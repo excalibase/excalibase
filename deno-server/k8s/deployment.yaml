@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: serverless
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deno-runtime
+  namespace: serverless
+  labels:
+    app: deno-runtime
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deno-runtime
+  template:
+    metadata:
+      labels:
+        app: deno-runtime
+    spec:
+      containers:
+      - name: runtime
+        image: excalibase/deno-runtime:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deno-runtime
+  namespace: serverless
+spec:
+  selector:
+    app: deno-runtime
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+  type: ClusterIP

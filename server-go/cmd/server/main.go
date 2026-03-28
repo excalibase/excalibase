@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -39,8 +40,15 @@ func main() {
 	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient)
 	factory := provisioner.NewFactory(pgProvisioner)
 
+	// Edge Functions
+	fnStore := edgefn.NewScriptStore(cfg.StoragePath)
+	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL)
+	hookSvc := edgefn.NewHookService(fnStore, fnClient)
+	fnHandler := handler.NewEdgeFnHandler(fnStore, fnClient)
+
 	// Services
 	provSvc := service.NewProvisioningService(store, factory)
+	provSvc.SetHookService(hookSvc)
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
 	backupSvc := service.NewBackupService(store, k8sClient, cfg.StoragePath)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
@@ -111,6 +119,9 @@ func main() {
 
 	// Parameter Groups API
 	r.Route("/api/parameter-groups", func(r chi.Router) { pgHandler.Routes(r) })
+
+	// Edge Functions API
+	r.Route("/api/functions", func(r chi.Router) { fnHandler.Routes(r) })
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("Excalibase Go server starting on %s", addr)

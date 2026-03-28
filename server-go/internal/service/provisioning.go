@@ -7,6 +7,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -14,10 +15,15 @@ import (
 type ProvisioningService struct {
 	store   storage.InstanceStore
 	factory *provisioner.Factory
+	hooks   *edgefn.HookService // optional — nil if edge functions not configured
 }
 
 func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Factory) *ProvisioningService {
 	return &ProvisioningService{store: store, factory: factory}
+}
+
+func (s *ProvisioningService) SetHookService(hooks *edgefn.HookService) {
+	s.hooks = hooks
 }
 
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
@@ -74,6 +80,14 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		s.store.Save(inst)
 	}
 
+	// Pre-provision hooks (non-blocking)
+	if s.hooks != nil {
+		s.hooks.ExecuteHooksAsync(ctx, "pre-provision", edgefn.HookContext{
+			ProjectID: req.ProjectName, OrgID: req.OrgID,
+			DatabaseType: string(req.DBType), Tier: string(req.Tier),
+		}, nil)
+	}
+
 	// Run provisioning
 	result, err := prov.Provision(ctx, req, tier, cb)
 	if err != nil {
@@ -113,6 +127,16 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	inst.UpdatedAt = finalNow
 	inst.LastHealthCheck = finalNow
 	s.store.Save(inst)
+
+	// Post-provision hooks (non-blocking, with credentials)
+	if s.hooks != nil {
+		s.hooks.ExecuteHooksAsync(ctx, "post-provision", edgefn.HookContext{
+			ProjectID: req.ProjectName, OrgID: req.OrgID,
+			DatabaseType: string(req.DBType), Tier: string(req.Tier),
+			Host: result.Host, Port: result.Port,
+			Database: result.DatabaseName, Username: result.Username, Password: result.Password,
+		}, nil)
+	}
 
 	return &domain.ProvisioningResponse{
 		ProjectID:    req.ProjectName,
