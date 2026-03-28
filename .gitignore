@@ -1,0 +1,40 @@
+# Go binary and build artifacts
+server-go/excalibase-server
+server-go/go-server.log
+*.exe
+*.test
+*.out
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Runtime data (never commit)
+provisioning-data/
+*.log
+
+# Encryption keys (never commit)
+.encryption-key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iws
+*.iml
+*.ipr
+*.swp
+*.swo
+
+# Env files
+.env
+.env.local
+
+# Test coverage
+coverage/
+*.coverprofile
+/tmp/

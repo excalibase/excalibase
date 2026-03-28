@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Light mode (default) ────────────────────────────── */
+:root {
+  /* Layout — hex values, no opacity needed */
+  --bg-primary:       #f9fafb;  /* gray-50   */
+  --bg-secondary:     #ffffff;  /* white     */
+  --bg-tertiary:      #f3f4f6;  /* gray-100  */
+  --surface-card:     #ffffff;  /* white     */
+  --surface-hover:    #f3f4f6;  /* gray-100  */
+  --border-primary:   #e5e7eb;  /* gray-200  */
+  --border-secondary: #d1d5db;  /* gray-300  */
+  --text-primary:     #111827;  /* gray-900  */
+  --text-secondary:   #6b7280;  /* gray-500  */
+  --text-tertiary:    #9ca3af;  /* gray-400  */
+  /* Accent — RGB channels so bg-accent-primary/10 etc. work */
+  --accent-primary:       147 51 234;   /* purple-600 */
+  --accent-primary-hover: 168 85 247;   /* purple-500 */
+}
+
+/* ── Dark mode ───────────────────────────────────────── */
+.dark {
+  --bg-primary:       #0f0f1e;  /* brand dark */
+  --bg-secondary:     #111827;  /* gray-900   */
+  --bg-tertiary:      #1f2937;  /* gray-800   */
+  --surface-card:     #111827;  /* gray-900   */
+  --surface-hover:    #1f2937;  /* gray-800   */
+  --border-primary:   #1f2937;  /* gray-800   */
+  --border-secondary: #374151;  /* gray-700   */
+  --text-primary:     #ffffff;  /* white      */
+  --text-secondary:   #9ca3af;  /* gray-400   */
+  --text-tertiary:    #4b5563;  /* gray-600   */
+  /* Accent — RGB channels */
+  --accent-primary:       168 85 247;   /* purple-500 */
+  --accent-primary-hover: 192 132 252;  /* purple-400 */
+}
+
+@layer base {
+  body {
+    @apply bg-bg-primary text-text-primary;
+    font-family: system-ui, -apple-system, sans-serif;
+    margin: 0;
+  }
+}
