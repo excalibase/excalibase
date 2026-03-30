@@ -31,7 +31,15 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 }
 
 func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Request) {
-	instances, err := h.svc.GetAllInstances()
+	ownerID := r.URL.Query().Get("ownerId")
+
+	var instances []*domain.DatabaseInstance
+	var err error
+	if ownerID != "" {
+		instances, err = h.svc.GetInstancesByOwner(ownerID)
+	} else {
+		instances, err = h.svc.GetAllInstances()
+	}
 	if err != nil {
 		httpError(w, err.Error(), http.StatusInternalServerError)
 		return

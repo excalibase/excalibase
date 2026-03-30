@@ -186,6 +186,10 @@ func (s *ProvisioningService) GetAllInstances() ([]*domain.DatabaseInstance, err
 	return s.store.FindAll()
 }
 
+func (s *ProvisioningService) GetInstancesByOwner(ownerID string) ([]*domain.DatabaseInstance, error) {
+	return s.store.FindByOwner(ownerID)
+}
+
 func (s *ProvisioningService) GetCredentials(projectID string) (*domain.CredentialsResponse, error) {
 	inst, err := s.GetInstance(projectID)
 	if err != nil {

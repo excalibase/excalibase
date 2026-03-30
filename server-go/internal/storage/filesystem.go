@@ -94,6 +94,19 @@ func (s *FileSystemStore) FindByProjectID(projectID string) (*domain.DatabaseIns
 	return inst, nil
 }
 
+func (s *FileSystemStore) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]*domain.DatabaseInstance, 0)
+	for _, inst := range s.cache {
+		if inst.OwnerID == ownerID {
+			result = append(result, inst)
+		}
+	}
+	return result, nil
+}
+
 func (s *FileSystemStore) FindAll() ([]*domain.DatabaseInstance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

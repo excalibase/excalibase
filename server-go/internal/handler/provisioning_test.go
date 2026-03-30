@@ -138,6 +138,92 @@ func TestProvisionNoK8s(t *testing.T) {
 	}
 }
 
+func TestListInstancesByOwner(t *testing.T) {
+	r, store := setupTestRouter(t)
+
+	store.Save(&domain.DatabaseInstance{ProjectID: "a", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "b", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
+
+	req := httptest.NewRequest("GET", "/api/provision/?ownerId=user-1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200", w.Code)
+	}
+
+	var result []*domain.DatabaseInstance
+	json.NewDecoder(w.Body).Decode(&result)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 instances for user-1, got %d", len(result))
+	}
+	for _, inst := range result {
+		if inst.OwnerID != "user-1" {
+			t.Errorf("unexpected owner: %s", inst.OwnerID)
+		}
+	}
+}
+
+func TestGetCredentialsForCDS(t *testing.T) {
+	r, store := setupTestRouter(t)
+
+	port := 5432
+	store.Save(&domain.DatabaseInstance{
+		ProjectID:    "cds-project",
+		OrgID:        "org1",
+		OwnerID:      "user-1",
+		Status:       "ACTIVE",
+		Host:         "10.0.0.5",
+		ReadOnlyHost: "10.0.0.6",
+		Port:         &port,
+		DatabaseName: "app_db",
+		Username:     "pguser",
+		Password:     "secret123",
+		SSLMode:      "require",
+	})
+
+	req := httptest.NewRequest("GET", "/api/provision/cds-project/credentials", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+
+	var creds struct {
+		ProjectID    string `json:"projectId"`
+		Host         string `json:"host"`
+		ReadOnlyHost string `json:"readOnlyHost"`
+		Port         int    `json:"port"`
+		DatabaseName string `json:"databaseName"`
+		Username     string `json:"username"`
+		Password     string `json:"password"`
+		SSLMode      string `json:"sslMode"`
+		ConnectionURL string `json:"connectionUrl"`
+	}
+	json.NewDecoder(w.Body).Decode(&creds)
+
+	if creds.Host != "10.0.0.5" {
+		t.Errorf("host: got %s", creds.Host)
+	}
+	if creds.Port != 5432 {
+		t.Errorf("port: got %d", creds.Port)
+	}
+	if creds.DatabaseName != "app_db" {
+		t.Errorf("databaseName: got %s", creds.DatabaseName)
+	}
+	if creds.Username != "pguser" {
+		t.Errorf("username: got %s", creds.Username)
+	}
+	if creds.Password != "secret123" {
+		t.Errorf("password: got %s", creds.Password)
+	}
+	if creds.ConnectionURL == "" {
+		t.Error("connectionUrl should be set")
+	}
+}
+
 func TestEstimateCost(t *testing.T) {
 	r, _ := setupTestRouter(t)
 

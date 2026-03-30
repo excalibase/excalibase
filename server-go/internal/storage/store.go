@@ -10,6 +10,7 @@ import (
 type InstanceStore interface {
 	Save(instance *domain.DatabaseInstance) error
 	FindByProjectID(projectID string) (*domain.DatabaseInstance, error)
+	FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error)
 	FindAll() ([]*domain.DatabaseInstance, error)
 	Delete(projectID string) error
 }

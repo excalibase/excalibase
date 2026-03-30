@@ -173,3 +173,32 @@ func TestGetAllInstances(t *testing.T) {
 		t.Errorf("expected 2, got %d", len(all))
 	}
 }
+
+func TestGetInstancesByOwner(t *testing.T) {
+	svc, store, _ := setupProvisioningTest(t)
+	store.Save(&domain.DatabaseInstance{ProjectID: "a", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "b", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
+
+	owned, err := svc.GetInstancesByOwner("user-1")
+	if err != nil {
+		t.Fatalf("GetInstancesByOwner: %v", err)
+	}
+	if len(owned) != 2 {
+		t.Errorf("expected 2, got %d", len(owned))
+	}
+	for _, inst := range owned {
+		if inst.OwnerID != "user-1" {
+			t.Errorf("unexpected owner: %s", inst.OwnerID)
+		}
+	}
+
+	// Empty result for unknown owner
+	empty, err := svc.GetInstancesByOwner("nobody")
+	if err != nil {
+		t.Fatalf("GetInstancesByOwner empty: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("expected 0, got %d", len(empty))
+	}
+}
