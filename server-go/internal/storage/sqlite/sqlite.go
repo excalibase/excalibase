@@ -36,8 +36,17 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// Add columns that may not exist in older databases
+	migrations := []string{
+		"ALTER TABLE database_instances ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''",
+	}
+	for _, m := range migrations {
+		s.db.Exec(m) // ignore "duplicate column" errors
+	}
+	return nil
 }
 
 const schema = `
