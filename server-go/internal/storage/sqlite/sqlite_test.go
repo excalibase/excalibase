@@ -91,6 +91,29 @@ func TestInstanceUpdate(t *testing.T) {
 	}
 }
 
+func TestInstanceOwnerID(t *testing.T) {
+	store := testStore(t)
+
+	store.Save(&domain.DatabaseInstance{ProjectID: "owned-1", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "owned-2", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "other", OwnerID: "user-2", Status: "ACTIVE"})
+
+	// FindByOwner should return only user-1's instances
+	owned, err := store.FindByOwner("user-1")
+	if err != nil {
+		t.Fatalf("FindByOwner: %v", err)
+	}
+	if len(owned) != 2 {
+		t.Errorf("expected 2 for user-1, got %d", len(owned))
+	}
+
+	// Save and read back — OwnerID should persist
+	got, _ := store.FindByProjectID("owned-1")
+	if got.OwnerID != "user-1" {
+		t.Errorf("ownerID: got %s, want user-1", got.OwnerID)
+	}
+}
+
 func TestInstanceNotFound(t *testing.T) {
 	store := testStore(t)
 	got, _ := store.FindByProjectID("nope")

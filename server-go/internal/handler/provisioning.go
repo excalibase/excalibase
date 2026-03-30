@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/go-chi/chi/v5"
@@ -43,6 +44,11 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, "invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	// Set owner from authenticated user
+	if user := auth.GetUser(r.Context()); user != nil {
+		req.OwnerID = user.ID
 	}
 
 	resp, err := h.svc.Provision(r.Context(), req)

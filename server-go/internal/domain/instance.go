@@ -39,6 +39,7 @@ type DatabaseInstance struct {
 	ID        *int64  `json:"id,omitempty"`
 	ProjectID string  `json:"projectId"`
 	OrgID     string  `json:"orgId"`
+	OwnerID   string  `json:"ownerId,omitempty"`
 	DBType    DatabaseType `json:"databaseType"`
 	Tier      TierType     `json:"tier"`
 	Namespace string       `json:"namespace"`

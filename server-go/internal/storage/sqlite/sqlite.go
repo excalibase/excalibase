@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS access_tokens (
 CREATE TABLE IF NOT EXISTS database_instances (
 	project_id TEXT PRIMARY KEY,
 	org_id TEXT NOT NULL DEFAULT '',
+	owner_id TEXT NOT NULL DEFAULT '',
 	database_type TEXT NOT NULL DEFAULT 'POSTGRESQL',
 	tier TEXT NOT NULL DEFAULT 'FREE',
 	namespace TEXT NOT NULL DEFAULT '',
@@ -204,7 +205,7 @@ VALUES (1, 'Initial schema', datetime('now'));
 func (s *Store) Save(inst *domain.DatabaseInstance) error {
 	_, err := s.db.Exec(`
 		INSERT OR REPLACE INTO database_instances (
-			project_id, org_id, database_type, tier, namespace,
+			project_id, org_id, owner_id, database_type, tier, namespace,
 			host, read_only_host, port, database_name, username, password,
 			deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 			webhook_url, postgres_version, tags,
@@ -214,8 +215,8 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 			backup_enabled, backup_schedule, backup_retention_days,
 			metrics_endpoint, grafana_dashboard_url,
 			created_at, updated_at, last_health_check
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		inst.ProjectID, inst.OrgID, inst.DBType, inst.Tier, inst.Namespace,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		inst.ProjectID, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
 		boolToInt(inst.DeletionProtection), boolToInt(inst.PoolerEnabled), inst.PoolerHost, inst.SSLMode,
 		inst.WebhookURL, inst.PostgresVersion, inst.Tags,
@@ -231,7 +232,7 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
 	row := s.db.QueryRow(`SELECT
-		project_id, org_id, database_type, tier, namespace,
+		project_id, org_id, owner_id, database_type, tier, namespace,
 		host, read_only_host, port, database_name, username, password,
 		deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 		webhook_url, postgres_version, tags,
@@ -252,7 +253,7 @@ func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, err
 
 func (s *Store) FindAll() ([]*domain.DatabaseInstance, error) {
 	rows, err := s.db.Query(`SELECT
-		project_id, org_id, database_type, tier, namespace,
+		project_id, org_id, owner_id, database_type, tier, namespace,
 		host, read_only_host, port, database_name, username, password,
 		deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 		webhook_url, postgres_version, tags,
@@ -285,6 +286,35 @@ func (s *Store) FindAll() ([]*domain.DatabaseInstance, error) {
 func (s *Store) Delete(projectID string) error {
 	_, err := s.db.Exec(`DELETE FROM database_instances WHERE project_id = ?`, projectID)
 	return err
+}
+
+func (s *Store) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error) {
+	rows, err := s.db.Query(`SELECT
+		project_id, org_id, owner_id, database_type, tier, namespace,
+		host, read_only_host, port, database_name, username, password,
+		deletion_protection, pooler_enabled, pooler_host, ssl_mode,
+		webhook_url, postgres_version, tags,
+		status, current_stage, failure_reason,
+		network_policy_enabled,
+		maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
+		backup_enabled, backup_schedule, backup_retention_days,
+		metrics_endpoint, grafana_dashboard_url,
+		created_at, updated_at, last_health_check
+	FROM database_instances WHERE owner_id = ?`, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]*domain.DatabaseInstance, 0)
+	for rows.Next() {
+		inst, err := scanInstanceRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, inst)
+	}
+	return result, nil
 }
 
 // --- UserStore ---
@@ -574,7 +604,7 @@ func scanInstance(row *sql.Row) (*domain.DatabaseInstance, error) {
 	var createdAt, updatedAt, lastHealth sql.NullString
 
 	err := row.Scan(
-		&inst.ProjectID, &inst.OrgID, &inst.DBType, &inst.Tier, &inst.Namespace,
+		&inst.ProjectID, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
 		&inst.Host, &inst.ReadOnlyHost, &port, &inst.DatabaseName, &inst.Username, &inst.Password,
 		&delProt, &poolerEn, &inst.PoolerHost, &inst.SSLMode,
 		&inst.WebhookURL, &inst.PostgresVersion, &inst.Tags,
@@ -627,7 +657,7 @@ func scanInstanceRows(rows *sql.Rows) (*domain.DatabaseInstance, error) {
 	var createdAt, updatedAt, lastHealth sql.NullString
 
 	err := rows.Scan(
-		&inst.ProjectID, &inst.OrgID, &inst.DBType, &inst.Tier, &inst.Namespace,
+		&inst.ProjectID, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
 		&inst.Host, &inst.ReadOnlyHost, &port, &inst.DatabaseName, &inst.Username, &inst.Password,
 		&delProt, &poolerEn, &inst.PoolerHost, &inst.SSLMode,
 		&inst.WebhookURL, &inst.PostgresVersion, &inst.Tags,

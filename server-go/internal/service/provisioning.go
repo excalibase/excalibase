@@ -51,6 +51,7 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	inst := &domain.DatabaseInstance{
 		ProjectID:    req.ProjectName,
 		OrgID:        req.OrgID,
+		OwnerID:      req.OwnerID,
 		DBType:       req.DBType,
 		Tier:         req.Tier,
 		Namespace:    namespace,
