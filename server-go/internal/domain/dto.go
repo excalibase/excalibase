@@ -148,6 +148,14 @@ type BackupConfig struct {
 	LastBackup    string `json:"lastBackup,omitempty"`
 }
 
+type BackupRecord struct {
+	ID        string `json:"id"`
+	ProjectID string `json:"projectId"`
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`   // MANUAL, SCHEDULED
+	Status    string `json:"status"` // IN_PROGRESS, COMPLETED, FAILED
+}
+
 type RestoreRequest struct {
 	BackupID       string    `json:"backupId,omitempty"`
 	TargetTime     *FlexTime `json:"targetTime,omitempty"`

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
@@ -15,6 +17,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -23,12 +26,21 @@ import (
 func main() {
 	cfg := config.Load()
 
-	// Storage
-	store, err := storage.NewFileSystemStore(cfg.StoragePath)
+	// SQLite storage
+	sqlStore, err := sqlitestore.New(cfg.DBPath)
 	if err != nil {
-		log.Fatalf("Failed to init storage: %v", err)
+		log.Fatalf("Failed to init SQLite: %v", err)
 	}
+	defer sqlStore.Close()
+
+	// Use SQLite store as InstanceStore (same interface)
+	var store storage.InstanceStore = sqlStore
+
+	// Keep filesystem store as fallback for parameter groups (until migrated)
 	pgStore, _ := storage.NewFileSystemParameterGroupStore(cfg.StoragePath)
+
+	// Bootstrap admin user on first run
+	auth.Bootstrap(context.Background(), sqlStore)
 
 	// Kubernetes client
 	k8sClient, err := k8s.NewClient()
@@ -70,10 +82,14 @@ func main() {
 	setupHandler := handler.NewSetupHandler(setupSvc)
 	pgHandler := handler.NewParameterGroupHandler(pgStore)
 
+	// Auth handler
+	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
+
 	// Router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(auth.ExtractAuth(sqlStore))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
@@ -119,6 +135,22 @@ func main() {
 
 	// Parameter Groups API
 	r.Route("/api/parameter-groups", func(r chi.Router) { pgHandler.Routes(r) })
+
+	// Auth API (login is public, rest requires auth)
+	r.Route("/api/auth", func(r chi.Router) {
+		r.Post("/login", authHandler.Login)
+		r.With(auth.RequireAuth).Get("/me", authHandler.Me)
+		r.With(auth.RequireAuth).Route("/users", func(r chi.Router) {
+			r.With(auth.RequirePermission(auth.PermManageUsers)).Get("/", authHandler.ListUsers)
+			r.With(auth.RequirePermission(auth.PermManageUsers)).Post("/", authHandler.CreateUser)
+			r.With(auth.RequirePermission(auth.PermManageUsers)).Delete("/{userId}", authHandler.DeleteUser)
+		})
+		r.With(auth.RequireAuth).Route("/tokens", func(r chi.Router) {
+			r.Get("/", authHandler.ListTokens)
+			r.Post("/", authHandler.CreateToken)
+			r.Delete("/{tokenHash}", authHandler.RevokeToken)
+		})
+	})
 
 	// Edge Functions API
 	r.Route("/api/functions", func(r chi.Router) { fnHandler.Routes(r) })
