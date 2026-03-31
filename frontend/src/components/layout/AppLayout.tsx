@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Database,
   DatabaseZap,
+  FolderKanban,
   BarChart2,
   HardDrive,
   Camera,
@@ -15,15 +16,18 @@ import {
   Menu,
   X,
   ChevronDown,
+  LogOut,
 } from 'lucide-react';
+import { useAuthStore } from '../../stores/auth-store';
 import { cn } from '../../utils/cn';
 import { useInstanceContext, InstanceProvider } from '../../context/InstanceContext';
 import { useInstances } from '../../hooks/useProvisioning';
 
 const TOP_NAV = [
-  { icon: LayoutDashboard, label: 'Dashboard',    to: '/'         },
+  { icon: LayoutDashboard, label: 'Dashboard',    to: '/'          },
   { icon: Database,        label: 'Instances',     to: '/instances' },
   { icon: DatabaseZap,     label: 'Provision New', to: '/provision' },
+  { icon: FolderKanban,    label: 'Projects',      to: '/projects'  },
 ];
 
 const SCOPED_NAV = [
@@ -89,14 +93,11 @@ function NavItem({ icon: Icon, label, to }: { icon: any; label: string; to: stri
   );
 }
 
-interface AppLayoutProps {
-  children: React.ReactNode;
-}
-
-function AppLayoutInner({ children }: AppLayoutProps) {
+function AppLayoutInner() {
   const [dark, setDark] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
+  const { user, clearAuth } = useAuthStore();
 
   const toggleDark = () => {
     const next = !dark;
@@ -178,6 +179,11 @@ function AppLayoutInner({ children }: AppLayoutProps) {
           </button>
           <h1 className="text-lg font-semibold text-text-primary">{currentPage}</h1>
           <div className="ml-auto flex items-center gap-3">
+            {user && (
+              <span className="text-sm text-text-secondary hidden sm:inline">
+                {user.username}
+              </span>
+            )}
             <button
               onClick={toggleDark}
               className="p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
@@ -185,21 +191,28 @@ function AppLayoutInner({ children }: AppLayoutProps) {
             >
               {dark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </button>
+            <button
+              onClick={clearAuth}
+              className="p-2 rounded-lg text-text-secondary hover:text-red-400 hover:bg-surface-hover transition-colors"
+              title="Sign out"
+            >
+              <LogOut className="w-5 h-5" />
+            </button>
           </div>
         </header>
 
         <main className="flex-1 overflow-y-auto p-6">
-          {children}
+          <Outlet />
         </main>
       </div>
     </div>
   );
 }
 
-export function AppLayout({ children }: AppLayoutProps) {
+export function AppLayout() {
   return (
     <InstanceProvider>
-      <AppLayoutInner>{children}</AppLayoutInner>
+      <AppLayoutInner />
     </InstanceProvider>
   );
 }

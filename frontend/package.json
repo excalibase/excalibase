@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.21",
+    "@xyflow/react": "^12.10.2",
     "axios": "^1.13.5",
     "clsx": "^2.1.1",
     "lucide-react": "^0.564.0",
@@ -18,7 +19,8 @@
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.1",
     "recharts": "^3.7.0",
-    "tailwind-merge": "^3.4.1"
+    "tailwind-merge": "^3.4.1",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
