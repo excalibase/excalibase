@@ -300,7 +300,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA _meta GRANT SELECT ON TABLES TO excalibase_ap
 `, authPass, metaPass, appPass)
 
 	// Execute via pod exec (psql)
-	cmd := []string{"psql", "-U", result.Username, "-d", dbName, "-c", roleSQL}
+	// Use postgres superuser via local socket (peer auth) to create roles
+	cmd := []string{"psql", "-U", "postgres", "-d", dbName, "-c", roleSQL}
 	output, err := s.k8sClient.ExecInPod(ctx, namespace, primaryPod, "postgres", cmd)
 	if err != nil {
 		fmt.Printf("WARN: role creation failed for %s: %v\nOutput: %s\n", projectID, err, output)
