@@ -167,6 +167,27 @@ func TestVaultSecretCRUD(t *testing.T) {
 	}
 }
 
+func TestVaultPublicKey(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(1, 1)
+
+	req := httptest.NewRequest("GET", "/api/vault/pki/public-key", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	json.NewDecoder(w.Body).Decode(&body)
+	if body["algorithm"] != "EC-P256" {
+		t.Errorf("algorithm: got %s", body["algorithm"])
+	}
+	if body["key"] == "" {
+		t.Fatal("key should not be empty")
+	}
+}
+
 func TestVaultSecrets_WhenSealed_Returns503(t *testing.T) {
 	r, v := setupVaultRouter(t)
 	v.Init(1, 1)

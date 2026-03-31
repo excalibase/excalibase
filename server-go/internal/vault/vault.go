@@ -170,6 +170,14 @@ func (v *Vault) Init(shares, threshold int) (*InitResult, error) {
 	v.threshold = threshold
 	v.mu.Unlock()
 
+	// Generate PKI signing keypair
+	privPEM, pubPEM, err := generatePKI()
+	if err != nil {
+		return nil, fmt.Errorf("generate PKI: %w", err)
+	}
+	v.Put("pki/signing/private", map[string]string{"key": privPEM, "algorithm": "EC-P256"})
+	v.Put("pki/signing/public", map[string]string{"key": pubPEM, "algorithm": "EC-P256"})
+
 	return &InitResult{
 		Shares:    hexShares,
 		Threshold: threshold,

@@ -3,6 +3,7 @@ package vault
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -319,6 +320,52 @@ func TestRekeyWhileSealed(t *testing.T) {
 	_, err := v.Rekey(3, 2)
 	if err != ErrSealed {
 		t.Fatalf("expected ErrSealed, got %v", err)
+	}
+}
+
+func TestInitGeneratesPKI(t *testing.T) {
+	v := tempVault(t)
+	defer v.Close()
+
+	v.Init(1, 1)
+
+	// PKI keys should be generated during init
+	privKey, err := v.Get("pki/signing/private")
+	if err != nil {
+		t.Fatalf("Get private key: %v", err)
+	}
+	if privKey["key"] == "" {
+		t.Fatal("private key should not be empty")
+	}
+	if privKey["algorithm"] != "EC-P256" {
+		t.Errorf("algorithm: got %s, want EC-P256", privKey["algorithm"])
+	}
+
+	pubKey, err := v.Get("pki/signing/public")
+	if err != nil {
+		t.Fatalf("Get public key: %v", err)
+	}
+	if pubKey["key"] == "" {
+		t.Fatal("public key should not be empty")
+	}
+}
+
+func TestGetPublicKey(t *testing.T) {
+	v := tempVault(t)
+	defer v.Close()
+
+	v.Init(1, 1)
+
+	// Public key should be accessible via dedicated method
+	pem, err := v.GetPublicKey()
+	if err != nil {
+		t.Fatalf("GetPublicKey: %v", err)
+	}
+	if pem == "" {
+		t.Fatal("public key PEM should not be empty")
+	}
+	if !strings.Contains(pem, "BEGIN PUBLIC KEY") {
+		t.Error("should be PEM-encoded public key")
 	}
 }
 

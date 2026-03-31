@@ -24,6 +24,7 @@ func (h *VaultHandler) Routes(r chi.Router) {
 	r.Post("/unseal", h.Unseal)
 	r.Post("/seal", h.Seal)
 	r.Post("/rekey", h.Rekey)
+	r.Get("/pki/public-key", h.GetPublicKey)
 	r.Route("/secrets", func(r chi.Router) {
 		r.Get("/*", h.GetSecret)
 		r.Put("/*", h.PutSecret)
@@ -113,6 +114,23 @@ func (h *VaultHandler) Rekey(w http.ResponseWriter, r *http.Request) {
 		"shares":    result.Shares,
 		"threshold": result.Threshold,
 	})
+}
+
+func (h *VaultHandler) GetPublicKey(w http.ResponseWriter, r *http.Request) {
+	pem, err := h.v.GetPublicKey()
+	if err != nil {
+		if errors.Is(err, vault.ErrSealed) {
+			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			return
+		}
+		if errors.Is(err, vault.ErrNotFound) {
+			httpError(w, "PKI not initialized", http.StatusNotFound)
+			return
+		}
+		httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"key": pem, "algorithm": "EC-P256"})
 }
 
 func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
