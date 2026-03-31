@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
@@ -19,13 +20,17 @@ type SchemaHandler struct {
 	introspector *schema.Introspector
 	mu           sync.RWMutex
 	connCache    map[string]*sql.DB
+	dbHostOverride string // if set, overrides vault host (for local dev with port-forward)
+	dbPortOverride string // if set, overrides vault port
 }
 
 func NewSchemaHandler(v *vault.Vault) *SchemaHandler {
 	return &SchemaHandler{
-		vault:        v,
-		introspector: schema.NewIntrospector(),
-		connCache:    make(map[string]*sql.DB),
+		vault:          v,
+		introspector:   schema.NewIntrospector(),
+		connCache:      make(map[string]*sql.DB),
+		dbHostOverride: os.Getenv("SCHEMA_DB_HOST"),
+		dbPortOverride: os.Getenv("SCHEMA_DB_PORT"),
 	}
 }
 
@@ -135,14 +140,23 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 	}
 	h.mu.RUnlock()
 
-	// Get meta_admin credentials from vault
-	creds, err := h.vault.Get(fmt.Sprintf("projects/%s/credentials/meta_admin", projectId))
+	// Get excalibase_app credentials from vault
+	creds, err := h.vault.Get(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectId))
 	if err != nil {
 		return nil, err
 	}
 
+	host := creds["host"]
+	port := creds["port"]
+	if h.dbHostOverride != "" {
+		host = h.dbHostOverride
+	}
+	if h.dbPortOverride != "" {
+		port = h.dbPortOverride
+	}
+
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		creds["host"], creds["port"], creds["username"], creds["password"], creds["database"])
+		host, port, creds["username"], creds["password"], creds["database"])
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {

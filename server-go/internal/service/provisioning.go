@@ -256,7 +256,6 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 
 	// Generate passwords for each role
 	authPass := generatePassword(32)
-	metaPass := generatePassword(32)
 	appPass := req.AppPassword
 	if appPass == "" {
 		appPass = generatePassword(32)
@@ -265,7 +264,6 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	// SQL to create roles and schemas
 	roleSQL := fmt.Sprintf(`
 CREATE SCHEMA IF NOT EXISTS auth;
-CREATE SCHEMA IF NOT EXISTS _meta;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'auth_admin') THEN
@@ -274,16 +272,6 @@ DO $$ BEGIN
 END $$;
 GRANT ALL ON SCHEMA auth TO auth_admin;
 ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO auth_admin;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'meta_admin') THEN
-    CREATE ROLE meta_admin WITH LOGIN PASSWORD '%s';
-  END IF;
-END $$;
-GRANT ALL ON SCHEMA _meta TO meta_admin;
-ALTER DEFAULT PRIVILEGES IN SCHEMA _meta GRANT ALL ON TABLES TO meta_admin;
-GRANT USAGE ON SCHEMA auth TO meta_admin;
-ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO meta_admin;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'excalibase_app') THEN
@@ -295,9 +283,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO excalibase_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO excalibase_app;
 GRANT USAGE ON SCHEMA auth TO excalibase_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO excalibase_app;
-GRANT USAGE ON SCHEMA _meta TO excalibase_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA _meta GRANT SELECT ON TABLES TO excalibase_app;
-`, authPass, metaPass, appPass)
+`, authPass, appPass)
 
 	// Execute via pod exec (psql)
 	// Use postgres superuser via local socket (peer auth) to create roles
@@ -308,14 +294,10 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA _meta GRANT SELECT ON TABLES TO excalibase_ap
 		return
 	}
 
-	// Store all credentials in vault
+	// Store credentials in vault
 	s.vault.Put(fmt.Sprintf("projects/%s/credentials/auth_admin", projectID), map[string]string{
 		"host": host, "port": port, "database": dbName,
 		"username": "auth_admin", "password": authPass,
-	})
-	s.vault.Put(fmt.Sprintf("projects/%s/credentials/meta_admin", projectID), map[string]string{
-		"host": host, "port": port, "database": dbName,
-		"username": "meta_admin", "password": metaPass,
 	})
 	s.vault.Put(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectID), map[string]string{
 		"host": host, "port": port, "database": dbName,
