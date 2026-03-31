@@ -125,24 +125,18 @@ SELECT c.column_name, c.data_type, c.is_nullable, c.column_default,
        c.ordinal_position, c.character_maximum_length,
        c.numeric_precision, c.numeric_scale,
        COALESCE(
-           (SELECT true FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name
-            AND tc.table_schema = kcu.table_schema
-            WHERE tc.constraint_type = 'PRIMARY KEY'
-            AND tc.table_schema = c.table_schema
-            AND tc.table_name = c.table_name
-            AND kcu.column_name = c.column_name), false
+           (SELECT true FROM pg_constraint con
+            JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+            WHERE con.contype = 'p'
+            AND con.conrelid = (SELECT oid FROM pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = c.table_schema))
+            AND a.attname = c.column_name), false
        ) AS is_primary_key,
        COALESCE(
-           (SELECT true FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name
-            AND tc.table_schema = kcu.table_schema
-            WHERE tc.constraint_type = 'UNIQUE'
-            AND tc.table_schema = c.table_schema
-            AND tc.table_name = c.table_name
-            AND kcu.column_name = c.column_name), false
+           (SELECT true FROM pg_constraint con
+            JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+            WHERE con.contype = 'u'
+            AND con.conrelid = (SELECT oid FROM pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = c.table_schema))
+            AND a.attname = c.column_name), false
        ) AS is_unique
 FROM information_schema.columns c
 WHERE c.table_schema = $1 AND c.table_name = $2
@@ -150,26 +144,29 @@ ORDER BY c.ordinal_position`
 
 const relationshipsQuery = `
 SELECT
-    tc.constraint_name,
-    kcu.table_name AS source_table,
-    kcu.column_name AS source_column,
-    ccu.table_name AS target_table,
-    ccu.column_name AS target_column,
-    rc.delete_rule AS on_delete,
-    rc.update_rule AS on_update
-FROM information_schema.table_constraints tc
-JOIN information_schema.key_column_usage kcu
-    ON tc.constraint_name = kcu.constraint_name
-    AND tc.table_schema = kcu.table_schema
-JOIN information_schema.constraint_column_usage ccu
-    ON ccu.constraint_name = tc.constraint_name
-    AND ccu.table_schema = tc.table_schema
-JOIN information_schema.referential_constraints rc
-    ON rc.constraint_name = tc.constraint_name
-    AND rc.constraint_schema = tc.table_schema
-WHERE tc.constraint_type = 'FOREIGN KEY'
-AND tc.table_schema = $1
-ORDER BY tc.constraint_name`
+    c.conname AS constraint_name,
+    src.relname AS source_table,
+    sa.attname AS source_column,
+    tgt.relname AS target_table,
+    ta.attname AS target_column,
+    CASE c.confdeltype
+        WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT'
+        WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL'
+        WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION'
+    END AS on_delete,
+    CASE c.confupdtype
+        WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT'
+        WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL'
+        WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION'
+    END AS on_update
+FROM pg_constraint c
+JOIN pg_class src ON src.oid = c.conrelid
+JOIN pg_class tgt ON tgt.oid = c.confrelid
+JOIN pg_namespace n ON n.oid = src.relnamespace
+JOIN pg_attribute sa ON sa.attrelid = c.conrelid AND sa.attnum = ANY(c.conkey)
+JOIN pg_attribute ta ON ta.attrelid = c.confrelid AND ta.attnum = ANY(c.confkey)
+WHERE c.contype = 'f' AND n.nspname = $1
+ORDER BY c.conname`
 
 const indexesQuery = `
 SELECT indexname, tablename, indexdef
