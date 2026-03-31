@@ -3,19 +3,24 @@ package service
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/vault"
 )
 
 type ProvisioningService struct {
-	store   storage.InstanceStore
-	factory *provisioner.Factory
-	hooks   *edgefn.HookService // optional — nil if edge functions not configured
+	store    storage.InstanceStore
+	factory  *provisioner.Factory
+	hooks    *edgefn.HookService // optional
+	vault    *vault.Vault        // optional
+	k8sClient k8s.KubeClient    // optional, for role creation via pod exec
 }
 
 func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Factory) *ProvisioningService {
@@ -24,6 +29,11 @@ func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Fa
 
 func (s *ProvisioningService) SetHookService(hooks *edgefn.HookService) {
 	s.hooks = hooks
+}
+
+func (s *ProvisioningService) SetVault(v *vault.Vault, k8sClient k8s.KubeClient) {
+	s.vault = v
+	s.k8sClient = k8sClient
 }
 
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
@@ -129,6 +139,11 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	inst.LastHealthCheck = finalNow
 	s.store.Save(inst)
 
+	// Create project roles and store credentials in vault
+	if s.vault != nil && s.k8sClient != nil && !s.vault.Sealed() {
+		s.createProjectRoles(ctx, req, result, namespace)
+	}
+
 	// Post-provision hooks (non-blocking, with credentials)
 	if s.hooks != nil {
 		s.hooks.ExecuteHooksAsync(ctx, "post-provision", edgefn.HookContext{
@@ -224,6 +239,89 @@ func (s *ProvisioningService) SetDeletionProtection(projectID string, enabled bo
 	}
 	inst.DeletionProtection = &enabled
 	return s.store.Save(inst)
+}
+
+func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, namespace string) {
+	projectID := req.ProjectName
+	primaryPod := projectID + "-postgres-1"
+	host := result.Host
+	port := strconv.Itoa(result.Port)
+	dbName := result.DatabaseName
+
+	// Store admin (superuser) credentials from CNPG
+	s.vault.Put(fmt.Sprintf("projects/%s/credentials/admin", projectID), map[string]string{
+		"host": host, "port": port, "database": dbName,
+		"username": result.Username, "password": result.Password,
+	})
+
+	// Generate passwords for each role
+	authPass := generatePassword(32)
+	metaPass := generatePassword(32)
+	appPass := req.AppPassword
+	if appPass == "" {
+		appPass = generatePassword(32)
+	}
+
+	// SQL to create roles and schemas
+	roleSQL := fmt.Sprintf(`
+CREATE SCHEMA IF NOT EXISTS auth;
+CREATE SCHEMA IF NOT EXISTS _meta;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'auth_admin') THEN
+    CREATE ROLE auth_admin WITH LOGIN PASSWORD '%s';
+  END IF;
+END $$;
+GRANT ALL ON SCHEMA auth TO auth_admin;
+ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO auth_admin;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'meta_admin') THEN
+    CREATE ROLE meta_admin WITH LOGIN PASSWORD '%s';
+  END IF;
+END $$;
+GRANT ALL ON SCHEMA _meta TO meta_admin;
+ALTER DEFAULT PRIVILEGES IN SCHEMA _meta GRANT ALL ON TABLES TO meta_admin;
+GRANT USAGE ON SCHEMA auth TO meta_admin;
+ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO meta_admin;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'excalibase_app') THEN
+    CREATE ROLE excalibase_app WITH LOGIN PASSWORD '%s';
+  END IF;
+END $$;
+GRANT ALL ON SCHEMA public TO excalibase_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO excalibase_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO excalibase_app;
+GRANT USAGE ON SCHEMA auth TO excalibase_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO excalibase_app;
+GRANT USAGE ON SCHEMA _meta TO excalibase_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA _meta GRANT SELECT ON TABLES TO excalibase_app;
+`, authPass, metaPass, appPass)
+
+	// Execute via pod exec (psql)
+	cmd := []string{"psql", "-U", result.Username, "-d", dbName, "-c", roleSQL}
+	output, err := s.k8sClient.ExecInPod(ctx, namespace, primaryPod, "postgres", cmd)
+	if err != nil {
+		fmt.Printf("WARN: role creation failed for %s: %v\nOutput: %s\n", projectID, err, output)
+		return
+	}
+
+	// Store all credentials in vault
+	s.vault.Put(fmt.Sprintf("projects/%s/credentials/auth_admin", projectID), map[string]string{
+		"host": host, "port": port, "database": dbName,
+		"username": "auth_admin", "password": authPass,
+	})
+	s.vault.Put(fmt.Sprintf("projects/%s/credentials/meta_admin", projectID), map[string]string{
+		"host": host, "port": port, "database": dbName,
+		"username": "meta_admin", "password": metaPass,
+	})
+	s.vault.Put(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectID), map[string]string{
+		"host": host, "port": port, "database": dbName,
+		"username": "excalibase_app", "password": appPass,
+	})
+
+	fmt.Printf("Created project roles for %s and stored in vault\n", projectID)
 }
 
 func boolPtr(b bool) *bool  { return &b }

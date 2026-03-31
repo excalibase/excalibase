@@ -70,6 +70,7 @@ func main() {
 	// Services
 	provSvc := service.NewProvisioningService(store, factory)
 	provSvc.SetHookService(hookSvc)
+	provSvc.SetVault(v, k8sClient)
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
 	backupSvc := service.NewBackupService(store, k8sClient, cfg.StoragePath)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
