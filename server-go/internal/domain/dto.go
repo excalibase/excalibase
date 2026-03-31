@@ -22,6 +22,7 @@ type ProvisioningRequest struct {
 	DatabaseName    string            `json:"databaseName,omitempty"`
 	MasterUsername  string            `json:"masterUsername,omitempty"`
 	ParameterGroup  string            `json:"parameterGroupName,omitempty"`
+	AppPassword     string            `json:"appPassword,omitempty"` // optional: password for excalibase_app role
 }
 
 type BackupSettings struct {

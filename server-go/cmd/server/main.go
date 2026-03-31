@@ -18,6 +18,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
+	"github.com/excalibase/provisioning-poc/internal/vault"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -38,6 +39,14 @@ func main() {
 
 	// Keep filesystem store as fallback for parameter groups (until migrated)
 	pgStore, _ := storage.NewFileSystemParameterGroupStore(cfg.StoragePath)
+
+	// Vault (bbolt)
+	vaultPath := cfg.StoragePath + "/vault.bolt"
+	v, err := vault.New(vaultPath)
+	if err != nil {
+		log.Fatalf("Failed to init vault: %v", err)
+	}
+	defer v.Close()
 
 	// Bootstrap admin user on first run
 	auth.Bootstrap(context.Background(), sqlStore)
@@ -84,6 +93,10 @@ func main() {
 
 	// Auth handler
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
+
+	// Vault + Schema handlers
+	vaultHandler := handler.NewVaultHandler(v)
+	schemaHandler := handler.NewSchemaHandler(v)
 
 	// Router
 	r := chi.NewRouter()
@@ -151,6 +164,12 @@ func main() {
 			r.Delete("/{tokenHash}", authHandler.RevokeToken)
 		})
 	})
+
+	// Vault API (init/unseal are public, secrets require auth)
+	r.Route("/api/vault", func(r chi.Router) { vaultHandler.Routes(r) })
+
+	// Schema API (requires auth + unsealed vault)
+	r.Route("/api/schema", func(r chi.Router) { schemaHandler.Routes(r) })
 
 	// Edge Functions API
 	r.Route("/api/functions", func(r chi.Router) { fnHandler.Routes(r) })

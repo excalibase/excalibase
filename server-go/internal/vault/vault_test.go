@@ -264,6 +264,64 @@ func TestPersistenceAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestInitAlreadyInitialized(t *testing.T) {
+	v := tempVault(t)
+	defer v.Close()
+
+	v.Init(1, 1)
+	_, err := v.Init(1, 1)
+	if err != ErrAlreadyInit {
+		t.Fatalf("expected ErrAlreadyInit, got %v", err)
+	}
+}
+
+func TestInitInvalidParams(t *testing.T) {
+	v := tempVault(t)
+	defer v.Close()
+
+	_, err := v.Init(0, 1)
+	if err == nil {
+		t.Fatal("expected error for shares=0")
+	}
+	_, err = v.Init(3, 5)
+	if err == nil {
+		t.Fatal("expected error for threshold > shares")
+	}
+}
+
+func TestUnsealNotInitialized(t *testing.T) {
+	v := tempVault(t)
+	defer v.Close()
+
+	_, err := v.Unseal("deadbeef")
+	if err != ErrNotInitialized {
+		t.Fatalf("expected ErrNotInitialized, got %v", err)
+	}
+}
+
+func TestGetNotFound(t *testing.T) {
+	v := tempVault(t)
+	defer v.Close()
+	v.Init(1, 1)
+
+	_, err := v.Get("nonexistent/path")
+	if err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestRekeyWhileSealed(t *testing.T) {
+	v := tempVault(t)
+	defer v.Close()
+	v.Init(1, 1)
+	v.Seal()
+
+	_, err := v.Rekey(3, 2)
+	if err != ErrSealed {
+		t.Fatalf("expected ErrSealed, got %v", err)
+	}
+}
+
 func TestAutoUnsealFromEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vault.bolt")
