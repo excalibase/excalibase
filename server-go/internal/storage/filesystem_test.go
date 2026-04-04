@@ -130,3 +130,68 @@ func TestFileSystemStoreNotFound(t *testing.T) {
 		t.Error("expected nil for nonexistent project")
 	}
 }
+
+func TestFileSystemStoreFindByOwner(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileSystemStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileSystemStore: %v", err)
+	}
+
+	store.Save(&domain.DatabaseInstance{ProjectID: "db-a", OwnerID: "owner-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "db-b", OwnerID: "owner-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "db-c", OwnerID: "owner-2", Status: "ACTIVE"})
+
+	owned, err := store.FindByOwner("owner-1")
+	if err != nil {
+		t.Fatalf("FindByOwner: %v", err)
+	}
+	if len(owned) != 2 {
+		t.Errorf("FindByOwner(owner-1): got %d, want 2", len(owned))
+	}
+	for _, inst := range owned {
+		if inst.OwnerID != "owner-1" {
+			t.Errorf("FindByOwner returned wrong owner: %s", inst.OwnerID)
+		}
+	}
+}
+
+func TestFileSystemStoreFindByOwnerEmpty(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := NewFileSystemStore(dir)
+
+	store.Save(&domain.DatabaseInstance{ProjectID: "db-x", OwnerID: "other-owner", Status: "ACTIVE"})
+
+	result, err := store.FindByOwner("no-such-owner")
+	if err != nil {
+		t.Fatalf("FindByOwner: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("FindByOwner: expected 0, got %d", len(result))
+	}
+}
+
+func TestFileSystemStoreFindByOwnerPersistedAcrossReload(t *testing.T) {
+	dir := t.TempDir()
+	store1, _ := NewFileSystemStore(dir)
+
+	store1.Save(&domain.DatabaseInstance{ProjectID: "persist-a", OwnerID: "owner-x", Status: "ACTIVE"})
+	store1.Save(&domain.DatabaseInstance{ProjectID: "persist-b", OwnerID: "owner-y", Status: "ACTIVE"})
+
+	// Simulate restart
+	store2, err := NewFileSystemStore(dir)
+	if err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+
+	owned, err := store2.FindByOwner("owner-x")
+	if err != nil {
+		t.Fatalf("FindByOwner after reload: %v", err)
+	}
+	if len(owned) != 1 {
+		t.Errorf("expected 1 for owner-x after reload, got %d", len(owned))
+	}
+	if owned[0].ProjectID != "persist-a" {
+		t.Errorf("ProjectID: got %s, want persist-a", owned[0].ProjectID)
+	}
+}

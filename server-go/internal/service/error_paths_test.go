@@ -129,7 +129,7 @@ func TestDeprovisionWhenK8sFails(t *testing.T) {
 	mock := k8s.NewMockClient()
 	pgProv := provisioner.NewPostgreSQLProvisioner(mock)
 	factory := provisioner.NewFactory(pgProv)
-	svc := NewProvisioningService(store, factory)
+	svc := NewProvisioningService(store, factory, mock)
 
 	store.Save(&domain.DatabaseInstance{
 		ProjectID: "k8s-fail-db", Namespace: "ns", DBType: domain.PostgreSQL, Status: "ACTIVE",

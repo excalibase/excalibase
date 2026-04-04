@@ -17,7 +17,7 @@ func setupProvisioningTest(t *testing.T) (*ProvisioningService, *storage.FileSys
 	mock := k8s.NewMockClient()
 	pgProv := provisioner.NewPostgreSQLProvisioner(mock)
 	factory := provisioner.NewFactory(pgProv)
-	svc := NewProvisioningService(store, factory)
+	svc := NewProvisioningService(store, factory, mock)
 	return svc, store, mock
 }
 

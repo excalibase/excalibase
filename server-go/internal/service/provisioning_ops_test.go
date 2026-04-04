@@ -17,7 +17,7 @@ func setupOpsTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore,
 	mock := k8s.NewMockClient()
 	pgProv := provisioner.NewPostgreSQLProvisioner(mock)
 	factory := provisioner.NewFactory(pgProv)
-	svc := NewProvisioningService(store, factory)
+	svc := NewProvisioningService(store, factory, mock)
 
 	port := 5432
 	store.Save(&domain.DatabaseInstance{
@@ -83,9 +83,9 @@ func TestGetMaintenanceWindowNotFound(t *testing.T) {
 }
 
 func TestGetLogs(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
+	svc, _, _ := setupOpsTest(t)
 
-	logs, err := svc.GetLogs(context.Background(), "ops-db", 50, mock)
+	logs, err := svc.GetLogs(context.Background(), "ops-db", 50)
 	if err != nil {
 		t.Fatalf("GetLogs: %v", err)
 	}
@@ -95,8 +95,8 @@ func TestGetLogs(t *testing.T) {
 }
 
 func TestGetLogsNotFound(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
-	_, err := svc.GetLogs(context.Background(), "nope", 50, mock)
+	svc, _, _ := setupOpsTest(t)
+	_, err := svc.GetLogs(context.Background(), "nope", 50)
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -106,7 +106,7 @@ func TestRotateCredentials(t *testing.T) {
 	svc, store, mock := setupOpsTest(t)
 	mock.ExecOutput["org1-ops-db/ops-db-postgres-1"] = "ALTER ROLE"
 
-	creds, err := svc.RotateCredentials(context.Background(), "ops-db", mock)
+	creds, err := svc.RotateCredentials(context.Background(), "ops-db")
 	if err != nil {
 		t.Fatalf("RotateCredentials: %v", err)
 	}
@@ -125,8 +125,8 @@ func TestRotateCredentials(t *testing.T) {
 }
 
 func TestRotateCredentialsNotFound(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
-	_, err := svc.RotateCredentials(context.Background(), "nope", mock)
+	svc, _, _ := setupOpsTest(t)
+	_, err := svc.RotateCredentials(context.Background(), "nope")
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -150,7 +150,7 @@ func TestUpdateParametersPatchesCRD(t *testing.T) {
 	err := svc.UpdateParameters(context.Background(), "ops-db", map[string]string{
 		"max_connections":  "200",
 		"work_mem":         "64MB",
-	}, mock)
+	})
 	if err != nil {
 		t.Fatalf("UpdateParameters: %v", err)
 	}
@@ -169,8 +169,8 @@ func TestUpdateParametersPatchesCRD(t *testing.T) {
 }
 
 func TestUpdateParametersNotFound(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
-	err := svc.UpdateParameters(context.Background(), "nope", map[string]string{"k": "v"}, mock)
+	svc, _, _ := setupOpsTest(t)
+	err := svc.UpdateParameters(context.Background(), "nope", map[string]string{"k": "v"})
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -183,7 +183,7 @@ func TestEnablePooler(t *testing.T) {
 		Enabled:  true,
 		PoolMode: "transaction",
 		PoolSize: 20,
-	}, mock)
+	})
 	if err != nil {
 		t.Fatalf("EnablePooler: %v", err)
 	}
@@ -201,8 +201,8 @@ func TestEnablePooler(t *testing.T) {
 }
 
 func TestEnablePoolerNotFound(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
-	err := svc.EnablePooler(context.Background(), "nope", domain.PoolerSettings{Enabled: true}, mock)
+	svc, _, _ := setupOpsTest(t)
+	err := svc.EnablePooler(context.Background(), "nope", domain.PoolerSettings{Enabled: true})
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -230,7 +230,7 @@ func TestResizeStorage(t *testing.T) {
 	})
 	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
 
-	err := svc.ResizeStorage(context.Background(), "ops-db", "20Gi", mock)
+	err := svc.ResizeStorage(context.Background(), "ops-db", "20Gi")
 	if err != nil {
 		t.Fatalf("ResizeStorage: %v", err)
 	}
@@ -245,8 +245,8 @@ func TestResizeStorage(t *testing.T) {
 }
 
 func TestResizeStorageNotFound(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
-	err := svc.ResizeStorage(context.Background(), "nope", "20Gi", mock)
+	svc, _, _ := setupOpsTest(t)
+	err := svc.ResizeStorage(context.Background(), "nope", "20Gi")
 	if err == nil {
 		t.Error("expected error for nonexistent project")
 	}
@@ -261,7 +261,7 @@ func TestUpgradeVersion(t *testing.T) {
 	})
 	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
 
-	err := svc.UpgradeVersion(context.Background(), "ops-db", "17", mock)
+	err := svc.UpgradeVersion(context.Background(), "ops-db", "17")
 	if err != nil {
 		t.Fatalf("UpgradeVersion: %v", err)
 	}
@@ -274,8 +274,8 @@ func TestUpgradeVersion(t *testing.T) {
 }
 
 func TestUpgradeVersionNotFound(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
-	err := svc.UpgradeVersion(context.Background(), "nope", "17", mock)
+	svc, _, _ := setupOpsTest(t)
+	err := svc.UpgradeVersion(context.Background(), "nope", "17")
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -286,7 +286,7 @@ func TestCloneDatabase(t *testing.T) {
 
 	resp, err := svc.CloneDatabase(context.Background(), "ops-db", domain.CloneRequest{
 		NewProjectName: "ops-db-clone",
-	}, mock)
+	})
 	if err != nil {
 		t.Fatalf("CloneDatabase: %v", err)
 	}
@@ -312,10 +312,10 @@ func TestCloneDatabase(t *testing.T) {
 }
 
 func TestCloneDatabaseNotFound(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
+	svc, _, _ := setupOpsTest(t)
 	_, err := svc.CloneDatabase(context.Background(), "nope", domain.CloneRequest{
 		NewProjectName: "clone",
-	}, mock)
+	})
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -332,7 +332,7 @@ func TestScaleTier(t *testing.T) {
 	})
 	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
 
-	err := svc.ScaleTier(context.Background(), "ops-db", domain.Standard, mock)
+	err := svc.ScaleTier(context.Background(), "ops-db", domain.Standard)
 	if err != nil {
 		t.Fatalf("ScaleTier: %v", err)
 	}

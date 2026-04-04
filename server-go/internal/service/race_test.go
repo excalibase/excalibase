@@ -19,7 +19,7 @@ func TestConcurrentProvisionSameID(t *testing.T) {
 	mock.SetupPostgreSQLMock("race-db", "org1-race-db", 1)
 	pgProv := provisioner.NewPostgreSQLProvisioner(mock)
 	factory := provisioner.NewFactory(pgProv)
-	svc := NewProvisioningService(store, factory)
+	svc := NewProvisioningService(store, factory, mock)
 
 	var wg sync.WaitGroup
 	results := make(chan string, 10)

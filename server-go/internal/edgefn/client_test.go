@@ -62,7 +62,7 @@ func TestRuntimeClientHealth(t *testing.T) {
 	srv := mockDenoServer()
 	defer srv.Close()
 
-	client := NewRuntimeClient(srv.URL)
+	client := NewRuntimeClient(srv.URL, "")
 	healthy, err := client.Health(context.Background())
 	if err != nil {
 		t.Fatalf("Health: %v", err)
@@ -76,7 +76,7 @@ func TestRuntimeClientDeploy(t *testing.T) {
 	srv := mockDenoServer()
 	defer srv.Close()
 
-	client := NewRuntimeClient(srv.URL)
+	client := NewRuntimeClient(srv.URL, "")
 	err := client.Deploy(context.Background(), "test-fn", "function handler(d) { return d; }")
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
@@ -87,7 +87,7 @@ func TestRuntimeClientInvoke(t *testing.T) {
 	srv := mockDenoServer()
 	defer srv.Close()
 
-	client := NewRuntimeClient(srv.URL)
+	client := NewRuntimeClient(srv.URL, "")
 	client.Deploy(context.Background(), "test-fn", "code")
 
 	result, err := client.Invoke(context.Background(), "test-fn", map[string]string{"key": "val"})
@@ -103,7 +103,7 @@ func TestRuntimeClientInvokeNotFound(t *testing.T) {
 	srv := mockDenoServer()
 	defer srv.Close()
 
-	client := NewRuntimeClient(srv.URL)
+	client := NewRuntimeClient(srv.URL, "")
 	_, err := client.Invoke(context.Background(), "nonexistent", nil)
 	if err == nil {
 		t.Error("expected error for missing function")
@@ -114,7 +114,7 @@ func TestRuntimeClientDelete(t *testing.T) {
 	srv := mockDenoServer()
 	defer srv.Close()
 
-	client := NewRuntimeClient(srv.URL)
+	client := NewRuntimeClient(srv.URL, "")
 	client.Deploy(context.Background(), "del-fn", "code")
 
 	err := client.Delete(context.Background(), "del-fn")
@@ -123,8 +123,38 @@ func TestRuntimeClientDelete(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientInvokeInvalidJSON(t *testing.T) {
+	// Server returns invalid JSON — Invoke should return an error, not nil
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("not valid json{{{"))
+	}))
+	defer srv.Close()
+
+	client := NewRuntimeClient(srv.URL, "")
+	_, err := client.Invoke(context.Background(), "test", nil)
+	if err == nil {
+		t.Error("Invoke with invalid JSON response should return error")
+	}
+}
+
+func TestRuntimeClientListInvalidJSON(t *testing.T) {
+	// Server returns invalid JSON — List should return an error, not nil
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("broken json"))
+	}))
+	defer srv.Close()
+
+	client := NewRuntimeClient(srv.URL, "")
+	_, err := client.List(context.Background())
+	if err == nil {
+		t.Error("List with invalid JSON response should return error")
+	}
+}
+
 func TestRuntimeClientUnreachable(t *testing.T) {
-	client := NewRuntimeClient("http://localhost:1") // nothing listening
+	client := NewRuntimeClient("http://localhost:1", "") // nothing listening
 
 	healthy, _ := client.Health(context.Background())
 	if healthy {

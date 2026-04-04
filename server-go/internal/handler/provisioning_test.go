@@ -24,7 +24,7 @@ func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 
 	// Empty factory (no real K8s provisioners for unit tests)
 	factory := provisioner.NewFactory()
-	svc := service.NewProvisioningService(store, factory)
+	svc := service.NewProvisioningService(store, factory, nil)
 	h := NewProvisioningHandler(svc)
 
 	r := chi.NewRouter()

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -207,5 +208,221 @@ func TestMiddlewareInvalidToken(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("invalid token should get 401, got %d", w.Code)
+	}
+}
+
+// --- GenerateID ---
+
+func TestGenerateIDNonEmpty(t *testing.T) {
+	id := GenerateID()
+	if id == "" {
+		t.Error("GenerateID should return non-empty string")
+	}
+}
+
+func TestGenerateIDLength(t *testing.T) {
+	id := GenerateID()
+	// 16 bytes encoded as hex = 32 characters
+	if len(id) != 32 {
+		t.Errorf("GenerateID: expected length 32, got %d", len(id))
+	}
+}
+
+func TestGenerateIDUnique(t *testing.T) {
+	seen := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		id := GenerateID()
+		if seen[id] {
+			t.Fatalf("GenerateID produced duplicate: %s", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestGenerateIDHexCharsOnly(t *testing.T) {
+	id := GenerateID()
+	for _, c := range id {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Errorf("GenerateID: non-hex character %q in %s", c, id)
+		}
+	}
+}
+
+// --- Bootstrap ---
+
+type mockUserStore struct {
+	users  []*domain.User
+	errOn  string // method name to return error on
+}
+
+func (m *mockUserStore) FindAllUsers(ctx context.Context) ([]*domain.User, error) {
+	if m.errOn == "FindAllUsers" {
+		return nil, fmt.Errorf("db error")
+	}
+	return m.users, nil
+}
+
+func (m *mockUserStore) CreateUser(ctx context.Context, u *domain.User) error {
+	if m.errOn == "CreateUser" {
+		return fmt.Errorf("db error")
+	}
+	m.users = append(m.users, u)
+	return nil
+}
+
+func (m *mockUserStore) FindUserByID(ctx context.Context, id string) (*domain.User, error) {
+	for _, u := range m.users {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockUserStore) FindUserByUsername(ctx context.Context, username string) (*domain.User, error) {
+	for _, u := range m.users {
+		if u.Username == username {
+			return u, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockUserStore) DeleteUser(ctx context.Context, id string) error {
+	return nil
+}
+
+func (m *mockUserStore) UpdateUserPassword(ctx context.Context, username, passwordHash string) error {
+	return nil
+}
+
+func TestBootstrapCreatesAdminWhenEmpty(t *testing.T) {
+	store := &mockUserStore{}
+	ctx := context.Background()
+
+	if err := Bootstrap(ctx, store); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	if len(store.users) != 1 {
+		t.Fatalf("expected 1 user, got %d", len(store.users))
+	}
+	admin := store.users[0]
+	if admin.Username != "admin" {
+		t.Errorf("username: got %s, want admin", admin.Username)
+	}
+	if admin.Role != "admin" {
+		t.Errorf("role: got %s, want admin", admin.Role)
+	}
+	if !admin.Active {
+		t.Error("admin user should be active")
+	}
+	if admin.PasswordHash == "" {
+		t.Error("password hash should not be empty")
+	}
+	if admin.ID == "" {
+		t.Error("ID should not be empty")
+	}
+}
+
+func TestBootstrapSkipsWhenUsersExist(t *testing.T) {
+	existing := &domain.User{ID: "u1", Username: "existing", Role: "admin", Active: true}
+	store := &mockUserStore{users: []*domain.User{existing}}
+	ctx := context.Background()
+
+	if err := Bootstrap(ctx, store); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	if len(store.users) != 1 {
+		t.Errorf("Bootstrap should not create user when users already exist, got %d users", len(store.users))
+	}
+}
+
+func TestBootstrapReturnsErrorOnFindAllFailure(t *testing.T) {
+	store := &mockUserStore{errOn: "FindAllUsers"}
+	ctx := context.Background()
+
+	err := Bootstrap(ctx, store)
+	if err == nil {
+		t.Error("Bootstrap should return error when FindAllUsers fails")
+	}
+}
+
+func TestBootstrapReturnsErrorOnCreateFailure(t *testing.T) {
+	store := &mockUserStore{errOn: "CreateUser"}
+	ctx := context.Background()
+
+	err := Bootstrap(ctx, store)
+	if err == nil {
+		t.Error("Bootstrap should return error when CreateUser fails")
+	}
+}
+
+// --- RBAC: full permission matrix ---
+
+func TestRBACAdminHasAllPermissions(t *testing.T) {
+	allPerms := []Permission{
+		PermProvision, PermDelete, PermViewInstances, PermViewCredentials,
+		PermManageBackups, PermRestore, PermApplyMigrations, PermManageSnapshots,
+		PermManageSetup, PermManageUsers, PermManageFunctions, PermViewAny,
+	}
+	for _, perm := range allPerms {
+		if !HasPermission("admin", perm) {
+			t.Errorf("admin should have permission %s", perm)
+		}
+	}
+}
+
+func TestRBACOperatorPermissions(t *testing.T) {
+	allowed := []Permission{
+		PermProvision, PermDelete, PermViewInstances, PermViewCredentials,
+		PermManageBackups, PermApplyMigrations, PermManageSnapshots,
+		PermManageFunctions, PermViewAny,
+	}
+	denied := []Permission{PermRestore, PermManageSetup, PermManageUsers}
+
+	for _, perm := range allowed {
+		if !HasPermission("operator", perm) {
+			t.Errorf("operator should have permission %s", perm)
+		}
+	}
+	for _, perm := range denied {
+		if HasPermission("operator", perm) {
+			t.Errorf("operator should NOT have permission %s", perm)
+		}
+	}
+}
+
+func TestRBACViewerPermissions(t *testing.T) {
+	allowed := []Permission{PermViewInstances, PermViewAny}
+	denied := []Permission{
+		PermProvision, PermDelete, PermViewCredentials, PermManageBackups,
+		PermRestore, PermApplyMigrations, PermManageSnapshots,
+		PermManageSetup, PermManageUsers, PermManageFunctions,
+	}
+
+	for _, perm := range allowed {
+		if !HasPermission("viewer", perm) {
+			t.Errorf("viewer should have permission %s", perm)
+		}
+	}
+	for _, perm := range denied {
+		if HasPermission("viewer", perm) {
+			t.Errorf("viewer should NOT have permission %s", perm)
+		}
+	}
+}
+
+func TestRBACUnknownRoleHasNoPermissions(t *testing.T) {
+	allPerms := []Permission{
+		PermProvision, PermDelete, PermViewInstances, PermViewCredentials,
+		PermManageBackups, PermRestore, PermApplyMigrations, PermManageSnapshots,
+		PermManageSetup, PermManageUsers, PermManageFunctions, PermViewAny,
+	}
+	for _, perm := range allPerms {
+		if HasPermission("unknown_role", perm) {
+			t.Errorf("unknown_role should have no permissions, but has %s", perm)
+		}
 	}
 }

@@ -12,7 +12,7 @@ func TestExecuteHooksFindsAndInvokes(t *testing.T) {
 
 	dir := t.TempDir()
 	store := NewScriptStore(dir)
-	client := NewRuntimeClient(srv.URL)
+	client := NewRuntimeClient(srv.URL, "")
 
 	// Create two post-provision hooks
 	store.Save(&Script{ID: "hook-1", Name: "notify", Code: "function handler(d){return d;}", HookType: "post-provision", Active: true})
@@ -46,7 +46,7 @@ func TestExecuteHooksNoneFound(t *testing.T) {
 
 	dir := t.TempDir()
 	store := NewScriptStore(dir)
-	client := NewRuntimeClient(srv.URL)
+	client := NewRuntimeClient(srv.URL, "")
 	hooks := NewHookService(store, client)
 
 	results := hooks.ExecuteHooks(context.Background(), "post-provision", HookContext{})
@@ -59,7 +59,7 @@ func TestExecuteHooksNonBlocking(t *testing.T) {
 	// Use unreachable server — hooks should fail but not panic
 	dir := t.TempDir()
 	store := NewScriptStore(dir)
-	client := NewRuntimeClient("http://localhost:1")
+	client := NewRuntimeClient("http://localhost:1", "")
 	store.Save(&Script{ID: "fail-hook", Name: "fail", Code: "code", HookType: "post-provision", Active: true})
 
 	hooks := NewHookService(store, client)
@@ -82,7 +82,7 @@ func TestExecuteHooksAsync(t *testing.T) {
 
 	dir := t.TempDir()
 	store := NewScriptStore(dir)
-	client := NewRuntimeClient(srv.URL)
+	client := NewRuntimeClient(srv.URL, "")
 	store.Save(&Script{ID: "async-hook", Name: "async", Code: "code", HookType: "post-provision", Active: true})
 
 	hooks := NewHookService(store, client)

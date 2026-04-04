@@ -39,9 +39,9 @@ func TestScriptStoreList(t *testing.T) {
 	dir := t.TempDir()
 	store := NewScriptStore(dir)
 
-	store.Save(&Script{ID: "a", Name: "func-a", HookType: "post-provision", Active: true})
-	store.Save(&Script{ID: "b", Name: "func-b", HookType: "custom", Active: true})
-	store.Save(&Script{ID: "c", Name: "func-c", HookType: "post-provision", Active: false})
+	store.Save(&Script{ID: "a", Name: "func-a", Code: "fn()", HookType: "post-provision", Active: true})
+	store.Save(&Script{ID: "b", Name: "func-b", Code: "fn()", HookType: "custom", Active: true})
+	store.Save(&Script{ID: "c", Name: "func-c", Code: "fn()", HookType: "post-provision", Active: false})
 
 	all, _ := store.List("")
 	if len(all) != 3 {
@@ -58,7 +58,7 @@ func TestScriptStoreDelete(t *testing.T) {
 	dir := t.TempDir()
 	store := NewScriptStore(dir)
 
-	store.Save(&Script{ID: "del-1", Name: "del", Active: true})
+	store.Save(&Script{ID: "del-1", Name: "del", Code: "fn()", Active: true})
 	store.Delete("del-1")
 
 	got, _ := store.Get("del-1")
