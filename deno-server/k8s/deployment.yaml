@@ -27,6 +27,19 @@ spec:
         ports:
         - containerPort: 8000
           name: http
+        env:
+        - name: RUNTIME_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: deno-runtime-secret
+              key: secret
+        - name: ALLOWED_HOSTS
+          value: "" # Restrict to project PG hosts only, e.g. "pg-rw.ns:5432"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: false
+          allowPrivilegeEscalation: false
         resources:
           requests:
             memory: "256Mi"
@@ -62,3 +75,25 @@ spec:
     targetPort: 8000
     name: http
   type: ClusterIP
+---
+# NetworkPolicy: only allow ingress from excalibase-server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deno-runtime-ingress
+  namespace: serverless
+spec:
+  podSelector:
+    matchLabels:
+      app: deno-runtime
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          app: excalibase-server
+    ports:
+    - port: 8000
+      protocol: TCP
