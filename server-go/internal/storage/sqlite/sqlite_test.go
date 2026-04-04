@@ -254,3 +254,244 @@ func TestAuditLog(t *testing.T) {
 		t.Errorf("action: got %s", entries[0].Action)
 	}
 }
+
+// --- UpdateUserPassword ---
+
+func TestUpdateUserPassword(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	user := &domain.User{
+		ID: "u-pw", Username: "pwuser", Email: "pw@test.com",
+		PasswordHash: "oldhash", Role: "viewer", Active: true,
+	}
+	if err := store.CreateUser(ctx, user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if err := store.UpdateUserPassword(ctx, "pwuser", "newhash"); err != nil {
+		t.Fatalf("UpdateUserPassword: %v", err)
+	}
+
+	got, err := store.FindUserByUsername(ctx, "pwuser")
+	if err != nil || got == nil {
+		t.Fatalf("FindUserByUsername: %v", err)
+	}
+	if got.PasswordHash != "newhash" {
+		t.Errorf("password hash: got %s, want newhash", got.PasswordHash)
+	}
+}
+
+func TestUpdateUserPasswordNotFound(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	err := store.UpdateUserPassword(ctx, "nonexistent", "hash")
+	if err == nil {
+		t.Error("UpdateUserPassword should return error for unknown username")
+	}
+}
+
+// --- MigrationVersion ---
+
+func TestMigrationVersion(t *testing.T) {
+	store := testStore(t)
+
+	version, dirty, err := store.MigrationVersion()
+	if err != nil {
+		t.Fatalf("MigrationVersion: %v", err)
+	}
+	if dirty {
+		t.Error("migration should not be dirty after clean init")
+	}
+	if version == 0 {
+		t.Error("migration version should be > 0 after applying migrations")
+	}
+}
+
+// --- Close ---
+
+func TestClose(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir + "/close_test.db")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Close should succeed
+	if err := store.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+
+	// Operations after close should fail
+	ctx := context.Background()
+	_, err = store.FindAllUsers(ctx)
+	if err == nil {
+		t.Error("operations after Close should return an error")
+	}
+}
+
+// --- FindUserByID: not found ---
+
+func TestFindUserByIDNotFound(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	got, err := store.FindUserByID(ctx, "nonexistent-id")
+	if err != nil {
+		t.Fatalf("FindUserByID: unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Error("FindUserByID should return nil for nonexistent user")
+	}
+}
+
+// --- FindUserByUsername: not found ---
+
+func TestFindUserByUsernameNotFound(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	got, err := store.FindUserByUsername(ctx, "nobody")
+	if err != nil {
+		t.Fatalf("FindUserByUsername: unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Error("FindUserByUsername should return nil for nonexistent user")
+	}
+}
+
+// --- FindAllUsers: empty ---
+
+func TestFindAllUsersEmpty(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	users, err := store.FindAllUsers(ctx)
+	if err != nil {
+		t.Fatalf("FindAllUsers: %v", err)
+	}
+	if len(users) != 0 {
+		t.Errorf("expected 0 users, got %d", len(users))
+	}
+}
+
+// --- Token tests ---
+
+func TestTokenCreateAndFind(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.CreateUser(ctx, &domain.User{ID: "tu1", Username: "tokenuser", Email: "t@t.com", Role: "admin", Active: true})
+
+	tok := &domain.AccessToken{
+		TokenHash:   "hashvalue123",
+		TokenPrefix: "prefix123456",
+		UserID:      "tu1",
+		Name:        "My Token",
+	}
+	if err := store.CreateToken(ctx, tok); err != nil {
+		t.Fatalf("CreateToken: %v", err)
+	}
+
+	got, err := store.FindByTokenHash(ctx, "hashvalue123")
+	if err != nil {
+		t.Fatalf("FindByTokenHash: %v", err)
+	}
+	if got == nil {
+		t.Fatal("FindByTokenHash returned nil")
+	}
+	if got.UserID != "tu1" {
+		t.Errorf("UserID: got %s, want tu1", got.UserID)
+	}
+	if got.Name != "My Token" {
+		t.Errorf("Name: got %s, want My Token", got.Name)
+	}
+}
+
+func TestTokenFindByHashNotFound(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	got, err := store.FindByTokenHash(ctx, "nonexistent-hash")
+	if err != nil {
+		t.Fatalf("FindByTokenHash: %v", err)
+	}
+	if got != nil {
+		t.Error("FindByTokenHash should return nil for unknown hash")
+	}
+}
+
+func TestTokenListByUser(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.CreateUser(ctx, &domain.User{ID: "lu1", Username: "listuser", Email: "l@t.com", Role: "admin", Active: true})
+
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "h1", TokenPrefix: "p1__________", UserID: "lu1", Name: "T1"})
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "h2", TokenPrefix: "p2__________", UserID: "lu1", Name: "T2"})
+
+	tokens, err := store.ListTokensByUser(ctx, "lu1")
+	if err != nil {
+		t.Fatalf("ListTokensByUser: %v", err)
+	}
+	if len(tokens) != 2 {
+		t.Errorf("expected 2 tokens, got %d", len(tokens))
+	}
+}
+
+func TestTokenDelete(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.CreateUser(ctx, &domain.User{ID: "du1", Username: "deluser", Email: "d@t.com", Role: "admin", Active: true})
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "del-hash", TokenPrefix: "delhash12345", UserID: "du1", Name: "Del"})
+
+	if err := store.DeleteToken(ctx, "del-hash"); err != nil {
+		t.Fatalf("DeleteToken: %v", err)
+	}
+
+	got, _ := store.FindByTokenHash(ctx, "del-hash")
+	if got != nil {
+		t.Error("token should be nil after deletion")
+	}
+}
+
+// --- FindByOwner: empty result ---
+
+func TestFindByOwnerEmpty(t *testing.T) {
+	store := testStore(t)
+
+	result, err := store.FindByOwner("no-such-owner")
+	if err != nil {
+		t.Fatalf("FindByOwner: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected 0 results, got %d", len(result))
+	}
+}
+
+// --- Metrics: prune old entries ---
+
+func TestMetricsPruneKeepsLatest100(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.Save(&domain.DatabaseInstance{ProjectID: "prune-db", Status: "ACTIVE"})
+
+	// Insert 105 metrics entries
+	for i := 0; i < 105; i++ {
+		ts := &domain.FlexTime{Time: time.Now()}
+		store.AppendMetrics(ctx, &domain.DatabaseMetrics{
+			ProjectID: "prune-db", Timestamp: ts, MetricsAvailable: true,
+		})
+	}
+
+	hist, err := store.GetMetricsHistory(ctx, "prune-db", 200)
+	if err != nil {
+		t.Fatalf("GetMetricsHistory: %v", err)
+	}
+	if len(hist) > 100 {
+		t.Errorf("expected at most 100 entries after pruning, got %d", len(hist))
+	}
+}
