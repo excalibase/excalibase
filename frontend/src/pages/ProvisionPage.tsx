@@ -6,9 +6,9 @@ import { Button } from '../components/Button';
 import { Database, Loader2 } from 'lucide-react';
 
 const DB_TYPES = [
-  { type: DatabaseType.POSTGRESQL, icon: '🐘', label: 'PostgreSQL', desc: 'CloudNativePG operator' },
-  { type: DatabaseType.MYSQL,      icon: '🐬', label: 'MySQL',      desc: 'Vitess operator (beta)'  },
-  { type: DatabaseType.MONGODB,    icon: '🍃', label: 'MongoDB',    desc: 'MongoDB Community operator' },
+  { type: DatabaseType.POSTGRESQL, icon: '🐘', label: 'PostgreSQL', desc: 'CloudNativePG operator', disabled: false },
+  { type: DatabaseType.MYSQL,      icon: '🐬', label: 'MySQL',      desc: 'Coming soon',            disabled: true  },
+  { type: DatabaseType.MONGODB,    icon: '🍃', label: 'MongoDB',    desc: 'Coming soon',            disabled: true  },
 ];
 
 const TIERS = [
@@ -29,7 +29,7 @@ export function ProvisionPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const result = await provision.mutateAsync({ projectName, orgId, databaseType: dbType, tier });
-    navigate(`/instances/${result.projectId}`);
+    navigate(`/project/${result.projectId}`);
   };
 
   return (
@@ -69,13 +69,16 @@ export function ProvisionPage() {
         <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
           <h2 className="font-semibold text-text-primary">Database Engine</h2>
           <div className="grid grid-cols-3 gap-3">
-            {DB_TYPES.map(({ type, icon, label, desc }) => (
+            {DB_TYPES.map(({ type, icon, label, desc, disabled }) => (
               <button
                 key={type}
                 type="button"
-                onClick={() => setDbType(type)}
+                onClick={() => !disabled && setDbType(type)}
+                disabled={disabled}
                 className={`p-4 rounded-xl border-2 text-left transition-all ${
-                  dbType === type
+                  disabled
+                    ? 'border-border-primary bg-bg-secondary opacity-50 cursor-not-allowed'
+                    : dbType === type
                     ? 'border-accent-primary bg-accent-primary/10'
                     : 'border-border-primary bg-bg-tertiary hover:border-border-secondary'
                 }`}

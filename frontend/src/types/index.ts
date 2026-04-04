@@ -81,6 +81,7 @@ export interface BackupInfo {
   timestamp: string;
   size: string;
   status: string;
+  type?: string;
 }
 
 export interface PodMetrics {

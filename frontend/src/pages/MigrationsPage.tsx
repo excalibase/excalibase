@@ -59,15 +59,16 @@ export function MigrationsPage() {
         }
         setTimeout(() => setToast(null), 5000);
       },
-      onError: (e: any) => {
-        setToast({ msg: e?.response?.data?.error ?? 'Request failed', ok: false });
+      onError: (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        setToast({ msg: msg || 'Request failed', ok: false });
         setTimeout(() => setToast(null), 5000);
       },
     });
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <div data-testid="migrations-page" className="max-w-5xl mx-auto space-y-6">
       {/* New Migration button */}
       <div className="flex justify-end">
         {projectId && (

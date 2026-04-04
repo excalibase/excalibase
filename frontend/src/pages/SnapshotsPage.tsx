@@ -2,13 +2,7 @@ import { useState } from 'react';
 import { useSnapshots, useExportSnapshot, useDeleteSnapshot } from '../hooks/useSnapshots';
 import { useInstanceContext } from '../context/InstanceContext';
 import { Camera, Download, Trash2, Plus, FileText } from 'lucide-react';
-
-function formatBytes(bytes: number) {
-  if (!bytes) return '—';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+import { formatBytes } from '../utils/formatBytes';
 
 export function SnapshotsPage() {
   const { projectId } = useInstanceContext();
@@ -28,7 +22,10 @@ export function SnapshotsPage() {
   function handleExport() {
     exportSnap.mutate(exportOpts, {
       onSuccess: (s) => showToast(`Snapshot ${s.snapshotId} created (${formatBytes(s.sizeBytes)})`, true),
-      onError: (e: any) => showToast(e?.response?.data?.error ?? 'Export failed', false),
+      onError: (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        showToast(msg || 'Export failed', false);
+      },
     });
   }
 
@@ -36,7 +33,10 @@ export function SnapshotsPage() {
     if (!confirm(`Delete snapshot ${snapshotId}?`)) return;
     deleteSnap.mutate(snapshotId, {
       onSuccess: () => showToast('Snapshot deleted', true),
-      onError: (e: any) => showToast(e?.response?.data?.error ?? 'Delete failed', false),
+      onError: (e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        showToast(msg || 'Delete failed', false);
+      },
     });
   }
 

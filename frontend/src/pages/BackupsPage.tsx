@@ -3,7 +3,7 @@ import { useListBackups, useTriggerBackup, useRestoreFromBackup, type RestoreReq
 import { useInstanceContext } from '../context/InstanceContext';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
-import { Archive, RefreshCw, RotateCcw, Clock } from 'lucide-react';
+import { Archive, RefreshCw, RotateCcw, Clock, type LucideIcon } from 'lucide-react';
 
 type Tab = 'backups' | 'restore';
 
@@ -62,7 +62,7 @@ export function BackupsPage() {
           {([
             { key: 'backups', label: 'Backup History', icon: Archive },
             { key: 'restore', label: 'Restore / PITR', icon: RotateCcw },
-          ] as { key: Tab; label: string; icon: any }[]).map(({ key, label, icon: Icon }) => (
+          ] as { key: Tab; label: string; icon: LucideIcon }[]).map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -115,7 +115,7 @@ export function BackupsPage() {
                     <tr key={b.id} className="border-b border-border-primary last:border-0 hover:bg-surface-hover transition-colors">
                       <td className="py-3 font-mono text-xs text-text-primary">{b.id}</td>
                       <td className="py-3 text-text-secondary">{new Date(b.timestamp).toLocaleString()}</td>
-                      <td className="py-3 text-text-tertiary">{(b as any).type ?? 'MANUAL'}</td>
+                      <td className="py-3 text-text-tertiary">{b.type ?? 'MANUAL'}</td>
                       <td className="py-3 text-text-secondary">{b.size}</td>
                       <td className="py-3"><StatusBadge status={b.status} /></td>
                     </tr>
@@ -176,7 +176,10 @@ export function BackupsPage() {
                 disabled={!restoreForm.newProjectId.trim() || restore.isPending || !projectId}
                 onClick={() => restore.mutate(
                   { ...restoreForm, targetTime: restoreForm.targetTime?.trim() || undefined },
-                  { onError: (e: any) => showToast(e?.response?.data?.error ?? 'Restore failed', false) }
+                  { onError: (e: unknown) => {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    showToast(msg || 'Restore failed', false);
+                  } }
                 )}
               >
                 <RotateCcw className="w-4 h-4 mr-2" />

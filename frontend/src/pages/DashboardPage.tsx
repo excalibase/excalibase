@@ -60,7 +60,7 @@ export function DashboardPage() {
                 <tr
                   key={inst.projectId}
                   className="border-b border-border-primary last:border-0 hover:bg-surface-hover cursor-pointer transition-colors"
-                  onClick={() => navigate(`/instances/${inst.projectId}`)}
+                  onClick={() => navigate(`/project/${inst.projectId}`)}
                 >
                   <td className="px-6 py-3 font-medium text-text-primary">{inst.projectId}</td>
                   <td className="px-6 py-3 text-text-secondary">{dbIcon(inst.databaseType)} {inst.databaseType}</td>

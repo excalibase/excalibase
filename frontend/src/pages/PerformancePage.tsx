@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useInstanceContext } from '../context/InstanceContext';
 import { usePerformanceSummary, useTopQueries, useWaitEvents, useEnablePerformanceInsights } from '../hooks/usePerformance';
-import { Zap, Clock, Database, AlertCircle, Settings, CheckCircle } from 'lucide-react';
+import { Zap, Clock, Database, AlertCircle, Settings, CheckCircle, type LucideIcon } from 'lucide-react';
+import { formatBytes } from '../utils/formatBytes';
 
 type Tab = 'summary' | 'queries' | 'waits';
 
@@ -12,11 +13,22 @@ function ms(n: number | undefined) {
   if (n == null) return '—';
   return n >= 1000 ? `${(n / 1000).toFixed(2)}s` : `${n.toFixed(1)}ms`;
 }
-function formatBytes(b: number) {
-  if (!b) return '—';
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
-  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+
+function extractErrorMessage(err: unknown): string | undefined {
+  if (err != null && typeof err === 'object' && 'response' in err) {
+    const resp = (err as { response?: { data?: { error?: string } } }).response;
+    return resp?.data?.error;
+  }
+  return undefined;
+}
+
+function isStatStatementsMissing(err: unknown): boolean {
+  if (err != null && typeof err === 'object' && 'response' in err) {
+    const resp = (err as { response?: { data?: { hint?: string; error?: string } } }).response;
+    return resp?.data?.hint?.includes('pg_stat_statements') === true ||
+      String(resp?.data?.error ?? '').includes('pg_stat_statements');
+  }
+  return false;
 }
 
 export function PerformancePage() {
@@ -34,11 +46,7 @@ export function PerformancePage() {
     setTimeout(() => setToast(null), 5000);
   }
 
-  const needsEnable = (e: any) =>
-    e?.response?.data?.hint?.includes('pg_stat_statements') ||
-    String(e?.response?.data?.error ?? '').includes('pg_stat_statements');
-
-  const pgStatMissing = needsEnable(summaryErr) || needsEnable(queriesErr) || needsEnable(waitsErr);
+  const pgStatMissing = isStatStatementsMissing(summaryErr) || isStatStatementsMissing(queriesErr) || isStatStatementsMissing(waitsErr);
   const anyLoading = summaryLoading || queriesLoading || waitsLoading;
 
   return (
@@ -84,7 +92,7 @@ export function PerformancePage() {
             <button
               onClick={() => enablePi.mutate(undefined, {
                 onSuccess: (r) => showToast(r.status ?? 'Enabled — cluster restart in progress (~30s)', true),
-                onError: (e: any) => showToast(e?.response?.data?.error ?? 'Failed to enable', false),
+                onError: (e: unknown) => showToast(extractErrorMessage(e) ?? 'Failed to enable', false),
               })}
               disabled={enablePi.isPending}
               className="px-6 py-2.5 bg-yellow-500 hover:bg-yellow-400 disabled:opacity-50 text-black text-sm font-semibold rounded-lg transition-colors"
@@ -104,7 +112,7 @@ export function PerformancePage() {
             { key: 'summary', label: 'Overview', icon: Database },
             { key: 'queries', label: 'Top Queries', icon: Zap },
             { key: 'waits',   label: 'Wait Events', icon: Clock },
-          ] as { key: Tab; label: string; icon: any }[]).map(({ key, label, icon: Icon }) => (
+          ] as { key: Tab; label: string; icon: LucideIcon }[]).map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -125,7 +133,7 @@ export function PerformancePage() {
                 <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-500/60" />
                 <p className="text-sm text-text-primary font-medium mb-1">Performance data unavailable</p>
                 <p className="text-xs text-text-tertiary max-w-sm mx-auto">
-                  {(summaryErr as any)?.response?.data?.error ?? 'Could not fetch performance data.'}
+                  {extractErrorMessage(summaryErr) ?? 'Could not fetch performance data.'}
                 </p>
               </div>
             ) : !summary ? (
@@ -159,7 +167,7 @@ export function PerformancePage() {
                 <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-500/60" />
                 <p className="text-sm text-text-primary font-medium mb-1">Query stats unavailable</p>
                 <p className="text-xs text-text-tertiary max-w-sm mx-auto">
-                  {(queriesErr as any)?.response?.data?.error ?? 'Could not fetch query stats.'}
+                  {extractErrorMessage(queriesErr) ?? 'Could not fetch query stats.'}
                 </p>
               </div>
             ) : queries.length === 0 ? (
@@ -179,7 +187,7 @@ export function PerformancePage() {
                   </thead>
                   <tbody>
                     {queries.map((q, i) => (
-                      <tr key={i} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
+                      <tr key={`query-${i}-${q.query?.slice(0, 20)}`} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
                         <td className="py-3 pr-4 font-mono text-xs text-text-primary max-w-xs truncate" title={q.query}>{q.query}</td>
                         <td className="py-3 pr-4 text-right text-text-secondary">{q.calls?.toLocaleString()}</td>
                         <td className="py-3 pr-4 text-right text-text-secondary">{ms(q.totalTimeMs)}</td>
@@ -203,7 +211,7 @@ export function PerformancePage() {
                 <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-500/60" />
                 <p className="text-sm text-text-primary font-medium mb-1">Wait events unavailable</p>
                 <p className="text-xs text-text-tertiary max-w-sm mx-auto">
-                  {(waitsErr as any)?.response?.data?.error ?? 'Could not fetch wait events.'}
+                  {extractErrorMessage(waitsErr) ?? 'Could not fetch wait events.'}
                 </p>
               </div>
             ) : waits.length === 0 ? (
@@ -222,7 +230,7 @@ export function PerformancePage() {
                 </thead>
                 <tbody>
                   {waits.map((w, i) => (
-                    <tr key={i} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
+                    <tr key={w.pid || i} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
                       <td className="py-3 pr-4 font-mono text-xs text-text-primary">{w.pid}</td>
                       <td className="py-3 pr-4 text-text-secondary">{w.waitEventType}</td>
                       <td className="py-3 pr-4 text-accent-primary">{w.waitEvent ?? '—'}</td>

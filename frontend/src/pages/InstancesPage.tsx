@@ -55,7 +55,7 @@ export function InstancesPage() {
                 <tr
                   key={inst.projectId}
                   className="border-b border-border-primary last:border-0 hover:bg-surface-hover transition-colors cursor-pointer"
-                  onClick={() => navigate(`/instances/${inst.projectId}`)}
+                  onClick={() => navigate(`/project/${inst.projectId}`)}
                 >
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
@@ -75,7 +75,7 @@ export function InstancesPage() {
                       <Button
                         variant="secondary"
                         size="sm"
-                        onClick={() => navigate(`/instances/${inst.projectId}`)}
+                        onClick={() => navigate(`/project/${inst.projectId}`)}
                       >
                         <Eye className="w-4 h-4" />
                       </Button>

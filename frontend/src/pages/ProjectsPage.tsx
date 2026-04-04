@@ -65,7 +65,7 @@ export function ProjectsPage() {
         {projects.map((project) => (
           <button
             key={project.projectId}
-            onClick={() => navigate(`/projects/${project.projectId}/schema`)}
+            onClick={() => navigate(`/project/${project.projectId}`)}
             className="bg-surface-card border border-border-primary rounded-xl p-5 text-left hover:border-purple-500/50 hover:bg-surface-hover transition-all group"
           >
             <div className="flex items-start justify-between mb-3">
