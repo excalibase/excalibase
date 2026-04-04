@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -88,64 +89,14 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 		MetricsAvailable: true,
 	}
 
-	namespace := inst.Namespace
-	projectID := inst.ProjectID
+	tierInstances := tierInstanceCount(inst.Tier)
 
-	// Fetch CNPG metrics from port 9187 via pod exec (IPv6)
-	cnpgMetrics, err := s.fetchCNPGMetrics(ctx, namespace, projectID)
-	if err != nil {
+	// Collect CNPG Prometheus metrics
+	if err := s.collectCNPGMetrics(ctx, inst, tierInstances, metrics); err != nil {
 		metrics.MetricsAvailable = false
 		reason := err.Error()
 		metrics.UnavailableReason = &reason
 		return metrics
-	}
-
-	if strings.TrimSpace(cnpgMetrics) == "" {
-		metrics.MetricsAvailable = false
-		reason := "Prometheus exporter returned empty data"
-		metrics.UnavailableReason = &reason
-		return metrics
-	}
-
-	// Parse CNPG metrics
-	labeled := parseLabeledMetrics(cnpgMetrics)
-
-	// Connections (sum across all pods for multi-instance)
-	tierInstances := tierInstanceCount(inst.Tier)
-	totalActive := sumMetric(labeled, "cnpg_backends_total")
-	if tierInstances > 1 {
-		for i := 2; i <= tierInstances; i++ {
-			pod := fmt.Sprintf("%s-postgres-%d", projectID, i)
-			replicaRaw, err := s.execMetricsFetch(ctx, namespace, pod)
-			if err == nil {
-				replicaLabeled := parseLabeledMetrics(replicaRaw)
-				totalActive += sumMetric(replicaLabeled, "cnpg_backends_total")
-			}
-		}
-	}
-	metrics.ActiveConnections = intPtr(totalActive)
-
-	// Idle connections
-	idleCount := sumMetricFiltered(labeled, "cnpg_backends_total", "\"idle\"")
-	metrics.IdleConnections = intPtr(idleCount)
-
-	// Max connections
-	if v, ok := labeled["cnpg_pg_settings_setting{name=\"max_connections\"}"]; ok {
-		metrics.MaxConnections = intPtr(int(v))
-	} else {
-		metrics.MaxConnections = intPtr(100)
-	}
-
-	// Database size
-	if v, ok := labeled["cnpg_pg_database_size_bytes{datname=\"app\"}"]; ok {
-		gb := int64(v) / (1024 * 1024 * 1024)
-		metrics.DatabaseSizeGB = &gb
-	}
-
-	// Last backup time
-	if v, ok := labeled["cnpg_collector_last_available_backup_timestamp"]; ok && v > 0 {
-		t := &domain.FlexTime{Time: time.Unix(int64(v), 0).UTC()}
-		metrics.LastBackupTime = t
 	}
 
 	// Health status
@@ -167,37 +118,96 @@ func (s *MetricsService) collectMetrics(ctx context.Context, inst *domain.Databa
 	metrics.InstanceCount = &tierInstances
 
 	// Pod-level CPU/memory from metrics-server
-	podMetrics, err := s.k8sClient.GetPodMetrics(ctx, namespace)
-	if err == nil && len(podMetrics) > 0 {
-		var totalCPUMillis int64
-		var totalMemMB int64
-		for _, pm := range podMetrics {
-			role := "replica"
-			if strings.HasSuffix(pm.Name, "-1") {
-				role = "primary"
-			}
-			metrics.Pods = append(metrics.Pods, domain.PodMetrics{
-				Name:          pm.Name,
-				Role:          role,
-				CPUCores:      float64(pm.CPUMillis) / 1000.0,
-				CPULimitCores: perPodCPU,
-				MemoryMB:      pm.MemoryMB,
-				MemoryLimitMB: int64(perPodMemMB),
-			})
-			totalCPUMillis += pm.CPUMillis
-			totalMemMB += pm.MemoryMB
-		}
-		// Aggregate CPU/memory as percentages of tier limits
-		cpuCores := float64(totalCPUMillis) / 1000.0
-		metrics.CPUUsageCores = &cpuCores
-		cpuPct := (cpuCores / totalCPULimit) * 100
-		metrics.CPUUsagePercent = &cpuPct
-		metrics.MemoryUsageMB = &totalMemMB
-		memPct := float64(totalMemMB) / float64(totalMemLimit) * 100
-		metrics.MemoryUsagePercent = &memPct
-	}
+	s.collectPodResourceMetrics(ctx, inst.Namespace, perPodCPU, perPodMemMB, totalCPULimit, totalMemLimit, metrics)
 
 	return metrics
+}
+
+// collectCNPGMetrics fetches and parses CNPG Prometheus metrics from the primary pod,
+// aggregating replica metrics for multi-instance tiers.
+func (s *MetricsService) collectCNPGMetrics(ctx context.Context, inst *domain.DatabaseInstance, tierInstances int, metrics *domain.DatabaseMetrics) error {
+	raw, err := s.fetchCNPGMetrics(ctx, inst.Namespace, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(raw) == "" {
+		return fmt.Errorf("Prometheus exporter returned empty data")
+	}
+
+	labeled := parseLabeledMetrics(raw)
+
+	// Connections (sum across all pods for multi-instance)
+	totalActive := sumMetric(labeled, "cnpg_backends_total")
+	if tierInstances > 1 {
+		for i := 2; i <= tierInstances; i++ {
+			pod := fmt.Sprintf("%s-postgres-%d", inst.ProjectID, i)
+			replicaRaw, err := s.execMetricsFetch(ctx, inst.Namespace, pod)
+			if err == nil {
+				totalActive += sumMetric(parseLabeledMetrics(replicaRaw), "cnpg_backends_total")
+			}
+		}
+	}
+	metrics.ActiveConnections = intPtr(totalActive)
+
+	// Idle connections
+	metrics.IdleConnections = intPtr(sumMetricFiltered(labeled, "cnpg_backends_total", "\"idle\""))
+
+	// Max connections
+	if v, ok := labeled["cnpg_pg_settings_setting{name=\"max_connections\"}"]; ok {
+		metrics.MaxConnections = intPtr(int(v))
+	} else {
+		metrics.MaxConnections = intPtr(100)
+	}
+
+	// Database size
+	if v, ok := labeled["cnpg_pg_database_size_bytes{datname=\"app\"}"]; ok {
+		gb := int64(v) / (1024 * 1024 * 1024)
+		metrics.DatabaseSizeGB = &gb
+	}
+
+	// Last backup time
+	if v, ok := labeled["cnpg_collector_last_available_backup_timestamp"]; ok && v > 0 {
+		t := &domain.FlexTime{Time: time.Unix(int64(v), 0).UTC()}
+		metrics.LastBackupTime = t
+	}
+
+	return nil
+}
+
+// collectPodResourceMetrics fetches CPU/memory usage from metrics-server and populates
+// per-pod metrics and aggregate usage percentages.
+func (s *MetricsService) collectPodResourceMetrics(ctx context.Context, namespace string, perPodCPU float64, perPodMemMB int, totalCPULimit float64, totalMemLimit int64, metrics *domain.DatabaseMetrics) {
+	podMetrics, err := s.k8sClient.GetPodMetrics(ctx, namespace)
+	if err != nil || len(podMetrics) == 0 {
+		return
+	}
+
+	var totalCPUMillis int64
+	var totalMemMB int64
+	for _, pm := range podMetrics {
+		role := "replica"
+		if strings.HasSuffix(pm.Name, "-1") {
+			role = "primary"
+		}
+		metrics.Pods = append(metrics.Pods, domain.PodMetrics{
+			Name:          pm.Name,
+			Role:          role,
+			CPUCores:      float64(pm.CPUMillis) / 1000.0,
+			CPULimitCores: perPodCPU,
+			MemoryMB:      pm.MemoryMB,
+			MemoryLimitMB: int64(perPodMemMB),
+		})
+		totalCPUMillis += pm.CPUMillis
+		totalMemMB += pm.MemoryMB
+	}
+
+	cpuCores := float64(totalCPUMillis) / 1000.0
+	metrics.CPUUsageCores = &cpuCores
+	cpuPct := (cpuCores / totalCPULimit) * 100
+	metrics.CPUUsagePercent = &cpuPct
+	metrics.MemoryUsageMB = &totalMemMB
+	memPct := float64(totalMemMB) / float64(totalMemLimit) * 100
+	metrics.MemoryUsagePercent = &memPct
 }
 
 func (s *MetricsService) fetchCNPGMetrics(ctx context.Context, namespace, projectID string) (string, error) {
@@ -301,9 +311,18 @@ func (s *MetricsService) saveHistory(projectID string) {
 	s.mu.RUnlock()
 
 	dir := filepath.Join(s.storagePath, "projects", projectID)
-	os.MkdirAll(dir, 0755)
-	data, _ := json.Marshal(hist)
-	os.WriteFile(filepath.Join(dir, "metrics-history.json"), data, 0644)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Printf("WARN: mkdir %s: %v", dir, err)
+		return
+	}
+	data, err := json.Marshal(hist)
+	if err != nil {
+		log.Printf("WARN: marshal metrics history for %s: %v", projectID, err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dir, "metrics-history.json"), data, 0644); err != nil {
+		log.Printf("WARN: write %s: %v", filepath.Join(dir, "metrics-history.json"), err)
+	}
 }
 
 func (s *MetricsService) loadHistory(projectID string) []domain.DatabaseMetrics {

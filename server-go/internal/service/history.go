@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -32,7 +33,10 @@ func (w *HistoryWriter) StartAttempt(projectID, attemptID string) error {
 		"status":    "IN_PROGRESS",
 		"startedAt": time.Now().Format(time.RFC3339),
 	}
-	data, _ := json.MarshalIndent(status, "", "  ")
+	data, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal attempt status: %w", err)
+	}
 	return os.WriteFile(filepath.Join(dir, "status.json"), data, 0644)
 }
 
@@ -60,8 +64,14 @@ func (w *HistoryWriter) FinalizeAttempt(projectID, attemptID, status string) {
 		"status":     status,
 		"finishedAt": time.Now().Format(time.RFC3339),
 	}
-	data, _ := json.MarshalIndent(finalStatus, "", "  ")
-	os.WriteFile(filepath.Join(dir, "status.json"), data, 0644)
+	data, err := json.MarshalIndent(finalStatus, "", "  ")
+	if err != nil {
+		log.Printf("WARN: marshal attempt status %s: %v", attemptID, err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dir, "status.json"), data, 0644); err != nil {
+		log.Printf("WARN: write %s: %v", filepath.Join(dir, "status.json"), err)
+	}
 }
 
 func (w *HistoryWriter) ListAttempts(projectID string) []string {

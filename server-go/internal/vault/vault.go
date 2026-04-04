@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 
@@ -134,7 +135,10 @@ func (v *Vault) Init(shares, threshold int) (*InitResult, error) {
 		Threshold:        threshold,
 		Shares:           shares,
 	}
-	metaBytes, _ := json.Marshal(meta)
+	metaBytes, err := json.Marshal(meta)
+	if err != nil {
+		return nil, fmt.Errorf("marshal barrier meta: %w", err)
+	}
 
 	err = v.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketBarrier)
@@ -175,8 +179,12 @@ func (v *Vault) Init(shares, threshold int) (*InitResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate PKI: %w", err)
 	}
-	v.Put("pki/signing/private", map[string]string{"key": privPEM, "algorithm": "EC-P256"})
-	v.Put("pki/signing/public", map[string]string{"key": pubPEM, "algorithm": "EC-P256"})
+	if err := v.Put("pki/signing/private", map[string]string{"key": privPEM, "algorithm": "EC-P256"}); err != nil {
+		return nil, fmt.Errorf("store pki private key: %w", err)
+	}
+	if err := v.Put("pki/signing/public", map[string]string{"key": pubPEM, "algorithm": "EC-P256"}); err != nil {
+		return nil, fmt.Errorf("store pki public key: %w", err)
+	}
 
 	return &InitResult{
 		Shares:    hexShares,
@@ -292,7 +300,10 @@ func (v *Vault) Rekey(shares, threshold int) (*InitResult, error) {
 		Threshold:        threshold,
 		Shares:           shares,
 	}
-	metaBytes, _ := json.Marshal(meta)
+	metaBytes, err := json.Marshal(meta)
+	if err != nil {
+		return nil, fmt.Errorf("marshal barrier meta: %w", err)
+	}
 
 	err = v.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketBarrier)
@@ -346,7 +357,10 @@ func (v *Vault) Put(path string, data map[string]string) error {
 	}
 
 	// Encrypt data with DEK
-	plaintext, _ := json.Marshal(data)
+	plaintext, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal secret data: %w", err)
+	}
 	encryptedData, err := encrypt(dek, plaintext)
 	if err != nil {
 		return fmt.Errorf("encrypt data: %w", err)
@@ -363,7 +377,10 @@ func (v *Vault) Put(path string, data map[string]string) error {
 		EncryptedData: encryptedData,
 		EncryptedDEK:  encryptedDEK,
 	}
-	entryBytes, _ := json.Marshal(entry)
+	entryBytes, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal secret entry: %w", err)
+	}
 
 	return v.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketSecrets).Put([]byte(path), entryBytes)
@@ -456,6 +473,6 @@ func (v *Vault) autoUnseal(keyHex string) {
 		return
 	}
 	if progress.Done {
-		fmt.Println("Vault auto-unsealed from VAULT_UNSEAL_KEY")
+		log.Printf("Vault auto-unsealed from VAULT_UNSEAL_KEY")
 	}
 }

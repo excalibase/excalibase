@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -106,9 +107,18 @@ func (s *AlertingService) CheckMetrics(metrics *domain.DatabaseMetrics) {
 
 func (s *AlertingService) saveHistory() {
 	dir := s.storagePath
-	os.MkdirAll(dir, 0755)
-	data, _ := json.MarshalIndent(s.history, "", "  ")
-	os.WriteFile(filepath.Join(dir, "alerts-history.json"), data, 0644)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Printf("WARN: mkdir %s: %v", dir, err)
+		return
+	}
+	data, err := json.MarshalIndent(s.history, "", "  ")
+	if err != nil {
+		log.Printf("WARN: marshal alert history: %v", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dir, "alerts-history.json"), data, 0644); err != nil {
+		log.Printf("WARN: write %s: %v", filepath.Join(dir, "alerts-history.json"), err)
+	}
 }
 
 func (s *AlertingService) loadHistory() {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vault"
 )
@@ -23,39 +25,62 @@ type ProvisioningService struct {
 	k8sClient k8s.KubeClient    // optional, for role creation via pod exec
 }
 
-func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Factory) *ProvisioningService {
-	return &ProvisioningService{store: store, factory: factory}
+func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Factory, k8sClient k8s.KubeClient) *ProvisioningService {
+	return &ProvisioningService{store: store, factory: factory, k8sClient: k8sClient}
 }
 
 func (s *ProvisioningService) SetHookService(hooks *edgefn.HookService) {
 	s.hooks = hooks
 }
 
-func (s *ProvisioningService) SetVault(v *vault.Vault, k8sClient k8s.KubeClient) {
+func (s *ProvisioningService) SetVault(v *vault.Vault) {
 	s.vault = v
-	s.k8sClient = k8sClient
 }
 
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
-	// Check for duplicate
-	existing, _ := s.store.FindByProjectID(req.ProjectName)
-	if existing != nil {
-		return nil, fmt.Errorf("project ID already exists: %s", req.ProjectName)
-	}
-
-	// Get tier config
-	tier, err := config.GetTierConfig(req.Tier)
+	inst, prov, tier, err := s.prepareProvisioning(req)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get provisioner
-	prov, ok := s.factory.Get(req.DBType)
-	if !ok {
-		return nil, fmt.Errorf("unsupported database type: %s", req.DBType)
+	if err := s.store.Save(inst); err != nil {
+		log.Printf("WARN: failed to persist instance state: %v", err)
 	}
 
-	// Create initial instance record
+	cb := s.stageCallback(inst)
+
+	if s.hooks != nil {
+		s.hooks.ExecuteHooksAsync(ctx, "pre-provision", edgefn.HookContext{
+			ProjectID: req.ProjectName, OrgID: req.OrgID,
+			DatabaseType: string(req.DBType), Tier: string(req.Tier),
+		}, nil)
+	}
+
+	result, err := prov.Provision(ctx, req, tier, cb)
+	if err != nil {
+		return s.handleProvisionFailure(inst, req, err), nil
+	}
+
+	return s.finalizeProvisioning(ctx, inst, req, result)
+}
+
+// prepareProvisioning validates the request and creates the initial instance record.
+func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest) (*domain.DatabaseInstance, provisioner.DatabaseProvisioner, config.TierConfig, error) {
+	existing, _ := s.store.FindByProjectID(req.ProjectName)
+	if existing != nil {
+		return nil, nil, config.TierConfig{}, fmt.Errorf("project ID already exists: %s", req.ProjectName)
+	}
+
+	tier, err := config.GetTierConfig(req.Tier)
+	if err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+
+	prov, ok := s.factory.Get(req.DBType)
+	if !ok {
+		return nil, nil, config.TierConfig{}, fmt.Errorf("unsupported database type: %s", req.DBType)
+	}
+
 	now := &domain.FlexTime{Time: time.Now()}
 	namespace := fmt.Sprintf("%s-%s", req.OrgID, req.ProjectName)
 	inst := &domain.DatabaseInstance{
@@ -75,48 +100,41 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		inst.BackupSchedule = req.Backup.Schedule
 		inst.BackupRetentionDays = intPtr(req.Backup.Retention)
 	}
-	if req.Tags != nil {
-		tagsJSON, _ := fmt.Printf("%v", req.Tags) // will be replaced with proper JSON
-		_ = tagsJSON
-	}
 
-	// Save initial state
-	s.store.Save(inst)
+	return inst, prov, tier, nil
+}
 
-	// Stage callback updates instance in store
-	cb := func(stage domain.ProvisioningStage) {
+// stageCallback returns a callback that updates instance stage in the store.
+func (s *ProvisioningService) stageCallback(inst *domain.DatabaseInstance) func(domain.ProvisioningStage) {
+	return func(stage domain.ProvisioningStage) {
 		inst.CurrentStage = stage
-		ft := &domain.FlexTime{Time: time.Now()}
-		inst.UpdatedAt = ft
-		s.store.Save(inst)
+		inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
+		if err := s.store.Save(inst); err != nil {
+			log.Printf("WARN: failed to persist instance state: %v", err)
+		}
 	}
+}
 
-	// Pre-provision hooks (non-blocking)
-	if s.hooks != nil {
-		s.hooks.ExecuteHooksAsync(ctx, "pre-provision", edgefn.HookContext{
-			ProjectID: req.ProjectName, OrgID: req.OrgID,
-			DatabaseType: string(req.DBType), Tier: string(req.Tier),
-		}, nil)
+// handleProvisionFailure persists the failure state and returns an error response.
+func (s *ProvisioningService) handleProvisionFailure(inst *domain.DatabaseInstance, req domain.ProvisioningRequest, err error) *domain.ProvisioningResponse {
+	inst.Status = "FAILED"
+	inst.CurrentStage = domain.StageFailed
+	inst.FailureReason = err.Error()
+	if saveErr := s.store.Save(inst); saveErr != nil {
+		log.Printf("WARN: failed to persist instance state: %v", saveErr)
 	}
-
-	// Run provisioning
-	result, err := prov.Provision(ctx, req, tier, cb)
-	if err != nil {
-		inst.Status = "FAILED"
-		inst.CurrentStage = domain.StageFailed
-		inst.FailureReason = err.Error()
-		s.store.Save(inst)
-		return &domain.ProvisioningResponse{
-			ProjectID:    req.ProjectName,
-			Status:       "FAILED",
-			CurrentStage: domain.StageFailed,
-			Namespace:    namespace,
-			FailureReason: err.Error(),
-			CreatedAt:    inst.CreatedAt,
-		}, nil
+	return &domain.ProvisioningResponse{
+		ProjectID:     req.ProjectName,
+		Status:        "FAILED",
+		CurrentStage:  domain.StageFailed,
+		Namespace:     inst.Namespace,
+		FailureReason: err.Error(),
+		CreatedAt:     inst.CreatedAt,
 	}
+}
 
-	// Update with connection details
+// finalizeProvisioning updates the instance with connection details, creates roles, and fires hooks.
+func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult) (*domain.ProvisioningResponse, error) {
 	port := result.Port
 	inst.Host = result.Host
 	inst.ReadOnlyHost = result.ReadOnlyHost
@@ -127,7 +145,7 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	inst.SSLMode = result.SSLMode
 	inst.Status = "ACTIVE"
 	inst.CurrentStage = domain.StageCompleted
-	inst.MetricsEndpoint = fmt.Sprintf("http://%s-postgres-1.%s.svc.cluster.local:9187/metrics", req.ProjectName, namespace)
+	inst.MetricsEndpoint = fmt.Sprintf("http://%s-postgres-1.%s.svc.cluster.local:9187/metrics", req.ProjectName, inst.Namespace)
 
 	delProtection := false
 	inst.DeletionProtection = &delProtection
@@ -137,14 +155,14 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	finalNow := &domain.FlexTime{Time: time.Now()}
 	inst.UpdatedAt = finalNow
 	inst.LastHealthCheck = finalNow
-	s.store.Save(inst)
-
-	// Create project roles and store credentials in vault
-	if s.vault != nil && s.k8sClient != nil && !s.vault.Sealed() {
-		s.createProjectRoles(ctx, req, result, namespace)
+	if err := s.store.Save(inst); err != nil {
+		log.Printf("WARN: failed to persist instance state: %v", err)
 	}
 
-	// Post-provision hooks (non-blocking, with credentials)
+	if s.vault != nil && s.k8sClient != nil && !s.vault.Sealed() {
+		s.createProjectRoles(ctx, req, result, inst.Namespace)
+	}
+
 	if s.hooks != nil {
 		s.hooks.ExecuteHooksAsync(ctx, "post-provision", edgefn.HookContext{
 			ProjectID: req.ProjectName, OrgID: req.OrgID,
@@ -158,7 +176,7 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		ProjectID:    req.ProjectName,
 		Status:       "ACTIVE",
 		CurrentStage: domain.StageCompleted,
-		Namespace:    namespace,
+		Namespace:    inst.Namespace,
 		Host:         result.Host,
 		Port:         &port,
 		DatabaseName: result.DatabaseName,
@@ -179,7 +197,7 @@ func (s *ProvisioningService) Deprovision(ctx context.Context, projectID string)
 	prov, ok := s.factory.Get(inst.DBType)
 	if ok {
 		if err := prov.Deprovision(ctx, inst.Namespace, projectID); err != nil {
-			fmt.Printf("WARN: K8s deprovision failed for %s: %v\n", projectID, err)
+			log.Printf("WARN: K8s deprovision failed for %s: %v", projectID, err)
 		}
 	}
 
@@ -262,38 +280,52 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	}
 
 	// SQL to create roles and schemas
+	// Use QuoteIdent for role names in GRANT statements and QuoteLiteral for passwords.
+	// Inside DO blocks, we pass the password as a Go-escaped literal to PG's format()
+	// with %L, which safely re-quotes it for the EXECUTE'd CREATE ROLE statement.
+	authRole := schema.QuoteIdent("auth_admin")
+	appRole := schema.QuoteIdent("excalibase_app")
+	safeAuthPass := schema.QuoteLiteral(authPass)
+	safeAppPass := schema.QuoteLiteral(appPass)
+
 	roleSQL := fmt.Sprintf(`
 CREATE SCHEMA IF NOT EXISTS auth;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'auth_admin') THEN
-    CREATE ROLE auth_admin WITH LOGIN PASSWORD '%s';
+    EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s::text);
   END IF;
 END $$;
-GRANT ALL ON SCHEMA auth TO auth_admin;
-ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO auth_admin;
+GRANT ALL ON SCHEMA auth TO %s;
+ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO %s;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'excalibase_app') THEN
-    CREATE ROLE excalibase_app WITH LOGIN PASSWORD '%s';
+    EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s::text);
   END IF;
 END $$;
-GRANT ALL ON SCHEMA public TO excalibase_app;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO excalibase_app;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO excalibase_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO excalibase_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO excalibase_app;
-GRANT USAGE ON SCHEMA auth TO excalibase_app;
-GRANT SELECT ON ALL TABLES IN SCHEMA auth TO excalibase_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO excalibase_app;
-`, authPass, appPass)
+GRANT ALL ON SCHEMA public TO %s;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO %s;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %s;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO %s;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %s;
+GRANT USAGE ON SCHEMA auth TO %s;
+GRANT SELECT ON ALL TABLES IN SCHEMA auth TO %s;
+ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
+`,
+		authRole, safeAuthPass, // DO block: format(%L) safely quotes the password
+		authRole, authRole, // GRANT auth
+		appRole, safeAppPass, // DO block for excalibase_app
+		appRole, appRole, appRole, appRole, appRole, // GRANT public
+		appRole, appRole, appRole, // GRANT auth usage
+	)
 
 	// Execute via pod exec (psql)
 	// Use postgres superuser via local socket (peer auth) to create roles
 	cmd := []string{"psql", "-U", "postgres", "-d", dbName, "-c", roleSQL}
 	output, err := s.k8sClient.ExecInPod(ctx, namespace, primaryPod, "postgres", cmd)
 	if err != nil {
-		fmt.Printf("WARN: role creation failed for %s: %v\nOutput: %s\n", projectID, err, output)
+		log.Printf("WARN: role creation failed for %s: %v\nOutput: %s", projectID, err, output)
 		return
 	}
 
@@ -307,7 +339,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO excalibase_app
 		"username": "excalibase_app", "password": appPass,
 	})
 
-	fmt.Printf("Created project roles for %s and stored in vault\n", projectID)
+	log.Printf("Created project roles for %s and stored in vault", projectID)
 }
 
 func boolPtr(b bool) *bool  { return &b }

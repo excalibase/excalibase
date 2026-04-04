@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -66,9 +67,15 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 
 	// Save to disk
 	dir := filepath.Join(s.storagePath, "projects", projectID, "migrations")
-	os.MkdirAll(dir, 0755)
-	data, _ := json.MarshalIndent(record, "", "  ")
-	os.WriteFile(filepath.Join(dir, migID+".json"), data, 0644)
+	if mkErr := os.MkdirAll(dir, 0755); mkErr != nil {
+		log.Printf("WARN: mkdir %s: %v", dir, mkErr)
+	}
+	data, marshalErr := json.MarshalIndent(record, "", "  ")
+	if marshalErr != nil {
+		log.Printf("WARN: marshal migration record %s: %v", migID, marshalErr)
+	} else if writeErr := os.WriteFile(filepath.Join(dir, migID+".json"), data, 0644); writeErr != nil {
+		log.Printf("WARN: write %s: %v", filepath.Join(dir, migID+".json"), writeErr)
+	}
 
 	return record, nil
 }

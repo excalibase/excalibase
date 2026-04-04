@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -56,9 +57,13 @@ func (s *SnapshotService) ExportSnapshot(ctx context.Context, projectID string, 
 
 	// Save to disk
 	dir := filepath.Join(s.storagePath, "snapshots")
-	os.MkdirAll(dir, 0755)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("mkdir snapshots: %w", err)
+	}
 	filePath := filepath.Join(dir, snapshotID+ext)
-	os.WriteFile(filePath, []byte(out), 0644)
+	if err := os.WriteFile(filePath, []byte(out), 0644); err != nil {
+		return nil, fmt.Errorf("write snapshot %s: %w", filePath, err)
+	}
 
 	now := &domain.FlexTime{Time: time.Now()}
 	info := &domain.SnapshotInfo{
@@ -71,8 +76,12 @@ func (s *SnapshotService) ExportSnapshot(ctx context.Context, projectID string, 
 	}
 
 	// Save metadata
-	metaData, _ := json.MarshalIndent(info, "", "  ")
-	os.WriteFile(filepath.Join(dir, snapshotID+".json"), metaData, 0644)
+	metaData, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		log.Printf("WARN: marshal snapshot metadata %s: %v", snapshotID, err)
+	} else if err := os.WriteFile(filepath.Join(dir, snapshotID+".json"), metaData, 0644); err != nil {
+		log.Printf("WARN: write %s: %v", filepath.Join(dir, snapshotID+".json"), err)
+	}
 
 	return info, nil
 }

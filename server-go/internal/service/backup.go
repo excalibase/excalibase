@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"log"
+
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -182,12 +184,24 @@ func (s *BackupService) syncBackupStatus(ctx context.Context, namespace, project
 				status, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
 				if status == "completed" {
 					record["status"] = "COMPLETED"
-					updated, _ := json.MarshalIndent(record, "", "  ")
-					os.WriteFile(filepath.Join(dir, e.Name()), updated, 0644)
+					updated, err := json.MarshalIndent(record, "", "  ")
+					if err != nil {
+						log.Printf("WARN: marshal backup record %s: %v", e.Name(), err)
+						continue
+					}
+					if err := os.WriteFile(filepath.Join(dir, e.Name()), updated, 0644); err != nil {
+						log.Printf("WARN: write %s: %v", filepath.Join(dir, e.Name()), err)
+					}
 				} else if status == "failed" {
 					record["status"] = "FAILED"
-					updated, _ := json.MarshalIndent(record, "", "  ")
-					os.WriteFile(filepath.Join(dir, e.Name()), updated, 0644)
+					updated, err := json.MarshalIndent(record, "", "  ")
+					if err != nil {
+						log.Printf("WARN: marshal backup record %s: %v", e.Name(), err)
+						continue
+					}
+					if err := os.WriteFile(filepath.Join(dir, e.Name()), updated, 0644); err != nil {
+						log.Printf("WARN: write %s: %v", filepath.Join(dir, e.Name()), err)
+					}
 				}
 			}
 		}
@@ -200,7 +214,16 @@ func (s *BackupService) GetInstance(projectID string) (*domain.DatabaseInstance,
 
 func (s *BackupService) saveBackupRecord(projectID, backupName string, record map[string]interface{}) {
 	dir := filepath.Join(s.storagePath, "projects", projectID, "backups")
-	os.MkdirAll(dir, 0755)
-	data, _ := json.MarshalIndent(record, "", "  ")
-	os.WriteFile(filepath.Join(dir, backupName+".json"), data, 0644)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Printf("WARN: mkdir %s: %v", dir, err)
+		return
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		log.Printf("WARN: marshal backup record %s: %v", backupName, err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dir, backupName+".json"), data, 0644); err != nil {
+		log.Printf("WARN: write %s: %v", filepath.Join(dir, backupName+".json"), err)
+	}
 }

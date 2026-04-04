@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -120,7 +121,7 @@ func (p *PostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, proj
 	// Delete the CNPG cluster CRD
 	err := p.client.DeleteCRD(ctx, k8s.CNPGClusterGVR, namespace, projectID+"-postgres")
 	if err != nil {
-		fmt.Printf("WARN: failed to delete cluster CRD: %v\n", err)
+		log.Printf("WARN: failed to delete cluster CRD: %v", err)
 	}
 	// Delete namespace (cascades everything)
 	return p.client.DeleteNamespace(ctx, namespace)
@@ -159,7 +160,7 @@ func (p *PostgreSQLProvisioner) waitForPodReady(ctx context.Context, namespace, 
 }
 
 func (p *PostgreSQLProvisioner) extractCredentials(ctx context.Context, namespace, secretName, projectID string) (*ProvisioningResult, error) {
-	// Poll for secret with retries
+	// Poll for secret with retries, respecting context cancellation.
 	var secretData map[string][]byte
 	var err error
 	for i := 0; i < 30; i++ {
@@ -167,7 +168,11 @@ func (p *PostgreSQLProvisioner) extractCredentials(ctx context.Context, namespac
 		if err == nil {
 			break
 		}
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("secret %s not found (context cancelled): %w", secretName, ctx.Err())
+		case <-time.After(2 * time.Second):
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("secret %s not found: %w", secretName, err)
