@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/vault"
@@ -15,35 +18,110 @@ import (
 	_ "github.com/lib/pq"
 )
 
+const (
+	connTTL     = 10 * time.Minute
+	maxConns    = 50
+	evictPeriod = 2 * time.Minute
+)
+
+type connEntry struct {
+	db      *sql.DB
+	created time.Time
+}
+
 type SchemaHandler struct {
-	vault        *vault.Vault
-	introspector *schema.Introspector
-	mu           sync.RWMutex
-	connCache    map[string]*sql.DB
-	dbHostOverride string // if set, overrides vault host (for local dev with port-forward)
-	dbPortOverride string // if set, overrides vault port
+	vault            *vault.Vault
+	introspector     *schema.Introspector
+	mu               sync.RWMutex
+	connCache        map[string]*connEntry
+	dbHostOverride   string // if set, overrides vault host (for local dev with port-forward)
+	dbPortOverride   string // if set, overrides vault port
+	dbSSLModeOverride string // if set, overrides sslmode (for testing)
 }
 
 func NewSchemaHandler(v *vault.Vault) *SchemaHandler {
-	return &SchemaHandler{
-		vault:          v,
-		introspector:   schema.NewIntrospector(),
-		connCache:      make(map[string]*sql.DB),
-		dbHostOverride: os.Getenv("SCHEMA_DB_HOST"),
-		dbPortOverride: os.Getenv("SCHEMA_DB_PORT"),
+	h := &SchemaHandler{
+		vault:             v,
+		introspector:      schema.NewIntrospector(),
+		connCache:         make(map[string]*connEntry),
+		dbHostOverride:    os.Getenv("SCHEMA_DB_HOST"),
+		dbPortOverride:    os.Getenv("SCHEMA_DB_PORT"),
+		dbSSLModeOverride: os.Getenv("SCHEMA_DB_SSLMODE"),
 	}
+	go h.evictLoop()
+	return h
+}
+
+func (h *SchemaHandler) evictLoop() {
+	ticker := time.NewTicker(evictPeriod)
+	defer ticker.Stop()
+	for range ticker.C {
+		h.mu.Lock()
+		now := time.Now()
+		for k, e := range h.connCache {
+			if now.Sub(e.created) > connTTL {
+				e.db.Close()
+				delete(h.connCache, k)
+			}
+		}
+		h.mu.Unlock()
+	}
+}
+
+func schemaParam(r *http.Request) string {
+	s := r.URL.Query().Get("schema")
+	if s == "" {
+		return "public"
+	}
+	if err := schema.ValidateSchemaName(s); err != nil {
+		return "public"
+	}
+	return s
 }
 
 func (h *SchemaHandler) Routes(r chi.Router) {
 	r.Route("/{projectId}", func(r chi.Router) {
 		r.Get("/tables", h.GetTables)
+		r.Post("/tables", h.CreateTable)
+		r.Patch("/tables/{tableName}", h.UpdateTable)
+		r.Delete("/tables/{tableName}", h.DropTable)
 		r.Get("/tables/{tableName}/columns", h.GetColumns)
+		r.Post("/tables/{tableName}/columns", h.AddColumn)
+		r.Patch("/tables/{tableName}/columns/{columnName}", h.AlterColumn)
+		r.Delete("/tables/{tableName}/columns/{columnName}", h.DropColumn)
 		r.Get("/relationships", h.GetRelationships)
 		r.Get("/tables/{tableName}/indexes", h.GetIndexes)
 		r.Post("/ddl", h.ExecuteDDL)
+		r.Post("/query", h.ExecuteQuery)
 		r.Get("/connection-test", h.TestConnection)
+		r.Get("/roles", h.GetRoles)
+		r.Post("/roles", h.CreateRole)
+		r.Delete("/roles/{roleName}", h.DropRole)
+		r.Get("/extensions", h.GetExtensions)
+		r.Post("/extensions", h.CreateExtension)
+		r.Delete("/extensions/{extName}", h.DropExtension)
+		r.Get("/policies", h.GetPolicies)
+		r.Post("/policies", h.CreatePolicy)
+		r.Delete("/policies/{policyName}", h.DropPolicy)
+		r.Get("/functions", h.GetFunctions)
+		r.Post("/functions", h.CreateFunction)
+		r.Delete("/functions/{funcName}", h.DropFunction)
+		r.Get("/triggers", h.GetTriggers)
+		r.Post("/triggers", h.CreateTrigger)
+		r.Delete("/triggers/{triggerName}", h.DropTrigger)
+		r.Post("/indexes", h.CreateIndex)
+		r.Delete("/indexes/{indexName}", h.DropIndex)
+		r.Get("/types", h.GetTypes)
+		r.Get("/tables/{tableName}/rows", h.GetRows)
+		r.Post("/tables/{tableName}/rows", h.InsertRow)
+		r.Patch("/tables/{tableName}/rows", h.UpdateRow)
+		r.Delete("/tables/{tableName}/rows", h.DeleteRow)
+		r.Get("/advisors/performance", h.RunPerformanceAdvisor)
+		r.Get("/advisors/security", h.RunSecurityAdvisor)
 	})
 }
+
+// --- Tables ---
 
 func (h *SchemaHandler) GetTables(w http.ResponseWriter, r *http.Request) {
 	db, err := h.getDB(chi.URLParam(r, "projectId"))
@@ -51,9 +129,9 @@ func (h *SchemaHandler) GetTables(w http.ResponseWriter, r *http.Request) {
 		h.handleDBError(w, err)
 		return
 	}
-	tables, err := h.introspector.GetTables(r.Context(), db, "public")
+	tables, err := h.introspector.GetTables(r.Context(), db, schemaParam(r))
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, tables)
@@ -65,9 +143,9 @@ func (h *SchemaHandler) GetColumns(w http.ResponseWriter, r *http.Request) {
 		h.handleDBError(w, err)
 		return
 	}
-	cols, err := h.introspector.GetColumns(r.Context(), db, "public", chi.URLParam(r, "tableName"))
+	cols, err := h.introspector.GetColumns(r.Context(), db, schemaParam(r), chi.URLParam(r, "tableName"))
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, cols)
@@ -79,9 +157,9 @@ func (h *SchemaHandler) GetRelationships(w http.ResponseWriter, r *http.Request)
 		h.handleDBError(w, err)
 		return
 	}
-	rels, err := h.introspector.GetRelationships(r.Context(), db, "public")
+	rels, err := h.introspector.GetRelationships(r.Context(), db, schemaParam(r))
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, rels)
@@ -93,52 +171,161 @@ func (h *SchemaHandler) GetIndexes(w http.ResponseWriter, r *http.Request) {
 		h.handleDBError(w, err)
 		return
 	}
-	indexes, err := h.introspector.GetIndexes(r.Context(), db, "public", chi.URLParam(r, "tableName"))
+	indexes, err := h.introspector.GetIndexes(r.Context(), db, schemaParam(r), chi.URLParam(r, "tableName"))
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, indexes)
 }
 
-func (h *SchemaHandler) ExecuteDDL(w http.ResponseWriter, r *http.Request) {
+func (h *SchemaHandler) CreateTable(w http.ResponseWriter, r *http.Request) {
 	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
-	var body struct {
-		SQL string `json:"sql"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var req schema.CreateTableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	result := h.introspector.ExecuteDDL(r.Context(), db, body.SQL)
-	writeJSON(w, result)
+	if req.Name == "" {
+		httpError(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	if err := h.introspector.CreateTable(r.Context(), db, req); err != nil {
+		schemaError(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
 }
 
-func (h *SchemaHandler) TestConnection(w http.ResponseWriter, r *http.Request) {
-	projectId := chi.URLParam(r, "projectId")
-	db, err := h.getDB(projectId)
+func (h *SchemaHandler) UpdateTable(w http.ResponseWriter, r *http.Request) {
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
-	connected := h.introspector.TestConnection(r.Context(), db)
-	writeJSON(w, map[string]interface{}{
-		"connected": connected,
-		"projectId": projectId,
-	})
+	var req schema.UpdateTableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	tableName := chi.URLParam(r, "tableName")
+	if err := h.introspector.UpdateTable(r.Context(), db, schemaParam(r), tableName, req); err != nil {
+		schemaError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "updated"})
+}
+
+func (h *SchemaHandler) DropTable(w http.ResponseWriter, r *http.Request) {
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	if err != nil {
+		h.handleDBError(w, err)
+		return
+	}
+	tableName := chi.URLParam(r, "tableName")
+	cascade := r.URL.Query().Get("cascade") == "true"
+	if err := h.introspector.DropTable(r.Context(), db, schemaParam(r), tableName, cascade); err != nil {
+		schemaError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "dropped"})
+}
+
+// --- Columns ---
+
+func (h *SchemaHandler) AddColumn(w http.ResponseWriter, r *http.Request) {
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	if err != nil {
+		h.handleDBError(w, err)
+		return
+	}
+	var req schema.AddColumnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" || req.Type == "" {
+		httpError(w, "name and type are required", http.StatusBadRequest)
+		return
+	}
+	tableName := chi.URLParam(r, "tableName")
+	if err := h.introspector.AddColumn(r.Context(), db, schemaParam(r), tableName, req); err != nil {
+		schemaError(w, err, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
+}
+
+func (h *SchemaHandler) AlterColumn(w http.ResponseWriter, r *http.Request) {
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	if err != nil {
+		h.handleDBError(w, err)
+		return
+	}
+	var req schema.AlterColumnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	tableName := chi.URLParam(r, "tableName")
+	columnName := chi.URLParam(r, "columnName")
+	if err := h.introspector.AlterColumn(r.Context(), db, schemaParam(r), tableName, columnName, req); err != nil {
+		schemaError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "updated"})
+}
+
+func (h *SchemaHandler) DropColumn(w http.ResponseWriter, r *http.Request) {
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	if err != nil {
+		h.handleDBError(w, err)
+		return
+	}
+	tableName := chi.URLParam(r, "tableName")
+	columnName := chi.URLParam(r, "columnName")
+	if err := h.introspector.DropColumn(r.Context(), db, schemaParam(r), tableName, columnName); err != nil {
+		schemaError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "dropped"})
+}
+
+// --- Internal helpers ---
+
+// indexOfByte returns the index of the first occurrence of sep in s, or -1.
+func indexOfByte(s string, sep byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep {
+			return i
+		}
+	}
+	return -1
 }
 
 func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 	h.mu.RLock()
-	if db, ok := h.connCache[projectId]; ok {
+	if e, ok := h.connCache[projectId]; ok {
 		h.mu.RUnlock()
-		return db, nil
+		return e.db, nil
 	}
 	h.mu.RUnlock()
+
+	// Enforce max connections
+	h.mu.RLock()
+	count := len(h.connCache)
+	h.mu.RUnlock()
+	if count >= maxConns {
+		return nil, fmt.Errorf("connection pool full (%d)", maxConns)
+	}
 
 	// Get excalibase_app credentials from vault
 	creds, err := h.vault.Get(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectId))
@@ -155,8 +342,14 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 		port = h.dbPortOverride
 	}
 
-	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		host, port, creds["username"], creds["password"], creds["database"])
+	sslmode := "require"
+	if h.dbSSLModeOverride != "" {
+		sslmode = h.dbSSLModeOverride
+	} else if h.dbHostOverride != "" {
+		sslmode = "disable" // local dev with port-forward
+	}
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		host, port, creds["username"], creds["password"], creds["database"], sslmode)
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -169,18 +362,26 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 	}
 
 	h.mu.Lock()
-	h.connCache[projectId] = db
+	// Double-check: another goroutine may have cached it while we were connecting
+	if existing, ok := h.connCache[projectId]; ok {
+		h.mu.Unlock()
+		db.Close() // close the one we just opened
+		return existing.db, nil
+	}
+	h.connCache[projectId] = &connEntry{db: db, created: time.Now()}
 	h.mu.Unlock()
 
 	return db, nil
 }
 
 func (h *SchemaHandler) handleDBError(w http.ResponseWriter, err error) {
-	if err == vault.ErrSealed {
+	if errors.Is(err, vault.ErrSealed) {
 		httpError(w, "vault is sealed", http.StatusServiceUnavailable)
-	} else if err == vault.ErrNotFound {
+	} else if errors.Is(err, vault.ErrNotFound) {
 		httpError(w, "project credentials not found in vault", http.StatusNotFound)
 	} else {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("schema db error: %v", err)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 	}
 }
+
