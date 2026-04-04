@@ -25,7 +25,7 @@ func (h *MetricsHandler) GetCurrent(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	metrics, err := h.svc.GetCurrentMetrics(r.Context(), projectID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, metrics)
@@ -41,7 +41,7 @@ func (h *MetricsHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	history, err := h.svc.GetMetricsHistory(r.Context(), projectID, limit)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, history)

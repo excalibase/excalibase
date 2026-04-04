@@ -8,9 +8,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/vault"
 	"github.com/go-chi/chi/v5"
 )
+
+// fakeAuthMiddleware injects a fake admin user so auth-protected vault routes pass.
+func fakeAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := &domain.User{ID: "test-admin", Username: "admin", Role: "admin", Active: true}
+		ctx := auth.SetUser(r.Context(), user)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 func setupVaultRouter(t *testing.T) (chi.Router, *vault.Vault) {
 	t.Helper()
@@ -22,6 +33,7 @@ func setupVaultRouter(t *testing.T) (chi.Router, *vault.Vault) {
 
 	h := NewVaultHandler(v)
 	r := chi.NewRouter()
+	r.Use(fakeAuthMiddleware)
 	r.Route("/api/vault", h.Routes)
 	return r, v
 }
@@ -196,6 +208,229 @@ func TestVaultSecrets_WhenSealed_Returns503(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/vault/secrets/test/key", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
+	}
+}
+
+// --- Rekey ---
+
+func TestVaultRekey_Success(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(3, 2)
+
+	req := httptest.NewRequest("POST", "/api/vault/rekey",
+		strings.NewReader(`{"shares":5,"threshold":3}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("rekey: got %d, body: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Shares    []string `json:"shares"`
+		Threshold int      `json:"threshold"`
+	}
+	json.NewDecoder(w.Body).Decode(&body)
+	if len(body.Shares) != 5 {
+		t.Errorf("expected 5 shares, got %d", len(body.Shares))
+	}
+	if body.Threshold != 3 {
+		t.Errorf("expected threshold 3, got %d", body.Threshold)
+	}
+}
+
+func TestVaultRekey_NotInitialized_Returns400(t *testing.T) {
+	r, _ := setupVaultRouter(t)
+
+	req := httptest.NewRequest("POST", "/api/vault/rekey",
+		strings.NewReader(`{"shares":3,"threshold":2}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for uninitialized vault, got %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestVaultRekey_InvalidJSON_Returns400(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(1, 1)
+
+	req := httptest.NewRequest("POST", "/api/vault/rekey",
+		strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid JSON, got %d", w.Code)
+	}
+}
+
+// --- Init error paths ---
+
+func TestVaultInit_AlreadyInitialized_Returns400(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(1, 1)
+
+	req := httptest.NewRequest("POST", "/api/vault/init",
+		strings.NewReader(`{"shares":3,"threshold":2}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for double-init, got %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestVaultInit_InvalidJSON_Returns400(t *testing.T) {
+	r, _ := setupVaultRouter(t)
+
+	req := httptest.NewRequest("POST", "/api/vault/init",
+		strings.NewReader("{invalid}"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestVaultInit_DefaultsSharesAndThreshold(t *testing.T) {
+	r, _ := setupVaultRouter(t)
+
+	req := httptest.NewRequest("POST", "/api/vault/init",
+		strings.NewReader(`{"shares":0,"threshold":0}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Shares    []string `json:"shares"`
+		Threshold int      `json:"threshold"`
+	}
+	json.NewDecoder(w.Body).Decode(&body)
+	// defaults: shares=5, threshold=3
+	if len(body.Shares) != 5 {
+		t.Errorf("expected 5 default shares, got %d", len(body.Shares))
+	}
+}
+
+// --- Unseal error paths ---
+
+func TestVaultUnseal_InvalidShare_Returns400(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(3, 2)
+	v.Seal()
+
+	req := httptest.NewRequest("POST", "/api/vault/unseal",
+		strings.NewReader(`{"share":"notvalidbase64!!!"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid share, got %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestVaultUnseal_InvalidJSON_Returns400(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(1, 1)
+	v.Seal()
+
+	req := httptest.NewRequest("POST", "/api/vault/unseal",
+		strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- GetPublicKey error paths ---
+
+func TestVaultGetPublicKey_WhenSealed_Returns503(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(1, 1)
+	v.Seal()
+
+	req := httptest.NewRequest("GET", "/api/vault/pki/public-key", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
+	}
+}
+
+func TestVaultGetPublicKey_NotInitialized_Returns404(t *testing.T) {
+	r, _ := setupVaultRouter(t)
+
+	req := httptest.NewRequest("GET", "/api/vault/pki/public-key", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	// Not initialized means vault has no PKI key yet; expects 404 or 503
+	if w.Code != http.StatusNotFound && w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 404 or 503, got %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- PutSecret error paths ---
+
+func TestVaultPutSecret_WhenSealed_Returns503(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(1, 1)
+	v.Seal()
+
+	req := httptest.NewRequest("PUT", "/api/vault/secrets/projects/app/creds",
+		strings.NewReader(`{"key":"value"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
+	}
+}
+
+func TestVaultPutSecret_InvalidJSON_Returns400(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(1, 1)
+
+	req := httptest.NewRequest("PUT", "/api/vault/secrets/test/key",
+		strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- DeleteSecret error paths ---
+
+func TestVaultDeleteSecret_WhenSealed_Returns503(t *testing.T) {
+	r, v := setupVaultRouter(t)
+	v.Init(1, 1)
+	v.Seal()
+
+	req := httptest.NewRequest("DELETE", "/api/vault/secrets/test/key", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)
 	}

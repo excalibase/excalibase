@@ -2,15 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
+	"os"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
-	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -25,6 +23,27 @@ import (
 )
 
 func main() {
+	// CLI subcommands (vault-gated recovery tools)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "reset-password":
+			resetPasswordCLI()
+			return
+		case "recover-instances":
+			recoverInstancesCLI()
+			return
+		case "help", "--help", "-h":
+			fmt.Println("Usage: excalibase-server [command]")
+			fmt.Println()
+			fmt.Println("Commands:")
+			fmt.Println("  (none)              Start the HTTP server")
+			fmt.Println("  reset-password      Reset admin password (vault-gated)")
+			fmt.Println("  recover-instances   Re-discover K8s clusters into SQLite (vault-gated)")
+			fmt.Println("  help                Show this help")
+			return
+		}
+	}
+
 	cfg := config.Load()
 
 	// SQLite storage
@@ -49,7 +68,9 @@ func main() {
 	defer v.Close()
 
 	// Bootstrap admin user on first run
-	auth.Bootstrap(context.Background(), sqlStore)
+	if err := auth.Bootstrap(context.Background(), sqlStore); err != nil {
+		log.Fatalf("Failed to bootstrap admin user: %v", err)
+	}
 
 	// Kubernetes client
 	k8sClient, err := k8s.NewClient()
@@ -63,14 +84,14 @@ func main() {
 
 	// Edge Functions
 	fnStore := edgefn.NewScriptStore(cfg.StoragePath)
-	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL)
+	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
 	hookSvc := edgefn.NewHookService(fnStore, fnClient)
 	fnHandler := handler.NewEdgeFnHandler(fnStore, fnClient)
 
 	// Services
-	provSvc := service.NewProvisioningService(store, factory)
+	provSvc := service.NewProvisioningService(store, factory, k8sClient)
 	provSvc.SetHookService(hookSvc)
-	provSvc.SetVault(v, k8sClient)
+	provSvc.SetVault(v)
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
 	backupSvc := service.NewBackupService(store, k8sClient, cfg.StoragePath)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
@@ -78,7 +99,7 @@ func main() {
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)
 	migrationSvc := service.NewMigrationService(store, k8sClient, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
-	setupSvc := service.NewOperatorSetupService()
+	setupSvc := service.NewOperatorSetupService(k8sClient)
 
 	// Handlers
 	provHandler := handler.NewProvisioningHandler(provSvc)
@@ -105,9 +126,9 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(auth.ExtractAuth(sqlStore))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowedOrigins:   cfg.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowedHeaders:   []string{"*"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Request-ID"},
 		AllowCredentials: true,
 		MaxAge:           3600,
 	}))
@@ -118,6 +139,7 @@ func main() {
 
 	// Provisioning API
 	r.Route("/api/provision", func(r chi.Router) {
+		r.Use(auth.RequireAuth)
 		r.Get("/", provHandler.ListInstances)
 		r.Post("/", provHandler.Provision)
 		r.Post("/estimate", provHandler.EstimateCost)
@@ -127,10 +149,10 @@ func main() {
 			r.Delete("/", provHandler.Delete)
 			r.Get("/credentials", provHandler.GetCredentials)
 			r.Patch("/deletion-protection", provHandler.SetDeletionProtection)
-			r.Get("/logs", logsHandler(provSvc, k8sClient))
-			r.Post("/credentials/rotate", rotateHandler(provSvc, k8sClient))
-			r.Put("/maintenance-window", maintenanceSetHandler(provSvc))
-			r.Get("/maintenance-window", maintenanceGetHandler(provSvc))
+			r.Get("/logs", provHandler.GetLogs)
+			r.Post("/credentials/rotate", provHandler.RotateCredentials)
+			r.Put("/maintenance-window", provHandler.SetMaintenanceWindow)
+			r.Get("/maintenance-window", provHandler.GetMaintenanceWindow)
 
 			r.Route("/metrics", func(r chi.Router) { metricsHandler.Routes(r) })
 			r.Route("/backup", func(r chi.Router) { backupHandler.Routes(r) })
@@ -142,13 +164,22 @@ func main() {
 	})
 
 	// Alerts API
-	r.Route("/api/alerts", func(r chi.Router) { alertHandler.Routes(r) })
+	r.Route("/api/alerts", func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		alertHandler.Routes(r)
+	})
 
 	// Setup API
-	r.Route("/api/setup", func(r chi.Router) { setupHandler.Routes(r) })
+	r.Route("/api/setup", func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		setupHandler.Routes(r)
+	})
 
 	// Parameter Groups API
-	r.Route("/api/parameter-groups", func(r chi.Router) { pgHandler.Routes(r) })
+	r.Route("/api/parameter-groups", func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		pgHandler.Routes(r)
+	})
 
 	// Auth API (login is public, rest requires auth)
 	r.Route("/api/auth", func(r chi.Router) {
@@ -170,10 +201,23 @@ func main() {
 	r.Route("/api/vault", func(r chi.Router) { vaultHandler.Routes(r) })
 
 	// Schema API (requires auth + unsealed vault)
-	r.Route("/api/schema", func(r chi.Router) { schemaHandler.Routes(r) })
+	r.Route("/api/schema", func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		schemaHandler.Routes(r)
+	})
 
-	// Edge Functions API
-	r.Route("/api/functions", func(r chi.Router) { fnHandler.Routes(r) })
+	// Edge Functions API (auth required, manage_functions permission for mutations)
+	r.Route("/api/functions", func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", fnHandler.List)
+		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/runtime/status", fnHandler.RuntimeStatus)
+		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/", fnHandler.Create)
+		r.Route("/{fnId}", func(r chi.Router) {
+			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", fnHandler.Get)
+			r.With(auth.RequirePermission(auth.PermManageFunctions)).Delete("/", fnHandler.Delete)
+			r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/invoke", fnHandler.Invoke)
+		})
+	})
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("Excalibase Go server starting on %s", addr)
@@ -182,63 +226,3 @@ func main() {
 	}
 }
 
-func logsHandler(svc *service.ProvisioningService, k *k8s.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		projectID := chi.URLParam(r, "projectId")
-		lines := 100
-		if l := r.URL.Query().Get("lines"); l != "" {
-			if v, err := strconv.Atoi(l); err == nil { lines = v }
-		}
-		out, err := svc.GetLogs(r.Context(), projectID, lines, k)
-		if err != nil {
-			w.WriteHeader(500)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"logs": out})
-	}
-}
-
-func rotateHandler(svc *service.ProvisioningService, k *k8s.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		projectID := chi.URLParam(r, "projectId")
-		creds, err := svc.RotateCredentials(r.Context(), projectID, k)
-		if err != nil {
-			w.WriteHeader(500)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(creds)
-	}
-}
-
-func maintenanceSetHandler(svc *service.ProvisioningService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		projectID := chi.URLParam(r, "projectId")
-		var cfg domain.MaintenanceWindowConfig
-		json.NewDecoder(r.Body).Decode(&cfg)
-		if err := svc.SetMaintenanceWindow(projectID, cfg); err != nil {
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
-	}
-}
-
-func maintenanceGetHandler(svc *service.ProvisioningService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		projectID := chi.URLParam(r, "projectId")
-		cfg, err := svc.GetMaintenanceWindow(projectID)
-		if err != nil {
-			w.WriteHeader(404)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(cfg)
-	}
-}

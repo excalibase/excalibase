@@ -25,7 +25,7 @@ func (h *AuditHandler) Enable(w http.ResponseWriter, r *http.Request) {
 	var cfg domain.AuditConfig
 	json.NewDecoder(r.Body).Decode(&cfg)
 	if err := h.svc.EnableAudit(r.Context(), projectID, cfg); err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "enabled"})
@@ -39,7 +39,7 @@ func (h *AuditHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	logs, err := h.svc.GetAuditLogs(r.Context(), projectID, lines)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"logs": logs})
@@ -49,7 +49,7 @@ func (h *AuditHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	cfg, err := h.svc.GetAuditConfig(r.Context(), projectID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, cfg)

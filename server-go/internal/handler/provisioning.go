@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -41,7 +42,7 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 		instances, err = h.svc.GetAllInstances()
 	}
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, instances)
@@ -61,7 +62,7 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 
 	resp, err := h.svc.Provision(r.Context(), req)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
 
@@ -72,7 +73,7 @@ func (h *ProvisioningHandler) GetStatus(w http.ResponseWriter, r *http.Request) 
 	projectID := chi.URLParam(r, "projectId")
 	inst, err := h.svc.GetInstance(projectID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusNotFound)
+		httpError(w, safeError(err), http.StatusNotFound)
 		return
 	}
 	writeJSON(w, inst)
@@ -81,7 +82,7 @@ func (h *ProvisioningHandler) GetStatus(w http.ResponseWriter, r *http.Request) 
 func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	if err := h.svc.Deprovision(r.Context(), projectID); err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -92,7 +93,7 @@ func (h *ProvisioningHandler) GetCredentials(w http.ResponseWriter, r *http.Requ
 	projectID := chi.URLParam(r, "projectId")
 	creds, err := h.svc.GetCredentials(projectID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusNotFound)
+		httpError(w, safeError(err), http.StatusNotFound)
 		return
 	}
 	writeJSON(w, creds)
@@ -105,7 +106,7 @@ func (h *ProvisioningHandler) SetDeletionProtection(w http.ResponseWriter, r *ht
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	if err := h.svc.SetDeletionProtection(projectID, body.Enabled); err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]interface{}{"projectId": projectID, "deletionProtection": body.Enabled})
@@ -133,16 +134,56 @@ func (h *ProvisioningHandler) EstimateCost(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func writeJSON(w http.ResponseWriter, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	lines := 100
+	if l := r.URL.Query().Get("lines"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil {
+			lines = v
+		}
+	}
+	if lines > 10000 {
+		lines = 10000
+	}
+	out, err := h.svc.GetLogs(r.Context(), projectID, lines)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"logs": out})
 }
 
-func httpError(w http.ResponseWriter, msg string, code int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error":  msg,
-		"status": code,
-	})
+func (h *ProvisioningHandler) RotateCredentials(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	creds, err := h.svc.RotateCredentials(r.Context(), projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, creds)
 }
+
+func (h *ProvisioningHandler) SetMaintenanceWindow(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	var cfg domain.MaintenanceWindowConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := h.svc.SetMaintenanceWindow(projectID, cfg); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "updated"})
+}
+
+func (h *ProvisioningHandler) GetMaintenanceWindow(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	cfg, err := h.svc.GetMaintenanceWindow(projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, cfg)
+}
+

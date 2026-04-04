@@ -29,6 +29,6 @@ func (h *MigrationHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	var req domain.MigrationRequest
 	json.NewDecoder(r.Body).Decode(&req)
 	rec, err := h.svc.ApplyMigration(r.Context(), projectID, req)
-	if err != nil { httpError(w, err.Error(), http.StatusInternalServerError); return }
+	if err != nil { httpError(w, safeError(err), http.StatusInternalServerError); return }
 	writeJSON(w, rec)
 }

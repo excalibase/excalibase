@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/vault"
 	"github.com/go-chi/chi/v5"
 )
@@ -19,16 +20,22 @@ func NewVaultHandler(v *vault.Vault) *VaultHandler {
 }
 
 func (h *VaultHandler) Routes(r chi.Router) {
+	// Public routes (no auth required)
 	r.Get("/status", h.Status)
 	r.Post("/init", h.Init)
 	r.Post("/unseal", h.Unseal)
-	r.Post("/seal", h.Seal)
-	r.Post("/rekey", h.Rekey)
 	r.Get("/pki/public-key", h.GetPublicKey)
-	r.Route("/secrets", func(r chi.Router) {
-		r.Get("/*", h.GetSecret)
-		r.Put("/*", h.PutSecret)
-		r.Delete("/*", h.DeleteSecret)
+
+	// Auth-required routes
+	r.Group(func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		r.Post("/seal", h.Seal)
+		r.Post("/rekey", h.Rekey)
+		r.Route("/secrets", func(r chi.Router) {
+			r.Get("/*", h.GetSecret)
+			r.Put("/*", h.PutSecret)
+			r.Delete("/*", h.DeleteSecret)
+		})
 	})
 }
 
@@ -57,7 +64,7 @@ func (h *VaultHandler) Init(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.v.Init(body.Shares, body.Threshold)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
 
@@ -78,7 +85,7 @@ func (h *VaultHandler) Unseal(w http.ResponseWriter, r *http.Request) {
 
 	progress, err := h.v.Unseal(body.Share)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
 
@@ -106,7 +113,7 @@ func (h *VaultHandler) Rekey(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.v.Rekey(body.Shares, body.Threshold)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
 
@@ -127,7 +134,7 @@ func (h *VaultHandler) GetPublicKey(w http.ResponseWriter, r *http.Request) {
 			httpError(w, "PKI not initialized", http.StatusNotFound)
 			return
 		}
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"key": pem, "algorithm": "EC-P256"})
@@ -145,7 +152,7 @@ func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 			httpError(w, "secret not found", http.StatusNotFound)
 			return
 		}
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, data)
@@ -164,7 +171,7 @@ func (h *VaultHandler) PutSecret(w http.ResponseWriter, r *http.Request) {
 			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
 			return
 		}
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -177,7 +184,7 @@ func (h *VaultHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
 			return
 		}
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})

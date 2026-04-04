@@ -19,6 +19,11 @@ type TokenLookup interface {
 	FindUserByID(ctx context.Context, id string) (*domain.User, error)
 }
 
+// SetUser returns a new context with the given user set (for testing).
+func SetUser(ctx context.Context, u *domain.User) context.Context {
+	return context.WithValue(ctx, userKey, u)
+}
+
 // GetUser returns the authenticated user from context, or nil.
 func GetUser(ctx context.Context) *domain.User {
 	u, _ := ctx.Value(userKey).(*domain.User)

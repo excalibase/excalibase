@@ -13,6 +13,7 @@ const (
 	PermManageSnapshots Permission = "manage_snapshots"
 	PermManageSetup     Permission = "manage_setup"
 	PermManageUsers     Permission = "manage_users"
+	PermManageFunctions Permission = "manage_functions"
 	PermViewAny         Permission = "view_any"
 )
 
@@ -21,12 +22,13 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermProvision: true, PermDelete: true, PermViewInstances: true,
 		PermViewCredentials: true, PermManageBackups: true, PermRestore: true,
 		PermApplyMigrations: true, PermManageSnapshots: true, PermManageSetup: true,
-		PermManageUsers: true, PermViewAny: true,
+		PermManageUsers: true, PermManageFunctions: true, PermViewAny: true,
 	},
 	"operator": {
 		PermProvision: true, PermDelete: true, PermViewInstances: true,
 		PermViewCredentials: true, PermManageBackups: true,
-		PermApplyMigrations: true, PermManageSnapshots: true, PermViewAny: true,
+		PermApplyMigrations: true, PermManageSnapshots: true,
+		PermManageFunctions: true, PermViewAny: true,
 	},
 	"viewer": {
 		PermViewInstances: true, PermViewAny: true,

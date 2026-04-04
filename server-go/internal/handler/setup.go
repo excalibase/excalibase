@@ -25,7 +25,7 @@ func (h *SetupHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 func (h *SetupHandler) Install(w http.ResponseWriter, r *http.Request) {
 	dbType := domain.DatabaseType(chi.URLParam(r, "databaseType"))
 	if err := h.svc.InstallOperator(r.Context(), dbType); err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "installed", "type": string(dbType)})
@@ -70,7 +70,7 @@ func (h *ParameterGroupHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *ParameterGroupHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var pg domain.ParameterGroup
 	json.NewDecoder(r.Body).Decode(&pg)
-	if err := h.store.Save(&pg); err != nil { httpError(w, err.Error(), http.StatusInternalServerError); return }
+	if err := h.store.Save(&pg); err != nil { httpError(w, safeError(err), http.StatusInternalServerError); return }
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, pg)
 }

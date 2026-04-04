@@ -26,7 +26,7 @@ func (h *PerformanceHandler) GetSummary(w http.ResponseWriter, r *http.Request) 
 	projectID := chi.URLParam(r, "projectId")
 	summary, err := h.svc.GetSummary(r.Context(), projectID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, summary)
@@ -42,7 +42,7 @@ func (h *PerformanceHandler) GetTopQueries(w http.ResponseWriter, r *http.Reques
 	}
 	queries, err := h.svc.GetTopQueries(r.Context(), projectID, limit)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, queries)
@@ -52,7 +52,7 @@ func (h *PerformanceHandler) GetWaitEvents(w http.ResponseWriter, r *http.Reques
 	projectID := chi.URLParam(r, "projectId")
 	events, err := h.svc.GetWaitEvents(r.Context(), projectID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, events)

@@ -99,7 +99,7 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.userStore.CreateUser(r.Context(), user); err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
 
@@ -146,7 +146,7 @@ func (h *AuthHandler) CreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.tokenStore.CreateToken(r.Context(), token); err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 

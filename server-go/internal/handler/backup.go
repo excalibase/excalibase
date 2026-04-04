@@ -27,7 +27,7 @@ func (h *BackupHandler) TriggerBackup(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	result, err := h.svc.TriggerManualBackup(r.Context(), projectID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, result)
@@ -37,7 +37,7 @@ func (h *BackupHandler) ListBackups(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	backups, err := h.svc.ListBackups(projectID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	// Frontend expects { backups: [], backupEnabled, schedule, retentionDays }
@@ -71,7 +71,7 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.svc.RestoreFromBackup(r.Context(), projectID, req)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, resp)

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
@@ -17,46 +18,63 @@ func NewEdgeFnHandler(store *edgefn.ScriptStore, client *edgefn.RuntimeClient) *
 	return &EdgeFnHandler{store: store, client: client}
 }
 
-func (h *EdgeFnHandler) Routes(r chi.Router) {
-	r.Get("/", h.List)
-	r.Post("/", h.Create)
-	r.Get("/runtime/status", h.RuntimeStatus)
-	r.Route("/{fnId}", func(r chi.Router) {
-		r.Get("/", h.Get)
-		r.Delete("/", h.Delete)
-		r.Post("/invoke", h.Invoke)
-	})
-}
-
 func (h *EdgeFnHandler) List(w http.ResponseWriter, r *http.Request) {
 	hookType := r.URL.Query().Get("hookType")
-	scripts, _ := h.store.List(hookType)
+	scripts, err := h.store.List(hookType)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, scripts)
 }
 
 func (h *EdgeFnHandler) Create(w http.ResponseWriter, r *http.Request) {
+	// Limit request body to MaxCodeSize + overhead for JSON fields
+	r.Body = http.MaxBytesReader(w, r.Body, int64(edgefn.MaxCodeSize+4096))
+
 	var script edgefn.Script
 	if err := json.NewDecoder(r.Body).Decode(&script); err != nil {
-		httpError(w, "invalid request", http.StatusBadRequest)
+		httpError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	script.Active = true
 
-	if err := h.store.Save(&script); err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+	// Validate (ID format, name, code size, hookType)
+	if err := script.Validate(); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
 
-	// Deploy to Deno runtime
-	h.client.Deploy(r.Context(), script.ID, script.Code)
+	if err := h.store.Save(&script); err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 
+	// Deploy to Deno runtime — rollback store on failure
+	if err := h.client.Deploy(r.Context(), script.ID, script.Code); err != nil {
+		if delErr := h.store.Delete(script.ID); delErr != nil {
+			log.Printf("WARN: failed to rollback script store: %v", delErr)
+		}
+		httpError(w, "failed to deploy: "+safeError(err), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, script)
+	json.NewEncoder(w).Encode(script)
 }
 
 func (h *EdgeFnHandler) Get(w http.ResponseWriter, r *http.Request) {
 	fnId := chi.URLParam(r, "fnId")
-	script, _ := h.store.Get(fnId)
+	if err := edgefn.ValidateID(fnId); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	script, err := h.store.Get(fnId)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 	if script == nil {
 		httpError(w, "function not found", http.StatusNotFound)
 		return
@@ -66,29 +84,48 @@ func (h *EdgeFnHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *EdgeFnHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	fnId := chi.URLParam(r, "fnId")
-	h.client.Delete(r.Context(), fnId)
-	h.store.Delete(fnId)
+	if err := edgefn.ValidateID(fnId); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if err := h.client.Delete(r.Context(), fnId); err != nil {
+		log.Printf("WARN: failed to delete function from runtime: %v", err)
+	}
+	if err := h.store.Delete(fnId); err != nil {
+		log.Printf("WARN: failed to delete function from store: %v", err)
+	}
 	writeJSON(w, map[string]string{"status": "deleted", "id": fnId})
 }
 
 func (h *EdgeFnHandler) Invoke(w http.ResponseWriter, r *http.Request) {
 	fnId := chi.URLParam(r, "fnId")
+	if err := edgefn.ValidateID(fnId); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
 
-	script, _ := h.store.Get(fnId)
+	// Limit invoke payload
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024) // 1 MB max
+
+	script, err := h.store.Get(fnId)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 	if script == nil {
 		httpError(w, "function not found", http.StatusNotFound)
 		return
 	}
 
-	// Ensure deployed
-	h.client.Deploy(r.Context(), script.ID, script.Code)
-
 	var data interface{}
-	json.NewDecoder(r.Body).Decode(&data)
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
 
 	result, err := h.client.Invoke(r.Context(), fnId, data)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, result)

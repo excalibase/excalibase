@@ -25,7 +25,7 @@ func (h *SnapshotHandler) Export(w http.ResponseWriter, r *http.Request) {
 	var req domain.SnapshotExportRequest
 	json.NewDecoder(r.Body).Decode(&req)
 	info, err := h.svc.ExportSnapshot(r.Context(), projectID, req)
-	if err != nil { httpError(w, err.Error(), http.StatusInternalServerError); return }
+	if err != nil { httpError(w, safeError(err), http.StatusInternalServerError); return }
 	writeJSON(w, info)
 }
 
@@ -39,7 +39,7 @@ func (h *SnapshotHandler) Download(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	snapshotID := chi.URLParam(r, "snapshotId")
 	data, filename, err := h.svc.DownloadSnapshot(projectID, snapshotID)
-	if err != nil { httpError(w, err.Error(), http.StatusNotFound); return }
+	if err != nil { httpError(w, safeError(err), http.StatusNotFound); return }
 	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Write(data)
