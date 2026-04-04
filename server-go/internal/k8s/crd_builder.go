@@ -48,6 +48,35 @@ type BackupOpts struct {
 
 // BuildPostgreSQLCluster builds a CloudNativePG Cluster CRD as unstructured.
 func BuildPostgreSQLCluster(opts PostgreSQLClusterOpts) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "postgresql.cnpg.io/v1",
+			"kind":       "Cluster",
+			"metadata":   buildClusterMetadata(opts),
+			"spec":       buildClusterSpec(opts),
+		},
+	}
+}
+
+// buildClusterMetadata builds the metadata section of a CNPG Cluster CRD.
+func buildClusterMetadata(opts PostgreSQLClusterOpts) map[string]interface{} {
+	labels := map[string]interface{}{}
+	for k, v := range opts.Tags {
+		labels[k] = v
+	}
+
+	metadata := map[string]interface{}{
+		"name":      opts.ProjectID + "-postgres",
+		"namespace": opts.Namespace,
+	}
+	if len(labels) > 0 {
+		metadata["labels"] = labels
+	}
+	return metadata
+}
+
+// buildClusterSpec builds the spec section of a CNPG Cluster CRD.
+func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 	dbName := "app"
 	dbUser := "app"
 	if opts.DatabaseName != "" {
@@ -57,45 +86,10 @@ func BuildPostgreSQLCluster(opts PostgreSQLClusterOpts) *unstructured.Unstructur
 		dbUser = opts.MasterUsername
 	}
 
-	// Build parameters
-	params := map[string]interface{}{
-		"max_connections": "100",
-	}
-	var sharedPreloadLibs []interface{}
-	for k, v := range opts.Parameters {
-		if k == "shared_preload_libraries" {
-			for _, lib := range strings.Split(v, ",") {
-				sharedPreloadLibs = append(sharedPreloadLibs, strings.TrimSpace(lib))
-			}
-		} else {
-			params[k] = v
-		}
-	}
+	postgresql, storage := buildPostgresqlAndStorage(opts)
 
-	// Build storage
-	storage := map[string]interface{}{"size": opts.Tier.StorageSize}
-	if opts.StorageClass != "" {
-		storage["storageClass"] = opts.StorageClass
-	}
-
-	// Build labels
-	labels := map[string]interface{}{}
-	for k, v := range opts.Tags {
-		labels[k] = v
-	}
-
-	// Build postgresql section
-	postgresql := map[string]interface{}{
-		"parameters": params,
-	}
-	if len(sharedPreloadLibs) > 0 {
-		postgresql["shared_preload_libraries"] = sharedPreloadLibs
-	}
-
-	// Monitoring: enable PodMonitor for multi-instance tiers
-	enablePodMonitor := opts.Tier.Instances > 1
 	monitoring := map[string]interface{}{
-		"enablePodMonitor": enablePodMonitor,
+		"enablePodMonitor": opts.Tier.Instances > 1,
 		"customQueriesConfigMap": []interface{}{
 			map[string]interface{}{
 				"key":  "queries",
@@ -121,7 +115,6 @@ func BuildPostgreSQLCluster(opts PostgreSQLClusterOpts) *unstructured.Unstructur
 		},
 	}
 
-	// Bootstrap with custom db/user
 	if dbName != "app" || dbUser != "app" {
 		spec["bootstrap"] = map[string]interface{}{
 			"initdb": map[string]interface{}{
@@ -131,54 +124,73 @@ func BuildPostgreSQLCluster(opts PostgreSQLClusterOpts) *unstructured.Unstructur
 		}
 	}
 
-	// Backup config
 	if opts.Backup != nil {
-		spec["backup"] = map[string]interface{}{
-			"retentionPolicy": fmt.Sprintf("%dd", opts.Backup.RetentionDays),
-			"barmanObjectStore": map[string]interface{}{
-				"serverName":      "cloud",
-				"destinationPath": fmt.Sprintf("s3://postgres-backups/%s", opts.ProjectID),
-				"endpointURL":     "http://localstack.localstack.svc.cluster.local:4566",
-				"s3Credentials": map[string]interface{}{
-					"accessKeyId": map[string]interface{}{
-						"name": "backup-s3-creds",
-						"key":  "ACCESS_KEY_ID",
-					},
-					"secretAccessKey": map[string]interface{}{
-						"name": "backup-s3-creds",
-						"key":  "ACCESS_SECRET_KEY",
-					},
-				},
-				"wal": map[string]interface{}{
-					"compression": "gzip",
-					"maxParallel": int64(2),
-				},
-				"data": map[string]interface{}{
-					"compression": "gzip",
-				},
-			},
-		}
+		spec["backup"] = buildBackupSpec(opts.ProjectID, opts.Backup)
 	}
 
-	// PostgreSQL version
 	if opts.PostgresVersion != "" {
 		spec["imageName"] = fmt.Sprintf("ghcr.io/cloudnative-pg/postgresql:%s", opts.PostgresVersion)
 	}
 
-	metadata := map[string]interface{}{
-		"name":      opts.ProjectID + "-postgres",
-		"namespace": opts.Namespace,
+	return spec
+}
+
+// buildPostgresqlAndStorage builds the postgresql config and storage sections.
+func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface{}, map[string]interface{}) {
+	params := map[string]interface{}{
+		"max_connections": "100",
 	}
-	if len(labels) > 0 {
-		metadata["labels"] = labels
+	var sharedPreloadLibs []interface{}
+	for k, v := range opts.Parameters {
+		if k == "shared_preload_libraries" {
+			for _, lib := range strings.Split(v, ",") {
+				sharedPreloadLibs = append(sharedPreloadLibs, strings.TrimSpace(lib))
+			}
+		} else {
+			params[k] = v
+		}
 	}
 
-	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "postgresql.cnpg.io/v1",
-			"kind":       "Cluster",
-			"metadata":   metadata,
-			"spec":       spec,
+	postgresql := map[string]interface{}{
+		"parameters": params,
+	}
+	if len(sharedPreloadLibs) > 0 {
+		postgresql["shared_preload_libraries"] = sharedPreloadLibs
+	}
+
+	storage := map[string]interface{}{"size": opts.Tier.StorageSize}
+	if opts.StorageClass != "" {
+		storage["storageClass"] = opts.StorageClass
+	}
+
+	return postgresql, storage
+}
+
+// buildBackupSpec builds the backup section of the CNPG Cluster spec.
+func buildBackupSpec(projectID string, backup *BackupOpts) map[string]interface{} {
+	return map[string]interface{}{
+		"retentionPolicy": fmt.Sprintf("%dd", backup.RetentionDays),
+		"barmanObjectStore": map[string]interface{}{
+			"serverName":      "cloud",
+			"destinationPath": fmt.Sprintf("s3://postgres-backups/%s", projectID),
+			"endpointURL":     "http://localstack.localstack.svc.cluster.local:4566",
+			"s3Credentials": map[string]interface{}{
+				"accessKeyId": map[string]interface{}{
+					"name": "backup-s3-creds",
+					"key":  "ACCESS_KEY_ID",
+				},
+				"secretAccessKey": map[string]interface{}{
+					"name": "backup-s3-creds",
+					"key":  "ACCESS_SECRET_KEY",
+				},
+			},
+			"wal": map[string]interface{}{
+				"compression": "gzip",
+				"maxParallel": int64(2),
+			},
+			"data": map[string]interface{}{
+				"compression": "gzip",
+			},
 		},
 	}
 }

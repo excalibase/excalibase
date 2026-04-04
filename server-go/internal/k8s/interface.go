@@ -21,6 +21,10 @@ type KubeClient interface {
 	CreateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
 	ExecInPod(ctx context.Context, namespace, pod, container string, cmd []string) (string, error)
 	GetPodMetrics(ctx context.Context, namespace string) ([]PodResourceMetrics, error)
+	ListNamespaces(ctx context.Context, prefix string) ([]string, error)
+	ListCRDs(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
+	ApplyManifestURL(ctx context.Context, url string) error
+	GetDeployment(ctx context.Context, namespace, name string) (bool, error)
 }
 
 // Verify Client implements KubeClient at compile time.

@@ -13,16 +13,20 @@ import (
 
 // MockClient is a test double for KubeClient.
 type MockClient struct {
-	mu         sync.Mutex
-	Namespaces map[string]bool
-	CRDs       map[string]*unstructured.Unstructured
-	Secrets    map[string]map[string][]byte
-	Pods       map[string][]corev1.Pod
-	PodReady   map[string]bool
-	ExecOutput map[string]string // key: "namespace/pod" → output
-	ExecError  map[string]error
-	Metrics    map[string][]PodResourceMetrics
-	Calls      []string // track method calls
+	mu             sync.Mutex
+	Namespaces     map[string]bool
+	CRDs           map[string]*unstructured.Unstructured
+	Secrets        map[string]map[string][]byte
+	Pods           map[string][]corev1.Pod
+	PodReady       map[string]bool
+	ExecOutput     map[string]string // key: "namespace/pod" → output
+	ExecError      map[string]error
+	Metrics        map[string][]PodResourceMetrics
+	Calls          []string // track method calls
+	NamespaceError       error // if non-nil, CreateNamespace returns this error
+	DeleteNamespaceError error // if non-nil, DeleteNamespace returns this error
+	CRDError             error // if non-nil, ApplyCRD returns this error
+	DeleteCRDError       error // if non-nil, DeleteCRD returns this error
 }
 
 func NewMockClient() *MockClient {
@@ -46,18 +50,27 @@ func (m *MockClient) record(method string) {
 
 func (m *MockClient) CreateNamespace(ctx context.Context, name string) error {
 	m.record("CreateNamespace:" + name)
+	if m.NamespaceError != nil {
+		return m.NamespaceError
+	}
 	m.Namespaces[name] = true
 	return nil
 }
 
 func (m *MockClient) DeleteNamespace(ctx context.Context, name string) error {
 	m.record("DeleteNamespace:" + name)
+	if m.DeleteNamespaceError != nil {
+		return m.DeleteNamespaceError
+	}
 	delete(m.Namespaces, name)
 	return nil
 }
 
 func (m *MockClient) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error {
 	m.record("ApplyCRD:" + namespace + "/" + obj.GetName())
+	if m.CRDError != nil {
+		return m.CRDError
+	}
 	key := namespace + "/" + obj.GetName()
 	m.CRDs[key] = obj
 	return nil
@@ -74,6 +87,9 @@ func (m *MockClient) GetCRD(ctx context.Context, gvr schema.GroupVersionResource
 
 func (m *MockClient) DeleteCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) error {
 	m.record("DeleteCRD:" + namespace + "/" + name)
+	if m.DeleteCRDError != nil {
+		return m.DeleteCRDError
+	}
 	delete(m.CRDs, namespace+"/"+name)
 	return nil
 }
@@ -169,4 +185,36 @@ cnpg_collector_last_available_backup_timestamp 1711929600
 		})
 	}
 	m.Metrics[namespace] = podMetrics
+}
+
+func (m *MockClient) ListNamespaces(ctx context.Context, prefix string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result []string
+	for ns := range m.Namespaces {
+		if prefix == "" || len(ns) >= len(prefix) && ns[:len(prefix)] == prefix {
+			result = append(result, ns)
+		}
+	}
+	return result, nil
+}
+
+func (m *MockClient) ListCRDs(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := namespace + "/" + gvr.Resource
+	if obj, ok := m.CRDs[key]; ok {
+		return []*unstructured.Unstructured{obj}, nil
+	}
+	return nil, nil
+}
+
+func (m *MockClient) ApplyManifestURL(ctx context.Context, url string) error {
+	m.record("ApplyManifestURL:" + url)
+	return nil
+}
+
+func (m *MockClient) GetDeployment(ctx context.Context, namespace, name string) (bool, error) {
+	m.record("GetDeployment:" + namespace + "/" + name)
+	return true, nil
 }

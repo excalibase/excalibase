@@ -3,17 +3,18 @@ package service
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
-type OperatorSetupService struct{}
+type OperatorSetupService struct {
+	k8sClient k8s.KubeClient
+}
 
-func NewOperatorSetupService() *OperatorSetupService {
-	return &OperatorSetupService{}
+func NewOperatorSetupService(k8sClient k8s.KubeClient) *OperatorSetupService {
+	return &OperatorSetupService{k8sClient: k8sClient}
 }
 
 var operatorURLs = map[domain.DatabaseType]string{
@@ -22,44 +23,39 @@ var operatorURLs = map[domain.DatabaseType]string{
 	domain.MongoDB:    "https://raw.githubusercontent.com/mongodb/mongodb-kubernetes-operator/master/config/manager/manager.yaml",
 }
 
+var operatorDeployments = map[domain.DatabaseType]struct {
+	name      string
+	namespace string
+}{
+	domain.PostgreSQL: {name: "cnpg-controller-manager", namespace: "cnpg-system"},
+	domain.MySQL:      {name: "vitess-operator", namespace: "vitess"},
+	domain.MongoDB:    {name: "mongodb-kubernetes-operator", namespace: "mongodb"},
+}
+
 func (s *OperatorSetupService) InstallOperator(ctx context.Context, dbType domain.DatabaseType) error {
 	url, ok := operatorURLs[dbType]
 	if !ok {
 		return fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "--server-side", "-f", url)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("install operator: %s: %w", string(out), err)
+	if err := s.k8sClient.ApplyManifestURL(ctx, url); err != nil {
+		return fmt.Errorf("install operator: %w", err)
 	}
 
-	// Wait for deployment
 	return s.waitForOperator(ctx, dbType, 2*time.Minute)
 }
 
 func (s *OperatorSetupService) IsOperatorInstalled(ctx context.Context, dbType domain.DatabaseType) bool {
-	var deployName, namespace string
-	switch dbType {
-	case domain.PostgreSQL:
-		deployName = "cnpg-controller-manager"
-		namespace = "cnpg-system"
-	case domain.MySQL:
-		deployName = "vitess-operator"
-		namespace = "vitess"
-	case domain.MongoDB:
-		deployName = "mongodb-kubernetes-operator"
-		namespace = "mongodb"
-	default:
+	deploy, ok := operatorDeployments[dbType]
+	if !ok {
 		return false
 	}
 
-	cmd := exec.CommandContext(ctx, "kubectl", "get", "deployment", deployName, "-n", namespace, "--no-headers")
-	out, err := cmd.CombinedOutput()
+	found, err := s.k8sClient.GetDeployment(ctx, deploy.namespace, deploy.name)
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(out), deployName)
+	return found
 }
 
 func (s *OperatorSetupService) GetStatus(ctx context.Context) domain.SetupStatusResponse {
