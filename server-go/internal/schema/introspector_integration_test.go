@@ -245,3 +245,125 @@ func TestIntegration_TestConnection_AsNonSuperuser(t *testing.T) {
 		t.Error("connection test should pass")
 	}
 }
+
+func TestIntegration_ExecuteQuery_SELECT(t *testing.T) {
+	_, appDB, cleanup := setupPG(t)
+	defer cleanup()
+
+	introspector := NewIntrospector()
+	ctx := context.Background()
+
+	// Insert test data
+	_, err := appDB.ExecContext(ctx, "INSERT INTO users (email, full_name) VALUES ('test@example.com', 'Test User')")
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	result := introspector.ExecuteQuery(ctx, appDB, "SELECT id, email, full_name FROM users WHERE email = 'test@example.com'")
+	if result.Error != "" {
+		t.Fatalf("query error: %s", result.Error)
+	}
+	if len(result.Columns) != 3 {
+		t.Fatalf("expected 3 columns, got %d", len(result.Columns))
+	}
+	if result.Columns[0].Name != "id" {
+		t.Errorf("expected column 'id', got '%s'", result.Columns[0].Name)
+	}
+	if result.Columns[1].Name != "email" {
+		t.Errorf("expected column 'email', got '%s'", result.Columns[1].Name)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(result.Rows))
+	}
+	if result.Rows[0][1] != "test@example.com" {
+		t.Errorf("expected 'test@example.com', got '%v'", result.Rows[0][1])
+	}
+}
+
+func TestIntegration_ExecuteQuery_DML(t *testing.T) {
+	_, appDB, cleanup := setupPG(t)
+	defer cleanup()
+
+	introspector := NewIntrospector()
+	ctx := context.Background()
+
+	result := introspector.ExecuteQuery(ctx, appDB, "INSERT INTO users (email, full_name) VALUES ('dml@test.com', 'DML Test')")
+	if result.Error != "" {
+		t.Fatalf("insert error: %s", result.Error)
+	}
+	if result.Command != "EXEC" {
+		t.Errorf("expected command 'EXEC', got '%s'", result.Command)
+	}
+	if result.AffectedRows != 1 {
+		t.Errorf("expected 1 affected row, got %d", result.AffectedRows)
+	}
+}
+
+func TestIntegration_ExecuteQuery_DDL(t *testing.T) {
+	_, appDB, cleanup := setupPG(t)
+	defer cleanup()
+
+	introspector := NewIntrospector()
+	ctx := context.Background()
+
+	result := introspector.ExecuteQuery(ctx, appDB, "CREATE TABLE query_test (id serial PRIMARY KEY, value text)")
+	if result.Error != "" {
+		t.Fatalf("DDL error: %s", result.Error)
+	}
+	if result.Command != "EXEC" {
+		t.Errorf("expected command 'EXEC', got '%s'", result.Command)
+	}
+}
+
+func TestIntegration_ExecuteQuery_InvalidSQL(t *testing.T) {
+	_, appDB, cleanup := setupPG(t)
+	defer cleanup()
+
+	introspector := NewIntrospector()
+	ctx := context.Background()
+
+	result := introspector.ExecuteQuery(ctx, appDB, "SELECT * FROM nonexistent_table_xyz")
+	if result.Error == "" {
+		t.Fatal("expected error for invalid SQL")
+	}
+}
+
+func TestIntegration_ExecuteQuery_EXPLAIN(t *testing.T) {
+	_, appDB, cleanup := setupPG(t)
+	defer cleanup()
+
+	introspector := NewIntrospector()
+	ctx := context.Background()
+
+	result := introspector.ExecuteQuery(ctx, appDB, "EXPLAIN SELECT * FROM users")
+	if result.Error != "" {
+		t.Fatalf("EXPLAIN error: %s", result.Error)
+	}
+	if len(result.Columns) == 0 {
+		t.Error("expected columns from EXPLAIN")
+	}
+	if len(result.Rows) == 0 {
+		t.Error("expected rows from EXPLAIN")
+	}
+}
+
+func TestIntegration_ExecuteQuery_WITH(t *testing.T) {
+	_, appDB, cleanup := setupPG(t)
+	defer cleanup()
+
+	introspector := NewIntrospector()
+	ctx := context.Background()
+
+	_, err := appDB.ExecContext(ctx, "INSERT INTO users (email, full_name) VALUES ('cte@test.com', 'CTE User')")
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	result := introspector.ExecuteQuery(ctx, appDB, "WITH u AS (SELECT * FROM users) SELECT email FROM u")
+	if result.Error != "" {
+		t.Fatalf("CTE error: %s", result.Error)
+	}
+	if len(result.Rows) == 0 {
+		t.Error("expected rows from CTE query")
+	}
+}

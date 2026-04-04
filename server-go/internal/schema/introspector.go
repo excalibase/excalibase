@@ -107,6 +107,86 @@ func (i *Introspector) ExecuteDDL(ctx context.Context, db *sql.DB, ddl string) D
 	return DDLResult{Success: true, UpdateCount: int(rowsAffected)}
 }
 
+func (i *Introspector) ExecuteQuery(ctx context.Context, db *sql.DB, query string) QueryResult {
+	trimmed := strings.TrimSpace(strings.ToUpper(query))
+	isRead := strings.HasPrefix(trimmed, "SELECT") ||
+		strings.HasPrefix(trimmed, "EXPLAIN") ||
+		strings.HasPrefix(trimmed, "WITH") ||
+		strings.HasPrefix(trimmed, "SHOW") ||
+		strings.HasPrefix(trimmed, "TABLE") ||
+		strings.HasPrefix(trimmed, "VALUES")
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return QueryResult{Error: fmt.Errorf("begin tx: %w", err).Error()}
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "SET LOCAL statement_timeout = '30s'"); err != nil {
+		return QueryResult{Error: fmt.Errorf("set timeout: %w", err).Error()}
+	}
+
+	if isRead {
+		rows, err := tx.QueryContext(ctx, query)
+		if err != nil {
+			return QueryResult{Error: err.Error()}
+		}
+		defer rows.Close()
+
+		colTypes, err := rows.ColumnTypes()
+		if err != nil {
+			return QueryResult{Error: fmt.Errorf("column types: %w", err).Error()}
+		}
+
+		columns := make([]ColumnMeta, len(colTypes))
+		for i, ct := range colTypes {
+			columns[i] = ColumnMeta{
+				Name:     ct.Name(),
+				DataType: ct.DatabaseTypeName(),
+			}
+		}
+
+		var resultRows [][]interface{}
+		for rows.Next() {
+			vals := make([]interface{}, len(colTypes))
+			ptrs := make([]interface{}, len(colTypes))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				return QueryResult{Error: fmt.Errorf("scan row: %w", err).Error()}
+			}
+			// Convert []byte to string for JSON serialization
+			row := make([]interface{}, len(vals))
+			for i, v := range vals {
+				if b, ok := v.([]byte); ok {
+					row[i] = string(b)
+				} else {
+					row[i] = v
+				}
+			}
+			resultRows = append(resultRows, row)
+		}
+		if err := rows.Err(); err != nil {
+			return QueryResult{Error: err.Error()}
+		}
+
+		tx.Commit()
+		return QueryResult{Columns: columns, Rows: resultRows}
+	}
+
+	// DML/DDL
+	result, err := tx.ExecContext(ctx, query)
+	if err != nil {
+		return QueryResult{Error: err.Error()}
+	}
+	affected, _ := result.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return QueryResult{Error: fmt.Errorf("commit: %w", err).Error()}
+	}
+	return QueryResult{Command: "EXEC", AffectedRows: affected}
+}
+
 func (i *Introspector) TestConnection(ctx context.Context, db *sql.DB) bool {
 	return db.PingContext(ctx) == nil
 }
