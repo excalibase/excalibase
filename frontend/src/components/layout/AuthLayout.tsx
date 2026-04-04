@@ -1,9 +1,20 @@
 import { Outlet } from 'react-router-dom';
-import { Database } from 'lucide-react';
+import { Database, Sun, Moon } from 'lucide-react';
+import { useDarkMode } from '../../hooks/useDarkMode';
 
 export function AuthLayout() {
+  const { dark, toggle } = useDarkMode();
+
   return (
-    <div className="min-h-screen bg-bg-primary flex items-center justify-center p-4">
+    <div className="min-h-screen bg-bg-primary flex items-center justify-center p-4 relative">
+      {/* Theme toggle */}
+      <button
+        onClick={toggle}
+        className="absolute top-4 right-4 p-2 rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+      >
+        {dark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+      </button>
+
       <div className="w-full max-w-md">
         {/* Branding */}
         <div className="flex flex-col items-center mb-8">

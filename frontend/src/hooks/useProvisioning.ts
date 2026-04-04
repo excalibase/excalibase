@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useCallback } from 'react';
 import { api } from '../api/client';
+import { useSSE } from './useSSE';
 import type { DatabaseInstance, ProvisioningRequest, CredentialsResponse, BackupConfig, BackupInfo } from '../types';
 
 export const useInstances = () => {
@@ -34,57 +35,27 @@ export const useInstance = (projectId: string) => {
  */
 export const useInstanceSSE = (projectId: string) => {
   const queryClient = useQueryClient();
-  const [isConnected, setIsConnected] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!projectId) return;
+  const handleMessage = useCallback((instance: DatabaseInstance) => {
+    // Update React Query cache with new data
+    queryClient.setQueryData(['instance', projectId], instance);
 
-    // Get API base URL from axios defaults
-    const baseURL = api.defaults.baseURL || 'http://localhost:24005';
-    const eventSource = new EventSource(`${baseURL}/api/provision/${projectId}/events`);
-
-    eventSource.onopen = () => {
-      setIsConnected(true);
-      setError(null);
-    };
-
-    eventSource.onmessage = (event) => {
-      try {
-        const instance: DatabaseInstance = JSON.parse(event.data);
-
-        // Update React Query cache with new data
-        queryClient.setQueryData(['instance', projectId], instance);
-
-        // Also update the instances list
-        queryClient.setQueryData<DatabaseInstance[]>(['instances'], (old) => {
-          if (!old) return [instance];
-          const index = old.findIndex((i) => i.projectId === projectId);
-          if (index === -1) return [...old, instance];
-          const updated = [...old];
-          updated[index] = instance;
-          return updated;
-        });
-      } catch (err) {
-        console.error('Failed to parse SSE event:', err);
-        setError('Failed to parse server event');
-      }
-    };
-
-    eventSource.onerror = (err) => {
-      console.error('SSE connection error:', err);
-      setIsConnected(false);
-      setError('Connection lost');
-      eventSource.close();
-    };
-
-    return () => {
-      eventSource.close();
-      setIsConnected(false);
-    };
+    // Also update the instances list
+    queryClient.setQueryData<DatabaseInstance[]>(['instances'], (old) => {
+      if (!old) return [instance];
+      const index = old.findIndex((i) => i.projectId === projectId);
+      if (index === -1) return [...old, instance];
+      const updated = [...old];
+      updated[index] = instance;
+      return updated;
+    });
   }, [projectId, queryClient]);
 
-  return { isConnected, error };
+  return useSSE<DatabaseInstance>(
+    projectId ? `/provision/${projectId}/events` : null,
+    handleMessage,
+    { enabled: !!projectId },
+  );
 };
 
 export const useCredentials = (projectId: string) => {

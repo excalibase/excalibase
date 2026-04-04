@@ -1,58 +1,104 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
+import { Routes, Route } from 'react-router-dom';
 import { AuthLayout } from './components/layout/AuthLayout';
 import { AuthGuard } from './components/auth/AuthGuard';
-import { AppLayout } from './components/layout/AppLayout';
+import { PlatformLayout } from './components/layout/PlatformLayout';
 import { ProjectLayout } from './components/layout/ProjectLayout';
-import { LoginPage } from './pages/LoginPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { InstancesPage } from './pages/InstancesPage';
-import { InstanceDetailPage } from './pages/InstanceDetailPage';
-import { ProvisionPage } from './pages/ProvisionPage';
-import { MetricsPage } from './pages/MetricsPage';
-import { BackupsPage } from './pages/BackupsPage';
-import { SnapshotsPage } from './pages/SnapshotsPage';
-import { PerformancePage } from './pages/PerformancePage';
-import { AlertsPage } from './pages/AlertsPage';
-import { MigrationsPage } from './pages/MigrationsPage';
-import { ProjectsPage } from './pages/ProjectsPage';
-import { SchemaDesignerPage } from './pages/SchemaDesignerPage';
-import { PlaceholderPage } from './pages/PlaceholderPage';
+
+// Lazy-loaded pages
+const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
+const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
+const InstancesPage = lazy(() => import('./pages/InstancesPage').then(m => ({ default: m.InstancesPage })));
+const InstanceDetailPage = lazy(() => import('./pages/InstanceDetailPage').then(m => ({ default: m.InstanceDetailPage })));
+const ProvisionPage = lazy(() => import('./pages/ProvisionPage').then(m => ({ default: m.ProvisionPage })));
+const SqlEditorPage = lazy(() => import('./pages/SqlEditorPage').then(m => ({ default: m.SqlEditorPage })));
+const TablesPage = lazy(() => import('./pages/TablesPage').then(m => ({ default: m.TablesPage })));
+const FunctionsPage = lazy(() => import('./pages/FunctionsPage').then(m => ({ default: m.FunctionsPage })));
+const ExtensionsPage = lazy(() => import('./pages/ExtensionsPage').then(m => ({ default: m.ExtensionsPage })));
+const RolesPage = lazy(() => import('./pages/RolesPage').then(m => ({ default: m.RolesPage })));
+const RlsPage = lazy(() => import('./pages/RlsPage').then(m => ({ default: m.RlsPage })));
+const AuthUsersPage = lazy(() => import('./pages/AuthUsersPage').then(m => ({ default: m.AuthUsersPage })));
+const AuthSessionsPage = lazy(() => import('./pages/AuthSessionsPage').then(m => ({ default: m.AuthSessionsPage })));
+const EdgeFunctionsPage = lazy(() => import('./pages/EdgeFunctionsPage').then(m => ({ default: m.EdgeFunctionsPage })));
+const ApiInfoPage = lazy(() => import('./pages/ApiInfoPage').then(m => ({ default: m.ApiInfoPage })));
+const RealtimePage = lazy(() => import('./pages/RealtimePage').then(m => ({ default: m.RealtimePage })));
+const MetricsPage = lazy(() => import('./pages/MetricsPage').then(m => ({ default: m.MetricsPage })));
+const PerformancePage = lazy(() => import('./pages/PerformancePage').then(m => ({ default: m.PerformancePage })));
+const AlertsPage = lazy(() => import('./pages/AlertsPage').then(m => ({ default: m.AlertsPage })));
+const BackupsPage = lazy(() => import('./pages/BackupsPage').then(m => ({ default: m.BackupsPage })));
+const SnapshotsPage = lazy(() => import('./pages/SnapshotsPage').then(m => ({ default: m.SnapshotsPage })));
+const MigrationsPage = lazy(() => import('./pages/MigrationsPage').then(m => ({ default: m.MigrationsPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
+const SchemaDesignerPage = lazy(() => import('./pages/SchemaDesignerPage').then(m => ({ default: m.SchemaDesignerPage })));
+const TriggersPage = lazy(() => import('./pages/TriggersPage').then(m => ({ default: m.TriggersPage })));
+const IndexesPage = lazy(() => import('./pages/IndexesPage').then(m => ({ default: m.IndexesPage })));
+const TypesPage = lazy(() => import('./pages/TypesPage').then(m => ({ default: m.TypesPage })));
+const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ default: m.AdvisorsPage })));
+const LogExplorerPage = lazy(() => import('./pages/LogExplorerPage').then(m => ({ default: m.LogExplorerPage })));
+
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500" />
+    </div>
+  );
+}
 
 export default function App() {
   return (
-    <Routes>
-      {/* Auth */}
-      <Route element={<AuthLayout />}>
-        <Route path="/login" element={<LoginPage />} />
-      </Route>
+    <Suspense fallback={<PageLoader />}>
+      <Routes>
+        {/* Auth */}
+        <Route element={<AuthLayout />}>
+          <Route path="/login" element={<LoginPage />} />
+        </Route>
 
-      {/* Protected */}
-      <Route element={<AuthGuard />}>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/instances" element={<InstancesPage />} />
-          <Route path="/instances/:projectId" element={<InstanceDetailPage />} />
-          <Route path="/provision" element={<ProvisionPage />} />
-          <Route path="/metrics" element={<MetricsPage />} />
-          <Route path="/backups" element={<BackupsPage />} />
-          <Route path="/snapshots" element={<SnapshotsPage />} />
-          <Route path="/performance" element={<PerformancePage />} />
-          <Route path="/alerts" element={<AlertsPage />} />
-          <Route path="/migrations" element={<MigrationsPage />} />
-          <Route path="/projects" element={<ProjectsPage />} />
-          <Route path="/projects/:projectId" element={<ProjectLayout />}>
-            <Route index element={<Navigate to="schema" replace />} />
+        {/* Platform pages */}
+        <Route element={<AuthGuard />}>
+          <Route element={<PlatformLayout />}>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/instances" element={<InstancesPage />} />
+            <Route path="/provision" element={<ProvisionPage />} />
+          </Route>
+
+          {/* Project-scoped pages */}
+          <Route path="/project/:projectId" element={<ProjectLayout />}>
+            <Route index element={<InstanceDetailPage />} />
+            <Route path="sql" element={<SqlEditorPage />} />
             <Route path="schema" element={<SchemaDesignerPage />} />
-            <Route path="sql" element={<PlaceholderPage title="SQL Editor" description="Execute SQL queries against your database." />} />
-            <Route path="functions" element={<PlaceholderPage title="Functions" description="Manage database functions and stored procedures." />} />
-            <Route path="rls" element={<PlaceholderPage title="Row-Level Security" description="Configure row-level security policies." />} />
-            <Route path="backups" element={<PlaceholderPage title="Backups" description="Manage project backups and restore points." />} />
-            <Route path="roles" element={<PlaceholderPage title="Roles" description="Manage database roles and permissions." />} />
-            <Route path="extensions" element={<PlaceholderPage title="Extensions" description="Install and manage database extensions." />} />
-            <Route path="settings" element={<PlaceholderPage title="Settings" description="Configure project settings." />} />
+            {/* Database */}
+            <Route path="database/tables" element={<TablesPage />} />
+            <Route path="database/functions" element={<FunctionsPage />} />
+            <Route path="database/extensions" element={<ExtensionsPage />} />
+            <Route path="database/roles" element={<RolesPage />} />
+            <Route path="database/rls" element={<RlsPage />} />
+            <Route path="database/triggers" element={<TriggersPage />} />
+            <Route path="database/indexes" element={<IndexesPage />} />
+            <Route path="database/types" element={<TypesPage />} />
+            <Route path="database/advisors" element={<AdvisorsPage />} />
+            {/* Authentication */}
+            <Route path="auth/users" element={<AuthUsersPage />} />
+            <Route path="auth/sessions" element={<AuthSessionsPage />} />
+            {/* Edge Functions */}
+            <Route path="edge-functions" element={<EdgeFunctionsPage />} />
+            {/* API */}
+            <Route path="api" element={<ApiInfoPage />} />
+            {/* Realtime */}
+            <Route path="realtime" element={<RealtimePage />} />
+            {/* Monitoring */}
+            <Route path="monitoring/metrics" element={<MetricsPage />} />
+            <Route path="monitoring/performance" element={<PerformancePage />} />
+            <Route path="monitoring/alerts" element={<AlertsPage />} />
+            <Route path="monitoring/logs" element={<LogExplorerPage />} />
+            {/* Operations */}
+            <Route path="operations/backups" element={<BackupsPage />} />
+            <Route path="operations/snapshots" element={<SnapshotsPage />} />
+            <Route path="operations/migrations" element={<MigrationsPage />} />
+            {/* Settings */}
+            <Route path="settings" element={<SettingsPage />} />
           </Route>
         </Route>
-      </Route>
-    </Routes>
+      </Routes>
+    </Suspense>
   );
 }

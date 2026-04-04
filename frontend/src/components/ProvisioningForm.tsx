@@ -25,7 +25,7 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
       await provision.mutateAsync(formData);
       onClose();
     } catch (error) {
-      console.error('Provisioning failed:', error);
+      // Error is shown via React Query's error state
     }
   };
 
@@ -86,8 +86,8 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
               className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
             >
               <option value={DatabaseType.POSTGRESQL}>PostgreSQL</option>
-              <option value={DatabaseType.MYSQL}>MySQL</option>
-              <option value={DatabaseType.MONGODB}>MongoDB</option>
+              <option value={DatabaseType.MYSQL} disabled>MySQL (coming soon)</option>
+              <option value={DatabaseType.MONGODB} disabled>MongoDB (coming soon)</option>
             </select>
           </div>
 

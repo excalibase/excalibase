@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useInstances, useInstanceSSE } from '../hooks/useProvisioning';
 import { Card, CardHeader, CardTitle, CardContent } from './Card';
 import { Button } from './Button';
@@ -127,16 +127,6 @@ export function Dashboard() {
 // Helper component to manage SSE connections
 function ProvisioningSSEManager({ projectId }: { projectId: string }) {
   const { isConnected, error } = useInstanceSSE(projectId);
-
-  // Log connection status for debugging
-  useEffect(() => {
-    if (isConnected) {
-      console.log(`SSE connected for ${projectId}`);
-    }
-    if (error) {
-      console.error(`SSE error for ${projectId}:`, error);
-    }
-  }, [isConnected, error, projectId]);
 
   return null; // This component doesn't render anything
 }

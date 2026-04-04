@@ -17,6 +17,7 @@ import {
   X,
   ChevronDown,
   LogOut,
+  type LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/auth-store';
 import { cn } from '../../utils/cn';
@@ -73,7 +74,7 @@ function InstancePicker() {
   );
 }
 
-function NavItem({ icon: Icon, label, to }: { icon: any; label: string; to: string }) {
+function NavItem({ icon: Icon, label, to }: { icon: LucideIcon; label: string; to: string }) {
   return (
     <NavLink
       to={to}
@@ -94,15 +95,25 @@ function NavItem({ icon: Icon, label, to }: { icon: any; label: string; to: stri
 }
 
 function AppLayoutInner() {
-  const [dark, setDark] = useState(true);
+  const [dark, setDark] = useState(() => {
+    const saved = localStorage.getItem('theme');
+    if (saved) return saved === 'dark';
+    return true;
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const { user, clearAuth } = useAuthStore();
+
+  // Apply theme on mount
+  useState(() => {
+    document.documentElement.classList.toggle('dark', dark);
+  });
 
   const toggleDark = () => {
     const next = !dark;
     setDark(next);
     document.documentElement.classList.toggle('dark', next);
+    localStorage.setItem('theme', next ? 'dark' : 'light');
   };
 
   const currentPage = ALL_NAV.find((item) =>

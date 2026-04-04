@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState, useCallback } from 'react';
 import { api } from '../api/client';
+import { useSSE } from './useSSE';
 import type { DatabaseMetrics, MetricsHistory } from '../types';
 
 /**
@@ -37,42 +38,16 @@ export const useMetricsHistory = (projectId: string, limit: number = 50) => {
  */
 export const useMetricsSSE = (projectId: string, enabled: boolean = true) => {
   const [latestMetrics, setLatestMetrics] = useState<DatabaseMetrics | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!projectId || !enabled) return;
+  const handleMessage = useCallback((metrics: DatabaseMetrics) => {
+    setLatestMetrics(metrics);
+  }, []);
 
-    const baseURL = api.defaults.baseURL || 'http://localhost:24005';
-    const eventSource = new EventSource(`${baseURL}/api/provision/${projectId}/metrics/stream`);
-
-    eventSource.onopen = () => {
-      setIsConnected(true);
-      setError(null);
-    };
-
-    eventSource.onmessage = (event) => {
-      try {
-        const metrics: DatabaseMetrics = JSON.parse(event.data);
-        setLatestMetrics(metrics);
-      } catch (err) {
-        console.error('Failed to parse metrics event:', err);
-        setError('Failed to parse server event');
-      }
-    };
-
-    eventSource.onerror = (err) => {
-      console.error('SSE connection error:', err);
-      setIsConnected(false);
-      setError('Connection lost');
-      eventSource.close();
-    };
-
-    return () => {
-      eventSource.close();
-      setIsConnected(false);
-    };
-  }, [projectId, enabled]);
+  const { isConnected, error } = useSSE<DatabaseMetrics>(
+    projectId ? `/provision/${projectId}/metrics/stream` : null,
+    handleMessage,
+    { enabled: !!projectId && enabled },
+  );
 
   return { latestMetrics, isConnected, error };
 };
