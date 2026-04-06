@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -19,7 +20,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/vault"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
 )
 
 func main() {
@@ -79,7 +79,7 @@ func main() {
 	}
 
 	// Provisioners
-	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient)
+	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
 	factory := provisioner.NewFactory(pgProvisioner)
 
 	// Edge Functions
@@ -124,14 +124,9 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(custommw.SecurityHeaders)
+	r.Use(custommw.CORS(cfg.CORSOrigins))
 	r.Use(auth.ExtractAuth(sqlStore))
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   cfg.CORSOrigins,
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Request-ID"},
-		AllowCredentials: true,
-		MaxAge:           3600,
-	}))
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
