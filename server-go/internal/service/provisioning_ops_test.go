@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -15,7 +16,7 @@ func setupOpsTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore,
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	pgProv := provisioner.NewPostgreSQLProvisioner(mock)
+	pgProv := provisioner.NewPostgreSQLProvisioner(mock, "")
 	factory := provisioner.NewFactory(pgProv)
 	svc := NewProvisioningService(store, factory, mock)
 
@@ -143,7 +144,7 @@ func TestUpdateParametersPatchesCRD(t *testing.T) {
 	// Seed CRD
 	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
 		ProjectID: "ops-db", Namespace: "org1-ops-db",
-		Tier: struct{ Instances int; StorageSize, Memory, CPU string }{1, "5Gi", "512Mi", "0.5"},
+		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
 	})
 	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
 
@@ -226,7 +227,7 @@ func TestResizeStorage(t *testing.T) {
 	// Seed CRD
 	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
 		ProjectID: "ops-db", Namespace: "org1-ops-db",
-		Tier: struct{ Instances int; StorageSize, Memory, CPU string }{1, "5Gi", "512Mi", "0.5"},
+		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
 	})
 	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
 
@@ -257,7 +258,7 @@ func TestUpgradeVersion(t *testing.T) {
 
 	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
 		ProjectID: "ops-db", Namespace: "org1-ops-db",
-		Tier: struct{ Instances int; StorageSize, Memory, CPU string }{1, "5Gi", "512Mi", "0.5"},
+		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
 	})
 	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
 
@@ -328,7 +329,7 @@ func TestScaleTier(t *testing.T) {
 	mock.SetupPostgreSQLMock("ops-db", "org1-ops-db", 1)
 	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
 		ProjectID: "ops-db", Namespace: "org1-ops-db",
-		Tier: struct{ Instances int; StorageSize, Memory, CPU string }{1, "5Gi", "512Mi", "0.5"},
+		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
 	})
 	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
 

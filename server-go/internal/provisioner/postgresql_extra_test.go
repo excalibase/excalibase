@@ -16,7 +16,7 @@ import (
 func TestGetStatusPodNotReady(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.PodReady["ns/test-postgres-1"] = false // key present, value false
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	status, err := prov.GetStatus(context.Background(), "ns", "test")
 	if err != nil {
@@ -35,7 +35,7 @@ func TestGetStatusPodNotReady(t *testing.T) {
 func TestGetStatusPodError(t *testing.T) {
 	mock := k8s.NewMockClient()
 	// Do NOT add the pod key — IsPodReady returns "pod not found" error
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	status, err := prov.GetStatus(context.Background(), "ns", "missing")
 	if err != nil {
@@ -55,7 +55,7 @@ func TestDeprovisionWithCRDDeleteError(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.Namespaces["org1-proj"] = true
 	mock.DeleteCRDError = fmt.Errorf("CRD not found")
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	err := prov.Deprovision(context.Background(), "org1-proj", "proj")
 	if err != nil {
@@ -72,7 +72,7 @@ func TestDeprovisionNamespaceDeleteError(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.Namespaces["org1-err-proj"] = true
 	mock.DeleteNamespaceError = fmt.Errorf("namespace locked")
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	err := prov.Deprovision(context.Background(), "org1-err-proj", "err-proj")
 	if err == nil {
@@ -85,7 +85,7 @@ func TestDeprovisionNamespaceDeleteError(t *testing.T) {
 func TestWaitForPodReadyContextCancellation(t *testing.T) {
 	mock := k8s.NewMockClient()
 	// Pod is never ready — IsPodReady will always return false/error
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
@@ -101,7 +101,7 @@ func TestWaitForPodReadyContextCancellation(t *testing.T) {
 func TestWaitForPodReadyTimeout(t *testing.T) {
 	mock := k8s.NewMockClient()
 	// Pod is never seeded as ready — every IsPodReady call returns false/error
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	// Use a very short timeout so the test completes quickly.
 	err := prov.waitForPodReady(context.Background(), "ns", "never-ready", 1*time.Millisecond)
@@ -116,7 +116,7 @@ func TestWaitForPodReadyTimeout(t *testing.T) {
 func TestExtractCredentialsSecretNotFound(t *testing.T) {
 	mock := k8s.NewMockClient()
 	// No secret seeded at all
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so the retry select fires at once
@@ -137,7 +137,7 @@ func TestExtractCredentialsMissingDBName(t *testing.T) {
 		"password": []byte("mypass"),
 		// "dbname" intentionally absent
 	}
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	result, err := prov.extractCredentials(context.Background(), "ns", "proj-postgres-app", "proj")
 	if err != nil {
@@ -156,7 +156,7 @@ func TestExtractCredentialsMissingDBName(t *testing.T) {
 func TestProvisionNamespaceCreationFailure(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.NamespaceError = fmt.Errorf("quota exceeded")
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
@@ -176,7 +176,7 @@ func TestProvisionCRDDeploymentFailure(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.CRDError = fmt.Errorf("CRD apply rejected")
 	// Namespace must be creatable
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
@@ -196,7 +196,7 @@ func TestProvisionCRDDeploymentFailure(t *testing.T) {
 func TestProvisionWithBackupDefaultSchedule(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.SetupPostgreSQLMock("sched-test", "org1-sched-test", 1)
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{

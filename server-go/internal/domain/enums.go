@@ -18,7 +18,7 @@ const (
 	Enterprise TierType = "ENTERPRISE"
 )
 
-// ProvisioningStage represents stages in the 8-stage pipeline.
+// ProvisioningStage represents stages in the provisioning pipeline.
 type ProvisioningStage string
 
 const (
@@ -29,6 +29,7 @@ const (
 	StageCredentialGeneration ProvisioningStage = "CREDENTIAL_GENERATION"
 	StageBackupConfiguration  ProvisioningStage = "BACKUP_CONFIGURATION"
 	StageMetricsSetup         ProvisioningStage = "METRICS_SETUP"
+	StageWatcherDeployment    ProvisioningStage = "WATCHER_DEPLOYMENT"
 	StageCompleted            ProvisioningStage = "COMPLETED"
 	StageFailed               ProvisioningStage = "FAILED"
 )

@@ -26,9 +26,18 @@ type ProvisioningRequest struct {
 }
 
 type BackupSettings struct {
-	Enabled   bool   `json:"enabled"`
-	Schedule  string `json:"schedule,omitempty"`
-	Retention int    `json:"retention,omitempty"`
+	Enabled   bool            `json:"enabled"`
+	Schedule  string          `json:"schedule,omitempty"`
+	Retention int             `json:"retention,omitempty"`
+	S3        *S3Credentials  `json:"s3,omitempty"`
+}
+
+type S3Credentials struct {
+	AccessKeyID     string `json:"accessKeyId"`
+	SecretAccessKey string `json:"secretAccessKey"`
+	Bucket          string `json:"bucket"`
+	Region          string `json:"region,omitempty"`
+	Endpoint        string `json:"endpoint,omitempty"`
 }
 
 type PoolerSettings struct {

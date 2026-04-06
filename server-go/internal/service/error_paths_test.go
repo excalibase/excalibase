@@ -127,7 +127,7 @@ func TestDeprovisionWhenK8sFails(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	pgProv := provisioner.NewPostgreSQLProvisioner(mock)
+	pgProv := provisioner.NewPostgreSQLProvisioner(mock, "")
 	factory := provisioner.NewFactory(pgProv)
 	svc := NewProvisioningService(store, factory, mock)
 

@@ -7,30 +7,38 @@ import (
 )
 
 type TierConfig struct {
+	MaxProjects int
 	Instances   int
 	StorageSize string
 	Memory      string
 	CPU         string
+	BackupEnabled bool
 }
 
 var tiers = map[domain.TierType]TierConfig{
 	domain.Free: {
+		MaxProjects: 1,
 		Instances:   1,
 		StorageSize: "5Gi",
 		Memory:      "512Mi",
 		CPU:         "0.5",
+		BackupEnabled: false,
 	},
 	domain.Standard: {
+		MaxProjects: 5,
 		Instances:   3,
 		StorageSize: "50Gi",
 		Memory:      "4Gi",
 		CPU:         "2",
+		BackupEnabled: true,
 	},
 	domain.Enterprise: {
+		MaxProjects: 0, // unlimited
 		Instances:   5,
 		StorageSize: "500Gi",
 		Memory:      "16Gi",
 		CPU:         "4",
+		BackupEnabled: true,
 	},
 }
 

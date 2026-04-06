@@ -12,7 +12,7 @@ import (
 func TestPostgreSQLProvisionerFree(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.SetupPostgreSQLMock("test-db", "org1-test-db", 1)
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	var stages []domain.ProvisioningStage
 	cb := func(stage domain.ProvisioningStage) { stages = append(stages, stage) }
@@ -38,7 +38,7 @@ func TestPostgreSQLProvisionerFree(t *testing.T) {
 		t.Errorf("password: got %s", result.Password)
 	}
 
-	// Verify all 8 stages were called
+	// Verify all stages were called (including watcher deployment)
 	expectedStages := []domain.ProvisioningStage{
 		domain.StageValidating,
 		domain.StageNamespaceCreation,
@@ -46,6 +46,7 @@ func TestPostgreSQLProvisionerFree(t *testing.T) {
 		domain.StageWaitingForReady,
 		domain.StageCredentialGeneration,
 		domain.StageMetricsSetup,
+		domain.StageWatcherDeployment,
 		domain.StageCompleted,
 	}
 	if len(stages) < len(expectedStages) {
@@ -60,19 +61,27 @@ func TestPostgreSQLProvisionerFree(t *testing.T) {
 	// Verify K8s calls
 	found := false
 	for _, call := range mock.Calls {
-		if call == "CreateNamespace:org1-test-db" {
+		if call == "CreateNamespaceWithLabels:org1-test-db" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("CreateNamespace not called")
+		t.Error("CreateNamespaceWithLabels not called")
+	}
+	// Verify namespace labels
+	labels := mock.NamespaceLabels["org1-test-db"]
+	if labels["excalibase.io/type"] != "project" {
+		t.Errorf("label excalibase.io/type: got %q, want %q", labels["excalibase.io/type"], "project")
+	}
+	if labels["excalibase.io/org"] != "org1" {
+		t.Errorf("label excalibase.io/org: got %q, want %q", labels["excalibase.io/org"], "org1")
 	}
 }
 
 func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.SetupPostgreSQLMock("bk-test", "org1-bk-test", 1)
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
@@ -80,16 +89,33 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 		OrgID:       "org1",
 		DBType:      domain.PostgreSQL,
 		Tier:        domain.Free,
-		Backup:      &domain.BackupSettings{Enabled: true, Schedule: "0 2 * * *", Retention: 30},
+		Backup: &domain.BackupSettings{
+			Enabled:   true,
+			Schedule:  "0 2 * * *",
+			Retention: 30,
+			S3: &domain.S3Credentials{
+				AccessKeyID:     "AKIA123",
+				SecretAccessKey: "secret456",
+				Bucket:          "excalibase-backups",
+				Region:          "ap-southeast-1",
+			},
+		},
 	}, tier, func(s domain.ProvisioningStage) {})
 
 	if err != nil {
 		t.Fatalf("Provision with backup: %v", err)
 	}
 
-	// Verify backup secret and scheduled backup were created
-	if _, ok := mock.Secrets["org1-bk-test/backup-s3-creds"]; !ok {
-		t.Error("backup S3 credentials secret not created")
+	// Verify backup secret uses real S3 credentials from request
+	secret, ok := mock.Secrets["org1-bk-test/backup-s3-creds"]
+	if !ok {
+		t.Fatal("backup S3 credentials secret not created")
+	}
+	if string(secret["ACCESS_KEY_ID"]) != "AKIA123" {
+		t.Errorf("ACCESS_KEY_ID: got %q, want %q", secret["ACCESS_KEY_ID"], "AKIA123")
+	}
+	if string(secret["ACCESS_SECRET_KEY"]) != "secret456" {
+		t.Errorf("ACCESS_SECRET_KEY: got %q, want %q", secret["ACCESS_SECRET_KEY"], "secret456")
 	}
 	if _, ok := mock.CRDs["org1-bk-test/bk-test-postgres-backup"]; !ok {
 		t.Error("ScheduledBackup CRD not created")
@@ -99,7 +125,7 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 func TestPostgreSQLProvisionerStandard(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.SetupPostgreSQLMock("std-db", "org1-std-db", 3)
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	tier, _ := config.GetTierConfig(domain.Standard)
 	result, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
@@ -131,7 +157,7 @@ func TestPostgreSQLProvisionerStandard(t *testing.T) {
 func TestPostgreSQLDeprovision(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.Namespaces["org1-del-db"] = true
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	err := prov.Deprovision(context.Background(), "org1-del-db", "del-db")
 	if err != nil {
@@ -145,7 +171,7 @@ func TestPostgreSQLDeprovision(t *testing.T) {
 func TestPostgreSQLGetStatus(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.PodReady["ns/test-postgres-1"] = true
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	status, _ := prov.GetStatus(context.Background(), "ns", "test")
 	if !status.Ready {
@@ -155,7 +181,7 @@ func TestPostgreSQLGetStatus(t *testing.T) {
 
 func TestPostgreSQLConfigureBackup(t *testing.T) {
 	mock := k8s.NewMockClient()
-	prov := NewPostgreSQLProvisioner(mock)
+	prov := NewPostgreSQLProvisioner(mock, "")
 
 	err := prov.ConfigureBackup(context.Background(), "ns", "bk-test", "0 3 * * *", 14)
 	if err != nil {
@@ -170,7 +196,7 @@ func TestPostgreSQLConfigureBackup(t *testing.T) {
 
 func TestFactoryGet(t *testing.T) {
 	mock := k8s.NewMockClient()
-	pg := NewPostgreSQLProvisioner(mock)
+	pg := NewPostgreSQLProvisioner(mock, "")
 	factory := NewFactory(pg)
 
 	p, ok := factory.Get(domain.PostgreSQL)

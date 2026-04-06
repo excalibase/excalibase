@@ -3,6 +3,8 @@ package k8s
 import (
 	"context"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/config"
 )
 
 func TestMockClientCreateNamespace(t *testing.T) {
@@ -90,7 +92,7 @@ func TestMockClientCRDLifecycle(t *testing.T) {
 
 	obj := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
 		ProjectID: "t", Namespace: "ns",
-		Tier: struct{ Instances int; StorageSize, Memory, CPU string }{1, "5Gi", "512Mi", "0.5"},
+		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
 	})
 
 	m.ApplyCRD(ctx, CNPGClusterGVR, "ns", obj)

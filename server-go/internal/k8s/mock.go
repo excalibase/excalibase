@@ -13,16 +13,19 @@ import (
 
 // MockClient is a test double for KubeClient.
 type MockClient struct {
-	mu             sync.Mutex
-	Namespaces     map[string]bool
-	CRDs           map[string]*unstructured.Unstructured
-	Secrets        map[string]map[string][]byte
-	Pods           map[string][]corev1.Pod
-	PodReady       map[string]bool
-	ExecOutput     map[string]string // key: "namespace/pod" → output
-	ExecError      map[string]error
-	Metrics        map[string][]PodResourceMetrics
-	Calls          []string // track method calls
+	mu              sync.Mutex
+	Namespaces      map[string]bool
+	NamespaceLabels map[string]map[string]string
+	CRDs            map[string]*unstructured.Unstructured
+	Secrets         map[string]map[string][]byte
+	Pods            map[string][]corev1.Pod
+	PodReady        map[string]bool
+	ExecOutput      map[string]string // key: "namespace/pod" → output
+	ExecError       map[string]error
+	Metrics         map[string][]PodResourceMetrics
+	HelmReleases    map[string]map[string]interface{} // key: "namespace/release" → values
+	Calls           []string // track method calls
+	HelmError            error // if non-nil, InstallHelmChart returns this error
 	NamespaceError       error // if non-nil, CreateNamespace returns this error
 	DeleteNamespaceError error // if non-nil, DeleteNamespace returns this error
 	CRDError             error // if non-nil, ApplyCRD returns this error
@@ -31,25 +34,23 @@ type MockClient struct {
 
 func NewMockClient() *MockClient {
 	return &MockClient{
-		Namespaces: make(map[string]bool),
-		CRDs:       make(map[string]*unstructured.Unstructured),
-		Secrets:    make(map[string]map[string][]byte),
-		Pods:       make(map[string][]corev1.Pod),
-		PodReady:   make(map[string]bool),
-		ExecOutput: make(map[string]string),
-		ExecError:  make(map[string]error),
-		Metrics:    make(map[string][]PodResourceMetrics),
+		Namespaces:      make(map[string]bool),
+		NamespaceLabels: make(map[string]map[string]string),
+		HelmReleases:    make(map[string]map[string]interface{}),
+		CRDs:            make(map[string]*unstructured.Unstructured),
+		Secrets:         make(map[string]map[string][]byte),
+		Pods:            make(map[string][]corev1.Pod),
+		PodReady:        make(map[string]bool),
+		ExecOutput:      make(map[string]string),
+		ExecError:       make(map[string]error),
+		Metrics:         make(map[string][]PodResourceMetrics),
 	}
 }
 
-func (m *MockClient) record(method string) {
-	m.mu.Lock()
-	m.Calls = append(m.Calls, method)
-	m.mu.Unlock()
-}
-
 func (m *MockClient) CreateNamespace(ctx context.Context, name string) error {
-	m.record("CreateNamespace:" + name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "CreateNamespace:"+name)
 	if m.NamespaceError != nil {
 		return m.NamespaceError
 	}
@@ -57,8 +58,22 @@ func (m *MockClient) CreateNamespace(ctx context.Context, name string) error {
 	return nil
 }
 
+func (m *MockClient) CreateNamespaceWithLabels(ctx context.Context, name string, labels map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "CreateNamespaceWithLabels:"+name)
+	if m.NamespaceError != nil {
+		return m.NamespaceError
+	}
+	m.Namespaces[name] = true
+	m.NamespaceLabels[name] = labels
+	return nil
+}
+
 func (m *MockClient) DeleteNamespace(ctx context.Context, name string) error {
-	m.record("DeleteNamespace:" + name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "DeleteNamespace:"+name)
 	if m.DeleteNamespaceError != nil {
 		return m.DeleteNamespaceError
 	}
@@ -67,17 +82,20 @@ func (m *MockClient) DeleteNamespace(ctx context.Context, name string) error {
 }
 
 func (m *MockClient) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error {
-	m.record("ApplyCRD:" + namespace + "/" + obj.GetName())
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ApplyCRD:"+namespace+"/"+obj.GetName())
 	if m.CRDError != nil {
 		return m.CRDError
 	}
-	key := namespace + "/" + obj.GetName()
-	m.CRDs[key] = obj
+	m.CRDs[namespace+"/"+obj.GetName()] = obj
 	return nil
 }
 
 func (m *MockClient) GetCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
-	m.record("GetCRD:" + namespace + "/" + name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "GetCRD:"+namespace+"/"+name)
 	key := namespace + "/" + name
 	if obj, ok := m.CRDs[key]; ok {
 		return obj, nil
@@ -86,7 +104,9 @@ func (m *MockClient) GetCRD(ctx context.Context, gvr schema.GroupVersionResource
 }
 
 func (m *MockClient) DeleteCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) error {
-	m.record("DeleteCRD:" + namespace + "/" + name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "DeleteCRD:"+namespace+"/"+name)
 	if m.DeleteCRDError != nil {
 		return m.DeleteCRDError
 	}
@@ -95,12 +115,16 @@ func (m *MockClient) DeleteCRD(ctx context.Context, gvr schema.GroupVersionResou
 }
 
 func (m *MockClient) GetPods(ctx context.Context, namespace, labelSelector string) ([]corev1.Pod, error) {
-	m.record("GetPods:" + namespace)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "GetPods:"+namespace)
 	return m.Pods[namespace], nil
 }
 
 func (m *MockClient) IsPodReady(ctx context.Context, namespace, name string) (bool, error) {
-	m.record("IsPodReady:" + namespace + "/" + name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "IsPodReady:"+namespace+"/"+name)
 	key := namespace + "/" + name
 	if ready, ok := m.PodReady[key]; ok {
 		return ready, nil
@@ -109,7 +133,9 @@ func (m *MockClient) IsPodReady(ctx context.Context, namespace, name string) (bo
 }
 
 func (m *MockClient) GetSecret(ctx context.Context, namespace, name string) (map[string][]byte, error) {
-	m.record("GetSecret:" + namespace + "/" + name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "GetSecret:"+namespace+"/"+name)
 	key := namespace + "/" + name
 	if data, ok := m.Secrets[key]; ok {
 		return data, nil
@@ -118,13 +144,17 @@ func (m *MockClient) GetSecret(ctx context.Context, namespace, name string) (map
 }
 
 func (m *MockClient) CreateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
-	m.record("CreateSecret:" + namespace + "/" + name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "CreateSecret:"+namespace+"/"+name)
 	m.Secrets[namespace+"/"+name] = data
 	return nil
 }
 
 func (m *MockClient) ExecInPod(ctx context.Context, namespace, pod, container string, cmd []string) (string, error) {
-	m.record("ExecInPod:" + namespace + "/" + pod)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ExecInPod:"+namespace+"/"+pod)
 	key := namespace + "/" + pod
 	if err, ok := m.ExecError[key]; ok && err != nil {
 		return "", err
@@ -136,7 +166,9 @@ func (m *MockClient) ExecInPod(ctx context.Context, namespace, pod, container st
 }
 
 func (m *MockClient) GetPodMetrics(ctx context.Context, namespace string) ([]PodResourceMetrics, error) {
-	m.record("GetPodMetrics:" + namespace)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "GetPodMetrics:"+namespace)
 	if metrics, ok := m.Metrics[namespace]; ok {
 		return metrics, nil
 	}
@@ -190,6 +222,7 @@ cnpg_collector_last_available_backup_timestamp 1711929600
 func (m *MockClient) ListNamespaces(ctx context.Context, prefix string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ListNamespaces:"+prefix)
 	var result []string
 	for ns := range m.Namespaces {
 		if prefix == "" || len(ns) >= len(prefix) && ns[:len(prefix)] == prefix {
@@ -202,6 +235,7 @@ func (m *MockClient) ListNamespaces(ctx context.Context, prefix string) ([]strin
 func (m *MockClient) ListCRDs(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ListCRDs:"+namespace+"/"+gvr.Resource)
 	key := namespace + "/" + gvr.Resource
 	if obj, ok := m.CRDs[key]; ok {
 		return []*unstructured.Unstructured{obj}, nil
@@ -210,11 +244,34 @@ func (m *MockClient) ListCRDs(ctx context.Context, gvr schema.GroupVersionResour
 }
 
 func (m *MockClient) ApplyManifestURL(ctx context.Context, url string) error {
-	m.record("ApplyManifestURL:" + url)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ApplyManifestURL:"+url)
 	return nil
 }
 
 func (m *MockClient) GetDeployment(ctx context.Context, namespace, name string) (bool, error) {
-	m.record("GetDeployment:" + namespace + "/" + name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "GetDeployment:"+namespace+"/"+name)
 	return true, nil
+}
+
+func (m *MockClient) InstallHelmChart(ctx context.Context, namespace, releaseName, chartPath string, values map[string]interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "InstallHelmChart:"+namespace+"/"+releaseName)
+	if m.HelmError != nil {
+		return m.HelmError
+	}
+	m.HelmReleases[namespace+"/"+releaseName] = values
+	return nil
+}
+
+func (m *MockClient) UninstallHelmChart(ctx context.Context, namespace, releaseName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "UninstallHelmChart:"+namespace+"/"+releaseName)
+	delete(m.HelmReleases, namespace+"/"+releaseName)
+	return nil
 }

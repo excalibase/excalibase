@@ -56,6 +56,19 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		}, nil)
 	}
 
+	// Populate S3 credentials from vault if backup enabled but no S3 creds provided
+	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 == nil && s.vault != nil && !s.vault.Sealed() {
+		if s3Creds, err := s.vault.Get("backup/s3"); err == nil {
+			req.Backup.S3 = &domain.S3Credentials{
+				AccessKeyID:     s3Creds["accessKeyId"],
+				SecretAccessKey: s3Creds["secretAccessKey"],
+				Bucket:          s3Creds["bucket"],
+				Region:          s3Creds["region"],
+				Endpoint:        s3Creds["endpoint"],
+			}
+		}
+	}
+
 	result, err := prov.Provision(ctx, req, tier, cb)
 	if err != nil {
 		return s.handleProvisionFailure(inst, req, err), nil
@@ -74,6 +87,25 @@ func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest
 	tier, err := config.GetTierConfig(req.Tier)
 	if err != nil {
 		return nil, nil, config.TierConfig{}, err
+	}
+
+	// Enforce max projects per org for this tier
+	if tier.MaxProjects > 0 {
+		allInstances, _ := s.store.FindAll()
+		orgCount := 0
+		for _, inst := range allInstances {
+			if inst.OrgID == req.OrgID {
+				orgCount++
+			}
+		}
+		if orgCount >= tier.MaxProjects {
+			return nil, nil, config.TierConfig{}, fmt.Errorf("org %s has reached the maximum of %d projects for %s tier", req.OrgID, tier.MaxProjects, req.Tier)
+		}
+	}
+
+	// Enforce backup availability per tier
+	if req.Backup != nil && req.Backup.Enabled && !tier.BackupEnabled {
+		return nil, nil, config.TierConfig{}, fmt.Errorf("backups are not available on %s tier", req.Tier)
 	}
 
 	prov, ok := s.factory.Get(req.DBType)
@@ -266,8 +298,10 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	port := strconv.Itoa(result.Port)
 	dbName := result.DatabaseName
 
+	orgID := req.OrgID
+
 	// Store admin (superuser) credentials from CNPG
-	s.vault.Put(fmt.Sprintf("projects/%s/credentials/admin", projectID), map[string]string{
+	s.vault.Put(fmt.Sprintf("orgs/%s/projects/%s/credentials/admin", orgID, projectID), map[string]string{
 		"host": host, "port": port, "database": dbName,
 		"username": result.Username, "password": result.Password,
 	})
@@ -330,11 +364,11 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
 	}
 
 	// Store credentials in vault
-	s.vault.Put(fmt.Sprintf("projects/%s/credentials/auth_admin", projectID), map[string]string{
+	s.vault.Put(fmt.Sprintf("orgs/%s/projects/%s/credentials/auth_admin", orgID, projectID), map[string]string{
 		"host": host, "port": port, "database": dbName,
 		"username": "auth_admin", "password": authPass,
 	})
-	s.vault.Put(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectID), map[string]string{
+	s.vault.Put(fmt.Sprintf("orgs/%s/projects/%s/credentials/excalibase_app", orgID, projectID), map[string]string{
 		"host": host, "port": port, "database": dbName,
 		"username": "excalibase_app", "password": appPass,
 	})

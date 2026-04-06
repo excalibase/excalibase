@@ -82,6 +82,18 @@ func (c *Client) CreateNamespace(ctx context.Context, name string) error {
 	return err
 }
 
+// CreateNamespaceWithLabels creates a K8s namespace with the given labels.
+func (c *Client) CreateNamespaceWithLabels(ctx context.Context, name string, labels map[string]string) error {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   name,
+			Labels: labels,
+		},
+	}
+	_, err := c.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	return err
+}
+
 // DeleteNamespace deletes a K8s namespace.
 func (c *Client) DeleteNamespace(ctx context.Context, name string) error {
 	return c.clientset.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})

@@ -17,7 +17,7 @@ func TestConcurrentProvisionSameID(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 	mock.SetupPostgreSQLMock("race-db", "org1-race-db", 1)
-	pgProv := provisioner.NewPostgreSQLProvisioner(mock)
+	pgProv := provisioner.NewPostgreSQLProvisioner(mock, "")
 	factory := provisioner.NewFactory(pgProv)
 	svc := NewProvisioningService(store, factory, mock)
 

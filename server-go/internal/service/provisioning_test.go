@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -15,7 +16,7 @@ func setupProvisioningTest(t *testing.T) (*ProvisioningService, *storage.FileSys
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	pgProv := provisioner.NewPostgreSQLProvisioner(mock)
+	pgProv := provisioner.NewPostgreSQLProvisioner(mock, "")
 	factory := provisioner.NewFactory(pgProv)
 	svc := NewProvisioningService(store, factory, mock)
 	return svc, store, mock
@@ -57,6 +58,66 @@ func TestProvisionDuplicate(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for duplicate project")
+	}
+}
+
+func TestProvisionExceedsFreeTierLimit(t *testing.T) {
+	svc, store, mock := setupProvisioningTest(t)
+	mock.SetupPostgreSQLMock("existing-db", "org1-existing-db", 1)
+
+	// Org already has 1 project (FREE tier max)
+	store.Save(&domain.DatabaseInstance{ProjectID: "existing-db", OrgID: "org1", Status: "ACTIVE"})
+
+	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "second-db",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	})
+	if err == nil {
+		t.Error("expected error for exceeding FREE tier project limit")
+	}
+	if err != nil && !strings.Contains(err.Error(), "maximum") {
+		t.Errorf("expected max projects error, got: %v", err)
+	}
+}
+
+func TestProvisionBackupNotAllowedOnFreeTier(t *testing.T) {
+	svc, _, _ := setupProvisioningTest(t)
+
+	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "backup-db",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+		Backup:      &domain.BackupSettings{Enabled: true},
+	})
+	if err == nil {
+		t.Error("expected error for backup on FREE tier")
+	}
+	if err != nil && !strings.Contains(err.Error(), "not available") {
+		t.Errorf("expected backup not available error, got: %v", err)
+	}
+}
+
+func TestProvisionStandardTierAllowsMultipleProjects(t *testing.T) {
+	svc, store, mock := setupProvisioningTest(t)
+	mock.SetupPostgreSQLMock("std-second", "org1-std-second", 3)
+
+	// Org already has 1 project but STANDARD allows 5
+	store.Save(&domain.DatabaseInstance{ProjectID: "std-first", OrgID: "org1", Status: "ACTIVE"})
+
+	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "std-second",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Standard,
+	})
+	if err != nil {
+		t.Fatalf("STANDARD tier should allow 2nd project: %v", err)
+	}
+	if resp.Status != "ACTIVE" {
+		t.Errorf("status: got %s, want ACTIVE", resp.Status)
 	}
 }
 

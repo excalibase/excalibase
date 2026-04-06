@@ -4,8 +4,17 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 )
+
+// validPathID allows only alphanumeric, hyphens, underscores, max 64 chars.
+// Used to validate orgId and projectId path parameters to prevent path traversal.
+var validPathID = regexp.MustCompile(`^[a-zA-Z0-9_\-]{1,64}$`)
+
+func isValidID(id string) bool {
+	return validPathID.MatchString(id)
+}
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")

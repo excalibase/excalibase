@@ -11,7 +11,7 @@ import (
 // --- Roles ---
 
 func (h *SchemaHandler) GetRoles(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -25,7 +25,7 @@ func (h *SchemaHandler) GetRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -49,7 +49,7 @@ func (h *SchemaHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropRole(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -65,7 +65,7 @@ func (h *SchemaHandler) DropRole(w http.ResponseWriter, r *http.Request) {
 // --- Extensions ---
 
 func (h *SchemaHandler) GetExtensions(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -79,7 +79,7 @@ func (h *SchemaHandler) GetExtensions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateExtension(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -106,7 +106,7 @@ func (h *SchemaHandler) CreateExtension(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *SchemaHandler) DropExtension(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -123,7 +123,7 @@ func (h *SchemaHandler) DropExtension(w http.ResponseWriter, r *http.Request) {
 // --- Policies ---
 
 func (h *SchemaHandler) GetPolicies(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -137,7 +137,7 @@ func (h *SchemaHandler) GetPolicies(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -161,7 +161,7 @@ func (h *SchemaHandler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropPolicy(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -182,7 +182,7 @@ func (h *SchemaHandler) DropPolicy(w http.ResponseWriter, r *http.Request) {
 // --- Functions ---
 
 func (h *SchemaHandler) GetFunctions(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -196,7 +196,7 @@ func (h *SchemaHandler) GetFunctions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateFunction(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -220,7 +220,7 @@ func (h *SchemaHandler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropFunction(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -237,7 +237,7 @@ func (h *SchemaHandler) DropFunction(w http.ResponseWriter, r *http.Request) {
 // --- Triggers ---
 
 func (h *SchemaHandler) GetTriggers(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -251,7 +251,7 @@ func (h *SchemaHandler) GetTriggers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateTrigger(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -275,7 +275,7 @@ func (h *SchemaHandler) CreateTrigger(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropTrigger(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -296,7 +296,7 @@ func (h *SchemaHandler) DropTrigger(w http.ResponseWriter, r *http.Request) {
 // --- Indexes (create/drop) ---
 
 func (h *SchemaHandler) CreateIndex(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -320,7 +320,7 @@ func (h *SchemaHandler) CreateIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropIndex(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -336,7 +336,7 @@ func (h *SchemaHandler) DropIndex(w http.ResponseWriter, r *http.Request) {
 // --- Types ---
 
 func (h *SchemaHandler) GetTypes(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return

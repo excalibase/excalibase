@@ -11,6 +11,7 @@ import (
 // KubeClient abstracts Kubernetes operations for testability.
 type KubeClient interface {
 	CreateNamespace(ctx context.Context, name string) error
+	CreateNamespaceWithLabels(ctx context.Context, name string, labels map[string]string) error
 	DeleteNamespace(ctx context.Context, name string) error
 	ApplyCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error
 	GetCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error)
@@ -25,6 +26,8 @@ type KubeClient interface {
 	ListCRDs(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
 	ApplyManifestURL(ctx context.Context, url string) error
 	GetDeployment(ctx context.Context, namespace, name string) (bool, error)
+	InstallHelmChart(ctx context.Context, namespace, releaseName, chartPath string, values map[string]interface{}) error
+	UninstallHelmChart(ctx context.Context, namespace, releaseName string) error
 }
 
 // Verify Client implements KubeClient at compile time.

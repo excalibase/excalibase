@@ -270,7 +270,7 @@ func newUninitializedVaultSchemaRouter(t *testing.T) chi.Router {
 // sealed vault returns 503 for all schema endpoints
 func TestSchemaGetTables_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/tables", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/tables", "")
 	if w.Code != 503 {
 		t.Errorf("GetTables sealed: got %d, want 503", w.Code)
 	}
@@ -278,7 +278,7 @@ func TestSchemaGetTables_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaGetColumns_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/tables/users/columns", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/tables/users/columns", "")
 	if w.Code != 503 {
 		t.Errorf("GetColumns sealed: got %d, want 503", w.Code)
 	}
@@ -286,7 +286,7 @@ func TestSchemaGetColumns_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaGetRelationships_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/relationships", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/relationships", "")
 	if w.Code != 503 {
 		t.Errorf("GetRelationships sealed: got %d, want 503", w.Code)
 	}
@@ -294,7 +294,7 @@ func TestSchemaGetRelationships_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaGetIndexes_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/tables/users/indexes", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/tables/users/indexes", "")
 	if w.Code != 503 {
 		t.Errorf("GetIndexes sealed: got %d, want 503", w.Code)
 	}
@@ -302,7 +302,7 @@ func TestSchemaGetIndexes_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaCreateTable_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/tables", `{"name":"t1"}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/tables", `{"name":"t1"}`)
 	if w.Code != 503 {
 		t.Errorf("CreateTable sealed: got %d, want 503", w.Code)
 	}
@@ -310,7 +310,7 @@ func TestSchemaCreateTable_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaUpdateTable_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "PATCH", "/schema/proj1/tables/users", `{"newName":"new_users"}`)
+	w := doRequest(r, "PATCH", "/schema/org1/proj1/tables/users", `{"newName":"new_users"}`)
 	if w.Code != 503 {
 		t.Errorf("UpdateTable sealed: got %d, want 503", w.Code)
 	}
@@ -318,7 +318,7 @@ func TestSchemaUpdateTable_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaDropTable_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/tables/users", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/tables/users", "")
 	if w.Code != 503 {
 		t.Errorf("DropTable sealed: got %d, want 503", w.Code)
 	}
@@ -326,7 +326,7 @@ func TestSchemaDropTable_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaAddColumn_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/tables/users/columns", `{"name":"col","type":"text"}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/tables/users/columns", `{"name":"col","type":"text"}`)
 	if w.Code != 503 {
 		t.Errorf("AddColumn sealed: got %d, want 503", w.Code)
 	}
@@ -334,7 +334,7 @@ func TestSchemaAddColumn_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaAlterColumn_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "PATCH", "/schema/proj1/tables/users/columns/email", `{}`)
+	w := doRequest(r, "PATCH", "/schema/org1/proj1/tables/users/columns/email", `{}`)
 	if w.Code != 503 {
 		t.Errorf("AlterColumn sealed: got %d, want 503", w.Code)
 	}
@@ -342,7 +342,7 @@ func TestSchemaAlterColumn_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaDropColumn_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/tables/users/columns/email", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/tables/users/columns/email", "")
 	if w.Code != 503 {
 		t.Errorf("DropColumn sealed: got %d, want 503", w.Code)
 	}
@@ -352,7 +352,7 @@ func TestSchemaDropColumn_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaGetRows_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/tables/users/rows", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/tables/users/rows", "")
 	if w.Code != 503 {
 		t.Errorf("GetRows sealed: got %d, want 503", w.Code)
 	}
@@ -360,7 +360,7 @@ func TestSchemaGetRows_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaInsertRow_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/tables/users/rows", `{"data":{"name":"alice"}}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/tables/users/rows", `{"data":{"name":"alice"}}`)
 	if w.Code != 503 {
 		t.Errorf("InsertRow sealed: got %d, want 503", w.Code)
 	}
@@ -368,7 +368,7 @@ func TestSchemaInsertRow_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaUpdateRow_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "PATCH", "/schema/proj1/tables/users/rows",
+	w := doRequest(r, "PATCH", "/schema/org1/proj1/tables/users/rows",
 		`{"pk":{"column":"id","value":"1"},"data":{"name":"bob"}}`)
 	if w.Code != 503 {
 		t.Errorf("UpdateRow sealed: got %d, want 503", w.Code)
@@ -377,7 +377,7 @@ func TestSchemaUpdateRow_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaDeleteRow_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/tables/users/rows",
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/tables/users/rows",
 		`{"pk":{"column":"id","value":"1"}}`)
 	if w.Code != 503 {
 		t.Errorf("DeleteRow sealed: got %d, want 503", w.Code)
@@ -395,7 +395,7 @@ func TestSchemaGetRows_InvalidLimit_Returns400(t *testing.T) {
 	// uninitialized router which returns 404 at getDB — still increases coverage
 	// of the handler function entry.
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/tables/users/rows?limit=notanumber", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/tables/users/rows?limit=notanumber", "")
 	// 404 because vault has no creds — still exercises the getDB error branch
 	if w.Code != 404 {
 		t.Errorf("GetRows uninitialized vault: got %d, want 404", w.Code)
@@ -404,7 +404,7 @@ func TestSchemaGetRows_InvalidLimit_Returns400(t *testing.T) {
 
 func TestSchemaInsertRow_InvalidJSON_Returns400(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/tables/users/rows", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/tables/users/rows", "not json")
 	// 404 because vault has no creds — exercises getDB error branch
 	if w.Code != 404 {
 		t.Errorf("InsertRow uninitialized vault: got %d, want 404", w.Code)
@@ -413,7 +413,7 @@ func TestSchemaInsertRow_InvalidJSON_Returns400(t *testing.T) {
 
 func TestSchemaUpdateRow_InvalidJSON_Returns400(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "PATCH", "/schema/proj1/tables/users/rows", "not json")
+	w := doRequest(r, "PATCH", "/schema/org1/proj1/tables/users/rows", "not json")
 	if w.Code != 404 {
 		t.Errorf("UpdateRow uninitialized vault: got %d, want 404", w.Code)
 	}
@@ -421,7 +421,7 @@ func TestSchemaUpdateRow_InvalidJSON_Returns400(t *testing.T) {
 
 func TestSchemaDeleteRow_InvalidJSON_Returns400(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/tables/users/rows", "not json")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/tables/users/rows", "not json")
 	if w.Code != 404 {
 		t.Errorf("DeleteRow uninitialized vault: got %d, want 404", w.Code)
 	}
@@ -432,7 +432,7 @@ func TestSchemaDeleteRow_InvalidJSON_Returns400(t *testing.T) {
 
 func TestSchemaGetTriggers_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/triggers", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/triggers", "")
 	if w.Code != 503 {
 		t.Errorf("GetTriggers sealed: got %d, want 503", w.Code)
 	}
@@ -441,7 +441,7 @@ func TestSchemaGetTriggers_SealedVault_Returns503(t *testing.T) {
 func TestSchemaCreateTrigger_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
 	body := `{"name":"trg","table":"users","function":"fn","timing":"BEFORE","events":["INSERT"]}`
-	w := doRequest(r, "POST", "/schema/proj1/triggers", body)
+	w := doRequest(r, "POST", "/schema/org1/proj1/triggers", body)
 	if w.Code != 503 {
 		t.Errorf("CreateTrigger sealed: got %d, want 503", w.Code)
 	}
@@ -449,7 +449,7 @@ func TestSchemaCreateTrigger_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaDropTrigger_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/triggers/my_trigger?table=users", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/triggers/my_trigger?table=users", "")
 	if w.Code != 503 {
 		t.Errorf("DropTrigger sealed: got %d, want 503", w.Code)
 	}
@@ -458,7 +458,7 @@ func TestSchemaDropTrigger_SealedVault_Returns503(t *testing.T) {
 func TestSchemaCreateIndex_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
 	body := `{"name":"idx","table":"users","columns":["email"]}`
-	w := doRequest(r, "POST", "/schema/proj1/indexes", body)
+	w := doRequest(r, "POST", "/schema/org1/proj1/indexes", body)
 	if w.Code != 503 {
 		t.Errorf("CreateIndex sealed: got %d, want 503", w.Code)
 	}
@@ -466,7 +466,7 @@ func TestSchemaCreateIndex_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaDropIndex_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/indexes/my_idx", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/indexes/my_idx", "")
 	if w.Code != 503 {
 		t.Errorf("DropIndex sealed: got %d, want 503", w.Code)
 	}
@@ -474,7 +474,7 @@ func TestSchemaDropIndex_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaGetTypes_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/types", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/types", "")
 	if w.Code != 503 {
 		t.Errorf("GetTypes sealed: got %d, want 503", w.Code)
 	}
@@ -482,7 +482,7 @@ func TestSchemaGetTypes_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaDropExtension_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/extensions/uuid-ossp", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/extensions/uuid-ossp", "")
 	if w.Code != 503 {
 		t.Errorf("DropExtension sealed: got %d, want 503", w.Code)
 	}
@@ -492,7 +492,7 @@ func TestSchemaDropExtension_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaGetRoles_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/roles", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/roles", "")
 	if w.Code != 404 {
 		t.Errorf("GetRoles uninitialized: got %d, want 404", w.Code)
 	}
@@ -500,7 +500,7 @@ func TestSchemaGetRoles_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaCreateRole_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/roles", `{"name":"myrole"}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/roles", `{"name":"myrole"}`)
 	if w.Code != 404 {
 		t.Errorf("CreateRole uninitialized: got %d, want 404", w.Code)
 	}
@@ -508,7 +508,7 @@ func TestSchemaCreateRole_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaDropRole_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/roles/myrole", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/roles/myrole", "")
 	if w.Code != 404 {
 		t.Errorf("DropRole uninitialized: got %d, want 404", w.Code)
 	}
@@ -516,7 +516,7 @@ func TestSchemaDropRole_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaGetExtensions_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/extensions", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/extensions", "")
 	if w.Code != 404 {
 		t.Errorf("GetExtensions uninitialized: got %d, want 404", w.Code)
 	}
@@ -524,7 +524,7 @@ func TestSchemaGetExtensions_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaCreateExtension_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/extensions", `{"name":"uuid-ossp"}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/extensions", `{"name":"uuid-ossp"}`)
 	if w.Code != 404 {
 		t.Errorf("CreateExtension uninitialized: got %d, want 404", w.Code)
 	}
@@ -532,7 +532,7 @@ func TestSchemaCreateExtension_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaDropExtension_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/extensions/uuid-ossp", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/extensions/uuid-ossp", "")
 	if w.Code != 404 {
 		t.Errorf("DropExtension uninitialized: got %d, want 404", w.Code)
 	}
@@ -540,7 +540,7 @@ func TestSchemaDropExtension_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaGetPolicies_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/policies", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/policies", "")
 	if w.Code != 404 {
 		t.Errorf("GetPolicies uninitialized: got %d, want 404", w.Code)
 	}
@@ -548,7 +548,7 @@ func TestSchemaGetPolicies_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaCreatePolicy_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/policies", `{"name":"p","table":"t"}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/policies", `{"name":"p","table":"t"}`)
 	if w.Code != 404 {
 		t.Errorf("CreatePolicy uninitialized: got %d, want 404", w.Code)
 	}
@@ -556,7 +556,7 @@ func TestSchemaCreatePolicy_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaDropPolicy_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/policies/mypol?table=users", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/policies/mypol?table=users", "")
 	if w.Code != 404 {
 		t.Errorf("DropPolicy uninitialized: got %d, want 404", w.Code)
 	}
@@ -564,7 +564,7 @@ func TestSchemaDropPolicy_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaGetFunctions_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/functions", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/functions", "")
 	if w.Code != 404 {
 		t.Errorf("GetFunctions uninitialized: got %d, want 404", w.Code)
 	}
@@ -572,7 +572,7 @@ func TestSchemaGetFunctions_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaCreateFunction_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/functions", `{"name":"fn","body":"BEGIN END"}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/functions", `{"name":"fn","body":"BEGIN END"}`)
 	if w.Code != 404 {
 		t.Errorf("CreateFunction uninitialized: got %d, want 404", w.Code)
 	}
@@ -580,7 +580,7 @@ func TestSchemaCreateFunction_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaDropFunction_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/functions/myfn", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/functions/myfn", "")
 	if w.Code != 404 {
 		t.Errorf("DropFunction uninitialized: got %d, want 404", w.Code)
 	}
@@ -588,7 +588,7 @@ func TestSchemaDropFunction_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaGetTriggers_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/triggers", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/triggers", "")
 	if w.Code != 404 {
 		t.Errorf("GetTriggers uninitialized: got %d, want 404", w.Code)
 	}
@@ -597,7 +597,7 @@ func TestSchemaGetTriggers_UnitializedVault_Returns404(t *testing.T) {
 func TestSchemaCreateTrigger_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
 	body := `{"name":"trg","table":"users","function":"fn"}`
-	w := doRequest(r, "POST", "/schema/proj1/triggers", body)
+	w := doRequest(r, "POST", "/schema/org1/proj1/triggers", body)
 	if w.Code != 404 {
 		t.Errorf("CreateTrigger uninitialized: got %d, want 404", w.Code)
 	}
@@ -605,7 +605,7 @@ func TestSchemaCreateTrigger_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaDropTrigger_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/triggers/t?table=users", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/triggers/t?table=users", "")
 	if w.Code != 404 {
 		t.Errorf("DropTrigger uninitialized: got %d, want 404", w.Code)
 	}
@@ -614,7 +614,7 @@ func TestSchemaDropTrigger_UnitializedVault_Returns404(t *testing.T) {
 func TestSchemaCreateIndex_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
 	body := `{"name":"idx","table":"users","columns":["id"]}`
-	w := doRequest(r, "POST", "/schema/proj1/indexes", body)
+	w := doRequest(r, "POST", "/schema/org1/proj1/indexes", body)
 	if w.Code != 404 {
 		t.Errorf("CreateIndex uninitialized: got %d, want 404", w.Code)
 	}
@@ -622,7 +622,7 @@ func TestSchemaCreateIndex_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaDropIndex_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/indexes/myidx", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/indexes/myidx", "")
 	if w.Code != 404 {
 		t.Errorf("DropIndex uninitialized: got %d, want 404", w.Code)
 	}
@@ -630,7 +630,7 @@ func TestSchemaDropIndex_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaGetTypes_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/types", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/types", "")
 	if w.Code != 404 {
 		t.Errorf("GetTypes uninitialized: got %d, want 404", w.Code)
 	}
@@ -640,7 +640,7 @@ func TestSchemaGetTypes_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaRunPerformanceAdvisor_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/advisors/performance", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/advisors/performance", "")
 	if w.Code != 503 {
 		t.Errorf("RunPerformanceAdvisor sealed: got %d, want 503", w.Code)
 	}
@@ -648,7 +648,7 @@ func TestSchemaRunPerformanceAdvisor_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaRunSecurityAdvisor_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/advisors/security", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/advisors/security", "")
 	if w.Code != 503 {
 		t.Errorf("RunSecurityAdvisor sealed: got %d, want 503", w.Code)
 	}
@@ -656,7 +656,7 @@ func TestSchemaRunSecurityAdvisor_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaRunPerformanceAdvisor_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/advisors/performance", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/advisors/performance", "")
 	if w.Code != 404 {
 		t.Errorf("RunPerformanceAdvisor uninitialized: got %d, want 404", w.Code)
 	}
@@ -664,7 +664,7 @@ func TestSchemaRunPerformanceAdvisor_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaRunSecurityAdvisor_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/advisors/security", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/advisors/security", "")
 	if w.Code != 404 {
 		t.Errorf("RunSecurityAdvisor uninitialized: got %d, want 404", w.Code)
 	}
@@ -674,7 +674,7 @@ func TestSchemaRunSecurityAdvisor_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaExecuteDDL_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/ddl", `{"sql":"CREATE TABLE t (id int)"}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/ddl", `{"sql":"CREATE TABLE t (id int)"}`)
 	if w.Code != 503 {
 		t.Errorf("ExecuteDDL sealed: got %d, want 503", w.Code)
 	}
@@ -682,7 +682,7 @@ func TestSchemaExecuteDDL_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaExecuteDDL_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/ddl", `{"sql":"SELECT 1"}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/ddl", `{"sql":"SELECT 1"}`)
 	if w.Code != 404 {
 		t.Errorf("ExecuteDDL uninitialized: got %d, want 404", w.Code)
 	}
@@ -690,7 +690,7 @@ func TestSchemaExecuteDDL_UnitializedVault_Returns404(t *testing.T) {
 
 func TestSchemaExecuteQuery_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/query", `{"query":"SELECT 1"}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/query", `{"query":"SELECT 1"}`)
 	if w.Code != 503 {
 		t.Errorf("ExecuteQuery sealed: got %d, want 503", w.Code)
 	}
@@ -698,7 +698,7 @@ func TestSchemaExecuteQuery_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaTestConnection_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/connection-test", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/connection-test", "")
 	if w.Code != 503 {
 		t.Errorf("TestConnection sealed: got %d, want 503", w.Code)
 	}
@@ -706,7 +706,7 @@ func TestSchemaTestConnection_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaTestConnection_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
-	w := doRequest(r, "GET", "/schema/proj1/connection-test", "")
+	w := doRequest(r, "GET", "/schema/org1/proj1/connection-test", "")
 	if w.Code != 404 {
 		t.Errorf("TestConnection uninitialized: got %d, want 404", w.Code)
 	}
@@ -727,7 +727,7 @@ func TestSchemaTestConnection_UnitializedVault_Returns404(t *testing.T) {
 func TestSchemaDropPolicy_MissingTableParam_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
 	// No "table" query param — validation happens after getDB, so we get 404 first
-	w := doRequest(r, "DELETE", "/schema/proj1/policies/mypol", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/policies/mypol", "")
 	if w.Code != 404 {
 		t.Errorf("DropPolicy no table param: got %d", w.Code)
 	}
@@ -736,7 +736,7 @@ func TestSchemaDropPolicy_MissingTableParam_UnitializedVault_Returns404(t *testi
 func TestSchemaDropTrigger_MissingTableParam_UnitializedVault_Returns404(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
 	// No "table" query param
-	w := doRequest(r, "DELETE", "/schema/proj1/triggers/mytrigger", "")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/triggers/mytrigger", "")
 	if w.Code != 404 {
 		t.Errorf("DropTrigger no table param: got %d", w.Code)
 	}
@@ -748,8 +748,8 @@ func TestSchemaHandleDBError_Branches(t *testing.T) {
 	rSealed := newSealedVaultSchemaRouter(t)
 	rNotFound := newUninitializedVaultSchemaRouter(t)
 
-	ws := doRequest(rSealed, "GET", "/schema/x/tables", "")
-	wn := doRequest(rNotFound, "GET", "/schema/x/tables", "")
+	ws := doRequest(rSealed, "GET", "/schema/x/x/tables", "")
+	wn := doRequest(rNotFound, "GET", "/schema/x/x/tables", "")
 	if ws.Code != 503 {
 		t.Errorf("sealed branch: got %d, want 503", ws.Code)
 	}
@@ -924,7 +924,7 @@ func TestAuthCreateUser_SaveError_Returns400(t *testing.T) {
 
 func TestSchemaCreateTable_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/tables", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/tables", "not json")
 	if w.Code != 503 {
 		t.Errorf("CreateTable invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -932,7 +932,7 @@ func TestSchemaCreateTable_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaAddColumn_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/tables/users/columns", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/tables/users/columns", "not json")
 	if w.Code != 503 {
 		t.Errorf("AddColumn invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -940,7 +940,7 @@ func TestSchemaAddColumn_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaCreateRole_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/roles", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/roles", "not json")
 	if w.Code != 503 {
 		t.Errorf("CreateRole invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -948,7 +948,7 @@ func TestSchemaCreateRole_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaCreateExtension_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/extensions", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/extensions", "not json")
 	if w.Code != 503 {
 		t.Errorf("CreateExtension invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -956,7 +956,7 @@ func TestSchemaCreateExtension_InvalidJSON_SealedVault_Returns503(t *testing.T) 
 
 func TestSchemaCreatePolicy_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/policies", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/policies", "not json")
 	if w.Code != 503 {
 		t.Errorf("CreatePolicy invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -964,7 +964,7 @@ func TestSchemaCreatePolicy_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaCreateFunction_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/functions", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/functions", "not json")
 	if w.Code != 503 {
 		t.Errorf("CreateFunction invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -972,7 +972,7 @@ func TestSchemaCreateFunction_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaCreateTrigger_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/triggers", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/triggers", "not json")
 	if w.Code != 503 {
 		t.Errorf("CreateTrigger invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -980,7 +980,7 @@ func TestSchemaCreateTrigger_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaCreateIndex_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/indexes", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/indexes", "not json")
 	if w.Code != 503 {
 		t.Errorf("CreateIndex invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -988,7 +988,7 @@ func TestSchemaCreateIndex_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaInsertRow_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/tables/users/rows", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/tables/users/rows", "not json")
 	if w.Code != 503 {
 		t.Errorf("InsertRow invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -996,7 +996,7 @@ func TestSchemaInsertRow_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaUpdateRow_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "PATCH", "/schema/proj1/tables/users/rows", "not json")
+	w := doRequest(r, "PATCH", "/schema/org1/proj1/tables/users/rows", "not json")
 	if w.Code != 503 {
 		t.Errorf("UpdateRow invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -1004,7 +1004,7 @@ func TestSchemaUpdateRow_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaDeleteRow_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "DELETE", "/schema/proj1/tables/users/rows", "not json")
+	w := doRequest(r, "DELETE", "/schema/org1/proj1/tables/users/rows", "not json")
 	if w.Code != 503 {
 		t.Errorf("DeleteRow invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -1012,7 +1012,7 @@ func TestSchemaDeleteRow_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaExecuteDDL_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/ddl", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/ddl", "not json")
 	if w.Code != 503 {
 		t.Errorf("ExecuteDDL invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -1020,7 +1020,7 @@ func TestSchemaExecuteDDL_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func TestSchemaExecuteQuery_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 	r := newSealedVaultSchemaRouter(t)
-	w := doRequest(r, "POST", "/schema/proj1/query", "not json")
+	w := doRequest(r, "POST", "/schema/org1/proj1/query", "not json")
 	if w.Code != 503 {
 		t.Errorf("ExecuteQuery invalid JSON + sealed: got %d, want 503", w.Code)
 	}
@@ -1041,7 +1041,7 @@ func newBadDBSchemaRouter(t *testing.T) chi.Router {
 	v.Init(1, 1)
 
 	// Store credentials pointing to an unreachable DB host
-	if err := v.Put("projects/proj-bad/credentials/excalibase_app", map[string]string{
+	if err := v.Put("orgs/test-org/projects/proj-bad/credentials/excalibase_app", map[string]string{
 		"host":     "127.0.0.1",
 		"port":     "1", // port 1 is always refused
 		"username": "user",
@@ -1061,7 +1061,7 @@ func TestSchemaHandleDBError_GenericPingError_Returns500(t *testing.T) {
 	r := newBadDBSchemaRouter(t)
 	// getDB will succeed getting creds from vault, but sql.Open + Ping will fail
 	// with a connection-refused error — not ErrSealed/ErrNotFound → returns 500
-	w := doRequest(r, "GET", "/schema/proj-bad/tables", "")
+	w := doRequest(r, "GET", "/schema/test-org/proj-bad/tables", "")
 	if w.Code != 500 {
 		t.Errorf("handleDBError generic: got %d, want 500", w.Code)
 	}
@@ -1094,7 +1094,7 @@ func TestSchemaGetDB_PoolFull_Returns500(t *testing.T) {
 
 	// Store credentials for our target project — the pool check happens before
 	// using the credentials, so the request will be rejected with "pool full"
-	if err := v.Put("projects/proj-full/credentials/excalibase_app", map[string]string{
+	if err := v.Put("orgs/test-org/projects/proj-full/credentials/excalibase_app", map[string]string{
 		"host":     "127.0.0.1",
 		"port":     "5432",
 		"username": "u",
@@ -1107,7 +1107,7 @@ func TestSchemaGetDB_PoolFull_Returns500(t *testing.T) {
 	r := chi.NewRouter()
 	r.Route("/schema", h.Routes)
 
-	w := doRequest(r, "GET", "/schema/proj-full/tables", "")
+	w := doRequest(r, "GET", "/schema/test-org/proj-full/tables", "")
 	if w.Code != 500 {
 		t.Errorf("getDB pool full: got %d, want 500", w.Code)
 	}
@@ -1210,7 +1210,7 @@ func TestProvision_InvalidBody_Returns400_Direct(t *testing.T) {
 func TestSchemaExecuteQuery_EmptyQuery_Returns400_ViaNotFound(t *testing.T) {
 	r := newUninitializedVaultSchemaRouter(t)
 	// Even if query is empty, getDB fails first with 404
-	w := doRequest(r, "POST", "/schema/proj1/query", `{"query":""}`)
+	w := doRequest(r, "POST", "/schema/org1/proj1/query", `{"query":""}`)
 	if w.Code != 404 {
 		t.Errorf("ExecuteQuery empty query with no creds: got %d, want 404", w.Code)
 	}

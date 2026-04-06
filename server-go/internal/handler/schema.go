@@ -80,7 +80,7 @@ func schemaParam(r *http.Request) string {
 }
 
 func (h *SchemaHandler) Routes(r chi.Router) {
-	r.Route("/{projectId}", func(r chi.Router) {
+	r.Route("/{orgId}/{projectId}", func(r chi.Router) {
 		r.Get("/tables", h.GetTables)
 		r.Post("/tables", h.CreateTable)
 		r.Patch("/tables/{tableName}", h.UpdateTable)
@@ -124,7 +124,7 @@ func (h *SchemaHandler) Routes(r chi.Router) {
 // --- Tables ---
 
 func (h *SchemaHandler) GetTables(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -138,7 +138,7 @@ func (h *SchemaHandler) GetTables(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) GetColumns(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -152,7 +152,7 @@ func (h *SchemaHandler) GetColumns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) GetRelationships(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -166,7 +166,7 @@ func (h *SchemaHandler) GetRelationships(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *SchemaHandler) GetIndexes(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -180,7 +180,7 @@ func (h *SchemaHandler) GetIndexes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateTable(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -204,7 +204,7 @@ func (h *SchemaHandler) CreateTable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) UpdateTable(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -223,7 +223,7 @@ func (h *SchemaHandler) UpdateTable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropTable(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -240,7 +240,7 @@ func (h *SchemaHandler) DropTable(w http.ResponseWriter, r *http.Request) {
 // --- Columns ---
 
 func (h *SchemaHandler) AddColumn(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -265,7 +265,7 @@ func (h *SchemaHandler) AddColumn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) AlterColumn(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -285,7 +285,7 @@ func (h *SchemaHandler) AlterColumn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropColumn(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -311,9 +311,13 @@ func indexOfByte(s string, sep byte) int {
 	return -1
 }
 
-func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
+func (h *SchemaHandler) getDB(orgId, projectId string) (*sql.DB, error) {
+	if !isValidID(orgId) || !isValidID(projectId) {
+		return nil, fmt.Errorf("invalid org or project id")
+	}
+	cacheKey := orgId + "/" + projectId
 	h.mu.RLock()
-	if e, ok := h.connCache[projectId]; ok {
+	if e, ok := h.connCache[cacheKey]; ok {
 		h.mu.RUnlock()
 		return e.db, nil
 	}
@@ -327,8 +331,8 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 		return nil, fmt.Errorf("connection pool full (%d)", maxConns)
 	}
 
-	// Get excalibase_app credentials from vault
-	creds, err := h.vault.Get(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectId))
+	// Get excalibase_app credentials from vault (org-scoped)
+	creds, err := h.vault.Get(fmt.Sprintf("orgs/%s/projects/%s/credentials/excalibase_app", orgId, projectId))
 	if err != nil {
 		return nil, err
 	}
@@ -363,12 +367,12 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 
 	h.mu.Lock()
 	// Double-check: another goroutine may have cached it while we were connecting
-	if existing, ok := h.connCache[projectId]; ok {
+	if existing, ok := h.connCache[cacheKey]; ok {
 		h.mu.Unlock()
 		db.Close() // close the one we just opened
 		return existing.db, nil
 	}
-	h.connCache[projectId] = &connEntry{db: db, created: time.Now()}
+	h.connCache[cacheKey] = &connEntry{db: db, created: time.Now()}
 	h.mu.Unlock()
 
 	return db, nil

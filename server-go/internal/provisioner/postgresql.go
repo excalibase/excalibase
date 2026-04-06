@@ -13,11 +13,12 @@ import (
 
 // PostgreSQLProvisioner provisions PostgreSQL via CloudNativePG operator.
 type PostgreSQLProvisioner struct {
-	client k8s.KubeClient
+	client           k8s.KubeClient
+	watcherChartPath string
 }
 
-func NewPostgreSQLProvisioner(client k8s.KubeClient) *PostgreSQLProvisioner {
-	return &PostgreSQLProvisioner{client: client}
+func NewPostgreSQLProvisioner(client k8s.KubeClient, watcherChartPath string) *PostgreSQLProvisioner {
+	return &PostgreSQLProvisioner{client: client, watcherChartPath: watcherChartPath}
 }
 
 func (p *PostgreSQLProvisioner) SupportedType() domain.DatabaseType {
@@ -31,17 +32,21 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 	// Stage 1: Validate
 	cb(domain.StageValidating)
 
-	// Stage 2: Create namespace
+	// Stage 2: Create namespace with labels for NetworkPolicy selectors
 	cb(domain.StageNamespaceCreation)
-	if err := p.client.CreateNamespace(ctx, namespace); err != nil {
+	labels := map[string]string{
+		"excalibase.io/type": "project",
+		"excalibase.io/org":  req.OrgID,
+	}
+	if err := p.client.CreateNamespaceWithLabels(ctx, namespace, labels); err != nil {
 		return nil, fmt.Errorf("create namespace: %w", err)
 	}
 
 	// Create S3 backup credentials secret if backup enabled
-	if req.Backup != nil && req.Backup.Enabled {
+	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 != nil {
 		if err := p.client.CreateSecret(ctx, namespace, "backup-s3-creds", map[string][]byte{
-			"ACCESS_KEY_ID":     []byte("test"),
-			"ACCESS_SECRET_KEY": []byte("test"),
+			"ACCESS_KEY_ID":     []byte(req.Backup.S3.AccessKeyID),
+			"ACCESS_SECRET_KEY": []byte(req.Backup.S3.SecretAccessKey),
 		}); err != nil {
 			return nil, fmt.Errorf("create backup secret: %w", err)
 		}
@@ -110,7 +115,39 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 	// Stage 7: Metrics setup
 	cb(domain.StageMetricsSetup)
 
-	// Stage 8: Completed
+	// Stage 8: Deploy per-project watcher for CDC
+	cb(domain.StageWatcherDeployment)
+	if p.watcherChartPath != "" {
+		watcherValues := map[string]interface{}{
+			"postgres": map[string]interface{}{
+				"enabled":                      true,
+				"url":                          fmt.Sprintf("jdbc:postgresql://%s-postgres-rw.%s.svc.cluster.local:5432/%s", projectID, namespace, creds.DatabaseName),
+				"existingSecret":               fmt.Sprintf("%s-postgres-superuser", projectID),
+				"existingSecretUsernameKey":     "username",
+				"existingSecretPasswordKey":     "password",
+				"slotName":                      fmt.Sprintf("cdc_%s", projectID),
+				"publicationName":              fmt.Sprintf("cdc_%s_pub", projectID),
+				"createSlotIfNotExists":        true,
+				"createPublicationIfNotExists": true,
+				"captureDdl":                   true,
+			},
+			"nats": map[string]interface{}{
+				"url":           "nats://nats.excalibase-platform.svc.cluster.local:4222",
+				"streamName":    "CDC",
+				"subjectPrefix": fmt.Sprintf("cdc.%s", projectID),
+				"enabled":       true,
+			},
+			"resources": map[string]interface{}{
+				"limits":   map[string]interface{}{"cpu": "200m", "memory": "256Mi"},
+				"requests": map[string]interface{}{"cpu": "50m", "memory": "128Mi"},
+			},
+		}
+		if err := p.client.InstallHelmChart(ctx, namespace, "excalibase-watcher", p.watcherChartPath, watcherValues); err != nil {
+			log.Printf("WARN: watcher deployment failed for %s: %v", projectID, err)
+		}
+	}
+
+	// Stage 9: Completed
 	cb(domain.StageCompleted)
 
 	creds.Namespace = namespace
@@ -118,9 +155,12 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 }
 
 func (p *PostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, projectID string) error {
+	// Uninstall watcher first (stops replication cleanly)
+	if err := p.client.UninstallHelmChart(ctx, namespace, "excalibase-watcher"); err != nil {
+		log.Printf("WARN: failed to uninstall watcher: %v", err)
+	}
 	// Delete the CNPG cluster CRD
-	err := p.client.DeleteCRD(ctx, k8s.CNPGClusterGVR, namespace, projectID+"-postgres")
-	if err != nil {
+	if err := p.client.DeleteCRD(ctx, k8s.CNPGClusterGVR, namespace, projectID+"-postgres"); err != nil {
 		log.Printf("WARN: failed to delete cluster CRD: %v", err)
 	}
 	// Delete namespace (cascades everything)

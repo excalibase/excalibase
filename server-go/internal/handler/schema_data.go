@@ -12,7 +12,7 @@ import (
 // --- Row Data ---
 
 func (h *SchemaHandler) GetRows(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -69,7 +69,7 @@ func (h *SchemaHandler) GetRows(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) InsertRow(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -99,7 +99,7 @@ func (h *SchemaHandler) InsertRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) UpdateRow(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -134,7 +134,7 @@ func (h *SchemaHandler) UpdateRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DeleteRow(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return

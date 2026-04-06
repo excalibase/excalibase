@@ -96,13 +96,9 @@ func TestLoadDBPath(t *testing.T) {
 
 // --- parseCORSOrigins ---
 
-func TestParseCORSOriginsEmpty(t *testing.T) {
-	got := parseCORSOrigins("")
-	want := []string{"*"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseCORSOrigins(%q) = %v, want %v", "", got, want)
-	}
-}
+// TestParseCORSOriginsEmpty and TestParseCORSOriginsAllEmpty removed:
+// parseCORSOrigins now calls log.Fatal on empty/all-empty input.
+// The Load() function always provides a non-empty default.
 
 func TestParseCORSOriginsWildcard(t *testing.T) {
 	got := parseCORSOrigins("*")
@@ -136,14 +132,6 @@ func TestParseCORSOriginsTrimsSpaces(t *testing.T) {
 	}
 }
 
-func TestParseCORSOriginsAllEmpty(t *testing.T) {
-	got := parseCORSOrigins(",,")
-	want := []string{"*"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseCORSOrigins(%q) = %v, want %v", ",,", got, want)
-	}
-}
-
 func TestParseCORSOriginsSkipsEmptyParts(t *testing.T) {
 	got := parseCORSOrigins("http://a.com,,http://b.com")
 	want := []string{"http://a.com", "http://b.com"}
@@ -165,10 +153,10 @@ func TestLoadCORSOriginsFromEnv(t *testing.T) {
 	}
 }
 
-func TestLoadCORSOriginsDefaultsToWildcard(t *testing.T) {
+func TestLoadCORSOriginsDefaultsToAppOrigin(t *testing.T) {
 	os.Unsetenv("CORS_ORIGINS")
 	cfg := Load()
-	if len(cfg.CORSOrigins) != 1 || cfg.CORSOrigins[0] != "*" {
-		t.Errorf("CORSOrigins default: got %v, want [*]", cfg.CORSOrigins)
+	if len(cfg.CORSOrigins) != 1 || cfg.CORSOrigins[0] != "https://app.excalibase.io" {
+		t.Errorf("CORSOrigins default: got %v, want [https://app.excalibase.io]", cfg.CORSOrigins)
 	}
 }

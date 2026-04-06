@@ -10,7 +10,7 @@ import (
 // --- Query Execution ---
 
 func (h *SchemaHandler) ExecuteDDL(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -27,7 +27,7 @@ func (h *SchemaHandler) ExecuteDDL(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -49,7 +49,7 @@ func (h *SchemaHandler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 
 func (h *SchemaHandler) TestConnection(w http.ResponseWriter, r *http.Request) {
 	projectId := chi.URLParam(r, "projectId")
-	db, err := h.getDB(projectId)
+	db, err := h.getDB(chi.URLParam(r, "orgId"), projectId)
 	if err != nil {
 		h.handleDBError(w, err)
 		return
