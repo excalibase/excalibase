@@ -34,7 +34,10 @@ Thumbs.db
 .env
 .env.local
 
-# Test coverage
+# Test coverage and artifacts
 coverage/
 *.coverprofile
 /tmp/
+**/test-results/
+**/playwright-report/
+/server-go/server
