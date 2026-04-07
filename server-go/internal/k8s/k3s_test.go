@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -86,12 +87,12 @@ func TestK3sNamespaceAndSecret(t *testing.T) {
 	testObj := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
 		ProjectID: "k3s-test",
 		Namespace: "test-ns",
-		Tier: struct {
-			Instances   int
-			StorageSize string
-			Memory      string
-			CPU         string
-		}{1, "1Gi", "256Mi", "0.25"},
+		Tier: config.TierConfig{
+			Instances:   1,
+			StorageSize: "1Gi",
+			Memory:      "256Mi",
+			CPU:         "0.25",
+		},
 	})
 
 	err = client.ApplyCRD(ctx, configMapGVR, "test-ns", testObj)
@@ -179,12 +180,12 @@ operatorReady:
 	cluster := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
 		ProjectID: "k3s-db",
 		Namespace: ns,
-		Tier: struct {
-			Instances   int
-			StorageSize string
-			Memory      string
-			CPU         string
-		}{1, "1Gi", "256Mi", "0.25"},
+		Tier: config.TierConfig{
+			Instances:   1,
+			StorageSize: "1Gi",
+			Memory:      "256Mi",
+			CPU:         "0.25",
+		},
 	})
 
 	if err := client.ApplyCRD(ctx, CNPGClusterGVR, ns, cluster); err != nil {
