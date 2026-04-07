@@ -102,7 +102,7 @@ func main() {
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 
 	// Handlers
-	provHandler := handler.NewProvisioningHandler(provSvc)
+	provHandler := handler.NewProvisioningHandler(provSvc, sqlStore)
 	metricsHandler := handler.NewMetricsHandler(metricsSvc)
 	backupHandler := handler.NewBackupHandler(backupSvc)
 	perfHandler := handler.NewPerformanceHandler(perfSvc)
@@ -115,6 +115,10 @@ func main() {
 
 	// Auth handler
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
+	authHandler.SetOrgStore(sqlStore)
+
+	// Org handler
+	orgHandler := handler.NewOrgHandler(sqlStore, sqlStore)
 
 	// Vault + Schema handlers
 	vaultHandler := handler.NewVaultHandler(v)
@@ -176,8 +180,9 @@ func main() {
 		pgHandler.Routes(r)
 	})
 
-	// Auth API (login is public, rest requires auth)
+	// Auth API (register + login are public, rest requires auth)
 	r.Route("/api/auth", func(r chi.Router) {
+		r.Post("/register", authHandler.Register)
 		r.Post("/login", authHandler.Login)
 		r.With(auth.RequireAuth).Get("/me", authHandler.Me)
 		r.With(auth.RequireAuth).Route("/users", func(r chi.Router) {
@@ -190,6 +195,12 @@ func main() {
 			r.Post("/", authHandler.CreateToken)
 			r.Delete("/{tokenHash}", authHandler.RevokeToken)
 		})
+	})
+
+	// Org API (requires auth — org-level permissions checked in handler)
+	r.Route("/api/orgs", func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		orgHandler.Routes(r)
 	})
 
 	// Vault API (init/unseal are public, secrets require auth)
