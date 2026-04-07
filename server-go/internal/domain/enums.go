@@ -18,6 +18,12 @@ const (
 	Enterprise TierType = "ENTERPRISE"
 )
 
+var validTiers = map[TierType]bool{Free: true, Standard: true, Enterprise: true}
+
+func IsValidTier(t TierType) bool {
+	return validTiers[t]
+}
+
 // ProvisioningStage represents stages in the provisioning pipeline.
 type ProvisioningStage string
 

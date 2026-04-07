@@ -55,6 +55,7 @@ type UserStore interface {
 	CreateUser(ctx context.Context, user *domain.User) error
 	FindUserByID(ctx context.Context, id string) (*domain.User, error)
 	FindUserByUsername(ctx context.Context, username string) (*domain.User, error)
+	FindUserByEmail(ctx context.Context, email string) (*domain.User, error)
 	FindAllUsers(ctx context.Context) ([]*domain.User, error)
 	DeleteUser(ctx context.Context, id string) error
 }
@@ -71,4 +72,32 @@ type TokenStore interface {
 type AuditLogStore interface {
 	Log(ctx context.Context, entry *domain.AuditEntry) error
 	Query(ctx context.Context, limit int) ([]domain.AuditEntry, error)
+}
+
+// OrgStore persists organizations and memberships.
+type OrgStore interface {
+	CreateOrg(ctx context.Context, org *domain.Org) error
+	FindOrgByID(ctx context.Context, id string) (*domain.Org, error)
+	FindOrgBySlug(ctx context.Context, slug string) (*domain.Org, error)
+	FindOrgsByUser(ctx context.Context, userID string) ([]*domain.Org, error)
+	FindAllOrgs(ctx context.Context) ([]*domain.Org, error)
+	UpdateOrg(ctx context.Context, org *domain.Org) error
+	DeleteOrg(ctx context.Context, id string) error
+
+	AddOrgMember(ctx context.Context, m *domain.OrgMember) error
+	RemoveOrgMember(ctx context.Context, orgID, userID string) error
+	UpdateOrgMemberRole(ctx context.Context, orgID, userID, role string) error
+	ListOrgMembers(ctx context.Context, orgID string) ([]*domain.OrgMember, error)
+	GetOrgMember(ctx context.Context, orgID, userID string) (*domain.OrgMember, error)
+
+	AddProjectMember(ctx context.Context, m *domain.ProjectMember) error
+	RemoveProjectMember(ctx context.Context, projectID, userID string) error
+	UpdateProjectMemberRole(ctx context.Context, projectID, userID, role string) error
+	ListProjectMembers(ctx context.Context, projectID string) ([]*domain.ProjectMember, error)
+	GetProjectMember(ctx context.Context, projectID, userID string) (*domain.ProjectMember, error)
+
+	CreatePendingInvite(ctx context.Context, invite *domain.PendingInvite) error
+	FindPendingInvitesByEmail(ctx context.Context, email string) ([]*domain.PendingInvite, error)
+	DeletePendingInvite(ctx context.Context, id int64) error
+	ListPendingInvites(ctx context.Context, orgID string) ([]*domain.PendingInvite, error)
 }

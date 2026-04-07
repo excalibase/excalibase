@@ -39,6 +39,11 @@ func (s *Store) FindUserByUsername(ctx context.Context, username string) (*domai
 	return scanUser(row)
 }
 
+func (s *Store) FindUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, email, password_hash, role, active, created_at, updated_at FROM users WHERE email = ?`, email)
+	return scanUser(row)
+}
+
 func (s *Store) FindAllUsers(ctx context.Context) ([]*domain.User, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, username, email, password_hash, role, active, created_at, updated_at FROM users`)
 	if err != nil {
