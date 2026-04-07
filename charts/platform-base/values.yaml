@@ -1,0 +1,22 @@
+platformDB:
+  instances: 3
+  image:
+    repository: ghcr.io/cloudnative-pg/postgresql
+    tag: "16.4"
+  resources:
+    requests:
+      cpu: 300m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  storage:
+    size: 10Gi
+    storageClass: ""
+  monitoring:
+    enabled: true
+  backup:
+    enabled: true
+    destinationPath: "s3://excalibase-platform-backup/"
+    retentionPolicy: "30d"
+    s3Secret: platform-backup-s3
