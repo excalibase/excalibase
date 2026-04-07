@@ -183,6 +183,7 @@ test.describe('Registration', () => {
     });
 
     await page.goto('/register');
+    await page.waitForLoadState('networkidle');
     await page.getByPlaceholder('johndoe').fill('testuser');
     await page.getByPlaceholder('john@company.com').fill('test@test.com');
     await page.getByPlaceholder('Choose a password').fill('Test123!');
