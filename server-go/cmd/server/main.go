@@ -16,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
 	"github.com/excalibase/provisioning-poc/internal/vault"
 	"github.com/go-chi/chi/v5"
@@ -46,14 +47,26 @@ func main() {
 
 	cfg := config.Load()
 
-	// SQLite storage
-	sqlStore, err := sqlitestore.New(cfg.DBPath)
-	if err != nil {
-		log.Fatalf("Failed to init SQLite: %v", err)
+	// Platform DB store (Postgres if PLATFORM_DB_URL set, else SQLite)
+	var sqlStore storage.PlatformStore
+	if cfg.PlatformDBURL != "" {
+		pgStore, err := pgstore.New(cfg.PlatformDBURL)
+		if err != nil {
+			log.Fatalf("Failed to init Postgres: %v", err)
+		}
+		sqlStore = pgStore
+		log.Println("Using PostgreSQL platform store")
+	} else {
+		sqliteStore, err := sqlitestore.New(cfg.DBPath)
+		if err != nil {
+			log.Fatalf("Failed to init SQLite: %v", err)
+		}
+		sqlStore = sqliteStore
+		log.Println("Using SQLite platform store")
 	}
 	defer sqlStore.Close()
 
-	// Use SQLite store as InstanceStore (same interface)
+	// Use platform store as InstanceStore (same interface)
 	var store storage.InstanceStore = sqlStore
 
 	// Keep filesystem store as fallback for parameter groups (until migrated)
