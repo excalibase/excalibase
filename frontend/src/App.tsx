@@ -7,7 +7,10 @@ import { ProjectLayout } from './components/layout/ProjectLayout';
 
 // Lazy-loaded pages
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
+const RegisterPage = lazy(() => import('./pages/RegisterPage').then(m => ({ default: m.RegisterPage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
+const OrgsPage = lazy(() => import('./pages/OrgsPage').then(m => ({ default: m.OrgsPage })));
+const OrgDetailPage = lazy(() => import('./pages/OrgDetailPage').then(m => ({ default: m.OrgDetailPage })));
 const InstancesPage = lazy(() => import('./pages/InstancesPage').then(m => ({ default: m.InstancesPage })));
 const InstanceDetailPage = lazy(() => import('./pages/InstanceDetailPage').then(m => ({ default: m.InstanceDetailPage })));
 const ProvisionPage = lazy(() => import('./pages/ProvisionPage').then(m => ({ default: m.ProvisionPage })));
@@ -51,12 +54,15 @@ export default function App() {
         {/* Auth */}
         <Route element={<AuthLayout />}>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
         </Route>
 
         {/* Platform pages */}
         <Route element={<AuthGuard />}>
           <Route element={<PlatformLayout />}>
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/orgs" element={<OrgsPage />} />
+            <Route path="/orgs/:orgId" element={<OrgDetailPage />} />
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
           </Route>

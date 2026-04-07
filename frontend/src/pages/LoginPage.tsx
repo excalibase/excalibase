@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuthStore, type AuthUser } from '../stores/auth-store';
@@ -103,6 +103,11 @@ export function LoginPage() {
         {loading && <Loader2 className="w-4 h-4 animate-spin" />}
         {loading ? 'Signing in...' : 'Sign in'}
       </Button>
+
+      <p className="text-center text-sm text-text-secondary">
+        Don't have an account?{' '}
+        <Link to="/register" className="text-purple-400 hover:text-purple-300 transition-colors">Register</Link>
+      </p>
     </form>
   );
 }

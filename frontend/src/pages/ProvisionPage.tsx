@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useProvisionDatabase } from '../hooks/useProvisioning';
 import { DatabaseType, TierType } from '../types';
 import { Button } from '../components/Button';
 import { Database, Loader2 } from 'lucide-react';
+import { listMyOrgs, type Org } from '../api/orgs';
 
 const DB_TYPES = [
   { type: DatabaseType.POSTGRESQL, icon: '🐘', label: 'PostgreSQL', desc: 'CloudNativePG operator', disabled: false },
@@ -21,10 +22,20 @@ export function ProvisionPage() {
   const navigate = useNavigate();
   const provision = useProvisionDatabase();
 
+  const [orgs, setOrgs] = useState<Org[]>([]);
   const [projectName, setProjectName] = useState('');
   const [orgId, setOrgId] = useState('');
   const [dbType, setDbType] = useState<DatabaseType>(DatabaseType.POSTGRESQL);
   const [tier, setTier] = useState<TierType>(TierType.FREE);
+
+  useEffect(() => {
+    listMyOrgs().then((data) => {
+      setOrgs(data);
+      if (data.length === 1) {
+        setOrgId(data[0].id);
+      }
+    });
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +46,6 @@ export function ProvisionPage() {
   return (
     <div className="max-w-3xl mx-auto space-y-8">
       <form onSubmit={handleSubmit} className="space-y-8">
-        {/* Basic info */}
         <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-5">
           <h2 className="font-semibold text-text-primary">Instance Details</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -52,20 +62,27 @@ export function ProvisionPage() {
               <p className="text-xs text-text-tertiary mt-1">Lowercase, alphanumeric and hyphens only</p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-text-primary mb-1.5">Organization ID</label>
-              <input
-                type="text"
+              <label className="block text-sm font-medium text-text-primary mb-1.5">Organization</label>
+              <select
                 value={orgId}
                 onChange={(e) => setOrgId(e.target.value)}
-                placeholder="my-org"
                 required
-                className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-primary"
-              />
+                className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
+              >
+                <option value="">Select organization...</option>
+                {orgs.map((org) => (
+                  <option key={org.id} value={org.id}>{org.name} ({org.tier})</option>
+                ))}
+              </select>
+              {orgs.length === 0 && (
+                <p className="text-xs text-red-400 mt-1">
+                  No organizations found. <a href="/orgs" className="underline">Create one first</a>.
+                </p>
+              )}
             </div>
           </div>
         </div>
 
-        {/* DB type selector */}
         <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
           <h2 className="font-semibold text-text-primary">Database Engine</h2>
           <div className="grid grid-cols-3 gap-3">
@@ -91,7 +108,6 @@ export function ProvisionPage() {
           </div>
         </div>
 
-        {/* Tier selector */}
         <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
           <h2 className="font-semibold text-text-primary">Plan</h2>
           <div className="grid grid-cols-3 gap-3">
@@ -117,7 +133,6 @@ export function ProvisionPage() {
           </div>
         </div>
 
-        {/* Actions */}
         {provision.isError && (
           <div className="bg-red-900/20 border border-color-error rounded-lg p-4">
             <p className="text-color-error text-sm">{(provision.error as Error).message}</p>
@@ -127,7 +142,7 @@ export function ProvisionPage() {
           <Button type="button" variant="secondary" className="flex-1" onClick={() => navigate('/instances')}>
             Cancel
           </Button>
-          <Button type="submit" className="flex-1" disabled={provision.isPending}>
+          <Button type="submit" className="flex-1" disabled={provision.isPending || !orgId}>
             {provision.isPending
               ? <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Provisioning...</>
               : <><Database className="w-4 h-4 mr-2 inline" /> Provision Database</>

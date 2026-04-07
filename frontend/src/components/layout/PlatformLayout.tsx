@@ -1,11 +1,12 @@
 import { Outlet, NavLink } from 'react-router-dom';
-import { LayoutDashboard, Database, DatabaseZap, Sun, Moon, LogOut } from 'lucide-react';
+import { LayoutDashboard, Database, DatabaseZap, Building2, Sun, Moon, LogOut } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { useDarkMode } from '../../hooks/useDarkMode';
 import { useAuthStore } from '../../stores/auth-store';
 
 const NAV = [
   { icon: LayoutDashboard, label: 'Dashboard', to: '/' },
+  { icon: Building2, label: 'Organizations', to: '/orgs' },
   { icon: Database, label: 'Projects', to: '/instances' },
   { icon: DatabaseZap, label: 'Provision', to: '/provision' },
 ];

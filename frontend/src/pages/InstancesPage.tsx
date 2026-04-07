@@ -3,11 +3,16 @@ import { useInstances, useDeprovisionDatabase } from '../hooks/useProvisioning';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
 import { Database, DatabaseZap, Loader2, Trash2, Eye, Sprout, Star, Crown } from 'lucide-react';
+import { useAuthStore } from '../stores/auth-store';
+
+const ADMIN_ROLES = ['platform_admin', 'platform_operator'];
 
 export function InstancesPage() {
   const { data: instances = [], isLoading } = useInstances();
   const deprovision = useDeprovisionDatabase();
   const navigate = useNavigate();
+  const user = useAuthStore((s) => s.user);
+  const canDelete = user ? ADMIN_ROLES.includes(user.role) : false;
 
   const handleDelete = async (e: React.MouseEvent, projectId: string) => {
     e.stopPropagation();
@@ -79,14 +84,16 @@ export function InstancesPage() {
                       >
                         <Eye className="w-4 h-4" />
                       </Button>
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        disabled={deprovision.isPending}
-                        onClick={(e) => handleDelete(e, inst.projectId)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      {canDelete && (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          disabled={deprovision.isPending}
+                          onClick={(e) => handleDelete(e, inst.projectId)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>
