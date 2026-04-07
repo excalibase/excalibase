@@ -17,7 +17,7 @@ import (
 // fakeAuthMiddleware injects a fake admin user so auth-protected vault routes pass.
 func fakeAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := &domain.User{ID: "test-admin", Username: "admin", Role: "admin", Active: true}
+		user := &domain.User{ID: "test-admin", Username: "admin", Role: "platform_admin", Active: true}
 		ctx := auth.SetUser(r.Context(), user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

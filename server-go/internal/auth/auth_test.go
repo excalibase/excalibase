@@ -58,22 +58,22 @@ func TestTokenPrefix(t *testing.T) {
 // --- RBAC ---
 
 func TestRBACPermissions(t *testing.T) {
-	if !HasPermission("admin", PermProvision) {
+	if !HasPermission("platform_admin", PermProvision) {
 		t.Error("admin should have provision permission")
 	}
-	if !HasPermission("operator", PermProvision) {
+	if !HasPermission("platform_operator", PermProvision) {
 		t.Error("operator should have provision permission")
 	}
-	if HasPermission("viewer", PermProvision) {
+	if HasPermission("platform_viewer", PermProvision) {
 		t.Error("viewer should NOT have provision permission")
 	}
-	if !HasPermission("viewer", PermViewInstances) {
+	if !HasPermission("platform_viewer", PermViewInstances) {
 		t.Error("viewer should have view permission")
 	}
-	if HasPermission("viewer", PermManageUsers) {
+	if HasPermission("platform_viewer", PermManageUsers) {
 		t.Error("viewer should NOT manage users")
 	}
-	if !HasPermission("admin", PermManageUsers) {
+	if !HasPermission("platform_admin", PermManageUsers) {
 		t.Error("admin should manage users")
 	}
 }
@@ -119,7 +119,7 @@ func TestMiddlewareWithToken(t *testing.T) {
 
 	lookup := &mockTokenLookup{
 		tokens: map[string]*domain.AccessToken{hash: {TokenHash: hash, UserID: "u1"}},
-		users:  map[string]*domain.User{"u1": {ID: "u1", Username: "admin", Role: "admin", Active: true}},
+		users:  map[string]*domain.User{"u1": {ID: "u1", Username: "admin", Role: "platform_admin", Active: true}},
 	}
 
 	r := chi.NewRouter()
@@ -145,7 +145,7 @@ func TestMiddlewareInactiveUser(t *testing.T) {
 
 	lookup := &mockTokenLookup{
 		tokens: map[string]*domain.AccessToken{hash: {TokenHash: hash, UserID: "u1"}},
-		users:  map[string]*domain.User{"u1": {ID: "u1", Role: "admin", Active: false}},
+		users:  map[string]*domain.User{"u1": {ID: "u1", Role: "platform_admin", Active: false}},
 	}
 
 	r := chi.NewRouter()
@@ -288,6 +288,15 @@ func (m *mockUserStore) FindUserByUsername(ctx context.Context, username string)
 	return nil, nil
 }
 
+func (m *mockUserStore) FindUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	for _, u := range m.users {
+		if u.Email == email {
+			return u, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockUserStore) DeleteUser(ctx context.Context, id string) error {
 	return nil
 }
@@ -311,8 +320,8 @@ func TestBootstrapCreatesAdminWhenEmpty(t *testing.T) {
 	if admin.Username != "admin" {
 		t.Errorf("username: got %s, want admin", admin.Username)
 	}
-	if admin.Role != "admin" {
-		t.Errorf("role: got %s, want admin", admin.Role)
+	if admin.Role != "platform_admin" {
+		t.Errorf("role: got %s, want platform_admin", admin.Role)
 	}
 	if !admin.Active {
 		t.Error("admin user should be active")
@@ -326,7 +335,7 @@ func TestBootstrapCreatesAdminWhenEmpty(t *testing.T) {
 }
 
 func TestBootstrapSkipsWhenUsersExist(t *testing.T) {
-	existing := &domain.User{ID: "u1", Username: "existing", Role: "admin", Active: true}
+	existing := &domain.User{ID: "u1", Username: "existing", Role: "platform_admin", Active: true}
 	store := &mockUserStore{users: []*domain.User{existing}}
 	ctx := context.Background()
 
@@ -368,7 +377,7 @@ func TestRBACAdminHasAllPermissions(t *testing.T) {
 		PermManageSetup, PermManageUsers, PermManageFunctions, PermViewAny,
 	}
 	for _, perm := range allPerms {
-		if !HasPermission("admin", perm) {
+		if !HasPermission("platform_admin", perm) {
 			t.Errorf("admin should have permission %s", perm)
 		}
 	}
@@ -383,12 +392,12 @@ func TestRBACOperatorPermissions(t *testing.T) {
 	denied := []Permission{PermRestore, PermManageSetup, PermManageUsers}
 
 	for _, perm := range allowed {
-		if !HasPermission("operator", perm) {
+		if !HasPermission("platform_operator", perm) {
 			t.Errorf("operator should have permission %s", perm)
 		}
 	}
 	for _, perm := range denied {
-		if HasPermission("operator", perm) {
+		if HasPermission("platform_operator", perm) {
 			t.Errorf("operator should NOT have permission %s", perm)
 		}
 	}
@@ -403,12 +412,12 @@ func TestRBACViewerPermissions(t *testing.T) {
 	}
 
 	for _, perm := range allowed {
-		if !HasPermission("viewer", perm) {
+		if !HasPermission("platform_viewer", perm) {
 			t.Errorf("viewer should have permission %s", perm)
 		}
 	}
 	for _, perm := range denied {
-		if HasPermission("viewer", perm) {
+		if HasPermission("platform_viewer", perm) {
 			t.Errorf("viewer should NOT have permission %s", perm)
 		}
 	}

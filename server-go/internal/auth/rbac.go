@@ -18,21 +18,23 @@ const (
 )
 
 var rolePermissions = map[string]map[Permission]bool{
-	"admin": {
+	"platform_admin": {
 		PermProvision: true, PermDelete: true, PermViewInstances: true,
 		PermViewCredentials: true, PermManageBackups: true, PermRestore: true,
 		PermApplyMigrations: true, PermManageSnapshots: true, PermManageSetup: true,
 		PermManageUsers: true, PermManageFunctions: true, PermViewAny: true,
 	},
-	"operator": {
+	"platform_operator": {
 		PermProvision: true, PermDelete: true, PermViewInstances: true,
 		PermViewCredentials: true, PermManageBackups: true,
 		PermApplyMigrations: true, PermManageSnapshots: true,
 		PermManageFunctions: true, PermViewAny: true,
 	},
-	"viewer": {
+	"platform_viewer": {
 		PermViewInstances: true, PermViewAny: true,
 	},
+	// Dashboard users have no platform permissions — they use org/project roles
+	"user": {},
 }
 
 func HasPermission(role string, perm Permission) bool {

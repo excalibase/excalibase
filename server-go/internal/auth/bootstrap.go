@@ -38,7 +38,7 @@ func Bootstrap(ctx context.Context, userStore storage.UserStore) error {
 		Username:     "admin",
 		Email:        "admin@excalibase.local",
 		PasswordHash: hash,
-		Role:         "admin",
+		Role:         "platform_admin",
 		Active:       true,
 		CreatedAt:    &now,
 		UpdatedAt:    &now,
