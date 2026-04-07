@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -14,10 +15,92 @@ import (
 type AuthHandler struct {
 	userStore  storage.UserStore
 	tokenStore storage.TokenStore
+	orgStore   storage.OrgStore // optional — resolves pending invites on user creation
 }
 
 func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) *AuthHandler {
 	return &AuthHandler{userStore: userStore, tokenStore: tokenStore}
+}
+
+func (h *AuthHandler) SetOrgStore(orgStore storage.OrgStore) {
+	h.orgStore = orgStore
+}
+
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.Username == "" || req.Email == "" || req.Password == "" {
+		httpError(w, "username, email, and password are required", http.StatusBadRequest)
+		return
+	}
+	if !isValidEmail(req.Email) {
+		httpError(w, "invalid email format", http.StatusBadRequest)
+		return
+	}
+	if msg := isValidPassword(req.Password); msg != "" {
+		httpError(w, msg, http.StatusBadRequest)
+		return
+	}
+
+	// Check duplicates (indexed lookups)
+	existing, _ := h.userStore.FindUserByUsername(r.Context(), req.Username)
+	if existing != nil {
+		httpError(w, "username already taken", http.StatusConflict)
+		return
+	}
+	existingEmail, _ := h.userStore.FindUserByEmail(r.Context(), req.Email)
+	if existingEmail != nil {
+		httpError(w, "email already registered", http.StatusConflict)
+		return
+	}
+
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		httpError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	now := time.Now()
+	user := &domain.User{
+		ID:           auth.GenerateID(),
+		Username:     req.Username,
+		Email:        req.Email,
+		PasswordHash: hash,
+		Role:         "user",
+		Active:       true,
+		CreatedAt:    &now,
+	}
+
+	if err := h.userStore.CreateUser(r.Context(), user); err != nil {
+		httpError(w, "failed to create account", http.StatusInternalServerError)
+		return
+	}
+
+	h.resolvePendingInvites(r.Context(), user)
+
+	// Auto-login: create PAT
+	raw := auth.GenerateToken()
+	token := &domain.AccessToken{
+		TokenHash:   auth.HashToken(raw),
+		TokenPrefix: auth.TokenPrefix(raw),
+		UserID:      user.ID,
+		Name:        "registration",
+		CreatedAt:   &now,
+	}
+	h.tokenStore.CreateToken(r.Context(), token)
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]interface{}{
+		"token": raw,
+		"user":  user,
+	})
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -103,8 +186,23 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.resolvePendingInvites(r.Context(), user)
+
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, user)
+}
+
+func (h *AuthHandler) resolvePendingInvites(ctx context.Context, user *domain.User) {
+	if h.orgStore == nil {
+		return
+	}
+	invites, _ := h.orgStore.FindPendingInvitesByEmail(ctx, user.Email)
+	for _, inv := range invites {
+		h.orgStore.AddOrgMember(ctx, &domain.OrgMember{
+			OrgID: inv.OrgID, UserID: user.ID, Role: inv.Role,
+		})
+		h.orgStore.DeletePendingInvite(ctx, inv.ID)
+	}
 }
 
 func (h *AuthHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {

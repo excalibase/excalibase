@@ -47,6 +47,15 @@ func (s *mockUserStore) FindUserByUsername(_ context.Context, username string) (
 	return nil, nil
 }
 
+func (s *mockUserStore) FindUserByEmail(_ context.Context, email string) (*domain.User, error) {
+	for _, u := range s.users {
+		if u.Email == email {
+			return u, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s *mockUserStore) FindAllUsers(_ context.Context) ([]*domain.User, error) {
 	list := make([]*domain.User, 0, len(s.users))
 	for _, u := range s.users {
