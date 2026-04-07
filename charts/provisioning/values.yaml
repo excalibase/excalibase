@@ -50,6 +50,15 @@ env:
   CORS_ORIGINS: "https://app.excalibase.io"
   WATCHER_CHART_PATH: "/charts/excalibase-watcher"
 
+platformDB:
+  enabled: true
+  # Connection string for the CNPG platform-db cluster
+  # Format: postgres://platform:password@platform-db-rw.excalibase-platform:5432/platform?sslmode=require
+  url: ""
+  # If using a secret for the DB URL (recommended for production)
+  existingSecret: ""
+  existingSecretKey: "PLATFORM_DB_URL"
+
 serviceAccount:
   name: provisioning-sa
 

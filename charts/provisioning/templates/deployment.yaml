@@ -43,6 +43,18 @@ spec:
               value: /data
             - name: DB_PATH
               value: /data/excalibase.db
+            {{- if and .Values.platformDB .Values.platformDB.enabled }}
+            {{- if .Values.platformDB.existingSecret }}
+            - name: PLATFORM_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.platformDB.existingSecret }}
+                  key: {{ .Values.platformDB.existingSecretKey | default "PLATFORM_DB_URL" }}
+            {{- else if .Values.platformDB.url }}
+            - name: PLATFORM_DB_URL
+              value: {{ .Values.platformDB.url | quote }}
+            {{- end }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /data
