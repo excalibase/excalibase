@@ -41,7 +41,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	alertSvc := service.NewAlertingService(dir)
 	setupSvc := service.NewOperatorSetupService(mock)
 
-	provH := NewProvisioningHandler(provSvc)
+	provH := NewProvisioningHandler(provSvc, nil)
 	metricsH := NewMetricsHandler(metricsSvc)
 	backupH := NewBackupHandler(backupSvc)
 	perfH := NewPerformanceHandler(perfSvc)
@@ -541,7 +541,7 @@ func TestProvisioningHandlerRoutes(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(dir)
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
-	h := NewProvisioningHandler(svc)
+	h := NewProvisioningHandler(svc, nil)
 
 	r := chi.NewRouter()
 	r.Route("/provision", h.Routes)
@@ -709,7 +709,7 @@ func TestProvisionWithAuthUser(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(dir)
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
-	h := NewProvisioningHandler(svc)
+	h := NewProvisioningHandler(svc, nil)
 
 	us := newMockUserStore()
 	ts := newMockTokenStore()

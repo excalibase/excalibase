@@ -8,15 +8,17 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
 type ProvisioningHandler struct {
-	svc *service.ProvisioningService
+	svc      *service.ProvisioningService
+	orgStore storage.OrgStore
 }
 
-func NewProvisioningHandler(svc *service.ProvisioningService) *ProvisioningHandler {
-	return &ProvisioningHandler{svc: svc}
+func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
+	return &ProvisioningHandler{svc: svc, orgStore: orgStore}
 }
 
 func (h *ProvisioningHandler) Routes(r chi.Router) {
@@ -32,20 +34,37 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 }
 
 func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Request) {
-	ownerID := r.URL.Query().Get("ownerId")
+	user := auth.GetUser(r.Context())
 
-	var instances []*domain.DatabaseInstance
-	var err error
-	if ownerID != "" {
-		instances, err = h.svc.GetInstancesByOwner(ownerID)
-	} else {
-		instances, err = h.svc.GetAllInstances()
-	}
+	allInstances, err := h.svc.GetAllInstances()
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, instances)
+
+	// Platform admins see everything; also fallback if no orgStore or no user context
+	if user == nil || h.orgStore == nil || auth.HasPermission(user.Role, auth.PermViewAny) {
+		writeJSON(w, allInstances)
+		return
+	}
+
+	// Regular users see only instances belonging to their orgs
+	myOrgs, _ := h.orgStore.FindOrgsByUser(r.Context(), user.ID)
+	orgIDs := make(map[string]bool, len(myOrgs))
+	for _, org := range myOrgs {
+		orgIDs[org.ID] = true
+	}
+
+	var filtered []*domain.DatabaseInstance
+	for _, inst := range allInstances {
+		if orgIDs[inst.OrgID] {
+			filtered = append(filtered, inst)
+		}
+	}
+	if filtered == nil {
+		filtered = []*domain.DatabaseInstance{}
+	}
+	writeJSON(w, filtered)
 }
 
 func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) {

@@ -39,7 +39,7 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 	alertSvc := service.NewAlertingService(dir)
 	setupSvc := service.NewOperatorSetupService(mock)
 
-	provH := NewProvisioningHandler(provSvc)
+	provH := NewProvisioningHandler(provSvc, nil)
 	metricsH := NewMetricsHandler(metricsSvc)
 	backupH := NewBackupHandler(backupSvc)
 	perfH := NewPerformanceHandler(perfSvc)
@@ -827,7 +827,7 @@ func TestProvisioningHandlerRoutes_NewMethodsWired(t *testing.T) {
 	factory := provisioner.NewFactory()
 	mock := k8s.NewMockClient()
 	svc := service.NewProvisioningService(st, factory, mock)
-	h := NewProvisioningHandler(svc)
+	h := NewProvisioningHandler(svc, nil)
 
 	r := chi.NewRouter()
 	r.Route("/p", h.Routes)
@@ -1191,7 +1191,7 @@ func TestProvision_InvalidBody_Returns400_Direct(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(dir)
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
-	h := NewProvisioningHandler(svc)
+	h := NewProvisioningHandler(svc, nil)
 
 	r := chi.NewRouter()
 	r.Post("/provision", h.Provision)

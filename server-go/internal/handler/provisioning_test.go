@@ -25,7 +25,7 @@ func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 	// Empty factory (no real K8s provisioners for unit tests)
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
-	h := NewProvisioningHandler(svc)
+	h := NewProvisioningHandler(svc, nil)
 
 	r := chi.NewRouter()
 	r.Route("/api/provision", func(r chi.Router) {
@@ -138,14 +138,14 @@ func TestProvisionNoK8s(t *testing.T) {
 	}
 }
 
-func TestListInstancesByOwner(t *testing.T) {
+func TestListInstancesReturnsAll(t *testing.T) {
 	r, store := setupTestRouter(t)
 
 	store.Save(&domain.DatabaseInstance{ProjectID: "a", OwnerID: "user-1", Status: "ACTIVE"})
 	store.Save(&domain.DatabaseInstance{ProjectID: "b", OwnerID: "user-1", Status: "ACTIVE"})
 	store.Save(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
 
-	req := httptest.NewRequest("GET", "/api/provision/?ownerId=user-1", nil)
+	req := httptest.NewRequest("GET", "/api/provision/", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -155,13 +155,9 @@ func TestListInstancesByOwner(t *testing.T) {
 
 	var result []*domain.DatabaseInstance
 	json.NewDecoder(w.Body).Decode(&result)
-	if len(result) != 2 {
-		t.Fatalf("expected 2 instances for user-1, got %d", len(result))
-	}
-	for _, inst := range result {
-		if inst.OwnerID != "user-1" {
-			t.Errorf("unexpected owner: %s", inst.OwnerID)
-		}
+	// Without auth context and nil orgStore, returns all instances
+	if len(result) != 3 {
+		t.Fatalf("expected 3 instances, got %d", len(result))
 	}
 }
 
