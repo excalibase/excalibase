@@ -12,8 +12,45 @@ import (
 // Used to validate orgId and projectId path parameters to prevent path traversal.
 var validPathID = regexp.MustCompile(`^[a-zA-Z0-9_\-]{1,64}$`)
 
+// validSlug allows lowercase alphanumeric and hyphens, 2-50 chars.
+var validSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9\-]{1,49}$`)
+
 func isValidID(id string) bool {
 	return validPathID.MatchString(id)
+}
+
+// validEmail basic email format check
+var validEmail = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+
+func isValidEmail(email string) bool {
+	return validEmail.MatchString(email)
+}
+
+func isValidPassword(password string) string {
+	if len(password) < 8 {
+		return "password must be at least 8 characters"
+	}
+	hasUpper := false
+	hasLower := false
+	hasDigit := false
+	for _, c := range password {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			hasUpper = true
+		case c >= 'a' && c <= 'z':
+			hasLower = true
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		}
+	}
+	if !hasUpper || !hasLower || !hasDigit {
+		return "password must contain uppercase, lowercase, and a digit"
+	}
+	return ""
+}
+
+func isValidSlug(slug string) bool {
+	return validSlug.MatchString(slug)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
