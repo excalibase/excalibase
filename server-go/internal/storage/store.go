@@ -101,3 +101,11 @@ type OrgStore interface {
 	DeletePendingInvite(ctx context.Context, id int64) error
 	ListPendingInvites(ctx context.Context, orgID string) ([]*domain.PendingInvite, error)
 }
+
+// PgDogConfigStore persists PgDog connection pooler configuration.
+type PgDogConfigStore interface {
+	RegisterPgDogDatabase(ctx context.Context, db *domain.PgDogDatabase) error
+	RemovePgDogDatabase(ctx context.Context, name string) error
+	RegisterPgDogUser(ctx context.Context, user *domain.PgDogUser) error
+	RemovePgDogUser(ctx context.Context, name, database string) error
+}

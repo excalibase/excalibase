@@ -12,6 +12,7 @@ type AppConfig struct {
 	LogLevel          string
 	DBPath            string
 	PlatformDBURL     string
+	NatsURL           string
 	CORSOrigins       []string
 	WatcherChartPath  string
 	DenoRuntimeURL    string
@@ -27,6 +28,7 @@ func Load() AppConfig {
 		LogLevel:         envOr("LOG_LEVEL", "debug"),
 		DBPath:           envOr("DB_PATH", "../provisioning-data/excalibase.db"),
 		PlatformDBURL:    envOr("PLATFORM_DB_URL", ""),
+		NatsURL:          envOr("NATS_URL", ""),
 		CORSOrigins:       parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
 		WatcherChartPath:  envOr("WATCHER_CHART_PATH", "/charts/excalibase-watcher"),
 		DenoRuntimeURL:    envOr("DENO_RUNTIME_URL", "http://deno-runtime.serverless.svc.cluster.local:8000"),

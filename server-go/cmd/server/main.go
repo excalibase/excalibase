@@ -105,6 +105,20 @@ func main() {
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
 	provSvc.SetHookService(hookSvc)
 	provSvc.SetVault(v)
+
+	// PgDog notifier (optional — requires Postgres store + NATS)
+	if cfg.PlatformDBURL != "" && cfg.NatsURL != "" {
+		if pgStore, ok := sqlStore.(storage.PgDogConfigStore); ok {
+			pgdogNotifier, err := service.NewPgDogNotifier(pgStore, cfg.NatsURL)
+			if err != nil {
+				log.Printf("WARN: pgdog notifier: %v", err)
+			} else {
+				provSvc.SetPgDogNotifier(pgdogNotifier)
+				defer pgdogNotifier.Close()
+				log.Println("PgDog notifier enabled (NATS + platform-db)")
+			}
+		}
+	}
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
 	backupSvc := service.NewBackupService(store, k8sClient, cfg.StoragePath)
 	perfSvc := service.NewPerformanceService(store, k8sClient)

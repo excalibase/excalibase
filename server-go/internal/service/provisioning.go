@@ -18,11 +18,12 @@ import (
 )
 
 type ProvisioningService struct {
-	store    storage.InstanceStore
-	factory  *provisioner.Factory
-	hooks    *edgefn.HookService // optional
-	vault    *vault.Vault        // optional
-	k8sClient k8s.KubeClient    // optional, for role creation via pod exec
+	store     storage.InstanceStore
+	factory   *provisioner.Factory
+	hooks     *edgefn.HookService  // optional
+	vault     *vault.Vault         // optional
+	k8sClient k8s.KubeClient      // optional, for role creation via pod exec
+	pgdog     *PgDogNotifier       // optional, for PgDog config registration
 }
 
 func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Factory, k8sClient k8s.KubeClient) *ProvisioningService {
@@ -35,6 +36,10 @@ func (s *ProvisioningService) SetHookService(hooks *edgefn.HookService) {
 
 func (s *ProvisioningService) SetVault(v *vault.Vault) {
 	s.vault = v
+}
+
+func (s *ProvisioningService) SetPgDogNotifier(n *PgDogNotifier) {
+	s.pgdog = n
 }
 
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
@@ -195,6 +200,14 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 		s.createProjectRoles(ctx, req, result, inst.Namespace)
 	}
 
+	// Register with PgDog connection pooler
+	if s.pgdog != nil {
+		if err := s.pgdog.RegisterCluster(ctx, req.ProjectName, inst.Namespace,
+			result.DatabaseName, result.Username, result.Password); err != nil {
+			log.Printf("WARN: pgdog register: %v", err)
+		}
+	}
+
 	if s.hooks != nil {
 		s.hooks.ExecuteHooksAsync(ctx, "post-provision", edgefn.HookContext{
 			ProjectID: req.ProjectName, OrgID: req.OrgID,
@@ -224,6 +237,13 @@ func (s *ProvisioningService) Deprovision(ctx context.Context, projectID string)
 
 	if inst.DeletionProtection != nil && *inst.DeletionProtection {
 		return fmt.Errorf("deletion protection is enabled for %s", projectID)
+	}
+
+	// Deregister from PgDog connection pooler
+	if s.pgdog != nil {
+		if err := s.pgdog.DeregisterCluster(ctx, projectID, inst.Username); err != nil {
+			log.Printf("WARN: pgdog deregister: %v", err)
+		}
 	}
 
 	prov, ok := s.factory.Get(inst.DBType)
