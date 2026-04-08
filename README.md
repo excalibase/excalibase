@@ -12,7 +12,7 @@ curl -X POST http://localhost:24005/api/provision \
   -d '{"projectName":"my-db","orgId":"myorg","databaseType":"POSTGRESQL","tier":"STANDARD"}'
 ```
 
-- **8-stage provisioning pipeline** — namespace, CRD deployment, pod readiness, credential extraction, backup config, metrics setup
+- **9-stage provisioning pipeline** — namespace, CRD deployment, pod readiness, credential extraction, backup config, metrics setup, watcher deployment
 - **3 tiers** — FREE (1 pod), STANDARD (3 pods + HA), ENTERPRISE (5 pods)
 - **Real metrics** — per-pod CPU/memory from metrics-server + CNPG database metrics from port 9187
 - **Backup & PITR** — automated WAL archiving + scheduled backups + point-in-time recovery
@@ -26,19 +26,24 @@ curl -X POST http://localhost:24005/api/provision \
 server-go/       Go backend (chi router, client-go)
 ├── cmd/server/    Entry point, router wiring, CLI tools
 ├── internal/
-│   ├── handler/     HTTP handlers (thin, delegates to services)
-│   ├── service/     Business logic (provisioning, metrics, backup)
+│   ├── handler/     HTTP handlers (auth, orgs, provisioning, schema, etc.)
+│   ├── service/     Business logic (provisioning, metrics, PgDog notifier)
 │   ├── provisioner/ Strategy pattern (PostgreSQL, MySQL planned)
-│   ├── k8s/         client-go wrapper + mock for testing
+│   ├── k8s/         client-go wrapper, Helm SDK, CRD builders, mock
 │   ├── schema/      SQL introspection + parameterized query builder
-│   ├── storage/     SQLite store (instances, users, tokens, metrics)
+│   ├── storage/
+│   │   ├── sqlite/    SQLite store (local dev)
+│   │   └── postgres/  Postgres store (production via CNPG)
 │   ├── vault/       Shamir-based secret vault (bbolt + AES-256-GCM)
 │   ├── edgefn/      Edge function store + Deno runtime client
-│   ├── auth/        RBAC, JWT tokens, bcrypt passwords
+│   ├── auth/        3-level RBAC (platform/org/project), JWT, bcrypt
+│   ├── middleware/   CORS, security headers
 │   └── security/    AES encryption for filesystem storage
 frontend/        React 18 dashboard (Vite, Tailwind, TanStack)
+charts/
+├── platform-base/  CNPG platform-db cluster (3 instances, S3 backup)
+└── provisioning/   Provisioning server Helm chart
 deno-server/     Deno edge functions runtime (Web Workers, sandboxed)
-k8s/             Kubernetes manifests
 ```
 
 The Go server uses `client-go` natively — no kubectl shell-outs. CRDs are built as `unstructured.Unstructured` objects and applied via the dynamic client.
@@ -127,6 +132,7 @@ All endpoints (except login, vault init/unseal/status) require authentication vi
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
+| POST | `/api/auth/register` | No | Public registration |
 | POST | `/api/auth/login` | No | Login, returns bearer token |
 | GET | `/api/auth/me` | Yes | Current user info |
 | GET | `/api/auth/users` | Yes (admin) | List all users |
@@ -136,12 +142,22 @@ All endpoints (except login, vault init/unseal/status) require authentication vi
 | POST | `/api/auth/tokens` | Yes | Create PAT |
 | DELETE | `/api/auth/tokens/{hash}` | Yes | Revoke PAT |
 
-**Login request/response:**
-```json
-// POST /api/auth/login
-{"username": "admin", "password": "secret"}
-// → {"token": "excali_abc123...", "user": {"id": "...", "username": "admin", "role": "admin"}}
-```
+### Organizations
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/orgs` | Yes | List user's orgs |
+| POST | `/api/orgs` | Yes | Create org |
+| GET | `/api/orgs/{id}` | Yes | Get org details |
+| PATCH | `/api/orgs/{id}` | Yes | Update org |
+| DELETE | `/api/orgs/{id}` | Yes | Delete org |
+| GET | `/api/orgs/{id}/members` | Yes | List org members |
+| POST | `/api/orgs/{id}/members` | Yes | Invite member (email) |
+| PATCH | `/api/orgs/{id}/members/{userId}` | Yes | Update member role |
+| DELETE | `/api/orgs/{id}/members/{userId}` | Yes | Remove member |
+| GET | `/api/orgs/{id}/invites` | Yes | List pending invites |
+| GET | `/api/orgs/{id}/projects/{pid}/members` | Yes | List project members |
+| POST | `/api/orgs/{id}/projects/{pid}/members` | Yes | Add project member |
 
 ### Vault
 
@@ -237,33 +253,38 @@ Error messages are sanitized — PostgreSQL internal details are stripped from 5
 | `PORT` | `24005` | Server port |
 | `STORAGE_PATH` | `../provisioning-data` | Data directory |
 | `DB_PATH` | `../provisioning-data/excalibase.db` | SQLite database path |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
-| `SCHEMA_DB_HOST` | (from vault) | Override DB host for local dev |
-| `SCHEMA_DB_PORT` | (from vault) | Override DB port for local dev |
+| `PLATFORM_DB_URL` | | Postgres connection string (overrides SQLite) |
+| `NATS_URL` | | NATS server for PgDog reload signals |
+| `CORS_ORIGINS` | `https://app.excalibase.io` | Comma-separated allowed origins |
+| `WATCHER_CHART_PATH` | `/charts/excalibase-watcher` | Helm chart for CDC watcher |
 | `DENO_RUNTIME_URL` | `http://deno-runtime...` | Deno edge functions runtime URL |
-| `DENO_RUNTIME_SECRET` | (required on Deno) | Shared secret for Deno runtime auth |
-| `VAULT_UNSEAL_KEY` | | Auto-unseal key for dev (bypasses Shamir) |
+| `DENO_RUNTIME_SECRET` | | Shared secret for Deno runtime auth |
 
 ## Testing
 
 ```bash
 cd server-go
 
-# Unit tests (fast, <5s)
-go test ./internal/... -race -cover
+# Unit tests (fast, excludes k8s integration)
+go test $(go list ./internal/... | grep -v /k8s) -race -cover
 
-# Full suite including integration tests (~3min, needs Docker)
-go test ./internal/... -race -cover -tags=integration -timeout 10m
+# Postgres integration tests (needs Docker)
+go test -tags=integration ./internal/storage/postgres/... -race -v -timeout 5m
+
+# Full suite including k3s (needs Docker, ~5min)
+go test ./internal/... -race -cover -timeout 7m
 
 # Frontend E2E
 cd frontend && npx playwright test
 ```
 
-13 packages, 83%+ average coverage, zero race conditions. Integration tests spin up real PostgreSQL and k3s clusters in Docker via testcontainers-go. Frontend has 78 Playwright E2E tests.
+14 Go packages, 25 Postgres integration tests, 45 k8s tests, 97 Playwright E2E tests. Integration tests use testcontainers-go (real PostgreSQL + k3s in Docker).
 
 ## Tech Stack
 
-- **Backend**: Go 1.24, chi router, client-go, bbolt vault, SQLite
+- **Backend**: Go 1.25, chi router, client-go, Helm SDK, bbolt vault
+- **Storage**: SQLite (dev) / PostgreSQL via CNPG (production), auto-migrate on startup
+- **Connection Pooler**: PgDog fork (Postgres-backed config + NATS reload)
 - **Frontend**: React 18, Vite, Tailwind CSS, TanStack Query/Table, CodeMirror 6, cmdk
 - **K8s Operators**: CloudNativePG (PostgreSQL), Vitess (MySQL planned), MongoDB Community (planned)
 - **Metrics**: Kubernetes metrics-server (CPU/memory), CNPG Prometheus exporter
