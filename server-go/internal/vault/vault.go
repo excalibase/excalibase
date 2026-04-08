@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	"github.com/hashicorp/vault/shamir"
-	bolt "go.etcd.io/bbolt"
 )
 
 var (
@@ -26,7 +25,7 @@ var (
 )
 
 type Vault struct {
-	db         *bolt.DB
+	store      VaultStore
 	barrierKey []byte // decrypted barrier key, nil when sealed
 	mu         sync.RWMutex
 
@@ -52,26 +51,22 @@ type barrierMeta struct {
 	Shares           int    `json:"shares"`
 }
 
+// New creates a vault with bbolt backend (local dev).
 func New(path string) (*Vault, error) {
-	db, err := bolt.Open(path, 0600, nil)
+	store, err := NewBoltStore(path)
 	if err != nil {
-		return nil, fmt.Errorf("open bbolt: %w", err)
+		return nil, err
 	}
+	return newVault(store)
+}
 
-	// Ensure buckets exist
-	err = db.Update(func(tx *bolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists(bucketBarrier); err != nil {
-			return err
-		}
-		_, err := tx.CreateBucketIfNotExists(bucketSecrets)
-		return err
-	})
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create buckets: %w", err)
-	}
+// NewWithStore creates a vault with any VaultStore backend.
+func NewWithStore(store VaultStore) (*Vault, error) {
+	return newVault(store)
+}
 
-	v := &Vault{db: db}
+func newVault(store VaultStore) (*Vault, error) {
+	v := &Vault{store: store}
 
 	// Auto-unseal from env if initialized
 	if v.Initialized() {
@@ -84,17 +79,15 @@ func New(path string) (*Vault, error) {
 }
 
 func (v *Vault) Close() error {
-	return v.db.Close()
+	return v.store.Close()
 }
 
 func (v *Vault) Initialized() bool {
-	var exists bool
-	v.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketBarrier)
-		exists = b.Get(keyBarrier) != nil
-		return nil
-	})
-	return exists
+	barrier, _, err := v.store.GetBarrier()
+	if err != nil {
+		return false
+	}
+	return barrier != nil
 }
 
 func (v *Vault) Sealed() bool {
@@ -140,14 +133,7 @@ func (v *Vault) Init(shares, threshold int) (*InitResult, error) {
 		return nil, fmt.Errorf("marshal barrier meta: %w", err)
 	}
 
-	err = v.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketBarrier)
-		if err := b.Put(keyBarrier, encryptedBarrier); err != nil {
-			return err
-		}
-		return b.Put(keyMeta, metaBytes)
-	})
-	if err != nil {
+	if err := v.store.PutBarrier(encryptedBarrier, metaBytes); err != nil {
 		return nil, fmt.Errorf("store barrier: %w", err)
 	}
 
@@ -244,12 +230,12 @@ func (v *Vault) Unseal(shareHex string) (*UnsealProgress, error) {
 		}
 	}
 
-	// Decrypt barrier key
-	var encryptedBarrier []byte
-	v.db.View(func(tx *bolt.Tx) error {
-		encryptedBarrier = tx.Bucket(bucketBarrier).Get(keyBarrier)
-		return nil
-	})
+	// Read encrypted barrier from store
+	encryptedBarrier, _, err := v.store.GetBarrier()
+	if err != nil {
+		v.unsealShares = nil
+		return nil, fmt.Errorf("read barrier: %w", err)
+	}
 
 	barrierKey, err := decrypt(mek, encryptedBarrier)
 	if err != nil {
@@ -305,14 +291,7 @@ func (v *Vault) Rekey(shares, threshold int) (*InitResult, error) {
 		return nil, fmt.Errorf("marshal barrier meta: %w", err)
 	}
 
-	err = v.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketBarrier)
-		if err := b.Put(keyBarrier, encryptedBarrier); err != nil {
-			return err
-		}
-		return b.Put(keyMeta, metaBytes)
-	})
-	if err != nil {
+	if err := v.store.PutBarrier(encryptedBarrier, metaBytes); err != nil {
 		return nil, fmt.Errorf("store barrier: %w", err)
 	}
 
@@ -382,9 +361,7 @@ func (v *Vault) Put(path string, data map[string]string) error {
 		return fmt.Errorf("marshal secret entry: %w", err)
 	}
 
-	return v.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketSecrets).Put([]byte(path), entryBytes)
-	})
+	return v.store.PutSecret(path, entryBytes)
 }
 
 func (v *Vault) Get(path string) (map[string]string, error) {
@@ -397,11 +374,10 @@ func (v *Vault) Get(path string) (map[string]string, error) {
 	copy(key, v.barrierKey)
 	v.mu.RUnlock()
 
-	var entryBytes []byte
-	v.db.View(func(tx *bolt.Tx) error {
-		entryBytes = tx.Bucket(bucketSecrets).Get([]byte(path))
-		return nil
-	})
+	entryBytes, err := v.store.GetSecret(path)
+	if err != nil {
+		return nil, err
+	}
 	if entryBytes == nil {
 		return nil, ErrNotFound
 	}
@@ -438,9 +414,7 @@ func (v *Vault) Delete(path string) error {
 	}
 	v.mu.RUnlock()
 
-	return v.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketSecrets).Delete([]byte(path))
-	})
+	return v.store.DeleteSecret(path)
 }
 
 // --- helpers ---
@@ -451,11 +425,10 @@ type secretEntry struct {
 }
 
 func (v *Vault) getMeta() (*barrierMeta, error) {
-	var metaBytes []byte
-	v.db.View(func(tx *bolt.Tx) error {
-		metaBytes = tx.Bucket(bucketBarrier).Get(keyMeta)
-		return nil
-	})
+	_, metaBytes, err := v.store.GetBarrier()
+	if err != nil {
+		return nil, err
+	}
 	if metaBytes == nil {
 		return nil, fmt.Errorf("barrier meta not found")
 	}

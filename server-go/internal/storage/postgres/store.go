@@ -53,6 +53,11 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// DB returns the underlying *sql.DB for shared use (e.g., vault store).
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 func (s *Store) migrate() error {
 	source, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {

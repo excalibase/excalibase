@@ -72,11 +72,27 @@ func main() {
 	// Keep filesystem store as fallback for parameter groups (until migrated)
 	pgStore, _ := storage.NewFileSystemParameterGroupStore(cfg.StoragePath)
 
-	// Vault (bbolt)
-	vaultPath := cfg.StoragePath + "/vault.bolt"
-	v, err := vault.New(vaultPath)
-	if err != nil {
-		log.Fatalf("Failed to init vault: %v", err)
+	// Vault (Postgres if PLATFORM_DB_URL set, else bbolt)
+	var v *vault.Vault
+	if cfg.PlatformDBURL != "" {
+		if pgStoreTyped, ok := sqlStore.(*pgstore.Store); ok {
+			vaultStore := vault.NewPostgresStore(pgStoreTyped.DB())
+			var vErr error
+			v, vErr = vault.NewWithStore(vaultStore)
+			if vErr != nil {
+				log.Fatalf("Failed to init vault (postgres): %v", vErr)
+			}
+			log.Println("Using PostgreSQL vault store")
+		}
+	}
+	if v == nil {
+		var vErr error
+		vaultPath := cfg.StoragePath + "/vault.bolt"
+		v, vErr = vault.New(vaultPath)
+		if vErr != nil {
+			log.Fatalf("Failed to init vault (bbolt): %v", vErr)
+		}
+		log.Println("Using bbolt vault store")
 	}
 	defer v.Close()
 
