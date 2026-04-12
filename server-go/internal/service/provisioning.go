@@ -355,13 +355,12 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	safeAppPass := schema.QuoteLiteral(appPass)
 
 	roleSQL := fmt.Sprintf(`
-CREATE SCHEMA IF NOT EXISTS auth;
-
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'auth_admin') THEN
     EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s::text);
   END IF;
 END $$;
+GRANT CREATE ON DATABASE %s TO %s;
 GRANT ALL ON SCHEMA auth TO %s;
 ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO %s;
 
@@ -380,6 +379,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA auth TO %s;
 ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
 `,
 		authRole, safeAuthPass, // DO block: format(%L) safely quotes the password
+		schema.QuoteIdent(dbName), authRole, // GRANT CREATE ON DATABASE
 		authRole, authRole, // GRANT auth
 		appRole, safeAppPass, // DO block for excalibase_app
 		appRole, appRole, appRole, appRole, appRole, // GRANT public
