@@ -19,6 +19,7 @@ import (
 
 type ProvisioningService struct {
 	store     storage.InstanceStore
+	orgStore  storage.OrgStore      // optional, for org slug lookup
 	factory   *provisioner.Factory
 	hooks     *edgefn.HookService  // optional
 	vault     *vault.Vault         // optional
@@ -40,6 +41,10 @@ func (s *ProvisioningService) SetVault(v *vault.Vault) {
 
 func (s *ProvisioningService) SetPgDogNotifier(n *PgDogNotifier) {
 	s.pgdog = n
+}
+
+func (s *ProvisioningService) SetOrgStore(os storage.OrgStore) {
+	s.orgStore = os
 }
 
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
@@ -320,11 +325,18 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 
 	orgID := req.OrgID
 
+	// Resolve org slug for vault paths (orgSlug/projectName is the unique key)
+	orgSlug := orgID // fallback to orgID if slug lookup fails
+	if s.orgStore != nil {
+		if org, err := s.orgStore.FindOrgByID(ctx, orgID); err == nil && org != nil {
+			orgSlug = org.Slug
+		}
+	}
+
 	// Store admin (superuser) credentials from CNPG
-	s.vault.Put(fmt.Sprintf("orgs/%s/projects/%s/credentials/admin", orgID, projectID), map[string]string{
-		"host": host, "port": port, "database": dbName,
-		"username": result.Username, "password": result.Password,
-	})
+	// Path: projects/{orgSlug}/{projectName}/credentials/{role}
+	creds_admin := map[string]string{"host": host, "port": port, "database": dbName, "username": result.Username, "password": result.Password}
+	s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/admin", orgSlug, projectID), creds_admin)
 
 	// Generate passwords for each role
 	authPass := generatePassword(32)
@@ -383,15 +395,12 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
 		return
 	}
 
-	// Store credentials in vault
-	s.vault.Put(fmt.Sprintf("orgs/%s/projects/%s/credentials/auth_admin", orgID, projectID), map[string]string{
-		"host": host, "port": port, "database": dbName,
-		"username": "auth_admin", "password": authPass,
-	})
-	s.vault.Put(fmt.Sprintf("orgs/%s/projects/%s/credentials/excalibase_app", orgID, projectID), map[string]string{
-		"host": host, "port": port, "database": dbName,
-		"username": "excalibase_app", "password": appPass,
-	})
+	// Store credentials in vault at projects/{orgSlug}/{projectName}/credentials/{role}
+	creds_auth := map[string]string{"host": host, "port": port, "database": dbName, "username": "auth_admin", "password": authPass}
+	creds_app := map[string]string{"host": host, "port": port, "database": dbName, "username": "excalibase_app", "password": appPass}
+
+	s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/auth_admin", orgSlug, projectID), creds_auth)
+	s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/excalibase_app", orgSlug, projectID), creds_app)
 
 	log.Printf("Created project roles for %s and stored in vault", projectID)
 }

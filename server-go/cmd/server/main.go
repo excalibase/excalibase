@@ -121,6 +121,7 @@ func main() {
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
 	provSvc.SetHookService(hookSvc)
 	provSvc.SetVault(v)
+	provSvc.SetOrgStore(sqlStore)
 
 	// PgDog notifier (optional — requires Postgres store + NATS)
 	if cfg.PlatformDBURL != "" && cfg.NatsURL != "" {
