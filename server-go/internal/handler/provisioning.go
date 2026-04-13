@@ -25,6 +25,7 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 	r.Get("/", h.ListInstances)
 	r.Post("/", h.Provision)
 	r.Post("/estimate", h.EstimateCost)
+	r.Post("/byoc", h.ProvisionBYOC)
 	r.Route("/{projectId}", func(r chi.Router) {
 		r.Get("/", h.GetStatus)
 		r.Delete("/", h.Delete)

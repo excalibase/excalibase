@@ -40,9 +40,10 @@ type DatabaseInstance struct {
 	ProjectID string  `json:"projectId"`
 	OrgID     string  `json:"orgId"`
 	OwnerID   string  `json:"ownerId,omitempty"`
-	DBType    DatabaseType `json:"databaseType"`
-	Tier      TierType     `json:"tier"`
-	Namespace string       `json:"namespace"`
+	DBType         DatabaseType   `json:"databaseType"`
+	Tier           TierType       `json:"tier"`
+	DeploymentMode DeploymentMode `json:"deploymentMode,omitempty"`
+	Namespace      string         `json:"namespace"`
 
 	// Connection
 	Host         string `json:"host,omitempty"`

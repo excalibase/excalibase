@@ -24,6 +24,15 @@ func IsValidTier(t TierType) bool {
 	return validTiers[t]
 }
 
+// DeploymentMode represents how a project's database is managed.
+type DeploymentMode string
+
+const (
+	ModeK8s    DeploymentMode = "k8s"
+	ModeDocker DeploymentMode = "docker"
+	ModeBYOC   DeploymentMode = "byoc"
+)
+
 // ProvisioningStage represents stages in the provisioning pipeline.
 type ProvisioningStage string
 
@@ -36,6 +45,7 @@ const (
 	StageBackupConfiguration  ProvisioningStage = "BACKUP_CONFIGURATION"
 	StageMetricsSetup         ProvisioningStage = "METRICS_SETUP"
 	StageWatcherDeployment    ProvisioningStage = "WATCHER_DEPLOYMENT"
+	StageContainerCreation    ProvisioningStage = "CONTAINER_CREATION"
 	StageCompleted            ProvisioningStage = "COMPLETED"
 	StageFailed               ProvisioningStage = "FAILED"
 )
