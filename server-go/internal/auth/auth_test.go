@@ -12,7 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// --- Password ---
+// --- Password (argon2id) ---
 
 func TestHashAndVerifyPassword(t *testing.T) {
 	hash, err := HashPassword("secret123")
@@ -24,6 +24,41 @@ func TestHashAndVerifyPassword(t *testing.T) {
 	}
 	if CheckPassword("wrong", hash) {
 		t.Error("wrong password should not verify")
+	}
+}
+
+func TestHashPasswordUsesArgon2id(t *testing.T) {
+	hash, err := HashPassword("test-password")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if len(hash) < 20 {
+		t.Error("hash too short")
+	}
+	// argon2id hashes start with $argon2id$
+	if hash[:10] != "$argon2id$" {
+		t.Errorf("expected argon2id hash prefix, got: %s", hash[:20])
+	}
+}
+
+func TestHashPasswordUniquePerCall(t *testing.T) {
+	h1, _ := HashPassword("same-password")
+	h2, _ := HashPassword("same-password")
+	if h1 == h2 {
+		t.Error("same password should produce different hashes (unique salt)")
+	}
+}
+
+func TestCheckPasswordRejectsBcrypt(t *testing.T) {
+	bcryptHash := "$2a$10$IevCHEIm2tE4uQg50oah3eZsCPQ0qsaHOrchTH1uMLn9/cMFwlt52"
+	if CheckPassword("admin123", bcryptHash) {
+		t.Error("bcrypt hash should be rejected")
+	}
+}
+
+func TestCheckPasswordEmptyHash(t *testing.T) {
+	if CheckPassword("anything", "") {
+		t.Error("empty hash should not verify")
 	}
 }
 
