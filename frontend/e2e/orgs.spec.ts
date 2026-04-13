@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loginAs } from './helpers';
+import { loginAs, mockCloudMode } from './helpers';
 
 const mockOrgs = [
   { id: 'org-1', name: 'Alice Corp', slug: 'alice-corp', tier: 'FREE', ownerId: '1', createdAt: '2026-01-01T00:00:00Z' },
@@ -64,6 +64,7 @@ async function mockOrgEndpoints(page: import('@playwright/test').Page) {
 test.describe('Organizations', () => {
   test.beforeEach(async ({ page }) => {
     await loginAs(page);
+    await mockCloudMode(page);
     await mockOrgEndpoints(page);
   });
 

@@ -3,17 +3,23 @@ import { LayoutDashboard, Database, DatabaseZap, Building2, Sun, Moon, LogOut } 
 import { cn } from '../../utils/cn';
 import { useDarkMode } from '../../hooks/useDarkMode';
 import { useAuthStore } from '../../stores/auth-store';
+import { useDeploymentMode, isSelfHosted } from '../../hooks/useDeploymentMode';
 
-const NAV = [
-  { icon: LayoutDashboard, label: 'Dashboard', to: '/' },
-  { icon: Building2, label: 'Organizations', to: '/orgs' },
-  { icon: Database, label: 'Projects', to: '/instances' },
-  { icon: DatabaseZap, label: 'Provision', to: '/provision' },
+const ALL_NAV = [
+  { icon: LayoutDashboard, label: 'Dashboard', to: '/', cloudOnly: false },
+  { icon: Building2, label: 'Organizations', to: '/orgs', cloudOnly: true },
+  { icon: Database, label: 'Projects', to: '/instances', cloudOnly: false },
+  { icon: DatabaseZap, label: 'Provision', to: '/provision', cloudOnly: false },
 ];
 
 export function PlatformLayout() {
   const { dark, toggle } = useDarkMode();
   const { user, clearAuth } = useAuthStore();
+  const mode = useDeploymentMode();
+
+  const NAV = isSelfHosted(mode)
+    ? ALL_NAV.filter((item) => !item.cloudOnly)
+    : ALL_NAV;
 
   return (
     <div className="flex h-screen bg-bg-primary overflow-hidden">
@@ -22,7 +28,7 @@ export function PlatformLayout() {
           <img src="/logo-icon.png" alt="" className="w-7 h-7 object-contain" />
           <span className="font-bold text-text-primary text-base">Excalibase</span>
         </div>
-        <nav className="flex-1 px-2 py-3 space-y-0.5">
+        <nav className="flex-1 px-2 py-3 space-y-0.5" data-testid="platform-nav">
           {NAV.map(({ icon: Icon, label, to }) => (
             <NavLink
               key={to}

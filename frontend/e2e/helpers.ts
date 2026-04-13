@@ -8,6 +8,15 @@ export async function loginAs(page: Page, user = { id: '1', username: 'admin', e
   }, user);
 }
 
+export async function mockCloudMode(page: Page) {
+  await page.route('**/api/config', (route) =>
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ deploymentMode: 'cloud' }),
+    })
+  );
+}
+
 export async function mockInstances(page: Page, projectId = 'test-project') {
   await page.route('**/api/provision', (route) => {
     if (route.request().method() === 'GET') {
