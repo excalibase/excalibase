@@ -63,23 +63,31 @@ SLUG=$(echo "$R" | jq -r '.[0].slug')
 ORG_ID=$(echo "$R" | jq -r '.[0].id')
 [ "$SLUG" = "default" ] && pass "default org (slug=default)" || fail "default org" "$R"
 
-# 6. Provision
-echo "6. Provision project"
+# 6. Provision — server generates opaque project ref, display name is free-form
+echo "6. Provision project (display name '$PROJECT')"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"projectName\":\"$PROJECT\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
-echo "$R" | jq -r '.projectId' | grep -q "$PROJECT" && pass "provision project" || fail "provision" "$R"
+PROJECT_ID=$(echo "$R" | jq -r '.projectId')
+[ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" == proj_* ]] && pass "provision project (ref=$PROJECT_ID)" || fail "provision" "$R"
 
-# 7. Vault credentials
+# 6b. Validation rejects bad postgres version (stage 1 failure, no K8s side effects)
+echo "6b. Validation: reject invalid postgres version"
+R=$(curl -s -X POST http://localhost:24005/api/provision/ \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"projectName\":\"bad-ver\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\",\"postgresVersion\":\"9.2\"}")
+echo "$R" | grep -q "postgres version" && pass "validation rejects pg 9.2" || fail "validation" "$R"
+
+# 7. Vault credentials (now keyed by generated ref, not display name)
 echo "7. Vault credentials (waiting 30s for role creation...)"
 sleep 30
-R=$(curl -s "http://localhost:24010/secrets-list?prefix=projects/default/$PROJECT/" -H "Authorization: Bearer vault-service-token")
+R=$(curl -s "http://localhost:24010/secrets-list?prefix=projects/default/$PROJECT_ID/" -H "Authorization: Bearer vault-service-token")
 COUNT=$(echo "$R" | jq '.paths | length')
 [ "$COUNT" -ge 3 ] && pass "3 credential paths in vault" || fail "vault creds ($COUNT)" "$R"
 
-# 8. Auth register
+# 8. Auth register — path uses generated projectId (opaque ref)
 echo "8. Auth register"
-R=$(curl -s -X POST "http://localhost:24000/auth/default/$PROJECT/register" \
+R=$(curl -s -X POST "http://localhost:24000/auth/default/$PROJECT_ID/register" \
   -H 'Content-Type: application/json' \
   -d '{"email":"fresh@test.com","password":"secret123","fullName":"Fresh User"}')
 JWT=$(echo "$R" | jq -r '.accessToken')
@@ -87,7 +95,7 @@ JWT=$(echo "$R" | jq -r '.accessToken')
 
 # 9. Validate
 echo "9. Validate JWT"
-R=$(curl -s -X POST "http://localhost:24000/auth/default/$PROJECT/validate" \
+R=$(curl -s -X POST "http://localhost:24000/auth/default/$PROJECT_ID/validate" \
   -H 'Content-Type: application/json' -d "{\"token\":\"$JWT\"}")
 echo "$R" | jq -r '.valid' | grep -q true && pass "JWT valid" || fail "validate" "$R"
 
@@ -153,16 +161,17 @@ kubectl -n $NS exec platform-db-1 -- psql -U postgres -d platform -c "UPDATE org
 
 # C4. K8s provisioning in cloud mode
 CLOUD_PROJECT="cloud-$(date +%s)"
-echo "C4. K8s provisioning (cloud mode)"
+echo "C4. K8s provisioning (cloud mode, display name '$CLOUD_PROJECT')"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"projectName\":\"$CLOUD_PROJECT\",\"orgId\":\"$CLOUD_ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"STANDARD\"}")
-echo "$R" | jq -r '.projectId' | grep -q "$CLOUD_PROJECT" && cpass "k8s provision in cloud" || cfail "k8s provision" "$R"
+CLOUD_PROJECT_ID=$(echo "$R" | jq -r '.projectId')
+[ -n "$CLOUD_PROJECT_ID" ] && [[ "$CLOUD_PROJECT_ID" == proj_* ]] && cpass "k8s provision in cloud (ref=$CLOUD_PROJECT_ID)" || cfail "k8s provision" "$R"
 
 # C5. Wait for credentials
 echo "C5. Cloud vault credentials (waiting 30s...)"
 sleep 30
-R=$(curl -s "http://localhost:24010/secrets-list?prefix=projects/cloud-corp/$CLOUD_PROJECT/" -H "Authorization: Bearer vault-service-token")
+R=$(curl -s "http://localhost:24010/secrets-list?prefix=projects/cloud-corp/$CLOUD_PROJECT_ID/" -H "Authorization: Bearer vault-service-token")
 COUNT=$(echo "$R" | jq '.paths | length')
 [ "$COUNT" -ge 3 ] && cpass "cloud project creds in vault ($COUNT)" || cfail "cloud vault creds ($COUNT)" "$R"
 
@@ -175,15 +184,16 @@ R=$(curl -s -X POST http://localhost:24005/api/provision/ \
 echo "$R" | grep -q "reached the maximum" && cpass "tier enforcement blocks over-limit" || cfail "tier" "$R"
 
 # C7. BYOC still works in cloud
-echo "C7. BYOC provision"
+echo "C7. BYOC provision (display name 'byoc-test')"
 R=$(curl -s -X POST http://localhost:24005/api/provision/byoc \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"projectName\":\"byoc-test\",\"orgId\":\"$ORG_ID\",\"host\":\"external-db.example.com\",\"port\":5432,\"database\":\"mydb\",\"username\":\"user\",\"password\":\"pass\"}")
-echo "$R" | jq -r '.projectId' | grep -q byoc-test && cpass "BYOC provision" || cfail "byoc" "$R"
+BYOC_PROJECT_ID=$(echo "$R" | jq -r '.projectId')
+[ -n "$BYOC_PROJECT_ID" ] && [[ "$BYOC_PROJECT_ID" == proj_* ]] && cpass "BYOC provision (ref=$BYOC_PROJECT_ID)" || cfail "byoc" "$R"
 
 # C5. Vault has BYOC credentials
 echo "C8. BYOC credentials in vault"
-R=$(curl -s "http://localhost:24010/secrets-list?prefix=projects/default/byoc-test/" -H "Authorization: Bearer vault-service-token")
+R=$(curl -s "http://localhost:24010/secrets-list?prefix=projects/default/$BYOC_PROJECT_ID/" -H "Authorization: Bearer vault-service-token")
 COUNT=$(echo "$R" | jq '.paths | length')
 [ "$COUNT" -ge 1 ] && cpass "BYOC creds in vault" || cfail "byoc vault ($COUNT)" "$R"
 

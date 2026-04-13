@@ -23,6 +23,8 @@ export const ProvisioningStage = {
   CREDENTIAL_GENERATION: 'CREDENTIAL_GENERATION',
   BACKUP_CONFIGURATION: 'BACKUP_CONFIGURATION',
   METRICS_SETUP: 'METRICS_SETUP',
+  WATCHER_DEPLOYMENT: 'WATCHER_DEPLOYMENT',
+  ROLE_CREATION: 'ROLE_CREATION',
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED'
 } as const;
@@ -39,6 +41,7 @@ export interface ProvisioningRequest {
 export interface DatabaseInstance {
   id: number;
   projectId: string;
+  projectName?: string;
   orgId: string;
   databaseType: DatabaseType;
   tier: TierType;
@@ -50,7 +53,11 @@ export interface DatabaseInstance {
   password: string;
   status: string;
   currentStage: ProvisioningStage;
+  currentStep?: string;
   failureReason?: string;
+  failureStage?: ProvisioningStage;
+  failureStep?: string;
+  rollbackLog?: string;
   backupEnabled: boolean;
   backupSchedule?: string;
   backupRetentionDays?: number;

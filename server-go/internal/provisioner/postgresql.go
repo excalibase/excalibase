@@ -154,6 +154,148 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 	return creds, nil
 }
 
+// ProvisionWithRollback mirrors Provision but uses ProvisionContext for stage/step
+// tracking and registers compensation actions so the service layer can roll back
+// on failure. Namespace delete is the single atomic cleanup that covers stages 2-8
+// (CNPG cluster CRD, pods, PVCs, backup secret, scheduled backup, helm watcher are
+// all inside the namespace).
+func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, pc *ProvisionContext) (*ProvisioningResult, error) {
+	namespace := fmt.Sprintf("%s-%s", req.OrgID, req.ProjectName)
+	projectID := req.ProjectName
+
+	// Stage 1: Validate
+	pc.SetStage(domain.StageValidating)
+
+	// Stage 2: Namespace
+	pc.SetStage(domain.StageNamespaceCreation)
+	pc.SetStep("create namespace")
+	labels := map[string]string{
+		"excalibase.io/type": "project",
+		"excalibase.io/org":  req.OrgID,
+	}
+	if err := p.client.CreateNamespaceWithLabels(ctx, namespace, labels); err != nil {
+		return nil, pc.Fail(fmt.Errorf("create namespace: %w", err))
+	}
+	// Single atomic cleanup covering everything created in this namespace.
+	pc.RegisterCleanup("delete namespace "+namespace, func(ctx context.Context) error {
+		return p.client.DeleteNamespace(ctx, namespace)
+	})
+
+	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 != nil {
+		pc.SetStep("create backup secret")
+		if err := p.client.CreateSecret(ctx, namespace, "backup-s3-creds", map[string][]byte{
+			"ACCESS_KEY_ID":     []byte(req.Backup.S3.AccessKeyID),
+			"ACCESS_SECRET_KEY": []byte(req.Backup.S3.SecretAccessKey),
+		}); err != nil {
+			return nil, pc.Fail(fmt.Errorf("create backup secret: %w", err))
+		}
+	}
+
+	// Stage 3: CRD (inside namespace — covered by namespace cleanup)
+	pc.SetStage(domain.StageCRDDeployment)
+	pc.SetStep("apply CNPG cluster")
+	opts := k8s.PostgreSQLClusterOpts{
+		ProjectID:       projectID,
+		Namespace:       namespace,
+		Tier:            tier,
+		StorageClass:    req.StorageClass,
+		PostgresVersion: req.PostgresVersion,
+		DatabaseName:    req.DatabaseName,
+		MasterUsername:  req.MasterUsername,
+		Parameters:      req.Parameters,
+		Tags:            req.Tags,
+	}
+	if req.Backup != nil && req.Backup.Enabled {
+		opts.Backup = &k8s.BackupOpts{
+			Schedule:      req.Backup.Schedule,
+			RetentionDays: req.Backup.Retention,
+		}
+	}
+	cluster := k8s.BuildPostgreSQLCluster(opts)
+	if err := p.client.ApplyCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
+		return nil, pc.Fail(fmt.Errorf("deploy cluster CRD: %w", err))
+	}
+
+	// Stage 4: Wait for pods
+	pc.SetStage(domain.StageWaitingForReady)
+	pc.SetStep("primary pod")
+	primaryPod := projectID + "-postgres-1"
+	if err := p.waitForPodReady(ctx, namespace, primaryPod, 5*time.Minute); err != nil {
+		return nil, pc.Fail(fmt.Errorf("primary pod: %w", err))
+	}
+	for i := 2; i <= tier.Instances; i++ {
+		pc.SetStep(fmt.Sprintf("replica %d", i))
+		pod := fmt.Sprintf("%s-postgres-%d", projectID, i)
+		if err := p.waitForPodReady(ctx, namespace, pod, 3*time.Minute); err != nil {
+			return nil, pc.Fail(fmt.Errorf("replica %d: %w", i, err))
+		}
+	}
+
+	// Stage 5: Credentials
+	pc.SetStage(domain.StageCredentialGeneration)
+	pc.SetStep("read postgres-app secret")
+	secretName := projectID + "-postgres-app"
+	creds, err := p.extractCredentials(ctx, namespace, secretName, projectID)
+	if err != nil {
+		return nil, pc.Fail(fmt.Errorf("extract credentials: %w", err))
+	}
+
+	// Stage 6: Backup
+	if req.Backup != nil && req.Backup.Enabled {
+		pc.SetStage(domain.StageBackupConfiguration)
+		pc.SetStep("apply scheduled backup")
+		schedule := req.Backup.Schedule
+		if schedule == "" {
+			schedule = "0 0 * * *"
+		}
+		backup := k8s.BuildScheduledBackup(projectID, namespace, schedule)
+		if err := p.client.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, backup); err != nil {
+			return nil, pc.Fail(fmt.Errorf("configure backup: %w", err))
+		}
+	}
+
+	// Stage 7: Metrics (no-op)
+	pc.SetStage(domain.StageMetricsSetup)
+
+	// Stage 8: Watcher (soft-fail: logs WARN, continues)
+	pc.SetStage(domain.StageWatcherDeployment)
+	if p.watcherChartPath != "" {
+		pc.SetStep("install watcher helm chart")
+		watcherValues := map[string]interface{}{
+			"postgres": map[string]interface{}{
+				"enabled":                      true,
+				"url":                          fmt.Sprintf("jdbc:postgresql://%s-postgres-rw.%s.svc.cluster.local:5432/%s", projectID, namespace, creds.DatabaseName),
+				"existingSecret":               fmt.Sprintf("%s-postgres-superuser", projectID),
+				"existingSecretUsernameKey":    "username",
+				"existingSecretPasswordKey":    "password",
+				"slotName":                     fmt.Sprintf("cdc_%s", projectID),
+				"publicationName":              fmt.Sprintf("cdc_%s_pub", projectID),
+				"createSlotIfNotExists":        true,
+				"createPublicationIfNotExists": true,
+				"captureDdl":                   true,
+			},
+			"nats": map[string]interface{}{
+				"url":           "nats://nats.excalibase-platform.svc.cluster.local:4222",
+				"streamName":    "CDC",
+				"subjectPrefix": fmt.Sprintf("cdc.%s", projectID),
+				"enabled":       true,
+			},
+			"resources": map[string]interface{}{
+				"limits":   map[string]interface{}{"cpu": "200m", "memory": "256Mi"},
+				"requests": map[string]interface{}{"cpu": "50m", "memory": "128Mi"},
+			},
+		}
+		if err := p.client.InstallHelmChart(ctx, namespace, "excalibase-watcher", p.watcherChartPath, watcherValues); err != nil {
+			log.Printf("WARN: watcher deployment failed for %s: %v", projectID, err)
+		}
+	}
+
+	// Stage 9: Done
+	pc.SetStage(domain.StageCompleted)
+	creds.Namespace = namespace
+	return creds, nil
+}
+
 func (p *PostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, projectID string) error {
 	// Uninstall watcher first (stops replication cleanly)
 	if err := p.client.UninstallHelmChart(ctx, namespace, "excalibase-watcher"); err != nil {

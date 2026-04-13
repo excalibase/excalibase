@@ -7,16 +7,24 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
-// StageCallback receives provisioning stage updates.
+// StageCallback receives provisioning stage updates (legacy callback form).
 type StageCallback func(stage domain.ProvisioningStage)
 
 // DatabaseProvisioner defines the strategy interface for database provisioning.
+// Implementations may implement RollbackAware to support compensation on failure.
 type DatabaseProvisioner interface {
 	Provision(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error)
 	Deprovision(ctx context.Context, namespace, projectID string) error
 	GetStatus(ctx context.Context, namespace, projectID string) (*ProvisioningStatus, error)
 	ConfigureBackup(ctx context.Context, namespace, projectID, schedule string, retention int) error
 	SupportedType() domain.DatabaseType
+}
+
+// RollbackAware is an optional interface a provisioner can implement to
+// enable per-stage rollback via ProvisionContext. The service layer will
+// prefer ProvisionWithRollback when the provisioner implements this.
+type RollbackAware interface {
+	ProvisionWithRollback(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, pc *ProvisionContext) (*ProvisioningResult, error)
 }
 
 type ProvisioningResult struct {

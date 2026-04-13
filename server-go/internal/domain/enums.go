@@ -46,6 +46,7 @@ const (
 	StageMetricsSetup         ProvisioningStage = "METRICS_SETUP"
 	StageWatcherDeployment    ProvisioningStage = "WATCHER_DEPLOYMENT"
 	StageContainerCreation    ProvisioningStage = "CONTAINER_CREATION"
+	StageRoleCreation         ProvisioningStage = "ROLE_CREATION"
 	StageCompleted            ProvisioningStage = "COMPLETED"
 	StageFailed               ProvisioningStage = "FAILED"
 )

@@ -30,6 +30,11 @@ type MockClient struct {
 	DeleteNamespaceError error // if non-nil, DeleteNamespace returns this error
 	CRDError             error // if non-nil, ApplyCRD returns this error
 	DeleteCRDError       error // if non-nil, DeleteCRD returns this error
+
+	// Wildcards — used when tests don't know the generated project ID upfront.
+	WildcardPodReady  bool              // IsPodReady returns true for any pod not in PodReady
+	WildcardSecret    map[string][]byte // GetSecret returns this if name not in Secrets
+	WildcardExecError error             // ExecInPod returns this for any pod not in ExecError
 }
 
 func NewMockClient() *MockClient {
@@ -129,6 +134,9 @@ func (m *MockClient) IsPodReady(ctx context.Context, namespace, name string) (bo
 	if ready, ok := m.PodReady[key]; ok {
 		return ready, nil
 	}
+	if m.WildcardPodReady {
+		return true, nil
+	}
 	return false, fmt.Errorf("pod not found: %s", key)
 }
 
@@ -139,6 +147,9 @@ func (m *MockClient) GetSecret(ctx context.Context, namespace, name string) (map
 	key := namespace + "/" + name
 	if data, ok := m.Secrets[key]; ok {
 		return data, nil
+	}
+	if m.WildcardSecret != nil {
+		return m.WildcardSecret, nil
 	}
 	return nil, fmt.Errorf("secret not found: %s", key)
 }
@@ -158,6 +169,9 @@ func (m *MockClient) ExecInPod(ctx context.Context, namespace, pod, container st
 	key := namespace + "/" + pod
 	if err, ok := m.ExecError[key]; ok && err != nil {
 		return "", err
+	}
+	if m.WildcardExecError != nil {
+		return "", m.WildcardExecError
 	}
 	if out, ok := m.ExecOutput[key]; ok {
 		return out, nil

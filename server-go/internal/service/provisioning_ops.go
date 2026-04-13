@@ -6,13 +6,15 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"time"
 )
 
 // ScaleTier changes the instance count and resources by patching the CNPG Cluster CRD.
@@ -299,4 +301,68 @@ func generatePassword(length int) string {
 	b := make([]byte, length)
 	rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)[:length]
+}
+
+// orgIDPattern allows lowercase alphanumerics, hyphens, and underscores so
+// both DNS-style slugs and UUIDs (which include hyphens) pass through.
+var orgIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// supportedPostgresVersions lists versions CNPG will accept. Keeping this explicit
+// catches typos early (e.g. "9.2", "15.4") before we spend time on K8s operations.
+var supportedPostgresVersions = map[string]bool{
+	"14": true, "15": true, "16": true, "17": true,
+}
+
+// validateProvisioningRequest performs cheap preflight checks that catch bad input
+// before any side effect. Fails return plain errors (not StageError) because no
+// project record exists yet — callers surface them as 400 Bad Request.
+func validateProvisioningRequest(req domain.ProvisioningRequest) error {
+	name := strings.TrimSpace(req.ProjectName)
+	if name == "" {
+		return fmt.Errorf("project name is required")
+	}
+	if len(name) > 100 {
+		return fmt.Errorf("project name must be 100 characters or fewer")
+	}
+
+	org := strings.TrimSpace(req.OrgID)
+	if org == "" {
+		return fmt.Errorf("org id is required")
+	}
+	if len(org) > 36 {
+		return fmt.Errorf("org id must be 36 characters or fewer")
+	}
+	if !orgIDPattern.MatchString(org) {
+		return fmt.Errorf("org id must contain only lowercase letters, digits, hyphen, or underscore")
+	}
+
+	if req.PostgresVersion != "" && !supportedPostgresVersions[req.PostgresVersion] {
+		return fmt.Errorf("postgres version %q is not supported (allowed: 14, 15, 16, 17)", req.PostgresVersion)
+	}
+
+	if req.Backup != nil && req.Backup.Enabled {
+		if req.Backup.Retention < 0 {
+			return fmt.Errorf("backup retention must be non-negative")
+		}
+		if req.Backup.Retention > 365 {
+			return fmt.Errorf("backup retention must be 365 days or fewer")
+		}
+	}
+	return nil
+}
+
+// generateProjectRef returns an opaque immutable identifier for a project,
+// e.g. "proj_a3k9fx7b2k". The ref is used everywhere downstream (K8s namespace,
+// vault paths, pgdog config, URLs) and is independent of the user's display name.
+// 10-char alphabet [a-z0-9] → 36^10 ≈ 3.6e15 combinations; collision probability
+// with 1M projects is ~10^-4, defended by a retry-on-collision check in the caller.
+func generateProjectRef() string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 10)
+	rand.Read(b)
+	out := make([]byte, 10)
+	for i, x := range b {
+		out[i] = alphabet[int(x)%len(alphabet)]
+	}
+	return "proj_" + string(out)
 }

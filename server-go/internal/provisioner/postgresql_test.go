@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -192,6 +193,185 @@ func TestPostgreSQLConfigureBackup(t *testing.T) {
 	if _, ok := mock.CRDs["ns/bk-test-postgres-backup"]; !ok {
 		t.Error("ScheduledBackup CRD not created")
 	}
+}
+
+// --- ProvisionWithRollback (rollback-aware path) ---
+
+func TestPostgreSQL_ProvisionWithRollback_Success(t *testing.T) {
+	mock := k8s.NewMockClient()
+	mock.SetupPostgreSQLMock("ok-db", "org1-ok-db", 1)
+	prov := NewPostgreSQLProvisioner(mock, "")
+
+	pc := NewProvisionContext(nil, nil)
+	tier, _ := config.GetTierConfig(domain.Free)
+	result, err := prov.ProvisionWithRollback(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "ok-db",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	}, tier, pc)
+
+	if err != nil {
+		t.Fatalf("ProvisionWithRollback: %v", err)
+	}
+	if result == nil || result.Username != "app" {
+		t.Fatalf("result: %+v", result)
+	}
+	if pc.Stage() != domain.StageCompleted {
+		t.Errorf("stage: got %s, want COMPLETED", pc.Stage())
+	}
+	// Namespace cleanup registered (covers all K8s resources via cascade)
+	if pc.CleanupCount() < 1 {
+		t.Error("expected at least 1 cleanup (namespace) to be registered")
+	}
+}
+
+func TestPostgreSQL_ProvisionWithRollback_NamespaceFailsNoCleanups(t *testing.T) {
+	mock := k8s.NewMockClient()
+	mock.NamespaceError = errors.New("quota exceeded")
+	prov := NewPostgreSQLProvisioner(mock, "")
+
+	pc := NewProvisionContext(nil, nil)
+	tier, _ := config.GetTierConfig(domain.Free)
+	_, err := prov.ProvisionWithRollback(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "ns-fail",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	}, tier, pc)
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected StageError, got %T: %v", err, err)
+	}
+	if se.Stage != domain.StageNamespaceCreation {
+		t.Errorf("stage: got %s, want NAMESPACE_CREATION", se.Stage)
+	}
+	// Nothing created before the failure → no cleanups to run
+	if pc.CleanupCount() != 0 {
+		t.Errorf("expected 0 cleanups, got %d", pc.CleanupCount())
+	}
+}
+
+func TestPostgreSQL_ProvisionWithRollback_CRDFailRollsBackNamespace(t *testing.T) {
+	mock := k8s.NewMockClient()
+	mock.CRDError = errors.New("forbidden: CNPG CRD missing")
+	prov := NewPostgreSQLProvisioner(mock, "")
+
+	pc := NewProvisionContext(nil, nil)
+	tier, _ := config.GetTierConfig(domain.Free)
+	_, err := prov.ProvisionWithRollback(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "crd-fail",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	}, tier, pc)
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected StageError, got %T: %v", err, err)
+	}
+	if se.Stage != domain.StageCRDDeployment {
+		t.Errorf("stage: got %s, want CRD_DEPLOYMENT", se.Stage)
+	}
+	// Namespace was created → exactly one cleanup registered
+	if pc.CleanupCount() != 1 {
+		t.Errorf("expected 1 cleanup, got %d", pc.CleanupCount())
+	}
+	if !mock.Namespaces["org1-crd-fail"] {
+		t.Fatal("namespace should exist before rollback runs")
+	}
+
+	results := pc.Rollback(context.Background())
+	if len(results) != 1 || !results[0].OK {
+		t.Fatalf("rollback results: %+v", results)
+	}
+	if mock.Namespaces["org1-crd-fail"] {
+		t.Error("namespace should be deleted by rollback")
+	}
+}
+
+func TestPostgreSQL_ProvisionWithRollback_WaitFailRollsBackNamespace(t *testing.T) {
+	// No SetupPostgreSQLMock → IsPodReady errors → loop hits ctx.Done()
+	mock := k8s.NewMockClient()
+	prov := NewPostgreSQLProvisioner(mock, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel up-front; early stages don't check ctx but waitForPodReady does
+	pc := NewProvisionContext(nil, nil)
+	tier, _ := config.GetTierConfig(domain.Free)
+	_, err := prov.ProvisionWithRollback(ctx, domain.ProvisioningRequest{
+		ProjectName: "wait-fail",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	}, tier, pc)
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected StageError, got %T: %v", err, err)
+	}
+	if se.Stage != domain.StageWaitingForReady {
+		t.Errorf("stage: got %s, want WAITING_FOR_READY", se.Stage)
+	}
+	if pc.CleanupCount() != 1 {
+		t.Errorf("expected 1 cleanup, got %d", pc.CleanupCount())
+	}
+	results := pc.Rollback(context.Background())
+	if len(results) != 1 || !results[0].OK {
+		t.Fatalf("rollback results: %+v", results)
+	}
+	if mock.Namespaces["org1-wait-fail"] {
+		t.Error("namespace should be deleted")
+	}
+}
+
+func TestPostgreSQL_ProvisionWithRollback_ReplicaStepCaptured(t *testing.T) {
+	mock := k8s.NewMockClient()
+	// Only primary is ready; replicas 2 and 3 are missing
+	mock.SetupPostgreSQLMock("rep-fail", "org1-rep-fail", 1)
+	prov := NewPostgreSQLProvisioner(mock, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // primary returns ready=true immediately; replica 2 enters select → ctx.Done()
+	pc := NewProvisionContext(nil, nil)
+	tier, _ := config.GetTierConfig(domain.Standard) // 3 instances
+
+	_, err := prov.ProvisionWithRollback(ctx, domain.ProvisioningRequest{
+		ProjectName: "rep-fail",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Standard,
+	}, tier, pc)
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var se *StageError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected StageError, got %T: %v", err, err)
+	}
+	if se.Stage != domain.StageWaitingForReady {
+		t.Errorf("stage: got %s", se.Stage)
+	}
+	if se.Step != "replica 2" {
+		t.Errorf("step: got %q, want %q", se.Step, "replica 2")
+	}
+}
+
+// --- RollbackAware interface assertion ---
+
+func TestPostgreSQLProvisioner_ImplementsRollbackAware(t *testing.T) {
+	var _ RollbackAware = (*PostgreSQLProvisioner)(nil)
 }
 
 func TestFactoryGet(t *testing.T) {

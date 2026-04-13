@@ -1,11 +1,44 @@
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Server, Database, Shield, Clock, Trash2 } from 'lucide-react';
+import { Loader2, Server, Database, Shield, Clock, Trash2, Copy, Check, AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../api/client';
 import { useDeprovisionDatabase } from '../hooks/useProvisioning';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import type { DatabaseInstance } from '../types';
+
+interface RollbackResult {
+  name: string;
+  ok: boolean;
+  error?: string;
+}
+
+function CopyField({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = () => {
+    navigator.clipboard.writeText(value);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div>
+      <div className="text-xs text-text-tertiary mb-1">{label}</div>
+      <div className="flex items-center gap-2">
+        <code className="flex-1 bg-bg-tertiary border border-border-primary rounded px-3 py-2 text-sm font-mono text-text-primary truncate">
+          {value}
+        </code>
+        <button
+          type="button"
+          onClick={onCopy}
+          aria-label={`Copy ${label}`}
+          className="p-2 rounded border border-border-primary text-text-secondary hover:text-text-primary hover:border-text-secondary transition-colors"
+        >
+          {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -26,7 +59,7 @@ export function SettingsPage() {
   }
 
   const info = [
-    { icon: Server, label: 'Project ID', value: project.projectId },
+    { icon: Server, label: 'Display Name', value: project.projectName || '-' },
     { icon: Database, label: 'Database Type', value: project.databaseType },
     { icon: Shield, label: 'Tier', value: project.tier },
     { icon: Server, label: 'Namespace', value: project.namespace },
@@ -37,9 +70,86 @@ export function SettingsPage() {
     { icon: Clock, label: 'Updated', value: project.updatedAt ? new Date(project.updatedAt).toLocaleString() : '-' },
   ];
 
+  // Connection endpoints — these come from env vars in the real deployment, but here
+  // we build them from the project ref so users have something to copy immediately.
+  const authEndpoint = `https://auth.excalibase.io/${project.orgId}/${project.projectId}`;
+  const graphqlEndpoint = `https://api.excalibase.io/${project.orgId}/${project.projectId}/graphql`;
+  const sdkSnippet = `import { createClient } from '@excalibase/client'
+
+const excalibase = createClient({
+  url: 'https://api.excalibase.io/${project.orgId}/${project.projectId}',
+  anonKey: '<paste your anon key from Auth settings>',
+})`;
+
+  let rollbackResults: RollbackResult[] = [];
+  if (project.rollbackLog) {
+    try {
+      rollbackResults = JSON.parse(project.rollbackLog) as RollbackResult[];
+    } catch {
+      // ignore parse error — just don't render rollback section
+    }
+  }
+
   return (
     <div data-testid="settings-page">
       <h3 className="text-lg font-semibold text-text-primary mb-4">Project Settings</h3>
+
+      {/* Failure banner */}
+      {project.status === 'FAILED' && (
+        <div className="rounded-lg border border-red-500/40 bg-red-500/5 p-4 mb-6">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-red-400 mb-1">
+                Provisioning failed at stage {project.failureStage || project.currentStage}
+                {project.failureStep ? ` (${project.failureStep})` : ''}
+              </div>
+              {project.failureReason && (
+                <div className="text-xs text-text-secondary font-mono break-words">
+                  {project.failureReason}
+                </div>
+              )}
+              {rollbackResults.length > 0 && (
+                <details className="mt-3">
+                  <summary className="text-xs text-text-tertiary cursor-pointer hover:text-text-secondary">
+                    Rollback log ({rollbackResults.length} action{rollbackResults.length === 1 ? '' : 's'})
+                  </summary>
+                  <ul className="mt-2 space-y-1">
+                    {rollbackResults.map((r, i) => (
+                      <li key={i} className="text-xs font-mono flex items-center gap-2">
+                        {r.ok ? (
+                          <Check className="w-3 h-3 text-green-400 flex-shrink-0" />
+                        ) : (
+                          <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />
+                        )}
+                        <span className={r.ok ? 'text-text-secondary' : 'text-red-400'}>
+                          {r.name}{r.error ? `: ${r.error}` : ''}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Connect section (Supabase-style) */}
+      <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8" data-testid="connect-section">
+        <h4 className="text-sm font-medium text-text-primary mb-3">Connect to your project</h4>
+        <div className="space-y-3">
+          <CopyField label="Project Ref" value={project.projectId} />
+          <CopyField label="GraphQL endpoint" value={graphqlEndpoint} />
+          <CopyField label="Auth endpoint" value={authEndpoint} />
+          <div>
+            <div className="text-xs text-text-tertiary mb-1">SDK init</div>
+            <pre className="bg-bg-tertiary border border-border-primary rounded px-3 py-2 text-xs font-mono text-text-primary overflow-x-auto">
+              <code>{sdkSnippet}</code>
+            </pre>
+          </div>
+        </div>
+      </div>
 
       {/* Info grid */}
       <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden mb-8">

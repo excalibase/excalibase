@@ -11,18 +11,25 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
-// TestConcurrentProvisionSameID verifies only one provision succeeds for the same projectId.
-func TestConcurrentProvisionSameID(t *testing.T) {
+// TestConcurrentProvisionSameDisplayName verifies that concurrent provisions with
+// the same display name all succeed and receive distinct generated refs.
+// After the project-ref refactor, same display name is no longer a conflict.
+func TestConcurrentProvisionSameDisplayName(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	mock.SetupPostgreSQLMock("race-db", "org1-race-db", 1)
+	mock.WildcardPodReady = true
+	mock.WildcardSecret = map[string][]byte{
+		"username": []byte("app"),
+		"password": []byte("testpassword123"),
+		"dbname":   []byte("app"),
+	}
 	pgProv := provisioner.NewPostgreSQLProvisioner(mock, "")
 	factory := provisioner.NewFactory(pgProv)
 	svc := NewProvisioningService(store, factory, mock)
-
+	// STANDARD tier so we can create >1 project per org
 	var wg sync.WaitGroup
-	results := make(chan string, 10)
+	results := make(chan string, 5)
 
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
@@ -32,12 +39,12 @@ func TestConcurrentProvisionSameID(t *testing.T) {
 				ProjectName: "race-db",
 				OrgID:       "org1",
 				DBType:      domain.PostgreSQL,
-				Tier:        domain.Free,
+				Tier:        domain.Enterprise,
 			})
 			if err != nil {
 				results <- "error:" + err.Error()
 			} else {
-				results <- "status:" + resp.Status
+				results <- resp.ProjectID
 			}
 		}()
 	}
@@ -45,22 +52,19 @@ func TestConcurrentProvisionSameID(t *testing.T) {
 	wg.Wait()
 	close(results)
 
-	activeCount := 0
-	errorCount := 0
+	refs := make(map[string]bool)
 	for r := range results {
-		if r == "status:ACTIVE" {
-			activeCount++
-		} else {
-			errorCount++
+		if len(r) > 6 && r[:6] == "error:" {
+			t.Errorf("concurrent provision failed: %s", r)
+			continue
 		}
+		if refs[r] {
+			t.Errorf("duplicate ref generated: %s", r)
+		}
+		refs[r] = true
 	}
-
-	// At least one should succeed, rest should fail with "already exists"
-	if activeCount < 1 {
-		t.Error("at least one provision should succeed")
-	}
-	if errorCount < 1 {
-		t.Error("concurrent provisions of same ID should produce errors")
+	if len(refs) != 5 {
+		t.Errorf("expected 5 unique refs, got %d", len(refs))
 	}
 }
 

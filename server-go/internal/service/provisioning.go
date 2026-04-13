@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -55,6 +57,19 @@ func (s *ProvisioningService) SetSelfHostedMode(enabled bool) {
 // ProvisionBYOC registers an externally managed database (no provisioning pipeline).
 // Validates connectivity, stores credentials in vault, creates instance record.
 func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOCRequest) (*domain.ProvisioningResponse, error) {
+	// Generate opaque project ref (display name stays as req.ProjectName)
+	var projectRef string
+	for i := 0; i < 5; i++ {
+		projectRef = generateProjectRef()
+		if existing, _ := s.store.FindByProjectID(projectRef); existing == nil {
+			break
+		}
+		projectRef = ""
+	}
+	if projectRef == "" {
+		return nil, fmt.Errorf("failed to generate unique project ref")
+	}
+
 	// Resolve org slug for vault path
 	orgSlug := "default"
 	if s.orgStore != nil && req.OrgID != "" {
@@ -63,7 +78,7 @@ func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOC
 		}
 	}
 
-	// Store credentials in vault
+	// Store credentials in vault under the generated ref
 	if s.vault != nil {
 		port := strconv.Itoa(req.Port)
 		creds := map[string]string{
@@ -73,14 +88,15 @@ func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOC
 			"password": req.Password,
 			"database": req.Database,
 		}
-		s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/excalibase_app", orgSlug, req.ProjectName), creds)
-		s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/admin", orgSlug, req.ProjectName), creds)
+		s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/excalibase_app", orgSlug, projectRef), creds)
+		s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/admin", orgSlug, projectRef), creds)
 	}
 
 	// Create instance record
 	portInt := req.Port
 	inst := &domain.DatabaseInstance{
-		ProjectID:      req.ProjectName,
+		ProjectID:      projectRef,
+		ProjectName:    req.ProjectName,
 		OrgID:          req.OrgID,
 		DBType:         domain.PostgreSQL,
 		Tier:           domain.Free,
@@ -96,10 +112,11 @@ func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOC
 		return nil, fmt.Errorf("save instance: %w", err)
 	}
 
-	log.Printf("BYOC project registered: %s (org=%s, host=%s)", req.ProjectName, orgSlug, req.Host)
+	log.Printf("BYOC project registered: %s (ref=%s, org=%s, host=%s)", req.ProjectName, projectRef, orgSlug, req.Host)
 
 	return &domain.ProvisioningResponse{
-		ProjectID:    req.ProjectName,
+		ProjectID:    projectRef,
+		ProjectName:  req.ProjectName,
 		Status:       "ACTIVE",
 		CurrentStage: domain.StageCompleted,
 		Host:         req.Host,
@@ -114,11 +131,30 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		return nil, err
 	}
 
+	// From this point on, req.ProjectName is replaced with the generated opaque
+	// ref so the provisioner and all downstream callers use the K8s-safe ID.
+	// The user's display name is preserved on inst.ProjectName.
+	req.ProjectName = inst.ProjectID
+
 	if err := s.store.Save(inst); err != nil {
 		log.Printf("WARN: failed to persist instance state: %v", err)
 	}
 
-	cb := s.stageCallback(inst)
+	pc := provisioner.NewProvisionContext(
+		func(stage domain.ProvisioningStage) {
+			inst.CurrentStage = stage
+			inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
+			if err := s.store.Save(inst); err != nil {
+				log.Printf("WARN: failed to persist instance state: %v", err)
+			}
+		},
+		func(step string) {
+			inst.CurrentStep = step
+			if err := s.store.Save(inst); err != nil {
+				log.Printf("WARN: failed to persist instance state: %v", err)
+			}
+		},
+	)
 
 	if s.hooks != nil {
 		s.hooks.ExecuteHooksAsync(ctx, "pre-provision", edgefn.HookContext{
@@ -140,19 +176,39 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		}
 	}
 
-	result, err := prov.Provision(ctx, req, tier, cb)
-	if err != nil {
-		return s.handleProvisionFailure(inst, req, err), nil
+	var result *provisioner.ProvisioningResult
+	var provErr error
+	if rbProv, ok := prov.(provisioner.RollbackAware); ok {
+		result, provErr = rbProv.ProvisionWithRollback(ctx, req, tier, pc)
+	} else {
+		// Legacy path — no rollback support.
+		result, provErr = prov.Provision(ctx, req, tier, pc.SetStage)
+	}
+	if provErr != nil {
+		return s.handleProvisionFailure(ctx, inst, req, provErr, pc), nil
 	}
 
-	return s.finalizeProvisioning(ctx, inst, req, result)
+	return s.finalizeProvisioning(ctx, inst, req, result, pc)
 }
 
 // prepareProvisioning validates the request and creates the initial instance record.
 func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest) (*domain.DatabaseInstance, provisioner.DatabaseProvisioner, config.TierConfig, error) {
-	existing, _ := s.store.FindByProjectID(req.ProjectName)
-	if existing != nil {
-		return nil, nil, config.TierConfig{}, fmt.Errorf("project ID already exists: %s", req.ProjectName)
+	if err := validateProvisioningRequest(req); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+
+	// Generate an opaque project ref, retrying in the (cosmically unlikely)
+	// event of a collision with an existing project.
+	var projectRef string
+	for i := 0; i < 5; i++ {
+		projectRef = generateProjectRef()
+		if existing, _ := s.store.FindByProjectID(projectRef); existing == nil {
+			break
+		}
+		projectRef = ""
+	}
+	if projectRef == "" {
+		return nil, nil, config.TierConfig{}, fmt.Errorf("failed to generate unique project ref after 5 attempts")
 	}
 
 	tier, err := config.GetTierConfig(req.Tier)
@@ -185,9 +241,10 @@ func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest
 	}
 
 	now := &domain.FlexTime{Time: time.Now()}
-	namespace := fmt.Sprintf("%s-%s", req.OrgID, req.ProjectName)
+	namespace := fmt.Sprintf("%s-%s", req.OrgID, projectRef)
 	inst := &domain.DatabaseInstance{
-		ProjectID:    req.ProjectName,
+		ProjectID:    projectRef,
+		ProjectName:  req.ProjectName,
 		OrgID:        req.OrgID,
 		OwnerID:      req.OwnerID,
 		DBType:       req.DBType,
@@ -207,37 +264,64 @@ func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest
 	return inst, prov, tier, nil
 }
 
-// stageCallback returns a callback that updates instance stage in the store.
-func (s *ProvisioningService) stageCallback(inst *domain.DatabaseInstance) func(domain.ProvisioningStage) {
-	return func(stage domain.ProvisioningStage) {
-		inst.CurrentStage = stage
-		inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-		if err := s.store.Save(inst); err != nil {
-			log.Printf("WARN: failed to persist instance state: %v", err)
+// handleProvisionFailure captures the failing stage/step, runs all registered
+// compensation actions in LIFO order, persists the rollback log, and returns a
+// failure response. Cleanup errors are captured per-action but never stop the
+// rollback or return an error — the DB row surfaces the partial state.
+func (s *ProvisioningService) handleProvisionFailure(
+	ctx context.Context,
+	inst *domain.DatabaseInstance,
+	req domain.ProvisioningRequest,
+	err error,
+	pc *provisioner.ProvisionContext,
+) *domain.ProvisioningResponse {
+	var se *provisioner.StageError
+	if errors.As(err, &se) {
+		inst.FailureStage = se.Stage
+		inst.FailureStep = se.Step
+		if unwrapped := errors.Unwrap(err); unwrapped != nil {
+			inst.FailureReason = unwrapped.Error()
+		} else {
+			inst.FailureReason = err.Error()
 		}
+	} else {
+		inst.FailureStage = pc.Stage()
+		inst.FailureStep = pc.Step()
+		inst.FailureReason = err.Error()
 	}
-}
 
-// handleProvisionFailure persists the failure state and returns an error response.
-func (s *ProvisioningService) handleProvisionFailure(inst *domain.DatabaseInstance, req domain.ProvisioningRequest, err error) *domain.ProvisioningResponse {
+	log.Printf("Provisioning failed for %s at stage %s (%s): %v — running %d cleanup(s)",
+		req.ProjectName, inst.FailureStage, inst.FailureStep, inst.FailureReason, pc.CleanupCount())
+
+	results := pc.Rollback(ctx)
+	if logJSON, jerr := json.Marshal(results); jerr == nil {
+		inst.RollbackLog = string(logJSON)
+	} else {
+		log.Printf("WARN: marshal rollback log: %v", jerr)
+	}
+
 	inst.Status = "FAILED"
 	inst.CurrentStage = domain.StageFailed
-	inst.FailureReason = err.Error()
 	if saveErr := s.store.Save(inst); saveErr != nil {
 		log.Printf("WARN: failed to persist instance state: %v", saveErr)
 	}
+
 	return &domain.ProvisioningResponse{
-		ProjectID:     req.ProjectName,
+		ProjectID:     inst.ProjectID,
+		ProjectName:   inst.ProjectName,
 		Status:        "FAILED",
 		CurrentStage:  domain.StageFailed,
 		Namespace:     inst.Namespace,
-		FailureReason: err.Error(),
+		FailureReason: inst.FailureReason,
+		FailureStage:  inst.FailureStage,
+		FailureStep:   inst.FailureStep,
+		RollbackLog:   inst.RollbackLog,
 		CreatedAt:     inst.CreatedAt,
 	}
 }
 
 // finalizeProvisioning updates the instance with connection details, creates roles, and fires hooks.
-func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult) (*domain.ProvisioningResponse, error) {
+func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, pc *provisioner.ProvisionContext) (*domain.ProvisioningResponse, error) {
 	port := result.Port
 	inst.Host = result.Host
 	inst.ReadOnlyHost = result.ReadOnlyHost
@@ -246,9 +330,19 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 	inst.Username = result.Username
 	inst.Password = result.Password
 	inst.SSLMode = result.SSLMode
+	inst.MetricsEndpoint = fmt.Sprintf("http://%s-postgres-1.%s.svc.cluster.local:9187/metrics", req.ProjectName, inst.Namespace)
+
+	// Role creation (writes to vault + executes psql in primary pod).
+	// This is an atomic step with its own rollback — failures here trigger
+	// full rollback via the same ProvisionContext (namespace + vault entries).
+	if s.vault != nil && s.k8sClient != nil && !s.vault.Sealed() {
+		if err := s.createProjectRoles(ctx, req, result, inst.Namespace, pc); err != nil {
+			return s.handleProvisionFailure(ctx, inst, req, err, pc), nil
+		}
+	}
+
 	inst.Status = "ACTIVE"
 	inst.CurrentStage = domain.StageCompleted
-	inst.MetricsEndpoint = fmt.Sprintf("http://%s-postgres-1.%s.svc.cluster.local:9187/metrics", req.ProjectName, inst.Namespace)
 
 	delProtection := false
 	inst.DeletionProtection = &delProtection
@@ -260,10 +354,6 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 	inst.LastHealthCheck = finalNow
 	if err := s.store.Save(inst); err != nil {
 		log.Printf("WARN: failed to persist instance state: %v", err)
-	}
-
-	if s.vault != nil && s.k8sClient != nil && !s.vault.Sealed() {
-		s.createProjectRoles(ctx, req, result, inst.Namespace)
 	}
 
 	// Register with PgDog connection pooler
@@ -284,7 +374,8 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 	}
 
 	return &domain.ProvisioningResponse{
-		ProjectID:    req.ProjectName,
+		ProjectID:    inst.ProjectID,
+		ProjectName:  inst.ProjectName,
 		Status:       "ACTIVE",
 		CurrentStage: domain.StageCompleted,
 		Namespace:    inst.Namespace,
@@ -377,7 +468,8 @@ func (s *ProvisioningService) SetDeletionProtection(projectID string, enabled bo
 	return s.store.Save(inst)
 }
 
-func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, namespace string) {
+func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, namespace string, pc *provisioner.ProvisionContext) error {
+	pc.SetStage(domain.StageRoleCreation)
 	projectID := req.ProjectName
 	primaryPod := projectID + "-postgres-1"
 	host := result.Host
@@ -394,10 +486,23 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 		}
 	}
 
+	vaultPath := func(role string) string {
+		return fmt.Sprintf("projects/%s/%s/credentials/%s", orgSlug, projectID, role)
+	}
+	registerVaultCleanup := func(path string) {
+		pc.RegisterCleanup("delete vault "+path, func(ctx context.Context) error {
+			return s.vault.Delete(path)
+		})
+	}
+
 	// Store admin (superuser) credentials from CNPG
-	// Path: projects/{orgSlug}/{projectName}/credentials/{role}
+	pc.SetStep("store admin credentials")
+	adminPath := vaultPath("admin")
 	creds_admin := map[string]string{"host": host, "port": port, "database": dbName, "username": result.Username, "password": result.Password}
-	s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/admin", orgSlug, projectID), creds_admin)
+	if err := s.vault.Put(adminPath, creds_admin); err != nil {
+		return pc.Fail(fmt.Errorf("vault put admin: %w", err))
+	}
+	registerVaultCleanup(adminPath)
 
 	// Generate passwords for each role
 	authPass := generatePassword(32)
@@ -449,23 +554,33 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
 		appRole, appRole, appRole, // GRANT auth usage
 	)
 
-	// Execute via pod exec (psql)
-	// Use postgres superuser via local socket (peer auth) to create roles
+	// Execute via pod exec (psql) — use postgres superuser via local socket (peer auth)
+	pc.SetStep("exec CREATE ROLE in primary pod")
 	cmd := []string{"psql", "-U", "postgres", "-d", dbName, "-c", roleSQL}
 	output, err := s.k8sClient.ExecInPod(ctx, namespace, primaryPod, "postgres", cmd)
 	if err != nil {
-		log.Printf("WARN: role creation failed for %s: %v\nOutput: %s", projectID, err, output)
-		return
+		return pc.Fail(fmt.Errorf("exec role creation: %w (output: %s)", err, output))
 	}
 
 	// Store credentials in vault at projects/{orgSlug}/{projectName}/credentials/{role}
+	pc.SetStep("store auth_admin credentials")
+	authPath := vaultPath("auth_admin")
 	creds_auth := map[string]string{"host": host, "port": port, "database": dbName, "username": "auth_admin", "password": authPass}
-	creds_app := map[string]string{"host": host, "port": port, "database": dbName, "username": "excalibase_app", "password": appPass}
+	if err := s.vault.Put(authPath, creds_auth); err != nil {
+		return pc.Fail(fmt.Errorf("vault put auth_admin: %w", err))
+	}
+	registerVaultCleanup(authPath)
 
-	s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/auth_admin", orgSlug, projectID), creds_auth)
-	s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/excalibase_app", orgSlug, projectID), creds_app)
+	pc.SetStep("store excalibase_app credentials")
+	appPath := vaultPath("excalibase_app")
+	creds_app := map[string]string{"host": host, "port": port, "database": dbName, "username": "excalibase_app", "password": appPass}
+	if err := s.vault.Put(appPath, creds_app); err != nil {
+		return pc.Fail(fmt.Errorf("vault put excalibase_app: %w", err))
+	}
+	registerVaultCleanup(appPath)
 
 	log.Printf("Created project roles for %s and stored in vault", projectID)
+	return nil
 }
 
 func boolPtr(b bool) *bool  { return &b }

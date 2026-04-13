@@ -10,22 +10,22 @@ import (
 func (s *Store) Save(inst *domain.DatabaseInstance) error {
 	_, err := s.db.Exec(`
 		INSERT OR REPLACE INTO database_instances (
-			project_id, org_id, owner_id, database_type, tier, namespace,
+			project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 			host, read_only_host, port, database_name, username, password,
 			deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 			webhook_url, postgres_version, tags,
-			status, current_stage, failure_reason,
+			status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
 			network_policy_enabled,
 			maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 			backup_enabled, backup_schedule, backup_retention_days,
 			metrics_endpoint, grafana_dashboard_url,
 			created_at, updated_at, last_health_check
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		inst.ProjectID, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
 		boolToInt(inst.DeletionProtection), boolToInt(inst.PoolerEnabled), inst.PoolerHost, inst.SSLMode,
 		inst.WebhookURL, inst.PostgresVersion, inst.Tags,
-		inst.Status, inst.CurrentStage, inst.FailureReason,
+		inst.Status, inst.CurrentStage, inst.CurrentStep, inst.FailureReason, inst.FailureStage, inst.FailureStep, inst.RollbackLog,
 		boolToInt(inst.NetworkPolicyEnabled),
 		inst.MaintenanceWindow, inst.MaintenanceWindowDurationMinutes, boolToInt(inst.AutoMinorVersionUpgrade),
 		boolToInt(inst.BackupEnabled), inst.BackupSchedule, inst.BackupRetentionDays,
@@ -37,11 +37,11 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
 	row := s.db.QueryRow(`SELECT
-		project_id, org_id, owner_id, database_type, tier, namespace,
+		project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 		host, read_only_host, port, database_name, username, password,
 		deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 		webhook_url, postgres_version, tags,
-		status, current_stage, failure_reason,
+		status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
 		network_policy_enabled,
 		maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 		backup_enabled, backup_schedule, backup_retention_days,
@@ -58,11 +58,11 @@ func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, err
 
 func (s *Store) FindAll() ([]*domain.DatabaseInstance, error) {
 	rows, err := s.db.Query(`SELECT
-		project_id, org_id, owner_id, database_type, tier, namespace,
+		project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 		host, read_only_host, port, database_name, username, password,
 		deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 		webhook_url, postgres_version, tags,
-		status, current_stage, failure_reason,
+		status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
 		network_policy_enabled,
 		maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 		backup_enabled, backup_schedule, backup_retention_days,
@@ -98,11 +98,11 @@ func (s *Store) Delete(projectID string) error {
 
 func (s *Store) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error) {
 	rows, err := s.db.Query(`SELECT
-		project_id, org_id, owner_id, database_type, tier, namespace,
+		project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 		host, read_only_host, port, database_name, username, password,
 		deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 		webhook_url, postgres_version, tags,
-		status, current_stage, failure_reason,
+		status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
 		network_policy_enabled,
 		maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 		backup_enabled, backup_schedule, backup_retention_days,
@@ -137,11 +137,11 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	var createdAt, updatedAt, lastHealth sql.NullString
 
 	err := s.Scan(
-		&inst.ProjectID, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
+		&inst.ProjectID, &inst.ProjectName, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
 		&inst.Host, &inst.ReadOnlyHost, &port, &inst.DatabaseName, &inst.Username, &inst.Password,
 		&delProt, &poolerEn, &inst.PoolerHost, &inst.SSLMode,
 		&inst.WebhookURL, &inst.PostgresVersion, &inst.Tags,
-		&inst.Status, &inst.CurrentStage, &inst.FailureReason,
+		&inst.Status, &inst.CurrentStage, &inst.CurrentStep, &inst.FailureReason, &inst.FailureStage, &inst.FailureStep, &inst.RollbackLog,
 		&netPol,
 		&inst.MaintenanceWindow, &maintDur, &autoUpgrade,
 		&backupEn, &inst.BackupSchedule, &backupRet,

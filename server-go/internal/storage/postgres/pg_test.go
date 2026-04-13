@@ -146,6 +146,44 @@ func TestInstanceNotFound(t *testing.T) {
 	}
 }
 
+func TestInstancePersistsDisplayNameAndRollbackFields(t *testing.T) {
+	store := testStore(t)
+	inst := &domain.DatabaseInstance{
+		ProjectID:     "proj_a1b2c3d4e5",
+		ProjectName:   "My Cool App 🚀",
+		OrgID:         "org1",
+		Status:        "FAILED",
+		CurrentStage:  domain.StageFailed,
+		CurrentStep:   "apply CNPG cluster",
+		FailureStage:  domain.StageCRDDeployment,
+		FailureStep:   "apply CNPG cluster",
+		FailureReason: "forbidden: CRD missing",
+		RollbackLog:   `[{"name":"delete namespace","ok":true}]`,
+	}
+	if err := store.Save(inst); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := store.FindByProjectID("proj_a1b2c3d4e5")
+	if err != nil || got == nil {
+		t.Fatalf("FindByProjectID: %v", err)
+	}
+	if got.ProjectName != "My Cool App 🚀" {
+		t.Errorf("ProjectName: got %q", got.ProjectName)
+	}
+	if got.CurrentStep != "apply CNPG cluster" {
+		t.Errorf("CurrentStep: got %q", got.CurrentStep)
+	}
+	if got.FailureStage != domain.StageCRDDeployment {
+		t.Errorf("FailureStage: got %s", got.FailureStage)
+	}
+	if got.FailureStep != "apply CNPG cluster" {
+		t.Errorf("FailureStep: got %q", got.FailureStep)
+	}
+	if got.RollbackLog != `[{"name":"delete namespace","ok":true}]` {
+		t.Errorf("RollbackLog: got %q", got.RollbackLog)
+	}
+}
+
 // --- User tests ---
 
 func TestUserCreateAndFind(t *testing.T) {

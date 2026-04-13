@@ -36,10 +36,11 @@ func (ft *FlexTime) UnmarshalJSON(b []byte) error {
 
 // DatabaseInstance is the core entity tracking a provisioned database.
 type DatabaseInstance struct {
-	ID        *int64  `json:"id,omitempty"`
-	ProjectID string  `json:"projectId"`
-	OrgID     string  `json:"orgId"`
-	OwnerID   string  `json:"ownerId,omitempty"`
+	ID          *int64 `json:"id,omitempty"`
+	ProjectID   string `json:"projectId"`
+	ProjectName string `json:"projectName,omitempty"` // display name, free-form, editable
+	OrgID       string `json:"orgId"`
+	OwnerID     string `json:"ownerId,omitempty"`
 	DBType         DatabaseType   `json:"databaseType"`
 	Tier           TierType       `json:"tier"`
 	DeploymentMode DeploymentMode `json:"deploymentMode,omitempty"`
@@ -66,8 +67,12 @@ type DatabaseInstance struct {
 
 	// Status
 	Status       string            `json:"status"`
-	CurrentStage ProvisioningStage `json:"currentStage,omitempty"`
-	FailureReason string           `json:"failureReason,omitempty"`
+	CurrentStage  ProvisioningStage `json:"currentStage,omitempty"`
+	CurrentStep   string            `json:"currentStep,omitempty"`
+	FailureReason string            `json:"failureReason,omitempty"`
+	FailureStage  ProvisioningStage `json:"failureStage,omitempty"`
+	FailureStep   string            `json:"failureStep,omitempty"`
+	RollbackLog   string            `json:"rollbackLog,omitempty"` // JSON array of cleanup results
 
 	// Network
 	NetworkPolicyEnabled *bool `json:"networkPolicyEnabled,omitempty"`

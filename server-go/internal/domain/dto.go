@@ -72,6 +72,7 @@ type MaintenanceWindowConfig struct {
 
 type ProvisioningResponse struct {
 	ProjectID    string            `json:"projectId"`
+	ProjectName  string            `json:"projectName,omitempty"`
 	Status       string            `json:"status"`
 	CurrentStage ProvisioningStage `json:"currentStage"`
 	Namespace    string            `json:"namespace"`
@@ -79,6 +80,9 @@ type ProvisioningResponse struct {
 	Port         *int              `json:"port,omitempty"`
 	DatabaseName string            `json:"databaseName,omitempty"`
 	FailureReason string           `json:"failureReason,omitempty"`
+	FailureStage  ProvisioningStage `json:"failureStage,omitempty"`
+	FailureStep   string            `json:"failureStep,omitempty"`
+	RollbackLog   string            `json:"rollbackLog,omitempty"`
 	CreatedAt    *FlexTime         `json:"createdAt,omitempty"`
 }
 
