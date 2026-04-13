@@ -32,6 +32,7 @@ const BackupsPage = lazy(() => import('./pages/BackupsPage').then(m => ({ defaul
 const SnapshotsPage = lazy(() => import('./pages/SnapshotsPage').then(m => ({ default: m.SnapshotsPage })));
 const MigrationsPage = lazy(() => import('./pages/MigrationsPage').then(m => ({ default: m.MigrationsPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
+const VaultPage = lazy(() => import('./pages/VaultPage').then(m => ({ default: m.VaultPage })));
 const SchemaDesignerPage = lazy(() => import('./pages/SchemaDesignerPage').then(m => ({ default: m.SchemaDesignerPage })));
 const TriggersPage = lazy(() => import('./pages/TriggersPage').then(m => ({ default: m.TriggersPage })));
 const IndexesPage = lazy(() => import('./pages/IndexesPage').then(m => ({ default: m.IndexesPage })));
@@ -101,6 +102,7 @@ export default function App() {
             <Route path="operations/snapshots" element={<SnapshotsPage />} />
             <Route path="operations/migrations" element={<MigrationsPage />} />
             {/* Settings */}
+            <Route path="vault" element={<VaultPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
         </Route>

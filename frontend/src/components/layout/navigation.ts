@@ -97,5 +97,6 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Migrations', icon: ArrowUpDown, to: 'operations/migrations' },
     ],
   },
+  { key: 'vault', label: 'Vault', icon: KeyRound, to: 'vault' },
   { key: 'settings', label: 'Settings', icon: Settings, to: 'settings' },
 ];
