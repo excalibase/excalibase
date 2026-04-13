@@ -369,6 +369,68 @@ func TestGetPublicKey(t *testing.T) {
 	}
 }
 
+func TestListSecrets(t *testing.T) {
+	v := tempVault(t)
+	defer v.Close()
+	v.Init(1, 1)
+
+	// Store secrets at various paths
+	v.Put("projects/org-a/app-a/credentials/admin", map[string]string{"password": "a"})
+	v.Put("projects/org-a/app-a/credentials/auth_admin", map[string]string{"password": "b"})
+	v.Put("projects/org-b/app-b/credentials/admin", map[string]string{"password": "c"})
+	v.Put("backup/s3", map[string]string{"key": "s3key"})
+
+	// List all
+	paths, err := v.List("")
+	if err != nil {
+		t.Fatalf("List all: %v", err)
+	}
+	// Should include all user secrets (pki/* auto-created by Init, plus our 4)
+	if len(paths) < 4 {
+		t.Errorf("expected at least 4 paths, got %d: %v", len(paths), paths)
+	}
+
+	// List with prefix
+	paths, err = v.List("projects/org-a/")
+	if err != nil {
+		t.Fatalf("List prefix: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Errorf("expected 2 paths for org-a, got %d: %v", len(paths), paths)
+	}
+
+	// List non-existent prefix
+	paths, err = v.List("nonexistent/")
+	if err != nil {
+		t.Fatalf("List nonexistent: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Errorf("expected 0 paths, got %d", len(paths))
+	}
+}
+
+func TestListSecretsRequiresUnseal(t *testing.T) {
+	v := tempVault(t)
+	defer v.Close()
+	result, _ := v.Init(1, 1)
+	v.Put("test/key", map[string]string{"value": "hello"})
+	v.Seal()
+
+	_, err := v.List("")
+	if err != ErrSealed {
+		t.Errorf("List while sealed: expected ErrSealed, got %v", err)
+	}
+
+	v.Unseal(result.Shares[0])
+	paths, err := v.List("")
+	if err != nil {
+		t.Fatalf("List after unseal: %v", err)
+	}
+	if len(paths) < 1 {
+		t.Error("expected at least 1 path after unseal")
+	}
+}
+
 func TestAutoUnsealFromEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vault.bolt")

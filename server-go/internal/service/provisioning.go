@@ -14,7 +14,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	"github.com/excalibase/provisioning-poc/internal/vault"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
 type ProvisioningService struct {
@@ -22,9 +22,10 @@ type ProvisioningService struct {
 	orgStore  storage.OrgStore      // optional, for org slug lookup
 	factory   *provisioner.Factory
 	hooks     *edgefn.HookService  // optional
-	vault     *vault.Vault         // optional
+	vault     vaultclient.VaultClient // optional
 	k8sClient k8s.KubeClient      // optional, for role creation via pod exec
-	pgdog     *PgDogNotifier       // optional, for PgDog config registration
+	pgdog          *PgDogNotifier       // optional, for PgDog config registration
+	selfHostedMode bool                 // skip tier enforcement
 }
 
 func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Factory, k8sClient k8s.KubeClient) *ProvisioningService {
@@ -35,7 +36,7 @@ func (s *ProvisioningService) SetHookService(hooks *edgefn.HookService) {
 	s.hooks = hooks
 }
 
-func (s *ProvisioningService) SetVault(v *vault.Vault) {
+func (s *ProvisioningService) SetVault(v vaultclient.VaultClient) {
 	s.vault = v
 }
 
@@ -45,6 +46,66 @@ func (s *ProvisioningService) SetPgDogNotifier(n *PgDogNotifier) {
 
 func (s *ProvisioningService) SetOrgStore(os storage.OrgStore) {
 	s.orgStore = os
+}
+
+func (s *ProvisioningService) SetSelfHostedMode(enabled bool) {
+	s.selfHostedMode = enabled
+}
+
+// ProvisionBYOC registers an externally managed database (no provisioning pipeline).
+// Validates connectivity, stores credentials in vault, creates instance record.
+func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOCRequest) (*domain.ProvisioningResponse, error) {
+	// Resolve org slug for vault path
+	orgSlug := "default"
+	if s.orgStore != nil && req.OrgID != "" {
+		if org, err := s.orgStore.FindOrgByID(ctx, req.OrgID); err == nil && org != nil {
+			orgSlug = org.Slug
+		}
+	}
+
+	// Store credentials in vault
+	if s.vault != nil {
+		port := strconv.Itoa(req.Port)
+		creds := map[string]string{
+			"host":     req.Host,
+			"port":     port,
+			"username": req.Username,
+			"password": req.Password,
+			"database": req.Database,
+		}
+		s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/excalibase_app", orgSlug, req.ProjectName), creds)
+		s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/admin", orgSlug, req.ProjectName), creds)
+	}
+
+	// Create instance record
+	portInt := req.Port
+	inst := &domain.DatabaseInstance{
+		ProjectID:      req.ProjectName,
+		OrgID:          req.OrgID,
+		DBType:         domain.PostgreSQL,
+		Tier:           domain.Free,
+		DeploymentMode: domain.ModeBYOC,
+		Host:           req.Host,
+		Port:           &portInt,
+		DatabaseName:   req.Database,
+		Status:         "ACTIVE",
+		CurrentStage:   domain.StageCompleted,
+	}
+
+	if err := s.store.Save(inst); err != nil {
+		return nil, fmt.Errorf("save instance: %w", err)
+	}
+
+	log.Printf("BYOC project registered: %s (org=%s, host=%s)", req.ProjectName, orgSlug, req.Host)
+
+	return &domain.ProvisioningResponse{
+		ProjectID:    req.ProjectName,
+		Status:       "ACTIVE",
+		CurrentStage: domain.StageCompleted,
+		Host:         req.Host,
+		Port:         &portInt,
+		DatabaseName: req.Database,
+	}, nil
 }
 
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
@@ -99,8 +160,8 @@ func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest
 		return nil, nil, config.TierConfig{}, err
 	}
 
-	// Enforce max projects per org for this tier
-	if tier.MaxProjects > 0 {
+	// Enforce max projects per org for this tier (skip in self-hosted mode)
+	if tier.MaxProjects > 0 && !s.selfHostedMode {
 		allInstances, _ := s.store.FindAll()
 		orgCount := 0
 		for _, inst := range allInstances {
@@ -114,7 +175,7 @@ func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest
 	}
 
 	// Enforce backup availability per tier
-	if req.Backup != nil && req.Backup.Enabled && !tier.BackupEnabled {
+	if req.Backup != nil && req.Backup.Enabled && !tier.BackupEnabled && !s.selfHostedMode {
 		return nil, nil, config.TierConfig{}, fmt.Errorf("backups are not available on %s tier", req.Tier)
 	}
 
@@ -355,6 +416,8 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	safeAppPass := schema.QuoteLiteral(appPass)
 
 	roleSQL := fmt.Sprintf(`
+CREATE SCHEMA IF NOT EXISTS auth;
+
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'auth_admin') THEN
     EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s::text);

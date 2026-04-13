@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"strings"
 	"log"
 	"net/http"
 	"os"
@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
-	"github.com/excalibase/provisioning-poc/internal/vault"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
 )
@@ -30,7 +30,7 @@ type connEntry struct {
 }
 
 type SchemaHandler struct {
-	vault            *vault.Vault
+	vault            vaultclient.VaultClient
 	introspector     *schema.Introspector
 	mu               sync.RWMutex
 	connCache        map[string]*connEntry
@@ -39,7 +39,7 @@ type SchemaHandler struct {
 	dbSSLModeOverride string // if set, overrides sslmode (for testing)
 }
 
-func NewSchemaHandler(v *vault.Vault) *SchemaHandler {
+func NewSchemaHandler(v vaultclient.VaultClient) *SchemaHandler {
 	h := &SchemaHandler{
 		vault:             v,
 		introspector:      schema.NewIntrospector(),
@@ -379,9 +379,10 @@ func (h *SchemaHandler) getDB(orgId, projectId string) (*sql.DB, error) {
 }
 
 func (h *SchemaHandler) handleDBError(w http.ResponseWriter, err error) {
-	if errors.Is(err, vault.ErrSealed) {
+	msg := err.Error()
+	if strings.Contains(msg, "sealed") {
 		httpError(w, "vault is sealed", http.StatusServiceUnavailable)
-	} else if errors.Is(err, vault.ErrNotFound) {
+	} else if strings.Contains(msg, "not found") {
 		httpError(w, "project credentials not found in vault", http.StatusNotFound)
 	} else {
 		log.Printf("schema db error: %v", err)

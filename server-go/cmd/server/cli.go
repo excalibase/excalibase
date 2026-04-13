@@ -18,7 +18,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
-	"github.com/excalibase/provisioning-poc/internal/vault"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 	k8sunstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 

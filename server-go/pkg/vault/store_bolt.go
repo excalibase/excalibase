@@ -83,6 +83,21 @@ func (s *BoltStore) DeleteSecret(path string) error {
 	})
 }
 
+func (s *BoltStore) ListSecrets(prefix string) ([]string, error) {
+	var paths []string
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketSecrets)
+		return b.ForEach(func(k, _ []byte) error {
+			key := string(k)
+			if prefix == "" || len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+				paths = append(paths, key)
+			}
+			return nil
+		})
+	})
+	return paths, err
+}
+
 func (s *BoltStore) Close() error {
 	return s.db.Close()
 }

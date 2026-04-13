@@ -1,4 +1,4 @@
-package handler
+package vaultapi
 
 import (
 	"encoding/json"
@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 )
@@ -19,16 +18,23 @@ func NewVaultHandler(v *vault.Vault) *VaultHandler {
 	return &VaultHandler{v: v}
 }
 
-func (h *VaultHandler) Routes(r chi.Router) {
-	// Public routes (no auth required)
+// Routes registers all vault API routes. If tokens is non-empty,
+// secret routes require a valid Bearer token from the list.
+func (h *VaultHandler) Routes(r chi.Router, tokens []string) {
+	// Public
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	})
 	r.Get("/status", h.Status)
 	r.Post("/init", h.Init)
 	r.Post("/unseal", h.Unseal)
 	r.Get("/pki/public-key", h.GetPublicKey)
 
-	// Auth-required routes
+	// Auth-gated secrets
 	r.Group(func(r chi.Router) {
-		r.Use(auth.RequireAuth)
+		if len(tokens) > 0 {
+			r.Use(requirePAT(tokens))
+		}
 		r.Post("/seal", h.Seal)
 		r.Post("/rekey", h.Rekey)
 		r.Get("/secrets-list", h.ListSecrets)
@@ -38,6 +44,28 @@ func (h *VaultHandler) Routes(r chi.Router) {
 			r.Delete("/*", h.DeleteSecret)
 		})
 	})
+}
+
+func requirePAT(validTokens []string) func(http.Handler) http.Handler {
+	tokenSet := make(map[string]struct{}, len(validTokens))
+	for _, t := range validTokens {
+		tokenSet[t] = struct{}{}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auth := r.Header.Get("Authorization")
+			if !strings.HasPrefix(auth, "Bearer ") {
+				httpError(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			token := strings.TrimPrefix(auth, "Bearer ")
+			if _, ok := tokenSet[token]; !ok {
+				httpError(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func (h *VaultHandler) Status(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +93,7 @@ func (h *VaultHandler) Init(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.v.Init(body.Shares, body.Threshold)
 	if err != nil {
-		httpError(w, safeError(err), http.StatusBadRequest)
+		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -86,7 +114,7 @@ func (h *VaultHandler) Unseal(w http.ResponseWriter, r *http.Request) {
 
 	progress, err := h.v.Unseal(body.Share)
 	if err != nil {
-		httpError(w, safeError(err), http.StatusBadRequest)
+		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -114,7 +142,7 @@ func (h *VaultHandler) Rekey(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.v.Rekey(body.Shares, body.Threshold)
 	if err != nil {
-		httpError(w, safeError(err), http.StatusBadRequest)
+		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -135,7 +163,7 @@ func (h *VaultHandler) GetPublicKey(w http.ResponseWriter, r *http.Request) {
 			httpError(w, "PKI not initialized", http.StatusNotFound)
 			return
 		}
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		httpError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"key": pem, "algorithm": "EC-P256"})
@@ -149,7 +177,7 @@ func (h *VaultHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
 			return
 		}
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		httpError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if paths == nil {
@@ -159,7 +187,7 @@ func (h *VaultHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
-	path := extractSecretPath(r)
+	path := extractPath(r)
 	data, err := h.v.Get(path)
 	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {
@@ -167,17 +195,17 @@ func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, vault.ErrNotFound) {
-			httpError(w, "secret not found", http.StatusNotFound)
+			httpError(w, "not found", http.StatusNotFound)
 			return
 		}
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		httpError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, data)
 }
 
 func (h *VaultHandler) PutSecret(w http.ResponseWriter, r *http.Request) {
-	path := extractSecretPath(r)
+	path := extractPath(r)
 	var data map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		httpError(w, "invalid request body", http.StatusBadRequest)
@@ -189,28 +217,36 @@ func (h *VaultHandler) PutSecret(w http.ResponseWriter, r *http.Request) {
 			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
 			return
 		}
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		httpError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (h *VaultHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
-	path := extractSecretPath(r)
+	path := extractPath(r)
 	if err := h.v.Delete(path); err != nil {
 		if errors.Is(err, vault.ErrSealed) {
 			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
 			return
 		}
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		httpError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-func extractSecretPath(r *http.Request) string {
-	// chi wildcard gives us everything after /secrets/
-	path := chi.URLParam(r, "*")
-	path = strings.TrimPrefix(path, "/")
-	return path
+func extractPath(r *http.Request) string {
+	return strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+}
+
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+func httpError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]interface{}{"error": msg, "status": code})
 }

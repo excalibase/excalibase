@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
-	"github.com/excalibase/provisioning-poc/internal/vault"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"

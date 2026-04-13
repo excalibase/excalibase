@@ -76,6 +76,30 @@ func (s *PostgresStore) DeleteSecret(path string) error {
 	return nil
 }
 
+func (s *PostgresStore) ListSecrets(prefix string) ([]string, error) {
+	var rows *sql.Rows
+	var err error
+	if prefix == "" {
+		rows, err = s.db.Query(`SELECT path FROM vault_secrets ORDER BY path`)
+	} else {
+		rows, err = s.db.Query(`SELECT path FROM vault_secrets WHERE path LIKE $1 ORDER BY path`, prefix+"%")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list secrets: %w", err)
+	}
+	defer rows.Close()
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("scan path: %w", err)
+		}
+		paths = append(paths, path)
+	}
+	return paths, rows.Err()
+}
+
 func (s *PostgresStore) Close() error {
 	// Don't close the shared DB connection — it's owned by the platform store.
 	return nil

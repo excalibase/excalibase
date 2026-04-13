@@ -18,7 +18,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
-	"github.com/excalibase/provisioning-poc/internal/vault"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -72,33 +73,51 @@ func main() {
 	// Keep filesystem store as fallback for parameter groups (until migrated)
 	pgStore, _ := storage.NewFileSystemParameterGroupStore(cfg.StoragePath)
 
-	// Vault (Postgres if PLATFORM_DB_URL set, else bbolt)
-	var v *vault.Vault
-	if cfg.PlatformDBURL != "" {
-		if pgStoreTyped, ok := sqlStore.(*pgstore.Store); ok {
-			vaultStore := vault.NewPostgresStore(pgStoreTyped.DB())
-			var vErr error
-			v, vErr = vault.NewWithStore(vaultStore)
-			if vErr != nil {
-				log.Fatalf("Failed to init vault (postgres): %v", vErr)
+	// Vault: remote (VAULT_URL) or local (Postgres/bbolt)
+	var vc vaultclient.VaultClient
+	var localVault *vault.Vault // only set when using local vault
+	if cfg.VaultURL != "" {
+		vc = vaultclient.NewHTTPClient(cfg.VaultURL, cfg.VaultPAT)
+		log.Printf("Using remote vault at %s", cfg.VaultURL)
+	} else {
+		if cfg.PlatformDBURL != "" {
+			if pgStoreTyped, ok := sqlStore.(*pgstore.Store); ok {
+				vaultStore := vault.NewPostgresStore(pgStoreTyped.DB())
+				var vErr error
+				localVault, vErr = vault.NewWithStore(vaultStore)
+				if vErr != nil {
+					log.Fatalf("Failed to init vault (postgres): %v", vErr)
+				}
+				log.Println("Using local PostgreSQL vault store")
 			}
-			log.Println("Using PostgreSQL vault store")
 		}
-	}
-	if v == nil {
-		var vErr error
-		vaultPath := cfg.StoragePath + "/vault.bolt"
-		v, vErr = vault.New(vaultPath)
-		if vErr != nil {
-			log.Fatalf("Failed to init vault (bbolt): %v", vErr)
+		if localVault == nil {
+			var vErr error
+			vaultPath := cfg.StoragePath + "/vault.bolt"
+			localVault, vErr = vault.New(vaultPath)
+			if vErr != nil {
+				log.Fatalf("Failed to init vault (bbolt): %v", vErr)
+			}
+			log.Println("Using local bbolt vault store")
 		}
-		log.Println("Using bbolt vault store")
+		vc = localVault
+		defer localVault.Close()
 	}
-	defer v.Close()
 
 	// Bootstrap admin user on first run
 	if err := auth.Bootstrap(context.Background(), sqlStore); err != nil {
 		log.Fatalf("Failed to bootstrap admin user: %v", err)
+	}
+
+	// Bootstrap default org in self-hosted mode
+	if cfg.DeploymentMode == "selfhosted" {
+		// Find admin user for org ownership
+		users, _ := sqlStore.FindAllUsers(context.Background())
+		if len(users) > 0 {
+			if err := auth.BootstrapDefaultOrg(context.Background(), sqlStore, users[0].ID); err != nil {
+				log.Fatalf("Failed to bootstrap default org: %v", err)
+			}
+		}
 	}
 
 	// Kubernetes client
@@ -120,8 +139,9 @@ func main() {
 	// Services
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
 	provSvc.SetHookService(hookSvc)
-	provSvc.SetVault(v)
+	provSvc.SetVault(vc)
 	provSvc.SetOrgStore(sqlStore)
+	provSvc.SetSelfHostedMode(cfg.DeploymentMode == "selfhosted")
 
 	// PgDog notifier (optional — requires Postgres store + NATS)
 	if cfg.PlatformDBURL != "" && cfg.NatsURL != "" {
@@ -165,8 +185,12 @@ func main() {
 	orgHandler := handler.NewOrgHandler(sqlStore, sqlStore)
 
 	// Vault + Schema handlers
-	vaultHandler := handler.NewVaultHandler(v)
-	schemaHandler := handler.NewSchemaHandler(v)
+	// Vault handler only when running local vault (no VAULT_URL)
+	var vaultHandler *handler.VaultHandler
+	if localVault != nil {
+		vaultHandler = handler.NewVaultHandler(localVault)
+	}
+	schemaHandler := handler.NewSchemaHandler(vc)
 
 	// Router
 	r := chi.NewRouter()
@@ -180,12 +204,19 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
+	// Public config endpoint for frontend
+	r.Get("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"deploymentMode":"%s"}`, cfg.DeploymentMode)
+	})
+
 	// Provisioning API
 	r.Route("/api/provision", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.Get("/", provHandler.ListInstances)
 		r.Post("/", provHandler.Provision)
 		r.Post("/estimate", provHandler.EstimateCost)
+		r.Post("/byoc", provHandler.ProvisionBYOC)
 
 		r.Route("/{projectId}", func(r chi.Router) {
 			r.Get("/", provHandler.GetStatus)
@@ -247,8 +278,10 @@ func main() {
 		orgHandler.Routes(r)
 	})
 
-	// Vault API (init/unseal are public, secrets require auth)
-	r.Route("/api/vault", func(r chi.Router) { vaultHandler.Routes(r) })
+	// Vault API (only when running local vault — remote vault has its own service)
+	if vaultHandler != nil {
+		r.Route("/api/vault", func(r chi.Router) { vaultHandler.Routes(r) })
+	}
 
 	// Schema API (requires auth + unsealed vault)
 	r.Route("/api/schema", func(r chi.Router) {

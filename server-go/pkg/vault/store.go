@@ -20,6 +20,10 @@ type VaultStore interface {
 	// DeleteSecret removes a secret by path.
 	DeleteSecret(path string) error
 
+	// ListSecrets returns all secret paths matching the given prefix.
+	// Pass empty string to list all secrets.
+	ListSecrets(prefix string) ([]string, error)
+
 	// Close releases any resources.
 	Close() error
 }

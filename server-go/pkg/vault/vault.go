@@ -417,6 +417,19 @@ func (v *Vault) Delete(path string) error {
 	return v.store.DeleteSecret(path)
 }
 
+// List returns all secret paths matching the given prefix.
+// Pass empty string to list all secrets.
+func (v *Vault) List(prefix string) ([]string, error) {
+	v.mu.RLock()
+	if v.barrierKey == nil {
+		v.mu.RUnlock()
+		return nil, ErrSealed
+	}
+	v.mu.RUnlock()
+
+	return v.store.ListSecrets(prefix)
+}
+
 // --- helpers ---
 
 type secretEntry struct {

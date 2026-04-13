@@ -19,6 +19,9 @@ type AppConfig struct {
 	DenoRuntimeSecret string
 	DenoNamespace     string
 	DenoRuntimeImage  string
+	VaultURL          string
+	VaultPAT          string
+	DeploymentMode    string // "selfhosted" (default) or "cloud"
 }
 
 func Load() AppConfig {
@@ -35,6 +38,9 @@ func Load() AppConfig {
 		DenoRuntimeSecret: envOr("DENO_RUNTIME_SECRET", ""),
 		DenoNamespace:    envOr("DENO_NAMESPACE", "serverless"),
 		DenoRuntimeImage: envOr("DENO_RUNTIME_IMAGE", "excalibase/deno-runtime:latest"),
+		VaultURL:         envOr("VAULT_URL", ""),
+		VaultPAT:         envOr("VAULT_PAT", ""),
+		DeploymentMode:   envOr("DEPLOYMENT_MODE", "selfhosted"),
 	}
 }
 
