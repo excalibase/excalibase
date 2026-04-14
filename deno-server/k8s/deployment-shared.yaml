@@ -1,3 +1,23 @@
+# Shared-fallback Deno runtime — ONE pod in the `serverless` namespace,
+# shared across ALL projects. Function ids are namespaced by `{projectId}__`
+# at the platform layer to avoid collisions.
+#
+# WHEN TO USE THIS:
+#   - Local dev / minikube without a working K8s API for the platform
+#   - Single-tenant deployments where isolation isn't a concern
+#   - As a fallback for environments where per-project pod creation isn't
+#     feasible
+#
+# WHEN NOT TO USE THIS:
+#   - Production multi-tenant. The platform's `EnsureDenoRuntime` (in
+#     `internal/k8s/client.go`) creates one Deno pod per project namespace
+#     automatically on first function deploy. That's the default and the
+#     recommended path. Don't run both — they don't conflict, but you'll
+#     waste resources on an unused shared pod.
+#
+# To deploy:
+#   kubectl apply -f deployment-shared.yaml
+#   # Then point the platform at it via DENO_RUNTIME_URL=http://deno-runtime.serverless.svc.cluster.local:8000
 apiVersion: v1
 kind: Namespace
 metadata:

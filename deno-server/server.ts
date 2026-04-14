@@ -1,9 +1,73 @@
+// Excalibase Deno edge-function runtime — Supabase-compatible shape.
+//
+// Protocol (platform → runtime):
+//   POST /deploy        { id, code, secrets }        — register/replace a function
+//   POST /invoke/{id}   InvokeRequest                — run a function, get InvokeResponse
+//   DELETE /delete/{id}                              — unregister a function
+//   GET /health                                      — liveness
+//
+// InvokeRequest = { method, url, headers, body }
+// InvokeResponse = { status, headers, body }
+//
+// The worker's user code must export a default handler of shape
+//   (req: Request) => Response | Promise<Response>
+// The platform's bundler rewrites `export default X` into
+// `globalThis.__excalibase_default = X` before sending, so the worker can
+// just read it from globalThis after loading the module.
+//
+// Security: every request (except /health) requires X-Runtime-Secret header.
+// Workers run with net restricted to ALLOWED_HOSTS (or disabled) and NO
+// filesystem, env, run, ffi, or write permission. Secrets are injected as
+// a Deno.env mock so user code sees only its own project's env vars.
+
+interface DeployRequest {
+  id: string;
+  code: string;
+  secrets?: Record<string, string>;
+}
+
+interface InvokeRequest {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+interface InvokeResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
+interface PendingRequest {
+  resolve: (r: InvokeResponse) => void;
+  reject: (e: Error) => void;
+  timeout: number;
+}
+
 interface ScriptMetadata {
   id: string;
   worker: Worker;
   createdAt: Date;
   invocations: number;
-  lastInvoked?: Date;
+  // pending tracks in-flight invocations keyed by request id so concurrent
+  // calls to the same function don't overwrite each other's response handlers.
+  pending: Map<number, PendingRequest>;
+  nextReqId: number;
+}
+
+/**
+ * Constant-time string comparison. Avoids early-exit timing leaks when
+ * checking the runtime auth secret. Length difference still leaks (but
+ * RUNTIME_SECRET length is constant).
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
 }
 
 const RUNTIME_SECRET = Deno.env.get("RUNTIME_SECRET");
@@ -11,187 +75,365 @@ if (!RUNTIME_SECRET) {
   console.error("FATAL: RUNTIME_SECRET environment variable is required");
   Deno.exit(1);
 }
+
 const MAX_CODE_SIZE = 512 * 1024; // 512 KB
-const MAX_INVOKE_SIZE = 1024 * 1024; // 1 MB
+const MAX_INVOKE_BODY = 1024 * 1024; // 1 MB
+const MAX_SCRIPTS = 100;
+const INVOKE_TIMEOUT_MS = 30_000;
+const WORKER_INIT_TIMEOUT_MS = 5_000;
+const VALID_ID = /^[a-zA-Z0-9_\-]{1,128}$/;
+
 // Allowed network hosts for workers — only project Postgres services
 // Format: "host1:port1,host2:port2" or empty for no network access
 const ALLOWED_HOSTS = (Deno.env.get("ALLOWED_HOSTS") || "").split(",").filter(Boolean);
 
-class DenoScriptServer {
-  private scripts = new Map<string, ScriptMetadata>();
-  private maxScripts = 100; // reduced from 500
+/** Build the JS source that runs inside the Deno Web Worker. */
+function buildWorkerCode(userCode: string, secrets: Record<string, string>): string {
+  // `Deno` is frozen inside workers, so we can't reassign `globalThis.Deno`.
+  // Instead we wrap user code in an IIFE that shadows `Deno` with a mock via
+  // a parameter. Inside the IIFE, any `Deno.env.get(...)` lookup resolves to
+  // our mock; outside, the real `Deno` is untouched. Worker permissions still
+  // apply either way.
+  //
+  // We also expose a plain `env` helper (`env.KEY`) for ergonomics — users
+  // migrating from Supabase get `Deno.env.get`, new users get `env.KEY`.
+  const secretsJSON = JSON.stringify(secrets);
+  return `
+    (function(Deno, env) {
+      // --- user bundled code (may assign globalThis.__excalibase_default) ---
+      ${userCode}
+    })(
+      // Shadowed Deno — .env is our mock, everything else is copied from the real Deno.
+      (() => {
+        const __secrets = ${secretsJSON};
+        const mockEnv = {
+          get(key) { return __secrets[key]; },
+          has(key) { return Object.prototype.hasOwnProperty.call(__secrets, key); },
+          toObject() { return { ...__secrets }; },
+          set() { /* read-only */ },
+          delete() { /* read-only */ },
+        };
+        const shadowed = Object.create(globalThis.Deno);
+        Object.defineProperty(shadowed, 'env', { value: mockEnv, enumerable: true });
+        Object.defineProperty(shadowed, 'serve', {
+          value: () => {
+            throw new Error('Deno.serve is not available inside Excalibase functions — export a default handler instead');
+          },
+          enumerable: true,
+        });
+        return shadowed;
+      })(),
+      // Plain env namespace (non-Deno code path)
+      (() => {
+        const __secrets = ${secretsJSON};
+        return {
+          get(key) { return __secrets[key]; },
+          has(key) { return Object.prototype.hasOwnProperty.call(__secrets, key); },
+          toObject() { return { ...__secrets }; },
+        };
+      })()
+    );
 
-  async deploy(scriptId: string, code: string): Promise<{ id: string; url: string }> {
-    if (this.scripts.size >= this.maxScripts) {
-      throw new Error(`Max scripts limit reached (${this.maxScripts})`);
-    }
-    if (!scriptId || scriptId.length > 64 || !/^[a-zA-Z0-9_\-]+$/.test(scriptId)) {
-      throw new Error("Invalid script ID");
+    // --- worker dispatch ---
+    // Each invoke message carries a unique reqId so the runtime can correlate
+    // concurrent responses on the same worker without races.
+    self.onmessage = async (e) => {
+      const msg = e.data;
+      if (msg && msg.type === 'invoke') {
+        const reqId = msg.reqId;
+        const reqData = msg.data;
+        try {
+          const init = { method: reqData.method || 'GET', headers: reqData.headers || {} };
+          if (reqData.body && reqData.method !== 'GET' && reqData.method !== 'HEAD') {
+            init.body = reqData.body;
+          }
+          // Accept relative URLs from the platform (e.g. /api/.../invoke path).
+          // Request() requires an absolute URL, so prepend a synthetic base.
+          let url = reqData.url || '/';
+          if (!/^https?:\\/\\//.test(url)) {
+            url = 'http://fn.excalibase.local' + (url.startsWith('/') ? '' : '/') + url;
+          }
+          const req = new Request(url, init);
+
+          const handler = globalThis.__excalibase_default;
+          if (typeof handler !== 'function') {
+            throw new Error('No default export found — function must export default (req: Request) => Response');
+          }
+
+          let res = await handler(req);
+          // Normalise non-Response returns into JSON responses
+          if (!(res instanceof Response)) {
+            res = Response.json(res);
+          }
+
+          const bodyText = await res.text();
+          const headers = {};
+          res.headers.forEach((v, k) => { headers[k] = v; });
+          self.postMessage({ type: 'success', reqId, status: res.status, headers, body: bodyText });
+        } catch (err) {
+          self.postMessage({ type: 'error', reqId, error: String(err && err.message || err) });
+        }
+      }
+    };
+    self.postMessage({ type: 'ready' });
+  `;
+}
+
+class FunctionRuntime {
+  private scripts = new Map<string, ScriptMetadata>();
+
+  async deploy(req: DeployRequest): Promise<{ id: string; url: string }> {
+    const { id, code, secrets = {} } = req;
+
+    if (!id || !VALID_ID.test(id)) {
+      throw new Error("Invalid function id");
     }
     if (!code || code.length > MAX_CODE_SIZE) {
-      throw new Error(`Code exceeds maximum size (${MAX_CODE_SIZE / 1024} KB)`);
+      throw new Error(`code exceeds maximum size (${MAX_CODE_SIZE / 1024} KB)`);
+    }
+    if (this.scripts.size >= MAX_SCRIPTS && !this.scripts.has(id)) {
+      throw new Error(`max scripts limit reached (${MAX_SCRIPTS})`);
     }
 
-    // Terminate existing worker if redeploying
-    if (this.scripts.has(scriptId)) {
-      this.scripts.get(scriptId)!.worker.terminate();
-    }
+    // Replace any existing worker
+    const existing = this.scripts.get(id);
+    if (existing) existing.worker.terminate();
 
-    const workerCode = `
-      ${code}
+    const workerCode = buildWorkerCode(code, secrets);
+    // TypeScript MIME type tells Deno to treat the blob as TS and strip type
+    // annotations. Without this, user code with `req: Request` annotations
+    // fails to parse as plain JS.
+    const blob = new Blob([workerCode], { type: "application/typescript" });
 
-      self.onmessage = async (e) => {
-        try {
-          const { type, data } = e.data;
-          if (type === 'invoke') {
-            let result;
-            if (typeof handler !== 'undefined') {
-              result = await handler(data);
-            } else {
-              throw new Error('No handler function exported');
-            }
-            self.postMessage({ type: 'success', result });
-          }
-        } catch (error) {
-          self.postMessage({ type: 'error', error: error.message });
-        }
-      };
-      self.postMessage({ type: 'ready' });
-    `;
+    const netPermission: boolean | string[] =
+      ALLOWED_HOSTS.length > 0 ? ALLOWED_HOSTS : false;
 
-    const blob = new Blob([workerCode], { type: "application/javascript" });
-    // Security: restrict net to allowed hosts only (project Postgres)
-    // If no hosts configured, disable network entirely
-    const netPermission: boolean | string[] = ALLOWED_HOSTS.length > 0 ? ALLOWED_HOSTS : false;
     const worker = new Worker(URL.createObjectURL(blob), {
       type: "module",
-      deno: { permissions: { net: netPermission, env: false, read: false, write: false, run: false, ffi: false } }
-    });
+      // deno-lint-ignore no-explicit-any
+      deno: {
+        permissions: {
+          net: netPermission,
+          env: false,
+          read: false,
+          write: false,
+          run: false,
+          ffi: false,
+        },
+      },
+    } as any);
 
+    // Wait for the worker's 'ready' message. Installs a temporary handler
+    // that swaps to the permanent router on first 'ready'.
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("Worker init timeout")), 5000);
-      worker.onmessage = (e) => { if (e.data.type === 'ready') { clearTimeout(timeout); resolve(); } };
-      worker.onerror = (err) => { clearTimeout(timeout); reject(err); };
+      const timeout = setTimeout(() => {
+        // Terminate the orphan so we don't leak it on init failure.
+        try { worker.terminate(); } catch (_) { /* ignore */ }
+        reject(new Error("worker init timeout"));
+      }, WORKER_INIT_TIMEOUT_MS);
+      worker.onmessage = (e) => {
+        if (e.data?.type === "ready") {
+          clearTimeout(timeout);
+          resolve();
+        }
+      };
+      worker.onerror = (err) => {
+        clearTimeout(timeout);
+        try { worker.terminate(); } catch (_) { /* ignore */ }
+        reject(err);
+      };
     });
 
-    this.scripts.set(scriptId, { id: scriptId, worker, createdAt: new Date(), invocations: 0 });
-    console.log(`Deployed: ${scriptId}`);
-    return { id: scriptId, url: `/invoke/${scriptId}` };
+    const meta: ScriptMetadata = {
+      id,
+      worker,
+      createdAt: new Date(),
+      invocations: 0,
+      pending: new Map(),
+      nextReqId: 1,
+    };
+    this.scripts.set(id, meta);
+
+    // Permanent message router — dispatches responses to pending requests by reqId.
+    // Installed AFTER init handshake so the 'ready' message above lands on the
+    // temporary handler.
+    worker.onmessage = (e) => {
+      const msg = e.data;
+      if (!msg || typeof msg.reqId !== "number") return;
+      const pending = meta.pending.get(msg.reqId);
+      if (!pending) return; // late delivery after timeout — ignore
+      meta.pending.delete(msg.reqId);
+      clearTimeout(pending.timeout);
+      if (msg.type === "success") {
+        pending.resolve({
+          status: msg.status || 200,
+          headers: msg.headers || {},
+          body: msg.body || "",
+        });
+      } else {
+        pending.reject(new Error(msg.error || "worker error"));
+      }
+    };
+
+    // Permanent error handler — fail every in-flight request and tear down
+    // the dead worker so the next deploy can replace it cleanly.
+    worker.onerror = (err) => {
+      console.error(`[runtime] worker ${id} crashed: ${err.message || "unknown"}`);
+      for (const [reqId, p] of meta.pending) {
+        clearTimeout(p.timeout);
+        p.reject(new Error(`worker crashed: ${err.message || "unknown"}`));
+        meta.pending.delete(reqId);
+      }
+      try { worker.terminate(); } catch (_) { /* ignore */ }
+      this.scripts.delete(id);
+    };
+
+    console.log(`[runtime] deployed ${id} (${Object.keys(secrets).length} secrets)`);
+    return { id, url: `/invoke/${id}` };
   }
 
-  async invoke(scriptId: string, data: any): Promise<any> {
-    const script = this.scripts.get(scriptId);
-    if (!script) throw new Error(`Script not found: ${scriptId}`);
+  async invoke(id: string, req: InvokeRequest): Promise<InvokeResponse> {
+    const script = this.scripts.get(id);
+    if (!script) throw new Error(`function not found: ${id}`);
 
     script.invocations++;
-    script.lastInvoked = new Date();
+    const reqId = script.nextReqId++;
 
-    return new Promise((resolve, reject) => {
+    return await new Promise<InvokeResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        // Terminate worker on timeout to prevent CPU spinning
-        script.worker.terminate();
-        this.scripts.delete(scriptId);
-        reject(new Error("Execution timeout (30s) — function terminated"));
-      }, 30000);
-      script.worker.onmessage = (e) => {
-        clearTimeout(timeout);
-        if (e.data.type === 'success') resolve(e.data.result);
-        else reject(new Error(e.data.error));
-      };
-      script.worker.onerror = (err) => { clearTimeout(timeout); reject(new Error("Worker error")); };
-      script.worker.postMessage({ type: 'invoke', data });
+        script.pending.delete(reqId);
+        reject(new Error(`execution timeout (${INVOKE_TIMEOUT_MS / 1000}s)`));
+        // Note: we do NOT terminate the worker on per-invoke timeout — other
+        // in-flight requests for the same function should keep running. If a
+        // function consistently times out, the operator can redeploy it.
+      }, INVOKE_TIMEOUT_MS);
+      script.pending.set(reqId, { resolve, reject, timeout });
+      script.worker.postMessage({ type: "invoke", reqId, data: req });
     });
   }
 
-  delete(scriptId: string): boolean {
-    const script = this.scripts.get(scriptId);
-    if (script) { script.worker.terminate(); this.scripts.delete(scriptId); return true; }
-    return false;
+  delete(id: string): boolean {
+    const script = this.scripts.get(id);
+    if (!script) return false;
+    script.worker.terminate();
+    this.scripts.delete(id);
+    return true;
   }
 
   list() {
-    return Array.from(this.scripts.values()).map(s => ({
-      id: s.id, invocations: s.invocations,
+    return Array.from(this.scripts.values()).map((s) => ({
+      id: s.id,
+      invocations: s.invocations,
       uptime: Date.now() - s.createdAt.getTime(),
-      lastInvoked: s.lastInvoked?.toISOString()
+      pending: s.pending.size,
     }));
   }
 
-  getStats() {
-    return { totalScripts: this.scripts.size, maxScripts: this.maxScripts, scripts: this.list() };
+  stats() {
+    return {
+      totalScripts: this.scripts.size,
+      maxScripts: MAX_SCRIPTS,
+      scripts: this.list(),
+    };
   }
 }
 
-const server = new DenoScriptServer();
+const runtime = new FunctionRuntime();
 
 Deno.serve({ port: 8000 }, async (req: Request) => {
   const url = new URL(req.url);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
 
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers });
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers });
+  }
 
-  // Authenticate all requests with shared secret (except health)
+  // Authenticate everything except /health (constant-time compare to avoid
+  // timing oracle on the runtime secret).
   if (url.pathname !== "/health") {
-    if (req.headers.get("X-Runtime-Secret") !== RUNTIME_SECRET) {
+    const provided = req.headers.get("X-Runtime-Secret") ?? "";
+    if (!constantTimeEqual(provided, RUNTIME_SECRET!)) {
       return Response.json({ error: "forbidden" }, { status: 403, headers });
     }
   }
 
+  // Refuse oversized requests upfront via Content-Length, before reading the
+  // body into memory. Stops trivial DOS via 1 GB POST.
+  const checkContentLength = (max: number): Response | null => {
+    const cl = req.headers.get("content-length");
+    if (cl) {
+      const n = Number(cl);
+      if (Number.isFinite(n) && n > max) {
+        return Response.json({ error: "payload too large" }, { status: 413, headers });
+      }
+    }
+    return null;
+  };
+
   try {
     if (url.pathname === "/health") {
-      return Response.json({ status: "healthy", scripts: server.getStats().totalScripts, uptime: performance.now() }, { headers });
+      return Response.json(
+        { status: "healthy", scripts: runtime.stats().totalScripts, uptime: performance.now() },
+        { headers },
+      );
     }
 
     if (url.pathname === "/deploy" && req.method === "POST") {
+      const deployMax = MAX_CODE_SIZE + 16 * 1024;
+      const tooBig = checkContentLength(deployMax);
+      if (tooBig) return tooBig;
       const body = await req.text();
-      if (body.length > MAX_CODE_SIZE + 4096) {
-        return Response.json({ error: "Payload too large" }, { status: 413, headers });
+      if (body.length > deployMax) {
+        return Response.json({ error: "payload too large" }, { status: 413, headers });
       }
-      const { id, code } = JSON.parse(body);
-      if (!id || !code) return Response.json({ error: "Missing id or code" }, { status: 400, headers });
-      const result = await server.deploy(id, code);
+      const parsed = JSON.parse(body) as DeployRequest;
+      if (!parsed.id || !parsed.code) {
+        return Response.json({ error: "missing id or code" }, { status: 400, headers });
+      }
+      const result = await runtime.deploy(parsed);
       return Response.json(result, { status: 201, headers });
     }
 
-    if (url.pathname.startsWith("/invoke/")) {
-      const scriptId = decodeURIComponent(url.pathname.split("/invoke/")[1]);
-      if (!scriptId || !/^[a-zA-Z0-9_\-]+$/.test(scriptId)) {
-        return Response.json({ error: "Invalid script ID" }, { status: 400, headers });
+    if (url.pathname.startsWith("/invoke/") && req.method === "POST") {
+      const id = decodeURIComponent(url.pathname.slice("/invoke/".length));
+      if (!VALID_ID.test(id)) {
+        return Response.json({ error: "invalid function id" }, { status: 400, headers });
       }
+      const tooBig = checkContentLength(MAX_INVOKE_BODY);
+      if (tooBig) return tooBig;
       const body = await req.text();
-      if (body.length > MAX_INVOKE_SIZE) {
-        return Response.json({ error: "Payload too large" }, { status: 413, headers });
+      if (body.length > MAX_INVOKE_BODY) {
+        return Response.json({ error: "payload too large" }, { status: 413, headers });
       }
-      let data;
-      try { data = JSON.parse(body); } catch { data = { body }; }
-      const result = await server.invoke(scriptId, data);
-      if (result && typeof result === 'object' && result.status && result.body) {
-        return new Response(result.body, { status: result.status, headers: result.headers || headers });
-      }
+      const invokeReq = JSON.parse(body) as InvokeRequest;
+      const result = await runtime.invoke(id, invokeReq);
       return Response.json(result, { headers });
     }
 
     if (url.pathname.startsWith("/delete/") && req.method === "DELETE") {
-      const scriptId = decodeURIComponent(url.pathname.split("/delete/")[1]);
-      if (!scriptId || !/^[a-zA-Z0-9_\-]+$/.test(scriptId)) {
-        return Response.json({ error: "Invalid script ID" }, { status: 400, headers });
+      const id = decodeURIComponent(url.pathname.slice("/delete/".length));
+      if (!VALID_ID.test(id)) {
+        return Response.json({ error: "invalid function id" }, { status: 400, headers });
       }
-      return server.delete(scriptId)
-        ? Response.json({ status: "deleted", id: scriptId }, { headers })
-        : Response.json({ error: "Not found" }, { status: 404, headers });
+      return runtime.delete(id)
+        ? Response.json({ status: "deleted", id }, { headers })
+        : Response.json({ error: "not found" }, { status: 404, headers });
     }
 
-    if (url.pathname === "/scripts") return Response.json({ scripts: server.list() }, { headers });
-    if (url.pathname === "/stats") return Response.json(server.getStats(), { headers });
+    if (url.pathname === "/scripts") {
+      return Response.json({ scripts: runtime.list() }, { headers });
+    }
 
-    return Response.json({ error: "Not found" }, { status: 404, headers });
+    if (url.pathname === "/stats") {
+      return Response.json(runtime.stats(), { headers });
+    }
+
+    return Response.json({ error: "not found" }, { status: 404, headers });
   } catch (error: any) {
-    // Don't leak stack traces — only return message, truncated
-    const msg = String(error?.message || "Internal error").slice(0, 500);
+    // Never leak stack traces
+    const msg = String(error?.message || "internal error").slice(0, 500);
     return Response.json({ error: msg }, { status: 500, headers });
   }
 });
 
-console.log("Deno Edge Functions runtime on :8000");
+console.log("Excalibase Deno runtime on :8000");
