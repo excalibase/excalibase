@@ -20,14 +20,26 @@ func NewOrgHandler(orgStore storage.OrgStore, userStore storage.UserStore) *OrgH
 	return &OrgHandler{orgStore: orgStore, userStore: userStore}
 }
 
-func (h *OrgHandler) Routes(r chi.Router) {
-	r.Post("/", h.CreateOrg)
+// Routes wires all org endpoints. The isCloud flag gates the cloud-only
+// multi-org lifecycle endpoints (create/delete) so self-hosted deployments
+// can't spin up additional orgs beyond the bootstrapped default. Team /
+// member / project management endpoints are available in both modes —
+// self-hosted users still need to invite teammates to the default org.
+func (h *OrgHandler) Routes(r chi.Router, isCloud bool) {
 	r.Get("/", h.ListMyOrgs)
+	if isCloud {
+		// Cloud-only: multi-org creation. Self-hosted has one default org.
+		r.Post("/", h.CreateOrg)
+	}
 	r.Route("/{orgId}", func(r chi.Router) {
 		r.Get("/", h.GetOrg)
 		r.Patch("/", h.UpdateOrg)
-		r.Delete("/", h.DeleteOrg)
+		if isCloud {
+			// Cloud-only: deleting orgs. Default org is permanent in self-hosted.
+			r.Delete("/", h.DeleteOrg)
+		}
 
+		// Team/member management — available in both modes.
 		r.Route("/members", func(r chi.Router) {
 			r.Get("/", h.ListOrgMembers)
 			r.Post("/", h.InviteOrgMember)

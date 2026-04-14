@@ -48,22 +48,26 @@ func main() {
 
 	cfg := config.Load()
 
-	// Platform DB store (Postgres if PLATFORM_DB_URL set, else SQLite)
+	// Platform DB store — cloud uses Postgres (PLATFORM_DB_URL required),
+	// self-hosted uses SQLite. One flag drives the whole decision tree.
 	var sqlStore storage.PlatformStore
-	if cfg.PlatformDBURL != "" {
+	if cfg.IsCloud() {
+		if cfg.PlatformDBURL == "" {
+			log.Fatal("cloud mode requires PLATFORM_DB_URL (PostgreSQL connection string)")
+		}
 		pgStore, err := pgstore.New(cfg.PlatformDBURL)
 		if err != nil {
 			log.Fatalf("Failed to init Postgres: %v", err)
 		}
 		sqlStore = pgStore
-		log.Println("Using PostgreSQL platform store")
+		log.Println("Cloud mode: using PostgreSQL platform store")
 	} else {
 		sqliteStore, err := sqlitestore.New(cfg.DBPath)
 		if err != nil {
 			log.Fatalf("Failed to init SQLite: %v", err)
 		}
 		sqlStore = sqliteStore
-		log.Println("Using SQLite platform store")
+		log.Println("Self-hosted mode: using SQLite platform store")
 	}
 	defer sqlStore.Close()
 
@@ -73,33 +77,36 @@ func main() {
 	// Keep filesystem store as fallback for parameter groups (until migrated)
 	pgStore, _ := storage.NewFileSystemParameterGroupStore(cfg.StoragePath)
 
-	// Vault: remote (VAULT_URL) or local (Postgres/bbolt)
+	// Vault backend — remote if VAULT_URL set; otherwise cloud uses the same
+	// Postgres instance as the platform store, self-hosted uses bbolt.
 	var vc vaultclient.VaultClient
-	var localVault *vault.Vault // only set when using local vault
-	if cfg.VaultURL != "" {
+	var localVault *vault.Vault
+	switch {
+	case cfg.VaultURL != "":
 		vc = vaultclient.NewHTTPClient(cfg.VaultURL, cfg.VaultPAT)
 		log.Printf("Using remote vault at %s", cfg.VaultURL)
-	} else {
-		if cfg.PlatformDBURL != "" {
-			if pgStoreTyped, ok := sqlStore.(*pgstore.Store); ok {
-				vaultStore := vault.NewPostgresStore(pgStoreTyped.DB())
-				var vErr error
-				localVault, vErr = vault.NewWithStore(vaultStore)
-				if vErr != nil {
-					log.Fatalf("Failed to init vault (postgres): %v", vErr)
-				}
-				log.Println("Using local PostgreSQL vault store")
-			}
+	case cfg.IsCloud():
+		pgStoreTyped, ok := sqlStore.(*pgstore.Store)
+		if !ok {
+			log.Fatal("cloud mode requires a Postgres platform store for vault backend")
 		}
-		if localVault == nil {
-			var vErr error
-			vaultPath := cfg.StoragePath + "/vault.bolt"
-			localVault, vErr = vault.New(vaultPath)
-			if vErr != nil {
-				log.Fatalf("Failed to init vault (bbolt): %v", vErr)
-			}
-			log.Println("Using local bbolt vault store")
+		vaultStore := vault.NewPostgresStore(pgStoreTyped.DB())
+		var vErr error
+		localVault, vErr = vault.NewWithStore(vaultStore)
+		if vErr != nil {
+			log.Fatalf("Failed to init vault (postgres): %v", vErr)
 		}
+		log.Println("Cloud mode: using PostgreSQL vault store")
+		vc = localVault
+		defer localVault.Close()
+	default:
+		var vErr error
+		vaultPath := cfg.StoragePath + "/vault.bolt"
+		localVault, vErr = vault.New(vaultPath)
+		if vErr != nil {
+			log.Fatalf("Failed to init vault (bbolt): %v", vErr)
+		}
+		log.Println("Self-hosted mode: using bbolt vault store")
 		vc = localVault
 		defer localVault.Close()
 	}
@@ -109,9 +116,9 @@ func main() {
 		log.Fatalf("Failed to bootstrap admin user: %v", err)
 	}
 
-	// Bootstrap default org in self-hosted mode
-	if cfg.DeploymentMode == "selfhosted" {
-		// Find admin user for org ownership
+	// Bootstrap default org in self-hosted mode. Cloud mode creates orgs
+	// on demand via the cloud-only POST /api/orgs/ endpoint.
+	if !cfg.IsCloud() {
 		users, _ := sqlStore.FindAllUsers(context.Background())
 		if len(users) > 0 {
 			if err := auth.BootstrapDefaultOrg(context.Background(), sqlStore, users[0].ID); err != nil {
@@ -145,7 +152,7 @@ func main() {
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
 	provSvc.SetVault(vc)
 	provSvc.SetOrgStore(sqlStore)
-	provSvc.SetSelfHostedMode(cfg.DeploymentMode == "selfhosted")
+	provSvc.SetSelfHostedMode(!cfg.IsCloud())
 
 	// PgDog notifier (optional — requires Postgres store + NATS)
 	if cfg.PlatformDBURL != "" && cfg.NatsURL != "" {
@@ -279,7 +286,7 @@ func main() {
 	// Org API (requires auth — org-level permissions checked in handler)
 	r.Route("/api/orgs", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
-		orgHandler.Routes(r)
+		orgHandler.Routes(r, cfg.IsCloud())
 	})
 
 	// Vault API (only when running local vault — remote vault has its own service)

@@ -25,6 +25,19 @@ type AppConfig struct {
 	PublicBaseURL     string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
 }
 
+// IsCloud returns true when running in cloud deployment mode. Derived from
+// DeploymentMode so the rest of the code has a single boolean to branch on.
+// Cloud mode:
+//   - Uses Postgres for platform store + vault backend (PLATFORM_DB_URL required)
+//   - Enables multi-org create/delete + tier enforcement endpoints
+//   - Enforces tier limits in the provisioning service
+// Self-hosted mode (default):
+//   - Uses SQLite for platform store, bbolt for vault
+//   - Single default org, no tier enforcement, no billing endpoints
+func (c AppConfig) IsCloud() bool {
+	return c.DeploymentMode == "cloud"
+}
+
 func Load() AppConfig {
 	return AppConfig{
 		Port:             envOr("PORT", "24005"),

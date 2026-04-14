@@ -14,6 +14,10 @@ import (
 )
 
 func setupOrgRouter(t *testing.T) (chi.Router, *sqlitestore.Store) {
+	return setupOrgRouterMode(t, true /* isCloud — existing tests expect multi-org */)
+}
+
+func setupOrgRouterMode(t *testing.T, isCloud bool) (chi.Router, *sqlitestore.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := sqlitestore.New(dir + "/test.db")
@@ -41,7 +45,6 @@ func setupOrgRouter(t *testing.T) (chi.Router, *sqlitestore.Store) {
 				if userID == "" {
 					userID = "alice"
 				}
-				// Look up actual user from store to get correct role
 				u, _ := store.FindUserByID(r.Context(), userID)
 				var user *domain.User
 				if u != nil {
@@ -53,7 +56,7 @@ func setupOrgRouter(t *testing.T) (chi.Router, *sqlitestore.Store) {
 				next.ServeHTTP(w, r.WithContext(ctx))
 			})
 		})
-		orgHandler.Routes(r)
+		orgHandler.Routes(r, isCloud)
 	})
 	return r, store
 }
@@ -72,6 +75,60 @@ func orgRequest(r chi.Router, method, path, body string, userID string) *httptes
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 	return rr
+}
+
+// --- Self-hosted vs cloud gating ---
+
+func TestOrgRoutes_SelfHostedGatesCloudOnlyRoutes(t *testing.T) {
+	r, store := setupOrgRouterMode(t, false /* selfhosted */)
+
+	// POST /api/orgs/ (create new org) — cloud only, 404 in self-hosted
+	w := orgRequest(r, "POST", "/api/orgs/",
+		`{"name":"Team Beta","slug":"beta"}`, "alice")
+	if w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 404/405 for create org in self-hosted, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// Seed an org directly so delete has something to target.
+	org := &domain.Org{ID: "o1", Name: "Default", Slug: "default", Tier: domain.Free, OwnerID: "alice"}
+	if err := store.CreateOrg(t.Context(), org); err != nil {
+		t.Fatalf("seed org: %v", err)
+	}
+	store.AddOrgMember(t.Context(), &domain.OrgMember{OrgID: "o1", UserID: "alice", Role: "owner"})
+
+	// DELETE /api/orgs/{orgId} — cloud only, 404 in self-hosted
+	w = orgRequest(r, "DELETE", "/api/orgs/o1", "", "alice")
+	if w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 404/405 for delete org in self-hosted, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// GET /api/orgs/ — works in both modes (shows the default org)
+	w = orgRequest(r, "GET", "/api/orgs/", "", "alice")
+	if w.Code != 200 {
+		t.Errorf("expected list orgs to work in self-hosted, got %d", w.Code)
+	}
+
+	// GET /api/orgs/{orgId} — works in both modes
+	w = orgRequest(r, "GET", "/api/orgs/o1", "", "alice")
+	if w.Code != 200 {
+		t.Errorf("expected get org to work in self-hosted, got %d", w.Code)
+	}
+
+	// POST /api/orgs/{orgId}/members — invite works in both (team collaboration)
+	w = orgRequest(r, "POST", "/api/orgs/o1/members",
+		`{"email":"bob@test.com","role":"developer"}`, "alice")
+	if w.Code != 200 && w.Code != http.StatusCreated {
+		t.Errorf("expected invite member to work in self-hosted, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestOrgRoutes_CloudAllowsCreateAndDelete(t *testing.T) {
+	r, _ := setupOrgRouterMode(t, true /* cloud */)
+	w := orgRequest(r, "POST", "/api/orgs/",
+		`{"name":"Cloud Team","slug":"cloud-team"}`, "alice")
+	if w.Code != http.StatusCreated && w.Code != 200 {
+		t.Errorf("expected create org to work in cloud, got %d body=%s", w.Code, w.Body.String())
+	}
 }
 
 func TestCreateOrg(t *testing.T) {
