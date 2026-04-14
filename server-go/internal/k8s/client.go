@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -37,10 +38,39 @@ type Client struct {
 	restConfig    *rest.Config
 }
 
+// ClientOptions configures how NewClientWith builds a K8s client. All fields
+// are optional — if none are set, NewClientWith behaves like NewClient and
+// tries in-cluster → default kubeconfig.
+type ClientOptions struct {
+	// KubeconfigPath points at a kubeconfig file (e.g. /home/user/.kube/config
+	// or a mounted secret). If set, takes precedence over remote API fields.
+	KubeconfigPath string
+	// APIURL + BearerToken + CACert together configure a remote API connection
+	// — Jenkins-style, for platform-runs-outside-cluster deployments.
+	APIURL      string
+	BearerToken string
+	// CACertPEM is the PEM-encoded CA bundle for the remote API's TLS.
+	// Leave empty to skip TLS verification (not recommended for production).
+	CACertPEM []byte
+	// InsecureSkipTLSVerify disables TLS verification on the remote API.
+	// Only set for local development against clusters with self-signed certs.
+	InsecureSkipTLSVerify bool
+}
+
 func NewClient() (*Client, error) {
-	config, err := loadConfig()
+	return NewClientWith(ClientOptions{})
+}
+
+// NewClientWith builds a K8s client using the given options. Priority order:
+//  1. opts.APIURL + opts.BearerToken set → remote API mode
+//  2. opts.KubeconfigPath set → load that kubeconfig file
+//  3. KUBECONFIG env var set → load that file
+//  4. In-cluster config (ServiceAccount auto-mount)
+//  5. ~/.kube/config (developer fallback)
+func NewClientWith(opts ClientOptions) (*Client, error) {
+	config, err := loadConfigWith(opts)
 	if err != nil {
-		return nil, fmt.Errorf("load kubeconfig: %w", err)
+		return nil, fmt.Errorf("load k8s config: %w", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -66,12 +96,33 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
-func loadConfig() (*rest.Config, error) {
-	// Try in-cluster first
+func loadConfigWith(opts ClientOptions) (*rest.Config, error) {
+	// 1. Remote API + bearer token (Jenkins-style)
+	if opts.APIURL != "" && opts.BearerToken != "" {
+		cfg := &rest.Config{
+			Host:        opts.APIURL,
+			BearerToken: opts.BearerToken,
+		}
+		if opts.InsecureSkipTLSVerify {
+			cfg.TLSClientConfig = rest.TLSClientConfig{Insecure: true}
+		} else if len(opts.CACertPEM) > 0 {
+			cfg.TLSClientConfig = rest.TLSClientConfig{CAData: opts.CACertPEM}
+		}
+		return cfg, nil
+	}
+	// 2. Explicit kubeconfig path from options
+	if opts.KubeconfigPath != "" {
+		return clientcmd.BuildConfigFromFlags("", opts.KubeconfigPath)
+	}
+	// 3. KUBECONFIG env var
+	if envPath := os.Getenv("KUBECONFIG"); envPath != "" {
+		return clientcmd.BuildConfigFromFlags("", envPath)
+	}
+	// 4. In-cluster (ServiceAccount)
 	if config, err := rest.InClusterConfig(); err == nil {
 		return config, nil
 	}
-	// Fall back to kubeconfig
+	// 5. Developer fallback
 	kubeconfig := filepath.Join(homedir.HomeDir(), ".kube", "config")
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
@@ -342,15 +393,32 @@ func (c *Client) GetDeployment(ctx context.Context, namespace, name string) (boo
 	return true, nil
 }
 
+// denoTierResources maps a project tier to Deno runtime pod resource requests
+// and limits. Free tier is intentionally tight (minimal footprint for hobby
+// projects), enterprise has more headroom. Limits are burstable, requests
+// are what K8s actually reserves on the node.
+func denoTierResources(tier string) (cpuReq, cpuLim, memReq, memLim string) {
+	switch strings.ToUpper(tier) {
+	case "ENTERPRISE":
+		return "100m", "1000m", "256Mi", "512Mi"
+	case "STANDARD":
+		return "50m", "500m", "128Mi", "256Mi"
+	default: // FREE or unknown
+		return "10m", "200m", "64Mi", "128Mi"
+	}
+}
+
 // EnsureDenoRuntime creates the deno-runtime Deployment + Service in the given
 // namespace if they don't already exist. Idempotent — safe to call on every
 // function deploy. The runtime exposes :8000 internally and is reachable at
 // http://deno-runtime.{namespace}.svc.cluster.local:8000
-func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace, image, runtimeSecret string) error {
+func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec DenoRuntimeSpec) error {
 	const name = "deno-runtime"
+	image := spec.Image
 	if image == "" {
 		image = "excalibase/deno-runtime:latest"
 	}
+	runtimeSecret := spec.RuntimeSecret
 	exists, err := c.GetDeployment(ctx, namespace, name)
 	if err != nil {
 		return fmt.Errorf("check existing deployment: %w", err)
@@ -359,12 +427,17 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace, image, runtim
 		return nil
 	}
 
-	labels := map[string]string{"app": name, "excalibase.io/component": "edgefn"}
+	labels := map[string]string{
+		"app":                     name,
+		"excalibase.io/component": "edgefn",
+		"excalibase.io/tier":      strings.ToLower(spec.Tier),
+	}
 	one := int32(1)
-	cpuReq, _ := resource.ParseQuantity("50m")
-	cpuLim, _ := resource.ParseQuantity("500m")
-	memReq, _ := resource.ParseQuantity("128Mi")
-	memLim, _ := resource.ParseQuantity("256Mi")
+	cpuReqStr, cpuLimStr, memReqStr, memLimStr := denoTierResources(spec.Tier)
+	cpuReq, _ := resource.ParseQuantity(cpuReqStr)
+	cpuLim, _ := resource.ParseQuantity(cpuLimStr)
+	memReq, _ := resource.ParseQuantity(memReqStr)
+	memLim, _ := resource.ParseQuantity(memLimStr)
 
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{

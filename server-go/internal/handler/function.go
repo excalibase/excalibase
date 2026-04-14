@@ -2,7 +2,11 @@ package handler
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,7 +18,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // FunctionHandler exposes per-project edge function CRUD + invoke + secrets.
@@ -29,6 +35,7 @@ import (
 type FunctionHandler struct {
 	store         *edgefn.FunctionStore
 	secrets       *edgefn.SecretsStore
+	vault         vaultclient.VaultClient // optional, for reading DB_URL + JWT tokens
 	instanceStore storage.InstanceStore
 	orgStore      storage.OrgStore
 	publicBaseURL string
@@ -46,6 +53,12 @@ type FunctionHandler struct {
 	limiters      map[string]*tokenBucket
 	rateBurst     int
 	ratePerSecond float64
+
+	// JWT signing public key cache. Fetched from vault path pki/signing/public
+	// on demand and refreshed every ~5 minutes. Protected by jwkMu.
+	jwkMu     sync.RWMutex
+	jwkKey    *ecdsa.PublicKey
+	jwkLoaded time.Time
 }
 
 // tokenBucket is a minimal in-memory leaky-bucket limiter. One per project.
@@ -124,6 +137,13 @@ func (h *FunctionHandler) SetK8sClient(c k8s.KubeClient, image, runtimeSecret st
 	h.runtimeSecret = runtimeSecret
 }
 
+// SetVault wires the platform vault client so the handler can read project
+// credentials (for EXCALIBASE_DB_URL) and JWT tokens (for ANON/SERVICE keys)
+// at function deploy time.
+func (h *FunctionHandler) SetVault(v vaultclient.VaultClient) {
+	h.vault = v
+}
+
 // SetRuntimeURLFn overrides cluster DNS URL resolution. Used by integration
 // tests to map namespaces to localhost subprocesses. Pass a function that
 // takes a namespace and returns the runtime base URL.
@@ -154,8 +174,19 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if namespace == "" {
 		return nil, fmt.Errorf("no namespace for project %s", projectID)
 	}
-	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.runtimeImage, h.runtimeSecret); err != nil {
+	spec := k8s.DenoRuntimeSpec{
+		Image:         h.runtimeImage,
+		RuntimeSecret: h.runtimeSecret,
+		Tier:          h.tierFor(projectID),
+	}
+	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, spec); err != nil {
 		return nil, fmt.Errorf("ensure deno runtime: %w", err)
+	}
+	// First-deploy race: EnsureDenoRuntime creates the Deployment but the pod
+	// may not be ready yet. If we proceed immediately to Deploy, the HTTP call
+	// fails with connection refused / 502. Wait for the pod to become ready.
+	if err := h.waitForDenoReady(ctx, namespace); err != nil {
+		return nil, fmt.Errorf("deno runtime did not become ready: %w", err)
 	}
 
 	var url string
@@ -170,6 +201,61 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	h.clients[projectID] = client
 	h.clientMu.Unlock()
 	return client, nil
+}
+
+// waitForDenoReady polls the Deno runtime pod's readiness until it's up or
+// the deadline is reached. Uses the k8s client's IsPodReady which already
+// knows about pod phase + readiness conditions. 60s total budget is enough
+// for image pull (first time) + container start.
+//
+// Skipped entirely if runtimeURLFn is set (integration tests point at
+// pre-started subprocesses) or if k8sClient is nil (legacy shared mode).
+func (h *FunctionHandler) waitForDenoReady(ctx context.Context, namespace string) error {
+	if h.runtimeURLFn != nil || h.k8sClient == nil {
+		return nil
+	}
+	// Deno pod is deployed with label app=deno-runtime — there's typically
+	// only one, and we check by known pod name prefix since the pod name is
+	// <deployment>-<replicaset-hash>-<pod-hash> which we don't know upfront.
+	// For simplicity we loop calling the k8s client's GetPods and picking the
+	// first one whose name starts with "deno-runtime".
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		pods, err := h.k8sClient.GetPods(ctx, namespace, "app=deno-runtime")
+		if err == nil {
+			for _, p := range pods {
+				if strings.HasPrefix(p.Name, "deno-runtime") {
+					ready, perr := h.k8sClient.IsPodReady(ctx, namespace, p.Name)
+					if perr == nil && ready {
+						return nil
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return fmt.Errorf("deno runtime pod in namespace %s did not become ready within 60s", namespace)
+}
+
+// tierFor looks up the project's tier from the instance store. Falls back to
+// "FREE" when the instance has no tier recorded. Used to size the Deno
+// runtime pod's CPU/memory requests + limits.
+func (h *FunctionHandler) tierFor(projectID string) string {
+	if h.instanceStore == nil {
+		return "FREE"
+	}
+	inst, err := h.instanceStore.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return "FREE"
+	}
+	if inst.Tier == "" {
+		return "FREE"
+	}
+	return string(inst.Tier)
 }
 
 // namespaceFor resolves the K8s namespace for a project from the instance store.
@@ -239,16 +325,102 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) stri
 
 // builtinEnv returns platform-injected env vars for a function deploy.
 // These override any user secret with the same key.
-func (h *FunctionHandler) builtinEnv(orgSlug, projectID string) map[string]string {
+//
+// Injected vars (all prefixed EXCALIBASE_):
+//   - URL          — function's public invoke base (for calling sibling fns)
+//   - PROJECT_ID   — the opaque project ref
+//   - ORG_SLUG     — the owning org's slug
+//   - DB_URL       — postgres connection string for the project's database,
+//                    using the excalibase_app role. Sourced from vault at
+//                    projects/{orgSlug}/{projectId}/credentials/excalibase_app.
+//                    Absent if vault is sealed, role doesn't exist, or BYOC.
+//   - ANON_KEY     — signed JWT for the anon role. Sourced from vault at
+//                    projects/{orgSlug}/{projectId}/credentials/jwt_keys/anon_token.
+//                    Absent if auth service hasn't published it yet.
+//   - SERVICE_KEY  — signed JWT for the service role (bypasses RLS). Sourced
+//                    from projects/{orgSlug}/{projectId}/credentials/jwt_keys/service_token.
+func (h *FunctionHandler) builtinEnv(ctx context.Context, orgSlug, projectID string) map[string]string {
 	base := h.publicBaseURL
 	if base == "" {
 		base = "https://api.excalibase.io"
 	}
-	return map[string]string{
-		"EXCALIBASE_URL":        fmt.Sprintf("%s/%s/%s", base, orgSlug, projectID),
+	env := map[string]string{
+		"EXCALIBASE_URL":        fmt.Sprintf("%s/functions/v1/%s", base, projectID),
 		"EXCALIBASE_PROJECT_ID": projectID,
 		"EXCALIBASE_ORG_SLUG":   orgSlug,
 	}
+
+	// DB_URL — build from vault-stored app credentials if available.
+	if h.secrets != nil {
+		if dbURL := h.buildDBURL(ctx, orgSlug, projectID); dbURL != "" {
+			env["EXCALIBASE_DB_URL"] = dbURL
+		}
+	}
+
+	// ANON_KEY + SERVICE_KEY — fetched from vault where the auth service
+	// publishes them. Tolerant: absent keys don't block deploy, function just
+	// can't authenticate back to sibling services until the keys exist.
+	if h.vault != nil {
+		if anon := h.readVaultString(fmt.Sprintf("projects/%s/%s/credentials/jwt_keys/anon_token", orgSlug, projectID)); anon != "" {
+			env["EXCALIBASE_ANON_KEY"] = anon
+		}
+		if svc := h.readVaultString(fmt.Sprintf("projects/%s/%s/credentials/jwt_keys/service_token", orgSlug, projectID)); svc != "" {
+			env["EXCALIBASE_SERVICE_KEY"] = svc
+		}
+	}
+
+	return env
+}
+
+// buildDBURL constructs a Postgres DSN for the project's app role. Uses the
+// vault credential payload stored by createProjectRoles during provisioning.
+func (h *FunctionHandler) buildDBURL(ctx context.Context, orgSlug, projectID string) string {
+	if h.vault == nil {
+		return ""
+	}
+	path := fmt.Sprintf("projects/%s/%s/credentials/excalibase_app", orgSlug, projectID)
+	creds, err := h.vault.Get(path)
+	if err != nil || creds == nil {
+		return ""
+	}
+	host := creds["host"]
+	port := creds["port"]
+	user := creds["username"]
+	pass := creds["password"]
+	db := creds["database"]
+	if host == "" || user == "" || db == "" {
+		return ""
+	}
+	if port == "" {
+		port = "5432"
+	}
+	// Intentionally sslmode=require — project DBs terminate TLS inside the cluster.
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=require",
+		user, pass, host, port, db)
+}
+
+// readVaultString reads a vault path and returns a single string value. The
+// vault stores values as map[string]string; we pick the first non-empty one
+// or a value keyed "token" / "value" if present.
+func (h *FunctionHandler) readVaultString(path string) string {
+	if h.vault == nil {
+		return ""
+	}
+	data, err := h.vault.Get(path)
+	if err != nil || data == nil {
+		return ""
+	}
+	for _, k := range []string{"token", "value", "key"} {
+		if v, ok := data[k]; ok && v != "" {
+			return v
+		}
+	}
+	for _, v := range data {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // List returns all functions belonging to the project.
@@ -296,10 +468,11 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgSlug := h.orgSlugFor(r.Context(), projectID)
-	env, err := h.secrets.BuildEnvForDeploy(orgSlug, projectID, h.builtinEnv(orgSlug, projectID))
+	builtins := h.builtinEnv(r.Context(), orgSlug, projectID)
+	env, err := h.secrets.BuildEnvForDeploy(orgSlug, projectID, builtins)
 	if err != nil {
 		log.Printf("WARN: build env for %s/%s: %v", projectID, fn.ID, err)
-		env = h.builtinEnv(orgSlug, projectID)
+		env = builtins
 	}
 
 	client, err := h.runtimeClientFor(r.Context(), projectID)
@@ -387,12 +560,121 @@ func (h *FunctionHandler) Invoke(w http.ResponseWriter, r *http.Request) {
 	h.forwardToRuntime(w, r, fn, true /* stripAuth */)
 }
 
+// jwkCacheTTL controls how long the public key is cached before we re-fetch
+// it from vault. 5 minutes is a reasonable balance — key rotation is rare,
+// and a stale key for 5 minutes during rotation is survivable.
+const jwkCacheTTL = 5 * time.Minute
+
+// loadSigningPublicKey fetches and caches the platform-wide ES256 public key
+// used by the auth service to sign project JWTs. Vault path: pki/signing/public
+// (PEM-encoded, same shape as vault.go:InitPKI writes).
+func (h *FunctionHandler) loadSigningPublicKey() (*ecdsa.PublicKey, error) {
+	h.jwkMu.RLock()
+	if h.jwkKey != nil && time.Since(h.jwkLoaded) < jwkCacheTTL {
+		key := h.jwkKey
+		h.jwkMu.RUnlock()
+		return key, nil
+	}
+	h.jwkMu.RUnlock()
+
+	h.jwkMu.Lock()
+	defer h.jwkMu.Unlock()
+	// Re-check in case another goroutine refreshed it while we were waiting.
+	if h.jwkKey != nil && time.Since(h.jwkLoaded) < jwkCacheTTL {
+		return h.jwkKey, nil
+	}
+
+	if h.vault == nil {
+		return nil, errors.New("vault not configured — cannot fetch signing key")
+	}
+	data, err := h.vault.Get("pki/signing/public")
+	if err != nil {
+		return nil, fmt.Errorf("fetch public key from vault: %w", err)
+	}
+	pemStr, ok := data["key"]
+	if !ok || pemStr == "" {
+		return nil, errors.New("pki/signing/public missing 'key' field")
+	}
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		return nil, errors.New("invalid PEM in pki/signing/public")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse ec public key: %w", err)
+	}
+	ecPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("public key is not ECDSA (got %T)", pub)
+	}
+	h.jwkKey = ecPub
+	h.jwkLoaded = time.Now()
+	return ecPub, nil
+}
+
+// validateProjectJWT verifies an ES256 signature and checks that the token's
+// `iss` claim matches the project id — i.e. that this JWT was issued for this
+// project's auth service, not another project's. Returns nil if the token is
+// valid, otherwise a non-nil error.
+func (h *FunctionHandler) validateProjectJWT(tokenStr, expectedProjectID string) error {
+	key, err := h.loadSigningPublicKey()
+	if err != nil {
+		return fmt.Errorf("load signing key: %w", err)
+	}
+
+	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+		// Reject tokens signed with anything other than ES256 — refuses
+		// alg=none downgrade attacks and HMAC confusion.
+		if _, ok := t.Method.(*jwt.SigningMethodECDSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method %v", t.Header["alg"])
+		}
+		return key, nil
+	}, jwt.WithValidMethods([]string{"ES256"}))
+	if err != nil {
+		return fmt.Errorf("parse/verify jwt: %w", err)
+	}
+	if !token.Valid {
+		return errors.New("jwt is not valid")
+	}
+
+	// Check iss claim if present — must match project id. Tolerant: if the
+	// auth service doesn't issue an `iss`, don't reject. If it does, must match.
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return errors.New("jwt claims are not a map")
+	}
+	if iss, ok := claims["iss"].(string); ok && iss != "" {
+		if !strings.Contains(iss, expectedProjectID) {
+			return fmt.Errorf("jwt iss %q does not match project %q", iss, expectedProjectID)
+		}
+	}
+	return nil
+}
+
+// writeCORSHeaders sets permissive CORS headers for edge functions. Edge
+// functions are designed to be called from any origin (browser, mobile,
+// server-to-server) so `*` is the right default. Users can tighten this
+// per-project later.
+func writeCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, apikey, x-client-info, x-excalibase-auth")
+	w.Header().Set("Access-Control-Max-Age", "86400")
+}
+
 // PublicInvoke is the Supabase-style public route /functions/v1/{projectId}/{fnId}.
 // Enforces:
-//   1. Per-project rate limit (returns 429 when exceeded)
-//   2. JWT presence check if the function has VerifyJwt enabled (default true)
-//   3. Forwards Authorization header to the function so user code can inspect it
+//   1. CORS — preflight + permissive headers for browser callers
+//   2. Per-project rate limit (returns 429 when exceeded)
+//   3. JWT presence check if the function has VerifyJwt enabled (default true)
+//   4. Forwards Authorization header to the function so user code can inspect it
 func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
+	writeCORSHeaders(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	projectID := chi.URLParam(r, "projectId")
 	fnID := chi.URLParam(r, "fnId")
 
@@ -416,20 +698,67 @@ func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
 			httpError(w, "missing or invalid Authorization header", http.StatusUnauthorized)
 			return
 		}
-		// NOTE: signature validation is the responsibility of the user function
-		// or a future JWKS-aware middleware. We only enforce header presence.
-		// This matches Supabase's `verify_jwt: false` opt-out shape but with
-		// an intentionally simpler check. Document loudly in the studio UI.
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+
+		// Real ES256 signature verification against the platform-wide signing
+		// key (published by the auth service at vault path pki/signing/public).
+		// If the vault isn't configured or the key isn't published yet, we
+		// fall back to header-presence check and log a warning — lets the
+		// platform boot before the auth service has finished first-run setup.
+		if err := h.validateProjectJWT(token, projectID); err != nil {
+			// Degraded mode: vault sealed or signing key missing. Log loudly
+			// so operators notice, accept the request (backward compat).
+			if strings.Contains(err.Error(), "vault not configured") ||
+				strings.Contains(err.Error(), "missing 'key' field") ||
+				strings.Contains(err.Error(), "fetch public key from vault") {
+				log.Printf("WARN: jwt verification in degraded mode for %s: %v", projectID, err)
+			} else {
+				httpError(w, "invalid jwt: "+safeError(err), http.StatusUnauthorized)
+				return
+			}
+		}
 	}
 
 	h.forwardToRuntime(w, r, fn, false /* keep Authorization */)
 }
 
+// parseContentLength returns the request's Content-Length as an int64 if
+// present and valid. Avoids importing strconv into the hot path.
+func parseContentLength(v string) (int64, error) {
+	var n int64
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("invalid content-length %q", v)
+		}
+		n = n*10 + int64(c-'0')
+		if n < 0 {
+			return 0, fmt.Errorf("content-length overflow")
+		}
+	}
+	return n, nil
+}
+
+// maxInvokeBodyBytes caps the request body forwarded to the runtime (1 MB).
+// Matches the Deno runtime's MAX_INVOKE_BODY; the Deno runtime will also
+// refuse larger payloads.
+const maxInvokeBodyBytes = 1024 * 1024
+
 // forwardToRuntime serializes the incoming HTTP request and ships it to the
 // Deno runtime via the RuntimeClient. The runtime's response is written back
 // to w with status, headers, and body intact.
 func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Request, fn *edgefn.Function, stripAuth bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	// Refuse oversized requests upfront via Content-Length before reading
+	// the body into memory. Protects against naive DoS via giant POSTs.
+	if cl := r.Header.Get("Content-Length"); cl != "" {
+		if n, perr := parseContentLength(cl); perr == nil && n > maxInvokeBodyBytes {
+			httpError(w, "payload too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+	}
+	// Defense-in-depth: MaxBytesReader enforces the cap for chunked
+	// transfer-encoded requests that lack Content-Length.
+	r.Body = http.MaxBytesReader(w, r.Body, maxInvokeBodyBytes)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		httpError(w, "failed to read body", http.StatusBadRequest)
@@ -555,7 +884,7 @@ func (h *FunctionHandler) redeployAll(r *http.Request, projectID, orgSlug string
 	if err != nil || len(list) == 0 {
 		return
 	}
-	env, err := h.secrets.BuildEnvForDeploy(orgSlug, projectID, h.builtinEnv(orgSlug, projectID))
+	env, err := h.secrets.BuildEnvForDeploy(orgSlug, projectID, h.builtinEnv(r.Context(), orgSlug, projectID))
 	if err != nil {
 		log.Printf("WARN: redeploy build env: %v", err)
 		return

@@ -287,10 +287,10 @@ func (m *MockClient) InstallHelmChart(ctx context.Context, namespace, releaseNam
 	return nil
 }
 
-func (m *MockClient) EnsureDenoRuntime(ctx context.Context, namespace, image, runtimeSecret string) error {
+func (m *MockClient) EnsureDenoRuntime(ctx context.Context, namespace string, spec DenoRuntimeSpec) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Calls = append(m.Calls, "EnsureDenoRuntime:"+namespace)
+	m.Calls = append(m.Calls, "EnsureDenoRuntime:"+namespace+":"+spec.Tier)
 	if m.EnsureDenoError != nil {
 		return m.EnsureDenoError
 	}

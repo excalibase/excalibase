@@ -3,17 +3,25 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // mockFnRuntime returns an httptest server that stands in for the Deno runtime
@@ -287,6 +295,103 @@ func TestFunctionHandler_Secrets_RejectsReservedKey(t *testing.T) {
 	}
 }
 
+// --- Built-in env injection (DB_URL, ANON_KEY, SERVICE_KEY) ---
+
+func TestFunctionHandler_BuiltinEnv_WiresDBURLFromVault(t *testing.T) {
+	store := edgefn.NewFunctionStore(t.TempDir())
+	v := newFakeVault()
+	// Seed app credentials the way createProjectRoles does
+	v.data["projects/default/proj_p1/credentials/excalibase_app"] = map[string]string{
+		"host":     "proj_p1-postgres-rw.default-proj_p1.svc.cluster.local",
+		"port":     "5432",
+		"database": "app",
+		"username": "excalibase_app",
+		"password": "p4ssw0rd",
+	}
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, scripts := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+
+	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}
+	h := NewFunctionHandler(store, secrets, client, instStore, nil, "https://api.test.io")
+	h.SetVault(v)
+
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) {
+		r.Post("/", h.Create)
+	})
+
+	body := map[string]interface{}{
+		"id": "dbuser", "name": "DB User",
+		"files": []map[string]string{
+			{"path": "index.ts", "content": "export default () => new Response(Deno.env.get('EXCALIBASE_DB_URL') || 'none')"},
+		},
+	}
+	w := doJSON(r, "POST", "/api/projects/proj_p1/functions/", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d body=%s", w.Code, w.Body.String())
+	}
+
+	// The mock runtime records every deploy. Verify the secrets payload
+	// that was shipped actually contained the DB_URL.
+	deploy, ok := (*scripts)["proj_p1__dbuser"]
+	if !ok {
+		t.Fatalf("deploy not recorded in mock runtime")
+	}
+	got := deploy.Secrets["EXCALIBASE_DB_URL"]
+	want := "postgres://excalibase_app:p4ssw0rd@proj_p1-postgres-rw.default-proj_p1.svc.cluster.local:5432/app?sslmode=require"
+	if got != want {
+		t.Errorf("EXCALIBASE_DB_URL:\n got:  %q\n want: %q", got, want)
+	}
+	// Sanity — other builtins still there
+	if deploy.Secrets["EXCALIBASE_PROJECT_ID"] != "proj_p1" {
+		t.Errorf("PROJECT_ID missing: %+v", deploy.Secrets)
+	}
+}
+
+func TestFunctionHandler_BuiltinEnv_WiresAnonAndServiceTokensFromVault(t *testing.T) {
+	store := edgefn.NewFunctionStore(t.TempDir())
+	v := newFakeVault()
+	v.data["projects/default/proj_p1/credentials/jwt_keys/anon_token"] = map[string]string{
+		"token": "eyJanon.token.here",
+	}
+	v.data["projects/default/proj_p1/credentials/jwt_keys/service_token"] = map[string]string{
+		"token": "eyJservice.token.here",
+	}
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, scripts := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}
+	h := NewFunctionHandler(store, secrets, client, instStore, nil, "https://api.test.io")
+	h.SetVault(v)
+
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) { r.Post("/", h.Create) })
+
+	body := map[string]interface{}{
+		"id": "tokens", "name": "Tokens",
+		"files": []map[string]string{
+			{"path": "index.ts", "content": "export default () => new Response('ok')"},
+		},
+	}
+	w := doJSON(r, "POST", "/api/projects/proj_p1/functions/", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d body=%s", w.Code, w.Body.String())
+	}
+
+	deploy := (*scripts)["proj_p1__tokens"]
+	if deploy.Secrets["EXCALIBASE_ANON_KEY"] != "eyJanon.token.here" {
+		t.Errorf("anon: %q", deploy.Secrets["EXCALIBASE_ANON_KEY"])
+	}
+	if deploy.Secrets["EXCALIBASE_SERVICE_KEY"] != "eyJservice.token.here" {
+		t.Errorf("service: %q", deploy.Secrets["EXCALIBASE_SERVICE_KEY"])
+	}
+}
+
 // --- Per-project pod lazy provisioning ---
 
 func TestFunctionHandler_PerProject_LazyDeploysRuntime(t *testing.T) {
@@ -332,6 +437,57 @@ func TestFunctionHandler_PerProject_LazyDeploysRuntime(t *testing.T) {
 	}
 }
 
+func TestFunctionHandler_PerProject_PassesProjectTierToRuntimeSpec(t *testing.T) {
+	store := edgefn.NewFunctionStore(t.TempDir())
+	v := newFakeVault()
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, _ := mockFnRuntime(t)
+
+	mockK8s := k8s.NewMockClient()
+	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_free":  {ProjectID: "proj_free", OrgID: "default", Namespace: "default-proj_free", Tier: domain.Free},
+		"proj_std":   {ProjectID: "proj_std", OrgID: "default", Namespace: "default-proj_std", Tier: domain.Standard},
+		"proj_entr":  {ProjectID: "proj_entr", OrgID: "default", Namespace: "default-proj_entr", Tier: domain.Enterprise},
+	}}
+	h := NewFunctionHandler(store, secrets, nil, instStore, nil, "")
+	h.SetK8sClient(mockK8s, "excalibase/deno-runtime:test", "secret")
+	h.SetRuntimeURLFn(func(_ string) string { return runtime.URL })
+
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) { r.Post("/", h.Create) })
+
+	for _, pid := range []string{"proj_free", "proj_std", "proj_entr"} {
+		body := map[string]interface{}{
+			"id": "fn", "name": "Fn",
+			"files": []map[string]string{{"path": "index.ts", "content": "export default () => new Response('ok')"}},
+		}
+		w := doJSON(r, "POST", "/api/projects/"+pid+"/functions/", body)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %s: %d body=%s", pid, w.Code, w.Body.String())
+		}
+	}
+
+	// Mock tracks calls as "EnsureDenoRuntime:<ns>:<tier>" — verify each project
+	// triggered a call with its own tier.
+	hasCall := func(expected string) bool {
+		for _, c := range mockK8s.Calls {
+			if c == expected {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasCall("EnsureDenoRuntime:default-proj_free:FREE") {
+		t.Errorf("expected EnsureDenoRuntime with FREE tier for proj_free; calls=%v", mockK8s.Calls)
+	}
+	if !hasCall("EnsureDenoRuntime:default-proj_std:STANDARD") {
+		t.Errorf("expected EnsureDenoRuntime with STANDARD tier for proj_std; calls=%v", mockK8s.Calls)
+	}
+	if !hasCall("EnsureDenoRuntime:default-proj_entr:ENTERPRISE") {
+		t.Errorf("expected EnsureDenoRuntime with ENTERPRISE tier for proj_entr; calls=%v", mockK8s.Calls)
+	}
+}
+
 func TestFunctionHandler_PerProject_RuntimeClientCachedPerProject(t *testing.T) {
 	store := edgefn.NewFunctionStore(t.TempDir())
 	v := newFakeVault()
@@ -366,10 +522,12 @@ func TestFunctionHandler_PerProject_RuntimeClientCachedPerProject(t *testing.T) 
 		}
 	}
 
-	// Both namespaces should have ensure called exactly once each
+	// Both namespaces should have ensure called exactly once each (tier suffix
+	// is appended by the mock since the tier-aware spec change).
 	ensureCalls := 0
 	for _, c := range mockK8s.Calls {
-		if c == "EnsureDenoRuntime:default-proj_a" || c == "EnsureDenoRuntime:default-proj_b" {
+		if strings.HasPrefix(c, "EnsureDenoRuntime:default-proj_a") ||
+			strings.HasPrefix(c, "EnsureDenoRuntime:default-proj_b") {
 			ensureCalls++
 		}
 	}
@@ -462,6 +620,326 @@ func TestFunctionHandler_PublicInvoke_VerifyJwtFalseAllowsUnauth(t *testing.T) {
 	pub.ServeHTTP(w, req)
 	if w.Code != 200 {
 		t.Errorf("expected 200 (verifyJwt=false), got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestFunctionHandler_PublicInvoke_CORSPreflight(t *testing.T) {
+	store := edgefn.NewFunctionStore(t.TempDir())
+	v := newFakeVault()
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, _ := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+	h := NewFunctionHandler(store, secrets, client, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}, nil, "")
+
+	pub := chi.NewRouter()
+	pub.HandleFunc("/functions/v1/{projectId}/{fnId}", h.PublicInvoke)
+
+	req := httptest.NewRequest("OPTIONS", "/functions/v1/proj_p1/hello", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	w := httptest.NewRecorder()
+	pub.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("preflight: got %d, want 204", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got == "" {
+		t.Error("Access-Control-Allow-Origin not set")
+	}
+	if got := w.Header().Get("Access-Control-Allow-Methods"); got == "" {
+		t.Error("Access-Control-Allow-Methods not set")
+	}
+	if got := w.Header().Get("Access-Control-Allow-Headers"); got == "" {
+		t.Error("Access-Control-Allow-Headers not set")
+	}
+}
+
+func TestFunctionHandler_PublicInvoke_CORSHeadersOnActualRequest(t *testing.T) {
+	store := edgefn.NewFunctionStore(t.TempDir())
+	v := newFakeVault()
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, _ := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+	h := NewFunctionHandler(store, secrets, client, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}, nil, "")
+
+	f := false
+	store.Save(&edgefn.Function{
+		ProjectID: "proj_p1", ID: "hello", Name: "Hello", VerifyJwt: &f,
+		Files:  []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Active: true,
+	})
+	client.Deploy(context.Background(), edgefn.DeployRequest{ID: "proj_p1__hello", Code: "ok"})
+
+	pub := chi.NewRouter()
+	pub.HandleFunc("/functions/v1/{projectId}/{fnId}", h.PublicInvoke)
+
+	req := httptest.NewRequest("POST", "/functions/v1/proj_p1/hello", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	w := httptest.NewRecorder()
+	pub.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got == "" {
+		t.Error("Access-Control-Allow-Origin missing on actual response")
+	}
+}
+
+func TestFunctionHandler_Invoke_ContentLengthCapRefusesOversized(t *testing.T) {
+	r, _, _, _ := setupFunctionHandler(t)
+
+	body := map[string]interface{}{
+		"id":   "cap",
+		"name": "Cap",
+		"files": []map[string]string{
+			{"path": "index.ts", "content": "export default () => new Response('ok')"},
+		},
+	}
+	w := doJSON(r, "POST", "/api/projects/proj_p1/functions/", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("setup deploy: %d body=%s", w.Code, w.Body.String())
+	}
+
+	// Invoke with an oversized Content-Length — should be rejected upfront
+	// without the handler reading the body.
+	req := httptest.NewRequest("POST", "/api/projects/proj_p1/functions/cap/invoke", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Length", "100000000") // 100 MB
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized Content-Length: got %d, want 413", rec.Code)
+	}
+}
+
+// --- Real ES256 JWT verification ---
+
+// setupVaultWithSigningKey creates a fakeVault seeded with an ES256 keypair
+// at pki/signing/public. Returns the private key so tests can sign JWTs.
+func setupVaultWithSigningKey(t *testing.T) (*fakeVault, *ecdsa.PrivateKey) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal pub: %v", err)
+	}
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	v := newFakeVault()
+	v.data["pki/signing/public"] = map[string]string{
+		"key":       string(pubPEM),
+		"algorithm": "EC-P256",
+	}
+	return v, priv
+}
+
+func signES256(t *testing.T, priv *ecdsa.PrivateKey, claims jwt.MapClaims) string {
+	t.Helper()
+	tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	signed, err := tok.SignedString(priv)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	return signed
+}
+
+func TestFunctionHandler_PublicInvoke_JWTValidSignatureAllowed(t *testing.T) {
+	v, priv := setupVaultWithSigningKey(t)
+	store := edgefn.NewFunctionStore(t.TempDir())
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, _ := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+	h := NewFunctionHandler(store, secrets, client, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}, nil, "")
+	h.SetVault(v)
+
+	// verifyJwt default → nil means true
+	store.Save(&edgefn.Function{
+		ProjectID: "proj_p1", ID: "secure", Name: "Secure",
+		Files:  []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Active: true,
+	})
+	client.Deploy(context.Background(), edgefn.DeployRequest{ID: "proj_p1__secure", Code: "ok"})
+
+	validToken := signES256(t, priv, jwt.MapClaims{
+		"iss": "proj_p1",
+		"sub": "user-alice",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+
+	pub := chi.NewRouter()
+	pub.HandleFunc("/functions/v1/{projectId}/{fnId}", h.PublicInvoke)
+
+	req := httptest.NewRequest("POST", "/functions/v1/proj_p1/secure", nil)
+	req.Header.Set("Authorization", "Bearer "+validToken)
+	w := httptest.NewRecorder()
+	pub.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Errorf("valid JWT should be accepted, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestFunctionHandler_PublicInvoke_JWTTamperedSignatureRejected(t *testing.T) {
+	v, priv := setupVaultWithSigningKey(t)
+	store := edgefn.NewFunctionStore(t.TempDir())
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, _ := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+	h := NewFunctionHandler(store, secrets, client, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}, nil, "")
+	h.SetVault(v)
+
+	store.Save(&edgefn.Function{
+		ProjectID: "proj_p1", ID: "secure", Name: "Secure",
+		Files:  []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Active: true,
+	})
+	client.Deploy(context.Background(), edgefn.DeployRequest{ID: "proj_p1__secure", Code: "ok"})
+
+	validToken := signES256(t, priv, jwt.MapClaims{"sub": "alice", "exp": time.Now().Add(time.Hour).Unix()})
+	// Tamper signature deterministically: replace the LAST 5 chars of the
+	// signature with "AAAAA". Signature is base64url, A is always a valid
+	// base64 char so the token still parses but the bytes don't match.
+	if len(validToken) < 5 {
+		t.Fatalf("token too short to tamper: %s", validToken)
+	}
+	tampered := validToken[:len(validToken)-5] + "AAAAA"
+	if tampered == validToken {
+		// Cosmically unlikely — but safety net.
+		tampered = validToken[:len(validToken)-5] + "BBBBB"
+	}
+
+	pub := chi.NewRouter()
+	pub.HandleFunc("/functions/v1/{projectId}/{fnId}", h.PublicInvoke)
+	req := httptest.NewRequest("POST", "/functions/v1/proj_p1/secure", nil)
+	req.Header.Set("Authorization", "Bearer "+tampered)
+	w := httptest.NewRecorder()
+	pub.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("tampered JWT should be 401, got %d", w.Code)
+	}
+}
+
+func TestFunctionHandler_PublicInvoke_JWTExpiredRejected(t *testing.T) {
+	v, priv := setupVaultWithSigningKey(t)
+	store := edgefn.NewFunctionStore(t.TempDir())
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, _ := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+	h := NewFunctionHandler(store, secrets, client, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}, nil, "")
+	h.SetVault(v)
+
+	store.Save(&edgefn.Function{
+		ProjectID: "proj_p1", ID: "secure", Name: "Secure",
+		Files:  []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Active: true,
+	})
+	client.Deploy(context.Background(), edgefn.DeployRequest{ID: "proj_p1__secure", Code: "ok"})
+
+	expired := signES256(t, priv, jwt.MapClaims{
+		"sub": "alice",
+		"exp": time.Now().Add(-time.Hour).Unix(), // expired 1h ago
+	})
+
+	pub := chi.NewRouter()
+	pub.HandleFunc("/functions/v1/{projectId}/{fnId}", h.PublicInvoke)
+	req := httptest.NewRequest("POST", "/functions/v1/proj_p1/secure", nil)
+	req.Header.Set("Authorization", "Bearer "+expired)
+	w := httptest.NewRecorder()
+	pub.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expired JWT should be 401, got %d", w.Code)
+	}
+}
+
+func TestFunctionHandler_PublicInvoke_JWTWrongProjectRejected(t *testing.T) {
+	v, priv := setupVaultWithSigningKey(t)
+	store := edgefn.NewFunctionStore(t.TempDir())
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, _ := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+	h := NewFunctionHandler(store, secrets, client, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+		"proj_p2": {ProjectID: "proj_p2", OrgID: "default"},
+	}}, nil, "")
+	h.SetVault(v)
+
+	store.Save(&edgefn.Function{
+		ProjectID: "proj_p1", ID: "secure", Name: "Secure",
+		Files:  []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Active: true,
+	})
+	client.Deploy(context.Background(), edgefn.DeployRequest{ID: "proj_p1__secure", Code: "ok"})
+
+	// Token signed with valid key BUT issuer says proj_p2 — caller is trying
+	// to use a proj_p2 token against proj_p1's function.
+	crossToken := signES256(t, priv, jwt.MapClaims{
+		"iss": "proj_p2",
+		"sub": "alice",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+
+	pub := chi.NewRouter()
+	pub.HandleFunc("/functions/v1/{projectId}/{fnId}", h.PublicInvoke)
+	req := httptest.NewRequest("POST", "/functions/v1/proj_p1/secure", nil)
+	req.Header.Set("Authorization", "Bearer "+crossToken)
+	w := httptest.NewRecorder()
+	pub.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("cross-project JWT should be 401, got %d", w.Code)
+	}
+}
+
+func TestFunctionHandler_PublicInvoke_JWTAlgNoneDowngradeRejected(t *testing.T) {
+	v, _ := setupVaultWithSigningKey(t)
+	store := edgefn.NewFunctionStore(t.TempDir())
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, _ := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+	h := NewFunctionHandler(store, secrets, client, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}, nil, "")
+	h.SetVault(v)
+
+	store.Save(&edgefn.Function{
+		ProjectID: "proj_p1", ID: "secure", Name: "Secure",
+		Files:  []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Active: true,
+	})
+	client.Deploy(context.Background(), edgefn.DeployRequest{ID: "proj_p1__secure", Code: "ok"})
+
+	// Unsigned token (alg=none). Attacker-facing header + payload + empty sig.
+	noneToken := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
+		"iss": "proj_p1", "sub": "attacker",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	tokStr, _ := noneToken.SignedString(jwt.UnsafeAllowNoneSignatureType)
+
+	pub := chi.NewRouter()
+	pub.HandleFunc("/functions/v1/{projectId}/{fnId}", h.PublicInvoke)
+	req := httptest.NewRequest("POST", "/functions/v1/proj_p1/secure", nil)
+	req.Header.Set("Authorization", "Bearer "+tokStr)
+	w := httptest.NewRecorder()
+	pub.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("alg=none downgrade should be 401, got %d", w.Code)
 	}
 }
 

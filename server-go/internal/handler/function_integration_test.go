@@ -259,7 +259,7 @@ func TestFnE2E_Secrets_VisibleToFunction(t *testing.T) {
 	if got["pid"] != "proj_e2e01" {
 		t.Errorf("EXCALIBASE_PROJECT_ID not injected: %+v", got)
 	}
-	if got["url"] != "https://api.e2e.test/default/proj_e2e01" {
+	if got["url"] != "https://api.e2e.test/functions/v1/proj_e2e01" {
 		t.Errorf("EXCALIBASE_URL: %q", got["url"])
 	}
 }

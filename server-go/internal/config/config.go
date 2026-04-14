@@ -23,6 +23,13 @@ type AppConfig struct {
 	VaultPAT          string
 	DeploymentMode    string // "selfhosted" (default) or "cloud"
 	PublicBaseURL     string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
+
+	// K8s client connection — priority: remote API > kubeconfig path > env KUBECONFIG > in-cluster > ~/.kube/config
+	KubeconfigPath        string // explicit kubeconfig file
+	KubeAPIURL            string // remote API server URL (for out-of-cluster platform deployments)
+	KubeBearerToken       string // ServiceAccount token for remote API
+	KubeCACert            string // PEM-encoded CA cert for remote API TLS
+	KubeInsecureSkipVerify bool  // disable TLS verification (dev only)
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -54,8 +61,13 @@ func Load() AppConfig {
 		DenoRuntimeImage: envOr("DENO_RUNTIME_IMAGE", "excalibase/deno-runtime:latest"),
 		VaultURL:         envOr("VAULT_URL", ""),
 		VaultPAT:         envOr("VAULT_PAT", ""),
-		DeploymentMode:   envOr("DEPLOYMENT_MODE", "selfhosted"),
-		PublicBaseURL:    envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
+		DeploymentMode:         envOr("DEPLOYMENT_MODE", "selfhosted"),
+		PublicBaseURL:          envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
+		KubeconfigPath:         envOr("KUBECONFIG_PATH", ""),
+		KubeAPIURL:             envOr("KUBE_API_URL", ""),
+		KubeBearerToken:        envOr("KUBE_BEARER_TOKEN", ""),
+		KubeCACert:             envOr("KUBE_CA_CERT", ""),
+		KubeInsecureSkipVerify: envOr("KUBE_INSECURE_SKIP_VERIFY", "") == "true",
 	}
 }
 

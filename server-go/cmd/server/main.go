@@ -128,7 +128,16 @@ func main() {
 	}
 
 	// Kubernetes client
-	k8sClient, err := k8s.NewClient()
+	k8sOpts := k8s.ClientOptions{
+		KubeconfigPath:        cfg.KubeconfigPath,
+		APIURL:                cfg.KubeAPIURL,
+		BearerToken:           cfg.KubeBearerToken,
+		InsecureSkipTLSVerify: cfg.KubeInsecureSkipVerify,
+	}
+	if cfg.KubeCACert != "" {
+		k8sOpts.CACertPEM = []byte(cfg.KubeCACert)
+	}
+	k8sClient, err := k8s.NewClientWith(k8sOpts)
 	if err != nil {
 		log.Fatalf("Failed to init K8s client: %v", err)
 	}
@@ -147,6 +156,7 @@ func main() {
 	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
 	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
 	fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
+	fnHandler.SetVault(vc)
 
 	// Services
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)

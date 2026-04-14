@@ -33,7 +33,16 @@ type KubeClient interface {
 	// (Deployment + Service) in the given namespace. No-op if already present.
 	// The runtime is reachable at http://deno-runtime.{namespace}.svc.cluster.local:8000
 	// after the pod becomes ready (caller polls IsPodReady or sleeps).
-	EnsureDenoRuntime(ctx context.Context, namespace, image, runtimeSecret string) error
+	EnsureDenoRuntime(ctx context.Context, namespace string, spec DenoRuntimeSpec) error
+}
+
+// DenoRuntimeSpec configures the per-project Deno runtime pod. Resource
+// limits scale with tier so paid projects get more headroom without cost to
+// free/hobbyist projects.
+type DenoRuntimeSpec struct {
+	Image         string // container image, e.g. excalibase/deno-runtime:latest
+	RuntimeSecret string // X-Runtime-Secret env var
+	Tier          string // "FREE" (default), "STANDARD", "ENTERPRISE"
 }
 
 // Verify Client implements KubeClient at compile time.
