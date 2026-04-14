@@ -8,8 +8,13 @@ import (
 	"testing"
 )
 
+// mockDenoServer stands in for the Deno runtime. Speaks the new protocol:
+//   - POST /deploy      { id, code, secrets } → 201
+//   - POST /invoke/{id} InvokeRequest → InvokeResponse
+//   - DELETE /delete/{id}
+//   - GET /health
 func mockDenoServer() *httptest.Server {
-	scripts := make(map[string]string)
+	scripts := make(map[string]DeployRequest)
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -20,42 +25,56 @@ func mockDenoServer() *httptest.Server {
 		}
 
 		if r.URL.Path == "/deploy" && r.Method == "POST" {
-			var body struct {
-				ID   string `json:"id"`
-				Code string `json:"code"`
+			var body DeployRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				w.WriteHeader(400)
+				return
 			}
-			json.NewDecoder(r.Body).Decode(&body)
-			scripts[body.ID] = body.Code
+			scripts[body.ID] = body
 			w.WriteHeader(201)
 			json.NewEncoder(w).Encode(map[string]string{"id": body.ID, "url": "/invoke/" + body.ID})
 			return
 		}
 
-		if len(r.URL.Path) > 8 && r.URL.Path[:8] == "/invoke/" {
-			id := r.URL.Path[8:]
+		if len(r.URL.Path) > len("/invoke/") && r.URL.Path[:len("/invoke/")] == "/invoke/" && r.Method == "POST" {
+			id := r.URL.Path[len("/invoke/"):]
 			if _, ok := scripts[id]; !ok {
 				w.WriteHeader(404)
 				json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"result": "ok", "scriptId": id})
+			// Echo back a Response-shaped payload
+			json.NewEncoder(w).Encode(InvokeResponse{
+				Status:  200,
+				Headers: map[string]string{"Content-Type": "application/json"},
+				Body:    `{"ok":true}`,
+			})
 			return
 		}
 
-		if len(r.URL.Path) > 8 && r.URL.Path[:8] == "/delete/" && r.Method == "DELETE" {
-			id := r.URL.Path[8:]
+		if len(r.URL.Path) > len("/delete/") && r.URL.Path[:len("/delete/")] == "/delete/" && r.Method == "DELETE" {
+			id := r.URL.Path[len("/delete/"):]
 			delete(scripts, id)
-			json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
-			return
-		}
-
-		if r.URL.Path == "/scripts" {
-			json.NewEncoder(w).Encode(map[string]interface{}{"scripts": []string{}})
+			w.WriteHeader(200)
+			json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "id": id})
 			return
 		}
 
 		w.WriteHeader(404)
 	}))
+}
+
+func deployRequest(id, code string) DeployRequest {
+	return DeployRequest{ID: id, Code: code, Secrets: map[string]string{}}
+}
+
+func invokeRequest(body string) InvokeRequest {
+	return InvokeRequest{
+		Method:  "POST",
+		URL:     "https://api.excalibase.io/functions/v1/test",
+		Headers: map[string]string{"Content-Type": "application/json"},
+		Body:    body,
+	}
 }
 
 func TestRuntimeClientHealth(t *testing.T) {
@@ -77,8 +96,7 @@ func TestRuntimeClientDeploy(t *testing.T) {
 	defer srv.Close()
 
 	client := NewRuntimeClient(srv.URL, "")
-	err := client.Deploy(context.Background(), "test-fn", "function handler(d) { return d; }")
-	if err != nil {
+	if err := client.Deploy(context.Background(), deployRequest("test-fn", "globalThis.__excalibase_default = () => new Response('ok')")); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
 }
@@ -88,14 +106,17 @@ func TestRuntimeClientInvoke(t *testing.T) {
 	defer srv.Close()
 
 	client := NewRuntimeClient(srv.URL, "")
-	client.Deploy(context.Background(), "test-fn", "code")
+	client.Deploy(context.Background(), deployRequest("test-fn", "code"))
 
-	result, err := client.Invoke(context.Background(), "test-fn", map[string]string{"key": "val"})
+	result, err := client.Invoke(context.Background(), "test-fn", invokeRequest(`{"key":"val"}`))
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if result == nil {
-		t.Error("result should not be nil")
+	if result == nil || result.Status != 200 {
+		t.Errorf("result: %+v", result)
+	}
+	if result.Body != `{"ok":true}` {
+		t.Errorf("body: %q", result.Body)
 	}
 }
 
@@ -104,7 +125,7 @@ func TestRuntimeClientInvokeNotFound(t *testing.T) {
 	defer srv.Close()
 
 	client := NewRuntimeClient(srv.URL, "")
-	_, err := client.Invoke(context.Background(), "nonexistent", nil)
+	_, err := client.Invoke(context.Background(), "nonexistent", invokeRequest(""))
 	if err == nil {
 		t.Error("expected error for missing function")
 	}
@@ -115,16 +136,14 @@ func TestRuntimeClientDelete(t *testing.T) {
 	defer srv.Close()
 
 	client := NewRuntimeClient(srv.URL, "")
-	client.Deploy(context.Background(), "del-fn", "code")
+	client.Deploy(context.Background(), deployRequest("del-fn", "code"))
 
-	err := client.Delete(context.Background(), "del-fn")
-	if err != nil {
+	if err := client.Delete(context.Background(), "del-fn"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 }
 
 func TestRuntimeClientInvokeInvalidJSON(t *testing.T) {
-	// Server returns invalid JSON — Invoke should return an error, not nil
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("not valid json{{{"))
@@ -132,14 +151,13 @@ func TestRuntimeClientInvokeInvalidJSON(t *testing.T) {
 	defer srv.Close()
 
 	client := NewRuntimeClient(srv.URL, "")
-	_, err := client.Invoke(context.Background(), "test", nil)
+	_, err := client.Invoke(context.Background(), "test", invokeRequest(""))
 	if err == nil {
 		t.Error("Invoke with invalid JSON response should return error")
 	}
 }
 
 func TestRuntimeClientListInvalidJSON(t *testing.T) {
-	// Server returns invalid JSON — List should return an error, not nil
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte("broken json"))
@@ -161,9 +179,7 @@ func TestRuntimeClientUnreachable(t *testing.T) {
 		t.Error("should not be healthy when unreachable")
 	}
 
-	// Deploy/Invoke should return errors but not panic
-	err := client.Deploy(context.Background(), "x", "code")
-	if err == nil {
-		t.Error("expected error")
+	if err := client.Deploy(context.Background(), deployRequest("x", "code")); err == nil {
+		t.Error("expected deploy error")
 	}
 }

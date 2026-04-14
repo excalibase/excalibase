@@ -130,15 +130,19 @@ func main() {
 	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
 	factory := provisioner.NewFactory(pgProvisioner)
 
-	// Edge Functions
-	fnStore := edgefn.NewScriptStore(cfg.StoragePath)
+	// Edge functions — new per-project function runtime.
+	// Each project gets its own deno-runtime pod in its own namespace; the
+	// handler lazy-creates the pod on first deploy. The legacy shared
+	// fnClient is supplied as a fallback for tests / dev environments
+	// without K8s access.
+	fnStore := edgefn.NewFunctionStore(cfg.StoragePath)
+	fnSecrets := edgefn.NewSecretsStore(vc)
 	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
-	hookSvc := edgefn.NewHookService(fnStore, fnClient)
-	fnHandler := handler.NewEdgeFnHandler(fnStore, fnClient)
+	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
+	fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 
 	// Services
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
-	provSvc.SetHookService(hookSvc)
 	provSvc.SetVault(vc)
 	provSvc.SetOrgStore(sqlStore)
 	provSvc.SetSelfHostedMode(cfg.DeploymentMode == "selfhosted")
@@ -289,18 +293,27 @@ func main() {
 		schemaHandler.Routes(r)
 	})
 
-	// Edge Functions API (auth required, manage_functions permission for mutations)
-	r.Route("/api/functions", func(r chi.Router) {
+	// Edge Functions API — per-project CRUD, invoke (admin test), secrets
+	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", fnHandler.List)
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/runtime/status", fnHandler.RuntimeStatus)
 		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/", fnHandler.Create)
+		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/runtime/status", fnHandler.RuntimeStatus)
+		// Secrets CRUD — keys-only read, write-only values
+		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/secrets", fnHandler.ListSecrets)
+		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/secrets", fnHandler.SetSecret)
+		r.With(auth.RequirePermission(auth.PermManageFunctions)).Delete("/secrets/{key}", fnHandler.DeleteSecret)
+		// Per-function routes
 		r.Route("/{fnId}", func(r chi.Router) {
 			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", fnHandler.Get)
 			r.With(auth.RequirePermission(auth.PermManageFunctions)).Delete("/", fnHandler.Delete)
 			r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/invoke", fnHandler.Invoke)
 		})
 	})
+
+	// Public function invoke — Supabase-style: /functions/v1/{projectId}/{name}
+	// Enforces per-project rate limit + verifyJwt presence check.
+	r.HandleFunc("/functions/v1/{projectId}/{fnId}", fnHandler.PublicInvoke)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("Excalibase Go server starting on %s", addr)

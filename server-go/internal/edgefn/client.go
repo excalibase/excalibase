@@ -11,7 +11,33 @@ import (
 	"time"
 )
 
-// RuntimeClient communicates with the Deno runtime server via HTTP.
+// DeployRequest is the payload the platform sends to /deploy on the Deno runtime.
+// Code is the already-bundled JS source; Secrets are merged user + built-in env vars.
+type DeployRequest struct {
+	ID      string            `json:"id"`
+	Code    string            `json:"code"`
+	Secrets map[string]string `json:"secrets,omitempty"`
+}
+
+// InvokeRequest is forwarded to the runtime on /invoke/{id}. The runtime
+// reconstructs a Fetch API Request from these fields and calls the user's
+// default export.
+type InvokeRequest struct {
+	Method  string            `json:"method"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"`
+}
+
+// InvokeResponse is what the runtime returns — the user handler's Response
+// serialized as status + headers + body.
+type InvokeResponse struct {
+	Status  int               `json:"status"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"`
+}
+
+// RuntimeClient communicates with the shared Deno runtime over HTTP.
 type RuntimeClient struct {
 	baseURL string
 	secret  string
@@ -47,8 +73,10 @@ func (c *RuntimeClient) Health(ctx context.Context) (bool, error) {
 	return resp.StatusCode == 200, nil
 }
 
-func (c *RuntimeClient) Deploy(ctx context.Context, id, code string) error {
-	body, err := json.Marshal(map[string]string{"id": id, "code": code})
+// Deploy registers or replaces a function in the runtime. The runtime
+// instantiates a fresh Deno Worker with the supplied code + secrets env.
+func (c *RuntimeClient) Deploy(ctx context.Context, deployReq DeployRequest) error {
+	body, err := json.Marshal(deployReq)
 	if err != nil {
 		return fmt.Errorf("marshal deploy body: %w", err)
 	}
@@ -57,32 +85,30 @@ func (c *RuntimeClient) Deploy(ctx context.Context, id, code string) error {
 		return fmt.Errorf("create request: %w", err)
 	}
 	c.setHeaders(req)
-
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("deploy %s: %w", id, err)
+		return fmt.Errorf("deploy %s: %w", deployReq.ID, err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("deploy %s: status %d: %s", id, resp.StatusCode, string(b))
+		return fmt.Errorf("deploy %s: status %d: %s", deployReq.ID, resp.StatusCode, string(b))
 	}
 	return nil
 }
 
-func (c *RuntimeClient) Invoke(ctx context.Context, id string, data interface{}) (interface{}, error) {
-	body, err := json.Marshal(data)
+// Invoke calls the function with the given Request shape and returns the
+// Response shape. Caller is responsible for forwarding it to the end user.
+func (c *RuntimeClient) Invoke(ctx context.Context, id string, invokeReq InvokeRequest) (*InvokeResponse, error) {
+	body, err := json.Marshal(invokeReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal invoke body: %w", err)
 	}
-	// PathEscape prevents URL injection via crafted IDs
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/invoke/"+url.PathEscape(id), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	c.setHeaders(req)
-
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("invoke %s: %w", id, err)
@@ -90,15 +116,14 @@ func (c *RuntimeClient) Invoke(ctx context.Context, id string, data interface{})
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("invoke %s: status %d: %s", id, resp.StatusCode, string(b))
 	}
-
-	var result interface{}
+	var result InvokeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("invoke %s: decode response: %w", id, err)
 	}
-	return result, nil
+	return &result, nil
 }
 
 func (c *RuntimeClient) Delete(ctx context.Context, id string) error {

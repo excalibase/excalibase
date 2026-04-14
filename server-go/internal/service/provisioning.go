@@ -11,7 +11,6 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
-	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/schema"
@@ -23,7 +22,6 @@ type ProvisioningService struct {
 	store     storage.InstanceStore
 	orgStore  storage.OrgStore      // optional, for org slug lookup
 	factory   *provisioner.Factory
-	hooks     *edgefn.HookService  // optional
 	vault     vaultclient.VaultClient // optional
 	k8sClient k8s.KubeClient      // optional, for role creation via pod exec
 	pgdog          *PgDogNotifier       // optional, for PgDog config registration
@@ -32,10 +30,6 @@ type ProvisioningService struct {
 
 func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Factory, k8sClient k8s.KubeClient) *ProvisioningService {
 	return &ProvisioningService{store: store, factory: factory, k8sClient: k8sClient}
-}
-
-func (s *ProvisioningService) SetHookService(hooks *edgefn.HookService) {
-	s.hooks = hooks
 }
 
 func (s *ProvisioningService) SetVault(v vaultclient.VaultClient) {
@@ -155,13 +149,6 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 			}
 		},
 	)
-
-	if s.hooks != nil {
-		s.hooks.ExecuteHooksAsync(ctx, "pre-provision", edgefn.HookContext{
-			ProjectID: req.ProjectName, OrgID: req.OrgID,
-			DatabaseType: string(req.DBType), Tier: string(req.Tier),
-		}, nil)
-	}
 
 	// Populate S3 credentials from vault if backup enabled but no S3 creds provided
 	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 == nil && s.vault != nil && !s.vault.Sealed() {
@@ -320,7 +307,7 @@ func (s *ProvisioningService) handleProvisionFailure(
 	}
 }
 
-// finalizeProvisioning updates the instance with connection details, creates roles, and fires hooks.
+// finalizeProvisioning updates the instance with connection details and creates roles.
 func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, pc *provisioner.ProvisionContext) (*domain.ProvisioningResponse, error) {
 	port := result.Port
 	inst.Host = result.Host
@@ -362,15 +349,6 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 			result.DatabaseName, result.Username, result.Password); err != nil {
 			log.Printf("WARN: pgdog register: %v", err)
 		}
-	}
-
-	if s.hooks != nil {
-		s.hooks.ExecuteHooksAsync(ctx, "post-provision", edgefn.HookContext{
-			ProjectID: req.ProjectName, OrgID: req.OrgID,
-			DatabaseType: string(req.DBType), Tier: string(req.Tier),
-			Host: result.Host, Port: result.Port,
-			Database: result.DatabaseName, Username: result.Username, Password: result.Password,
-		}, nil)
 	}
 
 	return &domain.ProvisioningResponse{

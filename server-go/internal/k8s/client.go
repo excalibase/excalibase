@@ -11,9 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	yamlutil "k8s.io/apimachinery/pkg/util/yaml"
@@ -337,4 +340,103 @@ func (c *Client) GetDeployment(ctx context.Context, namespace, name string) (boo
 		return false, fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
 	}
 	return true, nil
+}
+
+// EnsureDenoRuntime creates the deno-runtime Deployment + Service in the given
+// namespace if they don't already exist. Idempotent — safe to call on every
+// function deploy. The runtime exposes :8000 internally and is reachable at
+// http://deno-runtime.{namespace}.svc.cluster.local:8000
+func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace, image, runtimeSecret string) error {
+	const name = "deno-runtime"
+	if image == "" {
+		image = "excalibase/deno-runtime:latest"
+	}
+	exists, err := c.GetDeployment(ctx, namespace, name)
+	if err != nil {
+		return fmt.Errorf("check existing deployment: %w", err)
+	}
+	if exists {
+		return nil
+	}
+
+	labels := map[string]string{"app": name, "excalibase.io/component": "edgefn"}
+	one := int32(1)
+	cpuReq, _ := resource.ParseQuantity("50m")
+	cpuLim, _ := resource.ParseQuantity("500m")
+	memReq, _ := resource.ParseQuantity("128Mi")
+	memLim, _ := resource.ParseQuantity("256Mi")
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &one,
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:            name,
+						Image:           image,
+						ImagePullPolicy: corev1.PullIfNotPresent,
+						Ports: []corev1.ContainerPort{
+							{ContainerPort: 8000, Protocol: corev1.ProtocolTCP},
+						},
+						Env: []corev1.EnvVar{
+							{Name: "RUNTIME_SECRET", Value: runtimeSecret},
+							// No outbound network for user code by default.
+							// Per-project allowlist could be added later.
+							{Name: "ALLOWED_HOSTS", Value: ""},
+						},
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    cpuReq,
+								corev1.ResourceMemory: memReq,
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    cpuLim,
+								corev1.ResourceMemory: memLim,
+							},
+						},
+						ReadinessProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								HTTPGet: &corev1.HTTPGetAction{
+									Path: "/health",
+									Port: intstr.FromInt(8000),
+								},
+							},
+							InitialDelaySeconds: 1,
+							PeriodSeconds:       3,
+						},
+					}},
+				},
+			},
+		},
+	}
+	if _, err := c.clientset.AppsV1().Deployments(namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create deno deployment: %w", err)
+	}
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: labels,
+			Ports: []corev1.ServicePort{{
+				Port:       8000,
+				TargetPort: intstr.FromInt(8000),
+				Protocol:   corev1.ProtocolTCP,
+			}},
+		},
+	}
+	if _, err := c.clientset.CoreV1().Services(namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create deno service: %w", err)
+	}
+	return nil
 }

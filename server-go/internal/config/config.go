@@ -22,6 +22,7 @@ type AppConfig struct {
 	VaultURL          string
 	VaultPAT          string
 	DeploymentMode    string // "selfhosted" (default) or "cloud"
+	PublicBaseURL     string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
 }
 
 func Load() AppConfig {
@@ -41,6 +42,7 @@ func Load() AppConfig {
 		VaultURL:         envOr("VAULT_URL", ""),
 		VaultPAT:         envOr("VAULT_PAT", ""),
 		DeploymentMode:   envOr("DEPLOYMENT_MODE", "selfhosted"),
+		PublicBaseURL:    envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
 	}
 }
 

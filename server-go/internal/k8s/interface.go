@@ -28,6 +28,12 @@ type KubeClient interface {
 	GetDeployment(ctx context.Context, namespace, name string) (bool, error)
 	InstallHelmChart(ctx context.Context, namespace, releaseName, chartPath string, values map[string]interface{}) error
 	UninstallHelmChart(ctx context.Context, namespace, releaseName string) error
+
+	// EnsureDenoRuntime idempotently creates the per-project Deno runtime
+	// (Deployment + Service) in the given namespace. No-op if already present.
+	// The runtime is reachable at http://deno-runtime.{namespace}.svc.cluster.local:8000
+	// after the pod becomes ready (caller polls IsPodReady or sleeps).
+	EnsureDenoRuntime(ctx context.Context, namespace, image, runtimeSecret string) error
 }
 
 // Verify Client implements KubeClient at compile time.

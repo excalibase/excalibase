@@ -1113,38 +1113,9 @@ func TestSchemaGetDB_PoolFull_Returns500(t *testing.T) {
 	}
 }
 
-// --- EdgeFn handler: List error path ---
-
-func TestEdgeFnList_HookTypeFilter(t *testing.T) {
-	r, _ := setupEdgeFnRouter(t)
-	// List with hookType filter — should return empty list (not error)
-	w := doRequest(r, "GET", "/api/functions/?hookType=custom", "")
-	if w.Code != 200 {
-		t.Errorf("list with hookType: got %d", w.Code)
-	}
-}
-
-func TestEdgeFnInvoke_FunctionNotFound_Returns404(t *testing.T) {
-	r, _ := setupEdgeFnRouter(t)
-	// Valid ID format but function doesn't exist
-	w := doRequest(r, "POST", "/api/functions/nonexistent-fn/invoke", `{"key":"value"}`)
-	if w.Code != 404 {
-		t.Errorf("invoke not found: got %d, want 404", w.Code)
-	}
-}
-
-func TestEdgeFnRuntimeStatus_Healthy(t *testing.T) {
-	r, _ := setupEdgeFnRouter(t)
-	w := doRequest(r, "GET", "/api/functions/runtime/status", "")
-	if w.Code != 200 {
-		t.Errorf("runtime status: got %d", w.Code)
-	}
-	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["healthy"] != true {
-		t.Errorf("expected healthy=true, got: %v", resp["healthy"])
-	}
-}
+// Legacy EdgeFn handler coverage tests removed — the new FunctionHandler
+// lives at /api/projects/{projectId}/functions and has its own test file
+// (handler/function_test.go). Coverage for that handler is covered there.
 
 // --- schema_data: validation branches (not reachable without real DB, but
 // covered via sealed vault returning early at getDB) ---

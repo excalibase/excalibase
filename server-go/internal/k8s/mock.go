@@ -35,6 +35,10 @@ type MockClient struct {
 	WildcardPodReady  bool              // IsPodReady returns true for any pod not in PodReady
 	WildcardSecret    map[string][]byte // GetSecret returns this if name not in Secrets
 	WildcardExecError error             // ExecInPod returns this for any pod not in ExecError
+
+	// DenoRuntimes — set of namespaces where EnsureDenoRuntime has been called.
+	DenoRuntimes        map[string]bool
+	EnsureDenoError     error
 }
 
 func NewMockClient() *MockClient {
@@ -49,6 +53,7 @@ func NewMockClient() *MockClient {
 		ExecOutput:      make(map[string]string),
 		ExecError:       make(map[string]error),
 		Metrics:         make(map[string][]PodResourceMetrics),
+		DenoRuntimes:    make(map[string]bool),
 	}
 }
 
@@ -279,6 +284,17 @@ func (m *MockClient) InstallHelmChart(ctx context.Context, namespace, releaseNam
 		return m.HelmError
 	}
 	m.HelmReleases[namespace+"/"+releaseName] = values
+	return nil
+}
+
+func (m *MockClient) EnsureDenoRuntime(ctx context.Context, namespace, image, runtimeSecret string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "EnsureDenoRuntime:"+namespace)
+	if m.EnsureDenoError != nil {
+		return m.EnsureDenoError
+	}
+	m.DenoRuntimes[namespace] = true
 	return nil
 }
 
