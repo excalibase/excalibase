@@ -30,6 +30,14 @@ type AppConfig struct {
 	KubeBearerToken       string // ServiceAccount token for remote API
 	KubeCACert            string // PEM-encoded CA cert for remote API TLS
 	KubeInsecureSkipVerify bool  // disable TLS verification (dev only)
+
+	// Provisioner selection — "k8s" (default) or "docker". When "docker",
+	// databases are provisioned as containers on the Docker daemon instead
+	// of CNPG clusters on Kubernetes.
+	ProvisionerMode string
+	DockerHost      string // explicit Docker URI; empty → env → unix socket
+	DockerCertPath  string // TLS certificate directory (ca.pem, cert.pem, key.pem)
+	DockerTLSVerify bool
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -68,6 +76,10 @@ func Load() AppConfig {
 		KubeBearerToken:        envOr("KUBE_BEARER_TOKEN", ""),
 		KubeCACert:             envOr("KUBE_CA_CERT", ""),
 		KubeInsecureSkipVerify: envOr("KUBE_INSECURE_SKIP_VERIFY", "") == "true",
+		ProvisionerMode:        envOr("PROVISIONER_MODE", "k8s"),
+		DockerHost:             envOr("DOCKER_HOST", ""),
+		DockerCertPath:         envOr("DOCKER_CERT_PATH", ""),
+		DockerTLSVerify:        envOr("DOCKER_TLS_VERIFY", "") != "",
 	}
 }
 

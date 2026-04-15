@@ -142,9 +142,27 @@ func main() {
 		log.Fatalf("Failed to init K8s client: %v", err)
 	}
 
-	// Provisioners
-	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
-	factory := provisioner.NewFactory(pgProvisioner)
+	// Provisioners — PROVISIONER_MODE selects K8s (CNPG operator) or Docker
+	// (containers on a Docker daemon). Both implement the same strategy
+	// interface so the rest of the platform is agnostic.
+	var factory *provisioner.Factory
+	switch cfg.ProvisionerMode {
+	case "docker":
+		dockerClient, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
+			Host:      cfg.DockerHost,
+			CertPath:  cfg.DockerCertPath,
+			TLSVerify: cfg.DockerTLSVerify,
+		})
+		if err != nil {
+			log.Fatalf("docker provisioner: %v", err)
+		}
+		log.Printf("Provisioner mode: docker (host=%s)", cfg.DockerHost)
+		factory = provisioner.NewFactory(provisioner.NewDockerPostgreSQLProvisioner(dockerClient))
+	default:
+		log.Println("Provisioner mode: k8s (CNPG)")
+		pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
+		factory = provisioner.NewFactory(pgProvisioner)
+	}
 
 	// Edge functions — new per-project function runtime.
 	// Each project gets its own deno-runtime pod in its own namespace; the

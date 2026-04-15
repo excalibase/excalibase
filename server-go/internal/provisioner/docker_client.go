@@ -1,0 +1,248 @@
+package provisioner
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
+)
+
+// DockerClientOptions configures how NewRealDockerClient reaches the daemon.
+// All fields are optional; when every field is zero the constructor falls
+// through to DOCKER_HOST env then to /var/run/docker.sock.
+type DockerClientOptions struct {
+	// Host is an explicit URI, e.g. "unix:///var/run/docker.sock" or
+	// "tcp://docker.example.com:2376". Takes priority over env lookup.
+	Host string
+	// CertPath is a directory containing ca.pem, cert.pem, key.pem. If set
+	// alongside Host, TLS is enabled.
+	CertPath string
+	// TLSVerify is kept for symmetry with DOCKER_TLS_VERIFY but has no
+	// effect unless CertPath is also set.
+	TLSVerify bool
+}
+
+// RealDockerClient implements DockerClient against a real Docker daemon via
+// the official SDK. Satisfies the same interface the mock uses in tests.
+type RealDockerClient struct {
+	c *client.Client
+}
+
+// NewRealDockerClient builds a client using the priority chain:
+//
+//  1. opts.Host (explicit) — with optional TLS from opts.CertPath
+//  2. DOCKER_HOST env (via client.FromEnv) — also reads DOCKER_TLS_VERIFY,
+//     DOCKER_CERT_PATH, DOCKER_API_VERSION
+//  3. unix:///var/run/docker.sock — local-host fallback
+//
+// A Ping() is performed at startup so mis-configured connections fail fast
+// instead of only surfacing during the first provisioning run.
+func NewRealDockerClient(opts DockerClientOptions) (*RealDockerClient, error) {
+	var clientOpts []client.Opt
+
+	switch {
+	case opts.Host != "":
+		clientOpts = append(clientOpts, client.WithHost(opts.Host))
+		if opts.CertPath != "" {
+			clientOpts = append(clientOpts, client.WithTLSClientConfig(
+				filepath.Join(opts.CertPath, "ca.pem"),
+				filepath.Join(opts.CertPath, "cert.pem"),
+				filepath.Join(opts.CertPath, "key.pem"),
+			))
+		}
+	case os.Getenv("DOCKER_HOST") != "":
+		clientOpts = append(clientOpts, client.FromEnv)
+	default:
+		clientOpts = append(clientOpts, client.WithHost("unix:///var/run/docker.sock"))
+	}
+
+	clientOpts = append(clientOpts, client.WithAPIVersionNegotiation())
+
+	c, err := client.NewClientWithOpts(clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("init docker client: %w", err)
+	}
+
+	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := c.Ping(pingCtx); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("ping docker daemon: %w", err)
+	}
+
+	return &RealDockerClient{c: c}, nil
+}
+
+// excalibaseLabel marks every container created by the provisioner so
+// operators can list/clean them with `docker ps -f label=excalibase.managed`.
+const excalibaseLabel = "excalibase.managed"
+
+// Close releases the underlying docker client connection.
+func (r *RealDockerClient) Close() error {
+	if r.c == nil {
+		return nil
+	}
+	return r.c.Close()
+}
+
+// CreateContainer creates a container with the given env + port bindings
+// and returns its ID. Does not start the container.
+// ports maps "containerPort" → "hostPort" (empty hostPort = random free port).
+func (r *RealDockerClient) CreateContainer(ctx context.Context, name, img string, env, ports map[string]string) (string, error) {
+	if err := r.ensureImage(ctx, img); err != nil {
+		return "", err
+	}
+
+	envSlice := make([]string, 0, len(env))
+	for k, v := range env {
+		envSlice = append(envSlice, k+"="+v)
+	}
+
+	exposed := nat.PortSet{}
+	bindings := nat.PortMap{}
+	for containerPort, hostPort := range ports {
+		np, err := nat.NewPort("tcp", containerPort)
+		if err != nil {
+			return "", fmt.Errorf("invalid container port %q: %w", containerPort, err)
+		}
+		exposed[np] = struct{}{}
+		bindings[np] = []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: hostPort}}
+	}
+
+	cfg := &container.Config{
+		Image:        img,
+		Env:          envSlice,
+		ExposedPorts: exposed,
+		Labels:       map[string]string{excalibaseLabel: "true"},
+	}
+	hostCfg := &container.HostConfig{
+		PortBindings:  bindings,
+		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
+	}
+
+	resp, err := r.c.ContainerCreate(ctx, cfg, hostCfg, &network.NetworkingConfig{}, nil, name)
+	if err != nil {
+		return "", fmt.Errorf("create container: %w", err)
+	}
+	return resp.ID, nil
+}
+
+func (r *RealDockerClient) StartContainer(ctx context.Context, id string) error {
+	if err := r.c.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
+		return fmt.Errorf("start container %s: %w", id, err)
+	}
+	return nil
+}
+
+// StopContainer tries to stop gracefully (30s) then lets Docker kill. Missing
+// containers are treated as success to keep Deprovision idempotent.
+func (r *RealDockerClient) StopContainer(ctx context.Context, id string) error {
+	timeout := 30
+	err := r.c.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
+	if err != nil && !client.IsErrNotFound(err) {
+		return fmt.Errorf("stop container %s: %w", id, err)
+	}
+	return nil
+}
+
+// RemoveContainer force-removes the container and its volumes. Missing
+// containers are treated as success for idempotency.
+func (r *RealDockerClient) RemoveContainer(ctx context.Context, id string) error {
+	err := r.c.ContainerRemove(ctx, id, container.RemoveOptions{
+		Force:         true,
+		RemoveVolumes: true,
+	})
+	if err != nil && !client.IsErrNotFound(err) {
+		return fmt.Errorf("remove container %s: %w", id, err)
+	}
+	return nil
+}
+
+// ContainerStatus reports "running", "stopped", or "not_found". Matches the
+// coarse-grained vocabulary the mock uses in tests.
+func (r *RealDockerClient) ContainerStatus(ctx context.Context, id string) (string, error) {
+	insp, err := r.c.ContainerInspect(ctx, id)
+	if err != nil {
+		if client.IsErrNotFound(err) {
+			return "not_found", nil
+		}
+		return "", fmt.Errorf("inspect container %s: %w", id, err)
+	}
+	if insp.State != nil && insp.State.Running {
+		return "running", nil
+	}
+	return "stopped", nil
+}
+
+// WaitForHealthy polls ContainerInspect until the container is running and
+// (if a healthcheck is defined) reports "healthy". Caps at 60 seconds; the
+// provisioning pipeline should not block indefinitely on a stuck container.
+func (r *RealDockerClient) WaitForHealthy(ctx context.Context, id string) error {
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		insp, err := r.c.ContainerInspect(ctx, id)
+		if err != nil {
+			return fmt.Errorf("inspect container %s: %w", id, err)
+		}
+		if insp.State == nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if !insp.State.Running {
+			return fmt.Errorf("container %s exited: status=%s exitCode=%d error=%s",
+				id, insp.State.Status, insp.State.ExitCode, insp.State.Error)
+		}
+		if insp.State.Health != nil {
+			switch insp.State.Health.Status {
+			case "healthy":
+				return nil
+			case "unhealthy":
+				return fmt.Errorf("container %s health check failed", id)
+			}
+			// "starting" or "" → keep polling
+		} else {
+			// No health check — "running" is enough.
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("container %s did not become healthy within 60s", id)
+}
+
+// ensureImage skips the pull if the image already exists locally. Large
+// images can take minutes to pull and the check is cheap.
+func (r *RealDockerClient) ensureImage(ctx context.Context, ref string) error {
+	args := filters.NewArgs()
+	args.Add("reference", ref)
+	summaries, err := r.c.ImageList(ctx, image.ListOptions{Filters: args})
+	if err == nil && len(summaries) > 0 {
+		return nil
+	}
+
+	reader, err := r.c.ImagePull(ctx, ref, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("pull image %s: %w", ref, err)
+	}
+	defer reader.Close()
+	// Drain the stream. Abandoning mid-pull leaves a partial image on disk.
+	if _, err := io.Copy(io.Discard, reader); err != nil && !strings.Contains(err.Error(), "context canceled") {
+		return fmt.Errorf("drain pull stream: %w", err)
+	}
+	return nil
+}
