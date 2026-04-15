@@ -133,7 +133,7 @@ func TestFunction_Bundle_SingleFile(t *testing.T) {
 	}
 }
 
-func TestFunction_Bundle_MultiFileOrderedInline(t *testing.T) {
+func TestFunction_Bundle_MultiFileInlinedFromRelativeImport(t *testing.T) {
 	fn := &Function{
 		ProjectID: "proj_test0001",
 		ID:        "greet",
@@ -147,43 +147,103 @@ func TestFunction_Bundle_MultiFileOrderedInline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bundle: %v", err)
 	}
-	utilsIdx := strings.Index(code, "greet = (n: string)")
-	defaultIdx := strings.Index(code, "__excalibase_default")
-	if utilsIdx == -1 || defaultIdx == -1 {
-		t.Fatalf("bundle missing pieces: utils=%d default=%d\n%s", utilsIdx, defaultIdx, code)
+	// esbuild strips TS types and inlines the helper. Identifier must survive.
+	if !strings.Contains(code, "greet") || !strings.Contains(code, "`Hi ${") {
+		t.Errorf("utils.ts content should be inlined, got:\n%s", code)
 	}
-	if utilsIdx >= defaultIdx {
-		t.Errorf("utils.ts should be inlined BEFORE index.ts: utils=%d default=%d", utilsIdx, defaultIdx)
+	if !strings.Contains(code, "__excalibase_default") {
+		t.Error("default handler hoist missing")
 	}
-	if strings.Contains(code, "from './utils.ts'") {
-		t.Errorf("relative imports must be stripped after inlining")
+	if strings.Contains(code, "from \"./utils.ts\"") || strings.Contains(code, "from './utils.ts'") {
+		t.Errorf("relative imports must be resolved away, got:\n%s", code)
+	}
+	// No top-level export keyword — IIFE wraps the module scope.
+	if strings.Contains(code, "export default") {
+		t.Error("'export default' should be stripped")
 	}
 }
 
-func TestFunction_Bundle_StripsExportKeyword(t *testing.T) {
+func TestFunction_Bundle_NamespaceImportResolves(t *testing.T) {
+	// This form broke the old regex bundler. esbuild must handle it.
 	fn := &Function{
 		ProjectID: "proj_test0001",
-		ID:        "named",
-		Name:      "Named",
+		ID:        "ns-import",
+		Name:      "Namespace Import",
 		Files: []File{
-			{Path: "utils.ts", Content: "export const x = 1\nexport function helper() { return 2 }\nexport async function fetchThing() { return 3 }"},
-			{Path: "index.ts", Content: "export default () => new Response('ok')"},
+			{Path: "utils.ts", Content: "export const greet = () => 'hi'\nexport const bye = () => 'bye'"},
+			{Path: "index.ts", Content: "import * as utils from './utils.ts'\nexport default () => new Response(utils.greet() + utils.bye())"},
 		},
 	}
 	code, err := fn.Bundle()
 	if err != nil {
 		t.Fatalf("Bundle: %v", err)
 	}
-	// After bundling, 'export' keyword is stripped from non-default exports
-	if strings.Contains(code, "export const x") || strings.Contains(code, "export function helper") || strings.Contains(code, "export async function fetchThing") {
-		t.Errorf("non-default 'export' keyword should be stripped:\n%s", code)
+	if !strings.Contains(code, "__excalibase_default") {
+		t.Error("default handler hoist missing")
 	}
-	// But the identifiers must remain
-	if !strings.Contains(code, "const x = 1") {
-		t.Error("const x should remain")
+	// Both identifiers must be referenced in the bundled output.
+	if !strings.Contains(code, "greet") || !strings.Contains(code, "bye") {
+		t.Errorf("namespace members missing after bundling:\n%s", code)
 	}
-	if !strings.Contains(code, "function helper()") {
-		t.Error("function helper should remain")
+}
+
+func TestFunction_Bundle_RenamedImportResolves(t *testing.T) {
+	// `import { a as b }` form — regex bundler choked on this.
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "renamed",
+		Name:      "Renamed Import",
+		Files: []File{
+			{Path: "utils.ts", Content: "export const greet = () => 'hi'"},
+			{Path: "index.ts", Content: "import { greet as hello } from './utils.ts'\nexport default () => new Response(hello())"},
+		},
+	}
+	code, err := fn.Bundle()
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	if !strings.Contains(code, "__excalibase_default") {
+		t.Error("default handler hoist missing")
+	}
+	if !strings.Contains(code, "greet") {
+		t.Errorf("original export identifier missing after rename:\n%s", code)
+	}
+}
+
+func TestFunction_Bundle_PreservesRemoteImports(t *testing.T) {
+	// Deno-style remote imports must pass through as external — esbuild
+	// should not try to resolve npm:/jsr:/https: URLs. Actually use the
+	// import so tree-shaking can't remove it.
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "remote",
+		Name:      "Remote",
+		Files: []File{
+			{Path: "index.ts", Content: "import { z } from 'npm:zod@3'\nexport default () => new Response(typeof z)"},
+		},
+	}
+	code, err := fn.Bundle()
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	if !strings.Contains(code, "npm:zod") {
+		t.Errorf("remote import should pass through to runtime:\n%s", code)
+	}
+}
+
+func TestFunction_Bundle_MissingRelativeImportErrors(t *testing.T) {
+	// Use the imported symbol so tree-shaking can't remove the import
+	// before resolve fires.
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "broken",
+		Name:      "Broken",
+		Files: []File{
+			{Path: "index.ts", Content: "import { x } from './missing.ts'\nexport default () => new Response(String(x))"},
+		},
+	}
+	if _, err := fn.Bundle(); err == nil {
+		t.Error("expected error for missing relative import")
 	}
 }
 

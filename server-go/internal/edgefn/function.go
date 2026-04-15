@@ -2,9 +2,12 @@ package edgefn
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"time"
+
+	esbuild "github.com/evanw/esbuild/pkg/api"
 )
 
 // MaxCodeSize caps the bundled code at 512 KB (Deno runtime agrees).
@@ -131,77 +134,120 @@ func (f *Function) RuntimeID() string {
 	return f.ProjectID + "__" + f.ID
 }
 
-// Bundle produces the JS source shipped to the Deno runtime. Strategy:
-//  1. Inline all non-index files first, in user-provided order.
-//  2. Inline index.ts last.
-//  3. Strip relative imports (assume inlined helpers are in the same scope).
-//  4. Strip the `export` keyword from named exports (they become module-scoped vars).
-//  5. Rewrite `export default X` into `globalThis.__excalibase_default = X`.
+// Bundle produces the JS source shipped to the Deno runtime. Uses esbuild
+// with a virtual filesystem plugin so the user's source files never touch
+// disk. Entry point is always index.ts. Output format is IIFE assigned to
+// a global, then a trailer assigns the default export to
+// globalThis.__excalibase_default — which is the contract the worker
+// template in deno-server/server.ts reads from.
 //
-// Limitations (intentional for MVP):
-//   - No TS type erasure — Deno Workers handle TS natively.
-//   - No real ES module linking — users must not rely on module-scoped-only semantics.
-//   - No `import * as X from ...` — named imports only (they get stripped).
+// External imports (npm:, jsr:, node:, http:, https:) pass through to the
+// Deno runtime unchanged — Deno resolves and fetches them at worker start.
+// Relative imports (./utils.ts, ../shared/cors.ts) are resolved from the
+// virtual filesystem provided in f.Files.
 func (f *Function) Bundle() (string, error) {
-	var indexFile *File
-	var shared []File
-	for i := range f.Files {
-		if f.Files[i].Path == "index.ts" {
-			fx := f.Files[i]
-			indexFile = &fx
-		} else {
-			shared = append(shared, f.Files[i])
+	virtualFiles := make(map[string]string, len(f.Files))
+	hasIndex := false
+	for _, file := range f.Files {
+		virtualFiles[file.Path] = file.Content
+		if file.Path == "index.ts" {
+			hasIndex = true
 		}
 	}
-	if indexFile == nil {
+	if !hasIndex {
 		return "", fmt.Errorf("function must contain an index.ts entry point")
 	}
 
-	var buf strings.Builder
-	for _, sf := range shared {
-		buf.WriteString("// --- file: ")
-		buf.WriteString(sf.Path)
-		buf.WriteString(" ---\n")
-		buf.WriteString(transformSharedFile(sf.Content))
-		buf.WriteString("\n")
+	result := esbuild.Build(esbuild.BuildOptions{
+		EntryPoints: []string{"index.ts"},
+		Bundle:      true,
+		Format:      esbuild.FormatIIFE,
+		GlobalName:  "__excalibase_bundle",
+		Target:      esbuild.ES2022,
+		Platform:    esbuild.PlatformNeutral,
+		Write:       false,
+		LogLevel:    esbuild.LogLevelSilent,
+		Plugins:     []esbuild.Plugin{virtualFSPlugin(virtualFiles)},
+	})
+	if len(result.Errors) > 0 {
+		return "", fmt.Errorf("bundle error: %s", result.Errors[0].Text)
 	}
-	buf.WriteString("// --- file: index.ts ---\n")
-	buf.WriteString(transformIndexFile(indexFile.Content))
-	buf.WriteString("\n")
+	if len(result.OutputFiles) == 0 {
+		return "", fmt.Errorf("bundle produced no output")
+	}
 
-	code := buf.String()
-	if len(code) > MaxCodeSize {
+	// Append the handler hoist. esbuild IIFE with GlobalName emits:
+	//   var __excalibase_bundle = (() => { ... return index_exports; })();
+	// where `index_exports.default` is the user's default export.
+	bundled := string(result.OutputFiles[0].Contents)
+	final := bundled + "\nglobalThis.__excalibase_default = __excalibase_bundle && __excalibase_bundle.default;\n"
+
+	if len(final) > MaxCodeSize {
 		return "", fmt.Errorf("bundled code exceeds maximum size (%d KB)", MaxCodeSize/1024)
 	}
-	return code, nil
+	return final, nil
 }
 
-// relativeImportRE matches `import ... from './path'` and `import './path'`.
-var relativeImportRE = regexp.MustCompile(`(?m)^import\s+(?:[^;\n'"]*?\s+from\s+)?['"]\.[^'"\n]*['"];?\s*$`)
+// virtualFSPlugin returns an esbuild plugin that resolves and loads modules
+// from an in-memory file map. External protocols (npm:, jsr:, node:, http://,
+// https://) pass through as external so Deno resolves them at worker start.
+func virtualFSPlugin(files map[string]string) esbuild.Plugin {
+	return esbuild.Plugin{
+		Name: "excalibase-virtual-fs",
+		Setup: func(build esbuild.PluginBuild) {
+			build.OnResolve(esbuild.OnResolveOptions{Filter: `.*`},
+				func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {
+					// Let Deno handle remote and runtime modules.
+					if isExternal(args.Path) {
+						return esbuild.OnResolveResult{Path: args.Path, External: true}, nil
+					}
 
-// namedExportRE matches `export const|let|var|function|async function|class|interface|type` at line start.
-var namedExportRE = regexp.MustCompile(`(?m)^export\s+(const|let|var|function|async\s+function|class|interface|type)\b`)
+					resolved := args.Path
+					if args.Importer != "" && (strings.HasPrefix(args.Path, "./") || strings.HasPrefix(args.Path, "../")) {
+						importerDir := path.Dir(args.Importer)
+						resolved = path.Clean(path.Join(importerDir, args.Path))
+					}
+					resolved = strings.TrimPrefix(resolved, "./")
 
-// defaultExportRE matches `export default X` (handler variant) across a line.
-// Captures the value expression after `export default`.
-var defaultExportRE = regexp.MustCompile(`(?m)^export\s+default\s+`)
+					if _, ok := files[resolved]; ok {
+						return esbuild.OnResolveResult{Path: resolved, Namespace: "virtual"}, nil
+					}
+					return esbuild.OnResolveResult{}, fmt.Errorf("module %q not found in function bundle (importer=%q)", args.Path, args.Importer)
+				})
 
-func transformSharedFile(src string) string {
-	// Drop relative imports (their exports are inlined)
-	src = relativeImportRE.ReplaceAllString(src, "")
-	// Strip `export ` from named exports
-	src = namedExportRE.ReplaceAllString(src, "$1")
-	// Shared files should not contain `export default`, but if they do, keep it harmless
-	src = defaultExportRE.ReplaceAllString(src, "const __shared_default = ")
-	return src
+			build.OnLoad(esbuild.OnLoadOptions{Filter: `.*`, Namespace: "virtual"},
+				func(args esbuild.OnLoadArgs) (esbuild.OnLoadResult, error) {
+					contents, ok := files[args.Path]
+					if !ok {
+						return esbuild.OnLoadResult{}, fmt.Errorf("file %q not in virtual fs", args.Path)
+					}
+					loader := loaderForExt(args.Path)
+					return esbuild.OnLoadResult{
+						Contents: &contents,
+						Loader:   loader,
+					}, nil
+				})
+		},
+	}
 }
 
-func transformIndexFile(src string) string {
-	// Drop relative imports (helpers are already inlined above)
-	src = relativeImportRE.ReplaceAllString(src, "")
-	// Strip `export ` from named exports
-	src = namedExportRE.ReplaceAllString(src, "$1")
-	// Rewrite `export default X` → `globalThis.__excalibase_default = X`
-	src = defaultExportRE.ReplaceAllString(src, "globalThis.__excalibase_default = ")
-	return src
+func isExternal(p string) bool {
+	return strings.HasPrefix(p, "npm:") ||
+		strings.HasPrefix(p, "jsr:") ||
+		strings.HasPrefix(p, "node:") ||
+		strings.HasPrefix(p, "http://") ||
+		strings.HasPrefix(p, "https://")
+}
+
+func loaderForExt(p string) esbuild.Loader {
+	switch {
+	case strings.HasSuffix(p, ".tsx"):
+		return esbuild.LoaderTSX
+	case strings.HasSuffix(p, ".jsx"):
+		return esbuild.LoaderJSX
+	case strings.HasSuffix(p, ".js"), strings.HasSuffix(p, ".mjs"):
+		return esbuild.LoaderJS
+	default:
+		return esbuild.LoaderTS
+	}
 }
