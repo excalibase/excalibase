@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -540,6 +541,52 @@ func (h *FunctionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "deleted", "id": fnID})
+}
+
+// Logs returns the recent user-code log ring buffer for a function. Supports
+// incremental polling via ?since=<unix-ms>. Logs are in-memory only — they
+// reset on runtime pod restart, and callers should not rely on them for
+// persistence. This is the endpoint the Studio logs panel polls.
+func (h *FunctionHandler) Logs(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	fnID := chi.URLParam(r, "fnId")
+	fn, err := h.store.Get(projectID, fnID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if fn == nil {
+		httpError(w, "function not found", http.StatusNotFound)
+		return
+	}
+
+	var sinceMs int64
+	if s := r.URL.Query().Get("since"); s != "" {
+		if n, perr := strconv.ParseInt(s, 10, 64); perr == nil && n > 0 {
+			sinceMs = n
+		}
+	}
+
+	client, cerr := h.runtimeClientFor(r.Context(), projectID)
+	if cerr != nil {
+		// Runtime not ready yet — return empty list rather than error so the
+		// Studio panel can poll peacefully until the pod comes up.
+		writeJSON(w, map[string]interface{}{"logs": []edgefn.LogEntry{}})
+		return
+	}
+	logs, err := client.Logs(r.Context(), fn.RuntimeID(), sinceMs)
+	if err != nil {
+		if errors.Is(err, edgefn.ErrLogsNotFound) {
+			writeJSON(w, map[string]interface{}{"logs": []edgefn.LogEntry{}})
+			return
+		}
+		httpError(w, safeError(err), http.StatusBadGateway)
+		return
+	}
+	if logs == nil {
+		logs = []edgefn.LogEntry{}
+	}
+	writeJSON(w, map[string]interface{}{"logs": logs})
 }
 
 // Invoke is the admin test path — uses the same forwarding logic as PublicInvoke

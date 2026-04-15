@@ -29,3 +29,9 @@ export interface InvokeResult {
   headers?: Record<string, string>;
   body: string;
 }
+
+export interface LogEntry {
+  level: string;
+  msg: string;
+  ts: number;
+}

@@ -37,6 +37,14 @@ type InvokeResponse struct {
 	Body    string            `json:"body"`
 }
 
+// LogEntry is a single captured console.* line from user code, as returned
+// by GET /logs/{id} on the runtime. Timestamps are unix-ms.
+type LogEntry struct {
+	Level string `json:"level"`
+	Msg   string `json:"msg"`
+	TS    int64  `json:"ts"`
+}
+
 // RuntimeClient communicates with the shared Deno runtime over HTTP.
 type RuntimeClient struct {
 	baseURL string
@@ -139,6 +147,44 @@ func (c *RuntimeClient) Delete(ctx context.Context, id string) error {
 	defer resp.Body.Close()
 	return nil
 }
+
+// Logs fetches the ring buffer for a function from the runtime. If sinceMs
+// is non-zero, only entries strictly newer than that timestamp are returned.
+// A non-existent function id returns ErrLogsNotFound.
+func (c *RuntimeClient) Logs(ctx context.Context, id string, sinceMs int64) ([]LogEntry, error) {
+	endpoint := c.baseURL + "/logs/" + url.PathEscape(id)
+	if sinceMs > 0 {
+		endpoint += "?since=" + fmt.Sprintf("%d", sinceMs)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	c.setHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrLogsNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fetch logs: %d: %s", resp.StatusCode, string(body))
+	}
+	var result struct {
+		Logs []LogEntry `json:"logs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode logs: %w", err)
+	}
+	return result.Logs, nil
+}
+
+// ErrLogsNotFound is returned when the runtime has no record of the function
+// id (either never deployed, or the runtime pod restarted and dropped it).
+var ErrLogsNotFound = fmt.Errorf("function not found in runtime")
 
 func (c *RuntimeClient) List(ctx context.Context) ([]map[string]interface{}, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/scripts", nil)

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,6 +166,7 @@ func setupFnE2E(t *testing.T) (*chi.Mux, string, func()) {
 			r.Get("/", h.Get)
 			r.Delete("/", h.Delete)
 			r.Post("/invoke", h.Invoke)
+			r.Get("/logs", h.Logs)
 		})
 	})
 	return r, base, cleanup
@@ -314,6 +316,89 @@ func TestFnE2E_SecretChangeTakesEffectAfterSet(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &r3)
 	if r3["v"] != "second-value" {
 		t.Errorf("after rotate: %q, want 'second-value'", r3["v"])
+	}
+}
+
+func TestFnE2E_LogStreaming_CapturesConsoleCalls(t *testing.T) {
+	r, _, cleanup := setupFnE2E(t)
+	defer cleanup()
+
+	body := map[string]interface{}{
+		"id": "logger", "name": "Logger",
+		"files": []map[string]string{
+			{"path": "index.ts", "content": `export default (req: Request) => {
+  console.log('hello from user code', { who: 'invoker' });
+  console.warn('something smells off');
+  console.error('big problem');
+  return Response.json({ ok: 1 });
+};`},
+		},
+	}
+	w := doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("deploy: %d, body=%s", w.Code, w.Body.String())
+	}
+
+	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/logger/invoke", map[string]string{})
+	if w.Code != 200 {
+		t.Fatalf("invoke: %d, body=%s", w.Code, w.Body.String())
+	}
+
+	// Small wait so the worker's postMessage logs land in the ring buffer.
+	time.Sleep(250 * time.Millisecond)
+
+	w = doReq(r, "GET", "/api/projects/proj_e2e01/functions/logger/logs", nil)
+	if w.Code != 200 {
+		t.Fatalf("logs: %d, body=%s", w.Code, w.Body.String())
+	}
+	var result struct {
+		Logs []edgefn.LogEntry `json:"logs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v, body=%s", err, w.Body.String())
+	}
+	if len(result.Logs) < 3 {
+		t.Fatalf("expected >= 3 log entries, got %d: %+v", len(result.Logs), result.Logs)
+	}
+
+	seenLog, seenWarn, seenError := false, false, false
+	for _, l := range result.Logs {
+		switch l.Level {
+		case "log":
+			if strings.Contains(l.Msg, "hello from user code") {
+				seenLog = true
+			}
+		case "warn":
+			if strings.Contains(l.Msg, "something smells off") {
+				seenWarn = true
+			}
+		case "error":
+			if strings.Contains(l.Msg, "big problem") {
+				seenError = true
+			}
+		}
+	}
+	if !seenLog || !seenWarn || !seenError {
+		t.Errorf("missing log levels — log=%v warn=%v error=%v: %+v", seenLog, seenWarn, seenError, result.Logs)
+	}
+
+	// Verify ?since filter drops older entries
+	latestTS := int64(0)
+	for _, l := range result.Logs {
+		if l.TS > latestTS {
+			latestTS = l.TS
+		}
+	}
+	w = doReq(r, "GET", fmt.Sprintf("/api/projects/proj_e2e01/functions/logger/logs?since=%d", latestTS), nil)
+	if w.Code != 200 {
+		t.Fatalf("logs since: %d", w.Code)
+	}
+	var sinceResult struct {
+		Logs []edgefn.LogEntry `json:"logs"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &sinceResult)
+	if len(sinceResult.Logs) != 0 {
+		t.Errorf("since=latest should return no logs, got %d", len(sinceResult.Logs))
 	}
 }
 

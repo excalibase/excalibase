@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import type { EdgeFunction, RuntimeStatus, SecretKey } from '../types/edgefn';
+import type { EdgeFunction, LogEntry, RuntimeStatus, SecretKey } from '../types/edgefn';
 
 /**
  * All edge function operations are per-project. Pass the projectId from
@@ -88,6 +88,25 @@ export function useRuntimeStatus(projectId: string) {
     },
     enabled: !!projectId,
     refetchInterval: 30000,
+  });
+}
+
+// --- Logs ---
+
+// useEdgeFunctionLogs polls the runtime's per-function ring buffer. The
+// runtime stores the last 100 console.* lines per function and returns
+// them in order. Polling runs every 2 seconds while the panel is mounted
+// and a function id is set.
+export function useEdgeFunctionLogs(projectId: string, fnId: string | null) {
+  return useQuery({
+    queryKey: ['edge-function-logs', projectId, fnId],
+    queryFn: async () => {
+      if (!fnId) return [] as LogEntry[];
+      const res = await api.get<{ logs: LogEntry[] }>(`${baseUrl(projectId)}/${fnId}/logs`);
+      return res.data.logs ?? [];
+    },
+    enabled: !!projectId && !!fnId,
+    refetchInterval: 2000,
   });
 }
 

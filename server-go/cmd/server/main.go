@@ -325,6 +325,7 @@ func main() {
 			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", fnHandler.Get)
 			r.With(auth.RequirePermission(auth.PermManageFunctions)).Delete("/", fnHandler.Delete)
 			r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/invoke", fnHandler.Invoke)
+			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/logs", fnHandler.Logs)
 		})
 	})
 

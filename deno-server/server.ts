@@ -45,6 +45,12 @@ interface PendingRequest {
   timeout: number;
 }
 
+interface LogEntry {
+  level: string;
+  msg: string;
+  ts: number;
+}
+
 interface ScriptMetadata {
   id: string;
   worker: Worker;
@@ -54,6 +60,8 @@ interface ScriptMetadata {
   // calls to the same function don't overwrite each other's response handlers.
   pending: Map<number, PendingRequest>;
   nextReqId: number;
+  // Ring buffer of recent user-code log lines. Capped at LOG_RING_SIZE.
+  logs: LogEntry[];
 }
 
 /**
@@ -82,6 +90,10 @@ const MAX_SCRIPTS = 100;
 const INVOKE_TIMEOUT_MS = 30_000;
 const WORKER_INIT_TIMEOUT_MS = 5_000;
 const VALID_ID = /^[a-zA-Z0-9_\-]{1,128}$/;
+// Per-function log ring buffer capacity. Old entries are dropped first.
+const LOG_RING_SIZE = 100;
+// Cap on a single log line so one huge console.log() can't blow up memory.
+const MAX_LOG_LINE = 4 * 1024;
 
 // Allowed network hosts for workers — only project Postgres services
 // Format: "host1:port1,host2:port2" or empty for no network access
@@ -99,6 +111,36 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
   // migrating from Supabase get `Deno.env.get`, new users get `env.KEY`.
   const secretsJSON = JSON.stringify(secrets);
   return `
+    // --- console interceptor ---
+    // Proxy console.* so user log output is streamed back to the runtime
+    // and stored in a per-function ring buffer. Original console.* is still
+    // called so logs also land on the pod stdout for operators.
+    (function() {
+      const LEVELS = ['log', 'info', 'warn', 'error', 'debug'];
+      const MAX_LINE = ${MAX_LOG_LINE};
+      const fmt = (args) => {
+        try {
+          return args.map((a) => {
+            if (typeof a === 'string') return a;
+            if (a instanceof Error) return a.stack || a.message || String(a);
+            try { return JSON.stringify(a); } catch (_) { return String(a); }
+          }).join(' ');
+        } catch (_) { return '[unformattable]'; }
+      };
+      for (const lvl of LEVELS) {
+        const orig = console[lvl] ? console[lvl].bind(console) : console.log.bind(console);
+        console[lvl] = function() {
+          const args = Array.prototype.slice.call(arguments);
+          let msg = fmt(args);
+          if (msg.length > MAX_LINE) msg = msg.slice(0, MAX_LINE) + '…';
+          try {
+            self.postMessage({ type: 'log', level: lvl, msg: msg, ts: Date.now() });
+          } catch (_) { /* ignore */ }
+          try { orig.apply(null, args); } catch (_) { /* ignore */ }
+        };
+      }
+    })();
+
     (function(Deno, env) {
       // --- user bundled code (may assign globalThis.__excalibase_default) ---
       ${userCode}
@@ -251,15 +293,29 @@ class FunctionRuntime {
       invocations: 0,
       pending: new Map(),
       nextReqId: 1,
+      logs: [],
     };
     this.scripts.set(id, meta);
 
-    // Permanent message router — dispatches responses to pending requests by reqId.
-    // Installed AFTER init handshake so the 'ready' message above lands on the
-    // temporary handler.
+    // Permanent message router — dispatches responses to pending requests by reqId
+    // and appends log messages to the ring buffer. Installed AFTER init handshake
+    // so the 'ready' message above lands on the temporary handler.
     worker.onmessage = (e) => {
       const msg = e.data;
-      if (!msg || typeof msg.reqId !== "number") return;
+      if (!msg) return;
+
+      if (msg.type === "log") {
+        const level = typeof msg.level === "string" ? msg.level : "log";
+        const text = typeof msg.msg === "string" ? msg.msg : "";
+        const ts = typeof msg.ts === "number" ? msg.ts : Date.now();
+        meta.logs.push({ level, msg: text, ts });
+        if (meta.logs.length > LOG_RING_SIZE) {
+          meta.logs.splice(0, meta.logs.length - LOG_RING_SIZE);
+        }
+        return;
+      }
+
+      if (typeof msg.reqId !== "number") return;
       const pending = meta.pending.get(msg.reqId);
       if (!pending) return; // late delivery after timeout — ignore
       meta.pending.delete(msg.reqId);
@@ -327,6 +383,18 @@ class FunctionRuntime {
       uptime: Date.now() - s.createdAt.getTime(),
       pending: s.pending.size,
     }));
+  }
+
+  // getLogs returns the ring buffer for a function, optionally filtered to
+  // entries strictly newer than the given timestamp (milliseconds). If the
+  // function doesn't exist, returns null so the caller can return 404.
+  getLogs(id: string, sinceMs?: number): LogEntry[] | null {
+    const script = this.scripts.get(id);
+    if (!script) return null;
+    if (typeof sinceMs === "number" && Number.isFinite(sinceMs)) {
+      return script.logs.filter((l) => l.ts > sinceMs);
+    }
+    return script.logs.slice();
   }
 
   stats() {
@@ -408,6 +476,20 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
       const invokeReq = JSON.parse(body) as InvokeRequest;
       const result = await runtime.invoke(id, invokeReq);
       return Response.json(result, { headers });
+    }
+
+    if (url.pathname.startsWith("/logs/") && req.method === "GET") {
+      const id = decodeURIComponent(url.pathname.slice("/logs/".length));
+      if (!VALID_ID.test(id)) {
+        return Response.json({ error: "invalid function id" }, { status: 400, headers });
+      }
+      const sinceRaw = url.searchParams.get("since");
+      const sinceMs = sinceRaw ? Number(sinceRaw) : undefined;
+      const logs = runtime.getLogs(id, sinceMs);
+      if (logs === null) {
+        return Response.json({ error: "not found" }, { status: 404, headers });
+      }
+      return Response.json({ logs }, { headers });
     }
 
     if (url.pathname.startsWith("/delete/") && req.method === "DELETE") {

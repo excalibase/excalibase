@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Trash2, Play, Loader2, Code2, Circle, Key, X, FileCode } from 'lucide-react';
+import { Plus, Trash2, Play, Loader2, Code2, Circle, Key, X, FileCode, Terminal } from 'lucide-react';
 import {
   useEdgeFunctions,
   useCreateEdgeFunction,
@@ -10,6 +10,7 @@ import {
   useEdgeSecrets,
   useSetEdgeSecret,
   useDeleteEdgeSecret,
+  useEdgeFunctionLogs,
 } from '../hooks/useEdgeFunctions';
 import { SidePanel } from '../components/ui/SidePanel';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
@@ -20,6 +21,43 @@ const DEFAULT_INDEX_TS = `export default async (req: Request): Promise<Response>
   return Response.json({ message: \`Hello \${name}\` });
 };
 `;
+
+type EnvEntry = { key: string; value: string };
+
+// parseEnv turns a .env-style blob into entries. Handles:
+//   - blank lines, full-line comments (#)
+//   - optional `export ` prefix
+//   - single- and double-quoted values (inline literal, no escape expansion)
+// Invalid lines are returned as errors instead of throwing.
+function parseEnv(src: string): { entries: EnvEntry[]; errors: string[] } {
+  const entries: EnvEntry[] = [];
+  const errors: string[] = [];
+  const lines = src.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || line.startsWith('#')) continue;
+    const bare = line.replace(/^export\s+/, '');
+    const eqIdx = bare.indexOf('=');
+    if (eqIdx <= 0) {
+      errors.push(`line ${i + 1}: missing '='`);
+      continue;
+    }
+    const key = bare.slice(0, eqIdx).trim();
+    let value = bare.slice(eqIdx + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+      errors.push(`line ${i + 1}: invalid key "${key}" (must be UPPER_SNAKE)`);
+      continue;
+    }
+    entries.push({ key, value });
+  }
+  return { entries, errors };
+}
 
 export function EdgeFunctionsPage() {
   const { projectId = '' } = useParams<{ projectId: string }>();
@@ -36,8 +74,11 @@ export function EdgeFunctionsPage() {
   const [selected, setSelected] = useState<EdgeFunction | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
+  const [logsFor, setLogsFor] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [invokeResult, setInvokeResult] = useState<string | null>(null);
+
+  const { data: logs = [], isFetching: logsFetching } = useEdgeFunctionLogs(projectId, logsFor);
 
   const [fnId, setFnId] = useState('');
   const [fnName, setFnName] = useState('');
@@ -46,6 +87,9 @@ export function EdgeFunctionsPage() {
 
   const [secretKey, setSecretKey] = useState('');
   const [secretValue, setSecretValue] = useState('');
+  const [envPaste, setEnvPaste] = useState('');
+  const [envParsing, setEnvParsing] = useState(false);
+  const [envStatus, setEnvStatus] = useState<string | null>(null);
 
   const updateFileContent = (content: string) => {
     setFiles((cur) => cur.map((f, i) => (i === activeFileIdx ? { ...f, content } : f)));
@@ -96,6 +140,34 @@ export function EdgeFunctionsPage() {
         onError: (err: Error) => setInvokeResult(`Error: ${err.message}`),
       },
     );
+  };
+
+  const handleBulkEnvPaste = async () => {
+    const { entries, errors } = parseEnv(envPaste);
+    if (entries.length === 0) {
+      setEnvStatus(errors.length > 0 ? errors.join('; ') : 'nothing to import');
+      return;
+    }
+    setEnvParsing(true);
+    setEnvStatus(null);
+    let ok = 0;
+    const failed: string[] = [];
+    for (const entry of entries) {
+      try {
+        await setSecret.mutateAsync(entry);
+        ok++;
+      } catch (err) {
+        failed.push(`${entry.key}: ${(err as Error).message}`);
+      }
+    }
+    setEnvParsing(false);
+    const parts: string[] = [`saved ${ok}/${entries.length}`];
+    if (errors.length > 0) parts.push(`${errors.length} skipped`);
+    if (failed.length > 0) parts.push(`${failed.length} failed`);
+    setEnvStatus(parts.join(', '));
+    if (failed.length === 0 && errors.length === 0) {
+      setEnvPaste('');
+    }
   };
 
   const handleSetSecret = () => {
@@ -202,6 +274,14 @@ export function EdgeFunctionsPage() {
                   >
                     {invokeFn.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
                     Invoke
+                  </button>
+                  <button
+                    onClick={() => setLogsFor(selected.id)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-bg-tertiary hover:bg-bg-quaternary text-text-primary text-xs font-medium rounded-md"
+                    data-testid="logs-btn"
+                  >
+                    <Terminal className="w-3 h-3" />
+                    Logs
                   </button>
                   <button
                     onClick={() => setDeleteTarget(selected.id)}
@@ -356,6 +436,31 @@ export function EdgeFunctionsPage() {
           )}
 
           <div className="border-t border-border-primary pt-4">
+            <div className="text-xs text-text-tertiary mb-1">Paste .env (bulk import)</div>
+            <textarea
+              value={envPaste}
+              onChange={(e) => setEnvPaste(e.target.value)}
+              placeholder={'STRIPE_KEY=sk_test_...\nDATABASE_URL="postgres://..."\n# comments and blank lines are ignored'}
+              rows={6}
+              className="w-full px-3 py-2 bg-bg-tertiary border border-border-primary rounded text-xs text-text-primary font-mono"
+              data-testid="env-paste-textarea"
+            />
+            <button
+              onClick={handleBulkEnvPaste}
+              disabled={envParsing || !envPaste.trim()}
+              className="mt-2 w-full px-4 py-2 bg-bg-tertiary hover:bg-bg-quaternary text-text-primary text-sm font-medium rounded disabled:opacity-50"
+              data-testid="env-paste-import-btn"
+            >
+              {envParsing ? 'Importing…' : `Import from .env${envPaste.trim() ? ` (${parseEnv(envPaste).entries.length})` : ''}`}
+            </button>
+            {envStatus && (
+              <div className="text-xs text-text-tertiary mt-2 font-mono" data-testid="env-paste-status">
+                {envStatus}
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-border-primary pt-4">
             <div className="text-xs text-text-tertiary mb-2">Existing keys (values hidden)</div>
             {secrets.length === 0 && <div className="text-xs text-text-tertiary">No secrets set</div>}
             {secrets.map((s) => (
@@ -369,6 +474,51 @@ export function EdgeFunctionsPage() {
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      </SidePanel>
+
+      <SidePanel
+        open={!!logsFor}
+        onClose={() => setLogsFor(null)}
+        title={logsFor ? `Logs — ${logsFor}` : 'Logs'}
+      >
+        <div className="p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-text-tertiary">
+              Last 100 lines from <code className="bg-bg-tertiary px-1 rounded">console.log/warn/error</code>. Polls every 2s.
+            </p>
+            {logsFetching && <Loader2 className="w-3 h-3 animate-spin text-text-tertiary" />}
+          </div>
+          <div
+            className="bg-bg-tertiary border border-border-primary rounded p-3 max-h-[70vh] overflow-y-auto font-mono text-xs space-y-1"
+            data-testid="logs-panel"
+          >
+            {logs.length === 0 && (
+              <div className="text-text-tertiary">
+                No logs yet. Invoke the function to generate output.
+              </div>
+            )}
+            {logs.map((entry, i) => {
+              const when = new Date(entry.ts).toLocaleTimeString();
+              const levelColor =
+                entry.level === 'error'
+                  ? 'text-red-400'
+                  : entry.level === 'warn'
+                  ? 'text-yellow-400'
+                  : entry.level === 'info'
+                  ? 'text-blue-400'
+                  : 'text-text-secondary';
+              return (
+                <div key={`${entry.ts}-${i}`} className="flex gap-2">
+                  <span className="text-text-tertiary flex-shrink-0">{when}</span>
+                  <span className={`${levelColor} uppercase text-[10px] w-10 flex-shrink-0 pt-0.5`}>
+                    {entry.level}
+                  </span>
+                  <span className="text-text-primary whitespace-pre-wrap break-words">{entry.msg}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </SidePanel>
