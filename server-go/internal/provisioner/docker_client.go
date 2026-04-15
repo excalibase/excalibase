@@ -225,6 +225,39 @@ func (r *RealDockerClient) WaitForHealthy(ctx context.Context, id string) error 
 	return fmt.Errorf("container %s did not become healthy within 60s", id)
 }
 
+// ExecInContainer runs cmd inside a running container and returns its
+// exit code. Does not capture stdout/stderr — callers use it as a boolean
+// probe (e.g. `pg_isready -U postgres`). Polls ContainerExecInspect for
+// up to 10s waiting for the exec to finish.
+func (r *RealDockerClient) ExecInContainer(ctx context.Context, id string, cmd []string) (int, error) {
+	create, err := r.c.ContainerExecCreate(ctx, id, container.ExecOptions{
+		Cmd:          cmd,
+		AttachStdout: false,
+		AttachStderr: false,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("exec create: %w", err)
+	}
+	if err := r.c.ContainerExecStart(ctx, create.ID, container.ExecStartOptions{Detach: false}); err != nil {
+		return 0, fmt.Errorf("exec start: %w", err)
+	}
+
+	// Poll until the exec completes. Each probe is short-lived (pg_isready
+	// returns in milliseconds) so a tight loop is fine.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		inspect, err := r.c.ContainerExecInspect(ctx, create.ID)
+		if err != nil {
+			return 0, fmt.Errorf("exec inspect: %w", err)
+		}
+		if !inspect.Running {
+			return inspect.ExitCode, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return 0, fmt.Errorf("exec timeout waiting for command to finish")
+}
+
 // ensureImage skips the pull if the image already exists locally. Large
 // images can take minutes to pull and the check is cheap.
 func (r *RealDockerClient) ensureImage(ctx context.Context, ref string) error {

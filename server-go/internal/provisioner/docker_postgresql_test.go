@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -62,6 +63,13 @@ func (m *mockDockerClient) WaitForHealthy(_ context.Context, containerID string)
 		return fmt.Errorf("health check failed")
 	}
 	return nil
+}
+
+func (m *mockDockerClient) ExecInContainer(_ context.Context, containerID string, cmd []string) (int, error) {
+	if m.failOn == "exec" {
+		return 2, nil // pg_isready exit 2 = no connection attempt
+	}
+	return 0, nil
 }
 
 func TestDockerProvisioner_SupportedType(t *testing.T) {
@@ -185,6 +193,24 @@ func TestDockerProvisioner_HealthCheckFails(t *testing.T) {
 	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "unhealthy"}, config.TierConfig{}, func(s domain.ProvisioningStage) {})
 	if err == nil {
 		t.Error("expected error when health check fails")
+	}
+}
+
+// TestDockerProvisioner_PgReadyNeverSucceeds confirms the pg_isready probe
+// errors out when the DB never reports ready. The mock returns exit=2 for
+// every probe when failOn="exec", so the 30s loop should give up.
+func TestDockerProvisioner_PgReadyNeverSucceeds(t *testing.T) {
+	docker := newMockDocker()
+	docker.failOn = "exec"
+	p := NewDockerPostgreSQLProvisioner(docker)
+
+	// Short-deadline context so we don't wait a real 30s for the loop.
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	_, err := p.Provision(ctx, domain.ProvisioningRequest{ProjectName: "stuck"}, config.TierConfig{}, func(s domain.ProvisioningStage) {})
+	if err == nil {
+		t.Error("expected error when pg_isready never returns 0")
 	}
 }
 
