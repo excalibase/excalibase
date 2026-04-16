@@ -24,6 +24,7 @@ type ProvisioningService struct {
 	factory   *provisioner.Factory
 	vault     vaultclient.VaultClient // optional
 	k8sClient k8s.KubeClient      // optional, for role creation via pod exec
+	dockerClient provisioner.DockerClient // optional, for role creation via container exec (Docker mode)
 	pgdog          *PgDogNotifier       // optional, for PgDog config registration
 	selfHostedMode bool                 // skip tier enforcement
 }
@@ -46,6 +47,10 @@ func (s *ProvisioningService) SetOrgStore(os storage.OrgStore) {
 
 func (s *ProvisioningService) SetSelfHostedMode(enabled bool) {
 	s.selfHostedMode = enabled
+}
+
+func (s *ProvisioningService) SetDockerClient(dc provisioner.DockerClient) {
+	s.dockerClient = dc
 }
 
 // ProvisionBYOC registers an externally managed database (no provisioning pipeline).
@@ -317,12 +322,19 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 	inst.Username = result.Username
 	inst.Password = result.Password
 	inst.SSLMode = result.SSLMode
+	// Docker provisioner stores the container ID in result.Namespace —
+	// overwrite the K8s-style namespace so Deprovision and role creation
+	// can reach the right target.
+	if result.Namespace != "" {
+		inst.Namespace = result.Namespace
+	}
 	inst.MetricsEndpoint = fmt.Sprintf("http://%s-postgres-1.%s.svc.cluster.local:9187/metrics", req.ProjectName, inst.Namespace)
 
 	// Role creation (writes to vault + executes psql in primary pod).
 	// This is an atomic step with its own rollback — failures here trigger
 	// full rollback via the same ProvisionContext (namespace + vault entries).
-	if s.vault != nil && s.k8sClient != nil && !s.vault.Sealed() {
+	canExecSQL := (s.k8sClient != nil) || (s.dockerClient != nil)
+	if s.vault != nil && canExecSQL && !s.vault.Sealed() {
 		if err := s.createProjectRoles(ctx, req, result, inst.Namespace, pc); err != nil {
 			return s.handleProvisionFailure(ctx, inst, req, err, pc), nil
 		}
@@ -532,12 +544,28 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
 		appRole, appRole, appRole, // GRANT auth usage
 	)
 
-	// Execute via pod exec (psql) — use postgres superuser via local socket (peer auth)
-	pc.SetStep("exec CREATE ROLE in primary pod")
+	// Execute psql inside the database container (K8s pod or Docker container).
+	pc.SetStep("exec CREATE ROLE in database")
 	cmd := []string{"psql", "-U", "postgres", "-d", dbName, "-c", roleSQL}
-	output, err := s.k8sClient.ExecInPod(ctx, namespace, primaryPod, "postgres", cmd)
-	if err != nil {
-		return pc.Fail(fmt.Errorf("exec role creation: %w (output: %s)", err, output))
+	var execErr error
+	if s.dockerClient != nil {
+		// Docker mode: the container ID is stored in the instance's Namespace field
+		// (updated by finalizeProvisioning from result.Namespace).
+		exitCode, err := s.dockerClient.ExecInContainer(ctx, namespace, cmd)
+		if err != nil {
+			execErr = fmt.Errorf("exec role creation (docker): %w", err)
+		} else if exitCode != 0 {
+			execErr = fmt.Errorf("exec role creation (docker): psql exit code %d", exitCode)
+		}
+	} else if s.k8sClient != nil {
+		var output string
+		output, execErr = s.k8sClient.ExecInPod(ctx, namespace, primaryPod, "postgres", cmd)
+		if execErr != nil {
+			execErr = fmt.Errorf("exec role creation (k8s): %w (output: %s)", execErr, output)
+		}
+	}
+	if execErr != nil {
+		return pc.Fail(execErr)
 	}
 
 	// Store credentials in vault at projects/{orgSlug}/{projectName}/credentials/{role}

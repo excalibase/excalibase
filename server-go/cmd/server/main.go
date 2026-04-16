@@ -146,6 +146,7 @@ func main() {
 	// (containers on a Docker daemon). Both implement the same strategy
 	// interface so the rest of the platform is agnostic.
 	var factory *provisioner.Factory
+	var dockerClientRef provisioner.DockerClient
 	switch cfg.ProvisionerMode {
 	case "docker":
 		dockerClient, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
@@ -157,6 +158,7 @@ func main() {
 			log.Fatalf("docker provisioner: %v", err)
 		}
 		log.Printf("Provisioner mode: docker (host=%s)", cfg.DockerHost)
+		dockerClientRef = dockerClient // save for service wiring
 		factory = provisioner.NewFactory(provisioner.NewDockerPostgreSQLProvisioner(dockerClient))
 	default:
 		log.Println("Provisioner mode: k8s (CNPG)")
@@ -173,7 +175,11 @@ func main() {
 	fnSecrets := edgefn.NewSecretsStore(vc)
 	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
 	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
-	fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
+	// Per-project Deno pods require K8s. In Docker mode, all functions run on
+	// the shared runtime (fnClient above) — no K8s namespace creation.
+	if cfg.ProvisionerMode != "docker" {
+		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
+	}
 	fnHandler.SetVault(vc)
 
 	// Services
@@ -181,6 +187,9 @@ func main() {
 	provSvc.SetVault(vc)
 	provSvc.SetOrgStore(sqlStore)
 	provSvc.SetSelfHostedMode(!cfg.IsCloud())
+	if dockerClientRef != nil {
+		provSvc.SetDockerClient(dockerClientRef)
+	}
 
 	// PgDog notifier (optional — requires Postgres store + NATS)
 	if cfg.PlatformDBURL != "" && cfg.NatsURL != "" {
