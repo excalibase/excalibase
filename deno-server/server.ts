@@ -320,6 +320,7 @@ class FunctionRuntime {
       if (!pending) return; // late delivery after timeout — ignore
       meta.pending.delete(msg.reqId);
       clearTimeout(pending.timeout);
+      metrics.invocationsTotal++;
       if (msg.type === "success") {
         pending.resolve({
           status: msg.status || 200,
@@ -327,6 +328,7 @@ class FunctionRuntime {
           body: msg.body || "",
         });
       } else {
+        metrics.invocationsError++;
         pending.reject(new Error(msg.error || "worker error"));
       }
     };
@@ -344,6 +346,7 @@ class FunctionRuntime {
       this.scripts.delete(id);
     };
 
+    metrics.deploysTotal++;
     console.log(`[runtime] deployed ${id} (${Object.keys(secrets).length} secrets)`);
     return { id, url: `/invoke/${id}` };
   }
@@ -358,10 +361,20 @@ class FunctionRuntime {
     return await new Promise<InvokeResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         script.pending.delete(reqId);
+        metrics.invocationsTotal++;
+        metrics.invocationsError++;
+        metrics.timeoutsTotal++;
         reject(new Error(`execution timeout (${INVOKE_TIMEOUT_MS / 1000}s)`));
-        // Note: we do NOT terminate the worker on per-invoke timeout — other
-        // in-flight requests for the same function should keep running. If a
-        // function consistently times out, the operator can redeploy it.
+
+        // If this was the last pending request and nothing succeeded since
+        // the timeout fired, the worker is likely stuck (infinite loop, deadlock).
+        // Terminate it to reclaim resources. The function can be redeployed
+        // on the next deploy call.
+        if (script.pending.size === 0) {
+          console.error(`[runtime] terminating stuck worker ${id} (no pending requests after timeout)`);
+          try { script.worker.terminate(); } catch (_) { /* ignore */ }
+          this.scripts.delete(id);
+        }
       }, INVOKE_TIMEOUT_MS);
       script.pending.set(reqId, { resolve, reject, timeout });
       script.worker.postMessage({ type: "invoke", reqId, data: req });
@@ -405,6 +418,17 @@ class FunctionRuntime {
     };
   }
 }
+
+// --- Metrics (Prometheus text format) ---
+// Simple counters tracked globally. No histogram (adds complexity for minimal value
+// at this scale). Operators who need percentiles should use the /logs endpoint or
+// instrument upstream in the Go handler.
+const metrics = {
+  invocationsTotal: 0,
+  invocationsError: 0,
+  deploysTotal: 0,
+  timeoutsTotal: 0,
+};
 
 const runtime = new FunctionRuntime();
 
@@ -508,6 +532,44 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
 
     if (url.pathname === "/stats") {
       return Response.json(runtime.stats(), { headers });
+    }
+
+    if (url.pathname === "/metrics") {
+      const stats = runtime.stats();
+      const lines = [
+        "# HELP excalibase_fn_scripts_active Number of deployed function workers",
+        "# TYPE excalibase_fn_scripts_active gauge",
+        `excalibase_fn_scripts_active ${stats.totalScripts}`,
+        "",
+        "# HELP excalibase_fn_scripts_max Maximum number of function workers",
+        "# TYPE excalibase_fn_scripts_max gauge",
+        `excalibase_fn_scripts_max ${stats.maxScripts}`,
+        "",
+        "# HELP excalibase_fn_invocations_total Total function invocations",
+        "# TYPE excalibase_fn_invocations_total counter",
+        `excalibase_fn_invocations_total ${metrics.invocationsTotal}`,
+        "",
+        "# HELP excalibase_fn_invocations_errors_total Total failed invocations",
+        "# TYPE excalibase_fn_invocations_errors_total counter",
+        `excalibase_fn_invocations_errors_total ${metrics.invocationsError}`,
+        "",
+        "# HELP excalibase_fn_deploys_total Total function deployments",
+        "# TYPE excalibase_fn_deploys_total counter",
+        `excalibase_fn_deploys_total ${metrics.deploysTotal}`,
+        "",
+        "# HELP excalibase_fn_timeouts_total Total invocation timeouts",
+        "# TYPE excalibase_fn_timeouts_total counter",
+        `excalibase_fn_timeouts_total ${metrics.timeoutsTotal}`,
+        "",
+        "# HELP excalibase_fn_uptime_seconds Runtime uptime in seconds",
+        "# TYPE excalibase_fn_uptime_seconds gauge",
+        `excalibase_fn_uptime_seconds ${Math.floor(performance.now() / 1000)}`,
+        "",
+      ];
+      return new Response(lines.join("\n"), {
+        status: 200,
+        headers: { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" },
+      });
     }
 
     return Response.json({ error: "not found" }, { status: 404, headers });

@@ -402,6 +402,110 @@ func TestFnE2E_LogStreaming_CapturesConsoleCalls(t *testing.T) {
 	}
 }
 
+func TestFnE2E_InfiniteLoopWorkerTerminated(t *testing.T) {
+	r, base, cleanup := setupFnE2E(t)
+	defer cleanup()
+
+	// Deploy a function that loops forever — should be killed, not hang.
+	body := map[string]interface{}{
+		"id": "looper", "name": "Infinite Loop",
+		"files": []map[string]string{
+			{"path": "index.ts", "content": `export default () => { while(true){} };`},
+		},
+	}
+	w := doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("deploy looper: %d, body=%s", w.Code, w.Body.String())
+	}
+
+	// Invoke the infinite loop — should error within the timeout (not hang forever).
+	// The runtime should terminate the worker after the invoke timeout.
+	start := time.Now()
+	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/looper/invoke", map[string]string{})
+	elapsed := time.Since(start)
+	if w.Code == 200 {
+		t.Fatal("infinite loop should not return 200")
+	}
+	// Should timeout within ~35s (30s invoke timeout + overhead), not hang.
+	if elapsed > 45*time.Second {
+		t.Errorf("invoke took %v — should have timed out around 30s", elapsed)
+	}
+
+	// After timeout, the worker should be terminated and removed from the
+	// runtime's script map. Verify via the /scripts endpoint.
+	time.Sleep(500 * time.Millisecond)
+	client := &http.Client{Timeout: 5 * time.Second}
+	scriptsReq, _ := http.NewRequest("GET", base+"/scripts", nil)
+	scriptsReq.Header.Set("X-Runtime-Secret", "handler-e2e-secret")
+	scriptsResp, serr := client.Do(scriptsReq)
+	if serr != nil {
+		t.Fatalf("GET /scripts: %v", serr)
+	}
+	defer scriptsResp.Body.Close()
+	var scriptsList struct {
+		Scripts []map[string]interface{} `json:"scripts"`
+	}
+	json.NewDecoder(scriptsResp.Body).Decode(&scriptsList)
+	for _, s := range scriptsList.Scripts {
+		if s["id"] == "proj_e2e01__looper" {
+			t.Error("looper worker should be terminated and removed from scripts after timeout")
+		}
+	}
+
+	// Deploy and invoke a normal function to prove the runtime is still alive.
+	// If the looper killed the entire runtime, this will fail.
+	body2 := map[string]interface{}{
+		"id": "healthy", "name": "Healthy",
+		"files": []map[string]string{
+			{"path": "index.ts", "content": `export default () => Response.json({ alive: true });`},
+		},
+	}
+	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body2)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("deploy healthy: %d, body=%s", w.Code, w.Body.String())
+	}
+	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/healthy/invoke", map[string]string{})
+	if w.Code != 200 {
+		t.Fatalf("healthy function should work after looper killed: %d, body=%s", w.Code, w.Body.String())
+	}
+	var result map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &result)
+	if result["alive"] != true {
+		t.Errorf("expected alive=true, got %+v", result)
+	}
+}
+
+func TestFnE2E_MetricsEndpoint(t *testing.T) {
+	_, base, cleanup := setupFnE2E(t)
+	defer cleanup()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// GET /metrics should return Prometheus text format.
+	req, _ := http.NewRequest("GET", base+"/metrics", nil)
+	req.Header.Set("X-Runtime-Secret", "handler-e2e-secret")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /metrics: status %d", resp.StatusCode)
+	}
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	body := string(bodyBytes)
+
+	// Must contain at least these metric names (Prometheus text exposition).
+	for _, metric := range []string{
+		"excalibase_fn_invocations_total",
+		"excalibase_fn_scripts_active",
+	} {
+		if !strings.Contains(body, metric) {
+			t.Errorf("/metrics missing %q:\n%s", metric, body)
+		}
+	}
+}
+
 func TestFnE2E_ListAndDelete(t *testing.T) {
 	r, _, cleanup := setupFnE2E(t)
 	defer cleanup()
