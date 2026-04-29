@@ -26,8 +26,8 @@ func (p *PostgreSQLProvisioner) SupportedType() domain.DatabaseType {
 }
 
 func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error) {
-	namespace := fmt.Sprintf("%s-%s", req.OrgID, req.ProjectName)
 	projectID := req.ProjectName
+	namespace := fmt.Sprintf("%s-%s", req.OrgID, req.ProjectName)
 
 	// Stage 1: Validate
 	cb(domain.StageValidating)
@@ -52,7 +52,7 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 		}
 	}
 
-	// Stage 3: Deploy CRD
+	// Stage 3: Deploy CRD (K8s resource names use projectID, not the raw projectID)
 	cb(domain.StageCRDDeployment)
 	opts := k8s.PostgreSQLClusterOpts{
 		ProjectID:       projectID,
@@ -121,15 +121,15 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 		watcherValues := map[string]interface{}{
 			"postgres": map[string]interface{}{
 				"enabled":                      true,
-				"url":                          fmt.Sprintf("jdbc:postgresql://%s-postgres-rw.%s.svc.cluster.local:5432/%s", projectID, namespace, creds.DatabaseName),
-				"existingSecret":               fmt.Sprintf("%s-postgres-superuser", projectID),
+				"url":                          fmt.Sprintf("postgres://%s-postgres-rw.%s.svc.cluster.local:5432/%s?replication=database", projectID, namespace, creds.DatabaseName),
+				"existingSecret":               fmt.Sprintf("%s-postgres-app", projectID),
 				"existingSecretUsernameKey":     "username",
 				"existingSecretPasswordKey":     "password",
-				"slotName":                      fmt.Sprintf("cdc_%s", projectID),
-				"publicationName":              fmt.Sprintf("cdc_%s_pub", projectID),
-				"createSlotIfNotExists":        true,
-				"createPublicationIfNotExists": true,
-				"captureDdl":                   true,
+				"slotName":                     "cdc_watcher",
+				"publicationName":              "cdc_watcher_pub",
+				"createSlot":                   true,
+				"createPublication":            false,
+				"captureDdl":                   false,
 			},
 			"nats": map[string]interface{}{
 				"url":           "nats://nats.excalibase-platform.svc.cluster.local:4222",
@@ -140,6 +140,11 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 			"resources": map[string]interface{}{
 				"limits":   map[string]interface{}{"cpu": "200m", "memory": "256Mi"},
 				"requests": map[string]interface{}{"cpu": "50m", "memory": "128Mi"},
+			},
+			"image": map[string]interface{}{
+				"repository": "excalibase/excalibase-watcher-go",
+				"tag":        "latest",
+				"pullPolicy": "IfNotPresent",
 			},
 		}
 		if err := p.client.InstallHelmChart(ctx, namespace, "excalibase-watcher", p.watcherChartPath, watcherValues); err != nil {
@@ -160,8 +165,8 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 // (CNPG cluster CRD, pods, PVCs, backup secret, scheduled backup, helm watcher are
 // all inside the namespace).
 func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, pc *ProvisionContext) (*ProvisioningResult, error) {
-	namespace := fmt.Sprintf("%s-%s", req.OrgID, req.ProjectName)
 	projectID := req.ProjectName
+	namespace := fmt.Sprintf("%s-%s", req.OrgID, req.ProjectName)
 
 	// Stage 1: Validate
 	pc.SetStage(domain.StageValidating)
@@ -264,15 +269,15 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 		watcherValues := map[string]interface{}{
 			"postgres": map[string]interface{}{
 				"enabled":                      true,
-				"url":                          fmt.Sprintf("jdbc:postgresql://%s-postgres-rw.%s.svc.cluster.local:5432/%s", projectID, namespace, creds.DatabaseName),
-				"existingSecret":               fmt.Sprintf("%s-postgres-superuser", projectID),
+				"url":                          fmt.Sprintf("postgres://%s-postgres-rw.%s.svc.cluster.local:5432/%s?replication=database", projectID, namespace, creds.DatabaseName),
+				"existingSecret":               fmt.Sprintf("%s-postgres-app", projectID),
 				"existingSecretUsernameKey":    "username",
 				"existingSecretPasswordKey":    "password",
-				"slotName":                     fmt.Sprintf("cdc_%s", projectID),
-				"publicationName":              fmt.Sprintf("cdc_%s_pub", projectID),
-				"createSlotIfNotExists":        true,
-				"createPublicationIfNotExists": true,
-				"captureDdl":                   true,
+				"slotName":                     "cdc_watcher",
+				"publicationName":              "cdc_watcher_pub",
+				"createSlot":                   true,
+				"createPublication":            false,
+				"captureDdl":                   false,
 			},
 			"nats": map[string]interface{}{
 				"url":           "nats://nats.excalibase-platform.svc.cluster.local:4222",
@@ -283,6 +288,11 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 			"resources": map[string]interface{}{
 				"limits":   map[string]interface{}{"cpu": "200m", "memory": "256Mi"},
 				"requests": map[string]interface{}{"cpu": "50m", "memory": "128Mi"},
+			},
+			"image": map[string]interface{}{
+				"repository": "excalibase/excalibase-watcher-go",
+				"tag":        "latest",
+				"pullPolicy": "IfNotPresent",
 			},
 		}
 		if err := p.client.InstallHelmChart(ctx, namespace, "excalibase-watcher", p.watcherChartPath, watcherValues); err != nil {

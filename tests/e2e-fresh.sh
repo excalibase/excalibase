@@ -69,7 +69,7 @@ R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"projectName\":\"$PROJECT\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
 PROJECT_ID=$(echo "$R" | jq -r '.projectId')
-[ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" == proj_* ]] && pass "provision project (ref=$PROJECT_ID)" || fail "provision" "$R"
+[ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" == proj-* ]] && pass "provision project (ref=$PROJECT_ID)" || fail "provision" "$R"
 
 # 6b. Validation rejects bad postgres version (stage 1 failure, no K8s side effects)
 echo "6b. Validation: reject invalid postgres version"
@@ -166,7 +166,7 @@ R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"projectName\":\"$CLOUD_PROJECT\",\"orgId\":\"$CLOUD_ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"STANDARD\"}")
 CLOUD_PROJECT_ID=$(echo "$R" | jq -r '.projectId')
-[ -n "$CLOUD_PROJECT_ID" ] && [[ "$CLOUD_PROJECT_ID" == proj_* ]] && cpass "k8s provision in cloud (ref=$CLOUD_PROJECT_ID)" || cfail "k8s provision" "$R"
+[ -n "$CLOUD_PROJECT_ID" ] && [[ "$CLOUD_PROJECT_ID" == proj-* ]] && cpass "k8s provision in cloud (ref=$CLOUD_PROJECT_ID)" || cfail "k8s provision" "$R"
 
 # C5. Wait for credentials
 echo "C5. Cloud vault credentials (waiting 30s...)"
@@ -189,7 +189,7 @@ R=$(curl -s -X POST http://localhost:24005/api/provision/byoc \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"projectName\":\"byoc-test\",\"orgId\":\"$ORG_ID\",\"host\":\"external-db.example.com\",\"port\":5432,\"database\":\"mydb\",\"username\":\"user\",\"password\":\"pass\"}")
 BYOC_PROJECT_ID=$(echo "$R" | jq -r '.projectId')
-[ -n "$BYOC_PROJECT_ID" ] && [[ "$BYOC_PROJECT_ID" == proj_* ]] && cpass "BYOC provision (ref=$BYOC_PROJECT_ID)" || cfail "byoc" "$R"
+[ -n "$BYOC_PROJECT_ID" ] && [[ "$BYOC_PROJECT_ID" == proj-* ]] && cpass "BYOC provision (ref=$BYOC_PROJECT_ID)" || cfail "byoc" "$R"
 
 # C5. Vault has BYOC credentials
 echo "C8. BYOC credentials in vault"

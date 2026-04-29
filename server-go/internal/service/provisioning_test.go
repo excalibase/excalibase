@@ -69,7 +69,7 @@ func TestProvisionSameDisplayNameDoesNotBlock(t *testing.T) {
 		"password": []byte("testpassword123"),
 		"dbname":   []byte("app"),
 	}
-	store.Save(&domain.DatabaseInstance{ProjectID: "proj_aaaaaaaaaa", ProjectName: "Blog", OrgID: "org1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "proj-aaaaaaaaaa", ProjectName: "Blog", OrgID: "org1", Status: "ACTIVE"})
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		ProjectName: "Blog",
@@ -80,7 +80,7 @@ func TestProvisionSameDisplayNameDoesNotBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("same display name should be allowed: %v", err)
 	}
-	if resp.ProjectID == "proj_aaaaaaaaaa" {
+	if resp.ProjectID == "proj-aaaaaaaaaa" {
 		t.Errorf("ProjectID should be newly generated, got %q", resp.ProjectID)
 	}
 }
@@ -89,7 +89,7 @@ func TestProvisionExceedsFreeTierLimit(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
 
 	// Org already has 1 project (FREE tier max)
-	store.Save(&domain.DatabaseInstance{ProjectID: "proj_existing01", OrgID: "org1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "proj-existing01", OrgID: "org1", Status: "ACTIVE"})
 
 	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		ProjectName: "second-db",
@@ -127,7 +127,7 @@ func TestProvisionStandardTierAllowsMultipleProjects(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
 
 	// Org already has 1 project but STANDARD allows 5
-	store.Save(&domain.DatabaseInstance{ProjectID: "proj_stdfirst01", OrgID: "org1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "proj-stdfirst01", OrgID: "org1", Status: "ACTIVE"})
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		ProjectName: "std-second",
@@ -355,7 +355,7 @@ func TestProvisionValidation_BackupRetentionOutOfRange(t *testing.T) {
 
 // --- Generated project ref (opaque identifier) ---
 
-var projectRefPattern = regexp.MustCompile(`^proj_[a-z0-9]{10}$`)
+var projectRefPattern = regexp.MustCompile(`^proj-[a-z0-9]{10}$`)
 
 func TestProvision_GeneratesOpaqueProjectRef(t *testing.T) {
 	svc, store, mock := setupProvisioningTest(t)

@@ -153,6 +153,14 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 
 	postgresql := map[string]interface{}{
 		"parameters": params,
+		// Allow the app user to open replication connections (watcher-go CDC).
+		// CNPG's default pg_hba only permits the internal streaming_replica user
+		// over TLS with client cert auth. We use password auth over TLS or plain
+		// for the app user.
+		"pg_hba": []interface{}{
+			"host replication app all scram-sha-256",
+			"host all app all scram-sha-256",
+		},
 	}
 	if len(sharedPreloadLibs) > 0 {
 		postgresql["shared_preload_libraries"] = sharedPreloadLibs

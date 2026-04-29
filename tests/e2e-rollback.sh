@@ -75,7 +75,7 @@ R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"projectName\":\"$PROJECT\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\",\"postgresVersion\":\"17\"}")
 PROJECT_ID=$(echo "$R" | jq -r '.projectId')
-if [[ "$PROJECT_ID" == proj_* ]]; then
+if [[ "$PROJECT_ID" == proj-* ]]; then
   pass "valid request accepted (ref=$PROJECT_ID)"
   # Clean up
   curl -s -X DELETE "http://localhost:24005/api/provision/$PROJECT_ID" \
