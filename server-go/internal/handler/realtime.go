@@ -18,13 +18,21 @@ import (
 // using `excalibase_app` credentials from vault — that role owns the
 // publication so it can ALTER ADD/DROP TABLE without superuser access.
 type RealtimeHandler struct {
-	store    storage.InstanceStore
-	orgStore storage.OrgStore
-	vault    vaultclient.VaultClient
+	store           storage.InstanceStore
+	orgStore        storage.OrgStore
+	vault           vaultclient.VaultClient
+	publicationName string
 }
 
 func NewRealtimeHandler(store storage.InstanceStore, orgStore storage.OrgStore, vault vaultclient.VaultClient) *RealtimeHandler {
 	return &RealtimeHandler{store: store, orgStore: orgStore, vault: vault}
+}
+
+// SetPublicationName overrides the default publication name. Must match
+// what the watcher daemon and graphql are configured to use, otherwise
+// toggle endpoints write to a publication nobody reads.
+func (h *RealtimeHandler) SetPublicationName(name string) {
+	h.publicationName = name
 }
 
 func (h *RealtimeHandler) Routes(r chi.Router) {
@@ -150,5 +158,5 @@ func (h *RealtimeHandler) dial(r *http.Request) (*service.RealtimeService, *sql.
 	if err != nil {
 		return nil, nil, fmt.Errorf("open db: %w", err)
 	}
-	return service.NewRealtimeService(db), db, nil
+	return service.NewRealtimeServiceWithName(db, h.publicationName), db, nil
 }

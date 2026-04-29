@@ -185,6 +185,12 @@ func main() {
 	provSvc.SetVault(vc)
 	provSvc.SetOrgStore(sqlStore)
 	provSvc.SetSelfHostedMode(!cfg.IsCloud())
+	// Realtime publication name is the source-of-truth coupling between
+	// watcher (config.publication_name), graphql (app.realtime.publication-name),
+	// and provisioning (this env). All three must agree per deployment.
+	if name := os.Getenv("REALTIME_PUBLICATION_NAME"); name != "" {
+		provSvc.SetPublicationName(name)
+	}
 	if dockerClientRef != nil {
 		provSvc.SetDockerClient(dockerClientRef)
 	}
@@ -240,6 +246,9 @@ func main() {
 
 	// Realtime publication-membership handler (per-project ALTER PUBLICATION)
 	realtimeHandler := handler.NewRealtimeHandler(sqlStore, sqlStore, vc)
+	if name := os.Getenv("REALTIME_PUBLICATION_NAME"); name != "" {
+		realtimeHandler.SetPublicationName(name)
+	}
 
 	// Router
 	r := chi.NewRouter()

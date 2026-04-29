@@ -10,7 +10,7 @@ import (
 // from excalibase_app. This is the security boundary — only cdc_watcher can
 // open replication connections; excalibase_app cannot dump WAL.
 func TestBuildProjectRoleSQL_CreatesCdcWatcherRoleWithReplication(t *testing.T) {
-	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app")
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
 
 	if !strings.Contains(sql, "rolname = 'cdc_watcher'") {
 		t.Error("expected cdc_watcher role creation guard")
@@ -24,7 +24,7 @@ func TestBuildProjectRoleSQL_CreatesCdcWatcherRoleWithReplication(t *testing.T) 
 // CNPG's default `app` role for replication. The legacy ALTER ROLE app WITH
 // REPLICATION is removed in favor of a dedicated cdc_watcher role.
 func TestBuildProjectRoleSQL_DoesNotAlterRoleApp(t *testing.T) {
-	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app")
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
 
 	if strings.Contains(sql, "ALTER ROLE app WITH REPLICATION") {
 		t.Error("ALTER ROLE app WITH REPLICATION should be removed; use cdc_watcher instead")
@@ -35,13 +35,33 @@ func TestBuildProjectRoleSQL_DoesNotAlterRoleApp(t *testing.T) {
 // created without FOR ALL TABLES. Opt-in by default — users (or the
 // NoSQL auto-create flow) explicitly add tables.
 func TestBuildProjectRoleSQL_PublicationIsEmpty(t *testing.T) {
-	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app")
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
 
-	if !strings.Contains(sql, "CREATE PUBLICATION cdc_watcher_pub") {
-		t.Error("expected CREATE PUBLICATION cdc_watcher_pub")
+	// QuoteIdent wraps the publication name in double quotes.
+	if !strings.Contains(sql, `CREATE PUBLICATION "cdc_watcher_pub"`) {
+		t.Errorf("expected CREATE PUBLICATION \"cdc_watcher_pub\"; sql:\n%s", sql)
 	}
 	if strings.Contains(sql, "FOR ALL TABLES") {
 		t.Error("publication must be empty (no FOR ALL TABLES) — opt-in only")
+	}
+}
+
+// TestBuildProjectRoleSQL_HonoursCustomPublicationName asserts the
+// publication name parameter is threaded through — both the existence
+// check and the CREATE statement use the supplied name. Critical
+// because the watcher daemon's config is the source of truth; tests
+// and e2e setups must be able to use non-default names.
+func TestBuildProjectRoleSQL_HonoursCustomPublicationName(t *testing.T) {
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "custom_pub_name")
+
+	if !strings.Contains(sql, `pubname = 'custom_pub_name'`) {
+		t.Error("expected pubname existence check against 'custom_pub_name'")
+	}
+	if !strings.Contains(sql, `CREATE PUBLICATION "custom_pub_name"`) {
+		t.Error("expected CREATE PUBLICATION \"custom_pub_name\"")
+	}
+	if !strings.Contains(sql, `ALTER PUBLICATION "custom_pub_name" OWNER TO "excalibase_app"`) {
+		t.Error("expected ALTER PUBLICATION \"custom_pub_name\" OWNER TO \"excalibase_app\"")
 	}
 }
 
@@ -50,9 +70,9 @@ func TestBuildProjectRoleSQL_PublicationIsEmpty(t *testing.T) {
 // (which connect as excalibase_app) can ALTER PUBLICATION ADD/DROP TABLE
 // without superuser escalation.
 func TestBuildProjectRoleSQL_PublicationOwnedByExcalibaseApp(t *testing.T) {
-	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app")
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
 
-	if !strings.Contains(sql, `ALTER PUBLICATION cdc_watcher_pub OWNER TO "excalibase_app"`) {
+	if !strings.Contains(sql, `ALTER PUBLICATION "cdc_watcher_pub" OWNER TO "excalibase_app"`) {
 		t.Errorf("expected publication ownership transfer to excalibase_app; sql:\n%s", sql)
 	}
 }
@@ -63,7 +83,7 @@ func TestBuildProjectRoleSQL_PublicationOwnedByExcalibaseApp(t *testing.T) {
 // RLS — including auth tables. Keeping it without REPLICATION is the
 // load-bearing security boundary.
 func TestBuildProjectRoleSQL_ExcalibaseAppHasNoReplicationAttribute(t *testing.T) {
-	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app")
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
 
 	// The role creation block for excalibase_app must not include REPLICATION
 	excalibaseAppBlock := extractRoleBlock(sql, "excalibase_app")

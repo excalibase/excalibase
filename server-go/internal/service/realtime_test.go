@@ -49,7 +49,7 @@ func realtimeTestDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { db.Close() })
 
 	// Apply the same role + publication setup that production provisioning runs.
-	if _, err := db.ExecContext(ctx, BuildProjectRoleSQL("aP", "eP", "wP", "app")); err != nil {
+	if _, err := db.ExecContext(ctx, BuildProjectRoleSQL("aP", "eP", "wP", "app", "cdc_watcher_pub")); err != nil {
 		t.Fatalf("apply role SQL: %v", err)
 	}
 	// Seed user-data tables in public + nosql schemas to mimic post-provision state.

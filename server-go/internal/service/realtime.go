@@ -10,10 +10,10 @@ import (
 	"github.com/lib/pq"
 )
 
-// publicationName is the single per-project publication that the watcher
-// daemon reads via its replication slot. Membership is mutated via the
-// endpoints in this file (and from graphql's NoSQL auto-create flow).
-const publicationName = "cdc_watcher_pub"
+// DefaultPublicationName is the production-default publication name.
+// Watcher and graphql must agree on the same name; the value is
+// configurable via env (REALTIME_PUBLICATION_NAME) at process startup.
+const DefaultPublicationName = "cdc_watcher_pub"
 
 // pubAlreadyMemberCode is the SQLSTATE postgres returns when ALTER
 // PUBLICATION ADD TABLE is run for a table already in the publication.
@@ -36,11 +36,22 @@ type TableState struct {
 // per-tenant connection pool (excalibase_app credentials, fetched from
 // vault). The service has no opinion on auth or routing — purely SQL.
 type RealtimeService struct {
-	db *sql.DB
+	db              *sql.DB
+	publicationName string
 }
 
+// NewRealtimeService constructs the service with the production-default
+// publication name. Use NewRealtimeServiceWithName for custom deploys
+// (e.g. e2e tests where the watcher uses a different publication).
 func NewRealtimeService(db *sql.DB) *RealtimeService {
-	return &RealtimeService{db: db}
+	return &RealtimeService{db: db, publicationName: DefaultPublicationName}
+}
+
+func NewRealtimeServiceWithName(db *sql.DB, publicationName string) *RealtimeService {
+	if publicationName == "" {
+		publicationName = DefaultPublicationName
+	}
+	return &RealtimeService{db: db, publicationName: publicationName}
 }
 
 // ListTables returns every user-data table with whether it's currently
@@ -65,7 +76,7 @@ func (s *RealtimeService) ListTables(ctx context.Context) ([]TableState, error) 
 		  AND n.nspname NOT LIKE 'pg_%'
 		ORDER BY n.nspname, c.relname
 	`
-	rows, err := s.db.QueryContext(ctx, q, publicationName)
+	rows, err := s.db.QueryContext(ctx, q, s.publicationName)
 	if err != nil {
 		return nil, fmt.Errorf("list publication tables: %w", err)
 	}
@@ -90,7 +101,7 @@ func (s *RealtimeService) EnableTable(ctx context.Context, sch, tbl string) erro
 		return fmt.Errorf("invalid identifier: %q.%q", sch, tbl)
 	}
 	q := fmt.Sprintf("ALTER PUBLICATION %s ADD TABLE %s.%s",
-		schema.QuoteIdent(publicationName),
+		schema.QuoteIdent(s.publicationName),
 		schema.QuoteIdent(sch),
 		schema.QuoteIdent(tbl))
 	if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -109,7 +120,7 @@ func (s *RealtimeService) DisableTable(ctx context.Context, sch, tbl string) err
 		return fmt.Errorf("invalid identifier: %q.%q", sch, tbl)
 	}
 	q := fmt.Sprintf("ALTER PUBLICATION %s DROP TABLE %s.%s",
-		schema.QuoteIdent(publicationName),
+		schema.QuoteIdent(s.publicationName),
 		schema.QuoteIdent(sch),
 		schema.QuoteIdent(tbl))
 	if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -140,7 +151,7 @@ func (s *RealtimeService) EnableAll(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	q := fmt.Sprintf("ALTER PUBLICATION %s ADD TABLE %s",
-		schema.QuoteIdent(publicationName), strings.Join(refs, ", "))
+		schema.QuoteIdent(s.publicationName), strings.Join(refs, ", "))
 	if _, err := s.db.ExecContext(ctx, q); err != nil {
 		return 0, fmt.Errorf("bulk enable: %w", err)
 	}
@@ -165,7 +176,7 @@ func (s *RealtimeService) DisableAll(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	q := fmt.Sprintf("ALTER PUBLICATION %s DROP TABLE %s",
-		schema.QuoteIdent(publicationName), strings.Join(refs, ", "))
+		schema.QuoteIdent(s.publicationName), strings.Join(refs, ", "))
 	if _, err := s.db.ExecContext(ctx, q); err != nil {
 		return 0, fmt.Errorf("bulk disable: %w", err)
 	}

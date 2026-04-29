@@ -26,6 +26,10 @@ type ProvisioningService struct {
 	dockerClient provisioner.DockerClient // optional, for role creation via container exec (Docker mode)
 	pgdog          *PgDogNotifier       // optional, for PgDog config registration
 	selfHostedMode bool                 // skip tier enforcement
+	// publicationName is the CDC publication created during role setup.
+	// Must match watcher's publication_name config and graphql's
+	// app.realtime.publication-name. Empty defaults to "cdc_watcher_pub".
+	publicationName string
 }
 
 func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Factory, k8sClient k8s.KubeClient) *ProvisioningService {
@@ -38,6 +42,17 @@ func (s *ProvisioningService) SetVault(v vaultclient.VaultClient) {
 
 func (s *ProvisioningService) SetPgDogNotifier(n *PgDogNotifier) {
 	s.pgdog = n
+}
+
+func (s *ProvisioningService) SetPublicationName(name string) {
+	s.publicationName = name
+}
+
+func (s *ProvisioningService) PublicationName() string {
+	if s.publicationName == "" {
+		return "cdc_watcher_pub"
+	}
+	return s.publicationName
 }
 
 func (s *ProvisioningService) SetOrgStore(os storage.OrgStore) {
@@ -502,7 +517,7 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	}
 	watcherPass := generatePassword(32)
 
-	roleSQL := BuildProjectRoleSQL(authPass, appPass, watcherPass, dbName)
+	roleSQL := BuildProjectRoleSQL(authPass, appPass, watcherPass, dbName, s.publicationName)
 
 	// Execute psql inside the database container (K8s pod or Docker container).
 	pc.SetStep("exec CREATE ROLE in database")

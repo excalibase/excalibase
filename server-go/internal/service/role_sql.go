@@ -14,15 +14,21 @@ import (
 //     publication for managing realtime membership. NO REPLICATION.
 //   - cdc_watcher  — REPLICATION attribute, used by the watcher daemon
 //     to consume the logical slot. No DML grants.
-//   - cdc_watcher_pub — empty publication, owned by excalibase_app so
-//     studio / graphql / NoSQL auto-create can ALTER ADD/DROP TABLE.
+//   - empty publication, owned by excalibase_app so studio / graphql /
+//     NoSQL auto-create can ALTER ADD/DROP TABLE. Name is configurable
+//     because the watcher daemon's config is the source of truth — both
+//     ends must agree.
 //
 // The function is pure (no side effects, deterministic by input) so unit
 // tests can assert on the produced statement set without a live DB.
-func BuildProjectRoleSQL(authPass, appPass, watcherPass, dbName string) string {
+func BuildProjectRoleSQL(authPass, appPass, watcherPass, dbName, publicationName string) string {
+	if publicationName == "" {
+		publicationName = "cdc_watcher_pub"
+	}
 	authRole := schema.QuoteIdent("auth_admin")
 	appRole := schema.QuoteIdent("excalibase_app")
 	watcherRole := schema.QuoteIdent("cdc_watcher")
+	pubIdent := schema.QuoteIdent(publicationName)
 	safeAuthPass := schema.QuoteLiteral(authPass)
 	safeAppPass := schema.QuoteLiteral(appPass)
 	safeWatcherPass := schema.QuoteLiteral(watcherPass)
@@ -68,13 +74,14 @@ END $$;
 --   - studio toggle UI (provisioning's /api/projects/{id}/realtime endpoints)
 --   - NoSQL auto-create in graphql (when project's realtime_auto_enable=true)
 -- Owner is excalibase_app so those code paths can ALTER ADD/DROP TABLE
--- without superuser escalation.
+-- without superuser escalation. The watcher daemon's config is the source
+-- of truth for the publication name; both ends must agree.
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'cdc_watcher_pub') THEN
-    CREATE PUBLICATION cdc_watcher_pub;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = %s) THEN
+    CREATE PUBLICATION %s;
   END IF;
 END $$;
-ALTER PUBLICATION cdc_watcher_pub OWNER TO %s;
+ALTER PUBLICATION %s OWNER TO %s;
 `,
 		authRole, safeAuthPass, // auth_admin DO block
 		dbIdent, authRole, // GRANT CREATE ON DATABASE
@@ -83,6 +90,8 @@ ALTER PUBLICATION cdc_watcher_pub OWNER TO %s;
 		appRole, appRole, appRole, appRole, appRole, // GRANT public
 		appRole, appRole, appRole, // GRANT auth read
 		watcherRole, safeWatcherPass, // cdc_watcher DO block
-		appRole, // ALTER PUBLICATION OWNER TO
+		schema.QuoteLiteral(publicationName), // pubname check (literal)
+		pubIdent,                             // CREATE PUBLICATION ident
+		pubIdent, appRole,                    // ALTER PUBLICATION ... OWNER TO
 	)
 }
