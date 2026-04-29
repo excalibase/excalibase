@@ -41,9 +41,14 @@ func (h *VaultHandler) Routes(r chi.Router) {
 }
 
 func (h *VaultHandler) Status(w http.ResponseWriter, r *http.Request) {
+	s := h.v.Status()
 	writeJSON(w, map[string]interface{}{
-		"initialized": h.v.Initialized(),
-		"sealed":      h.v.Sealed(),
+		"initialized": s.Initialized,
+		"sealed":      s.Sealed,
+		"threshold":   s.Threshold,
+		"shares":      s.Shares,
+		"progress":    s.Progress,
+		"type":        s.Type,
 	})
 }
 

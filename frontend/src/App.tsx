@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { AuthLayout } from './components/layout/AuthLayout';
 import { AuthGuard } from './components/auth/AuthGuard';
+import { VaultGuard } from './components/auth/VaultGuard';
 import { PlatformLayout } from './components/layout/PlatformLayout';
 import { ProjectLayout } from './components/layout/ProjectLayout';
 
@@ -33,6 +34,7 @@ const SnapshotsPage = lazy(() => import('./pages/SnapshotsPage').then(m => ({ de
 const MigrationsPage = lazy(() => import('./pages/MigrationsPage').then(m => ({ default: m.MigrationsPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 const VaultPage = lazy(() => import('./pages/VaultPage').then(m => ({ default: m.VaultPage })));
+const SetupPage = lazy(() => import('./pages/SetupPage').then(m => ({ default: m.SetupPage })));
 const SchemaDesignerPage = lazy(() => import('./pages/SchemaDesignerPage').then(m => ({ default: m.SchemaDesignerPage })));
 const TriggersPage = lazy(() => import('./pages/TriggersPage').then(m => ({ default: m.TriggersPage })));
 const IndexesPage = lazy(() => import('./pages/IndexesPage').then(m => ({ default: m.IndexesPage })));
@@ -52,14 +54,20 @@ export default function App() {
   return (
     <Suspense fallback={<PageLoader />}>
       <Routes>
-        {/* Auth */}
-        <Route element={<AuthLayout />}>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-        </Route>
+        <Route element={<VaultGuard />}>
+          {/* Vault setup wizard — own route under AuthLayout so the branded card frame is reused */}
+          <Route element={<AuthLayout />}>
+            <Route path="/setup" element={<SetupPage />} />
+          </Route>
 
-        {/* Platform pages */}
-        <Route element={<AuthGuard />}>
+          {/* Auth */}
+          <Route element={<AuthLayout />}>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+          </Route>
+
+          {/* Platform pages */}
+          <Route element={<AuthGuard />}>
           <Route element={<PlatformLayout />}>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/orgs" element={<OrgsPage />} />
@@ -105,6 +113,7 @@ export default function App() {
             <Route path="vault" element={<VaultPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
+        </Route>
         </Route>
       </Routes>
     </Suspense>

@@ -4,6 +4,21 @@ import { api } from '../api/client';
 interface VaultStatus {
   initialized: boolean;
   sealed: boolean;
+  threshold: number;
+  shares: number;
+  progress: number;
+  type: string;
+}
+
+interface VaultInitResult {
+  shares: string[];
+  threshold: number;
+}
+
+interface VaultUnsealResult {
+  sealed: boolean;
+  progress: number;
+  threshold: number;
 }
 
 interface VaultListResponse {
@@ -17,7 +32,34 @@ export function useVaultStatus() {
       const { data } = await api.get('/vault/status');
       return data;
     },
-    staleTime: 10_000,
+    staleTime: 5_000,
+    refetchInterval: (q) => (q.state.data?.sealed ? 5_000 : false),
+  });
+}
+
+export function useInitVault() {
+  const queryClient = useQueryClient();
+  return useMutation<VaultInitResult, Error, { shares: number; threshold: number }>({
+    mutationFn: async ({ shares, threshold }) => {
+      const { data } = await api.post<VaultInitResult>('/vault/init', { shares, threshold });
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['vault', 'status'] });
+    },
+  });
+}
+
+export function useUnsealVault() {
+  const queryClient = useQueryClient();
+  return useMutation<VaultUnsealResult, Error, string>({
+    mutationFn: async (share) => {
+      const { data } = await api.post<VaultUnsealResult>('/vault/unseal', { share });
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['vault', 'status'] });
+    },
   });
 }
 

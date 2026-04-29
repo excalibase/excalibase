@@ -45,6 +45,18 @@ type UnsealProgress struct {
 	Threshold int
 }
 
+// Status mirrors HashiCorp Vault's /sys/seal-status shape so the studio UI
+// can drive the same init → unseal → ready routing flow. Threshold/Shares
+// are zero before init; Progress is non-zero only mid-unseal.
+type Status struct {
+	Initialized bool
+	Sealed      bool
+	Threshold   int
+	Shares      int
+	Progress    int
+	Type        string
+}
+
 type barrierMeta struct {
 	EncryptedBarrier []byte `json:"encrypted_barrier"`
 	Threshold        int    `json:"threshold"`
@@ -94,6 +106,27 @@ func (v *Vault) Sealed() bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return v.barrierKey == nil
+}
+
+// Status returns a snapshot suitable for the studio's setup wizard. Reads
+// barrier meta only when initialized so the pre-init path stays cheap.
+func (v *Vault) Status() Status {
+	s := Status{
+		Initialized: v.Initialized(),
+		Sealed:      v.Sealed(),
+		Type:        "shamir",
+	}
+	if !s.Initialized {
+		return s
+	}
+	if meta, err := v.getMeta(); err == nil {
+		s.Threshold = meta.Threshold
+		s.Shares = meta.Shares
+	}
+	v.mu.RLock()
+	s.Progress = len(v.unsealShares)
+	v.mu.RUnlock()
+	return s
 }
 
 func (v *Vault) Init(shares, threshold int) (*InitResult, error) {

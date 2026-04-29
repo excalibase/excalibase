@@ -111,13 +111,11 @@ func main() {
 		defer localVault.Close()
 	}
 
-	// Bootstrap admin user on first run
-	if err := auth.Bootstrap(context.Background(), sqlStore); err != nil {
-		log.Fatalf("Failed to bootstrap admin user: %v", err)
-	}
-
-	// Bootstrap default org in self-hosted mode. Cloud mode creates orgs
-	// on demand via the cloud-only POST /api/orgs/ endpoint.
+	// Note: legacy auth.Bootstrap removed — first admin is created via the
+	// studio /setup wizard (POST /api/auth/register auto-promotes the
+	// first registration to platform_admin). Default-org bootstrap still
+	// runs in self-hosted mode if at least one user exists, otherwise it
+	// waits for the wizard to finish.
 	if !cfg.IsCloud() {
 		users, _ := sqlStore.FindAllUsers(context.Background())
 		if len(users) > 0 {
@@ -267,6 +265,7 @@ func main() {
 		r.Post("/byoc", provHandler.ProvisionBYOC)
 
 		r.Route("/{projectId}", func(r chi.Router) {
+			r.Use(custommw.TenantContext)
 			r.Get("/", provHandler.GetStatus)
 			r.Delete("/", provHandler.Delete)
 			r.Get("/credentials", provHandler.GetCredentials)
@@ -303,10 +302,11 @@ func main() {
 		pgHandler.Routes(r)
 	})
 
-	// Auth API (register + login are public, rest requires auth)
+	// Auth API (register + login + setup-status are public, rest requires auth)
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/register", authHandler.Register)
 		r.Post("/login", authHandler.Login)
+		r.Get("/setup-status", authHandler.GetSetupStatus)
 		r.With(auth.RequireAuth).Get("/me", authHandler.Me)
 		r.With(auth.RequireAuth).Route("/users", func(r chi.Router) {
 			r.With(auth.RequirePermission(auth.PermManageUsers)).Get("/", authHandler.ListUsers)
@@ -339,6 +339,7 @@ func main() {
 
 	// Edge Functions API — per-project CRUD, invoke (admin test), secrets
 	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", fnHandler.List)
 		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/", fnHandler.Create)
@@ -356,9 +357,19 @@ func main() {
 		})
 	})
 
+	// Combined project + org metadata — consumed by the auth service at
+	// JWT-mint time to embed display names so support staff can find
+	// tenants by name in dashboards/logs. PAT (Bearer) protected via the
+	// shared RequireAuth middleware.
+	r.Route("/api/projects/{projectId}/info", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Get("/", provHandler.GetProjectInfo)
+	})
+
 	// Public function invoke — Supabase-style: /functions/v1/{projectId}/{name}
 	// Enforces per-project rate limit + verifyJwt presence check.
-	r.HandleFunc("/functions/v1/{projectId}/{fnId}", fnHandler.PublicInvoke)
+	r.With(custommw.TenantContext).HandleFunc("/functions/v1/{projectId}/{fnId}", fnHandler.PublicInvoke)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("Excalibase Go server starting on %s", addr)
