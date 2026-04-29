@@ -238,6 +238,9 @@ func main() {
 	}
 	schemaHandler := handler.NewSchemaHandler(vc)
 
+	// Realtime publication-membership handler (per-project ALTER PUBLICATION)
+	realtimeHandler := handler.NewRealtimeHandler(sqlStore, sqlStore, vc)
+
 	// Router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -365,6 +368,14 @@ func main() {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Get("/", provHandler.GetProjectInfo)
+	})
+
+	// Realtime publication membership: studio's per-table toggle UI calls
+	// these to ALTER PUBLICATION cdc_watcher_pub. Connects to the project
+	// DB as excalibase_app (publication owner — no superuser escalation).
+	r.Route("/api/projects/{projectId}/realtime", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		realtimeHandler.Routes(r)
 	})
 
 	// Public function invoke — Supabase-style: /functions/v1/{projectId}/{name}

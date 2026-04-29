@@ -10,4 +10,8 @@ type ProjectInfo struct {
 	OrgID       string `json:"orgId"`
 	OrgSlug     string `json:"orgSlug"`
 	OrgName     string `json:"orgName"`
+	// RealtimeAutoEnable controls whether NoSQL auto-create adds new
+	// collection tables to the cdc_watcher publication. v1 defaults to
+	// true; future: per-project override stored on instances row.
+	RealtimeAutoEnable bool `json:"realtimeAutoEnable"`
 }

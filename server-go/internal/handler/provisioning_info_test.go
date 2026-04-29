@@ -82,11 +82,12 @@ func TestGetProjectInfo_Success(t *testing.T) {
 	}
 
 	want := domain.ProjectInfo{
-		ProjectID:   "proj-i1nd88wser",
-		ProjectName: "blog",
-		OrgID:       "e6ab0746-974d-4ed1-b900-d83e916f1d39",
-		OrgSlug:     "acme",
-		OrgName:     "Acme Corp",
+		ProjectID:          "proj-i1nd88wser",
+		ProjectName:        "blog",
+		OrgID:              "e6ab0746-974d-4ed1-b900-d83e916f1d39",
+		OrgSlug:             "acme",
+		OrgName:            "Acme Corp",
+		RealtimeAutoEnable: true,
 	}
 	if got != want {
 		t.Errorf("body mismatch:\n got=%+v\nwant=%+v", got, want)

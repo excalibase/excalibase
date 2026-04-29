@@ -237,8 +237,9 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		// Fall back to the orgID for slug/name when the org record can't
 		// be loaded — keeps the endpoint useful for older instances that
 		// predate the org table or when orgStore isn't wired.
-		OrgSlug: inst.OrgID,
-		OrgName: inst.OrgID,
+		OrgSlug:            inst.OrgID,
+		OrgName:            inst.OrgID,
+		RealtimeAutoEnable: true, // v1: hardcoded; per-project override is a future column on instances
 	}
 
 	if h.orgStore != nil && inst.OrgID != "" {
