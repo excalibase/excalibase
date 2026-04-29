@@ -121,13 +121,23 @@ func (p *DockerPostgreSQLProvisioner) ConfigureBackup(ctx context.Context, names
 	return nil
 }
 
-// waitForPostgresReady polls `pg_isready` inside the container until it
-// returns exit code 0 (Postgres is accepting connections). Caps at 30s.
-// Runs after WaitForHealthy so the container is already up — we are only
-// waiting for Postgres' internal init to finish.
+// waitForPostgresReady polls Postgres readiness inside the container and
+// only returns once the server is accepting real client connections.
+//
+// pg_isready alone is NOT sufficient: the official postgres:17 image init
+// flow temporarily starts Postgres on a unix socket while running its
+// initdb / docker-entrypoint-initdb.d scripts, then restarts on TCP. A
+// pg_isready exec during that window returns 0 even though TCP and the
+// target DB aren't ready yet. The next caller's `psql -U postgres -d app`
+// then races against the restart and fails with exit code 2.
+//
+// Two-phase probe: pg_isready first (cheap), then a real `psql -c "SELECT 1"`
+// against the target DB to confirm the rebooted server actually accepts
+// queries. Caps at 30s. Runs after WaitForHealthy so the container is up.
 func (p *DockerPostgreSQLProvisioner) waitForPostgresReady(ctx context.Context, containerID, dbName string) error {
 	deadline := time.Now().Add(30 * time.Second)
-	probe := []string{"pg_isready", "-U", "postgres", "-d", dbName}
+	pgIsReady := []string{"pg_isready", "-U", "postgres", "-d", dbName}
+	psqlProbe := []string{"psql", "-U", "postgres", "-d", dbName, "-tAc", "SELECT 1"}
 	var lastErr error
 	for time.Now().Before(deadline) {
 		select {
@@ -135,17 +145,22 @@ func (p *DockerPostgreSQLProvisioner) waitForPostgresReady(ctx context.Context, 
 			return ctx.Err()
 		default:
 		}
-		code, err := p.docker.ExecInContainer(ctx, containerID, probe)
-		if err == nil && code == 0 {
-			return nil
+		if code, err := p.docker.ExecInContainer(ctx, containerID, pgIsReady); err == nil && code == 0 {
+			// pg_isready succeeded — confirm with a real query before declaring ready.
+			if code2, err2 := p.docker.ExecInContainer(ctx, containerID, psqlProbe); err2 == nil && code2 == 0 {
+				return nil
+			} else {
+				lastErr = err2
+			}
+		} else {
+			lastErr = err
 		}
-		lastErr = err
 		time.Sleep(500 * time.Millisecond)
 	}
 	if lastErr != nil {
-		return fmt.Errorf("pg_isready did not succeed within 30s: %w", lastErr)
+		return fmt.Errorf("postgres did not become query-ready within 30s: %w", lastErr)
 	}
-	return fmt.Errorf("pg_isready did not succeed within 30s")
+	return fmt.Errorf("postgres did not become query-ready within 30s")
 }
 
 func generatePassword() string {

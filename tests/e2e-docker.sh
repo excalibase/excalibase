@@ -107,29 +107,36 @@ R=$(curl -s "$API/api/config")
 echo "$R" | jq -r '.deploymentMode' 2>/dev/null | grep -q selfhosted && pass "selfhosted mode" || fail "config" "$R"
 
 # --- Step 5: Vault init + unseal ---
-echo "5. Vault init + unseal"
-VAULT_INIT=$(curl -s -X POST "$API/api/vault/init" -H 'Content-Type: application/json' -d '{"secretShares":1,"secretThreshold":1}')
-UNSEAL_KEY=$(echo "$VAULT_INIT" | jq -r '.keys[0]' 2>/dev/null)
+echo "5. Vault init + unseal (mirrors studio /setup wizard)"
+VAULT_INIT=$(curl -s -X POST "$API/api/vault/init" -H 'Content-Type: application/json' -d '{"shares":1,"threshold":1}')
+UNSEAL_KEY=$(echo "$VAULT_INIT" | jq -r '.shares[0]' 2>/dev/null)
 if [ -n "$UNSEAL_KEY" ] && [ "$UNSEAL_KEY" != "null" ]; then
-  pass "vault initialized"
-  curl -s -X POST "$API/api/vault/unseal" -H 'Content-Type: application/json' -d "{\"key\":\"$UNSEAL_KEY\"}" > /dev/null
-  pass "vault unsealed"
+  pass "vault initialized (shares=1, threshold=1)"
+  R=$(curl -s -X POST "$API/api/vault/unseal" -H 'Content-Type: application/json' -d "{\"share\":\"$UNSEAL_KEY\"}")
+  echo "$R" | jq -r '.sealed' 2>/dev/null | grep -q false && pass "vault unsealed" || fail "unseal" "$R"
 else
-  # Already initialized — check status
+  # Already initialized (idempotent re-runs over the same DATA_DIR)
   R=$(curl -s "$API/api/vault/status")
   echo "$R" | jq -r '.sealed' 2>/dev/null | grep -q false && pass "vault already unsealed" || fail "vault" "$R"
 fi
 
-# --- Step 6: Login (admin bootstrapped on first run) ---
-echo "6. Platform login"
-# Get the bootstrap password from server log (format: "  Password: <hex>")
-ADMIN_PASS=$(grep -oP 'Password: \K\S+' "$DATA_DIR/server.log" 2>/dev/null | head -1 || echo "")
-if [ -z "$ADMIN_PASS" ]; then
-  ADMIN_PASS="admin"
+# --- Step 6: Register first admin (wizard step 4) ---
+# Legacy auth.Bootstrap was removed; first registration auto-promotes
+# to platform_admin and returns a PAT for the rest of the flow.
+echo "6. Register platform admin"
+ADMIN_PASS="E2eAdmin123!"
+REG_BODY=$(jq -n --arg p "$ADMIN_PASS" '{username:"admin", email:"admin@e2e.local", password:$p}')
+R=$(curl -s -X POST "$API/api/auth/register" -H 'Content-Type: application/json' -d "$REG_BODY")
+TOKEN=$(echo "$R" | jq -r '.token' 2>/dev/null)
+ROLE=$(echo "$R" | jq -r '.user.role' 2>/dev/null)
+if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] && [ "$ROLE" = "platform_admin" ]; then
+  pass "admin registered + auto-promoted to platform_admin"
+else
+  # Admin already existed (re-run over same DATA_DIR) — fall back to login
+  TOKEN=$(curl -s -X POST "$API/api/auth/login" -H 'Content-Type: application/json' \
+    -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" | jq -r '.token')
+  [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] && pass "admin already existed; logged in" || fail "auth" "register=$R"
 fi
-TOKEN=$(curl -s -X POST "$API/api/auth/login" -H 'Content-Type: application/json' \
-  -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" | jq -r '.token')
-[ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] && pass "admin login (token obtained)" || fail "login" "token=$TOKEN"
 
 # --- Step 7: Default org ---
 echo "7. Default org"
@@ -144,7 +151,7 @@ R=$(curl -s -X POST "$API/api/provision/" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d "{\"projectName\":\"e2e-docker-test\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
 PROJECT_ID=$(echo "$R" | jq -r '.projectId' 2>/dev/null)
-[ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" == proj_* ]] && pass "provision started (ref=$PROJECT_ID)" || fail "provision" "$R"
+[ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" == proj-* ]] && pass "provision started (ref=$PROJECT_ID)" || fail "provision" "$R"
 
 # --- Step 9: Wait for provisioning to complete ---
 echo "9. Wait for provisioning (Docker container + pg_isready)"

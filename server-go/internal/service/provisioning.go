@@ -461,6 +461,7 @@ func (s *ProvisioningService) SetDeletionProtection(projectID string, enabled bo
 func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, namespace string, pc *provisioner.ProvisionContext) error {
 	pc.SetStage(domain.StageRoleCreation)
 	projectID := req.ProjectName
+	// Pod name = projectID (already DNS-1123 safe since ref uses hyphen)
 	primaryPod := projectID + "-postgres-1"
 	host := result.Host
 	port := strconv.Itoa(result.Port)
@@ -535,6 +536,22 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %s;
 GRANT USAGE ON SCHEMA auth TO %s;
 GRANT SELECT ON ALL TABLES IN SCHEMA auth TO %s;
 ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
+
+-- CDC: grant REPLICATION to the app-user used by watcher-go, and pre-create
+-- the publication (FOR ALL TABLES requires superuser — done here as postgres).
+-- The watcher will create its own replication slot on connect.
+-- In K8s/CNPG mode the cluster ships an "app" role; in Docker mode the
+-- container only has "postgres". Guard the ALTER so the same SQL runs in both.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app') THEN
+    ALTER ROLE app WITH REPLICATION;
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'cdc_watcher_pub') THEN
+    CREATE PUBLICATION cdc_watcher_pub FOR ALL TABLES;
+  END IF;
+END $$;
 `,
 		authRole, safeAuthPass, // DO block: format(%L) safely quotes the password
 		schema.QuoteIdent(dbName), authRole, // GRANT CREATE ON DATABASE
