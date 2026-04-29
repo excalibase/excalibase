@@ -13,7 +13,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
-	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
@@ -501,65 +500,9 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	if appPass == "" {
 		appPass = generatePassword(32)
 	}
+	watcherPass := generatePassword(32)
 
-	// SQL to create roles and schemas
-	// Use QuoteIdent for role names in GRANT statements and QuoteLiteral for passwords.
-	// Inside DO blocks, we pass the password as a Go-escaped literal to PG's format()
-	// with %L, which safely re-quotes it for the EXECUTE'd CREATE ROLE statement.
-	authRole := schema.QuoteIdent("auth_admin")
-	appRole := schema.QuoteIdent("excalibase_app")
-	safeAuthPass := schema.QuoteLiteral(authPass)
-	safeAppPass := schema.QuoteLiteral(appPass)
-
-	roleSQL := fmt.Sprintf(`
-CREATE SCHEMA IF NOT EXISTS auth;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'auth_admin') THEN
-    EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s::text);
-  END IF;
-END $$;
-GRANT CREATE ON DATABASE %s TO %s;
-GRANT ALL ON SCHEMA auth TO %s;
-ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO %s;
-
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'excalibase_app') THEN
-    EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s::text);
-  END IF;
-END $$;
-GRANT ALL ON SCHEMA public TO %s;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO %s;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO %s;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO %s;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %s;
-GRANT USAGE ON SCHEMA auth TO %s;
-GRANT SELECT ON ALL TABLES IN SCHEMA auth TO %s;
-ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
-
--- CDC: grant REPLICATION to the app-user used by watcher-go, and pre-create
--- the publication (FOR ALL TABLES requires superuser — done here as postgres).
--- The watcher will create its own replication slot on connect.
--- In K8s/CNPG mode the cluster ships an "app" role; in Docker mode the
--- container only has "postgres". Guard the ALTER so the same SQL runs in both.
-DO $$ BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app') THEN
-    ALTER ROLE app WITH REPLICATION;
-  END IF;
-END $$;
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'cdc_watcher_pub') THEN
-    CREATE PUBLICATION cdc_watcher_pub FOR ALL TABLES;
-  END IF;
-END $$;
-`,
-		authRole, safeAuthPass, // DO block: format(%L) safely quotes the password
-		schema.QuoteIdent(dbName), authRole, // GRANT CREATE ON DATABASE
-		authRole, authRole, // GRANT auth
-		appRole, safeAppPass, // DO block for excalibase_app
-		appRole, appRole, appRole, appRole, appRole, // GRANT public
-		appRole, appRole, appRole, // GRANT auth usage
-	)
+	roleSQL := BuildProjectRoleSQL(authPass, appPass, watcherPass, dbName)
 
 	// Execute psql inside the database container (K8s pod or Docker container).
 	pc.SetStep("exec CREATE ROLE in database")
@@ -601,6 +544,17 @@ END $$;
 		return pc.Fail(fmt.Errorf("vault put excalibase_app: %w", err))
 	}
 	registerVaultCleanup(appPath)
+
+	// Watcher daemon reads from this path. Distinct from excalibase_app's
+	// credentials because cdc_watcher carries the REPLICATION attribute and
+	// must not be reachable from any user-facing service.
+	pc.SetStep("store cdc_watcher credentials")
+	watcherPath := vaultPath("cdc_watcher")
+	creds_watcher := map[string]string{"host": host, "port": port, "database": dbName, "username": "cdc_watcher", "password": watcherPass}
+	if err := s.vault.Put(watcherPath, creds_watcher); err != nil {
+		return pc.Fail(fmt.Errorf("vault put cdc_watcher: %w", err))
+	}
+	registerVaultCleanup(watcherPath)
 
 	log.Printf("Created project roles for %s and stored in vault", projectID)
 	return nil

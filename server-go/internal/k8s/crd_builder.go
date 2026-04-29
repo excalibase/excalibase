@@ -153,13 +153,16 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 
 	postgresql := map[string]interface{}{
 		"parameters": params,
-		// Allow the app user to open replication connections (watcher-go CDC).
 		// CNPG's default pg_hba only permits the internal streaming_replica user
-		// over TLS with client cert auth. We use password auth over TLS or plain
-		// for the app user.
+		// over TLS with client cert auth. We grant replication to a dedicated
+		// cdc_watcher role (created post-bootstrap by createProjectRoles) and
+		// regular client access to app + excalibase_app + auth_admin via
+		// password auth.
 		"pg_hba": []interface{}{
-			"host replication app all scram-sha-256",
+			"host replication cdc_watcher all scram-sha-256",
 			"host all app all scram-sha-256",
+			"host all excalibase_app all scram-sha-256",
+			"host all auth_admin all scram-sha-256",
 		},
 	}
 	if len(sharedPreloadLibs) > 0 {
