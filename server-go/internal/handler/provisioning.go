@@ -2,11 +2,13 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -101,10 +103,14 @@ func (h *ProvisioningHandler) GetStatus(w http.ResponseWriter, r *http.Request) 
 
 func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
+	tenant, _ := custommw.TenantIDFromContext(r.Context())
+	log.Printf("tenant=%s action=deprovision path=%s", tenant, r.URL.Path)
 	if err := h.svc.Deprovision(r.Context(), projectID); err != nil {
+		log.Printf("tenant=%s action=deprovision status=failed err=%v", tenant, err)
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
+	log.Printf("tenant=%s action=deprovision status=ok", tenant)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Database instance deleted successfully"))
 }
@@ -205,5 +211,43 @@ func (h *ProvisioningHandler) GetMaintenanceWindow(w http.ResponseWriter, r *htt
 		return
 	}
 	writeJSON(w, cfg)
+}
+
+// GetProjectInfo returns a flat project + org metadata blob used by the
+// auth service at JWT-mint time so support staff can search by display
+// names in dashboards/logs. Defers all data lookup to the service/store
+// layers — no business logic here.
+func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	if !isValidID(projectID) {
+		httpError(w, "invalid projectId", http.StatusBadRequest)
+		return
+	}
+
+	inst, err := h.svc.GetInstance(projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusNotFound)
+		return
+	}
+
+	info := domain.ProjectInfo{
+		ProjectID:   inst.ProjectID,
+		ProjectName: inst.ProjectName,
+		OrgID:       inst.OrgID,
+		// Fall back to the orgID for slug/name when the org record can't
+		// be loaded — keeps the endpoint useful for older instances that
+		// predate the org table or when orgStore isn't wired.
+		OrgSlug: inst.OrgID,
+		OrgName: inst.OrgID,
+	}
+
+	if h.orgStore != nil && inst.OrgID != "" {
+		if org, oerr := h.orgStore.FindOrgByID(r.Context(), inst.OrgID); oerr == nil && org != nil {
+			info.OrgSlug = org.Slug
+			info.OrgName = org.Name
+		}
+	}
+
+	writeJSON(w, info)
 }
 

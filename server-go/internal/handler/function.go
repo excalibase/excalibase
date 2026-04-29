@@ -18,6 +18,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
@@ -447,6 +448,8 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
+	tenant, _ := custommw.TenantIDFromContext(r.Context())
+	log.Printf("tenant=%s action=fn_create path=%s", tenant, r.URL.Path)
 
 	r.Body = http.MaxBytesReader(w, r.Body, int64(edgefn.MaxCodeSize+16*1024))
 	var fn edgefn.Function

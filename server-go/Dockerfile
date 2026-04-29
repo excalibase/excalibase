@@ -13,8 +13,13 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates sqlite-libs
 COPY --from=build /bin/excalibase-provisioning /bin/excalibase-provisioning
 
+# Bundle watcher Helm chart so provisioning can auto-deploy per-tenant CDC watchers.
+# Path matches default WATCHER_CHART_PATH env.
+COPY charts/excalibase-watcher-go /charts/excalibase-watcher-go
+
 RUN adduser -D -u 1000 appuser
 USER appuser
+ENV WATCHER_CHART_PATH=/charts/excalibase-watcher-go
 
 EXPOSE 24005
 
