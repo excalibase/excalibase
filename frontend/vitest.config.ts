@@ -12,15 +12,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'json-summary'],
-      // Coverage gate covers only the files this branch added or modified
-      // heavily — the rest of the studio (older hooks/pages without unit
-      // tests) is tracked separately and improved incrementally.
       include: [
-        'src/hooks/useRealtime.ts',
-        'src/hooks/useSetup.ts',
-        'src/hooks/useVault.ts',
-        'src/components/auth/VaultGuard.tsx',
-        'src/components/auth/AuthGuard.tsx',
+        'src/hooks/**/*.{ts,tsx}',
+        'src/components/auth/**/*.{ts,tsx}',
         'src/pages/SetupPage.tsx',
         'src/pages/RealtimePage.tsx',
       ],
