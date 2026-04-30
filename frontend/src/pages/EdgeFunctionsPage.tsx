@@ -304,7 +304,7 @@ export function EdgeFunctionsPage() {
                     </div>
                   ))}
                 </div>
-                <pre className="flex-1 p-4 text-xs font-mono text-text-primary overflow-auto bg-bg-tertiary">
+                <pre className="flex-1 p-4 text-xs font-mono text-text-primary overflow-auto bg-bg-tertiary" data-testid="fn-code">
                   <code>{selected.files[0]?.content || ''}</code>
                 </pre>
               </div>
@@ -329,6 +329,7 @@ export function EdgeFunctionsPage() {
               onChange={(e) => setFnId(e.target.value)}
               placeholder="hello-world"
               className="w-full px-3 py-2 bg-bg-tertiary border border-border-primary rounded text-sm text-text-primary font-mono"
+              data-testid="fn-id-input"
             />
           </div>
           <div>
@@ -381,6 +382,7 @@ export function EdgeFunctionsPage() {
               rows={14}
               className="w-full px-3 py-2 bg-bg-tertiary border border-border-primary rounded text-xs text-text-primary font-mono"
               spellCheck={false}
+              data-testid="fn-code-input"
             />
           </div>
           <button

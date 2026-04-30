@@ -11,7 +11,12 @@ test.describe('Settings Page', () => {
 
   test('renders project settings', async ({ page }) => {
     await expect(page.getByTestId('settings-page')).toBeVisible();
-    await expect(page.getByTestId('settings-page').getByText('test-project')).toBeVisible();
+    // The project ref appears in multiple connection/code blocks, so
+    // the loose text query is ambiguous. Pin to the connect-section
+    // block which is the page's primary identity surface.
+    await expect(
+      page.getByTestId('connect-section').getByText('test-project', { exact: true }),
+    ).toBeVisible();
     const settingsPage = page.getByTestId('settings-page');
     await expect(settingsPage.getByText('POSTGRESQL')).toBeVisible();
     await expect(settingsPage.getByText('FREE')).toBeVisible();
