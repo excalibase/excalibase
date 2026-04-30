@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loginAs, mockCloudMode } from './helpers';
+import { loginAs, mockCloudMode, mockVaultGuardReady } from './helpers';
 
 const mockOrgs = [
   { id: 'org-1', name: 'Alice Corp', slug: 'alice-corp', tier: 'FREE', ownerId: '1', createdAt: '2026-01-01T00:00:00Z' },
@@ -152,6 +152,12 @@ test.describe('Organizations', () => {
 });
 
 test.describe('Registration', () => {
+  test.beforeEach(async ({ page }) => {
+    // /login and /register are inside VaultGuard but not AuthGuard, so
+    // pre-auth tests still need the guard's status endpoints mocked.
+    await mockVaultGuardReady(page);
+  });
+
   test('register page renders', async ({ page }) => {
     await page.goto('/register');
     await expect(page.getByRole('heading', { name: 'Create Account' })).toBeVisible();

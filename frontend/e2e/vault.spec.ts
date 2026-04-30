@@ -112,12 +112,29 @@ test.describe('Vault Page', () => {
     await expect(page.getByTestId('vault-secret-values')).not.toBeVisible();
   });
 
-  test('sealed vault shows sealed message', async ({ page }) => {
-    // Override the unsealed mock from beforeEach
-    await mockVaultSealed(page);
+  test('sealed vault redirects to /setup wizard', async ({ page }) => {
+    // VaultGuard (added in feat/security-hardening-studio) intercepts at
+    // the route level: when vault is sealed, the user is redirected to
+    // the /setup wizard's unseal step instead of seeing an inline
+    // "Vault is Sealed" message on VaultPage. The new mock must include
+    // the threshold/progress fields VaultGuard reads.
+    await page.route('**/api/vault/status', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          initialized: true,
+          sealed: true,
+          threshold: 1,
+          shares: 1,
+          progress: 0,
+          type: 'shamir',
+        }),
+      }),
+    );
     await page.goto('/project/test-project/vault');
-    await expect(page.getByTestId('vault-page')).toBeVisible();
-    await expect(page.getByText('Vault is Sealed')).toBeVisible();
+    await expect(page).toHaveURL(/\/setup$/);
+    await expect(page.getByTestId('vault-setup-unseal')).toBeVisible();
   });
 
   test('vault appears in sidebar navigation', async ({ page }) => {

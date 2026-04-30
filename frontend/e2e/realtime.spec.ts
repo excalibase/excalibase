@@ -72,36 +72,10 @@ async function mockRealtimeAPIs(page: Page, initial: MockState) {
   return state;
 }
 
-// VaultGuard renders a loading screen until vault/status and setup-status
-// resolve; without these mocks the page never reaches RealtimePage.
-async function mockGuards(page: Page) {
-  await page.route('**/api/vault/status', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        initialized: true,
-        sealed: false,
-        threshold: 1,
-        shares: 1,
-        progress: 0,
-        type: 'shamir',
-      }),
-    }),
-  );
-  await page.route('**/api/auth/setup-status', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ hasAdmin: true }),
-    }),
-  );
-}
-
 test.describe('Realtime page', () => {
   test.beforeEach(async ({ page }) => {
+    // loginAs now stubs vault-guard endpoints automatically (see helpers.ts)
     await loginAs(page);
-    await mockGuards(page);
     await mockProject(page);
     await mockSchemaEndpoints(page);
   });

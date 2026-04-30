@@ -1,11 +1,47 @@
 import { Page } from '@playwright/test';
 
+/**
+ * VaultGuard (added in feat/security-hardening-studio) wraps the entire
+ * authenticated route tree. It blocks rendering until both /api/vault/status
+ * and /api/auth/setup-status resolve. Every test that goes past /login must
+ * stub these two endpoints, otherwise the page hangs on the loader. We bake
+ * it into loginAs so existing specs don't have to know about it. Specs that
+ * exercise the wizard (sealed/uninitialized vault, no admin) override these
+ * routes after calling loginAs.
+ */
+export async function mockVaultGuardReady(page: Page) {
+  await page.route('**/api/vault/status', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        initialized: true,
+        sealed: false,
+        threshold: 1,
+        shares: 1,
+        progress: 0,
+        type: 'shamir',
+      }),
+    }),
+  );
+  await page.route('**/api/auth/setup-status', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ hasAdmin: true }),
+    }),
+  );
+}
+
 export async function loginAs(page: Page, user = { id: '1', username: 'admin', email: 'admin@test.com', role: 'admin' }) {
   await page.addInitScript((u) => {
     localStorage.setItem('auth_token', 'test-token-123');
     localStorage.setItem('auth_user', JSON.stringify(u));
     localStorage.setItem('theme', 'dark');
   }, user);
+  // VaultGuard renders a global loader until vault/status + setup-status
+  // resolve; without these stubs every authenticated route hangs.
+  await mockVaultGuardReady(page);
 }
 
 export async function mockCloudMode(page: Page) {
