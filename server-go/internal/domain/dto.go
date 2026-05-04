@@ -1,5 +1,7 @@
 package domain
 
+import "errors"
+
 // DTOs for API request/response
 
 // --- Provisioning ---
@@ -183,9 +185,16 @@ type BackupRecord struct {
 	Status    string `json:"status"` // IN_PROGRESS, COMPLETED, FAILED
 }
 
+// RestoreRequest controls a point-in-time / latest restore into a new
+// project. Exactly one of TargetTime / TargetXID / TargetLSN / TargetName
+// may be set; absence of all four means "restore to latest". Validate()
+// enforces the single-target rule so handlers can fail fast.
 type RestoreRequest struct {
 	BackupID       string    `json:"backupId,omitempty"`
 	TargetTime     *FlexTime `json:"targetTime,omitempty"`
+	TargetXID      string    `json:"targetXid,omitempty"`
+	TargetLSN      string    `json:"targetLsn,omitempty"`
+	TargetName     string    `json:"targetName,omitempty"`
 	NewProjectName string    `json:"newProjectName,omitempty"`
 	NewProjectID   string    `json:"newProjectId,omitempty"`
 }
@@ -195,6 +204,52 @@ func (r RestoreRequest) GetNewProject() string {
 		return r.NewProjectName
 	}
 	return r.NewProjectID
+}
+
+// Validate enforces the single-target invariant. Operationally the
+// most common ask is "restore to just before the bad migration ran"
+// which maps to TargetXID or TargetLSN — neither is supported by the
+// pre-Phase-1 API. Shipping the union now (even if only TargetTime is
+// wired in CNPG) avoids breaking the public surface in Phase 2/3.
+func (r RestoreRequest) Validate() error {
+	count := 0
+	if r.TargetTime != nil {
+		count++
+	}
+	if r.TargetXID != "" {
+		count++
+	}
+	if r.TargetLSN != "" {
+		count++
+	}
+	if r.TargetName != "" {
+		count++
+	}
+	if count > 1 {
+		return errors.New("restore request: at most one of targetTime, targetXid, targetLsn, targetName may be set")
+	}
+	if r.GetNewProject() == "" {
+		return errors.New("restore request: newProjectName or newProjectId is required")
+	}
+	return nil
+}
+
+// RecoveryTarget returns the CNPG `recoveryTarget` map (or nil for
+// "latest") so the K8s adapter can render the bootstrap recovery spec.
+// Docker-mode adapter renders WAL-G `recovery.signal` flags from the
+// same fields.
+func (r RestoreRequest) RecoveryTarget() map[string]interface{} {
+	switch {
+	case r.TargetTime != nil:
+		return map[string]interface{}{"targetTime": r.TargetTime.Time.Format("2006-01-02T15:04:05Z")}
+	case r.TargetXID != "":
+		return map[string]interface{}{"targetXID": r.TargetXID}
+	case r.TargetLSN != "":
+		return map[string]interface{}{"targetLSN": r.TargetLSN}
+	case r.TargetName != "":
+		return map[string]interface{}{"targetName": r.TargetName}
+	}
+	return nil
 }
 
 type CloneRequest struct {
