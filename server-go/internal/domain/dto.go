@@ -195,6 +195,46 @@ type BackupSchedule struct {
 	Enabled       bool   `json:"enabled"`
 }
 
+// Restore job statuses. Source of truth is the `status` column on
+// restore_jobs.
+const (
+	RestoreStatusRunning   = "RUNNING"
+	RestoreStatusCompleted = "COMPLETED"
+	RestoreStatusFailed    = "FAILED"
+)
+
+// RestoreJob is the persisted state of a restore-into-new-project run.
+// Returned synchronously from POST /api/projects/.../backup/restore so
+// the caller can poll status via GET /api/projects/.../restore/{jobId}.
+type RestoreJob struct {
+	ID              string `json:"id"`
+	SourceProjectID string `json:"sourceProjectId"`
+	NewProjectID    string `json:"newProjectId"`
+	Status          string `json:"status"` // RUNNING | COMPLETED | FAILED
+	CurrentStep     string `json:"currentStep,omitempty"`
+	TargetKind      string `json:"targetKind"` // latest | time | xid | lsn | name
+	TargetValue     string `json:"targetValue,omitempty"`
+	FailureReason   string `json:"failureReason,omitempty"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
+}
+
+// RestoreTargetKind extracts the canonical target kind from a
+// RestoreRequest. Used by the orchestrator when persisting RestoreJob.
+func (r RestoreRequest) RestoreTargetKind() (kind, value string) {
+	switch {
+	case r.TargetTime != nil:
+		return "time", r.TargetTime.Time.Format("2006-01-02T15:04:05Z")
+	case r.TargetXID != "":
+		return "xid", r.TargetXID
+	case r.TargetLSN != "":
+		return "lsn", r.TargetLSN
+	case r.TargetName != "":
+		return "name", r.TargetName
+	}
+	return "latest", ""
+}
+
 // RestoreRequest controls a point-in-time / latest restore into a new
 // project. Exactly one of TargetTime / TargetXID / TargetLSN / TargetName
 // may be set; absence of all four means "restore to latest". Validate()

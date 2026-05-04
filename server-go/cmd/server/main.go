@@ -109,6 +109,21 @@ func runServer(cfg config.AppConfig) {
 		deps.backupHandler.SetScheduler(scheduler)
 	}
 
+	if sqlStore != nil {
+		orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
+			Jobs: sqlStore.RestoreJobs(),
+		})
+		// Phase 3 default pipeline. Mode-specific steps will plug in
+		// here once the K8s + Docker restore runners land — for now
+		// the orchestrator is wired with a single validation step so
+		// the API contract is observable.
+		orchestrator.SetSteps([]service.RestoreStep{
+			{Name: "validate", Run: func(_ context.Context, _ *domain.RestoreJob) error { return nil }},
+		})
+		_ = orchestrator.SweepStale(context.Background())
+		deps.backupHandler.SetRestoreOrchestrator(orchestrator)
+	}
+
 	r := buildRouter(cfg, sqlStore, store, deps)
 
 	startServer(cfg, r)

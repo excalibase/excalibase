@@ -58,6 +58,15 @@ type BackupScheduleStore interface {
 	DeleteSchedule(ctx context.Context, projectID string) error
 }
 
+// RestoreJobStore persists the async restore state machine. The
+// orchestrator reads/writes through here so a platform restart can
+// replay (or fail) jobs that were RUNNING.
+type RestoreJobStore interface {
+	UpsertRestoreJob(ctx context.Context, j *domain.RestoreJob) error
+	FindRestoreJob(ctx context.Context, id string) (*domain.RestoreJob, error)
+	ListRunningRestoreJobs(ctx context.Context) ([]domain.RestoreJob, error)
+}
+
 // UserStore persists users for auth.
 type UserStore interface {
 	CreateUser(ctx context.Context, user *domain.User) error

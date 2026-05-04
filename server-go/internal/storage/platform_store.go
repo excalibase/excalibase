@@ -40,4 +40,8 @@ type PlatformStore interface {
 	// BackupSchedules returns the BackupScheduleStore the platform-side
 	// scheduler reloads schedules from on Start.
 	BackupSchedules() BackupScheduleStore
+
+	// RestoreJobs returns the RestoreJobStore the orchestrator writes
+	// async restore state into.
+	RestoreJobs() RestoreJobStore
 }

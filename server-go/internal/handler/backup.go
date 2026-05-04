@@ -11,8 +11,9 @@ import (
 )
 
 type BackupHandler struct {
-	svc       *service.BackupService
-	scheduler *service.BackupScheduler // optional; nil disables /schedule routes
+	svc        *service.BackupService
+	scheduler  *service.BackupScheduler     // optional; nil disables /schedule routes
+	orchestrator *service.RestoreOrchestrator // optional; nil → restore is synchronous
 }
 
 func NewBackupHandler(svc *service.BackupService) *BackupHandler {
@@ -24,6 +25,12 @@ func NewBackupHandler(svc *service.BackupService) *BackupHandler {
 // because the scheduler isn't available at handler init time.
 func (h *BackupHandler) SetScheduler(s *service.BackupScheduler) { h.scheduler = s }
 
+// SetRestoreOrchestrator wires the async restore pipeline. When set,
+// /restore returns RUNNING immediately + a job id; callers poll via
+// GET /restore/{jobId}. When nil, /restore behaves as it did pre-Phase
+// 3 — synchronous, returns the response shape from BackupAdapter.Restore.
+func (h *BackupHandler) SetRestoreOrchestrator(o *service.RestoreOrchestrator) { h.orchestrator = o }
+
 // Service exposes the underlying BackupService so the platform can
 // share it across HTTP handlers and the scheduler.
 func (h *BackupHandler) Service() *service.BackupService { return h.svc }
@@ -32,6 +39,7 @@ func (h *BackupHandler) Routes(r chi.Router) {
 	r.Post("/trigger", h.TriggerBackup)
 	r.Get("/list", h.ListBackups)
 	r.Post("/restore", h.Restore)
+	r.Get("/restore/{jobId}", h.GetRestoreJob)
 	r.Get("/wal-lag", h.GetWalLag)
 	r.Post("/schedule", h.UpsertSchedule)
 	r.Delete("/schedule", h.DeleteSchedule)
@@ -83,12 +91,48 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	if h.orchestrator != nil {
+		// Async path: orchestrator returns RUNNING immediately. The
+		// caller polls /restore/{jobId} for status.
+		inst, err := h.svc.GetInstance(projectID)
+		if err != nil || inst == nil {
+			httpError(w, "project not found", http.StatusNotFound)
+			return
+		}
+		job, err := h.orchestrator.Start(r.Context(), inst, req)
+		if err != nil {
+			httpError(w, safeError(err), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, job)
+		return
+	}
 	resp, err := h.svc.RestoreFromBackup(r.Context(), projectID, req)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, resp)
+}
+
+// GetRestoreJob polls a restore job by id. 404 when the job doesn't
+// exist. The orchestrator updates the row as it progresses.
+func (h *BackupHandler) GetRestoreJob(w http.ResponseWriter, r *http.Request) {
+	if h.orchestrator == nil {
+		httpError(w, "restore orchestrator not configured", http.StatusServiceUnavailable)
+		return
+	}
+	jobID := chi.URLParam(r, "jobId")
+	job, err := h.orchestrator.Get(r.Context(), jobID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	if job == nil {
+		httpError(w, "restore job not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, job)
 }
 
 // GetWalLag is a Docker-mode-only endpoint. K8s adapter doesn't
