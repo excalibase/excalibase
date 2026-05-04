@@ -3,14 +3,18 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
-// fakeAdapter is a test BackupAdapter that records calls.
+// fakeAdapter is a test BackupAdapter that records calls. Access to
+// counters is mutex-guarded so the scheduler tests can race against
+// the cron goroutine without a data race.
 type fakeAdapter struct {
+	muCount        sync.Mutex
 	configureCalls int
 	triggerCalls   int
 	listCalls      int
@@ -23,12 +27,16 @@ type fakeAdapter struct {
 }
 
 func (f *fakeAdapter) Configure(_ context.Context, _ *domain.DatabaseInstance, _ string, _ int) error {
+	f.muCount.Lock()
 	f.configureCalls++
+	f.muCount.Unlock()
 	return f.configureErr
 }
 
 func (f *fakeAdapter) TriggerManual(_ context.Context, inst *domain.DatabaseInstance) (BackupRef, error) {
+	f.muCount.Lock()
 	f.triggerCalls++
+	f.muCount.Unlock()
 	if f.triggerErr != nil {
 		return BackupRef{}, f.triggerErr
 	}
@@ -36,12 +44,16 @@ func (f *fakeAdapter) TriggerManual(_ context.Context, inst *domain.DatabaseInst
 }
 
 func (f *fakeAdapter) List(_ context.Context, _ *domain.DatabaseInstance) ([]BackupRef, error) {
+	f.muCount.Lock()
 	f.listCalls++
+	f.muCount.Unlock()
 	return f.listResult, f.listErr
 }
 
 func (f *fakeAdapter) Restore(_ context.Context, _ *domain.DatabaseInstance, _ domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
+	f.muCount.Lock()
 	f.restoreCalls++
+	f.muCount.Unlock()
 	if f.restoreErr != nil {
 		return nil, f.restoreErr
 	}

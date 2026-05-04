@@ -50,6 +50,14 @@ type BackupRecordStore interface {
 	UpdateStatus(ctx context.Context, id, status string) error
 }
 
+// BackupScheduleStore persists per-project backup schedules so the
+// scheduler can replay them after a platform restart.
+type BackupScheduleStore interface {
+	UpsertSchedule(ctx context.Context, s *domain.BackupSchedule) error
+	ListEnabledSchedules(ctx context.Context) ([]domain.BackupSchedule, error)
+	DeleteSchedule(ctx context.Context, projectID string) error
+}
+
 // UserStore persists users for auth.
 type UserStore interface {
 	CreateUser(ctx context.Context, user *domain.User) error
@@ -58,6 +66,9 @@ type UserStore interface {
 	FindUserByEmail(ctx context.Context, email string) (*domain.User, error)
 	FindAllUsers(ctx context.Context) ([]*domain.User, error)
 	DeleteUser(ctx context.Context, id string) error
+	// UpdateUserPassword writes the already-hashed password to the user
+	// record by username. Hashing is the caller's responsibility.
+	UpdateUserPassword(ctx context.Context, username, passwordHash string) error
 }
 
 // TokenStore persists access tokens (PAT pattern).

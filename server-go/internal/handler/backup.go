@@ -17,6 +17,10 @@ func NewBackupHandler(svc *service.BackupService) *BackupHandler {
 	return &BackupHandler{svc: svc}
 }
 
+// Service exposes the underlying BackupService so the platform can
+// share it across HTTP handlers and the scheduler.
+func (h *BackupHandler) Service() *service.BackupService { return h.svc }
+
 func (h *BackupHandler) Routes(r chi.Router) {
 	r.Post("/trigger", h.TriggerBackup)
 	r.Get("/list", h.ListBackups)

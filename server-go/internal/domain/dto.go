@@ -185,6 +185,16 @@ type BackupRecord struct {
 	Status    string `json:"status"` // IN_PROGRESS, COMPLETED, FAILED
 }
 
+// BackupSchedule is the persistent record driving the platform's
+// scheduled-backup cron. RetentionDays is informational only at the
+// scheduler layer — adapters consult it when deciding what to prune.
+type BackupSchedule struct {
+	ProjectID     string `json:"projectId"`
+	Cron          string `json:"cron"`
+	RetentionDays int    `json:"retentionDays"`
+	Enabled       bool   `json:"enabled"`
+}
+
 // RestoreRequest controls a point-in-time / latest restore into a new
 // project. Exactly one of TargetTime / TargetXID / TargetLSN / TargetName
 // may be set; absence of all four means "restore to latest". Validate()

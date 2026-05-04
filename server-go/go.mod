@@ -21,8 +21,8 @@ require (
 	github.com/nats-io/nats.go v1.50.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/testcontainers/testcontainers-go v0.42.0
-	github.com/testcontainers/testcontainers-go/modules/k3s v0.41.0
-	github.com/testcontainers/testcontainers-go/modules/postgres v0.41.0
+	github.com/testcontainers/testcontainers-go/modules/k3s v0.42.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/crypto v0.49.0
 	helm.sh/helm/v3 v3.20.1
@@ -148,6 +148,7 @@ require (
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/rubenv/sql-migrate v1.8.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect

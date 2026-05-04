@@ -103,9 +103,39 @@ func runServer(cfg config.AppConfig) {
 	})
 	deps.fnHandler = fnHandler
 
+	schedulerStop := startBackupScheduler(cfg, sqlStore, deps.backupHandler)
+	defer schedulerStop()
+
 	r := buildRouter(cfg, sqlStore, store, deps)
 
 	startServer(cfg, r)
+}
+
+// startBackupScheduler launches the cron runtime and replays the
+// persistent schedule. Returns a stop function for graceful shutdown.
+// In single-process self-hosted deployments the leader lock is a
+// no-op; cloud uses a Postgres advisory lock so multi-replica
+// platforms only fire once per tick.
+func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, backupHandler *handler.BackupHandler) func() {
+	if backupHandler == nil || sqlStore == nil {
+		return func() {}
+	}
+	var lock service.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() {
+		// FNV-1a("excalibase-backup-scheduler") — distinct from any
+		// other advisory lock the platform might use.
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), 0x6168_0acb_4233_4b21)
+	}
+	scheduler := service.NewBackupScheduler(service.BackupSchedulerConfig{
+		Schedules: sqlStore.BackupSchedules(),
+		Backups:   backupHandler.Service(),
+		Lock:      lock,
+	})
+	if err := scheduler.Start(context.Background()); err != nil {
+		log.Printf("WARN: backup scheduler start: %v", err)
+		return func() {}
+	}
+	return scheduler.Stop
 }
 
 // handlerDeps groups all wired handlers + middleware used during route mounting.

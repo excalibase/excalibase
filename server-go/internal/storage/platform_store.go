@@ -36,4 +36,8 @@ type PlatformStore interface {
 	// BackupRecords returns the BackupRecordStore for the underlying
 	// engine. Implemented by sqlite.NewBackupRecords / pg.NewBackupRecords.
 	BackupRecords() BackupRecordStore
+
+	// BackupSchedules returns the BackupScheduleStore the platform-side
+	// scheduler reloads schedules from on Start.
+	BackupSchedules() BackupScheduleStore
 }
