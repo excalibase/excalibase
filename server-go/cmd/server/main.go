@@ -91,14 +91,15 @@ func runServer(cfg config.AppConfig) {
 	defer provCleanup()
 
 	deps := buildHandlerDeps(handlerDepsArgs{
-		cfg:        cfg,
-		store:      store,
-		sqlStore:   sqlStore,
-		k8sClient:  k8sClient,
-		vc:         vc,
-		localVault: localVault,
-		provSvc:    provSvc,
-		pgStore:    pgStore,
+		cfg:          cfg,
+		store:        store,
+		sqlStore:     sqlStore,
+		k8sClient:    k8sClient,
+		vc:           vc,
+		localVault:   localVault,
+		provSvc:      provSvc,
+		pgStore:      pgStore,
+		dockerClient: dockerClientRef,
 	})
 	deps.fnHandler = fnHandler
 
@@ -212,14 +213,72 @@ func wirePgDogNotifier(cfg config.AppConfig, sqlStore storage.PlatformStore, pro
 }
 
 type handlerDepsArgs struct {
-	cfg        config.AppConfig
-	store      storage.InstanceStore
-	sqlStore   storage.PlatformStore
-	k8sClient  k8s.KubeClient
-	vc         vaultclient.VaultClient
-	localVault *vault.Vault
-	provSvc    *service.ProvisioningService
-	pgStore    storage.ParameterGroupStore
+	cfg          config.AppConfig
+	store        storage.InstanceStore
+	sqlStore     storage.PlatformStore
+	k8sClient    k8s.KubeClient
+	vc           vaultclient.VaultClient
+	localVault   *vault.Vault
+	provSvc      *service.ProvisioningService
+	pgStore      storage.ParameterGroupStore
+	dockerClient provisioner.DockerClient // optional, for Docker-mode backup adapter
+}
+
+// buildBackupService wires the BackupService with the right adapter
+// map for the current deployment mode. K8s adapter is always present
+// (BYOC flows through K8s today; future BYOC adapter can layer in).
+// Docker adapter is added when both ProvisionerMode=docker and the
+// platform has R2/S3 credentials available — without a bucket the
+// Docker adapter has nowhere to put bytes, so we keep it out and the
+// dispatch returns ErrUnsupportedBackupMode for docker projects until
+// the operator finishes wiring credentials.
+func buildBackupService(
+	cfg config.AppConfig,
+	store storage.InstanceStore,
+	sqlStore storage.PlatformStore,
+	k8sClient k8s.KubeClient,
+	dockerClient provisioner.DockerClient,
+) *service.BackupService {
+	adapters := map[domain.DeploymentMode]service.BackupAdapter{
+		domain.ModeK8s: service.NewK8sBackupAdapter(k8sClient, cfg.StoragePath),
+	}
+
+	if cfg.ProvisionerMode == "docker" && dockerClient != nil {
+		dockerSDK, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
+			Host:      os.Getenv("DOCKER_HOST"),
+			CertPath:  os.Getenv("DOCKER_CERT_PATH"),
+			TLSVerify: os.Getenv("DOCKER_TLS_VERIFY") != "",
+		})
+		if err == nil {
+			runner := service.NewDockerBackupRunner(dockerSDK.RawClient())
+			bucket := envOr("BACKUP_DEFAULT_BUCKET", "excalibase-backups")
+			endpoint := envOr("BACKUP_DEFAULT_ENDPOINT", os.Getenv("R2_ENDPOINT"))
+			ak := envOr("BACKUP_DEFAULT_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID"))
+			sk := envOr("BACKUP_DEFAULT_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY"))
+			region := envOr("BACKUP_DEFAULT_REGION", "auto")
+			if ak != "" && sk != "" && endpoint != "" {
+				uploader, err := service.NewAWSS3Uploader(context.Background(), service.AWSS3UploaderConfig{
+					AccessKeyID:     ak,
+					SecretAccessKey: sk,
+					Endpoint:        endpoint,
+					Region:          region,
+					UsePathStyle:    os.Getenv("BACKUP_S3_PATH_STYLE") != "",
+				})
+				if err == nil {
+					adapters[domain.ModeDocker] = service.NewDockerBackupAdapter(service.DockerBackupAdapterConfig{
+						Runner:    runner,
+						Uploader:  uploader,
+						Records:   sqlStore.BackupRecords(),
+						Bucket:    bucket,
+						KeyPrefix: "backups/",
+						Instances: store,
+					})
+				}
+			}
+		}
+	}
+
+	return service.NewBackupServiceWithAdapters(store, adapters, cfg.StoragePath)
 }
 
 // buildHandlerDeps constructs every HTTP handler the router needs.
@@ -229,7 +288,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provSvc, pgStore := a.provSvc, a.pgStore
 
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
-	backupSvc := service.NewBackupService(store, k8sClient, cfg.StoragePath)
+	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)

@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
@@ -37,6 +38,11 @@ type DockerClientOptions struct {
 type RealDockerClient struct {
 	c *client.Client
 }
+
+// RawClient returns the underlying SDK client. Used by the backup
+// service to share the same Docker connection for `docker exec`
+// streaming without re-doing the daemon discovery / TLS handshake.
+func (r *RealDockerClient) RawClient() *client.Client { return r.c }
 
 // NewRealDockerClient builds a client using the priority chain:
 //
@@ -149,7 +155,7 @@ func (r *RealDockerClient) StartContainer(ctx context.Context, id string) error 
 func (r *RealDockerClient) StopContainer(ctx context.Context, id string) error {
 	timeout := 30
 	err := r.c.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
-	if err != nil && !client.IsErrNotFound(err) {
+	if err != nil && !errdefs.IsNotFound(err) {
 		return fmt.Errorf("stop container %s: %w", id, err)
 	}
 	return nil
@@ -162,7 +168,7 @@ func (r *RealDockerClient) RemoveContainer(ctx context.Context, id string) error
 		Force:         true,
 		RemoveVolumes: true,
 	})
-	if err != nil && !client.IsErrNotFound(err) {
+	if err != nil && !errdefs.IsNotFound(err) {
 		return fmt.Errorf("remove container %s: %w", id, err)
 	}
 	return nil
@@ -173,7 +179,7 @@ func (r *RealDockerClient) RemoveContainer(ctx context.Context, id string) error
 func (r *RealDockerClient) ContainerStatus(ctx context.Context, id string) (string, error) {
 	insp, err := r.c.ContainerInspect(ctx, id)
 	if err != nil {
-		if client.IsErrNotFound(err) {
+		if errdefs.IsNotFound(err) {
 			return "not_found", nil
 		}
 		return "", fmt.Errorf("inspect container %s: %w", id, err)
