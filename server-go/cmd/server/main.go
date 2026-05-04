@@ -103,8 +103,11 @@ func runServer(cfg config.AppConfig) {
 	})
 	deps.fnHandler = fnHandler
 
-	schedulerStop := startBackupScheduler(cfg, sqlStore, deps.backupHandler)
+	scheduler, schedulerStop := startBackupScheduler(cfg, sqlStore, deps.backupHandler)
 	defer schedulerStop()
+	if scheduler != nil {
+		deps.backupHandler.SetScheduler(scheduler)
+	}
 
 	r := buildRouter(cfg, sqlStore, store, deps)
 
@@ -112,13 +115,14 @@ func runServer(cfg config.AppConfig) {
 }
 
 // startBackupScheduler launches the cron runtime and replays the
-// persistent schedule. Returns a stop function for graceful shutdown.
+// persistent schedule. Returns the scheduler (so the handler can be
+// wired post-construction) and a stop function for graceful shutdown.
 // In single-process self-hosted deployments the leader lock is a
 // no-op; cloud uses a Postgres advisory lock so multi-replica
 // platforms only fire once per tick.
-func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, backupHandler *handler.BackupHandler) func() {
+func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, backupHandler *handler.BackupHandler) (*service.BackupScheduler, func()) {
 	if backupHandler == nil || sqlStore == nil {
-		return func() {}
+		return nil, func() {}
 	}
 	var lock service.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
@@ -133,9 +137,9 @@ func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 	})
 	if err := scheduler.Start(context.Background()); err != nil {
 		log.Printf("WARN: backup scheduler start: %v", err)
-		return func() {}
+		return nil, func() {}
 	}
-	return scheduler.Stop
+	return scheduler, scheduler.Stop
 }
 
 // handlerDeps groups all wired handlers + middleware used during route mounting.

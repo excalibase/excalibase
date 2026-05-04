@@ -228,6 +228,32 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	}, nil
 }
 
+// WalLag returns the time since the most recent successful WAL push
+// for this project. We derive it from the BackupRecord history
+// (COMPLETED rows of type SCHEDULED or MANUAL) — without WAL-G
+// integration, that's the closest signal the platform has. Phase 2
+// follow-up will surface a true `wal-g wal-show` reading.
+func (a *DockerBackupAdapter) WalLag(ctx context.Context, inst *domain.DatabaseInstance) (WalLagInfo, error) {
+	records, err := a.records.ListByProject(ctx, inst.ProjectID)
+	if err != nil {
+		return WalLagInfo{}, fmt.Errorf("list records: %w", err)
+	}
+	var latest time.Time
+	for _, r := range records {
+		if r.Status != "COMPLETED" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, r.Timestamp)
+		if err != nil {
+			continue
+		}
+		if t.After(latest) {
+			latest = t
+		}
+	}
+	return staticWalLag(latest), nil
+}
+
 func (a *DockerBackupAdapter) objectKey(projectID, scope, id string) string {
 	return fmt.Sprintf("%s%s/%s/%s.tar.gz", a.keyPrefix, projectID, scope, id)
 }

@@ -14,6 +14,9 @@ import (
 type mockDockerClient struct {
 	containers map[string]string // containerID → status
 	failOn     string
+	execLog    [][]string // every Exec invocation's cmd captured here
+	stops      int        // counter for StopContainer calls
+	starts     int        // counter for StartContainer calls
 }
 
 func newMockDocker() *mockDockerClient {
@@ -34,6 +37,7 @@ func (m *mockDockerClient) StartContainer(_ context.Context, containerID string)
 		return fmt.Errorf("start failed")
 	}
 	m.containers[containerID] = "running"
+	m.starts++
 	return nil
 }
 
@@ -42,6 +46,7 @@ func (m *mockDockerClient) StopContainer(_ context.Context, containerID string) 
 		return fmt.Errorf("stop failed")
 	}
 	m.containers[containerID] = "stopped"
+	m.stops++
 	return nil
 }
 
@@ -66,6 +71,7 @@ func (m *mockDockerClient) WaitForHealthy(_ context.Context, containerID string)
 }
 
 func (m *mockDockerClient) ExecInContainer(_ context.Context, containerID string, cmd []string) (int, error) {
+	m.execLog = append(m.execLog, cmd)
 	if m.failOn == "exec" {
 		return 2, nil // pg_isready exit 2 = no connection attempt
 	}
@@ -140,7 +146,7 @@ func TestDockerProvisioner_Deprovision(t *testing.T) {
 
 	// Provision first
 	req := domain.ProvisioningRequest{ProjectName: "to-delete", DBType: domain.PostgreSQL}
-	result, _ := p.Provision(context.Background(), req, config.TierConfig{}, func(s domain.ProvisioningStage) {})
+	result, _ := p.Provision(context.Background(), req, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	// Deprovision
 	err := p.Deprovision(context.Background(), result.Namespace, "to-delete")
@@ -160,7 +166,7 @@ func TestDockerProvisioner_GetStatus(t *testing.T) {
 	p := NewDockerPostgreSQLProvisioner(docker)
 
 	req := domain.ProvisioningRequest{ProjectName: "status-test", DBType: domain.PostgreSQL}
-	result, _ := p.Provision(context.Background(), req, config.TierConfig{}, func(s domain.ProvisioningStage) {})
+	result, _ := p.Provision(context.Background(), req, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	status, err := p.GetStatus(context.Background(), result.Namespace, "status-test")
 	if err != nil {
@@ -179,7 +185,7 @@ func TestDockerProvisioner_CreateFails(t *testing.T) {
 	docker.failOn = "create"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "fail"}, config.TierConfig{}, func(s domain.ProvisioningStage) {})
+	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "fail"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 	if err == nil {
 		t.Error("expected error when create fails")
 	}
@@ -190,7 +196,7 @@ func TestDockerProvisioner_HealthCheckFails(t *testing.T) {
 	docker.failOn = "health"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "unhealthy"}, config.TierConfig{}, func(s domain.ProvisioningStage) {})
+	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "unhealthy"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 	if err == nil {
 		t.Error("expected error when health check fails")
 	}
@@ -208,10 +214,115 @@ func TestDockerProvisioner_PgReadyNeverSucceeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	_, err := p.Provision(ctx, domain.ProvisioningRequest{ProjectName: "stuck"}, config.TierConfig{}, func(s domain.ProvisioningStage) {})
+	_, err := p.Provision(ctx, domain.ProvisioningRequest{ProjectName: "stuck"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 	if err == nil {
 		t.Error("expected error when pg_isready never returns 0")
 	}
+}
+
+func TestDockerProvisioner_ConfigureArchive_RunsAlterSystemThenRestarts(t *testing.T) {
+	docker := newMockDocker()
+	docker.containers["container-pg"] = "running"
+	p := NewDockerPostgreSQLProvisioner(docker)
+
+	if err := p.ConfigureArchive(context.Background(), "container-pg", "wal-g wal-push %p", "postgres"); err != nil {
+		t.Fatalf("ConfigureArchive: %v", err)
+	}
+
+	// Expect: ALTER SYSTEM (archive_mode + archive_command + wal_level)
+	// then a stop + start. Order matters: ALTER SYSTEM persists to
+	// postgresql.auto.conf; the restart picks it up. Without the
+	// restart, archive_mode is silently ignored.
+	if len(docker.execLog) < 1 {
+		t.Fatalf("expected 1+ execs, got %d: %v", len(docker.execLog), docker.execLog)
+	}
+	hasArchiveMode := false
+	hasArchiveCmd := false
+	hasWalLevel := false
+	for _, cmd := range docker.execLog {
+		joined := fmt.Sprintf("%v", cmd)
+		if contains(joined, "archive_mode") {
+			hasArchiveMode = true
+		}
+		if contains(joined, "archive_command") {
+			hasArchiveCmd = true
+		}
+		if contains(joined, "wal_level") {
+			hasWalLevel = true
+		}
+	}
+	if !hasArchiveMode || !hasArchiveCmd || !hasWalLevel {
+		t.Errorf("missing ALTER SYSTEM call(s): mode=%v cmd=%v level=%v", hasArchiveMode, hasArchiveCmd, hasWalLevel)
+	}
+	if docker.stops != 1 || docker.starts != 1 {
+		t.Errorf("expected 1 stop + 1 start after ALTER SYSTEM, got stops=%d starts=%d", docker.stops, docker.starts)
+	}
+	if docker.containers["container-pg"] != "running" {
+		t.Errorf("container should be running after restart, got %q", docker.containers["container-pg"])
+	}
+}
+
+func TestDockerProvisioner_ConfigureArchive_RestartsLast(t *testing.T) {
+	// Ordering test: the restart must happen AFTER the ALTER SYSTEM
+	// commands. If it ran before, archive_mode would still be off.
+	docker := &orderedMockDocker{mockDockerClient: newMockDocker()}
+	docker.containers["c1"] = "running"
+	p := NewDockerPostgreSQLProvisioner(docker)
+
+	if err := p.ConfigureArchive(context.Background(), "c1", "cp %p /walarchive/%f", "postgres"); err != nil {
+		t.Fatalf("ConfigureArchive: %v", err)
+	}
+	// Expect events in this order: 3+ Execs, then Stop, then Start.
+	stopIdx, startIdx := -1, -1
+	lastExecIdx := -1
+	for i, ev := range docker.events {
+		switch ev {
+		case "exec":
+			lastExecIdx = i
+		case "stop":
+			stopIdx = i
+		case "start":
+			startIdx = i
+		}
+	}
+	if stopIdx < lastExecIdx {
+		t.Errorf("Stop ran before last Exec (stopIdx=%d, lastExecIdx=%d)", stopIdx, lastExecIdx)
+	}
+	if startIdx < stopIdx {
+		t.Errorf("Start ran before Stop (startIdx=%d, stopIdx=%d)", startIdx, stopIdx)
+	}
+}
+
+func contains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && (haystack == needle || (len(haystack) > 0 && indexOf(haystack, needle) >= 0))
+}
+
+func indexOf(haystack, needle string) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
+}
+
+// orderedMockDocker tracks event ordering for the restart-after-alter test.
+type orderedMockDocker struct {
+	*mockDockerClient
+	events []string
+}
+
+func (m *orderedMockDocker) ExecInContainer(ctx context.Context, id string, cmd []string) (int, error) {
+	m.events = append(m.events, "exec")
+	return m.mockDockerClient.ExecInContainer(ctx, id, cmd)
+}
+func (m *orderedMockDocker) StopContainer(ctx context.Context, id string) error {
+	m.events = append(m.events, "stop")
+	return m.mockDockerClient.StopContainer(ctx, id)
+}
+func (m *orderedMockDocker) StartContainer(ctx context.Context, id string) error {
+	m.events = append(m.events, "start")
+	return m.mockDockerClient.StartContainer(ctx, id)
 }
 
 func TestDockerProvisioner_FactoryRegistration(t *testing.T) {

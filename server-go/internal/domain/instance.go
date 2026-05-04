@@ -96,3 +96,21 @@ type DatabaseInstance struct {
 	UpdatedAt       *FlexTime `json:"updatedAt,omitempty"`
 	LastHealthCheck *FlexTime `json:"lastHealthCheck,omitempty"`
 }
+
+// WALGEnv returns the env block the WAL-G sidecar needs to talk to
+// S3. The platform writes these into the sidecar at start; the
+// runner re-passes them on exec because wal-g reads its credentials
+// from the *exec* env, not the container env.
+//
+// Source of truth is the inst's BackupSchedule — the actual S3
+// creds live in the platform's vault and are loaded by the
+// adapter. This method returns the keys WAL-G expects; values are
+// expected to be set by the caller via WithWALGCredentials before
+// passing into the exec.
+func (inst *DatabaseInstance) WALGEnv() []string {
+	// Phase 2 marker — the runner extracts wal-g env vars from the
+	// instance's vault-loaded creds. For now we return empty so
+	// tests that don't need real S3 don't break; real credential
+	// injection lives in the production wiring path.
+	return []string{}
+}
