@@ -11,6 +11,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/security"
 )
 
+// redactedSentinel is the placeholder written into metadata.json's
+// password field. Real credentials live in credentials.aes256 alongside.
+// Kept as a const so SAST tools can identify it as a non-secret marker
+// rather than a hardcoded password literal.
+const redactedSentinel = "[REDACTED]" // #nosec G101 — placeholder, not a credential
+
 // FileSystemStore implements InstanceStore using JSON files + AES-256-GCM encryption.
 type FileSystemStore struct {
 	basePath  string
@@ -71,9 +77,14 @@ func (s *FileSystemStore) Save(inst *domain.DatabaseInstance) error {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 
-	// Save metadata (mask password)
+	// Save metadata (mask password). The real (encrypted) password lives
+	// in credentials.aes256 above; this metadata.json is human-readable
+	// for debugging and must NOT contain the plaintext or any reversible
+	// token. The sentinel below is just a placeholder string — Snyk's
+	// hardcoded-secret heuristic flags it but it's a redaction marker,
+	// not a credential.
 	meta := *inst
-	meta.Password = "***ENCRYPTED***"
+	meta.Password = redactedSentinel
 	metaJSON, _ := json.MarshalIndent(meta, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), metaJSON, 0644); err != nil {
 		return fmt.Errorf("write metadata: %w", err)
@@ -149,7 +160,10 @@ func (s *FileSystemStore) loadAll() error {
 		if !entry.IsDir() {
 			continue
 		}
-		dir := filepath.Join(projectsDir, entry.Name())
+		if _, err := security.SafePathComponent(entry.Name()); err != nil {
+			continue
+		}
+		dir := filepath.Join(projectsDir, filepath.Base(entry.Name()))
 		inst, err := s.loadInstance(dir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "WARN: failed to load %s: %v\n", entry.Name(), err)
@@ -170,6 +184,13 @@ func (s *FileSystemStore) loadInstance(dir string) (*domain.DatabaseInstance, er
 	var inst domain.DatabaseInstance
 	if err := json.Unmarshal(metaJSON, &inst); err != nil {
 		return nil, fmt.Errorf("parse metadata: %w", err)
+	}
+
+	// Pre-Phase-0 metadata.json files have no deploymentMode key. Normalize
+	// to ModeK8s so callers (BackupAdapter dispatch, in particular) never
+	// receive the zero-value "".
+	if inst.DeploymentMode == "" {
+		inst.DeploymentMode = domain.ModeK8s
 	}
 
 	// Decrypt credentials

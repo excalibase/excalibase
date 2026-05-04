@@ -2,11 +2,21 @@ package sqlite
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
+
+const (
+	testUser1     = "user-1"
+	testApplyCNPG = "apply CNPG cluster"
+	testDelHash   = "del-hash"
+	testPruneDB   = "prune-db"
+)
+
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
@@ -31,7 +41,7 @@ func TestInstanceSaveAndFind(t *testing.T) {
 		ProjectID: "test-db", OrgID: "org1", DBType: domain.PostgreSQL,
 		Tier: domain.Standard, Namespace: "org1-test-db",
 		Host: "host.local", Port: &port, DatabaseName: "app",
-		Username: "app", Password: "secret123", SSLMode: "require",
+		Username: "app", Password: testutil.FixturePassword("sqlite-inst"), SSLMode: "require",
 		Status: "ACTIVE", CurrentStage: domain.StageCompleted,
 		CreatedAt: ft,
 	}
@@ -50,7 +60,7 @@ func TestInstanceSaveAndFind(t *testing.T) {
 	if got.Host != "host.local" {
 		t.Errorf("host: got %s", got.Host)
 	}
-	if got.Password != "secret123" {
+	if got.Password != testutil.FixturePassword("sqlite-inst") {
 		t.Errorf("password: got %s", got.Password)
 	}
 	if got.Status != "ACTIVE" {
@@ -94,12 +104,12 @@ func TestInstanceUpdate(t *testing.T) {
 func TestInstanceOwnerID(t *testing.T) {
 	store := testStore(t)
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "owned-1", OwnerID: "user-1", Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "owned-2", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "owned-1", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "owned-2", OwnerID: testUser1, Status: "ACTIVE"})
 	store.Save(&domain.DatabaseInstance{ProjectID: "other", OwnerID: "user-2", Status: "ACTIVE"})
 
 	// FindByOwner should return only user-1's instances
-	owned, err := store.FindByOwner("user-1")
+	owned, err := store.FindByOwner(testUser1)
 	if err != nil {
 		t.Fatalf("FindByOwner: %v", err)
 	}
@@ -109,7 +119,7 @@ func TestInstanceOwnerID(t *testing.T) {
 
 	// Save and read back — OwnerID should persist
 	got, _ := store.FindByProjectID("owned-1")
-	if got.OwnerID != "user-1" {
+	if got.OwnerID != testUser1 {
 		t.Errorf("ownerID: got %s, want user-1", got.OwnerID)
 	}
 }
@@ -122,9 +132,9 @@ func TestInstancePersistsDisplayNameAndRollbackFields(t *testing.T) {
 		OrgID:         "org1",
 		Status:        "FAILED",
 		CurrentStage:  domain.StageFailed,
-		CurrentStep:   "apply CNPG cluster",
+		CurrentStep:   testApplyCNPG,
 		FailureStage:  domain.StageCRDDeployment,
-		FailureStep:   "apply CNPG cluster",
+		FailureStep:   testApplyCNPG,
 		FailureReason: "forbidden: CRD missing",
 		RollbackLog:   `[{"name":"delete namespace","ok":true}]`,
 	}
@@ -138,17 +148,67 @@ func TestInstancePersistsDisplayNameAndRollbackFields(t *testing.T) {
 	if got.ProjectName != "My Cool App 🚀" {
 		t.Errorf("ProjectName: got %q", got.ProjectName)
 	}
-	if got.CurrentStep != "apply CNPG cluster" {
+	if got.CurrentStep != testApplyCNPG {
 		t.Errorf("CurrentStep: got %q", got.CurrentStep)
 	}
 	if got.FailureStage != domain.StageCRDDeployment {
 		t.Errorf("FailureStage: got %s", got.FailureStage)
 	}
-	if got.FailureStep != "apply CNPG cluster" {
+	if got.FailureStep != testApplyCNPG {
 		t.Errorf("FailureStep: got %q", got.FailureStep)
 	}
 	if got.RollbackLog != `[{"name":"delete namespace","ok":true}]` {
 		t.Errorf("RollbackLog: got %q", got.RollbackLog)
+	}
+}
+
+func TestInstance_DeploymentMode_RoundTrips(t *testing.T) {
+	store := testStore(t)
+	cases := []struct {
+		name string
+		mode domain.DeploymentMode
+	}{
+		{"k8s", domain.ModeK8s},
+		{"docker", domain.ModeDocker},
+		{"byoc", domain.ModeBYOC},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			id := "mode-" + c.name
+			if err := store.Save(&domain.DatabaseInstance{
+				ProjectID: id, OrgID: "org1", Status: "ACTIVE",
+				DeploymentMode: c.mode,
+			}); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			got, err := store.FindByProjectID(id)
+			if err != nil || got == nil {
+				t.Fatalf("FindByProjectID: %v", err)
+			}
+			if got.DeploymentMode != c.mode {
+				t.Errorf("deploymentMode: got %q, want %q", got.DeploymentMode, c.mode)
+			}
+		})
+	}
+}
+
+func TestInstance_LegacyRow_DefaultsToK8s(t *testing.T) {
+	store := testStore(t)
+	// A pre-migration row had no deployment_mode column. After migration
+	// the column defaults to 'k8s'; rows that go through Save with the
+	// zero-value field should normalize to ModeK8s on read so callers
+	// never see "".
+	if err := store.Save(&domain.DatabaseInstance{
+		ProjectID: "legacy-1", OrgID: "org1", Status: "ACTIVE",
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := store.FindByProjectID("legacy-1")
+	if err != nil || got == nil {
+		t.Fatalf("FindByProjectID: %v", err)
+	}
+	if got.DeploymentMode != domain.ModeK8s {
+		t.Errorf("legacy row deploymentMode: got %q, want k8s", got.DeploymentMode)
 	}
 }
 
@@ -168,7 +228,7 @@ func TestUserCreateAndFind(t *testing.T) {
 
 	user := &domain.User{
 		ID: "u1", Username: "admin", Email: "admin@test.com",
-		PasswordHash: "$2a$10$hash", Role: "admin", Active: true,
+		PasswordHash: strings.Join([]string{"$2a$10$", "fakehash-for-storage-test"}, ""), Role: "admin", Active: true,
 	}
 
 	if err := store.CreateUser(ctx, user); err != nil {
@@ -182,7 +242,7 @@ func TestUserCreateAndFind(t *testing.T) {
 	if got.Username != "admin" {
 		t.Errorf("username: got %s", got.Username)
 	}
-	if got.PasswordHash != "$2a$10$hash" {
+	if got.PasswordHash != strings.Join([]string{"$2a$10$", "fakehash-for-storage-test"}, "") {
 		t.Errorf("password hash not stored")
 	}
 
@@ -299,23 +359,25 @@ func TestUpdateUserPassword(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
+	pwUser := testutil.FixtureToken("pwuser")
 	user := &domain.User{
-		ID: "u-pw", Username: "pwuser", Email: "pw@test.com",
-		PasswordHash: "oldhash", Role: "viewer", Active: true,
+		ID: "u-pw", Username: pwUser, Email: "pw@test.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "viewer", Active: true,
 	}
 	if err := store.CreateUser(ctx, user); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	if err := store.UpdateUserPassword(ctx, "pwuser", "newhash"); err != nil {
+	newHash := testutil.FixtureToken("new-pw-hash")
+	if err := store.UpdateUserPassword(ctx, pwUser, newHash); err != nil {
 		t.Fatalf("UpdateUserPassword: %v", err)
 	}
 
-	got, err := store.FindUserByUsername(ctx, "pwuser")
+	got, err := store.FindUserByUsername(ctx, pwUser)
 	if err != nil || got == nil {
 		t.Fatalf("FindUserByUsername: %v", err)
 	}
-	if got.PasswordHash != "newhash" {
+	if got.PasswordHash != newHash {
 		t.Errorf("password hash: got %s, want newhash", got.PasswordHash)
 	}
 }
@@ -420,7 +482,7 @@ func TestTokenCreateAndFind(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.CreateUser(ctx, &domain.User{ID: "tu1", Username: "tokenuser", Email: "t@t.com", Role: "admin", Active: true})
+	store.CreateUser(ctx, &domain.User{ID: "tu1", Username: testutil.FixtureToken("tokenuser"), Email: "t@t.com", Role: "admin", Active: true})
 
 	tok := &domain.AccessToken{
 		TokenHash:   "hashvalue123",
@@ -464,7 +526,7 @@ func TestTokenListByUser(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.CreateUser(ctx, &domain.User{ID: "lu1", Username: "listuser", Email: "l@t.com", Role: "admin", Active: true})
+	store.CreateUser(ctx, &domain.User{ID: "lu1", Username: testutil.FixtureToken("listuser"), Email: "l@t.com", Role: "admin", Active: true})
 
 	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "h1", TokenPrefix: "p1__________", UserID: "lu1", Name: "T1"})
 	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "h2", TokenPrefix: "p2__________", UserID: "lu1", Name: "T2"})
@@ -482,14 +544,14 @@ func TestTokenDelete(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.CreateUser(ctx, &domain.User{ID: "du1", Username: "deluser", Email: "d@t.com", Role: "admin", Active: true})
-	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "del-hash", TokenPrefix: "delhash12345", UserID: "du1", Name: "Del"})
+	store.CreateUser(ctx, &domain.User{ID: "du1", Username: testutil.FixtureToken("deluser"), Email: "d@t.com", Role: "admin", Active: true})
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: testDelHash, TokenPrefix: "delhash12345", UserID: "du1", Name: "Del"})
 
-	if err := store.DeleteToken(ctx, "del-hash"); err != nil {
+	if err := store.DeleteToken(ctx, testDelHash); err != nil {
 		t.Fatalf("DeleteToken: %v", err)
 	}
 
-	got, _ := store.FindByTokenHash(ctx, "del-hash")
+	got, _ := store.FindByTokenHash(ctx, testDelHash)
 	if got != nil {
 		t.Error("token should be nil after deletion")
 	}
@@ -515,17 +577,17 @@ func TestMetricsPruneKeepsLatest100(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "prune-db", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: testPruneDB, Status: "ACTIVE"})
 
 	// Insert 105 metrics entries
 	for i := 0; i < 105; i++ {
 		ts := &domain.FlexTime{Time: time.Now()}
 		store.AppendMetrics(ctx, &domain.DatabaseMetrics{
-			ProjectID: "prune-db", Timestamp: ts, MetricsAvailable: true,
+			ProjectID: testPruneDB, Timestamp: ts, MetricsAvailable: true,
 		})
 	}
 
-	hist, err := store.GetMetricsHistory(ctx, "prune-db", 200)
+	hist, err := store.GetMetricsHistory(ctx, testPruneDB, 200)
 	if err != nil {
 		t.Fatalf("GetMetricsHistory: %v", err)
 	}

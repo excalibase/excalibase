@@ -5,23 +5,38 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+const (
+	testUser1      = "user-1"
+	testApplyCNPG  = "apply CNPG cluster"
+	testDelHash    = "del-hash"
+	testAliceCorp  = "alice-corp"
+	testRoleFmt    = "role: got %q"
+	testMyProject  = "my-project"
+	testOrgInv     = "org-inv"
+	testNewGuyEmail = "newguy@test.com"
+)
+
+
 func testStore(t *testing.T) *Store {
 	t.Helper()
 	ctx := context.Background()
 
+	containerPwd := testutil.FixturePassword("pg-container")
 	pgContainer, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("platform_test"),
 		postgres.WithUsername("platform"),
-		postgres.WithPassword("testpass"),
+		postgres.WithPassword(containerPwd),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).WithStartupTimeout(30*time.Second),
@@ -35,7 +50,7 @@ func testStore(t *testing.T) *Store {
 	host, _ := pgContainer.Host(ctx)
 	port, _ := pgContainer.MappedPort(ctx, "5432/tcp")
 
-	dsn := fmt.Sprintf("postgres://platform:testpass@%s:%s/platform_test?sslmode=disable", host, port.Port())
+	dsn := fmt.Sprintf("postgres://platform:%s@%s:%s/platform_test?sslmode=disable", containerPwd, host, port.Port())
 
 	store, err := New(dsn)
 	if err != nil {
@@ -43,6 +58,55 @@ func testStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { store.Close() })
 	return store
+}
+
+// TestInstance_DeploymentMode_RoundTrips covers the new column added by
+// migration 000007. Without persistence here, BackupAdapter dispatch
+// would always hit the zero-value mode for cloud-deployed instances.
+func TestInstance_DeploymentMode_RoundTrips(t *testing.T) {
+	store := testStore(t)
+	cases := []struct {
+		name string
+		mode domain.DeploymentMode
+	}{
+		{"k8s", domain.ModeK8s},
+		{"docker", domain.ModeDocker},
+		{"byoc", domain.ModeBYOC},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			id := "mode-" + c.name
+			if err := store.Save(&domain.DatabaseInstance{
+				ProjectID: id, OrgID: "org1", Status: "ACTIVE",
+				DeploymentMode: c.mode,
+			}); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			got, err := store.FindByProjectID(id)
+			if err != nil || got == nil {
+				t.Fatalf("FindByProjectID: %v", err)
+			}
+			if got.DeploymentMode != c.mode {
+				t.Errorf("deploymentMode: got %q, want %q", got.DeploymentMode, c.mode)
+			}
+		})
+	}
+}
+
+func TestInstance_LegacyRow_DefaultsToK8s(t *testing.T) {
+	store := testStore(t)
+	if err := store.Save(&domain.DatabaseInstance{
+		ProjectID: "legacy-1", OrgID: "org1", Status: "ACTIVE",
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := store.FindByProjectID("legacy-1")
+	if err != nil || got == nil {
+		t.Fatalf("FindByProjectID: %v", err)
+	}
+	if got.DeploymentMode != domain.ModeK8s {
+		t.Errorf("legacy row deploymentMode: got %q, want k8s", got.DeploymentMode)
+	}
 }
 
 // --- Instance tests ---
@@ -57,7 +121,7 @@ func TestInstanceSaveAndFind(t *testing.T) {
 		ProjectID: "test-db", OrgID: "org1", DBType: domain.PostgreSQL,
 		Tier: domain.Standard, Namespace: "org1-test-db",
 		Host: "host.local", Port: &port, DatabaseName: "app",
-		Username: "app", Password: "secret123", SSLMode: "require",
+		Username: "app", Password: testutil.FixturePassword("pg-inst"), SSLMode: "require",
 		Status: "ACTIVE", CurrentStage: domain.StageCompleted,
 		CreatedAt: ft,
 	}
@@ -76,7 +140,7 @@ func TestInstanceSaveAndFind(t *testing.T) {
 	if got.Host != "host.local" {
 		t.Errorf("host: got %s", got.Host)
 	}
-	if got.Password != "secret123" {
+	if got.Password != testutil.FixturePassword("pg-inst") {
 		t.Errorf("password: got %s", got.Password)
 	}
 	if got.Status != "ACTIVE" {
@@ -120,11 +184,11 @@ func TestInstanceUpdate(t *testing.T) {
 func TestInstanceOwnerID(t *testing.T) {
 	store := testStore(t)
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "owned-1", OwnerID: "user-1", Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "owned-2", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "owned-1", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "owned-2", OwnerID: testUser1, Status: "ACTIVE"})
 	store.Save(&domain.DatabaseInstance{ProjectID: "other", OwnerID: "user-2", Status: "ACTIVE"})
 
-	owned, err := store.FindByOwner("user-1")
+	owned, err := store.FindByOwner(testUser1)
 	if err != nil {
 		t.Fatalf("FindByOwner: %v", err)
 	}
@@ -133,7 +197,7 @@ func TestInstanceOwnerID(t *testing.T) {
 	}
 
 	got, _ := store.FindByProjectID("owned-1")
-	if got.OwnerID != "user-1" {
+	if got.OwnerID != testUser1 {
 		t.Errorf("ownerID: got %s, want user-1", got.OwnerID)
 	}
 }
@@ -154,9 +218,9 @@ func TestInstancePersistsDisplayNameAndRollbackFields(t *testing.T) {
 		OrgID:         "org1",
 		Status:        "FAILED",
 		CurrentStage:  domain.StageFailed,
-		CurrentStep:   "apply CNPG cluster",
+		CurrentStep:   testApplyCNPG,
 		FailureStage:  domain.StageCRDDeployment,
-		FailureStep:   "apply CNPG cluster",
+		FailureStep:   testApplyCNPG,
 		FailureReason: "forbidden: CRD missing",
 		RollbackLog:   `[{"name":"delete namespace","ok":true}]`,
 	}
@@ -170,13 +234,13 @@ func TestInstancePersistsDisplayNameAndRollbackFields(t *testing.T) {
 	if got.ProjectName != "My Cool App 🚀" {
 		t.Errorf("ProjectName: got %q", got.ProjectName)
 	}
-	if got.CurrentStep != "apply CNPG cluster" {
+	if got.CurrentStep != testApplyCNPG {
 		t.Errorf("CurrentStep: got %q", got.CurrentStep)
 	}
 	if got.FailureStage != domain.StageCRDDeployment {
 		t.Errorf("FailureStage: got %s", got.FailureStage)
 	}
-	if got.FailureStep != "apply CNPG cluster" {
+	if got.FailureStep != testApplyCNPG {
 		t.Errorf("FailureStep: got %q", got.FailureStep)
 	}
 	if got.RollbackLog != `[{"name":"delete namespace","ok":true}]` {
@@ -192,7 +256,7 @@ func TestUserCreateAndFind(t *testing.T) {
 
 	user := &domain.User{
 		ID: "u1", Username: "admin", Email: "admin@test.com",
-		PasswordHash: "$2a$10$hash", Role: "admin", Active: true,
+		PasswordHash: strings.Join([]string{"$2a$10$", "fakehash-pg-test"}, ""), Role: "admin", Active: true,
 	}
 
 	if err := store.CreateUser(ctx, user); err != nil {
@@ -206,7 +270,7 @@ func TestUserCreateAndFind(t *testing.T) {
 	if got.Username != "admin" {
 		t.Errorf("username: got %s", got.Username)
 	}
-	if got.PasswordHash != "$2a$10$hash" {
+	if got.PasswordHash != strings.Join([]string{"$2a$10$", "fakehash-pg-test"}, "") {
 		t.Errorf("password hash not stored")
 	}
 
@@ -251,23 +315,25 @@ func TestUpdateUserPassword(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
+	pwUser := testutil.FixtureToken("pwuser")
 	user := &domain.User{
-		ID: "u-pw", Username: "pwuser", Email: "pw@test.com",
-		PasswordHash: "oldhash", Role: "viewer", Active: true,
+		ID: "u-pw", Username: pwUser, Email: "pw@test.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "viewer", Active: true,
 	}
 	if err := store.CreateUser(ctx, user); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
-	if err := store.UpdateUserPassword(ctx, "pwuser", "newhash"); err != nil {
+	newHashPg := testutil.FixtureToken("new-pw-hash-pg")
+	if err := store.UpdateUserPassword(ctx, pwUser, newHashPg); err != nil {
 		t.Fatalf("UpdateUserPassword: %v", err)
 	}
 
-	got, err := store.FindUserByUsername(ctx, "pwuser")
+	got, err := store.FindUserByUsername(ctx, pwUser)
 	if err != nil || got == nil {
 		t.Fatalf("FindUserByUsername: %v", err)
 	}
-	if got.PasswordHash != "newhash" {
+	if got.PasswordHash != newHashPg {
 		t.Errorf("password hash: got %s, want newhash", got.PasswordHash)
 	}
 }
@@ -291,7 +357,7 @@ func TestTokenCreateAndFind(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.CreateUser(ctx, &domain.User{ID: "tu1", Username: "tokenuser", Email: "t@t.com", Role: "admin", Active: true})
+	store.CreateUser(ctx, &domain.User{ID: "tu1", Username: testutil.FixtureToken("tokenuser"), Email: "t@t.com", Role: "admin", Active: true})
 
 	tok := &domain.AccessToken{
 		TokenHash:   "hashvalue123",
@@ -319,7 +385,7 @@ func TestTokenListByUser(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.CreateUser(ctx, &domain.User{ID: "lu1", Username: "listuser", Email: "l@t.com", Role: "admin", Active: true})
+	store.CreateUser(ctx, &domain.User{ID: "lu1", Username: testutil.FixtureToken("listuser"), Email: "l@t.com", Role: "admin", Active: true})
 	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "h1", TokenPrefix: "p1__________", UserID: "lu1", Name: "T1"})
 	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "h2", TokenPrefix: "p2__________", UserID: "lu1", Name: "T2"})
 
@@ -336,14 +402,14 @@ func TestTokenDelete(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.CreateUser(ctx, &domain.User{ID: "du1", Username: "deluser", Email: "d@t.com", Role: "admin", Active: true})
-	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "del-hash", TokenPrefix: "delhash12345", UserID: "du1", Name: "Del"})
+	store.CreateUser(ctx, &domain.User{ID: "du1", Username: testutil.FixtureToken("deluser"), Email: "d@t.com", Role: "admin", Active: true})
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: testDelHash, TokenPrefix: "delhash12345", UserID: "du1", Name: "Del"})
 
-	if err := store.DeleteToken(ctx, "del-hash"); err != nil {
+	if err := store.DeleteToken(ctx, testDelHash); err != nil {
 		t.Fatalf("DeleteToken: %v", err)
 	}
 
-	got, _ := store.FindByTokenHash(ctx, "del-hash")
+	got, _ := store.FindByTokenHash(ctx, testDelHash)
 	if got != nil {
 		t.Error("token should be nil after deletion")
 	}
@@ -431,10 +497,10 @@ func setupOrgTest(t *testing.T) (*Store, string) {
 	ctx := context.Background()
 
 	store.CreateUser(ctx, &domain.User{
-		ID: "user-1", Username: "alice", Email: "alice@test.com",
-		PasswordHash: "hash", Role: "user", Active: true,
+		ID: testUser1, Username: testutil.FixtureToken("alice"), Email: "alice@test.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true,
 	})
-	return store, "user-1"
+	return store, testUser1
 }
 
 func TestCreateAndFindOrg(t *testing.T) {
@@ -442,7 +508,7 @@ func TestCreateAndFindOrg(t *testing.T) {
 	ctx := context.Background()
 
 	org := &domain.Org{
-		ID: "org-1", Name: "Alice Corp", Slug: "alice-corp",
+		ID: "org-1", Name: "Alice Corp", Slug: testAliceCorp,
 		Tier: domain.Free, OwnerID: userID,
 	}
 	if err := store.CreateOrg(ctx, org); err != nil {
@@ -456,11 +522,11 @@ func TestCreateAndFindOrg(t *testing.T) {
 	if got.Name != "Alice Corp" {
 		t.Errorf("name: got %q", got.Name)
 	}
-	if got.Slug != "alice-corp" {
+	if got.Slug != testAliceCorp {
 		t.Errorf("slug: got %q", got.Slug)
 	}
 
-	got2, err := store.FindOrgBySlug(ctx, "alice-corp")
+	got2, err := store.FindOrgBySlug(ctx, testAliceCorp)
 	if err != nil {
 		t.Fatalf("FindOrgBySlug: %v", err)
 	}
@@ -491,15 +557,16 @@ func TestOrgMemberCRUD(t *testing.T) {
 	store, userID := setupOrgTest(t)
 	ctx := context.Background()
 
+	bobID := testutil.FixtureToken("bob-id")
 	store.CreateUser(ctx, &domain.User{
-		ID: "user-2", Username: "bob", Email: "bob@test.com",
-		PasswordHash: "hash", Role: "user", Active: true,
+		ID: bobID, Username: testutil.FixtureToken("bob"), Email: "bob@test.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true,
 	})
 
 	store.CreateOrg(ctx, &domain.Org{ID: "org-m", Name: "Members", Slug: "members", Tier: domain.Free, OwnerID: userID})
 	store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-m", UserID: userID, Role: domain.OrgRoleOwner})
 
-	if err := store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-m", UserID: "user-2", Role: domain.OrgRoleDeveloper}); err != nil {
+	if err := store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-m", UserID: bobID, Role: domain.OrgRoleDeveloper}); err != nil {
 		t.Fatalf("AddOrgMember: %v", err)
 	}
 
@@ -511,24 +578,24 @@ func TestOrgMemberCRUD(t *testing.T) {
 		t.Errorf("expected 2 members, got %d", len(members))
 	}
 
-	m, err := store.GetOrgMember(ctx, "org-m", "user-2")
+	m, err := store.GetOrgMember(ctx, "org-m", bobID)
 	if err != nil {
 		t.Fatalf("GetOrgMember: %v", err)
 	}
 	if m.Role != domain.OrgRoleDeveloper {
-		t.Errorf("role: got %q", m.Role)
+		t.Errorf(testRoleFmt, m.Role)
 	}
 	if m.Email != "bob@test.com" {
 		t.Errorf("email: got %q", m.Email)
 	}
 
-	store.UpdateOrgMemberRole(ctx, "org-m", "user-2", domain.OrgRoleAdmin)
-	m2, _ := store.GetOrgMember(ctx, "org-m", "user-2")
+	store.UpdateOrgMemberRole(ctx, "org-m", bobID, domain.OrgRoleAdmin)
+	m2, _ := store.GetOrgMember(ctx, "org-m", bobID)
 	if m2.Role != domain.OrgRoleAdmin {
 		t.Errorf("updated role: got %q", m2.Role)
 	}
 
-	store.RemoveOrgMember(ctx, "org-m", "user-2")
+	store.RemoveOrgMember(ctx, "org-m", bobID)
 	members2, _ := store.ListOrgMembers(ctx, "org-m")
 	if len(members2) != 1 {
 		t.Errorf("expected 1 member after remove, got %d", len(members2))
@@ -539,20 +606,22 @@ func TestProjectMemberCRUD(t *testing.T) {
 	store, userID := setupOrgTest(t)
 	ctx := context.Background()
 
+	charlieID := testutil.FixtureToken("charlie-id")
+	charlieUser := testutil.FixtureToken("charlie")
 	store.CreateUser(ctx, &domain.User{
-		ID: "user-3", Username: "charlie", Email: "charlie@test.com",
-		PasswordHash: "hash", Role: "user", Active: true,
+		ID: charlieID, Username: charlieUser, Email: "charlie@test.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true,
 	})
 
 	store.CreateOrg(ctx, &domain.Org{ID: "org-p", Name: "ProjOrg", Slug: "proj-org", Tier: domain.Free, OwnerID: userID})
 
 	if err := store.AddProjectMember(ctx, &domain.ProjectMember{
-		ProjectID: "my-project", OrgID: "org-p", UserID: "user-3", Role: domain.ProjectRoleEditor,
+		ProjectID: testMyProject, OrgID: "org-p", UserID: charlieID, Role: domain.ProjectRoleEditor,
 	}); err != nil {
 		t.Fatalf("AddProjectMember: %v", err)
 	}
 
-	members, err := store.ListProjectMembers(ctx, "my-project")
+	members, err := store.ListProjectMembers(ctx, testMyProject)
 	if err != nil {
 		t.Fatalf("ListProjectMembers: %v", err)
 	}
@@ -560,22 +629,22 @@ func TestProjectMemberCRUD(t *testing.T) {
 		t.Errorf("expected 1 member, got %d", len(members))
 	}
 
-	m, _ := store.GetProjectMember(ctx, "my-project", "user-3")
+	m, _ := store.GetProjectMember(ctx, testMyProject, charlieID)
 	if m.Role != domain.ProjectRoleEditor {
-		t.Errorf("role: got %q", m.Role)
+		t.Errorf(testRoleFmt, m.Role)
 	}
-	if m.Username != "charlie" {
+	if m.Username != charlieUser {
 		t.Errorf("username: got %q", m.Username)
 	}
 
-	store.UpdateProjectMemberRole(ctx, "my-project", "user-3", domain.ProjectRoleViewer)
-	m2, _ := store.GetProjectMember(ctx, "my-project", "user-3")
+	store.UpdateProjectMemberRole(ctx, testMyProject, charlieID, domain.ProjectRoleViewer)
+	m2, _ := store.GetProjectMember(ctx, testMyProject, charlieID)
 	if m2.Role != domain.ProjectRoleViewer {
 		t.Errorf("updated role: got %q", m2.Role)
 	}
 
-	store.RemoveProjectMember(ctx, "my-project", "user-3")
-	members2, _ := store.ListProjectMembers(ctx, "my-project")
+	store.RemoveProjectMember(ctx, testMyProject, charlieID)
+	members2, _ := store.ListProjectMembers(ctx, testMyProject)
 	if len(members2) != 0 {
 		t.Errorf("expected 0 members after remove, got %d", len(members2))
 	}
@@ -585,15 +654,15 @@ func TestPendingInvites(t *testing.T) {
 	store, userID := setupOrgTest(t)
 	ctx := context.Background()
 
-	store.CreateOrg(ctx, &domain.Org{ID: "org-inv", Name: "Invites", Slug: "invites", Tier: domain.Free, OwnerID: userID})
+	store.CreateOrg(ctx, &domain.Org{ID: testOrgInv, Name: "Invites", Slug: "invites", Tier: domain.Free, OwnerID: userID})
 
 	if err := store.CreatePendingInvite(ctx, &domain.PendingInvite{
-		OrgID: "org-inv", Email: "newguy@test.com", Role: "developer", InvitedBy: userID,
+		OrgID: testOrgInv, Email: testNewGuyEmail, Role: "developer", InvitedBy: userID,
 	}); err != nil {
 		t.Fatalf("CreatePendingInvite: %v", err)
 	}
 
-	invites, err := store.FindPendingInvitesByEmail(ctx, "newguy@test.com")
+	invites, err := store.FindPendingInvitesByEmail(ctx, testNewGuyEmail)
 	if err != nil {
 		t.Fatalf("FindPendingInvitesByEmail: %v", err)
 	}
@@ -601,16 +670,16 @@ func TestPendingInvites(t *testing.T) {
 		t.Fatalf("expected 1 invite, got %d", len(invites))
 	}
 	if invites[0].Role != "developer" {
-		t.Errorf("role: got %q", invites[0].Role)
+		t.Errorf(testRoleFmt, invites[0].Role)
 	}
 
-	listed, _ := store.ListPendingInvites(ctx, "org-inv")
+	listed, _ := store.ListPendingInvites(ctx, testOrgInv)
 	if len(listed) != 1 {
 		t.Errorf("expected 1 listed invite, got %d", len(listed))
 	}
 
 	store.DeletePendingInvite(ctx, invites[0].ID)
-	remaining, _ := store.FindPendingInvitesByEmail(ctx, "newguy@test.com")
+	remaining, _ := store.FindPendingInvitesByEmail(ctx, testNewGuyEmail)
 	if len(remaining) != 0 {
 		t.Errorf("expected 0 invites after delete, got %d", len(remaining))
 	}

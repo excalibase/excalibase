@@ -15,21 +15,59 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
+const warnPersistFmt = "WARN: failed to persist instance state: %v"
+
+
 type ProvisioningService struct {
-	store     storage.InstanceStore
-	orgStore  storage.OrgStore      // optional, for org slug lookup
-	factory   *provisioner.Factory
-	vault     vaultclient.VaultClient // optional
-	k8sClient k8s.KubeClient      // optional, for role creation via pod exec
-	dockerClient provisioner.DockerClient // optional, for role creation via container exec (Docker mode)
-	pgdog          *PgDogNotifier       // optional, for PgDog config registration
-	selfHostedMode bool                 // skip tier enforcement
+	store          storage.InstanceStore
+	orgStore       storage.OrgStore // optional, for org slug lookup
+	factory        *provisioner.Factory
+	vault          vaultclient.VaultClient  // optional
+	k8sClient      k8s.KubeClient           // optional, for role creation via pod exec
+	dockerClient   provisioner.DockerClient // optional, for role creation via container exec (Docker mode)
+	pgdog          *PgDogNotifier           // optional, for PgDog config registration
+	selfHostedMode bool                     // skip tier enforcement
 	// publicationName is the CDC publication created during role setup.
 	// Must match watcher's publication_name config and graphql's
 	// app.realtime.publication-name. Empty defaults to "cdc_watcher_pub".
 	publicationName string
+	// capacityHeadroomPercent is the % of node Allocatable held back as a
+	// safety buffer when planning provisions. 0 means plan against full
+	// Allocatable. Set via SetCapacityHeadroom from main.go config.
+	capacityHeadroomPercent int
+
+	// lokiURL is the cluster's Loki HTTP endpoint. When set, GetLogs
+	// queries it instead of running kubectl-exec tail (the legacy path
+	// hangs on busy clusters and only sees logs since pod start).
+	lokiURL string
+
+	// backupDefaults configures the platform-wide backup target. When
+	// set, every new project gets backup enabled by default with these
+	// credentials, unless the request explicitly overrides via
+	// req.Backup. Wired from R2 creds in main.go so backups land in
+	// Cloudflare R2 instead of the legacy floci/localstack mock.
+	backupDefaults *BackupDefaults
+
+	// defaultDeploymentMode stamps inst.DeploymentMode at provision time
+	// for k8s + docker pipelines (BYOC sets its own). Empty falls back
+	// to ModeK8s so legacy callers keep their existing behaviour.
+	defaultDeploymentMode domain.DeploymentMode
+}
+
+// BackupDefaults — platform-wide CNPG backup target. All four fields are
+// required for the defaults to apply; an incomplete config is ignored
+// (provisions land without backup, matching pre-v1.1 behaviour).
+type BackupDefaults struct {
+	AccessKeyID     string
+	SecretAccessKey string
+	Endpoint        string // e.g. https://<account_id>.r2.cloudflarestorage.com
+	Bucket          string // e.g. excalibase-backups
+	Region          string // R2 ignores; SDK requires non-empty. Default "auto".
+	Schedule        string // cron; default "0 0 2 * * *"
+	RetentionDays   int    // default 7
 }
 
 func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Factory, k8sClient k8s.KubeClient) *ProvisioningService {
@@ -67,6 +105,59 @@ func (s *ProvisioningService) SetDockerClient(dc provisioner.DockerClient) {
 	s.dockerClient = dc
 }
 
+// SetDefaultDeploymentMode sets the deployment mode written onto every
+// new k8s/docker provision. BYOC ignores this — it always sets ModeBYOC.
+func (s *ProvisioningService) SetDefaultDeploymentMode(m domain.DeploymentMode) {
+	s.defaultDeploymentMode = m
+}
+
+// SetCapacityHeadroom sets the % of node Allocatable held back as a safety
+// buffer when planning provisions. Allocatable already excludes
+// kube-reserved + system-reserved (kubelet does that); this is the extra
+// cushion on top — for burst, monitoring growth, brief restart spikes.
+// Pass 0 to plan against full Allocatable.
+func (s *ProvisioningService) SetCapacityHeadroom(percent int) {
+	s.capacityHeadroomPercent = percent
+}
+
+// SetLokiURL configures the Loki endpoint used by GetLogs. Empty string
+// keeps the legacy kubectl-exec path (works in dev, hangs under load).
+func (s *ProvisioningService) SetLokiURL(url string) {
+	s.lokiURL = url
+}
+
+// SetBackupDefaults wires the platform-wide CNPG backup target. After
+// this is called, every new project provisions with backup enabled
+// against the configured S3-compatible store (R2 in production), unless
+// the provision request explicitly overrides via req.Backup.
+//
+// Pass nil (or a struct with empty AccessKeyID/Endpoint/Bucket) to
+// disable platform-wide backup defaults — projects then provision
+// without backup config (matches pre-v1.1 behaviour).
+func (s *ProvisioningService) SetBackupDefaults(d *BackupDefaults) {
+	if d == nil || d.AccessKeyID == "" || d.SecretAccessKey == "" || d.Endpoint == "" || d.Bucket == "" {
+		s.backupDefaults = nil
+		return
+	}
+	if d.Region == "" {
+		d.Region = "auto"
+	}
+	if d.Schedule == "" {
+		d.Schedule = "0 0 2 * * *"
+	}
+	if d.RetentionDays == 0 {
+		d.RetentionDays = 7
+	}
+	s.backupDefaults = d
+}
+
+// CapacityHeadroom returns the configured % held back as a safety buffer.
+// Exposed so the /api/capacity handler reports the same number it plans
+// against, and so tests can assert the policy applied correctly.
+func (s *ProvisioningService) CapacityHeadroom() int {
+	return s.capacityHeadroomPercent
+}
+
 // ProvisionBYOC registers an externally managed database (no provisioning pipeline).
 // Validates connectivity, stores credentials in vault, creates instance record.
 func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOCRequest) (*domain.ProvisioningResponse, error) {
@@ -83,15 +174,10 @@ func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOC
 		return nil, fmt.Errorf("failed to generate unique project ref")
 	}
 
-	// Resolve org slug for vault path
-	orgSlug := "default"
-	if s.orgStore != nil && req.OrgID != "" {
-		if org, err := s.orgStore.FindOrgByID(ctx, req.OrgID); err == nil && org != nil {
-			orgSlug = org.Slug
-		}
-	}
-
-	// Store credentials in vault under the generated ref
+	// Store credentials in vault under the project ref. Vault paths are
+	// project-scoped only — see `projects/{projectId}/...` scheme. Errors are
+	// fatal: no point creating an ACTIVE instance row pointing at credentials
+	// the platform can't read back.
 	if s.vault != nil {
 		port := strconv.Itoa(req.Port)
 		creds := map[string]string{
@@ -101,8 +187,12 @@ func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOC
 			"password": req.Password,
 			"database": req.Database,
 		}
-		s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/excalibase_app", orgSlug, projectRef), creds)
-		s.vault.Put(fmt.Sprintf("projects/%s/%s/credentials/admin", orgSlug, projectRef), creds)
+		if err := s.vault.Put(vaultCredentialPath(projectRef, "excalibase_app"), creds); err != nil {
+			return nil, fmt.Errorf("vault put excalibase_app: %w", err)
+		}
+		if err := s.vault.Put(vaultCredentialPath(projectRef, "admin"), creds); err != nil {
+			return nil, fmt.Errorf("vault put admin: %w", err)
+		}
 	}
 
 	// Create instance record
@@ -125,7 +215,7 @@ func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOC
 		return nil, fmt.Errorf("save instance: %w", err)
 	}
 
-	log.Printf("BYOC project registered: %s (ref=%s, org=%s, host=%s)", req.ProjectName, projectRef, orgSlug, req.Host)
+	log.Printf("BYOC project registered: %s (ref=%s, host=%s)", req.ProjectName, projectRef, req.Host)
 
 	return &domain.ProvisioningResponse{
 		ProjectID:    projectRef,
@@ -139,7 +229,11 @@ func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOC
 }
 
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
-	inst, prov, tier, err := s.prepareProvisioning(req)
+	// Pass req by pointer so prepareProvisioning's defaults (e.g. R2
+	// backup config injected when req.Backup is nil) propagate to the
+	// downstream prov.Provision call. Otherwise the mutated copy is
+	// scoped to the helper and the cluster comes up without backup.
+	inst, prov, tier, err := s.prepareProvisioning(&req)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +244,7 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	req.ProjectName = inst.ProjectID
 
 	if err := s.store.Save(inst); err != nil {
-		log.Printf("WARN: failed to persist instance state: %v", err)
+		log.Printf(warnPersistFmt, err)
 	}
 
 	pc := provisioner.NewProvisionContext(
@@ -158,13 +252,13 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 			inst.CurrentStage = stage
 			inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
 			if err := s.store.Save(inst); err != nil {
-				log.Printf("WARN: failed to persist instance state: %v", err)
+				log.Printf(warnPersistFmt, err)
 			}
 		},
 		func(step string) {
 			inst.CurrentStep = step
 			if err := s.store.Save(inst); err != nil {
-				log.Printf("WARN: failed to persist instance state: %v", err)
+				log.Printf(warnPersistFmt, err)
 			}
 		},
 	)
@@ -198,23 +292,14 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 }
 
 // prepareProvisioning validates the request and creates the initial instance record.
-func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest) (*domain.DatabaseInstance, provisioner.DatabaseProvisioner, config.TierConfig, error) {
-	if err := validateProvisioningRequest(req); err != nil {
+func (s *ProvisioningService) prepareProvisioning(req *domain.ProvisioningRequest) (*domain.DatabaseInstance, provisioner.DatabaseProvisioner, config.TierConfig, error) {
+	if err := validateProvisioningRequest(*req); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 
-	// Generate an opaque project ref, retrying in the (cosmically unlikely)
-	// event of a collision with an existing project.
-	var projectRef string
-	for i := 0; i < 5; i++ {
-		projectRef = generateProjectRef()
-		if existing, _ := s.store.FindByProjectID(projectRef); existing == nil {
-			break
-		}
-		projectRef = ""
-	}
-	if projectRef == "" {
-		return nil, nil, config.TierConfig{}, fmt.Errorf("failed to generate unique project ref after 5 attempts")
+	projectRef, err := s.generateUniqueProjectRef()
+	if err != nil {
+		return nil, nil, config.TierConfig{}, err
 	}
 
 	tier, err := config.GetTierConfig(req.Tier)
@@ -222,23 +307,20 @@ func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest
 		return nil, nil, config.TierConfig{}, err
 	}
 
-	// Enforce max projects per org for this tier (skip in self-hosted mode)
-	if tier.MaxProjects > 0 && !s.selfHostedMode {
-		allInstances, _ := s.store.FindAll()
-		orgCount := 0
-		for _, inst := range allInstances {
-			if inst.OrgID == req.OrgID {
-				orgCount++
-			}
-		}
-		if orgCount >= tier.MaxProjects {
-			return nil, nil, config.TierConfig{}, fmt.Errorf("org %s has reached the maximum of %d projects for %s tier", req.OrgID, tier.MaxProjects, req.Tier)
-		}
+	if err := s.enforceOrgProjectLimit(req.OrgID, tier, req.Tier); err != nil {
+		return nil, nil, config.TierConfig{}, err
 	}
 
-	// Enforce backup availability per tier
-	if req.Backup != nil && req.Backup.Enabled && !tier.BackupEnabled && !s.selfHostedMode {
-		return nil, nil, config.TierConfig{}, fmt.Errorf("backups are not available on %s tier", req.Tier)
+	s.applyBackupDefaults(req, tier)
+
+	if err := s.enforceBackupTierPolicy(req, tier); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+
+	if s.k8sClient != nil {
+		if err := s.checkClusterCapacity(tier); err != nil {
+			return nil, nil, config.TierConfig{}, err
+		}
 	}
 
 	prov, ok := s.factory.Get(req.DBType)
@@ -248,17 +330,22 @@ func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest
 
 	now := &domain.FlexTime{Time: time.Now()}
 	namespace := fmt.Sprintf("%s-%s", req.OrgID, projectRef)
+	mode := s.defaultDeploymentMode
+	if mode == "" {
+		mode = domain.ModeK8s
+	}
 	inst := &domain.DatabaseInstance{
-		ProjectID:    projectRef,
-		ProjectName:  req.ProjectName,
-		OrgID:        req.OrgID,
-		OwnerID:      req.OwnerID,
-		DBType:       req.DBType,
-		Tier:         req.Tier,
-		Namespace:    namespace,
-		Status:       "PROVISIONING",
-		CurrentStage: domain.StageValidating,
-		CreatedAt:    now,
+		ProjectID:      projectRef,
+		ProjectName:    req.ProjectName,
+		OrgID:          req.OrgID,
+		OwnerID:        req.OwnerID,
+		DBType:         req.DBType,
+		Tier:           req.Tier,
+		DeploymentMode: mode,
+		Namespace:      namespace,
+		Status:         "PROVISIONING",
+		CurrentStage:   domain.StageValidating,
+		CreatedAt:      now,
 	}
 
 	if req.Backup != nil {
@@ -268,6 +355,62 @@ func (s *ProvisioningService) prepareProvisioning(req domain.ProvisioningRequest
 	}
 
 	return inst, prov, tier, nil
+}
+
+// generateUniqueProjectRef retries up to 5 times to find a collision-free project ref.
+func (s *ProvisioningService) generateUniqueProjectRef() (string, error) {
+	for i := 0; i < 5; i++ {
+		ref := generateProjectRef()
+		if existing, _ := s.store.FindByProjectID(ref); existing == nil {
+			return ref, nil
+		}
+	}
+	return "", fmt.Errorf("failed to generate unique project ref after 5 attempts")
+}
+
+// enforceOrgProjectLimit checks whether the org has capacity for another project under the given tier.
+func (s *ProvisioningService) enforceOrgProjectLimit(orgID string, tier config.TierConfig, tierType domain.TierType) error {
+	if tier.MaxProjects <= 0 || s.selfHostedMode {
+		return nil
+	}
+	allInstances, _ := s.store.FindAll()
+	orgCount := 0
+	for _, inst := range allInstances {
+		if inst.OrgID == orgID {
+			orgCount++
+		}
+	}
+	if orgCount >= tier.MaxProjects {
+		return fmt.Errorf("org %s has reached the maximum of %d projects for %s tier", orgID, tier.MaxProjects, tierType)
+	}
+	return nil
+}
+
+// applyBackupDefaults injects platform-wide backup defaults when the request has no backup config.
+func (s *ProvisioningService) applyBackupDefaults(req *domain.ProvisioningRequest, tier config.TierConfig) {
+	if req.Backup != nil || s.backupDefaults == nil || !tier.BackupEnabled {
+		return
+	}
+	req.Backup = &domain.BackupSettings{
+		Enabled:   true,
+		Schedule:  s.backupDefaults.Schedule,
+		Retention: s.backupDefaults.RetentionDays,
+		S3: &domain.S3Credentials{
+			AccessKeyID:     s.backupDefaults.AccessKeyID,
+			SecretAccessKey: s.backupDefaults.SecretAccessKey,
+			Bucket:          s.backupDefaults.Bucket,
+			Region:          s.backupDefaults.Region,
+			Endpoint:        s.backupDefaults.Endpoint,
+		},
+	}
+}
+
+// enforceBackupTierPolicy rejects backup requests on tiers that do not support backup.
+func (s *ProvisioningService) enforceBackupTierPolicy(req *domain.ProvisioningRequest, tier config.TierConfig) error {
+	if req.Backup != nil && req.Backup.Enabled && !tier.BackupEnabled && !s.selfHostedMode {
+		return fmt.Errorf("backups are not available on %s tier", req.Tier)
+	}
+	return nil
 }
 
 // handleProvisionFailure captures the failing stage/step, runs all registered
@@ -309,7 +452,7 @@ func (s *ProvisioningService) handleProvisionFailure(
 	inst.Status = "FAILED"
 	inst.CurrentStage = domain.StageFailed
 	if saveErr := s.store.Save(inst); saveErr != nil {
-		log.Printf("WARN: failed to persist instance state: %v", saveErr)
+		log.Printf(warnPersistFmt, saveErr)
 	}
 
 	return &domain.ProvisioningResponse{
@@ -366,7 +509,7 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 	inst.UpdatedAt = finalNow
 	inst.LastHealthCheck = finalNow
 	if err := s.store.Save(inst); err != nil {
-		log.Printf("WARN: failed to persist instance state: %v", err)
+		log.Printf(warnPersistFmt, err)
 	}
 
 	// Register with PgDog connection pooler
@@ -414,7 +557,37 @@ func (s *ProvisioningService) Deprovision(ctx context.Context, projectID string)
 		}
 	}
 
+	// Delete every vault path scoped to this project. Critical for BYOC where
+	// the credentials are live passwords on an externally managed database —
+	// without this the platform retains them indefinitely after the project
+	// row is gone. Best-effort: a vault outage logs and proceeds rather than
+	// stranding the instance row.
+	if s.vault != nil && !s.vault.Sealed() {
+		s.deleteProjectVaultPaths(ctx, inst, projectID)
+	}
+
 	return s.store.Delete(projectID)
+}
+
+func (s *ProvisioningService) deleteProjectVaultPaths(ctx context.Context, inst *domain.DatabaseInstance, projectID string) {
+	// One vault round-trip; one storage transaction. Path is project-scoped
+	// only — no orgSlug guessing.
+	prefix := vaultProjectPrefix(projectID)
+	if _, err := s.vault.DeletePrefix(prefix); err != nil {
+		log.Printf("WARN: vault delete prefix %s: %v", prefix, err)
+	}
+}
+
+// vaultProjectPrefix is the canonical prefix for everything stored under a
+// project. All credential / secret paths sit under this prefix.
+func vaultProjectPrefix(projectID string) string {
+	return fmt.Sprintf("projects/%s/", projectID)
+}
+
+// vaultCredentialPath builds the canonical credential path. role is e.g.
+// "admin", "excalibase_app", "auth_admin", "cdc_watcher", "jwt_keys/anon_token".
+func vaultCredentialPath(projectID, role string) string {
+	return fmt.Sprintf("projects/%s/credentials/%s", projectID, role)
 }
 
 func (s *ProvisioningService) GetInstance(projectID string) (*domain.DatabaseInstance, error) {
@@ -472,6 +645,27 @@ func (s *ProvisioningService) SetDeletionProtection(projectID string, enabled bo
 	return s.store.Save(inst)
 }
 
+// execRoleSQL executes a psql command in the appropriate container (Docker or K8s).
+func (s *ProvisioningService) execRoleSQL(ctx context.Context, namespace, primaryPod string, cmd []string) error {
+	if s.dockerClient != nil {
+		exitCode, err := s.dockerClient.ExecInContainer(ctx, namespace, cmd)
+		if err != nil {
+			return fmt.Errorf("exec role creation (docker): %w", err)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("exec role creation (docker): psql exit code %d", exitCode)
+		}
+		return nil
+	}
+	if s.k8sClient != nil {
+		output, err := s.k8sClient.ExecInPod(ctx, namespace, primaryPod, "postgres", cmd)
+		if err != nil {
+			return fmt.Errorf("exec role creation (k8s): %w (output: %s)", err, output)
+		}
+	}
+	return nil
+}
+
 func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, namespace string, pc *provisioner.ProvisionContext) error {
 	pc.SetStage(domain.StageRoleCreation)
 	projectID := req.ProjectName
@@ -481,18 +675,11 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	port := strconv.Itoa(result.Port)
 	dbName := result.DatabaseName
 
-	orgID := req.OrgID
-
-	// Resolve org slug for vault paths (orgSlug/projectName is the unique key)
-	orgSlug := orgID // fallback to orgID if slug lookup fails
-	if s.orgStore != nil {
-		if org, err := s.orgStore.FindOrgByID(ctx, orgID); err == nil && org != nil {
-			orgSlug = org.Slug
-		}
-	}
-
+	// Vault paths are project-scoped only — projectID is globally unique so no
+	// org dimension is needed. Eliminates the silent-fallback bug where a
+	// failed org lookup could file credentials under the wrong tenant.
 	vaultPath := func(role string) string {
-		return fmt.Sprintf("projects/%s/%s/credentials/%s", orgSlug, projectID, role)
+		return vaultCredentialPath(projectID, role)
 	}
 	registerVaultCleanup := func(path string) {
 		pc.RegisterCleanup("delete vault "+path, func(ctx context.Context) error {
@@ -503,8 +690,8 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	// Store admin (superuser) credentials from CNPG
 	pc.SetStep("store admin credentials")
 	adminPath := vaultPath("admin")
-	creds_admin := map[string]string{"host": host, "port": port, "database": dbName, "username": result.Username, "password": result.Password}
-	if err := s.vault.Put(adminPath, creds_admin); err != nil {
+	credsAdmin := map[string]string{"host": host, "port": port, "database": dbName, "username": result.Username, "password": result.Password}
+	if err := s.vault.Put(adminPath, credsAdmin); err != nil {
 		return pc.Fail(fmt.Errorf("vault put admin: %w", err))
 	}
 	registerVaultCleanup(adminPath)
@@ -522,40 +709,23 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	// Execute psql inside the database container (K8s pod or Docker container).
 	pc.SetStep("exec CREATE ROLE in database")
 	cmd := []string{"psql", "-U", "postgres", "-d", dbName, "-c", roleSQL}
-	var execErr error
-	if s.dockerClient != nil {
-		// Docker mode: the container ID is stored in the instance's Namespace field
-		// (updated by finalizeProvisioning from result.Namespace).
-		exitCode, err := s.dockerClient.ExecInContainer(ctx, namespace, cmd)
-		if err != nil {
-			execErr = fmt.Errorf("exec role creation (docker): %w", err)
-		} else if exitCode != 0 {
-			execErr = fmt.Errorf("exec role creation (docker): psql exit code %d", exitCode)
-		}
-	} else if s.k8sClient != nil {
-		var output string
-		output, execErr = s.k8sClient.ExecInPod(ctx, namespace, primaryPod, "postgres", cmd)
-		if execErr != nil {
-			execErr = fmt.Errorf("exec role creation (k8s): %w (output: %s)", execErr, output)
-		}
-	}
-	if execErr != nil {
+	if execErr := s.execRoleSQL(ctx, namespace, primaryPod, cmd); execErr != nil {
 		return pc.Fail(execErr)
 	}
 
-	// Store credentials in vault at projects/{orgSlug}/{projectName}/credentials/{role}
+	// Store credentials in vault at projects/{projectId}/credentials/{role}
 	pc.SetStep("store auth_admin credentials")
 	authPath := vaultPath("auth_admin")
-	creds_auth := map[string]string{"host": host, "port": port, "database": dbName, "username": "auth_admin", "password": authPass}
-	if err := s.vault.Put(authPath, creds_auth); err != nil {
+	credsAuth := map[string]string{"host": host, "port": port, "database": dbName, "username": "auth_admin", "password": authPass}
+	if err := s.vault.Put(authPath, credsAuth); err != nil {
 		return pc.Fail(fmt.Errorf("vault put auth_admin: %w", err))
 	}
 	registerVaultCleanup(authPath)
 
 	pc.SetStep("store excalibase_app credentials")
 	appPath := vaultPath("excalibase_app")
-	creds_app := map[string]string{"host": host, "port": port, "database": dbName, "username": "excalibase_app", "password": appPass}
-	if err := s.vault.Put(appPath, creds_app); err != nil {
+	credsApp := map[string]string{"host": host, "port": port, "database": dbName, "username": "excalibase_app", "password": appPass}
+	if err := s.vault.Put(appPath, credsApp); err != nil {
 		return pc.Fail(fmt.Errorf("vault put excalibase_app: %w", err))
 	}
 	registerVaultCleanup(appPath)
@@ -565,15 +735,97 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	// must not be reachable from any user-facing service.
 	pc.SetStep("store cdc_watcher credentials")
 	watcherPath := vaultPath("cdc_watcher")
-	creds_watcher := map[string]string{"host": host, "port": port, "database": dbName, "username": "cdc_watcher", "password": watcherPass}
-	if err := s.vault.Put(watcherPath, creds_watcher); err != nil {
+	credsWatcher := map[string]string{"host": host, "port": port, "database": dbName, "username": "cdc_watcher", "password": watcherPass}
+	if err := s.vault.Put(watcherPath, credsWatcher); err != nil {
 		return pc.Fail(fmt.Errorf("vault put cdc_watcher: %w", err))
 	}
 	registerVaultCleanup(watcherPath)
 
 	log.Printf("Created project roles for %s and stored in vault", projectID)
+
+	// Deploy per-project watcher NOW that cdc_watcher role exists. Done here
+	// rather than inside the provisioner because the watcher needs the role
+	// (REPLICATION attribute) created by the SQL exec'd above. Inline creds —
+	// not the CNPG `app` secret which lacks REPLICATION.
+	if pgProv, ok := s.factory.Get(domain.PostgreSQL); ok {
+		if pg, ok := pgProv.(*provisioner.PostgreSQLProvisioner); ok {
+			if err := pg.DeployWatcher(ctx, namespace, projectID, dbName, "cdc_watcher", watcherPass); err != nil {
+				log.Printf("WARN: watcher deployment for %s: %v", projectID, err)
+			}
+		}
+	}
+
 	return nil
 }
 
-func boolPtr(b bool) *bool  { return &b }
-func intPtr(i int) *int     { return &i }
+func boolPtr(b bool) *bool { return &b }
+func intPtr(i int) *int    { return &i }
+
+// checkClusterCapacity refuses the provision if the cluster lacks headroom
+// for `tier.Instances` postgres pods of (tier.CPU, tier.Memory) plus the
+// per-project sidecars (watcher + deno-runtime).
+//
+// Best-effort: if capacity lookup itself errors (operator unavailable, etc.)
+// we log and let the provision proceed — better to fail at WAITING_FOR_READY
+// than block on a flaky API call. This is the only place we trade hard
+// enforcement for a soft warning; everywhere else upstream errors are fatal.
+func (s *ProvisioningService) checkClusterCapacity(tier config.TierConfig) error {
+	cap, err := s.k8sClient.GetClusterCapacity(context.Background())
+	if err != nil {
+		log.Printf("WARN: cluster capacity lookup failed (proceeding anyway): %v", err)
+		return nil
+	}
+	// Stamp the configured headroom % so FreeCPUMilli / FreeMemBytes
+	// account for our extra safety buffer on top of kubelet's Allocatable.
+	cap.HeadroomPercent = s.capacityHeadroomPercent
+	// Allocatable=0 means we couldn't read node status (mock or stale API
+	// cache). Treat as "capacity unknown" rather than blocking every
+	// provision — the WAITING_FOR_READY timeout still catches real OOMs.
+	if cap.AllocatableCPUMilli == 0 || cap.AllocatableMemBytes == 0 {
+		return nil
+	}
+
+	cpu, mem, err := TierResourceFootprint(tier)
+	if err != nil {
+		log.Printf("WARN: tier resource parse failed (proceeding anyway): %v", err)
+		return nil
+	}
+
+	if cap.FreeCPUMilli() < cpu {
+		// Detailed numbers go to the server log so operators can size up.
+		// End user sees only a short, actionable message — no milli-CPU,
+		// no allocatable counts, no signal about cluster sizing.
+		log.Printf("INFO: provision refused (CPU): tier=%s need=%dm free=%dm allocatable=%dm requested=%dm headroom=%d%%",
+			tier.CPUString(), cpu, cap.FreeCPUMilli(), cap.AllocatableCPUMilli, cap.RequestedCPUMilli, cap.HeadroomPercent)
+		return fmt.Errorf("not enough capacity right now — try again later or contact support")
+	}
+	if cap.FreeMemBytes() < mem {
+		log.Printf("INFO: provision refused (memory): tier=%s need=%d free=%d allocatable=%d requested=%d headroom=%d%%",
+			tier.MemoryString(), mem, cap.FreeMemBytes(), cap.AllocatableMemBytes, cap.RequestedMemBytes, cap.HeadroomPercent)
+		return fmt.Errorf("not enough capacity right now — try again later or contact support")
+	}
+	return nil
+}
+
+// TierResourceFootprint converts a tier's CPU/memory strings + instance count
+// into total milli-CPU and bytes the project would request from the cluster.
+// Sidecars (watcher 50m/128Mi + deno-runtime 10m/64Mi) are added once per
+// project regardless of instance count. Exported so the /api/capacity
+// handler can compute per-tier project headroom.
+func TierResourceFootprint(tier config.TierConfig) (cpuMilli, memBytes int64, err error) {
+	pgCPU, err := resource.ParseQuantity(tier.CPU)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse tier cpu %q: %w", tier.CPU, err)
+	}
+	pgMem, err := resource.ParseQuantity(tier.Memory)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse tier memory %q: %w", tier.Memory, err)
+	}
+	instances := int64(tier.Instances)
+	if instances < 1 {
+		instances = 1
+	}
+	cpuMilli = pgCPU.MilliValue()*instances + 60   // watcher 50m + deno 10m
+	memBytes = pgMem.Value()*instances + 192*1024*1024 // watcher 128Mi + deno 64Mi
+	return cpuMilli, memBytes, nil
+}

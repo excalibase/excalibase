@@ -8,11 +8,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
+
+const (
+	testDBName        = "test-db"
+	testProvisionFmt  = "Provision: %v"
+	testDelDB         = "del-db"
+	testDeprovisionFmt = "Deprovision: %v"
+	testVaultDel      = "vault-del"
+	testLegacyProj    = "legacy-proj"
+	testVaultErr      = "vault-err"
+	testSealedDel     = "sealed-del"
+	testCoolApp       = "My Cool App 🚀"
+	testNotPersisted  = "instance not persisted"
+	testUnexpErrFmt   = "unexpected err: %v"
+	testUser1         = "user-1"
+)
+
 
 func setupProvisioningTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore, *k8s.MockClient) {
 	t.Helper()
@@ -33,17 +50,103 @@ func setupProvisioningTest(t *testing.T) (*ProvisioningService, *storage.FileSys
 	return svc, store, mock
 }
 
-func TestProvisionSuccess(t *testing.T) {
-	svc, _, _ := setupProvisioningTest(t)
+// TestTierResourceFootprint pins the CPU/memory math the /api/capacity
+// endpoint and the pre-flight check both depend on. If new sidecars are
+// added (e.g. shadow-tables daemon), update the expected numbers.
+func TestTierResourceFootprint(t *testing.T) {
+	cases := []struct {
+		name       string
+		tier       config.TierConfig
+		wantCPU    int64 // milliCPU
+		wantMemMiB int64 // megabytes for readability
+	}{
+		// FREE: 0.5 CPU * 1 instance + 60m sidecars = 560m
+		// 512Mi * 1 + 192Mi sidecars = 704Mi
+		{"free", config.TierConfig{Instances: 1, CPU: "0.5", Memory: "512Mi"}, 560, 704},
+		// STANDARD: 2 CPU * 3 + 60m = 6060m; 4Gi * 3 + 192Mi = 12480Mi
+		{"standard", config.TierConfig{Instances: 3, CPU: "2", Memory: "4Gi"}, 6060, 12480},
+		// ENTERPRISE: 4 CPU * 5 + 60m = 20060m; 16Gi * 5 + 192Mi = 82112Mi
+		{"enterprise", config.TierConfig{Instances: 5, CPU: "4", Memory: "16Gi"}, 20060, 82112},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cpu, mem, err := TierResourceFootprint(c.tier)
+			if err != nil {
+				t.Fatalf("TierResourceFootprint: %v", err)
+			}
+			if cpu != c.wantCPU {
+				t.Errorf("cpu: got %dm, want %dm", cpu, c.wantCPU)
+			}
+			gotMiB := mem / (1024 * 1024)
+			if gotMiB != c.wantMemMiB {
+				t.Errorf("memory: got %dMiB, want %dMiB", gotMiB, c.wantMemMiB)
+			}
+		})
+	}
+}
 
+// TestProvision_RefusesWhenClusterFull confirms the capacity pre-flight
+// blocks new provisions instead of letting them fail at WAITING_FOR_READY
+// 5 minutes later.
+func TestProvision_RefusesWhenClusterFull(t *testing.T) {
+	svc, _, mock := setupProvisioningTest(t)
+	// Cluster has 1 CPU + 1Gi total but 950m + 900Mi already requested —
+	// not enough headroom for FREE tier (500m + 512Mi + 60m sidecars).
+	mock.Capacity = k8s.ClusterCapacity{
+		AllocatableCPUMilli: 1000,
+		AllocatableMemBytes: 1024 * 1024 * 1024,
+		RequestedCPUMilli:   950,
+		RequestedMemBytes:   900 * 1024 * 1024,
+	}
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "test-db",
+		ProjectName: "no-room",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	})
+	if err == nil {
+		t.Fatalf("expected capacity error, got resp=%+v", resp)
+	}
+	if !strings.Contains(err.Error(), "not enough capacity") {
+		t.Errorf("user-facing error should say 'not enough capacity': got %v", err)
+	}
+}
+
+// TestProvision_AcceptsWhenClusterHasRoom confirms a healthy cluster passes
+// the capacity check and proceeds to actual provisioning.
+func TestProvision_AcceptsWhenClusterHasRoom(t *testing.T) {
+	svc, _, mock := setupProvisioningTest(t)
+	mock.Capacity = k8s.ClusterCapacity{
+		AllocatableCPUMilli: 24000,
+		AllocatableMemBytes: 64 * 1024 * 1024 * 1024,
+		RequestedCPUMilli:   2000,
+		RequestedMemBytes:   4 * 1024 * 1024 * 1024,
+	}
+	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "fits",
 		OrgID:       "org1",
 		DBType:      domain.PostgreSQL,
 		Tier:        domain.Free,
 	})
 	if err != nil {
-		t.Fatalf("Provision: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected response")
+	}
+}
+
+func TestProvisionSuccess(t *testing.T) {
+	svc, _, _ := setupProvisioningTest(t)
+
+	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: testDBName,
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	})
+	if err != nil {
+		t.Fatalf(testProvisionFmt, err)
 	}
 	if resp.Status != "ACTIVE" {
 		t.Errorf("status: got %s, want ACTIVE", resp.Status)
@@ -51,8 +154,8 @@ func TestProvisionSuccess(t *testing.T) {
 	if resp.CurrentStage != domain.StageCompleted {
 		t.Errorf("stage: got %s, want COMPLETED", resp.CurrentStage)
 	}
-	if resp.ProjectName != "test-db" {
-		t.Errorf("ProjectName: got %q, want %q", resp.ProjectName, "test-db")
+	if resp.ProjectName != testDBName {
+		t.Errorf("ProjectName: got %q, want %q", resp.ProjectName, testDBName)
 	}
 	if resp.Namespace != "org1-"+resp.ProjectID {
 		t.Errorf("namespace: got %s, want %s", resp.Namespace, "org1-"+resp.ProjectID)
@@ -143,6 +246,75 @@ func TestProvisionStandardTierAllowsMultipleProjects(t *testing.T) {
 	}
 }
 
+// TestProvision_SetsDeploymentMode confirms the provisioning service
+// stamps inst.DeploymentMode at provision time. Without it, the
+// adapter dispatch in BackupService can't tell k8s from docker
+// instances and falls back to the zero value (""). See DOCKER_BACKUP_IMPL.md §0.
+func TestProvision_SetsDeploymentMode_K8s(t *testing.T) {
+	svc, store, _ := setupProvisioningTest(t)
+	svc.SetDefaultDeploymentMode(domain.ModeK8s)
+
+	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "k8s-mode-db",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	got, _ := store.FindByProjectID(resp.ProjectID)
+	if got == nil {
+		t.Fatal("instance not persisted")
+	}
+	if got.DeploymentMode != domain.ModeK8s {
+		t.Errorf("deploymentMode: got %q, want k8s", got.DeploymentMode)
+	}
+}
+
+func TestProvision_SetsDeploymentMode_Docker(t *testing.T) {
+	svc, store, _ := setupProvisioningTest(t)
+	svc.SetDefaultDeploymentMode(domain.ModeDocker)
+
+	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "docker-mode-db",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	got, _ := store.FindByProjectID(resp.ProjectID)
+	if got == nil {
+		t.Fatal("instance not persisted")
+	}
+	if got.DeploymentMode != domain.ModeDocker {
+		t.Errorf("deploymentMode: got %q, want docker", got.DeploymentMode)
+	}
+}
+
+// Default — no SetDefaultDeploymentMode call — must still produce
+// ModeK8s so existing callers that don't know about the new setter
+// keep working safely.
+func TestProvision_DefaultsToK8s_WhenUnset(t *testing.T) {
+	svc, store, _ := setupProvisioningTest(t)
+
+	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName: "default-mode-db",
+		OrgID:       "org1",
+		DBType:      domain.PostgreSQL,
+		Tier:        domain.Free,
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	got, _ := store.FindByProjectID(resp.ProjectID)
+	if got.DeploymentMode != domain.ModeK8s {
+		t.Errorf("default deploymentMode: got %q, want k8s", got.DeploymentMode)
+	}
+}
+
 func TestProvisionUnsupportedType(t *testing.T) {
 	svc, _, _ := setupProvisioningTest(t)
 
@@ -159,21 +331,21 @@ func TestProvisionUnsupportedType(t *testing.T) {
 
 func TestDeprovision(t *testing.T) {
 	svc, store, mock := setupProvisioningTest(t)
-	mock.SetupPostgreSQLMock("del-db", "org1-del-db", 1)
+	mock.SetupPostgreSQLMock(testDelDB, "org1-del-db", 1)
 
 	store.Save(&domain.DatabaseInstance{
-		ProjectID: "del-db",
+		ProjectID: testDelDB,
 		OrgID:     "org1",
 		DBType:    domain.PostgreSQL,
 		Namespace: "org1-del-db",
 		Status:    "ACTIVE",
 	})
 
-	if err := svc.Deprovision(context.Background(), "del-db"); err != nil {
-		t.Fatalf("Deprovision: %v", err)
+	if err := svc.Deprovision(context.Background(), testDelDB); err != nil {
+		t.Fatalf(testDeprovisionFmt, err)
 	}
 
-	inst, _ := store.FindByProjectID("del-db")
+	inst, _ := store.FindByProjectID(testDelDB)
 	if inst != nil {
 		t.Error("instance should be deleted")
 	}
@@ -184,6 +356,133 @@ func TestDeprovisionNotFound(t *testing.T) {
 	err := svc.Deprovision(context.Background(), "nonexistent")
 	if err == nil {
 		t.Error("expected error for nonexistent project")
+	}
+}
+
+func TestDeprovisionDeletesVaultCredentials(t *testing.T) {
+	svc, store, mock := setupProvisioningTest(t)
+	mock.SetupPostgreSQLMock(testVaultDel, "org1-vault-del", 1)
+
+	v := newFakeVault()
+	svc.SetVault(v)
+
+	// Seed every credential path the provisioner writes during a real run.
+	// Paths are project-scoped only — no org dimension.
+	prefix := "projects/vault-del/credentials/"
+	roles := []string{"admin", "auth_admin", "excalibase_app", "cdc_watcher"}
+	for _, r := range roles {
+		if err := v.Put(prefix+r, map[string]string{"password": "secret"}); err != nil {
+			t.Fatalf("seed %s: %v", r, err)
+		}
+	}
+	// A path outside the project — must NOT be deleted.
+	v.Put("projects/other-proj/credentials/admin", map[string]string{"password": "untouched"})
+
+	store.Save(&domain.DatabaseInstance{
+		ProjectID: testVaultDel,
+		OrgID:     "org1",
+		DBType:    domain.PostgreSQL,
+		Namespace: "org1-vault-del",
+		Status:    "ACTIVE",
+	})
+
+	if err := svc.Deprovision(context.Background(), testVaultDel); err != nil {
+		t.Fatalf(testDeprovisionFmt, err)
+	}
+
+	for _, r := range roles {
+		p := prefix + r
+		if _, leaked := v.data[p]; leaked {
+			t.Errorf("vault path %s should be deleted, still present", p)
+		}
+	}
+	if _, ok := v.data["projects/other-proj/credentials/admin"]; !ok {
+		t.Error("unrelated project's credentials should not be deleted")
+	}
+}
+
+// Vault paths must NOT be org-scoped. If a regression reintroduces the old
+// scheme, this test catches it: a credential filed under the legacy path
+// projects/{orgSlug}/{projectId}/... must NOT be reachable from Deprovision
+// because the canonical path is projects/{projectId}/...
+func TestDeprovisionDoesNotSweepLegacyOrgScopedPaths(t *testing.T) {
+	svc, store, mock := setupProvisioningTest(t)
+	mock.SetupPostgreSQLMock(testLegacyProj, "org9-legacy-proj", 1)
+
+	v := newFakeVault()
+	svc.SetVault(v)
+
+	// Legacy path layout — should never have been written under the new
+	// scheme, but if a stale operator put one there it must be left alone
+	// (deletion would only happen via explicit migration, not Deprovision).
+	legacy := "projects/default/legacy-proj/credentials/excalibase_app"
+	v.Put(legacy, map[string]string{"password": "stale"})
+	// Canonical path — must be deleted.
+	canonical := "projects/legacy-proj/credentials/excalibase_app"
+	v.Put(canonical, map[string]string{"password": "current"})
+
+	store.Save(&domain.DatabaseInstance{
+		ProjectID: testLegacyProj,
+		OrgID:     "org9",
+		DBType:    domain.PostgreSQL,
+		Status:    "ACTIVE",
+	})
+
+	if err := svc.Deprovision(context.Background(), testLegacyProj); err != nil {
+		t.Fatalf(testDeprovisionFmt, err)
+	}
+	if _, leaked := v.data[canonical]; leaked {
+		t.Errorf("canonical path %s should be deleted", canonical)
+	}
+	// Legacy path is intentionally not swept by Deprovision.
+}
+
+// Vault outage during list must log+continue, not strand the instance row.
+func TestDeprovisionContinuesWhenVaultListFails(t *testing.T) {
+	svc, store, mock := setupProvisioningTest(t)
+	mock.SetupPostgreSQLMock(testVaultErr, "org1-vault-err", 1)
+
+	v := &errVault{err: errors.New("vault outage")}
+	svc.SetVault(v)
+
+	store.Save(&domain.DatabaseInstance{
+		ProjectID: testVaultErr,
+		OrgID:     "org1",
+		DBType:    domain.PostgreSQL,
+		Namespace: "org1-vault-err",
+		Status:    "ACTIVE",
+	})
+
+	if err := svc.Deprovision(context.Background(), testVaultErr); err != nil {
+		t.Fatalf("Deprovision must succeed despite vault list failure: %v", err)
+	}
+	if inst, _ := store.FindByProjectID(testVaultErr); inst != nil {
+		t.Error("instance row should still be deleted")
+	}
+}
+
+// Sealed vault must skip the cleanup branch entirely (no calls into vault).
+func TestDeprovisionSkipsVaultWhenSealed(t *testing.T) {
+	svc, store, mock := setupProvisioningTest(t)
+	mock.SetupPostgreSQLMock(testSealedDel, "org1-sealed-del", 1)
+
+	v := &sealedVault{}
+	svc.SetVault(v)
+
+	store.Save(&domain.DatabaseInstance{
+		ProjectID: testSealedDel,
+		OrgID:     "org1",
+		DBType:    domain.PostgreSQL,
+		Namespace: "org1-sealed-del",
+		Status:    "ACTIVE",
+	})
+
+	if err := svc.Deprovision(context.Background(), testSealedDel); err != nil {
+		t.Fatalf(testDeprovisionFmt, err)
+	}
+	if v.listCalls != 0 || v.deleteCalls != 0 || v.deletePrefixCalls != 0 {
+		t.Errorf("sealed vault must not be called: list=%d delete=%d deletePrefix=%d",
+			v.listCalls, v.deleteCalls, v.deletePrefixCalls)
 	}
 }
 
@@ -369,18 +668,18 @@ func TestProvision_GeneratesOpaqueProjectRef(t *testing.T) {
 	}
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "My Cool App 🚀",
+		ProjectName: testCoolApp,
 		OrgID:       "org1",
 		DBType:      domain.PostgreSQL,
 		Tier:        domain.Free,
 	})
 	if err != nil {
-		t.Fatalf("Provision: %v", err)
+		t.Fatalf(testProvisionFmt, err)
 	}
 	if !projectRefPattern.MatchString(resp.ProjectID) {
 		t.Errorf("ProjectID: got %q, want match %s", resp.ProjectID, projectRefPattern)
 	}
-	if resp.ProjectID == "My Cool App 🚀" {
+	if resp.ProjectID == testCoolApp {
 		t.Errorf("ProjectID must be generated, not the display name")
 	}
 
@@ -388,8 +687,8 @@ func TestProvision_GeneratesOpaqueProjectRef(t *testing.T) {
 	if inst == nil {
 		t.Fatalf("instance not persisted under generated ID %q", resp.ProjectID)
 	}
-	if inst.ProjectName != "My Cool App 🚀" {
-		t.Errorf("inst.ProjectName: got %q, want %q", inst.ProjectName, "My Cool App 🚀")
+	if inst.ProjectName != testCoolApp {
+		t.Errorf("inst.ProjectName: got %q, want %q", inst.ProjectName, testCoolApp)
 	}
 	if inst.ProjectID != resp.ProjectID {
 		t.Errorf("inst.ProjectID: got %q, want %q", inst.ProjectID, resp.ProjectID)
@@ -444,7 +743,7 @@ func TestProvision_NamespaceUsesGeneratedRef(t *testing.T) {
 		Tier:        domain.Free,
 	})
 	if err != nil {
-		t.Fatalf("Provision: %v", err)
+		t.Fatalf(testProvisionFmt, err)
 	}
 	wantNamespace := "org1-" + resp.ProjectID
 	if resp.Namespace != wantNamespace {
@@ -476,9 +775,59 @@ func (f *fakeVault) Delete(p string) error {
 	delete(f.data, p)
 	return nil
 }
-func (f *fakeVault) List(prefix string) ([]string, error) { return nil, nil }
-func (f *fakeVault) Sealed() bool                         { return false }
-func (f *fakeVault) GetPublicKey() (string, error)        { return "", nil }
+func (f *fakeVault) DeletePrefix(prefix string) (int, error) {
+	if prefix == "" {
+		return 0, errors.New("empty prefix")
+	}
+	n := 0
+	for k := range f.data {
+		if strings.HasPrefix(k, prefix) {
+			f.deletes = append(f.deletes, k)
+			delete(f.data, k)
+			n++
+		}
+	}
+	return n, nil
+}
+func (f *fakeVault) List(prefix string) ([]string, error) {
+	out := []string{}
+	for k := range f.data {
+		if prefix == "" || strings.HasPrefix(k, prefix) {
+			out = append(out, k)
+		}
+	}
+	return out, nil
+}
+func (f *fakeVault) Sealed() bool                  { return false }
+func (f *fakeVault) GetPublicKey() (string, error) { return "", nil }
+
+// errVault returns a fixed error from List — used to verify Deprovision
+// logs+continues on vault outage rather than stranding the instance row.
+type errVault struct{ err error }
+
+func (e *errVault) Get(string) (map[string]string, error) { return nil, e.err }
+func (e *errVault) Put(string, map[string]string) error   { return e.err }
+func (e *errVault) Delete(string) error                   { return e.err }
+func (e *errVault) DeletePrefix(string) (int, error)      { return 0, e.err }
+func (e *errVault) List(string) ([]string, error)         { return nil, e.err }
+func (e *errVault) Sealed() bool                          { return false }
+func (e *errVault) GetPublicKey() (string, error)         { return "", e.err }
+
+// sealedVault reports Sealed=true and counts any other call so the test
+// can assert nothing else was invoked.
+type sealedVault struct {
+	listCalls         int
+	deleteCalls       int
+	deletePrefixCalls int
+}
+
+func (s *sealedVault) Get(string) (map[string]string, error) { return nil, nil }
+func (s *sealedVault) Put(string, map[string]string) error   { return nil }
+func (s *sealedVault) Delete(string) error                   { s.deleteCalls++; return nil }
+func (s *sealedVault) DeletePrefix(string) (int, error)      { s.deletePrefixCalls++; return 0, nil }
+func (s *sealedVault) List(string) ([]string, error)         { s.listCalls++; return nil, nil }
+func (s *sealedVault) Sealed() bool                          { return true }
+func (s *sealedVault) GetPublicKey() (string, error)         { return "", nil }
 
 // --- Rollback on failure ---
 
@@ -507,7 +856,7 @@ func TestProvisionFailure_PopulatesFailureStageAndStep(t *testing.T) {
 
 	inst, _ := store.FindByProjectID(resp.ProjectID)
 	if inst == nil {
-		t.Fatal("instance not persisted")
+		t.Fatal(testNotPersisted)
 	}
 	if inst.FailureStage != domain.StageCRDDeployment {
 		t.Errorf("inst.FailureStage: got %s", inst.FailureStage)
@@ -531,7 +880,7 @@ func TestProvisionFailure_RollbackDeletesNamespace(t *testing.T) {
 		Tier:        domain.Free,
 	})
 	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
+		t.Fatalf(testUnexpErrFmt, err)
 	}
 	if mock.Namespaces["org1-"+resp.ProjectID] {
 		t.Error("namespace should be deleted by rollback")
@@ -550,7 +899,7 @@ func TestProvisionFailure_PersistsRollbackLog(t *testing.T) {
 	})
 	inst, _ := store.FindByProjectID(resp.ProjectID)
 	if inst == nil {
-		t.Fatal("instance not persisted")
+		t.Fatal(testNotPersisted)
 	}
 	if inst.RollbackLog == "" {
 		t.Fatal("RollbackLog should be populated JSON")
@@ -586,7 +935,7 @@ func TestProvisionFailure_RollsBackVaultWritesOnRoleCreationFailure(t *testing.T
 		Tier:        domain.Free,
 	})
 	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
+		t.Fatalf(testUnexpErrFmt, err)
 	}
 	if resp.Status != "FAILED" {
 		t.Errorf("status: got %s, want FAILED", resp.Status)
@@ -596,7 +945,7 @@ func TestProvisionFailure_RollsBackVaultWritesOnRoleCreationFailure(t *testing.T
 	}
 
 	// Admin vault entry must be rolled back (created then deleted)
-	adminPath := "projects/org1/" + resp.ProjectID + "/credentials/admin"
+	adminPath := "projects/" + resp.ProjectID + "/credentials/admin"
 	if _, stillThere := v.data[adminPath]; stillThere {
 		t.Errorf("vault admin entry should be deleted by rollback, still at %s", adminPath)
 	}
@@ -619,7 +968,7 @@ func TestProvisionFailure_RollsBackVaultWritesOnRoleCreationFailure(t *testing.T
 	// Rollback log should contain at least 2 results (vault admin + namespace)
 	inst, _ := store.FindByProjectID(resp.ProjectID)
 	if inst == nil {
-		t.Fatal("instance not persisted")
+		t.Fatal(testNotPersisted)
 	}
 	var results []provisioner.CleanupResult
 	if err := json.Unmarshal([]byte(inst.RollbackLog), &results); err != nil {
@@ -643,14 +992,14 @@ func TestProvisionFailure_NamespaceFailureHasNoRollbackLog(t *testing.T) {
 		Tier:        domain.Free,
 	})
 	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
+		t.Fatalf(testUnexpErrFmt, err)
 	}
 	if resp.FailureStage != domain.StageNamespaceCreation {
 		t.Errorf("FailureStage: got %s", resp.FailureStage)
 	}
 	inst, _ := store.FindByProjectID(resp.ProjectID)
 	if inst == nil {
-		t.Fatal("instance not persisted")
+		t.Fatal(testNotPersisted)
 	}
 	if inst.RollbackLog != "" && inst.RollbackLog != "[]" && inst.RollbackLog != "null" {
 		var results []provisioner.CleanupResult
@@ -665,11 +1014,11 @@ func TestProvisionFailure_NamespaceFailureHasNoRollbackLog(t *testing.T) {
 
 func TestGetInstancesByOwner(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
-	store.Save(&domain.DatabaseInstance{ProjectID: "a", OwnerID: "user-1", Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "b", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "a", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "b", OwnerID: testUser1, Status: "ACTIVE"})
 	store.Save(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
 
-	owned, err := svc.GetInstancesByOwner("user-1")
+	owned, err := svc.GetInstancesByOwner(testUser1)
 	if err != nil {
 		t.Fatalf("GetInstancesByOwner: %v", err)
 	}
@@ -677,7 +1026,7 @@ func TestGetInstancesByOwner(t *testing.T) {
 		t.Errorf("expected 2, got %d", len(owned))
 	}
 	for _, inst := range owned {
-		if inst.OwnerID != "user-1" {
+		if inst.OwnerID != testUser1 {
 			t.Errorf("unexpected owner: %s", inst.OwnerID)
 		}
 	}

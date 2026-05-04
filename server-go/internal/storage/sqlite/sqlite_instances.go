@@ -8,9 +8,14 @@ import (
 )
 
 func (s *Store) Save(inst *domain.DatabaseInstance) error {
+	mode := inst.DeploymentMode
+	if mode == "" {
+		mode = domain.ModeK8s
+	}
 	_, err := s.db.Exec(`
 		INSERT OR REPLACE INTO database_instances (
 			project_id, project_name, org_id, owner_id, database_type, tier, namespace,
+			deployment_mode,
 			host, read_only_host, port, database_name, username, password,
 			deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 			webhook_url, postgres_version, tags,
@@ -20,8 +25,9 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 			backup_enabled, backup_schedule, backup_retention_days,
 			metrics_endpoint, grafana_dashboard_url,
 			created_at, updated_at, last_health_check
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
+		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
 		boolToInt(inst.DeletionProtection), boolToInt(inst.PoolerEnabled), inst.PoolerHost, inst.SSLMode,
 		inst.WebhookURL, inst.PostgresVersion, inst.Tags,
@@ -35,18 +41,21 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 	return err
 }
 
+const sqliteInstanceColumns = `
+	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
+	deployment_mode,
+	host, read_only_host, port, database_name, username, password,
+	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
+	webhook_url, postgres_version, tags,
+	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
+	network_policy_enabled,
+	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
+	backup_enabled, backup_schedule, backup_retention_days,
+	metrics_endpoint, grafana_dashboard_url,
+	created_at, updated_at, last_health_check`
+
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
-	row := s.db.QueryRow(`SELECT
-		project_id, project_name, org_id, owner_id, database_type, tier, namespace,
-		host, read_only_host, port, database_name, username, password,
-		deletion_protection, pooler_enabled, pooler_host, ssl_mode,
-		webhook_url, postgres_version, tags,
-		status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
-		network_policy_enabled,
-		maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
-		backup_enabled, backup_schedule, backup_retention_days,
-		metrics_endpoint, grafana_dashboard_url,
-		created_at, updated_at, last_health_check
+	row := s.db.QueryRow(`SELECT`+sqliteInstanceColumns+`
 	FROM database_instances WHERE project_id = ?`, projectID)
 
 	inst, err := scanInstanceFrom(row)
@@ -57,17 +66,7 @@ func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, err
 }
 
 func (s *Store) FindAll() ([]*domain.DatabaseInstance, error) {
-	rows, err := s.db.Query(`SELECT
-		project_id, project_name, org_id, owner_id, database_type, tier, namespace,
-		host, read_only_host, port, database_name, username, password,
-		deletion_protection, pooler_enabled, pooler_host, ssl_mode,
-		webhook_url, postgres_version, tags,
-		status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
-		network_policy_enabled,
-		maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
-		backup_enabled, backup_schedule, backup_retention_days,
-		metrics_endpoint, grafana_dashboard_url,
-		created_at, updated_at, last_health_check
+	rows, err := s.db.Query(`SELECT` + sqliteInstanceColumns + `
 	FROM database_instances`)
 	if err != nil {
 		return nil, err
@@ -97,17 +96,7 @@ func (s *Store) Delete(projectID string) error {
 }
 
 func (s *Store) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error) {
-	rows, err := s.db.Query(`SELECT
-		project_id, project_name, org_id, owner_id, database_type, tier, namespace,
-		host, read_only_host, port, database_name, username, password,
-		deletion_protection, pooler_enabled, pooler_host, ssl_mode,
-		webhook_url, postgres_version, tags,
-		status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
-		network_policy_enabled,
-		maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
-		backup_enabled, backup_schedule, backup_retention_days,
-		metrics_endpoint, grafana_dashboard_url,
-		created_at, updated_at, last_health_check
+	rows, err := s.db.Query(`SELECT`+sqliteInstanceColumns+`
 	FROM database_instances WHERE owner_id = ?`, ownerID)
 	if err != nil {
 		return nil, err
@@ -135,9 +124,11 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	var delProt, poolerEn, netPol, autoUpgrade, backupEn sql.NullInt64
 	var maintDur, backupRet sql.NullInt64
 	var createdAt, updatedAt, lastHealth sql.NullString
+	var deployMode sql.NullString
 
 	err := s.Scan(
 		&inst.ProjectID, &inst.ProjectName, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
+		&deployMode,
 		&inst.Host, &inst.ReadOnlyHost, &port, &inst.DatabaseName, &inst.Username, &inst.Password,
 		&delProt, &poolerEn, &inst.PoolerHost, &inst.SSLMode,
 		&inst.WebhookURL, &inst.PostgresVersion, &inst.Tags,
@@ -150,6 +141,12 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	if deployMode.Valid && deployMode.String != "" {
+		inst.DeploymentMode = domain.DeploymentMode(deployMode.String)
+	} else {
+		inst.DeploymentMode = domain.ModeK8s
 	}
 
 	if port.Valid {
