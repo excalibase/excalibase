@@ -306,12 +306,16 @@ func buildBackupService(
 			sk := envOr("BACKUP_DEFAULT_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY"))
 			region := envOr("BACKUP_DEFAULT_REGION", "auto")
 			if ak != "" && sk != "" && endpoint != "" {
+				// Default path-style ON — works for R2, MinIO, LocalStack.
+				// Operators targeting real AWS S3 set BACKUP_S3_PATH_STYLE=0
+				// to flip to virtual-host addressing.
+				usePathStyle := os.Getenv("BACKUP_S3_PATH_STYLE") != "0"
 				uploader, err := service.NewAWSS3Uploader(context.Background(), service.AWSS3UploaderConfig{
 					AccessKeyID:     ak,
 					SecretAccessKey: sk,
 					Endpoint:        endpoint,
 					Region:          region,
-					UsePathStyle:    os.Getenv("BACKUP_S3_PATH_STYLE") != "",
+					UsePathStyle:    usePathStyle,
 				})
 				if err == nil {
 					adapters[domain.ModeDocker] = service.NewDockerBackupAdapter(service.DockerBackupAdapterConfig{

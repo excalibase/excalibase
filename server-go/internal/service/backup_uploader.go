@@ -29,8 +29,14 @@ type AWSS3UploaderConfig struct {
 	AccessKeyID     string
 	SecretAccessKey string
 	Region          string
-	Endpoint        string // R2 endpoint; empty for real AWS S3
-	UsePathStyle    bool   // true for LocalStack / MinIO; false for R2 / AWS
+	Endpoint        string // R2 / MinIO / LocalStack endpoint; empty for real AWS S3
+	// UsePathStyle controls bucket addressing:
+	//   true  — https://<endpoint>/<bucket>/<key>  (R2, MinIO, LocalStack)
+	//   false — https://<bucket>.<endpoint>/<key>  (AWS S3 — virtual-host)
+	// R2 needs path-style on because the TLS cert covers the shared
+	// account endpoint, not per-bucket subdomains. Match the existing
+	// storagesvc.R2Client behaviour. Default in production is true.
+	UsePathStyle bool
 }
 
 func NewAWSS3Uploader(ctx context.Context, c AWSS3UploaderConfig) (*AWSS3Uploader, error) {
