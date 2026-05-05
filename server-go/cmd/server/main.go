@@ -113,12 +113,41 @@ func runServer(cfg config.AppConfig) {
 		orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
 			Jobs: sqlStore.RestoreJobs(),
 		})
-		// Phase 3 default pipeline. Mode-specific steps will plug in
-		// here once the K8s + Docker restore runners land — for now
-		// the orchestrator is wired with a single validation step so
-		// the API contract is observable.
+		backupSvc := deps.backupHandler.Service()
+		// Wrap the existing synchronous adapter.Restore as a single
+		// orchestrator step. K8s mode keeps its CNPG flow untouched
+		// (BackupService dispatches to K8sBackupAdapter); Docker mode
+		// returns the same RESTORING placeholder Phase 1B ships with.
+		// When the WAL-G fetch / restore-runner lands we replace this
+		// step with a multi-stage pipeline — RestoreOrchestrator's
+		// step list is the only thing that needs to change.
 		orchestrator.SetSteps([]service.RestoreStep{
-			{Name: "validate", Run: func(_ context.Context, _ *domain.RestoreJob) error { return nil }},
+			{
+				Name: "delegate-to-adapter",
+				Run: func(ctx context.Context, j *domain.RestoreJob) error {
+					inst, err := store.FindByProjectID(j.SourceProjectID)
+					if err != nil || inst == nil {
+						return fmt.Errorf("source project %s not found", j.SourceProjectID)
+					}
+					req := domain.RestoreRequest{
+						NewProjectID: j.NewProjectID,
+					}
+					switch j.TargetKind {
+					case "time":
+						if t, err := time.Parse(time.RFC3339, j.TargetValue); err == nil {
+							req.TargetTime = &domain.FlexTime{Time: t}
+						}
+					case "xid":
+						req.TargetXID = j.TargetValue
+					case "lsn":
+						req.TargetLSN = j.TargetValue
+					case "name":
+						req.TargetName = j.TargetValue
+					}
+					_, err = backupSvc.RestoreFromBackup(ctx, j.SourceProjectID, req)
+					return err
+				},
+			},
 		})
 		_ = orchestrator.SweepStale(context.Background())
 		deps.backupHandler.SetRestoreOrchestrator(orchestrator)
