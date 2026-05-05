@@ -89,8 +89,65 @@ kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-pa
 
 ### K8s mode (CNPG + Barman → R2)
 
-CNPG pushes WAL + base backups to the S3 endpoint declared in
-`.Values.platformDb.backup.s3`. Full feature parity with PITR.
+#### Credential flow (what actually happens at runtime)
+
+```
+vault://backup/s3                       ← canonical source (admin uploads once)
+        │
+        │ provisioning.go:268 reads at provision time
+        ▼
+req.Backup.S3 (in-memory, scoped to one provision call)
+        │
+        │ provisioner/postgresql.go:40 fans out to:
+        ▼
+K8s secret  excalibase-{org}-{projectId}/backup-s3-creds
+                ACCESS_KEY_ID, ACCESS_SECRET_KEY
+        │
+        │ crd_builder.go:223 references it from:
+        ▼
+CNPG Cluster CRD → barmanObjectStore.s3Credentials.{accessKeyId,secretAccessKey}
+        │
+        │ CNPG operator + Barman read the project-namespace secret
+        ▼
+s3://excalibase-backups/{projectId}/cloud/{base,wals}/...
+```
+
+**Properties to keep in mind when operating:**
+
+- The K8s secret is **project-namespace-scoped**, not cluster-scoped. Each
+  project's CNPG operator reads only its own copy; no central secret holds
+  every project's credentials.
+- The platform Go process is the only thing that ever reads vault `backup/s3`.
+  CNPG never touches vault — it only reads the project-namespace K8s secret.
+- **Rotation:** `vault put backup/s3 ...` rotates the source. New provisions
+  pick up the new value; *existing* per-project K8s secrets keep the old
+  value until re-provisioned or rotated by tooling. There is no auto-rotate
+  loop today; if you rotate R2 keys, you must walk every project namespace
+  with `kubectl create secret backup-s3-creds --dry-run=client -o yaml | apply`.
+- **Vault uninitialised fallback:** if vault is sealed / no `backup/s3`,
+  `provisioning.go` falls through to env-driven `BackupDefaults` populated
+  from the cluster-scoped `r2-creds` K8s secret on the `provisioning`
+  deployment. Same R2 destination, but the master creds are visible to
+  anyone with `get secret -n excalibase-platform r2-creds`. **This is the
+  state of the current minikube** — initialise the vault to tighten this.
+- **Platform-db cluster has no backup configured** in the deployed
+  `charts/platform-base/values.yaml`. Per-project clusters are protected;
+  the platform DB itself is not. Single-line fix: wire
+  `.Values.platformDb.backup.s3` to the same secret. Not done by default.
+
+#### R2 layout (Barman convention)
+
+```
+s3://excalibase-backups/
+  {projectId}/cloud/base/{timestamp}/{backup.info, data.tar.gz}
+  {projectId}/cloud/wals/{timeline}/{walSegment}.gz
+```
+
+`serverName: cloud` is hardcoded in `crd_builder.go:165`; `destinationPath`
+is `s3://excalibase-backups/{projectId}`. Inspect with `aws s3 ls
+s3://excalibase-backups/{projectId}/cloud/ --endpoint-url https://<account>.r2.cloudflarestorage.com`.
+
+#### CLI
 
 ```bash
 # List snapshots a project has
