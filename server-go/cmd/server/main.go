@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"os"
 	"time"
 
@@ -741,11 +743,34 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// buildEmailSender constructs the SES sender from env. SES_ACCESS_KEY_ID +
-// SES_SECRET_ACCESS_KEY are populated from the K8s secret ses-creds via
-// the chart. Falls back to a noop sender (returns 503) when env is empty
-// so dev/CI runs without AWS access — handlers stay code-complete.
+// buildEmailSender picks the email provider from EMAIL_PROVIDER env.
+// Supported values: "ses" (default — back-compat), "resend", "noop".
+// Falls back to noop on unrecognised values or missing creds so the
+// platform still boots and email-dependent handlers return 503.
+//
+// SES creds: SES_ACCESS_KEY_ID + SES_SECRET_ACCESS_KEY (k8s secret ses-creds)
+// Resend creds: RESEND_API_KEY (k8s secret resend-creds, or env directly)
+// Common: EMAIL_FROM_ADDRESS / EMAIL_FROM_NAME (or legacy SES_FROM_*)
 func buildEmailSender(cfg config.AppConfig) email.Sender {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("EMAIL_PROVIDER")))
+	if provider == "" {
+		provider = "ses" // back-compat default
+	}
+	switch provider {
+	case "noop":
+		log.Printf("INFO: EMAIL_PROVIDER=noop, email features will return 503")
+		return email.NewNoopSender()
+	case "resend":
+		return buildResendSender(cfg)
+	case "ses":
+		return buildSESSender(cfg)
+	default:
+		log.Printf("WARN: unknown EMAIL_PROVIDER=%q, falling back to noop", provider)
+		return email.NewNoopSender()
+	}
+}
+
+func buildSESSender(cfg config.AppConfig) email.Sender {
 	keyID := os.Getenv("SES_ACCESS_KEY_ID")
 	secret := os.Getenv("SES_SECRET_ACCESS_KEY")
 	region := os.Getenv("SES_REGION")
@@ -756,14 +781,8 @@ func buildEmailSender(cfg config.AppConfig) email.Sender {
 	if region == "" {
 		region = "us-east-1"
 	}
-	from := os.Getenv("SES_FROM_ADDRESS")
-	if from == "" {
-		from = cfg.EmailFromAddress
-	}
-	fromName := os.Getenv("SES_FROM_NAME")
-	if fromName == "" {
-		fromName = cfg.EmailFromName
-	}
+	from := envOr("SES_FROM_ADDRESS", envOr("EMAIL_FROM_ADDRESS", cfg.EmailFromAddress))
+	fromName := envOr("SES_FROM_NAME", envOr("EMAIL_FROM_NAME", cfg.EmailFromName))
 	sender, err := email.NewSESSender(email.SESConfig{
 		AccessKeyID:      keyID,
 		SecretAccessKey:  secret,
@@ -778,6 +797,34 @@ func buildEmailSender(cfg config.AppConfig) email.Sender {
 		return email.NewNoopSender()
 	}
 	log.Printf("INFO: SES sender configured (region=%s from=%s)", region, from)
+	return sender
+}
+
+func buildResendSender(cfg config.AppConfig) email.Sender {
+	apiKey := os.Getenv("RESEND_API_KEY")
+	if apiKey == "" {
+		log.Printf("INFO: RESEND_API_KEY not set, email features will return 503")
+		return email.NewNoopSender()
+	}
+	from := envOr("RESEND_FROM_ADDRESS", envOr("EMAIL_FROM_ADDRESS", cfg.EmailFromAddress))
+	fromName := envOr("RESEND_FROM_NAME", envOr("EMAIL_FROM_NAME", cfg.EmailFromName))
+	rate := 2 // free tier; production tier raises via RESEND_RATE_PER_SEC
+	if v := os.Getenv("RESEND_RATE_PER_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			rate = n
+		}
+	}
+	sender, err := email.NewResendSender(email.ResendConfig{
+		APIKey:          apiKey,
+		DefaultFrom:     from,
+		DefaultFromName: fromName,
+		SendsPerSecond:  rate,
+	})
+	if err != nil {
+		log.Printf("WARN: Resend sender init failed (%v); falling back to noop", err)
+		return email.NewNoopSender()
+	}
+	log.Printf("INFO: Resend sender configured (from=%s rate=%d/s)", from, rate)
 	return sender
 }
 
