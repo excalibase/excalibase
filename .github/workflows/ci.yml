@@ -171,6 +171,126 @@ jobs:
           # would mask test-fixture or quality regressions, so we keep it strict.
           snyk code test --severity-threshold=low
 
+  go-integration:
+    name: Go Integration (testcontainers)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # Integration tests need a Docker daemon (testcontainers spins up
+    # Postgres, NATS, LocalStack, and one-off postgres containers for
+    # restore E2Es). ubuntu-latest has Docker available out of the box.
+    # Gated on backend changes — skipped on frontend-only PRs to keep
+    # CI cost down. Manually trigger on workflow_dispatch when needed.
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Run integration suite
+        # 12-min timeout covers the slowest path: PITR_TargetVariants
+        # (60s) + RestoreE2E (10s) + LocalStack/Postgres bring-up (~15s
+        # per testcontainer) + the rest of the integration suite.
+        run: go test -tags=integration ./internal/... -race -timeout 12m
+
+  real-r2-integration:
+    name: Real R2 E2E (gated)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # Only runs when R2_ACCESS_KEY_ID secret is set in the GH Actions
+    # environment. Unset = job is skipped cleanly. Set CI secrets in
+    # repo Settings → Secrets and Variables → Actions:
+    #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, R2_BUCKET
+    # Recommend a *separate* R2 credential pair for CI from production
+    # so CI key compromise doesn't blast prod backups.
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Real R2 round-trip
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        # Tests skip themselves cleanly when env is empty. The
+        # `|| exit 0` after the skip-detection isn't needed because
+        # `go test` exits 0 on `t.Skip`.
+        run: go test -tags=integration ./internal/service/ -run R2_E2E -timeout 5m -v
+
+  real-resend-integration:
+    name: Real Resend E2E (gated)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # Same shape as real-r2: gated on RESEND_API_KEY secret. Sends
+    # to delivered@resend.dev (Resend's documented test sink — never
+    # bounces real inboxes). Override RESEND_TEST_TO + RESEND_TEST_FROM
+    # if your account has a verified domain to exercise.
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Real Resend send
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_TEST_FROM: ${{ secrets.RESEND_TEST_FROM }}
+          RESEND_TEST_TO: ${{ secrets.RESEND_TEST_TO }}
+        run: go test -tags=integration ./internal/email/ -run Live -timeout 2m -v
+
+  aio-e2e:
+    name: AIO E2E (minikube)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # Spins up the full all-in-one stack on minikube and runs
+    # tests/e2e-aio-self.sh. Currently triggered only on backend or
+    # CI changes — frontend-only PRs skip. Costs ~10 min per run; set
+    # workflow_dispatch to manual-trigger when needed without waiting
+    # for a relevant push.
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: medyagh/setup-minikube@latest
+        with:
+          minikube-version: '1.34.0'
+          kubernetes-version: '1.31.0'
+          cpus: 4
+          memory: 6g
+      - name: Wait for minikube
+        run: kubectl wait --for=condition=Ready node --all --timeout=5m
+      - name: Helm install AIO
+        run: |
+          helm dependency update charts/platform-aio || true
+          kubectl create ns excalibase-platform
+          helm install platform charts/platform-aio -n excalibase-platform \
+            --set provisioning.image.tag=latest \
+            --wait --timeout=10m
+      - name: Run e2e-aio-self.sh
+        env:
+          # Optional: backup-verify creds let the F18 section actually
+          # check uploaded objects. Without these the section skips.
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: bash tests/e2e-aio-self.sh
+      - name: Dump platform logs on failure
+        if: failure()
+        run: |
+          kubectl -n excalibase-platform get pods
+          kubectl -n excalibase-platform logs -l app=provisioning --tail=200 || true
+
   sonarcloud:
     name: SonarCloud Scan
     runs-on: ubuntu-latest

@@ -256,15 +256,19 @@ In severity order:
 
 2. ~~**HIGH — Docker PITR (`targetTime`/`xid`/`lsn`) execution**~~ **DONE (May 2026):** Adapter writes `recovery.signal` + `postgresql.auto.conf` (with `recovery_target_*` + `recovery_target_action='promote'` + `restore_command`) into the new container before start. `downloadWALsIntoContainer` fetches archived WALs from S3 and places them in `wal_restore/`. Postgres recovers, hits the target, and promotes. Proven end-to-end with the `mark` restore-point scenario in `PITR_TargetName`.
 
-3. **MED — Sister-repo contract tests.** No test in this repo verifies that the JWT issuance, projectId convention, or NATS subject format actually round-trip through `excalibase-graphql` and `excalibase-auth`. Path: contract tests run in CI against built sister-repo images (probably owned by AIO E2E, not this repo).
+3. ~~**MED — Sister-repo contract tests**~~ **DONE (May 2026):** `internal/service/contract_test.go` pins ProjectID format (regex + DNS-1123 compliance), vault path shape, NATS CDC subject pattern (`cdc.{projectId}.>` — projectId-only, no orgSlug), PgDog reload subject, and JWT vault paths (`pki/signing/{public,private}`). 6 cases, runs in default `go test`. Failure surfaces wire-format drift before sister repos break in production.
 
-4. **MED — Studio E2E against real data plane.** Every studio spec uses `page.route('**/api/...')` mocks. We catch UI regressions but not data-plane drift. Path: add a `STUDIO_LIVE=1`-gated variant of `tables.spec.ts` that connects to a real provisioned project.
+4. ~~**MED — Studio E2E against real data plane**~~ **DONE (May 2026):** `frontend/e2e/studio-live-data.spec.ts` — gated on `STUDIO_LIVE=1` + `E2E_API_URL` + `E2E_PROJECT_ID` + `E2E_PAT`. Three specs: table list reflects real schema, SQL editor CREATE → INSERT → SELECT → DROP round-trip, realtime subscribe + INSERT + receive event. Skips cleanly when env unset.
 
-5. **MED — `tests/e2e-aio-self.sh` runs in CI.** Currently manual. Path: GH Actions workflow that spins up minikube + helm install + runs the script. Cost: minutes per PR; needed for confidence in sister-repo integrations.
+5. ~~**MED — `tests/e2e-aio-self.sh` runs in CI**~~ **DONE (May 2026):** new `aio-e2e` job in `.github/workflows/ci.yml` uses `medyagh/setup-minikube`, helm-installs the platform-aio chart, runs the shell script. 30-min timeout, dumps platform logs on failure.
 
-6. **MED — Convert pgdog shell tests to Go.** `tests/pgdog/test.sh` is shell-based; not in `go test` flow. Path: rewrite as `internal/service/pgdog_notifier_integration_test.go` with testcontainers NATS + Postgres.
+6. ~~**MED — Convert pgdog shell tests to Go**~~ **DONE (May 2026):** `internal/service/pgdog_notifier_integration_test.go` — testcontainers Postgres + NATS, exercises register / upsert / deregister / no-NATS-silent paths. 5 sub-tests, ~2s total. The shell script stays for live-cluster smoke tests.
 
-7. **LOW — Real Resend / R2 / k3s integration in CI.** Gates exist but require CI secrets to be set + Docker in CI runner. Path: GH Actions secrets + a Docker-in-Docker runner image.
+7. ~~**LOW — Real Resend / R2 / k3s integration in CI**~~ **DONE (May 2026):** added `real-r2-integration`, `real-resend-integration`, and `go-integration` jobs in `.github/workflows/ci.yml`. R2 + Resend jobs gate on secrets being set in GH Actions — operator action: configure under repo Settings → Secrets and Variables → Actions:
+   - `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_BUCKET`
+   - `RESEND_API_KEY`, `RESEND_TEST_FROM` (verified domain), `RESEND_TEST_TO` (or use `delivered@resend.dev` default)
+
+   `go-integration` runs the full `-tags=integration` Go suite via ubuntu-latest's Docker daemon (no extra setup — testcontainers-go works out of the box).
 
 ---
 

@@ -252,3 +252,219 @@ func TestDockerBackupAdapter_PITR_TargetName(t *testing.T) {
 	t.Logf("=== pg_wal contents ===\n%s", string(dirList))
 	t.Fatalf("PITR did not stop at restore point. Want rows=[1], got=%q", lastOut)
 }
+
+// TestDockerBackupAdapter_PITR_TargetTime + _TargetXID share the same
+// pipeline shape as _TargetName; they swap the recovery target so we
+// prove the recovery_target_time / recovery_target_xid directives are
+// honored end-to-end (not just the directive serialisation, which the
+// unit tests already cover).
+//
+// To keep CI cheap we run them under a single test that builds the
+// source state once (postgres container + LocalStack + adapter
+// wiring) and then sub-tests exercise each target kind by restoring
+// into a fresh container. Each restore takes ~10–25s; total under a
+// minute beyond TargetName itself.
+func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+
+	// --- Source + LocalStack + adapter (same pattern as TargetName) ------
+	pgPwd := testutil.FixturePassword("pg-pitr-variants")
+	pgC, err := tcgeneric.GenericContainer(ctx, tcgeneric.GenericContainerRequest{
+		ContainerRequest: tcgeneric.ContainerRequest{
+			Image:        "postgres:17",
+			Env:          map[string]string{"POSTGRES_DB": "app", "POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": pgPwd},
+			ExposedPorts: []string{"5432/tcp"},
+			WaitingFor:   wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(60 * time.Second),
+		},
+		Started: true,
+	})
+	if err != nil {
+		t.Fatalf("source pg: %v", err)
+	}
+	t.Cleanup(func() { pgC.Terminate(ctx) })
+	srcID := pgC.GetContainerID()
+
+	mkdir := exec.CommandContext(ctx, "docker", "exec", "-u", "0", srcID,
+		"sh", "-c", "mkdir -p /walarchive && chown postgres:postgres /walarchive && chmod 700 /walarchive")
+	if out, err := mkdir.CombinedOutput(); err != nil {
+		t.Fatalf("mkdir /walarchive: %v: %s", err, out)
+	}
+	for _, sql := range []string{
+		"ALTER SYSTEM SET wal_level='replica'",
+		"ALTER SYSTEM SET archive_mode='on'",
+		"ALTER SYSTEM SET archive_command='cp %p /walarchive/%f'",
+	} {
+		if err := dockerExecPSQL(ctx, srcID, pgPwd, sql); err != nil {
+			t.Fatalf("alter %q: %v", sql, err)
+		}
+	}
+	pgC.Stop(ctx, nil)
+	pgC.Start(ctx)
+	time.Sleep(3 * time.Second)
+	if err := dockerExecPSQL(ctx, srcID, pgPwd, "CHECKPOINT"); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	lsC, err := tclocalstack.Run(ctx, "localstack/localstack:3.7",
+		testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}))
+	if err != nil {
+		t.Fatalf("localstack: %v", err)
+	}
+	t.Cleanup(func() { lsC.Terminate(ctx) })
+	lsHost, _ := lsC.Host(ctx)
+	lsPort, _ := lsC.MappedPort(ctx, "4566/tcp")
+	endpoint := fmt.Sprintf("http://%s:%s", lsHost, lsPort.Port())
+
+	uploader, err := NewAWSS3Uploader(ctx, AWSS3UploaderConfig{
+		AccessKeyID: "test", SecretAccessKey: "test", Region: "us-east-1",
+		Endpoint: endpoint, UsePathStyle: true,
+	})
+	if err != nil {
+		t.Fatalf("uploader: %v", err)
+	}
+	bucket := "excalibase-pitr-variants"
+	if _, err := uploader.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+
+	dockerSDK, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatalf("docker SDK: %v", err)
+	}
+	t.Cleanup(func() { dockerSDK.Close() })
+	runner := NewDockerBackupRunner(dockerSDK)
+	rd, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{})
+	if err != nil {
+		t.Fatalf("real docker: %v", err)
+	}
+
+	storeDir := t.TempDir()
+	store, _ := storage.NewFileSystemStore(storeDir)
+	records := &fakeBackupRecordStore{}
+	adapter := NewDockerBackupAdapter(DockerBackupAdapterConfig{
+		Runner: runner, Uploader: uploader, Records: records,
+		Bucket: bucket, KeyPrefix: "backups/", Instances: store,
+	})
+	adapter.SetDockerClient(rd)
+
+	src := &domain.DatabaseInstance{
+		ProjectID: "src-variants", OrgID: "org", Namespace: srcID,
+		DatabaseName: "app", Username: "postgres", Password: pgPwd,
+		PostgresVersion: "17", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
+	}
+	store.Save(src)
+
+	// Take an empty-state backup we'll restore from for every variant.
+	ref, err := adapter.TriggerManual(ctx, src)
+	if err != nil {
+		t.Fatalf("TriggerManual: %v", err)
+	}
+
+	// Build the post-backup timeline. Capture timing + xid markers
+	// so we can target them later. Each row's commit produces a
+	// distinct xid; pg_xact_commit_timestamp() gives us the exact
+	// commit time once track_commit_timestamp is on.
+	if err := dockerExecPSQL(ctx, srcID, pgPwd, "ALTER SYSTEM SET track_commit_timestamp = on"); err != nil {
+		t.Fatalf("track_commit_timestamp: %v", err)
+	}
+	pgC.Stop(ctx, nil)
+	pgC.Start(ctx)
+	time.Sleep(3 * time.Second)
+
+	for _, s := range []string{
+		"CREATE TABLE smoke (id int PRIMARY KEY)",
+		"INSERT INTO smoke VALUES (1)",
+		"CHECKPOINT",
+	} {
+		if err := dockerExecPSQL(ctx, srcID, pgPwd, s); err != nil {
+			t.Fatalf("seed pre-mark %q: %v", s, err)
+		}
+	}
+	// Capture the xid that committed row 1 — recovery_target_xid stops
+	// AFTER the named xid commits, so target=xid_of_row1 means rows 1
+	// (and earlier) are visible, row 2 is not.
+	xidStr, err := dockerExecPSQLQuery(ctx, srcID, pgPwd,
+		"SELECT xmin::text FROM smoke WHERE id = 1")
+	if err != nil {
+		t.Fatalf("capture xid: %v", err)
+	}
+	row1XID := strings.TrimSpace(xidStr)
+	if row1XID == "" {
+		t.Fatal("row1 xid empty")
+	}
+
+	// Capture commit time of row 1 for target_time.
+	timeStr, err := dockerExecPSQLQuery(ctx, srcID, pgPwd,
+		"SELECT to_char(pg_xact_commit_timestamp(xmin), 'YYYY-MM-DD HH24:MI:SS.US') FROM smoke WHERE id = 1")
+	if err != nil {
+		t.Fatalf("capture commit_ts: %v", err)
+	}
+	row1CommitTS := strings.TrimSpace(timeStr)
+
+	// Sleep then add row 2 and 3 so target_time can land between
+	// row1's commit and row2's. 1 second is more than enough resolution.
+	time.Sleep(1500 * time.Millisecond)
+
+	for _, s := range []string{
+		"INSERT INTO smoke VALUES (2)",
+		"INSERT INTO smoke VALUES (3)",
+		"SELECT pg_switch_wal()",
+		"CHECKPOINT",
+	} {
+		if err := dockerExecPSQL(ctx, srcID, pgPwd, s); err != nil {
+			t.Fatalf("seed post-mark %q: %v", s, err)
+		}
+	}
+	time.Sleep(2 * time.Second)
+	if err := adapter.RefreshWALArchive(ctx, src); err != nil {
+		t.Fatalf("RefreshWALArchive: %v", err)
+	}
+
+	// Helper to run one variant and tear down its container.
+	runVariant := func(t *testing.T, label string, req domain.RestoreRequest) {
+		t.Helper()
+		req.NewProjectID = "pitr-variant-" + label
+		req.BackupID = ref.ID
+		resp, err := adapter.Restore(ctx, src, req)
+		if err != nil {
+			t.Fatalf("Restore: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = rd.StopContainer(context.Background(), resp.Namespace)
+			_ = rd.RemoveContainer(context.Background(), resp.Namespace)
+		})
+		deadline := time.Now().Add(90 * time.Second)
+		var lastOut string
+		for time.Now().Before(deadline) {
+			got, err := dockerExecPSQLQuery(ctx, resp.Namespace, src.Password, "SELECT id FROM smoke ORDER BY id")
+			if err == nil {
+				lastOut = strings.TrimSpace(got)
+				if lastOut == "1" {
+					return
+				}
+			}
+			time.Sleep(2 * time.Second)
+		}
+		logs, _ := exec.CommandContext(ctx, "docker", "logs", "--tail", "40", resp.Namespace).CombinedOutput()
+		t.Logf("=== %s container logs ===\n%s", label, string(logs))
+		t.Fatalf("PITR (%s) did not stop at target. Want rows=[1], got=%q", label, lastOut)
+	}
+
+	t.Run("TargetXID", func(t *testing.T) {
+		runVariant(t, "xid", domain.RestoreRequest{TargetXID: row1XID})
+	})
+	t.Run("TargetTime", func(t *testing.T) {
+		// Pick a time strictly after row1 commit, strictly before
+		// row2 commit. Add 500ms to row1's commit_ts.
+		base, err := time.Parse("2006-01-02 15:04:05.000000", row1CommitTS)
+		if err != nil {
+			t.Fatalf("parse commit_ts %q: %v", row1CommitTS, err)
+		}
+		target := base.Add(500 * time.Millisecond)
+		runVariant(t, "time", domain.RestoreRequest{TargetTime: &domain.FlexTime{Time: target}})
+	})
+}
