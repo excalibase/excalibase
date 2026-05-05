@@ -264,6 +264,18 @@ func (r *RealDockerClient) ExecInContainer(ctx context.Context, id string, cmd [
 	return 0, fmt.Errorf("exec timeout waiting for command to finish")
 }
 
+// CopyToContainer streams a tar archive into the container's filesystem
+// at dstPath. Wraps the SDK's CopyToContainer (a.k.a. PutArchive). The
+// stream MUST be raw tar — Docker's API doesn't gunzip server-side.
+// Used by the backup adapter's restore path to extract a downloaded
+// pg_basebackup into /var/lib/postgresql/data before pg starts.
+func (r *RealDockerClient) CopyToContainer(ctx context.Context, id, dstPath string, content io.Reader) error {
+	if err := r.c.CopyToContainer(ctx, id, dstPath, content, container.CopyToContainerOptions{}); err != nil {
+		return fmt.Errorf("copy to %s:%s: %w", id, dstPath, err)
+	}
+	return nil
+}
+
 // ensureImage skips the pull if the image already exists locally. Large
 // images can take minutes to pull and the check is cheap.
 func (r *RealDockerClient) ensureImage(ctx context.Context, ref string) error {

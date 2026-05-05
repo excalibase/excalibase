@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -22,6 +23,14 @@ type DockerClient interface {
 	// readiness (e.g. `pg_isready`). Does not capture stdout/stderr —
 	// exit code is all the caller needs.
 	ExecInContainer(ctx context.Context, containerID string, cmd []string) (int, error)
+	// CopyToContainer extracts a tar archive into dstPath inside the
+	// (created or running) container. Used by the Docker backup
+	// adapter's restore path: stream a base backup tar from S3 →
+	// untar into the new container's /var/lib/postgresql/data before
+	// it's started so postgres skips initdb and opens the restored
+	// data dir directly. content MUST be raw tar (uncompressed) —
+	// callers gunzip first.
+	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader) error
 }
 
 // defaultPostgresSuperuser is the well-known username used by the

@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -17,6 +18,9 @@ type mockDockerClient struct {
 	execLog    [][]string // every Exec invocation's cmd captured here
 	stops      int        // counter for StopContainer calls
 	starts     int        // counter for StartContainer calls
+	copyCalls  int        // counter for CopyToContainer calls
+	copyDst    string     // last CopyToContainer destination path
+	copyBytes  int64      // total bytes drained from CopyToContainer streams
 }
 
 func newMockDocker() *mockDockerClient {
@@ -76,6 +80,17 @@ func (m *mockDockerClient) ExecInContainer(_ context.Context, containerID string
 		return 2, nil // pg_isready exit 2 = no connection attempt
 	}
 	return 0, nil
+}
+
+func (m *mockDockerClient) CopyToContainer(_ context.Context, _ string, dstPath string, content io.Reader) error {
+	m.copyCalls++
+	m.copyDst = dstPath
+	if m.failOn == "copy" {
+		return fmt.Errorf("copy failed")
+	}
+	n, _ := io.Copy(io.Discard, content)
+	m.copyBytes += n
+	return nil
 }
 
 func TestDockerProvisioner_SupportedType(t *testing.T) {

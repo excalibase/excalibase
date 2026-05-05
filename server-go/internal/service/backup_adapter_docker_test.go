@@ -1,13 +1,16 @@
 package service
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -300,6 +303,156 @@ func TestDockerAdapter_List_FiltersByProjectID_NotByRequest(t *testing.T) {
 		if r.ProjectID == "victim" {
 			t.Errorf("List leaked records from another project: %+v", r)
 		}
+	}
+}
+
+// fakeDockerClientForAdapter is a tiny mock for the Phase 1 docker
+// restore path. Records the lifecycle calls + the bytes copied in.
+type fakeDockerClientForAdapter struct {
+	createdName string
+	createdImg  string
+	createdEnv  map[string]string
+	started     bool
+	healthy     bool
+	copyDst     string
+	copyBytes   int64
+	failOn      string // "create" | "copy" | "start" | "health"
+}
+
+func (f *fakeDockerClientForAdapter) CreateContainer(_ context.Context, name, img string, env map[string]string, _ map[string]string) (string, error) {
+	if f.failOn == "create" {
+		return "", errors.New("create failed")
+	}
+	f.createdName = name
+	f.createdImg = img
+	f.createdEnv = env
+	return "container-" + name, nil
+}
+func (f *fakeDockerClientForAdapter) StartContainer(_ context.Context, _ string) error {
+	if f.failOn == "start" {
+		return errors.New("start failed")
+	}
+	f.started = true
+	return nil
+}
+func (f *fakeDockerClientForAdapter) StopContainer(_ context.Context, _ string) error    { return nil }
+func (f *fakeDockerClientForAdapter) RemoveContainer(_ context.Context, _ string) error  { return nil }
+func (f *fakeDockerClientForAdapter) ContainerStatus(_ context.Context, _ string) (string, error) {
+	return "running", nil
+}
+func (f *fakeDockerClientForAdapter) WaitForHealthy(_ context.Context, _ string) error {
+	if f.failOn == "health" {
+		return errors.New("never healthy")
+	}
+	f.healthy = true
+	return nil
+}
+func (f *fakeDockerClientForAdapter) ExecInContainer(_ context.Context, _ string, _ []string) (int, error) {
+	return 0, nil
+}
+func (f *fakeDockerClientForAdapter) CopyToContainer(_ context.Context, _ string, dst string, content io.Reader) error {
+	if f.failOn == "copy" {
+		return errors.New("copy failed")
+	}
+	f.copyDst = dst
+	n, _ := io.Copy(io.Discard, content)
+	f.copyBytes = n
+	return nil
+}
+
+// minimalGzippedTar produces a one-entry tar.gz so tests have a real
+// stream to push through CopyToContainer. The test fake just drains
+// it; what matters is non-zero bytes through the pipeline.
+func minimalGzippedTar(t *testing.T) []byte {
+	t.Helper()
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	body := []byte("PG_VERSION\n16\n")
+	hdr := &tar.Header{Name: "PG_VERSION", Mode: 0644, Size: int64(len(body))}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	var gz bytes.Buffer
+	gw := gzip.NewWriter(&gz)
+	gw.Write(raw.Bytes())
+	gw.Close()
+	return gz.Bytes()
+}
+
+func TestDockerAdapter_Restore_HappyPath(t *testing.T) {
+	adapter, store, _, uploader, records := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
+	dc := &fakeDockerClientForAdapter{}
+	adapter.SetDockerClient(dc)
+
+	src, _ := store.FindByProjectID("dk-1")
+
+	// Seed S3 with a base backup at the canonical Phase 1B key.
+	tarGz := minimalGzippedTar(t)
+	uploader.objects["test-backups/backups/dk-1/manual/backup-2026.tar.gz"] = tarGz
+	records.Save(context.Background(), &domain.BackupRecord{
+		ID: "backup-2026", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	resp, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectID: "dk-restored"})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if resp.ProjectID != "dk-restored" {
+		t.Errorf("ProjectID: got %q", resp.ProjectID)
+	}
+	if dc.createdName == "" {
+		t.Error("CreateContainer was never called")
+	}
+	if dc.copyDst != "/var/lib/postgresql/data" {
+		t.Errorf("CopyToContainer dst: got %q, want /var/lib/postgresql/data", dc.copyDst)
+	}
+	if dc.copyBytes == 0 {
+		t.Error("no bytes copied to container")
+	}
+	if !dc.started {
+		t.Error("StartContainer never called")
+	}
+	if !dc.healthy {
+		t.Error("WaitForHealthy never called")
+	}
+	// New instance row persisted, source untouched.
+	if got, _ := store.FindByProjectID("dk-restored"); got == nil {
+		t.Error("restored instance not persisted")
+	}
+	if got, _ := store.FindByProjectID("dk-1"); got == nil {
+		t.Error("source instance was deleted (must remain)")
+	}
+}
+
+func TestDockerAdapter_Restore_NoBaseBackup_Errors(t *testing.T) {
+	adapter, store, _, _, _ := setupDockerAdapter(t)
+	adapter.SetDockerClient(&fakeDockerClientForAdapter{})
+	src, _ := store.FindByProjectID("dk-1")
+
+	// No BackupRecord, no S3 object → restore must error before
+	// touching docker.
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectID: "dk-fresh"})
+	if err == nil {
+		t.Fatal("expected error when no base backup exists")
+	}
+	if !strings.Contains(err.Error(), "backup") {
+		t.Errorf("error should mention backup: %v", err)
+	}
+}
+
+func TestDockerAdapter_Restore_NoDockerClient_Errors(t *testing.T) {
+	adapter, store, _, _, _ := setupDockerAdapter(t)
+	src, _ := store.FindByProjectID("dk-1")
+	// Don't call SetDockerClient — should refuse rather than silently no-op.
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectID: "dk-fresh"})
+	if err == nil {
+		t.Error("expected error when docker client not wired")
 	}
 }
 

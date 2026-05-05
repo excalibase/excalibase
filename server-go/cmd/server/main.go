@@ -349,7 +349,7 @@ func buildBackupService(
 					UsePathStyle:    usePathStyle,
 				})
 				if err == nil {
-					adapters[domain.ModeDocker] = service.NewDockerBackupAdapter(service.DockerBackupAdapterConfig{
+					dockerAdapter := service.NewDockerBackupAdapter(service.DockerBackupAdapterConfig{
 						Runner:    runner,
 						Uploader:  uploader,
 						Records:   sqlStore.BackupRecords(),
@@ -357,6 +357,13 @@ func buildBackupService(
 						KeyPrefix: "backups/",
 						Instances: store,
 					})
+					// Wire the docker client so Restore can create +
+					// populate the new container. dockerClient is the
+					// abstracted interface used by DockerProvisioner;
+					// DockerBackupAdapter calls CreateContainer +
+					// CopyToContainer + StartContainer + WaitForHealthy.
+					dockerAdapter.SetDockerClient(dockerClient)
+					adapters[domain.ModeDocker] = dockerAdapter
 				}
 			}
 		}
