@@ -44,8 +44,15 @@ func TestResendSender_Live(t *testing.T) {
 	}
 	t.Cleanup(sender.Stop)
 
+	to := os.Getenv("RESEND_TEST_TO")
+	if to == "" {
+		// Default: Resend's documented test sink — always reports as
+		// delivered, never bounces real inboxes. Override RESEND_TEST_TO
+		// to send to your own verified address.
+		to = "delivered@resend.dev"
+	}
 	id, err := sender.Send(ctx, Message{
-		To:       []string{"delivered@resend.dev"},
+		To:       []string{to},
 		Subject:  "[excalibase] live integration test",
 		HTMLBody: "<p>Sent from <code>resend_live_test.go</code> at " + time.Now().UTC().Format(time.RFC3339) + "</p>",
 		TextBody: "Sent from resend_live_test.go at " + time.Now().UTC().Format(time.RFC3339),
