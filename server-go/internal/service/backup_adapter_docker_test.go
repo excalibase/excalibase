@@ -316,6 +316,7 @@ type fakeDockerClientForAdapter struct {
 	healthy     bool
 	copyDst     string
 	copyBytes   int64
+	copyCalls   int
 	failOn      string // "create" | "copy" | "start" | "health"
 }
 
@@ -356,8 +357,17 @@ func (f *fakeDockerClientForAdapter) CopyToContainer(_ context.Context, _ string
 	}
 	f.copyDst = dst
 	n, _ := io.Copy(io.Discard, content)
-	f.copyBytes = n
+	f.copyBytes += n
+	f.copyCalls++
 	return nil
+}
+
+func (f *fakeDockerClientForAdapter) CopyFromContainer(_ context.Context, _ string, _ string) (io.ReadCloser, error) {
+	if f.failOn == "copyFrom" {
+		return nil, errors.New("copy from failed")
+	}
+	// Return an empty tar so the iteration finishes cleanly.
+	return io.NopCloser(strings.NewReader("")), nil
 }
 
 // minimalGzippedTar produces a one-entry tar.gz so tests have a real
@@ -453,6 +463,119 @@ func TestDockerAdapter_Restore_NoDockerClient_Errors(t *testing.T) {
 	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectID: "dk-fresh"})
 	if err == nil {
 		t.Error("expected error when docker client not wired")
+	}
+}
+
+func TestBuildRecoveryTar_NoTarget_ReturnsNil(t *testing.T) {
+	got := buildRecoveryTar(domain.RestoreRequest{NewProjectID: "p"})
+	if got != nil {
+		t.Errorf("no target should produce no recovery tar; got %d bytes", len(got))
+	}
+}
+
+func TestBuildRecoveryTar_AllTargetKinds(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		req      domain.RestoreRequest
+		wantSubs []string // substrings expected in postgresql.auto.conf
+	}{
+		{"time", domain.RestoreRequest{TargetTime: &domain.FlexTime{Time: now}}, []string{"recovery_target_time = '2026-05-06 12:00:00'", "recovery_target_action = 'promote'"}},
+		{"xid", domain.RestoreRequest{TargetXID: "12345"}, []string{"recovery_target_xid = '12345'", "recovery_target_action"}},
+		{"lsn", domain.RestoreRequest{TargetLSN: "0/1500000"}, []string{"recovery_target_lsn = '0/1500000'", "recovery_target_action"}},
+		{"name", domain.RestoreRequest{TargetName: "before_bad"}, []string{"recovery_target_name = 'before_bad'", "recovery_target_action"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tarBytes := buildRecoveryTar(c.req)
+			if tarBytes == nil {
+				t.Fatal("expected non-nil tar")
+			}
+			files := readTarFiles(t, tarBytes)
+			if _, ok := files["recovery.signal"]; !ok {
+				t.Error("recovery.signal missing from tar")
+			}
+			autoConf, ok := files["postgresql.auto.conf"]
+			if !ok {
+				t.Fatal("postgresql.auto.conf missing from tar")
+			}
+			content := string(autoConf)
+			for _, want := range c.wantSubs {
+				if !strings.Contains(content, want) {
+					t.Errorf("postgresql.auto.conf missing %q\n got: %q", want, content)
+				}
+			}
+		})
+	}
+}
+
+// readTarFiles extracts a tar archive into a map[name]contents for
+// assertion convenience. Doesn't handle directories — the recovery
+// tar only contains files.
+func readTarFiles(t *testing.T, data []byte) map[string][]byte {
+	t.Helper()
+	out := map[string][]byte{}
+	tr := tar.NewReader(bytes.NewReader(data))
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+		buf := new(bytes.Buffer)
+		_, _ = io.Copy(buf, tr)
+		out[hdr.Name] = buf.Bytes()
+	}
+	return out
+}
+
+func TestDockerAdapter_Restore_WithTargetTime_WritesRecoveryTar(t *testing.T) {
+	adapter, store, _, uploader, records := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
+	dc := &fakeDockerClientForAdapter{}
+	adapter.SetDockerClient(dc)
+
+	src, _ := store.FindByProjectID("dk-1")
+	uploader.objects["test-backups/backups/dk-1/manual/backup-pitr.tar.gz"] = minimalGzippedTar(t)
+	records.Save(context.Background(), &domain.BackupRecord{
+		ID: "backup-pitr", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	target := time.Now().UTC().Add(-1 * time.Hour)
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{
+		NewProjectID: "dk-pitr",
+		TargetTime:   &domain.FlexTime{Time: target},
+	})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	// PITR target → expect 2 CopyToContainer calls (base + recovery
+	// config). No-target restore would be 1.
+	if dc.copyCalls != 2 {
+		t.Errorf("PITR restore should copy base+recovery=2 times, got %d", dc.copyCalls)
+	}
+}
+
+func TestDockerAdapter_Restore_NoTarget_NoRecoveryTar(t *testing.T) {
+	// Latest restore — only base copy, no recovery.signal.
+	adapter, store, _, uploader, records := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
+	dc := &fakeDockerClientForAdapter{}
+	adapter.SetDockerClient(dc)
+
+	src, _ := store.FindByProjectID("dk-1")
+	uploader.objects["test-backups/backups/dk-1/manual/backup-latest.tar.gz"] = minimalGzippedTar(t)
+	records.Save(context.Background(), &domain.BackupRecord{
+		ID: "backup-latest", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectID: "dk-latest"})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if dc.copyCalls != 1 {
+		t.Errorf("no-target restore should copy 1x (base only), got %d", dc.copyCalls)
 	}
 }
 

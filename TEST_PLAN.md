@@ -1,0 +1,314 @@
+# Test plan — Excalibase Provisioning
+
+This is the canonical inventory of what's tested today, what's
+covered by which suite, and what gaps remain. Updated as part of the
+ground-truth doc sync (May 2026).
+
+## Reading the matrix
+
+For each surface, four columns:
+
+- **Surface** — what's under test
+- **Where it lives** — repo + path
+- **Tests today** — actual test invocations + counts
+- **Gap** — what's not covered + concrete path to close it
+
+`HIGH` = ship-blocker, `MED` = should-have, `LOW` = nice-to-have.
+
+---
+
+## 1. Backend Go server (this repo)
+
+### 1.1 Auth + RBAC
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| argon2id password hashing | `internal/auth/password.go` | `auth_test.go` (covered) | — |
+| Token issuance + verification | `internal/auth/auth_test.go`, `middleware_token_test.go` | covered, `-race` clean | — |
+| Org / project RBAC matrix | `internal/auth/org_rbac.go` | `bootstrap_org_test.go` + `handler/org_test.go`, `org_member_test.go` | LOW: cross-tenant access denial — verify a project member of org A can't read org B's projects via crafted handler calls |
+| Setup wizard (vault init + first admin) | `internal/handler/setup.go`, `setup_wizard_test.go` | covered + Playwright `setup-wizard.spec.ts` | — |
+| Email verification + password reset | `internal/handler/auth.go` (email handlers), `internal/email/` | unit + Resend `live_test` (live send verified) | MED: end-to-end "click link in email → land on /reset" not exercised |
+
+### 1.2 Provisioning + lifecycle
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| 9-stage K8s pipeline | `internal/provisioner/postgresql.go` | unit + `internal/k8s/*_integration_test.go` (k3s, build-tagged) | — |
+| Rollback on stage failure | `internal/service/provisioning_test.go` (PopulatesFailureStageAndStep, RollbackDeletesNamespace, PersistsRollbackLog, RollsBackVaultWritesOnRoleCreationFailure) | covered | LOW: real-cluster rollback verification (currently MockClient) |
+| Docker provisioner | `internal/provisioner/docker_postgresql.go` | `docker_postgresql_test.go`, `docker_client_integration_test.go` (`-tags=integration`) | LOW: per-project Docker network isolation (cross-project reachability test) |
+| BYOC provisioning | `internal/handler/byoc.go` | `byoc_test.go`, `byoc.spec.ts` | — |
+| Capacity pre-flight | `internal/k8s/capacity.go` | `capacity_test.go`, `provisioning_test.go::TestProvision_RefusesWhenClusterFull` | — |
+| Tier enforcement | `internal/config/tiers.go` | `tiers_test.go`, `provisioning_test.go::ExceedsFreeTierLimit/Standard...` | — |
+| Deployment-mode persistence | `internal/storage/{postgres,sqlite}/migrations/000007*` | `pg_test.go`, `sqlite_test.go::DeploymentMode_RoundTrips`, `LegacyRow_DefaultsToK8s`; `provisioning_test.go::SetsDeploymentMode_*` | — |
+
+### 1.3 Backup + restore (Phase 0–3)
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| BackupAdapter dispatch | `internal/service/backup_adapter.go` | `backup_adapter_test.go` (7 cases: K8s/Docker dispatch, empty mode → K8s, unsupported → error, propagated error, list dispatch, restore dispatch) | — |
+| K8s adapter (CNPG flow) | `backup_adapter_k8s.go` | implicit via `backup_test.go` (legacy tests still pass through dispatch) | — |
+| Docker adapter MVP | `backup_adapter_docker.go` | `backup_adapter_docker_test.go` (8 cases: trigger basebackup, S3 prefix, persist record, FAILED on runner error, list IDOR, restore happy path, missing base errors, missing docker client errors) | — |
+| Docker runner (pg_basebackup over docker exec) | `backup_runner_docker.go` | unit covered; integration via `backup_adapter_docker_integration_test.go` + `_r2_test.go` + `_restore_integration_test.go` | — |
+| WAL-G runner (Phase 2) | `backup_runner_walg.go` | `backup_runner_walg_test.go` (5 cases against fake docker SDK) | HIGH: no integration test against a real WAL-G binary — the sidecar image is published but never exec'd in CI |
+| S3 / R2 uploader | `backup_uploader.go` | unit + LocalStack E2E + **real R2 E2E** (gated `R2_ACCESS_KEY_ID`) | — |
+| Backup scheduler (cron + leader) | `backup_scheduler.go` | `backup_scheduler_test.go` (5 cases: register/run, invalid cron, persists across restart, delete, not-leader-doesn't-fire) | LOW: real Postgres advisory lock under concurrent contention |
+| Restore orchestrator (state machine) | `backup_restore_orchestrator.go` | `backup_restore_orchestrator_test.go` (7 cases: all-steps complete, fail-stops-and-persists, target-kind matrix, two-targets-rejected, sweep-stale, mid-flight Get, RestoreTarget union) | — |
+| Wal-lag endpoint | `wal_lag.go` | `wal_lag_test.go` (3 cases: derives-from-records, no-records-returns-minus-1, K8s-returns-unsupported) | LOW: real WAL-G `wal-show` integration |
+| BackupRecordStore (DB-backed) | `internal/storage/{postgres,sqlite}/sqlite_backup_records.go` | sqlite unit (3 cases) + pg integration (2 cases, build-tagged) | — |
+| BackupSchedule store | same | sqlite unit (4 cases) + pg integration (3 cases) | — |
+| RestoreJob store | same | sqlite unit (4 cases) + pg integration (2 cases) | — |
+| End-to-end backup→S3→restore→query | `backup_adapter_docker_restore_integration_test.go` | **real testcontainers Postgres + LocalStack S3 round-trip; verifies seeded row survives the restore** | — |
+| End-to-end backup against real R2 | `backup_adapter_docker_r2_test.go`, `backup_uploader_r2_test.go` | gated `R2_ACCESS_KEY_ID`; multipart + path-style + idempotent delete + List + gzip-magic verified | — |
+| Continuous WAL archiving (Docker) | `provisioner/docker_postgresql.go::ConfigureArchive` (called from `Provision` when `req.Backup.Enabled`) + adapter's `RefreshWALArchive` / `uploadWALArchive` | `docker_postgresql_test.go` (2 cases: ALTER SYSTEM ordering, restart-after-alter) + integration via the PITR E2E below (proves /walarchive → S3 happens for real) | LOW: scheduled WAL refresh (currently only on backup trigger or explicit `RefreshWALArchive` call) |
+| Docker PITR with target time / xid / lsn / name | `service/backup_adapter_docker.go::Restore` (recovery tar + WAL download) + `domain.RestoreRequest::RecoveryTarget` | unit `BuildRecoveryTar_*` (5 cases: no-target, time, xid, lsn, name) + `Restore_WithTargetTime_WritesRecoveryTar` + `Restore_NoTarget_NoRecoveryTar` + **`backup_adapter_docker_pitr_integration_test.go::PITR_TargetName` real E2E**: empty backup → seed with restore point → post-backup WALs uploaded → restore from empty backup pinned via `BackupID` with `TargetName='mark'` → only pre-mark row visible (proves the full archive_command → upload → download → recovery → promote pipeline) | LOW: target_xid + target_lsn + target_time covered by unit tests but the E2E only proves target_name. The recovery directive logic is identical for all four kinds. |
+
+### 1.4 Scheduling + DB persistence
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| Migrations forward + back | `internal/storage/{pg,sqlite}/migrations/` (9 files each) | applied automatically on store init; structural validation in `migrate_test.go` (sqlite) | LOW: down-migration drift test (rare in practice) |
+| SQLite store | `internal/storage/sqlite/` | `sqlite_test.go`, `sqlite_orgs_test.go`, `sqlite_backup_records_test.go`, `sqlite_backup_schedules_test.go`, `sqlite_restore_jobs_test.go`, `coverage_gap_test.go` | — |
+| Postgres store | `internal/storage/postgres/` | `pg_test.go` + 4 backup-related, all `-tags=integration` | LOW: large-row scaling (hundreds of orgs/projects) |
+| FileSystemStore (vault metadata) | `internal/storage/filesystem.go` | `filesystem_test.go` (incl. roundtrip + LegacyRow_DefaultsToK8s) | — |
+
+### 1.5 Edge functions (Deno)
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| Function CRUD | `internal/handler/function.go` | `function_test.go`, `function_integration_test.go` (real Deno subprocess, `-tags=integration`) | — |
+| Multi-file source bundling (esbuild) | `internal/edgefn/store.go`, `client.go` | `client_test.go`, `function_test.go` | — |
+| Secrets store (vault-backed) | `internal/edgefn/secrets.go` | `secrets_test.go` | — |
+| Public invoke `POST /functions/v1/{projectId}/{fnId}` | `internal/handler/function.go` | `function_integration_test.go` | LOW: rate-limit edge cases (busy-loop attack) |
+| `verifyJwt` gating | same | covered | — |
+| Log streaming SSE (`GET /api/projects/{id}/functions/{fnId}/logs`) | `internal/handler/function.go` | `function_logs_test.go`, `sse_test.go` | LOW: client-disconnect cleanup under load |
+| K8s mode: per-project Deno pod | `internal/edgefn/integration_test.go` | covered | — |
+| Deno runtime image | `deno-server/` | smoke via `function_integration_test.go` | MED: dedicated Dockerfile vulnerability scan (Snyk Container) — workflow not yet wired |
+
+### 1.6 Storage feature
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| Bucket CRUD | `internal/storagesvc/service.go` | `service_test.go` | — |
+| Object key building + traversal protection | `internal/storagesvc/r2_client.go` | `r2_client_test.go` (`ObjectKey_*` covers prefix + traversal denial) | — |
+| Quota tracking | `internal/storagesvc/service.go` | `service_test.go::TestQuotaEnforced` | — |
+| Object upload (presigned URL) | `internal/handler/storage.go` | unit covered | LOW: full E2E with real R2 — currently relies on the existing real-user-flow shell script |
+| Object download (redirect) | same | unit covered | — |
+| Public URL routing | same | unit covered | — |
+
+### 1.7 Realtime (CDC publication management)
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| Publication membership API (`GET /tables`, `PUT/DELETE /tables/{schema}/{table}`) | `internal/handler/realtime.go` | `realtime_test.go` | — |
+| Enable-all / disable-all toggles | same | covered | — |
+| Configurable publication name (`REALTIME_PUBLICATION_NAME`) | same | covered | — |
+| **Watcher integration** (lives in `excalibase-watcher-go`) | sister repo | not in this repo's test suite | **CROSS-REPO** — own tests there, contract pinned via the projectId convention memory |
+
+### 1.8 PgDog connection pooler
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| NATS-triggered config reload | `internal/service/pgdog_notifier.go` | `tests/pgdog/test-nats-reload.sh` | LOW: Go-side unit test for the publish path |
+| Config table CRUD (`pgdog_databases`, `pgdog_users`) | `internal/storage/{pg,sqlite}/pg_pgdog.go` | `tests/pgdog/test.sh` (shell-based) | MED: convert to Go integration test |
+| R/W splitting routing | sister repo (`excalibase/pgdog` fork) | not in this repo's tests | **CROSS-REPO** — see `pgdog/test.sh` for smoke |
+
+### 1.9 Email
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| Sender interface + noop fallback | `internal/email/sender.go` | `sender_test.go` | — |
+| SES sender | `internal/email/ses_sender.go` | unit | LOW: SES sandbox is not configured, so live SES path untested in this repo |
+| **Resend sender** (Phase 2026-05) | `internal/email/resend_sender.go` | `resend_sender_test.go` (7 cases); **`resend_live_test.go` ran against real Resend with verified `support@excalibase.io` domain → message id `62e825ff-...`** | — |
+| EMAIL_PROVIDER switch | `cmd/server/main.go::buildEmailSender` | not directly unit-tested but covered by smoke build + manual run | LOW: a switch-case unit test for unknown values → noop |
+| Templates (verification, reset, invite) | `internal/email/templates.go` | implicit (rendered in handler tests) | LOW: dedicated golden-file test for HTML/text rendering |
+
+### 1.10 Vault
+
+| Surface | Where it lives | Tests today | Gap |
+|---|---|---|---|
+| In-process (Shamir + bbolt) | `internal/vault/vault.go`, `pkg/vault/vault_test.go` | covered | — |
+| HTTP client | `internal/vaultclient/client.go` | `client_test.go` | — |
+| Standalone vault HTTP service | `internal/handler/vaultapi/handler.go` | `handler_test.go` | — |
+| Setup wizard atomic init | `internal/handler/setup.go` | `setup_wizard_test.go`, Playwright `setup-wizard.spec.ts` | — |
+
+---
+
+## 2. Frontend (this repo)
+
+### 2.1 Vitest unit tests (`frontend/src/**/*.test.{ts,tsx}`)
+
+| Surface | Tests today | Gap |
+|---|---|---|
+| Hooks (`useProvisioning`, `useOrgs`, `useFunctions`, `useBackups` etc.) | 13 test files; ≥80% coverage per CLAUDE.md | — |
+| Components (Button, AuthGuard, etc.) | covered | LOW: snapshot test for major page layouts (catches accidental UI shifts) |
+
+### 2.2 Playwright E2E (`frontend/e2e/*.spec.ts`)
+
+26 spec files, 131 passing + 1 pre-existing skip on `real-user-flow.spec.ts` (gated on `REAL_E2E=1`).
+
+| Spec | Surface | Notes |
+|---|---|---|
+| `setup-wizard.spec.ts` | first-time vault init + admin | mocked vault |
+| `auth-cookie-flow.spec.ts` | login + refresh + logout | mocked auth |
+| `auth-users.spec.ts` | platform-admin user CRUD | mocked |
+| `orgs.spec.ts` | org list + create + empty state | mocked |
+| `vault.spec.ts` | secrets list + reveal + sealed redirect | mocked |
+| `byoc.spec.ts` | BYOC mode UI | mocked |
+| `deployment-mode.spec.ts` | mode selector toggles UI | mocked |
+| `tables.spec.ts`, `indexes.spec.ts`, `triggers.spec.ts`, `types.spec.ts`, `extensions.spec.ts`, `roles.spec.ts`, `rls.spec.ts`, `migrations.spec.ts`, `sql-editor.spec.ts` | studio DB action surfaces | mocked schema API; verifies UI behaviour, not actual DB action |
+| `realtime.spec.ts` | per-table CDC toggle UI | mocked |
+| `edge-functions.spec.ts`, `functions.spec.ts` | function CRUD UI | mocked |
+| `advisors.spec.ts` | advisor recommendations UI | mocked |
+| `api-info.spec.ts` | per-project API info modal | mocked |
+| `log-explorer.spec.ts` | logs viewer | mocked |
+| `settings.spec.ts` | project settings (delete protection, schedule) | mocked |
+| `navigation.spec.ts` | platform vs project sidebar split | mocked |
+| `backups.spec.ts` (Phase 1E) | trigger / list / restore form / PITR mode toggle / payload assertions | mocked |
+| `real-user-flow.spec.ts` | full flow against a live AIO stack | gated `REAL_E2E=1` (currently skipped in CI) |
+
+| Coverage gap | Severity |
+|---|---|
+| Studio actions don't actually exercise the GraphQL/REST data plane — all schema specs use `page.route('**/api/...')` mocks. We test the UI, not the data integrity. | MED — by design (sister-repo coverage), but should be called out |
+| Backups spec is mock-based; doesn't exercise a real Docker-mode dev stack. The new `backup_adapter_docker_restore_integration_test.go` covers the backend side. | LOW (deferred to Phase 1E follow-up) |
+| Real-user-flow spec runs against AIO; no per-PR run | MED — the gate is opt-in, no CI signal until manually flipped |
+
+---
+
+## 3. Cross-repo surfaces (NOT in this repo)
+
+### 3.1 GraphQL (`excalibase-graphql` repo)
+
+GraphQL is owned by the Java/Spring Boot service in a sister repo. **Not tested here.** Contract pins:
+
+- WS subscriptions gated by JWT (single platform-wide signing keypair, vault path `pki/signing/*`)
+- Topics: `cdc.{projectId}.*` — projectId is opaque (no orgSlug)
+- Auth flows through `app.security.multi-tenant.provisioning-pat` and `provisioning-url`
+
+When GraphQL changes break this contract, sister-repo tests catch it. **No tests in this repo verify GraphQL.**
+
+### 3.2 Auth IMS (`excalibase-auth` repo)
+
+Auth lives in a sister repo (separate service). This repo:
+
+- Issues JWT signing keys via vault
+- Mounts `/api/auth/*` routes (delegate to IMS in production; local stub in self-hosted mode)
+
+Auth-flow tests in this repo cover only the local stub. Production auth integration is sister-repo + AIO end-to-end test (`tests/e2e-aio-self.sh`).
+
+### 3.3 Watcher (`excalibase-watcher-go` repo)
+
+CDC watcher is a separate process per project. Image is hardcoded in `internal/provisioner/postgresql.go`. Contract: watcher reads PostgreSQL publication `cdc_watcher_pub` and publishes to NATS subject `cdc.{projectId}.*`.
+
+Tests in this repo cover provisioner deploy of the watcher CRD; watcher behavior itself is sister-repo coverage.
+
+### 3.4 Storage / NoSQL / future engines
+
+- **Storage** (object/file) — covered in `internal/storagesvc/` (this repo). User-facing E2E partly covered by `tests/e2e-aio-self.sh` F23.
+- **NoSQL** (MongoDB, etc.) — **not implemented yet**. Future engine; the `BackupAdapter` interface already accepts arbitrary `domain.DatabaseType`, so the adapter pattern extends cleanly.
+- **MySQL** — provisioner stub exists; no live tests. Future engine.
+
+---
+
+## 4. CI / cluster surfaces
+
+### 4.1 What runs in CI
+
+| Job | Tests | Trigger |
+|---|---|---|
+| `go-test` | `go test ./internal/... -short -race -count=1` (110 tests) | every push |
+| `go-vet` | `go vet ./...` + `go vet -tags=integration ./...` | every push |
+| `playwright` | `npx playwright test` (26 specs, 131 + 1 skip) | every push |
+| `snyk-code` | `snyk code test --severity-threshold=low` | every push |
+| `sonarcloud` | Sonar scan with go coverage | every push |
+
+### 4.2 What doesn't run in CI
+
+| Test | Why | Severity |
+|---|---|---|
+| `-tags=integration` Go suite | testcontainers needs Docker daemon; CI doesn't have one yet | MED |
+| Real R2 E2E | requires `R2_ACCESS_KEY_ID` secret in CI | MED — but the gate works locally |
+| Real Resend live test | requires `RESEND_API_KEY` secret in CI | MED |
+| Real K8s integration (k3s testcontainers) | same Docker dependency | MED |
+| `tests/e2e-aio-self.sh` (full AIO smoke) | needs a live AIO stack | LOW (manual run before release) |
+| `tests/pgdog/test.sh` | needs running PgDog + Postgres | LOW (manual) |
+| Sister-repo tests (graphql, auth, watcher) | not this repo | N/A |
+
+---
+
+## 5. Manual / live verification done in May 2026
+
+Rotating these to a checklist so they're not lost:
+
+- [x] Resend `support@excalibase.io → vuduc047@gmail.com` — message id captured
+- [x] R2 backup full pipeline (`pg_basebackup` → multipart upload → download → gzip magic verified)
+- [x] Docker restore E2E (testcontainers Postgres → backup → S3 → restore → `SELECT n FROM smoke` returns 4242)
+- [ ] Helm template render of `platform-base` with `platformDB.backup.endpointURL` set — chart YAML renders cleanly (verified) but actual `helm upgrade` against minikube not run
+- [ ] Live PgDog config reload via NATS publish — `tests/pgdog/test-nats-reload.sh` ran in earlier session per memory; not re-verified
+- [ ] Vault-from-shamir-shares unseal end-to-end — covered by setup-wizard spec mock; not exercised against a sealed bbolt vault recently
+
+---
+
+## 6. Highest-priority gaps (next session backlog)
+
+In severity order:
+
+1. ~~**HIGH — Continuous WAL archiving for Docker mode**~~ **DONE (May 2026):** `ConfigureArchive` is now called from `Provision` when `req.Backup.Enabled`. archive_command writes to `/walarchive` inside the container; `uploadWALArchive` ships them to S3 on every backup trigger (or via `RefreshWALArchive` out-of-band). Verified by the PITR E2E test.
+
+2. ~~**HIGH — Docker PITR (`targetTime`/`xid`/`lsn`) execution**~~ **DONE (May 2026):** Adapter writes `recovery.signal` + `postgresql.auto.conf` (with `recovery_target_*` + `recovery_target_action='promote'` + `restore_command`) into the new container before start. `downloadWALsIntoContainer` fetches archived WALs from S3 and places them in `wal_restore/`. Postgres recovers, hits the target, and promotes. Proven end-to-end with the `mark` restore-point scenario in `PITR_TargetName`.
+
+3. **MED — Sister-repo contract tests.** No test in this repo verifies that the JWT issuance, projectId convention, or NATS subject format actually round-trip through `excalibase-graphql` and `excalibase-auth`. Path: contract tests run in CI against built sister-repo images (probably owned by AIO E2E, not this repo).
+
+4. **MED — Studio E2E against real data plane.** Every studio spec uses `page.route('**/api/...')` mocks. We catch UI regressions but not data-plane drift. Path: add a `STUDIO_LIVE=1`-gated variant of `tables.spec.ts` that connects to a real provisioned project.
+
+5. **MED — `tests/e2e-aio-self.sh` runs in CI.** Currently manual. Path: GH Actions workflow that spins up minikube + helm install + runs the script. Cost: minutes per PR; needed for confidence in sister-repo integrations.
+
+6. **MED — Convert pgdog shell tests to Go.** `tests/pgdog/test.sh` is shell-based; not in `go test` flow. Path: rewrite as `internal/service/pgdog_notifier_integration_test.go` with testcontainers NATS + Postgres.
+
+7. **LOW — Real Resend / R2 / k3s integration in CI.** Gates exist but require CI secrets to be set + Docker in CI runner. Path: GH Actions secrets + a Docker-in-Docker runner image.
+
+---
+
+## 7. How to run each suite locally
+
+```bash
+# Backend Go: short, race-checked
+cd server-go && ~/go-sdk/go/bin/go test ./internal/... -short -race -count=1
+
+# Backend Go: integration (needs Docker daemon)
+~/go-sdk/go/bin/go test -tags=integration ./internal/... -race -timeout=10m
+
+# Real R2 (requires creds)
+export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... \
+       R2_ENDPOINT=https://<account>.r2.cloudflarestorage.com R2_BUCKET=excalibase-backups
+~/go-sdk/go/bin/go test -tags=integration ./internal/service/ -run R2_E2E -v
+
+# Real Resend (requires creds + verified domain)
+export RESEND_API_KEY=... RESEND_TEST_FROM=support@yourdomain.com RESEND_TEST_TO=you@gmail.com
+~/go-sdk/go/bin/go test -tags=integration ./internal/email/ -run Live -v
+
+# Frontend Vitest
+cd frontend && npm test
+
+# Playwright (full suite)
+npx playwright test
+
+# Playwright (single spec)
+npx playwright test e2e/backups.spec.ts --reporter=list
+
+# AIO end-to-end (manual; needs minikube)
+./tests/e2e-aio-self.sh
+
+# Sonar local
+./scripts/sonar-local.sh
+```
+
+---
+
+## 8. Maintenance contract
+
+When adding a feature, update **two columns** in this doc:
+
+- The relevant section's table — drop a row for the test that ships with the feature
+- Section 6 if a known gap is introduced — operators reading this should see it
+
+When ground-truth drifts (test count, spec count, missing endpoint), the doc fix is part of the same PR that drifted them. Doc-vs-code drift was a real problem that bit us in May 2026 — see `docs: sync docs to match shipped Phase 0–3` (a519d44) for the correction. Don't let this doc rot.

@@ -1,12 +1,15 @@
 package service
 
 import (
+	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -172,6 +175,21 @@ func (a *DockerBackupAdapter) TriggerManual(ctx context.Context, inst *domain.Da
 		return BackupRef{}, fmt.Errorf("upload: %w", upErr)
 	}
 
+	// Phase 2: ship any WALs that piled up in /walarchive (set by
+	// archive_command at provision time when backup is enabled).
+	// Required for PITR — recovery on restore needs the WAL stream
+	// from after the basebackup, which lives in /walarchive on the
+	// source. Best-effort: if archive_mode wasn't enabled, /walarchive
+	// doesn't exist and we silently skip.
+	a.mu.RLock()
+	dc := a.docker
+	a.mu.RUnlock()
+	if dc != nil {
+		if err := a.uploadWALArchive(ctx, dc, inst); err != nil {
+			log.Printf("WARN: WAL archive upload for %s: %v", inst.ProjectID, err)
+		}
+	}
+
 	record.Status = "COMPLETED"
 	if err := a.records.Save(ctx, record); err != nil {
 		log.Printf("WARN: persist completed status for %s: %v", id, err)
@@ -186,6 +204,101 @@ func (a *DockerBackupAdapter) TriggerManual(ctx context.Context, inst *domain.Da
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 		SizeBytes:  size,
 	}, nil
+}
+
+// walArchivePath is where archive_command drops closed WAL segments
+// inside the project's container. Set by ConfigureArchive at provision
+// time when backup is enabled.
+const walArchivePath = "/walarchive"
+
+// RefreshWALArchive ships any new WALs that have piled up in the
+// project's /walarchive since the last call. Public + callable
+// out-of-band so tests (and ops cron tasks) can ship WALs without
+// taking a full base backup. Equivalent to the WAL upload step
+// inside TriggerManual but standalone.
+func (a *DockerBackupAdapter) RefreshWALArchive(ctx context.Context, inst *domain.DatabaseInstance) error {
+	a.mu.RLock()
+	dc := a.docker
+	a.mu.RUnlock()
+	if dc == nil {
+		return fmt.Errorf("docker client not configured")
+	}
+	return a.uploadWALArchive(ctx, dc, inst)
+}
+
+// uploadWALArchive forces a WAL switch + checkpoint on the source,
+// then streams /walarchive out via CopyFromContainer, gzips each
+// entry, and uploads to S3 at backups/{projectId}/wals/{name}.gz.
+//
+// Best-effort: missing /walarchive (archive_mode never enabled),
+// empty directory, or permission errors return nil so backup
+// completion isn't blocked by archive plumbing.
+func (a *DockerBackupAdapter) uploadWALArchive(ctx context.Context, dc provisioner.DockerClient, inst *domain.DatabaseInstance) error {
+	if inst.Namespace == "" {
+		return fmt.Errorf("no container id on instance")
+	}
+	dbName := inst.DatabaseName
+	if dbName == "" {
+		dbName = "postgres"
+	}
+	// Force WAL switch + checkpoint so the segment containing recent
+	// commits closes and becomes archivable. PGPASSWORD env keeps the
+	// psql exec from prompting.
+	for _, sql := range []string{"SELECT pg_switch_wal();", "CHECKPOINT;"} {
+		_, _ = dc.ExecInContainer(ctx, inst.Namespace,
+			[]string{"sh", "-c", fmt.Sprintf("PGPASSWORD=%q psql -U postgres -d %s -c %q", inst.Password, dbName, sql)})
+	}
+
+	stream, err := dc.CopyFromContainer(ctx, inst.Namespace, walArchivePath)
+	if err != nil {
+		// /walarchive doesn't exist → archive_mode wasn't on. Not a
+		// failure for backup itself.
+		return nil
+	}
+	defer stream.Close()
+
+	prefix := fmt.Sprintf("%s%s/wals/", a.keyPrefix, inst.ProjectID)
+	tr := tar.NewReader(stream)
+	uploaded := 0
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read walarchive tar: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := hdr.Name
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			name = name[i+1:]
+		}
+		if name == "" {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return fmt.Errorf("read WAL %s: %w", name, err)
+		}
+		var gzBuf bytes.Buffer
+		gw := gzip.NewWriter(&gzBuf)
+		if _, err := gw.Write(data); err != nil {
+			return fmt.Errorf("gzip WAL %s: %w", name, err)
+		}
+		gw.Close()
+
+		key := prefix + name + ".gz"
+		if _, err := a.uploader.Upload(ctx, a.bucket, key, &gzBuf); err != nil {
+			return fmt.Errorf("upload WAL %s: %w", name, err)
+		}
+		uploaded++
+	}
+	if uploaded > 0 {
+		log.Printf("INFO: uploaded %d WAL segment(s) for %s", uploaded, inst.ProjectID)
+	}
+	return nil
 }
 
 // List sources the project filter from inst.ProjectID — never from
@@ -254,18 +367,33 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		return nil, fmt.Errorf("docker restore: docker client not configured (call SetDockerClient)")
 	}
 
-	// 2. Resolve the most recent base backup. We pick the latest
-	// COMPLETED record by Timestamp; PITR will refine this when we
-	// wire WAL replay in Phase 2.
+	// 2. Resolve the source backup. Default: most recent COMPLETED
+	// record by Timestamp. When req.BackupID is set, restore from
+	// that specific backup — required for PITR scenarios where the
+	// target lives in WALs accumulated AFTER an older backup.
 	records, err := a.records.ListByProject(ctx, inst.ProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("list backup records: %w", err)
 	}
-	src, err := pickLatestCompletedBackup(records)
-	if err != nil {
-		return nil, err
+	var srcRec *domain.BackupRecord
+	if req.BackupID != "" {
+		for i := range records {
+			if records[i].ID == req.BackupID && records[i].Status == "COMPLETED" {
+				r := records[i]
+				srcRec = &r
+				break
+			}
+		}
+		if srcRec == nil {
+			return nil, fmt.Errorf("backup %q not found or not COMPLETED", req.BackupID)
+		}
+	} else {
+		srcRec, err = pickLatestCompletedBackup(records)
+		if err != nil {
+			return nil, err
+		}
 	}
-	srcKey := a.objectKey(inst.ProjectID, "manual", src.ID)
+	srcKey := a.objectKey(inst.ProjectID, "manual", srcRec.ID)
 	body, err := a.uploader.Download(ctx, a.bucket, srcKey)
 	if err != nil {
 		return nil, fmt.Errorf("download base backup %s: %w", srcKey, err)
@@ -293,6 +421,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	if inst.PostgresVersion != "" {
 		image = "postgres:" + inst.PostgresVersion
 	}
+	log.Printf("docker restore: image=%q for new project %q (src.PostgresVersion=%q)", image, newProject, inst.PostgresVersion)
 	containerID, err := dc.CreateContainer(ctx, containerName, image, env, map[string]string{"5432": ""})
 	if err != nil {
 		return nil, fmt.Errorf("create restore container: %w", err)
@@ -309,6 +438,27 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	if err := dc.CopyToContainer(ctx, containerID, "/var/lib/postgresql/data", gz); err != nil {
 		_ = dc.RemoveContainer(ctx, containerID)
 		return nil, fmt.Errorf("extract backup into container: %w", err)
+	}
+
+	// 4b. PITR: download every archived WAL segment for the source
+	// project from S3 + place them in PGDATA/pg_wal/ alongside the
+	// basebackup's bundled WALs. This gives recovery the complete
+	// WAL stream from backup-time forward — without it, a recovery
+	// target landing AFTER the basebackup window would hang forever.
+	if err := a.downloadWALsIntoContainer(ctx, dc, containerID, inst.ProjectID); err != nil {
+		_ = dc.RemoveContainer(ctx, containerID)
+		return nil, fmt.Errorf("download archived WALs: %w", err)
+	}
+
+	// 4c. Recovery directives. recovery.signal + postgresql.auto.conf
+	// land in PGDATA so postgres enters archive recovery on start
+	// and stops at the requested target (or replays everything
+	// available if no target).
+	if recoveryTarBytes := buildRecoveryTar(req); recoveryTarBytes != nil {
+		if err := dc.CopyToContainer(ctx, containerID, "/var/lib/postgresql/data", bytes.NewReader(recoveryTarBytes)); err != nil {
+			_ = dc.RemoveContainer(ctx, containerID)
+			return nil, fmt.Errorf("write recovery config: %w", err)
+		}
 	}
 
 	// 5. Start + wait for ready.
@@ -382,12 +532,164 @@ func pickLatestCompletedBackup(records []domain.BackupRecord) (*domain.BackupRec
 	return &r, nil
 }
 
+// downloadWALsIntoContainer lists every WAL object under the source
+// project's wals/ prefix, gunzips each, and packs them into a single
+// tar that gets CopyToContainer'd into the new container's
+// PGDATA/wal_restore/ directory. Postgres recovery uses restore_command
+// (set by buildRecoveryTar) to fetch them on demand.
+//
+// Why a separate dir instead of pg_wal/? Because postgres requires a
+// non-empty restore_command whenever recovery.signal is present
+// (archive recovery), and restore_command's source path must NOT be
+// pg_wal — postgres copies into pg_wal as it replays.
+//
+// Empty when the project never produced archived WALs (archive_mode
+// wasn't enabled). Returns nil so restore continues without PITR-able
+// WALs — recovery will replay only the basebackup-bundled segments.
+func (a *DockerBackupAdapter) downloadWALsIntoContainer(ctx context.Context, dc provisioner.DockerClient, containerID, sourceProjectID string) error {
+	prefix := fmt.Sprintf("%s%s/wals/", a.keyPrefix, sourceProjectID)
+	objects, err := a.uploader.List(ctx, a.bucket, prefix)
+	if err != nil {
+		return fmt.Errorf("list WAL objects: %w", err)
+	}
+	if len(objects) == 0 {
+		return nil
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, obj := range objects {
+		// obj.Key is e.g. "backups/{srcProjectId}/wals/000000010000000000000003.gz"
+		base := obj.Key
+		if i := strings.LastIndex(base, "/"); i >= 0 {
+			base = base[i+1:]
+		}
+		base = strings.TrimSuffix(base, ".gz")
+		if base == "" {
+			continue
+		}
+		body, err := a.uploader.Download(ctx, a.bucket, obj.Key)
+		if err != nil {
+			return fmt.Errorf("download WAL %s: %w", obj.Key, err)
+		}
+		gr, err := gzip.NewReader(body)
+		if err != nil {
+			body.Close()
+			return fmt.Errorf("gunzip WAL %s: %w", obj.Key, err)
+		}
+		data, err := io.ReadAll(gr)
+		gr.Close()
+		body.Close()
+		if err != nil {
+			return fmt.Errorf("read WAL %s: %w", obj.Key, err)
+		}
+		hdr := &tar.Header{
+			Name:    "wal_restore/" + base,
+			Mode:    0600,
+			Size:    int64(len(data)),
+			Uid:     999, Gid: 999,
+			ModTime: time.Now(),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("tar header %s: %w", base, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			return fmt.Errorf("tar body %s: %w", base, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("close tar: %w", err)
+	}
+	if err := dc.CopyToContainer(ctx, containerID, "/var/lib/postgresql/data", &buf); err != nil {
+		return fmt.Errorf("copy WALs into container: %w", err)
+	}
+	return nil
+}
+
 // generateRestorePassword produces a one-shot password for the
 // restored container's superuser env. The actual DB users + their
 // passwords come from the backup; this only satisfies the postgres
 // image's startup contract.
 func generateRestorePassword() string {
 	return fmt.Sprintf("restored-%d", time.Now().UnixNano())
+}
+
+// buildRecoveryTar produces a tar archive containing the two files
+// PostgreSQL needs to enter recovery mode + stop at a specific point:
+//
+//   - recovery.signal  (empty file; presence triggers archive recovery)
+//   - postgresql.auto.conf  (recovery_target_* + recovery_target_action='promote')
+//
+// Returns nil when the request has no target (latest restore — pg
+// replays all WALs in pg_wal/ and starts normally without a signal).
+//
+// Layout: relative paths so when CopyToContainer'd into
+// /var/lib/postgresql/data, files land at the PGDATA root next to
+// pg_wal/, base/, etc. Mode 0600 owned by uid:gid 999:999 — the
+// postgres image's user. Without those permissions postgres refuses
+// to start (PGDATA must be 0700; files within must be owned by pg).
+func buildRecoveryTar(req domain.RestoreRequest) []byte {
+	var directives string
+	switch {
+	case req.TargetTime != nil:
+		directives = fmt.Sprintf("recovery_target_time = '%s'\n", req.TargetTime.Time.UTC().Format("2006-01-02 15:04:05"))
+	case req.TargetXID != "":
+		directives = fmt.Sprintf("recovery_target_xid = '%s'\n", req.TargetXID)
+	case req.TargetLSN != "":
+		directives = fmt.Sprintf("recovery_target_lsn = '%s'\n", req.TargetLSN)
+	case req.TargetName != "":
+		directives = fmt.Sprintf("recovery_target_name = '%s'\n", req.TargetName)
+	default:
+		// No target → latest restore, no recovery.signal needed.
+		return nil
+	}
+	directives += "recovery_target_action = 'promote'\n"
+	// Postgres requires restore_command whenever recovery.signal is
+	// present (archive recovery mode), even if all WALs are already
+	// in pg_wal/. Point at PGDATA/wal_restore/ where
+	// downloadWALsIntoContainer placed the archived segments.
+	// `|| true` makes a missing-WAL exit cleanly so recovery promotes
+	// at the target instead of treating it as a fatal error.
+	directives += "restore_command = 'cp /var/lib/postgresql/data/wal_restore/%f %p 2>/dev/null || true'\n"
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	// recovery.signal — empty file, mode 0600, owned by postgres uid.
+	hdr := &tar.Header{
+		Name: "recovery.signal",
+		Mode: 0600,
+		Size: 0,
+		Uid:  999, Gid: 999, // postgres image's uid:gid (Debian-based)
+		ModTime: time.Now(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return nil
+	}
+
+	// postgresql.auto.conf — overwrites the basebackup's copy. PG
+	// reads auto.conf last so directives here win. We deliberately
+	// don't try to merge with the existing file: extracting the tar
+	// into PGDATA would need a read-modify-write cycle, and the only
+	// thing in a fresh cluster's auto.conf that matters is what we
+	// just wrote anyway.
+	body := []byte(directives)
+	hdr = &tar.Header{
+		Name: "postgresql.auto.conf",
+		Mode: 0600,
+		Size: int64(len(body)),
+		Uid:  999, Gid: 999,
+		ModTime: time.Now(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return nil
+	}
+	if _, err := tw.Write(body); err != nil {
+		return nil
+	}
+	if err := tw.Close(); err != nil {
+		return nil
+	}
+	return buf.Bytes()
 }
 
 // WalLag returns the time since the most recent successful WAL push

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,13 @@ func (m *mockDockerClient) CopyToContainer(_ context.Context, _ string, dstPath 
 	n, _ := io.Copy(io.Discard, content)
 	m.copyBytes += n
 	return nil
+}
+
+func (m *mockDockerClient) CopyFromContainer(_ context.Context, _ string, _ string) (io.ReadCloser, error) {
+	if m.failOn == "copyFrom" {
+		return nil, fmt.Errorf("copy from failed")
+	}
+	return io.NopCloser(strings.NewReader("")), nil
 }
 
 func TestDockerProvisioner_SupportedType(t *testing.T) {

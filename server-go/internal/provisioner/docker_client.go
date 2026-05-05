@@ -276,6 +276,17 @@ func (r *RealDockerClient) CopyToContainer(ctx context.Context, id, dstPath stri
 	return nil
 }
 
+// CopyFromContainer wraps the SDK's CopyFromContainer (a.k.a.
+// GetArchive). Returns a tar stream of srcPath. Caller must close the
+// returned ReadCloser.
+func (r *RealDockerClient) CopyFromContainer(ctx context.Context, id, srcPath string) (io.ReadCloser, error) {
+	body, _, err := r.c.CopyFromContainer(ctx, id, srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("copy from %s:%s: %w", id, srcPath, err)
+	}
+	return body, nil
+}
+
 // ensureImage skips the pull if the image already exists locally. Large
 // images can take minutes to pull and the check is cheap.
 func (r *RealDockerClient) ensureImage(ctx context.Context, ref string) error {

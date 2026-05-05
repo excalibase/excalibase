@@ -31,6 +31,12 @@ type DockerClient interface {
 	// data dir directly. content MUST be raw tar (uncompressed) —
 	// callers gunzip first.
 	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader) error
+	// CopyFromContainer returns a tar stream of srcPath inside the
+	// container. Used by the backup adapter's WAL-archive upload
+	// path: read the contents of /walarchive (where archive_command
+	// dropped completed WAL segments), iterate the tar, gzip + upload
+	// each entry to S3 so PITR has the WALs to replay on restore.
+	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error)
 }
 
 // defaultPostgresSuperuser is the well-known username used by the
@@ -99,6 +105,20 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 
 	// Stage: Credential generation
 	cb(domain.StageCredentialGeneration)
+
+	// PITR groundwork: enable WAL archiving when backup is requested.
+	// archive_mode=on requires a postgres restart so we do this here,
+	// before the container is handed back to the user. Best-effort:
+	// failure logs but doesn't block provisioning. Backup itself
+	// works without this; PITR specifically requires it.
+	if req.Backup != nil && req.Backup.Enabled {
+		if err := p.ConfigureArchive(ctx, containerID, "cp %p /walarchive/%f", defaultPostgresSuperuser); err != nil {
+			fmt.Printf("WARN: configure archive for %s: %v\n", req.ProjectName, err)
+		} else {
+			// Re-probe readiness after the restart.
+			_ = p.waitForPostgresReady(ctx, containerID, dbName)
+		}
+	}
 
 	cb(domain.StageCompleted)
 
