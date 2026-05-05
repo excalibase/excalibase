@@ -34,7 +34,8 @@ export function RlsPage() {
 
   // Group policies by table
   const grouped = policies.reduce<Record<string, typeof policies>>((acc, p) => {
-    (acc[p.table] ||= []).push(p);
+    if (!acc[p.table]) acc[p.table] = [];
+    acc[p.table].push(p);
     return acc;
   }, {});
 
@@ -136,14 +137,14 @@ export function RlsPage() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Policy Name</label>
-            <input type="text" value={pName} onChange={e => setPName(e.target.value)}
+            <label htmlFor="policy-name-input" className="block text-sm font-medium text-text-secondary mb-1">Policy Name</label>
+            <input id="policy-name-input" type="text" value={pName} onChange={e => setPName(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
               data-testid="policy-name-input" autoFocus />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Table</label>
-            <select value={pTable} onChange={e => setPTable(e.target.value)}
+            <label htmlFor="policy-table-select" className="block text-sm font-medium text-text-secondary mb-1">Table</label>
+            <select id="policy-table-select" value={pTable} onChange={e => setPTable(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
               <option value="">Select table...</option>
               {tables.filter(t => t.type === 'BASE TABLE').map(t => (
@@ -152,26 +153,26 @@ export function RlsPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Command</label>
-            <select value={pCommand} onChange={e => setPCommand(e.target.value)}
+            <label htmlFor="policy-command-select" className="block text-sm font-medium text-text-secondary mb-1">Command</label>
+            <select id="policy-command-select" value={pCommand} onChange={e => setPCommand(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
               {['ALL', 'SELECT', 'INSERT', 'UPDATE', 'DELETE'].map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Roles</label>
-            <input type="text" value={pRoles} onChange={e => setPRoles(e.target.value)}
+            <label htmlFor="policy-roles-input" className="block text-sm font-medium text-text-secondary mb-1">Roles</label>
+            <input id="policy-roles-input" type="text" value={pRoles} onChange={e => setPRoles(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">USING expression</label>
-            <textarea value={pUsing} onChange={e => setPUsing(e.target.value)} rows={3}
+            <label htmlFor="policy-using-input" className="block text-sm font-medium text-text-secondary mb-1">USING expression</label>
+            <textarea id="policy-using-input" value={pUsing} onChange={e => setPUsing(e.target.value)} rows={3}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
               placeholder="e.g. auth.uid() = user_id" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">WITH CHECK expression</label>
-            <textarea value={pWithCheck} onChange={e => setPWithCheck(e.target.value)} rows={3}
+            <label htmlFor="policy-withcheck-input" className="block text-sm font-medium text-text-secondary mb-1">WITH CHECK expression</label>
+            <textarea id="policy-withcheck-input" value={pWithCheck} onChange={e => setPWithCheck(e.target.value)} rows={3}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
               placeholder="e.g. auth.uid() = user_id" />
           </div>

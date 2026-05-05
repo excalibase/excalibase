@@ -230,25 +230,33 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	info := domain.ProjectInfo{
-		ProjectID:   inst.ProjectID,
-		ProjectName: inst.ProjectName,
-		OrgID:       inst.OrgID,
-		// Fall back to the orgID for slug/name when the org record can't
-		// be loaded — keeps the endpoint useful for older instances that
-		// predate the org table or when orgStore isn't wired.
-		OrgSlug:            inst.OrgID,
-		OrgName:            inst.OrgID,
-		RealtimeAutoEnable: true, // v1: hardcoded; per-project override is a future column on instances
+	// Resolve org metadata. Refuse to forge a slug from the raw OrgID — the
+	// auth service mints JWTs from this payload and a UUID-as-slug feeds
+	// downstream verification with the wrong `iss` claim. If we can't
+	// resolve the real slug/name, surface that as 503 so the caller knows
+	// to retry rather than caching a poisoned value.
+	if h.orgStore == nil {
+		httpError(w, "org store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if inst.OrgID == "" {
+		httpError(w, "project has no org assignment", http.StatusServiceUnavailable)
+		return
+	}
+	org, oerr := h.orgStore.FindOrgByID(r.Context(), inst.OrgID)
+	if oerr != nil || org == nil {
+		httpError(w, "org metadata unavailable", http.StatusServiceUnavailable)
+		return
 	}
 
-	if h.orgStore != nil && inst.OrgID != "" {
-		if org, oerr := h.orgStore.FindOrgByID(r.Context(), inst.OrgID); oerr == nil && org != nil {
-			info.OrgSlug = org.Slug
-			info.OrgName = org.Name
-		}
+	info := domain.ProjectInfo{
+		ProjectID:          inst.ProjectID,
+		ProjectName:        inst.ProjectName,
+		OrgID:              inst.OrgID,
+		OrgSlug:            org.Slug,
+		OrgName:            org.Name,
+		RealtimeAutoEnable: true, // v1: hardcoded; per-project override is a future column on instances
 	}
 
 	writeJSON(w, info)
 }
-

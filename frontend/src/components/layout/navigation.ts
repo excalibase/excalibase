@@ -9,13 +9,10 @@ import {
   Settings,
   Table2,
   Code,
-  Code2,
   Package,
   Users,
   Shield,
   KeyRound,
-  Globe,
-  Radio,
   BarChart2,
   Zap,
   Bell,
@@ -26,6 +23,7 @@ import {
   Hash,
   AlertTriangle,
   FileText,
+  FolderOpen,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -76,6 +74,7 @@ export const PROJECT_NAV: NavSection[] = [
   // { key: 'edge-functions', label: 'Edge Functions', icon: Code2, to: 'edge-functions' },
   // { key: 'api', label: 'API', icon: Globe, to: 'api' },
   // { key: 'realtime', label: 'Realtime', icon: Radio, to: 'realtime' },
+  { key: 'storage', label: 'Storage', icon: FolderOpen, to: 'storage' },
   {
     key: 'monitoring',
     label: 'Monitoring',

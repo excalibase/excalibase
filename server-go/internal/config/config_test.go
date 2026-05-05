@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+const (
+	testCORSFmt = "parseCORSOrigins: got %v, want %v"
+	testBCom    = "http://b.com"
+	testACom    = "http://a.com"
+)
+
+
 func TestLoadDefaults(t *testing.T) {
 	cfg := Load()
 	if cfg.Port != "24005" {
@@ -112,31 +119,31 @@ func TestParseCORSOriginsSingle(t *testing.T) {
 	got := parseCORSOrigins("http://localhost:3000")
 	want := []string{"http://localhost:3000"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseCORSOrigins: got %v, want %v", got, want)
+		t.Errorf(testCORSFmt, got, want)
 	}
 }
 
 func TestParseCORSOriginsMultiple(t *testing.T) {
 	got := parseCORSOrigins("http://a.com,http://b.com")
-	want := []string{"http://a.com", "http://b.com"}
+	want := []string{testACom, testBCom}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseCORSOrigins: got %v, want %v", got, want)
+		t.Errorf(testCORSFmt, got, want)
 	}
 }
 
 func TestParseCORSOriginsTrimsSpaces(t *testing.T) {
 	got := parseCORSOrigins("http://a.com, http://b.com ")
-	want := []string{"http://a.com", "http://b.com"}
+	want := []string{testACom, testBCom}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseCORSOrigins: got %v, want %v", got, want)
+		t.Errorf(testCORSFmt, got, want)
 	}
 }
 
 func TestParseCORSOriginsSkipsEmptyParts(t *testing.T) {
 	got := parseCORSOrigins("http://a.com,,http://b.com")
-	want := []string{"http://a.com", "http://b.com"}
+	want := []string{testACom, testBCom}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseCORSOrigins: got %v, want %v", got, want)
+		t.Errorf(testCORSFmt, got, want)
 	}
 }
 

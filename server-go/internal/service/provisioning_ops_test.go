@@ -9,7 +9,16 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
+
+const (
+	testOpsDB       = "ops-db"
+	testOpsDBNS     = "org1-ops-db"
+	testExpectedErr = "expected error"
+	testOpsDBPostgres = "ops-db-postgres"
+)
+
 
 func setupOpsTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore, *k8s.MockClient) {
 	t.Helper()
@@ -22,10 +31,10 @@ func setupOpsTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore,
 
 	port := 5432
 	store.Save(&domain.DatabaseInstance{
-		ProjectID: "ops-db", OrgID: "org1", Namespace: "org1-ops-db",
+		ProjectID: testOpsDB, OrgID: "org1", Namespace: testOpsDBNS,
 		DBType: domain.PostgreSQL, Tier: domain.Free, Status: "ACTIVE",
 		Host: "h.local", Port: &port, DatabaseName: "app",
-		Username: "app", Password: "oldpass", SSLMode: "require",
+		Username: "app", Password: testutil.FixturePassword(testOpsDB), SSLMode: "require",
 	})
 	mock.ExecOutput["org1-ops-db/ops-db-postgres-1"] = "log line 1\nlog line 2"
 
@@ -35,7 +44,7 @@ func setupOpsTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore,
 func TestSetMaintenanceWindow(t *testing.T) {
 	svc, store, _ := setupOpsTest(t)
 
-	err := svc.SetMaintenanceWindow("ops-db", domain.MaintenanceWindowConfig{
+	err := svc.SetMaintenanceWindow(testOpsDB, domain.MaintenanceWindowConfig{
 		Window:          "0 3 * * 0",
 		DurationMinutes: 60,
 		AutoUpgrade:     true,
@@ -44,7 +53,7 @@ func TestSetMaintenanceWindow(t *testing.T) {
 		t.Fatalf("SetMaintenanceWindow: %v", err)
 	}
 
-	inst, _ := store.FindByProjectID("ops-db")
+	inst, _ := store.FindByProjectID(testOpsDB)
 	if inst.MaintenanceWindow != "0 3 * * 0" {
 		t.Errorf("window: got %s", inst.MaintenanceWindow)
 	}
@@ -59,11 +68,11 @@ func TestSetMaintenanceWindow(t *testing.T) {
 func TestGetMaintenanceWindow(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 
-	svc.SetMaintenanceWindow("ops-db", domain.MaintenanceWindowConfig{
+	svc.SetMaintenanceWindow(testOpsDB, domain.MaintenanceWindowConfig{
 		Window: "0 4 * * 1", DurationMinutes: 30, AutoUpgrade: false,
 	})
 
-	cfg, err := svc.GetMaintenanceWindow("ops-db")
+	cfg, err := svc.GetMaintenanceWindow(testOpsDB)
 	if err != nil {
 		t.Fatalf("GetMaintenanceWindow: %v", err)
 	}
@@ -79,14 +88,14 @@ func TestGetMaintenanceWindowNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 	_, err := svc.GetMaintenanceWindow("nonexistent")
 	if err == nil {
-		t.Error("expected error")
+		t.Error(testExpectedErr)
 	}
 }
 
 func TestGetLogs(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 
-	logs, err := svc.GetLogs(context.Background(), "ops-db", 50)
+	logs, err := svc.GetLogs(context.Background(), testOpsDB, 50)
 	if err != nil {
 		t.Fatalf("GetLogs: %v", err)
 	}
@@ -99,7 +108,7 @@ func TestGetLogsNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 	_, err := svc.GetLogs(context.Background(), "nope", 50)
 	if err == nil {
-		t.Error("expected error")
+		t.Error(testExpectedErr)
 	}
 }
 
@@ -107,11 +116,11 @@ func TestRotateCredentials(t *testing.T) {
 	svc, store, mock := setupOpsTest(t)
 	mock.ExecOutput["org1-ops-db/ops-db-postgres-1"] = "ALTER ROLE"
 
-	creds, err := svc.RotateCredentials(context.Background(), "ops-db")
+	creds, err := svc.RotateCredentials(context.Background(), testOpsDB)
 	if err != nil {
 		t.Fatalf("RotateCredentials: %v", err)
 	}
-	if creds.Password == "oldpass" {
+	if creds.Password == testutil.FixturePassword(testOpsDB) {
 		t.Error("password should have changed")
 	}
 	if creds.Password == "" {
@@ -119,8 +128,8 @@ func TestRotateCredentials(t *testing.T) {
 	}
 
 	// Verify stored
-	inst, _ := store.FindByProjectID("ops-db")
-	if inst.Password == "oldpass" {
+	inst, _ := store.FindByProjectID(testOpsDB)
+	if inst.Password == testutil.FixturePassword(testOpsDB) {
 		t.Error("stored password should be updated")
 	}
 }
@@ -129,7 +138,7 @@ func TestRotateCredentialsNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 	_, err := svc.RotateCredentials(context.Background(), "nope")
 	if err == nil {
-		t.Error("expected error")
+		t.Error(testExpectedErr)
 	}
 }
 
@@ -143,12 +152,12 @@ func TestUpdateParametersPatchesCRD(t *testing.T) {
 
 	// Seed CRD
 	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
-		ProjectID: "ops-db", Namespace: "org1-ops-db",
+		ProjectID: testOpsDB, Namespace: testOpsDBNS,
 		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
 	})
-	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
+	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
 
-	err := svc.UpdateParameters(context.Background(), "ops-db", map[string]string{
+	err := svc.UpdateParameters(context.Background(), testOpsDB, map[string]string{
 		"max_connections":  "200",
 		"work_mem":         "64MB",
 	})
@@ -157,7 +166,7 @@ func TestUpdateParametersPatchesCRD(t *testing.T) {
 	}
 
 	// Verify CRD was patched
-	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", "ops-db-postgres")
+	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
 	spec := got.Object["spec"].(map[string]interface{})
 	pg := spec["postgresql"].(map[string]interface{})
 	params := pg["parameters"].(map[string]interface{})
@@ -173,14 +182,14 @@ func TestUpdateParametersNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 	err := svc.UpdateParameters(context.Background(), "nope", map[string]string{"k": "v"})
 	if err == nil {
-		t.Error("expected error")
+		t.Error(testExpectedErr)
 	}
 }
 
 func TestEnablePooler(t *testing.T) {
 	svc, store, mock := setupOpsTest(t)
 
-	err := svc.EnablePooler(context.Background(), "ops-db", domain.PoolerSettings{
+	err := svc.EnablePooler(context.Background(), testOpsDB, domain.PoolerSettings{
 		Enabled:  true,
 		PoolMode: "transaction",
 		PoolSize: 20,
@@ -195,7 +204,7 @@ func TestEnablePooler(t *testing.T) {
 	}
 
 	// Verify instance updated
-	inst, _ := store.FindByProjectID("ops-db")
+	inst, _ := store.FindByProjectID(testOpsDB)
 	if inst.PoolerEnabled == nil || !*inst.PoolerEnabled {
 		t.Error("poolerEnabled should be true")
 	}
@@ -205,7 +214,7 @@ func TestEnablePoolerNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 	err := svc.EnablePooler(context.Background(), "nope", domain.PoolerSettings{Enabled: true})
 	if err == nil {
-		t.Error("expected error")
+		t.Error(testExpectedErr)
 	}
 }
 
@@ -226,18 +235,18 @@ func TestResizeStorage(t *testing.T) {
 
 	// Seed CRD
 	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
-		ProjectID: "ops-db", Namespace: "org1-ops-db",
+		ProjectID: testOpsDB, Namespace: testOpsDBNS,
 		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
 	})
-	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
+	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
 
-	err := svc.ResizeStorage(context.Background(), "ops-db", "20Gi")
+	err := svc.ResizeStorage(context.Background(), testOpsDB, "20Gi")
 	if err != nil {
 		t.Fatalf("ResizeStorage: %v", err)
 	}
 
 	// Verify CRD was patched with new storage size
-	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", "ops-db-postgres")
+	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
 	spec := got.Object["spec"].(map[string]interface{})
 	storage := spec["storage"].(map[string]interface{})
 	if storage["size"] != "20Gi" {
@@ -257,17 +266,17 @@ func TestUpgradeVersion(t *testing.T) {
 	svc, _, mock := setupOpsTest(t)
 
 	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
-		ProjectID: "ops-db", Namespace: "org1-ops-db",
+		ProjectID: testOpsDB, Namespace: testOpsDBNS,
 		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
 	})
-	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
+	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
 
-	err := svc.UpgradeVersion(context.Background(), "ops-db", "17")
+	err := svc.UpgradeVersion(context.Background(), testOpsDB, "17")
 	if err != nil {
 		t.Fatalf("UpgradeVersion: %v", err)
 	}
 
-	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", "ops-db-postgres")
+	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
 	spec := got.Object["spec"].(map[string]interface{})
 	if spec["imageName"] != "ghcr.io/cloudnative-pg/postgresql:17" {
 		t.Errorf("imageName: got %v", spec["imageName"])
@@ -278,14 +287,14 @@ func TestUpgradeVersionNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 	err := svc.UpgradeVersion(context.Background(), "nope", "17")
 	if err == nil {
-		t.Error("expected error")
+		t.Error(testExpectedErr)
 	}
 }
 
 func TestCloneDatabase(t *testing.T) {
 	svc, _, mock := setupOpsTest(t)
 
-	resp, err := svc.CloneDatabase(context.Background(), "ops-db", domain.CloneRequest{
+	resp, err := svc.CloneDatabase(context.Background(), testOpsDB, domain.CloneRequest{
 		NewProjectName: "ops-db-clone",
 	})
 	if err != nil {
@@ -318,7 +327,7 @@ func TestCloneDatabaseNotFound(t *testing.T) {
 		NewProjectName: "clone",
 	})
 	if err == nil {
-		t.Error("expected error")
+		t.Error(testExpectedErr)
 	}
 }
 
@@ -326,26 +335,26 @@ func TestScaleTier(t *testing.T) {
 	svc, store, mock := setupOpsTest(t)
 
 	// Seed a CRD so GetCRD succeeds
-	mock.SetupPostgreSQLMock("ops-db", "org1-ops-db", 1)
+	mock.SetupPostgreSQLMock(testOpsDB, testOpsDBNS, 1)
 	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
-		ProjectID: "ops-db", Namespace: "org1-ops-db",
+		ProjectID: testOpsDB, Namespace: testOpsDBNS,
 		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
 	})
-	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", clusterObj)
+	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
 
-	err := svc.ScaleTier(context.Background(), "ops-db", domain.Standard)
+	err := svc.ScaleTier(context.Background(), testOpsDB, domain.Standard)
 	if err != nil {
 		t.Fatalf("ScaleTier: %v", err)
 	}
 
 	// Verify store updated
-	inst, _ := store.FindByProjectID("ops-db")
+	inst, _ := store.FindByProjectID(testOpsDB)
 	if inst.Tier != domain.Standard {
 		t.Errorf("tier: got %s, want STANDARD", inst.Tier)
 	}
 
 	// Verify CRD was patched with new instances/resources
-	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, "org1-ops-db", "ops-db-postgres")
+	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
 	spec := got.Object["spec"].(map[string]interface{})
 	if spec["instances"] != int64(3) {
 		t.Errorf("CRD instances: got %v, want 3", spec["instances"])

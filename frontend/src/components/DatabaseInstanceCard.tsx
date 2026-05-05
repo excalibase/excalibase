@@ -9,7 +9,7 @@ import { ChevronDown, ChevronUp, Database, Trash2, Info, Activity, Key } from 'l
 import { useDeprovisionDatabase } from '../hooks/useProvisioning';
 
 interface DatabaseInstanceCardProps {
-  instance: DatabaseInstance;
+  readonly instance: DatabaseInstance;
 }
 
 type TabType = 'details' | 'monitoring' | 'credentials';
@@ -176,10 +176,10 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
 }
 
 interface TabButtonProps {
-  icon: React.ReactNode;
-  label: string;
-  active: boolean;
-  onClick: () => void;
+  readonly icon: React.ReactNode;
+  readonly label: string;
+  readonly active: boolean;
+  readonly onClick: () => void;
 }
 
 function TabButton({ icon, label, active, onClick }: TabButtonProps) {

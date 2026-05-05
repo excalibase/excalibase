@@ -11,6 +11,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+const testK8SFailDB = "k8s-fail-db"
+
+
 // --- Error path tests: what happens when K8s operations fail ---
 
 func TestMetricsWhenPodExecFails(t *testing.T) {
@@ -132,17 +135,17 @@ func TestDeprovisionWhenK8sFails(t *testing.T) {
 	svc := NewProvisioningService(store, factory, mock)
 
 	store.Save(&domain.DatabaseInstance{
-		ProjectID: "k8s-fail-db", Namespace: "ns", DBType: domain.PostgreSQL, Status: "ACTIVE",
+		ProjectID: testK8SFailDB, Namespace: "ns", DBType: domain.PostgreSQL, Status: "ACTIVE",
 	})
 
 	// Deprovision should succeed even if K8s namespace delete fails
 	// (it logs a warning and still removes from store)
-	err := svc.Deprovision(context.Background(), "k8s-fail-db")
+	err := svc.Deprovision(context.Background(), testK8SFailDB)
 	if err != nil {
 		t.Fatalf("Deprovision should succeed: %v", err)
 	}
 
-	inst, _ := store.FindByProjectID("k8s-fail-db")
+	inst, _ := store.FindByProjectID(testK8SFailDB)
 	if inst != nil {
 		t.Error("instance should be removed from store even if K8s fails")
 	}

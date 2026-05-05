@@ -17,6 +17,15 @@ import (
 	"time"
 )
 
+const (
+	testDeployFmt = "deploy: %v"
+	testAPIBase    = "https://api.test/"
+	testInvokeFmt  = "invoke: %v"
+	testValueA     = "value-A"
+	testValueB     = "value-B"
+)
+
+
 // Tests in this file spin up the real Deno runtime as a subprocess and talk to
 // it over HTTP via the Go RuntimeClient. Run with:
 //
@@ -152,7 +161,7 @@ func TestIntegration_DeployAndInvoke_SingleFile(t *testing.T) {
 		ID:        "hello",
 		Name:      "Hello Integration",
 		Files: []File{
-			{Path: "index.ts", Content: `export default async (req: Request): Promise<Response> => {
+			{Path: testIndexTS, Content: `export default async (req: Request): Promise<Response> => {
   const { name = "anon" } = await req.json().catch(() => ({}));
   return Response.json({ greeting: "hi " + name });
 };`},
@@ -160,20 +169,20 @@ func TestIntegration_DeployAndInvoke_SingleFile(t *testing.T) {
 	}
 	code, err := fn.Bundle()
 	if err != nil {
-		t.Fatalf("bundle: %v", err)
+		t.Fatalf(testBundleFmt, err)
 	}
 	if err := client.Deploy(context.Background(), DeployRequest{
 		ID: fn.RuntimeID(), Code: code, Secrets: map[string]string{},
 	}); err != nil {
-		t.Fatalf("deploy: %v", err)
+		t.Fatalf(testDeployFmt, err)
 	}
 
 	resp, err := client.Invoke(context.Background(), fn.RuntimeID(), InvokeRequest{
-		Method: "POST", URL: "https://api.test/", Headers: map[string]string{"Content-Type": "application/json"},
+		Method: "POST", URL: testAPIBase, Headers: map[string]string{"Content-Type": "application/json"},
 		Body: `{"name":"world"}`,
 	})
 	if err != nil {
-		t.Fatalf("invoke: %v", err)
+		t.Fatalf(testInvokeFmt, err)
 	}
 	if resp.Status != 200 {
 		t.Errorf("status: %d", resp.Status)
@@ -201,13 +210,13 @@ func TestIntegration_DeployAndInvoke_MultiFile(t *testing.T) {
 		Name:      "Greet",
 		Files: []File{
 			{Path: "utils.ts", Content: `export const shout = (msg: string) => msg.toUpperCase() + '!!'`},
-			{Path: "index.ts", Content: `import { shout } from './utils.ts'
+			{Path: testIndexTS, Content: `import { shout } from './utils.ts'
 export default (req: Request) => Response.json({ yell: shout('hello') })`},
 		},
 	}
 	code, err := fn.Bundle()
 	if err != nil {
-		t.Fatalf("bundle: %v", err)
+		t.Fatalf(testBundleFmt, err)
 	}
 	if err := client.Deploy(context.Background(), DeployRequest{
 		ID: fn.RuntimeID(), Code: code,
@@ -216,10 +225,10 @@ export default (req: Request) => Response.json({ yell: shout('hello') })`},
 	}
 
 	resp, err := client.Invoke(context.Background(), fn.RuntimeID(), InvokeRequest{
-		Method: "POST", URL: "https://api.test/", Body: "{}",
+		Method: "POST", URL: testAPIBase, Body: "{}",
 	})
 	if err != nil {
-		t.Fatalf("invoke: %v", err)
+		t.Fatalf(testInvokeFmt, err)
 	}
 	if !strings.Contains(resp.Body, "HELLO!!") {
 		t.Errorf("expected shouted 'HELLO!!' in body, got: %s", resp.Body)
@@ -237,7 +246,7 @@ func TestIntegration_SecretsInjectedAsDenoEnv(t *testing.T) {
 		ID:        "envread",
 		Name:      "Env Read",
 		Files: []File{
-			{Path: "index.ts", Content: `export default (req: Request) => {
+			{Path: testIndexTS, Content: `export default (req: Request) => {
   const stripeKey = Deno.env.get('STRIPE_KEY');
   const url = Deno.env.get('EXCALIBASE_URL');
   return Response.json({ stripeKey, url });
@@ -246,7 +255,7 @@ func TestIntegration_SecretsInjectedAsDenoEnv(t *testing.T) {
 	}
 	code, err := fn.Bundle()
 	if err != nil {
-		t.Fatalf("bundle: %v", err)
+		t.Fatalf(testBundleFmt, err)
 	}
 
 	secrets := map[string]string{
@@ -256,14 +265,14 @@ func TestIntegration_SecretsInjectedAsDenoEnv(t *testing.T) {
 	if err := client.Deploy(context.Background(), DeployRequest{
 		ID: fn.RuntimeID(), Code: code, Secrets: secrets,
 	}); err != nil {
-		t.Fatalf("deploy: %v", err)
+		t.Fatalf(testDeployFmt, err)
 	}
 
 	resp, err := client.Invoke(context.Background(), fn.RuntimeID(), InvokeRequest{
-		Method: "POST", URL: "https://api.test/", Body: "{}",
+		Method: "POST", URL: testAPIBase, Body: "{}",
 	})
 	if err != nil {
-		t.Fatalf("invoke: %v", err)
+		t.Fatalf(testInvokeFmt, err)
 	}
 	var body struct {
 		StripeKey string `json:"stripeKey"`
@@ -290,19 +299,19 @@ func TestIntegration_SecretsAreIsolatedBetweenProjects(t *testing.T) {
 	code := `export default (req: Request) => Response.json({ secret: Deno.env.get('THE_KEY') })`
 
 	// Project A
-	fnA := &Function{ProjectID: "proj_isolateA", ID: "h", Files: []File{{Path: "index.ts", Content: "export default " + code[15:]}}}
+	fnA := &Function{ProjectID: "proj_isolateA", ID: "h", Files: []File{{Path: testIndexTS, Content: "export default " + code[15:]}}}
 	_ = fnA // use the more direct deploy below
 	if err := client.Deploy(context.Background(), DeployRequest{
 		ID:      "proj_isolateA__h",
 		Code:    "globalThis.__excalibase_default = " + code[15:] + ";",
-		Secrets: map[string]string{"THE_KEY": "value-A"},
+		Secrets: map[string]string{"THE_KEY": testValueA},
 	}); err != nil {
 		t.Fatalf("deploy A: %v", err)
 	}
 	if err := client.Deploy(context.Background(), DeployRequest{
 		ID:      "proj_isolateB__h",
 		Code:    "globalThis.__excalibase_default = " + code[15:] + ";",
-		Secrets: map[string]string{"THE_KEY": "value-B"},
+		Secrets: map[string]string{"THE_KEY": testValueB},
 	}); err != nil {
 		t.Fatalf("deploy B: %v", err)
 	}
@@ -315,13 +324,13 @@ func TestIntegration_SecretsAreIsolatedBetweenProjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invoke B: %v", err)
 	}
-	if !strings.Contains(respA.Body, "value-A") {
+	if !strings.Contains(respA.Body, testValueA) {
 		t.Errorf("A should see value-A: %s", respA.Body)
 	}
-	if !strings.Contains(respB.Body, "value-B") {
+	if !strings.Contains(respB.Body, testValueB) {
 		t.Errorf("B should see value-B: %s", respB.Body)
 	}
-	if strings.Contains(respA.Body, "value-B") || strings.Contains(respB.Body, "value-A") {
+	if strings.Contains(respA.Body, testValueB) || strings.Contains(respB.Body, testValueA) {
 		t.Error("secrets leaked across projects")
 	}
 }
@@ -343,7 +352,7 @@ func TestIntegration_ConcurrentInvokesNoRace(t *testing.T) {
 		ID:        "echo",
 		Name:      "Echo",
 		Files: []File{
-			{Path: "index.ts", Content: `export default async (req: Request): Promise<Response> => {
+			{Path: testIndexTS, Content: `export default async (req: Request): Promise<Response> => {
   const { n } = await req.json();
   // small async pause so requests overlap inside the worker
   await new Promise(r => setTimeout(r, 20));
@@ -353,10 +362,10 @@ func TestIntegration_ConcurrentInvokesNoRace(t *testing.T) {
 	}
 	code, err := fn.Bundle()
 	if err != nil {
-		t.Fatalf("bundle: %v", err)
+		t.Fatalf(testBundleFmt, err)
 	}
 	if err := client.Deploy(context.Background(), DeployRequest{ID: fn.RuntimeID(), Code: code}); err != nil {
-		t.Fatalf("deploy: %v", err)
+		t.Fatalf(testDeployFmt, err)
 	}
 
 	const N = 25
@@ -370,7 +379,7 @@ func TestIntegration_ConcurrentInvokesNoRace(t *testing.T) {
 		go func(i int) {
 			body := fmt.Sprintf(`{"n":%d}`, i)
 			resp, err := client.Invoke(context.Background(), fn.RuntimeID(), InvokeRequest{
-				Method: "POST", URL: "https://api.test/", Body: body,
+				Method: "POST", URL: testAPIBase, Body: body,
 			})
 			if err != nil {
 				results <- result{i, false}
@@ -415,7 +424,7 @@ func TestIntegration_ResponseStatusHeadersPassthrough(t *testing.T) {
 	fn := &Function{
 		ProjectID: "proj_passthru", ID: "status", Name: "Status",
 		Files: []File{
-			{Path: "index.ts", Content: `export default (req: Request) => new Response('nope', {
+			{Path: testIndexTS, Content: `export default (req: Request) => new Response('nope', {
   status: 418,
   headers: { 'X-Excalibase-Teapot': 'yes', 'Content-Type': 'text/plain' },
 });`},
@@ -423,12 +432,12 @@ func TestIntegration_ResponseStatusHeadersPassthrough(t *testing.T) {
 	}
 	code, _ := fn.Bundle()
 	if err := client.Deploy(context.Background(), DeployRequest{ID: fn.RuntimeID(), Code: code}); err != nil {
-		t.Fatalf("deploy: %v", err)
+		t.Fatalf(testDeployFmt, err)
 	}
 
 	resp, err := client.Invoke(context.Background(), fn.RuntimeID(), InvokeRequest{Method: "GET"})
 	if err != nil {
-		t.Fatalf("invoke: %v", err)
+		t.Fatalf(testInvokeFmt, err)
 	}
 	if resp.Status != 418 {
 		t.Errorf("status: %d, want 418", resp.Status)

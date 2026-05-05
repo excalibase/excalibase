@@ -6,7 +6,7 @@ import { Card, CardTitle } from './Card';
 import { X } from 'lucide-react';
 
 interface ProvisioningFormProps {
-  onClose: () => void;
+  readonly onClose: () => void;
 }
 
 export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
@@ -24,7 +24,7 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
     try {
       await provision.mutateAsync(formData);
       onClose();
-    } catch (error) {
+    } catch {
       // Error is shown via React Query's error state
     }
   };
@@ -44,10 +44,11 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-text-primary mb-2">
+            <label htmlFor="provision-project-name" className="block text-sm font-medium text-text-primary mb-2">
               Project Name
             </label>
             <input
+              id="provision-project-name"
               type="text"
               value={formData.projectName}
               onChange={(e) => setFormData({ ...formData, projectName: e.target.value })}
@@ -61,10 +62,11 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-text-primary mb-2">
+            <label htmlFor="provision-org-id" className="block text-sm font-medium text-text-primary mb-2">
               Organization ID
             </label>
             <input
+              id="provision-org-id"
               type="text"
               value={formData.orgId}
               onChange={(e) => setFormData({ ...formData, orgId: e.target.value })}
@@ -75,10 +77,11 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-text-primary mb-2">
+            <label htmlFor="provision-db-type" className="block text-sm font-medium text-text-primary mb-2">
               Database Type
             </label>
             <select
+              id="provision-db-type"
               value={formData.databaseType}
               onChange={(e) =>
                 setFormData({ ...formData, databaseType: e.target.value as typeof formData.databaseType })
@@ -92,9 +95,9 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-text-primary mb-2">
+            <p className="block text-sm font-medium text-text-primary mb-2">
               Tier
-            </label>
+            </p>
             <div className="grid grid-cols-3 gap-3">
               {([TierType.FREE, TierType.STANDARD, TierType.ENTERPRISE] as const).map((tier) => (
                 <button
@@ -134,7 +137,7 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
           {provision.isError && (
             <div className="bg-red-900/20 border border-color-error rounded-lg p-3">
               <p className="text-color-error text-sm">
-                {(provision.error as Error).message}
+                {provision.error instanceof Error ? provision.error.message : String(provision.error)}
               </p>
             </div>
           )}

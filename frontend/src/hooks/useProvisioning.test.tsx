@@ -70,7 +70,7 @@ describe('useProvisioning hooks', () => {
     vi.mocked(api.post).mockResolvedValueOnce({ data: { projectId: 'p' } } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useProvisionBYOC(), { wrapper: Wrapper });
-    result.current.mutate({ projectName: 'p', orgId: 'o', host: 'localhost', port: 5432, databaseName: 'db', username: 'u', password: 'p' });
+    result.current.mutate({ projectName: 'p', orgId: 'o', host: 'db.example.com', port: 5432, database: 'db', username: 'u', password: 'p' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalledWith('/provision/byoc', expect.objectContaining({ projectName: 'p' }));
   });
@@ -88,7 +88,7 @@ describe('useProvisioning hooks', () => {
     vi.mocked(api.post).mockResolvedValueOnce({ data: {} } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useConfigureBackup(), { wrapper: Wrapper });
-    result.current.mutate({ projectId: 'p1', config: { backupEnabled: true, schedule: '0 2 * * *', retentionDays: 7 } });
+    result.current.mutate({ projectId: 'p1', config: { schedule: '0 2 * * *', retention: 7 } });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalledWith('/provision/p1/backup/configure', expect.any(Object));
   });
@@ -114,7 +114,7 @@ describe('useProvisioning hooks', () => {
     vi.mocked(api.post).mockResolvedValueOnce({ data: {} } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useRestoreFromBackup('p1'), { wrapper: Wrapper });
-    result.current.mutate('backup-1');
+    result.current.mutate({ newProjectId: 'restored-p', backupId: 'backup-1' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalled();
   });

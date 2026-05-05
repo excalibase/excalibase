@@ -44,3 +44,11 @@ func HasPermission(role string, perm Permission) bool {
 	}
 	return perms[perm]
 }
+
+// IsValidPlatformRole reports whether role is a known platform-level role.
+// Used to validate user input that names a role — never trust an arbitrary
+// string as a role assignment.
+func IsValidPlatformRole(role string) bool {
+	_, ok := rolePermissions[role]
+	return ok
+}

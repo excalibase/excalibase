@@ -70,11 +70,11 @@ describe('useEdgeFunctions hooks', () => {
     vi.mocked(api.post).mockResolvedValueOnce({ data: 'ok' } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useInvokeEdgeFunction('p1'), { wrapper: Wrapper });
-    result.current.mutate({ fnId: 'fn1', body: { hello: 'world' } });
+    result.current.mutate({ fnId: 'fn1', body: '{"hello":"world"}' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalledWith(
       '/projects/p1/functions/fn1/invoke',
-      { hello: 'world' },
+      '{"hello":"world"}',
       expect.any(Object),
     );
   });

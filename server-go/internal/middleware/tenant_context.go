@@ -23,8 +23,8 @@ const tenantIDKey contextKey = "tenant_id"
 // When projectId is absent (e.g. on routes without the param), the middleware
 // is a no-op and passes the request through untouched.
 //
-// TODO: OTEL integration pending. Once a direct dependency on
-// go.opentelemetry.io/otel is added, set a span attribute:
+// OTEL integration: once go.opentelemetry.io/otel is a direct dependency,
+// set a span attribute here for structured tracing:
 //
 //	trace.SpanFromContext(r.Context()).SetAttributes(attribute.String("tenant.id", projectID))
 //

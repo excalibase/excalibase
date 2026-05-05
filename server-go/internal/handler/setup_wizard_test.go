@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,8 +10,14 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/go-chi/chi/v5"
 )
+
+const (
+	testSetupStatusPath = "/api/auth/setup-status"
+)
+
 
 // wireSetupStatus mounts /api/auth/setup-status on the given base router,
 // sharing the store the register router was wired with so status reflects
@@ -18,7 +25,7 @@ import (
 func wireSetupStatus(t *testing.T, base chi.Router, store *sqlitestore.Store) chi.Router {
 	t.Helper()
 	h := NewAuthHandler(store, store)
-	base.Get("/api/auth/setup-status", h.GetSetupStatus)
+	base.Get(testSetupStatusPath, h.GetSetupStatus)
 	return base
 }
 
@@ -28,9 +35,9 @@ func wireSetupStatus(t *testing.T, base chi.Router, store *sqlitestore.Store) ch
 func TestRegister_FirstUser_BecomesPlatformAdmin(t *testing.T) {
 	r, store := setupRegisterRouter(t)
 
-	body := `{"username":"founder","email":"founder@example.com","password":"Founder123!"}`
-	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	body := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q}`, testutil.FixturePassword("founder"))
+	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
+	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -54,9 +61,9 @@ func TestRegister_SecondUser_StaysAsRegularUser(t *testing.T) {
 	r, store := setupRegisterRouter(t)
 
 	// First registration — becomes platform_admin
-	first := `{"username":"founder","email":"founder@example.com","password":"Founder123!"}`
-	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(first))
-	req.Header.Set("Content-Type", "application/json")
+	first := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q}`, testutil.FixturePassword("founder"))
+	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(first))
+	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
@@ -64,9 +71,9 @@ func TestRegister_SecondUser_StaysAsRegularUser(t *testing.T) {
 	}
 
 	// Second registration — should stay as plain "user"
-	second := `{"username":"newcomer","email":"newcomer@example.com","password":"Newcomer123!"}`
-	req2 := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(second))
-	req2.Header.Set("Content-Type", "application/json")
+	second := fmt.Sprintf(`{"username":"newcomer","email":"newcomer@example.com","password":%q}`, testutil.FixturePassword("newcomer"))
+	req2 := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(second))
+	req2.Header.Set(sharedContentType, sharedMIMEJSON)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusCreated {
@@ -90,9 +97,9 @@ func TestRegister_SecondUser_StaysAsRegularUser(t *testing.T) {
 func TestRegister_FirstUser_CreatesDefaultOrg(t *testing.T) {
 	r, store := setupRegisterRouter(t)
 
-	body := `{"username":"founder","email":"founder@example.com","password":"Founder123!"}`
-	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	body := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q}`, testutil.FixturePassword("founder"))
+	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
+	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
@@ -132,16 +139,16 @@ func TestRegister_FirstUser_CreatesDefaultOrg(t *testing.T) {
 func TestRegister_SecondUser_DoesNotCreateAnotherOrg(t *testing.T) {
 	r, store := setupRegisterRouter(t)
 
-	first := `{"username":"founder","email":"founder@example.com","password":"Founder123!"}`
+	first := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q}`, testutil.FixturePassword("founder"))
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(first))
-	req.Header.Set("Content-Type", "application/json")
+	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(first))
+	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	r.ServeHTTP(w, req)
 
-	second := `{"username":"newcomer","email":"newcomer@example.com","password":"Newcomer123!"}`
+	second := fmt.Sprintf(`{"username":"newcomer","email":"newcomer@example.com","password":%q}`, testutil.FixturePassword("newcomer"))
 	w2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(second))
-	req2.Header.Set("Content-Type", "application/json")
+	req2 := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(second))
+	req2.Header.Set(sharedContentType, sharedMIMEJSON)
 	r.ServeHTTP(w2, req2)
 
 	orgs, _ := store.FindAllOrgs(t.Context())
@@ -158,7 +165,7 @@ func TestSetupStatus_NoUsers_ReturnsHasAdminFalse(t *testing.T) {
 	r2 := wireSetupStatus(t, r, store)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/auth/setup-status", nil)
+	req := httptest.NewRequest("GET", testSetupStatusPath, nil)
 	r2.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -182,13 +189,13 @@ func TestSetupStatus_AfterRegister_ReturnsHasAdminTrue(t *testing.T) {
 		ID:           "admin-1",
 		Username:     "admin",
 		Email:        "admin@example.com",
-		PasswordHash: "hash",
+		PasswordHash: testutil.FixturePasswordHash(),
 		Role:         "platform_admin",
 		Active:       true,
 	})
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/auth/setup-status", nil)
+	req := httptest.NewRequest("GET", testSetupStatusPath, nil)
 	r2.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {

@@ -1,25 +1,30 @@
 interface SkeletonProps {
-  className?: string;
+  readonly className?: string;
 }
 
 export function Skeleton({ className = '' }: SkeletonProps) {
   return <div className={`animate-pulse bg-bg-secondary rounded ${className}`} />;
 }
 
-export function SkeletonTable({ rows = 5, cols = 4 }: { rows?: number; cols?: number }) {
+export function SkeletonTable({ rows = 5, cols = 4 }: { readonly rows?: number; readonly cols?: number }) {
   return (
     <div className="space-y-3" data-testid="skeleton-table">
       {/* Header */}
       <div className="flex gap-4">
         {Array.from({ length: cols }).map((_, i) => (
-          <Skeleton key={i} className="h-4 flex-1" />
+          // Static skeleton placeholders have no stable id; index is acceptable
+          // here because this list is purely decorative and never reordered.
+          // eslint-disable-next-line react/no-array-index-key
+          <Skeleton key={`hdr-${i}`} className="h-4 flex-1" />
         ))}
       </div>
       {/* Rows */}
       {Array.from({ length: rows }).map((_, ri) => (
-        <div key={ri} className="flex gap-4">
+        // eslint-disable-next-line react/no-array-index-key
+        <div key={`row-${ri}`} className="flex gap-4">
           {Array.from({ length: cols }).map((_, ci) => (
-            <Skeleton key={ci} className="h-8 flex-1" />
+            // eslint-disable-next-line react/no-array-index-key
+            <Skeleton key={`cell-${ri}-${ci}`} className="h-8 flex-1" />
           ))}
         </div>
       ))}

@@ -63,7 +63,7 @@ export function RolesPage() {
                 <td className="px-4 py-3">{role.superuser ? <span className="text-yellow-400 text-xs font-medium">YES</span> : <span className="text-text-tertiary text-xs">no</span>}</td>
                 <td className="px-4 py-3">{role.createDb ? <span className="text-green-400 text-xs">yes</span> : <span className="text-text-tertiary text-xs">no</span>}</td>
                 <td className="px-4 py-3">{role.createRole ? <span className="text-green-400 text-xs">yes</span> : <span className="text-text-tertiary text-xs">no</span>}</td>
-                <td className="px-4 py-3 text-text-secondary text-xs">{role.connLimit === -1 ? 'unlimited' : role.connLimit}</td>
+                <td className="px-4 py-3 text-text-secondary text-xs">{role.connLimit === -1 ? 'unlimited' : String(role.connLimit)}</td>
                 <td className="px-4 py-3 text-right">
                   {!role.superuser && (
                     <button
@@ -99,20 +99,20 @@ export function RolesPage() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Role Name</label>
-            <input type="text" value={name} onChange={e => setName(e.target.value)}
+            <label htmlFor="role-name-input" className="block text-sm font-medium text-text-secondary mb-1">Role Name</label>
+            <input id="role-name-input" type="text" value={name} onChange={e => setName(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
               data-testid="role-name-input" autoFocus />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+            <label htmlFor="role-password-input" className="block text-sm font-medium text-text-secondary mb-1">Password</label>
+            <input id="role-password-input" type="password" value={password} onChange={e => setPassword(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
               data-testid="role-password-input" />
           </div>
           <label className="flex items-center gap-2 text-sm text-text-secondary">
             <input type="checkbox" checked={canLogin} onChange={e => setCanLogin(e.target.checked)} className="rounded" />
-            Can Login
+            {' '}Can Login
           </label>
         </div>
       </SidePanel>

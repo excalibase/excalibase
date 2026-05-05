@@ -26,10 +26,17 @@ All four support both deployment modes:
 - **Running the platform outside Kubernetes (dev laptop, VM, different
   cluster) but want workloads provisioned on a target Kubernetes cluster?** →
   matrix 2.
-- **Don't want Kubernetes at all, single host?** → matrix 3.
-- **Don't want Kubernetes, remote Docker host?** → matrix 4.
+- **Don't want Kubernetes, single host you control?** → matrix 3.
+- **Don't want Kubernetes, dedicated remote Docker host?** → matrix 4.
 
-Matrices 3 and 4 require the Docker provisioner (`PROVISIONER_MODE=docker`).
+> **Single-host ≠ Docker-only.** Single-node K8s distros (k0s, k3s, RKE2,
+> MicroK8s — including rootless) are first-class production targets for
+> matrix 1. Docker mode trades operational simplicity for a weaker isolation
+> surface — the daemon is root-equivalent and there are no per-project
+> namespaces or NetworkPolicies. Pick K8s mode when you want that surface;
+> pick Docker mode when you want fewer moving parts.
+
+Matrices 3 and 4 use the Docker provisioner (`PROVISIONER_MODE=docker`).
 K8s provisioner is the default.
 
 ## Shared environment variables

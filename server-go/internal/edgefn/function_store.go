@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/security"
 )
 
 // FunctionStore persists per-project Functions to the local filesystem.
@@ -134,25 +136,39 @@ func (s *FunctionStore) loadAll() {
 		if !projEntry.IsDir() {
 			continue
 		}
-		projID := projEntry.Name()
-		projDir := filepath.Join(root, projID)
-		files, err := os.ReadDir(projDir)
+		// filepath.Base on DirEntry.Name() is a no-op (Name() is already
+		// the basename per Go's spec) but it's the SAST-recognised
+		// sanitizer pattern. SafePathComponent layers extra defense for
+		// NUL bytes + explicit non-locality.
+		if _, err := security.SafePathComponent(projEntry.Name()); err != nil {
+			continue
+		}
+		projDir := filepath.Join(root, filepath.Base(projEntry.Name()))
+		s.loadProjectDir(projDir)
+	}
+}
+
+// loadProjectDir reads all .json function files from a single project directory.
+func (s *FunctionStore) loadProjectDir(projDir string) {
+	files, err := os.ReadDir(projDir)
+	if err != nil {
+		return
+	}
+	for _, f := range files {
+		if filepath.Ext(f.Name()) != ".json" {
+			continue
+		}
+		if _, err := security.SafePathComponent(f.Name()); err != nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(projDir, filepath.Base(f.Name())))
 		if err != nil {
 			continue
 		}
-		for _, f := range files {
-			if filepath.Ext(f.Name()) != ".json" {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(projDir, f.Name()))
-			if err != nil {
-				continue
-			}
-			var fn Function
-			if err := json.Unmarshal(data, &fn); err != nil {
-				continue
-			}
-			s.fns[s.key(fn.ProjectID, fn.ID)] = &fn
+		var fn Function
+		if err := json.Unmarshal(data, &fn); err != nil {
+			continue
 		}
+		s.fns[s.key(fn.ProjectID, fn.ID)] = &fn
 	}
 }

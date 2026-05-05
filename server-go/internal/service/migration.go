@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/security"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -40,8 +41,11 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 		[]string{"psql", "-U", "postgres", "-d", "app", "-c", req.SQL})
 	elapsed := time.Since(start).Milliseconds()
 
-	// Compute checksum from SQL
-	checksum := fmt.Sprintf("%x", md5.Sum([]byte(req.SQL)))[:8]
+	// Compute checksum from SQL — display-only fingerprint, not used
+	// for security. Truncated SHA-256 (chosen over MD5 to satisfy SAST
+	// rules even though either would be functionally equivalent for
+	// 8-char change detection).
+	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(req.SQL)))[:8]
 
 	record := &domain.MigrationRecord{
 		ID:              migID,
@@ -92,7 +96,10 @@ func (s *MigrationService) ListMigrations(projectID string) ([]domain.MigrationR
 		if filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, _ := os.ReadFile(filepath.Join(dir, e.Name()))
+		if _, err := security.SafePathComponent(e.Name()); err != nil {
+			continue
+		}
+		data, _ := os.ReadFile(filepath.Join(dir, filepath.Base(e.Name())))
 		var rec domain.MigrationRecord
 		if json.Unmarshal(data, &rec) == nil {
 			result = append(result, rec)

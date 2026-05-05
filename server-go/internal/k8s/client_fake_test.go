@@ -13,6 +13,15 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+const (
+	testNS        = "test-ns"
+	testDelNS     = "del-ns"
+	testSecNS     = "sec-ns"
+	testGroup     = "test.io"
+	testAPIVersion = "test.io/v1"
+)
+
+
 // newFakeClient builds a Client backed by in-memory fakes (no real K8s needed).
 func newFakeClient(objects ...runtime.Object) *Client {
 	cs := fake.NewSimpleClientset(objects...)
@@ -32,15 +41,15 @@ func TestClientCreateNamespace(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	if err := c.CreateNamespace(ctx, "test-ns"); err != nil {
+	if err := c.CreateNamespace(ctx, testNS); err != nil {
 		t.Fatalf("CreateNamespace: %v", err)
 	}
 
-	ns, err := c.clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
+	ns, err := c.clientset.CoreV1().Namespaces().Get(ctx, testNS, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("namespace should exist: %v", err)
 	}
-	if ns.Name != "test-ns" {
+	if ns.Name != testNS {
 		t.Errorf("name: got %s", ns.Name)
 	}
 }
@@ -60,12 +69,12 @@ func TestClientDeleteNamespace(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	c.CreateNamespace(ctx, "del-ns")
-	if err := c.DeleteNamespace(ctx, "del-ns"); err != nil {
+	c.CreateNamespace(ctx, testDelNS)
+	if err := c.DeleteNamespace(ctx, testDelNS); err != nil {
 		t.Fatalf("DeleteNamespace: %v", err)
 	}
 
-	_, err := c.clientset.CoreV1().Namespaces().Get(ctx, "del-ns", metav1.GetOptions{})
+	_, err := c.clientset.CoreV1().Namespaces().Get(ctx, testDelNS, metav1.GetOptions{})
 	if err == nil {
 		t.Error("namespace should be deleted")
 	}
@@ -77,8 +86,8 @@ func TestClientCreateAndGetSecret(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	c.CreateNamespace(ctx, "sec-ns")
-	err := c.CreateSecret(ctx, "sec-ns", "my-secret", map[string][]byte{
+	c.CreateNamespace(ctx, testSecNS)
+	err := c.CreateSecret(ctx, testSecNS, "my-secret", map[string][]byte{
 		"username": []byte("app"),
 		"password": []byte("s3cret"),
 	})
@@ -86,7 +95,7 @@ func TestClientCreateAndGetSecret(t *testing.T) {
 		t.Fatalf("CreateSecret: %v", err)
 	}
 
-	data, err := c.GetSecret(ctx, "sec-ns", "my-secret")
+	data, err := c.GetSecret(ctx, testSecNS, "my-secret")
 	if err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
@@ -111,14 +120,14 @@ func TestClientGetSecretNotFound(t *testing.T) {
 func TestClientGetPods(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "db-postgres-1", Namespace: "test-ns",
+			Name: "db-postgres-1", Namespace: testNS,
 			Labels: map[string]string{"app": "postgres"},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	c := newFakeClient(pod)
 
-	pods, err := c.GetPods(context.Background(), "test-ns", "app=postgres")
+	pods, err := c.GetPods(context.Background(), testNS, "app=postgres")
 	if err != nil {
 		t.Fatalf("GetPods: %v", err)
 	}
@@ -204,10 +213,10 @@ func TestClientApplyCRD(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	gvr := schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "widgets"}
+	gvr := schema.GroupVersionResource{Group: testGroup, Version: "v1", Resource: "widgets"}
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "test.io/v1",
+			"apiVersion": testAPIVersion,
 			"kind":       "Widget",
 			"metadata":   map[string]interface{}{"name": "w1", "namespace": "ns"},
 			"spec":       map[string]interface{}{"size": "large"},
@@ -232,10 +241,10 @@ func TestClientApplyCRDUpdate(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	gvr := schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "widgets"}
+	gvr := schema.GroupVersionResource{Group: testGroup, Version: "v1", Resource: "widgets"}
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "test.io/v1",
+			"apiVersion": testAPIVersion,
 			"kind":       "Widget",
 			"metadata":   map[string]interface{}{"name": "w1", "namespace": "ns"},
 			"spec":       map[string]interface{}{"size": "small"},
@@ -261,10 +270,10 @@ func TestClientDeleteCRD(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	gvr := schema.GroupVersionResource{Group: "test.io", Version: "v1", Resource: "things"}
+	gvr := schema.GroupVersionResource{Group: testGroup, Version: "v1", Resource: "things"}
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "test.io/v1",
+			"apiVersion": testAPIVersion,
 			"kind":       "Thing",
 			"metadata":   map[string]interface{}{"name": "t1", "namespace": "ns"},
 		},

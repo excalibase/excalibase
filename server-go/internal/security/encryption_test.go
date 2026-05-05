@@ -1,9 +1,12 @@
 package security
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {
@@ -13,7 +16,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 		t.Fatalf("NewEncryptor: %v", err)
 	}
 
-	plaintext := []byte(`{"password":"secret123","host":"db.local"}`)
+	plaintext := []byte(fmt.Sprintf(`{"password":%q,"host":"db.local"}`, testutil.FixtureSecret("enc-test")))
 	encrypted, err := enc.Encrypt(plaintext)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)

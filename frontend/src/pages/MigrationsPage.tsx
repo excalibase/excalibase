@@ -3,7 +3,11 @@ import { useInstanceContext } from '../context/InstanceContext';
 import { useMigrations, useApplyMigration, type MigrationRequest } from '../hooks/useMigrations';
 import { CheckCircle, XCircle, Clock, ArrowUpDown, Plus, X } from 'lucide-react';
 
-function StatusBadge({ status }: { status: string }) {
+interface StatusBadgeProps {
+  readonly status: string;
+}
+
+function StatusBadge({ status }: StatusBadgeProps) {
   if (status === 'APPLIED') return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-green-900/20 text-green-400 border border-green-500/30">
       <CheckCircle className="w-3 h-3" /> Applied
@@ -28,7 +32,7 @@ export function MigrationsPage() {
   const { projectId } = useInstanceContext();
 
   const { data: migrations = [], isLoading } = useMigrations(projectId);
-  const { mutate: apply, isPending, data: lastResult, reset } = useApplyMigration(projectId);
+  const { mutate: apply, isPending, reset } = useApplyMigration(projectId);
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<MigrationRequest>({
@@ -69,7 +73,6 @@ export function MigrationsPage() {
 
   return (
     <div data-testid="migrations-page" className="max-w-5xl mx-auto space-y-6">
-      {/* New Migration button */}
       <div className="flex justify-end">
         {projectId && (
           <button
@@ -81,14 +84,12 @@ export function MigrationsPage() {
         )}
       </div>
 
-      {/* Toast */}
       {toast && (
         <div className={`p-3 rounded-lg text-sm border ${toast.ok ? 'bg-green-900/20 border-green-500/30 text-green-400' : 'bg-red-900/20 border-red-500/30 text-red-400'}`}>
           {toast.msg}
         </div>
       )}
 
-      {/* Migration history table */}
       <div className="bg-surface-card border border-border-primary rounded-xl overflow-hidden">
         <div className="px-6 py-4 border-b border-border-primary flex items-center gap-2">
           <ArrowUpDown className="w-4 h-4 text-text-tertiary" />
@@ -96,13 +97,15 @@ export function MigrationsPage() {
           <span className="ml-auto text-xs text-text-tertiary">{migrations.length} applied</span>
         </div>
 
-        {isLoading ? (
+        {isLoading && (
           <div className="p-12 text-center text-text-secondary text-sm">Loading…</div>
-        ) : migrations.length === 0 ? (
+        )}
+        {!isLoading && migrations.length === 0 && (
           <div className="p-12 text-center text-text-secondary text-sm">
             {projectId ? 'No migrations applied yet. Click "New Migration" to get started.' : 'Select an instance above.'}
           </div>
-        ) : (
+        )}
+        {!isLoading && migrations.length > 0 && (
           <table className="w-full text-sm">
             <thead>
               <tr className="text-text-tertiary border-b border-border-primary bg-bg-secondary text-left">
@@ -137,7 +140,6 @@ export function MigrationsPage() {
         )}
       </div>
 
-      {/* New Migration Modal */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="bg-surface-card border border-border-primary rounded-xl w-full max-w-2xl mx-4 shadow-2xl">
@@ -150,8 +152,9 @@ export function MigrationsPage() {
             <div className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs text-text-secondary mb-1 block">Version *</label>
+                  <label htmlFor="migration-version" className="text-xs text-text-secondary mb-1 block">Version *</label>
                   <input
+                    id="migration-version"
                     value={form.version}
                     onChange={(e) => setForm({ ...form, version: e.target.value })}
                     placeholder="e.g. V3"
@@ -159,8 +162,9 @@ export function MigrationsPage() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-text-secondary mb-1 block">Name *</label>
+                  <label htmlFor="migration-name" className="text-xs text-text-secondary mb-1 block">Name *</label>
                   <input
+                    id="migration-name"
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
                     placeholder="e.g. add_orders_table"
@@ -169,8 +173,9 @@ export function MigrationsPage() {
                 </div>
               </div>
               <div>
-                <label className="text-xs text-text-secondary mb-1 block">Description</label>
+                <label htmlFor="migration-desc" className="text-xs text-text-secondary mb-1 block">Description</label>
                 <input
+                  id="migration-desc"
                   value={form.description}
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
                   placeholder="Optional description"
@@ -178,8 +183,9 @@ export function MigrationsPage() {
                 />
               </div>
               <div>
-                <label className="text-xs text-text-secondary mb-1 block">SQL *</label>
+                <label htmlFor="migration-sql" className="text-xs text-text-secondary mb-1 block">SQL *</label>
                 <textarea
+                  id="migration-sql"
                   value={form.sql}
                   onChange={(e) => setForm({ ...form, sql: e.target.value })}
                   rows={10}

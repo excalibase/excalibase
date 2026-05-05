@@ -4,7 +4,10 @@ package schema
 
 import (
 	"context"
+	"database/sql"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
 
 // --- Tables CRUD ---
@@ -33,16 +36,7 @@ func TestIntegration_CreateTable(t *testing.T) {
 			t.Fatalf("CreateTable: %v", err)
 		}
 
-		tables, _ := introspector.GetTables(ctx, appDB, "public")
-		found := false
-		for _, tbl := range tables {
-			if tbl.Name == "test_create" {
-				found = true
-			}
-		}
-		if !found {
-			t.Error("table test_create not found after creation")
-		}
+		assertTableExists(t, introspector, appDB, ctx, "test_create")
 
 		cols, _ := introspector.GetColumns(ctx, appDB, "public", "test_create")
 		if len(cols) != 4 {
@@ -75,6 +69,29 @@ func TestIntegration_CreateTable(t *testing.T) {
 	})
 }
 
+// assertTableExists checks that a table with the given name exists in public schema.
+func assertTableExists(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name string) {
+	t.Helper()
+	tables, _ := i.GetTables(ctx, db, "public")
+	for _, tbl := range tables {
+		if tbl.Name == name {
+			return
+		}
+	}
+	t.Errorf("table %s not found after creation", name)
+}
+
+// assertTableAbsent checks that a table with the given name does not exist in public schema.
+func assertTableAbsent(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name string) {
+	t.Helper()
+	tables, _ := i.GetTables(ctx, db, "public")
+	for _, tbl := range tables {
+		if tbl.Name == name {
+			t.Errorf("table %s should not exist", name)
+		}
+	}
+}
+
 func TestIntegration_UpdateTable(t *testing.T) {
 	_, appDB, cleanup := setupPG(t)
 	defer cleanup()
@@ -82,7 +99,6 @@ func TestIntegration_UpdateTable(t *testing.T) {
 	introspector := NewIntrospector()
 	ctx := context.Background()
 
-	// Create table first
 	req := CreateTableRequest{
 		Name:   "test_update",
 		Schema: "public",
@@ -99,17 +115,7 @@ func TestIntegration_UpdateTable(t *testing.T) {
 		if err := introspector.UpdateTable(ctx, appDB, "public", "test_update", UpdateTableRequest{NewName: &newName}); err != nil {
 			t.Fatalf("rename: %v", err)
 		}
-
-		tables, _ := introspector.GetTables(ctx, appDB, "public")
-		found := false
-		for _, tbl := range tables {
-			if tbl.Name == "test_renamed" {
-				found = true
-			}
-		}
-		if !found {
-			t.Error("renamed table not found")
-		}
+		assertTableExists(t, introspector, appDB, ctx, "test_renamed")
 	})
 
 	t.Run("enable RLS", func(t *testing.T) {
@@ -117,16 +123,7 @@ func TestIntegration_UpdateTable(t *testing.T) {
 		if err := introspector.UpdateTable(ctx, appDB, "public", "test_renamed", UpdateTableRequest{RlsEnabled: &enabled}); err != nil {
 			t.Fatalf("enable RLS: %v", err)
 		}
-		// Verify RLS is enabled by checking pg_class
-		var rlsEnabled bool
-		err := appDB.QueryRowContext(ctx,
-			"SELECT relrowsecurity FROM pg_class WHERE relname = 'test_renamed'").Scan(&rlsEnabled)
-		if err != nil {
-			t.Fatalf("check RLS: %v", err)
-		}
-		if !rlsEnabled {
-			t.Error("RLS should be enabled")
-		}
+		assertRLSEnabled(t, appDB, ctx, "test_renamed")
 	})
 
 	t.Run("set comment", func(t *testing.T) {
@@ -135,6 +132,20 @@ func TestIntegration_UpdateTable(t *testing.T) {
 			t.Fatalf("set comment: %v", err)
 		}
 	})
+}
+
+// assertRLSEnabled checks that row-level security is enabled on a table.
+func assertRLSEnabled(t *testing.T, db *sql.DB, ctx context.Context, tableName string) {
+	t.Helper()
+	var rlsEnabled bool
+	err := db.QueryRowContext(ctx,
+		"SELECT relrowsecurity FROM pg_class WHERE relname = $1", tableName).Scan(&rlsEnabled)
+	if err != nil {
+		t.Fatalf("check RLS: %v", err)
+	}
+	if !rlsEnabled {
+		t.Error("RLS should be enabled")
+	}
 }
 
 func TestIntegration_DropTable(t *testing.T) {
@@ -159,17 +170,10 @@ func TestIntegration_DropTable(t *testing.T) {
 		if err := introspector.DropTable(ctx, appDB, "public", "test_drop", false); err != nil {
 			t.Fatalf("DropTable: %v", err)
 		}
-
-		tables, _ := introspector.GetTables(ctx, appDB, "public")
-		for _, tbl := range tables {
-			if tbl.Name == "test_drop" {
-				t.Error("table should be dropped")
-			}
-		}
+		assertTableAbsent(t, introspector, appDB, ctx, "test_drop")
 	})
 
 	t.Run("drop with cascade", func(t *testing.T) {
-		// Create parent and child tables
 		parent := CreateTableRequest{
 			Name: "parent_tbl", Schema: "public",
 			Columns: []CreateColumnDef{{Name: "id", Type: "serial", PrimaryKey: true}},
@@ -203,20 +207,7 @@ func TestIntegration_AddColumn(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("AddColumn: %v", err)
 		}
-
-		cols, _ := introspector.GetColumns(ctx, appDB, "public", "test_cols")
-		found := false
-		for _, c := range cols {
-			if c.Name == "description" {
-				found = true
-				if !c.Nullable {
-					t.Error("column should be nullable")
-				}
-			}
-		}
-		if !found {
-			t.Error("column not found")
-		}
+		assertColumnNullable(t, introspector, appDB, ctx, "test_cols", "description", true)
 	})
 
 	t.Run("add column with default", func(t *testing.T) {
@@ -235,6 +226,22 @@ func TestIntegration_AddColumn(t *testing.T) {
 			t.Fatalf("AddColumn unique: %v", err)
 		}
 	})
+}
+
+// assertColumnNullable checks that the named column has the expected nullable setting.
+func assertColumnNullable(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, table, colName string, wantNullable bool) {
+	t.Helper()
+	cols, _ := i.GetColumns(ctx, db, "public", table)
+	for _, c := range cols {
+		if c.Name != colName {
+			continue
+		}
+		if c.Nullable != wantNullable {
+			t.Errorf("column %s: expected nullable=%v, got %v", colName, wantNullable, c.Nullable)
+		}
+		return
+	}
+	t.Errorf("column %s not found", colName)
 }
 
 func TestIntegration_AlterColumn(t *testing.T) {
@@ -259,17 +266,7 @@ func TestIntegration_AlterColumn(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("rename column: %v", err)
 		}
-
-		cols, _ := introspector.GetColumns(ctx, appDB, "public", "test_alter")
-		found := false
-		for _, c := range cols {
-			if c.Name == "full_name" {
-				found = true
-			}
-		}
-		if !found {
-			t.Error("renamed column not found")
-		}
+		assertColumnExists(t, introspector, appDB, ctx, "test_alter", "full_name")
 	})
 
 	t.Run("change type", func(t *testing.T) {
@@ -306,6 +303,18 @@ func TestIntegration_AlterColumn(t *testing.T) {
 			t.Fatalf("drop default: %v", err)
 		}
 	})
+}
+
+// assertColumnExists checks that the named column is present in the given table.
+func assertColumnExists(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, table, colName string) {
+	t.Helper()
+	cols, _ := i.GetColumns(ctx, db, "public", table)
+	for _, c := range cols {
+		if c.Name == colName {
+			return
+		}
+	}
+	t.Errorf("column %s not found in table %s", colName, table)
 }
 
 func TestIntegration_DropColumn(t *testing.T) {
@@ -350,57 +359,76 @@ func TestIntegration_Roles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetRoles: %v", err)
 		}
-		for _, r := range roles {
-			if r.Name == "pg_signal_backend" || r.Name == "pg_read_all_stats" {
-				t.Errorf("system role %s should be excluded", r.Name)
-			}
-		}
-		// should have superuser and excalibase_app
-		names := map[string]bool{}
-		for _, r := range roles {
-			names[r.Name] = true
-		}
-		if !names["superuser"] {
-			t.Error("expected 'superuser' role")
-		}
-		if !names["excalibase_app"] {
-			t.Error("expected 'excalibase_app' role")
-		}
+		assertSystemRolesExcluded(t, roles)
+		assertExpectedRolesPresent(t, roles)
 	})
 
 	t.Run("create and drop role", func(t *testing.T) {
-		pwd := "testpass123"
+		pwd := testutil.FixturePassword("schema-role")
 		if err := introspector.CreateRole(ctx, superDB, CreateRoleRequest{
 			Name: "test_role", Password: &pwd, Login: true,
 		}); err != nil {
 			t.Fatalf("CreateRole: %v", err)
 		}
-
-		roles, _ := introspector.GetRoles(ctx, superDB)
-		found := false
-		for _, r := range roles {
-			if r.Name == "test_role" {
-				found = true
-				if !r.Login {
-					t.Error("role should have login")
-				}
-			}
-		}
-		if !found {
-			t.Error("created role not found")
-		}
+		assertRoleLogin(t, introspector, superDB, ctx, "test_role", true)
 
 		if err := introspector.DropRole(ctx, superDB, "test_role"); err != nil {
 			t.Fatalf("DropRole: %v", err)
 		}
-
-		roles, _ = introspector.GetRoles(ctx, superDB)
-		for _, r := range roles {
-			if r.Name == "test_role" {
-				t.Error("role should be dropped")
-			}
-		}
+		assertRoleAbsent(t, introspector, superDB, ctx, "test_role")
 	})
+}
+
+// assertSystemRolesExcluded verifies known system roles are absent from the list.
+func assertSystemRolesExcluded(t *testing.T, roles []RoleInfo) {
+	t.Helper()
+	for _, r := range roles {
+		if r.Name == "pg_signal_backend" || r.Name == "pg_read_all_stats" {
+			t.Errorf("system role %s should be excluded", r.Name)
+		}
+	}
+}
+
+// assertExpectedRolesPresent verifies that the fixture roles exist.
+func assertExpectedRolesPresent(t *testing.T, roles []RoleInfo) {
+	t.Helper()
+	names := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		names[r.Name] = true
+	}
+	if !names["superuser"] {
+		t.Error("expected 'superuser' role")
+	}
+	if !names["excalibase_app"] {
+		t.Error("expected 'excalibase_app' role")
+	}
+}
+
+// assertRoleLogin checks that the named role has the expected login capability.
+func assertRoleLogin(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name string, wantLogin bool) {
+	t.Helper()
+	roles, _ := i.GetRoles(ctx, db)
+	for _, r := range roles {
+		if r.Name != name {
+			continue
+		}
+		if r.Login != wantLogin {
+			t.Errorf("role %s: expected login=%v, got %v", name, wantLogin, r.Login)
+		}
+		return
+	}
+	t.Errorf("role %s not found", name)
+}
+
+// assertRoleAbsent verifies a role no longer exists.
+func assertRoleAbsent(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name string) {
+	t.Helper()
+	roles, _ := i.GetRoles(ctx, db)
+	for _, r := range roles {
+		if r.Name == name {
+			t.Errorf("role %s should be dropped", name)
+		}
+	}
 }
 
 // --- Extensions ---
@@ -417,41 +445,37 @@ func TestIntegration_Extensions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetExtensions: %v", err)
 		}
-		// plpgsql is installed by default
-		found := false
-		for _, e := range exts {
-			if e.Name == "plpgsql" {
-				found = true
-				if e.InstalledVersion == nil {
-					t.Error("plpgsql should have installed version")
-				}
-			}
-		}
-		if !found {
-			t.Error("plpgsql not found")
-		}
+		assertExtensionInstalled(t, exts, "plpgsql")
 	})
 
 	t.Run("create and drop extension", func(t *testing.T) {
 		if err := introspector.CreateExtension(ctx, superDB, "pg_trgm", ""); err != nil {
 			t.Fatalf("CreateExtension: %v", err)
 		}
-
-		exts, _ := introspector.GetExtensions(ctx, superDB)
-		found := false
-		for _, e := range exts {
-			if e.Name == "pg_trgm" && e.InstalledVersion != nil {
-				found = true
-			}
-		}
-		if !found {
-			t.Error("pg_trgm not installed")
-		}
+		assertExtensionInstalled(t, mustGetExtensions(t, introspector, superDB, ctx), "pg_trgm")
 
 		if err := introspector.DropExtension(ctx, superDB, "pg_trgm", false); err != nil {
 			t.Fatalf("DropExtension: %v", err)
 		}
 	})
+}
+
+// assertExtensionInstalled checks that the named extension is installed.
+func assertExtensionInstalled(t *testing.T, exts []ExtensionInfo, name string) {
+	t.Helper()
+	for _, e := range exts {
+		if e.Name == name && e.InstalledVersion != nil {
+			return
+		}
+	}
+	t.Errorf("extension %s not found or not installed", name)
+}
+
+// mustGetExtensions returns extensions or fails the test.
+func mustGetExtensions(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context) []ExtensionInfo {
+	t.Helper()
+	exts, _ := i.GetExtensions(ctx, db)
+	return exts
 }
 
 // --- Policies ---
@@ -463,7 +487,6 @@ func TestIntegration_Policies(t *testing.T) {
 	introspector := NewIntrospector()
 	ctx := context.Background()
 
-	// Create a table owned by appDB user, then enable RLS
 	introspector.CreateTable(ctx, appDB, CreateTableRequest{
 		Name: "policy_test", Schema: "public",
 		Columns: []CreateColumnDef{
@@ -486,40 +509,48 @@ func TestIntegration_Policies(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("CreatePolicy: %v", err)
 		}
-
-		policies, err := introspector.GetPolicies(ctx, appDB, "public")
-		if err != nil {
-			t.Fatalf("GetPolicies: %v", err)
-		}
-		found := false
-		for _, p := range policies {
-			if p.Name == "policy_test_select" {
-				found = true
-				if p.Command != "SELECT" {
-					t.Errorf("expected command SELECT, got %s", p.Command)
-				}
-				if !p.Permissive {
-					t.Error("policy should be permissive")
-				}
-			}
-		}
-		if !found {
-			t.Error("policy not found")
-		}
+		assertPolicyPresent(t, introspector, appDB, ctx, "policy_test_select", "SELECT", true)
 	})
 
 	t.Run("drop policy", func(t *testing.T) {
 		if err := introspector.DropPolicy(ctx, appDB, "policy_test", "policy_test_select"); err != nil {
 			t.Fatalf("DropPolicy: %v", err)
 		}
-
-		policies, _ := introspector.GetPolicies(ctx, appDB, "public")
-		for _, p := range policies {
-			if p.Name == "policy_test_select" {
-				t.Error("policy should be dropped")
-			}
-		}
+		assertPolicyAbsent(t, introspector, appDB, ctx, "policy_test_select")
 	})
+}
+
+// assertPolicyPresent checks that a policy with the given name, command, and permissive setting exists.
+func assertPolicyPresent(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name, command string, permissive bool) {
+	t.Helper()
+	policies, err := i.GetPolicies(ctx, db, "public")
+	if err != nil {
+		t.Fatalf("GetPolicies: %v", err)
+	}
+	for _, p := range policies {
+		if p.Name != name {
+			continue
+		}
+		if p.Command != command {
+			t.Errorf("policy %s: expected command %s, got %s", name, command, p.Command)
+		}
+		if p.Permissive != permissive {
+			t.Errorf("policy %s: expected permissive=%v, got %v", name, permissive, p.Permissive)
+		}
+		return
+	}
+	t.Errorf("policy %s not found", name)
+}
+
+// assertPolicyAbsent verifies that a policy no longer exists.
+func assertPolicyAbsent(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name string) {
+	t.Helper()
+	policies, _ := i.GetPolicies(ctx, db, "public")
+	for _, p := range policies {
+		if p.Name == name {
+			t.Errorf("policy %s should be dropped", name)
+		}
+	}
 }
 
 // --- Functions ---
@@ -543,26 +574,7 @@ func TestIntegration_Functions(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("CreateFunction: %v", err)
 		}
-
-		funcs, err := introspector.GetFunctions(ctx, appDB, "public")
-		if err != nil {
-			t.Fatalf("GetFunctions: %v", err)
-		}
-		found := false
-		for _, f := range funcs {
-			if f.Name == "add_numbers" {
-				found = true
-				if f.Language != "sql" {
-					t.Errorf("expected language sql, got %s", f.Language)
-				}
-				if f.Volatility != "IMMUTABLE" {
-					t.Errorf("expected IMMUTABLE, got %s", f.Volatility)
-				}
-			}
-		}
-		if !found {
-			t.Error("function not found")
-		}
+		assertFunctionProperties(t, introspector, appDB, ctx, "add_numbers", "sql", "IMMUTABLE")
 	})
 
 	t.Run("create plpgsql function", func(t *testing.T) {
@@ -583,12 +595,39 @@ func TestIntegration_Functions(t *testing.T) {
 		if err := introspector.DropFunction(ctx, appDB, "public", "add_numbers", "integer, integer"); err != nil {
 			t.Fatalf("DropFunction: %v", err)
 		}
-
-		funcs, _ := introspector.GetFunctions(ctx, appDB, "public")
-		for _, f := range funcs {
-			if f.Name == "add_numbers" {
-				t.Error("function should be dropped")
-			}
-		}
+		assertFunctionAbsent(t, introspector, appDB, ctx, "add_numbers")
 	})
+}
+
+// assertFunctionProperties checks language and volatility for a named function.
+func assertFunctionProperties(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name, language, volatility string) {
+	t.Helper()
+	funcs, err := i.GetFunctions(ctx, db, "public")
+	if err != nil {
+		t.Fatalf("GetFunctions: %v", err)
+	}
+	for _, f := range funcs {
+		if f.Name != name {
+			continue
+		}
+		if f.Language != language {
+			t.Errorf("function %s: expected language %s, got %s", name, language, f.Language)
+		}
+		if f.Volatility != volatility {
+			t.Errorf("function %s: expected volatility %s, got %s", name, volatility, f.Volatility)
+		}
+		return
+	}
+	t.Errorf("function %s not found", name)
+}
+
+// assertFunctionAbsent verifies that a function no longer exists.
+func assertFunctionAbsent(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name string) {
+	t.Helper()
+	funcs, _ := i.GetFunctions(ctx, db, "public")
+	for _, f := range funcs {
+		if f.Name == name {
+			t.Errorf("function %s should be dropped", name)
+		}
+	}
 }

@@ -1,9 +1,9 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { useInstances } from '../hooks/useProvisioning';
 
 interface InstanceContextType {
-  projectId: string;
-  setProjectId: (id: string) => void;
+  readonly projectId: string;
+  readonly setProjectId: (id: string) => void;
 }
 
 const InstanceContext = createContext<InstanceContextType>({
@@ -13,7 +13,7 @@ const InstanceContext = createContext<InstanceContextType>({
 
 export const useInstanceContext = () => useContext(InstanceContext);
 
-export function InstanceProvider({ children }: { children: React.ReactNode }) {
+export function InstanceProvider({ children }: { readonly children: React.ReactNode }) {
   const [projectId, setProjectId] = useState('');
   const { data: instances = [] } = useInstances();
 
@@ -24,8 +24,13 @@ export function InstanceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [instances, projectId]);
 
+  const value = useMemo<InstanceContextType>(
+    () => ({ projectId, setProjectId }),
+    [projectId],
+  );
+
   return (
-    <InstanceContext.Provider value={{ projectId, setProjectId }}>
+    <InstanceContext.Provider value={value}>
       {children}
     </InstanceContext.Provider>
   );

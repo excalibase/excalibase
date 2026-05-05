@@ -9,6 +9,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const testProjABC = "proj-abc"
+
+
 // newReqWithChiParam simulates a chi-routed request by seeding the chi
 // RouteContext with the given URL params. This mirrors how chi.URLParam
 // behaves inside a real router without needing to stand one up.
@@ -31,7 +34,7 @@ func TestTenantContext_ExtractsProjectID(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := newReqWithChiParam(t, map[string]string{"projectId": "proj-abc"})
+	req := newReqWithChiParam(t, map[string]string{"projectId": testProjABC})
 	rr := httptest.NewRecorder()
 
 	TenantContext(next).ServeHTTP(rr, req)
@@ -39,8 +42,8 @@ func TestTenantContext_ExtractsProjectID(t *testing.T) {
 	if !seenOK {
 		t.Fatal("tenant not propagated into request context")
 	}
-	if seenTenant != "proj-abc" {
-		t.Errorf("tenant id: got %q, want %q", seenTenant, "proj-abc")
+	if seenTenant != testProjABC {
+		t.Errorf("tenant id: got %q, want %q", seenTenant, testProjABC)
 	}
 	if rr.Code != http.StatusOK {
 		t.Errorf("status: got %d, want %d", rr.Code, http.StatusOK)

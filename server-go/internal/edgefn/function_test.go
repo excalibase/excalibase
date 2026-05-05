@@ -5,13 +5,22 @@ import (
 	"testing"
 )
 
+const (
+	testIndexTS       = "index.ts"
+	testBundleFmt     = "Bundle: %v"
+	testUtilsTS       = "utils.ts"
+	testHoistMissing  = "default handler hoist missing"
+	testDefaultHandler = "export default () => new Response('ok')"
+)
+
+
 // --- Function.Validate ---
 
 func TestFunction_Validate_RequiresProjectID(t *testing.T) {
 	fn := &Function{
 		ID:    "hello",
 		Name:  "Hello",
-		Files: []File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Files: []File{{Path: testIndexTS, Content: testDefaultHandler}},
 	}
 	if err := fn.Validate(); err == nil || !strings.Contains(err.Error(), "project") {
 		t.Errorf("expected project id error, got: %v", err)
@@ -23,7 +32,7 @@ func TestFunction_Validate_RequiresValidID(t *testing.T) {
 		ProjectID: "proj_test0001",
 		ID:        "bad id with space",
 		Name:      "Bad",
-		Files:     []File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Files:     []File{{Path: testIndexTS, Content: testDefaultHandler}},
 	}
 	if err := fn.Validate(); err == nil {
 		t.Error("expected invalid id error")
@@ -34,7 +43,7 @@ func TestFunction_Validate_RequiresName(t *testing.T) {
 	fn := &Function{
 		ProjectID: "proj_test0001",
 		ID:        "hello",
-		Files:     []File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Files:     []File{{Path: testIndexTS, Content: testDefaultHandler}},
 	}
 	if err := fn.Validate(); err == nil || !strings.Contains(err.Error(), "name") {
 		t.Errorf("expected name error, got: %v", err)
@@ -55,7 +64,7 @@ func TestFunction_Validate_RequiresIndexEntry(t *testing.T) {
 		Name:      "NoIndex",
 		Files:     []File{{Path: "helper.ts", Content: "export const x = 1"}},
 	}
-	if err := fn.Validate(); err == nil || !strings.Contains(err.Error(), "index.ts") {
+	if err := fn.Validate(); err == nil || !strings.Contains(err.Error(), testIndexTS) {
 		t.Errorf("expected index.ts error, got: %v", err)
 	}
 }
@@ -66,7 +75,7 @@ func TestFunction_Validate_RejectsBadFilePath(t *testing.T) {
 		ID:        "bad",
 		Name:      "Bad",
 		Files: []File{
-			{Path: "index.ts", Content: "export default () => new Response('ok')"},
+			{Path: testIndexTS, Content: testDefaultHandler},
 			{Path: "../escape.ts", Content: "export const x = 1"},
 		},
 	}
@@ -80,7 +89,7 @@ func TestFunction_Validate_RejectsEmptyFile(t *testing.T) {
 		ProjectID: "proj_test0001",
 		ID:        "empty",
 		Name:      "Empty",
-		Files:     []File{{Path: "index.ts", Content: ""}},
+		Files:     []File{{Path: testIndexTS, Content: ""}},
 	}
 	if err := fn.Validate(); err == nil {
 		t.Error("expected empty file error")
@@ -93,7 +102,7 @@ func TestFunction_Validate_RejectsOversizedBundle(t *testing.T) {
 		ProjectID: "proj_test0001",
 		ID:        "huge",
 		Name:      "Huge",
-		Files:     []File{{Path: "index.ts", Content: huge}},
+		Files:     []File{{Path: testIndexTS, Content: huge}},
 	}
 	if err := fn.Validate(); err == nil {
 		t.Error("expected oversized error")
@@ -105,7 +114,7 @@ func TestFunction_Validate_Happy(t *testing.T) {
 		ProjectID: "proj_test0001",
 		ID:        "hello",
 		Name:      "Hello",
-		Files:     []File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Files:     []File{{Path: testIndexTS, Content: testDefaultHandler}},
 	}
 	if err := fn.Validate(); err != nil {
 		t.Errorf("valid function should not fail validation: %v", err)
@@ -119,11 +128,11 @@ func TestFunction_Bundle_SingleFile(t *testing.T) {
 		ProjectID: "proj_test0001",
 		ID:        "hello",
 		Name:      "Hello",
-		Files:     []File{{Path: "index.ts", Content: "export default (req: Request) => new Response('hi')"}},
+		Files:     []File{{Path: testIndexTS, Content: "export default (req: Request) => new Response('hi')"}},
 	}
 	code, err := fn.Bundle()
 	if err != nil {
-		t.Fatalf("Bundle: %v", err)
+		t.Fatalf(testBundleFmt, err)
 	}
 	if !strings.Contains(code, "globalThis.__excalibase_default") {
 		t.Errorf("bundle should transform 'export default', got:\n%s", code)
@@ -139,20 +148,20 @@ func TestFunction_Bundle_MultiFileInlinedFromRelativeImport(t *testing.T) {
 		ID:        "greet",
 		Name:      "Greet",
 		Files: []File{
-			{Path: "utils.ts", Content: "export const greet = (n: string) => `Hi ${n}`"},
-			{Path: "index.ts", Content: "import { greet } from './utils.ts'\nexport default (req: Request) => new Response(greet('world'))"},
+			{Path: testUtilsTS, Content: "export const greet = (n: string) => `Hi ${n}`"},
+			{Path: testIndexTS, Content: "import { greet } from './utils.ts'\nexport default (req: Request) => new Response(greet('world'))"},
 		},
 	}
 	code, err := fn.Bundle()
 	if err != nil {
-		t.Fatalf("Bundle: %v", err)
+		t.Fatalf(testBundleFmt, err)
 	}
 	// esbuild strips TS types and inlines the helper. Identifier must survive.
 	if !strings.Contains(code, "greet") || !strings.Contains(code, "`Hi ${") {
 		t.Errorf("utils.ts content should be inlined, got:\n%s", code)
 	}
 	if !strings.Contains(code, "__excalibase_default") {
-		t.Error("default handler hoist missing")
+		t.Error(testHoistMissing)
 	}
 	if strings.Contains(code, "from \"./utils.ts\"") || strings.Contains(code, "from './utils.ts'") {
 		t.Errorf("relative imports must be resolved away, got:\n%s", code)
@@ -170,16 +179,16 @@ func TestFunction_Bundle_NamespaceImportResolves(t *testing.T) {
 		ID:        "ns-import",
 		Name:      "Namespace Import",
 		Files: []File{
-			{Path: "utils.ts", Content: "export const greet = () => 'hi'\nexport const bye = () => 'bye'"},
-			{Path: "index.ts", Content: "import * as utils from './utils.ts'\nexport default () => new Response(utils.greet() + utils.bye())"},
+			{Path: testUtilsTS, Content: "export const greet = () => 'hi'\nexport const bye = () => 'bye'"},
+			{Path: testIndexTS, Content: "import * as utils from './utils.ts'\nexport default () => new Response(utils.greet() + utils.bye())"},
 		},
 	}
 	code, err := fn.Bundle()
 	if err != nil {
-		t.Fatalf("Bundle: %v", err)
+		t.Fatalf(testBundleFmt, err)
 	}
 	if !strings.Contains(code, "__excalibase_default") {
-		t.Error("default handler hoist missing")
+		t.Error(testHoistMissing)
 	}
 	// Both identifiers must be referenced in the bundled output.
 	if !strings.Contains(code, "greet") || !strings.Contains(code, "bye") {
@@ -194,16 +203,16 @@ func TestFunction_Bundle_RenamedImportResolves(t *testing.T) {
 		ID:        "renamed",
 		Name:      "Renamed Import",
 		Files: []File{
-			{Path: "utils.ts", Content: "export const greet = () => 'hi'"},
-			{Path: "index.ts", Content: "import { greet as hello } from './utils.ts'\nexport default () => new Response(hello())"},
+			{Path: testUtilsTS, Content: "export const greet = () => 'hi'"},
+			{Path: testIndexTS, Content: "import { greet as hello } from './utils.ts'\nexport default () => new Response(hello())"},
 		},
 	}
 	code, err := fn.Bundle()
 	if err != nil {
-		t.Fatalf("Bundle: %v", err)
+		t.Fatalf(testBundleFmt, err)
 	}
 	if !strings.Contains(code, "__excalibase_default") {
-		t.Error("default handler hoist missing")
+		t.Error(testHoistMissing)
 	}
 	if !strings.Contains(code, "greet") {
 		t.Errorf("original export identifier missing after rename:\n%s", code)
@@ -219,12 +228,12 @@ func TestFunction_Bundle_PreservesRemoteImports(t *testing.T) {
 		ID:        "remote",
 		Name:      "Remote",
 		Files: []File{
-			{Path: "index.ts", Content: "import { z } from 'npm:zod@3'\nexport default () => new Response(typeof z)"},
+			{Path: testIndexTS, Content: "import { z } from 'npm:zod@3'\nexport default () => new Response(typeof z)"},
 		},
 	}
 	code, err := fn.Bundle()
 	if err != nil {
-		t.Fatalf("Bundle: %v", err)
+		t.Fatalf(testBundleFmt, err)
 	}
 	if !strings.Contains(code, "npm:zod") {
 		t.Errorf("remote import should pass through to runtime:\n%s", code)
@@ -239,7 +248,7 @@ func TestFunction_Bundle_MissingRelativeImportErrors(t *testing.T) {
 		ID:        "broken",
 		Name:      "Broken",
 		Files: []File{
-			{Path: "index.ts", Content: "import { x } from './missing.ts'\nexport default () => new Response(String(x))"},
+			{Path: testIndexTS, Content: "import { x } from './missing.ts'\nexport default () => new Response(String(x))"},
 		},
 	}
 	if _, err := fn.Bundle(); err == nil {
@@ -295,7 +304,7 @@ func TestFunctionStore_SaveAndGet(t *testing.T) {
 		ProjectID: "proj_p1",
 		ID:        "hello",
 		Name:      "Hello",
-		Files:     []File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+		Files:     []File{{Path: testIndexTS, Content: testDefaultHandler}},
 	}
 	if err := store.Save(fn); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -316,9 +325,9 @@ func TestFunctionStore_ScopedByProject(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFunctionStore(dir)
 	store.Save(&Function{ProjectID: "proj_p1", ID: "hello", Name: "P1 Hello",
-		Files: []File{{Path: "index.ts", Content: "export default () => new Response('p1')"}}})
+		Files: []File{{Path: testIndexTS, Content: "export default () => new Response('p1')"}}})
 	store.Save(&Function{ProjectID: "proj_p2", ID: "hello", Name: "P2 Hello",
-		Files: []File{{Path: "index.ts", Content: "export default () => new Response('p2')"}}})
+		Files: []File{{Path: testIndexTS, Content: "export default () => new Response('p2')"}}})
 
 	// Same ID in two projects must not collide
 	p1, _ := store.Get("proj_p1", "hello")
@@ -341,10 +350,10 @@ func TestFunctionStore_Versioning(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFunctionStore(dir)
 	fn := &Function{ProjectID: "proj_p1", ID: "v", Name: "V1",
-		Files: []File{{Path: "index.ts", Content: "export default () => new Response('v1')"}}}
+		Files: []File{{Path: testIndexTS, Content: "export default () => new Response('v1')"}}}
 	store.Save(fn)
 	fn2 := &Function{ProjectID: "proj_p1", ID: "v", Name: "V2",
-		Files: []File{{Path: "index.ts", Content: "export default () => new Response('v2')"}}}
+		Files: []File{{Path: testIndexTS, Content: "export default () => new Response('v2')"}}}
 	store.Save(fn2)
 	got, _ := store.Get("proj_p1", "v")
 	if got.Version != 2 {
@@ -359,7 +368,7 @@ func TestFunctionStore_Delete(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFunctionStore(dir)
 	store.Save(&Function{ProjectID: "proj_p1", ID: "bye", Name: "Bye",
-		Files: []File{{Path: "index.ts", Content: "export default () => new Response('bye')"}}})
+		Files: []File{{Path: testIndexTS, Content: "export default () => new Response('bye')"}}})
 	if err := store.Delete("proj_p1", "bye"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -373,7 +382,7 @@ func TestFunctionStore_LoadsFromDiskOnStart(t *testing.T) {
 	dir := t.TempDir()
 	store1 := NewFunctionStore(dir)
 	store1.Save(&Function{ProjectID: "proj_p1", ID: "persisted", Name: "Persisted",
-		Files: []File{{Path: "index.ts", Content: "export default () => new Response('p')"}}})
+		Files: []File{{Path: testIndexTS, Content: "export default () => new Response('p')"}}})
 
 	// Fresh store over same dir should see existing functions
 	store2 := NewFunctionStore(dir)

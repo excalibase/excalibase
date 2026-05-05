@@ -17,4 +17,4 @@ export function mutationToast(successMsg: string, errorMsg?: string) {
   };
 }
 
-export { toast };
+export { toast } from 'sonner';

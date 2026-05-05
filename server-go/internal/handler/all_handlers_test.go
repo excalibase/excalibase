@@ -14,8 +14,21 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/go-chi/chi/v5"
 )
+
+const (
+	testPGCreds          = "pg-creds"
+	testStatusBodyFmt    = "status: %d, body: %s"
+	testStatusFmt        = "status: %d"
+	testMigrationsPath   = "/api/provision/test-db/migrations/"
+	testParamGroupsPath  = "/api/parameter-groups/"
+	testParamGroupHighPerf = "/api/parameter-groups/high-perf"
+	testDBPodName        = "org1-test-db/test-db-postgres-1"
+	testProvisionPath    = "/provision"
+)
+
 
 func setupRouter(t *testing.T) chi.Router {
 	t.Helper()
@@ -82,7 +95,7 @@ func seedInstance(store *storage.FileSystemStore, mock *k8s.MockClient) {
 		ProjectID: "test-db", OrgID: "org1", DBType: domain.PostgreSQL,
 		Tier: domain.Free, Namespace: "org1-test-db", Status: "ACTIVE",
 		Host: "h.local", Port: &port, DatabaseName: "app",
-		Username: "user", Password: "pass", SSLMode: "require",
+		Username: "user", Password: testutil.FixturePassword(testPGCreds), SSLMode: "require",
 	})
 	mock.SetupPostgreSQLMock("test-db", "org1-test-db", 1)
 }
@@ -108,7 +121,7 @@ func TestMetricsCurrentHandler(t *testing.T) {
 
 	w := doRequest(r, "GET", "/api/provision/test-db/metrics/current", "")
 	if w.Code != 200 {
-		t.Errorf("status: %d, body: %s", w.Code, w.Body.String())
+		t.Errorf(testStatusBodyFmt, w.Code, w.Body.String())
 	}
 
 	var m domain.DatabaseMetrics
@@ -124,7 +137,7 @@ func TestMetricsHistoryHandler(t *testing.T) {
 
 	w := doRequest(r, "GET", "/api/provision/test-db/metrics/history?limit=5", "")
 	if w.Code != 200 {
-		t.Errorf("status: %d", w.Code)
+		t.Errorf(testStatusFmt, w.Code)
 	}
 }
 
@@ -136,7 +149,7 @@ func TestBackupTriggerHandler(t *testing.T) {
 
 	w := doRequest(r, "POST", "/api/provision/test-db/backup/trigger", "")
 	if w.Code != 200 {
-		t.Errorf("status: %d, body: %s", w.Code, w.Body.String())
+		t.Errorf(testStatusBodyFmt, w.Code, w.Body.String())
 	}
 }
 
@@ -146,7 +159,7 @@ func TestBackupListHandler(t *testing.T) {
 
 	w := doRequest(r, "GET", "/api/provision/test-db/backup/list", "")
 	if w.Code != 200 {
-		t.Errorf("status: %d, body: %s", w.Code, w.Body.String())
+		t.Errorf(testStatusBodyFmt, w.Code, w.Body.String())
 	}
 
 	// Frontend expects { backups: [], backupEnabled, schedule, retentionDays }
@@ -171,7 +184,7 @@ func TestPerformanceSummaryHandler(t *testing.T) {
 
 	w := doRequest(r, "GET", "/api/provision/test-db/performance/summary", "")
 	if w.Code != 200 {
-		t.Errorf("status: %d, body: %s", w.Code, w.Body.String())
+		t.Errorf(testStatusBodyFmt, w.Code, w.Body.String())
 	}
 }
 
@@ -181,7 +194,7 @@ func TestPerformanceTopQueriesHandler(t *testing.T) {
 
 	w := doRequest(r, "GET", "/api/provision/test-db/performance/top-queries?limit=5", "")
 	if w.Code != 200 {
-		t.Errorf("status: %d", w.Code)
+		t.Errorf(testStatusFmt, w.Code)
 	}
 }
 
@@ -191,7 +204,7 @@ func TestPerformanceWaitEventsHandler(t *testing.T) {
 
 	w := doRequest(r, "GET", "/api/provision/test-db/performance/wait-events", "")
 	if w.Code != 200 {
-		t.Errorf("status: %d", w.Code)
+		t.Errorf(testStatusFmt, w.Code)
 	}
 }
 
@@ -203,7 +216,7 @@ func TestAuditEnableHandler(t *testing.T) {
 
 	w := doRequest(r, "POST", "/api/provision/test-db/audit/enable", `{"enabled":true}`)
 	if w.Code != 200 {
-		t.Errorf("status: %d, body: %s", w.Code, w.Body.String())
+		t.Errorf(testStatusBodyFmt, w.Code, w.Body.String())
 	}
 }
 
@@ -213,7 +226,7 @@ func TestAuditConfigHandler(t *testing.T) {
 
 	w := doRequest(r, "GET", "/api/provision/test-db/audit/config", "")
 	if w.Code != 200 {
-		t.Errorf("status: %d", w.Code)
+		t.Errorf(testStatusFmt, w.Code)
 	}
 }
 
@@ -223,9 +236,9 @@ func TestMigrationApplyHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
 
-	w := doRequest(r, "POST", "/api/provision/test-db/migrations/", `{"sql":"SELECT 1"}`)
+	w := doRequest(r, "POST", testMigrationsPath, `{"sql":"SELECT 1"}`)
 	if w.Code != 200 {
-		t.Errorf("status: %d, body: %s", w.Code, w.Body.String())
+		t.Errorf(testStatusBodyFmt, w.Code, w.Body.String())
 	}
 }
 
@@ -233,9 +246,9 @@ func TestMigrationListHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
 
-	w := doRequest(r, "GET", "/api/provision/test-db/migrations/", "")
+	w := doRequest(r, "GET", testMigrationsPath, "")
 	if w.Code != 200 {
-		t.Errorf("status: %d", w.Code)
+		t.Errorf(testStatusFmt, w.Code)
 	}
 }
 
@@ -266,37 +279,37 @@ func TestParameterGroupCRUD(t *testing.T) {
 	r, _, _ := fullRouter(t)
 
 	// Create
-	w := doRequest(r, "POST", "/api/parameter-groups/", `{"name":"high-perf","parameters":{"max_connections":"200"}}`)
+	w := doRequest(r, "POST", testParamGroupsPath, `{"name":"high-perf","parameters":{"max_connections":"200"}}`)
 	if w.Code != 201 {
 		t.Errorf("create: %d, body: %s", w.Code, w.Body.String())
 	}
 
 	// List
-	w = doRequest(r, "GET", "/api/parameter-groups/", "")
+	w = doRequest(r, "GET", testParamGroupsPath, "")
 	if w.Code != 200 {
 		t.Errorf("list: %d", w.Code)
 	}
 
 	// Get
-	w = doRequest(r, "GET", "/api/parameter-groups/high-perf", "")
+	w = doRequest(r, "GET", testParamGroupHighPerf, "")
 	if w.Code != 200 {
 		t.Errorf("get: %d", w.Code)
 	}
 
 	// Update
-	w = doRequest(r, "PUT", "/api/parameter-groups/high-perf", `{"parameters":{"max_connections":"300"}}`)
+	w = doRequest(r, "PUT", testParamGroupHighPerf, `{"parameters":{"max_connections":"300"}}`)
 	if w.Code != 200 {
 		t.Errorf("update: %d", w.Code)
 	}
 
 	// Delete
-	w = doRequest(r, "DELETE", "/api/parameter-groups/high-perf", "")
+	w = doRequest(r, "DELETE", testParamGroupHighPerf, "")
 	if w.Code != 200 {
 		t.Errorf("delete: %d", w.Code)
 	}
 
 	// Get after delete (should be 404)
-	w = doRequest(r, "GET", "/api/parameter-groups/high-perf", "")
+	w = doRequest(r, "GET", testParamGroupHighPerf, "")
 	if w.Code != 404 {
 		t.Errorf("get after delete: %d, want 404", w.Code)
 	}
@@ -345,7 +358,7 @@ func TestGetCredentialsHandler(t *testing.T) {
 	}
 	var creds domain.CredentialsResponse
 	json.NewDecoder(w.Body).Decode(&creds)
-	if creds.Password != "pass" {
+	if creds.Password != testutil.FixturePassword(testPGCreds) {
 		t.Errorf("password: got %s", creds.Password)
 	}
 }
@@ -373,7 +386,7 @@ func TestSetDeletionProtectionHandler(t *testing.T) {
 func TestAuditGetLogsHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
-	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = "AUDIT: line1"
+	mock.ExecOutput[testDBPodName] = "AUDIT: line1"
 
 	w := doRequest(r, "GET", "/api/provision/test-db/audit/logs?lines=50", "")
 	if w.Code != 200 {
@@ -398,7 +411,7 @@ func TestBackupRestoreHandler(t *testing.T) {
 func TestSnapshotExportHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
-	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = "-- dump output"
+	mock.ExecOutput[testDBPodName] = "-- dump output"
 
 	w := doRequest(r, "POST", "/api/provision/test-db/snapshot/export", `{"format":"plain"}`)
 	if w.Code != 200 {
@@ -487,7 +500,7 @@ func TestMigrationInvalidJSON(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
 
-	w := doRequest(r, "POST", "/api/provision/test-db/migrations/", "not json")
+	w := doRequest(r, "POST", testMigrationsPath, "not json")
 	// Should still work (empty SQL) or return error
 	if w.Code == 0 {
 		t.Error("should return a response")
@@ -544,7 +557,7 @@ func TestProvisioningHandlerRoutes(t *testing.T) {
 	h := NewProvisioningHandler(svc, nil)
 
 	r := chi.NewRouter()
-	r.Route("/provision", h.Routes)
+	r.Route(testProvisionPath, h.Routes)
 
 	// Verify routes are wired by hitting each one
 	w := doRequest(r, "GET", "/provision/", "")
@@ -668,7 +681,7 @@ func TestBackupListWithConfig(t *testing.T) {
 		Port:                &port,
 		DatabaseName:        "app",
 		Username:            "user",
-		Password:            "pass",
+		Password:            testutil.FixturePassword(testPGCreds),
 		SSLMode:             "require",
 		BackupEnabled:       &enabled,
 		BackupSchedule:      "0 2 * * *",
@@ -714,7 +727,7 @@ func TestProvisionWithAuthUser(t *testing.T) {
 	us := newMockUserStore()
 	ts := newMockTokenStore()
 	now := time.Now()
-	user := &domain.User{ID: "owner-123", Username: "alice", Active: true, CreatedAt: &now}
+	user := &domain.User{ID: "owner-123", Username: testutil.FixtureToken("alice"), Active: true, CreatedAt: &now}
 	us.users["owner-123"] = user
 
 	r := chi.NewRouter()
@@ -725,9 +738,9 @@ func TestProvisionWithAuthUser(t *testing.T) {
 		user:  user,
 	}
 	r.Use(auth.ExtractAuth(lookup))
-	r.Post("/provision", h.Provision)
+	r.Post(testProvisionPath, h.Provision)
 
-	req := httptest.NewRequest("POST", "/provision",
+	req := httptest.NewRequest("POST", testProvisionPath,
 		strings.NewReader(`{"projectName":"owned-db","orgId":"org1","databaseType":"POSTGRESQL","tier":"FREE"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok)
@@ -755,7 +768,7 @@ func TestParameterGroupCreate_StoreError(t *testing.T) {
 
 	// Store file is removed to simulate an error — just test that empty name works
 	// (store.Save with empty name succeeds; we test the happy path)
-	w := doRequest(r, "POST", "/api/parameter-groups/", `{"name":"pg1","parameters":{}}`)
+	w := doRequest(r, "POST", testParamGroupsPath, `{"name":"pg1","parameters":{}}`)
 	if w.Code != 201 {
 		t.Errorf("param group create: got %d, body: %s", w.Code, w.Body.String())
 	}
@@ -766,7 +779,7 @@ func TestParameterGroupCreate_StoreError(t *testing.T) {
 func TestSnapshotDownloadSuccess(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
-	mock.ExecOutput["org1-test-db/test-db-postgres-1"] = "-- dump content"
+	mock.ExecOutput[testDBPodName] = "-- dump content"
 
 	// First export a snapshot so it exists
 	wExport := doRequest(r, "POST", "/api/provision/test-db/snapshot/export", `{"format":"plain"}`)

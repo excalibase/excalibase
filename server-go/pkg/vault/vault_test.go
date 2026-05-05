@@ -7,10 +7,18 @@ import (
 	"testing"
 )
 
+const (
+	testVaultFile      = "vault.bolt"
+	testVaultCredsPath = "projects/my-app/credentials/admin"
+	testVaultIP        = "10.0.0.5"
+	testVaultKey       = "test/key"
+)
+
+
 func tempVault(t *testing.T) *Vault {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "vault.bolt")
+	path := filepath.Join(dir, testVaultFile)
 	v, err := New(path)
 	if err != nil {
 		t.Fatalf("New vault: %v", err)
@@ -111,8 +119,8 @@ func TestSecretCRUD(t *testing.T) {
 	v.Init(1, 1)
 
 	// Put a secret
-	err := v.Put("projects/my-app/credentials/admin", map[string]string{
-		"host":     "10.0.0.5",
+	err := v.Put(testVaultCredsPath, map[string]string{
+		"host":     testVaultIP,
 		"port":     "5432",
 		"username": "admin",
 		"password": "secret123",
@@ -122,11 +130,11 @@ func TestSecretCRUD(t *testing.T) {
 	}
 
 	// Get it back
-	data, err := v.Get("projects/my-app/credentials/admin")
+	data, err := v.Get(testVaultCredsPath)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if data["host"] != "10.0.0.5" {
+	if data["host"] != testVaultIP {
 		t.Errorf("host: got %s", data["host"])
 	}
 	if data["password"] != "secret123" {
@@ -134,8 +142,8 @@ func TestSecretCRUD(t *testing.T) {
 	}
 
 	// Update it
-	err = v.Put("projects/my-app/credentials/admin", map[string]string{
-		"host":     "10.0.0.5",
+	err = v.Put(testVaultCredsPath, map[string]string{
+		"host":     testVaultIP,
 		"port":     "5432",
 		"username": "admin",
 		"password": "new-password",
@@ -143,17 +151,17 @@ func TestSecretCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Put update: %v", err)
 	}
-	data, _ = v.Get("projects/my-app/credentials/admin")
+	data, _ = v.Get(testVaultCredsPath)
 	if data["password"] != "new-password" {
 		t.Errorf("password after update: got %s", data["password"])
 	}
 
 	// Delete it
-	err = v.Delete("projects/my-app/credentials/admin")
+	err = v.Delete(testVaultCredsPath)
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	_, err = v.Get("projects/my-app/credentials/admin")
+	_, err = v.Get(testVaultCredsPath)
 	if err == nil {
 		t.Fatal("expected error after delete")
 	}
@@ -164,12 +172,12 @@ func TestSecretRequiresUnseal(t *testing.T) {
 	defer v.Close()
 
 	result, _ := v.Init(1, 1)
-	v.Put("test/key", map[string]string{"value": "hello"})
+	v.Put(testVaultKey, map[string]string{"value": "hello"})
 
 	v.Seal()
 
 	// All operations should fail when sealed
-	_, err := v.Get("test/key")
+	_, err := v.Get(testVaultKey)
 	if err != ErrSealed {
 		t.Errorf("Get while sealed: expected ErrSealed, got %v", err)
 	}
@@ -177,14 +185,14 @@ func TestSecretRequiresUnseal(t *testing.T) {
 	if err != ErrSealed {
 		t.Errorf("Put while sealed: expected ErrSealed, got %v", err)
 	}
-	err = v.Delete("test/key")
+	err = v.Delete(testVaultKey)
 	if err != ErrSealed {
 		t.Errorf("Delete while sealed: expected ErrSealed, got %v", err)
 	}
 
 	// Unseal and verify data persisted
 	v.Unseal(result.Shares[0])
-	data, err := v.Get("test/key")
+	data, err := v.Get(testVaultKey)
 	if err != nil {
 		t.Fatalf("Get after unseal: %v", err)
 	}
@@ -235,7 +243,7 @@ func TestRekey(t *testing.T) {
 
 func TestPersistenceAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "vault.bolt")
+	path := filepath.Join(dir, testVaultFile)
 
 	// Create vault, init, store secret
 	v1, _ := New(path)
@@ -413,7 +421,7 @@ func TestListSecretsRequiresUnseal(t *testing.T) {
 	v := tempVault(t)
 	defer v.Close()
 	result, _ := v.Init(1, 1)
-	v.Put("test/key", map[string]string{"value": "hello"})
+	v.Put(testVaultKey, map[string]string{"value": "hello"})
 	v.Seal()
 
 	_, err := v.List("")
@@ -433,7 +441,7 @@ func TestListSecretsRequiresUnseal(t *testing.T) {
 
 func TestAutoUnsealFromEnv(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "vault.bolt")
+	path := filepath.Join(dir, testVaultFile)
 
 	// Create and init
 	v1, _ := New(path)

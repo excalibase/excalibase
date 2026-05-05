@@ -4,6 +4,12 @@ The platform runs inside the same Kubernetes cluster it provisions databases
 on. `client-go` picks up the mounted ServiceAccount automatically. This is the
 recommended production topology.
 
+Works on any K8s distro — managed (EKS/GKE/AKS), self-hosted multi-node
+(RKE2), or single-node (k0s, k3s, MicroK8s — including rootless). Single-node
+distros make this matrix viable for homelab / VPS deployments while keeping
+the ServiceAccount + Role + namespace isolation surface that Docker mode
+lacks.
+
 ## Prerequisites
 
 - Kubernetes 1.27+
@@ -133,7 +139,7 @@ kubectl get pods -n excalibase-platform
 
 # Health check
 kubectl port-forward -n excalibase-platform svc/provisioning 24005:24005 &
-curl http://localhost:24005/health
+curl http://localhost:24005/healthz
 
 # Create a project (self-hosted uses the default org)
 curl -X POST http://localhost:24005/api/provision \

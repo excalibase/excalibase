@@ -33,7 +33,7 @@ export function Dashboard() {
       <div className="flex items-center justify-center min-h-screen">
         <Card className="max-w-md">
           <CardContent>
-            <p className="text-color-error">Failed to load instances: {(error as Error).message}</p>
+            <p className="text-color-error">Failed to load instances: {error instanceof Error ? error.message : String(error)}</p>
           </CardContent>
         </Card>
       </div>
@@ -69,7 +69,7 @@ export function Dashboard() {
             </CardHeader>
             <CardContent>
               <p className="text-3xl font-bold text-text-primary">
-                {instances?.length || 0}
+                {instances?.length ?? 0}
               </p>
             </CardContent>
           </Card>
@@ -79,7 +79,7 @@ export function Dashboard() {
             </CardHeader>
             <CardContent>
               <p className="text-3xl font-bold text-color-success">
-                {instances?.filter((i) => i.status === 'ACTIVE').length || 0}
+                {instances?.filter((i) => i.status === 'ACTIVE').length ?? 0}
               </p>
             </CardContent>
           </Card>
@@ -89,7 +89,7 @@ export function Dashboard() {
             </CardHeader>
             <CardContent>
               <p className="text-3xl font-bold text-color-error">
-                {instances?.filter((i) => i.currentStage === 'FAILED').length || 0}
+                {instances?.filter((i) => i.currentStage === 'FAILED').length ?? 0}
               </p>
             </CardContent>
           </Card>
@@ -124,9 +124,10 @@ export function Dashboard() {
   );
 }
 
-// Helper component to manage SSE connections
+// Helper component to manage SSE connections. Subscribes for the side-
+// effect (live state push) — the parent reads provisioning state through
+// React Query separately. No render output by design.
 function ProvisioningSSEManager({ projectId }: { projectId: string }) {
-  const { isConnected, error } = useInstanceSSE(projectId);
-
-  return null; // This component doesn't render anything
+  useInstanceSSE(projectId);
+  return null;
 }

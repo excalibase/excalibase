@@ -137,54 +137,18 @@ func (v *Vault) Init(shares, threshold int) (*InitResult, error) {
 		return nil, fmt.Errorf("invalid shares=%d threshold=%d", shares, threshold)
 	}
 
-	// Generate barrier key (256-bit)
-	barrierKey, err := randomBytes(32)
+	barrierKey, mek, encryptedBarrier, err := generateBarrierKeys()
 	if err != nil {
 		return nil, err
 	}
 
-	// Generate MEK (256-bit)
-	mek, err := randomBytes(32)
-	if err != nil {
+	if err := v.storeBarrierMeta(encryptedBarrier, shares, threshold); err != nil {
 		return nil, err
 	}
 
-	// Encrypt barrier key with MEK
-	encryptedBarrier, err := encrypt(mek, barrierKey)
+	hexShares, err := splitMEKToHex(mek, shares, threshold)
 	if err != nil {
-		return nil, fmt.Errorf("encrypt barrier: %w", err)
-	}
-
-	// Store encrypted barrier + metadata
-	meta := barrierMeta{
-		EncryptedBarrier: encryptedBarrier,
-		Threshold:        threshold,
-		Shares:           shares,
-	}
-	metaBytes, err := json.Marshal(meta)
-	if err != nil {
-		return nil, fmt.Errorf("marshal barrier meta: %w", err)
-	}
-
-	if err := v.store.PutBarrier(encryptedBarrier, metaBytes); err != nil {
-		return nil, fmt.Errorf("store barrier: %w", err)
-	}
-
-	// Split MEK into shares
-	var shareBytes [][]byte
-	if shares == 1 && threshold == 1 {
-		shareBytes = [][]byte{mek}
-	} else {
-		shareBytes, err = shamir.Split(mek, shares, threshold)
-		if err != nil {
-			return nil, fmt.Errorf("shamir split: %w", err)
-		}
-	}
-
-	// Hex-encode shares for display
-	hexShares := make([]string, len(shareBytes))
-	for i, s := range shareBytes {
-		hexShares[i] = hex.EncodeToString(s)
+		return nil, err
 	}
 
 	// Unseal immediately after init
@@ -193,22 +157,82 @@ func (v *Vault) Init(shares, threshold int) (*InitResult, error) {
 	v.threshold = threshold
 	v.mu.Unlock()
 
-	// Generate PKI signing keypair
-	privPEM, pubPEM, err := generatePKI()
-	if err != nil {
-		return nil, fmt.Errorf("generate PKI: %w", err)
-	}
-	if err := v.Put("pki/signing/private", map[string]string{"key": privPEM, "algorithm": "EC-P256"}); err != nil {
-		return nil, fmt.Errorf("store pki private key: %w", err)
-	}
-	if err := v.Put("pki/signing/public", map[string]string{"key": pubPEM, "algorithm": "EC-P256"}); err != nil {
-		return nil, fmt.Errorf("store pki public key: %w", err)
+	if err := v.storePKIKeys(); err != nil {
+		return nil, err
 	}
 
 	return &InitResult{
 		Shares:    hexShares,
 		Threshold: threshold,
 	}, nil
+}
+
+// generateBarrierKeys creates the barrier key, MEK, and encrypted barrier.
+func generateBarrierKeys() (barrierKey, mek, encryptedBarrier []byte, err error) {
+	barrierKey, err = randomBytes(32)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	mek, err = randomBytes(32)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	encryptedBarrier, err = encrypt(mek, barrierKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("encrypt barrier: %w", err)
+	}
+	return barrierKey, mek, encryptedBarrier, nil
+}
+
+// storeBarrierMeta persists the encrypted barrier and its metadata.
+func (v *Vault) storeBarrierMeta(encryptedBarrier []byte, shares, threshold int) error {
+	meta := barrierMeta{
+		EncryptedBarrier: encryptedBarrier,
+		Threshold:        threshold,
+		Shares:           shares,
+	}
+	metaBytes, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal barrier meta: %w", err)
+	}
+	if err := v.store.PutBarrier(encryptedBarrier, metaBytes); err != nil {
+		return fmt.Errorf("store barrier: %w", err)
+	}
+	return nil
+}
+
+// splitMEKToHex splits the MEK into Shamir shares and hex-encodes them.
+func splitMEKToHex(mek []byte, shares, threshold int) ([]string, error) {
+	var shareBytes [][]byte
+	if shares == 1 && threshold == 1 {
+		shareBytes = [][]byte{mek}
+	} else {
+		var err error
+		shareBytes, err = shamir.Split(mek, shares, threshold)
+		if err != nil {
+			return nil, fmt.Errorf("shamir split: %w", err)
+		}
+	}
+	hexShares := make([]string, len(shareBytes))
+	for i, s := range shareBytes {
+		hexShares[i] = hex.EncodeToString(s)
+	}
+	return hexShares, nil
+}
+
+// storePKIKeys generates and stores the EC-P256 signing keypair in the vault.
+func (v *Vault) storePKIKeys() error {
+	privPEM, pubPEM, err := generatePKI()
+	if err != nil {
+		return fmt.Errorf("generate PKI: %w", err)
+	}
+	if err := v.Put("pki/signing/private", map[string]string{"key": privPEM, "algorithm": "EC-P256"}); err != nil {
+		return fmt.Errorf("store pki private key: %w", err)
+	}
+	if err := v.Put("pki/signing/public", map[string]string{"key": pubPEM, "algorithm": "EC-P256"}); err != nil {
+		return fmt.Errorf("store pki public key: %w", err)
+	}
+	return nil
 }
 
 func (v *Vault) Seal() {
@@ -231,7 +255,6 @@ func (v *Vault) Unseal(shareHex string) (*UnsealProgress, error) {
 		return nil, fmt.Errorf("invalid share hex: %w", err)
 	}
 
-	// Get threshold from meta
 	meta, err := v.getMeta()
 	if err != nil {
 		return nil, err
@@ -251,39 +274,54 @@ func (v *Vault) Unseal(shareHex string) (*UnsealProgress, error) {
 		}, nil
 	}
 
-	// Reconstruct MEK
-	var mek []byte
-	if meta.Shares == 1 && meta.Threshold == 1 {
-		mek = v.unsealShares[0]
-	} else {
-		mek, err = shamir.Combine(v.unsealShares)
-		if err != nil {
-			v.unsealShares = nil // reset on failure
-			return nil, fmt.Errorf("shamir combine failed: %w", err)
-		}
+	if err := v.applyUnsealShares(*meta); err != nil {
+		return nil, err
 	}
-
-	// Read encrypted barrier from store
-	encryptedBarrier, _, err := v.store.GetBarrier()
-	if err != nil {
-		v.unsealShares = nil
-		return nil, fmt.Errorf("read barrier: %w", err)
-	}
-
-	barrierKey, err := decrypt(mek, encryptedBarrier)
-	if err != nil {
-		v.unsealShares = nil
-		return nil, fmt.Errorf("decrypt barrier: %w (wrong shares?)", err)
-	}
-
-	v.barrierKey = barrierKey
-	v.unsealShares = nil
 
 	return &UnsealProgress{
 		Done:      true,
 		Progress:  meta.Threshold,
 		Threshold: meta.Threshold,
 	}, nil
+}
+
+// applyUnsealShares reconstructs the MEK from accumulated shares and decrypts
+// the barrier key. Must be called with v.mu held. Clears unsealShares on any error.
+func (v *Vault) applyUnsealShares(meta barrierMeta) error {
+	mek, err := reconstructMEK(v.unsealShares, meta)
+	if err != nil {
+		v.unsealShares = nil
+		return err
+	}
+
+	encryptedBarrier, _, err := v.store.GetBarrier()
+	if err != nil {
+		v.unsealShares = nil
+		return fmt.Errorf("read barrier: %w", err)
+	}
+
+	barrierKey, err := decrypt(mek, encryptedBarrier)
+	if err != nil {
+		v.unsealShares = nil
+		return fmt.Errorf("decrypt barrier: %w (wrong shares?)", err)
+	}
+
+	v.barrierKey = barrierKey
+	v.unsealShares = nil
+	return nil
+}
+
+// reconstructMEK combines shares to recover the master encryption key.
+// Single-share (1-of-1) setups bypass Shamir split/combine.
+func reconstructMEK(shares [][]byte, meta barrierMeta) ([]byte, error) {
+	if meta.Shares == 1 && meta.Threshold == 1 {
+		return shares[0], nil
+	}
+	mek, err := shamir.Combine(shares)
+	if err != nil {
+		return nil, fmt.Errorf("shamir combine failed: %w", err)
+	}
+	return mek, nil
 }
 
 func (v *Vault) ResetUnseal() {
@@ -448,6 +486,23 @@ func (v *Vault) Delete(path string) error {
 	v.mu.RUnlock()
 
 	return v.store.DeleteSecret(path)
+}
+
+// DeletePrefix removes every secret whose path starts with prefix in a
+// single underlying-store transaction. Returns the number deleted.
+// Empty prefix is rejected to avoid accidentally wiping the vault.
+func (v *Vault) DeletePrefix(prefix string) (int, error) {
+	v.mu.RLock()
+	if v.barrierKey == nil {
+		v.mu.RUnlock()
+		return 0, ErrSealed
+	}
+	v.mu.RUnlock()
+
+	if prefix == "" {
+		return 0, fmt.Errorf("DeletePrefix: empty prefix not allowed")
+	}
+	return v.store.DeletePrefix(prefix)
 }
 
 // List returns all secret paths matching the given prefix.

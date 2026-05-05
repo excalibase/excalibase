@@ -5,7 +5,9 @@ replicaCount: 1
 image:
   repository: ghcr.io/excalibase/watcher
   pullPolicy: IfNotPresent
-  tag: "latest"
+  # Pin to a specific tag in production. Empty = falls back to .Chart.AppVersion,
+  # which is what release-pipeline-built charts ship with.
+  tag: ""
 
 imagePullSecrets: []
 nameOverride: ""
@@ -157,9 +159,11 @@ resources:
   limits:
     cpu: 200m
     memory: 128Mi
+    ephemeral-storage: 256Mi
   requests:
     cpu: 50m
     memory: 32Mi
+    ephemeral-storage: 64Mi
 
 # ---------------------------------------------------------------------------
 # Autoscaling

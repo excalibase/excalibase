@@ -31,7 +31,7 @@ export function VaultPage() {
   // Filter out PKI paths and apply search
   const filteredPaths = (paths ?? [])
     .filter((p) => !p.startsWith(PKI_PREFIX))
-    .filter((p) => !search || p.toLowerCase().includes(search.toLowerCase()));
+    .filter((p) => search === '' || p.toLowerCase().includes(search.toLowerCase()));
 
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
@@ -51,13 +51,18 @@ export function VaultPage() {
     );
   }
 
+  const handleRowToggle = (path: string) => {
+    setSelectedPath(selectedPath === path ? null : path);
+    setRevealedPath(null);
+  };
+
   return (
     <div data-testid="vault-page">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h3 className="text-lg font-semibold text-text-primary">Vault Secrets</h3>
           <p className="text-sm text-text-secondary mt-1">
-            {filteredPaths.length} secret{filteredPaths.length !== 1 ? 's' : ''}
+            {filteredPaths.length} secret{filteredPaths.length === 1 ? '' : 's'}
           </p>
         </div>
       </div>
@@ -99,13 +104,11 @@ export function VaultPage() {
             }`}
           >
             {/* Path row */}
-            <div
-              className="flex items-center justify-between px-4 py-3 cursor-pointer"
-              onClick={() => {
-                setSelectedPath(selectedPath === path ? null : path);
-                setRevealedPath(null);
-              }}
-              data-testid={`vault-secret-row-${path.replace(/\//g, '-')}`}
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-4 py-3 text-left"
+              onClick={() => handleRowToggle(path)}
+              data-testid={`vault-secret-row-${path.replaceAll('/', '-')}`}
             >
               <div className="flex items-center gap-3 min-w-0">
                 <KeyRound className="w-4 h-4 text-text-tertiary flex-shrink-0" />
@@ -124,7 +127,7 @@ export function VaultPage() {
                   }}
                   className="p-1.5 rounded hover:bg-surface-hover text-text-tertiary hover:text-text-primary transition-colors"
                   title={revealedPath === path ? 'Hide' : 'Reveal'}
-                  data-testid={`vault-reveal-${path.replace(/\//g, '-')}`}
+                  data-testid={`vault-reveal-${path.replaceAll('/', '-')}`}
                 >
                   {revealedPath === path ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -135,12 +138,12 @@ export function VaultPage() {
                   }}
                   className="p-1.5 rounded hover:bg-red-500/10 text-text-tertiary hover:text-red-400 transition-colors"
                   title="Delete"
-                  data-testid={`vault-delete-${path.replace(/\//g, '-')}`}
+                  data-testid={`vault-delete-${path.replaceAll('/', '-')}`}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
-            </div>
+            </button>
 
             {/* Expanded secret values */}
             {selectedPath === path && revealedPath === path && (

@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+const errCreateRequest = "create request: %w"
+
+
 // DeployRequest is the payload the platform sends to /deploy on the Deno runtime.
 // Code is the already-bundled JS source; Secrets are merged user + built-in env vars.
 type DeployRequest struct {
@@ -70,7 +73,7 @@ func (c *RuntimeClient) setHeaders(req *http.Request) {
 func (c *RuntimeClient) Health(ctx context.Context) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/health", nil)
 	if err != nil {
-		return false, fmt.Errorf("create request: %w", err)
+		return false, fmt.Errorf(errCreateRequest, err)
 	}
 	c.setHeaders(req)
 	resp, err := c.http.Do(req)
@@ -90,7 +93,7 @@ func (c *RuntimeClient) Deploy(ctx context.Context, deployReq DeployRequest) err
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/deploy", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return fmt.Errorf(errCreateRequest, err)
 	}
 	c.setHeaders(req)
 	resp, err := c.http.Do(req)
@@ -114,7 +117,7 @@ func (c *RuntimeClient) Invoke(ctx context.Context, id string, invokeReq InvokeR
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/invoke/"+url.PathEscape(id), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf(errCreateRequest, err)
 	}
 	c.setHeaders(req)
 	resp, err := c.http.Do(req)
@@ -137,7 +140,7 @@ func (c *RuntimeClient) Invoke(ctx context.Context, id string, invokeReq InvokeR
 func (c *RuntimeClient) Delete(ctx context.Context, id string) error {
 	req, err := http.NewRequestWithContext(ctx, "DELETE", c.baseURL+"/delete/"+url.PathEscape(id), nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return fmt.Errorf(errCreateRequest, err)
 	}
 	c.setHeaders(req)
 	resp, err := c.http.Do(req)
@@ -158,7 +161,7 @@ func (c *RuntimeClient) Logs(ctx context.Context, id string, sinceMs int64) ([]L
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf(errCreateRequest, err)
 	}
 	c.setHeaders(req)
 	resp, err := c.http.Do(req)
@@ -189,7 +192,7 @@ var ErrLogsNotFound = fmt.Errorf("function not found in runtime")
 func (c *RuntimeClient) List(ctx context.Context) ([]map[string]interface{}, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/scripts", nil)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf(errCreateRequest, err)
 	}
 	c.setHeaders(req)
 	resp, err := c.http.Do(req)

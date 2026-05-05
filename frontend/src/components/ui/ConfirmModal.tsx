@@ -2,15 +2,15 @@ import { useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 
 interface ConfirmModalProps {
-  open: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  title: string;
-  message: string;
-  confirmLabel?: string;
-  confirmText?: string; // If set, user must type this to confirm (destructive)
-  destructive?: boolean;
-  loading?: boolean;
+  readonly open: boolean;
+  readonly onClose: () => void;
+  readonly onConfirm: () => void;
+  readonly title: string;
+  readonly message: string;
+  readonly confirmLabel?: string;
+  readonly confirmText?: string; // If set, user must type this to confirm (destructive)
+  readonly destructive?: boolean;
+  readonly loading?: boolean;
 }
 
 export function ConfirmModal({
@@ -43,9 +43,17 @@ export function ConfirmModal({
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 z-50" onClick={handleClose} data-testid="modal-backdrop" />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" data-testid="confirm-modal">
-        <div className="bg-surface-card border border-border-primary rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        className="fixed inset-0 bg-black/50 z-50 cursor-default border-0 p-0"
+        onClick={handleClose}
+        aria-label="Close dialog"
+        data-testid="modal-backdrop"
+      />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none" data-testid="confirm-modal">
+        <div
+          className="bg-surface-card border border-border-primary rounded-xl shadow-2xl w-full max-w-md pointer-events-auto"
+        >
           {/* Header */}
           <div className="flex items-center gap-3 px-6 pt-5 pb-0">
             {destructive && (

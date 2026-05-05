@@ -3,6 +3,7 @@ package edgefn
 import (
 	"errors"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -28,18 +29,39 @@ func (f *fakeVault) Put(p string, d map[string]string) error {
 	f.data[p] = cp
 	return nil
 }
-func (f *fakeVault) Delete(p string) error                { delete(f.data, p); return nil }
-func (f *fakeVault) List(prefix string) ([]string, error) { return nil, nil }
-func (f *fakeVault) Sealed() bool                         { return false }
-func (f *fakeVault) GetPublicKey() (string, error)        { return "", nil }
+func (f *fakeVault) Delete(p string) error { delete(f.data, p); return nil }
+func (f *fakeVault) DeletePrefix(prefix string) (int, error) {
+	if prefix == "" {
+		return 0, errors.New("empty prefix")
+	}
+	n := 0
+	for k := range f.data {
+		if strings.HasPrefix(k, prefix) {
+			delete(f.data, k)
+			n++
+		}
+	}
+	return n, nil
+}
+func (f *fakeVault) List(prefix string) ([]string, error) {
+	out := []string{}
+	for k := range f.data {
+		if prefix == "" || strings.HasPrefix(k, prefix) {
+			out = append(out, k)
+		}
+	}
+	return out, nil
+}
+func (f *fakeVault) Sealed() bool                  { return false }
+func (f *fakeVault) GetPublicKey() (string, error) { return "", nil }
 
 func TestSecretsStore_SetAndGetAll(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
-	if err := s.Set("default", "proj_p1", "STRIPE_KEY", "sk_test_123"); err != nil {
+	if err := s.Set("proj_p1", "STRIPE_KEY", "sk_test_123"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	got, err := s.GetAll("default", "proj_p1")
+	got, err := s.GetAll("proj_p1")
 	if err != nil {
 		t.Fatalf("GetAll: %v", err)
 	}
@@ -51,10 +73,10 @@ func TestSecretsStore_SetAndGetAll(t *testing.T) {
 func TestSecretsStore_ListKeysNoValues(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
-	s.Set("default", "proj_p1", "B_KEY", "val-b")
-	s.Set("default", "proj_p1", "A_KEY", "val-a")
+	s.Set("proj_p1", "B_KEY", "val-b")
+	s.Set("proj_p1", "A_KEY", "val-a")
 
-	keys, err := s.ListKeys("default", "proj_p1")
+	keys, err := s.ListKeys("proj_p1")
 	if err != nil {
 		t.Fatalf("ListKeys: %v", err)
 	}
@@ -69,11 +91,11 @@ func TestSecretsStore_ListKeysNoValues(t *testing.T) {
 func TestSecretsStore_ScopedByProject(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
-	s.Set("default", "proj_p1", "SHARED", "p1-value")
-	s.Set("default", "proj_p2", "SHARED", "p2-value")
+	s.Set("proj_p1", "SHARED", "p1-value")
+	s.Set("proj_p2", "SHARED", "p2-value")
 
-	p1, _ := s.GetAll("default", "proj_p1")
-	p2, _ := s.GetAll("default", "proj_p2")
+	p1, _ := s.GetAll("proj_p1")
+	p2, _ := s.GetAll("proj_p2")
 	if p1["SHARED"] == p2["SHARED"] {
 		t.Errorf("secrets must be scoped per project, both=%q", p1["SHARED"])
 	}
@@ -85,12 +107,12 @@ func TestSecretsStore_ScopedByProject(t *testing.T) {
 func TestSecretsStore_Delete(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
-	s.Set("default", "proj_p1", "A_KEY", "a")
-	s.Set("default", "proj_p1", "B_KEY", "b")
-	if err := s.Delete("default", "proj_p1", "A_KEY"); err != nil {
+	s.Set("proj_p1", "A_KEY", "a")
+	s.Set("proj_p1", "B_KEY", "b")
+	if err := s.Delete("proj_p1", "A_KEY"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	got, _ := s.GetAll("default", "proj_p1")
+	got, _ := s.GetAll("proj_p1")
 	if _, ok := got["A_KEY"]; ok {
 		t.Error("A_KEY should be gone")
 	}
@@ -102,7 +124,7 @@ func TestSecretsStore_Delete(t *testing.T) {
 func TestSecretsStore_DeleteMissingIdempotent(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
-	if err := s.Delete("default", "proj_p1", "NEVER_SET"); err != nil {
+	if err := s.Delete("proj_p1", "NEVER_SET"); err != nil {
 		t.Errorf("delete missing key should be idempotent, got: %v", err)
 	}
 }
@@ -112,7 +134,7 @@ func TestSecretsStore_RejectsInvalidKey(t *testing.T) {
 	s := NewSecretsStore(v)
 	bad := []string{"", "has space", "lowercase-ok-too", "1LEADING_DIGIT", "with.dot", "way-too-long-way-too-long-way-too-long-way-too-long-way-too-long-way-too-long"}
 	for _, k := range bad {
-		if err := s.Set("default", "proj_p1", k, "v"); err == nil {
+		if err := s.Set("proj_p1", k, "v"); err == nil {
 			t.Errorf("expected error for key %q", k)
 		}
 	}
@@ -123,7 +145,7 @@ func TestSecretsStore_RejectsReservedKeys(t *testing.T) {
 	s := NewSecretsStore(v)
 	reserved := []string{"EXCALIBASE_URL", "EXCALIBASE_PROJECT_ID", "EXCALIBASE_ANON_KEY", "EXCALIBASE_SERVICE_KEY", "EXCALIBASE_DB_URL"}
 	for _, k := range reserved {
-		if err := s.Set("default", "proj_p1", k, "malicious"); err == nil {
+		if err := s.Set("proj_p1", k, "malicious"); err == nil {
 			t.Errorf("reserved key %q should be rejected", k)
 		}
 	}
@@ -137,9 +159,9 @@ func TestSecretsStore_MaxSecretCount(t *testing.T) {
 		for j := 0; j < i/26+1; j++ {
 			key += string(rune('A' + i%26))
 		}
-		s.Set("default", "proj_p1", key, "v")
+		s.Set("proj_p1", key, "v")
 	}
-	if err := s.Set("default", "proj_p1", "ONE_MORE", "v"); err == nil {
+	if err := s.Set("proj_p1", "ONE_MORE", "v"); err == nil {
 		t.Error("expected error when exceeding MaxSecretCount")
 	}
 }
@@ -151,7 +173,7 @@ func TestSecretsStore_MaxValueLen(t *testing.T) {
 	for i := range huge {
 		huge[i] = 'x'
 	}
-	if err := s.Set("default", "proj_p1", "HUGE", string(huge)); err == nil {
+	if err := s.Set("proj_p1", "HUGE", string(huge)); err == nil {
 		t.Error("expected error for oversized secret value")
 	}
 }
@@ -159,16 +181,16 @@ func TestSecretsStore_MaxValueLen(t *testing.T) {
 func TestSecretsStore_BuildEnvMergesBuiltinsOverride(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
-	s.Set("default", "proj_p1", "MY_KEY", "my-val")
+	s.Set("proj_p1", "MY_KEY", "my-val")
 	// User secret collision with a normal (non-reserved) key
-	s.Set("default", "proj_p1", "OTHER_KEY", "user-other")
+	s.Set("proj_p1", "OTHER_KEY", "user-other")
 
 	builtins := map[string]string{
 		"EXCALIBASE_URL":        "https://api.excalibase.io/default/proj_p1",
 		"EXCALIBASE_PROJECT_ID": "proj_p1",
 		"OTHER_KEY":             "platform-override", // simulates a collision
 	}
-	merged, err := s.BuildEnvForDeploy("default", "proj_p1", builtins)
+	merged, err := s.BuildEnvForDeploy("proj_p1", builtins)
 	if err != nil {
 		t.Fatalf("BuildEnvForDeploy: %v", err)
 	}

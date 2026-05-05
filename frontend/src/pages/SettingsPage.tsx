@@ -13,7 +13,12 @@ interface RollbackResult {
   error?: string;
 }
 
-function CopyField({ label, value }: { label: string; value: string }) {
+interface CopyFieldProps {
+  readonly label: string;
+  readonly value: string;
+}
+
+function CopyField({ label, value }: CopyFieldProps) {
   const [copied, setCopied] = useState(false);
   const onCopy = () => {
     navigator.clipboard.writeText(value);
@@ -70,8 +75,6 @@ export function SettingsPage() {
     { icon: Clock, label: 'Updated', value: project.updatedAt ? new Date(project.updatedAt).toLocaleString() : '-' },
   ];
 
-  // Connection endpoints — these come from env vars in the real deployment, but here
-  // we build them from the project ref so users have something to copy immediately.
   const authEndpoint = `https://auth.excalibase.io/${project.orgId}/${project.projectId}`;
   const graphqlEndpoint = `https://api.excalibase.io/${project.orgId}/${project.projectId}/graphql`;
   const sdkSnippet = `import { createClient } from '@excalibase/client'
@@ -94,14 +97,13 @@ const excalibase = createClient({
     <div data-testid="settings-page">
       <h3 className="text-lg font-semibold text-text-primary mb-4">Project Settings</h3>
 
-      {/* Failure banner */}
       {project.status === 'FAILED' && (
         <div className="rounded-lg border border-red-500/40 bg-red-500/5 p-4 mb-6">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-red-400 mb-1">
-                Provisioning failed at stage {project.failureStage || project.currentStage}
+                Provisioning failed at stage {project.failureStage ?? project.currentStage}
                 {project.failureStep ? ` (${project.failureStep})` : ''}
               </div>
               {project.failureReason && (
@@ -116,7 +118,7 @@ const excalibase = createClient({
                   </summary>
                   <ul className="mt-2 space-y-1">
                     {rollbackResults.map((r, i) => (
-                      <li key={i} className="text-xs font-mono flex items-center gap-2">
+                      <li key={`${r.name}-${i}`} className="text-xs font-mono flex items-center gap-2">
                         {r.ok ? (
                           <Check className="w-3 h-3 text-green-400 flex-shrink-0" />
                         ) : (
@@ -135,7 +137,6 @@ const excalibase = createClient({
         </div>
       )}
 
-      {/* Connect section (Supabase-style) */}
       <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8" data-testid="connect-section">
         <h4 className="text-sm font-medium text-text-primary mb-3">Connect to your project</h4>
         <div className="space-y-3">
@@ -151,7 +152,6 @@ const excalibase = createClient({
         </div>
       </div>
 
-      {/* Info grid */}
       <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden mb-8">
         {info.map(({ icon: Icon, label, value }) => (
           <div key={label} className="flex items-center gap-3 px-4 py-3 border-b border-border-primary last:border-0">
@@ -162,7 +162,6 @@ const excalibase = createClient({
         ))}
       </div>
 
-      {/* Backup info */}
       <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8">
         <h4 className="text-sm font-medium text-text-primary mb-2">Backup Configuration</h4>
         <div className="grid grid-cols-3 gap-4 text-sm">
@@ -181,7 +180,6 @@ const excalibase = createClient({
         </div>
       </div>
 
-      {/* Danger zone */}
       <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4">
         <h4 className="text-sm font-medium text-red-400 mb-2">Danger Zone</h4>
         <p className="text-xs text-text-secondary mb-3">
@@ -201,7 +199,7 @@ const excalibase = createClient({
         onClose={() => setShowDelete(false)}
         onConfirm={() => {
           if (projectId) deprovision.mutate(projectId, {
-            onSuccess: () => { window.location.href = '/projects'; },
+            onSuccess: () => { globalThis.location.href = '/projects'; },
           });
         }}
         title="Delete Project"

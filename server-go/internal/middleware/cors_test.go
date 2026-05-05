@@ -6,19 +6,30 @@ import (
 	"testing"
 )
 
+const (
+	testOrigin         = "https://app.excalibase.io"
+	testAPIPath        = "/api/test"
+	corsOriginHeader   = "Access-Control-Allow-Origin"
+	corsOriginFmt      = "Allow-Origin: got %q, want %q"
+	testEvilOrigin     = "https://evil.com"
+	testLocalhostOrigin = "http://localhost:3000"
+	testAnythingOrigin = "https://anything.com"
+)
+
+
 func TestCORS_AllowedOrigin(t *testing.T) {
-	handler := CORS([]string{"https://app.excalibase.io"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CORS([]string{testOrigin})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.Header.Set("Origin", "https://app.excalibase.io")
+	req := httptest.NewRequest(http.MethodGet, testAPIPath, nil)
+	req.Header.Set("Origin", testOrigin)
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
 
-	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "https://app.excalibase.io" {
-		t.Errorf("Allow-Origin: got %q, want %q", got, "https://app.excalibase.io")
+	if got := rr.Header().Get(corsOriginHeader); got != testOrigin {
+		t.Errorf(corsOriginFmt, got, testOrigin)
 	}
 	if got := rr.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
 		t.Errorf("Allow-Credentials: got %q, want %q", got, "true")
@@ -26,32 +37,32 @@ func TestCORS_AllowedOrigin(t *testing.T) {
 }
 
 func TestCORS_BlockedOrigin(t *testing.T) {
-	handler := CORS([]string{"https://app.excalibase.io"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CORS([]string{testOrigin})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.Header.Set("Origin", "https://evil.com")
+	req := httptest.NewRequest(http.MethodGet, testAPIPath, nil)
+	req.Header.Set("Origin", testEvilOrigin)
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
 
-	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "" {
+	if got := rr.Header().Get(corsOriginHeader); got != "" {
 		t.Errorf("Allow-Origin should be empty for blocked origin, got %q", got)
 	}
 }
 
 func TestCORS_NoOriginHeader(t *testing.T) {
-	handler := CORS([]string{"https://app.excalibase.io"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CORS([]string{testOrigin})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	req := httptest.NewRequest(http.MethodGet, testAPIPath, nil)
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
 
-	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "" {
+	if got := rr.Header().Get(corsOriginHeader); got != "" {
 		t.Errorf("Allow-Origin should be empty when no Origin header, got %q", got)
 	}
 	if rr.Code != http.StatusOK {
@@ -60,12 +71,12 @@ func TestCORS_NoOriginHeader(t *testing.T) {
 }
 
 func TestCORS_Preflight(t *testing.T) {
-	handler := CORS([]string{"https://app.excalibase.io"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CORS([]string{testOrigin})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("next handler should not be called for preflight")
 	}))
 
-	req := httptest.NewRequest(http.MethodOptions, "/api/test", nil)
-	req.Header.Set("Origin", "https://app.excalibase.io")
+	req := httptest.NewRequest(http.MethodOptions, testAPIPath, nil)
+	req.Header.Set("Origin", testOrigin)
 	req.Header.Set("Access-Control-Request-Method", "POST")
 	rr := httptest.NewRecorder()
 
@@ -83,12 +94,12 @@ func TestCORS_Preflight(t *testing.T) {
 }
 
 func TestCORS_PreflightBlockedOrigin(t *testing.T) {
-	handler := CORS([]string{"https://app.excalibase.io"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CORS([]string{testOrigin})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("next handler should not be called")
 	}))
 
-	req := httptest.NewRequest(http.MethodOptions, "/api/test", nil)
-	req.Header.Set("Origin", "https://evil.com")
+	req := httptest.NewRequest(http.MethodOptions, testAPIPath, nil)
+	req.Header.Set("Origin", testEvilOrigin)
 	req.Header.Set("Access-Control-Request-Method", "POST")
 	rr := httptest.NewRecorder()
 
@@ -97,13 +108,13 @@ func TestCORS_PreflightBlockedOrigin(t *testing.T) {
 	if rr.Code != http.StatusNoContent {
 		t.Errorf("status: got %d, want %d", rr.Code, http.StatusNoContent)
 	}
-	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "" {
+	if got := rr.Header().Get(corsOriginHeader); got != "" {
 		t.Errorf("Allow-Origin should be empty for blocked origin, got %q", got)
 	}
 }
 
 func TestCORS_MultipleOrigins(t *testing.T) {
-	origins := []string{"https://app.excalibase.io", "http://localhost:3000"}
+	origins := []string{testOrigin, testLocalhostOrigin}
 	handler := CORS(origins)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -113,20 +124,20 @@ func TestCORS_MultipleOrigins(t *testing.T) {
 		origin string
 		want   string
 	}{
-		{"app origin", "https://app.excalibase.io", "https://app.excalibase.io"},
-		{"localhost origin", "http://localhost:3000", "http://localhost:3000"},
-		{"blocked origin", "https://evil.com", ""},
+		{"app origin", testOrigin, testOrigin},
+		{"localhost origin", testLocalhostOrigin, testLocalhostOrigin},
+		{"blocked origin", testEvilOrigin, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+			req := httptest.NewRequest(http.MethodGet, testAPIPath, nil)
 			req.Header.Set("Origin", tt.origin)
 			rr := httptest.NewRecorder()
 			handler.ServeHTTP(rr, req)
 
-			if got := rr.Header().Get("Access-Control-Allow-Origin"); got != tt.want {
-				t.Errorf("Allow-Origin: got %q, want %q", got, tt.want)
+			if got := rr.Header().Get(corsOriginHeader); got != tt.want {
+				t.Errorf(corsOriginFmt, got, tt.want)
 			}
 		})
 	}
@@ -137,24 +148,24 @@ func TestCORS_WildcardAllowsAll(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.Header.Set("Origin", "https://anything.com")
+	req := httptest.NewRequest(http.MethodGet, testAPIPath, nil)
+	req.Header.Set("Origin", testAnythingOrigin)
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
 
-	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "https://anything.com" {
-		t.Errorf("Allow-Origin: got %q, want %q", got, "https://anything.com")
+	if got := rr.Header().Get(corsOriginHeader); got != testAnythingOrigin {
+		t.Errorf(corsOriginFmt, got, testAnythingOrigin)
 	}
 }
 
 func TestCORS_VaryHeader(t *testing.T) {
-	handler := CORS([]string{"https://app.excalibase.io"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := CORS([]string{testOrigin})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
-	req.Header.Set("Origin", "https://app.excalibase.io")
+	req := httptest.NewRequest(http.MethodGet, testAPIPath, nil)
+	req.Header.Set("Origin", testOrigin)
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)

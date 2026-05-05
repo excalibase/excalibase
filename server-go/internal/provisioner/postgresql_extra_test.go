@@ -11,6 +11,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
+const testOrg1Proj = "org1-proj"
+
+
 // TestGetStatusPodNotReady covers GetStatus when the pod exists but is not
 // ready, which should return Phase "Pending" with Ready=false.
 func TestGetStatusPodNotReady(t *testing.T) {
@@ -53,15 +56,15 @@ func TestGetStatusPodError(t *testing.T) {
 // Deprovision when DeleteCRD fails. The namespace must still be deleted.
 func TestDeprovisionWithCRDDeleteError(t *testing.T) {
 	mock := k8s.NewMockClient()
-	mock.Namespaces["org1-proj"] = true
+	mock.Namespaces[testOrg1Proj] = true
 	mock.DeleteCRDError = fmt.Errorf("CRD not found")
 	prov := NewPostgreSQLProvisioner(mock, "")
 
-	err := prov.Deprovision(context.Background(), "org1-proj", "proj")
+	err := prov.Deprovision(context.Background(), testOrg1Proj, "proj")
 	if err != nil {
 		t.Fatalf("Deprovision should succeed even when CRD delete fails: %v", err)
 	}
-	if mock.Namespaces["org1-proj"] {
+	if mock.Namespaces[testOrg1Proj] {
 		t.Error("namespace should have been deleted despite CRD delete failure")
 	}
 }
@@ -164,7 +167,7 @@ func TestProvisionNamespaceCreationFailure(t *testing.T) {
 		OrgID:       "org1",
 		DBType:      domain.PostgreSQL,
 		Tier:        domain.Free,
-	}, tier, func(domain.ProvisioningStage) {})
+	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
 
 	if err == nil {
 		t.Fatal("expected error when namespace creation fails, got nil")
@@ -184,7 +187,7 @@ func TestProvisionCRDDeploymentFailure(t *testing.T) {
 		OrgID:       "org1",
 		DBType:      domain.PostgreSQL,
 		Tier:        domain.Free,
-	}, tier, func(domain.ProvisioningStage) {})
+	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
 
 	if err == nil {
 		t.Fatal("expected error when CRD deployment fails, got nil")
@@ -205,7 +208,7 @@ func TestProvisionWithBackupDefaultSchedule(t *testing.T) {
 		DBType:      domain.PostgreSQL,
 		Tier:        domain.Free,
 		Backup:      &domain.BackupSettings{Enabled: true, Schedule: "", Retention: 7},
-	}, tier, func(domain.ProvisioningStage) {})
+	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
 
 	if err != nil {
 		t.Fatalf("Provision with default schedule: %v", err)

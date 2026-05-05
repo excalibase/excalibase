@@ -1,6 +1,7 @@
 package vaultapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,6 +11,13 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const (
+	errInvalidBody = "invalid request body"
+	errVaultSealed = "vault is sealed"
+	errInternal    = "internal error"
+)
+
+
 type VaultHandler struct {
 	v *vault.Vault
 }
@@ -18,26 +26,32 @@ func NewVaultHandler(v *vault.Vault) *VaultHandler {
 	return &VaultHandler{v: v}
 }
 
-// Routes registers all vault API routes. If tokens is non-empty,
-// secret routes require a valid Bearer token from the list.
+// Routes registers all vault API routes. tokens MUST be non-empty — passing
+// an empty list will panic. The standalone vault service has no other auth
+// surface; running it open would expose every secret to anything that can
+// reach the port. Init/Unseal remain public by design (they can't require
+// pre-existing auth, and Init refuses if the vault is already initialised),
+// but every secret operation and admin operation is PAT-gated.
 func (h *VaultHandler) Routes(r chi.Router, tokens []string) {
+	if len(tokens) == 0 {
+		panic("vaultapi: at least one PAT must be configured")
+	}
 	// Public
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
 	r.Get("/status", h.Status)
-	r.Post("/init", h.Init)
-	r.Post("/unseal", h.Unseal)
+	r.Post("/init", h.Init)     // self-gated: refuses if already initialised
+	r.Post("/unseal", h.Unseal) // self-gated: requires a valid Shamir share
 	r.Get("/pki/public-key", h.GetPublicKey)
 
-	// Auth-gated secrets
+	// Auth-gated: every secret op + the admin lifecycle ops.
 	r.Group(func(r chi.Router) {
-		if len(tokens) > 0 {
-			r.Use(requirePAT(tokens))
-		}
+		r.Use(requirePAT(tokens))
 		r.Post("/seal", h.Seal)
 		r.Post("/rekey", h.Rekey)
 		r.Get("/secrets-list", h.ListSecrets)
+		r.Delete("/secrets-list", h.DeletePrefix)
 		r.Route("/secrets", func(r chi.Router) {
 			r.Get("/*", h.GetSecret)
 			r.Put("/*", h.PutSecret)
@@ -47,9 +61,10 @@ func (h *VaultHandler) Routes(r chi.Router, tokens []string) {
 }
 
 func requirePAT(validTokens []string) func(http.Handler) http.Handler {
-	tokenSet := make(map[string]struct{}, len(validTokens))
-	for _, t := range validTokens {
-		tokenSet[t] = struct{}{}
+	// Pre-compute byte slices once for constant-time comparison.
+	tokenBytes := make([][]byte, len(validTokens))
+	for i, t := range validTokens {
+		tokenBytes[i] = []byte(t)
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,8 +73,15 @@ func requirePAT(validTokens []string) func(http.Handler) http.Handler {
 				httpError(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			token := strings.TrimPrefix(auth, "Bearer ")
-			if _, ok := tokenSet[token]; !ok {
+			candidate := []byte(strings.TrimPrefix(auth, "Bearer "))
+			matched := 0
+			for _, t := range tokenBytes {
+				// ConstantTimeCompare returns 0 on length mismatch or content
+				// mismatch; OR-ing the result accumulates a 1 on any match
+				// without short-circuiting, so total time is O(len(tokens)).
+				matched |= subtle.ConstantTimeCompare(candidate, t)
+			}
+			if matched == 0 {
 				httpError(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -81,7 +103,7 @@ func (h *VaultHandler) Init(w http.ResponseWriter, r *http.Request) {
 		Threshold int `json:"threshold"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if body.Shares < 1 {
@@ -108,7 +130,7 @@ func (h *VaultHandler) Unseal(w http.ResponseWriter, r *http.Request) {
 		Share string `json:"share"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 
@@ -136,7 +158,7 @@ func (h *VaultHandler) Rekey(w http.ResponseWriter, r *http.Request) {
 		Threshold int `json:"threshold"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 
@@ -156,14 +178,14 @@ func (h *VaultHandler) GetPublicKey(w http.ResponseWriter, r *http.Request) {
 	pem, err := h.v.GetPublicKey()
 	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
 		if errors.Is(err, vault.ErrNotFound) {
 			httpError(w, "PKI not initialized", http.StatusNotFound)
 			return
 		}
-		httpError(w, "internal error", http.StatusInternalServerError)
+		httpError(w, errInternal, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"key": pem, "algorithm": "EC-P256"})
@@ -174,10 +196,10 @@ func (h *VaultHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 	paths, err := h.v.List(prefix)
 	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
-		httpError(w, "internal error", http.StatusInternalServerError)
+		httpError(w, errInternal, http.StatusInternalServerError)
 		return
 	}
 	if paths == nil {
@@ -191,14 +213,14 @@ func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 	data, err := h.v.Get(path)
 	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
 		if errors.Is(err, vault.ErrNotFound) {
 			httpError(w, "not found", http.StatusNotFound)
 			return
 		}
-		httpError(w, "internal error", http.StatusInternalServerError)
+		httpError(w, errInternal, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, data)
@@ -208,16 +230,16 @@ func (h *VaultHandler) PutSecret(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
 	var data map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 
 	if err := h.v.Put(path, data); err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
-		httpError(w, "internal error", http.StatusInternalServerError)
+		httpError(w, errInternal, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -227,13 +249,31 @@ func (h *VaultHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	path := extractPath(r)
 	if err := h.v.Delete(path); err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
-		httpError(w, "internal error", http.StatusInternalServerError)
+		httpError(w, errInternal, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (h *VaultHandler) DeletePrefix(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	if prefix == "" {
+		httpError(w, "prefix is required", http.StatusBadRequest)
+		return
+	}
+	deleted, err := h.v.DeletePrefix(prefix)
+	if err != nil {
+		if errors.Is(err, vault.ErrSealed) {
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
+			return
+		}
+		httpError(w, errInternal, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"deleted": deleted})
 }
 
 func extractPath(r *http.Request) string {

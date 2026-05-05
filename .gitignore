@@ -55,3 +55,4 @@ coverage/
 /tests/pgdog/setup-config-db.sql
 /tests/pgdog/test.sh
 /tests/pgdog/test-nats-reload.sh
+.sonar-local-token

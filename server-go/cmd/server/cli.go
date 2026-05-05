@@ -128,6 +128,17 @@ func resetPasswordCLI() {
 	fmt.Println("\nStore this password securely. It will not be shown again.")
 }
 
+// discoveredInstance holds data about a CNPG cluster found during namespace scan.
+type discoveredInstance struct {
+	ProjectID string
+	Namespace string
+	Host      string
+	Port      int
+	DBName    string
+	Status    string
+	InSQLite  bool
+}
+
 // recoverInstancesCLI handles the `recover-instances` subcommand.
 func recoverInstancesCLI() {
 	fs := flag.NewFlagSet("recover-instances", flag.ExitOnError)
@@ -145,24 +156,20 @@ func recoverInstancesCLI() {
 		*vaultPath = filepath.Join(cfg.StoragePath, "vault.bolt")
 	}
 
-	// 1. Open vault and require unseal
 	v, err := vault.New(*vaultPath)
 	if err != nil {
 		log.Fatalf("Open vault: %v", err)
 	}
-
 	if err := unsealVaultInteractive(v); err != nil {
 		log.Fatalf("Vault: %v", err)
 	}
 
-	// 2. Open SQLite
 	sqlStore, err := sqlitestore.New(*dbPath)
 	if err != nil {
 		log.Fatalf("Open database: %v", err)
 	}
 	defer sqlStore.Close()
 
-	// 3. Bootstrap admin if no users exist
 	ctx := context.Background()
 	users, _ := sqlStore.FindAllUsers(ctx)
 	if len(users) == 0 {
@@ -172,90 +179,111 @@ func recoverInstancesCLI() {
 		}
 	}
 
-	// 4. Connect to K8s
 	k8sClient, err := k8s.NewClient()
 	if err != nil {
 		log.Fatalf("K8s client: %v", err)
 	}
 
-	// 5. List namespaces matching prefix
 	namespaces, err := k8sClient.ListNamespaces(ctx, *nsPrefix)
 	if err != nil {
 		log.Fatalf("List namespaces: %v", err)
 	}
-
 	if len(namespaces) == 0 {
 		fmt.Printf("No namespaces found with prefix '%s'\n", *nsPrefix)
 		return
 	}
 
-	// 6. Get existing instances from SQLite
 	existing, _ := sqlStore.FindAll()
-	existingMap := make(map[string]*domain.DatabaseInstance)
+	existingMap := buildExistingMap(existing)
+	discovered := scanNamespacesForClusters(ctx, k8sClient, namespaces, existingMap)
+
+	newCount, orphanCount := printRecoverySummary(discovered, existing)
+	fmt.Printf("\nSummary: %d found, %d new, %d orphaned\n", len(discovered), newCount, orphanCount)
+
+	if newCount == 0 {
+		fmt.Println("Nothing to recover.")
+		return
+	}
+	if *dryRun {
+		fmt.Println("\nDry run — no changes made. Remove --dry-run to recover.")
+		return
+	}
+
+	fmt.Printf("\nRecover %d instance(s)? [y/N]: ", newCount)
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
+		fmt.Println("Cancelled.")
+		return
+	}
+
+	saveRecoveredInstances(sqlStore, discovered)
+	fmt.Println("\nRecovery complete. Vault credentials should still be intact.")
+	fmt.Println("If vault credentials are missing, re-store them via:")
+	fmt.Println("  curl -X PUT /api/vault/secrets/projects/<project>/credentials/excalibase_app")
+}
+
+// buildExistingMap converts a slice of instances to a lookup map by ProjectID.
+func buildExistingMap(existing []*domain.DatabaseInstance) map[string]*domain.DatabaseInstance {
+	m := make(map[string]*domain.DatabaseInstance, len(existing))
 	for _, inst := range existing {
-		existingMap[inst.ProjectID] = inst
+		m[inst.ProjectID] = inst
 	}
+	return m
+}
 
-	// 7. Scan each namespace for CNPG clusters
-	type discoveredInstance struct {
-		ProjectID string
-		Namespace string
-		Host      string
-		Port      int
-		DBName    string
-		Status    string
-		InSQLite  bool
-	}
-
+// scanNamespacesForClusters discovers CNPG clusters across the given namespaces.
+func scanNamespacesForClusters(ctx context.Context, k8sClient k8s.KubeClient, namespaces []string, existingMap map[string]*domain.DatabaseInstance) []discoveredInstance {
 	var discovered []discoveredInstance
-
 	for _, ns := range namespaces {
 		clusters, err := k8sClient.ListCRDs(ctx, k8s.CNPGClusterGVR, ns)
 		if err != nil {
 			fmt.Printf("  Warning: could not list clusters in %s: %v\n", ns, err)
 			continue
 		}
-
 		for _, cluster := range clusters {
-			clusterName := cluster.GetName()
-			phase, _, _ := unstructuredNestedString(cluster, "status", "phase")
-
-			status := "ACTIVE"
-			if phase != "" && phase != "Cluster in healthy state" {
-				status = "PROVISIONING"
-			}
-
-			// CNPG cluster name = "{projectId}-postgres", strip suffix to get project ID
-			projectID := strings.TrimSuffix(clusterName, "-postgres")
-
-			// Connection host uses the CNPG service name
-			host := fmt.Sprintf("%s-rw.%s.svc.cluster.local", clusterName, ns)
-
-			// Try to get database name from app secret
-			dbName := "app"
-			secret, err := k8sClient.GetSecret(ctx, ns, clusterName+"-app")
-			if err == nil && secret != nil {
-				if d, ok := secret["dbname"]; ok {
-					dbName = string(d)
-				}
-			}
-
-			d := discoveredInstance{
-				ProjectID: projectID,
-				Namespace: ns,
-				Host:      host,
-				Port:      5432,
-				DBName:    dbName,
-				Status:    status,
-				InSQLite:  existingMap[projectID] != nil,
-			}
+			d := buildDiscoveredInstance(ctx, k8sClient, ns, cluster, existingMap)
 			discovered = append(discovered, d)
 		}
 	}
+	return discovered
+}
 
-	// 8. Print summary
+// buildDiscoveredInstance extracts metadata for a single CNPG cluster object.
+func buildDiscoveredInstance(ctx context.Context, k8sClient k8s.KubeClient, ns string, cluster *k8sunstructured.Unstructured, existingMap map[string]*domain.DatabaseInstance) discoveredInstance {
+	clusterName := cluster.GetName()
+	phase, _, _ := unstructuredNestedString(cluster, "status", "phase")
+
+	status := "ACTIVE"
+	if phase != "" && phase != "Cluster in healthy state" {
+		status = "PROVISIONING"
+	}
+
+	projectID := strings.TrimSuffix(clusterName, "-postgres")
+	host := fmt.Sprintf("%s-rw.%s.svc.cluster.local", clusterName, ns)
+
+	dbName := "app"
+	secret, err := k8sClient.GetSecret(ctx, ns, clusterName+"-app")
+	if err == nil && secret != nil {
+		if d, ok := secret["dbname"]; ok {
+			dbName = string(d)
+		}
+	}
+
+	return discoveredInstance{
+		ProjectID: projectID,
+		Namespace: ns,
+		Host:      host,
+		Port:      5432,
+		DBName:    dbName,
+		Status:    status,
+		InSQLite:  existingMap[projectID] != nil,
+	}
+}
+
+// printRecoverySummary prints the scan results and returns (newCount, orphanCount).
+func printRecoverySummary(discovered []discoveredInstance, existing []*domain.DatabaseInstance) (int, int) {
 	fmt.Printf("\n=== RECOVERY SCAN ===\n")
-	fmt.Printf("Scanned %d namespaces, found %d CNPG clusters\n\n", len(namespaces), len(discovered))
+	fmt.Printf("Scanned clusters, found %d CNPG instances\n\n", len(discovered))
 
 	newCount := 0
 	for _, d := range discovered {
@@ -268,8 +296,7 @@ func recoverInstancesCLI() {
 			marker, d.ProjectID, d.Namespace, d.Status, d.Host, d.Port, d.DBName)
 	}
 
-	// Check for orphans (in SQLite but not in K8s)
-	discoveredMap := make(map[string]bool)
+	discoveredMap := make(map[string]bool, len(discovered))
 	for _, d := range discovered {
 		discoveredMap[d.ProjectID] = true
 	}
@@ -280,34 +307,17 @@ func recoverInstancesCLI() {
 			orphanCount++
 		}
 	}
+	return newCount, orphanCount
+}
 
-	fmt.Printf("\nSummary: %d found, %d new, %d orphaned\n", len(discovered), newCount, orphanCount)
-
-	if newCount == 0 {
-		fmt.Println("Nothing to recover.")
-		return
-	}
-
-	if *dryRun {
-		fmt.Println("\nDry run — no changes made. Remove --dry-run to recover.")
-		return
-	}
-
-	// 9. Confirm
-	fmt.Printf("\nRecover %d instance(s)? [y/N]: ", newCount)
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
-		fmt.Println("Cancelled.")
-		return
-	}
-
-	// 10. Insert new instances
+// saveRecoveredInstances inserts newly discovered instances into the store.
+func saveRecoveredInstances(sqlStore *sqlitestore.Store, discovered []discoveredInstance) {
 	flexNow := &domain.FlexTime{Time: time.Now()}
 	for _, d := range discovered {
 		if d.InSQLite {
 			continue
 		}
-
+		port := d.Port
 		orgID := strings.TrimSuffix(d.Namespace, "-"+d.ProjectID)
 		inst := &domain.DatabaseInstance{
 			ProjectID:    d.ProjectID,
@@ -316,8 +326,8 @@ func recoverInstancesCLI() {
 			Tier:         domain.Free,
 			Namespace:    d.Namespace,
 			Host:         d.Host,
-			ReadOnlyHost: fmt.Sprintf("%s-postgres-r.%s.svc.cluster.local", d.ProjectID, d.Namespace), // {projectId}-postgres-r
-			Port:         &d.Port,
+			ReadOnlyHost: fmt.Sprintf("%s-postgres-r.%s.svc.cluster.local", d.ProjectID, d.Namespace),
+			Port:         &port,
 			DatabaseName: d.DBName,
 			Username:     "app",
 			SSLMode:      "require",
@@ -326,17 +336,12 @@ func recoverInstancesCLI() {
 			CreatedAt:    flexNow,
 			UpdatedAt:    flexNow,
 		}
-
 		if err := sqlStore.Save(inst); err != nil {
 			fmt.Printf("  ERROR saving %s: %v\n", d.ProjectID, err)
 		} else {
 			fmt.Printf("  Recovered: %s\n", d.ProjectID)
 		}
 	}
-
-	fmt.Println("\nRecovery complete. Vault credentials should still be intact.")
-	fmt.Println("If vault credentials are missing, re-store them via:")
-	fmt.Println("  curl -X PUT /api/vault/secrets/projects/<project>/credentials/excalibase_app")
 }
 
 // helper to read nested string from unstructured

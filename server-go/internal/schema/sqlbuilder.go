@@ -114,15 +114,15 @@ var nextvalPattern = regexp.MustCompile(`^nextval\('[a-zA-Z_][a-zA-Z0-9_.]*'\)$`
 
 // safeFunctions is the allowlist of PostgreSQL functions/keywords allowed in DEFAULT expressions.
 var safeFunctions = map[string]bool{
-	"now()":                     true,
-	"gen_random_uuid()":         true,
-	"uuid_generate_v4()":        true,
-	"current_timestamp":         true,
-	"current_date":              true,
-	"current_user":              true,
-	"clock_timestamp()":         true,
-	"statement_timestamp()":     true,
-	"transaction_timestamp()":   true,
+	"now()":                   true,
+	"gen_random_uuid()":       true,
+	"uuid_generate_v4()":      true,
+	"current_timestamp":       true,
+	"current_date":            true,
+	"current_user":            true,
+	"clock_timestamp()":       true,
+	"statement_timestamp()":   true,
+	"transaction_timestamp()": true,
 }
 
 // ValidateDefaultExpression validates and sanitizes a column DEFAULT expression.
@@ -164,6 +164,103 @@ func ValidateDefaultExpression(expr string) (string, error) {
 	}
 
 	return "", fmt.Errorf("unrecognized default expression: %q", expr)
+}
+
+// MaxPolicyExpressionLen caps the length of a USING / WITH CHECK clause to
+// stop pathologically large inputs. RLS expressions in practice are short
+// boolean predicates over the row's columns and a few session GUCs.
+const MaxPolicyExpressionLen = 1024
+
+// rejectedPolicyKeywords are SQL keywords that have no place in an RLS
+// boolean predicate. Their presence almost always indicates injection
+// (statement chaining or DDL/DML smuggled into the expression).
+var rejectedPolicyKeywords = []string{
+	"insert", "update", "delete", "drop", "alter", "create", "grant",
+	"revoke", "truncate", "merge", "copy", "execute", "do",
+	"pg_sleep", "pg_read_file", "pg_ls_dir", "lo_import", "lo_export",
+}
+
+// ValidatePolicyExpression performs a defense-in-depth check on RLS
+// USING / WITH CHECK expressions before they are interpolated into a
+// CREATE POLICY DDL statement. PostgreSQL has no parameterised form for
+// policy bodies (DDL is not parameterised), so the only mitigation is
+// strict input shaping. The caller must already be authorised to manage
+// schema for the project — this is a second layer in case that check is
+// bypassed or the role's DB privileges expand later.
+//
+// Rejects:
+//   - statement terminators (";"), comments ("--", "/*", "*/")
+//   - dollar-quoted strings ("$$" or "$tag$") — these escape every other guard
+//   - DDL/DML keywords (INSERT/UPDATE/DELETE/DROP/...)
+//   - empty input or input over MaxPolicyExpressionLen
+//
+// Accepts: anything else verbatim. RLS predicates can legitimately contain
+// arbitrary operators, function calls, identifiers, and parentheses, so
+// this remains a deny-list rather than an allow-list. Operators with
+// schema-write power (platform_admin / org admin) should be the only ones
+// reaching this path.
+func ValidatePolicyExpression(expr string) (string, error) {
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return "", fmt.Errorf("policy expression is empty")
+	}
+	if len(expr) > MaxPolicyExpressionLen {
+		return "", fmt.Errorf("policy expression exceeds %d chars", MaxPolicyExpressionLen)
+	}
+	if err := checkForbiddenTokens(expr); err != nil {
+		return "", err
+	}
+	lower := strings.ToLower(expr)
+	for _, kw := range rejectedPolicyKeywords {
+		if err := checkKeywordBoundary(lower, kw); err != nil {
+			return "", err
+		}
+	}
+	return expr, nil
+}
+
+// checkForbiddenTokens rejects SQL injection tokens: statement terminators,
+// comments, and dollar-quoted strings.
+func checkForbiddenTokens(expr string) error {
+	if strings.ContainsAny(expr, ";") || strings.Contains(expr, "--") ||
+		strings.Contains(expr, "/*") || strings.Contains(expr, "*/") ||
+		strings.Contains(expr, "$$") {
+		return fmt.Errorf("policy expression contains forbidden token")
+	}
+	if strings.Count(expr, "$") >= 2 {
+		return fmt.Errorf("policy expression contains $-tagged token")
+	}
+	return nil
+}
+
+// checkKeywordBoundary returns an error if kw appears as a whole word in lower.
+// Word-boundary check prevents "user_create_at" from matching "create".
+func checkKeywordBoundary(lower, kw string) error {
+	idx := 0
+	for {
+		pos := strings.Index(lower[idx:], kw)
+		if pos < 0 {
+			return nil
+		}
+		at := idx + pos
+		before := byte(' ')
+		after := byte(' ')
+		if at > 0 {
+			before = lower[at-1]
+		}
+		if at+len(kw) < len(lower) {
+			after = lower[at+len(kw)]
+		}
+		if !isIdentChar(before) && !isIdentChar(after) {
+			return fmt.Errorf("policy expression contains forbidden keyword %q", kw)
+		}
+		idx = at + len(kw)
+	}
+}
+
+func isIdentChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9') || b == '_'
 }
 
 // QuoteRoles quotes a comma-separated roles string. Each role name gets quoted.

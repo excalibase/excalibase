@@ -7,6 +7,13 @@ import (
 	"testing"
 )
 
+const (
+	testPerfAdvisorFmt = "RunPerformanceAdvisor: %v"
+	testSeverityFmt    = "expected severity high, got %s"
+	testSecAdvisorFmt  = "RunSecurityAdvisor: %v"
+)
+
+
 func TestIntegration_AdvisorPerformance_UnindexedFK(t *testing.T) {
 	superDB, _, cleanup := setupPG(t)
 	defer cleanup()
@@ -18,7 +25,7 @@ func TestIntegration_AdvisorPerformance_UnindexedFK(t *testing.T) {
 	introspector := NewIntrospector()
 	findings, err := introspector.RunPerformanceAdvisor(ctx, superDB, "public")
 	if err != nil {
-		t.Fatalf("RunPerformanceAdvisor: %v", err)
+		t.Fatalf(testPerfAdvisorFmt, err)
 	}
 
 	found := false
@@ -26,7 +33,7 @@ func TestIntegration_AdvisorPerformance_UnindexedFK(t *testing.T) {
 		if f.RuleID == "perf-0001" {
 			found = true
 			if f.Severity != "high" {
-				t.Errorf("expected severity high, got %s", f.Severity)
+				t.Errorf(testSeverityFmt, f.Severity)
 			}
 			if f.Category != "performance" {
 				t.Errorf("expected category performance, got %s", f.Category)
@@ -54,7 +61,7 @@ func TestIntegration_AdvisorPerformance_NoPrimaryKey(t *testing.T) {
 	introspector := NewIntrospector()
 	findings, err := introspector.RunPerformanceAdvisor(ctx, superDB, "public")
 	if err != nil {
-		t.Fatalf("RunPerformanceAdvisor: %v", err)
+		t.Fatalf(testPerfAdvisorFmt, err)
 	}
 
 	found := false
@@ -62,7 +69,7 @@ func TestIntegration_AdvisorPerformance_NoPrimaryKey(t *testing.T) {
 		if f.RuleID == "perf-0004" && f.Table == "no_pk_table" {
 			found = true
 			if f.Severity != "high" {
-				t.Errorf("expected severity high, got %s", f.Severity)
+				t.Errorf(testSeverityFmt, f.Severity)
 			}
 			break
 		}
@@ -90,7 +97,7 @@ func TestIntegration_AdvisorPerformance_DuplicateIndex(t *testing.T) {
 	introspector := NewIntrospector()
 	findings, err := introspector.RunPerformanceAdvisor(ctx, superDB, "public")
 	if err != nil {
-		t.Fatalf("RunPerformanceAdvisor: %v", err)
+		t.Fatalf(testPerfAdvisorFmt, err)
 	}
 
 	found := false
@@ -125,7 +132,7 @@ func TestIntegration_AdvisorSecurity_PolicyExistsRLSDisabled(t *testing.T) {
 	introspector := NewIntrospector()
 	findings, err := introspector.RunSecurityAdvisor(ctx, superDB, "public")
 	if err != nil {
-		t.Fatalf("RunSecurityAdvisor: %v", err)
+		t.Fatalf(testSecAdvisorFmt, err)
 	}
 
 	found := false
@@ -161,7 +168,7 @@ func TestIntegration_AdvisorSecurity_RLSEnabledNoPolicy(t *testing.T) {
 	introspector := NewIntrospector()
 	findings, err := introspector.RunSecurityAdvisor(ctx, superDB, "public")
 	if err != nil {
-		t.Fatalf("RunSecurityAdvisor: %v", err)
+		t.Fatalf(testSecAdvisorFmt, err)
 	}
 
 	found := false
@@ -169,7 +176,7 @@ func TestIntegration_AdvisorSecurity_RLSEnabledNoPolicy(t *testing.T) {
 		if f.RuleID == "sec-0008" && f.Table == "users" {
 			found = true
 			if f.Severity != "high" {
-				t.Errorf("expected severity high, got %s", f.Severity)
+				t.Errorf(testSeverityFmt, f.Severity)
 			}
 			break
 		}
@@ -189,7 +196,7 @@ func TestIntegration_AdvisorSecurity_RLSDisabledInPublic(t *testing.T) {
 	introspector := NewIntrospector()
 	findings, err := introspector.RunSecurityAdvisor(ctx, superDB, "public")
 	if err != nil {
-		t.Fatalf("RunSecurityAdvisor: %v", err)
+		t.Fatalf(testSecAdvisorFmt, err)
 	}
 
 	found := false
@@ -228,7 +235,7 @@ func TestIntegration_AdvisorSecurity_SecurityDefinerFunction(t *testing.T) {
 	introspector := NewIntrospector()
 	findings, err := introspector.RunSecurityAdvisor(ctx, superDB, "public")
 	if err != nil {
-		t.Fatalf("RunSecurityAdvisor: %v", err)
+		t.Fatalf(testSecAdvisorFmt, err)
 	}
 
 	found := false
@@ -236,7 +243,7 @@ func TestIntegration_AdvisorSecurity_SecurityDefinerFunction(t *testing.T) {
 		if f.RuleID == "sec-0011" {
 			found = true
 			if f.Severity != "high" {
-				t.Errorf("expected severity high, got %s", f.Severity)
+				t.Errorf(testSeverityFmt, f.Severity)
 			}
 			break
 		}
@@ -265,7 +272,7 @@ func TestIntegration_AdvisorPerformance_ReturnsAllRuleTypes(t *testing.T) {
 	introspector := NewIntrospector()
 	findings, err := introspector.RunPerformanceAdvisor(ctx, superDB, "public")
 	if err != nil {
-		t.Fatalf("RunPerformanceAdvisor: %v", err)
+		t.Fatalf(testPerfAdvisorFmt, err)
 	}
 
 	ruleIDs := map[string]bool{}
@@ -301,7 +308,7 @@ func TestIntegration_AdvisorSecurity_ReturnsAllRuleTypes(t *testing.T) {
 	introspector := NewIntrospector()
 	findings, err := introspector.RunSecurityAdvisor(ctx, superDB, "public")
 	if err != nil {
-		t.Fatalf("RunSecurityAdvisor: %v", err)
+		t.Fatalf(testSecAdvisorFmt, err)
 	}
 
 	for _, f := range findings {

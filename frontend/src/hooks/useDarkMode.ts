@@ -5,7 +5,8 @@ const STORAGE_KEY = 'theme-dark';
 export function useDarkMode() {
   const [dark, setDark] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
-    return stored !== null ? stored === 'true' : true; // default dark
+    // When no stored preference, default to dark mode.
+    return stored === null ? true : stored === 'true';
   });
 
   useEffect(() => {

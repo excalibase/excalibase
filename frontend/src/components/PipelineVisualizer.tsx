@@ -3,8 +3,8 @@ import { cn } from '../utils/cn';
 import { CheckCircle, Circle, XCircle, Loader2 } from 'lucide-react';
 
 interface PipelineVisualizerProps {
-  currentStage: ProvisioningStage;
-  failureReason?: string;
+  readonly currentStage: ProvisioningStage;
+  readonly failureReason?: string;
 }
 
 const STAGES = [
@@ -35,6 +35,19 @@ export function PipelineVisualizer({ currentStage, failureReason }: PipelineVisu
     return <Circle className="w-6 h-6 text-text-tertiary" />;
   };
 
+  const getNodeClass = (index: number) => {
+    if (index < currentIndex || currentStage === ProvisioningStage.COMPLETED) {
+      return 'border-color-success bg-green-900/20';
+    }
+    if (index === currentIndex && !isFailed) {
+      return 'border-accent-primary bg-blue-900/20';
+    }
+    if (isFailed && index === currentIndex) {
+      return 'border-color-error bg-red-900/20';
+    }
+    return 'border-border-primary bg-bg-tertiary';
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between overflow-x-auto pb-4">
@@ -44,13 +57,7 @@ export function PipelineVisualizer({ currentStage, failureReason }: PipelineVisu
               <div
                 className={cn(
                   'flex items-center justify-center w-12 h-12 rounded-full border-2',
-                  index < currentIndex || currentStage === ProvisioningStage.COMPLETED
-                    ? 'border-color-success bg-green-900/20'
-                    : index === currentIndex && !isFailed
-                    ? 'border-accent-primary bg-blue-900/20'
-                    : isFailed && index === currentIndex
-                    ? 'border-color-error bg-red-900/20'
-                    : 'border-border-primary bg-bg-tertiary'
+                  getNodeClass(index)
                 )}
               >
                 {getStageIcon(index)}

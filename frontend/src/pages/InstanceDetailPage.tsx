@@ -72,13 +72,14 @@ export function InstanceDetailPage() {
         <StageTimeline currentStage={instance.currentStage} failureReason={instance.failureReason} />
       </div>
 
-      {/* Live metrics */}
+      {/* Live metrics. Metric fields are nullable while the project is
+          spinning up or scaling — render "—" rather than NaN. */}
       {metrics && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard icon={<Cpu className="w-4 h-4" />}      label="CPU"         value={`${Math.round(metrics.cpuUsagePercent)}%`}    subtitle={`${metrics.cpuUsageCores?.toFixed(1)} cores`}  color="text-blue-400" />
-          <MetricCard icon={<Database className="w-4 h-4" />}  label="Memory"      value={`${Math.round(metrics.memoryUsagePercent)}%`} subtitle={`${metrics.memoryUsageMB} MB`}                color="text-purple-400" />
-          <MetricCard icon={<HardDrive className="w-4 h-4" />} label="Disk"        value={`${Math.round(metrics.diskUsagePercent)}%`}   subtitle={`${metrics.diskUsageGB} GB`}                  color="text-orange-400" />
-          <MetricCard icon={<Users className="w-4 h-4" />}     label="Connections" value={metrics.activeConnections}                   subtitle={`/ ${metrics.maxConnections} max`}            color="text-green-400" />
+          <MetricCard icon={<Cpu className="w-4 h-4" />}      label="CPU"         value={metrics.cpuUsagePercent == null ? '—' : `${Math.round(metrics.cpuUsagePercent)}%`}    subtitle={metrics.cpuUsageCores == null ? '—' : `${metrics.cpuUsageCores.toFixed(1)} cores`}  color="text-blue-400" />
+          <MetricCard icon={<Database className="w-4 h-4" />}  label="Memory"      value={metrics.memoryUsagePercent == null ? '—' : `${Math.round(metrics.memoryUsagePercent)}%`} subtitle={metrics.memoryUsageMB == null ? '—' : `${metrics.memoryUsageMB} MB`}                color="text-purple-400" />
+          <MetricCard icon={<HardDrive className="w-4 h-4" />} label="Disk"        value={metrics.diskUsagePercent == null ? '—' : `${Math.round(metrics.diskUsagePercent)}%`}   subtitle={metrics.diskUsageGB == null ? '—' : `${metrics.diskUsageGB} GB`}                  color="text-orange-400" />
+          <MetricCard icon={<Users className="w-4 h-4" />}     label="Connections" value={metrics.activeConnections ?? '—'}                                                       subtitle={`/ ${metrics.maxConnections ?? '—'} max`}                                            color="text-green-400" />
         </div>
       )}
 
@@ -105,13 +106,13 @@ export function InstanceDetailPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-6 text-sm">
               {[
                 ['Organization',  instance.orgId],
-                ['Host',          instance.host || '—'],
+                ['Host',          instance.host ?? '—'],
                 ['Port',          instance.port ?? '—'],
-                ['Database Name', instance.databaseName || '—'],
+                ['Database Name', instance.databaseName ?? '—'],
                 ['Backup',        instance.backupEnabled ? `Enabled · ${instance.backupSchedule}` : 'Disabled'],
                 ['Created',       new Date(instance.createdAt).toLocaleString()],
                 ['Updated',       new Date(instance.updatedAt).toLocaleString()],
-                ['Metrics',       instance.metricsEndpoint || '—'],
+                ['Metrics',       instance.metricsEndpoint ?? '—'],
               ].map(([label, value]) => (
                 <div key={label as string}>
                   <p className="text-text-tertiary mb-1">{label}</p>
@@ -127,14 +128,16 @@ export function InstanceDetailPage() {
 
           {tab === 'logs' && (
             <div>
-              {!logs ? (
+              {logs == null && (
                 <div className="text-center py-10 text-text-secondary text-sm">Loading logs…</div>
-              ) : logs.trim() === '' ? (
+              )}
+              {logs?.trim() === '' && (
                 <div className="text-center py-10 text-text-secondary text-sm">
                   <FileText className="w-10 h-10 mx-auto mb-2 text-text-tertiary" />
                   No logs available (pod may not be running in this environment).
                 </div>
-              ) : (
+              )}
+              {logs != null && logs.trim() !== '' && (
                 <pre className="bg-bg-primary rounded-lg p-4 text-xs font-mono text-text-secondary overflow-auto max-h-[500px] whitespace-pre-wrap break-all">
                   {logs}
                 </pre>

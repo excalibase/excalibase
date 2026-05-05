@@ -9,20 +9,27 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+const (
+	cnpgGroup      = "postgresql.cnpg.io"
+	cnpgAPIVersion = "postgresql.cnpg.io/v1"
+	postgresSuffix = "-postgres"
+)
+
+
 // GVRs for CloudNativePG CRDs.
 var (
 	CNPGClusterGVR = schema.GroupVersionResource{
-		Group:    "postgresql.cnpg.io",
+		Group:    cnpgGroup,
 		Version:  "v1",
 		Resource: "clusters",
 	}
 	CNPGScheduledBackupGVR = schema.GroupVersionResource{
-		Group:    "postgresql.cnpg.io",
+		Group:    cnpgGroup,
 		Version:  "v1",
 		Resource: "scheduledbackups",
 	}
 	CNPGBackupGVR = schema.GroupVersionResource{
-		Group:    "postgresql.cnpg.io",
+		Group:    cnpgGroup,
 		Version:  "v1",
 		Resource: "backups",
 	}
@@ -44,13 +51,27 @@ type PostgreSQLClusterOpts struct {
 type BackupOpts struct {
 	Schedule      string
 	RetentionDays int
+	// EndpointURL is the S3-compatible storage endpoint Barman writes to.
+	// For Cloudflare R2: https://<account_id>.r2.cloudflarestorage.com
+	// For AWS S3: empty (Barman defaults to AWS).
+	// For local dev: http://floci.excalibase-platform.svc.cluster.local:4566
+	// Empty string keeps the historical localstack default for backwards compat.
+	EndpointURL string
+	// Bucket is the destination bucket name. Path within the bucket is
+	// automatically scoped to the project: s3://<bucket>/<projectID>/...
+	// Empty defaults to "postgres-backups" (legacy default).
+	Bucket string
+	// SecretName is the K8s Secret holding ACCESS_KEY_ID + ACCESS_SECRET_KEY.
+	// Same field names work for AWS S3, R2, MinIO, floci/localstack — Barman
+	// is provider-agnostic at this layer.
+	SecretName string
 }
 
 // BuildPostgreSQLCluster builds a CloudNativePG Cluster CRD as unstructured.
 func BuildPostgreSQLCluster(opts PostgreSQLClusterOpts) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "postgresql.cnpg.io/v1",
+			"apiVersion": cnpgAPIVersion,
 			"kind":       "Cluster",
 			"metadata":   buildClusterMetadata(opts),
 			"spec":       buildClusterSpec(opts),
@@ -66,7 +87,7 @@ func buildClusterMetadata(opts PostgreSQLClusterOpts) map[string]interface{} {
 	}
 
 	metadata := map[string]interface{}{
-		"name":      opts.ProjectID + "-postgres",
+		"name":      opts.ProjectID + postgresSuffix,
 		"namespace": opts.Namespace,
 	}
 	if len(labels) > 0 {
@@ -88,14 +109,19 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 
 	postgresql, storage := buildPostgresqlAndStorage(opts)
 
+	// enablePodMonitor is left off entirely. CNPG's PodMonitor reconciler
+	// blows up with "cannot create Cluster auxiliary objects: expected
+	// pointer, but got invalid kind" when the Prometheus operator's CRDs are
+	// installed but Prometheus isn't scraping the project namespace — which
+	// is the typical AIO setup. Operators who want pod metrics scraped can
+	// add a PodMonitor out-of-band; we don't need to bake it into the CRD.
+	//
+	// customQueriesConfigMap also dropped: CNPG looks for the configMap in
+	// the project namespace; we only ship it to cnpg-system + platform.
+	// Reintroducing means copying the configMap on namespace creation,
+	// which we can do later if anyone actually consumes those queries.
 	monitoring := map[string]interface{}{
-		"enablePodMonitor": opts.Tier.Instances > 1,
-		"customQueriesConfigMap": []interface{}{
-			map[string]interface{}{
-				"key":  "queries",
-				"name": "cnpg-default-monitoring",
-			},
-		},
+		"enablePodMonitor": false,
 	}
 
 	spec := map[string]interface{}{
@@ -178,20 +204,37 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 }
 
 // buildBackupSpec builds the backup section of the CNPG Cluster spec.
+// Provider-agnostic: works for AWS S3, Cloudflare R2, MinIO, floci. The
+// caller picks via BackupOpts{EndpointURL, Bucket, SecretName} — all 3
+// have legacy defaults so existing callers don't break.
 func buildBackupSpec(projectID string, backup *BackupOpts) map[string]interface{} {
+	bucket := backup.Bucket
+	if bucket == "" {
+		bucket = "postgres-backups"
+	}
+	endpoint := backup.EndpointURL
+	if endpoint == "" {
+		// Legacy default for dev/test that still runs against localstack/floci.
+		// Production should always set EndpointURL via chart values.
+		endpoint = "http://floci.excalibase-platform.svc.cluster.local:4566"
+	}
+	secret := backup.SecretName
+	if secret == "" {
+		secret = "backup-s3-creds"
+	}
 	return map[string]interface{}{
 		"retentionPolicy": fmt.Sprintf("%dd", backup.RetentionDays),
 		"barmanObjectStore": map[string]interface{}{
 			"serverName":      "cloud",
-			"destinationPath": fmt.Sprintf("s3://postgres-backups/%s", projectID),
-			"endpointURL":     "http://localstack.localstack.svc.cluster.local:4566",
+			"destinationPath": fmt.Sprintf("s3://%s/%s", bucket, projectID),
+			"endpointURL":     endpoint,
 			"s3Credentials": map[string]interface{}{
 				"accessKeyId": map[string]interface{}{
-					"name": "backup-s3-creds",
+					"name": secret,
 					"key":  "ACCESS_KEY_ID",
 				},
 				"secretAccessKey": map[string]interface{}{
-					"name": "backup-s3-creds",
+					"name": secret,
 					"key":  "ACCESS_SECRET_KEY",
 				},
 			},
@@ -210,7 +253,7 @@ func buildBackupSpec(projectID string, backup *BackupOpts) map[string]interface{
 func BuildScheduledBackup(projectID, namespace, schedule string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "postgresql.cnpg.io/v1",
+			"apiVersion": cnpgAPIVersion,
 			"kind":       "ScheduledBackup",
 			"metadata": map[string]interface{}{
 				"name":      projectID + "-postgres-backup",
@@ -220,7 +263,7 @@ func BuildScheduledBackup(projectID, namespace, schedule string) *unstructured.U
 				"schedule":              schedule,
 				"backupOwnerReference":  "self",
 				"cluster": map[string]interface{}{
-					"name": projectID + "-postgres",
+					"name": projectID + postgresSuffix,
 				},
 				"immediate": false,
 				"target":    "prefer-standby",
@@ -233,7 +276,7 @@ func BuildScheduledBackup(projectID, namespace, schedule string) *unstructured.U
 func BuildManualBackup(projectID, namespace, backupName string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "postgresql.cnpg.io/v1",
+			"apiVersion": cnpgAPIVersion,
 			"kind":       "Backup",
 			"metadata": map[string]interface{}{
 				"name":      backupName,
@@ -241,7 +284,7 @@ func BuildManualBackup(projectID, namespace, backupName string) *unstructured.Un
 			},
 			"spec": map[string]interface{}{
 				"cluster": map[string]interface{}{
-					"name": projectID + "-postgres",
+					"name": projectID + postgresSuffix,
 				},
 			},
 		},

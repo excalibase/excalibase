@@ -11,6 +11,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const statusFile = "status.json"
+
+
 type HistoryWriter struct {
 	basePath string
 }
@@ -37,7 +40,7 @@ func (w *HistoryWriter) StartAttempt(projectID, attemptID string) error {
 	if err != nil {
 		return fmt.Errorf("marshal attempt status: %w", err)
 	}
-	return os.WriteFile(filepath.Join(dir, "status.json"), data, 0644)
+	return os.WriteFile(filepath.Join(dir, statusFile), data, 0644)
 }
 
 func (w *HistoryWriter) LogStage(projectID, attemptID string, stage domain.ProvisioningStage, message string) {
@@ -69,8 +72,8 @@ func (w *HistoryWriter) FinalizeAttempt(projectID, attemptID, status string) {
 		log.Printf("WARN: marshal attempt status %s: %v", attemptID, err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(dir, "status.json"), data, 0644); err != nil {
-		log.Printf("WARN: write %s: %v", filepath.Join(dir, "status.json"), err)
+	if err := os.WriteFile(filepath.Join(dir, statusFile), data, 0644); err != nil {
+		log.Printf("WARN: write %s: %v", filepath.Join(dir, statusFile), err)
 	}
 }
 

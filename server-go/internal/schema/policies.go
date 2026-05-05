@@ -62,13 +62,21 @@ func (i *Introspector) CreatePolicy(ctx context.Context, db *sql.DB, req CreateP
 	b.WriteString(QuoteRoles(req.Roles))
 
 	if req.Using != nil {
+		safe, err := ValidatePolicyExpression(*req.Using)
+		if err != nil {
+			return fmt.Errorf("USING: %w", err)
+		}
 		b.WriteString(" USING (")
-		b.WriteString(*req.Using)
+		b.WriteString(safe)
 		b.WriteString(")")
 	}
 	if req.WithCheck != nil {
+		safe, err := ValidatePolicyExpression(*req.WithCheck)
+		if err != nil {
+			return fmt.Errorf("WITH CHECK: %w", err)
+		}
 		b.WriteString(" WITH CHECK (")
-		b.WriteString(*req.WithCheck)
+		b.WriteString(safe)
 		b.WriteString(")")
 	}
 

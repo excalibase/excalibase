@@ -1,10 +1,15 @@
-FROM denoland/deno:alpine-2.1.4
+FROM denoland/deno:alpine-2.5.5
 
 WORKDIR /app
 
-# Run as non-root user
-RUN addgroup -S deno && adduser -S deno -G deno
-RUN chown -R deno:deno /app
+# Pull latest Alpine security patches (openssl/libcrypto3/libssl3 ship CVE
+# fixes on a faster cadence than the deno base) AND chown /app to the
+# pre-existing non-root `deno` user from the base image — merged into a
+# single RUN to keep the layer count down (Sonar docker:S7031).
+RUN apk update --no-cache && \
+    apk upgrade --no-cache --available openssl libcrypto3 libssl3 musl musl-utils ca-certificates ssl_client && \
+    rm -rf /var/cache/apk/* && \
+    chown -R deno:deno /app
 
 COPY --chown=deno:deno server.ts .
 

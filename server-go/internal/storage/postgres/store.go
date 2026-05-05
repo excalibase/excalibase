@@ -109,12 +109,16 @@ func flexTimePtr(ft *domain.FlexTime) *time.Time {
 	return &ft.Time
 }
 
+// toFlexTime is the inverse of flexTimePtr. Used by integration tests —
+// `go vet` without `-tags=integration` won't see those callers and may
+// flag this as unused.
 func toFlexTime(t *time.Time) *domain.FlexTime {
 	if t == nil {
 		return nil
 	}
 	return &domain.FlexTime{Time: *t}
 }
+
 
 func ptrStr(s *string) *string {
 	return s

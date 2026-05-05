@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -74,7 +74,7 @@ function InstancePicker() {
   );
 }
 
-function NavItem({ icon: Icon, label, to }: { icon: LucideIcon; label: string; to: string }) {
+function NavItem({ icon: Icon, label, to }: { readonly icon: LucideIcon; readonly label: string; readonly to: string }) {
   return (
     <NavLink
       to={to}
@@ -102,12 +102,12 @@ function AppLayoutInner() {
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
-  const { user, clearAuth } = useAuthStore();
+  const { user, logout } = useAuthStore();
 
   // Apply theme on mount
-  useState(() => {
+  useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
-  });
+  }, [dark]);
 
   const toggleDark = () => {
     const next = !dark;
@@ -125,9 +125,11 @@ function AppLayoutInner() {
   return (
     <div className="flex h-screen bg-bg-primary overflow-hidden">
       {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-20 lg:hidden"
+        <button
+          type="button"
+          className="fixed inset-0 bg-black/50 z-20 lg:hidden cursor-default"
           onClick={() => setSidebarOpen(false)}
+          aria-label="Close sidebar"
         />
       )}
 
@@ -203,7 +205,7 @@ function AppLayoutInner() {
               {dark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </button>
             <button
-              onClick={clearAuth}
+              onClick={() => { void logout(); }}
               className="p-2 rounded-lg text-text-secondary hover:text-red-400 hover:bg-surface-hover transition-colors"
               title="Sign out"
             >

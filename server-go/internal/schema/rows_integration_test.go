@@ -4,8 +4,29 @@ package schema
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 )
+
+const (
+	testCreateTableFmt = "create table: %v"
+	testGetRowsFmt     = "GetRows: %v"
+	testTotalCount5Fmt = "expected totalCount 5, got %d"
+	test2RowsFmt       = "expected 2 rows, got %d"
+	testSeedFmt        = "seed: %v"
+	test1RowFmt        = "expected 1 row, got %d"
+)
+
+// assertRowsResult validates totalCount and row count from a GetRows result.
+func assertRowsResult(t *testing.T, result *RowsResult, wantTotal int64, wantRows int) {
+	t.Helper()
+	if result.TotalCount != wantTotal {
+		t.Errorf("expected totalCount %d, got %d", wantTotal, result.TotalCount)
+	}
+	if len(result.Rows) != wantRows {
+		t.Errorf("expected %d rows, got %d", wantRows, len(result.Rows))
+	}
+}
 
 func TestIntegration_GetRows(t *testing.T) {
 	_, appDB, cleanup := setupPG(t)
@@ -14,7 +35,6 @@ func TestIntegration_GetRows(t *testing.T) {
 	introspector := NewIntrospector()
 	ctx := context.Background()
 
-	// Create and seed table
 	_, err := appDB.ExecContext(ctx, `
 		CREATE TABLE row_test (
 			id serial PRIMARY KEY,
@@ -24,7 +44,7 @@ func TestIntegration_GetRows(t *testing.T) {
 		)
 	`)
 	if err != nil {
-		t.Fatalf("create table: %v", err)
+		t.Fatalf(testCreateTableFmt, err)
 	}
 	_, err = appDB.ExecContext(ctx, `
 		INSERT INTO row_test (name, age, email) VALUES
@@ -41,14 +61,9 @@ func TestIntegration_GetRows(t *testing.T) {
 	t.Run("default pagination", func(t *testing.T) {
 		result, err := introspector.GetRows(ctx, appDB, "public", "row_test", RowQueryOpts{})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
-		if result.TotalCount != 5 {
-			t.Errorf("expected totalCount 5, got %d", result.TotalCount)
-		}
-		if len(result.Rows) != 5 {
-			t.Errorf("expected 5 rows, got %d", len(result.Rows))
-		}
+		assertRowsResult(t, result, 5, 5)
 		if len(result.Columns) != 4 {
 			t.Errorf("expected 4 columns, got %d", len(result.Columns))
 		}
@@ -62,26 +77,20 @@ func TestIntegration_GetRows(t *testing.T) {
 			Order:  "asc",
 		})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
-		if result.TotalCount != 5 {
-			t.Errorf("expected totalCount 5, got %d", result.TotalCount)
-		}
-		if len(result.Rows) != 2 {
-			t.Errorf("expected 2 rows, got %d", len(result.Rows))
-		}
+		assertRowsResult(t, result, 5, 2)
 	})
 
 	t.Run("limit capped at 1000", func(t *testing.T) {
-		// Should not error, just cap
 		result, err := introspector.GetRows(ctx, appDB, "public", "row_test", RowQueryOpts{
 			Limit: 5000,
 		})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
 		if result.TotalCount != 5 {
-			t.Errorf("expected totalCount 5, got %d", result.TotalCount)
+			t.Errorf(testTotalCount5Fmt, result.TotalCount)
 		}
 	})
 }
@@ -101,7 +110,7 @@ func TestIntegration_GetRows_Sort(t *testing.T) {
 		)
 	`)
 	if err != nil {
-		t.Fatalf("create table: %v", err)
+		t.Fatalf(testCreateTableFmt, err)
 	}
 	_, err = appDB.ExecContext(ctx, `
 		INSERT INTO sort_test (name, age) VALUES
@@ -110,7 +119,7 @@ func TestIntegration_GetRows_Sort(t *testing.T) {
 			('Charlie', 35)
 	`)
 	if err != nil {
-		t.Fatalf("seed: %v", err)
+		t.Fatalf(testSeedFmt, err)
 	}
 
 	t.Run("sort ascending by age", func(t *testing.T) {
@@ -119,7 +128,7 @@ func TestIntegration_GetRows_Sort(t *testing.T) {
 			Order: "asc",
 		})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
 		if len(result.Rows) != 3 {
 			t.Fatalf("expected 3 rows, got %d", len(result.Rows))
@@ -137,7 +146,7 @@ func TestIntegration_GetRows_Sort(t *testing.T) {
 			Order: "desc",
 		})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
 		firstAge := result.Rows[0][2]
 		if toInt64(firstAge) != 35 {
@@ -156,129 +165,108 @@ func TestIntegration_GetRows_Sort(t *testing.T) {
 	})
 }
 
-func TestIntegration_GetRows_Filter(t *testing.T) {
+const filterTestSetupSQL = `
+	CREATE TABLE filter_test (
+		id serial PRIMARY KEY,
+		name text NOT NULL,
+		age int,
+		email text
+	)
+`
+
+const filterTestSeedSQL = `
+	INSERT INTO filter_test (name, age, email) VALUES
+		('Alice', 30, 'alice@test.com'),
+		('Bob', 25, NULL),
+		('Charlie', 35, 'charlie@test.com')
+`
+
+func TestIntegration_GetRows_Filter_Equality(t *testing.T) {
 	_, appDB, cleanup := setupPG(t)
 	defer cleanup()
-
 	introspector := NewIntrospector()
 	ctx := context.Background()
-
-	_, err := appDB.ExecContext(ctx, `
-		CREATE TABLE filter_test (
-			id serial PRIMARY KEY,
-			name text NOT NULL,
-			age int,
-			email text
-		)
-	`)
-	if err != nil {
-		t.Fatalf("create table: %v", err)
+	if _, err := appDB.ExecContext(ctx, filterTestSetupSQL); err != nil {
+		t.Fatalf(testCreateTableFmt, err)
 	}
-	_, err = appDB.ExecContext(ctx, `
-		INSERT INTO filter_test (name, age, email) VALUES
-			('Alice', 30, 'alice@test.com'),
-			('Bob', 25, NULL),
-			('Charlie', 35, 'charlie@test.com')
-	`)
-	if err != nil {
-		t.Fatalf("seed: %v", err)
+	if _, err := appDB.ExecContext(ctx, filterTestSeedSQL); err != nil {
+		t.Fatalf(testSeedFmt, err)
 	}
 
 	t.Run("filter equals", func(t *testing.T) {
 		result, err := introspector.GetRows(ctx, appDB, "public", "filter_test", RowQueryOpts{
-			Filters: []RowFilter{
-				{Column: "name", Operator: "=", Value: "Alice"},
-			},
+			Filters: []RowFilter{{Column: "name", Operator: "=", Value: "Alice"}},
 		})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
-		if len(result.Rows) != 1 {
-			t.Fatalf("expected 1 row, got %d", len(result.Rows))
-		}
-		if result.TotalCount != 1 {
-			t.Errorf("expected totalCount 1, got %d", result.TotalCount)
-		}
+		assertRowsResult(t, result, 1, 1)
 	})
 
 	t.Run("filter greater than", func(t *testing.T) {
 		result, err := introspector.GetRows(ctx, appDB, "public", "filter_test", RowQueryOpts{
-			Filters: []RowFilter{
-				{Column: "age", Operator: ">", Value: "28"},
-			},
+			Filters: []RowFilter{{Column: "age", Operator: ">", Value: "28"}},
 		})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
 		if len(result.Rows) != 2 {
-			t.Errorf("expected 2 rows, got %d", len(result.Rows))
+			t.Errorf(test2RowsFmt, len(result.Rows))
 		}
 	})
+}
+
+// runFilterRowCount executes a GetRows call with a filter set and asserts the
+// returned row count. Centralising the boilerplate keeps the parent test's
+// cognitive complexity within the Sonar limit.
+func runFilterRowCount(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, filters []RowFilter, want int) {
+	t.Helper()
+	result, err := i.GetRows(ctx, db, "public", "filter_test", RowQueryOpts{Filters: filters})
+	if err != nil {
+		t.Fatalf(testGetRowsFmt, err)
+	}
+	if len(result.Rows) != want {
+		t.Errorf("expected %d rows, got %d", want, len(result.Rows))
+	}
+}
+
+func TestIntegration_GetRows_Filter_Null(t *testing.T) {
+	_, appDB, cleanup := setupPG(t)
+	defer cleanup()
+	introspector := NewIntrospector()
+	ctx := context.Background()
+	if _, err := appDB.ExecContext(ctx, filterTestSetupSQL); err != nil {
+		t.Fatalf(testCreateTableFmt, err)
+	}
+	if _, err := appDB.ExecContext(ctx, filterTestSeedSQL); err != nil {
+		t.Fatalf(testSeedFmt, err)
+	}
 
 	t.Run("filter is_null", func(t *testing.T) {
-		result, err := introspector.GetRows(ctx, appDB, "public", "filter_test", RowQueryOpts{
-			Filters: []RowFilter{
-				{Column: "email", Operator: "is_null"},
-			},
-		})
-		if err != nil {
-			t.Fatalf("GetRows: %v", err)
-		}
-		if len(result.Rows) != 1 {
-			t.Errorf("expected 1 row (Bob), got %d", len(result.Rows))
-		}
+		runFilterRowCount(t, introspector, appDB, ctx,
+			[]RowFilter{{Column: "email", Operator: "is_null"}}, 1)
 	})
 
 	t.Run("filter is_not_null", func(t *testing.T) {
-		result, err := introspector.GetRows(ctx, appDB, "public", "filter_test", RowQueryOpts{
-			Filters: []RowFilter{
-				{Column: "email", Operator: "is_not_null"},
-			},
-		})
-		if err != nil {
-			t.Fatalf("GetRows: %v", err)
-		}
-		if len(result.Rows) != 2 {
-			t.Errorf("expected 2 rows, got %d", len(result.Rows))
-		}
+		runFilterRowCount(t, introspector, appDB, ctx,
+			[]RowFilter{{Column: "email", Operator: "is_not_null"}}, 2)
 	})
 
 	t.Run("filter like", func(t *testing.T) {
-		result, err := introspector.GetRows(ctx, appDB, "public", "filter_test", RowQueryOpts{
-			Filters: []RowFilter{
-				{Column: "name", Operator: "like", Value: "%li%"},
-			},
-		})
-		if err != nil {
-			t.Fatalf("GetRows: %v", err)
-		}
-		// Alice and Charlie match %li%
-		if len(result.Rows) != 2 {
-			t.Errorf("expected 2 rows, got %d", len(result.Rows))
-		}
+		runFilterRowCount(t, introspector, appDB, ctx,
+			[]RowFilter{{Column: "name", Operator: "like", Value: "%li%"}}, 2)
 	})
 
 	t.Run("multiple filters AND", func(t *testing.T) {
-		result, err := introspector.GetRows(ctx, appDB, "public", "filter_test", RowQueryOpts{
-			Filters: []RowFilter{
-				{Column: "age", Operator: ">=", Value: "30"},
-				{Column: "email", Operator: "is_not_null"},
-			},
-		})
-		if err != nil {
-			t.Fatalf("GetRows: %v", err)
-		}
-		// Alice (30, has email) and Charlie (35, has email)
-		if len(result.Rows) != 2 {
-			t.Errorf("expected 2 rows, got %d", len(result.Rows))
-		}
+		runFilterRowCount(t, introspector, appDB, ctx, []RowFilter{
+			{Column: "age", Operator: ">=", Value: "30"},
+			{Column: "email", Operator: "is_not_null"},
+		}, 2)
 	})
 
 	t.Run("invalid operator rejected", func(t *testing.T) {
 		_, err := introspector.GetRows(ctx, appDB, "public", "filter_test", RowQueryOpts{
-			Filters: []RowFilter{
-				{Column: "name", Operator: "DROP TABLE", Value: "x"},
-			},
+			Filters: []RowFilter{{Column: "name", Operator: "DROP TABLE", Value: "x"}},
 		})
 		if err == nil {
 			t.Fatal("expected error for invalid operator")
@@ -301,7 +289,7 @@ func TestIntegration_InsertRow(t *testing.T) {
 		)
 	`)
 	if err != nil {
-		t.Fatalf("create table: %v", err)
+		t.Fatalf(testCreateTableFmt, err)
 	}
 
 	t.Run("insert and verify", func(t *testing.T) {
@@ -318,36 +306,38 @@ func TestIntegration_InsertRow(t *testing.T) {
 		if len(result.Columns) < 3 {
 			t.Fatalf("expected at least 3 columns, got %d", len(result.Columns))
 		}
-
-		// Verify data is actually in the table
 		rows, err := introspector.GetRows(ctx, appDB, "public", "insert_test", RowQueryOpts{})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
 		if rows.TotalCount != 1 {
-			t.Errorf("expected 1 row, got %d", rows.TotalCount)
+			t.Errorf(test1RowFmt, rows.TotalCount)
 		}
 	})
 
 	t.Run("insert multiple rows", func(t *testing.T) {
-		for i := 0; i < 3; i++ {
-			_, err := introspector.InsertRow(ctx, appDB, "public", "insert_test", map[string]interface{}{
-				"name": "User",
-				"age":  20 + i,
-			})
-			if err != nil {
-				t.Fatalf("InsertRow %d: %v", i, err)
-			}
-		}
-
+		insertMultipleRows(t, introspector, appDB, ctx, "insert_test", 3)
 		rows, err := introspector.GetRows(ctx, appDB, "public", "insert_test", RowQueryOpts{})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
 		if rows.TotalCount != 4 { // 1 from first test + 3
 			t.Errorf("expected 4 rows, got %d", rows.TotalCount)
 		}
 	})
+}
+
+// insertMultipleRows inserts n rows with sequential ages into the named table.
+func insertMultipleRows(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, table string, n int) {
+	t.Helper()
+	for idx := 0; idx < n; idx++ {
+		if _, err := i.InsertRow(ctx, db, "public", table, map[string]interface{}{
+			"name": "User",
+			"age":  20 + idx,
+		}); err != nil {
+			t.Fatalf("InsertRow %d: %v", idx, err)
+		}
+	}
 }
 
 func TestIntegration_UpdateRow(t *testing.T) {
@@ -365,11 +355,11 @@ func TestIntegration_UpdateRow(t *testing.T) {
 		)
 	`)
 	if err != nil {
-		t.Fatalf("create table: %v", err)
+		t.Fatalf(testCreateTableFmt, err)
 	}
 	_, err = appDB.ExecContext(ctx, `INSERT INTO update_test (name, age) VALUES ('Alice', 30)`)
 	if err != nil {
-		t.Fatalf("seed: %v", err)
+		t.Fatalf(testSeedFmt, err)
 	}
 
 	t.Run("update and verify", func(t *testing.T) {
@@ -380,18 +370,16 @@ func TestIntegration_UpdateRow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("UpdateRow: %v", err)
 		}
-
-		// Verify the change
 		result, err := introspector.GetRows(ctx, appDB, "public", "update_test", RowQueryOpts{
 			Filters: []RowFilter{
 				{Column: "id", Operator: "=", Value: "1"},
 			},
 		})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
 		if len(result.Rows) != 1 {
-			t.Fatalf("expected 1 row, got %d", len(result.Rows))
+			t.Fatalf(test1RowFmt, len(result.Rows))
 		}
 		// name is column index 1
 		if result.Rows[0][1] != "Alice Updated" {
@@ -403,7 +391,6 @@ func TestIntegration_UpdateRow(t *testing.T) {
 		err := introspector.UpdateRow(ctx, appDB, "public", "update_test", "id", "999", map[string]interface{}{
 			"name": "Ghost",
 		})
-		// Should not error (0 rows affected is valid SQL behavior)
 		if err != nil {
 			t.Fatalf("UpdateRow non-existent: %v", err)
 		}
@@ -424,13 +411,13 @@ func TestIntegration_DeleteRow(t *testing.T) {
 		)
 	`)
 	if err != nil {
-		t.Fatalf("create table: %v", err)
+		t.Fatalf(testCreateTableFmt, err)
 	}
 	_, err = appDB.ExecContext(ctx, `
 		INSERT INTO delete_test (name) VALUES ('Alice'), ('Bob'), ('Charlie')
 	`)
 	if err != nil {
-		t.Fatalf("seed: %v", err)
+		t.Fatalf(testSeedFmt, err)
 	}
 
 	t.Run("delete and verify", func(t *testing.T) {
@@ -438,23 +425,17 @@ func TestIntegration_DeleteRow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DeleteRow: %v", err)
 		}
-
 		result, err := introspector.GetRows(ctx, appDB, "public", "delete_test", RowQueryOpts{
 			Sort:  "id",
 			Order: "asc",
 		})
 		if err != nil {
-			t.Fatalf("GetRows: %v", err)
+			t.Fatalf(testGetRowsFmt, err)
 		}
 		if result.TotalCount != 2 {
 			t.Errorf("expected 2 rows after delete, got %d", result.TotalCount)
 		}
-		// Verify Bob (id=2) is gone
-		for _, row := range result.Rows {
-			if row[1] == "Bob" {
-				t.Error("Bob should have been deleted")
-			}
-		}
+		assertBobDeleted(t, result.Rows)
 	})
 
 	t.Run("delete non-existent row", func(t *testing.T) {
@@ -463,6 +444,16 @@ func TestIntegration_DeleteRow(t *testing.T) {
 			t.Fatalf("DeleteRow non-existent: %v", err)
 		}
 	})
+}
+
+// assertBobDeleted checks that no row with name "Bob" exists in the result set.
+func assertBobDeleted(t *testing.T, rows [][]interface{}) {
+	t.Helper()
+	for _, row := range rows {
+		if row[1] == "Bob" {
+			t.Error("Bob should have been deleted")
+		}
+	}
 }
 
 // toInt64 converts various numeric types to int64 for comparison.

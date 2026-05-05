@@ -11,16 +11,19 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const testStreamPath = "/stream"
+
+
 func TestSSEMetricsStream(t *testing.T) {
 	r := chi.NewRouter()
 	h := &SSEHandler{interval: 100 * time.Millisecond}
-	r.Get("/stream", h.StreamMetrics)
+	r.Get(testStreamPath, h.StreamMetrics)
 
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
 	client := &http.Client{Timeout: 400 * time.Millisecond}
-	resp, err := client.Get(ts.URL + "/stream")
+	resp, err := client.Get(ts.URL + testStreamPath)
 	if err != nil {
 		// Timeout is expected — we just want the data received so far
 		t.Skipf("client timeout (expected): %v", err)
@@ -48,13 +51,13 @@ func TestSSEMetricsStream(t *testing.T) {
 func TestSSEContentType(t *testing.T) {
 	r := chi.NewRouter()
 	h := &SSEHandler{interval: 50 * time.Millisecond}
-	r.Get("/stream", h.StreamMetrics)
+	r.Get(testStreamPath, h.StreamMetrics)
 
 	// Use real HTTP server to avoid race on ResponseRecorder
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/stream")
+	resp, err := http.Get(ts.URL + testStreamPath)
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}

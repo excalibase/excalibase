@@ -183,8 +183,13 @@ describe('SetupPage', () => {
       });
     });
     await waitFor(() => {
-      expect(useAuthStore.getState().accessToken).toBe('pat-bootstrap');
+      // Cookie auth flow: state holds the user profile + isAuthenticated.
+      // The raw token lives in localStorage as legacyToken (header fallback)
+      // and in the httpOnly cookie set by the server — neither belongs in
+      // store state any more.
+      expect(useAuthStore.getState().isAuthenticated).toBe(true);
       expect(useAuthStore.getState().user?.role).toBe('platform_admin');
+      expect(localStorage.getItem('auth_token')).toBe('pat-bootstrap');
     });
     expect(await screen.findByTestId('dashboard')).toBeInTheDocument();
   });

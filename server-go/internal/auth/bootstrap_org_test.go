@@ -8,6 +8,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const testAdminUserID = "admin-user-id"
+
+
 // mockOrgStore implements the subset of OrgStore needed for bootstrap
 type mockOrgStore struct {
 	orgs  []*domain.Org
@@ -37,7 +40,7 @@ func TestBootstrapDefaultOrg_CreatesWhenEmpty(t *testing.T) {
 	store := &mockOrgStore{}
 	ctx := context.Background()
 
-	err := BootstrapDefaultOrg(ctx, store, "admin-user-id")
+	err := BootstrapDefaultOrg(ctx, store, testAdminUserID)
 	if err != nil {
 		t.Fatalf("BootstrapDefaultOrg: %v", err)
 	}
@@ -53,7 +56,7 @@ func TestBootstrapDefaultOrg_CreatesWhenEmpty(t *testing.T) {
 	if org.Name != "Default Organization" {
 		t.Errorf("expected name=Default Organization, got %s", org.Name)
 	}
-	if org.OwnerID != "admin-user-id" {
+	if org.OwnerID != testAdminUserID {
 		t.Errorf("expected ownerId=admin-user-id, got %s", org.OwnerID)
 	}
 	if org.ID == "" {
@@ -66,7 +69,7 @@ func TestBootstrapDefaultOrg_SkipsWhenOrgsExist(t *testing.T) {
 	store := &mockOrgStore{orgs: []*domain.Org{existing}}
 	ctx := context.Background()
 
-	err := BootstrapDefaultOrg(ctx, store, "admin-user-id")
+	err := BootstrapDefaultOrg(ctx, store, testAdminUserID)
 	if err != nil {
 		t.Fatalf("BootstrapDefaultOrg: %v", err)
 	}

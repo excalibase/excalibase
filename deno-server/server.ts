@@ -73,23 +73,28 @@ function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let result = 0;
   for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    // codePointAt is preferred over charCodeAt; for ASCII secrets the values
+    // are identical, but the wider type satisfies modern lint rules.
+    const ca = a.codePointAt(i) ?? 0;
+    const cb = b.codePointAt(i) ?? 0;
+    result |= ca ^ cb;
   }
   return result === 0;
 }
 
-const RUNTIME_SECRET = Deno.env.get("RUNTIME_SECRET");
-if (!RUNTIME_SECRET) {
+const RUNTIME_SECRET_RAW = Deno.env.get("RUNTIME_SECRET");
+if (!RUNTIME_SECRET_RAW) {
   console.error("FATAL: RUNTIME_SECRET environment variable is required");
   Deno.exit(1);
 }
+const RUNTIME_SECRET: string = RUNTIME_SECRET_RAW;
 
 const MAX_CODE_SIZE = 512 * 1024; // 512 KB
 const MAX_INVOKE_BODY = 1024 * 1024; // 1 MB
 const MAX_SCRIPTS = 100;
 const INVOKE_TIMEOUT_MS = 30_000;
 const WORKER_INIT_TIMEOUT_MS = 5_000;
-const VALID_ID = /^[a-zA-Z0-9_\-]{1,128}$/;
+const VALID_ID = /^[a-zA-Z0-9_-]{1,128}$/;
 // Per-function log ring buffer capacity. Old entries are dropped first.
 const LOG_RING_SIZE = 100;
 // Cap on a single log line so one huge console.log() can't blow up memory.
@@ -110,7 +115,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
   // We also expose a plain `env` helper (`env.KEY`) for ergonomics — users
   // migrating from Supabase get `Deno.env.get`, new users get `env.KEY`.
   const secretsJSON = JSON.stringify(secrets);
-  return `
+  return String.raw`
     // --- console interceptor ---
     // Proxy console.* so user log output is streamed back to the runtime
     // and stored in a per-function ring buffer. Original console.* is still
@@ -136,7 +141,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           try {
             self.postMessage({ type: 'log', level: lvl, msg: msg, ts: Date.now() });
           } catch (_) { /* ignore */ }
-          try { orig.apply(null, args); } catch (_) { /* ignore */ }
+          try { orig.apply(null, args); } catch { /* suppress original console errors */ }
         };
       }
     })();
@@ -192,7 +197,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           // Accept relative URLs from the platform (e.g. /api/.../invoke path).
           // Request() requires an absolute URL, so prepend a synthetic base.
           let url = reqData.url || '/';
-          if (!/^https?:\\/\\//.test(url)) {
+          if (!/^https?:\/\//.test(url)) {
             url = 'http://fn.excalibase.local' + (url.startsWith('/') ? '' : '/') + url;
           }
           const req = new Request(url, init);
@@ -222,7 +227,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
 }
 
 class FunctionRuntime {
-  private scripts = new Map<string, ScriptMetadata>();
+  private readonly scripts = new Map<string, ScriptMetadata>();
 
   async deploy(req: DeployRequest): Promise<{ id: string; url: string }> {
     const { id, code, secrets = {} } = req;
@@ -270,7 +275,7 @@ class FunctionRuntime {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         // Terminate the orphan so we don't leak it on init failure.
-        try { worker.terminate(); } catch (_) { /* ignore */ }
+        try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on timeout:", terminateErr); }
         reject(new Error("worker init timeout"));
       }, WORKER_INIT_TIMEOUT_MS);
       worker.onmessage = (e) => {
@@ -281,8 +286,8 @@ class FunctionRuntime {
       };
       worker.onerror = (err) => {
         clearTimeout(timeout);
-        try { worker.terminate(); } catch (_) { /* ignore */ }
-        reject(err);
+        try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on error:", terminateErr); }
+        reject(new Error(err.message ?? "worker init error"));
       };
     });
 
@@ -342,7 +347,7 @@ class FunctionRuntime {
         p.reject(new Error(`worker crashed: ${err.message || "unknown"}`));
         meta.pending.delete(reqId);
       }
-      try { worker.terminate(); } catch (_) { /* ignore */ }
+      try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on crash:", terminateErr); }
       this.scripts.delete(id);
     };
 
@@ -372,7 +377,7 @@ class FunctionRuntime {
         // on the next deploy call.
         if (script.pending.size === 0) {
           console.error(`[runtime] terminating stuck worker ${id} (no pending requests after timeout)`);
-          try { script.worker.terminate(); } catch (_) { /* ignore */ }
+          try { script.worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on invoke timeout:", terminateErr); }
           this.scripts.delete(id);
         }
       }, INVOKE_TIMEOUT_MS);
@@ -432,151 +437,159 @@ const metrics = {
 
 const runtime = new FunctionRuntime();
 
+const JSON_HEADERS: Record<string, string> = { "Content-Type": "application/json" };
+
+// checkContentLength refuses oversized requests upfront via Content-Length,
+// before the body is read into memory. Returns a 413 Response on overflow.
+function checkContentLength(req: Request, max: number): Response | null {
+  const cl = req.headers.get("content-length");
+  if (cl) {
+    const n = Number(cl);
+    if (Number.isFinite(n) && n > max) {
+      return Response.json({ error: "payload too large" }, { status: 413, headers: JSON_HEADERS });
+    }
+  }
+  return null;
+}
+
+function notFound(): Response {
+  return Response.json({ error: "not found" }, { status: 404, headers: JSON_HEADERS });
+}
+
+function badRequest(msg: string): Response {
+  return Response.json({ error: msg }, { status: 400, headers: JSON_HEADERS });
+}
+
+async function handleHealth(): Promise<Response> {
+  return Response.json(
+    { status: "healthy", scripts: runtime.stats().totalScripts, uptime: performance.now() },
+    { headers: JSON_HEADERS },
+  );
+}
+
+async function handleDeploy(req: Request): Promise<Response> {
+  const deployMax = MAX_CODE_SIZE + 16 * 1024;
+  const tooBig = checkContentLength(req, deployMax);
+  if (tooBig) return tooBig;
+  const body = await req.text();
+  if (body.length > deployMax) {
+    return Response.json({ error: "payload too large" }, { status: 413, headers: JSON_HEADERS });
+  }
+  const parsed = JSON.parse(body) as DeployRequest;
+  if (!parsed.id || !parsed.code) {
+    return badRequest("missing id or code");
+  }
+  const result = await runtime.deploy(parsed);
+  return Response.json(result, { status: 201, headers: JSON_HEADERS });
+}
+
+async function handleInvoke(req: Request, id: string): Promise<Response> {
+  if (!VALID_ID.test(id)) return badRequest("invalid function id");
+  const tooBig = checkContentLength(req, MAX_INVOKE_BODY);
+  if (tooBig) return tooBig;
+  const body = await req.text();
+  if (body.length > MAX_INVOKE_BODY) {
+    return Response.json({ error: "payload too large" }, { status: 413, headers: JSON_HEADERS });
+  }
+  const invokeReq = JSON.parse(body) as InvokeRequest;
+  const result = await runtime.invoke(id, invokeReq);
+  return Response.json(result, { headers: JSON_HEADERS });
+}
+
+function handleLogs(url: URL, id: string): Response {
+  if (!VALID_ID.test(id)) return badRequest("invalid function id");
+  const sinceRaw = url.searchParams.get("since");
+  const sinceMs = sinceRaw ? Number(sinceRaw) : undefined;
+  const logs = runtime.getLogs(id, sinceMs);
+  if (logs === null) return notFound();
+  return Response.json({ logs }, { headers: JSON_HEADERS });
+}
+
+function handleDelete(id: string): Response {
+  if (!VALID_ID.test(id)) return badRequest("invalid function id");
+  return runtime.delete(id)
+    ? Response.json({ status: "deleted", id }, { headers: JSON_HEADERS })
+    : notFound();
+}
+
+function handleMetrics(): Response {
+  const stats = runtime.stats();
+  const lines = [
+    "# HELP excalibase_fn_scripts_active Number of deployed function workers",
+    "# TYPE excalibase_fn_scripts_active gauge",
+    `excalibase_fn_scripts_active ${stats.totalScripts}`,
+    "",
+    "# HELP excalibase_fn_scripts_max Maximum number of function workers",
+    "# TYPE excalibase_fn_scripts_max gauge",
+    `excalibase_fn_scripts_max ${stats.maxScripts}`,
+    "",
+    "# HELP excalibase_fn_invocations_total Total function invocations",
+    "# TYPE excalibase_fn_invocations_total counter",
+    `excalibase_fn_invocations_total ${metrics.invocationsTotal}`,
+    "",
+    "# HELP excalibase_fn_invocations_errors_total Total failed invocations",
+    "# TYPE excalibase_fn_invocations_errors_total counter",
+    `excalibase_fn_invocations_errors_total ${metrics.invocationsError}`,
+    "",
+    "# HELP excalibase_fn_deploys_total Total function deployments",
+    "# TYPE excalibase_fn_deploys_total counter",
+    `excalibase_fn_deploys_total ${metrics.deploysTotal}`,
+    "",
+    "# HELP excalibase_fn_timeouts_total Total invocation timeouts",
+    "# TYPE excalibase_fn_timeouts_total counter",
+    `excalibase_fn_timeouts_total ${metrics.timeoutsTotal}`,
+    "",
+    "# HELP excalibase_fn_uptime_seconds Runtime uptime in seconds",
+    "# TYPE excalibase_fn_uptime_seconds gauge",
+    `excalibase_fn_uptime_seconds ${Math.floor(performance.now() / 1000)}`,
+    "",
+  ];
+  return new Response(lines.join("\n"), {
+    status: 200,
+    headers: { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" },
+  });
+}
+
+function isAuthorized(req: Request, url: URL): boolean {
+  if (url.pathname === "/health") return true;
+  const provided = req.headers.get("X-Runtime-Secret") ?? "";
+  return constantTimeEqual(provided, RUNTIME_SECRET);
+}
+
+// dispatch matches a request to the right route handler. Each handler is a
+// thin wrapper so the dispatcher itself stays under Sonar's complexity limit.
+async function dispatch(req: Request, url: URL): Promise<Response> {
+  if (url.pathname === "/health") return handleHealth();
+  if (url.pathname === "/deploy" && req.method === "POST") return handleDeploy(req);
+  if (url.pathname.startsWith("/invoke/") && req.method === "POST") {
+    return handleInvoke(req, decodeURIComponent(url.pathname.slice("/invoke/".length)));
+  }
+  if (url.pathname.startsWith("/logs/") && req.method === "GET") {
+    return handleLogs(url, decodeURIComponent(url.pathname.slice("/logs/".length)));
+  }
+  if (url.pathname.startsWith("/delete/") && req.method === "DELETE") {
+    return handleDelete(decodeURIComponent(url.pathname.slice("/delete/".length)));
+  }
+  if (url.pathname === "/scripts") return Response.json({ scripts: runtime.list() }, { headers: JSON_HEADERS });
+  if (url.pathname === "/stats") return Response.json(runtime.stats(), { headers: JSON_HEADERS });
+  if (url.pathname === "/metrics") return handleMetrics();
+  return notFound();
+}
+
 Deno.serve({ port: 8000 }, async (req: Request) => {
   const url = new URL(req.url);
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers });
+    return new Response(null, { status: 204, headers: JSON_HEADERS });
   }
-
-  // Authenticate everything except /health (constant-time compare to avoid
-  // timing oracle on the runtime secret).
-  if (url.pathname !== "/health") {
-    const provided = req.headers.get("X-Runtime-Secret") ?? "";
-    if (!constantTimeEqual(provided, RUNTIME_SECRET!)) {
-      return Response.json({ error: "forbidden" }, { status: 403, headers });
-    }
+  if (!isAuthorized(req, url)) {
+    return Response.json({ error: "forbidden" }, { status: 403, headers: JSON_HEADERS });
   }
-
-  // Refuse oversized requests upfront via Content-Length, before reading the
-  // body into memory. Stops trivial DOS via 1 GB POST.
-  const checkContentLength = (max: number): Response | null => {
-    const cl = req.headers.get("content-length");
-    if (cl) {
-      const n = Number(cl);
-      if (Number.isFinite(n) && n > max) {
-        return Response.json({ error: "payload too large" }, { status: 413, headers });
-      }
-    }
-    return null;
-  };
-
   try {
-    if (url.pathname === "/health") {
-      return Response.json(
-        { status: "healthy", scripts: runtime.stats().totalScripts, uptime: performance.now() },
-        { headers },
-      );
-    }
-
-    if (url.pathname === "/deploy" && req.method === "POST") {
-      const deployMax = MAX_CODE_SIZE + 16 * 1024;
-      const tooBig = checkContentLength(deployMax);
-      if (tooBig) return tooBig;
-      const body = await req.text();
-      if (body.length > deployMax) {
-        return Response.json({ error: "payload too large" }, { status: 413, headers });
-      }
-      const parsed = JSON.parse(body) as DeployRequest;
-      if (!parsed.id || !parsed.code) {
-        return Response.json({ error: "missing id or code" }, { status: 400, headers });
-      }
-      const result = await runtime.deploy(parsed);
-      return Response.json(result, { status: 201, headers });
-    }
-
-    if (url.pathname.startsWith("/invoke/") && req.method === "POST") {
-      const id = decodeURIComponent(url.pathname.slice("/invoke/".length));
-      if (!VALID_ID.test(id)) {
-        return Response.json({ error: "invalid function id" }, { status: 400, headers });
-      }
-      const tooBig = checkContentLength(MAX_INVOKE_BODY);
-      if (tooBig) return tooBig;
-      const body = await req.text();
-      if (body.length > MAX_INVOKE_BODY) {
-        return Response.json({ error: "payload too large" }, { status: 413, headers });
-      }
-      const invokeReq = JSON.parse(body) as InvokeRequest;
-      const result = await runtime.invoke(id, invokeReq);
-      return Response.json(result, { headers });
-    }
-
-    if (url.pathname.startsWith("/logs/") && req.method === "GET") {
-      const id = decodeURIComponent(url.pathname.slice("/logs/".length));
-      if (!VALID_ID.test(id)) {
-        return Response.json({ error: "invalid function id" }, { status: 400, headers });
-      }
-      const sinceRaw = url.searchParams.get("since");
-      const sinceMs = sinceRaw ? Number(sinceRaw) : undefined;
-      const logs = runtime.getLogs(id, sinceMs);
-      if (logs === null) {
-        return Response.json({ error: "not found" }, { status: 404, headers });
-      }
-      return Response.json({ logs }, { headers });
-    }
-
-    if (url.pathname.startsWith("/delete/") && req.method === "DELETE") {
-      const id = decodeURIComponent(url.pathname.slice("/delete/".length));
-      if (!VALID_ID.test(id)) {
-        return Response.json({ error: "invalid function id" }, { status: 400, headers });
-      }
-      return runtime.delete(id)
-        ? Response.json({ status: "deleted", id }, { headers })
-        : Response.json({ error: "not found" }, { status: 404, headers });
-    }
-
-    if (url.pathname === "/scripts") {
-      return Response.json({ scripts: runtime.list() }, { headers });
-    }
-
-    if (url.pathname === "/stats") {
-      return Response.json(runtime.stats(), { headers });
-    }
-
-    if (url.pathname === "/metrics") {
-      const stats = runtime.stats();
-      const lines = [
-        "# HELP excalibase_fn_scripts_active Number of deployed function workers",
-        "# TYPE excalibase_fn_scripts_active gauge",
-        `excalibase_fn_scripts_active ${stats.totalScripts}`,
-        "",
-        "# HELP excalibase_fn_scripts_max Maximum number of function workers",
-        "# TYPE excalibase_fn_scripts_max gauge",
-        `excalibase_fn_scripts_max ${stats.maxScripts}`,
-        "",
-        "# HELP excalibase_fn_invocations_total Total function invocations",
-        "# TYPE excalibase_fn_invocations_total counter",
-        `excalibase_fn_invocations_total ${metrics.invocationsTotal}`,
-        "",
-        "# HELP excalibase_fn_invocations_errors_total Total failed invocations",
-        "# TYPE excalibase_fn_invocations_errors_total counter",
-        `excalibase_fn_invocations_errors_total ${metrics.invocationsError}`,
-        "",
-        "# HELP excalibase_fn_deploys_total Total function deployments",
-        "# TYPE excalibase_fn_deploys_total counter",
-        `excalibase_fn_deploys_total ${metrics.deploysTotal}`,
-        "",
-        "# HELP excalibase_fn_timeouts_total Total invocation timeouts",
-        "# TYPE excalibase_fn_timeouts_total counter",
-        `excalibase_fn_timeouts_total ${metrics.timeoutsTotal}`,
-        "",
-        "# HELP excalibase_fn_uptime_seconds Runtime uptime in seconds",
-        "# TYPE excalibase_fn_uptime_seconds gauge",
-        `excalibase_fn_uptime_seconds ${Math.floor(performance.now() / 1000)}`,
-        "",
-      ];
-      return new Response(lines.join("\n"), {
-        status: 200,
-        headers: { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" },
-      });
-    }
-
-    return Response.json({ error: "not found" }, { status: 404, headers });
-  } catch (error: any) {
+    return await dispatch(req, url);
+  } catch (error: unknown) {
     // Never leak stack traces
-    const msg = String(error?.message || "internal error").slice(0, 500);
-    return Response.json({ error: msg }, { status: 500, headers });
+    const msg = String((error instanceof Error ? error.message : null) ?? "internal error").slice(0, 500);
+    return Response.json({ error: msg }, { status: 500, headers: JSON_HEADERS });
   }
 });
 

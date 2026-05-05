@@ -153,3 +153,43 @@ jobs:
           go-version: '1.24'
       - if: needs.changes.outputs.backend == 'true'
         run: cd server-go && go vet ./...
+
+  snyk-code:
+    name: Snyk Code (SAST)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: snyk/actions/setup@master
+      - name: Snyk Code scan (fail on any severity)
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          # `--severity-threshold=low` makes Snyk Code fail on ANY finding.
+          # The repo is currently clean at this gate; raising it to medium
+          # would mask test-fixture or quality regressions, so we keep it strict.
+          snyk code test --severity-threshold=low
+
+  sonarcloud:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    needs: [changes, go-test]
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # SonarCloud needs full history for accurate blame/new-code analysis.
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: go-coverage
+          path: server-go
+        continue-on-error: true
+      # SonarSource/sonarqube-scan-action v6 wraps sonar-scanner-cli 8.x —
+      # the same engine SonarCloud runs, so local/CI scans match cloud
+      # results. Local validation: ./scripts/sonar-local.sh
+      - uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io

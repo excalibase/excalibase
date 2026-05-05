@@ -71,13 +71,15 @@ export function LogExplorerPage() {
 
       {/* Log viewer */}
       <div className="rounded-lg border border-border-primary bg-bg-primary overflow-hidden">
-        {isLoading ? (
+        {isLoading && (
           <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>
-        ) : logLines.length === 0 ? (
+        )}
+        {!isLoading && logLines.length === 0 && (
           <div className="p-12 text-center text-text-tertiary text-sm">
             {search ? 'No matching log lines' : 'No logs available'}
           </div>
-        ) : (
+        )}
+        {!isLoading && logLines.length > 0 && (
           <div className="max-h-[600px] overflow-y-auto font-mono text-xs p-4 space-y-0.5">
             {logLines.map((line, i) => (
               <div key={`log-${i}-${line.slice(0, 30)}`} className={`py-0.5 ${getLineColor(line)}`}>

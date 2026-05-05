@@ -9,8 +9,12 @@ Use this when:
 - Your Docker host is on a dedicated VM you manage separately.
 - You need multiple platform instances provisioning to the same Docker host.
 
-> **Status:** requires `PROVISIONER_MODE=docker`, which is being implemented.
-> Until it lands, the K8s provisioner is the default.
+> **Trade-off vs K8s mode:** mTLS protects the wire, but possessing a valid
+> client cert still grants root-equivalent control of the remote daemon —
+> there is no platform-enforced per-project isolation. If you need
+> ServiceAccount + Role + namespace isolation, use matrix 1 or 2 (K8s)
+> instead. Even single-node distros (k0s, k3s, RKE2, MicroK8s — including
+> rootless) provide that surface.
 
 ## Target Docker host setup
 
@@ -115,7 +119,7 @@ volumes:
 
 ```bash
 ./excalibase-server &
-curl http://localhost:24005/health
+curl http://localhost:24005/healthz
 
 # Create a project — it should land on the remote Docker host
 curl -X POST http://localhost:24005/api/provision \

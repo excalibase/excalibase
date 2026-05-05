@@ -25,6 +25,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+const errFunctionNotFound = "function not found"
+
+
 // FunctionHandler exposes per-project edge function CRUD + invoke + secrets.
 // Routes are all scoped under /api/projects/{projectId}/functions and use the
 // new multi-file Function model.
@@ -61,16 +64,27 @@ type FunctionHandler struct {
 	jwkMu     sync.RWMutex
 	jwkKey    *ecdsa.PublicKey
 	jwkLoaded time.Time
+
+	// expectedJWTIssuer, if non-empty, must match the JWT's `iss` claim
+	// exactly. Empty disables the check (leaves projectId-claim binding as
+	// the only tenant gate). Auth service hardcodes "excalibase".
+	expectedJWTIssuer string
+}
+
+// SetExpectedJWTIssuer configures the iss claim the function handler will
+// require on inbound JWTs. Empty (default) disables the check.
+func (h *FunctionHandler) SetExpectedJWTIssuer(iss string) {
+	h.expectedJWTIssuer = iss
 }
 
 // tokenBucket is a minimal in-memory leaky-bucket limiter. One per project.
 // Not exported — callers configure via SetRateLimit on the handler.
 type tokenBucket struct {
-	mu          sync.Mutex
-	capacity    float64
-	tokens      float64
-	refillRate  float64
-	lastRefill  time.Time
+	mu         sync.Mutex
+	capacity   float64
+	tokens     float64
+	refillRate float64
+	lastRefill time.Time
 }
 
 func newTokenBucket(capacity int, refillPerSecond float64) *tokenBucket {
@@ -216,23 +230,13 @@ func (h *FunctionHandler) waitForDenoReady(ctx context.Context, namespace string
 	if h.runtimeURLFn != nil || h.k8sClient == nil {
 		return nil
 	}
-	// Deno pod is deployed with label app=deno-runtime — there's typically
-	// only one, and we check by known pod name prefix since the pod name is
-	// <deployment>-<replicaset-hash>-<pod-hash> which we don't know upfront.
-	// For simplicity we loop calling the k8s client's GetPods and picking the
-	// first one whose name starts with "deno-runtime".
-	deadline := time.Now().Add(60 * time.Second)
+	// Deno pod is deployed with label app=deno-runtime. We poll GetPods and check
+	// any pod whose name starts with "deno-runtime". 120s covers first-time image
+	// pull + container start in fresh minikube/kind clusters.
+	deadline := time.Now().Add(120 * time.Second)
 	for time.Now().Before(deadline) {
-		pods, err := h.k8sClient.GetPods(ctx, namespace, "app=deno-runtime")
-		if err == nil {
-			for _, p := range pods {
-				if strings.HasPrefix(p.Name, "deno-runtime") {
-					ready, perr := h.k8sClient.IsPodReady(ctx, namespace, p.Name)
-					if perr == nil && ready {
-						return nil
-					}
-				}
-			}
+		if h.isDenoPodReady(ctx, namespace) {
+			return nil
 		}
 		select {
 		case <-ctx.Done():
@@ -241,6 +245,22 @@ func (h *FunctionHandler) waitForDenoReady(ctx context.Context, namespace string
 		}
 	}
 	return fmt.Errorf("deno runtime pod in namespace %s did not become ready within 60s", namespace)
+}
+
+// isDenoPodReady returns true if at least one deno-runtime pod in namespace is ready.
+func (h *FunctionHandler) isDenoPodReady(ctx context.Context, namespace string) bool {
+	pods, err := h.k8sClient.GetPods(ctx, namespace, "app=deno-runtime")
+	if err != nil {
+		return false
+	}
+	for _, p := range pods {
+		if strings.HasPrefix(p.Name, "deno-runtime") {
+			if ready, perr := h.k8sClient.IsPodReady(ctx, namespace, p.Name); perr == nil && ready {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // tierFor looks up the project's tier from the instance store. Falls back to
@@ -260,8 +280,11 @@ func (h *FunctionHandler) tierFor(projectID string) string {
 	return string(inst.Tier)
 }
 
-// namespaceFor resolves the K8s namespace for a project from the instance store.
-// Falls back to {orgId}-{projectId} if the instance has no explicit namespace.
+// namespaceFor returns the K8s namespace recorded on the project's instance
+// row. Returns "" if the instance is unknown or has no namespace — callers
+// must treat empty as "cannot deploy" rather than computing a guess. The
+// previous {orgID}-{projectId} fallback could land deploys in the wrong
+// namespace because real CNPG namespaces use slug-based naming.
 func (h *FunctionHandler) namespaceFor(projectID string) string {
 	if h.instanceStore == nil {
 		return ""
@@ -270,18 +293,14 @@ func (h *FunctionHandler) namespaceFor(projectID string) string {
 	if err != nil || inst == nil {
 		return ""
 	}
-	if inst.Namespace != "" {
-		return inst.Namespace
-	}
-	if inst.OrgID != "" {
-		return inst.OrgID + "-" + projectID
-	}
-	return ""
+	return inst.Namespace
 }
 
 // SetRateLimit configures the public invoke rate limit (per project).
-//   burst:           initial bucket size — how many requests can be made instantly
-//   refillPerSecond: refill rate (≈ steady-state requests per second)
+//
+//	burst:           initial bucket size — how many requests can be made instantly
+//	refillPerSecond: refill rate (≈ steady-state requests per second)
+//
 // Default is 100/100 — generous for normal use, blocks runaway loops.
 func (h *FunctionHandler) SetRateLimit(burst int, refillPerSecond float64) {
 	h.limiterMu.Lock()
@@ -305,24 +324,23 @@ func (h *FunctionHandler) allowProject(projectID string) bool {
 	return bucket.take()
 }
 
-// orgSlugFor resolves the org slug for a given project id so secrets and vault
-// paths stay consistent with the rest of the platform.
-func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) string {
-	if h.instanceStore == nil {
-		return "default"
+// orgSlugFor resolves the org slug for the EXCALIBASE_ORG_SLUG env var.
+// Returns ("", false) if the slug can't be determined — caller decides
+// whether to omit the env var (preferred) or fail. Vault paths no longer
+// depend on this; this is purely for surfacing the slug to user code.
+func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) (string, bool) {
+	if h.instanceStore == nil || h.orgStore == nil {
+		return "", false
 	}
 	inst, err := h.instanceStore.FindByProjectID(projectID)
-	if err != nil || inst == nil {
-		return "default"
-	}
-	if h.orgStore == nil || inst.OrgID == "" {
-		return "default"
+	if err != nil || inst == nil || inst.OrgID == "" {
+		return "", false
 	}
 	org, err := h.orgStore.FindOrgByID(ctx, inst.OrgID)
 	if err != nil || org == nil {
-		return "default"
+		return "", false
 	}
-	return org.Slug
+	return org.Slug, true
 }
 
 // builtinEnv returns platform-injected env vars for a function deploy.
@@ -331,17 +349,15 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) stri
 // Injected vars (all prefixed EXCALIBASE_):
 //   - URL          — function's public invoke base (for calling sibling fns)
 //   - PROJECT_ID   — the opaque project ref
-//   - ORG_SLUG     — the owning org's slug
-//   - DB_URL       — postgres connection string for the project's database,
-//                    using the excalibase_app role. Sourced from vault at
-//                    projects/{orgSlug}/{projectId}/credentials/excalibase_app.
-//                    Absent if vault is sealed, role doesn't exist, or BYOC.
-//   - ANON_KEY     — signed JWT for the anon role. Sourced from vault at
-//                    projects/{orgSlug}/{projectId}/credentials/jwt_keys/anon_token.
-//                    Absent if auth service hasn't published it yet.
-//   - SERVICE_KEY  — signed JWT for the service role (bypasses RLS). Sourced
-//                    from projects/{orgSlug}/{projectId}/credentials/jwt_keys/service_token.
-func (h *FunctionHandler) builtinEnv(ctx context.Context, orgSlug, projectID string) map[string]string {
+//   - ORG_SLUG     — the owning org's slug, omitted if not resolvable
+//   - DB_URL       — postgres DSN for the project's database (excalibase_app
+//     role). Sourced from vault at projects/{projectId}/credentials/excalibase_app.
+//     Absent if vault is sealed, role doesn't exist, or BYOC.
+//   - ANON_KEY     — JWT for the anon role from
+//     projects/{projectId}/credentials/jwt_keys/anon_token.
+//   - SERVICE_KEY  — JWT for the service role (bypasses RLS) from
+//     projects/{projectId}/credentials/jwt_keys/service_token.
+func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[string]string {
 	base := h.publicBaseURL
 	if base == "" {
 		base = "https://api.excalibase.io"
@@ -349,12 +365,14 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, orgSlug, projectID str
 	env := map[string]string{
 		"EXCALIBASE_URL":        fmt.Sprintf("%s/functions/v1/%s", base, projectID),
 		"EXCALIBASE_PROJECT_ID": projectID,
-		"EXCALIBASE_ORG_SLUG":   orgSlug,
+	}
+	if slug, ok := h.orgSlugFor(ctx, projectID); ok {
+		env["EXCALIBASE_ORG_SLUG"] = slug
 	}
 
 	// DB_URL — build from vault-stored app credentials if available.
 	if h.secrets != nil {
-		if dbURL := h.buildDBURL(ctx, orgSlug, projectID); dbURL != "" {
+		if dbURL := h.buildDBURL(projectID); dbURL != "" {
 			env["EXCALIBASE_DB_URL"] = dbURL
 		}
 	}
@@ -363,10 +381,10 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, orgSlug, projectID str
 	// publishes them. Tolerant: absent keys don't block deploy, function just
 	// can't authenticate back to sibling services until the keys exist.
 	if h.vault != nil {
-		if anon := h.readVaultString(fmt.Sprintf("projects/%s/%s/credentials/jwt_keys/anon_token", orgSlug, projectID)); anon != "" {
+		if anon := h.readVaultString(fmt.Sprintf("projects/%s/credentials/jwt_keys/anon_token", projectID)); anon != "" {
 			env["EXCALIBASE_ANON_KEY"] = anon
 		}
-		if svc := h.readVaultString(fmt.Sprintf("projects/%s/%s/credentials/jwt_keys/service_token", orgSlug, projectID)); svc != "" {
+		if svc := h.readVaultString(fmt.Sprintf("projects/%s/credentials/jwt_keys/service_token", projectID)); svc != "" {
 			env["EXCALIBASE_SERVICE_KEY"] = svc
 		}
 	}
@@ -376,11 +394,11 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, orgSlug, projectID str
 
 // buildDBURL constructs a Postgres DSN for the project's app role. Uses the
 // vault credential payload stored by createProjectRoles during provisioning.
-func (h *FunctionHandler) buildDBURL(ctx context.Context, orgSlug, projectID string) string {
+func (h *FunctionHandler) buildDBURL(projectID string) string {
 	if h.vault == nil {
 		return ""
 	}
-	path := fmt.Sprintf("projects/%s/%s/credentials/excalibase_app", orgSlug, projectID)
+	path := fmt.Sprintf("projects/%s/credentials/excalibase_app", projectID)
 	creds, err := h.vault.Get(path)
 	if err != nil || creds == nil {
 		return ""
@@ -471,9 +489,8 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	orgSlug := h.orgSlugFor(r.Context(), projectID)
-	builtins := h.builtinEnv(r.Context(), orgSlug, projectID)
-	env, err := h.secrets.BuildEnvForDeploy(orgSlug, projectID, builtins)
+	builtins := h.builtinEnv(r.Context(), projectID)
+	env, err := h.secrets.BuildEnvForDeploy(projectID, builtins)
 	if err != nil {
 		log.Printf("WARN: build env for %s/%s: %v", projectID, fn.ID, err)
 		env = builtins
@@ -515,7 +532,7 @@ func (h *FunctionHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fn == nil {
-		httpError(w, "function not found", http.StatusNotFound)
+		httpError(w, errFunctionNotFound, http.StatusNotFound)
 		return
 	}
 	writeJSON(w, fn)
@@ -531,7 +548,7 @@ func (h *FunctionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fn == nil {
-		httpError(w, "function not found", http.StatusNotFound)
+		httpError(w, errFunctionNotFound, http.StatusNotFound)
 		return
 	}
 	if client, cerr := h.runtimeClientFor(r.Context(), projectID); cerr == nil {
@@ -559,7 +576,7 @@ func (h *FunctionHandler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fn == nil {
-		httpError(w, "function not found", http.StatusNotFound)
+		httpError(w, errFunctionNotFound, http.StatusNotFound)
 		return
 	}
 
@@ -604,7 +621,7 @@ func (h *FunctionHandler) Invoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fn == nil {
-		httpError(w, "function not found", http.StatusNotFound)
+		httpError(w, errFunctionNotFound, http.StatusNotFound)
 		return
 	}
 	h.forwardToRuntime(w, r, fn, true /* stripAuth */)
@@ -662,43 +679,64 @@ func (h *FunctionHandler) loadSigningPublicKey() (*ecdsa.PublicKey, error) {
 	return ecPub, nil
 }
 
-// validateProjectJWT verifies an ES256 signature and checks that the token's
-// `iss` claim matches the project id — i.e. that this JWT was issued for this
-// project's auth service, not another project's. Returns nil if the token is
-// valid, otherwise a non-nil error.
-func (h *FunctionHandler) validateProjectJWT(tokenStr, expectedProjectID string) error {
+// validateProjectJWT verifies an ES256 signature and binds the token to a
+// specific project. Returns the JWT scope (`authenticated`, `public`,
+// `service`, or empty for legacy password-flow tokens) so callers can apply
+// per-function policy if they choose.
+//
+// Verification gates:
+//  1. Algorithm is ES256 (rejects alg=none and HMAC-confusion).
+//  2. Signature verifies against the platform-wide PKI public key (vault-published).
+//  3. exp/nbf/iat valid (handled by jwt.Parse via token.Valid).
+//  4. claims["projectId"] EXACTLY matches the URL's expected project ID.
+//     This is what prevents a JWT minted for project A from being replayed
+//     against project B's function URL — the auth service's `iss` claim is a
+//     hardcoded platform identifier (`excalibase`) that contains no project
+//     binding, so `projectId` is the only authoritative tenant marker.
+//  5. (Optional) iss matches the configured expected issuer if set via env
+//     EXCALIBASE_AUTH_ISS — defense in depth that the token came from the
+//     platform's auth service, not some other ES256 signer.
+func (h *FunctionHandler) validateProjectJWT(tokenStr, expectedProjectID string) (string, error) {
 	key, err := h.loadSigningPublicKey()
 	if err != nil {
-		return fmt.Errorf("load signing key: %w", err)
+		return "", fmt.Errorf("load signing key: %w", err)
 	}
 
 	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-		// Reject tokens signed with anything other than ES256 — refuses
-		// alg=none downgrade attacks and HMAC confusion.
 		if _, ok := t.Method.(*jwt.SigningMethodECDSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method %v", t.Header["alg"])
 		}
 		return key, nil
 	}, jwt.WithValidMethods([]string{"ES256"}))
 	if err != nil {
-		return fmt.Errorf("parse/verify jwt: %w", err)
+		return "", fmt.Errorf("parse/verify jwt: %w", err)
 	}
 	if !token.Valid {
-		return errors.New("jwt is not valid")
+		return "", errors.New("jwt is not valid")
 	}
 
-	// Check iss claim if present — must match project id. Tolerant: if the
-	// auth service doesn't issue an `iss`, don't reject. If it does, must match.
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return errors.New("jwt claims are not a map")
+		return "", errors.New("jwt claims are not a map")
 	}
-	if iss, ok := claims["iss"].(string); ok && iss != "" {
-		if !strings.Contains(iss, expectedProjectID) {
-			return fmt.Errorf("jwt iss %q does not match project %q", iss, expectedProjectID)
+
+	tokenProjectID, ok := claims["projectId"].(string)
+	if !ok || tokenProjectID == "" {
+		return "", errors.New("jwt missing projectId claim")
+	}
+	if tokenProjectID != expectedProjectID {
+		return "", fmt.Errorf("jwt projectId %q does not match url %q", tokenProjectID, expectedProjectID)
+	}
+
+	if expectedIss := h.expectedJWTIssuer; expectedIss != "" {
+		iss, _ := claims["iss"].(string)
+		if iss != expectedIss {
+			return "", fmt.Errorf("jwt iss %q does not match expected %q", iss, expectedIss)
 		}
 	}
-	return nil
+
+	scope, _ := claims["scope"].(string)
+	return scope, nil
 }
 
 // writeCORSHeaders sets permissive CORS headers for edge functions. Edge
@@ -714,10 +752,10 @@ func writeCORSHeaders(w http.ResponseWriter) {
 
 // PublicInvoke is the Supabase-style public route /functions/v1/{projectId}/{fnId}.
 // Enforces:
-//   1. CORS — preflight + permissive headers for browser callers
-//   2. Per-project rate limit (returns 429 when exceeded)
-//   3. JWT presence check if the function has VerifyJwt enabled (default true)
-//   4. Forwards Authorization header to the function so user code can inspect it
+//  1. CORS — preflight + permissive headers for browser callers
+//  2. Per-project rate limit (returns 429 when exceeded)
+//  3. JWT presence check if the function has VerifyJwt enabled (default true)
+//  4. Forwards Authorization header to the function so user code can inspect it
 func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
 	writeCORSHeaders(w)
 	if r.Method == http.MethodOptions {
@@ -738,38 +776,51 @@ func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
 	if err != nil || fn == nil {
 		// Don't distinguish project-missing from function-missing — both 404 to
 		// avoid leaking which projects exist.
-		httpError(w, "function not found", http.StatusNotFound)
+		httpError(w, errFunctionNotFound, http.StatusNotFound)
 		return
 	}
 
 	if fn.JwtVerificationRequired() {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			httpError(w, "missing or invalid Authorization header", http.StatusUnauthorized)
+		if !h.enforceJWT(w, r, projectID) {
 			return
-		}
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-
-		// Real ES256 signature verification against the platform-wide signing
-		// key (published by the auth service at vault path pki/signing/public).
-		// If the vault isn't configured or the key isn't published yet, we
-		// fall back to header-presence check and log a warning — lets the
-		// platform boot before the auth service has finished first-run setup.
-		if err := h.validateProjectJWT(token, projectID); err != nil {
-			// Degraded mode: vault sealed or signing key missing. Log loudly
-			// so operators notice, accept the request (backward compat).
-			if strings.Contains(err.Error(), "vault not configured") ||
-				strings.Contains(err.Error(), "missing 'key' field") ||
-				strings.Contains(err.Error(), "fetch public key from vault") {
-				log.Printf("WARN: jwt verification in degraded mode for %s: %v", projectID, err)
-			} else {
-				httpError(w, "invalid jwt: "+safeError(err), http.StatusUnauthorized)
-				return
-			}
 		}
 	}
 
 	h.forwardToRuntime(w, r, fn, false /* keep Authorization */)
+}
+
+// enforceJWT validates the Authorization Bearer token and sets X-Excalibase-Scope.
+// Returns false (and writes the error response) if validation fails.
+func (h *FunctionHandler) enforceJWT(w http.ResponseWriter, r *http.Request, projectID string) bool {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		httpError(w, "missing or invalid Authorization header", http.StatusUnauthorized)
+		return false
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	scope, err := h.validateProjectJWT(token, projectID)
+	if err != nil {
+		if isVaultUnavailableError(err) {
+			log.Printf("ERROR: jwt verify unavailable for %s: %v", projectID, err)
+			httpError(w, "auth temporarily unavailable", http.StatusServiceUnavailable)
+			return false
+		}
+		httpError(w, "invalid jwt: "+safeError(err), http.StatusUnauthorized)
+		return false
+	}
+	if scope != "" {
+		r.Header.Set("X-Excalibase-Scope", scope)
+	}
+	return true
+}
+
+// isVaultUnavailableError returns true for errors that indicate the vault key
+// cannot be fetched (temporarily, not a bad-token situation).
+func isVaultUnavailableError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "vault not configured") ||
+		strings.Contains(msg, "missing 'key' field") ||
+		strings.Contains(msg, "fetch public key from vault")
 }
 
 // parseContentLength returns the request's Content-Length as an int64 if
@@ -875,8 +926,7 @@ func (h *FunctionHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
-	orgSlug := h.orgSlugFor(r.Context(), projectID)
-	keys, err := h.secrets.ListKeys(orgSlug, projectID)
+	keys, err := h.secrets.ListKeys(projectID)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
@@ -904,12 +954,11 @@ func (h *FunctionHandler) SetSecret(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	orgSlug := h.orgSlugFor(r.Context(), projectID)
-	if err := h.secrets.Set(orgSlug, projectID, body.Key, body.Value); err != nil {
+	if err := h.secrets.Set(projectID, body.Key, body.Value); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
-	h.redeployAll(r, projectID, orgSlug)
+	h.redeployAll(r, projectID)
 	writeJSON(w, map[string]string{"status": "set", "key": body.Key})
 }
 
@@ -917,24 +966,23 @@ func (h *FunctionHandler) SetSecret(w http.ResponseWriter, r *http.Request) {
 func (h *FunctionHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	key := chi.URLParam(r, "key")
-	orgSlug := h.orgSlugFor(r.Context(), projectID)
-	if err := h.secrets.Delete(orgSlug, projectID, key); err != nil {
+	if err := h.secrets.Delete(projectID, key); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
-	h.redeployAll(r, projectID, orgSlug)
+	h.redeployAll(r, projectID)
 	writeJSON(w, map[string]string{"status": "deleted", "key": key})
 }
 
 // redeployAll re-pushes every function of the project to the runtime so the
 // latest env (user secrets + builtins) is picked up. Errors are logged and
 // not surfaced — secret write succeeded, so the admin UI should still 200.
-func (h *FunctionHandler) redeployAll(r *http.Request, projectID, orgSlug string) {
+func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
 	list, err := h.store.List(projectID)
 	if err != nil || len(list) == 0 {
 		return
 	}
-	env, err := h.secrets.BuildEnvForDeploy(orgSlug, projectID, h.builtinEnv(r.Context(), orgSlug, projectID))
+	env, err := h.secrets.BuildEnvForDeploy(projectID, h.builtinEnv(r.Context(), projectID))
 	if err != nil {
 		log.Printf("WARN: redeploy build env: %v", err)
 		return

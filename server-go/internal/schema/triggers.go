@@ -43,37 +43,7 @@ func (i *Introspector) GetTriggers(ctx context.Context, db *sql.DB, schemaName s
 		if err := rows.Scan(&t.Name, &t.Table, &t.Schema, &t.Function, &tgType, &tgEnabled); err != nil {
 			return nil, fmt.Errorf("scan trigger: %w", err)
 		}
-		// tgtype is a bitmask: bit 0 = ROW (1) vs STATEMENT (0)
-		// bit 1 = BEFORE (1<<1=2), bit 6 = INSTEAD OF (1<<6=64)
-		// bits 2-4 = INSERT(4), DELETE(8), UPDATE(16), TRUNCATE(32)
-		t.ForEachRow = tgType&1 != 0
-
-		if tgType&(1<<1) != 0 {
-			t.Timing = "BEFORE"
-		} else if tgType&(1<<6) != 0 {
-			t.Timing = "INSTEAD OF"
-		} else {
-			t.Timing = "AFTER"
-		}
-
-		events := make([]string, 0, 4)
-		if tgType&(1<<2) != 0 {
-			events = append(events, "INSERT")
-		}
-		if tgType&(1<<3) != 0 {
-			events = append(events, "DELETE")
-		}
-		if tgType&(1<<4) != 0 {
-			events = append(events, "UPDATE")
-		}
-		if tgType&(1<<5) != 0 {
-			events = append(events, "TRUNCATE")
-		}
-		t.Event = strings.Join(events, ",")
-
-		// tgenabled: 'O' = origin (default enabled), 'D' = disabled,
-		// 'A' = always, 'R' = replica
-		t.Enabled = tgEnabled != "D"
+		decodeTriggerType(tgType, tgEnabled, &t)
 
 		triggers = append(triggers, t)
 	}
@@ -148,3 +118,37 @@ JOIN pg_proc p ON p.oid = t.tgfoid
 WHERE n.nspname = $1
 AND NOT t.tgisinternal
 ORDER BY c.relname, t.tgname`
+
+// decodeTriggerType fills TriggerInfo fields from the PostgreSQL tgtype bitmask.
+// tgtype bit layout: bit 0 = FOR EACH ROW, bit 1 = BEFORE, bit 6 = INSTEAD OF,
+// bits 2-5 = INSERT/DELETE/UPDATE/TRUNCATE respectively.
+func decodeTriggerType(tgType int16, tgEnabled string, t *TriggerInfo) {
+	t.ForEachRow = tgType&1 != 0
+
+	switch {
+	case tgType&(1<<1) != 0:
+		t.Timing = "BEFORE"
+	case tgType&(1<<6) != 0:
+		t.Timing = "INSTEAD OF"
+	default:
+		t.Timing = "AFTER"
+	}
+
+	events := make([]string, 0, 4)
+	if tgType&(1<<2) != 0 {
+		events = append(events, "INSERT")
+	}
+	if tgType&(1<<3) != 0 {
+		events = append(events, "DELETE")
+	}
+	if tgType&(1<<4) != 0 {
+		events = append(events, "UPDATE")
+	}
+	if tgType&(1<<5) != 0 {
+		events = append(events, "TRUNCATE")
+	}
+	t.Event = strings.Join(events, ",")
+
+	// tgenabled: 'O' = origin (default enabled), 'D' = disabled, 'A' = always, 'R' = replica
+	t.Enabled = tgEnabled != "D"
+}

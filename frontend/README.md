@@ -1,32 +1,41 @@
-# Excalibase Provisioning UI
+# Excalibase Studio
 
-React + TypeScript + Vite frontend for the Excalibase database provisioning service.
+React + TypeScript + Vite frontend for the Excalibase database provisioning platform. Talks to the Go server (`server-go/`) at `http://localhost:24005`.
 
 ## Features
 
-- **Dashboard View** - List all provisioned database instances
-- **Provisioning Flow Visualizer** - Real-time 8-stage pipeline visualization
-- **Database Creation Form** - Interactive form to provision new databases
-- **Credentials Viewer** - Secure credential display with copy-to-clipboard
-- **Real-time Updates** - Auto-refresh using React Query polling
-- **Dark Mode** - Matching Excalibase design system
+- **Setup wizard** — vault initialization (Shamir shares + threshold) and first-admin registration in a single guided flow at `/setup`
+- **Dashboard** — list of all instances, status pills, deletion-protection toggle
+- **Provisioning flow visualizer** — real-time 9-stage pipeline with rollback log on failure
+- **Project creation** — three modes: Kubernetes (CNPG), Docker (containers), or BYOC (register an external DB)
+- **Schema browser** — tables, columns, roles, extensions, RLS policies, functions, triggers, indexes; row CRUD with paginated, sortable, filterable views
+- **Edge functions** — multi-file Deno functions with Monaco editor, secrets management, log streaming, public invoke URL
+- **Realtime** — per-table CDC publication toggle (enables/disables logical replication membership)
+- **Vault secrets browser** — read/write secrets with PAT-scoped paths
+- **Performance + advisors** — pg_stat_statements top queries, performance/security advisors
+- **Backups + PITR** — manual backup trigger, list, restore to point in time
+- **Org + project members** — invite by email, role management, project-level membership separate from org membership
+- **Auth + tokens** — login, register (first registrant becomes platform_admin in self-hosted mode), PAT lifecycle
 
 ## Tech Stack
 
-- React 18 + TypeScript
+- React 18 (do **not** upgrade to 19) + TypeScript
 - Vite for build tooling
-- TanStack Query (React Query) for data fetching
-- Tailwind CSS for styling
-- Lucide React for icons
-- Axios for HTTP requests
+- TanStack Query for server state, TanStack Table for data grids
+- Tailwind CSS, lucide-react, cmdk
+- CodeMirror 6 + @uiw/react-codemirror for SQL editor
+- Monaco Editor for the edge functions editor
+- axios pinned to `1.13.5` (do **not** upgrade — `1.14.x` was a supply-chain compromise)
+- Vitest + React Testing Library for unit tests
+- Playwright for end-to-end tests
 
 ## Setup
 
 ```bash
-# Install dependencies
+# Install
 npm install
 
-# Start development server
+# Start dev server (defaults to http://localhost:5173)
 npm run dev
 
 # Build for production
@@ -36,69 +45,63 @@ npm run build
 npm run preview
 ```
 
-The frontend will run on http://localhost:5173 and proxy API requests to http://localhost:8080
+The Vite dev server proxies API calls to `http://localhost:24005`. Override via `VITE_API_URL` if the backend lives elsewhere.
 
-## Backend API
+## Backend
 
-Make sure the Spring Boot backend is running on port 8080:
+The Go backend must be running for the app to work. From the repo root:
 
 ```bash
-cd ..
-./mvnw spring-boot:run
+cd server-go
+go build -o excalibase-server ./cmd/server/
+PORT=24005 STORAGE_PATH=../provisioning-data CORS_ORIGINS=http://localhost:5173 ./excalibase-server
 ```
+
+On first run, the studio will redirect to `/setup` to initialize the vault and create the first platform_admin.
 
 ## Project Structure
 
 ```
 src/
-├── api/          # Axios client configuration
-├── components/   # React components
-│   ├── Dashboard.tsx
-│   ├── DatabaseInstanceCard.tsx
-│   ├── ProvisioningForm.tsx
-│   ├── PipelineVisualizer.tsx
-│   ├── CredentialsViewer.tsx
-│   ├── Card.tsx
-│   └── Button.tsx
-├── hooks/        # React Query hooks
-│   └── useProvisioning.ts
-├── types/        # TypeScript type definitions
-│   └── index.ts
-├── utils/        # Utility functions
-│   └── cn.ts
-├── App.tsx       # Main app component
-└── main.tsx      # Entry point with React Query setup
+├── api/             axios instance + typed request helpers
+├── components/      shared layout (sidebar, command palette, modals, tables)
+├── pages/           route components (Dashboard, Project, Schema, Functions, Realtime, ...)
+├── hooks/           TanStack Query hooks (useInstances, useProvision, useFunctions, ...)
+├── types/           TS types mirroring Go domain entities
+├── utils/           cn, formatters, vault path helpers
+├── App.tsx          router + auth guard
+└── main.tsx         entry point
 ```
 
-## API Integration
+## Testing
 
-All API calls use React Query hooks from `hooks/useProvisioning.ts`:
+```bash
+# Vitest unit + component tests
+npm run test
+npm run test:ui          # interactive UI
 
-- `useInstances()` - List all database instances (auto-refresh every 5s)
-- `useInstance(projectId)` - Get single instance details (auto-refresh every 3s)
-- `useCredentials(projectId)` - Get connection credentials
-- `useProvisionDatabase()` - Create new database instance
-- `useDeprovisionDatabase()` - Delete database instance
-- `useConfigureBackup()` - Configure automated backups
-- `useTriggerBackup()` - Trigger manual backup
-- `useListBackups(projectId)` - List available backups
+# Playwright E2E (26 spec files, ~120 tests; requires backend at localhost:24005)
+npx playwright test
+npx playwright test --ui
+npx playwright test e2e/byoc.spec.ts        # one file
+```
+
+E2E spec coverage: vault setup, BYOC flow, Docker-mode flow, K8s-mode flow, edge functions, realtime, schema CRUD, advisors, RBAC (auth/users), org members.
+
+## Conventions
+
+- **Server state via TanStack Query** — never `useEffect` for data fetching
+- **No barrel exports** — import from the file that owns the symbol
+- **Two navbars** — separate platform sidebar and project-scoped sidebar; no "back to admin" tabs (handled at routing level)
+- **Dark mode** is the default and only theme
 
 ## Design System
 
-Uses Excalibase dark mode color palette:
-
-- Background: `#1a1d2e` (primary), `#252938` (secondary)
-- Text: `#e4e6eb` (primary), `#9ca3af` (secondary)
-- Accent: `#3b82f6` (blue)
-- Success: `#10b981` (green)
-- Warning: `#f59e0b` (orange)
-- Error: `#ef4444` (red)
-
-## Development
-
-The app uses:
-
-- **React Query** for server state management (NO useEffect for data fetching!)
-- **Tailwind CSS** with custom color palette
-- **TypeScript** for type safety
-- **Vite** for fast development and HMR
+```
+Background: #1a1d2e (primary), #252938 (secondary)
+Text:       #e4e6eb (primary), #9ca3af (secondary)
+Accent:     #3b82f6 (blue)
+Success:    #10b981 (green)
+Warning:    #f59e0b (orange)
+Error:      #ef4444 (red)
+```

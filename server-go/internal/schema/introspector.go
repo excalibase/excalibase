@@ -107,15 +107,18 @@ func (i *Introspector) ExecuteDDL(ctx context.Context, db *sql.DB, ddl string) D
 	return DDLResult{Success: true, UpdateCount: int(rowsAffected)}
 }
 
-func (i *Introspector) ExecuteQuery(ctx context.Context, db *sql.DB, query string) QueryResult {
+// isReadQuery returns true if the query starts with a read-only SQL keyword.
+func isReadQuery(query string) bool {
 	trimmed := strings.TrimSpace(strings.ToUpper(query))
-	isRead := strings.HasPrefix(trimmed, "SELECT") ||
+	return strings.HasPrefix(trimmed, "SELECT") ||
 		strings.HasPrefix(trimmed, "EXPLAIN") ||
 		strings.HasPrefix(trimmed, "WITH") ||
 		strings.HasPrefix(trimmed, "SHOW") ||
 		strings.HasPrefix(trimmed, "TABLE") ||
 		strings.HasPrefix(trimmed, "VALUES")
+}
 
+func (i *Introspector) ExecuteQuery(ctx context.Context, db *sql.DB, query string) QueryResult {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("begin tx: %w", err).Error()}
@@ -126,56 +129,65 @@ func (i *Introspector) ExecuteQuery(ctx context.Context, db *sql.DB, query strin
 		return QueryResult{Error: fmt.Errorf("set timeout: %w", err).Error()}
 	}
 
-	if isRead {
-		rows, err := tx.QueryContext(ctx, query)
-		if err != nil {
-			return QueryResult{Error: err.Error()}
-		}
-		defer rows.Close()
+	if isReadQuery(query) {
+		return i.executeReadQuery(ctx, tx, query)
+	}
+	return i.executeDMLQuery(ctx, tx, query)
+}
 
-		colTypes, err := rows.ColumnTypes()
-		if err != nil {
-			return QueryResult{Error: fmt.Errorf("column types: %w", err).Error()}
-		}
+// executeReadQuery runs a SELECT/EXPLAIN/WITH/SHOW query inside tx and returns the row set.
+func (i *Introspector) executeReadQuery(ctx context.Context, tx interface {
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+	Commit() error
+}, query string) QueryResult {
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return QueryResult{Error: err.Error()}
+	}
+	defer rows.Close()
 
-		columns := make([]ColumnMeta, len(colTypes))
-		for i, ct := range colTypes {
-			columns[i] = ColumnMeta{
-				Name:     ct.Name(),
-				DataType: ct.DatabaseTypeName(),
-			}
-		}
-
-		var resultRows [][]interface{}
-		for rows.Next() {
-			vals := make([]interface{}, len(colTypes))
-			ptrs := make([]interface{}, len(colTypes))
-			for i := range vals {
-				ptrs[i] = &vals[i]
-			}
-			if err := rows.Scan(ptrs...); err != nil {
-				return QueryResult{Error: fmt.Errorf("scan row: %w", err).Error()}
-			}
-			// Convert []byte to string for JSON serialization
-			row := make([]interface{}, len(vals))
-			for i, v := range vals {
-				if b, ok := v.([]byte); ok {
-					row[i] = string(b)
-				} else {
-					row[i] = v
-				}
-			}
-			resultRows = append(resultRows, row)
-		}
-		if err := rows.Err(); err != nil {
-			return QueryResult{Error: err.Error()}
-		}
-
-		tx.Commit()
-		return QueryResult{Columns: columns, Rows: resultRows}
+	colTypes, err := rows.ColumnTypes()
+	if err != nil {
+		return QueryResult{Error: fmt.Errorf("column types: %w", err).Error()}
 	}
 
-	// DML/DDL
+	columns := make([]ColumnMeta, len(colTypes))
+	for idx, ct := range colTypes {
+		columns[idx] = ColumnMeta{Name: ct.Name(), DataType: ct.DatabaseTypeName()}
+	}
+
+	var resultRows [][]interface{}
+	for rows.Next() {
+		vals := make([]interface{}, len(colTypes))
+		ptrs := make([]interface{}, len(colTypes))
+		for idx := range vals {
+			ptrs[idx] = &vals[idx]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return QueryResult{Error: fmt.Errorf("scan row: %w", err).Error()}
+		}
+		row := make([]interface{}, len(vals))
+		for idx, v := range vals {
+			if b, ok := v.([]byte); ok {
+				row[idx] = string(b)
+			} else {
+				row[idx] = v
+			}
+		}
+		resultRows = append(resultRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return QueryResult{Error: err.Error()}
+	}
+	tx.Commit()
+	return QueryResult{Columns: columns, Rows: resultRows}
+}
+
+// executeDMLQuery runs a DML/DDL statement inside tx and returns the affected-row count.
+func (i *Introspector) executeDMLQuery(ctx context.Context, tx interface {
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+	Commit() error
+}, query string) QueryResult {
 	result, err := tx.ExecContext(ctx, query)
 	if err != nil {
 		return QueryResult{Error: err.Error()}

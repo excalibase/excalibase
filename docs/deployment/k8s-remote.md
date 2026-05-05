@@ -125,7 +125,7 @@ KUBE_CA_CERT=<pem with \n escaped>
 
 ```bash
 ./excalibase-server &
-curl http://localhost:24005/health
+curl http://localhost:24005/healthz
 
 # Should successfully create a project on the remote cluster
 curl -X POST http://localhost:24005/api/provision \

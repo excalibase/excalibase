@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Building2, Plus, Crown, Users, ChevronRight } from 'lucide-react';
+import { Building2, Plus, Crown, ChevronRight } from 'lucide-react';
 import { listMyOrgs, createOrg, type Org } from '../api/orgs';
 import { Button } from '../components/Button';
 
@@ -44,7 +44,7 @@ export function OrgsPage() {
       navigate(`/orgs/${org.id}`);
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { error?: string } } };
-      setCreateError(axiosErr.response?.data?.error || 'Failed to create organization');
+      setCreateError(axiosErr.response?.data?.error ?? 'Failed to create organization');
     } finally {
       setCreating(false);
     }
@@ -52,7 +52,7 @@ export function OrgsPage() {
 
   const handleNameChange = (name: string) => {
     setNewName(name);
-    setNewSlug(name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+    setNewSlug(name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, ''));
   };
 
   if (loading) {
@@ -84,8 +84,9 @@ export function OrgsPage() {
             </div>
           )}
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Name</label>
+            <label htmlFor="org-name" className="block text-sm text-text-secondary mb-1">Name</label>
             <input
+              id="org-name"
               value={newName}
               onChange={(e) => handleNameChange(e.target.value)}
               className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500"
@@ -94,8 +95,9 @@ export function OrgsPage() {
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Slug</label>
+            <label htmlFor="org-slug" className="block text-sm text-text-secondary mb-1">Slug</label>
             <input
+              id="org-slug"
               value={newSlug}
               onChange={(e) => setNewSlug(e.target.value)}
               className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500"
@@ -114,44 +116,40 @@ export function OrgsPage() {
         </form>
       )}
 
-      {orgs.length === 0 && !showCreate ? (
-        <div className="text-center py-16 bg-surface-card border border-border-primary rounded-lg">
-          <Building2 className="w-12 h-12 text-text-tertiary mx-auto mb-3" />
-          <h3 className="text-lg font-semibold text-text-primary mb-1">No organizations yet</h3>
-          <p className="text-sm text-text-secondary mb-4">Create your first organization to get started</p>
-          <Button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2">
-            <Plus className="w-4 h-4" /> Create Organization
-          </Button>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {orgs.map((org) => (
+      <div className="space-y-2">
+        {orgs.length === 0 ? (
+          <div className="text-center py-16">
+            <Building2 className="w-12 h-12 mx-auto mb-3 text-text-tertiary" />
+            <p className="text-text-secondary mb-4">No organizations yet.</p>
+            <Button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-2">
+              <Plus className="w-4 h-4" /> Create Organization
+            </Button>
+          </div>
+        ) : (
+          orgs.map((org) => (
             <button
               key={org.id}
               onClick={() => navigate(`/orgs/${org.id}`)}
-              className="w-full flex items-center gap-4 p-4 bg-surface-card border border-border-primary rounded-lg hover:border-purple-500/50 transition-colors text-left group"
+              className="w-full text-left p-4 bg-surface-card border border-border-primary rounded-xl hover:border-border-secondary transition-colors flex items-center gap-4"
             >
-              <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+              <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center flex-shrink-0">
                 <Building2 className="w-5 h-5 text-purple-400" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold text-text-primary">{org.name}</span>
-                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${TIER_COLORS[org.tier] || TIER_COLORS.FREE}`}>
+                  <span className="font-medium text-text-primary">{org.name}</span>
+                  {org.role === 'owner' && <Crown className="w-3.5 h-3.5 text-yellow-400" />}
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${TIER_COLORS[org.tier] || TIER_COLORS.FREE}`}>
                     {org.tier}
                   </span>
                 </div>
-                <div className="flex items-center gap-3 mt-0.5">
-                  <span className="text-xs text-text-tertiary flex items-center gap-1">
-                    <Crown className="w-3 h-3" /> {org.slug}
-                  </span>
-                </div>
+                <p className="text-sm text-text-tertiary truncate">{org.slug}</p>
               </div>
-              <ChevronRight className="w-5 h-5 text-text-tertiary group-hover:text-text-secondary transition-colors" />
+              <ChevronRight className="w-4 h-4 text-text-tertiary flex-shrink-0" />
             </button>
-          ))}
-        </div>
-      )}
+          ))
+        )}
+      </div>
     </div>
   );
 }

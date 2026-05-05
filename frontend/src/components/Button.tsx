@@ -1,9 +1,9 @@
 import { cn } from '../utils/cn';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'danger';
-  size?: 'sm' | 'md' | 'lg';
-  children: React.ReactNode;
+  readonly variant?: 'primary' | 'secondary' | 'danger';
+  readonly size?: 'sm' | 'md' | 'lg';
+  readonly children: React.ReactNode;
 }
 
 export function Button({
@@ -12,7 +12,7 @@ export function Button({
   className,
   children,
   ...props
-}: ButtonProps) {
+}: Readonly<ButtonProps>) {
   const baseStyles = 'font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-accent-primary';
 
   const variants = {

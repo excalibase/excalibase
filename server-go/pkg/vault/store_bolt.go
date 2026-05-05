@@ -2,6 +2,7 @@ package vault
 
 import (
 	"fmt"
+	"strings"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -81,6 +82,36 @@ func (s *BoltStore) DeleteSecret(path string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketSecrets).Delete([]byte(path))
 	})
+}
+
+func (s *BoltStore) DeletePrefix(prefix string) (int, error) {
+	if prefix == "" {
+		return 0, fmt.Errorf("DeletePrefix: empty prefix not allowed")
+	}
+	deleted := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketSecrets)
+		// Collect first; bolt's cursor is unsafe to delete through.
+		var keys [][]byte
+		if err := b.ForEach(func(k, _ []byte) error {
+			if strings.HasPrefix(string(k), prefix) {
+				cp := make([]byte, len(k))
+				copy(cp, k)
+				keys = append(keys, cp)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, k := range keys {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+			deleted++
+		}
+		return nil
+	})
+	return deleted, err
 }
 
 func (s *BoltStore) ListSecrets(prefix string) ([]string, error) {

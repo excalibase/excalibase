@@ -15,6 +15,13 @@ type TierConfig struct {
 	BackupEnabled bool
 }
 
+// CPUString returns CPU as configured (e.g. "0.5", "2"). Provided as a method
+// so error messages don't leak the raw struct field name.
+func (t TierConfig) CPUString() string { return t.CPU }
+
+// MemoryString returns Memory as configured (e.g. "512Mi", "4Gi").
+func (t TierConfig) MemoryString() string { return t.Memory }
+
 var tiers = map[domain.TierType]TierConfig{
 	domain.Free: {
 		MaxProjects: 1,

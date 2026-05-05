@@ -9,6 +9,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const routeNameParam = "/{name}"
+
+
 type SetupHandler struct{ svc *service.OperatorSetupService }
 
 func NewSetupHandler(svc *service.OperatorSetupService) *SetupHandler { return &SetupHandler{svc: svc} }
@@ -50,9 +53,9 @@ func NewParameterGroupHandler(store interface {
 func (h *ParameterGroupHandler) Routes(r chi.Router) {
 	r.Get("/", h.List)
 	r.Post("/", h.Create)
-	r.Get("/{name}", h.Get)
-	r.Put("/{name}", h.Update)
-	r.Delete("/{name}", h.Delete)
+	r.Get(routeNameParam, h.Get)
+	r.Put(routeNameParam, h.Update)
+	r.Delete(routeNameParam, h.Delete)
 }
 
 func (h *ParameterGroupHandler) List(w http.ResponseWriter, r *http.Request) {

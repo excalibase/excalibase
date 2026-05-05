@@ -40,13 +40,8 @@ export function RealtimePage() {
     return rows;
   }, [tables, search, showOnlyEnabled]);
 
-  const handleToggle = (schema: string, table: string, currentlyEnabled: boolean) => {
-    if (currentlyEnabled) {
-      disableTable.mutate({ schema, table });
-    } else {
-      enableTable.mutate({ schema, table });
-    }
-  };
+  const handleEnable = (schema: string, table: string) => enableTable.mutate({ schema, table });
+  const handleDisable = (schema: string, table: string) => disableTable.mutate({ schema, table });
 
   return (
     <div data-testid="realtime-page">
@@ -86,7 +81,7 @@ export function RealtimePage() {
 
       <div className="bg-surface-card border border-border-primary rounded-lg p-4 mb-4 flex items-center justify-between">
         <span className="text-sm text-text-primary" data-testid="realtime-counter">
-          <strong>{enabledCount}</strong> of <strong>{totalCount}</strong> tables enabled
+          <strong>{enabledCount}</strong>{' '}of{' '}<strong>{totalCount}</strong>{' '}tables enabled
         </span>
         <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
           <input
@@ -95,7 +90,7 @@ export function RealtimePage() {
             onChange={(e) => setShowOnlyEnabled(e.target.checked)}
             data-testid="realtime-filter-enabled"
           />
-          Show only enabled
+          {' '}Show only enabled
         </label>
       </div>
 
@@ -147,7 +142,7 @@ export function RealtimePage() {
                   type="checkbox"
                   checked={t.enabled}
                   disabled={isPending}
-                  onChange={() => handleToggle(t.schema, t.table, t.enabled)}
+                  onChange={() => t.enabled ? handleDisable(t.schema, t.table) : handleEnable(t.schema, t.table)}
                   data-testid={`realtime-toggle-${id}`}
                   className="cursor-pointer"
                 />

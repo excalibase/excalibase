@@ -297,8 +297,9 @@ export function OrgDetailPage() {
           <div className="p-4 bg-surface-card border border-border-primary rounded-lg space-y-3">
             <h3 className="font-semibold text-text-primary">Organization Settings</h3>
             <div>
-              <label className="block text-sm text-text-secondary mb-1">Tier</label>
+              <label htmlFor="org-tier-select" className="block text-sm text-text-secondary mb-1">Tier</label>
               <select
+                id="org-tier-select"
                 value={org.tier}
                 onChange={async (e) => {
                   const updated = await updateOrg(org.id, { tier: e.target.value });

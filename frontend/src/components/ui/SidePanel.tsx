@@ -3,12 +3,12 @@ import { X } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 interface SidePanelProps {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-  footer?: React.ReactNode;
-  width?: string;
+  readonly open: boolean;
+  readonly onClose: () => void;
+  readonly title: string;
+  readonly children: React.ReactNode;
+  readonly footer?: React.ReactNode;
+  readonly width?: string;
 }
 
 export function SidePanel({ open, onClose, title, children, footer, width = 'w-96' }: SidePanelProps) {
@@ -29,9 +29,11 @@ export function SidePanel({ open, onClose, title, children, footer, width = 'w-9
   return (
     <>
       {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/40 z-40"
+      <button
+        type="button"
+        className="fixed inset-0 bg-black/40 z-40 cursor-default border-0 p-0"
         onClick={onClose}
+        aria-label="Close panel"
         data-testid="sidepanel-backdrop"
       />
       {/* Panel */}

@@ -5,6 +5,12 @@ import { useFunctions, useCreateFunction, useDropFunction } from '../hooks/useSc
 import { SidePanel } from '../components/ui/SidePanel';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 
+function getVolatilityClass(volatility: string): string {
+  if (volatility === 'IMMUTABLE') return 'bg-green-500/10 text-green-400';
+  if (volatility === 'STABLE') return 'bg-yellow-500/10 text-yellow-400';
+  return 'bg-text-tertiary/10 text-text-tertiary';
+}
+
 export function FunctionsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const { data: functions = [], isLoading } = useFunctions(projectId || '');
@@ -63,11 +69,7 @@ export function FunctionsPage() {
                 <span className={`ml-2 px-1.5 py-0.5 text-[10px] rounded font-medium ${
                   fn.language === 'plpgsql' ? 'bg-blue-500/10 text-blue-400' : 'bg-green-500/10 text-green-400'
                 }`}>{fn.language}</span>
-                <span className={`px-1.5 py-0.5 text-[10px] rounded font-medium ${
-                  fn.volatility === 'IMMUTABLE' ? 'bg-green-500/10 text-green-400' :
-                  fn.volatility === 'STABLE' ? 'bg-yellow-500/10 text-yellow-400' :
-                  'bg-text-tertiary/10 text-text-tertiary'
-                }`}>{fn.volatility}</span>
+                <span className={`px-1.5 py-0.5 text-[10px] rounded font-medium ${getVolatilityClass(fn.volatility)}`}>{fn.volatility}</span>
               </button>
               <button
                 onClick={() => setDropTarget({ name: fn.name, argTypes: fn.argTypes })}
@@ -113,35 +115,35 @@ export function FunctionsPage() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Function Name</label>
-            <input type="text" value={fName} onChange={e => setFName(e.target.value)}
+            <label htmlFor="fn-name-input" className="block text-sm font-medium text-text-secondary mb-1">Function Name</label>
+            <input id="fn-name-input" type="text" value={fName} onChange={e => setFName(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
               data-testid="fn-name-input" autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1">Language</label>
-              <select value={fLang} onChange={e => setFLang(e.target.value)}
+              <label htmlFor="fn-lang-select" className="block text-sm font-medium text-text-secondary mb-1">Language</label>
+              <select id="fn-lang-select" value={fLang} onChange={e => setFLang(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
                 <option value="plpgsql">PL/pgSQL</option>
                 <option value="sql">SQL</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1">Returns</label>
-              <input type="text" value={fReturn} onChange={e => setFReturn(e.target.value)}
+              <label htmlFor="fn-return-input" className="block text-sm font-medium text-text-secondary mb-1">Returns</label>
+              <input id="fn-return-input" type="text" value={fReturn} onChange={e => setFReturn(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Arguments</label>
-            <input type="text" value={fArgs} onChange={e => setFArgs(e.target.value)}
+            <label htmlFor="fn-args-input" className="block text-sm font-medium text-text-secondary mb-1">Arguments</label>
+            <input id="fn-args-input" type="text" value={fArgs} onChange={e => setFArgs(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
               placeholder="e.g. p_name text, p_age integer" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Volatility</label>
-            <select value={fVol} onChange={e => setFVol(e.target.value)}
+            <label htmlFor="fn-vol-select" className="block text-sm font-medium text-text-secondary mb-1">Volatility</label>
+            <select id="fn-vol-select" value={fVol} onChange={e => setFVol(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
               <option value="VOLATILE">VOLATILE</option>
               <option value="STABLE">STABLE</option>
@@ -149,8 +151,8 @@ export function FunctionsPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Function Body</label>
-            <textarea value={fBody} onChange={e => setFBody(e.target.value)} rows={10}
+            <label htmlFor="fn-body-input" className="block text-sm font-medium text-text-secondary mb-1">Function Body</label>
+            <textarea id="fn-body-input" value={fBody} onChange={e => setFBody(e.target.value)} rows={10}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
               data-testid="fn-body-input"
               placeholder="BEGIN&#10;  RETURN 'hello';&#10;END;" />

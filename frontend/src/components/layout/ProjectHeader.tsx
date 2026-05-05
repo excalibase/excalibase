@@ -9,7 +9,7 @@ export function ProjectHeader() {
   const { dark, toggle } = useDarkMode();
   const location = useLocation();
   const { projectId } = useParams<{ projectId: string }>();
-  const { clearAuth } = useAuthStore();
+  const { logout } = useAuthStore();
 
   const breadcrumbs = buildBreadcrumbs(location.pathname, projectId ?? '');
 
@@ -38,7 +38,7 @@ export function ProjectHeader() {
           {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </button>
         <button
-          onClick={clearAuth}
+          onClick={() => { void logout(); }}
           className="p-2 rounded-lg text-text-secondary hover:text-red-400 hover:bg-surface-hover transition-colors"
           title="Sign out"
         >

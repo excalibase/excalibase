@@ -17,13 +17,13 @@ const INDEX_TYPES = ['btree', 'hash', 'gin', 'gist', 'brin'];
 
 export function IndexesPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const { data: tables = [] } = useTables(projectId || '');
+  const { data: tables = [] } = useTables(projectId ?? '');
 
   const [selectedTable, setSelectedTable] = useState('');
-  const { data: indexes = [], isLoading } = useIndexes(projectId || '', selectedTable);
-  const { data: columns = [] } = useColumns(projectId || '', selectedTable);
-  const createIndex = useCreateIndex(projectId || '');
-  const dropIndex = useDropIndex(projectId || '');
+  const { data: indexes = [], isLoading } = useIndexes(projectId ?? '', selectedTable);
+  const { data: columns = [] } = useColumns(projectId ?? '', selectedTable);
+  const createIndex = useCreateIndex(projectId ?? '');
+  const dropIndex = useDropIndex(projectId ?? '');
 
   const [showCreate, setShowCreate] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -78,22 +78,25 @@ export function IndexesPage() {
         </select>
       </div>
 
-      {!selectedTable ? (
+      {selectedTable === '' && (
         <div className="rounded-lg border border-border-primary bg-surface-card p-12 text-center text-text-tertiary text-sm">
           Select a table to view its indexes
         </div>
-      ) : isLoading ? (
+      )}
+      {selectedTable !== '' && isLoading && (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>
-      ) : (
+      )}
+      {selectedTable !== '' && !isLoading && (
         <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden">
           <div className="px-4 py-3 border-b border-border-primary flex items-center gap-2 bg-bg-secondary">
             <List className="w-4 h-4 text-purple-400" />
             <span className="text-sm font-medium text-text-primary">Indexes on {selectedTable}</span>
-            <span className="text-xs text-text-tertiary ml-auto">{indexes.length} index{indexes.length !== 1 ? 'es' : ''}</span>
+            <span className="text-xs text-text-tertiary ml-auto">{indexes.length} <span>{indexes.length === 1 ? 'index' : 'indexes'}</span></span>
           </div>
-          {indexes.length === 0 ? (
+          {indexes.length === 0 && (
             <div className="p-8 text-center text-text-tertiary text-sm">No indexes on this table</div>
-          ) : (
+          )}
+          {indexes.length > 0 && (
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-card">
@@ -147,14 +150,14 @@ export function IndexesPage() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Index Name</label>
-            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+            <label htmlFor="index-name-input" className="block text-sm font-medium text-text-secondary mb-1">Index Name</label>
+            <input id="index-name-input" type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
               autoFocus />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Table</label>
-            <select value={form.table} onChange={(e) => setForm({ ...form, table: e.target.value, columns: [] })}
+            <label htmlFor="index-table-select" className="block text-sm font-medium text-text-secondary mb-1">Table</label>
+            <select id="index-table-select" value={form.table} onChange={(e) => setForm({ ...form, table: e.target.value, columns: [] })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
               <option value="">Select table...</option>
               {tables.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
@@ -162,7 +165,7 @@ export function IndexesPage() {
           </div>
           {form.table && (
             <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1">Columns</label>
+              <span className="block text-sm font-medium text-text-secondary mb-1">Columns</span>
               <div className="space-y-2">
                 {columns.map((col) => (
                   <label key={col.name} className="flex items-center gap-2 text-sm text-text-secondary">
@@ -180,11 +183,11 @@ export function IndexesPage() {
           )}
           <label className="flex items-center gap-2 text-sm text-text-secondary">
             <input type="checkbox" checked={form.unique} onChange={(e) => setForm({ ...form, unique: e.target.checked })} className="rounded" />
-            Unique
+            {' '}Unique
           </label>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Type</label>
-            <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}
+            <label htmlFor="index-type-select" className="block text-sm font-medium text-text-secondary mb-1">Type</label>
+            <select id="index-type-select" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
               {INDEX_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>

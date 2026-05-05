@@ -3,11 +3,12 @@ import { useInstanceContext } from '../context/InstanceContext';
 import { usePerformanceSummary, useTopQueries, useWaitEvents, useEnablePerformanceInsights } from '../hooks/usePerformance';
 import { Zap, Clock, Database, AlertCircle, Settings, CheckCircle, type LucideIcon } from 'lucide-react';
 import { formatBytes } from '../utils/formatBytes';
+// formatBytes is used to render summary.databaseSizeBytes below.
 
 type Tab = 'summary' | 'queries' | 'waits';
 
 function pct(n: number | undefined) {
-  return n != null ? `${n.toFixed(1)}%` : '—';
+  return n == null ? '—' : `${n.toFixed(1)}%`;
 }
 function ms(n: number | undefined) {
   if (n == null) return '—';
@@ -58,7 +59,7 @@ export function PerformancePage() {
       )}
 
       {/* Full-page gate: extension not enabled */}
-      {!anyLoading && pgStatMissing && projectId ? (
+      {!anyLoading && pgStatMissing && projectId && (
         <div className="bg-surface-card border border-border-primary rounded-xl p-12 flex flex-col items-center text-center gap-6">
           <div className="w-16 h-16 rounded-full bg-yellow-900/20 border border-yellow-500/30 flex items-center justify-center">
             <Settings className="w-8 h-8 text-yellow-400" />
@@ -102,7 +103,8 @@ export function PerformancePage() {
             <p className="text-xs text-text-tertiary">Triggers a rolling cluster restart — takes ~30 seconds. No data loss.</p>
           </div>
         </div>
-      ) : (
+      )}
+      {(anyLoading || !pgStatMissing || !projectId) && (
       <>
 
       {/* Tabs */}
@@ -125,123 +127,126 @@ export function PerformancePage() {
 
         <div className="p-6">
           {/* Summary */}
-          {tab === 'summary' && (
-            summaryLoading ? (
-              <div className="text-center py-12 text-text-secondary text-sm">Loading…</div>
-            ) : summaryError ? (
-              <div className="text-center py-12 text-text-secondary">
-                <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-500/60" />
-                <p className="text-sm text-text-primary font-medium mb-1">Performance data unavailable</p>
-                <p className="text-xs text-text-tertiary max-w-sm mx-auto">
-                  {extractErrorMessage(summaryErr) ?? 'Could not fetch performance data.'}
-                </p>
+          {tab === 'summary' && summaryLoading && (
+            <div className="text-center py-12 text-text-secondary text-sm">Loading…</div>
+          )}
+          {tab === 'summary' && !summaryLoading && summaryError && (
+            <div className="text-center py-12 text-text-secondary">
+              <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-500/60" />
+              <p className="text-sm text-text-primary font-medium mb-1">Performance data unavailable</p>
+              <p className="text-xs text-text-tertiary max-w-sm mx-auto">
+                {extractErrorMessage(summaryErr) ?? 'Could not fetch performance data.'}
+              </p>
+            </div>
+          )}
+          {tab === 'summary' && !summaryLoading && !summaryError && !summary && (
+            <div className="text-center py-12 text-text-secondary text-sm">No data yet.</div>
+          )}
+          {tab === 'summary' && !summaryLoading && !summaryError && summary && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  { label: 'Cache Hit Ratio', value: pct(summary.cacheHitRatio) },
+                  { label: 'Active Connections', value: `${summary.activeConnections ?? '—'} / ${summary.totalConnections ?? '—'}` },
+                  { label: 'Database Size', value: summary.databaseSizeBytes == null ? '—' : formatBytes(summary.databaseSizeBytes) },
+                  { label: 'Slow Queries', value: summary.slowQueryCount },
+                ].map(({ label, value }) => (
+                  <div key={label} className="bg-bg-secondary border border-border-primary rounded-xl p-4">
+                    <p className="text-xs text-text-tertiary mb-1">{label}</p>
+                    <p className="text-lg font-bold text-text-primary">{value}</p>
+                  </div>
+                ))}
               </div>
-            ) : !summary ? (
-              <div className="text-center py-12 text-text-secondary text-sm">No data yet.</div>
-            ) : (
-              <div className="space-y-6">
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                  {[
-                    { label: 'Cache Hit Ratio', value: pct(summary.cacheHitRatio) },
-                    { label: 'Active Connections', value: `${summary.activeConnections ?? '—'} / ${summary.totalConnections ?? '—'}` },
-                    { label: 'Database Size', value: summary.databaseSize ?? '—' },
-                    { label: 'Slow Queries', value: summary.slowQueryCount },
-                  ].map(({ label, value }) => (
-                    <div key={label} className="bg-bg-secondary border border-border-primary rounded-xl p-4">
-                      <p className="text-xs text-text-tertiary mb-1">{label}</p>
-                      <p className="text-lg font-bold text-text-primary">{value}</p>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-text-tertiary">Last collected: {summary.collectedAt ? new Date(summary.collectedAt).toLocaleString() : '—'}</p>
-              </div>
-            )
+              <p className="text-xs text-text-tertiary">Last collected: {summary.collectedAt ? new Date(summary.collectedAt).toLocaleString() : '—'}</p>
+            </div>
           )}
 
           {/* Top Queries */}
-          {tab === 'queries' && (
-            queriesLoading ? (
-              <div className="text-center py-12 text-text-secondary text-sm">Loading…</div>
-            ) : queriesError ? (
-              <div className="text-center py-12 text-text-secondary">
-                <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-500/60" />
-                <p className="text-sm text-text-primary font-medium mb-1">Query stats unavailable</p>
-                <p className="text-xs text-text-tertiary max-w-sm mx-auto">
-                  {extractErrorMessage(queriesErr) ?? 'Could not fetch query stats.'}
-                </p>
-              </div>
-            ) : queries.length === 0 ? (
-              <div className="text-center py-12 text-text-secondary text-sm">No query stats yet.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-text-tertiary border-b border-border-primary text-left">
-                      <th className="py-2 pr-4 font-medium">Query</th>
-                      <th className="py-2 pr-4 font-medium text-right">Calls</th>
-                      <th className="py-2 pr-4 font-medium text-right">Total Time</th>
-                      <th className="py-2 pr-4 font-medium text-right">Avg Time</th>
-                      <th className="py-2 pr-4 font-medium text-right">Rows</th>
-                      <th className="py-2 font-medium text-right">Cache Hit</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {queries.map((q, i) => (
-                      <tr key={`query-${i}-${q.query?.slice(0, 20)}`} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
-                        <td className="py-3 pr-4 font-mono text-xs text-text-primary max-w-xs truncate" title={q.query}>{q.query}</td>
-                        <td className="py-3 pr-4 text-right text-text-secondary">{q.calls?.toLocaleString()}</td>
-                        <td className="py-3 pr-4 text-right text-text-secondary">{ms(q.totalTimeMs)}</td>
-                        <td className="py-3 pr-4 text-right text-yellow-400">{ms(q.meanTimeMs)}</td>
-                        <td className="py-3 pr-4 text-right text-text-secondary">{q.rows?.toLocaleString()}</td>
-                        <td className="py-3 text-right text-green-400">{pct(q.hitPercent)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
+          {tab === 'queries' && queriesLoading && (
+            <div className="text-center py-12 text-text-secondary text-sm">Loading…</div>
           )}
-
-          {/* Wait Events */}
-          {tab === 'waits' && (
-            waitsLoading ? (
-              <div className="text-center py-12 text-text-secondary text-sm">Loading…</div>
-            ) : waitsError ? (
-              <div className="text-center py-12 text-text-secondary">
-                <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-500/60" />
-                <p className="text-sm text-text-primary font-medium mb-1">Wait events unavailable</p>
-                <p className="text-xs text-text-tertiary max-w-sm mx-auto">
-                  {extractErrorMessage(waitsErr) ?? 'Could not fetch wait events.'}
-                </p>
-              </div>
-            ) : waits.length === 0 ? (
-              <div className="text-center py-12 text-text-secondary text-sm">No active wait events — database is idle.</div>
-            ) : (
+          {tab === 'queries' && !queriesLoading && queriesError && (
+            <div className="text-center py-12 text-text-secondary">
+              <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-500/60" />
+              <p className="text-sm text-text-primary font-medium mb-1">Query stats unavailable</p>
+              <p className="text-xs text-text-tertiary max-w-sm mx-auto">
+                {extractErrorMessage(queriesErr) ?? 'Could not fetch query stats.'}
+              </p>
+            </div>
+          )}
+          {tab === 'queries' && !queriesLoading && !queriesError && queries.length === 0 && (
+            <div className="text-center py-12 text-text-secondary text-sm">No query stats yet.</div>
+          )}
+          {tab === 'queries' && !queriesLoading && !queriesError && queries.length > 0 && (
+            <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-text-tertiary border-b border-border-primary text-left">
-                    <th className="py-2 pr-4 font-medium">PID</th>
-                    <th className="py-2 pr-4 font-medium">Wait Type</th>
-                    <th className="py-2 pr-4 font-medium">Event</th>
-                    <th className="py-2 pr-4 font-medium">State</th>
-                    <th className="py-2 pr-4 font-medium">Duration</th>
-                    <th className="py-2 font-medium">Query</th>
+                    <th className="py-2 pr-4 font-medium">Query</th>
+                    <th className="py-2 pr-4 font-medium text-right">Calls</th>
+                    <th className="py-2 pr-4 font-medium text-right">Total Time</th>
+                    <th className="py-2 pr-4 font-medium text-right">Avg Time</th>
+                    <th className="py-2 pr-4 font-medium text-right">Rows</th>
+                    <th className="py-2 font-medium text-right">Cache Hit</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {waits.map((w, i) => (
-                    <tr key={w.pid || i} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
-                      <td className="py-3 pr-4 font-mono text-xs text-text-primary">{w.pid}</td>
-                      <td className="py-3 pr-4 text-text-secondary">{w.waitEventType}</td>
-                      <td className="py-3 pr-4 text-accent-primary">{w.waitEvent ?? '—'}</td>
-                      <td className="py-3 pr-4 text-text-tertiary">{w.state}</td>
-                      <td className="py-3 pr-4 text-yellow-400">{w.duration}</td>
-                      <td className="py-3 font-mono text-xs text-text-secondary max-w-xs truncate" title={w.query}>{w.query}</td>
+                  {queries.map((q, i) => (
+                    <tr key={`query-${i}-${q.query?.slice(0, 20)}`} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
+                      <td className="py-3 pr-4 font-mono text-xs text-text-primary max-w-xs truncate" title={q.query}>{q.query}</td>
+                      <td className="py-3 pr-4 text-right text-text-secondary">{q.calls?.toLocaleString()}</td>
+                      <td className="py-3 pr-4 text-right text-text-secondary">{ms(q.totalTimeMs)}</td>
+                      <td className="py-3 pr-4 text-right text-yellow-400">{ms(q.meanTimeMs)}</td>
+                      <td className="py-3 pr-4 text-right text-text-secondary">{q.rows?.toLocaleString()}</td>
+                      <td className="py-3 text-right text-green-400">{pct(q.hitPercent)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            )
+            </div>
+          )}
+
+          {/* Wait Events */}
+          {tab === 'waits' && waitsLoading && (
+            <div className="text-center py-12 text-text-secondary text-sm">Loading…</div>
+          )}
+          {tab === 'waits' && !waitsLoading && waitsError && (
+            <div className="text-center py-12 text-text-secondary">
+              <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-500/60" />
+              <p className="text-sm text-text-primary font-medium mb-1">Wait events unavailable</p>
+              <p className="text-xs text-text-tertiary max-w-sm mx-auto">
+                {extractErrorMessage(waitsErr) ?? 'Could not fetch wait events.'}
+              </p>
+            </div>
+          )}
+          {tab === 'waits' && !waitsLoading && !waitsError && waits.length === 0 && (
+            <div className="text-center py-12 text-text-secondary text-sm">No active wait events — database is idle.</div>
+          )}
+          {tab === 'waits' && !waitsLoading && !waitsError && waits.length > 0 && (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-text-tertiary border-b border-border-primary text-left">
+                  <th className="py-2 pr-4 font-medium">PID</th>
+                  <th className="py-2 pr-4 font-medium">Wait Type</th>
+                  <th className="py-2 pr-4 font-medium">Event</th>
+                  <th className="py-2 pr-4 font-medium">State</th>
+                  <th className="py-2 pr-4 font-medium">Duration</th>
+                  <th className="py-2 font-medium">Query</th>
+                </tr>
+              </thead>
+              <tbody>
+                {waits.map((w, i) => (
+                  <tr key={w.pid || i} className="border-b border-border-primary last:border-0 hover:bg-surface-hover">
+                    <td className="py-3 pr-4 font-mono text-xs text-text-primary">{w.pid}</td>
+                    <td className="py-3 pr-4 text-text-secondary">{w.waitEventType}</td>
+                    <td className="py-3 pr-4 text-accent-primary">{w.waitEvent ?? '—'}</td>
+                    <td className="py-3 pr-4 text-text-tertiary">{w.state}</td>
+                    <td className="py-3 pr-4 text-yellow-400">{w.duration}</td>
+                    <td className="py-3 font-mono text-xs text-text-secondary max-w-xs truncate" title={w.query}>{w.query}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       </div>

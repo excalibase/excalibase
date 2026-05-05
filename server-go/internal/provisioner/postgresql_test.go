@@ -10,6 +10,14 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
+const (
+	testExpectedErr  = "expected error"
+	testStageErrFmt  = "expected StageError, got %T: %v"
+	testBKTest       = "bk-test"
+	testDelDBNS      = "org1-del-db"
+)
+
+
 func TestPostgreSQLProvisionerFree(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.SetupPostgreSQLMock("test-db", "org1-test-db", 1)
@@ -81,12 +89,12 @@ func TestPostgreSQLProvisionerFree(t *testing.T) {
 
 func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 	mock := k8s.NewMockClient()
-	mock.SetupPostgreSQLMock("bk-test", "org1-bk-test", 1)
+	mock.SetupPostgreSQLMock(testBKTest, "org1-bk-test", 1)
 	prov := NewPostgreSQLProvisioner(mock, "")
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "bk-test",
+		ProjectName: testBKTest,
 		OrgID:       "org1",
 		DBType:      domain.PostgreSQL,
 		Tier:        domain.Free,
@@ -101,7 +109,7 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 				Region:          "ap-southeast-1",
 			},
 		},
-	}, tier, func(s domain.ProvisioningStage) {})
+	}, tier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	if err != nil {
 		t.Fatalf("Provision with backup: %v", err)
@@ -134,7 +142,7 @@ func TestPostgreSQLProvisionerStandard(t *testing.T) {
 		OrgID:       "org1",
 		DBType:      domain.PostgreSQL,
 		Tier:        domain.Standard,
-	}, tier, func(s domain.ProvisioningStage) {})
+	}, tier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	if err != nil {
 		t.Fatalf("Provision STANDARD: %v", err)
@@ -157,14 +165,14 @@ func TestPostgreSQLProvisionerStandard(t *testing.T) {
 
 func TestPostgreSQLDeprovision(t *testing.T) {
 	mock := k8s.NewMockClient()
-	mock.Namespaces["org1-del-db"] = true
+	mock.Namespaces[testDelDBNS] = true
 	prov := NewPostgreSQLProvisioner(mock, "")
 
-	err := prov.Deprovision(context.Background(), "org1-del-db", "del-db")
+	err := prov.Deprovision(context.Background(), testDelDBNS, "del-db")
 	if err != nil {
 		t.Fatalf("Deprovision: %v", err)
 	}
-	if mock.Namespaces["org1-del-db"] {
+	if mock.Namespaces[testDelDBNS] {
 		t.Error("namespace should be deleted")
 	}
 }
@@ -184,7 +192,7 @@ func TestPostgreSQLConfigureBackup(t *testing.T) {
 	mock := k8s.NewMockClient()
 	prov := NewPostgreSQLProvisioner(mock, "")
 
-	err := prov.ConfigureBackup(context.Background(), "ns", "bk-test", "0 3 * * *", 14)
+	err := prov.ConfigureBackup(context.Background(), "ns", testBKTest, "0 3 * * *", 14)
 	if err != nil {
 		t.Fatalf("ConfigureBackup: %v", err)
 	}
@@ -241,11 +249,11 @@ func TestPostgreSQL_ProvisionWithRollback_NamespaceFailsNoCleanups(t *testing.T)
 	}, tier, pc)
 
 	if err == nil {
-		t.Fatal("expected error")
+		t.Fatal(testExpectedErr)
 	}
 	var se *StageError
 	if !errors.As(err, &se) {
-		t.Fatalf("expected StageError, got %T: %v", err, err)
+		t.Fatalf(testStageErrFmt, err, err)
 	}
 	if se.Stage != domain.StageNamespaceCreation {
 		t.Errorf("stage: got %s, want NAMESPACE_CREATION", se.Stage)
@@ -271,11 +279,11 @@ func TestPostgreSQL_ProvisionWithRollback_CRDFailRollsBackNamespace(t *testing.T
 	}, tier, pc)
 
 	if err == nil {
-		t.Fatal("expected error")
+		t.Fatal(testExpectedErr)
 	}
 	var se *StageError
 	if !errors.As(err, &se) {
-		t.Fatalf("expected StageError, got %T: %v", err, err)
+		t.Fatalf(testStageErrFmt, err, err)
 	}
 	if se.Stage != domain.StageCRDDeployment {
 		t.Errorf("stage: got %s, want CRD_DEPLOYMENT", se.Stage)
@@ -314,11 +322,11 @@ func TestPostgreSQL_ProvisionWithRollback_WaitFailRollsBackNamespace(t *testing.
 	}, tier, pc)
 
 	if err == nil {
-		t.Fatal("expected error")
+		t.Fatal(testExpectedErr)
 	}
 	var se *StageError
 	if !errors.As(err, &se) {
-		t.Fatalf("expected StageError, got %T: %v", err, err)
+		t.Fatalf(testStageErrFmt, err, err)
 	}
 	if se.Stage != domain.StageWaitingForReady {
 		t.Errorf("stage: got %s, want WAITING_FOR_READY", se.Stage)
@@ -354,11 +362,11 @@ func TestPostgreSQL_ProvisionWithRollback_ReplicaStepCaptured(t *testing.T) {
 	}, tier, pc)
 
 	if err == nil {
-		t.Fatal("expected error")
+		t.Fatal(testExpectedErr)
 	}
 	var se *StageError
 	if !errors.As(err, &se) {
-		t.Fatalf("expected StageError, got %T: %v", err, err)
+		t.Fatalf(testStageErrFmt, err, err)
 	}
 	if se.Stage != domain.StageWaitingForReady {
 		t.Errorf("stage: got %s", se.Stage)

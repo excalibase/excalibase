@@ -11,6 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+const podNameFmt = "%s-postgres-%d"
+
+
 // MockClient is a test double for KubeClient.
 type MockClient struct {
 	mu              sync.Mutex
@@ -39,6 +42,11 @@ type MockClient struct {
 	// DenoRuntimes — set of namespaces where EnsureDenoRuntime has been called.
 	DenoRuntimes        map[string]bool
 	EnsureDenoError     error
+
+	// Capacity returned by GetClusterCapacity. Tests set this to simulate
+	// cluster headroom for capacity-aware provisioning checks.
+	Capacity      ClusterCapacity
+	CapacityError error
 }
 
 func NewMockClient() *MockClient {
@@ -198,7 +206,7 @@ func (m *MockClient) GetPodMetrics(ctx context.Context, namespace string) ([]Pod
 func (m *MockClient) SetupPostgreSQLMock(projectID, namespace string, instances int) {
 	// Pods ready
 	for i := 1; i <= instances; i++ {
-		podName := fmt.Sprintf("%s-postgres-%d", projectID, i)
+		podName := fmt.Sprintf(podNameFmt, projectID, i)
 		m.PodReady[namespace+"/"+podName] = true
 		m.Pods[namespace] = append(m.Pods[namespace], corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: namespace},
@@ -222,7 +230,7 @@ cnpg_pg_settings_setting{name="max_connections"} 100
 cnpg_collector_last_available_backup_timestamp 1711929600
 `
 	for i := 1; i <= instances; i++ {
-		pod := fmt.Sprintf("%s-postgres-%d", projectID, i)
+		pod := fmt.Sprintf(podNameFmt, projectID, i)
 		m.ExecOutput[namespace+"/"+pod] = metricsOutput
 	}
 
@@ -230,7 +238,7 @@ cnpg_collector_last_available_backup_timestamp 1711929600
 	var podMetrics []PodResourceMetrics
 	for i := 1; i <= instances; i++ {
 		podMetrics = append(podMetrics, PodResourceMetrics{
-			Name:      fmt.Sprintf("%s-postgres-%d", projectID, i),
+			Name:      fmt.Sprintf(podNameFmt, projectID, i),
 			CPUMillis: 20,
 			MemoryMB:  100,
 		})
@@ -296,6 +304,16 @@ func (m *MockClient) EnsureDenoRuntime(ctx context.Context, namespace string, sp
 	}
 	m.DenoRuntimes[namespace] = true
 	return nil
+}
+
+func (m *MockClient) GetClusterCapacity(ctx context.Context) (ClusterCapacity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "GetClusterCapacity")
+	if m.CapacityError != nil {
+		return ClusterCapacity{}, m.CapacityError
+	}
+	return m.Capacity, nil
 }
 
 func (m *MockClient) UninstallHelmChart(ctx context.Context, namespace, releaseName string) error {

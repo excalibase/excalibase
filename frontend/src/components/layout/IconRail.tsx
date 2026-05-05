@@ -9,8 +9,8 @@ type SidebarMode = 'expanded' | 'collapsed' | 'expandable';
 const STORAGE_KEY = 'sidebar-behavior';
 
 interface IconRailProps {
-  activeSection: string | null;
-  onSectionClick: (key: string) => void;
+  readonly activeSection: string | null;
+  readonly onSectionClick: (key: string) => void;
 }
 
 export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
@@ -20,7 +20,7 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
   const basePath = `/project/${projectId}`;
 
   const [mode, setMode] = useState<SidebarMode>(() => {
-    return (localStorage.getItem(STORAGE_KEY) as SidebarMode) || 'expandable';
+    return (localStorage.getItem(STORAGE_KEY) as SidebarMode) ?? 'expandable';
   });
   const [hovered, setHovered] = useState(false);
   const [showModeMenu, setShowModeMenu] = useState(false);
@@ -56,13 +56,16 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
   };
 
   return (
-    <div
+    <aside
+      aria-label="Project navigation rail"
       className={cn(
         'flex-shrink-0 flex flex-col bg-surface-card border-r border-border-primary transition-all duration-200',
         isExpanded ? 'w-48' : 'w-12'
       )}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); setShowModeMenu(false); }}
+      onFocus={() => setHovered(true)}
+      onBlur={() => { setHovered(false); setShowModeMenu(false); }}
       data-testid="icon-rail"
     >
       {/* Back to platform */}
@@ -142,6 +145,6 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
           </div>
         )}
       </div>
-    </div>
+    </aside>
   );
 }

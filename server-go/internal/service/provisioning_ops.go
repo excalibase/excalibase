@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -16,6 +19,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
+
+const (
+	postgresSuffix = "-postgres"
+	errGetCRDFmt   = "get cluster CRD: %w"
+)
+
 
 // ScaleTier changes the instance count and resources by patching the CNPG Cluster CRD.
 func (s *ProvisioningService) ScaleTier(ctx context.Context, projectID string, newTier domain.TierType) error {
@@ -30,10 +39,10 @@ func (s *ProvisioningService) ScaleTier(ctx context.Context, projectID string, n
 	}
 
 	// Get existing cluster CRD and update spec
-	clusterName := projectID + "-postgres"
+	clusterName := projectID + postgresSuffix
 	existing, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, clusterName)
 	if err != nil {
-		return fmt.Errorf("get cluster CRD: %w", err)
+		return fmt.Errorf(errGetCRDFmt, err)
 	}
 
 	spec := existing.Object["spec"].(map[string]interface{})
@@ -58,10 +67,10 @@ func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, newS
 		return err
 	}
 
-	clusterName := projectID + "-postgres"
+	clusterName := projectID + postgresSuffix
 	existing, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, clusterName)
 	if err != nil {
-		return fmt.Errorf("get cluster CRD: %w", err)
+		return fmt.Errorf(errGetCRDFmt, err)
 	}
 
 	spec := existing.Object["spec"].(map[string]interface{})
@@ -78,10 +87,10 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 		return err
 	}
 
-	clusterName := projectID + "-postgres"
+	clusterName := projectID + postgresSuffix
 	existing, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, clusterName)
 	if err != nil {
-		return fmt.Errorf("get cluster CRD: %w", err)
+		return fmt.Errorf(errGetCRDFmt, err)
 	}
 
 	spec := existing.Object["spec"].(map[string]interface{})
@@ -108,7 +117,7 @@ func (s *ProvisioningService) CloneDatabase(ctx context.Context, projectID strin
 			"apiVersion": "postgresql.cnpg.io/v1",
 			"kind":       "Cluster",
 			"metadata": map[string]interface{}{
-				"name":      req.NewProjectName + "-postgres",
+				"name":      req.NewProjectName + postgresSuffix,
 				"namespace": newNamespace,
 			},
 			"spec": map[string]interface{}{
@@ -116,12 +125,12 @@ func (s *ProvisioningService) CloneDatabase(ctx context.Context, projectID strin
 				"storage":   map[string]interface{}{"size": "5Gi"},
 				"bootstrap": map[string]interface{}{
 					"pg_basebackup": map[string]interface{}{
-						"source": projectID + "-postgres",
+						"source": projectID + postgresSuffix,
 					},
 				},
 				"externalClusters": []interface{}{
 					map[string]interface{}{
-						"name": projectID + "-postgres",
+						"name": projectID + postgresSuffix,
 						"connectionParameters": map[string]interface{}{
 							"host":   inst.Host,
 							"dbname": inst.DatabaseName,
@@ -146,16 +155,75 @@ func (s *ProvisioningService) CloneDatabase(ctx context.Context, projectID strin
 	}, nil
 }
 
-// GetLogs tails logs from the primary pod.
+// GetLogs returns the last N lines of the project's postgres pod log.
+// Prefers Loki when configured (sees logs across pod restarts, doesn't hang
+// on busy minikube apiservers); falls back to kubectl-exec tail in dev/test
+// environments without Loki.
 func (s *ProvisioningService) GetLogs(ctx context.Context, projectID string, lines int) (string, error) {
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return "", err
 	}
 
+	if s.lokiURL != "" {
+		return s.getLogsFromLoki(ctx, inst.Namespace, projectID, lines)
+	}
+
 	pod := projectID + "-postgres-1"
 	return s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
 		[]string{"sh", "-c", fmt.Sprintf("tail -%d /controller/log/postgres.csv", lines)})
+}
+
+// getLogsFromLoki queries Loki for the last N postgres pod lines from the
+// project's namespace. Returns plain-text concatenated lines (one per row)
+// so the existing handler-side response shape stays unchanged.
+func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, namespace, projectID string, lines int) (string, error) {
+	if lines <= 0 || lines > 5000 {
+		lines = 100
+	}
+	logql := fmt.Sprintf(`{namespace=%q,cnpg_io_cluster=%q}`, namespace, projectID+postgresSuffix)
+	end := time.Now()
+	start := end.Add(-1 * time.Hour)
+	u := fmt.Sprintf("%s/loki/api/v1/query_range?query=%s&start=%d&end=%d&limit=%d&direction=backward",
+		s.lokiURL, urlEscape(logql), start.UnixNano(), end.UnixNano(), lines)
+
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(reqCtx, "GET", u, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("loki query: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("loki returned %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Data struct {
+			Result []struct {
+				Values [][]string `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", fmt.Errorf("loki decode: %w", err)
+	}
+
+	var sb strings.Builder
+	for _, stream := range body.Data.Result {
+		for _, v := range stream.Values {
+			if len(v) >= 2 {
+				sb.WriteString(v[1])
+				sb.WriteByte('\n')
+			}
+		}
+	}
+	return sb.String(), nil
+}
+
+func urlEscape(s string) string {
+	return url.QueryEscape(s)
 }
 
 // RotateCredentials generates a new password and updates the database.
@@ -223,10 +291,10 @@ func (s *ProvisioningService) UpdateParameters(ctx context.Context, projectID st
 		return err
 	}
 
-	clusterName := projectID + "-postgres"
+	clusterName := projectID + postgresSuffix
 	existing, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, clusterName)
 	if err != nil {
-		return fmt.Errorf("get cluster CRD: %w", err)
+		return fmt.Errorf(errGetCRDFmt, err)
 	}
 
 	spec := existing.Object["spec"].(map[string]interface{})
@@ -270,7 +338,7 @@ func (s *ProvisioningService) EnablePooler(ctx context.Context, projectID string
 			},
 			"spec": map[string]interface{}{
 				"cluster": map[string]interface{}{
-					"name": projectID + "-postgres",
+					"name": projectID + postgresSuffix,
 				},
 				"instances": int64(1),
 				"type":      "rw",

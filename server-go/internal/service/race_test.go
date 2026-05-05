@@ -11,6 +11,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+const testConcM = "conc-m"
+
+
 // TestConcurrentProvisionSameDisplayName verifies that concurrent provisions with
 // the same display name all succeed and receive distinct generated refs.
 // After the project-ref refactor, same display name is no longer a conflict.
@@ -74,10 +77,10 @@ func TestConcurrentMetricsCollection(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 	store.Save(&domain.DatabaseInstance{
-		ProjectID: "conc-m", Namespace: "ns", Status: "ACTIVE",
+		ProjectID: testConcM, Namespace: "ns", Status: "ACTIVE",
 		DBType: domain.PostgreSQL, Tier: domain.Free,
 	})
-	mock.SetupPostgreSQLMock("conc-m", "ns", 1)
+	mock.SetupPostgreSQLMock(testConcM, "ns", 1)
 
 	svc := NewMetricsService(store, mock, dir)
 
@@ -86,7 +89,7 @@ func TestConcurrentMetricsCollection(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			m, err := svc.GetCurrentMetrics(context.Background(), "conc-m")
+			m, err := svc.GetCurrentMetrics(context.Background(), testConcM)
 			if err != nil {
 				t.Errorf("concurrent metrics: %v", err)
 			}
@@ -98,7 +101,7 @@ func TestConcurrentMetricsCollection(t *testing.T) {
 	wg.Wait()
 
 	// History should have all 10 points
-	hist, _ := svc.GetMetricsHistory(context.Background(), "conc-m", 100)
+	hist, _ := svc.GetMetricsHistory(context.Background(), testConcM, 100)
 	if hist.TotalPoints < 10 {
 		t.Errorf("expected >= 10 history points, got %d", hist.TotalPoints)
 	}

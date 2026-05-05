@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+const sqlWhere = " WHERE "
+
+
 // allowedOperators is the allowlist of valid filter operators.
 var allowedOperators = map[string]string{
 	"=":           "=",
@@ -89,7 +92,7 @@ func buildSelectQuery(schema, table string, opts RowQueryOpts) (dataSQL, countSQ
 
 	whereSQL := ""
 	if len(whereClauses) > 0 {
-		whereSQL = " WHERE " + strings.Join(whereClauses, " AND ")
+		whereSQL = sqlWhere + strings.Join(whereClauses, " AND ")
 	}
 
 	countSQL = "SELECT COUNT(*) FROM " + fqn + whereSQL
@@ -164,9 +167,30 @@ func (i *Introspector) InsertRow(ctx context.Context, db *sql.DB, schema, table 
 		return nil, fmt.Errorf("data is required")
 	}
 
+	query, args := buildInsertQuery(schema, table, data)
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("insert row: %w", err)
+	}
+	defer rows.Close()
+
+	columns, resultRows, err := scanQueryRows(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	return &QueryResult{
+		Columns: columns,
+		Rows:    resultRows,
+	}, nil
+}
+
+// buildInsertQuery constructs the INSERT ... RETURNING * SQL and its arguments from a data map.
+// Keys are sorted for deterministic parameter ordering.
+func buildInsertQuery(schema, table string, data map[string]interface{}) (string, []interface{}) {
 	fqn := QuoteIdent(schema) + "." + QuoteIdent(table)
 
-	// Sort keys for deterministic query building
 	keys := make([]string, 0, len(data))
 	for k := range data {
 		keys = append(keys, k)
@@ -187,54 +211,7 @@ func (i *Introspector) InsertRow(ctx context.Context, db *sql.DB, schema, table 
 		" (" + strings.Join(quotedCols, ", ") + ")" +
 		" VALUES (" + strings.Join(placeholders, ", ") + ")" +
 		" RETURNING *"
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("insert row: %w", err)
-	}
-	defer rows.Close()
-
-	colTypes, err := rows.ColumnTypes()
-	if err != nil {
-		return nil, fmt.Errorf("column types: %w", err)
-	}
-
-	columns := make([]ColumnMeta, len(colTypes))
-	for idx, ct := range colTypes {
-		columns[idx] = ColumnMeta{
-			Name:     ct.Name(),
-			DataType: ct.DatabaseTypeName(),
-		}
-	}
-
-	var resultRows [][]interface{}
-	for rows.Next() {
-		vals := make([]interface{}, len(colTypes))
-		ptrs := make([]interface{}, len(colTypes))
-		for idx := range vals {
-			ptrs[idx] = &vals[idx]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, fmt.Errorf("scan row: %w", err)
-		}
-		row := make([]interface{}, len(vals))
-		for idx, v := range vals {
-			if b, ok := v.([]byte); ok {
-				row[idx] = string(b)
-			} else {
-				row[idx] = v
-			}
-		}
-		resultRows = append(resultRows, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate rows: %w", err)
-	}
-
-	return &QueryResult{
-		Columns: columns,
-		Rows:    resultRows,
-	}, nil
+	return query, args
 }
 
 // UpdateRow updates a row by primary key.
@@ -266,7 +243,7 @@ func (i *Introspector) UpdateRow(ctx context.Context, db *sql.DB, schema, table,
 
 	query := "UPDATE " + fqn +
 		" SET " + strings.Join(setClauses, ", ") +
-		" WHERE " + QuoteIdent(pkColumn) + " = " + pkParam
+		sqlWhere + QuoteIdent(pkColumn) + " = " + pkParam
 
 	if _, err := db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("update row: %w", err)
@@ -277,7 +254,7 @@ func (i *Introspector) UpdateRow(ctx context.Context, db *sql.DB, schema, table,
 // DeleteRow deletes a row by primary key.
 func (i *Introspector) DeleteRow(ctx context.Context, db *sql.DB, schema, table, pkColumn, pkValue string) error {
 	fqn := QuoteIdent(schema) + "." + QuoteIdent(table)
-	query := "DELETE FROM " + fqn + " WHERE " + QuoteIdent(pkColumn) + " = $1"
+	query := "DELETE FROM " + fqn + sqlWhere + QuoteIdent(pkColumn) + " = $1"
 	if _, err := db.ExecContext(ctx, query, pkValue); err != nil {
 		return fmt.Errorf("delete row: %w", err)
 	}

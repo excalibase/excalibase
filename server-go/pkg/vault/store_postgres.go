@@ -76,6 +76,21 @@ func (s *PostgresStore) DeleteSecret(path string) error {
 	return nil
 }
 
+func (s *PostgresStore) DeletePrefix(prefix string) (int, error) {
+	if prefix == "" {
+		return 0, fmt.Errorf("DeletePrefix: empty prefix not allowed")
+	}
+	res, err := s.db.Exec(`DELETE FROM vault_secrets WHERE path LIKE $1`, prefix+"%")
+	if err != nil {
+		return 0, fmt.Errorf("delete prefix: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return int(n), nil
+}
+
 func (s *PostgresStore) ListSecrets(prefix string) ([]string, error) {
 	var rows *sql.Rows
 	var err error

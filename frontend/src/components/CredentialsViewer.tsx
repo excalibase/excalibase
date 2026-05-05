@@ -4,7 +4,7 @@ import { Button } from './Button';
 import { Copy, Eye, EyeOff, Loader2 } from 'lucide-react';
 
 interface CredentialsViewerProps {
-  projectId: string;
+  readonly projectId: string;
 }
 
 export function CredentialsViewer({ projectId }: CredentialsViewerProps) {

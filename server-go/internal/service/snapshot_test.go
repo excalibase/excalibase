@@ -9,6 +9,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+const testSnapDB = "snap-db"
+
+
 func setupSnapshotTest(t *testing.T) *SnapshotService {
 	t.Helper()
 	dir := t.TempDir()
@@ -16,18 +19,18 @@ func setupSnapshotTest(t *testing.T) *SnapshotService {
 	mock := k8s.NewMockClient()
 	mock.ExecOutput["org-snap-db/snap-db-postgres-1"] = "-- pg_dump output\nCREATE TABLE..."
 	store.Save(&domain.DatabaseInstance{
-		ProjectID: "snap-db", Namespace: "org-snap-db", Status: "ACTIVE",
+		ProjectID: testSnapDB, Namespace: "org-snap-db", Status: "ACTIVE",
 	})
 	return NewSnapshotService(store, mock, dir)
 }
 
 func TestExportSnapshot(t *testing.T) {
 	svc := setupSnapshotTest(t)
-	info, err := svc.ExportSnapshot(context.Background(), "snap-db", domain.SnapshotExportRequest{Format: "plain"})
+	info, err := svc.ExportSnapshot(context.Background(), testSnapDB, domain.SnapshotExportRequest{Format: "plain"})
 	if err != nil {
 		t.Fatalf("ExportSnapshot: %v", err)
 	}
-	if info.ProjectID != "snap-db" {
+	if info.ProjectID != testSnapDB {
 		t.Errorf("projectId: got %s", info.ProjectID)
 	}
 	if info.Size == 0 {
@@ -37,8 +40,8 @@ func TestExportSnapshot(t *testing.T) {
 
 func TestListSnapshots(t *testing.T) {
 	svc := setupSnapshotTest(t)
-	svc.ExportSnapshot(context.Background(), "snap-db", domain.SnapshotExportRequest{})
-	list, _ := svc.ListSnapshots("snap-db")
+	svc.ExportSnapshot(context.Background(), testSnapDB, domain.SnapshotExportRequest{})
+	list, _ := svc.ListSnapshots(testSnapDB)
 	if len(list) != 1 {
 		t.Errorf("expected 1 snapshot, got %d", len(list))
 	}
@@ -46,7 +49,7 @@ func TestListSnapshots(t *testing.T) {
 
 func TestDownloadSnapshotNotFound(t *testing.T) {
 	svc := setupSnapshotTest(t)
-	_, _, err := svc.DownloadSnapshot("snap-db", "nonexistent")
+	_, _, err := svc.DownloadSnapshot(testSnapDB, "nonexistent")
 	if err == nil {
 		t.Error("expected error for missing snapshot")
 	}
@@ -54,9 +57,9 @@ func TestDownloadSnapshotNotFound(t *testing.T) {
 
 func TestDeleteSnapshot(t *testing.T) {
 	svc := setupSnapshotTest(t)
-	info, _ := svc.ExportSnapshot(context.Background(), "snap-db", domain.SnapshotExportRequest{})
-	svc.DeleteSnapshot("snap-db", info.ID)
-	list, _ := svc.ListSnapshots("snap-db")
+	info, _ := svc.ExportSnapshot(context.Background(), testSnapDB, domain.SnapshotExportRequest{})
+	svc.DeleteSnapshot(testSnapDB, info.ID)
+	list, _ := svc.ListSnapshots(testSnapDB)
 	if len(list) != 0 {
 		t.Errorf("expected 0 after delete, got %d", len(list))
 	}

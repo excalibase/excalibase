@@ -51,7 +51,7 @@ func TestCRDProducesValidYAML(t *testing.T) {
 		"size: 50Gi",
 		"storageClass: standard",
 		"memory: 4Gi",
-		"enablePodMonitor: true",
+		"enablePodMonitor: false",
 		"shared_preload_libraries:",
 		"- pg_stat_statements",
 		"pg_stat_statements.max:",
@@ -114,16 +114,19 @@ func TestCRDFreeTierDisablesPodMonitor(t *testing.T) {
 	}
 }
 
-// TestCRDEnterpriseTierEnablesPodMonitor verifies ENTERPRISE tier creates PodMonitor.
-func TestCRDEnterpriseTierEnablesPodMonitor(t *testing.T) {
+// TestCRDAllTiersDisablePodMonitor verifies enablePodMonitor stays off for
+// every tier. CNPG's PodMonitor reconciler crashes when prometheus-operator
+// CRDs are installed but Prometheus isn't actually scraping the project
+// namespace — so we never set this true at the CRD level.
+func TestCRDAllTiersDisablePodMonitor(t *testing.T) {
 	obj := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
 		ProjectID: "ent-db",
 		Namespace: "ns",
 		Tier:      config.TierConfig{Instances: 5, StorageSize: "500Gi", Memory: "16Gi", CPU: "4"},
 	})
 	monitoring := obj.Object["spec"].(map[string]interface{})["monitoring"].(map[string]interface{})
-	if monitoring["enablePodMonitor"] != true {
-		t.Error("ENTERPRISE tier must have enablePodMonitor=true")
+	if monitoring["enablePodMonitor"] != false {
+		t.Error("enablePodMonitor must stay false to avoid CNPG operator panic")
 	}
 }
 

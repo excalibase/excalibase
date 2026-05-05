@@ -11,6 +11,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/security"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -98,7 +99,10 @@ func (s *SnapshotService) ListSnapshots(projectID string) ([]domain.SnapshotInfo
 		if filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, _ := os.ReadFile(filepath.Join(dir, e.Name()))
+		if _, err := security.SafePathComponent(e.Name()); err != nil {
+			continue
+		}
+		data, _ := os.ReadFile(filepath.Join(dir, filepath.Base(e.Name())))
 		var info domain.SnapshotInfo
 		if json.Unmarshal(data, &info) == nil && info.ProjectID == projectID {
 			result = append(result, info)

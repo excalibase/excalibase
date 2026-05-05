@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +17,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
 )
+
+const (
+	routeTableRows = "/tables/{tableName}/rows"
+	errInvalidBody = "invalid request body"
+)
+
 
 const (
 	connTTL     = 10 * time.Minute
@@ -30,12 +36,12 @@ type connEntry struct {
 }
 
 type SchemaHandler struct {
-	vault            vaultclient.VaultClient
-	introspector     *schema.Introspector
-	mu               sync.RWMutex
-	connCache        map[string]*connEntry
-	dbHostOverride   string // if set, overrides vault host (for local dev with port-forward)
-	dbPortOverride   string // if set, overrides vault port
+	vault             vaultclient.VaultClient
+	introspector      *schema.Introspector
+	mu                sync.RWMutex
+	connCache         map[string]*connEntry
+	dbHostOverride    string // if set, overrides vault host (for local dev with port-forward)
+	dbPortOverride    string // if set, overrides vault port
 	dbSSLModeOverride string // if set, overrides sslmode (for testing)
 }
 
@@ -80,7 +86,7 @@ func schemaParam(r *http.Request) string {
 }
 
 func (h *SchemaHandler) Routes(r chi.Router) {
-	r.Route("/{orgId}/{projectId}", func(r chi.Router) {
+	r.Route("/{projectId}", func(r chi.Router) {
 		r.Get("/tables", h.GetTables)
 		r.Post("/tables", h.CreateTable)
 		r.Patch("/tables/{tableName}", h.UpdateTable)
@@ -112,10 +118,10 @@ func (h *SchemaHandler) Routes(r chi.Router) {
 		r.Post("/indexes", h.CreateIndex)
 		r.Delete("/indexes/{indexName}", h.DropIndex)
 		r.Get("/types", h.GetTypes)
-		r.Get("/tables/{tableName}/rows", h.GetRows)
-		r.Post("/tables/{tableName}/rows", h.InsertRow)
-		r.Patch("/tables/{tableName}/rows", h.UpdateRow)
-		r.Delete("/tables/{tableName}/rows", h.DeleteRow)
+		r.Get(routeTableRows, h.GetRows)
+		r.Post(routeTableRows, h.InsertRow)
+		r.Patch(routeTableRows, h.UpdateRow)
+		r.Delete(routeTableRows, h.DeleteRow)
 		r.Get("/advisors/performance", h.RunPerformanceAdvisor)
 		r.Get("/advisors/security", h.RunSecurityAdvisor)
 	})
@@ -124,7 +130,7 @@ func (h *SchemaHandler) Routes(r chi.Router) {
 // --- Tables ---
 
 func (h *SchemaHandler) GetTables(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -138,7 +144,7 @@ func (h *SchemaHandler) GetTables(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) GetColumns(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -152,7 +158,7 @@ func (h *SchemaHandler) GetColumns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) GetRelationships(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -166,7 +172,7 @@ func (h *SchemaHandler) GetRelationships(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *SchemaHandler) GetIndexes(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -180,14 +186,14 @@ func (h *SchemaHandler) GetIndexes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateTable(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	var req schema.CreateTableRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" {
@@ -204,14 +210,14 @@ func (h *SchemaHandler) CreateTable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) UpdateTable(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	var req schema.UpdateTableRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	tableName := chi.URLParam(r, "tableName")
@@ -223,7 +229,7 @@ func (h *SchemaHandler) UpdateTable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropTable(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -240,14 +246,14 @@ func (h *SchemaHandler) DropTable(w http.ResponseWriter, r *http.Request) {
 // --- Columns ---
 
 func (h *SchemaHandler) AddColumn(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	var req schema.AddColumnRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" || req.Type == "" {
@@ -265,14 +271,14 @@ func (h *SchemaHandler) AddColumn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) AlterColumn(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	var req schema.AlterColumnRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	tableName := chi.URLParam(r, "tableName")
@@ -285,7 +291,7 @@ func (h *SchemaHandler) AlterColumn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DropColumn(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -311,11 +317,11 @@ func indexOfByte(s string, sep byte) int {
 	return -1
 }
 
-func (h *SchemaHandler) getDB(orgId, projectId string) (*sql.DB, error) {
-	if !isValidID(orgId) || !isValidID(projectId) {
-		return nil, fmt.Errorf("invalid org or project id")
+func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
+	if !isValidID(projectId) {
+		return nil, fmt.Errorf("invalid project id")
 	}
-	cacheKey := orgId + "/" + projectId
+	cacheKey := projectId
 	h.mu.RLock()
 	if e, ok := h.connCache[cacheKey]; ok {
 		h.mu.RUnlock()
@@ -331,8 +337,12 @@ func (h *SchemaHandler) getDB(orgId, projectId string) (*sql.DB, error) {
 		return nil, fmt.Errorf("connection pool full (%d)", maxConns)
 	}
 
-	// Get excalibase_app credentials from vault (org-scoped)
-	creds, err := h.vault.Get(fmt.Sprintf("orgs/%s/projects/%s/credentials/excalibase_app", orgId, projectId))
+	// Get excalibase_app credentials from vault. Path is project-scoped only:
+	// `projects/{projectId}/credentials/excalibase_app`. Previously this read
+	// from `orgs/{orgId}/projects/{projectId}/...` which never matched what
+	// the provisioner wrote — a latent bug now fixed alongside the unified
+	// vault path scheme.
+	creds, err := h.vault.Get(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectId))
 	if err != nil {
 		return nil, err
 	}
@@ -389,4 +399,3 @@ func (h *SchemaHandler) handleDBError(w http.ResponseWriter, err error) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 	}
 }
-

@@ -55,7 +55,7 @@ describe('useMigrations', () => {
     vi.mocked(api.post).mockResolvedValueOnce({ data: {} } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useApplyMigration('p1'), { wrapper: Wrapper });
-    result.current.mutate({ name: 'mig1', sql: 'SELECT 1' });
+    result.current.mutate({ version: '001', name: 'mig1', sql: 'SELECT 1' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalled();
   });
@@ -109,7 +109,7 @@ describe('useSnapshots', () => {
     vi.mocked(api.post).mockResolvedValueOnce({ data: {} } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useExportSnapshot('p1'), { wrapper: Wrapper });
-    result.current.mutate({ name: 'snap1' });
+    result.current.mutate({ format: 'custom' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalled();
   });

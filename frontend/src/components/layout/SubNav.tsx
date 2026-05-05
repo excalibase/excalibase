@@ -3,7 +3,7 @@ import { PROJECT_NAV } from './navigation';
 import { cn } from '../../utils/cn';
 
 interface SubNavProps {
-  sectionKey: string;
+  readonly sectionKey: string;
 }
 
 export function SubNav({ sectionKey }: SubNavProps) {

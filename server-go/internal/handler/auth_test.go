@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,8 +13,19 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/go-chi/chi/v5"
 )
+
+const (
+	routeUsers     = "/users"
+	routeTokens    = "/tokens"
+	routeLogin     = "/api/auth/login"
+	expect401Fmt   = "expected 401, got %d"
+	routeAuthUsers = "/api/auth/users"
+	routeAuthTokens = "/api/auth/tokens"
+)
+
 
 // --- in-memory mock stores for auth tests ---
 
@@ -66,6 +78,16 @@ func (s *mockUserStore) FindAllUsers(_ context.Context) ([]*domain.User, error) 
 
 func (s *mockUserStore) DeleteUser(_ context.Context, id string) error {
 	delete(s.users, id)
+	return nil
+}
+
+func (s *mockUserStore) UpdateUserPassword(_ context.Context, username, hash string) error {
+	for _, u := range s.users {
+		if u.Username == username {
+			u.PasswordHash = hash
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -134,12 +156,13 @@ func setupAuthRouter(t *testing.T, us *mockUserStore, ts *mockTokenStore) chi.Ro
 	r := chi.NewRouter()
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/login", h.Login)
+		r.Post("/logout", h.Logout)
 		r.Get("/me", h.Me)
-		r.Get("/users", h.ListUsers)
-		r.Post("/users", h.CreateUser)
+		r.Get(routeUsers, h.ListUsers)
+		r.Post(routeUsers, h.CreateUser)
 		r.Delete("/users/{userId}", h.DeleteUser)
-		r.Get("/tokens", h.ListTokens)
-		r.Post("/tokens", h.CreateToken)
+		r.Get(routeTokens, h.ListTokens)
+		r.Post(routeTokens, h.CreateToken)
 		r.Delete("/tokens/{tokenHash}", h.RevokeToken)
 	})
 	return r
@@ -154,7 +177,7 @@ func setupAuthRouterWithUser(
 	user *domain.User,
 ) (r chi.Router, rawToken string) {
 	t.Helper()
-	rawToken = "test-inject-token-abc"
+	rawToken = testutil.FixtureToken("inject")
 	tokenHash := auth.HashToken(rawToken)
 
 	lookup := &fakeLookup{
@@ -168,12 +191,13 @@ func setupAuthRouterWithUser(
 	r.Use(auth.ExtractAuth(lookup))
 	r.Route("/api/auth", func(r chi.Router) {
 		r.Post("/login", h.Login)
+		r.Post("/logout", h.Logout)
 		r.Get("/me", h.Me)
-		r.Get("/users", h.ListUsers)
-		r.Post("/users", h.CreateUser)
+		r.Get(routeUsers, h.ListUsers)
+		r.Post(routeUsers, h.CreateUser)
 		r.Delete("/users/{userId}", h.DeleteUser)
-		r.Get("/tokens", h.ListTokens)
-		r.Post("/tokens", h.CreateToken)
+		r.Get(routeTokens, h.ListTokens)
+		r.Post(routeTokens, h.CreateToken)
 		r.Delete("/tokens/{tokenHash}", h.RevokeToken)
 	})
 	return r, rawToken
@@ -195,18 +219,20 @@ func TestAuthLogin_Success(t *testing.T) {
 	us := newMockUserStore()
 	ts := newMockTokenStore()
 
-	hash, _ := auth.HashPassword("hunter2")
+	aliceUser := testutil.FixtureToken("alice")
+	alicePwd := testutil.FixturePassword("alice-login")
+	hash, _ := auth.HashPassword(alicePwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID:           "u1",
-		Username:     "alice",
+		Username:     aliceUser,
 		PasswordHash: hash,
 		Active:       true,
 		CreatedAt:    &now,
 	}
 
 	r := setupAuthRouter(t, us, ts)
-	w := doRequest(r, "POST", "/api/auth/login", `{"username":"alice","password":"hunter2"}`)
+	w := doRequest(r, "POST", routeLogin, fmt.Sprintf(`{"username":%q,"password":%q}`, aliceUser, alicePwd))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("login: got %d, body: %s", w.Code, w.Body.String())
@@ -221,9 +247,9 @@ func TestAuthLogin_Success(t *testing.T) {
 func TestAuthLogin_InvalidCredentials_Returns401(t *testing.T) {
 	r := setupAuthRouter(t, newMockUserStore(), newMockTokenStore())
 
-	w := doRequest(r, "POST", "/api/auth/login", `{"username":"nobody","password":"wrong"}`)
+	w := doRequest(r, "POST", routeLogin, `{"username":"nobody","password":"not-a-real-password-xyz"}`)
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+		t.Fatalf(expect401Fmt, w.Code)
 	}
 }
 
@@ -231,22 +257,23 @@ func TestAuthLogin_WrongPassword_Returns401(t *testing.T) {
 	us := newMockUserStore()
 	ts := newMockTokenStore()
 
-	hash, _ := auth.HashPassword("correctpass")
+	correctPwd := testutil.FixturePassword("bob-correct")
+	hash, _ := auth.HashPassword(correctPwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
 		ID: "u1", Username: "bob", PasswordHash: hash, Active: true, CreatedAt: &now,
 	}
 
 	r := setupAuthRouter(t, us, ts)
-	w := doRequest(r, "POST", "/api/auth/login", `{"username":"bob","password":"wrongpass"}`)
+	w := doRequest(r, "POST", routeLogin, fmt.Sprintf(`{"username":"bob","password":%q}`, testutil.FixturePassword("bob-wrong")))
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+		t.Fatalf(expect401Fmt, w.Code)
 	}
 }
 
 func TestAuthLogin_InvalidJSON_Returns400(t *testing.T) {
 	r := setupAuthRouter(t, newMockUserStore(), newMockTokenStore())
-	w := doRequest(r, "POST", "/api/auth/login", "not json")
+	w := doRequest(r, "POST", routeLogin, "not json")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
@@ -257,14 +284,16 @@ func TestAuthLogin_TokenCreationFails_Returns500(t *testing.T) {
 	ts := newMockTokenStore()
 	ts.failSave = true
 
-	hash, _ := auth.HashPassword("pass")
+	carolUser := testutil.FixtureToken("carol")
+	carolPwd := testutil.FixturePassword("carol-login")
+	hash, _ := auth.HashPassword(carolPwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
-		ID: "u1", Username: "carol", PasswordHash: hash, Active: true, CreatedAt: &now,
+		ID: "u1", Username: carolUser, PasswordHash: hash, Active: true, CreatedAt: &now,
 	}
 
 	r := setupAuthRouter(t, us, ts)
-	w := doRequest(r, "POST", "/api/auth/login", `{"username":"carol","password":"pass"}`)
+	w := doRequest(r, "POST", routeLogin, fmt.Sprintf(`{"username":%q,"password":%q}`, carolUser, carolPwd))
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)
 	}
@@ -274,7 +303,8 @@ func TestAuthMe_Authenticated(t *testing.T) {
 	us := newMockUserStore()
 	ts := newMockTokenStore()
 	now := time.Now()
-	user := &domain.User{ID: "u1", Username: "alice", Active: true, CreatedAt: &now}
+	aliceUser := testutil.FixtureToken("alice")
+	user := &domain.User{ID: "u1", Username: aliceUser, Active: true, CreatedAt: &now}
 	us.users["u1"] = user
 
 	r, tok := setupAuthRouterWithUser(t, us, ts, user)
@@ -285,7 +315,7 @@ func TestAuthMe_Authenticated(t *testing.T) {
 	}
 	var resp domain.User
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp.Username != "alice" {
+	if resp.Username != aliceUser {
 		t.Errorf("username: got %s", resp.Username)
 	}
 }
@@ -294,7 +324,7 @@ func TestAuthMe_Unauthenticated_Returns401(t *testing.T) {
 	r := setupAuthRouter(t, newMockUserStore(), newMockTokenStore())
 	w := doRequest(r, "GET", "/api/auth/me", "")
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+		t.Fatalf(expect401Fmt, w.Code)
 	}
 }
 
@@ -302,11 +332,11 @@ func TestAuthListUsers(t *testing.T) {
 	us := newMockUserStore()
 	ts := newMockTokenStore()
 	now := time.Now()
-	us.users["u1"] = &domain.User{ID: "u1", Username: "alice", Active: true, CreatedAt: &now}
-	us.users["u2"] = &domain.User{ID: "u2", Username: "bob", Active: true, CreatedAt: &now}
+	us.users["u1"] = &domain.User{ID: "u1", Username: testutil.FixtureToken("alice"), Active: true, CreatedAt: &now}
+	us.users["u2"] = &domain.User{ID: "u2", Username: testutil.FixtureToken("bob"), Active: true, CreatedAt: &now}
 
 	r := setupAuthRouter(t, us, ts)
-	w := doRequest(r, "GET", "/api/auth/users", "")
+	w := doRequest(r, "GET", routeAuthUsers, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("list users: got %d", w.Code)
 	}
@@ -322,8 +352,8 @@ func TestAuthCreateUser_Success(t *testing.T) {
 	ts := newMockTokenStore()
 	r := setupAuthRouter(t, us, ts)
 
-	w := doRequest(r, "POST", "/api/auth/users",
-		`{"username":"newuser","email":"new@example.com","password":"secure123","role":"operator"}`)
+	w := doRequest(r, "POST", routeAuthUsers,
+		fmt.Sprintf(`{"username":"newuser","email":"new@example.com","password":%q,"role":"platform_operator"}`, testutil.FixturePassword("new-user")))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create user: got %d, body: %s", w.Code, w.Body.String())
 	}
@@ -339,8 +369,8 @@ func TestAuthCreateUser_StoreFails_Returns400(t *testing.T) {
 	us.failSave = true
 	r := setupAuthRouter(t, us, newMockTokenStore())
 
-	w := doRequest(r, "POST", "/api/auth/users",
-		`{"username":"fail","password":"pass","role":"viewer"}`)
+	w := doRequest(r, "POST", routeAuthUsers,
+		fmt.Sprintf(`{"username":"fail","email":"fail@example.com","password":%q,"role":"platform_viewer"}`, testutil.FixturePassword("fail-user")))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
@@ -349,7 +379,7 @@ func TestAuthCreateUser_StoreFails_Returns400(t *testing.T) {
 func TestAuthDeleteUser(t *testing.T) {
 	us := newMockUserStore()
 	now := time.Now()
-	us.users["u1"] = &domain.User{ID: "u1", Username: "todelete", Active: true, CreatedAt: &now}
+	us.users["u1"] = &domain.User{ID: "u1", Username: testutil.FixtureToken("todelete"), Active: true, CreatedAt: &now}
 
 	r := setupAuthRouter(t, us, newMockTokenStore())
 	w := doRequest(r, "DELETE", "/api/auth/users/u1", "")
@@ -365,14 +395,15 @@ func TestAuthListTokens_Authenticated(t *testing.T) {
 	us := newMockUserStore()
 	ts := newMockTokenStore()
 	now := time.Now()
-	user := &domain.User{ID: "u1", Username: "alice", Active: true, CreatedAt: &now}
+	user := &domain.User{ID: "u1", Username: testutil.FixtureToken("alice"), Active: true, CreatedAt: &now}
 	us.users["u1"] = user
-	ts.tokens["hash1"] = &domain.AccessToken{
-		TokenHash: "hash1", UserID: "u1", Name: "ci", CreatedAt: &now,
+	ciHash := testutil.FixtureToken("ci-token")
+	ts.tokens[ciHash] = &domain.AccessToken{
+		TokenHash: ciHash, UserID: "u1", Name: "ci", CreatedAt: &now,
 	}
 
 	r, tok := setupAuthRouterWithUser(t, us, ts, user)
-	w := doAuthRequest(r, "GET", "/api/auth/tokens", tok, "")
+	w := doAuthRequest(r, "GET", routeAuthTokens, tok, "")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("list tokens: got %d, body: %s", w.Code, w.Body.String())
@@ -386,9 +417,9 @@ func TestAuthListTokens_Authenticated(t *testing.T) {
 
 func TestAuthListTokens_Unauthenticated_Returns401(t *testing.T) {
 	r := setupAuthRouter(t, newMockUserStore(), newMockTokenStore())
-	w := doRequest(r, "GET", "/api/auth/tokens", "")
+	w := doRequest(r, "GET", routeAuthTokens, "")
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+		t.Fatalf(expect401Fmt, w.Code)
 	}
 }
 
@@ -396,11 +427,11 @@ func TestAuthCreateToken_Success(t *testing.T) {
 	us := newMockUserStore()
 	ts := newMockTokenStore()
 	now := time.Now()
-	user := &domain.User{ID: "u1", Username: "alice", Active: true, CreatedAt: &now}
+	user := &domain.User{ID: "u1", Username: testutil.FixtureToken("alice"), Active: true, CreatedAt: &now}
 	us.users["u1"] = user
 
 	r, tok := setupAuthRouterWithUser(t, us, ts, user)
-	w := doAuthRequest(r, "POST", "/api/auth/tokens", tok, `{"name":"ci-token"}`)
+	w := doAuthRequest(r, "POST", routeAuthTokens, tok, `{"name":"ci-token"}`)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create token: got %d, body: %s", w.Code, w.Body.String())
@@ -417,9 +448,9 @@ func TestAuthCreateToken_Success(t *testing.T) {
 
 func TestAuthCreateToken_Unauthenticated_Returns401(t *testing.T) {
 	r := setupAuthRouter(t, newMockUserStore(), newMockTokenStore())
-	w := doRequest(r, "POST", "/api/auth/tokens", `{"name":"test"}`)
+	w := doRequest(r, "POST", routeAuthTokens, `{"name":"test"}`)
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+		t.Fatalf(expect401Fmt, w.Code)
 	}
 }
 
@@ -428,11 +459,11 @@ func TestAuthCreateToken_StoreFails_Returns500(t *testing.T) {
 	ts := newMockTokenStore()
 	ts.failSave = true
 	now := time.Now()
-	user := &domain.User{ID: "u1", Username: "alice", Active: true, CreatedAt: &now}
+	user := &domain.User{ID: "u1", Username: testutil.FixtureToken("alice"), Active: true, CreatedAt: &now}
 	us.users["u1"] = user
 
 	r, tok := setupAuthRouterWithUser(t, us, ts, user)
-	w := doAuthRequest(r, "POST", "/api/auth/tokens", tok, `{"name":"fail"}`)
+	w := doAuthRequest(r, "POST", routeAuthTokens, tok, `{"name":"fail"}`)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)
@@ -443,16 +474,139 @@ func TestAuthRevokeToken(t *testing.T) {
 	us := newMockUserStore()
 	ts := newMockTokenStore()
 	now := time.Now()
-	ts.tokens["abc123"] = &domain.AccessToken{
-		TokenHash: "abc123", UserID: "u1", Name: "old", CreatedAt: &now,
+	owner := &domain.User{ID: "u1", Username: testutil.FixtureToken("owner"), Active: true, Role: "user", CreatedAt: &now}
+	us.users["u1"] = owner
+	// Token to revoke — owned by u1.
+	revokeHash := testutil.FixtureToken("revoke-hash")
+	ts.tokens[revokeHash] = &domain.AccessToken{
+		TokenHash: revokeHash, UserID: "u1", Name: "old", CreatedAt: &now,
 	}
 
-	r := setupAuthRouter(t, us, ts)
-	w := doRequest(r, "DELETE", "/api/auth/tokens/abc123", "")
+	r, tok := setupAuthRouterWithUser(t, us, ts, owner)
+	w := doAuthRequest(r, "DELETE", "/api/auth/tokens/"+revokeHash, tok, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("revoke token: got %d", w.Code)
+		t.Fatalf("revoke own token: got %d, body=%s", w.Code, w.Body.String())
 	}
-	if ts.tokens["abc123"] != nil {
+	if ts.tokens[revokeHash] != nil {
 		t.Error("token should be revoked")
+	}
+}
+
+// Login must set an httpOnly session cookie so the studio can authenticate
+// without exposing the PAT to JS. Returns the token in the body too for
+// SDK/curl callers, but browsers should rely on the cookie.
+func TestAuthLogin_SetsSessionCookie(t *testing.T) {
+	us := newMockUserStore()
+	alicePwd2 := testutil.FixturePassword("alice-cookie")
+	hash, _ := auth.HashPassword(alicePwd2)
+	now := time.Now()
+	aliceUser2 := testutil.FixtureToken("alice")
+	us.users["u1"] = &domain.User{
+		ID: "u1", Username: aliceUser2, PasswordHash: hash, Active: true, CreatedAt: &now,
+	}
+	ts := newMockTokenStore()
+	r := setupAuthRouter(t, us, ts)
+
+	body := fmt.Sprintf(`{"username":%q,"password":%q}`, aliceUser2, alicePwd2)
+	w := doRequest(r, "POST", routeLogin, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("login: got %d, body=%s", w.Code, w.Body.String())
+	}
+	cookies := w.Result().Cookies()
+	var session *http.Cookie
+	for _, c := range cookies {
+		if c.Name == auth.SessionCookieName {
+			session = c
+			break
+		}
+	}
+	if session == nil {
+		t.Fatalf("expected session cookie %q in response, got %v", auth.SessionCookieName, cookies)
+	}
+	if !session.HttpOnly {
+		t.Error("session cookie must be HttpOnly")
+	}
+	if session.SameSite != http.SameSiteStrictMode {
+		t.Errorf("session cookie SameSite: got %v, want Strict", session.SameSite)
+	}
+	if session.Path != "/" {
+		t.Errorf("session cookie Path: got %q, want /", session.Path)
+	}
+	if session.Expires.IsZero() {
+		t.Error("session cookie must have an expiry (12h TTL)")
+	}
+	// Stored token should carry session scope + future expiry.
+	var stored *domain.AccessToken
+	for _, tk := range ts.tokens {
+		stored = tk
+		break
+	}
+	if stored == nil {
+		t.Fatal("expected token persisted on login")
+	}
+	if stored.Scopes != "session" {
+		t.Errorf("login token scopes: got %q, want session", stored.Scopes)
+	}
+	if stored.ExpiresAt == nil || time.Until(*stored.ExpiresAt) > 13*time.Hour {
+		t.Errorf("login token expiry should be ~12h, got %+v", stored.ExpiresAt)
+	}
+}
+
+func TestAuthLogout_ClearsCookieAndRevokesToken(t *testing.T) {
+	us := newMockUserStore()
+	ts := newMockTokenStore()
+	now := time.Now()
+	user := &domain.User{ID: "u1", Username: testutil.FixtureToken("alice"), Active: true, Role: "user", CreatedAt: &now}
+	us.users["u1"] = user
+	// Pre-populate a session token for this user (mimics post-login state)
+	r, tok := setupAuthRouterWithUser(t, us, ts, user)
+
+	w := doAuthRequest(r, "POST", "/api/auth/logout", tok, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("logout: got %d body=%s", w.Code, w.Body.String())
+	}
+	// Token must be deleted from the store.
+	if len(ts.tokens) != 0 {
+		t.Errorf("token store should be empty after logout, got %d", len(ts.tokens))
+	}
+	// Response must clear the cookie (Max-Age <= 0 or Expires in the past).
+	cookies := w.Result().Cookies()
+	var clearing *http.Cookie
+	for _, c := range cookies {
+		if c.Name == auth.SessionCookieName {
+			clearing = c
+			break
+		}
+	}
+	if clearing == nil {
+		t.Fatal("logout must emit a session cookie clear")
+	}
+	if clearing.Value != "" || (clearing.MaxAge >= 0 && !clearing.Expires.Before(time.Now())) {
+		t.Errorf("session cookie should be cleared, got value=%q maxAge=%d expires=%v",
+			clearing.Value, clearing.MaxAge, clearing.Expires)
+	}
+}
+
+func TestAuthRevokeToken_RejectsForeign(t *testing.T) {
+	us := newMockUserStore()
+	ts := newMockTokenStore()
+	now := time.Now()
+	callerID := testutil.FixtureToken("u-caller")
+	otherID := testutil.FixtureToken("u-other")
+	caller := &domain.User{ID: callerID, Username: testutil.FixtureToken("caller"), Active: true, Role: "user", CreatedAt: &now}
+	us.users[callerID] = caller
+	// Foreign token belongs to a different user.
+	foreignHash := testutil.FixtureToken("foreign-tok")
+	ts.tokens[foreignHash] = &domain.AccessToken{
+		TokenHash: foreignHash, UserID: otherID, Name: "foreign", CreatedAt: &now,
+	}
+
+	r, tok := setupAuthRouterWithUser(t, us, ts, caller)
+	w := doAuthRequest(r, "DELETE", "/api/auth/tokens/"+foreignHash, tok, "")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 revoking foreign token, got %d body=%s", w.Code, w.Body.String())
+	}
+	if ts.tokens[foreignHash] == nil {
+		t.Error("foreign token must NOT be deleted on 403")
 	}
 }

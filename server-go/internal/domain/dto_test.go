@@ -2,13 +2,27 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
+
+const (
+	testDTODBName        = "test-db"
+	testDTOMarshalFmt    = "marshal: %v"
+	testDTOUnmarshalFmt  = "unmarshal: %v"
+	testDTORestoredName  = "my-restored-project"
+	testDTOProjID        = "proj-id-123"
+	testDTOGetNewFmt     = "GetNewProject: got %q, want %q"
+	testDTONameWins      = "name-wins"
+)
+
 
 func TestProvisioningRequestRoundTrip(t *testing.T) {
 	req := ProvisioningRequest{
-		ProjectName: "test-db",
+		ProjectName: testDTODBName,
 		OrgID:       "org1",
 		DBType:      PostgreSQL,
 		Tier:        Standard,
@@ -19,15 +33,15 @@ func TestProvisioningRequestRoundTrip(t *testing.T) {
 
 	b, err := json.Marshal(req)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf(testDTOMarshalFmt, err)
 	}
 
 	var got ProvisioningRequest
 	if err := json.Unmarshal(b, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+		t.Fatalf(testDTOUnmarshalFmt, err)
 	}
 
-	if got.ProjectName != "test-db" {
+	if got.ProjectName != testDTODBName {
 		t.Errorf("projectName: got %s, want test-db", got.ProjectName)
 	}
 	if got.DBType != PostgreSQL {
@@ -46,14 +60,14 @@ func TestProvisioningRequestRoundTrip(t *testing.T) {
 
 func TestDatabaseMetricsNullFields(t *testing.T) {
 	m := DatabaseMetrics{
-		ProjectID:        "test-db",
+		ProjectID:        testDTODBName,
 		MetricsAvailable: false,
 		UnavailableReason: strPtr("Prometheus not reachable"),
 	}
 
 	b, err := json.Marshal(m)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf(testDTOMarshalFmt, err)
 	}
 
 	var raw map[string]interface{}
@@ -112,23 +126,23 @@ func strPtr(s string) *string { return &s }
 
 func TestRestoreRequestGetNewProjectReturnsName(t *testing.T) {
 	r := RestoreRequest{
-		NewProjectName: "my-restored-project",
-		NewProjectID:   "proj-id-123",
+		NewProjectName: testDTORestoredName,
+		NewProjectID:   testDTOProjID,
 	}
 	got := r.GetNewProject()
-	if got != "my-restored-project" {
-		t.Errorf("GetNewProject: got %q, want %q", got, "my-restored-project")
+	if got != testDTORestoredName {
+		t.Errorf(testDTOGetNewFmt, got, testDTORestoredName)
 	}
 }
 
 func TestRestoreRequestGetNewProjectFallsBackToID(t *testing.T) {
 	r := RestoreRequest{
 		NewProjectName: "",
-		NewProjectID:   "proj-id-123",
+		NewProjectID:   testDTOProjID,
 	}
 	got := r.GetNewProject()
-	if got != "proj-id-123" {
-		t.Errorf("GetNewProject: got %q, want %q", got, "proj-id-123")
+	if got != testDTOProjID {
+		t.Errorf(testDTOGetNewFmt, got, testDTOProjID)
 	}
 }
 
@@ -142,12 +156,12 @@ func TestRestoreRequestGetNewProjectBothEmpty(t *testing.T) {
 
 func TestRestoreRequestGetNewProjectNameTakesPriority(t *testing.T) {
 	r := RestoreRequest{
-		NewProjectName: "name-wins",
+		NewProjectName: testDTONameWins,
 		NewProjectID:   "",
 	}
 	got := r.GetNewProject()
-	if got != "name-wins" {
-		t.Errorf("GetNewProject: got %q, want %q", got, "name-wins")
+	if got != testDTONameWins {
+		t.Errorf(testDTOGetNewFmt, got, testDTONameWins)
 	}
 }
 
@@ -167,12 +181,12 @@ func TestProvisioningResponseJSON(t *testing.T) {
 
 	b, err := json.Marshal(resp)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf(testDTOMarshalFmt, err)
 	}
 
 	var raw map[string]interface{}
 	if err := json.Unmarshal(b, &raw); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+		t.Fatalf(testDTOUnmarshalFmt, err)
 	}
 
 	if raw["projectId"] != "db-1" {
@@ -189,15 +203,17 @@ func TestProvisioningResponseJSON(t *testing.T) {
 // --- CredentialsResponse ---
 
 func TestCredentialsResponseFields(t *testing.T) {
+	user := testutil.FixtureToken("user")
+	pass := testutil.FixturePassword("creds")
 	resp := CredentialsResponse{
 		ProjectID:    "p1",
 		Host:         "db.local",
 		Port:         5432,
 		DatabaseName: "app",
-		Username:     "appuser",
-		Password:     "s3cr3t",
+		Username:     user,
+		Password:     pass,
 		SSLMode:      "require",
-		ConnectionURL: "postgresql://appuser:s3cr3t@db.local:5432/app?sslmode=require",
+		ConnectionURL: fmt.Sprintf("postgresql://%s:%s@db.local:5432/app?sslmode=require", user, pass),
 	}
 
 	b, _ := json.Marshal(resp)
@@ -224,11 +240,11 @@ func TestBackupRecordJSON(t *testing.T) {
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf(testDTOMarshalFmt, err)
 	}
 	var got BackupRecord
 	if err := json.Unmarshal(b, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+		t.Fatalf(testDTOUnmarshalFmt, err)
 	}
 	if got.Type != "MANUAL" {
 		t.Errorf("type: got %s", got.Type)

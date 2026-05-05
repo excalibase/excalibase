@@ -31,7 +31,7 @@ export function RegisterPage() {
         email: email.trim(),
         password,
       });
-      setAuth(response.data.token, response.data.user);
+      setAuth(response.data.user, { legacyToken: response.data.token });
       navigate('/orgs', { replace: true });
     } catch (err: unknown) {
       const axiosErr = err as { response?: { status?: number; data?: { error?: string } } };

@@ -7,6 +7,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 )
 
+const (
+	testMockDelNS  = "del-ns"
+	testPostgresNS = "t-postgres"
+)
+
+
 func TestMockClientCreateNamespace(t *testing.T) {
 	m := NewMockClient()
 	err := m.CreateNamespace(context.Background(), "test-ns")
@@ -20,9 +26,9 @@ func TestMockClientCreateNamespace(t *testing.T) {
 
 func TestMockClientDeleteNamespace(t *testing.T) {
 	m := NewMockClient()
-	m.Namespaces["del-ns"] = true
-	m.DeleteNamespace(context.Background(), "del-ns")
-	if m.Namespaces["del-ns"] {
+	m.Namespaces[testMockDelNS] = true
+	m.DeleteNamespace(context.Background(), testMockDelNS)
+	if m.Namespaces[testMockDelNS] {
 		t.Error("namespace not deleted")
 	}
 }
@@ -97,13 +103,13 @@ func TestMockClientCRDLifecycle(t *testing.T) {
 
 	m.ApplyCRD(ctx, CNPGClusterGVR, "ns", obj)
 
-	got, err := m.GetCRD(ctx, CNPGClusterGVR, "ns", "t-postgres")
+	got, err := m.GetCRD(ctx, CNPGClusterGVR, "ns", testPostgresNS)
 	if err != nil || got == nil {
 		t.Error("CRD should exist")
 	}
 
-	m.DeleteCRD(ctx, CNPGClusterGVR, "ns", "t-postgres")
-	_, err = m.GetCRD(ctx, CNPGClusterGVR, "ns", "t-postgres")
+	m.DeleteCRD(ctx, CNPGClusterGVR, "ns", testPostgresNS)
+	_, err = m.GetCRD(ctx, CNPGClusterGVR, "ns", testPostgresNS)
 	if err == nil {
 		t.Error("CRD should be deleted")
 	}

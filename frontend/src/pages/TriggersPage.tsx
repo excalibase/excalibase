@@ -18,11 +18,11 @@ const TIMINGS = ['BEFORE', 'AFTER', 'INSTEAD OF'];
 
 export function TriggersPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const { data: triggers = [], isLoading } = useTriggers(projectId || '');
-  const { data: tables = [] } = useTables(projectId || '');
-  const { data: functions = [] } = useFunctions(projectId || '');
-  const createTrigger = useCreateTrigger(projectId || '');
-  const dropTrigger = useDropTrigger(projectId || '');
+  const { data: triggers = [], isLoading } = useTriggers(projectId ?? '');
+  const { data: tables = [] } = useTables(projectId ?? '');
+  const { data: functions = [] } = useFunctions(projectId ?? '');
+  const createTrigger = useCreateTrigger(projectId ?? '');
+  const dropTrigger = useDropTrigger(projectId ?? '');
 
   const [showCreate, setShowCreate] = useState(false);
   const [dropTarget, setDropTarget] = useState<{ name: string; table: string } | null>(null);
@@ -72,7 +72,7 @@ export function TriggersPage() {
               <div className="px-4 py-3 border-b border-border-primary flex items-center gap-2 bg-bg-secondary">
                 <Zap className="w-4 h-4 text-purple-400" />
                 <span className="text-sm font-medium text-text-primary">{tableName}</span>
-                <span className="text-xs text-text-tertiary ml-auto">{tableTriggers.length} trigger{tableTriggers.length !== 1 ? 's' : ''}</span>
+                <span className="text-xs text-text-tertiary ml-auto">{tableTriggers.length} <span>{tableTriggers.length === 1 ? 'trigger' : 'triggers'}</span></span>
               </div>
               <table className="w-full text-sm">
                 <thead>
@@ -130,36 +130,36 @@ export function TriggersPage() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Trigger Name</label>
-            <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+            <label htmlFor="trigger-name-input" className="block text-sm font-medium text-text-secondary mb-1">Trigger Name</label>
+            <input id="trigger-name-input" type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
               autoFocus />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Table</label>
-            <select value={form.table} onChange={(e) => setForm({ ...form, table: e.target.value })}
+            <label htmlFor="trigger-table-select" className="block text-sm font-medium text-text-secondary mb-1">Table</label>
+            <select id="trigger-table-select" value={form.table} onChange={(e) => setForm({ ...form, table: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
               <option value="">Select table...</option>
               {tables.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Event</label>
-            <select value={form.event} onChange={(e) => setForm({ ...form, event: e.target.value })}
+            <label htmlFor="trigger-event-select" className="block text-sm font-medium text-text-secondary mb-1">Event</label>
+            <select id="trigger-event-select" value={form.event} onChange={(e) => setForm({ ...form, event: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
               {EVENTS.map((ev) => <option key={ev} value={ev}>{ev}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Timing</label>
-            <select value={form.timing} onChange={(e) => setForm({ ...form, timing: e.target.value })}
+            <label htmlFor="trigger-timing-select" className="block text-sm font-medium text-text-secondary mb-1">Timing</label>
+            <select id="trigger-timing-select" value={form.timing} onChange={(e) => setForm({ ...form, timing: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
               {TIMINGS.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Function</label>
-            <select value={form.function} onChange={(e) => setForm({ ...form, function: e.target.value })}
+            <label htmlFor="trigger-function-select" className="block text-sm font-medium text-text-secondary mb-1">Function</label>
+            <select id="trigger-function-select" value={form.function} onChange={(e) => setForm({ ...form, function: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
               <option value="">Select function...</option>
               {functions.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}

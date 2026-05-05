@@ -13,6 +13,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const testNonexistentContainer = "nonexistent-container-"
+
+
 // Real Docker daemon lifecycle test. Requires a reachable docker socket
 // (unix or DOCKER_HOST). Skipped if the daemon isn't available.
 //
@@ -41,13 +44,13 @@ func TestDockerRealClient_RemoveIdempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := dc.RemoveContainer(ctx, "nonexistent-container-"+t.Name()); err != nil {
+	if err := dc.RemoveContainer(ctx, testNonexistentContainer+t.Name()); err != nil {
 		t.Errorf("removing missing container should be no-op, got: %v", err)
 	}
-	if err := dc.StopContainer(ctx, "nonexistent-container-"+t.Name()); err != nil {
+	if err := dc.StopContainer(ctx, testNonexistentContainer+t.Name()); err != nil {
 		t.Errorf("stopping missing container should be no-op, got: %v", err)
 	}
-	status, err := dc.ContainerStatus(ctx, "nonexistent-container-"+t.Name())
+	status, err := dc.ContainerStatus(ctx, testNonexistentContainer+t.Name())
 	if err != nil {
 		t.Errorf("status of missing container should not error, got: %v", err)
 	}

@@ -5,6 +5,9 @@ import (
 	"testing"
 )
 
+const testGotWantFmt = "got %s, want %s"
+
+
 func TestDatabaseTypeSerialization(t *testing.T) {
 	tests := []struct {
 		dt   DatabaseType
@@ -20,7 +23,7 @@ func TestDatabaseTypeSerialization(t *testing.T) {
 			t.Fatalf("marshal %s: %v", tt.dt, err)
 		}
 		if string(b) != tt.want {
-			t.Errorf("got %s, want %s", b, tt.want)
+			t.Errorf(testGotWantFmt, b, tt.want)
 		}
 	}
 }
@@ -40,7 +43,7 @@ func TestTierTypeSerialization(t *testing.T) {
 			t.Fatalf("marshal %s: %v", tt.tier, err)
 		}
 		if string(b) != tt.want {
-			t.Errorf("got %s, want %s", b, tt.want)
+			t.Errorf(testGotWantFmt, b, tt.want)
 		}
 	}
 }
@@ -57,7 +60,7 @@ func TestProvisioningStageSerialization(t *testing.T) {
 	for _, tt := range tests {
 		b, _ := json.Marshal(tt.stage)
 		if string(b) != tt.want {
-			t.Errorf("got %s, want %s", b, tt.want)
+			t.Errorf(testGotWantFmt, b, tt.want)
 		}
 	}
 }

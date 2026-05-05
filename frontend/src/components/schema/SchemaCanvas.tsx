@@ -18,10 +18,10 @@ import { MarkerDefinitions } from './MarkerDefinitions';
 import type { TableInfo, ColumnInfo, RelationshipInfo, TablePosition } from '../../types/schema';
 
 interface SchemaCanvasProps {
-  tables: TableInfo[];
-  columns: Record<string, ColumnInfo[]>;
-  relationships: RelationshipInfo[];
-  positions: TablePosition[];
+  readonly tables: TableInfo[];
+  readonly columns: Record<string, ColumnInfo[]>;
+  readonly relationships: RelationshipInfo[];
+  readonly positions: TablePosition[];
 }
 
 const nodeTypes: NodeTypes = { tableNode: TableNode };
@@ -47,14 +47,14 @@ export function SchemaCanvas({ tables, columns, relationships, positions }: Sche
 
   const initialNodes: Node[] = useMemo(() => {
     return tables.map((table, idx) => {
-      const pos = positionMap[table.name] || {
+      const pos = positionMap[table.name] ?? {
         x: (idx % 4) * 300 + 50,
         y: Math.floor(idx / 4) * 350 + 50,
       };
       const data: TableNodeData = {
         label: table.name,
-        columns: columns[table.name] || [],
-        foreignKeyColumns: fkColumnsByTable[table.name] || new Set(),
+        columns: columns[table.name] ?? [],
+        foreignKeyColumns: fkColumnsByTable[table.name] ?? new Set(),
       };
       return {
         id: table.name,

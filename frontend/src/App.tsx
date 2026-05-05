@@ -41,6 +41,8 @@ const IndexesPage = lazy(() => import('./pages/IndexesPage').then(m => ({ defaul
 const TypesPage = lazy(() => import('./pages/TypesPage').then(m => ({ default: m.TypesPage })));
 const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ default: m.AdvisorsPage })));
 const LogExplorerPage = lazy(() => import('./pages/LogExplorerPage').then(m => ({ default: m.LogExplorerPage })));
+const PlatformAdminPage = lazy(() => import('./pages/PlatformAdminPage').then(m => ({ default: m.PlatformAdminPage })));
+const StoragePage = lazy(() => import('./pages/StoragePage').then(m => ({ default: m.StoragePage })));
 
 function PageLoader() {
   return (
@@ -74,6 +76,7 @@ export default function App() {
             <Route path="/orgs/:orgId" element={<OrgDetailPage />} />
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
+            <Route path="/admin" element={<PlatformAdminPage />} />
           </Route>
 
           {/* Project-scoped pages */}
@@ -96,6 +99,8 @@ export default function App() {
             <Route path="auth/sessions" element={<AuthSessionsPage />} />
             {/* Edge Functions */}
             <Route path="edge-functions" element={<EdgeFunctionsPage />} />
+            {/* Storage */}
+            <Route path="storage" element={<StoragePage />} />
             {/* API */}
             <Route path="api" element={<ApiInfoPage />} />
             {/* Realtime */}

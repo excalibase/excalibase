@@ -5,7 +5,22 @@ import { useState } from 'react';
 import { api } from '../api/client';
 import type { DatabaseInstance } from '../types';
 
-function CopyButton({ text }: { text: string }) {
+// buildDeploySnippet assembles the curl deploy example. Inlined as a separate
+// helper because the embedded JSON requires escaped double quotes which
+// confuse static analysis when written as a single template literal (S6535).
+function buildDeploySnippet(host: string, port: number | string): string {
+  const body = JSON.stringify({
+    id: 'hello',
+    code: 'function handler(d) { return {msg: "hi"}; }',
+  });
+  return [
+    `curl -X POST http://${host}:${port}/deploy \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -d '${body}'`,
+  ].join('\n');
+}
+
+function CopyButton({ text }: { readonly text: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
     navigator.clipboard.writeText(text);
@@ -20,8 +35,8 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function EndpointCard({ icon: Icon, title, url, description, snippets }: {
-  icon: React.ElementType; title: string; url: string; description: string;
-  snippets?: { label: string; code: string }[];
+  readonly icon: React.ComponentType<{ className?: string }>; readonly title: string; readonly url: string; readonly description: string;
+  readonly snippets?: ReadonlyArray<{ readonly label: string; readonly code: string }>;
 }) {
   const [showSnippets, setShowSnippets] = useState(false);
   return (
@@ -43,7 +58,7 @@ function EndpointCard({ icon: Icon, title, url, description, snippets }: {
           </button>
           {showSnippets && (
             <div className="mt-2 space-y-2">
-              {snippets.map((s, i) => (
+              {snippets.map((s) => (
                 <div key={s.label}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] text-text-tertiary uppercase">{s.label}</span>
@@ -156,7 +171,7 @@ export function ApiInfoPage() {
           url={`http://${host}:${edgeFnPort}`}
           description="Deploy and invoke serverless Deno functions."
           snippets={[
-            { label: 'deploy', code: `curl -X POST http://${host}:${edgeFnPort}/deploy \\\n  -H 'Content-Type: application/json' \\\n  -d '{"id":"hello","code":"function handler(d) { return {msg: \\\"hi\\\"}; }"}'` },
+            { label: 'deploy', code: buildDeploySnippet(host, edgeFnPort) },
           ]}
         />
 

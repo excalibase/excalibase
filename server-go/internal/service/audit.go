@@ -10,6 +10,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+const (
+	errProjectNotFoundFmt = "project not found: %s"
+	primaryPodSuffix      = "-postgres-1"
+)
+
+
 type AuditService struct {
 	store     storage.InstanceStore
 	k8sClient k8s.KubeClient
@@ -22,10 +28,10 @@ func NewAuditService(store storage.InstanceStore, client k8s.KubeClient) *AuditS
 func (s *AuditService) EnableAudit(ctx context.Context, projectID string, config domain.AuditConfig) error {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return fmt.Errorf("project not found: %s", projectID)
+		return fmt.Errorf(errProjectNotFoundFmt, projectID)
 	}
 
-	pod := projectID + "-postgres-1"
+	pod := projectID + primaryPodSuffix
 	_, err = s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
 		[]string{"psql", "-U", "postgres", "-c", "CREATE EXTENSION IF NOT EXISTS pgaudit"})
 	return err
@@ -34,10 +40,10 @@ func (s *AuditService) EnableAudit(ctx context.Context, projectID string, config
 func (s *AuditService) GetAuditLogs(ctx context.Context, projectID string, lines int) (string, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return "", fmt.Errorf("project not found: %s", projectID)
+		return "", fmt.Errorf(errProjectNotFoundFmt, projectID)
 	}
 
-	pod := projectID + "-postgres-1"
+	pod := projectID + primaryPodSuffix
 	out, err := s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
 		[]string{"sh", "-c", fmt.Sprintf("cat /controller/log/postgres.csv | grep AUDIT | tail -%d", lines)})
 	if err != nil {
@@ -49,10 +55,10 @@ func (s *AuditService) GetAuditLogs(ctx context.Context, projectID string, lines
 func (s *AuditService) GetAuditConfig(ctx context.Context, projectID string) (*domain.AuditConfig, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return nil, fmt.Errorf("project not found: %s", projectID)
+		return nil, fmt.Errorf(errProjectNotFoundFmt, projectID)
 	}
 
-	pod := projectID + "-postgres-1"
+	pod := projectID + primaryPodSuffix
 	out, err := s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
 		[]string{"psql", "-U", "postgres", "-t", "-A", "-c",
 			"SELECT name, setting FROM pg_settings WHERE name LIKE 'pgaudit.%'"})

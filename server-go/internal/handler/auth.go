@@ -13,6 +13,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const errNotAuthenticated = "not authenticated"
+
+
 type AuthHandler struct {
 	userStore  storage.UserStore
 	tokenStore storage.TokenStore
@@ -117,7 +120,12 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Name:        "registration",
 		CreatedAt:   &now,
 	}
-	h.tokenStore.CreateToken(r.Context(), token)
+	if err := h.tokenStore.CreateToken(r.Context(), token); err != nil {
+		// Don't 200 with a token the user can never use again — that would
+		// trap them in a loop where every subsequent request 401s.
+		httpError(w, "token persistence failed", http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]interface{}{
@@ -125,6 +133,12 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		"user":  user,
 	})
 }
+
+// sessionTokenTTL is how long the studio's auto-issued login PAT lives.
+// Long enough to avoid daily re-login, short enough that a stolen cookie
+// has bounded value. Long-lived CI tokens go through the explicit
+// "Create token" UI which sets ExpiresAt=nil.
+const sessionTokenTTL = 12 * time.Hour
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -142,15 +156,20 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create PAT
+	// Issue a session-scope PAT. 12h TTL bounds blast radius if the cookie
+	// leaks; "session" scope distinguishes it from long-lived CI tokens in
+	// the token-list UI so users can spot and revoke active sessions.
 	raw := auth.GenerateToken()
 	now := time.Now()
+	expiry := now.Add(sessionTokenTTL)
 	token := &domain.AccessToken{
 		TokenHash:   auth.HashToken(raw),
 		TokenPrefix: auth.TokenPrefix(raw),
 		UserID:      user.ID,
 		Name:        "login",
+		Scopes:      "session",
 		CreatedAt:   &now,
+		ExpiresAt:   &expiry,
 	}
 
 	if err := h.tokenStore.CreateToken(r.Context(), token); err != nil {
@@ -158,23 +177,70 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeSessionCookie(w, raw, expiry)
+
 	writeJSON(w, map[string]interface{}{
-		"token": raw, // returned once, client stores it
-		"user":  user,
+		// Token is also returned in the body so SDK / curl callers can
+		// pin to header auth. Browser clients should rely on the cookie
+		// and ignore this field.
+		"token":     raw,
+		"expiresAt": expiry,
+		"user":      user,
+	})
+}
+
+// Logout revokes the caller's current PAT and clears the session cookie.
+// Returns 200 even if no token is present so client logout is idempotent.
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	if t := auth.GetToken(r.Context()); t != nil {
+		_ = h.tokenStore.DeleteToken(r.Context(), t.TokenHash)
+	}
+	clearSessionCookie(w)
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// writeSessionCookie sets the session PAT as an httpOnly cookie. The cookie
+// is the studio's auth path; XSS in the React app cannot read it.
+func writeSessionCookie(w http.ResponseWriter, raw string, expiry time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.SessionCookieName,
+		Value:    raw,
+		Path:     "/",
+		Expires:  expiry,
+		HttpOnly: true,
+		Secure:   true, // requires HTTPS in production; browsers ignore Secure on http://localhost during dev
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+// clearSessionCookie tells the browser to drop the cookie immediately.
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
 	})
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	if user == nil {
-		httpError(w, "not authenticated", http.StatusUnauthorized)
+		httpError(w, errNotAuthenticated, http.StatusUnauthorized)
 		return
 	}
 	writeJSON(w, user)
 }
 
 func (h *AuthHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
-	users, _ := h.userStore.FindAllUsers(r.Context())
+	users, err := h.userStore.FindAllUsers(r.Context())
+	if err != nil {
+		httpError(w, "failed to list users", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, users)
 }
 
@@ -185,7 +251,18 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 		Role     string `json:"role"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Username == "" || req.Email == "" || req.Password == "" {
+		httpError(w, "username, email, and password are required", http.StatusBadRequest)
+		return
+	}
+	if !auth.IsValidPlatformRole(req.Role) {
+		httpError(w, "invalid role", http.StatusBadRequest)
+		return
+	}
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
@@ -219,42 +296,65 @@ func (h *AuthHandler) resolvePendingInvites(ctx context.Context, user *domain.Us
 	if h.orgStore == nil {
 		return
 	}
-	invites, _ := h.orgStore.FindPendingInvitesByEmail(ctx, user.Email)
+	invites, err := h.orgStore.FindPendingInvitesByEmail(ctx, user.Email)
+	if err != nil {
+		log.Printf("WARN: list pending invites for %s: %v", user.Email, err)
+		return
+	}
 	for _, inv := range invites {
-		h.orgStore.AddOrgMember(ctx, &domain.OrgMember{
+		if err := h.orgStore.AddOrgMember(ctx, &domain.OrgMember{
 			OrgID: inv.OrgID, UserID: user.ID, Role: inv.Role,
-		})
-		h.orgStore.DeletePendingInvite(ctx, inv.ID)
+		}); err != nil {
+			log.Printf("WARN: add org member %s/%s: %v", inv.OrgID, user.ID, err)
+			continue // don't delete the invite if the membership write failed
+		}
+		if err := h.orgStore.DeletePendingInvite(ctx, inv.ID); err != nil {
+			log.Printf("WARN: delete pending invite %d: %v", inv.ID, err)
+		}
 	}
 }
 
 func (h *AuthHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userId")
-	h.userStore.DeleteUser(r.Context(), userID)
+	if err := h.userStore.DeleteUser(r.Context(), userID); err != nil {
+		httpError(w, "delete failed", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "deleted"})
 }
 
 func (h *AuthHandler) ListTokens(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	if user == nil {
-		httpError(w, "not authenticated", http.StatusUnauthorized)
+		httpError(w, errNotAuthenticated, http.StatusUnauthorized)
 		return
 	}
-	tokens, _ := h.tokenStore.ListTokensByUser(r.Context(), user.ID)
+	tokens, err := h.tokenStore.ListTokensByUser(r.Context(), user.ID)
+	if err != nil {
+		httpError(w, "failed to list tokens", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, tokens)
 }
 
 func (h *AuthHandler) CreateToken(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	if user == nil {
-		httpError(w, "not authenticated", http.StatusUnauthorized)
+		httpError(w, errNotAuthenticated, http.StatusUnauthorized)
 		return
 	}
 
 	var req struct {
 		Name string `json:"name"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		httpError(w, "token name is required", http.StatusBadRequest)
+		return
+	}
 
 	raw := auth.GenerateToken()
 	now := time.Now()
@@ -281,7 +381,29 @@ func (h *AuthHandler) CreateToken(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) RevokeToken(w http.ResponseWriter, r *http.Request) {
 	tokenHash := chi.URLParam(r, "tokenHash")
-	h.tokenStore.DeleteToken(r.Context(), tokenHash)
+
+	// Confirm the token belongs to the caller before deleting. Without this
+	// any authenticated user could revoke any other user's token if they
+	// learned the hash. Platform admins (PermManageUsers) may revoke any
+	// token — supports incident response.
+	caller := auth.GetUser(r.Context())
+	if caller == nil {
+		httpError(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	tok, err := h.tokenStore.FindByTokenHash(r.Context(), tokenHash)
+	if err != nil || tok == nil {
+		httpError(w, "token not found", http.StatusNotFound)
+		return
+	}
+	if tok.UserID != caller.ID && !auth.HasPermission(caller.Role, auth.PermManageUsers) {
+		httpError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := h.tokenStore.DeleteToken(r.Context(), tokenHash); err != nil {
+		httpError(w, "revoke failed", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "revoked"})
 }
 

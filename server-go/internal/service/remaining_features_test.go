@@ -12,6 +12,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+
+
 // --- Network Policy ---
 
 func TestUpdateNetworkPolicy(t *testing.T) {
@@ -88,17 +90,17 @@ func TestProvisioningHistoryWriter(t *testing.T) {
 	dir := t.TempDir()
 	w := NewHistoryWriter(dir)
 
-	err := w.StartAttempt("test-db", "001")
+	err := w.StartAttempt(testDBName, "001")
 	if err != nil {
 		t.Fatalf("StartAttempt: %v", err)
 	}
 
-	w.LogStage("test-db", "001", domain.StageValidating, "started")
-	w.LogStage("test-db", "001", domain.StageCompleted, "done")
-	w.FinalizeAttempt("test-db", "001", "SUCCESS")
+	w.LogStage(testDBName, "001", domain.StageValidating, "started")
+	w.LogStage(testDBName, "001", domain.StageCompleted, "done")
+	w.FinalizeAttempt(testDBName, "001", "SUCCESS")
 
 	// Verify files exist
-	entries := w.ListAttempts("test-db")
+	entries := w.ListAttempts(testDBName)
 	if len(entries) != 1 {
 		t.Errorf("expected 1 attempt, got %d", len(entries))
 	}

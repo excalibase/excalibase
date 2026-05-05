@@ -62,7 +62,12 @@ export function CommandMenu() {
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 z-[60]" onClick={() => setOpen(false)} />
+      <button
+        type="button"
+        className="fixed inset-0 bg-black/50 z-[60] cursor-default border-0 p-0"
+        onClick={() => setOpen(false)}
+        aria-label="Close command menu"
+      />
       <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[20vh]" data-testid="command-menu">
         <Command className="w-full max-w-lg bg-surface-card border border-border-primary rounded-xl shadow-2xl overflow-hidden">
           <div className="flex items-center gap-2 px-4 border-b border-border-primary">

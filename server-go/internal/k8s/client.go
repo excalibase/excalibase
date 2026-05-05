@@ -341,42 +341,49 @@ func (c *Client) ApplyManifestURL(ctx context.Context, url string) error {
 		if len(bytes.TrimSpace(doc)) == 0 {
 			continue
 		}
-
-		jsonData, err := yamlutil.ToJSON(doc)
-		if err != nil {
-			return fmt.Errorf("convert YAML to JSON: %w", err)
-		}
-
-		var obj unstructured.Unstructured
-		if err := json.Unmarshal(jsonData, &obj.Object); err != nil {
-			return fmt.Errorf("unmarshal object: %w", err)
-		}
-
-		gvk := obj.GroupVersionKind()
-		gvr := schema.GroupVersionResource{
-			Group:    gvk.Group,
-			Version:  gvk.Version,
-			Resource: strings.ToLower(gvk.Kind) + "s",
-		}
-
-		ns := obj.GetNamespace()
-		var resource dynamic.ResourceInterface
-		if ns != "" {
-			resource = c.dynamicClient.Resource(gvr).Namespace(ns)
-		} else {
-			resource = c.dynamicClient.Resource(gvr)
-		}
-
-		obj.SetManagedFields(nil)
-		_, err = resource.Apply(ctx, obj.GetName(), &obj, metav1.ApplyOptions{
-			FieldManager: "excalibase-server",
-			Force:        true,
-		})
-		if err != nil {
-			return fmt.Errorf("apply %s/%s: %w", gvr.Resource, obj.GetName(), err)
+		if err := c.applyYAMLDoc(ctx, doc); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
+// applyYAMLDoc converts a single YAML document to JSON, unmarshals it, and applies
+// it to the cluster using server-side apply.
+func (c *Client) applyYAMLDoc(ctx context.Context, doc []byte) error {
+	jsonData, err := yamlutil.ToJSON(doc)
+	if err != nil {
+		return fmt.Errorf("convert YAML to JSON: %w", err)
+	}
+
+	var obj unstructured.Unstructured
+	if err := json.Unmarshal(jsonData, &obj.Object); err != nil {
+		return fmt.Errorf("unmarshal object: %w", err)
+	}
+
+	gvk := obj.GroupVersionKind()
+	gvr := schema.GroupVersionResource{
+		Group:    gvk.Group,
+		Version:  gvk.Version,
+		Resource: strings.ToLower(gvk.Kind) + "s",
+	}
+
+	ns := obj.GetNamespace()
+	var resource dynamic.ResourceInterface
+	if ns != "" {
+		resource = c.dynamicClient.Resource(gvr).Namespace(ns)
+	} else {
+		resource = c.dynamicClient.Resource(gvr)
+	}
+
+	obj.SetManagedFields(nil)
+	_, err = resource.Apply(ctx, obj.GetName(), &obj, metav1.ApplyOptions{
+		FieldManager: "excalibase-server",
+		Force:        true,
+	})
+	if err != nil {
+		return fmt.Errorf("apply %s/%s: %w", gvr.Resource, obj.GetName(), err)
+	}
 	return nil
 }
 
@@ -510,6 +517,64 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	}
 	if _, err := c.clientset.CoreV1().Services(namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create deno service: %w", err)
+	}
+	return nil
+}
+
+// GetClusterCapacity walks all schedulable nodes for Allocatable CPU/memory,
+// then walks every non-terminal pod cluster-wide to sum CPU/memory requests.
+// Cordoned/unschedulable nodes are skipped; pods in Succeeded/Failed phases
+// are excluded since they no longer hold reservations.
+func (c *Client) GetClusterCapacity(ctx context.Context) (ClusterCapacity, error) {
+	var cap ClusterCapacity
+
+	if err := c.accumulateNodeCapacity(ctx, &cap); err != nil {
+		return cap, err
+	}
+	if err := c.accumulatePodRequests(ctx, &cap); err != nil {
+		return cap, err
+	}
+	return cap, nil
+}
+
+// accumulateNodeCapacity adds Allocatable CPU/memory for each schedulable node.
+func (c *Client) accumulateNodeCapacity(ctx context.Context, cap *ClusterCapacity) error {
+	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list nodes: %w", err)
+	}
+	for _, n := range nodes.Items {
+		if n.Spec.Unschedulable {
+			continue
+		}
+		if cpu, ok := n.Status.Allocatable[corev1.ResourceCPU]; ok {
+			cap.AllocatableCPUMilli += cpu.MilliValue()
+		}
+		if mem, ok := n.Status.Allocatable[corev1.ResourceMemory]; ok {
+			cap.AllocatableMemBytes += mem.Value()
+		}
+	}
+	return nil
+}
+
+// accumulatePodRequests sums CPU/memory requests for all non-terminal pods cluster-wide.
+func (c *Client) accumulatePodRequests(ctx context.Context, cap *ClusterCapacity) error {
+	pods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list pods: %w", err)
+	}
+	for _, p := range pods.Items {
+		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		for _, ctr := range p.Spec.Containers {
+			if cpu, ok := ctr.Resources.Requests[corev1.ResourceCPU]; ok {
+				cap.RequestedCPUMilli += cpu.MilliValue()
+			}
+			if mem, ok := ctr.Resources.Requests[corev1.ResourceMemory]; ok {
+				cap.RequestedMemBytes += mem.Value()
+			}
+		}
 	}
 	return nil
 }

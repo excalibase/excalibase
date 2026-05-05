@@ -5,9 +5,12 @@ import (
 	"testing"
 )
 
+const testDBFile = "test.db"
+
+
 func TestMigrateCreatesAllTables(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := filepath.Join(dir, testDBFile)
 
 	store, err := New(dbPath)
 	if err != nil {
@@ -37,7 +40,7 @@ func TestMigrateCreatesAllTables(t *testing.T) {
 
 func TestMigrateVersion(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := filepath.Join(dir, testDBFile)
 
 	store, err := New(dbPath)
 	if err != nil {
@@ -60,7 +63,7 @@ func TestMigrateVersion(t *testing.T) {
 
 func TestMigrateIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := filepath.Join(dir, testDBFile)
 
 	// First open — runs migration
 	store1, err := New(dbPath)

@@ -7,8 +7,8 @@ afterEach(() => {
 });
 
 // JSDOM doesn't ship matchMedia; React Router and tailwind hooks read it.
-if (typeof window !== 'undefined' && !window.matchMedia) {
-  Object.defineProperty(window, 'matchMedia', {
+if (globalThis.window !== undefined && !globalThis.window.matchMedia) {
+  Object.defineProperty(globalThis.window, 'matchMedia', {
     writable: true,
     value: (query: string) => ({
       matches: false,

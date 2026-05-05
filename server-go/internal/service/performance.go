@@ -11,6 +11,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+
+
 type PerformanceService struct {
 	store     storage.InstanceStore
 	k8sClient k8s.KubeClient
@@ -23,7 +25,7 @@ func NewPerformanceService(store storage.InstanceStore, client k8s.KubeClient) *
 func (s *PerformanceService) GetSummary(ctx context.Context, projectID string) (*domain.PerformanceSummary, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return nil, fmt.Errorf("project not found: %s", projectID)
+		return nil, fmt.Errorf(errProjectNotFoundFmt, projectID)
 	}
 
 	summary := &domain.PerformanceSummary{Available: true}
@@ -36,59 +38,59 @@ func (s *PerformanceService) GetSummary(ctx context.Context, projectID string) (
 		return summary, nil
 	}
 
-	// Active connections
-	out, err := s.execSQL(ctx, inst, "SELECT count(*) FROM pg_stat_activity WHERE state='active'")
-	if err == nil {
-		if v, err := parseFirstInt(out); err == nil {
-			summary.ActiveConnections = &v
-		}
-	}
+	s.populateSummaryMetrics(ctx, inst, summary)
+	return summary, nil
+}
 
-	// Total connections
-	out, err = s.execSQL(ctx, inst, "SELECT count(*) FROM pg_stat_activity")
-	if err == nil {
-		if v, err := parseFirstInt(out); err == nil {
-			summary.TotalConnections = &v
-		}
-	}
+// populateSummaryMetrics fills summary fields by querying pg_stat_activity and pg_stat_statements.
+// Each metric is best-effort: a query error leaves the field nil/zero.
+func (s *PerformanceService) populateSummaryMetrics(ctx context.Context, inst *domain.DatabaseInstance, summary *domain.PerformanceSummary) {
+	const cacheHitSQL = `SELECT ROUND(sum(blks_hit)*100.0/NULLIF(sum(blks_hit)+sum(blks_read),0),2) FROM pg_stat_database`
+	const slowQuerySQL = `SELECT count(*) FROM pg_stat_statements WHERE mean_exec_time > 1000`
+	const avgTimeSQL = `SELECT ROUND(avg(mean_exec_time)::numeric, 2) FROM pg_stat_statements WHERE calls > 0`
 
-	// Cache hit ratio
-	out, err = s.execSQL(ctx, inst, `SELECT ROUND(sum(blks_hit)*100.0/NULLIF(sum(blks_hit)+sum(blks_read),0),2) FROM pg_stat_database`)
-	if err == nil {
-		if v, err := parseFirstFloat(out); err == nil {
-			summary.CacheHitRatio = &v
-		}
-	}
+	summary.ActiveConnections = s.queryInt(ctx, inst, "SELECT count(*) FROM pg_stat_activity WHERE state='active'")
+	summary.TotalConnections = s.queryInt(ctx, inst, "SELECT count(*) FROM pg_stat_activity")
+	summary.CacheHitRatio = s.queryFloat(ctx, inst, cacheHitSQL)
+	summary.SlowQueryCount = s.queryInt(ctx, inst, slowQuerySQL)
+	summary.AvgQueryTimeMs = s.queryFloat(ctx, inst, avgTimeSQL)
 
-	// Database size
-	out, err = s.execSQL(ctx, inst, `SELECT pg_size_pretty(pg_database_size(current_database()))`)
-	if err == nil {
+	if out, err := s.execSQL(ctx, inst, `SELECT pg_size_pretty(pg_database_size(current_database()))`); err == nil {
 		summary.DatabaseSize = strings.TrimSpace(extractFirstLine(out))
 	}
+}
 
-	// Slow queries (> 1s avg)
-	out, err = s.execSQL(ctx, inst, `SELECT count(*) FROM pg_stat_statements WHERE mean_exec_time > 1000`)
-	if err == nil {
-		if v, err := parseFirstInt(out); err == nil {
-			summary.SlowQueryCount = &v
-		}
+// queryInt runs a single-cell SQL query and returns the int result, or nil on any error.
+func (s *PerformanceService) queryInt(ctx context.Context, inst *domain.DatabaseInstance, sql string) *int {
+	out, err := s.execSQL(ctx, inst, sql)
+	if err != nil {
+		return nil
 	}
-
-	// Average query time
-	out, err = s.execSQL(ctx, inst, `SELECT ROUND(avg(mean_exec_time)::numeric, 2) FROM pg_stat_statements WHERE calls > 0`)
-	if err == nil {
-		if v, err := parseFirstFloat(out); err == nil {
-			summary.AvgQueryTimeMs = &v
-		}
+	v64, err := parseFirstInt(out)
+	if err != nil {
+		return nil
 	}
+	v := int(v64)
+	return &v
+}
 
-	return summary, nil
+// queryFloat runs a single-cell SQL query and returns the float64 result, or nil on any error.
+func (s *PerformanceService) queryFloat(ctx context.Context, inst *domain.DatabaseInstance, sql string) *float64 {
+	out, err := s.execSQL(ctx, inst, sql)
+	if err != nil {
+		return nil
+	}
+	v, err := parseFirstFloat(out)
+	if err != nil {
+		return nil
+	}
+	return &v
 }
 
 func (s *PerformanceService) GetTopQueries(ctx context.Context, projectID string, limit int) ([]domain.QueryStat, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return nil, fmt.Errorf("project not found: %s", projectID)
+		return nil, fmt.Errorf(errProjectNotFoundFmt, projectID)
 	}
 
 	sql := fmt.Sprintf(`SELECT query, calls, total_exec_time, mean_exec_time, min_exec_time, max_exec_time, rows FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT %d`, limit)
@@ -103,7 +105,7 @@ func (s *PerformanceService) GetTopQueries(ctx context.Context, projectID string
 func (s *PerformanceService) GetWaitEvents(ctx context.Context, projectID string) ([]domain.WaitEvent, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return nil, fmt.Errorf("project not found: %s", projectID)
+		return nil, fmt.Errorf(errProjectNotFoundFmt, projectID)
 	}
 
 	sql := `SELECT wait_event_type, wait_event, count(*) FROM pg_stat_activity WHERE wait_event IS NOT NULL GROUP BY wait_event_type, wait_event ORDER BY count DESC`

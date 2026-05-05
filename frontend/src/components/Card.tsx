@@ -1,8 +1,8 @@
 import { cn } from '../utils/cn';
 
 interface CardProps {
-  children: React.ReactNode;
-  className?: string;
+  readonly children: React.ReactNode;
+  readonly className?: string;
 }
 
 export function Card({ children, className }: CardProps) {

@@ -48,6 +48,12 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// DB exposes the underlying *sql.DB. Matches postgres.Store.DB(). Used by
+// handlers that own bespoke tables (email_verifications, password_resets,
+// email_invites) instead of going through InstanceStore/UserStore. Avoid
+// for normal CRUD — that's what the typed methods are for.
+func (s *Store) DB() *sql.DB { return s.db }
+
 func (s *Store) migrate() error {
 	source, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {

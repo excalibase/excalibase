@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+const (
+	testPingDaemon  = "ping docker daemon"
+	testPingErrFmt  = "expected ping error, got: %v"
+)
+
+
 // TestNewRealDockerClient_NoHostAvailable exercises the connect failure
 // path without needing a real daemon. We point at an unreachable unix
 // socket and verify the ping fails fast with a helpful error.
@@ -16,8 +22,8 @@ func TestNewRealDockerClient_PingFailsOnBadHost(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when socket does not exist")
 	}
-	if !strings.Contains(err.Error(), "ping docker daemon") {
-		t.Errorf("expected ping error, got: %v", err)
+	if !strings.Contains(err.Error(), testPingDaemon) {
+		t.Errorf(testPingErrFmt, err)
 	}
 }
 
@@ -36,8 +42,8 @@ func TestNewRealDockerClient_FallsBackToEnvHost(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from unreachable env host")
 	}
-	if !strings.Contains(err.Error(), "ping docker daemon") {
-		t.Errorf("expected ping error, got: %v", err)
+	if !strings.Contains(err.Error(), testPingDaemon) {
+		t.Errorf(testPingErrFmt, err)
 	}
 }
 
@@ -57,7 +63,7 @@ func TestNewRealDockerClient_FallsBackToUnixSocket(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when no socket is available")
 	}
-	if !strings.Contains(err.Error(), "ping docker daemon") {
-		t.Errorf("expected ping error, got: %v", err)
+	if !strings.Contains(err.Error(), testPingDaemon) {
+		t.Errorf(testPingErrFmt, err)
 	}
 }

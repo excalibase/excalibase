@@ -11,6 +11,11 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const (
+	errVaultSealed = "vault is sealed"
+)
+
+
 type VaultHandler struct {
 	v *vault.Vault
 }
@@ -32,6 +37,7 @@ func (h *VaultHandler) Routes(r chi.Router) {
 		r.Post("/seal", h.Seal)
 		r.Post("/rekey", h.Rekey)
 		r.Get("/secrets-list", h.ListSecrets)
+		r.Delete("/secrets-list", h.DeletePrefix)
 		r.Route("/secrets", func(r chi.Router) {
 			r.Get("/*", h.GetSecret)
 			r.Put("/*", h.PutSecret)
@@ -58,7 +64,7 @@ func (h *VaultHandler) Init(w http.ResponseWriter, r *http.Request) {
 		Threshold int `json:"threshold"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if body.Shares < 1 {
@@ -85,7 +91,7 @@ func (h *VaultHandler) Unseal(w http.ResponseWriter, r *http.Request) {
 		Share string `json:"share"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 
@@ -113,7 +119,7 @@ func (h *VaultHandler) Rekey(w http.ResponseWriter, r *http.Request) {
 		Threshold int `json:"threshold"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 
@@ -133,7 +139,7 @@ func (h *VaultHandler) GetPublicKey(w http.ResponseWriter, r *http.Request) {
 	pem, err := h.v.GetPublicKey()
 	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
 		if errors.Is(err, vault.ErrNotFound) {
@@ -151,7 +157,7 @@ func (h *VaultHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 	paths, err := h.v.List(prefix)
 	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
 		httpError(w, safeError(err), http.StatusInternalServerError)
@@ -168,7 +174,7 @@ func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 	data, err := h.v.Get(path)
 	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
 		if errors.Is(err, vault.ErrNotFound) {
@@ -185,13 +191,13 @@ func (h *VaultHandler) PutSecret(w http.ResponseWriter, r *http.Request) {
 	path := extractSecretPath(r)
 	var data map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 
 	if err := h.v.Put(path, data); err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
 		httpError(w, safeError(err), http.StatusInternalServerError)
@@ -204,13 +210,33 @@ func (h *VaultHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	path := extractSecretPath(r)
 	if err := h.v.Delete(path); err != nil {
 		if errors.Is(err, vault.ErrSealed) {
-			httpError(w, "vault is sealed", http.StatusServiceUnavailable)
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
 			return
 		}
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// DeletePrefix removes every secret under ?prefix=... in one transaction.
+// Empty prefix is rejected so we can't accidentally wipe the vault.
+func (h *VaultHandler) DeletePrefix(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	if prefix == "" {
+		httpError(w, "prefix is required", http.StatusBadRequest)
+		return
+	}
+	deleted, err := h.v.DeletePrefix(prefix)
+	if err != nil {
+		if errors.Is(err, vault.ErrSealed) {
+			httpError(w, errVaultSealed, http.StatusServiceUnavailable)
+			return
+		}
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"deleted": deleted})
 }
 
 func extractSecretPath(r *http.Request) string {

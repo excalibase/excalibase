@@ -12,6 +12,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const alertsHistoryFile = "alerts-history.json"
+
+
 type AlertingService struct {
 	storagePath string
 	mu          sync.RWMutex
@@ -116,13 +119,13 @@ func (s *AlertingService) saveHistory() {
 		log.Printf("WARN: marshal alert history: %v", err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(dir, "alerts-history.json"), data, 0644); err != nil {
-		log.Printf("WARN: write %s: %v", filepath.Join(dir, "alerts-history.json"), err)
+	if err := os.WriteFile(filepath.Join(dir, alertsHistoryFile), data, 0644); err != nil {
+		log.Printf("WARN: write %s: %v", filepath.Join(dir, alertsHistoryFile), err)
 	}
 }
 
 func (s *AlertingService) loadHistory() {
-	data, err := os.ReadFile(filepath.Join(s.storagePath, "alerts-history.json"))
+	data, err := os.ReadFile(filepath.Join(s.storagePath, alertsHistoryFile))
 	if err != nil {
 		return
 	}

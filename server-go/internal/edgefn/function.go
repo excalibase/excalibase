@@ -10,6 +10,9 @@ import (
 	esbuild "github.com/evanw/esbuild/pkg/api"
 )
 
+const defaultEntrypoint = "index.ts"
+
+
 // MaxCodeSize caps the bundled code at 512 KB (Deno runtime agrees).
 const MaxCodeSize = 512 * 1024
 
@@ -51,7 +54,7 @@ func validateProjectID(pid string) error {
 	return nil
 }
 
-// File is a single source file belonging to a function. Entry point is "index.ts".
+// File is a single source file belonging to a function. Entry point is defaultEntrypoint.
 type File struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
@@ -96,22 +99,29 @@ func (f *Function) Validate() error {
 	if f.Name == "" || len(f.Name) > 200 {
 		return fmt.Errorf("name must be 1-200 characters")
 	}
-	if len(f.Files) == 0 {
+	if err := validateFileSet(f.Files); err != nil {
+		return err
+	}
+	if _, err := f.Bundle(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateFileSet validates count, paths, content, and entry-point presence.
+func validateFileSet(files []File) error {
+	if len(files) == 0 {
 		return fmt.Errorf("function must have at least one of its files (index.ts required)")
 	}
-	if len(f.Files) > MaxFileCount {
+	if len(files) > MaxFileCount {
 		return fmt.Errorf("function has too many files (max %d)", MaxFileCount)
 	}
-
 	hasIndex := false
-	for _, file := range f.Files {
-		if !validPathPattern.MatchString(file.Path) {
-			return fmt.Errorf("invalid file path %q: only lowercase alphanumerics, _, -, /, . allowed", file.Path)
+	for _, file := range files {
+		if err := validateFilePath(file.Path); err != nil {
+			return err
 		}
-		if strings.Contains(file.Path, "..") {
-			return fmt.Errorf("invalid file path %q: path traversal not allowed", file.Path)
-		}
-		if file.Path == "index.ts" {
+		if file.Path == defaultEntrypoint {
 			hasIndex = true
 		}
 		if len(file.Content) == 0 {
@@ -121,9 +131,16 @@ func (f *Function) Validate() error {
 	if !hasIndex {
 		return fmt.Errorf("function must contain an index.ts entry point")
 	}
+	return nil
+}
 
-	if _, err := f.Bundle(); err != nil {
-		return err
+// validateFilePath checks that a single file path is safe for use in the function.
+func validateFilePath(p string) error {
+	if !validPathPattern.MatchString(p) {
+		return fmt.Errorf("invalid file path %q: only lowercase alphanumerics, _, -, /, . allowed", p)
+	}
+	if strings.Contains(p, "..") {
+		return fmt.Errorf("invalid file path %q: path traversal not allowed", p)
 	}
 	return nil
 }
@@ -150,7 +167,7 @@ func (f *Function) Bundle() (string, error) {
 	hasIndex := false
 	for _, file := range f.Files {
 		virtualFiles[file.Path] = file.Content
-		if file.Path == "index.ts" {
+		if file.Path == defaultEntrypoint {
 			hasIndex = true
 		}
 	}
@@ -159,7 +176,7 @@ func (f *Function) Bundle() (string, error) {
 	}
 
 	result := esbuild.Build(esbuild.BuildOptions{
-		EntryPoints: []string{"index.ts"},
+		EntryPoints: []string{defaultEntrypoint},
 		Bundle:      true,
 		Format:      esbuild.FormatIIFE,
 		GlobalName:  "__excalibase_bundle",

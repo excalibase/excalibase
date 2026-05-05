@@ -4,30 +4,71 @@ package schema
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 )
 
-func TestIntegration_Indexes(t *testing.T) {
-	_, appDB, cleanup := setupPG(t)
-	defer cleanup()
+const indexCreateTableErrFmt = "create table: %v"
 
+// setupIndexTable creates the common index test table structure.
+func setupIndexTable(t *testing.T, cols []CreateColumnDef) (*Introspector, *sql.DB, context.Context, func()) {
+	t.Helper()
+	_, appDB, cleanup := setupPG(t)
 	introspector := NewIntrospector()
 	ctx := context.Background()
-
-	// Create a table to add indexes on
 	if err := introspector.CreateTable(ctx, appDB, CreateTableRequest{
 		Name: "index_test", Schema: "public",
-		Columns: []CreateColumnDef{
-			{Name: "id", Type: "serial", PrimaryKey: true},
-			{Name: "email", Type: "text"},
-			{Name: "name", Type: "text"},
-			{Name: "tags", Type: "jsonb"},
-		},
+		Columns: cols,
 	}); err != nil {
-		t.Fatalf("create table: %v", err)
+		cleanup()
+		t.Fatalf(indexCreateTableErrFmt, err)
 	}
+	return introspector, appDB, ctx, cleanup
+}
 
-	t.Run("create btree index", func(t *testing.T) {
+// assertIndexType verifies that the named index has the expected type.
+func assertIndexType(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, idxName, wantType string) {
+	t.Helper()
+	indexes, _ := i.GetIndexes(ctx, db, "public", "index_test")
+	for _, idx := range indexes {
+		if idx.Name == idxName && idx.Type != wantType {
+			t.Errorf("index %s: expected type %s, got %s", idxName, wantType, idx.Type)
+		}
+	}
+}
+
+// assertIndexUnique fails when the named index is not unique.
+func assertIndexUnique(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name string) {
+	t.Helper()
+	indexes, _ := i.GetIndexes(ctx, db, "public", "index_test")
+	for _, idx := range indexes {
+		if idx.Name == name && !idx.Unique {
+			t.Error("expected unique index")
+		}
+	}
+}
+
+// assertIndexColumnCount fails when the named index has fewer than wantCols columns.
+func assertIndexColumnCount(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name string, wantCols int) {
+	t.Helper()
+	indexes, _ := i.GetIndexes(ctx, db, "public", "index_test")
+	for _, idx := range indexes {
+		if idx.Name == name && len(idx.Columns) < wantCols {
+			t.Errorf("expected %d columns, got %d", wantCols, len(idx.Columns))
+		}
+	}
+}
+
+func TestIntegration_Indexes_Create(t *testing.T) {
+	introspector, appDB, ctx, cleanup := setupIndexTable(t, []CreateColumnDef{
+		{Name: "id", Type: "serial", PrimaryKey: true},
+		{Name: "email", Type: "text"},
+		{Name: "name", Type: "text"},
+		{Name: "tags", Type: "jsonb"},
+	})
+	defer cleanup()
+
+	t.Run("btree index", func(t *testing.T) {
 		if err := introspector.CreateIndex(ctx, appDB, CreateIndexRequest{
 			Name:    "idx_email",
 			Table:   "index_test",
@@ -38,29 +79,10 @@ func TestIntegration_Indexes(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("CreateIndex btree: %v", err)
 		}
-
-		indexes, err := introspector.GetIndexes(ctx, appDB, "public", "index_test")
-		if err != nil {
-			t.Fatalf("GetIndexes: %v", err)
-		}
-		found := false
-		for _, idx := range indexes {
-			if idx.Name == "idx_email" {
-				found = true
-				if idx.Unique {
-					t.Error("expected non-unique index")
-				}
-				if idx.Type != "btree" {
-					t.Errorf("expected btree, got %s", idx.Type)
-				}
-			}
-		}
-		if !found {
-			t.Error("idx_email not found")
-		}
+		assertIndexProperties(t, introspector, appDB, ctx, "idx_email", false, "btree")
 	})
 
-	t.Run("create unique index", func(t *testing.T) {
+	t.Run("unique index", func(t *testing.T) {
 		if err := introspector.CreateIndex(ctx, appDB, CreateIndexRequest{
 			Name:    "idx_email_unique",
 			Table:   "index_test",
@@ -71,90 +93,83 @@ func TestIntegration_Indexes(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("CreateIndex unique: %v", err)
 		}
-
-		indexes, _ := introspector.GetIndexes(ctx, appDB, "public", "index_test")
-		for _, idx := range indexes {
-			if idx.Name == "idx_email_unique" {
-				if !idx.Unique {
-					t.Error("expected unique index")
-				}
-			}
-		}
+		assertIndexUnique(t, introspector, appDB, ctx, "idx_email_unique")
 	})
 
-	t.Run("create multi-column index", func(t *testing.T) {
+	t.Run("multi-column index", func(t *testing.T) {
 		if err := introspector.CreateIndex(ctx, appDB, CreateIndexRequest{
 			Name:    "idx_email_name",
 			Table:   "index_test",
 			Schema:  "public",
 			Columns: []string{"email", "name"},
-			Unique:  false,
 			Type:    "btree",
 		}); err != nil {
 			t.Fatalf("CreateIndex multi-column: %v", err)
 		}
-
-		indexes, _ := introspector.GetIndexes(ctx, appDB, "public", "index_test")
-		for _, idx := range indexes {
-			if idx.Name == "idx_email_name" {
-				if len(idx.Columns) < 2 {
-					t.Errorf("expected 2 columns, got %d", len(idx.Columns))
-				}
-			}
-		}
+		assertIndexColumnCount(t, introspector, appDB, ctx, "idx_email_name", 2)
 	})
+}
 
-	t.Run("create hash index", func(t *testing.T) {
+// assertIndexProperties finds an index by name and checks uniqueness and type.
+func assertIndexProperties(t *testing.T, i *Introspector, db *sql.DB, ctx context.Context, name string, wantUnique bool, wantType string) {
+	t.Helper()
+	indexes, err := i.GetIndexes(ctx, db, "public", "index_test")
+	if err != nil {
+		t.Fatalf("GetIndexes: %v", err)
+	}
+	for _, idx := range indexes {
+		if idx.Name != name {
+			continue
+		}
+		if idx.Unique != wantUnique {
+			t.Errorf("index %s: expected unique=%v, got %v", name, wantUnique, idx.Unique)
+		}
+		if idx.Type != wantType {
+			t.Errorf("index %s: expected type %s, got %s", name, wantType, idx.Type)
+		}
+		return
+	}
+	t.Errorf("index %s not found", name)
+}
+
+func TestIntegration_Indexes_Types(t *testing.T) {
+	introspector, appDB, ctx, cleanup := setupIndexTable(t, []CreateColumnDef{
+		{Name: "id", Type: "serial", PrimaryKey: true},
+		{Name: "name", Type: "text"},
+		{Name: "tags", Type: "jsonb"},
+	})
+	defer cleanup()
+
+	t.Run("hash index", func(t *testing.T) {
 		if err := introspector.CreateIndex(ctx, appDB, CreateIndexRequest{
 			Name:    "idx_name_hash",
 			Table:   "index_test",
 			Schema:  "public",
 			Columns: []string{"name"},
-			Unique:  false,
 			Type:    "hash",
 		}); err != nil {
 			t.Fatalf("CreateIndex hash: %v", err)
 		}
-
-		indexes, _ := introspector.GetIndexes(ctx, appDB, "public", "index_test")
-		for _, idx := range indexes {
-			if idx.Name == "idx_name_hash" {
-				if idx.Type != "hash" {
-					t.Errorf("expected hash, got %s", idx.Type)
-				}
-			}
-		}
+		assertIndexType(t, introspector, appDB, ctx, "idx_name_hash", "hash")
 	})
 
-	t.Run("create gin index", func(t *testing.T) {
+	t.Run("gin index", func(t *testing.T) {
 		if err := introspector.CreateIndex(ctx, appDB, CreateIndexRequest{
 			Name:    "idx_tags_gin",
 			Table:   "index_test",
 			Schema:  "public",
 			Columns: []string{"tags"},
-			Unique:  false,
 			Type:    "gin",
 		}); err != nil {
 			t.Fatalf("CreateIndex gin: %v", err)
 		}
-
-		indexes, _ := introspector.GetIndexes(ctx, appDB, "public", "index_test")
-		for _, idx := range indexes {
-			if idx.Name == "idx_tags_gin" {
-				if idx.Type != "gin" {
-					t.Errorf("expected gin, got %s", idx.Type)
-				}
-			}
-		}
+		assertIndexType(t, introspector, appDB, ctx, "idx_tags_gin", "gin")
 	})
 
 	t.Run("invalid index type rejected", func(t *testing.T) {
 		err := introspector.CreateIndex(ctx, appDB, CreateIndexRequest{
-			Name:    "idx_bad",
-			Table:   "index_test",
-			Schema:  "public",
-			Columns: []string{"email"},
-			Type:    "invalid_type",
+			Name: "idx_bad", Table: "index_test", Schema: "public",
+			Columns: []string{"name"}, Type: "invalid_type",
 		})
 		if err == nil {
 			t.Fatal("expected error for invalid index type")
@@ -163,107 +178,64 @@ func TestIntegration_Indexes(t *testing.T) {
 
 	t.Run("empty columns rejected", func(t *testing.T) {
 		err := introspector.CreateIndex(ctx, appDB, CreateIndexRequest{
-			Name:    "idx_nocols",
-			Table:   "index_test",
-			Schema:  "public",
-			Columns: []string{},
-			Type:    "btree",
+			Name: "idx_nocols", Table: "index_test", Schema: "public",
+			Columns: []string{}, Type: "btree",
 		})
 		if err == nil {
 			t.Fatal("expected error for empty columns")
 		}
 	})
+}
+
+func TestIntegration_Indexes_Drop(t *testing.T) {
+	introspector, appDB, ctx, cleanup := setupIndexTable(t, []CreateColumnDef{
+		{Name: "id", Type: "serial", PrimaryKey: true},
+		{Name: "email", Type: "text"},
+	})
+	defer cleanup()
+
+	if err := introspector.CreateIndex(ctx, appDB, CreateIndexRequest{
+		Name: "idx_drop_me", Table: "index_test", Schema: "public",
+		Columns: []string{"email"}, Type: "btree",
+	}); err != nil {
+		t.Fatalf("setup index: %v", err)
+	}
 
 	t.Run("drop index", func(t *testing.T) {
-		if err := introspector.DropIndex(ctx, appDB, "public", "idx_email"); err != nil {
+		if err := introspector.DropIndex(ctx, appDB, "public", "idx_drop_me"); err != nil {
 			t.Fatalf("DropIndex: %v", err)
 		}
-
 		indexes, _ := introspector.GetIndexes(ctx, appDB, "public", "index_test")
 		for _, idx := range indexes {
-			if idx.Name == "idx_email" {
+			if idx.Name == "idx_drop_me" {
 				t.Error("index should be dropped")
 			}
 		}
 	})
 }
 
-func TestIntegration_Types(t *testing.T) {
+func TestIntegration_Types_Enum(t *testing.T) {
 	_, appDB, cleanup := setupPG(t)
 	defer cleanup()
-
 	introspector := NewIntrospector()
 	ctx := context.Background()
 
-	// Create an enum type
-	_, err := appDB.ExecContext(ctx, "CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy')")
-	if err != nil {
+	if _, err := appDB.ExecContext(ctx, "CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy')"); err != nil {
 		t.Fatalf("create enum type: %v", err)
 	}
-
-	// Create a composite type
-	_, err = appDB.ExecContext(ctx, "CREATE TYPE address AS (street text, city text, zip text)")
-	if err != nil {
+	if _, err := appDB.ExecContext(ctx, "CREATE TYPE address AS (street text, city text, zip text)"); err != nil {
 		t.Fatalf("create composite type: %v", err)
 	}
-
-	// Create a domain type
-	_, err = appDB.ExecContext(ctx, "CREATE DOMAIN positive_int AS integer CHECK (VALUE > 0)")
-	if err != nil {
+	if _, err := appDB.ExecContext(ctx, "CREATE DOMAIN positive_int AS integer CHECK (VALUE > 0)"); err != nil {
 		t.Fatalf("create domain type: %v", err)
 	}
 
-	t.Run("get types returns enum with values", func(t *testing.T) {
+	t.Run("get types returns expected kinds", func(t *testing.T) {
 		types, err := introspector.GetTypes(ctx, appDB, "public")
 		if err != nil {
 			t.Fatalf("GetTypes: %v", err)
 		}
-
-		foundEnum := false
-		foundComposite := false
-		foundDomain := false
-
-		for _, pt := range types {
-			switch pt.Name {
-			case "mood":
-				foundEnum = true
-				if pt.Type != "enum" {
-					t.Errorf("expected type enum, got %s", pt.Type)
-				}
-				if len(pt.Values) != 3 {
-					t.Errorf("expected 3 enum values, got %d: %v", len(pt.Values), pt.Values)
-				}
-				expectedVals := map[string]bool{"sad": true, "ok": true, "happy": true}
-				for _, v := range pt.Values {
-					if !expectedVals[v] {
-						t.Errorf("unexpected enum value: %s", v)
-					}
-				}
-			case "address":
-				foundComposite = true
-				if pt.Type != "composite" {
-					t.Errorf("expected type composite, got %s", pt.Type)
-				}
-				if len(pt.Values) != 0 {
-					t.Errorf("composite type should have empty values, got %v", pt.Values)
-				}
-			case "positive_int":
-				foundDomain = true
-				if pt.Type != "domain" {
-					t.Errorf("expected type domain, got %s", pt.Type)
-				}
-			}
-		}
-
-		if !foundEnum {
-			t.Error("enum type 'mood' not found")
-		}
-		if !foundComposite {
-			t.Error("composite type 'address' not found")
-		}
-		if !foundDomain {
-			t.Error("domain type 'positive_int' not found")
-		}
+		assertTypesPresent(t, types)
 	})
 
 	t.Run("enum values are ordered", func(t *testing.T) {
@@ -276,4 +248,60 @@ func TestIntegration_Types(t *testing.T) {
 			}
 		}
 	})
+}
+
+// assertEnumType validates the mood enum: kind, value count, and value set.
+func assertEnumType(t *testing.T, pt PgTypeInfo) {
+	t.Helper()
+	if pt.Type != "enum" {
+		t.Errorf("expected type enum, got %s", pt.Type)
+	}
+	if len(pt.Values) != 3 {
+		t.Errorf("expected 3 enum values, got %d: %v", len(pt.Values), pt.Values)
+	}
+	expectedVals := map[string]bool{"sad": true, "ok": true, "happy": true}
+	for _, v := range pt.Values {
+		if !expectedVals[v] {
+			t.Errorf("unexpected enum value: %s", v)
+		}
+	}
+}
+
+// assertTypeKind asserts a single PgTypeInfo matches the expected pg type kind.
+func assertTypeKind(t *testing.T, pt PgTypeInfo, want string) {
+	t.Helper()
+	if pt.Type != want {
+		t.Errorf("expected type %s, got %s", want, pt.Type)
+	}
+}
+
+// assertTypesPresent validates that mood (enum), address (composite), and positive_int (domain) exist.
+func assertTypesPresent(t *testing.T, types []PgTypeInfo) {
+	t.Helper()
+	foundEnum, foundComposite, foundDomain := false, false, false
+	for _, pt := range types {
+		switch pt.Name {
+		case "mood":
+			foundEnum = true
+			assertEnumType(t, pt)
+		case "address":
+			foundComposite = true
+			assertTypeKind(t, pt, "composite")
+			if len(pt.Values) != 0 {
+				t.Errorf("composite type should have empty values, got %v", pt.Values)
+			}
+		case "positive_int":
+			foundDomain = true
+			assertTypeKind(t, pt, "domain")
+		}
+	}
+	if !foundEnum {
+		t.Error("enum type 'mood' not found")
+	}
+	if !foundComposite {
+		t.Error("composite type 'address' not found")
+	}
+	if !foundDomain {
+		t.Error("domain type 'positive_int' not found")
+	}
 }

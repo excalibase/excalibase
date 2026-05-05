@@ -14,13 +14,17 @@ type User struct {
 }
 
 type AccessToken struct {
-	TokenHash   string     `json:"-"`
-	TokenPrefix string     `json:"tokenPrefix"`
-	UserID      string     `json:"userId"`
-	Name        string     `json:"name"`
-	CreatedAt   *time.Time `json:"createdAt,omitempty"`
-	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
-	LastUsed    *time.Time `json:"lastUsed,omitempty"`
+	TokenHash   string `json:"-"`
+	TokenPrefix string `json:"tokenPrefix"`
+	UserID      string `json:"userId"`
+	Name        string `json:"name"`
+	// Scopes is a comma-separated list of capability tags ("session",
+	// "read", "admin"). Empty = legacy all-purpose token (predates this
+	// column). New tokens always carry at least one scope.
+	Scopes    string     `json:"scopes,omitempty"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	LastUsed  *time.Time `json:"lastUsed,omitempty"`
 }
 
 type AuditEntry struct {

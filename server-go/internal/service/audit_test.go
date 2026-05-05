@@ -9,13 +9,16 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+const testAudDB = "aud-db"
+
+
 func setupAuditTest(t *testing.T) (*AuditService, *k8s.MockClient) {
 	t.Helper()
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 	store.Save(&domain.DatabaseInstance{
-		ProjectID: "aud-db", Namespace: "org-aud-db", Status: "ACTIVE",
+		ProjectID: testAudDB, Namespace: "org-aud-db", Status: "ACTIVE",
 	})
 	mock.ExecOutput["org-aud-db/aud-db-postgres-1"] = "pgaudit.log|all\npgaudit.log_level|log"
 	return NewAuditService(store, mock), mock
@@ -23,7 +26,7 @@ func setupAuditTest(t *testing.T) (*AuditService, *k8s.MockClient) {
 
 func TestEnableAudit(t *testing.T) {
 	svc, _ := setupAuditTest(t)
-	err := svc.EnableAudit(context.Background(), "aud-db", domain.AuditConfig{Enabled: true})
+	err := svc.EnableAudit(context.Background(), testAudDB, domain.AuditConfig{Enabled: true})
 	if err != nil {
 		t.Fatalf("EnableAudit: %v", err)
 	}
@@ -41,7 +44,7 @@ func TestEnableAuditNotFound(t *testing.T) {
 
 func TestGetAuditConfig(t *testing.T) {
 	svc, _ := setupAuditTest(t)
-	cfg, err := svc.GetAuditConfig(context.Background(), "aud-db")
+	cfg, err := svc.GetAuditConfig(context.Background(), testAudDB)
 	if err != nil {
 		t.Fatalf("GetAuditConfig: %v", err)
 	}
@@ -56,7 +59,7 @@ func TestGetAuditConfig(t *testing.T) {
 func TestGetAuditLogs(t *testing.T) {
 	svc, mock := setupAuditTest(t)
 	mock.ExecOutput["org-aud-db/aud-db-postgres-1"] = "AUDIT: session,1,1,READ,SELECT,,,SELECT 1"
-	logs, err := svc.GetAuditLogs(context.Background(), "aud-db", 100)
+	logs, err := svc.GetAuditLogs(context.Background(), testAudDB, 100)
 	if err != nil {
 		t.Fatalf("GetAuditLogs: %v", err)
 	}

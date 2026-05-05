@@ -9,6 +9,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const errIterateRows = "iterate rows: %w"
+
+
 // --- MetricsStore ---
 
 func (s *Store) AppendMetrics(ctx context.Context, m *domain.DatabaseMetrics) error {
@@ -80,7 +83,7 @@ func (s *Store) GetMetricsHistory(ctx context.Context, projectID string, limit i
 		result = append(result, m)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate rows: %w", err)
+		return nil, fmt.Errorf(errIterateRows, err)
 	}
 	return result, nil
 }
@@ -128,7 +131,7 @@ func (s *Store) queryAlerts(ctx context.Context, query string, args ...interface
 		result = append(result, a)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate rows: %w", err)
+		return nil, fmt.Errorf(errIterateRows, err)
 	}
 	return result, nil
 }
@@ -180,7 +183,7 @@ func (s *Store) QueryAudit(ctx context.Context, limit int) ([]domain.AuditEntry,
 		result = append(result, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate rows: %w", err)
+		return nil, fmt.Errorf(errIterateRows, err)
 	}
 	return result, nil
 }

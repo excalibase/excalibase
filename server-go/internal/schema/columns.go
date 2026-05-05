@@ -7,10 +7,16 @@ import (
 	"strings"
 )
 
+const (
+	sqlAlterTable  = "ALTER TABLE "
+	sqlAlterColumn = " ALTER COLUMN "
+)
+
+
 // AddColumn adds a new column to an existing table.
 func (i *Introspector) AddColumn(ctx context.Context, db *sql.DB, schema, table string, req AddColumnRequest) error {
 	var b strings.Builder
-	b.WriteString("ALTER TABLE ")
+	b.WriteString(sqlAlterTable)
 	b.WriteString(QuoteIdent(schema))
 	b.WriteString(".")
 	b.WriteString(QuoteIdent(table))
@@ -47,62 +53,77 @@ func (i *Introspector) AddColumn(ctx context.Context, db *sql.DB, schema, table 
 func (i *Introspector) AlterColumn(ctx context.Context, db *sql.DB, schema, table, col string, req AlterColumnRequest) error {
 	fqn := QuoteIdent(schema) + "." + QuoteIdent(table)
 	quotedCol := QuoteIdent(col)
+	base := sqlAlterTable + fqn + sqlAlterColumn + quotedCol
 
-	if req.Type != nil {
-		if err := ValidateTypeName(*req.Type); err != nil {
-			return fmt.Errorf("alter column: %w", err)
-		}
-		stmt := "ALTER TABLE " + fqn + " ALTER COLUMN " + quotedCol +
-			" TYPE " + *req.Type
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("alter column type: %w", err)
-		}
+	if err := alterColumnType(ctx, db, base, req); err != nil {
+		return err
 	}
-
-	if req.Nullable != nil {
-		var action string
-		if *req.Nullable {
-			action = "DROP NOT NULL"
-		} else {
-			action = "SET NOT NULL"
-		}
-		stmt := "ALTER TABLE " + fqn + " ALTER COLUMN " + quotedCol + " " + action
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("alter column nullable: %w", err)
-		}
+	if err := alterColumnNullable(ctx, db, base, req); err != nil {
+		return err
 	}
-
-	if req.DropDefault {
-		stmt := "ALTER TABLE " + fqn + " ALTER COLUMN " + quotedCol + " DROP DEFAULT"
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("drop column default: %w", err)
-		}
-	} else if req.Default != nil {
-		safeDefault, err := ValidateDefaultExpression(*req.Default)
-		if err != nil {
-			return fmt.Errorf("alter column default: %w", err)
-		}
-		stmt := "ALTER TABLE " + fqn + " ALTER COLUMN " + quotedCol +
-			" SET DEFAULT " + safeDefault
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("set column default: %w", err)
-		}
+	if err := alterColumnDefault(ctx, db, base, req); err != nil {
+		return err
 	}
-
 	if req.NewName != nil {
-		stmt := "ALTER TABLE " + fqn + " RENAME COLUMN " + quotedCol +
-			" TO " + QuoteIdent(*req.NewName)
+		stmt := sqlAlterTable + fqn + " RENAME COLUMN " + quotedCol + " TO " + QuoteIdent(*req.NewName)
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("rename column: %w", err)
 		}
 	}
+	return nil
+}
 
+func alterColumnType(ctx context.Context, db *sql.DB, base string, req AlterColumnRequest) error {
+	if req.Type == nil {
+		return nil
+	}
+	if err := ValidateTypeName(*req.Type); err != nil {
+		return fmt.Errorf("alter column: %w", err)
+	}
+	_, err := db.ExecContext(ctx, base+" TYPE "+*req.Type)
+	if err != nil {
+		return fmt.Errorf("alter column type: %w", err)
+	}
+	return nil
+}
+
+func alterColumnNullable(ctx context.Context, db *sql.DB, base string, req AlterColumnRequest) error {
+	if req.Nullable == nil {
+		return nil
+	}
+	action := "SET NOT NULL"
+	if *req.Nullable {
+		action = "DROP NOT NULL"
+	}
+	if _, err := db.ExecContext(ctx, base+" "+action); err != nil {
+		return fmt.Errorf("alter column nullable: %w", err)
+	}
+	return nil
+}
+
+func alterColumnDefault(ctx context.Context, db *sql.DB, base string, req AlterColumnRequest) error {
+	if req.DropDefault {
+		if _, err := db.ExecContext(ctx, base+" DROP DEFAULT"); err != nil {
+			return fmt.Errorf("drop column default: %w", err)
+		}
+		return nil
+	}
+	if req.Default == nil {
+		return nil
+	}
+	safeDefault, err := ValidateDefaultExpression(*req.Default)
+	if err != nil {
+		return fmt.Errorf("alter column default: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, base+" SET DEFAULT "+safeDefault); err != nil {
+		return fmt.Errorf("set column default: %w", err)
+	}
 	return nil
 }
 
 // DropColumn removes a column from a table.
 func (i *Introspector) DropColumn(ctx context.Context, db *sql.DB, schema, table, col string) error {
-	stmt := "ALTER TABLE " + QuoteIdent(schema) + "." + QuoteIdent(table) +
+	stmt := sqlAlterTable + QuoteIdent(schema) + "." + QuoteIdent(table) +
 		" DROP COLUMN " + QuoteIdent(col)
 	if _, err := db.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("drop column: %w", err)

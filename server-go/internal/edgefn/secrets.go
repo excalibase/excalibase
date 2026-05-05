@@ -40,7 +40,8 @@ func ValidateSecretKey(key string) error {
 }
 
 // SecretsStore persists per-project function secrets in the vault.
-// Vault path: projects/{orgSlug}/{projectId}/edgefn/secrets
+// Vault path: projects/{projectId}/edgefn/secrets — project-scoped only,
+// no org dimension (projectId is globally unique).
 // Stored as a single map[string]string entry — all secrets for a project
 // are loaded and reloaded together. Keeps the worker deploy step simple.
 type SecretsStore struct {
@@ -51,17 +52,17 @@ func NewSecretsStore(vault vaultclient.VaultClient) *SecretsStore {
 	return &SecretsStore{vault: vault}
 }
 
-func (s *SecretsStore) vaultPath(orgSlug, projectID string) string {
-	return fmt.Sprintf("projects/%s/%s/edgefn/secrets", orgSlug, projectID)
+func (s *SecretsStore) vaultPath(projectID string) string {
+	return fmt.Sprintf("projects/%s/edgefn/secrets", projectID)
 }
 
 // GetAll returns every secret for the project as a map. Missing/empty returns
 // an empty map, not an error — this is the normal state for new projects.
-func (s *SecretsStore) GetAll(orgSlug, projectID string) (map[string]string, error) {
+func (s *SecretsStore) GetAll(projectID string) (map[string]string, error) {
 	if s.vault == nil {
 		return map[string]string{}, nil
 	}
-	data, err := s.vault.Get(s.vaultPath(orgSlug, projectID))
+	data, err := s.vault.Get(s.vaultPath(projectID))
 	if err != nil {
 		// Vault returns "not found" for new projects — return empty.
 		return map[string]string{}, nil
@@ -73,8 +74,8 @@ func (s *SecretsStore) GetAll(orgSlug, projectID string) (map[string]string, err
 }
 
 // ListKeys returns only the keys (not values) in deterministic order.
-func (s *SecretsStore) ListKeys(orgSlug, projectID string) ([]string, error) {
-	all, err := s.GetAll(orgSlug, projectID)
+func (s *SecretsStore) ListKeys(projectID string) ([]string, error) {
+	all, err := s.GetAll(projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +90,7 @@ func (s *SecretsStore) ListKeys(orgSlug, projectID string) ([]string, error) {
 // Set stores (or updates) a single secret. Reads the full map, updates one key,
 // writes it back. Not atomic across concurrent callers — acceptable for a low-
 // traffic admin surface.
-func (s *SecretsStore) Set(orgSlug, projectID, key, value string) error {
+func (s *SecretsStore) Set(projectID, key, value string) error {
 	if s.vault == nil {
 		return fmt.Errorf("vault not configured")
 	}
@@ -102,7 +103,7 @@ func (s *SecretsStore) Set(orgSlug, projectID, key, value string) error {
 	if len(value) > MaxSecretValueLen {
 		return fmt.Errorf("secret value exceeds max length %d", MaxSecretValueLen)
 	}
-	all, err := s.GetAll(orgSlug, projectID)
+	all, err := s.GetAll(projectID)
 	if err != nil {
 		return err
 	}
@@ -110,19 +111,19 @@ func (s *SecretsStore) Set(orgSlug, projectID, key, value string) error {
 		return fmt.Errorf("project has reached the max of %d secrets", MaxSecretCount)
 	}
 	all[key] = value
-	return s.vault.Put(s.vaultPath(orgSlug, projectID), all)
+	return s.vault.Put(s.vaultPath(projectID), all)
 }
 
 // Delete removes a single key from the project's secret map. Missing key is not
 // an error (idempotent).
-func (s *SecretsStore) Delete(orgSlug, projectID, key string) error {
+func (s *SecretsStore) Delete(projectID, key string) error {
 	if s.vault == nil {
 		return fmt.Errorf("vault not configured")
 	}
 	if err := ValidateSecretKey(key); err != nil {
 		return err
 	}
-	all, err := s.GetAll(orgSlug, projectID)
+	all, err := s.GetAll(projectID)
 	if err != nil {
 		return err
 	}
@@ -130,13 +131,13 @@ func (s *SecretsStore) Delete(orgSlug, projectID, key string) error {
 		return nil
 	}
 	delete(all, key)
-	return s.vault.Put(s.vaultPath(orgSlug, projectID), all)
+	return s.vault.Put(s.vaultPath(projectID), all)
 }
 
 // BuildEnvForDeploy merges user secrets with the platform's built-in env vars.
 // Built-ins always win over user values — platform identity is not overridable.
-func (s *SecretsStore) BuildEnvForDeploy(orgSlug, projectID string, builtins map[string]string) (map[string]string, error) {
-	user, err := s.GetAll(orgSlug, projectID)
+func (s *SecretsStore) BuildEnvForDeploy(projectID string, builtins map[string]string) (map[string]string, error) {
+	user, err := s.GetAll(projectID)
 	if err != nil {
 		return nil, err
 	}

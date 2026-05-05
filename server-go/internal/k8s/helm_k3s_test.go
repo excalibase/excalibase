@@ -1,3 +1,8 @@
+//go:build integration
+
+// Helm SDK against live k3s via testcontainers — see k3s_test.go for the
+// hang risk that motivated the build tag.
+
 package k8s
 
 import (
@@ -13,6 +18,15 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+const (
+	testK3SStartMsg    = "Starting k3s container..."
+	testK3SImage       = "rancher/k3s:v1.31.6-k3s1"
+	testK3SStartFmt    = "k3s start: %v"
+	testKubeconfigFmt  = "get kubeconfig: %v"
+	testHelmE2E        = "helm-e2e"
+)
+
+
 // Run with: go test ./internal/k8s/ -run TestK3sHelmInstallUninstall -v -timeout 5m
 // Requires: Docker running.
 
@@ -26,17 +40,17 @@ func TestK3sHelmInstallUninstall(t *testing.T) {
 	}
 
 	// Start k3s
-	t.Log("Starting k3s container...")
-	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
+	t.Log(testK3SStartMsg)
+	container, err := k3s.Run(ctx, testK3SImage)
 	if err != nil {
-		t.Fatalf("k3s start: %v", err)
+		t.Fatalf(testK3SStartFmt, err)
 	}
 	defer container.Terminate(ctx)
 
 	// Get kubeconfig and write to temp file (Helm SDK needs file path)
 	kubeconfig, err := container.GetKubeConfig(ctx)
 	if err != nil {
-		t.Fatalf("get kubeconfig: %v", err)
+		t.Fatalf(testKubeconfigFmt, err)
 	}
 
 	kubeconfigFile := filepath.Join(t.TempDir(), "kubeconfig")
@@ -69,7 +83,7 @@ func TestK3sHelmInstallUninstall(t *testing.T) {
 	t.Log("Installing test chart...")
 	values := map[string]interface{}{
 		"replicaCount": 1,
-		"name":         "helm-e2e",
+		"name":         testHelmE2E,
 		"image":        "busybox:1.36",
 	}
 
@@ -77,25 +91,9 @@ func TestK3sHelmInstallUninstall(t *testing.T) {
 		t.Fatalf("InstallHelmChart: %v", err)
 	}
 
-	// Verify deployment was created
-	t.Log("Verifying deployment...")
-	deadline := time.Now().Add(30 * time.Second)
-	var found bool
-	for time.Now().Before(deadline) {
-		pods, _ := client.GetPods(ctx, ns, "app=helm-e2e")
-		if len(pods) > 0 {
-			found = true
-			t.Logf("Pod found: %s (phase: %s)", pods[0].Name, pods[0].Status.Phase)
-			break
-		}
-		time.Sleep(2 * time.Second)
-	}
-	if !found {
-		t.Error("no pods found after helm install")
-	}
+	waitForHelmPod(ctx, t, client, ns)
 
-	// Verify deployment exists
-	exists, err := client.GetDeployment(ctx, ns, "helm-e2e")
+	exists, err := client.GetDeployment(ctx, ns, testHelmE2E)
 	if err != nil {
 		t.Errorf("GetDeployment: %v", err)
 	}
@@ -103,22 +101,35 @@ func TestK3sHelmInstallUninstall(t *testing.T) {
 		t.Error("deployment helm-e2e should exist after install")
 	}
 
-	// --- Test: Uninstall chart ---
 	t.Log("Uninstalling chart...")
 	if err := client.UninstallHelmChart(ctx, ns, "my-release"); err != nil {
 		t.Fatalf("UninstallHelmChart: %v", err)
 	}
 
-	// Verify deployment resource is gone (pods may still be terminating)
 	time.Sleep(3 * time.Second)
-	exists, err = client.GetDeployment(ctx, ns, "helm-e2e")
+	exists, err = client.GetDeployment(ctx, ns, testHelmE2E)
 	if err == nil && exists {
 		t.Error("deployment should be deleted after uninstall")
 	}
 
-	// Cleanup
 	client.DeleteNamespace(ctx, ns)
 	t.Log("Helm install/uninstall E2E test passed")
+}
+
+// waitForHelmPod polls until at least one pod with label app=helm-e2e appears.
+func waitForHelmPod(ctx context.Context, t *testing.T, client *Client, ns string) {
+	t.Helper()
+	t.Log("Verifying deployment...")
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		pods, _ := client.GetPods(ctx, ns, "app=helm-e2e")
+		if len(pods) > 0 {
+			t.Logf("Pod found: %s (phase: %s)", pods[0].Name, pods[0].Status.Phase)
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Error("no pods found after helm install")
 }
 
 func TestK3sHelmInstallWithOverrides(t *testing.T) {
@@ -129,16 +140,16 @@ func TestK3sHelmInstallWithOverrides(t *testing.T) {
 		t.Fatalf("test chart not found: %v", err)
 	}
 
-	t.Log("Starting k3s container...")
-	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
+	t.Log(testK3SStartMsg)
+	container, err := k3s.Run(ctx, testK3SImage)
 	if err != nil {
-		t.Fatalf("k3s start: %v", err)
+		t.Fatalf(testK3SStartFmt, err)
 	}
 	defer container.Terminate(ctx)
 
 	kubeconfig, err := container.GetKubeConfig(ctx)
 	if err != nil {
-		t.Fatalf("get kubeconfig: %v", err)
+		t.Fatalf(testKubeconfigFmt, err)
 	}
 
 	kubeconfigFile := filepath.Join(t.TempDir(), "kubeconfig")
@@ -191,16 +202,16 @@ func TestK3sHelmInstallWithOverrides(t *testing.T) {
 func TestK3sHelmInstallBadChart(t *testing.T) {
 	ctx := context.Background()
 
-	t.Log("Starting k3s container...")
-	container, err := k3s.Run(ctx, "rancher/k3s:v1.31.6-k3s1")
+	t.Log(testK3SStartMsg)
+	container, err := k3s.Run(ctx, testK3SImage)
 	if err != nil {
-		t.Fatalf("k3s start: %v", err)
+		t.Fatalf(testK3SStartFmt, err)
 	}
 	defer container.Terminate(ctx)
 
 	kubeconfig, err := container.GetKubeConfig(ctx)
 	if err != nil {
-		t.Fatalf("get kubeconfig: %v", err)
+		t.Fatalf(testKubeconfigFmt, err)
 	}
 
 	kubeconfigFile := filepath.Join(t.TempDir(), "kubeconfig")

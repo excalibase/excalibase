@@ -9,6 +9,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+const (
+	testPerfDB    = "perf-db"
+	testPerfDBPod = "org-perf-db/perf-db-postgres-1"
+)
+
+
 func setupPerfTest(t *testing.T) (*PerformanceService, *k8s.MockClient) {
 	t.Helper()
 	dir := t.TempDir()
@@ -16,7 +22,7 @@ func setupPerfTest(t *testing.T) (*PerformanceService, *k8s.MockClient) {
 	mock := k8s.NewMockClient()
 
 	store.Save(&domain.DatabaseInstance{
-		ProjectID: "perf-db", Namespace: "org-perf-db", Status: "ACTIVE",
+		ProjectID: testPerfDB, Namespace: "org-perf-db", Status: "ACTIVE",
 		DBType: domain.PostgreSQL,
 	})
 
@@ -25,11 +31,11 @@ func setupPerfTest(t *testing.T) (*PerformanceService, *k8s.MockClient) {
 
 func TestGetSummaryPgStatStatementsEnabled(t *testing.T) {
 	svc, mock := setupPerfTest(t)
-	pod := "org-perf-db/perf-db-postgres-1"
+	pod := testPerfDBPod
 	// Mock pg_stat_statements check
 	mock.ExecOutput[pod] = "1\n3\n9\n99.5\n7548 kB\n0\n1.5"
 
-	summary, err := svc.GetSummary(context.Background(), "perf-db")
+	summary, err := svc.GetSummary(context.Background(), testPerfDB)
 	if err != nil {
 		t.Fatalf("GetSummary: %v", err)
 	}
@@ -52,9 +58,9 @@ func TestGetSummaryNotFound(t *testing.T) {
 
 func TestGetTopQueries(t *testing.T) {
 	svc, mock := setupPerfTest(t)
-	mock.ExecOutput["org-perf-db/perf-db-postgres-1"] = "SELECT 1|100|50.5|0.5|0.1|1.0|100\nSELECT 2|50|25.0|0.5|0.1|1.0|50"
+	mock.ExecOutput[testPerfDBPod] = "SELECT 1|100|50.5|0.5|0.1|1.0|100\nSELECT 2|50|25.0|0.5|0.1|1.0|50"
 
-	queries, err := svc.GetTopQueries(context.Background(), "perf-db", 10)
+	queries, err := svc.GetTopQueries(context.Background(), testPerfDB, 10)
 	if err != nil {
 		t.Fatalf("GetTopQueries: %v", err)
 	}
@@ -68,9 +74,9 @@ func TestGetTopQueries(t *testing.T) {
 
 func TestGetWaitEvents(t *testing.T) {
 	svc, mock := setupPerfTest(t)
-	mock.ExecOutput["org-perf-db/perf-db-postgres-1"] = "IO|DataFileRead|5\nLock|relation|2"
+	mock.ExecOutput[testPerfDBPod] = "IO|DataFileRead|5\nLock|relation|2"
 
-	events, err := svc.GetWaitEvents(context.Background(), "perf-db")
+	events, err := svc.GetWaitEvents(context.Background(), testPerfDB)
 	if err != nil {
 		t.Fatalf("GetWaitEvents: %v", err)
 	}

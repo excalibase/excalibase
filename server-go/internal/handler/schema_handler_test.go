@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
@@ -22,6 +23,18 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+const (
+	testUnsealFmt   = "unseal: %v"
+	testSchemaBase  = "/api/schema"
+	testTablesPath  = "/api/schema/test-proj/tables"
+	testColumnsPath = "/api/schema/test-proj/tables/users/columns"
+	testQueryPath   = "/api/schema/test-proj/query"
+	testRolesPath   = "/api/schema/test-proj/roles"
+	testPoliciesPath = "/api/schema/test-proj/policies"
+	testFunctionsPath = "/api/schema/test-proj/functions"
+)
+
 
 // setupSchemaRouter creates a chi router with SchemaHandler wired to a real
 // PostgreSQL via testcontainers, vault unsealed with credentials stored.
@@ -87,7 +100,7 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 
 	// 2. Create + init + unseal vault, store credentials
 	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, "vault.bolt"))
+	v, err := vault.New(filepath.Join(dir, testVaultFile))
 	if err != nil {
 		t.Fatalf("new vault: %v", err)
 	}
@@ -98,12 +111,12 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 	}
 	for _, share := range initResult.Shares[:3] {
 		if _, err := v.Unseal(share); err != nil {
-			t.Fatalf("unseal: %v", err)
+			t.Fatalf(testUnsealFmt, err)
 		}
 	}
 
-	// Store credentials for project "test-proj" (org-scoped path)
-	err = v.Put("orgs/test-org/projects/test-proj/credentials/excalibase_app", map[string]string{
+	// Store credentials at the canonical project-scoped path.
+	err = v.Put("projects/test-proj/credentials/excalibase_app", map[string]string{
 		"host":     host,
 		"port":     port.Port(),
 		"username": "excalibase_app",
@@ -118,7 +131,7 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 	t.Setenv("SCHEMA_DB_SSLMODE", "disable")
 	h := NewSchemaHandler(v)
 	r := chi.NewRouter()
-	r.Route("/api/schema", h.Routes)
+	r.Route(testSchemaBase, h.Routes)
 	return r
 }
 
@@ -140,7 +153,7 @@ func schemaRequest(r chi.Router, method, path, body string) *httptest.ResponseRe
 func TestSchemaHandler_GetTables(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/tables", "")
+	w := schemaRequest(r, "GET", testTablesPath, "")
 	if w.Code != 200 {
 		t.Fatalf("GET /tables: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -158,7 +171,7 @@ func TestSchemaHandler_GetTables(t *testing.T) {
 func TestSchemaHandler_GetColumns(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/tables/users/columns", "")
+	w := schemaRequest(r, "GET", testColumnsPath, "")
 	if w.Code != 200 {
 		t.Fatalf("GET columns: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -183,7 +196,7 @@ func TestSchemaHandler_GetColumns(t *testing.T) {
 func TestSchemaHandler_GetRelationships(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/relationships", "")
+	w := schemaRequest(r, "GET", "/api/schema/test-proj/relationships", "")
 	if w.Code != 200 {
 		t.Fatalf("GET relationships: %d", w.Code)
 	}
@@ -199,7 +212,7 @@ func TestSchemaHandler_GetRelationships(t *testing.T) {
 func TestSchemaHandler_TestConnection(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/connection-test", "")
+	w := schemaRequest(r, "GET", "/api/schema/test-proj/connection-test", "")
 	if w.Code != 200 {
 		t.Fatalf("connection test: %d", w.Code)
 	}
@@ -216,7 +229,7 @@ func TestSchemaHandler_TestConnection(t *testing.T) {
 func TestSchemaHandler_ExecuteQuery_SELECT(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/query",
+	w := schemaRequest(r, "POST", testQueryPath,
 		`{"query":"SELECT email, name FROM users WHERE email = 'alice@test.com'"}`)
 	if w.Code != 200 {
 		t.Fatalf("query: %d, body: %s", w.Code, w.Body.String())
@@ -238,7 +251,7 @@ func TestSchemaHandler_ExecuteQuery_SELECT(t *testing.T) {
 func TestSchemaHandler_ExecuteQuery_DML(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/query",
+	w := schemaRequest(r, "POST", testQueryPath,
 		`{"query":"INSERT INTO users (email, name) VALUES ('bob@test.com', 'Bob')"}`)
 	if w.Code != 200 {
 		t.Fatalf("query: %d, body: %s", w.Code, w.Body.String())
@@ -260,7 +273,7 @@ func TestSchemaHandler_ExecuteQuery_DML(t *testing.T) {
 func TestSchemaHandler_ExecuteQuery_EmptyBody(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/query", `{"query":""}`)
+	w := schemaRequest(r, "POST", testQueryPath, `{"query":""}`)
 	if w.Code != 400 {
 		t.Errorf("empty query: expected 400, got %d", w.Code)
 	}
@@ -269,7 +282,7 @@ func TestSchemaHandler_ExecuteQuery_EmptyBody(t *testing.T) {
 func TestSchemaHandler_ExecuteQuery_InvalidJSON(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/query", "not json")
+	w := schemaRequest(r, "POST", testQueryPath, "not json")
 	if w.Code != 400 {
 		t.Errorf("invalid json: expected 400, got %d", w.Code)
 	}
@@ -278,7 +291,7 @@ func TestSchemaHandler_ExecuteQuery_InvalidJSON(t *testing.T) {
 func TestSchemaHandler_ExecuteDDL(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/ddl",
+	w := schemaRequest(r, "POST", "/api/schema/test-proj/ddl",
 		`{"sql":"CREATE TABLE ddl_test (id serial PRIMARY KEY)"}`)
 	if w.Code != 200 {
 		t.Fatalf("ddl: %d, body: %s", w.Code, w.Body.String())
@@ -296,14 +309,14 @@ func TestSchemaHandler_ExecuteDDL(t *testing.T) {
 func TestSchemaHandler_CreateTable(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/tables",
+	w := schemaRequest(r, "POST", testTablesPath,
 		`{"name":"products","schema":"public","columns":[{"name":"id","type":"serial","primaryKey":true},{"name":"title","type":"text","nullable":true}]}`)
 	if w.Code != 201 {
 		t.Fatalf("create table: %d, body: %s", w.Code, w.Body.String())
 	}
 
 	// Verify table exists
-	w = schemaRequest(r, "GET", "/api/schema/test-org/test-proj/tables", "")
+	w = schemaRequest(r, "GET", testTablesPath, "")
 	var tables []schema.TableInfo
 	json.NewDecoder(w.Body).Decode(&tables)
 	found := false
@@ -320,7 +333,7 @@ func TestSchemaHandler_CreateTable(t *testing.T) {
 func TestSchemaHandler_CreateTable_MissingName(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/tables", `{"schema":"public"}`)
+	w := schemaRequest(r, "POST", testTablesPath, `{"schema":"public"}`)
 	if w.Code != 400 {
 		t.Errorf("missing name: expected 400, got %d", w.Code)
 	}
@@ -329,7 +342,7 @@ func TestSchemaHandler_CreateTable_MissingName(t *testing.T) {
 func TestSchemaHandler_CreateTable_InvalidJSON(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/tables", "not json")
+	w := schemaRequest(r, "POST", testTablesPath, "not json")
 	if w.Code != 400 {
 		t.Errorf("invalid json: expected 400, got %d", w.Code)
 	}
@@ -339,18 +352,18 @@ func TestSchemaHandler_UpdateTable(t *testing.T) {
 	r := setupSchemaRouter(t)
 
 	// Create a table first
-	schemaRequest(r, "POST", "/api/schema/test-org/test-proj/tables",
+	schemaRequest(r, "POST", testTablesPath,
 		`{"name":"to_rename","schema":"public","columns":[{"name":"id","type":"serial","primaryKey":true}]}`)
 
 	// Rename it
-	w := schemaRequest(r, "PATCH", "/api/schema/test-org/test-proj/tables/to_rename",
+	w := schemaRequest(r, "PATCH", "/api/schema/test-proj/tables/to_rename",
 		`{"newName":"renamed_tbl"}`)
 	if w.Code != 200 {
 		t.Fatalf("update table: %d, body: %s", w.Code, w.Body.String())
 	}
 
 	// Verify renamed
-	w = schemaRequest(r, "GET", "/api/schema/test-org/test-proj/tables", "")
+	w = schemaRequest(r, "GET", testTablesPath, "")
 	var tables []schema.TableInfo
 	json.NewDecoder(w.Body).Decode(&tables)
 	found := false
@@ -368,17 +381,17 @@ func TestSchemaHandler_DropTable(t *testing.T) {
 	r := setupSchemaRouter(t)
 
 	// Create table
-	schemaRequest(r, "POST", "/api/schema/test-org/test-proj/tables",
+	schemaRequest(r, "POST", testTablesPath,
 		`{"name":"to_drop","schema":"public","columns":[{"name":"id","type":"serial","primaryKey":true}]}`)
 
 	// Drop it
-	w := schemaRequest(r, "DELETE", "/api/schema/test-org/test-proj/tables/to_drop?cascade=true", "")
+	w := schemaRequest(r, "DELETE", "/api/schema/test-proj/tables/to_drop?cascade=true", "")
 	if w.Code != 200 {
 		t.Fatalf("drop table: %d, body: %s", w.Code, w.Body.String())
 	}
 
 	// Verify gone
-	w = schemaRequest(r, "GET", "/api/schema/test-org/test-proj/tables", "")
+	w = schemaRequest(r, "GET", testTablesPath, "")
 	var tables []schema.TableInfo
 	json.NewDecoder(w.Body).Decode(&tables)
 	for _, tbl := range tables {
@@ -393,14 +406,14 @@ func TestSchemaHandler_DropTable(t *testing.T) {
 func TestSchemaHandler_AddColumn(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/tables/users/columns",
+	w := schemaRequest(r, "POST", testColumnsPath,
 		`{"name":"age","type":"integer","nullable":true}`)
 	if w.Code != 201 {
 		t.Fatalf("add column: %d, body: %s", w.Code, w.Body.String())
 	}
 
 	// Verify column exists
-	w = schemaRequest(r, "GET", "/api/schema/test-org/test-proj/tables/users/columns", "")
+	w = schemaRequest(r, "GET", testColumnsPath, "")
 	var cols []schema.ColumnInfo
 	json.NewDecoder(w.Body).Decode(&cols)
 	found := false
@@ -420,7 +433,7 @@ func TestSchemaHandler_AddColumn(t *testing.T) {
 func TestSchemaHandler_AddColumn_MissingFields(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/tables/users/columns",
+	w := schemaRequest(r, "POST", testColumnsPath,
 		`{"name":""}`)
 	if w.Code != 400 {
 		t.Errorf("missing fields: expected 400, got %d", w.Code)
@@ -431,14 +444,14 @@ func TestSchemaHandler_AlterColumn(t *testing.T) {
 	r := setupSchemaRouter(t)
 
 	// Rename column
-	w := schemaRequest(r, "PATCH", "/api/schema/test-org/test-proj/tables/users/columns/name",
+	w := schemaRequest(r, "PATCH", "/api/schema/test-proj/tables/users/columns/name",
 		`{"newName":"full_name"}`)
 	if w.Code != 200 {
 		t.Fatalf("alter column: %d, body: %s", w.Code, w.Body.String())
 	}
 
 	// Verify renamed
-	w = schemaRequest(r, "GET", "/api/schema/test-org/test-proj/tables/users/columns", "")
+	w = schemaRequest(r, "GET", testColumnsPath, "")
 	var cols []schema.ColumnInfo
 	json.NewDecoder(w.Body).Decode(&cols)
 	found := false
@@ -456,10 +469,10 @@ func TestSchemaHandler_DropColumn(t *testing.T) {
 	r := setupSchemaRouter(t)
 
 	// Add a column to drop
-	schemaRequest(r, "POST", "/api/schema/test-org/test-proj/tables/users/columns",
+	schemaRequest(r, "POST", testColumnsPath,
 		`{"name":"temp_col","type":"text","nullable":true}`)
 
-	w := schemaRequest(r, "DELETE", "/api/schema/test-org/test-proj/tables/users/columns/temp_col", "")
+	w := schemaRequest(r, "DELETE", "/api/schema/test-proj/tables/users/columns/temp_col", "")
 	if w.Code != 200 {
 		t.Fatalf("drop column: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -470,7 +483,7 @@ func TestSchemaHandler_DropColumn(t *testing.T) {
 func TestSchemaHandler_GetRoles(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/roles", "")
+	w := schemaRequest(r, "GET", testRolesPath, "")
 	if w.Code != 200 {
 		t.Fatalf("get roles: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -498,14 +511,14 @@ func TestSchemaHandler_GetRoles(t *testing.T) {
 func TestSchemaHandler_CreateRole(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/roles",
-		`{"name":"test_role","password":"secret123","login":true}`)
+	w := schemaRequest(r, "POST", testRolesPath,
+		fmt.Sprintf(`{"name":"test_role","password":%q,"login":true}`, testutil.FixturePassword("schema-role-handler")))
 	if w.Code != 201 {
 		t.Fatalf("create role: %d, body: %s", w.Code, w.Body.String())
 	}
 
 	// Verify role exists
-	w = schemaRequest(r, "GET", "/api/schema/test-org/test-proj/roles", "")
+	w = schemaRequest(r, "GET", testRolesPath, "")
 	var roles []schema.RoleInfo
 	json.NewDecoder(w.Body).Decode(&roles)
 	found := false
@@ -522,7 +535,7 @@ func TestSchemaHandler_CreateRole(t *testing.T) {
 func TestSchemaHandler_CreateRole_MissingName(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/roles", `{"login":true}`)
+	w := schemaRequest(r, "POST", testRolesPath, `{"login":true}`)
 	if w.Code != 400 {
 		t.Errorf("missing name: expected 400, got %d", w.Code)
 	}
@@ -532,10 +545,10 @@ func TestSchemaHandler_DropRole(t *testing.T) {
 	r := setupSchemaRouter(t)
 
 	// Create then drop
-	schemaRequest(r, "POST", "/api/schema/test-org/test-proj/roles",
+	schemaRequest(r, "POST", testRolesPath,
 		`{"name":"drop_me","login":false}`)
 
-	w := schemaRequest(r, "DELETE", "/api/schema/test-org/test-proj/roles/drop_me", "")
+	w := schemaRequest(r, "DELETE", "/api/schema/test-proj/roles/drop_me", "")
 	if w.Code != 200 {
 		t.Fatalf("drop role: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -546,7 +559,7 @@ func TestSchemaHandler_DropRole(t *testing.T) {
 func TestSchemaHandler_GetExtensions(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/extensions", "")
+	w := schemaRequest(r, "GET", "/api/schema/test-proj/extensions", "")
 	if w.Code != 200 {
 		t.Fatalf("get extensions: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -563,7 +576,7 @@ func TestSchemaHandler_CreateAndDropExtension(t *testing.T) {
 
 	// Create extension — excalibase_app may not be superuser, so this may fail.
 	// We test the HTTP contract regardless.
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/extensions",
+	w := schemaRequest(r, "POST", "/api/schema/test-proj/extensions",
 		`{"name":"pg_trgm"}`)
 	// May be 201 (success) or 500 (permission denied)
 	if w.Code != 201 && w.Code != 500 {
@@ -572,7 +585,7 @@ func TestSchemaHandler_CreateAndDropExtension(t *testing.T) {
 
 	if w.Code == 201 {
 		// Drop it
-		w = schemaRequest(r, "DELETE", "/api/schema/test-org/test-proj/extensions/pg_trgm?cascade=true", "")
+		w = schemaRequest(r, "DELETE", "/api/schema/test-proj/extensions/pg_trgm?cascade=true", "")
 		if w.Code != 200 {
 			t.Errorf("drop extension: %d", w.Code)
 		}
@@ -584,7 +597,7 @@ func TestSchemaHandler_CreateAndDropExtension(t *testing.T) {
 func TestSchemaHandler_GetPolicies(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/policies", "")
+	w := schemaRequest(r, "GET", testPoliciesPath, "")
 	if w.Code != 200 {
 		t.Fatalf("get policies: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -594,17 +607,17 @@ func TestSchemaHandler_CreatePolicy(t *testing.T) {
 	r := setupSchemaRouter(t)
 
 	// Enable RLS first
-	schemaRequest(r, "PATCH", "/api/schema/test-org/test-proj/tables/users",
+	schemaRequest(r, "PATCH", "/api/schema/test-proj/tables/users",
 		`{"rlsEnabled":true}`)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/policies",
+	w := schemaRequest(r, "POST", testPoliciesPath,
 		`{"name":"users_select","table":"users","schema":"public","command":"SELECT","roles":"public","using":"true","permissive":true}`)
 	if w.Code != 201 {
 		t.Fatalf("create policy: %d, body: %s", w.Code, w.Body.String())
 	}
 
 	// Verify policy exists
-	w = schemaRequest(r, "GET", "/api/schema/test-org/test-proj/policies", "")
+	w = schemaRequest(r, "GET", testPoliciesPath, "")
 	var policies []schema.PolicyInfo
 	json.NewDecoder(w.Body).Decode(&policies)
 	found := false
@@ -625,11 +638,11 @@ func TestSchemaHandler_DropPolicy(t *testing.T) {
 	r := setupSchemaRouter(t)
 
 	// Setup
-	schemaRequest(r, "PATCH", "/api/schema/test-org/test-proj/tables/users", `{"rlsEnabled":true}`)
-	schemaRequest(r, "POST", "/api/schema/test-org/test-proj/policies",
+	schemaRequest(r, "PATCH", "/api/schema/test-proj/tables/users", `{"rlsEnabled":true}`)
+	schemaRequest(r, "POST", testPoliciesPath,
 		`{"name":"to_drop_pol","table":"users","schema":"public","command":"ALL","roles":"public","using":"true","permissive":true}`)
 
-	w := schemaRequest(r, "DELETE", "/api/schema/test-org/test-proj/policies/to_drop_pol?table=users", "")
+	w := schemaRequest(r, "DELETE", "/api/schema/test-proj/policies/to_drop_pol?table=users", "")
 	if w.Code != 200 {
 		t.Fatalf("drop policy: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -640,7 +653,7 @@ func TestSchemaHandler_DropPolicy(t *testing.T) {
 func TestSchemaHandler_GetFunctions(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/functions", "")
+	w := schemaRequest(r, "GET", testFunctionsPath, "")
 	if w.Code != 200 {
 		t.Fatalf("get functions: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -649,14 +662,14 @@ func TestSchemaHandler_GetFunctions(t *testing.T) {
 func TestSchemaHandler_CreateFunction(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "POST", "/api/schema/test-org/test-proj/functions",
+	w := schemaRequest(r, "POST", testFunctionsPath,
 		`{"name":"greet","schema":"public","language":"sql","returnType":"text","args":"","body":"SELECT 'hello'","volatility":"IMMUTABLE"}`)
 	if w.Code != 201 {
 		t.Fatalf("create function: %d, body: %s", w.Code, w.Body.String())
 	}
 
 	// Verify function exists
-	w = schemaRequest(r, "GET", "/api/schema/test-org/test-proj/functions", "")
+	w = schemaRequest(r, "GET", testFunctionsPath, "")
 	var fns []schema.FunctionInfo
 	json.NewDecoder(w.Body).Decode(&fns)
 	found := false
@@ -677,10 +690,10 @@ func TestSchemaHandler_DropFunction(t *testing.T) {
 	r := setupSchemaRouter(t)
 
 	// Create then drop
-	schemaRequest(r, "POST", "/api/schema/test-org/test-proj/functions",
+	schemaRequest(r, "POST", testFunctionsPath,
 		`{"name":"to_drop_fn","schema":"public","language":"sql","returnType":"void","args":"","body":"SELECT 1","volatility":"VOLATILE"}`)
 
-	w := schemaRequest(r, "DELETE", "/api/schema/test-org/test-proj/functions/to_drop_fn", "")
+	w := schemaRequest(r, "DELETE", "/api/schema/test-proj/functions/to_drop_fn", "")
 	if w.Code != 200 {
 		t.Fatalf("drop function: %d, body: %s", w.Code, w.Body.String())
 	}
@@ -691,21 +704,21 @@ func TestSchemaHandler_DropFunction(t *testing.T) {
 func TestSchemaHandler_VaultSealed(t *testing.T) {
 	// Create vault, init and then seal it
 	dir := t.TempDir()
-	v, _ := vault.New(filepath.Join(dir, "vault.bolt"))
+	v, _ := vault.New(filepath.Join(dir, testVaultFile))
 	initResult, _ := v.Init(5, 3)
 	// Unseal first (to get a valid state), then seal
 	for _, share := range initResult.Shares[:3] {
 		if _, err := v.Unseal(share); err != nil {
-			t.Fatalf("unseal: %v", err)
+			t.Fatalf(testUnsealFmt, err)
 		}
 	}
 	v.Seal()
 
 	h := NewSchemaHandler(v)
 	r := chi.NewRouter()
-	r.Route("/api/schema", h.Routes)
+	r.Route(testSchemaBase, h.Routes)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/tables", "")
+	w := schemaRequest(r, "GET", testTablesPath, "")
 	if w.Code != 503 {
 		t.Errorf("vault sealed: expected 503, got %d, body: %s", w.Code, w.Body.String())
 	}
@@ -713,17 +726,17 @@ func TestSchemaHandler_VaultSealed(t *testing.T) {
 
 func TestSchemaHandler_ProjectNotFound(t *testing.T) {
 	dir := t.TempDir()
-	v, _ := vault.New(filepath.Join(dir, "vault.bolt"))
+	v, _ := vault.New(filepath.Join(dir, testVaultFile))
 	initResult, _ := v.Init(5, 3)
 	for _, share := range initResult.Shares[:3] {
 		if _, err := v.Unseal(share); err != nil {
-			t.Fatalf("unseal: %v", err)
+			t.Fatalf(testUnsealFmt, err)
 		}
 	}
 
 	h := NewSchemaHandler(v)
 	r := chi.NewRouter()
-	r.Route("/api/schema", h.Routes)
+	r.Route(testSchemaBase, h.Routes)
 
 	w := schemaRequest(r, "GET", "/api/schema/nonexistent-proj/tables", "")
 	if w.Code != 404 {
@@ -736,7 +749,7 @@ func TestSchemaHandler_ProjectNotFound(t *testing.T) {
 func TestSchemaHandler_GetIndexes(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	w := schemaRequest(r, "GET", "/api/schema/test-org/test-proj/tables/users/indexes", "")
+	w := schemaRequest(r, "GET", "/api/schema/test-proj/tables/users/indexes", "")
 	if w.Code != 200 {
 		t.Fatalf("get indexes: %d, body: %s", w.Code, w.Body.String())
 	}

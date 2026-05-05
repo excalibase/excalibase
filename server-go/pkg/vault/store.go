@@ -20,6 +20,12 @@ type VaultStore interface {
 	// DeleteSecret removes a secret by path.
 	DeleteSecret(path string) error
 
+	// DeletePrefix removes every secret whose path starts with the given
+	// prefix and returns the number deleted. Empty prefix is rejected.
+	// Implementations should perform this in a single transaction so
+	// callers see all-or-nothing semantics.
+	DeletePrefix(prefix string) (int, error)
+
 	// ListSecrets returns all secret paths matching the given prefix.
 	// Pass empty string to list all secrets.
 	ListSecrets(prefix string) ([]string, error)

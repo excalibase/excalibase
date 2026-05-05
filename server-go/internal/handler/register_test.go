@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,8 +10,15 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/go-chi/chi/v5"
 )
+
+const (
+	testRegisterPath = "/api/auth/register"
+	testNewGuyEmail  = "newguy@test.com"
+)
+
 
 func setupRegisterRouter(t *testing.T) (chi.Router, *sqlitestore.Store) {
 	t.Helper()
@@ -25,7 +33,7 @@ func setupRegisterRouter(t *testing.T) (chi.Router, *sqlitestore.Store) {
 	authHandler.SetOrgStore(store)
 
 	r := chi.NewRouter()
-	r.Post("/api/auth/register", authHandler.Register)
+	r.Post(testRegisterPath, authHandler.Register)
 	r.Post("/api/auth/login", authHandler.Login)
 	return r, store
 }
@@ -34,9 +42,9 @@ func TestRegister_Success(t *testing.T) {
 	r, _ := setupRegisterRouter(t)
 
 	w := httptest.NewRecorder()
-	body := `{"username":"alice","email":"alice@test.com","password":"Alice123!"}`
-	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	body := fmt.Sprintf(`{"username":"alice","email":"alice@test.com","password":%q}`, testutil.FixturePassword("alice-reg"))
+	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
+	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -56,16 +64,17 @@ func TestRegister_Success(t *testing.T) {
 func TestRegister_DuplicateEmail(t *testing.T) {
 	r, _ := setupRegisterRouter(t)
 
-	body := `{"username":"alice","email":"alice@test.com","password":"Alice123!"}`
-	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	alicePwd := testutil.FixturePassword("alice-dup")
+	body := fmt.Sprintf(`{"username":"alice","email":"alice@test.com","password":%q}`, alicePwd)
+	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
+	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
 	// Second registration with same email
-	body2 := `{"username":"alice2","email":"alice@test.com","password":"Alice123!"}`
-	req2 := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body2))
-	req2.Header.Set("Content-Type", "application/json")
+	body2 := fmt.Sprintf(`{"username":"alice2","email":"alice@test.com","password":%q}`, alicePwd)
+	req2 := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body2))
+	req2.Header.Set(sharedContentType, sharedMIMEJSON)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
 
@@ -77,20 +86,21 @@ func TestRegister_DuplicateEmail(t *testing.T) {
 func TestRegister_MissingFields(t *testing.T) {
 	r, _ := setupRegisterRouter(t)
 
+	missingFieldPwd := testutil.FixturePassword("missing-fields")
 	tests := []struct {
 		name string
 		body string
 	}{
-		{"no username", `{"email":"a@t.com","password":"pass"}`},
-		{"no email", `{"username":"a","password":"pass"}`},
+		{"no username", fmt.Sprintf(`{"email":"a@t.com","password":%q}`, missingFieldPwd)},
+		{"no email", fmt.Sprintf(`{"username":"a","password":%q}`, missingFieldPwd)},
 		{"no password", `{"username":"a","email":"a@t.com"}`},
 		{"empty body", `{}`},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(tt.body))
-			req.Header.Set("Content-Type", "application/json")
+			req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(tt.body))
+			req.Header.Set(sharedContentType, sharedMIMEJSON)
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
 
@@ -117,8 +127,8 @@ func TestRegister_WeakPassword(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			body := `{"username":"test","email":"test@t.com","password":"` + tt.password + `"}`
-			req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
+			req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
+			req.Header.Set(sharedContentType, sharedMIMEJSON)
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
 
@@ -144,9 +154,9 @@ func TestRegister_InvalidEmail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body := `{"username":"test","email":"` + tt.email + `","password":"Test1234"}`
-			req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
+			body := fmt.Sprintf(`{"username":"test","email":%q,"password":%q}`, tt.email, testutil.FixturePassword("inv-email"))
+			req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
+			req.Header.Set(sharedContentType, sharedMIMEJSON)
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
 
@@ -162,18 +172,19 @@ func TestRegister_ResolvesPendingInvites(t *testing.T) {
 	ctx := t.Context()
 
 	// Create an org and a pending invite
+	ownerID := testutil.FixtureToken("owner-id")
 	store.CreateUser(ctx, &domain.User{
-		ID: "owner-1", Username: "owner", Email: "owner@t.com",
-		PasswordHash: "hash", Role: "user", Active: true,
+		ID: ownerID, Username: testutil.FixtureToken("owner"), Email: "owner@t.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true,
 	})
-	store.CreateOrg(ctx, &domain.Org{ID: "org-1", Name: "TestOrg", Slug: "test-org", Tier: domain.Free, OwnerID: "owner-1"})
-	store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-1", UserID: "owner-1", Role: "owner"})
-	store.CreatePendingInvite(ctx, &domain.PendingInvite{OrgID: "org-1", Email: "newguy@test.com", Role: "developer", InvitedBy: "owner-1"})
+	store.CreateOrg(ctx, &domain.Org{ID: "org-1", Name: "TestOrg", Slug: "test-org", Tier: domain.Free, OwnerID: ownerID})
+	store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-1", UserID: ownerID, Role: "owner"})
+	store.CreatePendingInvite(ctx, &domain.PendingInvite{OrgID: "org-1", Email: testNewGuyEmail, Role: "developer", InvitedBy: ownerID})
 
 	// Register with the invited email
-	body := `{"username":"newguy","email":"newguy@test.com","password":"Newguy123!"}`
-	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	body := fmt.Sprintf(`{"username":"newguy","email":"%s","password":%q}`, testNewGuyEmail, testutil.FixturePassword("newguy-reg"))
+	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
+	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -185,7 +196,7 @@ func TestRegister_ResolvesPendingInvites(t *testing.T) {
 	members, _ := store.ListOrgMembers(ctx, "org-1")
 	found := false
 	for _, m := range members {
-		if m.Email == "newguy@test.com" && m.Role == "developer" {
+		if m.Email == testNewGuyEmail && m.Role == "developer" {
 			found = true
 		}
 	}
@@ -194,7 +205,7 @@ func TestRegister_ResolvesPendingInvites(t *testing.T) {
 	}
 
 	// Check: pending invite should be deleted
-	invites, _ := store.FindPendingInvitesByEmail(ctx, "newguy@test.com")
+	invites, _ := store.FindPendingInvitesByEmail(ctx, testNewGuyEmail)
 	if len(invites) != 0 {
 		t.Errorf("expected 0 pending invites after registration, got %d", len(invites))
 	}
@@ -203,17 +214,18 @@ func TestRegister_ResolvesPendingInvites(t *testing.T) {
 func TestRegister_CanLoginAfter(t *testing.T) {
 	r, _ := setupRegisterRouter(t)
 
+	bobPwd := testutil.FixturePassword("bob-login")
 	// Register
-	body := `{"username":"bob","email":"bob@test.com","password":"Bobpass123!"}`
-	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	body := fmt.Sprintf(`{"username":"bob","email":"bob@test.com","password":%q}`, bobPwd)
+	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
+	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
 	// Login
-	loginBody := `{"username":"bob","password":"Bobpass123!"}`
+	loginBody := fmt.Sprintf(`{"username":"bob","password":%q}`, bobPwd)
 	loginReq := httptest.NewRequest("POST", "/api/auth/login", strings.NewReader(loginBody))
-	loginReq.Header.Set("Content-Type", "application/json")
+	loginReq.Header.Set(sharedContentType, sharedMIMEJSON)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, loginReq)
 

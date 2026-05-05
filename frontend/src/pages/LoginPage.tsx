@@ -34,7 +34,11 @@ export function LoginPage() {
         username: username.trim(),
         password,
       });
-      setAuth(response.data.token, response.data.user);
+      // Server sets the httpOnly excali_session cookie on this response;
+      // we just persist the user profile for UI bootstrapping. Pass the
+      // raw token as legacyToken to keep the axios header fallback alive
+      // for callers that don't yet honour the cookie.
+      setAuth(response.data.user, { legacyToken: response.data.token });
       navigate('/', { replace: true });
     } catch (err: unknown) {
       const axiosErr = err as { response?: { status?: number; data?: { error?: string } } };

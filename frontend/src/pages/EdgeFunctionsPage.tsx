@@ -191,6 +191,13 @@ export function EdgeFunctionsPage() {
     );
   }
 
+  const logLevelColor = (level: string): string => {
+    if (level === 'error') return 'text-red-400';
+    if (level === 'warn') return 'text-yellow-400';
+    if (level === 'info') return 'text-blue-400';
+    return 'text-text-secondary';
+  };
+
   return (
     <div data-testid="edge-functions-page">
       <div className="flex items-center justify-between mb-4">
@@ -305,7 +312,7 @@ export function EdgeFunctionsPage() {
                   ))}
                 </div>
                 <pre className="flex-1 p-4 text-xs font-mono text-text-primary overflow-auto bg-bg-tertiary" data-testid="fn-code">
-                  <code>{selected.files[0]?.content || ''}</code>
+                  <code>{selected.files[0]?.content ?? ''}</code>
                 </pre>
               </div>
               {invokeResult && (
@@ -322,8 +329,9 @@ export function EdgeFunctionsPage() {
       <SidePanel open={showCreate} onClose={() => setShowCreate(false)} title="Deploy Function">
         <div className="space-y-4 p-4">
           <div>
-            <label className="block text-xs text-text-tertiary mb-1">ID (slug)</label>
+            <label htmlFor="fn-id-field" className="block text-xs text-text-tertiary mb-1">ID (slug)</label>
             <input
+              id="fn-id-field"
               type="text"
               value={fnId}
               onChange={(e) => setFnId(e.target.value)}
@@ -333,8 +341,9 @@ export function EdgeFunctionsPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-text-tertiary mb-1">Display name</label>
+            <label htmlFor="fn-name-field" className="block text-xs text-text-tertiary mb-1">Display name</label>
             <input
+              id="fn-name-field"
               type="text"
               value={fnName}
               onChange={(e) => setFnName(e.target.value)}
@@ -344,7 +353,7 @@ export function EdgeFunctionsPage() {
           </div>
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs text-text-tertiary">Files</label>
+              <span className="block text-xs text-text-tertiary">Files</span>
               <button onClick={addFile} className="text-xs text-purple-400 hover:text-purple-300" data-testid="add-file-btn">
                 + Add file
               </button>
@@ -352,7 +361,7 @@ export function EdgeFunctionsPage() {
             <div className="flex gap-1 mb-2 flex-wrap">
               {files.map((f, i) => (
                 <div
-                  key={i}
+                  key={`${f.path}-${i}`}
                   className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-mono border ${
                     activeFileIdx === i
                       ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
@@ -377,7 +386,7 @@ export function EdgeFunctionsPage() {
               />
             )}
             <textarea
-              value={files[activeFileIdx]?.content || ''}
+              value={files[activeFileIdx]?.content ?? ''}
               onChange={(e) => updateFileContent(e.target.value)}
               rows={14}
               className="w-full px-3 py-2 bg-bg-tertiary border border-border-primary rounded text-xs text-text-primary font-mono"
@@ -394,7 +403,7 @@ export function EdgeFunctionsPage() {
             {createFn.isPending ? 'Deploying…' : 'Deploy'}
           </button>
           {createFn.error && (
-            <div className="text-xs text-red-400 font-mono">{(createFn.error as Error).message}</div>
+            <div className="text-xs text-red-400 font-mono">{createFn.error instanceof Error ? createFn.error.message : String(createFn.error)}</div>
           )}
         </div>
       </SidePanel>
@@ -406,8 +415,9 @@ export function EdgeFunctionsPage() {
             <code className="bg-bg-tertiary px-1 rounded">Deno.env.get('KEY')</code>.
           </p>
           <div>
-            <label className="block text-xs text-text-tertiary mb-1">Key</label>
+            <label htmlFor="secret-key-input" className="block text-xs text-text-tertiary mb-1">Key</label>
             <input
+              id="secret-key-input"
               type="text"
               value={secretKey}
               onChange={(e) => setSecretKey(e.target.value.toUpperCase())}
@@ -416,8 +426,9 @@ export function EdgeFunctionsPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-text-tertiary mb-1">Value</label>
+            <label htmlFor="secret-value-input" className="block text-xs text-text-tertiary mb-1">Value</label>
             <input
+              id="secret-value-input"
               type="password"
               value={secretValue}
               onChange={(e) => setSecretValue(e.target.value)}
@@ -434,7 +445,7 @@ export function EdgeFunctionsPage() {
             {setSecret.isPending ? 'Saving…' : 'Save secret'}
           </button>
           {setSecret.error && (
-            <div className="text-xs text-red-400 font-mono">{(setSecret.error as Error).message}</div>
+            <div className="text-xs text-red-400 font-mono">{setSecret.error instanceof Error ? setSecret.error.message : String(setSecret.error)}</div>
           )}
 
           <div className="border-t border-border-primary pt-4">
@@ -453,7 +464,9 @@ export function EdgeFunctionsPage() {
               className="mt-2 w-full px-4 py-2 bg-bg-tertiary hover:bg-bg-quaternary text-text-primary text-sm font-medium rounded disabled:opacity-50"
               data-testid="env-paste-import-btn"
             >
-              {envParsing ? 'Importing…' : `Import from .env${envPaste.trim() ? ` (${parseEnv(envPaste).entries.length})` : ''}`}
+              {envParsing && 'Importing…'}
+              {!envParsing && !envPaste.trim() && 'Import from .env'}
+              {!envParsing && envPaste.trim() && `Import from .env (${parseEnv(envPaste).entries.length})`}
             </button>
             {envStatus && (
               <div className="text-xs text-text-tertiary mt-2 font-mono" data-testid="env-paste-status">
@@ -503,18 +516,11 @@ export function EdgeFunctionsPage() {
             )}
             {logs.map((entry, i) => {
               const when = new Date(entry.ts).toLocaleTimeString();
-              const levelColor =
-                entry.level === 'error'
-                  ? 'text-red-400'
-                  : entry.level === 'warn'
-                  ? 'text-yellow-400'
-                  : entry.level === 'info'
-                  ? 'text-blue-400'
-                  : 'text-text-secondary';
               return (
+                /* eslint-disable-next-line react/no-array-index-key -- log entries have no stable id; ts alone can collide under rapid invocation */
                 <div key={`${entry.ts}-${i}`} className="flex gap-2">
                   <span className="text-text-tertiary flex-shrink-0">{when}</span>
-                  <span className={`${levelColor} uppercase text-[10px] w-10 flex-shrink-0 pt-0.5`}>
+                  <span className={`${logLevelColor(entry.level)} uppercase text-[10px] w-10 flex-shrink-0 pt-0.5`}>
                     {entry.level}
                   </span>
                   <span className="text-text-primary whitespace-pre-wrap break-words">{entry.msg}</span>

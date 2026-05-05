@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   useReactTable, getCoreRowModel, flexRender,
@@ -8,18 +8,155 @@ import type { ColumnMeta, RowsResult } from '../../types/schema';
 import { SkeletonTable } from '../ui/Skeleton';
 
 interface DataGridProps {
-  rowsData: RowsResult | undefined;
-  rowsLoading: boolean;
-  pkColumn: string;
-  selectedTable: string;
-  sortCol: string;
-  sortOrder: 'asc' | 'desc';
-  page: number;
-  pageSize: number;
-  onSortChange: (col: string, order: 'asc' | 'desc') => void;
-  onPageChange: (page: number) => void;
-  onCellEdit: (tableName: string, pkColumn: string, pkValue: string, columnName: string, value: string | null) => void;
-  onDeleteRow: (pkColumn: string, pkValue: string) => void;
+  readonly rowsData: RowsResult | undefined;
+  readonly rowsLoading: boolean;
+  readonly pkColumn: string;
+  readonly selectedTable: string;
+  readonly sortCol: string;
+  readonly sortOrder: 'asc' | 'desc';
+  readonly page: number;
+  readonly pageSize: number;
+  readonly onSortChange: (col: string, order: 'asc' | 'desc') => void;
+  readonly onPageChange: (page: number) => void;
+  readonly onCellEdit: (tableName: string, pkColumn: string, pkValue: string, columnName: string, value: string | null) => void;
+  readonly onDeleteRow: (pkColumn: string, pkValue: string) => void;
+}
+
+interface EditingCell {
+  readonly row: number;
+  readonly col: number;
+  readonly value: string;
+}
+
+// safeString avoids the [object Object] sonar trap (S6551) when stringifying
+// arbitrary cell values pulled out of the row buffer.
+function safeString(val: unknown): string {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number' || typeof val === 'boolean' || typeof val === 'bigint') {
+    return String(val);
+  }
+  try {
+    return JSON.stringify(val);
+  } catch {
+    return '';
+  }
+}
+
+interface BuildColumnDefArgs {
+  readonly col: ColumnMeta;
+  readonly i: number;
+  readonly sortCol: string;
+  readonly sortOrder: 'asc' | 'desc';
+  readonly onSortChange: (col: string, order: 'asc' | 'desc') => void;
+  readonly editingCell: EditingCell | null;
+  readonly commitEdit: (rowIdx: number, colIdx: number, columnName: string, val: unknown, newVal: string) => void;
+  readonly setEditingCell: (c: EditingCell | null) => void;
+}
+
+function buildColumnDef(a: BuildColumnDefArgs): ColumnDef<unknown[], unknown> {
+  const { col, i, sortCol, sortOrder, onSortChange, editingCell, commitEdit, setEditingCell } = a;
+  return {
+    id: col.name,
+    header: () => (
+      <HeaderCell column={col} sortCol={sortCol} sortOrder={sortOrder} onSortChange={onSortChange} />
+    ),
+    accessorFn: (row: unknown[]) => row[i],
+    cell: (info) => {
+      const val = info.getValue();
+      const tableRow = info.row;
+      const isEditing = editingCell?.row === tableRow.index && editingCell?.col === i;
+      if (isEditing) {
+        return (
+          <CellEditor
+            val={val}
+            onCommit={(newVal) => commitEdit(tableRow.index, i, col.name, val, newVal)}
+            onCancel={() => setEditingCell(null)}
+          />
+        );
+      }
+      return (
+        <CellView
+          val={val}
+          onActivate={() => setEditingCell({ row: tableRow.index, col: i, value: safeString(val) })}
+        />
+      );
+    },
+  };
+}
+
+interface HeaderCellProps {
+  readonly column: ColumnMeta;
+  readonly sortCol: string;
+  readonly sortOrder: 'asc' | 'desc';
+  readonly onSortChange: (col: string, order: 'asc' | 'desc') => void;
+}
+
+function HeaderCell({ column, sortCol, sortOrder, onSortChange }: HeaderCellProps) {
+  const handleClick = () => {
+    if (sortCol === column.name) {
+      onSortChange(column.name, sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      onSortChange(column.name, 'asc');
+    }
+  };
+  return (
+    <button
+      onClick={handleClick}
+      className="flex items-center gap-1 text-left"
+    >
+      {column.name}
+      <span className="text-text-tertiary text-[10px]">{column.dataType}</span>
+      {sortCol === column.name && <span className="text-purple-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>}
+    </button>
+  );
+}
+
+interface CellEditorProps {
+  readonly val: unknown;
+  readonly onCommit: (newVal: string) => void;
+  readonly onCancel: () => void;
+}
+
+function CellEditor({ val, onCommit, onCancel }: CellEditorProps) {
+  const initial = val === null ? '' : safeString(val);
+  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+    onCommit(e.target.value);
+  };
+  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+    if (e.key === 'Escape') onCancel();
+  };
+  return (
+    <input
+      autoFocus
+      defaultValue={initial}
+      className="w-full px-1 py-0.5 bg-bg-primary border border-purple-500 rounded text-xs font-mono outline-none"
+      onBlur={handleBlur}
+      onKeyDown={handleKey}
+    />
+  );
+}
+
+interface CellViewProps {
+  readonly val: unknown;
+  readonly onActivate: () => void;
+}
+
+function CellView({ val, onActivate }: CellViewProps) {
+  const handleKey = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') onActivate();
+  };
+  return (
+    <button
+      type="button"
+      onDoubleClick={onActivate}
+      onKeyDown={handleKey}
+      className="cursor-text bg-transparent border-0 p-0 text-left w-full"
+    >
+      {val === null ? <span className="text-text-tertiary italic">NULL</span> : safeString(val).slice(0, 1000)}
+    </button>
+  );
 }
 
 export function DataGrid({
@@ -27,69 +164,32 @@ export function DataGrid({
   sortCol, sortOrder, page, pageSize,
   onSortChange, onPageChange, onCellEdit, onDeleteRow,
 }: DataGridProps) {
-  const [editingCell, setEditingCell] = useState<{ row: number; col: number; value: string } | null>(null);
+  const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
+
+  // commitEdit lifts the side-effectful "did the cell value change?" branch out
+  // of the render path so the cell renderer stays shallow (S2004).
+  const commitEdit = useCallback((tableRowIndex: number, colIndex: number, columnName: string, val: unknown, newVal: string) => {
+    if (newVal !== safeString(val) && pkColumn && rowsData?.rows) {
+      const pkIdx = rowsData.columns.findIndex((c: ColumnMeta) => c.name === pkColumn);
+      const pkValue = safeString(rowsData.rows[tableRowIndex][pkIdx]);
+      onCellEdit(selectedTable, pkColumn, pkValue, columnName, newVal || null);
+    }
+    setEditingCell(null);
+  }, [pkColumn, rowsData, selectedTable, onCellEdit]);
 
   const tableColumns = useMemo(() => {
     if (!rowsData?.columns) return [];
-    return rowsData.columns.map((col: ColumnMeta, i: number) => ({
-      id: col.name,
-      header: () => (
-        <button
-          onClick={() => {
-            if (sortCol === col.name) {
-              onSortChange(col.name, sortOrder === 'asc' ? 'desc' : 'asc');
-            } else {
-              onSortChange(col.name, 'asc');
-            }
-          }}
-          className="flex items-center gap-1 text-left"
-        >
-          {col.name}
-          <span className="text-text-tertiary text-[10px]">{col.dataType}</span>
-          {sortCol === col.name && <span className="text-purple-400">{sortOrder === 'asc' ? '\u2191' : '\u2193'}</span>}
-        </button>
-      ),
-      accessorFn: (row: unknown[]) => row[i],
-      cell: ({ getValue, row: tableRow }: { getValue: () => unknown; row: { index: number } }) => {
-        const val = getValue();
-        const isEditing = editingCell?.row === tableRow.index && editingCell?.col === i;
-        if (isEditing) {
-          return (
-            <input
-              autoFocus
-              defaultValue={val === null ? '' : String(val)}
-              className="w-full px-1 py-0.5 bg-bg-primary border border-purple-500 rounded text-xs font-mono outline-none"
-              onBlur={(e) => {
-                const newVal = e.target.value;
-                if (newVal !== String(val ?? '') && pkColumn && rowsData?.rows) {
-                  const pkIdx = rowsData.columns.findIndex((c: ColumnMeta) => c.name === pkColumn);
-                  const pkValue = String(rowsData.rows[tableRow.index][pkIdx]);
-                  onCellEdit(selectedTable, pkColumn, pkValue, col.name, newVal || null);
-                }
-                setEditingCell(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                if (e.key === 'Escape') setEditingCell(null);
-              }}
-            />
-          );
-        }
-        return (
-          <span
-            onDoubleClick={() => setEditingCell({ row: tableRow.index, col: i, value: String(val ?? '') })}
-            className="cursor-text"
-          >
-            {val === null ? <span className="text-text-tertiary italic">NULL</span> : String(val).slice(0, 1000)}
-          </span>
-        );
-      },
-    }));
-  }, [rowsData, sortCol, sortOrder, editingCell, pkColumn, selectedTable, onCellEdit, onSortChange]);
+    return rowsData.columns.map((col: ColumnMeta, i: number) =>
+      buildColumnDef({
+        col, i, sortCol, sortOrder, onSortChange,
+        editingCell, commitEdit, setEditingCell,
+      })
+    );
+  }, [rowsData, sortCol, sortOrder, editingCell, onSortChange, commitEdit]);
 
   const table = useReactTable({
     data: rowsData?.rows ?? [],
-    columns: tableColumns as ColumnDef<unknown[], unknown>[],
+    columns: tableColumns,
     getCoreRowModel: getCoreRowModel(),
     manualSorting: true,
     manualPagination: true,
@@ -125,16 +225,13 @@ export function DataGrid({
                 ))}
                 <td className="px-2 py-1.5">
                   {pkColumn && rowsData?.rows && (
-                    <button
-                      onClick={() => {
-                        const pkIdx = rowsData.columns.findIndex((c: ColumnMeta) => c.name === pkColumn);
-                        const pkVal = String(rowsData.rows[row.index][pkIdx]);
-                        onDeleteRow(pkColumn, pkVal);
-                      }}
-                      className="p-0.5 text-text-tertiary hover:text-red-400"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                    <DeleteRowButton
+                      rows={rowsData.rows}
+                      columns={rowsData.columns}
+                      pkColumn={pkColumn}
+                      rowIndex={row.index}
+                      onDeleteRow={onDeleteRow}
+                    />
                   )}
                 </td>
               </tr>
@@ -146,7 +243,6 @@ export function DataGrid({
         </table>
       </div>
 
-      {/* Pagination */}
       {rowsData && (
         <div className="flex items-center justify-between px-4 py-2 border-t border-border-primary text-xs text-text-tertiary">
           <span>Page {page + 1} of {Math.max(1, Math.ceil(rowsData.totalCount / pageSize))}</span>
@@ -161,5 +257,29 @@ export function DataGrid({
         </div>
       )}
     </>
+  );
+}
+
+interface DeleteRowButtonProps {
+  readonly rows: ReadonlyArray<ReadonlyArray<unknown>>;
+  readonly columns: ReadonlyArray<ColumnMeta>;
+  readonly pkColumn: string;
+  readonly rowIndex: number;
+  readonly onDeleteRow: (pkColumn: string, pkValue: string) => void;
+}
+
+function DeleteRowButton({ rows, columns, pkColumn, rowIndex, onDeleteRow }: DeleteRowButtonProps) {
+  const handleClick = () => {
+    const pkIdx = columns.findIndex((c) => c.name === pkColumn);
+    const pkVal = safeString(rows[rowIndex][pkIdx]);
+    onDeleteRow(pkColumn, pkVal);
+  };
+  return (
+    <button
+      onClick={handleClick}
+      className="p-0.5 text-text-tertiary hover:text-red-400"
+    >
+      <Trash2 className="w-3 h-3" />
+    </button>
   );
 }

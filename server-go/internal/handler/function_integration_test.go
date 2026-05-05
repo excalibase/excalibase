@@ -22,6 +22,17 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const (
+	testE2ESecret           = "handler-e2e-secret"
+	testRuntimeSecretHeader = "X-Runtime-Secret"
+	testE2EFnPath           = "/api/projects/proj_e2e01/functions/"
+	testDeployFmt           = "deploy: %d, body=%s"
+	testInvokeFmt           = "invoke: %d, body=%s"
+	testE2ESecretsPath      = "/api/projects/proj_e2e01/functions/secrets"
+	testE2EInvokePath       = "/api/projects/proj_e2e01/functions/echo-key/invoke"
+)
+
+
 // Full stack e2e: Go handler → RuntimeClient → real Deno runtime subprocess.
 // Tests the HTTP layer all the way from platform API to user code and back.
 //
@@ -50,7 +61,7 @@ func startDenoRuntime(t *testing.T) (string, func()) {
 	if _, err := os.Stat(serverTS); err != nil {
 		t.Skipf("deno-server/server.ts not found at %s", serverTS)
 	}
-	secret := "handler-e2e-secret"
+	secret := testE2ESecret
 	cmd := exec.Command(deno, "run",
 		"--allow-env", "--allow-net", "--allow-read",
 		"--unstable-worker-options",
@@ -74,7 +85,7 @@ func startDenoRuntime(t *testing.T) (string, func()) {
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		req, _ := http.NewRequest("GET", base+"/health", nil)
-		req.Header.Set("X-Runtime-Secret", secret)
+		req.Header.Set(testRuntimeSecretHeader, secret)
 		resp, err := client.Do(req)
 		if err == nil && resp.StatusCode == 200 {
 			resp.Body.Close()
@@ -138,8 +149,18 @@ func (f *e2eFakeVault) Put(p string, d map[string]string) error {
 }
 func (f *e2eFakeVault) Delete(p string) error                { delete(f.data, p); return nil }
 func (f *e2eFakeVault) List(prefix string) ([]string, error) { return nil, nil }
-func (f *e2eFakeVault) Sealed() bool                         { return false }
-func (f *e2eFakeVault) GetPublicKey() (string, error)        { return "", nil }
+func (f *e2eFakeVault) DeletePrefix(prefix string) (int, error) {
+	n := 0
+	for k := range f.data {
+		if strings.HasPrefix(k, prefix) {
+			delete(f.data, k)
+			n++
+		}
+	}
+	return n, nil
+}
+func (f *e2eFakeVault) Sealed() bool                  { return false }
+func (f *e2eFakeVault) GetPublicKey() (string, error) { return "", nil }
 
 func setupFnE2E(t *testing.T) (*chi.Mux, string, func()) {
 	t.Helper()
@@ -149,7 +170,7 @@ func setupFnE2E(t *testing.T) (*chi.Mux, string, func()) {
 	store := edgefn.NewFunctionStore(dir)
 	vault := &e2eFakeVault{data: map[string]map[string]string{}}
 	secrets := edgefn.NewSecretsStore(vault)
-	client := edgefn.NewRuntimeClient(base, "handler-e2e-secret")
+	client := edgefn.NewRuntimeClient(base, testE2ESecret)
 
 	instStore := &e2eInstanceStore{insts: map[string]*domain.DatabaseInstance{
 		"proj_e2e01": {ProjectID: "proj_e2e01", OrgID: "default"},
@@ -195,21 +216,21 @@ func TestFnE2E_Deploy_Invoke_FullChain(t *testing.T) {
 		"id":   "greet",
 		"name": "Greet",
 		"files": []map[string]string{
-			{"path": "index.ts", "content": `export default async (req: Request): Promise<Response> => {
+			{"path": testIndexTS, "content": `export default async (req: Request): Promise<Response> => {
   const { name = 'anon' } = await req.json().catch(() => ({}));
   return Response.json({ hello: name });
 };`},
 		},
 	}
-	w := doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body)
+	w := doReq(r, "POST", testE2EFnPath, body)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("deploy: %d, body=%s", w.Code, w.Body.String())
+		t.Fatalf(testDeployFmt, w.Code, w.Body.String())
 	}
 
 	// Invoke
 	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/greet/invoke", map[string]string{"name": "world"})
 	if w.Code != 200 {
-		t.Fatalf("invoke: %d, body=%s", w.Code, w.Body.String())
+		t.Fatalf(testInvokeFmt, w.Code, w.Body.String())
 	}
 	var out map[string]string
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
@@ -225,7 +246,7 @@ func TestFnE2E_Secrets_VisibleToFunction(t *testing.T) {
 	defer cleanup()
 
 	// Set a secret first
-	w := doReq(r, "POST", "/api/projects/proj_e2e01/functions/secrets",
+	w := doReq(r, "POST", testE2ESecretsPath,
 		map[string]string{"key": "API_TOKEN", "value": "tok_sekrit"})
 	if w.Code != 200 {
 		t.Fatalf("set secret: %d, body=%s", w.Code, w.Body.String())
@@ -236,22 +257,22 @@ func TestFnE2E_Secrets_VisibleToFunction(t *testing.T) {
 		"id":   "read-env",
 		"name": "Read Env",
 		"files": []map[string]string{
-			{"path": "index.ts", "content": `export default (req: Request) => Response.json({
+			{"path": testIndexTS, "content": `export default (req: Request) => Response.json({
   token: Deno.env.get('API_TOKEN'),
   url: Deno.env.get('EXCALIBASE_URL'),
   pid: Deno.env.get('EXCALIBASE_PROJECT_ID'),
 });`},
 		},
 	}
-	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body)
+	w = doReq(r, "POST", testE2EFnPath, body)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("deploy: %d, body=%s", w.Code, w.Body.String())
+		t.Fatalf(testDeployFmt, w.Code, w.Body.String())
 	}
 
 	// Invoke → function should see the secret + built-ins
 	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/read-env/invoke", map[string]string{})
 	if w.Code != 200 {
-		t.Fatalf("invoke: %d, body=%s", w.Code, w.Body.String())
+		t.Fatalf(testInvokeFmt, w.Code, w.Body.String())
 	}
 	var got map[string]string
 	json.Unmarshal(w.Body.Bytes(), &got)
@@ -274,16 +295,16 @@ func TestFnE2E_SecretChangeTakesEffectAfterSet(t *testing.T) {
 	body := map[string]interface{}{
 		"id": "echo-key", "name": "Echo Key",
 		"files": []map[string]string{
-			{"path": "index.ts", "content": `export default (req: Request) => Response.json({ v: Deno.env.get('ROTATE_ME') || 'unset' });`},
+			{"path": testIndexTS, "content": `export default (req: Request) => Response.json({ v: Deno.env.get('ROTATE_ME') || 'unset' });`},
 		},
 	}
-	w := doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body)
+	w := doReq(r, "POST", testE2EFnPath, body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("deploy: %d", w.Code)
 	}
 
 	// Invoke → should be 'unset'
-	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/echo-key/invoke", map[string]string{})
+	w = doReq(r, "POST", testE2EInvokePath, map[string]string{})
 	var r1 map[string]string
 	json.Unmarshal(w.Body.Bytes(), &r1)
 	if r1["v"] != "unset" {
@@ -291,14 +312,14 @@ func TestFnE2E_SecretChangeTakesEffectAfterSet(t *testing.T) {
 	}
 
 	// Set secret — handler redeploys automatically
-	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/secrets",
+	w = doReq(r, "POST", testE2ESecretsPath,
 		map[string]string{"key": "ROTATE_ME", "value": "first-value"})
 	if w.Code != 200 {
 		t.Fatalf("set secret: %d, body=%s", w.Code, w.Body.String())
 	}
 
 	// Invoke again → should be 'first-value'
-	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/echo-key/invoke", map[string]string{})
+	w = doReq(r, "POST", testE2EInvokePath, map[string]string{})
 	var r2 map[string]string
 	json.Unmarshal(w.Body.Bytes(), &r2)
 	if r2["v"] != "first-value" {
@@ -306,12 +327,12 @@ func TestFnE2E_SecretChangeTakesEffectAfterSet(t *testing.T) {
 	}
 
 	// Rotate the value
-	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/secrets",
+	w = doReq(r, "POST", testE2ESecretsPath,
 		map[string]string{"key": "ROTATE_ME", "value": "second-value"})
 	if w.Code != 200 {
 		t.Fatalf("rotate secret: %d", w.Code)
 	}
-	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/echo-key/invoke", map[string]string{})
+	w = doReq(r, "POST", testE2EInvokePath, map[string]string{})
 	var r3 map[string]string
 	json.Unmarshal(w.Body.Bytes(), &r3)
 	if r3["v"] != "second-value" {
@@ -326,7 +347,7 @@ func TestFnE2E_LogStreaming_CapturesConsoleCalls(t *testing.T) {
 	body := map[string]interface{}{
 		"id": "logger", "name": "Logger",
 		"files": []map[string]string{
-			{"path": "index.ts", "content": `export default (req: Request) => {
+			{"path": testIndexTS, "content": `export default (req: Request) => {
   console.log('hello from user code', { who: 'invoker' });
   console.warn('something smells off');
   console.error('big problem');
@@ -334,14 +355,14 @@ func TestFnE2E_LogStreaming_CapturesConsoleCalls(t *testing.T) {
 };`},
 		},
 	}
-	w := doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body)
+	w := doReq(r, "POST", testE2EFnPath, body)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("deploy: %d, body=%s", w.Code, w.Body.String())
+		t.Fatalf(testDeployFmt, w.Code, w.Body.String())
 	}
 
 	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/logger/invoke", map[string]string{})
 	if w.Code != 200 {
-		t.Fatalf("invoke: %d, body=%s", w.Code, w.Body.String())
+		t.Fatalf(testInvokeFmt, w.Code, w.Body.String())
 	}
 
 	// Small wait so the worker's postMessage logs land in the ring buffer.
@@ -361,8 +382,15 @@ func TestFnE2E_LogStreaming_CapturesConsoleCalls(t *testing.T) {
 		t.Fatalf("expected >= 3 log entries, got %d: %+v", len(result.Logs), result.Logs)
 	}
 
+	assertConsoleLevelsPresent(t, result.Logs)
+	assertSinceFilterEmpty(t, r, result.Logs, "/api/projects/proj_e2e01/functions/logger/logs")
+}
+
+// assertConsoleLevelsPresent verifies that log, warn, and error entries are all present.
+func assertConsoleLevelsPresent(t *testing.T, logs []edgefn.LogEntry) {
+	t.Helper()
 	seenLog, seenWarn, seenError := false, false, false
-	for _, l := range result.Logs {
+	for _, l := range logs {
 		switch l.Level {
 		case "log":
 			if strings.Contains(l.Msg, "hello from user code") {
@@ -379,17 +407,20 @@ func TestFnE2E_LogStreaming_CapturesConsoleCalls(t *testing.T) {
 		}
 	}
 	if !seenLog || !seenWarn || !seenError {
-		t.Errorf("missing log levels — log=%v warn=%v error=%v: %+v", seenLog, seenWarn, seenError, result.Logs)
+		t.Errorf("missing log levels — log=%v warn=%v error=%v: %+v", seenLog, seenWarn, seenError, logs)
 	}
+}
 
-	// Verify ?since filter drops older entries
+// assertSinceFilterEmpty verifies that querying logs with since=<latestTS> returns no entries.
+func assertSinceFilterEmpty(t *testing.T, r chi.Router, logs []edgefn.LogEntry, logsPath string) {
+	t.Helper()
 	latestTS := int64(0)
-	for _, l := range result.Logs {
+	for _, l := range logs {
 		if l.TS > latestTS {
 			latestTS = l.TS
 		}
 	}
-	w = doReq(r, "GET", fmt.Sprintf("/api/projects/proj_e2e01/functions/logger/logs?since=%d", latestTS), nil)
+	w := doReq(r, "GET", fmt.Sprintf("%s?since=%d", logsPath, latestTS), nil)
 	if w.Code != 200 {
 		t.Fatalf("logs since: %d", w.Code)
 	}
@@ -410,10 +441,10 @@ func TestFnE2E_InfiniteLoopWorkerTerminated(t *testing.T) {
 	body := map[string]interface{}{
 		"id": "looper", "name": "Infinite Loop",
 		"files": []map[string]string{
-			{"path": "index.ts", "content": `export default () => { while(true){} };`},
+			{"path": testIndexTS, "content": `export default () => { while(true){} };`},
 		},
 	}
-	w := doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body)
+	w := doReq(r, "POST", testE2EFnPath, body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("deploy looper: %d, body=%s", w.Code, w.Body.String())
 	}
@@ -436,7 +467,7 @@ func TestFnE2E_InfiniteLoopWorkerTerminated(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	client := &http.Client{Timeout: 5 * time.Second}
 	scriptsReq, _ := http.NewRequest("GET", base+"/scripts", nil)
-	scriptsReq.Header.Set("X-Runtime-Secret", "handler-e2e-secret")
+	scriptsReq.Header.Set(testRuntimeSecretHeader, testE2ESecret)
 	scriptsResp, serr := client.Do(scriptsReq)
 	if serr != nil {
 		t.Fatalf("GET /scripts: %v", serr)
@@ -457,10 +488,10 @@ func TestFnE2E_InfiniteLoopWorkerTerminated(t *testing.T) {
 	body2 := map[string]interface{}{
 		"id": "healthy", "name": "Healthy",
 		"files": []map[string]string{
-			{"path": "index.ts", "content": `export default () => Response.json({ alive: true });`},
+			{"path": testIndexTS, "content": `export default () => Response.json({ alive: true });`},
 		},
 	}
-	w = doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body2)
+	w = doReq(r, "POST", testE2EFnPath, body2)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("deploy healthy: %d, body=%s", w.Code, w.Body.String())
 	}
@@ -483,7 +514,7 @@ func TestFnE2E_MetricsEndpoint(t *testing.T) {
 
 	// GET /metrics should return Prometheus text format.
 	req, _ := http.NewRequest("GET", base+"/metrics", nil)
-	req.Header.Set("X-Runtime-Secret", "handler-e2e-secret")
+	req.Header.Set(testRuntimeSecretHeader, testE2ESecret)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("GET /metrics: %v", err)
@@ -515,17 +546,17 @@ func TestFnE2E_ListAndDelete(t *testing.T) {
 		body := map[string]interface{}{
 			"id": id, "name": id,
 			"files": []map[string]string{
-				{"path": "index.ts", "content": `export default () => Response.json({ ok: 1 });`},
+				{"path": testIndexTS, "content": `export default () => Response.json({ ok: 1 });`},
 			},
 		}
-		w := doReq(r, "POST", "/api/projects/proj_e2e01/functions/", body)
+		w := doReq(r, "POST", testE2EFnPath, body)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("deploy %s: %d, body=%s", id, w.Code, w.Body.String())
 		}
 	}
 
 	// List
-	w := doReq(r, "GET", "/api/projects/proj_e2e01/functions/", nil)
+	w := doReq(r, "GET", testE2EFnPath, nil)
 	var list []edgefn.Function
 	json.Unmarshal(w.Body.Bytes(), &list)
 	if len(list) != 2 {
@@ -539,7 +570,7 @@ func TestFnE2E_ListAndDelete(t *testing.T) {
 	}
 
 	// List again → one left
-	w = doReq(r, "GET", "/api/projects/proj_e2e01/functions/", nil)
+	w = doReq(r, "GET", testE2EFnPath, nil)
 	var list2 []edgefn.Function
 	json.Unmarshal(w.Body.Bytes(), &list2)
 	if len(list2) != 1 || list2[0].ID != "fn-b" {

@@ -12,7 +12,7 @@ const SEVERITY_COLORS: Record<string, string> = {
   low: 'bg-blue-900/20 text-blue-400 border-blue-500/30',
 };
 
-function SeverityBadge({ severity }: { severity: string }) {
+function SeverityBadge({ severity }: { readonly severity: string }) {
   const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.low;
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs border ${color}`}>
@@ -21,7 +21,7 @@ function SeverityBadge({ severity }: { severity: string }) {
   );
 }
 
-function FindingCard({ finding }: { finding: AdvisorFinding }) {
+function FindingCard({ finding }: { readonly finding: AdvisorFinding }) {
   return (
     <div className="rounded-lg border border-border-primary bg-surface-card p-4">
       <div className="flex items-center gap-2 mb-2">
@@ -108,13 +108,15 @@ export function AdvisorsPage() {
       </div>
 
       {/* Content */}
-      {isLoading ? (
+      {isLoading && (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>
-      ) : findings.length === 0 ? (
+      )}
+      {!isLoading && findings.length === 0 && (
         <div className="rounded-lg border border-border-primary bg-surface-card p-12 text-center text-text-tertiary text-sm">
           No {activeTab} findings. Your database looks good!
         </div>
-      ) : (
+      )}
+      {!isLoading && findings.length > 0 && (
         <div className="space-y-3">
           {findings.map((f) => <FindingCard key={f.ruleId} finding={f} />)}
         </div>

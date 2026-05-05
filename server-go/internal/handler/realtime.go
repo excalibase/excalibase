@@ -135,19 +135,12 @@ func (h *RealtimeHandler) dial(r *http.Request) (*service.RealtimeService, *sql.
 	if !isValidID(projectID) {
 		return nil, nil, fmt.Errorf("invalid projectId")
 	}
-	inst, err := h.store.FindByProjectID(projectID)
-	if err != nil {
+	if _, err := h.store.FindByProjectID(projectID); err != nil {
 		return nil, nil, fmt.Errorf("project not found: %w", err)
 	}
 
-	orgSlug := inst.OrgID
-	if h.orgStore != nil && inst.OrgID != "" {
-		if org, oerr := h.orgStore.FindOrgByID(r.Context(), inst.OrgID); oerr == nil && org != nil {
-			orgSlug = org.Slug
-		}
-	}
-
-	vaultPath := fmt.Sprintf("projects/%s/%s/credentials/excalibase_app", orgSlug, projectID)
+	// Vault path is project-scoped only — no org dimension to guess at.
+	vaultPath := fmt.Sprintf("projects/%s/credentials/excalibase_app", projectID)
 	creds, err := h.vault.Get(vaultPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read excalibase_app creds from vault: %w", err)

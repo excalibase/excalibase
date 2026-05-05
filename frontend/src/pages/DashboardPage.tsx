@@ -34,17 +34,19 @@ export function DashboardPage() {
           </Button>
         </div>
 
-        {isLoading ? (
+        {isLoading && (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="w-6 h-6 animate-spin text-accent-primary" />
           </div>
-        ) : instances.length === 0 ? (
+        )}
+        {!isLoading && instances.length === 0 && (
           <div className="text-center py-16">
             <Database className="w-12 h-12 mx-auto mb-3 text-text-tertiary" />
             <p className="text-text-secondary">No instances yet.</p>
             <Button className="mt-4" onClick={() => navigate('/provision')}>Create your first database</Button>
           </div>
-        ) : (
+        )}
+        {!isLoading && instances.length > 0 && (
           <table className="w-full text-sm">
             <thead>
               <tr className="text-text-tertiary border-b border-border-primary">

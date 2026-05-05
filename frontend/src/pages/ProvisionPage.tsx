@@ -8,6 +8,12 @@ import { listMyOrgs, type Org } from '../api/orgs';
 
 type DeployMode = 'k8s' | 'docker' | 'byoc';
 
+function optionTileClass(disabled: boolean | undefined, selected: boolean): string {
+  if (disabled) return 'border-border-primary bg-bg-secondary opacity-50 cursor-not-allowed';
+  if (selected) return 'border-accent-primary bg-accent-primary/10';
+  return 'border-border-primary bg-bg-tertiary hover:border-border-secondary';
+}
+
 const DEPLOY_MODES = [
   { mode: 'k8s' as DeployMode, icon: Cloud, label: 'Kubernetes', desc: 'CloudNativePG operator' },
   { mode: 'docker' as DeployMode, icon: Server, label: 'Docker', desc: 'Docker container (coming soon)', disabled: true },
@@ -60,7 +66,7 @@ export function ProvisionPage() {
     if (deployMode === 'byoc') {
       const result = await byoc.mutateAsync({
         projectName, orgId,
-        host: byocHost, port: parseInt(byocPort, 10),
+        host: byocHost, port: Number.parseInt(byocPort, 10),
         database: byocDatabase, username: byocUsername, password: byocPassword,
       });
       navigate(`/project/${result.projectId}`);
@@ -77,26 +83,23 @@ export function ProvisionPage() {
         <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
           <h2 className="font-semibold text-text-primary">Deployment Mode</h2>
           <div className="grid grid-cols-3 gap-3" data-testid="deploy-mode-selector">
-            {DEPLOY_MODES.map(({ mode, icon: Icon, label, desc, disabled }) => (
+            {DEPLOY_MODES.map(({ mode, icon: Icon, label, desc, disabled }) => {
+              const modeClass = optionTileClass(disabled, deployMode === mode);
+              return (
               <button
                 key={mode}
                 type="button"
                 onClick={() => !disabled && setDeployMode(mode)}
                 disabled={disabled}
                 data-testid={`deploy-mode-${mode}`}
-                className={`p-4 rounded-xl border-2 text-left transition-all ${
-                  disabled
-                    ? 'border-border-primary bg-bg-secondary opacity-50 cursor-not-allowed'
-                    : deployMode === mode
-                    ? 'border-accent-primary bg-accent-primary/10'
-                    : 'border-border-primary bg-bg-tertiary hover:border-border-secondary'
-                }`}
+                className={`p-4 rounded-xl border-2 text-left transition-all ${modeClass}`}
               >
                 <Icon className="w-8 h-8 mb-2 text-text-primary" />
                 <p className="font-semibold text-text-primary text-sm">{label}</p>
                 <p className="text-xs text-text-tertiary mt-0.5">{desc}</p>
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -105,16 +108,18 @@ export function ProvisionPage() {
           <h2 className="font-semibold text-text-primary">Instance Details</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-text-primary mb-1.5">Project Name</label>
+              <label htmlFor="provision-project-name" className="block text-sm font-medium text-text-primary mb-1.5">Project Name</label>
               <input
+                id="provision-project-name"
                 type="text" value={projectName} onChange={(e) => setProjectName(e.target.value)}
                 placeholder="my-database" required
                 className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-primary"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-text-primary mb-1.5">Organization</label>
+              <label htmlFor="provision-org-select" className="block text-sm font-medium text-text-primary mb-1.5">Organization</label>
               <select
+                id="provision-org-select"
                 value={orgId} onChange={(e) => setOrgId(e.target.value)} required
                 className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
               >
@@ -133,36 +138,36 @@ export function ProvisionPage() {
             <h2 className="font-semibold text-text-primary">Connection Details</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-text-primary mb-1.5">Host</label>
-                <input type="text" value={byocHost} onChange={(e) => setByocHost(e.target.value)}
+                <label htmlFor="byoc-host" className="block text-sm font-medium text-text-primary mb-1.5">Host</label>
+                <input id="byoc-host" type="text" value={byocHost} onChange={(e) => setByocHost(e.target.value)}
                   placeholder="db.example.com" required
                   className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-primary"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-text-primary mb-1.5">Port</label>
-                <input type="number" value={byocPort} onChange={(e) => setByocPort(e.target.value)}
+                <label htmlFor="byoc-port" className="block text-sm font-medium text-text-primary mb-1.5">Port</label>
+                <input id="byoc-port" type="number" value={byocPort} onChange={(e) => setByocPort(e.target.value)}
                   required
                   className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-text-primary mb-1.5">Database</label>
-                <input type="text" value={byocDatabase} onChange={(e) => setByocDatabase(e.target.value)}
+                <label htmlFor="byoc-database" className="block text-sm font-medium text-text-primary mb-1.5">Database</label>
+                <input id="byoc-database" type="text" value={byocDatabase} onChange={(e) => setByocDatabase(e.target.value)}
                   placeholder="mydb" required
                   className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-primary"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-text-primary mb-1.5">Username</label>
-                <input type="text" value={byocUsername} onChange={(e) => setByocUsername(e.target.value)}
+                <label htmlFor="byoc-username" className="block text-sm font-medium text-text-primary mb-1.5">Username</label>
+                <input id="byoc-username" type="text" value={byocUsername} onChange={(e) => setByocUsername(e.target.value)}
                   placeholder="postgres" required
                   className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-primary"
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-text-primary mb-1.5">Password</label>
-                <input type="password" value={byocPassword} onChange={(e) => setByocPassword(e.target.value)}
+                <label htmlFor="byoc-password" className="block text-sm font-medium text-text-primary mb-1.5">Password</label>
+                <input id="byoc-password" type="password" value={byocPassword} onChange={(e) => setByocPassword(e.target.value)}
                   required
                   className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
                 />
@@ -179,11 +184,7 @@ export function ProvisionPage() {
               <div className="grid grid-cols-3 gap-3">
                 {DB_TYPES.map(({ type, icon, label, desc, disabled }) => (
                   <button key={type} type="button" onClick={() => !disabled && setDbType(type)} disabled={disabled}
-                    className={`p-4 rounded-xl border-2 text-left transition-all ${
-                      disabled ? 'border-border-primary bg-bg-secondary opacity-50 cursor-not-allowed'
-                        : dbType === type ? 'border-accent-primary bg-accent-primary/10'
-                        : 'border-border-primary bg-bg-tertiary hover:border-border-secondary'
-                    }`}
+                    className={`p-4 rounded-xl border-2 text-left transition-all ${optionTileClass(disabled, dbType === type)}`}
                   >
                     <div className="text-3xl mb-2">{icon}</div>
                     <p className="font-semibold text-text-primary text-sm">{label}</p>
@@ -216,7 +217,7 @@ export function ProvisionPage() {
 
         {error && (
           <div className="bg-red-900/20 border border-color-error rounded-lg p-4">
-            <p className="text-color-error text-sm">{(error as Error).message}</p>
+            <p className="text-color-error text-sm">{error instanceof Error ? error.message : String(error)}</p>
           </div>
         )}
         <div className="flex gap-3">
@@ -224,10 +225,10 @@ export function ProvisionPage() {
             Cancel
           </Button>
           <Button type="submit" className="flex-1" disabled={isPending || !orgId}>
-            {isPending
-              ? <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> {deployMode === 'byoc' ? 'Connecting...' : 'Provisioning...'}</>
-              : <><Database className="w-4 h-4 mr-2 inline" /> {deployMode === 'byoc' ? 'Connect Database' : 'Provision Database'}</>
-            }
+            {isPending && deployMode === 'byoc' && <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Connecting...</>}
+          {isPending && deployMode !== 'byoc' && <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Provisioning...</>}
+          {!isPending && deployMode === 'byoc' && <><Database className="w-4 h-4 mr-2 inline" /> Connect Database</>}
+          {!isPending && deployMode !== 'byoc' && <><Database className="w-4 h-4 mr-2 inline" /> Provision Database</>}
           </Button>
         </div>
       </form>

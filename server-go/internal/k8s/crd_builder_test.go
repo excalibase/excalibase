@@ -7,6 +7,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 )
 
+const (
+	testCronSchedule = "0 2 * * *"
+	testPGStatParam  = "pg_stat_statements.max"
+)
+
+
 func TestBuildPostgreSQLClusterFree(t *testing.T) {
 	obj := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
 		ProjectID: "test-db",
@@ -36,10 +42,10 @@ func TestBuildPostgreSQLClusterStandard(t *testing.T) {
 		ProjectID: "duke-db",
 		Namespace: "exca-duke-db",
 		Tier:      config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2"},
-		Backup:    &BackupOpts{Schedule: "0 2 * * *", RetentionDays: 30},
+		Backup:    &BackupOpts{Schedule: testCronSchedule, RetentionDays: 30},
 		Parameters: map[string]string{
 			"shared_preload_libraries": "pg_stat_statements",
-			"pg_stat_statements.max":   "10000",
+			testPGStatParam:   "10000",
 			"pg_stat_statements.track": "all",
 		},
 		Tags: map[string]string{"owner": "duke", "env": "demo"},
@@ -47,14 +53,17 @@ func TestBuildPostgreSQLClusterStandard(t *testing.T) {
 
 	spec := obj.Object["spec"].(map[string]interface{})
 
-	// STANDARD tier: 3 instances, PodMonitor enabled
+	// STANDARD tier: 3 instances. enablePodMonitor stays false at the CRD
+	// level because the operator's PodMonitor reconciler crashes when the
+	// Prometheus operator's CRDs exist but Prometheus isn't actually
+	// scraping the project namespace.
 	if spec["instances"] != int64(3) {
 		t.Errorf("instances: got %v", spec["instances"])
 	}
 
 	monitoring := spec["monitoring"].(map[string]interface{})
-	if monitoring["enablePodMonitor"] != true {
-		t.Error("STANDARD tier should have enablePodMonitor=true")
+	if monitoring["enablePodMonitor"] != false {
+		t.Error("enablePodMonitor must be false to avoid CNPG operator panic")
 	}
 
 	// Backup configured
@@ -72,8 +81,8 @@ func TestBuildPostgreSQLClusterStandard(t *testing.T) {
 
 	// Custom params should be in parameters (not shared_preload_libraries)
 	params := pg["parameters"].(map[string]interface{})
-	if params["pg_stat_statements.max"] != "10000" {
-		t.Errorf("pg_stat_statements.max: got %v", params["pg_stat_statements.max"])
+	if params[testPGStatParam] != "10000" {
+		t.Errorf("pg_stat_statements.max: got %v", params[testPGStatParam])
 	}
 
 	// Tags as labels
@@ -99,7 +108,7 @@ func TestBuildPostgreSQLClusterJSON(t *testing.T) {
 }
 
 func TestBuildScheduledBackup(t *testing.T) {
-	obj := BuildScheduledBackup("duke-db", "exca-duke-db", "0 2 * * *")
+	obj := BuildScheduledBackup("duke-db", "exca-duke-db", testCronSchedule)
 
 	meta := obj.Object["metadata"].(map[string]interface{})
 	if meta["name"] != "duke-db-postgres-backup" {
@@ -107,7 +116,7 @@ func TestBuildScheduledBackup(t *testing.T) {
 	}
 
 	spec := obj.Object["spec"].(map[string]interface{})
-	if spec["schedule"] != "0 2 * * *" {
+	if spec["schedule"] != testCronSchedule {
 		t.Errorf("schedule: got %v", spec["schedule"])
 	}
 

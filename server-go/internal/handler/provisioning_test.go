@@ -11,8 +11,16 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/go-chi/chi/v5"
 )
+
+const (
+	testProvisionPrefix = "/api/provision/"
+	testWant200Fmt      = "status: got %d, want 200"
+	testUser1           = "user-1"
+)
+
 
 func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 	t.Helper()
@@ -45,12 +53,12 @@ func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 func TestListInstancesEmpty(t *testing.T) {
 	r, _ := setupTestRouter(t)
 
-	req := httptest.NewRequest("GET", "/api/provision/", nil)
+	req := httptest.NewRequest("GET", testProvisionPrefix, nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("status: got %d, want 200", w.Code)
+		t.Errorf(testWant200Fmt, w.Code)
 	}
 
 	var result []*domain.DatabaseInstance
@@ -69,7 +77,7 @@ func TestListInstancesWithData(t *testing.T) {
 		Status:    "ACTIVE",
 	})
 
-	req := httptest.NewRequest("GET", "/api/provision/", nil)
+	req := httptest.NewRequest("GET", testProvisionPrefix, nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -113,7 +121,7 @@ func TestGetStatus(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("status: got %d, want 200", w.Code)
+		t.Errorf(testWant200Fmt, w.Code)
 	}
 
 	var inst domain.DatabaseInstance
@@ -127,7 +135,7 @@ func TestProvisionNoK8s(t *testing.T) {
 	r, _ := setupTestRouter(t)
 
 	body := `{"projectName":"test","orgId":"org","databaseType":"POSTGRESQL","tier":"FREE"}`
-	req := httptest.NewRequest("POST", "/api/provision/", strings.NewReader(body))
+	req := httptest.NewRequest("POST", testProvisionPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -141,16 +149,16 @@ func TestProvisionNoK8s(t *testing.T) {
 func TestListInstancesReturnsAll(t *testing.T) {
 	r, store := setupTestRouter(t)
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "a", OwnerID: "user-1", Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "b", OwnerID: "user-1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "a", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "b", OwnerID: testUser1, Status: "ACTIVE"})
 	store.Save(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
 
-	req := httptest.NewRequest("GET", "/api/provision/", nil)
+	req := httptest.NewRequest("GET", testProvisionPrefix, nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("status: got %d, want 200", w.Code)
+		t.Errorf(testWant200Fmt, w.Code)
 	}
 
 	var result []*domain.DatabaseInstance
@@ -165,17 +173,18 @@ func TestGetCredentialsForCDS(t *testing.T) {
 	r, store := setupTestRouter(t)
 
 	port := 5432
+	pgUsername := testutil.FixtureToken("pguser")
 	store.Save(&domain.DatabaseInstance{
 		ProjectID:    "cds-project",
 		OrgID:        "org1",
-		OwnerID:      "user-1",
+		OwnerID:      testUser1,
 		Status:       "ACTIVE",
 		Host:         "10.0.0.5",
 		ReadOnlyHost: "10.0.0.6",
 		Port:         &port,
 		DatabaseName: "app_db",
-		Username:     "pguser",
-		Password:     "secret123",
+		Username:     pgUsername,
+		Password:     testutil.FixturePassword("cds-proj"),
 		SSLMode:      "require",
 	})
 
@@ -184,7 +193,7 @@ func TestGetCredentialsForCDS(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200", w.Code)
+		t.Fatalf(testWant200Fmt, w.Code)
 	}
 
 	var creds struct {
@@ -209,10 +218,10 @@ func TestGetCredentialsForCDS(t *testing.T) {
 	if creds.DatabaseName != "app_db" {
 		t.Errorf("databaseName: got %s", creds.DatabaseName)
 	}
-	if creds.Username != "pguser" {
+	if creds.Username != pgUsername {
 		t.Errorf("username: got %s", creds.Username)
 	}
-	if creds.Password != "secret123" {
+	if creds.Password != testutil.FixturePassword("cds-proj") {
 		t.Errorf("password: got %s", creds.Password)
 	}
 	if creds.ConnectionURL == "" {
@@ -230,7 +239,7 @@ func TestEstimateCost(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("status: got %d, want 200", w.Code)
+		t.Errorf(testWant200Fmt, w.Code)
 	}
 
 	var est domain.CostEstimation

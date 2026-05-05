@@ -9,7 +9,7 @@ import (
 // --- Advisors ---
 
 func (h *SchemaHandler) RunPerformanceAdvisor(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -23,7 +23,7 @@ func (h *SchemaHandler) RunPerformanceAdvisor(w http.ResponseWriter, r *http.Req
 }
 
 func (h *SchemaHandler) RunSecurityAdvisor(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return

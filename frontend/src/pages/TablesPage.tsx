@@ -12,9 +12,22 @@ import { DataGrid } from '../components/tables/DataGrid';
 import { CreateTablePanel } from '../components/tables/CreateTablePanel';
 import { ColumnSchemaView } from '../components/tables/ColumnSchemaView';
 
+// csvSafe stringifies an arbitrary cell value without falling through to
+// "[object Object]" (S6551). Used for CSV export only.
+function csvSafe(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return '';
+  }
+}
+
 export function TablesPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const pid = projectId || '';
+  const pid = projectId ?? '';
   const { data: tables = [], isLoading } = useTables(pid);
   const [selectedTable, setSelectedTable] = useState<string>('');
   const { data: columns = [] } = useColumns(pid, selectedTable);
@@ -53,7 +66,7 @@ export function TablesPage() {
   // Insert row form
   const [newRowData, setNewRowData] = useState<Record<string, string>>({});
 
-  const pkColumn = useMemo(() => columns.find(c => c.primaryKey)?.name || '', [columns]);
+  const pkColumn = useMemo(() => columns.find(c => c.primaryKey)?.name ?? '', [columns]);
 
   const handleSortChange = useCallback((col: string, order: 'asc' | 'desc') => {
     setSortCol(col);
@@ -103,7 +116,7 @@ export function TablesPage() {
   const handleExportCSV = () => {
     if (!rowsData?.rows || !rowsData.columns) return;
     const header = rowsData.columns.map(c => c.name).join(',');
-    const rows = rowsData.rows.map(r => r.map(v => v === null ? '' : `"${String(v).replace(/"/g, '""')}"`).join(','));
+    const rows = rowsData.rows.map(r => r.map(v => v === null ? '' : `"${csvSafe(v).replaceAll('"', '""')}"`).join(','));
     const csv = [header, ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${selectedTable}.csv` });
@@ -111,6 +124,21 @@ export function TablesPage() {
   };
 
   if (isLoading) return <SkeletonTable rows={8} cols={5} />;
+
+  function getDropModalTitle(): string {
+    if (dropTarget?.type === 'table') return 'Drop Table';
+    if (dropTarget?.type === 'column') return 'Drop Column';
+    return 'Delete Row';
+  }
+
+  function getDropModalMessage(): string {
+    if (dropTarget?.type === 'table') return `Permanently delete "${dropTarget?.name}" and all data?`;
+    if (dropTarget?.type === 'column') return `Remove column "${dropTarget?.name}"?`;
+    return `Delete row with ${dropTarget?.pkCol}=${dropTarget?.name}?`;
+  }
+
+  const dropModalTitle = getDropModalTitle();
+  const dropModalMessage = getDropModalMessage();
 
   return (
     <div className="flex gap-4 h-[calc(100vh-220px)]" data-testid="tables-page">
@@ -207,12 +235,16 @@ export function TablesPage() {
       <SidePanel open={showAddColumn} onClose={() => setShowAddColumn(false)} title={`Add Column to ${selectedTable}`}
         footer={<button onClick={handleAddColumn} disabled={!newColName.trim() || addColumn.isPending} className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-lg disabled:opacity-50" data-testid="add-column-submit">{addColumn.isPending ? 'Adding...' : 'Add Column'}</button>}>
         <div className="space-y-4">
-          <div><label className="block text-sm font-medium text-text-secondary mb-1">Name</label>
-            <input type="text" value={newColName} onChange={e => setNewColName(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" data-testid="column-name-input" autoFocus /></div>
-          <div><label className="block text-sm font-medium text-text-secondary mb-1">Type</label>
-            <select value={newColType} onChange={e => setNewColType(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm">
+          <div>
+            <label htmlFor="col-name-input" className="block text-sm font-medium text-text-secondary mb-1">Name</label>
+            <input id="col-name-input" type="text" value={newColName} onChange={e => setNewColName(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" data-testid="column-name-input" autoFocus />
+          </div>
+          <div>
+            <label htmlFor="col-type-select" className="block text-sm font-medium text-text-secondary mb-1">Type</label>
+            <select id="col-type-select" value={newColType} onChange={e => setNewColType(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm">
               {['text', 'integer', 'bigint', 'serial', 'boolean', 'timestamp', 'timestamptz', 'date', 'numeric', 'uuid', 'jsonb', 'varchar(255)'].map(t => <option key={t} value={t}>{t}</option>)}
-            </select></div>
+            </select>
+          </div>
           <label className="flex items-center gap-2 text-sm text-text-secondary"><input type="checkbox" checked={newColNullable} onChange={e => setNewColNullable(e.target.checked)} className="rounded" /> Nullable</label>
         </div>
       </SidePanel>
@@ -223,8 +255,8 @@ export function TablesPage() {
         <div className="space-y-3">
           {columns.filter(c => !c.defaultValue?.includes('nextval')).map(col => (
             <div key={col.name}>
-              <label className="block text-xs font-medium text-text-secondary mb-1">{col.name} <span className="text-text-tertiary">({col.dataType})</span></label>
-              <input type="text" value={newRowData[col.name] || ''} onChange={e => setNewRowData(prev => ({ ...prev, [col.name]: e.target.value }))}
+              <label htmlFor={`insert-col-${col.name}`} className="block text-xs font-medium text-text-secondary mb-1">{col.name} <span className="text-text-tertiary">({col.dataType})</span></label>
+              <input id={`insert-col-${col.name}`} type="text" value={newRowData[col.name] ?? ''} onChange={e => setNewRowData(prev => ({ ...prev, [col.name]: e.target.value }))}
                 className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
                 placeholder={col.nullable ? 'NULL' : 'required'} />
             </div>
@@ -235,8 +267,8 @@ export function TablesPage() {
       {/* Drop Confirm */}
       <ConfirmModal
         open={!!dropTarget} onClose={() => setDropTarget(null)} onConfirm={handleDrop}
-        title={dropTarget?.type === 'table' ? 'Drop Table' : dropTarget?.type === 'column' ? 'Drop Column' : 'Delete Row'}
-        message={dropTarget?.type === 'table' ? `Permanently delete "${dropTarget?.name}" and all data?` : dropTarget?.type === 'column' ? `Remove column "${dropTarget?.name}"?` : `Delete row with ${dropTarget?.pkCol}=${dropTarget?.name}?`}
+        title={dropModalTitle}
+        message={dropModalMessage}
         confirmText={dropTarget?.type === 'table' ? dropTarget?.name : undefined}
         confirmLabel={dropTarget?.type === 'row' ? 'Delete' : 'Drop'}
         destructive loading={dropTable.isPending || dropColumn.isPending || deleteRow.isPending}

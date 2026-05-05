@@ -4,6 +4,12 @@ import { useInstanceContext } from '../context/InstanceContext';
 import { Camera, Download, Trash2, Plus, FileText } from 'lucide-react';
 import { formatBytes } from '../utils/formatBytes';
 
+function getSnapshotType(schemaOnly: boolean, dataOnly: boolean): string {
+  if (schemaOnly) return 'Schema only';
+  if (dataOnly) return 'Data only';
+  return 'Full';
+}
+
 export function SnapshotsPage() {
   const { projectId } = useInstanceContext();
 
@@ -54,8 +60,9 @@ export function SnapshotsPage() {
       <div className="bg-surface-card border border-border-primary rounded-xl p-5 space-y-4">
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex items-center gap-2">
-            <label className="text-xs text-text-secondary">Format:</label>
+            <label htmlFor="snapshot-format-select" className="text-xs text-text-secondary">Format:</label>
             <select
+              id="snapshot-format-select"
               value={exportOpts.format}
               onChange={(e) => setExportOpts({ ...exportOpts, format: e.target.value as 'custom' | 'plain' })}
               className="px-2 py-1.5 bg-bg-secondary border border-border-primary rounded text-text-primary text-sm"
@@ -66,11 +73,11 @@ export function SnapshotsPage() {
           </div>
           <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
             <input type="checkbox" checked={exportOpts.schemaOnly} onChange={(e) => setExportOpts({ ...exportOpts, schemaOnly: e.target.checked, dataOnly: false })} className="accent-emerald-500" />
-            Schema only
+            <span>Schema only</span>
           </label>
           <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
             <input type="checkbox" checked={exportOpts.dataOnly} onChange={(e) => setExportOpts({ ...exportOpts, dataOnly: e.target.checked, schemaOnly: false })} className="accent-emerald-500" />
-            Data only
+            <span>Data only</span>
           </label>
           <button
             onClick={handleExport}
@@ -91,14 +98,16 @@ export function SnapshotsPage() {
           <span className="ml-auto text-xs text-text-tertiary">{snapshots.length} total</span>
         </div>
 
-        {isLoading ? (
+        {isLoading && (
           <div className="p-12 text-center text-text-secondary text-sm">Loading…</div>
-        ) : snapshots.length === 0 ? (
+        )}
+        {!isLoading && snapshots.length === 0 && (
           <div className="p-12 text-center">
             <FileText className="w-12 h-12 mx-auto mb-3 text-text-tertiary" />
             <p className="text-text-secondary text-sm">No snapshots yet. Click "Export Snapshot" to create a pg_dump.</p>
           </div>
-        ) : (
+        )}
+        {!isLoading && snapshots.length > 0 && (
           <table className="w-full text-sm">
             <thead>
               <tr className="text-text-tertiary border-b border-border-primary bg-bg-secondary text-left">
@@ -116,7 +125,7 @@ export function SnapshotsPage() {
                   <td className="px-6 py-4 font-mono text-xs text-text-primary">{s.snapshotId}</td>
                   <td className="px-6 py-4 text-text-secondary">{s.format}</td>
                   <td className="px-6 py-4 text-text-tertiary text-xs">
-                    {s.schemaOnly ? 'Schema only' : s.dataOnly ? 'Data only' : 'Full'}
+                    {getSnapshotType(s.schemaOnly, s.dataOnly)}
                   </td>
                   <td className="px-6 py-4 text-text-secondary">{formatBytes(s.sizeBytes)}</td>
                   <td className="px-6 py-4 text-text-tertiary">{new Date(s.createdAt).toLocaleString()}</td>

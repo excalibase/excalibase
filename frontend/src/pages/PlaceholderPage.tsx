@@ -1,8 +1,8 @@
 import { Construction } from 'lucide-react';
 
 interface PlaceholderPageProps {
-  title: string;
-  description?: string;
+  readonly title: string;
+  readonly description?: string;
 }
 
 export function PlaceholderPage({

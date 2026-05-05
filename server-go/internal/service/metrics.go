@@ -18,6 +18,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+const metricsHistoryFile = "metrics-history.json"
+
+
 type MetricsService struct {
 	store       storage.InstanceStore
 	k8sClient   k8s.KubeClient
@@ -131,7 +134,7 @@ func (s *MetricsService) collectCNPGMetrics(ctx context.Context, inst *domain.Da
 		return err
 	}
 	if strings.TrimSpace(raw) == "" {
-		return fmt.Errorf("Prometheus exporter returned empty data")
+		return fmt.Errorf("prometheus exporter returned empty data")
 	}
 
 	labeled := parseLabeledMetrics(raw)
@@ -320,13 +323,13 @@ func (s *MetricsService) saveHistory(projectID string) {
 		log.Printf("WARN: marshal metrics history for %s: %v", projectID, err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(dir, "metrics-history.json"), data, 0644); err != nil {
-		log.Printf("WARN: write %s: %v", filepath.Join(dir, "metrics-history.json"), err)
+	if err := os.WriteFile(filepath.Join(dir, metricsHistoryFile), data, 0644); err != nil {
+		log.Printf("WARN: write %s: %v", filepath.Join(dir, metricsHistoryFile), err)
 	}
 }
 
 func (s *MetricsService) loadHistory(projectID string) []domain.DatabaseMetrics {
-	path := filepath.Join(s.storagePath, "projects", projectID, "metrics-history.json")
+	path := filepath.Join(s.storagePath, "projects", projectID, metricsHistoryFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil

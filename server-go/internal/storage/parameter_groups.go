@@ -8,7 +8,11 @@ import (
 	"sync"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/security"
 )
+
+const paramGroupsKey = "parameter-groups"
+
 
 type FileSystemParameterGroupStore struct {
 	basePath string
@@ -17,7 +21,7 @@ type FileSystemParameterGroupStore struct {
 }
 
 func NewFileSystemParameterGroupStore(basePath string) (*FileSystemParameterGroupStore, error) {
-	dir := filepath.Join(basePath, "parameter-groups")
+	dir := filepath.Join(basePath, paramGroupsKey)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
@@ -32,7 +36,10 @@ func NewFileSystemParameterGroupStore(basePath string) (*FileSystemParameterGrou
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if _, err := security.SafePathComponent(e.Name()); err != nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, filepath.Base(e.Name())))
 		if err != nil {
 			continue
 		}
@@ -54,7 +61,7 @@ func (s *FileSystemParameterGroupStore) Save(pg *domain.ParameterGroup) error {
 		return err
 	}
 
-	dir := filepath.Join(s.basePath, "parameter-groups")
+	dir := filepath.Join(s.basePath, paramGroupsKey)
 	if err := os.WriteFile(filepath.Join(dir, pg.Name+".json"), data, 0644); err != nil {
 		return fmt.Errorf("write parameter group: %w", err)
 	}
@@ -85,7 +92,7 @@ func (s *FileSystemParameterGroupStore) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	path := filepath.Join(s.basePath, "parameter-groups", name+".json")
+	path := filepath.Join(s.basePath, paramGroupsKey, name+".json")
 	os.Remove(path)
 	delete(s.cache, name)
 	return nil

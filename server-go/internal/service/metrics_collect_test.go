@@ -9,6 +9,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+const testPersistM = "persist-m"
+
+
 func setupMetricsCollectTest(t *testing.T) (*MetricsService, *k8s.MockClient) {
 	t.Helper()
 	dir := t.TempDir()
@@ -106,17 +109,17 @@ func TestMetricsHistoryPersistence(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 	store.Save(&domain.DatabaseInstance{
-		ProjectID: "persist-m", Namespace: "org-persist-m", Status: "ACTIVE",
+		ProjectID: testPersistM, Namespace: "org-persist-m", Status: "ACTIVE",
 		Tier: domain.Free,
 	})
-	mock.SetupPostgreSQLMock("persist-m", "org-persist-m", 1)
+	mock.SetupPostgreSQLMock(testPersistM, "org-persist-m", 1)
 
 	svc1 := NewMetricsService(store, mock, dir)
-	svc1.GetCurrentMetrics(context.Background(), "persist-m")
+	svc1.GetCurrentMetrics(context.Background(), testPersistM)
 
 	// New service instance (simulates restart)
 	svc2 := NewMetricsService(store, mock, dir)
-	hist, _ := svc2.GetMetricsHistory(context.Background(), "persist-m", 10)
+	hist, _ := svc2.GetMetricsHistory(context.Background(), testPersistM, 10)
 	if hist.TotalPoints < 1 {
 		t.Error("history should persist to disk and reload")
 	}

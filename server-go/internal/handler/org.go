@@ -11,6 +11,14 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	routeUserID          = "/{userId}"
+	errInvalidRequest    = "invalid request"
+	errOrgNotFound       = "org not found"
+	errInsufficientPerms = "insufficient permissions"
+)
+
+
 type OrgHandler struct {
 	orgStore  storage.OrgStore
 	userStore storage.UserStore
@@ -43,8 +51,8 @@ func (h *OrgHandler) Routes(r chi.Router, isCloud bool) {
 		r.Route("/members", func(r chi.Router) {
 			r.Get("/", h.ListOrgMembers)
 			r.Post("/", h.InviteOrgMember)
-			r.Patch("/{userId}", h.UpdateOrgMemberRole)
-			r.Delete("/{userId}", h.RemoveOrgMember)
+			r.Patch(routeUserID, h.UpdateOrgMemberRole)
+			r.Delete(routeUserID, h.RemoveOrgMember)
 		})
 
 		r.Get("/invites", h.ListPendingInvites)
@@ -52,8 +60,8 @@ func (h *OrgHandler) Routes(r chi.Router, isCloud bool) {
 		r.Route("/projects/{projectId}/members", func(r chi.Router) {
 			r.Get("/", h.ListProjectMembers)
 			r.Post("/", h.AddProjectMember)
-			r.Patch("/{userId}", h.UpdateProjectMemberRole)
-			r.Delete("/{userId}", h.RemoveProjectMember)
+			r.Patch(routeUserID, h.UpdateProjectMemberRole)
+			r.Delete(routeUserID, h.RemoveProjectMember)
 		})
 	})
 }
@@ -70,7 +78,7 @@ func (h *OrgHandler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 		Slug string `json:"slug"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request", http.StatusBadRequest)
+		httpError(w, errInvalidRequest, http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" || req.Slug == "" {
@@ -139,13 +147,13 @@ func (h *OrgHandler) GetOrg(w http.ResponseWriter, r *http.Request) {
 
 	// Must be a member or platform admin
 	if !h.isMemberOrPlatformAdmin(r, orgID, user.ID) {
-		httpError(w, "org not found", http.StatusNotFound)
+		httpError(w, errOrgNotFound, http.StatusNotFound)
 		return
 	}
 
 	org, err := h.orgStore.FindOrgByID(r.Context(), orgID)
 	if err != nil {
-		httpError(w, "org not found", http.StatusNotFound)
+		httpError(w, errOrgNotFound, http.StatusNotFound)
 		return
 	}
 	writeJSON(w, org)
@@ -156,13 +164,13 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermUpdateOrg) {
-		httpError(w, "insufficient permissions", http.StatusForbidden)
+		httpError(w, errInsufficientPerms, http.StatusForbidden)
 		return
 	}
 
 	org, err := h.orgStore.FindOrgByID(r.Context(), orgID)
 	if err != nil {
-		httpError(w, "org not found", http.StatusNotFound)
+		httpError(w, errOrgNotFound, http.StatusNotFound)
 		return
 	}
 
@@ -171,7 +179,7 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 		Tier *domain.TierType `json:"tier,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request", http.StatusBadRequest)
+		httpError(w, errInvalidRequest, http.StatusBadRequest)
 		return
 	}
 	if req.Name != nil {
@@ -214,7 +222,7 @@ func (h *OrgHandler) ListOrgMembers(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	orgID := chi.URLParam(r, "orgId")
 	if !h.isMemberOrPlatformAdmin(r, orgID, user.ID) {
-		httpError(w, "org not found", http.StatusNotFound)
+		httpError(w, errOrgNotFound, http.StatusNotFound)
 		return
 	}
 
@@ -234,7 +242,7 @@ func (h *OrgHandler) InviteOrgMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, "insufficient permissions", http.StatusForbidden)
+		httpError(w, errInsufficientPerms, http.StatusForbidden)
 		return
 	}
 
@@ -244,62 +252,64 @@ func (h *OrgHandler) InviteOrgMember(w http.ResponseWriter, r *http.Request) {
 		Role   string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request", http.StatusBadRequest)
+		httpError(w, errInvalidRequest, http.StatusBadRequest)
 		return
 	}
 	if req.Role == "" {
 		httpError(w, "role is required", http.StatusBadRequest)
 		return
 	}
-
-	// Validate role
-	validOrgRoles := map[string]bool{
-		domain.OrgRoleAdmin: true, domain.OrgRoleDeveloper: true, domain.OrgRoleViewer: true,
-	}
-	if !validOrgRoles[req.Role] {
+	if !isValidOrgRole(req.Role) {
 		httpError(w, "invalid role: must be admin, developer, or viewer", http.StatusBadRequest)
 		return
 	}
-
-	// Resolve user by email or userId
-	userID := req.UserID
-	email := req.Email
-
-	if userID == "" && email == "" {
+	if req.UserID == "" && req.Email == "" {
 		httpError(w, "userId or email is required", http.StatusBadRequest)
 		return
 	}
 
-	// Try to find existing user by email (indexed lookup)
+	h.resolveAndAddMember(w, r, orgID, req.UserID, req.Email, req.Role)
+}
+
+// isValidOrgRole checks if the role is one of the allowed org-level roles.
+func isValidOrgRole(role string) bool {
+	switch role {
+	case domain.OrgRoleAdmin, domain.OrgRoleDeveloper, domain.OrgRoleViewer:
+		return true
+	}
+	return false
+}
+
+// resolveAndAddMember looks up the user by email if needed, then either adds
+// them as a member directly (user exists) or creates a pending invite.
+func (h *OrgHandler) resolveAndAddMember(w http.ResponseWriter, r *http.Request, orgID, userID, email, role string) {
 	if userID == "" && email != "" && h.userStore != nil {
-		u, _ := h.userStore.FindUserByEmail(r.Context(), email)
-		if u != nil {
+		if u, _ := h.userStore.FindUserByEmail(r.Context(), email); u != nil {
 			userID = u.ID
 		}
 	}
 
 	if userID != "" {
-		// User exists — add directly as org member
 		if err := h.orgStore.AddOrgMember(r.Context(), &domain.OrgMember{
-			OrgID: orgID, UserID: userID, Role: req.Role,
+			OrgID: orgID, UserID: userID, Role: role,
 		}); err != nil {
 			httpError(w, "failed to add member", http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, map[string]string{"status": "invited"})
-	} else {
-		// User doesn't exist — create pending invite
-		inviter := auth.GetUser(r.Context())
-		if err := h.orgStore.CreatePendingInvite(r.Context(), &domain.PendingInvite{
-			OrgID: orgID, Email: email, Role: req.Role, InvitedBy: inviter.ID,
-		}); err != nil {
-			httpError(w, "failed to create invite", http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, map[string]string{"status": "pending", "message": "invite created, user will be added on registration"})
+		return
 	}
+	// User doesn't exist — create pending invite
+	inviter := auth.GetUser(r.Context())
+	if err := h.orgStore.CreatePendingInvite(r.Context(), &domain.PendingInvite{
+		OrgID: orgID, Email: email, Role: role, InvitedBy: inviter.ID,
+	}); err != nil {
+		httpError(w, "failed to create invite", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{"status": "pending", "message": "invite created, user will be added on registration"})
 }
 
 func (h *OrgHandler) UpdateOrgMemberRole(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +317,7 @@ func (h *OrgHandler) UpdateOrgMemberRole(w http.ResponseWriter, r *http.Request)
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, "insufficient permissions", http.StatusForbidden)
+		httpError(w, errInsufficientPerms, http.StatusForbidden)
 		return
 	}
 
@@ -315,7 +325,7 @@ func (h *OrgHandler) UpdateOrgMemberRole(w http.ResponseWriter, r *http.Request)
 		Role string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request", http.StatusBadRequest)
+		httpError(w, errInvalidRequest, http.StatusBadRequest)
 		return
 	}
 
@@ -341,7 +351,7 @@ func (h *OrgHandler) RemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, "insufficient permissions", http.StatusForbidden)
+		httpError(w, errInsufficientPerms, http.StatusForbidden)
 		return
 	}
 
@@ -359,7 +369,7 @@ func (h *OrgHandler) ListProjectMembers(w http.ResponseWriter, r *http.Request) 
 	user := auth.GetUser(r.Context())
 	orgID := chi.URLParam(r, "orgId")
 	if !h.isMemberOrPlatformAdmin(r, orgID, user.ID) {
-		httpError(w, "org not found", http.StatusNotFound)
+		httpError(w, errOrgNotFound, http.StatusNotFound)
 		return
 	}
 
@@ -379,7 +389,7 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, "insufficient permissions", http.StatusForbidden)
+		httpError(w, errInsufficientPerms, http.StatusForbidden)
 		return
 	}
 
@@ -388,7 +398,7 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 		Role   string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request", http.StatusBadRequest)
+		httpError(w, errInvalidRequest, http.StatusBadRequest)
 		return
 	}
 
@@ -418,7 +428,7 @@ func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Requ
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, "insufficient permissions", http.StatusForbidden)
+		httpError(w, errInsufficientPerms, http.StatusForbidden)
 		return
 	}
 
@@ -426,7 +436,7 @@ func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Requ
 		Role string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request", http.StatusBadRequest)
+		httpError(w, errInvalidRequest, http.StatusBadRequest)
 		return
 	}
 
@@ -444,7 +454,7 @@ func (h *OrgHandler) RemoveProjectMember(w http.ResponseWriter, r *http.Request)
 	orgID := chi.URLParam(r, "orgId")
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
-		httpError(w, "insufficient permissions", http.StatusForbidden)
+		httpError(w, errInsufficientPerms, http.StatusForbidden)
 		return
 	}
 
@@ -463,7 +473,7 @@ func (h *OrgHandler) ListPendingInvites(w http.ResponseWriter, r *http.Request) 
 	user := auth.GetUser(r.Context())
 	orgID := chi.URLParam(r, "orgId")
 	if !h.isMemberOrPlatformAdmin(r, orgID, user.ID) {
-		httpError(w, "org not found", http.StatusNotFound)
+		httpError(w, errOrgNotFound, http.StatusNotFound)
 		return
 	}
 

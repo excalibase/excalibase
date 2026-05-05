@@ -8,10 +8,16 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const (
+	mimeJSON       = "application/json"
+	hdrContentType = "Content-Type"
+)
+
+
 // --- Roles ---
 
 func (h *SchemaHandler) GetRoles(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -25,14 +31,14 @@ func (h *SchemaHandler) GetRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	var req schema.CreateRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" {
@@ -43,13 +49,13 @@ func (h *SchemaHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
 }
 
 func (h *SchemaHandler) DropRole(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -65,7 +71,7 @@ func (h *SchemaHandler) DropRole(w http.ResponseWriter, r *http.Request) {
 // --- Extensions ---
 
 func (h *SchemaHandler) GetExtensions(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -79,7 +85,7 @@ func (h *SchemaHandler) GetExtensions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateExtension(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -89,7 +95,7 @@ func (h *SchemaHandler) CreateExtension(w http.ResponseWriter, r *http.Request) 
 		Schema string `json:"schema"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if body.Name == "" {
@@ -100,13 +106,13 @@ func (h *SchemaHandler) CreateExtension(w http.ResponseWriter, r *http.Request) 
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
 }
 
 func (h *SchemaHandler) DropExtension(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -123,7 +129,7 @@ func (h *SchemaHandler) DropExtension(w http.ResponseWriter, r *http.Request) {
 // --- Policies ---
 
 func (h *SchemaHandler) GetPolicies(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -137,14 +143,14 @@ func (h *SchemaHandler) GetPolicies(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	var req schema.CreatePolicyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" || req.Table == "" {
@@ -155,13 +161,13 @@ func (h *SchemaHandler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
 }
 
 func (h *SchemaHandler) DropPolicy(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -182,7 +188,7 @@ func (h *SchemaHandler) DropPolicy(w http.ResponseWriter, r *http.Request) {
 // --- Functions ---
 
 func (h *SchemaHandler) GetFunctions(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -196,14 +202,14 @@ func (h *SchemaHandler) GetFunctions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateFunction(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	var req schema.CreateFunctionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" || req.Body == "" {
@@ -214,13 +220,13 @@ func (h *SchemaHandler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
 }
 
 func (h *SchemaHandler) DropFunction(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -237,7 +243,7 @@ func (h *SchemaHandler) DropFunction(w http.ResponseWriter, r *http.Request) {
 // --- Triggers ---
 
 func (h *SchemaHandler) GetTriggers(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -251,14 +257,14 @@ func (h *SchemaHandler) GetTriggers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) CreateTrigger(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	var req schema.CreateTriggerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" || req.Table == "" || req.Function == "" {
@@ -269,13 +275,13 @@ func (h *SchemaHandler) CreateTrigger(w http.ResponseWriter, r *http.Request) {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
 }
 
 func (h *SchemaHandler) DropTrigger(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -296,14 +302,14 @@ func (h *SchemaHandler) DropTrigger(w http.ResponseWriter, r *http.Request) {
 // --- Indexes (create/drop) ---
 
 func (h *SchemaHandler) CreateIndex(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 	var req schema.CreateIndexRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" || req.Table == "" || len(req.Columns) == 0 {
@@ -314,13 +320,13 @@ func (h *SchemaHandler) CreateIndex(w http.ResponseWriter, r *http.Request) {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(hdrContentType, mimeJSON)
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "created"})
 }
 
 func (h *SchemaHandler) DropIndex(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -336,7 +342,7 @@ func (h *SchemaHandler) DropIndex(w http.ResponseWriter, r *http.Request) {
 // --- Types ---
 
 func (h *SchemaHandler) GetTypes(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return

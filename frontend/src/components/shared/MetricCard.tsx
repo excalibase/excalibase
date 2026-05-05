@@ -1,12 +1,12 @@
 import { cn } from '../../utils/cn';
 
 interface MetricCardProps {
-  icon: React.ReactNode;
-  label: string;
-  value: string | number;
-  subtitle?: string;
-  color?: string;
-  className?: string;
+  readonly icon: React.ReactNode;
+  readonly label: string;
+  readonly value: string | number;
+  readonly subtitle?: string;
+  readonly color?: string;
+  readonly className?: string;
 }
 
 export function MetricCard({ icon, label, value, subtitle, color = 'text-accent-primary', className }: MetricCardProps) {

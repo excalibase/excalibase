@@ -8,6 +8,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const testApplyLabels = "apply labels"
+
+
 func TestProvisionContext_StageTracking(t *testing.T) {
 	var stages []domain.ProvisioningStage
 	var steps []string
@@ -19,18 +22,18 @@ func TestProvisionContext_StageTracking(t *testing.T) {
 	pc.SetStage(domain.StageValidating)
 	pc.SetStage(domain.StageNamespaceCreation)
 	pc.SetStep("create namespace")
-	pc.SetStep("apply labels")
+	pc.SetStep(testApplyLabels)
 
 	if len(stages) != 2 || stages[1] != domain.StageNamespaceCreation {
 		t.Errorf("expected 2 stages, got %v", stages)
 	}
-	if len(steps) != 2 || steps[1] != "apply labels" {
+	if len(steps) != 2 || steps[1] != testApplyLabels {
 		t.Errorf("expected 2 steps, got %v", steps)
 	}
 	if pc.Stage() != domain.StageNamespaceCreation {
 		t.Errorf("Stage(): got %s", pc.Stage())
 	}
-	if pc.Step() != "apply labels" {
+	if pc.Step() != testApplyLabels {
 		t.Errorf("Step(): got %s", pc.Step())
 	}
 }

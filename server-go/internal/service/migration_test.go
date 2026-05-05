@@ -9,6 +9,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+const testMigDB = "mig-db"
+
+
 func setupMigrationTest(t *testing.T) *MigrationService {
 	t.Helper()
 	dir := t.TempDir()
@@ -17,7 +20,7 @@ func setupMigrationTest(t *testing.T) *MigrationService {
 	mock.ExecOutput["org-mig-db/mig-db-postgres-1"] = "CREATE TABLE"
 
 	store.Save(&domain.DatabaseInstance{
-		ProjectID: "mig-db", Namespace: "org-mig-db", Status: "ACTIVE",
+		ProjectID: testMigDB, Namespace: "org-mig-db", Status: "ACTIVE",
 	})
 
 	return NewMigrationService(store, mock, dir)
@@ -25,7 +28,7 @@ func setupMigrationTest(t *testing.T) *MigrationService {
 
 func TestApplyMigration(t *testing.T) {
 	svc := setupMigrationTest(t)
-	rec, err := svc.ApplyMigration(context.Background(), "mig-db", domain.MigrationRequest{
+	rec, err := svc.ApplyMigration(context.Background(), testMigDB, domain.MigrationRequest{
 		SQL:         "CREATE TABLE test (id int)",
 		Description: "test migration",
 	})
@@ -42,9 +45,9 @@ func TestApplyMigration(t *testing.T) {
 
 func TestListMigrationsAfterApply(t *testing.T) {
 	svc := setupMigrationTest(t)
-	svc.ApplyMigration(context.Background(), "mig-db", domain.MigrationRequest{SQL: "SELECT 1"})
+	svc.ApplyMigration(context.Background(), testMigDB, domain.MigrationRequest{SQL: "SELECT 1"})
 
-	list, _ := svc.ListMigrations("mig-db")
+	list, _ := svc.ListMigrations(testMigDB)
 	if len(list) != 1 {
 		t.Errorf("expected 1 migration, got %d", len(list))
 	}
@@ -52,7 +55,7 @@ func TestListMigrationsAfterApply(t *testing.T) {
 
 func TestListMigrationsEmpty(t *testing.T) {
 	svc := setupMigrationTest(t)
-	list, _ := svc.ListMigrations("mig-db")
+	list, _ := svc.ListMigrations(testMigDB)
 	if len(list) != 0 {
 		t.Errorf("expected 0 migrations, got %d", len(list))
 	}

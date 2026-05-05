@@ -8,6 +8,15 @@ import { useAuthStore } from '../stores/auth-store';
 
 type Step = 'init' | 'shares' | 'unseal' | 'admin' | 'done';
 
+// validateAdminPassword replaces the nested ternary used inside the form's
+// `onChange` validator (S3358) with explicit checks.
+function validateAdminPassword(value: string): string | undefined {
+  if (value.length < 8) return 'Min 8 characters';
+  const hasMixedCase = /[A-Z]/.test(value) && /[a-z]/.test(value);
+  if (!hasMixedCase || !/\d/.test(value)) return 'Mixed case + at least one digit';
+  return undefined;
+}
+
 interface IssuedKeys {
   shares: string[];
   threshold: number;
@@ -44,12 +53,19 @@ export function SetupPage() {
     defaultValues: { username: '', email: '', password: '' },
     onSubmit: async ({ value }) => {
       const data = await registerMutation.mutateAsync(value);
-      setAuth(data.token, {
-        id: data.user.id,
-        username: data.user.username,
-        email: data.user.email,
-        role: data.user.role,
-      });
+      // Server set the httpOnly session cookie on the response — frontend
+      // doesn't need to store the raw token. Pass it as legacyToken so the
+      // axios header fallback still works for any code path that hasn't
+      // moved to cookie auth yet.
+      setAuth(
+        {
+          id: data.user.id,
+          username: data.user.username,
+          email: data.user.email,
+          role: data.user.role,
+        },
+        { legacyToken: data.token },
+      );
       navigate('/', { replace: true });
     },
   });
@@ -67,15 +83,14 @@ export function SetupPage() {
   // confirm they saved the shares — even though the backend reports
   // initialized immediately after init returns. Only when the user clicks
   // Continue (which clears issuedKeys) does the wizard advance to unseal.
-  const step: Step = issuedKeys
-    ? 'shares'
-    : !vaultStatus.initialized
-    ? 'init'
-    : vaultStatus.sealed
-    ? 'unseal'
-    : !setupStatus.hasAdmin
-    ? 'admin'
-    : 'done';
+  function resolveStep(): Step {
+    if (issuedKeys) return 'shares';
+    if (!vaultStatus.initialized) return 'init';
+    if (vaultStatus.sealed) return 'unseal';
+    if (!setupStatus.hasAdmin) return 'admin';
+    return 'done';
+  }
+  const step: Step = resolveStep();
 
   if (step === 'init') {
     return (
@@ -355,12 +370,7 @@ export function SetupPage() {
           <adminForm.Field
             name="password"
             validators={{
-              onChange: ({ value }) =>
-                value.length < 8
-                  ? 'Min 8 characters'
-                  : !/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value)
-                  ? 'Mixed case + at least one digit'
-                  : undefined,
+              onChange: ({ value }) => validateAdminPassword(value),
             }}
           >
             {(field) => (
@@ -423,9 +433,9 @@ interface FieldApiLike<T> {
 }
 
 interface NumericFieldProps {
-  label: string;
-  field: FieldApiLike<string>;
-  testId: string;
+  readonly label: string;
+  readonly field: FieldApiLike<string>;
+  readonly testId: string;
 }
 
 function NumericField({ label, field, testId }: NumericFieldProps) {
@@ -453,12 +463,12 @@ function NumericField({ label, field, testId }: NumericFieldProps) {
 }
 
 interface TextFieldProps {
-  label: string;
-  type: 'text' | 'email' | 'password';
-  autoComplete: string;
-  field: FieldApiLike<string>;
-  testId: string;
-  hint?: string;
+  readonly label: string;
+  readonly type: 'text' | 'email' | 'password';
+  readonly autoComplete: string;
+  readonly field: FieldApiLike<string>;
+  readonly testId: string;
+  readonly hint?: string;
 }
 
 function TextField({ label, type, autoComplete, field, testId, hint }: TextFieldProps) {
@@ -489,10 +499,10 @@ function TextField({ label, type, autoComplete, field, testId, hint }: TextField
 }
 
 interface HeaderProps {
-  icon: React.ReactNode;
-  iconBg?: 'purple' | 'amber';
-  title: string;
-  subtitle: string;
+  readonly icon: React.ReactNode;
+  readonly iconBg?: 'purple' | 'amber';
+  readonly title: string;
+  readonly subtitle: string;
 }
 
 function Header({ icon, iconBg = 'purple', title, subtitle }: HeaderProps) {
@@ -513,7 +523,7 @@ function Header({ icon, iconBg = 'purple', title, subtitle }: HeaderProps) {
   );
 }
 
-function ErrorBanner({ message }: { message: string }) {
+function ErrorBanner({ message }: { readonly message: string }) {
   return (
     <div className="mb-3 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
       {message}

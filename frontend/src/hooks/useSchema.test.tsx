@@ -70,7 +70,7 @@ describe('useSchemaTables', () => {
     vi.mocked(api.patch).mockResolvedValueOnce({} as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useUpdateTable('p1'), { wrapper: Wrapper });
-    result.current.mutate({ tableName: 'posts', body: { newName: 'p2' } });
+    result.current.mutate({ tableName: 'posts', newName: 'p2' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.patch).toHaveBeenCalled();
   });
@@ -154,7 +154,7 @@ describe('useSchemaData', () => {
     vi.mocked(api.patch).mockResolvedValueOnce({} as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useUpdateRow('p1'), { wrapper: Wrapper });
-    result.current.mutate({ tableName: 'posts', pk: { id: 1 }, data: { title: 'y' } });
+    result.current.mutate({ tableName: 'posts', pk: { column: 'id', value: '1' }, data: { title: 'y' } });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.patch).toHaveBeenCalled();
   });
@@ -163,7 +163,7 @@ describe('useSchemaData', () => {
     vi.mocked(api.delete).mockResolvedValueOnce({} as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useDeleteRow('p1'), { wrapper: Wrapper });
-    result.current.mutate({ tableName: 'posts', pk: { id: 1 } });
+    result.current.mutate({ tableName: 'posts', pk: { column: 'id', value: '1' } });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.delete).toHaveBeenCalled();
   });
@@ -174,7 +174,7 @@ describe('useSchemaTables — extra DDL', () => {
     vi.mocked(api.delete).mockResolvedValueOnce({} as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useDropTable('p1'), { wrapper: Wrapper });
-    result.current.mutate('posts');
+    result.current.mutate({ tableName: 'posts' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.delete).toHaveBeenCalled();
   });
@@ -183,7 +183,7 @@ describe('useSchemaTables — extra DDL', () => {
     vi.mocked(api.post).mockResolvedValueOnce({} as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useAddColumn('p1'), { wrapper: Wrapper });
-    result.current.mutate({ tableName: 'posts', body: { name: 'c', dataType: 'text' } });
+    result.current.mutate({ tableName: 'posts', name: 'c', type: 'text' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalled();
   });
@@ -192,7 +192,7 @@ describe('useSchemaTables — extra DDL', () => {
     vi.mocked(api.patch).mockResolvedValueOnce({} as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useAlterColumn('p1'), { wrapper: Wrapper });
-    result.current.mutate({ tableName: 'posts', columnName: 'c', body: { dataType: 'int' } });
+    result.current.mutate({ tableName: 'posts', columnName: 'c', type: 'int' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.patch).toHaveBeenCalled();
   });
@@ -227,7 +227,7 @@ describe('useSchemaObjects — extra', () => {
     await waitFor(() => expect(list.current.isSuccess).toBe(true));
 
     const { result: create } = renderHook(() => useCreatePolicy('p1'), { wrapper: Wrapper });
-    create.current.mutate({ table: 'posts', name: 'p1', command: 'SELECT' });
+    create.current.mutate({ table: 'posts', name: 'p1', command: 'SELECT', roles: 'public' });
     await waitFor(() => expect(create.current.isSuccess).toBe(true));
 
     const { result: drop } = renderHook(() => useDropPolicy('p1'), { wrapper: Wrapper });
@@ -245,7 +245,7 @@ describe('useSchemaObjects — extra', () => {
     await waitFor(() => expect(list.current.isSuccess).toBe(true));
 
     const { result: create } = renderHook(() => useCreateFunction('p1'), { wrapper: Wrapper });
-    create.current.mutate({ name: 'f', body: 'SELECT 1', returnType: 'int' });
+    create.current.mutate({ name: 'f', body: 'SELECT 1', returnType: 'int', language: 'sql' });
     await waitFor(() => expect(create.current.isSuccess).toBe(true));
 
     const { result: drop } = renderHook(() => useDropFunction('p1'), { wrapper: Wrapper });
@@ -263,7 +263,7 @@ describe('useSchemaObjects — extra', () => {
     await waitFor(() => expect(list.current.isSuccess).toBe(true));
 
     const { result: create } = renderHook(() => useCreateTrigger('p1'), { wrapper: Wrapper });
-    create.current.mutate({ name: 't', table: 'posts', timing: 'BEFORE', event: 'INSERT', functionName: 'f' });
+    create.current.mutate({ name: 't', table: 'posts', timing: 'BEFORE', event: 'INSERT', function: 'f' });
     await waitFor(() => expect(create.current.isSuccess).toBe(true));
 
     const { result: drop } = renderHook(() => useDropTrigger('p1'), { wrapper: Wrapper });

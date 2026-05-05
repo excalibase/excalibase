@@ -2,8 +2,8 @@ import { Trash2 } from 'lucide-react';
 import type { ColumnInfo } from '../../types/schema';
 
 interface ColumnSchemaViewProps {
-  columns: ColumnInfo[];
-  onDropColumn: (columnName: string) => void;
+  readonly columns: ColumnInfo[];
+  readonly onDropColumn: (columnName: string) => void;
 }
 
 export function ColumnSchemaView({ columns, onDropColumn }: ColumnSchemaViewProps) {

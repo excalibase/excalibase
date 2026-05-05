@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+const (
+	testGenUUID   = "gen_random_uuid()"
+	testUUIDGen   = "uuid_generate_v4()"
+	testClockTS   = "clock_timestamp()"
+	testStmtTS    = "statement_timestamp()"
+	testTxnTS     = "transaction_timestamp()"
+)
+
+
 func TestQuoteIdent(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -175,15 +184,15 @@ func TestValidateDefaultExpression(t *testing.T) {
 
 		// Safe function calls
 		{"now()", "now()", "now()", false},
-		{"gen_random_uuid()", "gen_random_uuid()", "gen_random_uuid()", false},
-		{"uuid_generate_v4()", "uuid_generate_v4()", "uuid_generate_v4()", false},
+		{testGenUUID, testGenUUID, testGenUUID, false},
+		{testUUIDGen, testUUIDGen, testUUIDGen, false},
 		{"current_timestamp", "current_timestamp", "current_timestamp", false},
 		{"CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP", false},
 		{"current_date", "current_date", "current_date", false},
 		{"current_user", "current_user", "current_user", false},
-		{"clock_timestamp()", "clock_timestamp()", "clock_timestamp()", false},
-		{"statement_timestamp()", "statement_timestamp()", "statement_timestamp()", false},
-		{"transaction_timestamp()", "transaction_timestamp()", "transaction_timestamp()", false},
+		{testClockTS, testClockTS, testClockTS, false},
+		{testStmtTS, testStmtTS, testStmtTS, false},
+		{testTxnTS, testTxnTS, testTxnTS, false},
 
 		// nextval pattern
 		{"nextval simple", "nextval('my_seq')", "nextval('my_seq')", false},

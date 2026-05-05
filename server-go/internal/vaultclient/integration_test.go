@@ -10,6 +10,13 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const (
+	testVaultHost      = "app-a-postgres-rw.ns-app-a.svc.cluster.local"
+	testVaultCredsPath = "projects/org-a/app-a/credentials/admin"
+	testIntegSecretPath     = "test/secret"
+)
+
+
 // Integration tests: vault service (handler) ↔ HTTP client ↔ platform operations
 // Simulates the full flow: platform stores credentials in vault, auth/graphql reads them.
 
@@ -32,11 +39,16 @@ func setupIntegrationServer(t *testing.T, tokens []string) (*httptest.Server, *v
 
 	h := vaultapi.NewVaultHandler(v)
 	r := chi.NewRouter()
+	if len(tokens) == 0 {
+		tokens = []string{integrationTestPAT}
+	}
 	h.Routes(r, tokens)
 	ts := httptest.NewServer(r)
 	t.Cleanup(ts.Close)
 	return ts, v
 }
+
+const integrationTestPAT = "integration-test-pat"
 
 // Test: provisioning stores project credentials, auth reads them
 func TestIntegration_ProvisioningStoresCredentials_AuthReads(t *testing.T) {
@@ -47,7 +59,7 @@ func TestIntegration_ProvisioningStoresCredentials_AuthReads(t *testing.T) {
 	platformClient := NewHTTPClient(ts.URL, pat)
 
 	err := platformClient.Put("projects/duc-corp/app-a/credentials/auth_admin", map[string]string{
-		"host":     "app-a-postgres-rw.ns-app-a.svc.cluster.local",
+		"host":     testVaultHost,
 		"port":     "5432",
 		"username": "auth_admin",
 		"password": "auth-secret-123",
@@ -58,7 +70,7 @@ func TestIntegration_ProvisioningStoresCredentials_AuthReads(t *testing.T) {
 	}
 
 	err = platformClient.Put("projects/duc-corp/app-a/credentials/excalibase_app", map[string]string{
-		"host":     "app-a-postgres-rw.ns-app-a.svc.cluster.local",
+		"host":     testVaultHost,
 		"port":     "5432",
 		"username": "excalibase_app",
 		"password": "app-secret-456",
@@ -90,7 +102,7 @@ func TestIntegration_ProvisioningStoresCredentials_AuthReads(t *testing.T) {
 	if appCreds["username"] != "excalibase_app" {
 		t.Errorf("graphql expected username=excalibase_app, got %s", appCreds["username"])
 	}
-	if appCreds["host"] != "app-a-postgres-rw.ns-app-a.svc.cluster.local" {
+	if appCreds["host"] != testVaultHost {
 		t.Errorf("graphql expected correct host, got %s", appCreds["host"])
 	}
 }
@@ -122,14 +134,14 @@ func TestIntegration_PKISigningKeyFlow(t *testing.T) {
 // Test: multi-project isolation — credentials for project A not visible as project B
 func TestIntegration_MultiProjectIsolation(t *testing.T) {
 	ts, _ := setupIntegrationServer(t, nil)
-	client := NewHTTPClient(ts.URL, "")
+	client := NewHTTPClient(ts.URL, integrationTestPAT)
 
 	// Store creds for two different projects
-	client.Put("projects/org-a/app-a/credentials/admin", map[string]string{"password": "a-secret"})
+	client.Put(testVaultCredsPath, map[string]string{"password": "a-secret"})
 	client.Put("projects/org-b/app-b/credentials/admin", map[string]string{"password": "b-secret"})
 
 	// Read each — verify isolation
-	credsA, err := client.Get("projects/org-a/app-a/credentials/admin")
+	credsA, err := client.Get(testVaultCredsPath)
 	if err != nil {
 		t.Fatalf("Get project A: %v", err)
 	}
@@ -155,9 +167,9 @@ func TestIntegration_MultiProjectIsolation(t *testing.T) {
 // Test: credential rotation — overwrite existing secret
 func TestIntegration_CredentialRotation(t *testing.T) {
 	ts, _ := setupIntegrationServer(t, nil)
-	client := NewHTTPClient(ts.URL, "")
+	client := NewHTTPClient(ts.URL, integrationTestPAT)
 
-	path := "projects/org-a/app-a/credentials/admin"
+	path := testVaultCredsPath
 
 	// Store initial credentials
 	client.Put(path, map[string]string{"password": "old-password", "host": "old-host"})
@@ -181,16 +193,16 @@ func TestIntegration_CredentialRotation(t *testing.T) {
 // Test: vault seal blocks reads and writes
 func TestIntegration_SealBlocksOperations(t *testing.T) {
 	ts, v := setupIntegrationServer(t, nil)
-	client := NewHTTPClient(ts.URL, "")
+	client := NewHTTPClient(ts.URL, integrationTestPAT)
 
 	// Store a secret while unsealed
-	client.Put("test/secret", map[string]string{"key": "value"})
+	client.Put(testIntegSecretPath, map[string]string{"key": "value"})
 
 	// Seal vault
 	v.Seal()
 
 	// All operations should fail
-	_, err := client.Get("test/secret")
+	_, err := client.Get(testIntegSecretPath)
 	if err == nil {
 		t.Error("Get should fail when sealed")
 	}
@@ -200,7 +212,7 @@ func TestIntegration_SealBlocksOperations(t *testing.T) {
 		t.Error("Put should fail when sealed")
 	}
 
-	err = client.Delete("test/secret")
+	err = client.Delete(testIntegSecretPath)
 	if err == nil {
 		t.Error("Delete should fail when sealed")
 	}
@@ -209,7 +221,7 @@ func TestIntegration_SealBlocksOperations(t *testing.T) {
 // Test: delete removes credential permanently
 func TestIntegration_DeleteCredentials(t *testing.T) {
 	ts, _ := setupIntegrationServer(t, nil)
-	client := NewHTTPClient(ts.URL, "")
+	client := NewHTTPClient(ts.URL, integrationTestPAT)
 
 	path := "projects/org-a/deleted-app/credentials/admin"
 	client.Put(path, map[string]string{"password": "will-be-deleted"})

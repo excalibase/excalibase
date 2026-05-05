@@ -6,8 +6,8 @@ import {
 } from 'lucide-react';
 
 interface StageTimelineProps {
-  currentStage: ProvisioningStage;
-  failureReason?: string;
+  readonly currentStage: ProvisioningStage;
+  readonly failureReason?: string;
 }
 
 const STAGES = [
@@ -21,11 +21,20 @@ const STAGES = [
   { key: ProvisioningStage.COMPLETED,             label: 'Completed',   icon: CheckCircle },
 ];
 
+type StageState = 'done' | 'running' | 'failed' | 'pending';
+
+function getLabelClass(state: StageState): string {
+  if (state === 'running') return 'text-purple-400 font-semibold';
+  if (state === 'done') return 'text-green-500';
+  if (state === 'failed') return 'text-red-500';
+  return 'text-text-tertiary';
+}
+
 export function StageTimeline({ currentStage, failureReason }: StageTimelineProps) {
   const currentIndex = STAGES.findIndex((s) => s.key === currentStage);
   const isFailed = currentStage === ProvisioningStage.FAILED;
 
-  const getState = (index: number) => {
+  const getState = (index: number): StageState => {
     if (isFailed && index === currentIndex) return 'failed';
     if (currentStage === ProvisioningStage.COMPLETED || index < currentIndex) return 'done';
     if (index === currentIndex) return 'running';
@@ -41,7 +50,6 @@ export function StageTimeline({ currentStage, failureReason }: StageTimelineProp
           return (
             <div key={stage.key} className="flex items-center flex-shrink-0">
               <div className="flex flex-col items-center">
-                {/* Circle */}
                 <div
                   className={cn(
                     'w-10 h-10 rounded-full border-2 flex items-center justify-center',
@@ -56,18 +64,10 @@ export function StageTimeline({ currentStage, failureReason }: StageTimelineProp
                   {state === 'failed'  && <XCircle className="w-5 h-5 text-red-500" />}
                   {state === 'pending' && <StageIcon className="w-4 h-4 text-text-tertiary" />}
                 </div>
-                {/* Label */}
-                <p className={cn(
-                  'mt-2 text-xs text-center w-20',
-                  state === 'running' ? 'text-purple-400 font-semibold' :
-                  state === 'done'    ? 'text-green-500' :
-                  state === 'failed'  ? 'text-red-500' :
-                  'text-text-tertiary'
-                )}>
+                <p className={cn('mt-2 text-xs text-center w-20', getLabelClass(state))}>
                   {stage.label}
                 </p>
               </div>
-              {/* Connector */}
               {index < STAGES.length - 1 && (
                 <div className={cn(
                   'w-8 h-0.5 mb-6',

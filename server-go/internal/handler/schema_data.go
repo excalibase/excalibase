@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"errors"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
@@ -12,54 +14,19 @@ import (
 // --- Row Data ---
 
 func (h *SchemaHandler) GetRows(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
 	}
 
+	opts, err := buildRowQueryOpts(r.URL.Query())
+	if err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	tableName := chi.URLParam(r, "tableName")
-	q := r.URL.Query()
-
-	opts := schema.RowQueryOpts{
-		Sort:  q.Get("sort"),
-		Order: q.Get("order"),
-	}
-
-	if v := q.Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			httpError(w, "invalid limit: must be an integer", http.StatusBadRequest)
-			return
-		}
-		opts.Limit = n
-	}
-	if v := q.Get("offset"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			httpError(w, "invalid offset: must be an integer", http.StatusBadRequest)
-			return
-		}
-		opts.Offset = n
-	}
-
-	// Parse filters: filter[column]=operator:value
-	for key, values := range q {
-		if len(key) > 7 && key[:7] == "filter[" && key[len(key)-1] == ']' {
-			col := key[7 : len(key)-1]
-			for _, v := range values {
-				f := schema.RowFilter{Column: col}
-				if idx := indexOfByte(v, ':'); idx >= 0 {
-					f.Operator = v[:idx]
-					f.Value = v[idx+1:]
-				} else {
-					f.Operator = v
-				}
-				opts.Filters = append(opts.Filters, f)
-			}
-		}
-	}
-
 	result, err := h.introspector.GetRows(r.Context(), db, schemaParam(r), tableName, opts)
 	if err != nil {
 		schemaError(w, err, http.StatusBadRequest)
@@ -68,8 +35,56 @@ func (h *SchemaHandler) GetRows(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+// buildRowQueryOpts parses pagination, sort, and filter query parameters.
+func buildRowQueryOpts(q url.Values) (schema.RowQueryOpts, error) {
+	opts := schema.RowQueryOpts{
+		Sort:  q.Get("sort"),
+		Order: q.Get("order"),
+	}
+
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return opts, errors.New("invalid limit: must be an integer")
+		}
+		opts.Limit = n
+	}
+	if v := q.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return opts, errors.New("invalid offset: must be an integer")
+		}
+		opts.Offset = n
+	}
+
+	opts.Filters = parseRowFilters(q)
+	return opts, nil
+}
+
+// parseRowFilters extracts filter[column]=operator:value params.
+func parseRowFilters(q url.Values) []schema.RowFilter {
+	var filters []schema.RowFilter
+	for key, values := range q {
+		if len(key) <= 7 || key[:7] != "filter[" || key[len(key)-1] != ']' {
+			continue
+		}
+		col := key[7 : len(key)-1]
+		for _, v := range values {
+			f := schema.RowFilter{Column: col}
+			if idx := indexOfByte(v, ':'); idx >= 0 {
+				f.Operator = v[:idx]
+				f.Value = v[idx+1:]
+			} else {
+				f.Operator = v
+			}
+			filters = append(filters, f)
+		}
+	}
+	return filters
+}
+
 func (h *SchemaHandler) InsertRow(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -79,7 +94,7 @@ func (h *SchemaHandler) InsertRow(w http.ResponseWriter, r *http.Request) {
 		Data map[string]interface{} `json:"data"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if len(body.Data) == 0 {
@@ -99,7 +114,7 @@ func (h *SchemaHandler) InsertRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) UpdateRow(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -113,7 +128,7 @@ func (h *SchemaHandler) UpdateRow(w http.ResponseWriter, r *http.Request) {
 		Data map[string]interface{} `json:"data"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if body.PK.Column == "" || body.PK.Value == "" {
@@ -134,7 +149,7 @@ func (h *SchemaHandler) UpdateRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchemaHandler) DeleteRow(w http.ResponseWriter, r *http.Request) {
-	db, err := h.getDB(chi.URLParam(r, "orgId"), chi.URLParam(r, "projectId"))
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
 	if err != nil {
 		h.handleDBError(w, err)
 		return
@@ -147,7 +162,7 @@ func (h *SchemaHandler) DeleteRow(w http.ResponseWriter, r *http.Request) {
 		} `json:"pk"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
 	if body.PK.Column == "" || body.PK.Value == "" {

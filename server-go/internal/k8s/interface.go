@@ -34,6 +34,56 @@ type KubeClient interface {
 	// The runtime is reachable at http://deno-runtime.{namespace}.svc.cluster.local:8000
 	// after the pod becomes ready (caller polls IsPodReady or sleeps).
 	EnsureDenoRuntime(ctx context.Context, namespace string, spec DenoRuntimeSpec) error
+
+	// GetClusterCapacity returns aggregate Allocatable + already-Requested
+	// CPU/memory across all schedulable nodes. Used by capacity-aware
+	// provisioning to refuse projects that wouldn't fit.
+	GetClusterCapacity(ctx context.Context) (ClusterCapacity, error)
+}
+
+// ClusterCapacity holds aggregate cluster resource state. All values are in
+// canonical Kubernetes resource.Quantity Milli/MilliBytes — i.e. CPU is in
+// milliCPU (1000m = 1 core), memory is in bytes.
+//
+// Allocatable is what kubelet exposes (after kube-reserved + system-reserved).
+// In practice we hold back a further percentage so the cluster never runs at
+// 100% allocatable: that buffer covers monitoring/observability burst, brief
+// pod-restart spikes, and lets node-level GC + kubelet stay responsive. The
+// HeadroomPercent field captures that policy; Usable* methods apply it.
+type ClusterCapacity struct {
+	AllocatableCPUMilli int64 // sum of allocatable CPU across nodes (milli)
+	AllocatableMemBytes int64 // sum of allocatable memory across nodes (bytes)
+	RequestedCPUMilli   int64 // sum of pod CPU requests in flight (milli)
+	RequestedMemBytes   int64 // sum of pod memory requests in flight (bytes)
+	HeadroomPercent     int   // % of allocatable held back as a safety buffer (0-100)
+}
+
+// UsableCPUMilli is allocatable minus the headroom buffer. This is the
+// number provisioning should plan against — never `Allocatable` directly.
+func (c ClusterCapacity) UsableCPUMilli() int64 {
+	if c.HeadroomPercent <= 0 || c.HeadroomPercent >= 100 {
+		return c.AllocatableCPUMilli
+	}
+	return c.AllocatableCPUMilli * int64(100-c.HeadroomPercent) / 100
+}
+
+// UsableMemBytes is allocatable memory minus the headroom buffer.
+func (c ClusterCapacity) UsableMemBytes() int64 {
+	if c.HeadroomPercent <= 0 || c.HeadroomPercent >= 100 {
+		return c.AllocatableMemBytes
+	}
+	return c.AllocatableMemBytes * int64(100-c.HeadroomPercent) / 100
+}
+
+// FreeCPUMilli is usable - requested. Negative means we're already past the
+// safety threshold and new provisions should be refused.
+func (c ClusterCapacity) FreeCPUMilli() int64 {
+	return c.UsableCPUMilli() - c.RequestedCPUMilli
+}
+
+// FreeMemBytes is usable memory - requested.
+func (c ClusterCapacity) FreeMemBytes() int64 {
+	return c.UsableMemBytes() - c.RequestedMemBytes
 }
 
 // DenoRuntimeSpec configures the per-project Deno runtime pod. Resource

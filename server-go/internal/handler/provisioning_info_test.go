@@ -11,8 +11,15 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/go-chi/chi/v5"
 )
+
+const (
+	testOwner1 = "owner-1"
+	testUUID   = "e6ab0746-974d-4ed1-b900-d83e916f1d39"
+)
+
 
 // setupInfoRouter wires the GetProjectInfo route with a real SQLite-backed
 // OrgStore + InstanceStore so the test exercises the same code path used in
@@ -42,18 +49,18 @@ func TestGetProjectInfo_Success(t *testing.T) {
 	ctx := context.Background()
 
 	if err := store.CreateUser(ctx, &domain.User{
-		ID: "owner-1", Username: "owner1", Email: "owner1@test.com",
-		PasswordHash: "hash", Role: "user", Active: true,
+		ID: testOwner1, Username: testutil.FixtureToken("owner1"), Email: "owner1@test.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true,
 	}); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
 	if err := store.CreateOrg(ctx, &domain.Org{
-		ID:      "e6ab0746-974d-4ed1-b900-d83e916f1d39",
+		ID:      testUUID,
 		Name:    "Acme Corp",
 		Slug:    "acme",
 		Tier:    domain.Free,
-		OwnerID: "owner-1",
+		OwnerID: testOwner1,
 	}); err != nil {
 		t.Fatalf("CreateOrg: %v", err)
 	}
@@ -61,8 +68,8 @@ func TestGetProjectInfo_Success(t *testing.T) {
 	if err := store.Save(&domain.DatabaseInstance{
 		ProjectID:   "proj-i1nd88wser",
 		ProjectName: "blog",
-		OrgID:       "e6ab0746-974d-4ed1-b900-d83e916f1d39",
-		OwnerID:     "owner-1",
+		OrgID:       testUUID,
+		OwnerID:     testOwner1,
 		Status:      "ACTIVE",
 	}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -84,7 +91,7 @@ func TestGetProjectInfo_Success(t *testing.T) {
 	want := domain.ProjectInfo{
 		ProjectID:          "proj-i1nd88wser",
 		ProjectName:        "blog",
-		OrgID:              "e6ab0746-974d-4ed1-b900-d83e916f1d39",
+		OrgID:              testUUID,
 		OrgSlug:             "acme",
 		OrgName:            "Acme Corp",
 		RealtimeAutoEnable: true,
@@ -124,10 +131,11 @@ func TestGetProjectInfo_InvalidProjectID(t *testing.T) {
 	}
 }
 
-// When the org record is missing (e.g. legacy instances or orphaned data),
-// the handler still returns 200 with the orgID echoed for slug/name so the
-// auth service can still mint a JWT with at least the projectID grounded.
-func TestGetProjectInfo_OrgMissing_FallsBackToOrgID(t *testing.T) {
+// When the org record can't be resolved, the handler must NOT forge a slug
+// from the raw OrgID. Returning a UUID-as-slug feeds downstream JWT verifiers
+// the wrong `iss` claim. 503 tells the caller to retry rather than caching a
+// poisoned response.
+func TestGetProjectInfo_OrgMissing_Returns503(t *testing.T) {
 	r, store := setupInfoRouter(t)
 
 	if err := store.Save(&domain.DatabaseInstance{
@@ -143,17 +151,7 @@ func TestGetProjectInfo_OrgMissing_FallsBackToOrgID(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200 (body=%s)", w.Code, w.Body.String())
-	}
-
-	var got domain.ProjectInfo
-	json.NewDecoder(w.Body).Decode(&got)
-
-	if got.OrgID != "unknown-org-id" || got.OrgSlug != "unknown-org-id" || got.OrgName != "unknown-org-id" {
-		t.Errorf("expected fallback to orgID for slug/name; got %+v", got)
-	}
-	if got.ProjectName != "orphaned" {
-		t.Errorf("projectName: got %q, want %q", got.ProjectName, "orphaned")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status: got %d, want 503 (body=%s)", w.Code, w.Body.String())
 	}
 }

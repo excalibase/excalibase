@@ -11,13 +11,11 @@ export function BackupsPage() {
   const { projectId } = useInstanceContext();
   const [tab, setTab] = useState<Tab>('backups');
 
-  // Backup list
   const { data: backupData, isLoading } = useListBackups(projectId);
   const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
   const triggerBackup = useTriggerBackup();
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
-  // Restore / PITR
   const restore = useRestoreFromBackup(projectId);
   const [restoreForm, setRestoreForm] = useState<RestoreRequest>({ newProjectId: '', targetTime: '' });
   const isPitr = !!restoreForm.targetTime?.trim();
@@ -29,14 +27,12 @@ export function BackupsPage() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      {/* Toast */}
       {toast && (
         <div className={`px-4 py-2 rounded-lg text-sm font-medium border ${toast.ok ? 'bg-green-900/20 text-green-400 border-green-500/30' : 'bg-red-900/20 text-red-400 border-red-500/30'}`}>
           {toast.msg}
         </div>
       )}
 
-      {/* Backup config summary */}
       {backupData && (
         <div className="grid grid-cols-3 gap-4">
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
@@ -51,12 +47,11 @@ export function BackupsPage() {
           </div>
           <div className="bg-surface-card border border-border-primary rounded-xl p-4">
             <p className="text-xs text-text-tertiary mb-1">Retention</p>
-            <p className="text-sm font-medium text-text-primary">{backupData.retentionDays != null ? `${backupData.retentionDays} days` : '—'}</p>
+            <p className="text-sm font-medium text-text-primary">{backupData.retentionDays == null ? '—' : `${backupData.retentionDays} days`}</p>
           </div>
         </div>
       )}
 
-      {/* Tabs */}
       <div className="bg-surface-card border border-border-primary rounded-xl overflow-hidden">
         <div className="flex border-b border-border-primary px-4 gap-1">
           {([
@@ -90,42 +85,40 @@ export function BackupsPage() {
         </div>
 
         <div className="p-6">
-          {/* ── Backup History ── */}
-          {tab === 'backups' && (
-            isLoading ? (
-              <div className="text-center py-12 text-text-secondary">Loading…</div>
-            ) : backups.length === 0 ? (
-              <div className="text-center py-12">
-                <Archive className="w-12 h-12 mx-auto mb-3 text-text-tertiary" />
-                <p className="text-text-secondary">No backups found. Click "Trigger Backup" to create one.</p>
-              </div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-text-tertiary border-b border-border-primary">
-                    <th className="text-left py-2 font-medium">Backup ID</th>
-                    <th className="text-left py-2 font-medium">Timestamp</th>
-                    <th className="text-left py-2 font-medium">Type</th>
-                    <th className="text-left py-2 font-medium">Size</th>
-                    <th className="text-left py-2 font-medium">Status</th>
+          {tab === 'backups' && isLoading && (
+            <div className="text-center py-12 text-text-secondary">Loading…</div>
+          )}
+          {tab === 'backups' && !isLoading && backups.length === 0 && (
+            <div className="text-center py-12">
+              <Archive className="w-12 h-12 mx-auto mb-3 text-text-tertiary" />
+              <p className="text-text-secondary">No backups found. Click "Trigger Backup" to create one.</p>
+            </div>
+          )}
+          {tab === 'backups' && !isLoading && backups.length > 0 && (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-text-tertiary border-b border-border-primary">
+                  <th className="text-left py-2 font-medium">Backup ID</th>
+                  <th className="text-left py-2 font-medium">Timestamp</th>
+                  <th className="text-left py-2 font-medium">Type</th>
+                  <th className="text-left py-2 font-medium">Size</th>
+                  <th className="text-left py-2 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {backups.map((b) => (
+                  <tr key={b.id} className="border-b border-border-primary last:border-0 hover:bg-surface-hover transition-colors">
+                    <td className="py-3 font-mono text-xs text-text-primary">{b.id}</td>
+                    <td className="py-3 text-text-secondary">{new Date(b.timestamp).toLocaleString()}</td>
+                    <td className="py-3 text-text-tertiary">{b.type ?? 'MANUAL'}</td>
+                    <td className="py-3 text-text-secondary">{b.size}</td>
+                    <td className="py-3"><StatusBadge status={b.status} /></td>
                   </tr>
-                </thead>
-                <tbody>
-                  {backups.map((b) => (
-                    <tr key={b.id} className="border-b border-border-primary last:border-0 hover:bg-surface-hover transition-colors">
-                      <td className="py-3 font-mono text-xs text-text-primary">{b.id}</td>
-                      <td className="py-3 text-text-secondary">{new Date(b.timestamp).toLocaleString()}</td>
-                      <td className="py-3 text-text-tertiary">{b.type ?? 'MANUAL'}</td>
-                      <td className="py-3 text-text-secondary">{b.size}</td>
-                      <td className="py-3"><StatusBadge status={b.status} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )
+                ))}
+              </tbody>
+            </table>
           )}
 
-          {/* ── Restore / PITR ── */}
           {tab === 'restore' && (
             <div className="max-w-lg space-y-5">
               <p className="text-sm text-text-secondary">
@@ -135,8 +128,9 @@ export function BackupsPage() {
 
               <div className="space-y-4">
                 <div>
-                  <label className="text-xs text-text-secondary block mb-1">New Instance ID *</label>
+                  <label htmlFor="restore-new-id" className="text-xs text-text-secondary block mb-1">New Instance ID *</label>
                   <input
+                    id="restore-new-id"
                     value={restoreForm.newProjectId}
                     onChange={(e) => setRestoreForm({ ...restoreForm, newProjectId: e.target.value })}
                     placeholder="e.g. db-restored"
@@ -145,10 +139,11 @@ export function BackupsPage() {
                 </div>
 
                 <div>
-                  <label className="text-xs text-text-secondary block mb-1 flex items-center gap-1.5">
+                  <label htmlFor="restore-target-time" className="text-xs text-text-secondary block mb-1 flex items-center gap-1.5">
                     <Clock className="w-3 h-3" /> Target Time (PITR) — leave blank for latest backup
                   </label>
                   <input
+                    id="restore-target-time"
                     type="datetime-local"
                     value={restoreForm.targetTime ?? ''}
                     onChange={(e) => setRestoreForm({ ...restoreForm, targetTime: e.target.value })}
@@ -183,7 +178,9 @@ export function BackupsPage() {
                 )}
               >
                 <RotateCcw className="w-4 h-4 mr-2" />
-                {restore.isPending ? 'Initiating restore…' : isPitr ? 'Restore to Point in Time' : 'Restore Latest Backup'}
+                {restore.isPending && 'Initiating restore…'}
+                {!restore.isPending && isPitr && 'Restore to Point in Time'}
+                {!restore.isPending && !isPitr && 'Restore Latest Backup'}
               </Button>
             </div>
           )}

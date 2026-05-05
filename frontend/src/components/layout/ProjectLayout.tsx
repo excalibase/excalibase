@@ -23,7 +23,7 @@ function ProjectLayoutInner() {
         activeSection={showSubNav ? currentSection : activeSection}
         onSectionClick={setActiveSection}
       />
-      {showSubNav && <SubNav sectionKey={currentSection!} />}
+      {showSubNav && currentSection && <SubNav sectionKey={currentSection} />}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <ProjectHeader />
         <main className="flex-1 overflow-y-auto p-6">

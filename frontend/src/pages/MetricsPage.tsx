@@ -6,7 +6,17 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
-function UsageBar({ value, max, color }: { value: number; max: number; color: string }) {
+// SKELETON_KEYS provides stable React keys for the loading-state placeholder
+// tiles. Static identifiers avoid the array-index-as-key smell (S6479).
+const SKELETON_KEYS = ['cpu', 'mem', 'storage', 'conn', 'health', 'backup'] as const;
+
+interface UsageBarProps {
+  readonly value: number;
+  readonly max: number;
+  readonly color: string;
+}
+
+function UsageBar({ value, max, color }: UsageBarProps) {
   const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
   return (
     <div className="w-full bg-bg-tertiary rounded-full h-2 mt-1">
@@ -29,11 +39,11 @@ export function MetricsPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      {isLoading ? (
+      {isLoading && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="bg-surface-card border border-border-primary rounded-xl p-5 animate-pulse">
+            {SKELETON_KEYS.map((k) => (
+              <div key={k} className="bg-surface-card border border-border-primary rounded-xl p-5 animate-pulse">
                 <div className="h-3 w-16 bg-bg-tertiary rounded mb-3" />
                 <div className="h-7 w-20 bg-bg-tertiary rounded mb-2" />
                 <div className="h-2 w-12 bg-bg-tertiary rounded" />
@@ -45,9 +55,11 @@ export function MetricsPage() {
             <span className="text-sm text-text-secondary">Fetching metrics...</span>
           </div>
         </div>
-      ) : !current ? (
+      )}
+      {!isLoading && current == null && (
         <div className="text-center py-20 text-text-secondary">No metrics data yet.</div>
-      ) : !current.metricsAvailable ? (
+      )}
+      {!isLoading && current != null && !current.metricsAvailable && (
         <div className="flex flex-col items-center justify-center py-24 text-center gap-6">
           <div className="w-14 h-14 rounded-full bg-amber-500/10 flex items-center justify-center">
             <AlertTriangle className="w-7 h-7 text-amber-400" />
@@ -65,29 +77,29 @@ export function MetricsPage() {
             </ol>
           </div>
         </div>
-      ) : (
+      )}
+      {!isLoading && current != null && current.metricsAvailable && (
         <>
-          {/* Cluster overview cards */}
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
             <MetricCard
               icon={<Cpu className="w-4 h-4" />}
               label="CPU"
-              value={current.cpuUsageCores != null ? `${current.cpuUsageCores.toFixed(2)} cores` : 'N/A'}
-              subtitle={current.cpuLimitCores != null ? `/ ${current.cpuLimitCores} limit (${current.instanceCount} pods)` : undefined}
+              value={current.cpuUsageCores == null ? 'N/A' : `${current.cpuUsageCores.toFixed(2)} cores`}
+              subtitle={current.cpuLimitCores == null ? undefined : `/ ${current.cpuLimitCores} limit (${current.instanceCount} pods)`}
               color="text-blue-400"
             />
             <MetricCard
               icon={<Server className="w-4 h-4" />}
               label="Memory"
-              value={current.memoryUsageMB != null ? `${current.memoryUsageMB} MB` : 'N/A'}
-              subtitle={current.memoryLimitMB != null ? `/ ${current.memoryLimitMB} MB limit` : undefined}
+              value={current.memoryUsageMB == null ? 'N/A' : `${current.memoryUsageMB} MB`}
+              subtitle={current.memoryLimitMB == null ? undefined : `/ ${current.memoryLimitMB} MB limit`}
               color="text-purple-400"
             />
             <MetricCard
               icon={<HardDrive className="w-4 h-4" />}
               label="Storage"
               value={current.storageLimit ?? 'N/A'}
-              subtitle={current.databaseSizeGB != null ? `${current.databaseSizeGB} GB used` : undefined}
+              subtitle={current.databaseSizeGB == null ? undefined : `${current.databaseSizeGB} GB used`}
               color="text-orange-400"
             />
             <MetricCard
@@ -113,7 +125,6 @@ export function MetricsPage() {
             />
           </div>
 
-          {/* Per-pod breakdown */}
           {current.pods && current.pods.length > 0 && (
             <div className="bg-surface-card border border-border-primary rounded-xl overflow-hidden">
               <div className="px-6 py-4 border-b border-border-primary">
@@ -158,7 +169,6 @@ export function MetricsPage() {
             </div>
           )}
 
-          {/* Chart */}
           {chartData.length > 1 && chartData.some(d => d.cpu > 0 || d.memory > 0) && (
             <div className="bg-surface-card border border-border-primary rounded-xl p-6">
               <h3 className="text-sm font-semibold text-text-primary mb-6">Resource Usage Trends</h3>

@@ -6,6 +6,9 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const testHighPerf = "high-perf"
+
+
 func TestParameterGroupStoreCRUD(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewFileSystemParameterGroupStore(dir)
@@ -14,7 +17,7 @@ func TestParameterGroupStoreCRUD(t *testing.T) {
 	}
 
 	pg := &domain.ParameterGroup{
-		Name:        "high-perf",
+		Name:        testHighPerf,
 		Description: "High performance settings",
 		Parameters:  map[string]string{"max_connections": "200", "shared_buffers": "4GB"},
 	}
@@ -25,7 +28,7 @@ func TestParameterGroupStoreCRUD(t *testing.T) {
 	}
 
 	// FindByName
-	got, _ := store.FindByName("high-perf")
+	got, _ := store.FindByName(testHighPerf)
 	if got == nil {
 		t.Fatal("FindByName returned nil")
 	}
@@ -40,8 +43,8 @@ func TestParameterGroupStoreCRUD(t *testing.T) {
 	}
 
 	// Delete
-	store.Delete("high-perf")
-	got, _ = store.FindByName("high-perf")
+	store.Delete(testHighPerf)
+	got, _ = store.FindByName(testHighPerf)
 	if got != nil {
 		t.Error("should be nil after delete")
 	}

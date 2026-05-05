@@ -13,7 +13,7 @@ import {
 import { Activity, Database, HardDrive, Cpu, Clock, Zap } from 'lucide-react';
 
 interface MonitoringDashboardProps {
-  projectId: string;
+  readonly projectId: string;
 }
 
 export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
@@ -22,9 +22,9 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
   const { latestMetrics, isConnected } = useMetricsSSE(projectId, true);
 
   // Use SSE data if available, otherwise use current metrics
-  const metrics = latestMetrics || currentMetrics;
+  const metrics = latestMetrics ?? currentMetrics;
 
-  if (isLoading || !metrics) {
+  if (isLoading || metrics == null) {
     return (
       <div className="text-center py-8">
         <Activity className="w-8 h-8 animate-pulse text-accent-primary mx-auto mb-2" />
@@ -50,13 +50,26 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
     return new Date(timestamp).toLocaleTimeString();
   };
 
-  // Prepare chart data
+  // Prepare chart data. metric fields are nullable when the project is in
+  // a transient state (just provisioned, scaling, etc) — coerce to 0 for
+  // the chart axis rather than producing NaN/null which Recharts renders
+  // as broken bars.
+  const num = (v: number | null | undefined): number => v ?? 0;
   const chartData = historyData?.metrics.map((m) => ({
     time: formatTimestamp(m.timestamp),
-    cpu: Math.round(m.cpuUsagePercent),
-    memory: Math.round(m.memoryUsagePercent),
-    disk: Math.round(m.diskUsagePercent),
-  })) || [];
+    cpu: Math.round(num(m.cpuUsagePercent)),
+    memory: Math.round(num(m.memoryUsagePercent)),
+    disk: Math.round(num(m.diskUsagePercent)),
+  })) ?? [];
+
+  // Display helpers for nullable metrics — show "—" when the platform
+  // hasn't reported a value yet rather than "0" which would mislead.
+  const fmtPct = (v: number | null | undefined): string =>
+    v == null ? '—' : `${Math.round(v)}%`;
+  const fmtNum = (v: number | null | undefined, digits = 1): string =>
+    v == null ? '—' : v.toFixed(digits);
+  const fmtVal = (v: number | null | undefined, suffix = ''): string =>
+    v == null ? '—' : `${v}${suffix}`;
 
   return (
     <div className="space-y-6">
@@ -97,22 +110,22 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
         <MetricCard
           icon={<Cpu className="w-6 h-6" />}
           label="CPU Usage"
-          value={`${Math.round(metrics.cpuUsagePercent)}%`}
-          subtitle={`${metrics.cpuUsageCores?.toFixed(2)} cores`}
+          value={fmtPct(metrics.cpuUsagePercent)}
+          subtitle={metrics.cpuUsageCores == null ? '—' : `${metrics.cpuUsageCores.toFixed(2)} cores`}
           color="text-blue-500"
         />
         <MetricCard
           icon={<Database className="w-6 h-6" />}
           label="Memory Usage"
-          value={`${Math.round(metrics.memoryUsagePercent)}%`}
-          subtitle={`${metrics.memoryUsageMB} MB`}
+          value={fmtPct(metrics.memoryUsagePercent)}
+          subtitle={fmtVal(metrics.memoryUsageMB, ' MB')}
           color="text-purple-500"
         />
         <MetricCard
           icon={<HardDrive className="w-6 h-6" />}
           label="Disk Usage"
-          value={`${Math.round(metrics.diskUsagePercent)}%`}
-          subtitle={`${metrics.diskUsageGB} GB`}
+          value={fmtPct(metrics.diskUsagePercent)}
+          subtitle={fmtVal(metrics.diskUsageGB, ' GB')}
           color="text-orange-500"
         />
       </div>
@@ -165,22 +178,35 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              <MetricRow label="Active" value={metrics.activeConnections} />
-              <MetricRow label="Idle" value={metrics.idleConnections} />
-              <MetricRow label="Max" value={metrics.maxConnections} />
+              <MetricRow label="Active" value={metrics.activeConnections ?? '—'} />
+              <MetricRow label="Idle" value={metrics.idleConnections ?? '—'} />
+              <MetricRow label="Max" value={metrics.maxConnections ?? '—'} />
               <div className="pt-2 border-t border-border-primary">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-text-tertiary">Usage</span>
-                  <span className="text-sm font-medium text-text-primary">
-                    {Math.round((metrics.activeConnections / metrics.maxConnections) * 100)}%
-                  </span>
-                </div>
-                <div className="mt-2 h-2 bg-bg-tertiary rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-accent-primary rounded-full"
-                    style={{ width: `${(metrics.activeConnections / metrics.maxConnections) * 100}%` }}
-                  />
-                </div>
+                {(() => {
+                  const active = metrics.activeConnections;
+                  const max = metrics.maxConnections;
+                  // Need both ends of the ratio AND a non-zero denominator
+                  // before rendering — otherwise show "—" rather than NaN.
+                  const usagePct = active != null && max != null && max > 0
+                    ? (active / max) * 100
+                    : null;
+                  return (
+                    <>
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-text-tertiary">Usage</span>
+                        <span className="text-sm font-medium text-text-primary">
+                          {usagePct == null ? '—' : `${Math.round(usagePct)}%`}
+                        </span>
+                      </div>
+                      <div className="mt-2 h-2 bg-bg-tertiary rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-accent-primary rounded-full"
+                          style={{ width: `${usagePct ?? 0}%` }}
+                        />
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </CardContent>
@@ -195,15 +221,15 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
               <MetricRow
                 icon={<Zap className="w-4 h-4" />}
                 label="Queries/sec"
-                value={metrics.queriesPerSecond.toFixed(1)}
+                value={fmtNum(metrics.queriesPerSecond)}
               />
               <MetricRow
                 icon={<Clock className="w-4 h-4" />}
                 label="Avg Latency"
-                value={`${metrics.averageQueryLatencyMs.toFixed(1)}ms`}
+                value={metrics.averageQueryLatencyMs == null ? '—' : `${metrics.averageQueryLatencyMs.toFixed(1)}ms`}
               />
-              <MetricRow label="Slow Queries" value={metrics.slowQueryCount} />
-              <MetricRow label="DB Size" value={`${metrics.databaseSizeGB} GB`} />
+              <MetricRow label="Slow Queries" value={metrics.slowQueryCount ?? '—'} />
+              <MetricRow label="DB Size" value={fmtVal(metrics.databaseSizeGB, ' GB')} />
             </div>
           </CardContent>
         </Card>
@@ -242,11 +268,11 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
 }
 
 interface MetricCardProps {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  subtitle: string;
-  color: string;
+  readonly icon: React.ReactNode;
+  readonly label: string;
+  readonly value: string;
+  readonly subtitle: string;
+  readonly color: string;
 }
 
 function MetricCard({ icon, label, value, subtitle, color }: MetricCardProps) {
@@ -267,9 +293,9 @@ function MetricCard({ icon, label, value, subtitle, color }: MetricCardProps) {
 }
 
 interface MetricRowProps {
-  label: string;
-  value: string | number;
-  icon?: React.ReactNode;
+  readonly label: string;
+  readonly value: string | number;
+  readonly icon?: React.ReactNode;
 }
 
 function MetricRow({ label, value, icon }: MetricRowProps) {
