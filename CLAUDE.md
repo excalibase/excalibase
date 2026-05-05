@@ -90,14 +90,14 @@ frontend/                        # React 18 studio (Vite, Tailwind, TanStack)
 
 `DeploymentMode` on `DatabaseInstance` controls how a project is provisioned:
 - **K8s** — full 9-stage pipeline against CNPG. Works on any distro (managed EKS/GKE/AKS, self-hosted RKE2, or single-node k0s/k3s/MicroK8s — including rootless). Provisioner authenticates as a ServiceAccount with a least-privilege ClusterRole; projects are namespace-isolated. Default when `PROVISIONER_MODE=k8s`.
-- **Docker** — runs Postgres as a container on a Docker daemon (local socket *or* a remote daemon over TLS, Dokploy/CapRover-style). Simpler to operate, but requires root-equivalent access to the daemon (same constraint applies to Podman unless explicitly rootless). Per-project isolation is process-level only — there is no equivalent of K8s namespaces / NetworkPolicies. `PROVISIONER_MODE=docker`. Backup/restore/PITR is in flight via a WAL-G sidecar — see `DOCKER_BACKUP_PLAN.md`.
+- **Docker** — runs Postgres as a container on a Docker daemon (local socket *or* a remote daemon over TLS, Dokploy/CapRover-style). Simpler to operate, but requires root-equivalent access to the daemon (same constraint applies to Podman unless explicitly rootless). Per-project isolation is process-level only — there is no equivalent of K8s namespaces / NetworkPolicies. `PROVISIONER_MODE=docker`. Backup/restore/PITR landed via WAL-G sidecar (May 2026) — see `OPERATOR.md` §6 for ops; `DOCKER_BACKUP_PLAN.md` is the historical design doc.
 - **BYOC** — `POST /api/provision/byoc` registers an externally managed DB; no provisioning, just stores credentials in vault and creates the instance row
 
 ### Self-hosted vs Cloud (platform-wide)
 
 `DEPLOYMENT_MODE` env var (`selfhosted` default, or `cloud`):
 - **Self-hosted**: SQLite store + bbolt vault, default org auto-created at first registration, no tier enforcement, single tenant
-- **Cloud**: Postgres store + Postgres-backed vault required (`PLATFORM_DB_URL`), multi-org create/delete, tier limits enforced
+- **Cloud**: Postgres store (`PLATFORM_DB_URL` required) + a vault that is one of (in priority): remote HTTP (`VAULT_URL` set), bbolt fallback. Multi-org create/delete, tier limits enforced. ("Postgres-backed vault" was the original plan; the implemented fallback is bbolt + the standalone HTTP vault service — see `internal/vault/` and `cmd/server/main.go` vault-init switch.)
 
 ### Strategy Pattern for Database Provisioning
 
@@ -207,10 +207,12 @@ Tier enforcement is bypassed entirely in self-hosted mode.
 
 ## Testing
 
-- **Go**: 16 internal packages, 84 test files, all pass with `-race`
-- **Postgres integration**: ~25 tests via testcontainers-go
-- **K8s integration**: ~45 tests including k3s in Docker
-- **Playwright E2E**: 26 spec files, ~120 tests; covers vault setup wizard, BYOC flow, deployment modes, edge functions, realtime, advisors, schema CRUD
+- **Go**: 16 internal packages, 110 test files, all pass with `-race`. Run cmd: `go test ./internal/... -short -race -count=1` (~80s)
+- **Postgres integration**: ~30 tests via testcontainers-go (`-tags=integration`)
+- **K8s integration**: ~45 tests including k3s in Docker (`-tags=integration`)
+- **R2 / S3 integration**: 2 tests gated on `R2_ACCESS_KEY_ID` (uploader-only + full pipeline). LocalStack covers the structural path; real R2 catches TLS-SAN / multipart quirks LocalStack doesn't reproduce.
+- **Resend integration**: 1 live test gated on `RESEND_API_KEY`
+- **Playwright E2E**: 26 spec files, 131 passing + 1 pre-existing skip; covers vault setup wizard, BYOC flow, deployment modes, edge functions, realtime, advisors, schema CRUD, **backup history + restore** (`backups.spec.ts`, May 2026)
 - **Frontend unit**: Vitest suite for hooks and components (≥80% coverage)
 - All critical paths use `MockClient` (fake K8s) and `fakeVault` for hermetic tests
 
@@ -222,6 +224,16 @@ Tier enforcement is bypassed entirely in self-hosted mode.
 - `internal/provisioner/docker.go` — Docker SDK provisioner
 - `internal/service/provisioning.go` — orchestration + vault cleanup on deprovision + BYOC
 - `internal/service/pgdog_notifier.go` — NATS publish + config table CRUD
+- `internal/service/backup.go` — adapter dispatch shim (resolveAdapter → K8s | Docker)
+- `internal/service/backup_adapter.go` — `BackupAdapter` interface + `BackupRef` + `ErrUnsupportedBackupMode`
+- `internal/service/backup_adapter_k8s.go` — CNPG flow (writes JSON-on-disk records)
+- `internal/service/backup_adapter_docker.go` — Phase 1 MVP: pg_basebackup → S3 multipart, records in DB
+- `internal/service/backup_runner_walg.go` — Phase 2: WAL-G runner (sidecar exec)
+- `internal/service/backup_uploader.go` — aws-sdk-go-v2 multipart Upload/Download/Delete/List
+- `internal/service/backup_scheduler.go` — robfig/cron + `LeaderLock` (Postgres advisory or `AlwaysLeader`)
+- `internal/service/backup_restore_orchestrator.go` — async multi-step restore with `restore_jobs` rows
+- `internal/service/wal_lag.go` — Docker-only `WalLagAdvertiser` interface
+- `internal/email/resend_sender.go` — Resend SDK adapter (Phase 1 swap from SES)
 - `internal/storage/postgres/store.go` — Postgres store (cloud)
 - `internal/storage/sqlite/sqlite.go` — SQLite store (self-hosted)
 - `internal/storage/platform_store.go` — combined store interface
@@ -289,3 +301,19 @@ Environment variables:
 **Pooler / CDC**
 - `NATS_URL` — NATS server for PgDog reload + CDC fan-out
 - `REALTIME_PUBLICATION_NAME` — publication name (default: `cdc_watcher_pub`)
+
+**Email**
+- `EMAIL_PROVIDER` — `ses` (default, back-compat), `resend`, or `noop`. `noop` short-circuits to 503 so dev/CI runs without provider creds.
+- `EMAIL_FROM_ADDRESS` / `EMAIL_FROM_NAME` — provider-agnostic defaults; provider-specific vars (`SES_FROM_ADDRESS`, `RESEND_FROM_ADDRESS`) override when set
+- `EMAIL_PRODUCT_NAME` — string used in templates (verification + reset emails)
+- `EMAIL_REPLY_TO` — optional Reply-To header
+- SES path: `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY`, `SES_REGION` (default `us-east-1`), `SES_FROM_ADDRESS`, `SES_FROM_NAME`, `SES_CONFIGURATION_SET` (optional, for bounce/complaint topic)
+- Resend path: `RESEND_API_KEY`, `RESEND_FROM_ADDRESS`, `RESEND_FROM_NAME`, `RESEND_RATE_PER_SEC` (default 2 — free-tier limit)
+
+**Backup defaults** (S3/R2 creds inherited by every new project unless `req.Backup.S3` is set explicitly; vault `backup/s3` takes priority over these envs)
+- `BACKUP_DEFAULT_ACCESS_KEY_ID` / falls back to `R2_ACCESS_KEY_ID`
+- `BACKUP_DEFAULT_SECRET_ACCESS_KEY` / falls back to `R2_SECRET_ACCESS_KEY`
+- `BACKUP_DEFAULT_ENDPOINT` / falls back to `R2_ENDPOINT`
+- `BACKUP_DEFAULT_BUCKET` (default `excalibase-backups`)
+- `BACKUP_DEFAULT_REGION` (default `auto` for R2)
+- `BACKUP_S3_PATH_STYLE` — set to `0` to disable path-style addressing (only flip for real AWS S3 buckets — R2/MinIO/LocalStack all need it on, the default)
