@@ -174,47 +174,57 @@ For each surface, four columns:
 
 ---
 
-## 3. Cross-repo surfaces (NOT in this repo)
+## 3. Cross-repo integration boundaries
 
-The platform AIO ships **5 service images**, of which 3 come from sister repos and 2 are owned here. PgDog is a sixth dependency, run as a fork of the upstream pooler. This section enumerates each sister surface, what wire contract this repo holds with it, which test in *this* repo protects against drift, and where the sister-repo-side tests live.
+Sister repos own their own behavior tests (graphql in particular has very good Java/Spring Boot test coverage). This section is about the **wires** — what this repo provisions, secrets, and routes that sister services then *connect to*. The risk surface isn't "does graphql do GraphQL right"; it's "when graphql tries to dial CNPG via PgDog using the JWT we minted, do all four pieces actually agree".
 
-| Sister repo / surface | What this repo's code assumes | Contract pinned by | Sister-repo coverage |
+The platform AIO ships **5 service images**, of which 3 come from sister repos and 2 are owned here. PgDog is a sixth dependency, run as a fork of the upstream pooler.
+
+### 3.1 GraphQL (`excalibase-graphql`) — wires into our infra
+
+Graphql connects to four pieces this repo provisions/owns. Sister-repo tests verify graphql does GraphQL right; *this* repo's tests verify each wire is dialled correctly.
+
+| Wire | What this repo provides | Risk if it drifts | Coverage in this repo |
 |---|---|---|---|
-| `excalibase-graphql` | JWT issued by us (via vault `pki/signing/{public,private}`) verifies on the WS subscribe path; subscriptions topic-scoped to `cdc.{projectId}.>` (projectId-only, no orgSlug); REST data-plane reads `app.security.multi-tenant.provisioning-pat` + `provisioning-url` from env | `contract_test.go::TestContract_NATS_CDCSubjectShape`, `TestContract_NATS_NoOrgSlug`, `TestContract_JWTPaths_Stable`, `TestContract_ProjectID_FormatStable` | sister-repo's own GraphQL tests verify it consumes the contract correctly |
-| `excalibase-auth` | reads `pki/signing/private` from vault to mint JWTs; writes `pki/signing/public` for us to verify; per-project JWT `iss` uses the projectId; provisioning↔auth talks via `provisioning-pat` HTTP client | `contract_test.go::TestContract_JWTPaths_Stable`, `TestContract_VaultPath_Shape`, `TestContract_ProjectID_FormatStable` | sister-repo's auth-flow tests + the AIO E2E (`tests/e2e-aio-self.sh`) |
-| `excalibase-watcher-go` | image tag hardcoded in `internal/provisioner/postgresql.go`; deployed per-project via Helm SDK; reads PostgreSQL publication `cdc_watcher_pub`, publishes to NATS subject `cdc.{projectId}.*`; auth via project's `cdc_watcher` role (NOT app or admin) | `contract_test.go::TestContract_NATS_CDCSubjectShape`, `TestContract_NATS_NoOrgSlug`; deployment-side covered by `internal/provisioner/postgresql.go` tests | sister-repo verifies it produces the expected NATS subject shape |
-| `excalibase/pgdog` (fork) | reads its own `pgdog_databases` + `pgdog_users` tables from platform-db on startup; subscribes to NATS subject `pgdog.config.reload` to re-read on changes; routes by `name` column → primary/replica based on `role` | `contract_test.go::TestContract_PgDogReloadSubject`; column shape in `pgdog_notifier_integration_test.go::RegisterCluster_writes_DB_rows` | the fork's own tests + smoke via `tests/pgdog/test.sh` |
-| `deno-server` (in this repo, owned here) | per-project pod; auth via `DENO_RUNTIME_SECRET`; HTTP API for CRUD + invoke; reads function source over HTTP from the platform | `internal/edgefn/client_test.go`, `function_integration_test.go`, contract is internal | n/a (in-repo) |
+| **CNPG database connection** | per-project Postgres cluster, accessed via PgDog pooler at `pgdog.{platform-ns}.svc:6432`, db name = `projectId`, user = `app`, password rotated via vault | wrong DSN → graphql fails to start; rotated password not in pgdog_users → graphql gets auth-rejected; pgdog routes to wrong cluster (name collision) | `pgdog_notifier_integration_test.go` (register writes correct host + db_name + role), `contract_test.go::TestContract_ProjectID_FormatStable` (db name shape), `tests/e2e-aio-self.sh` F-series (smokes a real graphql query through pgdog) |
+| **JWT public key** | `pki/signing/public` in vault; graphql fetches via `/api/projects/{id}/info` (or vault HTTP if VAULT_URL set) to verify subscription tokens | key rotated without graphql cache invalidation → all subscriptions reject; vault path renamed → graphql can't find the key | `contract_test.go::TestContract_JWTPaths_Stable`, `function_test.go` covers the same `pki/signing/public` read path with a different consumer (edge functions) so any rename breaks both code paths simultaneously |
+| **NATS CDC subscriptions** | NATS at `nats.{platform-ns}.svc:4222`; graphql subscribes to `cdc.{projectId}.>` (no orgSlug); JWT-gated by graphql itself | wrong subject prefix → silent: subscriptions never receive events; orgSlug accidentally added back → graphql sees nothing | `contract_test.go::TestContract_NATS_CDCSubjectShape`, `TestContract_NATS_NoOrgSlug`; integration verified by `tests/e2e-aio-self.sh` realtime sections |
+| **Provisioning REST API** | `/api/projects/{id}/info` returns project metadata graphql needs (db url, schemas, JWT public key, project tier); auth via `provisioning-pat` (long-lived PAT minted at platform setup) | response shape change → graphql misreads the metadata; PAT auth disabled → graphql gets 401 on every project lookup | `provisioning_info_test.go` (handler-level shape + auth), `aio-e2e` job exercises the full provision-then-graphql-connects flow |
 
-### 3.1 GraphQL (`excalibase-graphql` repo)
+**Likely failure modes if a sister-repo release drifts here:**
+- Graphql rebuild with `cdc.{orgSlug}.{projectId}.*` → realtime subscriptions silently break. `TestContract_NATS_NoOrgSlug` fires if someone tries the same change in this repo; AIO E2E catches actual sister-side change.
+- Graphql cached JWT public key beyond rotation TTL → AIO E2E catches if rotation flow exists; otherwise this is a long-tail prod issue.
+- Provisioning-info handler renames a JSON field → handler test catches the field rename; AIO E2E catches end-to-end mismatch.
 
-GraphQL is owned by the Java/Spring Boot service in a sister repo. **Not tested here directly.** Contract pins exist in `contract_test.go` (table above). When GraphQL changes break this contract, the sister-repo's tests catch it; in CI both repos must publish coordinated images for the AIO E2E to pass.
+### 3.2 Auth IMS (`excalibase-auth`) — wires into our infra
 
-Likely failure mode if drift: a GraphQL release that hard-codes `cdc.{orgSlug}.{projectId}.*` instead of `cdc.{projectId}.*` — `TestContract_NATS_NoOrgSlug` here will fire if anyone tries the same change in this repo, and the AIO E2E would fail because subscriptions wouldn't match the watcher's publishes.
+| Wire | What this repo provides | Risk if it drifts | Coverage |
+|---|---|---|---|
+| **Vault JWT private key** | `pki/signing/private` written by setup wizard; auth IMS reads to mint JWTs | wizard never wrote → auth IMS can't mint; rotated path → auth panics on startup | `setup_wizard_test.go`, `vault_test.go`, `contract_test.go::TestContract_JWTPaths_Stable` |
+| **Provisioning REST → user/org/project lookups** | `/api/admin/users`, `/api/orgs`, `/api/projects/{id}/info` serve the auth UI; PAT auth | admin-handler RBAC tightened too far → auth's own setup flow blocked | `admin_test.go`, `org_test.go`, `org_member_test.go`, `provisioning_info_test.go` |
+| **Local stub auth in self-hosted mode** | when EXTERNAL_AUTH_URL is unset, the stub at `internal/handler/auth.go` mints + verifies JWTs in-process | stub diverges from IMS contract → upgrades from self-hosted to cloud break | `auth_test.go`, `register_test.go`, `auth-cookie-flow.spec.ts` (Playwright) |
 
-### 3.2 Auth IMS (`excalibase-auth` repo)
+Local stub coverage in this repo is comprehensive; full IMS integration relies on `aio-e2e` running against the real `excalibase-auth` image.
 
-Auth lives in a separate process. This repo:
+### 3.3 Watcher (`excalibase-watcher-go`) — wires into our infra
 
-- Issues JWT signing keys via vault setup wizard (`pki/signing/private` + `pki/signing/public`)
-- Mounts `/api/auth/*` routes — delegate to IMS in production; local stub in self-hosted mode (the local stub is what the `auth_test.go` + `register_test.go` cases cover)
-- Auth IMS reads `pki/signing/private` to mint JWTs scoped per-project
+| Wire | What this repo provides | Risk if it drifts | Coverage |
+|---|---|---|---|
+| **Per-project PostgreSQL role** | `cdc_watcher` role created during provisioning; `LOGIN`, `REPLICATION`, `pg_read_all_data`, can use replication slots | role privileges tightened wrong → watcher CrashLoops on startup with "permission denied to use replication slots" | `internal/provisioner/postgresql.go::stageRoleCreation` + tests in `provisioning_test.go`; documented incident in OPERATOR.md §8 |
+| **Publication membership** | publication `cdc_watcher_pub` (configurable via `REALTIME_PUBLICATION_NAME`); watcher reads from this pub only | publication name renamed → watcher dies; publication owned by wrong role → watcher can't ALTER membership when studio toggles tables | `realtime_test.go` (publication CRUD), `contract_test.go` could pin the default publication name (TODO add) |
+| **NATS publish target** | watcher writes to `cdc.{projectId}.{schema}.{table}`; we deploy it with this projectId baked in via Helm values | watcher publishes to wrong subject → graphql sees nothing | `contract_test.go::TestContract_NATS_CDCSubjectShape`, `TestContract_NATS_NoOrgSlug`; deploy-side via `internal/k8s/helm.go` tests |
+| **Image tag** | hardcoded in `internal/provisioner/postgresql.go::watcherImage` per memory `gotchas_email_storage_r2.md` | image tag drift between provisioning-rev and watcher-rev → watcher pod ImagePullBackOff or runs old code | bump rule documented in OPERATOR.md §7; `aio-e2e` catches mismatches if it runs on each release |
 
-Auth-flow tests in this repo cover only the local stub. Production auth integration is sister-repo coverage + the new `aio-e2e` CI job which spins up the full AIO and exercises real auth.
+### 3.4 PgDog (`github.com/excalibase/pgdog` fork) — wires into our infra
 
-### 3.3 Watcher (`excalibase-watcher-go` repo)
+| Wire | What this repo provides | Risk if it drifts | Coverage |
+|---|---|---|---|
+| **Config tables** | `pgdog_databases` (name, host, port, database_name, role, shard, read_only) + `pgdog_users` (name, database, password) on platform-db | column added/renamed by either side without coordinated bump → PgDog fails to read config | `pgdog_notifier_integration_test.go::RegisterCluster_writes_DB_rows` asserts the column shape against a real Postgres |
+| **NATS reload signal** | publish on subject `pgdog.config.reload` after every register/deregister | subject renamed → PgDog never re-reads → new projects unreachable until pgdog restart | `contract_test.go::TestContract_PgDogReloadSubject`, `pgdog_notifier_integration_test.go::RegisterCluster_publishes_reload_to_NATS` |
+| **Idempotent register** | upsert semantics on (name, role, shard) so password rotation just replaces the row | UNIQUE violation on rotation → admin-page password rotation fails for existing projects | `pgdog_notifier_integration_test.go::RegisterCluster_idempotent_upsert` |
+| **R/W routing** | role='primary' for the rw cluster service, role='replica' read_only=true for the ro service | wrong host string format → PgDog can't resolve the CNPG service | `RegisterCluster_writes_DB_rows` asserts host format `{projectId}-postgres-rw.{namespace}.svc.cluster.local` |
 
-CDC watcher is a separate process per project. Image tag is hardcoded in `internal/provisioner/postgresql.go::watcherImage` (the deploy-watcher stage references it). Contract: watcher reads PostgreSQL publication `cdc_watcher_pub` (configurable per `REALTIME_PUBLICATION_NAME`) under role `cdc_watcher`, publishes to NATS subject `cdc.{projectId}.{schema}.{table}` (or `cdc.{projectId}.*` aggregated).
-
-Tests in this repo cover provisioner deploy of the watcher Helm release (`internal/k8s/helm.go`); watcher behavior itself is sister-repo coverage. The `cdc_watcher` role has only `pg_create_subscription` + `SELECT` on the publication — privilege contract pinned in `internal/provisioner/postgresql.go`.
-
-### 3.4 PgDog (`github.com/excalibase/pgdog` fork)
-
-PgDog is upstream PostgreSQL connection pooler with our fork adding NATS-triggered config reload. We don't own its source code but we do own the schema of the tables it reads (`pgdog_databases`, `pgdog_users`) and the NATS subject it subscribes to (`pgdog.config.reload`).
-
-Contract pinned by `pgdog_notifier_integration_test.go` (testcontainers Postgres + NATS — exercises the full register/upsert/deregister/no-NATS-silent paths) and `contract_test.go::TestContract_PgDogReloadSubject`.
-
-If our fork drifts (e.g., the upstream PgDog merges back support for a different reload signal), bump the fork to absorb upstream + adjust the subject const in `pgdog_notifier.go` + update the contract test. Smoke against a live PgDog cluster: `tests/pgdog/test.sh`.
+If our fork drifts (upstream PgDog merges support for a different reload signal): bump the fork to absorb upstream → adjust the subject const in `pgdog_notifier.go` → update the contract test → run `tests/pgdog/test.sh` against a live cluster as final smoke.
 
 ### 3.5 Storage / NoSQL / future engines
 
