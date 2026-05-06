@@ -167,28 +167,63 @@ curl -X POST -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json'
 PITR (point-in-time recovery) reuses the same flow with a `targetTime`
 field in the body.
 
-### Docker mode (WAL-G sidecar)
+### Docker mode (in-process backup adapter)
 
-> Status: Phases 0–3 landed (May 2026). Sidecar image
-> `ghcr.io/excalibase/walg-sidecar:0.1.0` ships from the
-> `walg-sidecar-publish` workflow. R2/S3 credentials must be set via
-> `BACKUP_DEFAULT_*` env (or legacy `R2_*`) for the Docker adapter to
-> register; without them, `/backup/trigger` returns
-> `501 backup not supported for this deployment mode`.
+> Status: Phases 0–3 landed (May 2026). PITR end-to-end verified
+> with three target kinds: `targetName`, `targetXID`, `targetTime`
+> (E2E tests in `internal/service/backup_adapter_docker_pitr_integration_test.go`).
+> R2/S3 credentials must be set via `BACKUP_DEFAULT_*` env (or
+> legacy `R2_*`) for the Docker adapter to register; without them
+> `/backup/trigger` returns `501 backup not supported for this deployment mode`.
 
-Architecture mirrors CNPG semantically but uses WAL-G (chosen over
-Barman/pgBackRest because it also covers the upcoming MySQL + MongoDB
-engines). Each Docker-mode project gets a dedicated `walg-sidecar`
-container alongside its postgres container; both share a
-`walarchive-{projectId}` volume. PostgreSQL `archive_command =
-'wal-g wal-push %p'` streams WAL segments continuously; the
-platform's scheduler invokes `wal-g backup-push` on the configured
-cadence via `docker exec` against the sidecar.
+**What actually ships (vs. the original sidecar design):** what
+landed is the simpler "platform-driven" pipeline, not the WAL-G
+sidecar from the original plan doc. The sidecar Dockerfile +
+publish workflow are kept for the Phase 4 polyglot future (MySQL,
+MongoDB) but aren't on the critical path today.
+
+How a Docker-mode project's backup actually works:
+
+1. **At provision time** — when `req.Backup.Enabled`, the
+   provisioner runs `ConfigureArchive` (postgresql.go): `ALTER
+   SYSTEM SET wal_level='replica'; archive_mode='on';
+   archive_command='cp %p /walarchive/%f'`, then restarts the
+   container so archive_mode takes effect. `/walarchive` is a
+   directory inside the postgres container (created with postgres
+   user ownership pre-init).
+
+2. **On `POST /backup/trigger`** — `DockerBackupAdapter.TriggerManual`
+   runs `pg_basebackup -F tar -X fetch -z` via `docker exec`, streams
+   the gzipped tar into an S3 multipart upload at
+   `s3://{bucket}/backups/{projectId}/manual/{id}.tar.gz`. After
+   the basebackup uploads, it forces `pg_switch_wal()` + `CHECKPOINT`,
+   pulls `/walarchive` out via `CopyFromContainer`, and uploads
+   each WAL segment to `s3://{bucket}/backups/{projectId}/wals/{name}.gz`.
+
+3. **On `POST /backup/restore` with a recovery target** —
+   `DockerBackupAdapter.Restore` creates a stopped postgres container,
+   gunzips + extracts the basebackup tar into `/var/lib/postgresql/data`,
+   downloads every archived WAL segment + extracts them into
+   `/var/lib/postgresql/data/wal_restore/`, writes
+   `recovery.signal` + `postgresql.auto.conf` (with
+   `recovery_target_*`, `recovery_target_action='promote'`, and
+   `restore_command='cp /var/lib/postgresql/data/wal_restore/%f %p'`),
+   then starts the container. Postgres replays WALs from
+   `pg_wal/` (basebackup's bundled WALs) + `wal_restore/`, hits
+   the target, and promotes.
+
+WAL freshness: WAL segments are uploaded synchronously at backup
+trigger time. For continuous near-real-time PITR (sub-minute
+recovery window), call `RefreshWALArchive` from a periodic cron
+or wire it into the platform-side scheduler. Today the gap between
+shipped WAL and backup trigger is "next backup" — set a tighter
+`backup_schedule` to shrink it.
 
 Endpoints:
 
 ```bash
-# Manual trigger (returns IN_PROGRESS → polls into COMPLETED)
+# Manual trigger — synchronous; returns COMPLETED with the message id
+# once basebackup + WAL upload finish (typical: 5–30s for small DBs).
 curl -X POST -H "Authorization: Bearer $PAT" \
   https://<host>/api/projects/proj-abc123/backup/trigger
 

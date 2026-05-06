@@ -144,7 +144,7 @@ For each surface, four columns:
 
 ### 2.2 Playwright E2E (`frontend/e2e/*.spec.ts`)
 
-26 spec files, 131 passing + 1 pre-existing skip on `real-user-flow.spec.ts` (gated on `REAL_E2E=1`).
+27 spec files, 131 passing + 4 skipped (1 on `REAL_E2E=1` for `real-user-flow.spec.ts`, 3 on `STUDIO_LIVE=1` for `studio-live-data.spec.ts`).
 
 | Spec | Surface | Notes |
 |---|---|---|

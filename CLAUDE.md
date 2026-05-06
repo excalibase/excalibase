@@ -207,12 +207,13 @@ Tier enforcement is bypassed entirely in self-hosted mode.
 
 ## Testing
 
-- **Go**: 16 internal packages, 110 test files, all pass with `-race`. Run cmd: `go test ./internal/... -short -race -count=1` (~80s)
-- **Postgres integration**: ~30 tests via testcontainers-go (`-tags=integration`)
+- **Go**: 16 internal packages, 114 test files, all pass with `-race`. Run cmd: `go test ./internal/... -short -race -count=1` (~80s)
+- **Postgres integration**: ~32 tests via testcontainers-go (`-tags=integration`); includes Docker restore E2E + Docker PITR E2E (target_name + target_xid + target_time variants) + pgdog notifier integration
 - **K8s integration**: ~45 tests including k3s in Docker (`-tags=integration`)
 - **R2 / S3 integration**: 2 tests gated on `R2_ACCESS_KEY_ID` (uploader-only + full pipeline). LocalStack covers the structural path; real R2 catches TLS-SAN / multipart quirks LocalStack doesn't reproduce.
 - **Resend integration**: 1 live test gated on `RESEND_API_KEY`
-- **Playwright E2E**: 26 spec files, 131 passing + 1 pre-existing skip; covers vault setup wizard, BYOC flow, deployment modes, edge functions, realtime, advisors, schema CRUD, **backup history + restore** (`backups.spec.ts`, May 2026)
+- **Sister-repo contracts**: `internal/service/contract_test.go` pins ProjectID format, vault path shape, NATS CDC subject, JWT vault paths, PgDog reload subject. Runs in default `go test`.
+- **Playwright E2E**: 27 spec files, 131 passing + 4 skipped (gated on `REAL_E2E=1` or `STUDIO_LIVE=1`); covers vault setup wizard, BYOC flow, deployment modes, edge functions, realtime, advisors, schema CRUD, backup history + restore (`backups.spec.ts`), live studio-vs-data-plane (`studio-live-data.spec.ts`)
 - **Frontend unit**: Vitest suite for hooks and components (≥80% coverage)
 - All critical paths use `MockClient` (fake K8s) and `fakeVault` for hermetic tests
 
