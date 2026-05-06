@@ -111,6 +111,19 @@ func runServer(cfg config.AppConfig) {
 		deps.backupHandler.SetScheduler(scheduler)
 	}
 
+	// Wire pause/resume — backup must run before pause, so PauseService
+	// depends on the BackupService that backupHandler exposes.
+	pausers := buildPausers(cfg, factory, dockerClientRef)
+	if len(pausers) > 0 {
+		pauseSvc := service.NewPauseService(service.PauseServiceConfig{
+			Instances: store,
+			Pausers:   pausers,
+			Backups:   deps.backupHandler.Service(),
+		})
+		deps.provHandler.SetPauseService(pauseSvc)
+		deps.provHandler.SetInstanceStore(store)
+	}
+
 	if sqlStore != nil {
 		orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
 			Jobs: sqlStore.RestoreJobs(),
@@ -739,6 +752,31 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 	log.Println("Provisioner mode: k8s (CNPG)")
 	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
 	return provisioner.NewFactory(pgProvisioner), nil
+}
+
+// buildPausers extracts the Pauser-implementing provisioners from
+// the factory + docker client. Returns an empty map when no pauser
+// is wired (BYOC-only deployments). PauseService consults this map
+// at request time to pick the right Pauser per instance's mode.
+func buildPausers(cfg config.AppConfig, factory *provisioner.Factory, dc provisioner.DockerClient) map[domain.DeploymentMode]provisioner.Pauser {
+	out := map[domain.DeploymentMode]provisioner.Pauser{}
+	// Iterate the factory's registered provisioners and cherry-pick
+	// those that satisfy the optional Pauser interface.
+	for _, p := range factory.Registered() {
+		if pauser, ok := p.(provisioner.Pauser); ok {
+			// Both K8s and Docker postgres provisioners now implement
+			// Pauser. The mode to register under depends on which
+			// provisioner shipped the implementation, which mirrors
+			// cfg.ProvisionerMode for the active path.
+			if cfg.ProvisionerMode == "docker" {
+				out[domain.ModeDocker] = pauser
+			} else {
+				out[domain.ModeK8s] = pauser
+			}
+		}
+	}
+	_ = dc // dockerClient already wrapped inside DockerPostgreSQLProvisioner
+	return out
 }
 
 // envOr returns os.Getenv(key) or fallback when empty. Local helper to keep

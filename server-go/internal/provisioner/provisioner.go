@@ -20,6 +20,17 @@ type DatabaseProvisioner interface {
 	SupportedType() domain.DatabaseType
 }
 
+// Pauser is the optional interface a provisioner implements when it
+// supports stop-without-deprovision. K8s/CNPG patches cluster spec
+// instances to 0; Docker stops the container. Both paths preserve
+// data volumes so Resume can spin the workload back up. Adapters
+// that lack pause (BYOC) just don't implement this interface and
+// the pauseService returns ErrPauseUnsupported.
+type Pauser interface {
+	Pause(ctx context.Context, namespace, projectID string) error
+	Resume(ctx context.Context, namespace, projectID string) error
+}
+
 // RollbackAware is an optional interface a provisioner can implement to
 // enable per-stage rollback via ProvisionContext. The service layer will
 // prefer ProvisionWithRollback when the provisioner implements this.
@@ -60,4 +71,15 @@ func NewFactory(provisionerList ...DatabaseProvisioner) *Factory {
 func (f *Factory) Get(dbType domain.DatabaseType) (DatabaseProvisioner, bool) {
 	p, ok := f.provisioners[dbType]
 	return p, ok
+}
+
+// Registered returns every provisioner in the factory. Used by
+// optional-feature wiring (Pauser, RollbackAware) to cherry-pick
+// implementations that satisfy the optional interface.
+func (f *Factory) Registered() []DatabaseProvisioner {
+	out := make([]DatabaseProvisioner, 0, len(f.provisioners))
+	for _, p := range f.provisioners {
+		out = append(out, p)
+	}
+	return out
 }

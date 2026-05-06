@@ -132,6 +132,32 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	}, nil
 }
 
+// Pause stops the project's postgres container without removing it.
+// Volumes persist so Resume reopens the same data dir. Idempotent —
+// stopping an already-stopped container is fine.
+func (p *DockerPostgreSQLProvisioner) Pause(ctx context.Context, namespace, _ string) error {
+	if namespace == "" {
+		return fmt.Errorf("docker pause: container id missing on instance.Namespace")
+	}
+	return p.docker.StopContainer(ctx, namespace)
+}
+
+// Resume starts a previously-paused container and waits for postgres
+// to accept queries. Caller must run capacity + tier pre-checks
+// before calling so we don't bring up a workload that exceeds limits.
+func (p *DockerPostgreSQLProvisioner) Resume(ctx context.Context, namespace, _ string) error {
+	if namespace == "" {
+		return fmt.Errorf("docker resume: container id missing on instance.Namespace")
+	}
+	if err := p.docker.StartContainer(ctx, namespace); err != nil {
+		return fmt.Errorf("start container: %w", err)
+	}
+	if err := p.docker.WaitForHealthy(ctx, namespace); err != nil {
+		return fmt.Errorf("wait healthy after resume: %w", err)
+	}
+	return nil
+}
+
 func (p *DockerPostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, projectID string) error {
 	if err := p.docker.StopContainer(ctx, namespace); err != nil {
 		return fmt.Errorf("stop container: %w", err)

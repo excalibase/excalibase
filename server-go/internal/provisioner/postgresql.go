@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -291,6 +294,52 @@ func (p *PostgreSQLProvisioner) stageBackup(ctx context.Context, req domain.Prov
 	backup := k8s.BuildScheduledBackup(projectID, namespace, schedule)
 	if err := p.client.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, backup); err != nil {
 		return pc.Fail(fmt.Errorf("configure backup: %w", err))
+	}
+	return nil
+}
+
+// Pause patches the project's CNPG cluster spec.instances to 0.
+// CNPG operator gracefully drains then scales down all replicas.
+// PVCs are kept; data persists. Resume restores the count from
+// inst.Tier (caller must pass tier.Instances via the resumeReplicas
+// helper since the spec doesn't know the tier).
+func (p *PostgreSQLProvisioner) Pause(ctx context.Context, namespace, projectID string) error {
+	return p.patchClusterInstances(ctx, namespace, projectID, 0)
+}
+
+// Resume patches spec.instances back. K8s provisioner can't infer
+// tier.Instances from the cluster CRD itself (it's the *desired*
+// count, not embedded in tier metadata), so we read tier from the
+// cluster's annotation that the provisioner stamps at create time.
+// If the annotation is missing (legacy cluster), fall back to 1.
+func (p *PostgreSQLProvisioner) Resume(ctx context.Context, namespace, projectID string) error {
+	clusterName := projectID + "-postgres"
+	cluster, err := p.client.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, clusterName)
+	if err != nil {
+		return fmt.Errorf("get cluster for resume: %w", err)
+	}
+	count := 1
+	if anns, ok, _ := unstructured.NestedStringMap(cluster.Object, "metadata", "annotations"); ok {
+		if v, ok := anns["excalibase.io/tier-instances"]; ok {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				count = n
+			}
+		}
+	}
+	return p.patchClusterInstances(ctx, namespace, projectID, count)
+}
+
+func (p *PostgreSQLProvisioner) patchClusterInstances(ctx context.Context, namespace, projectID string, instances int) error {
+	clusterName := projectID + "-postgres"
+	cluster, err := p.client.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, clusterName)
+	if err != nil {
+		return fmt.Errorf("get cluster for instances patch: %w", err)
+	}
+	if err := unstructured.SetNestedField(cluster.Object, int64(instances), "spec", "instances"); err != nil {
+		return fmt.Errorf("set spec.instances: %w", err)
+	}
+	if err := p.client.ApplyCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
+		return fmt.Errorf("apply cluster instances=%d: %w", instances, err)
 	}
 	return nil
 }

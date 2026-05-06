@@ -121,6 +121,44 @@ export const useDeprovisionDatabase = () => {
   });
 };
 
+interface PauseResponse {
+  projectId: string;
+  status: string;
+  pauseReason?: string;
+}
+
+export const usePauseProject = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ projectId, reason }: { projectId: string; reason?: string }) => {
+      const response = await api.post<PauseResponse>(`/provision/${projectId}/pause`, { reason: reason ?? 'manual' });
+      return response.data;
+    },
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['instances'] });
+      queryClient.invalidateQueries({ queryKey: ['instance', vars.projectId] });
+      // SettingsPage queryKey is ['project', projectId] — invalidate that
+      // too so the page repaints with the new status without a manual refresh.
+      queryClient.invalidateQueries({ queryKey: ['project', vars.projectId] });
+    },
+  });
+};
+
+export const useResumeProject = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (projectId: string) => {
+      const response = await api.post<PauseResponse>(`/provision/${projectId}/resume`);
+      return response.data;
+    },
+    onSuccess: (_, projectId) => {
+      queryClient.invalidateQueries({ queryKey: ['instances'] });
+      queryClient.invalidateQueries({ queryKey: ['instance', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+    },
+  });
+};
+
 export const useConfigureBackup = () => {
   const queryClient = useQueryClient();
 

@@ -66,6 +66,10 @@ export interface DatabaseInstance {
   updatedAt: string;
   lastHealthCheck?: string;
   grafanaDashboardUrl?: string;
+  // Pause-related (set when project is PAUSED or has been tracked)
+  deploymentMode?: 'k8s' | 'docker' | 'byoc';
+  lastActiveAt?: string;
+  pauseReason?: 'idle_7d' | 'manual' | 'tier_limit' | '';
 }
 
 export interface CredentialsResponse {

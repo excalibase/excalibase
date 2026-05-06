@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,13 +16,23 @@ import (
 )
 
 type ProvisioningHandler struct {
-	svc      *service.ProvisioningService
-	orgStore storage.OrgStore
+	svc       *service.ProvisioningService
+	orgStore  storage.OrgStore
+	pauseSvc  *service.PauseService // optional; nil → /pause + /resume return 503
+	instances storage.InstanceStore
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
 	return &ProvisioningHandler{svc: svc, orgStore: orgStore}
 }
+
+// SetPauseService wires the pause/resume backend. Wired post-construction
+// because pauseService depends on backupSvc which is built after provHandler.
+func (h *ProvisioningHandler) SetPauseService(s *service.PauseService) { h.pauseSvc = s }
+
+// SetInstanceStore lets the pause handlers look up the post-transition
+// state for the response shape.
+func (h *ProvisioningHandler) SetInstanceStore(s storage.InstanceStore) { h.instances = s }
 
 func (h *ProvisioningHandler) Routes(r chi.Router) {
 	r.Get("/", h.ListInstances)
@@ -33,7 +44,84 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 		r.Delete("/", h.Delete)
 		r.Get("/credentials", h.GetCredentials)
 		r.Patch("/deletion-protection", h.SetDeletionProtection)
+		r.Post("/pause", h.Pause)
+		r.Post("/resume", h.Resume)
 	})
+}
+
+// Pause stops the project workload after taking a backup. Body:
+//   {"reason": "manual"}     // optional; defaults to manual
+//
+// 503 when pause service isn't wired, 400 for unsupported deployment
+// modes (BYOC), 404 for missing project, 500 on unexpected failures.
+func (h *ProvisioningHandler) Pause(w http.ResponseWriter, r *http.Request) {
+	if h.pauseSvc == nil {
+		httpError(w, "pause service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	projectID := chi.URLParam(r, "projectId")
+	if h.instances != nil {
+		if inst, _ := h.instances.FindByProjectID(projectID); inst == nil {
+			httpError(w, "project not found", http.StatusNotFound)
+			return
+		}
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Reason == "" {
+		body.Reason = domain.PauseReasonManual
+	}
+	if err := h.pauseSvc.Pause(r.Context(), projectID, body.Reason); err != nil {
+		if errors.Is(err, service.ErrPauseUnsupported) {
+			httpError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	if h.instances != nil {
+		if got, _ := h.instances.FindByProjectID(projectID); got != nil {
+			writeJSON(w, map[string]interface{}{
+				"projectId": got.ProjectID, "status": got.Status, "pauseReason": got.PauseReason,
+			})
+			return
+		}
+	}
+	writeJSON(w, map[string]string{"status": "PAUSED"})
+}
+
+// Resume restarts a paused project's workload + clears PauseReason.
+func (h *ProvisioningHandler) Resume(w http.ResponseWriter, r *http.Request) {
+	if h.pauseSvc == nil {
+		httpError(w, "pause service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	projectID := chi.URLParam(r, "projectId")
+	if h.instances != nil {
+		if inst, _ := h.instances.FindByProjectID(projectID); inst == nil {
+			httpError(w, "project not found", http.StatusNotFound)
+			return
+		}
+	}
+	if err := h.pauseSvc.Resume(r.Context(), projectID); err != nil {
+		if errors.Is(err, service.ErrPauseUnsupported) {
+			httpError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	if h.instances != nil {
+		if got, _ := h.instances.FindByProjectID(projectID); got != nil {
+			writeJSON(w, map[string]interface{}{
+				"projectId": got.ProjectID, "status": got.Status,
+			})
+			return
+		}
+	}
+	writeJSON(w, map[string]string{"status": "ACTIVE"})
 }
 
 func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Request) {
