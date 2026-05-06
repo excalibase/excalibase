@@ -24,8 +24,9 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 			maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 			backup_enabled, backup_schedule, backup_retention_days,
 			metrics_endpoint, grafana_dashboard_url,
+			last_active_at, last_xact_count, pause_reason,
 			created_at, updated_at, last_health_check
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
@@ -36,6 +37,7 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 		inst.MaintenanceWindow, inst.MaintenanceWindowDurationMinutes, boolToInt(inst.AutoMinorVersionUpgrade),
 		boolToInt(inst.BackupEnabled), inst.BackupSchedule, inst.BackupRetentionDays,
 		inst.MetricsEndpoint, inst.GrafanaDashboardURL,
+		flexTimeStr(inst.LastActiveAt), inst.LastXactCount, inst.PauseReason,
 		flexTimeStr(inst.CreatedAt), flexTimeStr(inst.UpdatedAt), flexTimeStr(inst.LastHealthCheck),
 	)
 	return err
@@ -52,6 +54,7 @@ const sqliteInstanceColumns = `
 	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 	backup_enabled, backup_schedule, backup_retention_days,
 	metrics_endpoint, grafana_dashboard_url,
+	last_active_at, last_xact_count, pause_reason,
 	created_at, updated_at, last_health_check`
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
@@ -125,6 +128,9 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	var maintDur, backupRet sql.NullInt64
 	var createdAt, updatedAt, lastHealth sql.NullString
 	var deployMode sql.NullString
+	var lastActiveAt sql.NullString
+	var lastXactCount sql.NullInt64
+	var pauseReason sql.NullString
 
 	err := s.Scan(
 		&inst.ProjectID, &inst.ProjectName, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
@@ -137,6 +143,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&inst.MaintenanceWindow, &maintDur, &autoUpgrade,
 		&backupEn, &inst.BackupSchedule, &backupRet,
 		&inst.MetricsEndpoint, &inst.GrafanaDashboardURL,
+		&lastActiveAt, &lastXactCount, &pauseReason,
 		&createdAt, &updatedAt, &lastHealth,
 	)
 	if err != nil {
@@ -174,6 +181,15 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	}
 	if lastHealth.Valid {
 		inst.LastHealthCheck = parseFlexTime(lastHealth.String)
+	}
+	if lastActiveAt.Valid && lastActiveAt.String != "" {
+		inst.LastActiveAt = parseFlexTime(lastActiveAt.String)
+	}
+	if lastXactCount.Valid {
+		inst.LastXactCount = lastXactCount.Int64
+	}
+	if pauseReason.Valid {
+		inst.PauseReason = pauseReason.String
 	}
 
 	return &inst, nil

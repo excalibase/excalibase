@@ -49,4 +49,20 @@ const (
 	StageRoleCreation         ProvisioningStage = "ROLE_CREATION"
 	StageCompleted            ProvisioningStage = "COMPLETED"
 	StageFailed               ProvisioningStage = "FAILED"
+	// Pause/resume lifecycle (see service/pause.go). Status string,
+	// not pipeline stage in the strict sense — but they live on the
+	// same Status column so unifying the enum keeps the storage layer
+	// simple. Intermediate states (PAUSING, RESUMING) are visible to
+	// the API so callers polling status see progress.
+	StatusPausing  ProvisioningStage = "PAUSING"
+	StatusPaused   ProvisioningStage = "PAUSED"
+	StatusResuming ProvisioningStage = "RESUMING"
+)
+
+// Pause reasons recorded on database_instances.pause_reason. Empty
+// for ACTIVE projects.
+const (
+	PauseReasonIdle7Days = "idle_7d"
+	PauseReasonManual    = "manual"
+	PauseReasonTierLimit = "tier_limit"
 )

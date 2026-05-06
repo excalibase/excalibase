@@ -91,6 +91,13 @@ type DatabaseInstance struct {
 	MetricsEndpoint     string `json:"metricsEndpoint,omitempty"`
 	GrafanaDashboardURL string `json:"grafanaDashboardUrl,omitempty"`
 
+	// Pause state. last_active_at is updated by the activity tracker (poll
+	// of pg_stat_database). PauseReason is empty for ACTIVE projects;
+	// idle_7d / manual / tier_limit when status is PAUSED.
+	LastActiveAt   *FlexTime `json:"lastActiveAt,omitempty"`
+	LastXactCount  int64     `json:"lastXactCount,omitempty"`
+	PauseReason    string    `json:"pauseReason,omitempty"`
+
 	// Timestamps
 	CreatedAt       *FlexTime `json:"createdAt,omitempty"`
 	UpdatedAt       *FlexTime `json:"updatedAt,omitempty"`

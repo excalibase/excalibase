@@ -162,6 +162,52 @@ func TestInstancePersistsDisplayNameAndRollbackFields(t *testing.T) {
 	}
 }
 
+func TestInstance_PauseFields_RoundTrip(t *testing.T) {
+	store := testStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	inst := &domain.DatabaseInstance{
+		ProjectID: "p-pause", OrgID: "o", Status: "PAUSED",
+		LastActiveAt:  &domain.FlexTime{Time: now.Add(-8 * 24 * time.Hour)},
+		LastXactCount: 12345,
+		PauseReason:   domain.PauseReasonIdle7Days,
+	}
+	if err := store.Save(inst); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := store.FindByProjectID("p-pause")
+	if err != nil || got == nil {
+		t.Fatalf("FindByProjectID: %v", err)
+	}
+	if got.LastActiveAt == nil {
+		t.Fatal("LastActiveAt round-trip dropped value")
+	}
+	if got.LastXactCount != 12345 {
+		t.Errorf("LastXactCount: got %d, want 12345", got.LastXactCount)
+	}
+	if got.PauseReason != domain.PauseReasonIdle7Days {
+		t.Errorf("PauseReason: got %q, want %q", got.PauseReason, domain.PauseReasonIdle7Days)
+	}
+}
+
+func TestInstance_LegacyRow_PauseFieldsZero(t *testing.T) {
+	store := testStore(t)
+	if err := store.Save(&domain.DatabaseInstance{
+		ProjectID: "legacy-pause", OrgID: "o", Status: "ACTIVE",
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, _ := store.FindByProjectID("legacy-pause")
+	if got.LastActiveAt != nil {
+		t.Errorf("LastActiveAt should be nil for never-tracked: %v", got.LastActiveAt)
+	}
+	if got.LastXactCount != 0 {
+		t.Errorf("LastXactCount default: got %d, want 0", got.LastXactCount)
+	}
+	if got.PauseReason != "" {
+		t.Errorf("PauseReason default: got %q, want empty", got.PauseReason)
+	}
+}
+
 func TestInstance_DeploymentMode_RoundTrips(t *testing.T) {
 	store := testStore(t)
 	cases := []struct {
