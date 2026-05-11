@@ -51,7 +51,7 @@ Deno.test({
             let cursor = null;
             for (let p = 0; p < 6; p++) {
               const res = await c.find({}, { cursorMode: true, limit: 5, cursor });
-              pages.push({ ids: res.docs.map((d) => d.id), nextCursor: res.nextCursor });
+              pages.push({ ids: res.docs.map((d) => d._id), nextCursor: res.nextCursor });
               if (res.nextCursor === null) break;
               cursor = res.nextCursor;
             }

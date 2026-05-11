@@ -198,8 +198,11 @@ Deno.test({
       });
       assertEquals(res.ok, true);
       if (res.ok === true) {
-        const docs = res.data as Array<{ active: unknown }>;
+        const docs = res.data as Array<{ _id: string; _creationTime: number; active: unknown }>;
         assertEquals(docs.length, 1);
+        // Phase 5b: every find() result carries the system fields.
+        assertEquals(typeof docs[0]._id, "string");
+        assertEquals(typeof docs[0]._creationTime, "number");
       }
     });
   },

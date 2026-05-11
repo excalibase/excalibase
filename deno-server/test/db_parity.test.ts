@@ -34,7 +34,7 @@ async function bootEnv(collection: string) {
 }
 
 Deno.test({
-  name: "parity: insertMany inserts every document and assigns distinct ids",
+  name: "parity: insertMany inserts every document and assigns distinct _id values",
   async fn() {
     const env = await bootEnv("posts");
     try {
@@ -55,8 +55,12 @@ Deno.test({
       const res = await env.rt.invoke("p-im", { args: {} });
       const parsed = JSON.parse(res.body);
       assertEquals(parsed.data.length, 3);
-      const ids = new Set(parsed.data.map((d: { id: string }) => d.id));
-      assertEquals(ids.size, 3, "ids must be distinct");
+      const ids = new Set(parsed.data.map((d: { _id: string }) => d._id));
+      assertEquals(ids.size, 3, "_id values must be distinct");
+      for (const d of parsed.data) {
+        // _creationTime is a runtime-assigned millisecond epoch float.
+        assertEquals(typeof d._creationTime, "number");
+      }
     } finally {
       await env.cleanup();
     }
@@ -290,9 +294,9 @@ Deno.test({
         handler: async (ctx, _args) => {
           const c = ctx.db.collection("rt");
           const inserted = await c.insert({ label: "hello" });
-          const fetched = await c.getById(inserted.id);
-          const missing = await c.getById("00000000-0000-0000-0000-000000000000");
-          return { insertedId: inserted.id, fetchedLabel: fetched && fetched.label, missing };
+          const fetched = await c.getById(inserted._id);
+          const missing = await c.getById("0123456789abcdefghijklmnopqrst");
+          return { insertedId: inserted._id, fetchedLabel: fetched && fetched.label, missing };
         },
       }`);
       await env.rt.deploy("p-rt", code);

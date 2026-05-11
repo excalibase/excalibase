@@ -21,16 +21,17 @@ async function createSearchableCollection(pgUrl: string, collection: string): Pr
   try {
     await sql`CREATE SCHEMA IF NOT EXISTS nosql`;
     const quoted = `nosql."${collection.replace(/"/g, '""')}"`;
-    // The generated tsvector column mirrors what the Java
-    // CollectionSchemaManager.addSearchColumn does on the prod path.
+    // Phase 5b: schema mirrors Phase 5a's ApplySchema output —
+    // `_id text PRIMARY KEY`, `_creation_time double precision`, and a
+    // `doc jsonb` column for the user payload. The search_text column
+    // generates over `doc->>'body'` (was `data->>'body'` pre-5b).
     await sql.unsafe(
       `CREATE TABLE IF NOT EXISTS ${quoted} (
-         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-         data JSONB NOT NULL,
-         created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
-         updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+         _id text PRIMARY KEY,
+         _creation_time double precision NOT NULL,
+         doc jsonb NOT NULL DEFAULT '{}'::jsonb,
          search_text tsvector GENERATED ALWAYS AS (
-           to_tsvector('english', coalesce(data->>'body', ''))
+           to_tsvector('english', coalesce(doc->>'body', ''))
          ) STORED
        )`,
     );
@@ -177,17 +178,18 @@ Deno.test({
   async fn() {
     const pg = await startPostgres();
     try {
-      // Plain collection — no search_text column.
+      // The "no_search" collection has the Convex-shape `_id`/`doc` columns
+      // but lacks the generated `search_text` tsvector. We expect the user
+      // to see a clear error from search() rather than a silent zero-row.
       const postgres = (await import("npm:postgres@3.4.4")).default;
       const sql = postgres(pg.url, { onnotice: () => {} });
       try {
         await sql`CREATE SCHEMA IF NOT EXISTS nosql`;
         await sql.unsafe(
           `CREATE TABLE IF NOT EXISTS nosql.no_search (
-             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-             data JSONB NOT NULL,
-             created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
-             updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+             _id text PRIMARY KEY,
+             _creation_time double precision NOT NULL,
+             doc jsonb NOT NULL DEFAULT '{}'::jsonb
            )`,
         );
       } finally {

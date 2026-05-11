@@ -15,7 +15,7 @@ function bundle(expr: string): string {
 }
 
 Deno.test({
-  name: "ctx.db.collection('users').insert returns the inserted doc with id + timestamps",
+  name: "ctx.db.collection('users').insert returns the inserted doc with _id + _creationTime",
   async fn() {
     const pg = await startPostgres();
     try {
@@ -39,11 +39,14 @@ Deno.test({
         const res = await rt.invoke("dbi-insert", { args: { name: "alice" } });
         assertEquals(res.status, 200);
         const parsed = JSON.parse(res.body);
-        assertExists(parsed.data.id, "id should be populated");
+        assertExists(parsed.data._id, "_id should be populated");
         assertEquals(parsed.data.name, "alice");
         assertEquals(parsed.data.status, "active");
-        assertExists(parsed.data.createdAt);
-        assertExists(parsed.data.updatedAt);
+        assertEquals(typeof parsed.data._creationTime, "number");
+        // Convex-shape id: 30-char base32 lowercase letters+digits.
+        if (typeof parsed.data._id !== "string" || !/^[a-z0-9]{30}$/.test(parsed.data._id)) {
+          throw new Error(`_id is not 30-char base32 lowercase: ${parsed.data._id}`);
+        }
       } finally {
         await rt.stop();
       }
@@ -115,8 +118,8 @@ Deno.test({
           handler: async (ctx, _args) => {
             const c = ctx.db.collection("items");
             const inserted = await c.insert({ name: "thing" });
-            const found = await c.getById(inserted.id);
-            const missing = await c.getById("00000000-0000-0000-0000-000000000000");
+            const found = await c.getById(inserted._id);
+            const missing = await c.getById("0123456789abcdefghijklmnopqrst");
             return { found, missing };
           },
         }`);

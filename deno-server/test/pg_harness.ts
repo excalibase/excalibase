@@ -124,8 +124,11 @@ async function stopContainer(name: string): Promise<void> {
 }
 
 /**
- * Apply the minimal NoSQL schema migration mirroring `CollectionSchemaManager.createTable`.
- * Creates a `nosql` schema and a single collection table for the given name.
+ * Apply the Convex-shape NoSQL schema migration mirroring Phase 5a's
+ * `ApplySchema` in server-go. Creates a `nosql` schema and a single
+ * collection table with `_id`, `_creation_time`, and `doc` columns. This
+ * replaces the pre-5b `(id uuid, data jsonb, created_at, updated_at)` shape
+ * so the deno runtime can address the same columns the Go migrator emits.
  */
 export async function createCollection(pgUrl: string, collection: string): Promise<void> {
   // Use a one-shot Postgres connection from the host via npm:postgres to
@@ -139,10 +142,9 @@ export async function createCollection(pgUrl: string, collection: string): Promi
     const quoted = `nosql."${collection.replace(/"/g, '""')}"`;
     await sql.unsafe(
       `CREATE TABLE IF NOT EXISTS ${quoted} (
-         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-         data JSONB NOT NULL,
-         created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
-         updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+         _id text PRIMARY KEY,
+         _creation_time double precision NOT NULL,
+         doc jsonb NOT NULL DEFAULT '{}'::jsonb
        )`,
     );
   } finally {

@@ -110,12 +110,13 @@ async function createVectorCollection(pgUrl: string, collection: string, dims: n
     await sql.unsafe(`CREATE EXTENSION IF NOT EXISTS vector`);
     await sql`CREATE SCHEMA IF NOT EXISTS nosql`;
     const quoted = `nosql."${collection.replace(/"/g, '""')}"`;
+    // Phase 5b: same Convex-shape columns as the rest of the suite — the
+    // embedding column is added alongside.
     await sql.unsafe(
       `CREATE TABLE IF NOT EXISTS ${quoted} (
-         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-         data JSONB NOT NULL,
-         created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
-         updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+         _id text PRIMARY KEY,
+         _creation_time double precision NOT NULL,
+         doc jsonb NOT NULL DEFAULT '{}'::jsonb,
          embedding vector(${dims})
        )`,
     );
@@ -126,6 +127,20 @@ async function createVectorCollection(pgUrl: string, collection: string, dims: n
   } finally {
     await sql.end({ timeout: 1 });
   }
+}
+
+// Tiny Convex-format id generator for seed rows — keep the algorithm
+// inline to avoid depending on the runtime's `runtime/ids.ts` from a test
+// fixture (which would create a tight coupling). The runtime asserts a
+// 30-char lowercase base32 shape; matching it here keeps the seed rows
+// indistinguishable from runtime-minted ones.
+function seedId(): string {
+  const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let out = "";
+  const bytes = new Uint8Array(30);
+  crypto.getRandomValues(bytes);
+  for (let i = 0; i < 30; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
 }
 
 // Seed embeddings directly via SQL — production wires this through
@@ -147,7 +162,8 @@ async function seedVectors(
       // value through `$1::jsonb` would double-encode (the runtime treats
       // the string itself as the JSONB scalar).
       const vec = `[${r.embedding.join(",")}]`;
-      await sql`INSERT INTO ${table} (data, embedding) VALUES (${sql.json({ title: r.title })}, ${vec}::vector)`;
+      await sql`INSERT INTO ${table} (_id, _creation_time, doc, embedding)
+                VALUES (${seedId()}, ${Date.now()}, ${sql.json({ title: r.title })}, ${vec}::vector)`;
     }
   } finally {
     await sql.end({ timeout: 1 });
@@ -258,17 +274,17 @@ Deno.test({
         { title: "gamma-keep", embedding: [0.5, 0.5, 0] },
         { title: "delta-skip", embedding: [0.5, 0.5, 0] },
       ]);
-      // Tag the rows we want to keep by inserting `category=keep` into data.
+      // Tag the rows we want to keep by inserting `category=keep` into doc.
       const postgres = (await import("npm:postgres@3.4.4")).default;
       const sql = postgres(pg.url, { onnotice: () => {} });
       try {
         await sql.unsafe(
-          `UPDATE nosql.items SET data = data || '{"category":"keep"}'::jsonb
-             WHERE (data->>'title') LIKE '%-keep'`,
+          `UPDATE nosql.items SET doc = doc || '{"category":"keep"}'::jsonb
+             WHERE (doc->>'title') LIKE '%-keep'`,
         );
         await sql.unsafe(
-          `UPDATE nosql.items SET data = data || '{"category":"skip"}'::jsonb
-             WHERE (data->>'title') LIKE '%-skip'`,
+          `UPDATE nosql.items SET doc = doc || '{"category":"skip"}'::jsonb
+             WHERE (doc->>'title') LIKE '%-skip'`,
         );
       } finally {
         await sql.end({ timeout: 1 });
