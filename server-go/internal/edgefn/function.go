@@ -12,12 +12,38 @@ import (
 )
 
 // v2ShapePattern matches the tagged FunctionDef record produced by the
-// excalibase SDK (kind: "query" | "mutation" | "action"). Whitespace
-// around the colon is tolerated — esbuild emits `kind: "query"` (with
-// space), and hand-written user code can omit the space. We deliberately
-// don't try to verify args/handler here; the runtime does the structural
-// check at dispatch time. This is a quick post-bundle marker, not a parser.
-var v2ShapePattern = regexp.MustCompile(`kind\s*:\s*"(query|mutation|action)"`)
+// excalibase SDK (kind: "query" | "mutation" | "action" | "httpAction" |
+// "httpRouter"). Whitespace around the colon is tolerated — esbuild emits
+// `kind: "query"` (with space), and hand-written user code can omit the
+// space. We deliberately don't try to verify args/handler here; the
+// runtime does the structural check at dispatch time. This is a quick
+// post-bundle marker, not a parser.
+var v2ShapePattern = regexp.MustCompile(`kind\s*:\s*"(query|mutation|action|httpAction|httpRouter)"`)
+
+// httpKindPattern picks the specific kind for httpAction / httpRouter so
+// Function.Kind reflects exactly what the bundle declared.
+var httpKindPattern = regexp.MustCompile(`kind\s*:\s*"(httpAction|httpRouter)"`)
+
+// httpRoutesPattern extracts the `__excalibase_routes: [...]` literal the
+// httpRouter() helper emits at deploy time. We capture the array contents
+// so the bundler can persist them on Function.HttpRoutes. Greedy match is
+// intentional: routes are sourced from a single literal array, not from
+// dynamic code, so the closing bracket nearest the opener is always the
+// right one. The (?s) flag lets `.` match newlines for multi-line tables.
+var httpRoutesPattern = regexp.MustCompile(`(?s)__excalibase_routes\s*:\s*(\[[^\[\]]*?\])`)
+
+// validHttpMethods bounds the method set written into Function.HttpRoutes.
+// Anything outside the set fails the bundle so a malformed router can't slip
+// through to the runtime — defence in depth on top of the lib's route()
+// guard.
+var validHttpMethods = map[string]bool{
+	"GET":     true,
+	"POST":    true,
+	"PUT":     true,
+	"PATCH":   true,
+	"DELETE":  true,
+	"OPTIONS": true,
+}
 
 // RuntimeShape values written into Function.RuntimeShape after Bundle().
 // Older persisted records may have an empty string — readers must treat
@@ -119,6 +145,27 @@ type Function struct {
 	// on the Function so the migrator can apply it on deploy. Empty/nil on
 	// bundles that do not declare a schema.
 	SchemaJSON json.RawMessage `json:"schemaJson,omitempty"`
+	// Kind — Phase 7 marker for httpAction / httpRouter exports. Empty for
+	// the v1 Fetch handler shape AND for the v2 query/mutation/action
+	// shapes (those discriminate via RuntimeShape + the worker-side scan
+	// of the export's `kind` field). Only "httpAction" and "httpRouter"
+	// land here so the Go gateway can route /functions/v1/{p}/http/* to
+	// the right function without re-loading the bundle. `omitempty` keeps
+	// legacy records byte-stable.
+	Kind string `json:"kind,omitempty"`
+	// HttpRoutes — JSON array of `{path, method, exportName}` rows
+	// extracted from the bundle's `__excalibase_routes` side-channel when
+	// the default export is an httpRouter. Used by the gateway's
+	// path-matching dispatcher; empty/nil for any other kind.
+	HttpRoutes json.RawMessage `json:"httpRoutes,omitempty"`
+	// IsInternal — Phase 7 marker for internalQuery / internalMutation /
+	// internalAction exports. The Go gateway returns 404 from PublicInvoke
+	// when this is true (indistinguishable from a missing function — no
+	// information leak). Internal functions remain reachable via the
+	// trusted /internal/invoke route and via ctx.runX from sibling
+	// functions. The flag is captured from the runtime-reported metadata
+	// callback (Phase 2 flow) and persisted on the Function record.
+	IsInternal bool `json:"isInternal,omitempty"`
 	CreatedAt  time.Time       `json:"createdAt"`
 	UpdatedAt  time.Time       `json:"updatedAt"`
 }
@@ -267,7 +314,83 @@ func (f *Function) Bundle() (string, error) {
 		f.RuntimeShape = RuntimeShapeV1
 	}
 
+	// Phase 7: detect httpAction / httpRouter and stamp Function.Kind. Both
+	// kinds are part of the v2 shape family (RuntimeShape stays "v2") but
+	// the gateway needs the precise discriminator to route requests.
+	if m := httpKindPattern.FindStringSubmatch(final); m != nil {
+		f.Kind = m[1]
+		if f.Kind == "httpRouter" {
+			routes, rerr := extractHttpRoutes(final)
+			if rerr != nil {
+				return "", rerr
+			}
+			f.HttpRoutes = routes
+		}
+	} else {
+		// Clear stale Kind/HttpRoutes if this bundle isn't an http* shape
+		// (e.g. redeploy that swapped the default export for a query).
+		f.Kind = ""
+		f.HttpRoutes = nil
+	}
+
 	return final, nil
+}
+
+// extractHttpRoutes pulls the __excalibase_routes array out of the bundled
+// source and returns it as a json.RawMessage. The lib's httpRouter() emits
+// the table as a JS array literal of `{path, method, exportName}` rows.
+// esbuild preserves the literal verbatim with UNQUOTED keys (TS object-
+// literal syntax), so the bundled output looks like:
+//
+//	[
+//	  { path: "/webhook", method: "POST", exportName: "default" },
+//	  ...
+//	]
+//
+// We normalise to JSON by quoting the bare identifier keys, then decode
+// with the standard library. On a non-parseable literal or any row with
+// an unsupported method, the bundle fails so the bad shape never reaches
+// the runtime.
+func extractHttpRoutes(bundled string) (json.RawMessage, error) {
+	m := httpRoutesPattern.FindStringSubmatch(bundled)
+	if m == nil {
+		return nil, fmt.Errorf("httpRouter detected but __excalibase_routes table missing")
+	}
+	normalised := quoteBareJSKeys(m[1])
+	var routes []struct {
+		Path       string `json:"path"`
+		Method     string `json:"method"`
+		ExportName string `json:"exportName"`
+	}
+	if err := json.Unmarshal([]byte(normalised), &routes); err != nil {
+		return nil, fmt.Errorf("httpRouter routes are not valid: %w", err)
+	}
+	for _, r := range routes {
+		if r.Path == "" || r.Path[0] != '/' {
+			return nil, fmt.Errorf("route path must start with '/' (got %q)", r.Path)
+		}
+		if !validHttpMethods[r.Method] {
+			return nil, fmt.Errorf("route method must be GET/POST/PUT/PATCH/DELETE/OPTIONS (got %q)", r.Method)
+		}
+	}
+	// Re-encode through json.Marshal so the persisted blob is canonical
+	// (no source-side whitespace, single canonical key order).
+	out, err := json.Marshal(routes)
+	if err != nil {
+		return nil, fmt.Errorf("re-marshal routes: %w", err)
+	}
+	return json.RawMessage(out), nil
+}
+
+// bareJSKeyPattern matches an identifier-shaped object key that is NOT
+// already quoted (i.e. `path:`, `method:`, `exportName:`). The negative
+// lookbehind on `"` is faked with a class — Go regexp has no lookbehind —
+// by requiring the preceding character to be `{` or `,` or whitespace.
+// JSON keys must be quoted; this pass wraps each bare key in double quotes.
+var bareJSKeyPattern = regexp.MustCompile(`([{,\s])([A-Za-z_][A-Za-z0-9_]*)\s*:`)
+
+func quoteBareJSKeys(s string) string {
+	return bareJSKeyPattern.ReplaceAllString(s, `$1"$2":`)
 }
 
 // virtualFSPlugin returns an esbuild plugin that resolves and loads modules

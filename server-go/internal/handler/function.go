@@ -899,6 +899,16 @@ func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase 7: internal-only functions are NOT reachable via the public
+	// route. Return the regular 404 phrasing so an attacker can't tell
+	// "internal-only" apart from "missing". Internal callers (sibling
+	// functions via ctx.runX, admin tools) reach the handler via
+	// /internal/invoke/{projectId}/{fnId} instead.
+	if fn.IsInternal {
+		httpError(w, errFunctionNotFound, http.StatusNotFound)
+		return
+	}
+
 	if fn.JwtVerificationRequired() {
 		if !h.enforceJWT(w, r, projectID) {
 			return
@@ -1254,9 +1264,175 @@ func (h *FunctionHandler) ReceiveExportMetadata(w http.ResponseWriter, r *http.R
 		return
 	}
 	fn.ExportMetadata = body.Exports
+	// Phase 7: surface the isInternal flag from the runtime-reported export
+	// metadata onto the Function record so PublicInvoke can short-circuit
+	// to 404 on the way in. We inspect the first entry's tag — Phase 2's
+	// metadata contract is one entry per default export.
+	if isInternalFromMetadata(body.Exports) {
+		fn.IsInternal = true
+	}
 	if err := h.store.Save(fn); err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "updated", "id": fnID})
+}
+
+// isInternalFromMetadata returns true when the runtime-reported exports
+// array tags the default export with `isInternal: true`. The metadata
+// shape is `[{name, kind, argsJsonSchema, isInternal?}]`; we read only
+// the first entry because Phase 2 contracts a single default export per
+// function. Tolerates missing/empty payloads.
+func isInternalFromMetadata(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var entries []map[string]interface{}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return false
+	}
+	if len(entries) == 0 {
+		return false
+	}
+	v, ok := entries[0]["isInternal"]
+	if !ok {
+		return false
+	}
+	b, _ := v.(bool)
+	return b
+}
+
+// --- Phase 7: internal-invoke route + http* dispatch ---
+
+// InternalInvoke serves POST /internal/invoke/{projectId}/{fnId} — the
+// server-to-server bridge used by `ctx.runQuery / runMutation / runAction`
+// when a function in one runtime targets a function in a different runtime
+// (or, for now, in the same runtime via the gateway). Authenticated with
+// the runtime-token shared secret — anything else 401s before the function
+// is even looked up.
+//
+// The body forwards to the runtime verbatim, exactly like Invoke, but
+// without the Authorization-strip behaviour (internal callers carry a
+// runtime-token, not a user JWT).
+func (h *FunctionHandler) InternalInvoke(w http.ResponseWriter, r *http.Request) {
+	if h.runtimeSecret == "" || r.Header.Get(runtimeTokenHeader) != h.runtimeSecret {
+		httpError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	projectID := chi.URLParam(r, "projectId")
+	fnID := chi.URLParam(r, "fnId")
+	if err := edgefn.ValidateProjectID(projectID); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	fn, err := h.store.Get(projectID, fnID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if fn == nil {
+		httpError(w, errFunctionNotFound, http.StatusNotFound)
+		return
+	}
+	// Internal invoke reaches both public and internal-only functions —
+	// no IsInternal short-circuit here. That's the whole point of the
+	// route: it's the trusted path the runtime uses to compose calls.
+	h.forwardToRuntime(w, r, fn, false /* keep auth headers — caller is the runtime */)
+}
+
+// PublicHttpInvoke serves /functions/v1/{projectId}/http/* — the entry
+// point for httpAction and httpRouter functions. Differs from PublicInvoke
+// in two ways:
+//
+//  1. The function is looked up by `Kind` (httpAction / httpRouter) rather
+//     than by URL-supplied fnId. Phase 7 supports at most one httpAction
+//     or one httpRouter per project (Convex parity); the first matching
+//     Function wins.
+//  2. For httpRouter, the request path is matched against the persisted
+//     route table; a miss (or method mismatch) returns 404.
+//
+// Internal-only http* functions follow the same 404-on-public rule as the
+// other internalX kinds — for consistency, even though Convex's
+// `internalAction` doesn't have an http variant.
+func (h *FunctionHandler) PublicHttpInvoke(w http.ResponseWriter, r *http.Request) {
+	writeCORSHeaders(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	projectID := chi.URLParam(r, "projectId")
+	if err := edgefn.ValidateProjectID(projectID); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if !h.allowProject(projectID) {
+		w.Header().Set("Retry-After", "1")
+		httpError(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
+	fns, err := h.store.List(projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+
+	// Sub-path after the /http prefix — chi's `*` wildcard captures it.
+	subPath := "/" + strings.TrimLeft(chi.URLParam(r, "*"), "/")
+
+	for _, fn := range fns {
+		if fn.IsInternal {
+			continue
+		}
+		if fn.Kind == "httpAction" {
+			// Match path: the function id forms the sub-path. The Go-side
+			// gateway treats `/functions/v1/{p}/http/<fnId>` as the route
+			// for an httpAction whose fnId equals the segment.
+			if subPath == "/"+fn.ID {
+				if fn.JwtVerificationRequired() {
+					if !h.enforceJWT(w, r, projectID) {
+						return
+					}
+				}
+				h.forwardToRuntime(w, r, fn, false)
+				return
+			}
+			continue
+		}
+		if fn.Kind == "httpRouter" {
+			if matched := matchRouterRoute(fn.HttpRoutes, subPath, r.Method); matched {
+				if fn.JwtVerificationRequired() {
+					if !h.enforceJWT(w, r, projectID) {
+						return
+					}
+				}
+				h.forwardToRuntime(w, r, fn, false)
+				return
+			}
+		}
+	}
+	httpError(w, errFunctionNotFound, http.StatusNotFound)
+}
+
+// matchRouterRoute walks the persisted route table looking for a (path,
+// method) match. Phase 7 keeps the matcher exact-only — no path parameters
+// or wildcards. A method mismatch on an otherwise-known path returns
+// `false` (and PublicHttpInvoke 404s) to match Convex's behaviour.
+func matchRouterRoute(rawRoutes json.RawMessage, path, method string) bool {
+	if len(rawRoutes) == 0 {
+		return false
+	}
+	var routes []struct {
+		Path   string `json:"path"`
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(rawRoutes, &routes); err != nil {
+		return false
+	}
+	for _, route := range routes {
+		if route.Path == path && route.Method == method {
+			return true
+		}
+	}
+	return false
 }

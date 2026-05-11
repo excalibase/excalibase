@@ -491,11 +491,18 @@ func buildRouter(cfg config.AppConfig, sqlStore storage.PlatformStore, store sto
 	mountProjectScopedRoutes(r, sqlStore, store, d)
 	mountEmailRoutes(r, d)
 
+	// Phase 7: /http/* dispatch is mounted BEFORE the bare /{fnId} route so
+	// chi's router doesn't treat the literal segment "http" as a function id.
+	r.With(custommw.TenantContext).HandleFunc("/functions/v1/{projectId}/http/*", d.fnHandler.PublicHttpInvoke)
 	r.With(custommw.TenantContext).HandleFunc("/functions/v1/{projectId}/{fnId}", d.fnHandler.PublicInvoke)
 	// Internal runtime → provisioning callback for export metadata capture.
 	// Authenticates via X-Excalibase-Runtime-Token (shared runtime secret),
 	// not JWT — this is server-to-server only.
 	r.Post("/internal/runtime/functions/{fnId}/metadata", d.fnHandler.ReceiveExportMetadata)
+	// Phase 7: server-to-server bridge used by ctx.runQuery/runMutation/
+	// runAction to invoke a sibling function. Same shared-secret auth as
+	// the metadata callback above.
+	r.Post("/internal/invoke/{projectId}/{fnId}", d.fnHandler.InternalInvoke)
 	return r
 }
 

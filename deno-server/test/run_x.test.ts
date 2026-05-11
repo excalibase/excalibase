@@ -134,25 +134,26 @@ Deno.test({
 });
 
 Deno.test({
-  name: "ctx.runMutation: target args validation surfaces back to caller",
+  name: "ctx.runMutation: ValidationError from target surfaces with issues array",
   async fn() {
     const rt = await startRuntime({ v2Enabled: true });
     try {
-      // Target validates `n` is a number; caller passes a string.
+      // The target's handler does its own validation and throws a
+      // ValidationError-shaped error. Phase 7 surfaces .name and .issues
+      // through the runX RPC envelope so the caller sees the same shape
+      // it would from a direct ctx.db ValidationError.
       const targetCode = bundleDefault(`{
         kind: "mutation",
-        args: {
-          parse: (a) => {
-            if (typeof a !== "object" || typeof a.n !== "number") {
-              const e = new Error("ValidationError");
-              e.name = "ValidationError";
-              e.issues = [{ path: "n", message: "expected number" }];
-              throw e;
-            }
-            return a;
-          },
+        args: { parse: (a) => a },
+        handler: async (_ctx, args) => {
+          if (typeof args.n !== "number") {
+            const e = new Error("expected number");
+            e.name = "ValidationError";
+            e.issues = [{ path: "n", message: "expected number" }];
+            throw e;
+          }
+          return { n: args.n };
         },
-        handler: async (_ctx, args) => ({ n: args.n }),
       }`);
       await rt.deploy("proj_d__strict", targetCode);
       const callerCode = bundleDefault(`{
@@ -182,6 +183,8 @@ Deno.test({
       };
       assertEquals(parsed.data.caught, true);
       assertEquals(parsed.data.name, "ValidationError");
+      assertEquals(parsed.data.issues.length, 1);
+      assertEquals(parsed.data.issues[0].path, "n");
     } finally {
       await rt.stop();
     }

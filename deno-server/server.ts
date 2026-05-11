@@ -147,8 +147,17 @@ const PROVISIONING_URL = Deno.env.get("EXCALIBASE_PROVISIONING_URL") || "";
 
 // V2_KINDS — recognised tagged FunctionDef kinds. Used both in the worker
 // (kept as a literal in the template) and in shape checks here. Phase 3
-// codegen will key off these too.
-const V2_KINDS = ["query", "mutation", "action"];
+// codegen will key off these too. Phase 7 extends the family with
+// httpAction and httpRouter; these share the v2 boot path but skip the
+// {args}-parsing dispatch and go through a raw-Request handler instead.
+const V2_KINDS = ["query", "mutation", "action", "httpAction", "httpRouter"];
+
+// EXCALIBASE_RUN_MAX_DEPTH bounds the nested ctx.runQuery/runMutation/
+// runAction call chain so a buggy handler can't recurse without limit.
+// Default 8 (matches @excalibase/server@0.6.0 CHANGELOG). Each runX RPC
+// carries the caller's depth + 1 in its envelope; the dispatcher rejects
+// any value above the limit before the message reaches the target worker.
+const RUN_MAX_DEPTH = Math.max(1, Number(Deno.env.get("EXCALIBASE_RUN_MAX_DEPTH") || "8"));
 
 /** Build the JS source that runs inside the Deno Web Worker. */
 function buildWorkerCode(userCode: string, secrets: Record<string, string>): string {
@@ -233,13 +242,28 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
 
     // __isV2Export — duck-types a tagged FunctionDef record:
     //   { kind: "query"|"mutation"|"action", args: <zod-or-parseable>, handler: function }
-    // We accept any object whose 'args' is non-null because the user's zod
-    // (or hand-rolled) parser will run inside the handler shim below.
+    // or, for Phase 7's HTTP shapes:
+    //   { kind: "httpAction", handler: function }
+    //   { kind: "httpRouter", __excalibase_route_handlers: { ... } }
+    // We accept the args-carrying kinds whose 'args' is non-null because
+    // the user's zod (or hand-rolled) parser will run inside the handler
+    // shim below. http* kinds skip the args validation entirely.
     function __isV2Export(d) {
       if (!d || typeof d !== 'object') return false;
+      if (__V2_KINDS.indexOf(d.kind) === -1) return false;
+      if (d.kind === 'httpAction') {
+        return typeof d.handler === 'function';
+      }
+      if (d.kind === 'httpRouter') {
+        // The router itself has no callable handler — dispatch resolves
+        // per-route handlers from __excalibase_route_handlers. We just
+        // confirm the side-channel map is present.
+        return typeof d.__excalibase_route_handlers === 'object' &&
+               d.__excalibase_route_handlers !== null;
+      }
       if (typeof d.handler !== 'function') return false;
       if (d.args === null || d.args === undefined) return false;
-      return __V2_KINDS.indexOf(d.kind) !== -1;
+      return true;
     }
 
     // __decodeJwtClaims — base64url-decode the JWT payload segment. The Go
@@ -472,6 +496,146 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       };
     }
 
+    // --- ctx.runQuery / runMutation / runAction (Phase 7) ---
+    // Composition surface for cross-function calls. Each call posts a
+    // {type:'runX', op, ref, args} message to the main thread; the main
+    // thread looks up the target (in-process if same runtime, HTTP self-call
+    // if not) and posts {type:'runXResult', rpcId, result} back.
+    //
+    // The current call depth rides along in the envelope so the dispatcher
+    // can reject runaway recursion before the message reaches the target.
+    // The initial depth is set by the v2 dispatcher when it builds the ctx
+    // for an invocation, and increments for every nested call this worker
+    // makes via __runXCall.
+    const __runXPending = new Map();
+    let __nextRunXRpcId = 1;
+    // Set by __dispatchV2 / httpAction dispatch before the handler runs.
+    let __currentRunDepth = 0;
+    const __RUN_MAX_DEPTH = ${RUN_MAX_DEPTH};
+
+    function __runXCall(op, ref, args) {
+      // ref must look like { moduleName, exportName }. Reject malformed
+      // values up-front so the user gets a clean error.
+      if (!ref || typeof ref !== 'object' ||
+          typeof ref.moduleName !== 'string' || ref.moduleName.length === 0 ||
+          typeof ref.exportName !== 'string' || ref.exportName.length === 0) {
+        return Promise.reject(new Error("ctx." + op + ": first argument must be a FunctionRef { moduleName, exportName }"));
+      }
+      const nextDepth = __currentRunDepth + 1;
+      if (nextDepth > __RUN_MAX_DEPTH) {
+        return Promise.reject(new Error(
+          "ctx." + op + ": run depth limit exceeded (" + __RUN_MAX_DEPTH +
+          "). Check for infinite recursion."
+        ));
+      }
+      const rpcId = __nextRunXRpcId++;
+      return new Promise((resolve, reject) => {
+        __runXPending.set(rpcId, { resolve, reject });
+        self.postMessage({
+          type: 'runX', rpcId, op, ref, args,
+          depth: nextDepth,
+        });
+      });
+    }
+
+    function __makeRunQuery()    { return (ref, args) => __runXCall('runQuery',    ref, args); }
+    function __makeRunMutation() { return (ref, args) => __runXCall('runMutation', ref, args); }
+    function __makeRunAction()   { return (ref, args) => __runXCall('runAction',   ref, args); }
+
+    // __dispatchHttp — Phase 7 httpAction/httpRouter dispatch. Skips the
+    // {args}-parsing v2 path; reconstructs a raw Request from the invoke
+    // envelope and forwards the handler's Response unchanged.
+    //
+    // For an httpAction the default export's handler runs every time.
+    // For an httpRouter we look up the matching (path, method) row in
+    // the bundled __excalibase_route_handlers map; misses return 404.
+    async function __dispatchHttp(reqId, reqData, fnDef) {
+      try {
+        const headers = reqData.headers || {};
+        const auth = headers['Authorization'] || headers['authorization'] || '';
+        const claims = __decodeJwtClaims(auth);
+        // httpAction/httpRouter don't have an args envelope, so the runX
+        // envelope's depth must ride alongside reqData.runDepth (the
+        // gateway forwards it that way for internal invocations).
+        // Public traffic has no depth, so default to 0.
+        const incomingDepth = typeof reqData.runDepth === 'number' ? reqData.runDepth : 0;
+        __currentRunDepth = incomingDepth;
+
+        // Reconstruct a raw Request. The runtime accepts relative URLs;
+        // Request requires an absolute one. Use the same synthetic base
+        // as the legacy Fetch path so URL parsing inside the handler
+        // (req.url, new URL(req.url)) works.
+        let url = reqData.url || '/';
+        if (!/^https?:\/\//.test(url)) {
+          url = 'http://fn.excalibase.local' + (url.startsWith('/') ? '' : '/') + url;
+        }
+        const init = { method: reqData.method || 'GET', headers };
+        if (reqData.body && reqData.method !== 'GET' && reqData.method !== 'HEAD') {
+          init.body = reqData.body;
+        }
+        const req = new Request(url, init);
+
+        // httpAction ctx parity: db is null (Convex contract), runX
+        // surface is wired so the handler can compose with other functions.
+        const ctx = {
+          db: null,
+          auth: { claims },
+          runQuery:    __makeRunQuery(),
+          runMutation: __makeRunMutation(),
+          runAction:   __makeRunAction(),
+        };
+
+        // Find the handler. For httpAction the def itself carries it; for
+        // httpRouter we resolve via the route-handlers map keyed by
+        // "METHOD path". A miss is a 404 (Convex parity: method mismatch
+        // is also 404, not 405).
+        let handler;
+        if (fnDef.kind === 'httpAction') {
+          handler = fnDef.handler;
+        } else if (fnDef.kind === 'httpRouter') {
+          const handlers = fnDef.__excalibase_route_handlers || {};
+          const path = new URL(req.url).pathname;
+          handler = handlers[req.method + ' ' + path];
+          if (typeof handler !== 'function') {
+            self.postMessage({ type: 'success', reqId, status: 404,
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ error: 'not found' }) });
+            return;
+          }
+        }
+        if (typeof handler !== 'function') {
+          self.postMessage({ type: 'success', reqId, status: 500,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ error: 'http handler missing' }) });
+          return;
+        }
+
+        let res;
+        try {
+          res = await handler(ctx, req);
+        } catch (err) {
+          self.postMessage({ type: 'success', reqId, status: 500,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ error: String(err && err.message || err) }) });
+          return;
+        }
+        if (!(res instanceof Response)) {
+          self.postMessage({ type: 'success', reqId, status: 500,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ error: 'http handler must return a Response' }) });
+          return;
+        }
+        const bodyText = await res.text();
+        const outHeaders = {};
+        res.headers.forEach((v, k) => { outHeaders[k] = v; });
+        self.postMessage({ type: 'success', reqId, status: res.status,
+          headers: outHeaders, body: bodyText });
+      } catch (outer) {
+        self.postMessage({ type: 'error', reqId,
+          error: String(outer && outer.message || outer) });
+      }
+    }
+
     // __dispatchV2 — runs the tagged FunctionDef contract:
     //   POST body must be { "args": <object> }; on missing args, 400.
     //   Calls handler(ctx, body.args); wraps result as { data } JSON.
@@ -503,7 +667,24 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         const db = (fnDef.kind === 'query' || fnDef.kind === 'mutation')
           ? __makeDbClient()
           : null;
-        const ctx = { db, auth: { claims } };
+        // Initial depth comes from the request body (set by dispatchRunX
+        // for cross-function calls; absent on top-level public traffic).
+        // The gateway sets it to 0 for top-level public calls; runX bumps
+        // it for each nested call so the chain is end-to-end bounded.
+        const incomingDepth = typeof body.runDepth === 'number' ? body.runDepth : 0;
+        __currentRunDepth = incomingDepth;
+        const ctx = {
+          db,
+          auth: { claims },
+          // Phase 7: composition surface. Type-level read-only rules are
+          // enforced by the lib (QueryCtx has no runMutation/runAction);
+          // the worker exposes all three on every Ctx variant so a
+          // hand-rolled bundle can still compose, but discipline lives
+          // in the typed lib path.
+          runQuery:    __makeRunQuery(),
+          runMutation: __makeRunMutation(),
+          runAction:   __makeRunAction(),
+        };
         try {
           const result = await fnDef.handler(ctx, body.args);
           self.postMessage({ type: 'success', reqId, status: 200,
@@ -551,7 +732,12 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           : { type: 'object', properties: {} };
       // The name field is filled by the main thread (it knows the runtime
       // id) before the HTTP forward — here we report a placeholder.
-      return [{ name: 'default', kind: exp.kind, argsJsonSchema: argsJsonSchema }];
+      const entry = { name: 'default', kind: exp.kind, argsJsonSchema: argsJsonSchema };
+      // Phase 7: surface the isInternal flag so the gateway can gate
+      // PublicInvoke. Omit when false to keep the metadata payload
+      // byte-stable for legacy v2 records.
+      if (exp.isInternal === true) entry.isInternal = true;
+      return [entry];
     }
 
     // --- worker dispatch ---
@@ -578,6 +764,26 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         }
         return;
       }
+      // Phase 7: runX RPC reply. Mirrors the db RPC channel but on its
+      // own pending map so the two don't collide.
+      if (msg && msg.type === 'runXResult') {
+        const pending = __runXPending.get(msg.rpcId);
+        if (!pending) return;
+        __runXPending.delete(msg.rpcId);
+        if (msg.result && msg.result.ok === true) {
+          pending.resolve(msg.result.data);
+        } else {
+          const err = new Error(msg.result && msg.result.error || 'runX error');
+          if (msg.result && msg.result.issues) {
+            err.issues = msg.result.issues;
+            err.name = msg.result.errorName || 'ValidationError';
+          } else if (msg.result && msg.result.errorName) {
+            err.name = msg.result.errorName;
+          }
+          pending.reject(err);
+        }
+        return;
+      }
       if (msg && msg.type === 'invoke') {
         const reqId = msg.reqId;
         const reqData = msg.data;
@@ -586,6 +792,11 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         // tagged FunctionDef shape. Anything else falls through to legacy.
         const exp = globalThis.__excalibase_default;
         if (__V2_ENABLED && __isV2Export(exp)) {
+          // Phase 7: httpAction / httpRouter take the raw-Request path.
+          if (exp.kind === 'httpAction' || exp.kind === 'httpRouter') {
+            await __dispatchHttp(reqId, reqData, exp);
+            return;
+          }
           await __dispatchV2(reqId, reqData, exp);
           return;
         }
@@ -635,6 +846,69 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
 
     self.postMessage({ type: 'ready' });
   `;
+}
+
+// RunXMessage is the envelope shape posted by a worker's __runXCall(...)
+// surface back to the main thread. `op` is the variant being invoked,
+// `ref` carries the typed function reference, `args` is the validated
+// payload, and `depth` is the post-increment composition depth (the
+// dispatcher enforces depth ≤ RUN_MAX_DEPTH before forwarding).
+interface RunXMessage {
+  type: "runX";
+  rpcId: number;
+  op: "runQuery" | "runMutation" | "runAction";
+  ref: { moduleName: string; exportName: string };
+  args: unknown;
+  depth: number;
+}
+
+// dispatchRunX resolves a function reference against the runtime's local
+// script table and invokes the target in-process. The caller's runtime id
+// (`${projectId}__${fnId}`) gives us the project; we look for any deployed
+// script in the same project whose fn-id matches the ref's moduleName.
+//
+// For Phase 7 the in-process path is the only one wired here. Cross-runtime
+// hops can be added in Phase 8 (scheduler) when separate pods need to
+// compose — the gateway's /internal/invoke route is ready to receive them.
+async function dispatchRunX(callerRuntimeID: string, msg: RunXMessage): Promise<unknown> {
+  if (msg.depth > RUN_MAX_DEPTH) {
+    throw new Error(`ctx.${msg.op}: run depth limit exceeded (${RUN_MAX_DEPTH})`);
+  }
+  const sep = callerRuntimeID.indexOf("__");
+  if (sep < 0) {
+    throw new Error("runX: caller runtime id missing project separator");
+  }
+  const projectID = callerRuntimeID.slice(0, sep);
+  const targetID = `${projectID}__${msg.ref.moduleName}`;
+  const invokeReq: InvokeRequest = {
+    method: "POST",
+    url: `/invoke/${targetID}`,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ args: msg.args, runDepth: msg.depth }),
+  };
+  let res: InvokeResponse;
+  try {
+    res = await runtime.invoke(targetID, invokeReq);
+  } catch (err) {
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+  // The target's response envelope mirrors the dispatchV2 contract:
+  //   200 + { data } on success, 400/500 + { error, issues? } on failure.
+  let parsed: { data?: unknown; error?: string; issues?: unknown };
+  try {
+    parsed = JSON.parse(res.body);
+  } catch (_) {
+    parsed = { error: res.body };
+  }
+  if (res.status >= 200 && res.status < 300) {
+    return parsed.data === undefined ? null : parsed.data;
+  }
+  const err = new Error(parsed.error || `runX target returned ${res.status}`);
+  if (parsed.issues) {
+    (err as { issues?: unknown }).issues = parsed.issues;
+    err.name = "ValidationError";
+  }
+  throw err;
 }
 
 class FunctionRuntime {
@@ -783,6 +1057,43 @@ class FunctionRuntime {
             // Worker is gone — nothing to do; the pending invoke will
             // surface a timeout instead.
             console.debug("[runtime] dbResult postMessage failed:", postErr);
+          }
+        })();
+        return;
+      }
+
+      if (msg.type === "runX") {
+        // Phase 7: ctx.runQuery/runMutation/runAction RPC from the worker.
+        // Resolve the target fn against the runtime's local script table
+        // (in-process composition — same project, sibling fn) and forward
+        // the args through the regular invoke pipeline so validation,
+        // ctx wiring, and error semantics match a direct call.
+        //
+        // Cross-runtime composition (target in a different deno-runtime
+        // pod) falls back to an HTTP self-call to the gateway's
+        // /internal/invoke route. Out of scope for the in-process tests;
+        // the gateway side already supports the route.
+        const rpcId = msg.rpcId;
+        if (typeof rpcId !== "number") return;
+        (async () => {
+          let result: { ok: true; data: unknown } | { ok: false; error: string; errorName?: string; issues?: unknown };
+          try {
+            const data = await dispatchRunX(meta.id, msg as RunXMessage);
+            result = { ok: true, data };
+          } catch (err) {
+            const issues = (err as { issues?: unknown }).issues;
+            const errorName = (err as { name?: string }).name;
+            result = {
+              ok: false,
+              error: String((err instanceof Error ? err.message : err) ?? "runX error"),
+              ...(errorName ? { errorName } : {}),
+              ...(issues ? { issues } : {}),
+            };
+          }
+          try {
+            worker.postMessage({ type: "runXResult", rpcId, result });
+          } catch (postErr) {
+            console.debug("[runtime] runXResult postMessage failed:", postErr);
           }
         })();
         return;
