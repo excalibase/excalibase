@@ -22,12 +22,18 @@ function queryBody(args: unknown): string {
 Deno.test({
   name: "v2 query: handler called with ctx + args, response wrapped in {data}",
   async fn() {
+    // Phase 1: query ctx.db is a real DbClient. The handler only needs to
+    // observe its presence — no DB call is made here.
     const rt = await startRuntime({ v2Enabled: true });
     try {
       const fnCode = bundleDefault(`{
         kind: "query",
         args: { parse: (a) => a },
-        handler: async (ctx, args) => ({ greeting: "hi " + args.name, hasDb: ctx.db === null }),
+        handler: async (ctx, args) => ({
+          greeting: "hi " + args.name,
+          // Phase 1: query ctx must expose a DbClient (object), not null.
+          dbType: ctx.db === null ? "null" : typeof ctx.db,
+        }),
       }`);
       const deploy = await rt.deploy("v2q", fnCode);
       assertEquals(deploy.status, 201);
@@ -36,7 +42,30 @@ Deno.test({
       assertEquals(res.status, 200);
       const parsed = JSON.parse(res.body);
       assertEquals(parsed.data.greeting, "hi duc");
-      assertEquals(parsed.data.hasDb, true); // ctx.db is null in phase 0
+      assertEquals(parsed.data.dbType, "object");
+    } finally {
+      await rt.stop();
+    }
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name: "v2 action: ctx.db is null (Convex parity)",
+  async fn() {
+    const rt = await startRuntime({ v2Enabled: true });
+    try {
+      const fnCode = bundleDefault(`{
+        kind: "action",
+        args: { parse: (a) => a },
+        handler: async (ctx, _args) => ({ dbIsNull: ctx.db === null }),
+      }`);
+      await rt.deploy("v2a-nodb", fnCode);
+      const res = await rt.invoke("v2a-nodb", { args: {} });
+      assertEquals(res.status, 200);
+      const parsed = JSON.parse(res.body);
+      assertEquals(parsed.data.dbIsNull, true);
     } finally {
       await rt.stop();
     }

@@ -9,6 +9,11 @@ import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
 export interface RuntimeOptions {
   v2Enabled?: boolean;
   allowedHosts?: string;
+  /**
+   * If set, the server is started with EXCALIBASE_DB_URL pointed at this
+   * Postgres URL. Required for Phase 1 ctx.db tests.
+   */
+  dbUrl?: string;
 }
 
 export interface RuntimeHandle {
@@ -46,6 +51,7 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
   };
   if (opts.v2Enabled) env.EXCALIBASE_FUNCTIONS_V2 = "1";
   if (opts.allowedHosts) env.ALLOWED_HOSTS = opts.allowedHosts;
+  if (opts.dbUrl) env.EXCALIBASE_DB_URL = opts.dbUrl;
 
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
