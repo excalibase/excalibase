@@ -8,13 +8,19 @@
 // the SQL text, and it's regex-validated against `[a-zA-Z_]\w{0,62}` so
 // quote/identifier injection is impossible.
 //
-// The on-disk shape mirrors what `DocumentExecutionService` returns: rows
-// are `{ id, createdAt, updatedAt, ...data }`. Mutations also include row
-// counts (`matched`/`modified`/`deleted`) so the worker can return
-// `UpdateResult` / `DeleteResult` shapes from @excalibase/server.
+// Phase 5b on-disk shape: every collection table has the Convex-shape
+// columns `_id text PRIMARY KEY`, `_creation_time double precision NOT
+// NULL`, and `doc jsonb NOT NULL`. Reads project all three; rows are
+// mapped to `{ _id, _creationTime, ...doc }` so user code sees the Convex
+// `Doc<T>` shape. Inserts generate `_id` via the runtime/ids generator
+// (30-char base32) and `_creation_time` via `Date.now()` (millisecond
+// epoch as a float). The legacy `(id uuid, data jsonb, created_at,
+// updated_at)` shape is no longer addressed anywhere in this module — it
+// was last addressed in the pre-5b runtime.
 
 import type { Sql } from "./pool.ts";
 import { decodeCursor, encodeCursor } from "./cursor.ts";
+import { newId } from "./ids.ts";
 import { newCache, validateDoc, type ValidatorCache } from "./validator.ts";
 
 const COLLECTION_NAME_RE = /^[a-zA-Z_]\w{0,62}$/;
@@ -78,23 +84,32 @@ export interface DbResultErr {
 
 export type DbResult = DbResultOk | DbResultErr;
 
-function rowToDoc(row: { id: string; data: unknown; created_at: Date | string; updated_at: Date | string }): Record<string, unknown> {
+interface DbRow {
+  _id: string;
+  _creation_time: number | string;
+  doc: unknown;
+}
+
+function rowToDoc(row: DbRow): Record<string, unknown> {
   // postgres.js parses JSONB to a plain JS value by default when binding
   // through tagged templates. We still parse defensively in case a future
   // code path returns a string.
-  let data: Record<string, unknown> = {};
-  if (typeof row.data === "string") {
-    try { data = JSON.parse(row.data); } catch (_) { data = {}; }
-  } else if (row.data && typeof row.data === "object") {
-    data = row.data as Record<string, unknown>;
+  let doc: Record<string, unknown> = {};
+  if (typeof row.doc === "string") {
+    try { doc = JSON.parse(row.doc); } catch (_) { doc = {}; }
+  } else if (row.doc && typeof row.doc === "object") {
+    doc = row.doc as Record<string, unknown>;
   }
-  const createdAt = row.created_at instanceof Date
-    ? row.created_at.toISOString()
-    : String(row.created_at);
-  const updatedAt = row.updated_at instanceof Date
-    ? row.updated_at.toISOString()
-    : String(row.updated_at);
-  return { ...data, id: row.id, createdAt, updatedAt };
+  // `_creation_time` is stored as `double precision` so postgres.js binds
+  // it as a JS number; defensively coerce strings (some pooler configs
+  // emit numerics as text).
+  const creationTime = typeof row._creation_time === "number"
+    ? row._creation_time
+    : Number(row._creation_time);
+  // System fields are placed AFTER the doc spread so a malicious doc
+  // payload (e.g. `{ _id: "spoofed" }`) cannot override the canonical
+  // values pulled from the table.
+  return { ...doc, _id: row._id, _creationTime: creationTime };
 }
 
 // Build a single condition fragment for one (field, op, value) triple, as a
@@ -108,9 +123,9 @@ function buildCondition(
   value: unknown,
 ): unknown /* postgres.Fragment */ {
   const key = safeIdent(field, "filter field");
-  const colText = sql.unsafe(`(data->>'${key}')`);
-  const colNum = sql.unsafe(`((data->>'${key}')::numeric)`);
-  const colBool = sql.unsafe(`((data->>'${key}')::boolean)`);
+  const colText = sql.unsafe(`(doc->>'${key}')`);
+  const colNum = sql.unsafe(`((doc->>'${key}')::numeric)`);
+  const colBool = sql.unsafe(`((doc->>'${key}')::boolean)`);
   const opFrag = sql.unsafe(sqlOp);
   if (typeof value === "number") {
     return sql`${colNum} ${opFrag} ${value}`;
@@ -152,7 +167,7 @@ function compileWhere(
           }
           const key = safeIdent(field, "filter field");
           const vals = opVal.map((v) => String(v));
-          out.push(sql`(data->>${sql.unsafe(`'${key}'`)}) IN ${sql(vals)}`);
+          out.push(sql`(doc->>${sql.unsafe(`'${key}'`)}) IN ${sql(vals)}`);
         } else if (Object.prototype.hasOwnProperty.call(OPERATORS, opName)) {
           out.push(buildCondition(sql, field, OPERATORS[opName], opVal));
         } else {
@@ -173,7 +188,7 @@ function compileOrderBy(
   if (!sort || Object.keys(sort).length === 0) return null;
   const parts = Object.entries(sort).map(([field, dir]) => {
     const key = safeIdent(field, "sort field");
-    return `(data->>'${key}') ${dir === -1 ? "DESC" : "ASC"}`;
+    return `(doc->>'${key}') ${dir === -1 ? "DESC" : "ASC"}`;
   });
   return sql.unsafe(`ORDER BY ${parts.join(", ")}`);
 }
@@ -196,23 +211,6 @@ function clampTopK(topK: number | undefined): number {
   if (typeof topK !== "number" || !Number.isFinite(topK) || topK <= 0) return 30;
   if (topK > 1000) return 1000;
   return Math.floor(topK);
-}
-
-// Convert a Postgres `timestamptz::text` literal (e.g. `2026-05-11
-// 12:00:00.123456+00`) into the ISO-8601 form CursorCodec validates
-// (`YYYY-MM-DDTHH:MM:SS[.fraction]Z`). We keep the fractional seconds
-// as-is so the cursor preserves sub-millisecond precision; truncating
-// to milliseconds would make cursors imprecise on dense inserts and
-// risk skipping rows. The function is tolerant of either `+00` (no
-// fractional offset) or `+00:00` Postgres might emit.
-function pgTimestampToIso(s: string): string {
-  // Replace the space separator with `T` and rewrite any UTC offset to `Z`.
-  let out = s.replace(" ", "T");
-  out = out.replace(/\+00(:00)?$/, "Z");
-  out = out.replace(/-00(:00)?$/, "Z");
-  // Some clients return `.000` already trimmed; in either case the
-  // cursor codec's ISO_INSTANT_RE accepts 0-9 fractional digits.
-  return out;
 }
 
 /**
@@ -252,10 +250,12 @@ export async function executeDbOp(
         if (issues.length > 0) {
           return { ok: false, error: "validation", issues };
         }
+        const id = newId();
+        const creationTime = Date.now();
         const rows = await sql`
-          INSERT INTO ${table} (data)
-          VALUES (${sql.json(op.doc)})
-          RETURNING id, data, created_at, updated_at
+          INSERT INTO ${table} (_id, _creation_time, doc)
+          VALUES (${id}, ${creationTime}, ${sql.json(op.doc)})
+          RETURNING _id, _creation_time, doc
         `;
         return { ok: true, data: rowToDoc(rows[0]) };
       }
@@ -273,12 +273,17 @@ export async function executeDbOp(
           }
         }
         // postgres.js multi-row insert: pass `sql(arrayOfRows, ...columns)`
-        // and it expands to `("data1"), ("data2"), ...` with each value
-        // parameterised. We wrap each doc through sql.json() ahead of time.
-        const rowsPayload = op.docs.map((d) => ({ data: sql.json(d) }));
+        // and it expands to `("id1","ct1","doc1"), ...` with each value
+        // parameterised. We pre-compute `_id` and `_creation_time` per
+        // row so the runtime fully owns system-field generation.
+        const rowsPayload = op.docs.map((d) => ({
+          _id: newId(),
+          _creation_time: Date.now(),
+          doc: sql.json(d),
+        }));
         const rows = await sql`
-          INSERT INTO ${table} ${sql(rowsPayload, "data")}
-          RETURNING id, data, created_at, updated_at
+          INSERT INTO ${table} ${sql(rowsPayload, "_id", "_creation_time", "doc")}
+          RETURNING _id, _creation_time, doc
         `;
         return { ok: true, data: rows.map(rowToDoc) };
       }
@@ -287,9 +292,9 @@ export async function executeDbOp(
           return { ok: false, error: "id required" };
         }
         const rows = await sql`
-          SELECT id, data, created_at, updated_at
+          SELECT _id, _creation_time, doc
           FROM ${table}
-          WHERE id = ${op.id}::uuid
+          WHERE _id = ${op.id}
           LIMIT 1
         `;
         return { ok: true, data: rows.length === 0 ? null : rowToDoc(rows[0]) };
@@ -299,63 +304,42 @@ export async function executeDbOp(
         const limit = clampLimit(op.options?.limit);
 
         // Cursor-mode path mirrors `DocumentQueryCompiler.compileFind` on
-        // the Java side: keyset over `(created_at DESC, id DESC)` with an
-        // optional `(created_at, id) < (cursorTs, cursorId)` cutoff. We
-        // fetch one extra row so we can decide whether `nextCursor` should
-        // be null (no more rows) or the encoded keyset of the last visible
-        // row (more rows available).
+        // the Java side: keyset over `(_creation_time DESC, _id DESC)`
+        // with an optional `(_creation_time, _id) < (cursorTs, cursorId)`
+        // cutoff. We fetch one extra row so we can decide whether
+        // `nextCursor` should be null (no more rows) or the encoded
+        // keyset of the last visible row (more rows available).
         if (op.options?.cursorMode === true) {
           const cursorToken = op.options?.cursor ?? null;
           const fetchLimit = limit + 1;
-          // We SELECT `created_at::text` alongside the usual columns so the
-          // cursor we emit preserves Postgres' microsecond precision.
-          // postgres.js otherwise hydrates `timestamptz` into a JS Date,
-          // which truncates to millisecond resolution; a cursor minted
-          // from a truncated value would exclude rows whose actual
-          // `created_at` falls inside the same millisecond window,
-          // causing pagination to skip records on dense inserts.
-          let rows: Array<{
-            id: string;
-            data: unknown;
-            created_at: Date | string;
-            updated_at: Date | string;
-            created_at_text: string;
-          }>;
+          let rows: Array<DbRow>;
           if (cursorToken && typeof cursorToken === "string") {
             const cur = decodeCursor(cursorToken);
             const baseConds = conds ?? [];
-            // IMPORTANT: bind via `::text::timestamptz` rather than the
-            // direct `::timestamptz` cast. postgres.js detects the cast
-            // target and pre-converts the JS string through a Date, which
-            // truncates sub-millisecond fractional seconds and would lead
-            // the keyset comparison to miss rows whose `created_at` shares
-            // a millisecond bucket with the cursor's timestamp. Routing
-            // through `::text` first forces Postgres to parse the string
-            // directly and preserves microsecond precision.
-            const keysetFrag = sql`(created_at, id) < (${cur.createdAt}::text::timestamptz, ${cur.id}::uuid)`;
+            const keysetFrag = sql`(_creation_time, _id) < (${cur.creationTime}, ${cur.id})`;
             const combined = baseConds.length === 0
               ? keysetFrag
               : joinAnd(sql, [...baseConds, keysetFrag]);
             rows = await sql`
-              SELECT id, data, created_at, updated_at, created_at::text AS created_at_text
+              SELECT _id, _creation_time, doc
               FROM ${table}
               WHERE ${combined}
-              ORDER BY created_at DESC, id DESC
+              ORDER BY _creation_time DESC, _id DESC
               LIMIT ${fetchLimit}
             `;
           } else if (conds === null) {
             rows = await sql`
-              SELECT id, data, created_at, updated_at, created_at::text AS created_at_text
+              SELECT _id, _creation_time, doc
               FROM ${table}
-              ORDER BY created_at DESC, id DESC
+              ORDER BY _creation_time DESC, _id DESC
               LIMIT ${fetchLimit}
             `;
           } else {
             rows = await sql`
-              SELECT id, data, created_at, updated_at, created_at::text AS created_at_text
+              SELECT _id, _creation_time, doc
               FROM ${table}
               WHERE ${joinAnd(sql, conds)}
-              ORDER BY created_at DESC, id DESC
+              ORDER BY _creation_time DESC, _id DESC
               LIMIT ${fetchLimit}
             `;
           }
@@ -364,11 +348,10 @@ export async function executeDbOp(
           let nextCursor: string | null = null;
           if (hasMore && visible.length > 0) {
             const last = visible[visible.length - 1];
-            // `created_at::text` returns a Postgres-style timestamptz
-            // literal like `2026-05-11 12:00:00.123456+00`. CursorCodec
-            // validates ISO-8601 with a `Z` terminator, so normalise.
-            const createdAt = pgTimestampToIso(last.created_at_text);
-            nextCursor = encodeCursor({ createdAt, id: last.id });
+            const creationTime = typeof last._creation_time === "number"
+              ? last._creation_time
+              : Number(last._creation_time);
+            nextCursor = encodeCursor({ creationTime, id: last._id });
           }
           return { ok: true, data: { docs: visible.map(rowToDoc), nextCursor } };
         }
@@ -380,21 +363,21 @@ export async function executeDbOp(
         const rows = conds === null
           ? (order
               ? await sql`
-                  SELECT id, data, created_at, updated_at FROM ${table}
+                  SELECT _id, _creation_time, doc FROM ${table}
                   ${order} LIMIT ${limit} OFFSET ${offset}
                 `
               : await sql`
-                  SELECT id, data, created_at, updated_at FROM ${table}
+                  SELECT _id, _creation_time, doc FROM ${table}
                   LIMIT ${limit} OFFSET ${offset}
                 `)
           : (order
               ? await sql`
-                  SELECT id, data, created_at, updated_at FROM ${table}
+                  SELECT _id, _creation_time, doc FROM ${table}
                   WHERE ${joinAnd(sql, conds)}
                   ${order} LIMIT ${limit} OFFSET ${offset}
                 `
               : await sql`
-                  SELECT id, data, created_at, updated_at FROM ${table}
+                  SELECT _id, _creation_time, doc FROM ${table}
                   WHERE ${joinAnd(sql, conds)}
                   LIMIT ${limit} OFFSET ${offset}
                 `);
@@ -403,8 +386,8 @@ export async function executeDbOp(
       case "findOne": {
         const conds = compileWhere(sql, op.filter);
         const rows = conds === null
-          ? await sql`SELECT id, data, created_at, updated_at FROM ${table} LIMIT 1`
-          : await sql`SELECT id, data, created_at, updated_at FROM ${table} WHERE ${joinAnd(sql, conds)} LIMIT 1`;
+          ? await sql`SELECT _id, _creation_time, doc FROM ${table} LIMIT 1`
+          : await sql`SELECT _id, _creation_time, doc FROM ${table} WHERE ${joinAnd(sql, conds)} LIMIT 1`;
         return { ok: true, data: rows.length === 0 ? null : rowToDoc(rows[0]) };
       }
       case "update": {
@@ -422,11 +405,14 @@ export async function executeDbOp(
         if (issues.length > 0) {
           return { ok: false, error: "validation", issues };
         }
+        // `_creation_time` stays immutable: only `doc` is patched. We do
+        // NOT touch `_id` either — Convex semantics say the primary key
+        // is permanent.
         const rows = await sql`
           UPDATE ${table}
-          SET data = data || ${sql.json(patch)}, updated_at = clock_timestamp()
+          SET doc = doc || ${sql.json(patch)}
           WHERE ${joinAnd(sql, conds)}
-          RETURNING id, data, created_at, updated_at
+          RETURNING _id, _creation_time, doc
         `;
         const docs = rows.map(rowToDoc);
         return {
@@ -442,7 +428,7 @@ export async function executeDbOp(
         const rows = await sql`
           DELETE FROM ${table}
           WHERE ${joinAnd(sql, conds)}
-          RETURNING id, data, created_at, updated_at
+          RETURNING _id, _creation_time, doc
         `;
         const docs = rows.map(rowToDoc);
         return { ok: true, data: { deleted: rows.length, docs } };
@@ -456,20 +442,15 @@ export async function executeDbOp(
       }
       case "search": {
         // Full-text search over the generated `search_text` tsvector
-        // column. Mirrors `DocumentQueryCompiler.compileSearch` on the
-        // Java side: `websearch_to_tsquery` for the parser (so users can
-        // pass quoted phrases / OR-keywords directly) and `ts_rank` for
-        // the ORDER BY. The rank score is NOT exposed in the response —
-        // Java only returns the doc envelope, so we drop the rank column
-        // before mapping. Documenting that here so a future PR doesn't
-        // mistake the omission for a bug.
+        // column. Phase 5b parity: projection now selects `_id`,
+        // `_creation_time`, `doc` (Convex shape).
         const queryText = op.query;
         if (typeof queryText !== "string" || queryText.length === 0) {
           return { ok: false, error: "search query must be a non-empty string" };
         }
         const limit = clampLimit(op.options?.limit);
         const rows = await sql`
-          SELECT id, data, created_at, updated_at
+          SELECT _id, _creation_time, doc
           FROM ${table}
           WHERE search_text @@ websearch_to_tsquery(${queryText})
           ORDER BY ts_rank(search_text, websearch_to_tsquery(${queryText})) DESC
@@ -479,12 +460,7 @@ export async function executeDbOp(
       }
       case "vectorSearch": {
         // k-NN over `embedding vector(N)` via the cosine-distance
-        // operator `<=>`, which matches the operator class declared on
-        // the HNSW index (`vector_cosine_ops`) and the Java compiler's
-        // choice in `DocumentQueryCompiler.compileVectorSearch`. Any
-        // additional filter is AND-combined with the implicit "all rows"
-        // predicate so callers can narrow by tag/category before the
-        // similarity sort runs.
+        // operator `<=>`. Projection updated to the Convex shape.
         const embedding = op.embedding;
         if (!Array.isArray(embedding) || embedding.length === 0) {
           return { ok: false, error: "embedding must be a non-empty numeric array" };
@@ -495,20 +471,17 @@ export async function executeDbOp(
           }
         }
         const topK = clampTopK(op.options?.topK);
-        // pgvector accepts the textual `[a,b,c]` literal cast to `vector`;
-        // the value is bound as a parameter so no user-supplied text ever
-        // lands in the SQL string itself.
         const vecLiteral = `[${embedding.join(",")}]`;
         const conds = compileWhere(sql, op.filter);
         const rows = conds === null
           ? await sql`
-              SELECT id, data, created_at, updated_at
+              SELECT _id, _creation_time, doc
               FROM ${table}
               ORDER BY embedding <=> ${vecLiteral}::vector
               LIMIT ${topK}
             `
           : await sql`
-              SELECT id, data, created_at, updated_at
+              SELECT _id, _creation_time, doc
               FROM ${table}
               WHERE ${joinAnd(sql, conds)}
               ORDER BY embedding <=> ${vecLiteral}::vector

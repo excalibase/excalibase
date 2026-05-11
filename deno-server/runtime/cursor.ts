@@ -1,12 +1,20 @@
 // CursorCodec — opaque base64url cursor for keyset pagination.
 //
-// Ported verbatim from `CursorCodec.java` in excalibase-nosql so existing
-// cursors minted by the Java service keep working when read by a v2
-// function that paginates via `ctx.db.find()`. Payload is
-// `createdAt|id` (ISO instant + UUID) encoded as base64url without padding.
+// Phase 5b uses the Convex-shape system fields (`_id` + `_creation_time`)
+// for the keyset. Payload is `creationTime|id` where `creationTime` is the
+// millisecond epoch float persisted in `_creation_time` and `id` is the
+// 30-char base32 `_id`. The encoded form is base64url without padding —
+// safe to ship as a URL query param.
+//
+// The pre-5b codec used an ISO-8601 instant + UUID derived from
+// `created_at`/`id`. Cursors minted by that codec are no longer valid;
+// callers must re-paginate from the start of a collection. There is no
+// shim — Phase 5b is a hard break.
 
 export interface CursorPayload {
-  readonly createdAt: string;
+  /** Millisecond epoch (Convex `_creationTime`). Stored as a float. */
+  readonly creationTime: number;
+  /** 30-char base32 id (`_id`). */
   readonly id: string;
 }
 
@@ -28,22 +36,27 @@ function fromBase64Url(urlB64: string): string {
 }
 
 /**
- * Encode a cursor for keyset pagination. Output is base64url without padding
- * and byte-identical to `CursorCodec.encode(Instant, String)` on the Java side.
+ * Encode a cursor for keyset pagination. Output is base64url without
+ * padding. Payload format: `<creationTime>|<id>` where `creationTime` is
+ * serialised as its plain JS number string (e.g. `1715472000123`) and `id`
+ * is the 30-char `_id` string verbatim.
  */
 export function encodeCursor(payload: CursorPayload): string {
-  if (!payload.createdAt || !payload.id) {
-    throw new Error("cursor payload requires both createdAt and id");
+  if (
+    typeof payload.creationTime !== "number" ||
+    !Number.isFinite(payload.creationTime) ||
+    !payload.id
+  ) {
+    throw new Error("cursor payload requires a finite creationTime and a non-empty id");
   }
-  const joined = `${payload.createdAt}|${payload.id}`;
+  const joined = `${payload.creationTime}|${payload.id}`;
   return toBase64Url(btoa(joined));
 }
 
-const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/;
-
 /**
- * Decode a cursor token. Throws on empty/blank/malformed input with the same
- * error vocabulary as the Java version (non-empty / malformed / not ISO-8601).
+ * Decode a cursor token. Throws on empty/blank/malformed input with the
+ * same error vocabulary as the encoder (non-empty / malformed / not a
+ * finite number).
  */
 export function decodeCursor(token: string): CursorPayload {
   if (!token || token.trim().length === 0) {
@@ -59,10 +72,11 @@ export function decodeCursor(token: string): CursorPayload {
   if (sep <= 0 || sep === decoded.length - 1) {
     throw new Error("cursor payload malformed");
   }
-  const createdAt = decoded.substring(0, sep);
+  const ctRaw = decoded.substring(0, sep);
   const id = decoded.substring(sep + 1);
-  if (!ISO_INSTANT_RE.test(createdAt)) {
-    throw new Error("cursor createdAt not ISO-8601");
+  const creationTime = Number(ctRaw);
+  if (!Number.isFinite(creationTime)) {
+    throw new Error("cursor creationTime not a finite number");
   }
-  return { createdAt, id };
+  return { creationTime, id };
 }

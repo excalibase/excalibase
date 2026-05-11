@@ -562,9 +562,25 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "runtime unavailable: "+safeError(err), http.StatusServiceUnavailable)
 		return
 	}
+	// Phase 5b: inject the function's captured SchemaJSON into the bundle
+	// preamble so the worker-side schema helper (`runtime/schema.ts`) can
+	// pre-flight collection access and search/vector index lookup. Bundles
+	// without a defineSchema call get no preamble — the runtime falls back
+	// to permissive mode (any collection name OK).
+	codeWithMetadata := code
+	if len(fn.SchemaJSON) > 0 {
+		// json.RawMessage is verbatim JSON; embedding it as a JS object
+		// literal is safe because (a) the source was JSON-marshalled by
+		// ExtractSchema and (b) the assignment goes through a separate
+		// statement that the worker sandbox parses as JS. The slot name
+		// matches what deno-server/runtime/schema.ts reads at runtime.
+		preamble := "globalThis.__excalibase_function_metadata = { schemaJson: " +
+			string(fn.SchemaJSON) + " };\n"
+		codeWithMetadata = preamble + code
+	}
 	deployErr := client.Deploy(r.Context(), edgefn.DeployRequest{
 		ID:      fn.RuntimeID(),
-		Code:    code,
+		Code:    codeWithMetadata,
 		Secrets: env,
 	})
 	if deployErr != nil {

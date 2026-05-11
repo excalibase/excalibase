@@ -285,7 +285,55 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       });
     }
 
+    // __schemaConfig — the worker reads the bundler-injected metadata at
+    // globalThis.__excalibase_function_metadata.schemaJson on first
+    // ctx.db.collection call. When absent, the runtime stays permissive
+    // (any collection name OK). When present, an unknown collection name
+    // throws a friendly error before any SQL is issued, and search and
+    // vectorSearch are pre-flighted against the declared index lists.
+    // This mirrors Phase 5a schema-driven migration so the runtime and
+    // DB shape stay in lock-step.
+    function __schemaTables() {
+      const meta = globalThis.__excalibase_function_metadata;
+      if (!meta || meta.schemaJson === null || meta.schemaJson === undefined) return null;
+      const raw = meta.schemaJson;
+      if (typeof raw !== 'object' || !raw) return null;
+      const tables = raw.tables;
+      if (!tables || typeof tables !== 'object') return null;
+      return tables;
+    }
+
+    function __assertCollectionInSchema(name) {
+      const tables = __schemaTables();
+      if (tables === null) return; // permissive mode
+      if (!Object.prototype.hasOwnProperty.call(tables, name)) {
+        throw new Error("Collection '" + name + "' is not in schema; declare it in schema.ts and redeploy");
+      }
+    }
+
+    function __assertSearchable(name) {
+      const tables = __schemaTables();
+      if (tables === null) return; // permissive mode — surface 42703 from PG
+      const def = tables[name];
+      if (!def || !Array.isArray(def.searchIndexes) || def.searchIndexes.length === 0) {
+        throw new Error("Collection '" + name + "' has no search index; declare one via defineTable(...).searchIndex(...) and redeploy");
+      }
+    }
+
+    function __assertVectorable(name) {
+      const tables = __schemaTables();
+      if (tables === null) return; // permissive mode
+      const def = tables[name];
+      if (!def || !Array.isArray(def.vectorIndexes) || def.vectorIndexes.length === 0) {
+        throw new Error("Collection '" + name + "' has no vector index; declare one via defineTable(...).vectorIndex(...) and redeploy");
+      }
+    }
+
     function __makeCollectionApi(name) {
+      // Preflight at construction so an unknown collection fails fast even
+      // before the user calls any specific op. The error propagates
+      // through the user's await chain naturally.
+      __assertCollectionInSchema(name);
       return {
         insert: (doc) => __dbCall('insert', name, { doc }),
         insertMany: (docs) => __dbCall('insertMany', name, { docs }),
@@ -295,15 +343,15 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         update: (filter, patch) => __dbCall('update', name, { filter, patch }),
         delete: (filter) => __dbCall('delete', name, { filter }),
         count: (filter) => __dbCall('count', name, { filter }),
-        // search/vectorSearch — Phase 1.5. The worker is a thin RPC
-        // facade; the main thread owns SQL composition + execution.
-        search: (query, options) => __dbCall('search', name, { query, options }),
+        // search/vectorSearch are pre-flighted against the schema's
+        // index declarations. In permissive mode (no schema), an actual
+        // missing column surfaces as SQLSTATE 42703 from postgres.js.
+        search: (query, options) => {
+          __assertSearchable(name);
+          return __dbCall('search', name, { query, options });
+        },
         vectorSearch: (embedding, options) => {
-          // The vectorSearch options block carries an optional filter
-          // which travels to the main thread as a top-level field,
-          // mirroring the rest of the DbOp shape. Forwarding it under
-          // options would force the SQL builder to special-case which
-          // key holds the filter for which op.
+          __assertVectorable(name);
           const opts = options || {};
           const payload = { embedding, options: { topK: opts.topK }, filter: opts.filter };
           return __dbCall('vectorSearch', name, payload);
