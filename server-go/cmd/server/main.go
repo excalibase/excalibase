@@ -611,6 +611,12 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store 
 			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/logs", d.fnHandler.Logs)
 		})
 	})
+	r.Route("/api/projects/{projectId}/schema", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
+	})
 	r.Route("/api/projects/{projectId}/info", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)

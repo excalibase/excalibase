@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,6 +71,17 @@ type FunctionHandler struct {
 	// exactly. Empty disables the check (leaves projectId-claim binding as
 	// the only tenant gate). Auth service hardcodes "excalibase".
 	expectedJWTIssuer string
+
+	// projectDBFn resolves a *sql.DB for the given projectID — used by the
+	// schema migrator on deploy. Pluggable so tests can inject a testcontainer
+	// DB. nil disables schema migration entirely (deploys still succeed,
+	// schema is stored but never applied).
+	projectDBFn func(ctx context.Context, projectID string) (*sql.DB, error)
+
+	// autoMigrate gates whether ApplySchema runs at deploy time. Default
+	// true; flip to false (EXCALIBASE_AUTO_MIGRATE=false) to defer migration
+	// to an explicit POST /api/projects/{projectId}/schema/apply call.
+	autoMigrate bool
 }
 
 // SetExpectedJWTIssuer configures the iss claim the function handler will
@@ -135,6 +148,9 @@ func NewFunctionHandler(
 		limiters:      make(map[string]*tokenBucket),
 		rateBurst:     100,
 		ratePerSecond: 100,
+		// Auto-migrate defaults to true so deploys are atomic.
+		// EXCALIBASE_AUTO_MIGRATE=false defers schema application.
+		autoMigrate: !strings.EqualFold(os.Getenv("EXCALIBASE_AUTO_MIGRATE"), "false"),
 	}
 	// Backwards-compat: if a single shared client is supplied, use it for all
 	// projects until k8sClient is set.
@@ -158,6 +174,19 @@ func (h *FunctionHandler) SetK8sClient(c k8s.KubeClient, image, runtimeSecret st
 // at function deploy time.
 func (h *FunctionHandler) SetVault(v vaultclient.VaultClient) {
 	h.vault = v
+}
+
+// SetProjectDBFn registers a resolver that returns a *sql.DB for the given
+// projectID. The schema migrator uses this to apply user-declared schemas at
+// deploy time. nil disables migration entirely.
+func (h *FunctionHandler) SetProjectDBFn(fn func(ctx context.Context, projectID string) (*sql.DB, error)) {
+	h.projectDBFn = fn
+}
+
+// SetAutoMigrate toggles schema-application-on-deploy. Default true.
+// Tests use this to disable migration when running without a project DB.
+func (h *FunctionHandler) SetAutoMigrate(enabled bool) {
+	h.autoMigrate = enabled
 }
 
 // SetRuntimeURLFn overrides cluster DNS URL resolution. Used by integration
@@ -489,6 +518,37 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
+
+	// Extract user-declared schema (if any) and apply it before deploying
+	// the function bundle. If migration fails we roll back the store record
+	// so the deploy is atomic. Schema extraction is a no-op for bundles
+	// that don't call defineSchema — same behaviour as a v1 fetch handler.
+	if schema, found, sErr := edgefn.ExtractSchema(code); sErr != nil {
+		log.Printf("WARN: schema extraction failed for %s/%s: %v", projectID, fn.ID, sErr)
+	} else if found {
+		raw, mErr := json.Marshal(schema)
+		if mErr == nil {
+			fn.SchemaJSON = raw
+			// Re-save to persist SchemaJSON before migration runs.
+			if err := h.store.Save(&fn); err != nil {
+				log.Printf("WARN: save schema for %s/%s: %v", projectID, fn.ID, err)
+			}
+		}
+		if h.autoMigrate && h.projectDBFn != nil {
+			db, dbErr := h.projectDBFn(r.Context(), projectID)
+			if dbErr != nil {
+				_ = h.store.Delete(projectID, fn.ID)
+				httpError(w, "failed to open project db for migration: "+safeError(dbErr), http.StatusBadGateway)
+				return
+			}
+			if err := edgefn.ApplySchema(r.Context(), db, projectID, schema); err != nil {
+				_ = h.store.Delete(projectID, fn.ID)
+				httpError(w, "schema migration failed: "+safeError(err), http.StatusBadGateway)
+				return
+			}
+		}
+	}
+
 	builtins := h.builtinEnv(r.Context(), projectID)
 	env, err := h.secrets.BuildEnvForDeploy(projectID, builtins)
 	if err != nil {
@@ -520,6 +580,49 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(fn)
+}
+
+// ApplySchemaFromStore applies the stored SchemaJSON for every function in
+// the project. Wired at POST /api/projects/{projectId}/schema/apply for
+// deployments running with EXCALIBASE_AUTO_MIGRATE=false. Idempotent — the
+// migrator only adds tables/indexes/columns, never drops them.
+func (h *FunctionHandler) ApplySchemaFromStore(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	if err := edgefn.ValidateProjectID(projectID); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if h.projectDBFn == nil {
+		httpError(w, "schema apply not configured (no project db resolver)", http.StatusServiceUnavailable)
+		return
+	}
+	fns, err := h.store.List(projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	db, err := h.projectDBFn(r.Context(), projectID)
+	if err != nil {
+		httpError(w, "open project db: "+safeError(err), http.StatusBadGateway)
+		return
+	}
+	applied := 0
+	for _, fn := range fns {
+		if len(fn.SchemaJSON) == 0 {
+			continue
+		}
+		var schema edgefn.Schema
+		if err := json.Unmarshal(fn.SchemaJSON, &schema); err != nil {
+			log.Printf("WARN: parse schema for %s/%s: %v", projectID, fn.ID, err)
+			continue
+		}
+		if err := edgefn.ApplySchema(r.Context(), db, projectID, schema); err != nil {
+			httpError(w, "apply schema for "+fn.ID+": "+safeError(err), http.StatusBadGateway)
+			return
+		}
+		applied++
+	}
+	writeJSON(w, map[string]any{"status": "applied", "functions": applied})
 }
 
 // Get returns a single function (with all its files).

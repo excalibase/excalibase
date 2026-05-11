@@ -113,8 +113,14 @@ type Function struct {
 	// `omitempty` keeps v1 records (and freshly created v2 records before
 	// the runtime callback fires) clean on the wire.
 	ExportMetadata json.RawMessage `json:"exportMetadata,omitempty"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	UpdatedAt      time.Time       `json:"updatedAt"`
+	// SchemaJSON — opaque JSON object emitted by the @excalibase/server lib
+	// when the user's bundle calls `defineSchema(...)`. Captured by the
+	// bundler via the globalThis.__excalibase_schema side-channel and stored
+	// on the Function so the migrator can apply it on deploy. Empty/nil on
+	// bundles that do not declare a schema.
+	SchemaJSON json.RawMessage `json:"schemaJson,omitempty"`
+	CreatedAt  time.Time       `json:"createdAt"`
+	UpdatedAt  time.Time       `json:"updatedAt"`
 }
 
 // JwtVerificationRequired returns true unless the function has explicitly opted
