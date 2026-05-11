@@ -359,8 +359,117 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       };
     }
 
+    // __makeQuery — Convex-shape chainable query builder, Phase 6.
+    // Mirrors @excalibase/server@0.5.0's Query<TDoc> exactly:
+    //   ctx.db.query("posts")
+    //     .withIndex("by_author", q => q.eq("author", uid))
+    //     .filter(q => q.gt(q.field("votes"), 10))
+    //     .order("desc")
+    //     .paginate({ cursor, numItems: 20 });
+    //
+    // Each chainable method returns a new builder whose plan carries the
+    // accumulated state. Terminal methods (.first/.unique/.collect/.take/
+    // .paginate) post a {type:'db', op:'query', plan, terminal, extra}
+    // RPC to the main thread, which compiles the plan to SQL.
+    function __makeQuery(name) {
+      __assertCollectionInSchema(name);
+
+      function __terminal(plan, terminal, extra) {
+        return __dbCall('query', name, { plan, terminal, extra });
+      }
+
+      function __indexQ(initial) {
+        const bounds = initial || [];
+        function push(b) { return __indexQ([...bounds, b]); }
+        return {
+          eq: (field, value) => push({ field, op: 'eq', value }),
+          gt: (field, value) => push({ field, op: 'gt', value }),
+          gte: (field, value) => push({ field, op: 'gte', value }),
+          lt: (field, value) => push({ field, op: 'lt', value }),
+          lte: (field, value) => push({ field, op: 'lte', value }),
+          range: (field, lo, hi) =>
+            __indexQ([...bounds, { field, op: 'gte', value: lo }, { field, op: 'lte', value: hi }]),
+          __bounds: () => bounds,
+        };
+      }
+
+      function __searchQ(field, queryText, filters) {
+        return {
+          search: (f, q) => __searchQ(f, q, filters),
+          eq: (f, v) => __searchQ(field, queryText, [...filters, { field: f, value: v }]),
+          __field: field, __query: queryText, __filters: filters,
+        };
+      }
+
+      function __vectorQ(embedding, k, filters) {
+        return {
+          vector: (e, k2) => __vectorQ(e, k2, filters),
+          eq: (f, v) => __vectorQ(embedding, k, [...filters, { field: f, value: v }]),
+          __embedding: embedding, __k: k, __filters: filters,
+        };
+      }
+
+      // filterQ — pure AST constructor (no accumulation; expressions are
+      // composed by the caller's lambda).
+      const filterQ = {
+        field: (n) => ({ kind: 'field', name: n }),
+        eq:  (l, r) => ({ kind: 'eq',  left: l, right: r }),
+        neq: (l, r) => ({ kind: 'neq', left: l, right: r }),
+        gt:  (l, r) => ({ kind: 'gt',  left: l, right: r }),
+        gte: (l, r) => ({ kind: 'gte', left: l, right: r }),
+        lt:  (l, r) => ({ kind: 'lt',  left: l, right: r }),
+        lte: (l, r) => ({ kind: 'lte', left: l, right: r }),
+        and: function() { return { kind: 'and', args: Array.prototype.slice.call(arguments) }; },
+        or:  function() { return { kind: 'or',  args: Array.prototype.slice.call(arguments) }; },
+        not: (a) => ({ kind: 'not', arg: a }),
+      };
+
+      function __buildQuery(plan) {
+        return {
+          withIndex: (idxName, builder) => {
+            const seed = __indexQ();
+            const built = builder ? builder(seed) : seed;
+            const bounds = (built && typeof built.__bounds === 'function') ? built.__bounds() : [];
+            return __buildQuery(Object.assign({}, plan, { index: { name: idxName, bounds } }));
+          },
+          withSearchIndex: (idxName, builder) => {
+            const out = builder(__searchQ('', '', []));
+            return __buildQuery(Object.assign({}, plan, {
+              search: { name: idxName, field: out.__field, query: out.__query, filters: out.__filters },
+            }));
+          },
+          withVectorIndex: (idxName, builder) => {
+            const out = builder(__vectorQ([], 0, []));
+            return __buildQuery(Object.assign({}, plan, {
+              vector: { name: idxName, embedding: out.__embedding, k: out.__k, filters: out.__filters },
+            }));
+          },
+          filter: (pred) => {
+            const expr = pred(filterQ);
+            const merged = plan.filter
+              ? { kind: 'and', args: [plan.filter, expr] }
+              : expr;
+            return __buildQuery(Object.assign({}, plan, { filter: merged }));
+          },
+          order: (direction) => __buildQuery(Object.assign({}, plan, { order: direction })),
+
+          first:   () => __terminal(plan, 'first'),
+          unique:  () => __terminal(plan, 'unique'),
+          collect: () => __terminal(plan, 'collect'),
+          take:    (n) => __terminal(plan, 'take', n),
+          paginate: (opts) => __terminal(plan, 'paginate', opts),
+
+          getDependencies: () => [plan.collection],
+        };
+      }
+      return __buildQuery({ collection: name });
+    }
+
     function __makeDbClient() {
-      return { collection: (name) => __makeCollectionApi(name) };
+      return {
+        collection: (name) => __makeCollectionApi(name),
+        query: (name) => __makeQuery(name),
+      };
     }
 
     // __dispatchV2 — runs the tagged FunctionDef contract:

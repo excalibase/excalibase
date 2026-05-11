@@ -43,14 +43,18 @@ async function seed(
   const postgres = (await import("npm:postgres@3.4.4")).default;
   const sql = postgres(pgUrl, { onnotice: () => {} });
   try {
-    const quoted = `nosql."${collection}"`;
+    // Tagged-template insert so jsonb is parsed as an object, not stored
+    // as a JSON-encoded string (the latter breaks `doc->>'field'` lookups).
+    // deno-lint-ignore no-explicit-any
+    const sqlAny: any = sql;
+    const table = sqlAny.unsafe(`nosql."${collection}"`);
     for (const d of docs) {
       const _id = `id-${Math.random().toString(36).slice(2, 12)}`;
       const _ct = Date.now() + Math.random() * 1000;
-      await sql.unsafe(
-        `INSERT INTO ${quoted} (_id, _creation_time, doc) VALUES ($1, $2, $3::jsonb)`,
-        [_id, _ct, JSON.stringify(d)],
-      );
+      await sqlAny`
+        INSERT INTO ${table} (_id, _creation_time, doc)
+        VALUES (${_id}, ${_ct}, ${sqlAny.json(d)})
+      `;
     }
   } finally {
     await sql.end({ timeout: 1 });

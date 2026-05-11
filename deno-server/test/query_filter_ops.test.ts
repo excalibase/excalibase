@@ -23,18 +23,21 @@ async function withSeededCollection<T>(
     const postgres = (await import("npm:postgres@3.4.4")).default;
     const sql = postgres(pg.url, { onnotice: () => {} });
     try {
-      // Seed via INSERT so each test starts with predictable rows.
-      const quoted = `nosql."${collection}"`;
+      // Seed via tagged template so jsonb binds properly. (sql.unsafe with
+      // a JSON string would land the doc as a JSON-encoded string, not an
+      // object, breaking `doc->>'field'` lookups.)
+      // deno-lint-ignore no-explicit-any
+      const sqlAny: any = sql;
+      const table = sqlAny.unsafe(`nosql."${collection}"`);
       for (const d of docs) {
         const _id = `id-${Math.random().toString(36).slice(2, 12)}`;
         const _ct = Date.now() + Math.random() * 1000;
-        await sql.unsafe(
-          `INSERT INTO ${quoted} (_id, _creation_time, doc) VALUES ($1, $2, $3::jsonb)`,
-          [_id, _ct, JSON.stringify(d)],
-        );
+        await sqlAny`
+          INSERT INTO ${table} (_id, _creation_time, doc)
+          VALUES (${_id}, ${_ct}, ${sqlAny.json(d)})
+        `;
       }
-      // deno-lint-ignore no-explicit-any
-      return await fn(sql as any);
+      return await fn(sqlAny);
     } finally {
       await sql.end({ timeout: 1 });
     }

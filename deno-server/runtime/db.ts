@@ -25,6 +25,92 @@ import { newCache, validateDoc, type ValidatorCache } from "./validator.ts";
 
 const COLLECTION_NAME_RE = /^[a-zA-Z_]\w{0,62}$/;
 
+// ---------------------------------------------------------------------------
+// Convex-shape query builder — plan compiler.
+//
+// Phase 6 introduces `ctx.db.query(name)`. The worker shim accumulates the
+// chained calls into a `QueryPlan` (defined here, shared verbatim with
+// @excalibase/server's `QueryPlan`) and routes it through `executeDbOp`
+// with `op: "query"`. The main thread executes the plan via
+// `executeQueryPlan` and returns the right shape per terminal.
+//
+// API contract is documented in @excalibase/server@0.5.0 — these types
+// MUST stay shape-compatible with that package, since the worker bundles
+// the lib's runtime callback that hands a plan over RPC.
+// ---------------------------------------------------------------------------
+
+export type FilterExpr =
+  | { readonly kind: "field"; readonly name: string }
+  | { readonly kind: "eq" | "neq" | "gt" | "gte" | "lt" | "lte"; readonly left: FilterExpr; readonly right: unknown }
+  | { readonly kind: "and" | "or"; readonly args: ReadonlyArray<FilterExpr> }
+  | { readonly kind: "not"; readonly arg: FilterExpr };
+
+export interface IndexBound {
+  readonly field: string;
+  readonly op: "eq" | "gt" | "gte" | "lt" | "lte";
+  readonly value: unknown;
+}
+
+export interface IndexHint {
+  readonly name: string;
+  readonly bounds: ReadonlyArray<IndexBound>;
+}
+
+export interface SearchIndexHint {
+  readonly name: string;
+  readonly field: string;
+  readonly query: string;
+  readonly filters: ReadonlyArray<{ readonly field: string; readonly value: unknown }>;
+}
+
+export interface VectorIndexHint {
+  readonly name: string;
+  readonly embedding: ReadonlyArray<number>;
+  readonly k: number;
+  readonly filters: ReadonlyArray<{ readonly field: string; readonly value: unknown }>;
+}
+
+export interface QueryPlan {
+  readonly collection: string;
+  readonly index?: IndexHint;
+  readonly search?: SearchIndexHint;
+  readonly vector?: VectorIndexHint;
+  readonly filter?: FilterExpr;
+  readonly order?: "asc" | "desc";
+}
+
+export type QueryTerminal = "first" | "unique" | "collect" | "take" | "paginate";
+
+export interface PaginationOptions {
+  readonly cursor: string | null;
+  readonly numItems: number;
+}
+
+export interface PaginationResult {
+  readonly page: ReadonlyArray<Record<string, unknown>>;
+  readonly isDone: boolean;
+  readonly continueCursor: string;
+}
+
+/**
+ * Default cap on `collect()` result size. Mirrors Convex's 16k cap. Override
+ * via the `EXCALIBASE_QUERY_MAX_RESULTS` env var; the value is read on each
+ * call so tests can flip it without restarting the runtime.
+ */
+const DEFAULT_QUERY_MAX_RESULTS = 16384;
+
+function queryMaxResults(): number {
+  try {
+    const raw = Deno.env.get("EXCALIBASE_QUERY_MAX_RESULTS");
+    if (raw === undefined || raw === null || raw === "") return DEFAULT_QUERY_MAX_RESULTS;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return DEFAULT_QUERY_MAX_RESULTS;
+    return Math.floor(n);
+  } catch (_) {
+    return DEFAULT_QUERY_MAX_RESULTS;
+  }
+}
+
 function safeCollection(name: string): string {
   if (typeof name !== "string" || !COLLECTION_NAME_RE.test(name)) {
     throw new Error(`Invalid collection name: ${String(name).slice(0, 64)}`);
@@ -50,7 +136,8 @@ export interface DbOp {
     | "delete"
     | "count"
     | "search"
-    | "vectorSearch";
+    | "vectorSearch"
+    | "query";
   readonly collection: string;
   readonly doc?: Readonly<Record<string, unknown>>;
   readonly docs?: ReadonlyArray<Readonly<Record<string, unknown>>>;
@@ -69,6 +156,12 @@ export interface DbOp {
   readonly query?: string;
   /** Numeric vector for the `vectorSearch` op. */
   readonly embedding?: ReadonlyArray<number>;
+  /** Compiled `QueryPlan` for the `query` op (Phase 6 chainable builder). */
+  readonly plan?: QueryPlan;
+  /** Terminal for the `query` op (one of `first`/`unique`/`collect`/`take`/`paginate`). */
+  readonly terminal?: QueryTerminal;
+  /** Extra payload for the `query` op (e.g. `take(n)`'s `n`, `paginate(opts)`'s opts). */
+  readonly extra?: unknown;
 }
 
 export interface DbResultOk {
@@ -225,6 +318,292 @@ function joinAnd(sql: Sql, fragments: unknown[]): unknown {
     result = sql`${result} AND ${fragments[i]}`;
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Query plan → SQL compiler.
+//
+// The compiler walks the plan tree and emits postgres.js fragments. Every
+// user-supplied value crosses a parameter boundary; identifiers (field
+// names, index field names, collection name) are regex-validated via
+// `safeIdent` before they ever appear in SQL text. The Convex-shape
+// projection is constant — `_id`, `_creation_time`, `doc` — so the
+// terminal-specific bits are only the WHERE/ORDER/LIMIT shape.
+
+function compileFilterExpr(sql: Sql, expr: FilterExpr): unknown /* fragment */ {
+  switch (expr.kind) {
+    case "eq":
+    case "neq":
+    case "gt":
+    case "gte":
+    case "lt":
+    case "lte": {
+      if (expr.left.kind !== "field") {
+        throw new Error("filter comparison left must be a field reference");
+      }
+      const op = expr.kind === "eq" ? "="
+        : expr.kind === "neq" ? "!="
+        : expr.kind === "gt" ? ">"
+        : expr.kind === "gte" ? ">="
+        : expr.kind === "lt" ? "<"
+        : "<=";
+      return buildCondition(sql, expr.left.name, op, expr.right);
+    }
+    case "and":
+    case "or": {
+      if (!Array.isArray(expr.args) || expr.args.length === 0) {
+        throw new Error(`filter ${expr.kind} requires non-empty args`);
+      }
+      const parts = expr.args.map((a) => compileFilterExpr(sql, a));
+      let combined = parts[0];
+      const joiner = expr.kind === "and" ? sql.unsafe(" AND ") : sql.unsafe(" OR ");
+      for (let i = 1; i < parts.length; i++) {
+        combined = sql`(${combined}${joiner}${parts[i]})`;
+      }
+      return combined;
+    }
+    case "not": {
+      const inner = compileFilterExpr(sql, expr.arg);
+      return sql`(NOT (${inner}))`;
+    }
+    case "field":
+      throw new Error("filter 'field' is only valid as the left side of a comparison");
+    default: {
+      // exhaustive guard — narrow `never` is enough for the type checker.
+      const k = (expr as { kind: string }).kind;
+      throw new Error(`unsupported filter kind: ${k}`);
+    }
+  }
+}
+
+function compileIndexBounds(sql: Sql, hint: IndexHint): unknown {
+  if (!Array.isArray(hint.bounds) || hint.bounds.length === 0) return null;
+  const parts = hint.bounds.map((b) => {
+    const op = b.op === "eq" ? "="
+      : b.op === "gt" ? ">"
+      : b.op === "gte" ? ">="
+      : b.op === "lt" ? "<"
+      : "<=";
+    return buildCondition(sql, b.field, op, b.value);
+  });
+  let combined = parts[0];
+  for (let i = 1; i < parts.length; i++) {
+    combined = sql`${combined} AND ${parts[i]}`;
+  }
+  return combined;
+}
+
+// Run a SELECT-style query against the compiled plan and return the raw
+// rows. Terminal methods compose on top of this.
+async function runPlanSelect(
+  sql: Sql,
+  plan: QueryPlan,
+  limit: number | null,
+): Promise<Array<DbRow>> {
+  const collection = safeCollection(plan.collection);
+  const table = sql.unsafe(`nosql."${collection}"`);
+
+  // Build WHERE fragments — collect from index bounds, filter, and any
+  // search/vector filterFields.
+  const wherePieces: unknown[] = [];
+  if (plan.index) {
+    const idxName = safeIdent(plan.index.name, "index name");
+    void idxName; // identifier validation — Postgres planner picks the actual index.
+    const idx = compileIndexBounds(sql, plan.index);
+    if (idx !== null) wherePieces.push(idx);
+  }
+  if (plan.filter) {
+    wherePieces.push(compileFilterExpr(sql, plan.filter));
+  }
+  if (plan.search) {
+    // Validate every identifier we touch.
+    safeIdent(plan.search.name, "search index name");
+    const field = safeIdent(plan.search.field, "search field");
+    const colName = sql.unsafe(`search_${field}`);
+    wherePieces.push(sql`${colName} @@ websearch_to_tsquery(${plan.search.query})`);
+    for (const f of plan.search.filters) {
+      wherePieces.push(buildCondition(sql, f.field, "=", f.value));
+    }
+  }
+  if (plan.vector) {
+    safeIdent(plan.vector.name, "vector index name");
+    for (const f of plan.vector.filters) {
+      wherePieces.push(buildCondition(sql, f.field, "=", f.value));
+    }
+  }
+
+  // ORDER BY:
+  //   search:  ORDER BY ts_rank(...) DESC
+  //   vector:  ORDER BY embedding <=> $vec::vector
+  //   else:    ORDER BY _creation_time {ASC|DESC}, _id {ASC|DESC}
+  let orderFrag: unknown;
+  if (plan.search) {
+    const field = safeIdent(plan.search.field, "search field");
+    const colName = sql.unsafe(`search_${field}`);
+    orderFrag = sql`ORDER BY ts_rank(${colName}, websearch_to_tsquery(${plan.search.query})) DESC`;
+  } else if (plan.vector) {
+    const vecLiteral = `[${plan.vector.embedding.join(",")}]`;
+    orderFrag = sql`ORDER BY embedding <=> ${vecLiteral}::vector`;
+  } else {
+    const direction = (plan.order ?? "asc") === "desc" ? "DESC" : "ASC";
+    orderFrag = sql.unsafe(`ORDER BY _creation_time ${direction}, _id ${direction}`);
+  }
+
+  // Combine WHERE fragments.
+  let whereFrag: unknown | null = null;
+  if (wherePieces.length > 0) {
+    whereFrag = wherePieces[0];
+    for (let i = 1; i < wherePieces.length; i++) {
+      whereFrag = sql`${whereFrag} AND ${wherePieces[i]}`;
+    }
+  }
+
+  // For vector terminals the k is the LIMIT; for everything else the
+  // caller-supplied limit governs.
+  let effectiveLimit: number | null = limit;
+  if (plan.vector && (limit === null || limit > plan.vector.k)) {
+    effectiveLimit = plan.vector.k;
+  }
+  const limitFrag = effectiveLimit === null ? sql.unsafe("") : sql`LIMIT ${effectiveLimit}`;
+
+  if (whereFrag === null) {
+    return await sql`
+      SELECT _id, _creation_time, doc
+      FROM ${table}
+      ${orderFrag}
+      ${limitFrag}
+    `;
+  }
+  return await sql`
+    SELECT _id, _creation_time, doc
+    FROM ${table}
+    WHERE ${whereFrag}
+    ${orderFrag}
+    ${limitFrag}
+  `;
+}
+
+/**
+ * Compile and execute a `QueryPlan` against the pool, picking the right
+ * SQL shape for each terminal.
+ *
+ * Throws on:
+ *   - invalid collection / field / index identifiers,
+ *   - unique() with 0 or >1 matches,
+ *   - collect() exceeding `EXCALIBASE_QUERY_MAX_RESULTS`,
+ *   - unsupported filter kinds.
+ *
+ * Returns:
+ *   - first:    `Record<string, unknown> | null`
+ *   - unique:   `Record<string, unknown>`
+ *   - collect:  `ReadonlyArray<Record<string, unknown>>`
+ *   - take:     `ReadonlyArray<Record<string, unknown>>` (capped at `extra` as number)
+ *   - paginate: `{ page, isDone, continueCursor }`
+ */
+export async function executeQueryPlan(
+  sql: Sql,
+  plan: QueryPlan,
+  terminal: QueryTerminal,
+  extra?: unknown,
+): Promise<unknown> {
+  switch (terminal) {
+    case "first": {
+      const rows = await runPlanSelect(sql, plan, 1);
+      return rows.length === 0 ? null : rowToDoc(rows[0]);
+    }
+    case "unique": {
+      const rows = await runPlanSelect(sql, plan, 2);
+      if (rows.length === 0) throw new Error("expected unique, got 0 docs");
+      if (rows.length > 1) throw new Error(`expected unique, got more than one doc`);
+      return rowToDoc(rows[0]);
+    }
+    case "collect": {
+      const cap = queryMaxResults();
+      // Fetch one extra so we can detect "exceeded" deterministically.
+      const rows = await runPlanSelect(sql, plan, cap + 1);
+      if (rows.length > cap) {
+        throw new Error(`collect() exceeded max results (${cap}); refine the filter or use paginate()`);
+      }
+      return rows.map(rowToDoc);
+    }
+    case "take": {
+      const n = typeof extra === "number" && extra > 0 ? Math.floor(extra) : 30;
+      const rows = await runPlanSelect(sql, plan, n);
+      return rows.map(rowToDoc);
+    }
+    case "paginate": {
+      const opts = (extra ?? {}) as Partial<PaginationOptions>;
+      const numItems = typeof opts.numItems === "number" && opts.numItems > 0
+        ? Math.floor(opts.numItems)
+        : 30;
+      const direction = plan.order ?? "asc";
+      // Cursor cutoff is `(_creation_time, _id) > (ct, id)` for asc
+      // (`<` for desc). Compiled inline below so we don't have to teach
+      // `buildCondition` about system columns.
+      const cursorFrag = (() => {
+        if (typeof opts.cursor !== "string" || opts.cursor.length === 0) return null;
+        const cur = decodeCursor(opts.cursor);
+        if (direction === "desc") {
+          return sql`(_creation_time, _id) < (${cur.creationTime}, ${cur.id})`;
+        }
+        return sql`(_creation_time, _id) > (${cur.creationTime}, ${cur.id})`;
+      })();
+
+      // Build the SELECT ourselves so we can splice the keyset alongside
+      // any user-supplied filter without abusing the FilterExpr type.
+      const collection = safeCollection(plan.collection);
+      const table = sql.unsafe(`nosql."${collection}"`);
+      const wherePieces: unknown[] = [];
+      if (plan.index) {
+        safeIdent(plan.index.name, "index name");
+        const idx = compileIndexBounds(sql, plan.index);
+        if (idx !== null) wherePieces.push(idx);
+      }
+      if (plan.filter) wherePieces.push(compileFilterExpr(sql, plan.filter));
+      if (cursorFrag !== null) wherePieces.push(cursorFrag);
+
+      let whereFrag: unknown | null = null;
+      if (wherePieces.length > 0) {
+        whereFrag = wherePieces[0];
+        for (let i = 1; i < wherePieces.length; i++) {
+          whereFrag = sql`${whereFrag} AND ${wherePieces[i]}`;
+        }
+      }
+      const directionUpper = direction === "desc" ? "DESC" : "ASC";
+      const orderFrag = sql.unsafe(`ORDER BY _creation_time ${directionUpper}, _id ${directionUpper}`);
+      const limit = numItems + 1;
+      const rows: Array<DbRow> = whereFrag === null
+        ? await sql`
+            SELECT _id, _creation_time, doc
+            FROM ${table}
+            ${orderFrag}
+            LIMIT ${limit}
+          `
+        : await sql`
+            SELECT _id, _creation_time, doc
+            FROM ${table}
+            WHERE ${whereFrag}
+            ${orderFrag}
+            LIMIT ${limit}
+          `;
+      const hasMore = rows.length > numItems;
+      const visible = hasMore ? rows.slice(0, numItems) : rows;
+      const page = visible.map(rowToDoc);
+      let continueCursor = "";
+      if (hasMore && visible.length > 0) {
+        const last = visible[visible.length - 1];
+        const ct = typeof last._creation_time === "number"
+          ? last._creation_time
+          : Number(last._creation_time);
+        continueCursor = encodeCursor({ creationTime: ct, id: last._id });
+      }
+      return { page, isDone: !hasMore, continueCursor };
+    }
+    default: {
+      const t = (terminal as string) ?? "";
+      throw new Error(`unsupported terminal: ${t}`);
+    }
+  }
 }
 
 /**
@@ -488,6 +867,27 @@ export async function executeDbOp(
               LIMIT ${topK}
             `;
         return { ok: true, data: rows.map(rowToDoc) };
+      }
+      case "query": {
+        // Convex-shape chainable builder. The worker shim posts a compiled
+        // `QueryPlan` (mirrors @excalibase/server's plan shape one-for-one)
+        // plus the terminal name and any extra payload. We re-set the
+        // plan's collection so `safeCollection` runs uniformly with all
+        // other ops above — defence in depth against a worker that
+        // forgets to set it.
+        if (!op.plan || typeof op.plan !== "object") {
+          return { ok: false, error: "query op requires a plan" };
+        }
+        if (op.plan.collection !== collection) {
+          return { ok: false, error: "plan.collection must match op.collection" };
+        }
+        const terminal = op.terminal;
+        if (terminal !== "first" && terminal !== "unique"
+            && terminal !== "collect" && terminal !== "take" && terminal !== "paginate") {
+          return { ok: false, error: `query op requires a valid terminal, got: ${String(terminal)}` };
+        }
+        const data = await executeQueryPlan(sql, op.plan, terminal, op.extra);
+        return { ok: true, data };
       }
       default: {
         return { ok: false, error: `unknown op: ${(op as { op: string }).op}` };
