@@ -339,6 +339,28 @@ func TestCancel_NoopOnCompleted(t *testing.T) {
 	}
 }
 
+// TestCronRunner_Run_StopsOnContextCancel mirrors the worker test —
+// CronRunner.Run must return cleanly when the context is cancelled so the
+// server can shut down without leaking goroutines.
+func TestCronRunner_Run_StopsOnContextCancel(t *testing.T) {
+	db, teardown := setupSchedulerPG(t)
+	defer teardown()
+	cr := NewCronRunner(CronRunnerConfig{DB: db})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = cr.Run(ctx)
+		close(done)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("CronRunner.Run did not return after ctx cancel")
+	}
+}
+
 // TestRun_StopsOnContextCancel — Run blocks until the context is cancelled.
 // The worker must drain in-flight ticks and return without leaking goroutines.
 func TestRun_StopsOnContextCancel(t *testing.T) {

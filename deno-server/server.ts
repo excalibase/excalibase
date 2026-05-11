@@ -35,6 +35,7 @@
 
 import { executeDbOp, newCache } from "./runtime/db.ts";
 import type { DbOp } from "./runtime/db.ts";
+import { newId } from "./runtime/ids.ts";
 import { closePool, getPool } from "./runtime/pool.ts";
 import type { ValidatorCache } from "./runtime/validator.ts";
 
@@ -83,6 +84,12 @@ interface ScriptMetadata {
   // Per-worker JSON Schema validator cache. Lives for the lifetime of the
   // deployed function; refreshed only when the function is redeployed.
   dbCache: ValidatorCache;
+  // Phase 8 — recorded from the metadata callback. The main thread uses
+  // this for runX read-only enforcement (query handlers can't call
+  // mutations/actions) and for shared-transaction routing (mutation→
+  // mutation rides the caller's txn). One of `"query"|"mutation"|"action"
+  // |"httpAction"|"httpRouter"|""` (empty for v1 fetch handlers).
+  kind: string;
 }
 
 /**
@@ -542,6 +549,55 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     function __makeRunMutation() { return (ref, args) => __runXCall('runMutation', ref, args); }
     function __makeRunAction()   { return (ref, args) => __runXCall('runAction',   ref, args); }
 
+    // --- ctx.scheduler (Phase 8) ---
+    // Worker-side facade for runAfter / runAt / cancel. Each method posts
+    // a {type:'scheduler', op, ...} message to the main thread; the main
+    // thread does the INSERT/UPDATE on the project DB and posts a
+    // {type:'schedulerResult', rpcId, result} message back.
+    const __schedPending = new Map();
+    let __nextSchedRpcId = 1;
+    function __schedCall(op, payload) {
+      const rpcId = __nextSchedRpcId++;
+      return new Promise((resolve, reject) => {
+        __schedPending.set(rpcId, { resolve, reject });
+        self.postMessage({ type: 'scheduler', rpcId, op, payload });
+      });
+    }
+    function __makeScheduler() {
+      return {
+        runAfter: (delayMs, ref, args) => {
+          if (!ref || typeof ref !== 'object' ||
+              typeof ref.moduleName !== 'string' || ref.moduleName.length === 0 ||
+              typeof ref.exportName !== 'string' || ref.exportName.length === 0) {
+            return Promise.reject(new Error("ctx.scheduler.runAfter: ref must be { moduleName, exportName }"));
+          }
+          const d = Number(delayMs);
+          if (!Number.isFinite(d)) {
+            return Promise.reject(new Error("ctx.scheduler.runAfter: delayMs must be a finite number"));
+          }
+          return __schedCall('runAfter', { delayMs: d, ref, args: args === undefined ? {} : args });
+        },
+        runAt: (timestamp, ref, args) => {
+          if (!ref || typeof ref !== 'object' ||
+              typeof ref.moduleName !== 'string' || ref.moduleName.length === 0 ||
+              typeof ref.exportName !== 'string' || ref.exportName.length === 0) {
+            return Promise.reject(new Error("ctx.scheduler.runAt: ref must be { moduleName, exportName }"));
+          }
+          const t = Number(timestamp);
+          if (!Number.isFinite(t)) {
+            return Promise.reject(new Error("ctx.scheduler.runAt: timestamp must be a finite number"));
+          }
+          return __schedCall('runAt', { timestamp: t, ref, args: args === undefined ? {} : args });
+        },
+        cancel: (id) => {
+          if (typeof id !== 'string' || id.length === 0) {
+            return Promise.reject(new Error("ctx.scheduler.cancel: id must be a non-empty string"));
+          }
+          return __schedCall('cancel', { id });
+        },
+      };
+    }
+
     // __dispatchHttp — Phase 7 httpAction/httpRouter dispatch. Skips the
     // {args}-parsing v2 path; reconstructs a raw Request from the invoke
     // envelope and forwards the handler's Response unchanged.
@@ -577,12 +633,15 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
 
         // httpAction ctx parity: db is null (Convex contract), runX
         // surface is wired so the handler can compose with other functions.
+        // Scheduler is also present — httpAction handlers can enqueue
+        // background work the same way actions can.
         const ctx = {
           db: null,
           auth: { claims },
           runQuery:    __makeRunQuery(),
           runMutation: __makeRunMutation(),
           runAction:   __makeRunAction(),
+          scheduler:   __makeScheduler(),
         };
 
         // Find the handler. For httpAction the def itself carries it; for
@@ -680,10 +739,16 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           // enforced by the lib (QueryCtx has no runMutation/runAction);
           // the worker exposes all three on every Ctx variant so a
           // hand-rolled bundle can still compose, but discipline lives
-          // in the typed lib path.
+          // in the typed lib path. Read-only enforcement at runtime is
+          // the main thread's job (dispatchRunX kind-matrix check).
           runQuery:    __makeRunQuery(),
           runMutation: __makeRunMutation(),
           runAction:   __makeRunAction(),
+          // Phase 8: scheduler — present on mutation/action ctx via the
+          // typed lib. Worker exposes it on every Ctx so the runtime
+          // path is uniform; the typed lib still keeps it off QueryCtx
+          // (a query handler that tries to schedule is a compile error).
+          scheduler:   __makeScheduler(),
         };
         try {
           const result = await fnDef.handler(ctx, body.args);
@@ -784,6 +849,18 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         }
         return;
       }
+      // Phase 8: scheduler RPC reply.
+      if (msg && msg.type === 'schedulerResult') {
+        const pending = __schedPending.get(msg.rpcId);
+        if (!pending) return;
+        __schedPending.delete(msg.rpcId);
+        if (msg.result && msg.result.ok === true) {
+          pending.resolve(msg.result.data);
+        } else {
+          pending.reject(new Error(msg.result && msg.result.error || 'scheduler error'));
+        }
+        return;
+      }
       if (msg && msg.type === 'invoke') {
         const reqId = msg.reqId;
         const reqData = msg.data;
@@ -880,6 +957,37 @@ async function dispatchRunX(callerRuntimeID: string, msg: RunXMessage): Promise<
   }
   const projectID = callerRuntimeID.slice(0, sep);
   const targetID = `${projectID}__${msg.ref.moduleName}`;
+
+  // Phase 8 read-only enforcement. The caller and target kinds are
+  // captured at deploy time via the metadata callback (see
+  // ScriptMetadata.kind). We refuse the call before dispatching when the
+  // matrix says "no":
+  //
+  //   query   → query      OK
+  //   query   → mutation   ERROR
+  //   query   → action     ERROR
+  //   mutation→ query      OK
+  //   mutation→ mutation   OK (shared txn — runtime-side wiring)
+  //   mutation→ action     OK
+  //   action  → *          OK
+  //
+  // Unknown caller or target kinds are not enforced — falls back to the
+  // pre-Phase-8 behaviour so v1 fetch handlers (which never report a
+  // kind) keep working.
+  const callerKind = runtime.getKind(callerRuntimeID);
+  const targetKind = runtime.getKind(targetID);
+  if (callerKind === "query") {
+    if (targetKind === "mutation") {
+      throw new Error(
+        `Calling mutation ${msg.ref.moduleName} from a query is not allowed`,
+      );
+    }
+    if (targetKind === "action") {
+      throw new Error(
+        `Calling action ${msg.ref.moduleName} from a query is not allowed`,
+      );
+    }
+  }
   const invokeReq: InvokeRequest = {
     method: "POST",
     url: `/invoke/${targetID}`,
@@ -909,6 +1017,92 @@ async function dispatchRunX(callerRuntimeID: string, msg: RunXMessage): Promise<
     err.name = "ValidationError";
   }
   throw err;
+}
+
+// SchedulerMessage is the envelope shape posted by a worker's
+// `ctx.scheduler.*` calls. Mirrors RunXMessage but on its own type so
+// dispatch is unambiguous.
+interface SchedulerMessage {
+  type: "scheduler";
+  rpcId: number;
+  op: "runAfter" | "runAt" | "cancel";
+  payload: {
+    delayMs?: number;
+    timestamp?: number;
+    ref?: { moduleName: string; exportName: string };
+    args?: unknown;
+    id?: string;
+  };
+}
+
+/**
+ * dispatchScheduler executes one `ctx.scheduler.*` op on the project
+ * Postgres. Resolves with the result that the worker's promise should
+ * receive (a `ScheduledId` for `runAfter`/`runAt`, `null` for `cancel`).
+ *
+ * The implementation routes through the project pool unconditionally
+ * (no shared-mutation-transaction yet — see the inline note for the
+ * follow-up). Action-side semantics are correct: an action that fails
+ * after scheduling leaves the row in place. Mutation-side rollback
+ * semantics are NOT yet honoured; a mutation that throws after
+ * scheduling will leave the pending row behind.
+ */
+async function dispatchScheduler(
+  callerRuntimeID: string,
+  msg: SchedulerMessage,
+): Promise<unknown> {
+  const sep = callerRuntimeID.indexOf("__");
+  if (sep < 0) {
+    throw new Error("scheduler: caller runtime id missing project separator");
+  }
+  const projectID = callerRuntimeID.slice(0, sep);
+  const sql = getPool();
+  if (msg.op === "runAfter") {
+    const delayMs = msg.payload.delayMs ?? 0;
+    const ref = msg.payload.ref;
+    if (!ref) throw new Error("scheduler.runAfter: missing ref");
+    const args = msg.payload.args ?? {};
+    const id = newId();
+    const scheduledForMs = Date.now() + Math.max(0, delayMs);
+    await sql`
+      INSERT INTO excalibase_scheduled_functions
+        (id, project_id, module_name, export_name, args, scheduled_for, status)
+      VALUES
+        (${id}, ${projectID}, ${ref.moduleName}, ${ref.exportName},
+         ${sql.json(args as Record<string, unknown>)},
+         to_timestamp(${scheduledForMs / 1000}), 'pending')
+    `;
+    return id;
+  }
+  if (msg.op === "runAt") {
+    const ts = msg.payload.timestamp ?? Date.now();
+    const ref = msg.payload.ref;
+    if (!ref) throw new Error("scheduler.runAt: missing ref");
+    const args = msg.payload.args ?? {};
+    const id = newId();
+    await sql`
+      INSERT INTO excalibase_scheduled_functions
+        (id, project_id, module_name, export_name, args, scheduled_for, status)
+      VALUES
+        (${id}, ${projectID}, ${ref.moduleName}, ${ref.exportName},
+         ${sql.json(args as Record<string, unknown>)},
+         to_timestamp(${ts / 1000}), 'pending')
+    `;
+    return id;
+  }
+  if (msg.op === "cancel") {
+    const id = msg.payload.id;
+    if (typeof id !== "string" || id.length === 0) {
+      throw new Error("scheduler.cancel: id required");
+    }
+    await sql`
+      UPDATE excalibase_scheduled_functions
+         SET status = 'cancelled'
+       WHERE id = ${id} AND status = 'pending'
+    `;
+    return null;
+  }
+  throw new Error(`scheduler: unknown op ${msg.op}`);
 }
 
 class FunctionRuntime {
@@ -993,6 +1187,14 @@ class FunctionRuntime {
       });
     }
 
+    // Pull the kind off the metadata array (Phase 7 emits one entry per
+    // worker — name=default, kind=<query|mutation|action|httpAction|
+    // httpRouter>). Defaults to empty for legacy v1 fetch handlers.
+    let detectedKind = "";
+    if (Array.isArray(initMetadataExports) && initMetadataExports.length > 0) {
+      const first = initMetadataExports[0] as { kind?: unknown };
+      if (typeof first.kind === "string") detectedKind = first.kind;
+    }
     const meta: ScriptMetadata = {
       id,
       worker,
@@ -1002,6 +1204,7 @@ class FunctionRuntime {
       nextReqId: 1,
       logs: [],
       dbCache: newCache(),
+      kind: detectedKind,
     };
     this.scripts.set(id, meta);
 
@@ -1099,6 +1302,37 @@ class FunctionRuntime {
         return;
       }
 
+      if (msg.type === "scheduler") {
+        // Phase 8: ctx.scheduler.{runAfter,runAt,cancel}. Each op routes
+        // through the project pool. The mutation-side rollback semantics
+        // require the INSERT to ride inside the caller's Postgres
+        // transaction; that wiring (shared txn map) is a follow-up. For
+        // now, runAfter/runAt INSERT through the pool unconditionally so
+        // action-side scheduling works end-to-end. A failing mutation
+        // will leave the inserted row behind until the shared-txn work
+        // lands — known limitation, tracked separately.
+        const rpcId = msg.rpcId;
+        if (typeof rpcId !== "number") return;
+        (async () => {
+          let result: { ok: true; data: unknown } | { ok: false; error: string };
+          try {
+            const data = await dispatchScheduler(meta.id, msg);
+            result = { ok: true, data };
+          } catch (err) {
+            result = {
+              ok: false,
+              error: String((err instanceof Error ? err.message : err) ?? "scheduler error"),
+            };
+          }
+          try {
+            worker.postMessage({ type: "schedulerResult", rpcId, result });
+          } catch (postErr) {
+            console.debug("[runtime] schedulerResult postMessage failed:", postErr);
+          }
+        })();
+        return;
+      }
+
       if (typeof msg.reqId !== "number") return;
       const pending = meta.pending.get(msg.reqId);
       if (!pending) return; // late delivery after timeout — ignore
@@ -1171,6 +1405,16 @@ class FunctionRuntime {
     script.worker.terminate();
     this.scripts.delete(id);
     return true;
+  }
+
+  /**
+   * Returns the recorded export kind for a deployed function id, or the
+   * empty string when the function is unknown or its metadata never
+   * arrived. Phase 8 read-only enforcement consults this to validate
+   * ctx.runX targets against the caller's kind.
+   */
+  getKind(id: string): string {
+    return this.scripts.get(id)?.kind ?? "";
   }
 
   list() {

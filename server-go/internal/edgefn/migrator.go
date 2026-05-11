@@ -55,9 +55,23 @@ func quoteIdent(ident string) string {
 // projectID is logged but does NOT prefix the table name — projects already
 // have their own database, so collisions within nosql.* would only happen
 // across different schemas the user themselves declared.
+//
+// Phase 8: ApplySchema also creates the Phase 8 scheduler/cron tables
+// (`excalibase_scheduled_functions`, `excalibase_cron_jobs`) on every
+// deploy. These tables live at the public schema (not under `nosql.*`)
+// because they are platform metadata, not user data. The DDL is
+// idempotent so re-application is free.
 func ApplySchema(ctx context.Context, db *sql.DB, projectID string, schema Schema) error {
+	// Short-circuit on empty schema BEFORE any DB access so callers (and
+	// unit tests) can pass a nil DB when there's nothing to migrate.
 	if len(schema.Tables) == 0 {
 		return nil
+	}
+	// Phase 8: ensure scheduler tables exist on every real migration.
+	// Safe to run before the user-schema DDL because it doesn't touch
+	// the `nosql.*` schema or any user tables.
+	if err := ensureSchedulerTables(ctx, db); err != nil {
+		return fmt.Errorf("ensure scheduler tables: %w", err)
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -241,4 +255,45 @@ func applyTable(ctx context.Context, tx *sql.Tx, tableName string, table TableSc
 // already controlled — this is defence-in-depth.
 func quoteLiteral(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// ensureSchedulerTables creates the Phase 8 scheduler bookkeeping tables
+// on the project database. Idempotent: every CREATE uses IF NOT EXISTS
+// so re-application during normal deploys is a no-op.
+//
+// Mirrors `scheduler.EnsureTables` — kept duplicated here (rather than
+// imported) so the migrator package stays free of cross-package
+// dependencies on the runtime worker.
+func ensureSchedulerTables(ctx context.Context, db *sql.DB) error {
+	const ddl = `
+		CREATE TABLE IF NOT EXISTS excalibase_scheduled_functions (
+			id text PRIMARY KEY,
+			project_id text NOT NULL,
+			module_name text NOT NULL,
+			export_name text NOT NULL,
+			args jsonb NOT NULL,
+			scheduled_for timestamptz NOT NULL,
+			status text NOT NULL DEFAULT 'pending',
+			attempts int NOT NULL DEFAULT 0,
+			last_error text,
+			created_at timestamptz NOT NULL DEFAULT now()
+		);
+		CREATE INDEX IF NOT EXISTS excalibase_scheduled_functions_due_idx
+			ON excalibase_scheduled_functions (status, scheduled_for)
+			WHERE status = 'pending';
+		CREATE TABLE IF NOT EXISTS excalibase_cron_jobs (
+			name text NOT NULL,
+			project_id text NOT NULL,
+			module_name text NOT NULL,
+			export_name text NOT NULL,
+			args jsonb NOT NULL,
+			schedule jsonb NOT NULL,
+			last_enqueued_at timestamptz,
+			PRIMARY KEY (project_id, name)
+		);
+	`
+	if _, err := db.ExecContext(ctx, ddl); err != nil {
+		return err
+	}
+	return nil
 }

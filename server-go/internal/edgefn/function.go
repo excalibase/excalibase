@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dop251/goja"
 	esbuild "github.com/evanw/esbuild/pkg/api"
 )
 
@@ -31,6 +32,23 @@ var httpKindPattern = regexp.MustCompile(`kind\s*:\s*"(httpAction|httpRouter)"`)
 // dynamic code, so the closing bracket nearest the opener is always the
 // right one. The (?s) flag lets `.` match newlines for multi-line tables.
 var httpRoutesPattern = regexp.MustCompile(`(?s)__excalibase_routes\s*:\s*(\[[^\[\]]*?\])`)
+
+// cronJobsMarker is a cheap pre-check: if the bundled JS doesn't contain
+// the side-channel slot string, we don't bother spinning up a goja VM.
+// The slot is written by @excalibase/server's `cronJobs()` registry on
+// every registration, and by user bundles that publish it directly.
+const cronJobsMarker = "__excalibase_crons"
+
+// validCronScheduleKinds bounds the schedule.kind values written into
+// Function.CronJobs. The library's `cronJobs()` only emits these four
+// kinds — anything else fails the bundle so the runner never receives
+// an unknown shape.
+var validCronScheduleKinds = map[string]bool{
+	"cron":     true,
+	"interval": true,
+	"daily":    true,
+	"hourly":   true,
+}
 
 // validHttpMethods bounds the method set written into Function.HttpRoutes.
 // Anything outside the set fails the bundle so a malformed router can't slip
@@ -166,6 +184,13 @@ type Function struct {
 	// functions. The flag is captured from the runtime-reported metadata
 	// callback (Phase 2 flow) and persisted on the Function record.
 	IsInternal bool `json:"isInternal,omitempty"`
+	// CronJobs — Phase 8 cron registry table extracted from the bundle's
+	// `globalThis.__excalibase_crons` side-channel at deploy time. JSON
+	// array of `{name, schedule, fnRef, args}` rows. The Go cron runner
+	// reads this slot to schedule each entry at its next due time without
+	// re-evaluating the module graph. nil/omitempty for bundles that
+	// don't call `cronJobs()`.
+	CronJobs   json.RawMessage `json:"cronJobs,omitempty"`
 	CreatedAt  time.Time       `json:"createdAt"`
 	UpdatedAt  time.Time       `json:"updatedAt"`
 }
@@ -333,6 +358,15 @@ func (f *Function) Bundle() (string, error) {
 		f.HttpRoutes = nil
 	}
 
+	// Phase 8: detect cron registry. Bundles that don't call cronJobs()
+	// land here with no match — clear stale CronJobs so a redeploy that
+	// dropped its crons.ts wipes the persisted table.
+	cronJobs, cerr := extractCronJobs(final)
+	if cerr != nil {
+		return "", cerr
+	}
+	f.CronJobs = cronJobs
+
 	return final, nil
 }
 
@@ -378,6 +412,83 @@ func extractHttpRoutes(bundled string) (json.RawMessage, error) {
 	out, err := json.Marshal(routes)
 	if err != nil {
 		return nil, fmt.Errorf("re-marshal routes: %w", err)
+	}
+	return json.RawMessage(out), nil
+}
+
+// extractCronJobs pulls the `globalThis.__excalibase_crons` value out of
+// the bundled JS by evaluating it in an isolated goja VM (same pattern
+// as ExtractSchema). Returns (nil, nil) when no registry was published,
+// so callers can treat a missing crons slot as "no crons configured".
+//
+// Goja is used (rather than a regex over the bundled source) because the
+// lib's `cronJobs()` registry publishes through an intermediate variable
+// and the post-esbuild output binds the array to a local name first, then
+// assigns it to globalThis. Evaluating the bundle is the most reliable
+// way to capture the resulting table without re-implementing the lib's
+// publish() side-effect in Go.
+//
+// Each entry is validated for shape: `name` (non-empty string), `schedule`
+// (object with `kind` in {cron, interval, daily, hourly}), `fnRef`
+// (object with non-empty `moduleName` + `exportName`), `args` (object).
+// A bad row fails the bundle so a malformed registry can't slip through
+// to the cron runner.
+func extractCronJobs(bundled string) (json.RawMessage, error) {
+	if !strings.Contains(bundled, cronJobsMarker) {
+		return nil, nil
+	}
+	vm := goja.New()
+	// Prime the slot so reading back gets a clean undefined when the
+	// bundle declared the marker only via the lib's import side-effect.
+	if _, err := vm.RunString("globalThis = globalThis || {};\nglobalThis.__excalibase_crons = null;\n"); err != nil {
+		return nil, fmt.Errorf("init cron slot: %w", err)
+	}
+	if _, err := vm.RunString(bundled); err != nil {
+		return nil, fmt.Errorf("evaluate bundle for cron extraction: %w", err)
+	}
+	val := vm.Get("__excalibase_crons")
+	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
+		return nil, nil
+	}
+	raw, err := json.Marshal(val.Export())
+	if err != nil {
+		return nil, fmt.Errorf("marshal extracted cron jobs: %w", err)
+	}
+	if string(raw) == "null" || string(raw) == "[]" {
+		return nil, nil
+	}
+	var jobs []struct {
+		Name     string         `json:"name"`
+		Schedule map[string]any `json:"schedule"`
+		FnRef    map[string]any `json:"fnRef"`
+		Args     map[string]any `json:"args"`
+	}
+	if err := json.Unmarshal(raw, &jobs); err != nil {
+		return nil, fmt.Errorf("parse extracted cron jobs: %w", err)
+	}
+	for i, j := range jobs {
+		if j.Name == "" {
+			return nil, fmt.Errorf("cronJobs[%d]: cron job name is required", i)
+		}
+		if j.Schedule == nil {
+			return nil, fmt.Errorf("cronJobs[%d] %q: schedule object is required", i, j.Name)
+		}
+		kind, _ := j.Schedule["kind"].(string)
+		if !validCronScheduleKinds[kind] {
+			return nil, fmt.Errorf("cronJobs[%d] %q: unknown schedule kind %q (want cron|interval|daily|hourly)", i, j.Name, kind)
+		}
+		if j.FnRef == nil {
+			return nil, fmt.Errorf("cronJobs[%d] %q: fnRef is required", i, j.Name)
+		}
+		mod, _ := j.FnRef["moduleName"].(string)
+		exp, _ := j.FnRef["exportName"].(string)
+		if mod == "" || exp == "" {
+			return nil, fmt.Errorf("cronJobs[%d] %q: fnRef.moduleName and fnRef.exportName must be non-empty", i, j.Name)
+		}
+	}
+	out, err := json.Marshal(jobs)
+	if err != nil {
+		return nil, fmt.Errorf("re-marshal cronJobs: %w", err)
 	}
 	return json.RawMessage(out), nil
 }
