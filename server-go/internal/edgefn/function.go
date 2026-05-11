@@ -10,6 +10,22 @@ import (
 	esbuild "github.com/evanw/esbuild/pkg/api"
 )
 
+// v2ShapePattern matches the tagged FunctionDef record produced by the
+// excalibase SDK (kind: "query" | "mutation" | "action"). Whitespace
+// around the colon is tolerated — esbuild emits `kind: "query"` (with
+// space), and hand-written user code can omit the space. We deliberately
+// don't try to verify args/handler here; the runtime does the structural
+// check at dispatch time. This is a quick post-bundle marker, not a parser.
+var v2ShapePattern = regexp.MustCompile(`kind\s*:\s*"(query|mutation|action)"`)
+
+// RuntimeShape values written into Function.RuntimeShape after Bundle().
+// Older persisted records may have an empty string — readers must treat
+// "" as equivalent to "v1" (legacy Fetch handler shape).
+const (
+	RuntimeShapeV1 = "v1"
+	RuntimeShapeV2 = "v2"
+)
+
 const defaultEntrypoint = "index.ts"
 
 
@@ -70,11 +86,16 @@ type Function struct {
 	// VerifyJwt: nil/missing → true (safe default).
 	// Set to *false to opt out — public route lets unauthenticated traffic through
 	// straight to the user handler. Use only for webhooks that do their own auth.
-	VerifyJwt *bool     `json:"verifyJwt,omitempty"`
-	Active    bool      `json:"active"`
-	Version   int       `json:"version"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	VerifyJwt *bool `json:"verifyJwt,omitempty"`
+	Active    bool  `json:"active"`
+	Version   int   `json:"version"`
+	// RuntimeShape — populated by Bundle() based on the emitted JS:
+	//   "v1" → legacy default-export Fetch handler (req: Request) => Response
+	//   "v2" → tagged FunctionDef with kind: "query" | "mutation" | "action"
+	// Empty string on legacy persisted records is treated as "v1" by readers.
+	RuntimeShape string    `json:"runtimeShape,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // JwtVerificationRequired returns true unless the function has explicitly opted
@@ -202,6 +223,18 @@ func (f *Function) Bundle() (string, error) {
 	if len(final) > MaxCodeSize {
 		return "", fmt.Errorf("bundled code exceeds maximum size (%d KB)", MaxCodeSize/1024)
 	}
+
+	// Stamp the detected shape on the receiver. This is the only place that
+	// writes RuntimeShape — persistence stores it, runtime codegen reads it.
+	// Pragmatic substring/regex scan: esbuild's IIFE output is non-minified
+	// and preserves the source object literal verbatim, so the kind marker
+	// survives unchanged. Phase 3 codegen consumes this field.
+	if v2ShapePattern.MatchString(final) {
+		f.RuntimeShape = RuntimeShapeV2
+	} else {
+		f.RuntimeShape = RuntimeShapeV1
+	}
+
 	return final, nil
 }
 

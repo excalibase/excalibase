@@ -104,6 +104,25 @@ const MAX_LOG_LINE = 4 * 1024;
 // Format: "host1:port1,host2:port2" or empty for no network access
 const ALLOWED_HOSTS = (Deno.env.get("ALLOWED_HOSTS") || "").split(",").filter(Boolean);
 
+// Server port — defaults to 8000 for production; tests override via env so
+// concurrent test runs don't collide on the same port.
+const PORT = Number(Deno.env.get("PORT") || "8000");
+
+// Feature flag for the v2 tagged FunctionDef shape (kind: "query" |
+// "mutation" | "action"). When off (default), v2-shaped exports fall back
+// through to the legacy Fetch handler path, which will fail naturally
+// because the export is an object rather than a function. When on, the
+// worker recognises the shape, builds a ctx skeleton (auth.claims from the
+// incoming Bearer JWT, db: null in this phase), and dispatches the
+// handler. Existing legacy Fetch handlers are unaffected either way.
+const V2_ENABLED = Deno.env.get("EXCALIBASE_FUNCTIONS_V2") === "1" ||
+  Deno.env.get("EXCALIBASE_FUNCTIONS_V2") === "true";
+
+// V2_KINDS — recognised tagged FunctionDef kinds. Used both in the worker
+// (kept as a literal in the template) and in shape checks here. Phase 3
+// codegen will key off these too.
+const V2_KINDS = ["query", "mutation", "action"];
+
 /** Build the JS source that runs inside the Deno Web Worker. */
 function buildWorkerCode(userCode: string, secrets: Record<string, string>): string {
   // `Deno` is frozen inside workers, so we can't reassign `globalThis.Deno`.
@@ -181,6 +200,96 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       })()
     );
 
+    // --- v2 helpers (only used when EXCALIBASE_FUNCTIONS_V2 is on) ---
+    const __V2_ENABLED = ${V2_ENABLED ? "true" : "false"};
+    const __V2_KINDS = ${JSON.stringify(V2_KINDS)};
+
+    // __isV2Export — duck-types a tagged FunctionDef record:
+    //   { kind: "query"|"mutation"|"action", args: <zod-or-parseable>, handler: function }
+    // We accept any object whose 'args' is non-null because the user's zod
+    // (or hand-rolled) parser will run inside the handler shim below.
+    function __isV2Export(d) {
+      if (!d || typeof d !== 'object') return false;
+      if (typeof d.handler !== 'function') return false;
+      if (d.args === null || d.args === undefined) return false;
+      return __V2_KINDS.indexOf(d.kind) !== -1;
+    }
+
+    // __decodeJwtClaims — base64url-decode the JWT payload segment. The Go
+    // gateway has already verified the signature before forwarding; this
+    // worker only reads claims for ctx.auth. Returns null on a malformed
+    // or absent token so the handler can still run unauthenticated.
+    function __decodeJwtClaims(authHeader) {
+      if (typeof authHeader !== 'string') return null;
+      if (!authHeader.toLowerCase().startsWith('bearer ')) return null;
+      const token = authHeader.slice(7).trim();
+      if (!token) return null;
+      const parts = token.split('.');
+      if (parts.length !== 3) return null;
+      try {
+        // base64url → base64 (atob is base64 only)
+        let p = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const pad = p.length % 4;
+        if (pad === 2) p += '==';
+        else if (pad === 3) p += '=';
+        else if (pad !== 0) return null;
+        const json = atob(p);
+        return JSON.parse(json);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    // __dispatchV2 — runs the tagged FunctionDef contract:
+    //   POST body must be { "args": <object> }; on missing args, 400.
+    //   Calls handler(ctx, body.args); wraps result as { data } JSON.
+    //   ctx.db is null in phase 0 — phase 1 will replace it with a real
+    //   transaction-scoped client.
+    async function __dispatchV2(reqId, reqData, fnDef) {
+      try {
+        const headers = reqData.headers || {};
+        const auth = headers['Authorization'] || headers['authorization'] || '';
+        const claims = __decodeJwtClaims(auth);
+
+        let body = {};
+        if (reqData.body) {
+          try { body = JSON.parse(reqData.body); } catch (_) {
+            self.postMessage({ type: 'success', reqId, status: 400,
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ error: 'invalid JSON body' }) });
+            return;
+          }
+        }
+        if (!body || typeof body !== 'object' || !('args' in body)) {
+          self.postMessage({ type: 'success', reqId, status: 400,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ error: "request body must contain 'args' field" }) });
+          return;
+        }
+
+        const ctx = { db: null, auth: { claims } };
+        try {
+          const result = await fnDef.handler(ctx, body.args);
+          self.postMessage({ type: 'success', reqId, status: 200,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ data: result === undefined ? null : result }) });
+        } catch (err) {
+          // If the handler threw a zod-style issues array, relay it as 400.
+          if (err && Array.isArray(err.issues)) {
+            self.postMessage({ type: 'success', reqId, status: 400,
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ error: 'args validation failed', issues: err.issues }) });
+            return;
+          }
+          self.postMessage({ type: 'success', reqId, status: 500,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ error: String(err && err.message || err) }) });
+        }
+      } catch (outer) {
+        self.postMessage({ type: 'error', reqId, error: String(outer && outer.message || outer) });
+      }
+    }
+
     // --- worker dispatch ---
     // Each invoke message carries a unique reqId so the runtime can correlate
     // concurrent responses on the same worker without races.
@@ -189,6 +298,15 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       if (msg && msg.type === 'invoke') {
         const reqId = msg.reqId;
         const reqData = msg.data;
+
+        // v2 path — only if the flag is on AND the export matches the
+        // tagged FunctionDef shape. Anything else falls through to legacy.
+        const exp = globalThis.__excalibase_default;
+        if (__V2_ENABLED && __isV2Export(exp)) {
+          await __dispatchV2(reqId, reqData, exp);
+          return;
+        }
+
         try {
           const init = { method: reqData.method || 'GET', headers: reqData.headers || {} };
           if (reqData.body && reqData.method !== 'GET' && reqData.method !== 'HEAD') {
@@ -576,7 +694,7 @@ async function dispatch(req: Request, url: URL): Promise<Response> {
   return notFound();
 }
 
-Deno.serve({ port: 8000 }, async (req: Request) => {
+Deno.serve({ port: PORT }, async (req: Request) => {
   const url = new URL(req.url);
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
@@ -593,4 +711,4 @@ Deno.serve({ port: 8000 }, async (req: Request) => {
   }
 });
 
-console.log("Excalibase Deno runtime on :8000");
+console.log(`Excalibase Deno runtime on :${PORT}${V2_ENABLED ? " (functions v2 enabled)" : ""}`);
