@@ -1021,3 +1021,123 @@ func (h *FunctionHandler) RuntimeStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, map[string]interface{}{"status": status, "healthy": healthy})
 }
+
+// --- Phase 2: export-metadata endpoints (SDK codegen + runtime callback) ---
+
+// runtimeTokenHeader names the shared-secret header used on the internal
+// /metadata callback from the Deno runtime back to provisioning. The same
+// runtimeSecret that authenticates deploy/invoke RPCs authenticates this.
+const runtimeTokenHeader = "X-Excalibase-Runtime-Token"
+
+// exportMetadataEntry is the on-wire shape of one element returned by
+// ListExportMetadata. Mirrors what the SDK codegen reads:
+//
+//	[{ id, name, runtimeShape, exports: [...], lastDeployedAt }]
+//
+// `Exports` is left as a json.RawMessage so the runtime's reported payload
+// passes through verbatim — no re-parse + re-serialize on every read.
+type exportMetadataEntry struct {
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	RuntimeShape   string          `json:"runtimeShape"`
+	Exports        json.RawMessage `json:"exports"`
+	LastDeployedAt time.Time       `json:"lastDeployedAt"`
+}
+
+// ListExportMetadata serves
+// GET /api/projects/{projectId}/functions/_metadata — the SDK codegen
+// entry point. Returns every persisted function in the project with its
+// runtime-reported export metadata. Functions that haven't yet had a
+// callback (or that ship a v1 Fetch handler) get `exports: []` so the
+// codegen output is shape-stable.
+func (h *FunctionHandler) ListExportMetadata(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	if err := edgefn.ValidateProjectID(projectID); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	list, err := h.store.List(projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	out := make([]exportMetadataEntry, 0, len(list))
+	for _, fn := range list {
+		exports := fn.ExportMetadata
+		if len(exports) == 0 {
+			exports = json.RawMessage("[]")
+		}
+		out = append(out, exportMetadataEntry{
+			ID:             fn.ID,
+			Name:           fn.Name,
+			RuntimeShape:   fn.RuntimeShape,
+			Exports:        exports,
+			LastDeployedAt: fn.UpdatedAt,
+		})
+	}
+	writeJSON(w, out)
+}
+
+// ReceiveExportMetadata serves
+// POST /internal/runtime/functions/{fnId}/metadata — called by the Deno
+// runtime's main thread when a worker reports its scanned exports. Auth:
+// the same runtimeSecret shared between provisioning and runtime; required
+// in the X-Excalibase-Runtime-Token header.
+//
+// Body: { "projectId": "...", "exports": [...] }. The exports array is
+// stored verbatim on the Function.ExportMetadata field so a later
+// /_metadata read can return it untouched.
+func (h *FunctionHandler) ReceiveExportMetadata(w http.ResponseWriter, r *http.Request) {
+	if h.runtimeSecret == "" || r.Header.Get(runtimeTokenHeader) != h.runtimeSecret {
+		httpError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	fnID := chi.URLParam(r, "fnId")
+	if err := edgefn.ValidateID(fnID); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 256*1024)
+	var body struct {
+		ProjectID string          `json:"projectId"`
+		Exports   json.RawMessage `json:"exports"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := edgefn.ValidateProjectID(body.ProjectID); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if len(body.Exports) == 0 {
+		// Tolerate empty bodies — record an empty array so /_metadata
+		// returns a consistent shape.
+		body.Exports = json.RawMessage("[]")
+	}
+	// Validate that exports parses as a JSON array — guards against the
+	// runtime sending malformed payloads.
+	var probe []interface{}
+	if err := json.Unmarshal(body.Exports, &probe); err != nil {
+		httpError(w, "exports must be a JSON array", http.StatusBadRequest)
+		return
+	}
+
+	fn, err := h.store.Get(body.ProjectID, fnID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if fn == nil {
+		httpError(w, errFunctionNotFound, http.StatusNotFound)
+		return
+	}
+	fn.ExportMetadata = body.Exports
+	if err := h.store.Save(fn); err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "updated", "id": fnID})
+}

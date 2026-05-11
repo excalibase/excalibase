@@ -492,6 +492,10 @@ func buildRouter(cfg config.AppConfig, sqlStore storage.PlatformStore, store sto
 	mountEmailRoutes(r, d)
 
 	r.With(custommw.TenantContext).HandleFunc("/functions/v1/{projectId}/{fnId}", d.fnHandler.PublicInvoke)
+	// Internal runtime → provisioning callback for export metadata capture.
+	// Authenticates via X-Excalibase-Runtime-Token (shared runtime secret),
+	// not JWT — this is server-to-server only.
+	r.Post("/internal/runtime/functions/{fnId}/metadata", d.fnHandler.ReceiveExportMetadata)
 	return r
 }
 
@@ -595,6 +599,7 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store 
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", d.fnHandler.List)
 		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/", d.fnHandler.Create)
+		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/_metadata", d.fnHandler.ListExportMetadata)
 		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/runtime/status", d.fnHandler.RuntimeStatus)
 		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/secrets", d.fnHandler.ListSecrets)
 		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/secrets", d.fnHandler.SetSecret)

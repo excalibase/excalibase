@@ -242,6 +242,71 @@ func TestReceiveExportMetadata_UnknownFunctionReturns404(t *testing.T) {
 	}
 }
 
+func TestReceiveExportMetadata_RejectsBadJSON(t *testing.T) {
+	r, _, h := setupMetadataHandler(t)
+	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata", strings.NewReader("not json"))
+	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400 for malformed JSON body, got %d", w.Code)
+	}
+}
+
+func TestReceiveExportMetadata_RejectsMalformedProjectID(t *testing.T) {
+	r, _, h := setupMetadataHandler(t)
+	body, _ := json.Marshal(map[string]interface{}{"projectId": "has..bad", "exports": []interface{}{}})
+	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata", bytes.NewReader(body))
+	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400 for malformed projectId, got %d", w.Code)
+	}
+}
+
+func TestReceiveExportMetadata_RejectsNonArrayExports(t *testing.T) {
+	r, _, h := setupMetadataHandler(t)
+	body := []byte(`{"projectId":"proj_p1","exports":{"not":"an array"}}`)
+	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata", bytes.NewReader(body))
+	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400 for non-array exports, got %d", w.Code)
+	}
+}
+
+func TestReceiveExportMetadata_EmptyBodyDefaultsToEmptyArray(t *testing.T) {
+	r, store, h := setupMetadataHandler(t)
+	// Send a body that decodes (valid JSON) but omits "exports". Handler
+	// should default to []. Function record gets ExportMetadata = []
+	body := []byte(`{"projectId":"proj_p1"}`)
+	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata", bytes.NewReader(body))
+	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK && w.Code != http.StatusNoContent {
+		t.Fatalf("empty-exports body: %d", w.Code)
+	}
+	updated, _ := store.Get("proj_p1", "users")
+	if string(updated.ExportMetadata) != "[]" {
+		t.Errorf("ExportMetadata: got %q, want %q", string(updated.ExportMetadata), "[]")
+	}
+}
+
+func TestReceiveExportMetadata_RejectsBadFunctionID(t *testing.T) {
+	r, _, h := setupMetadataHandler(t)
+	body, _ := json.Marshal(map[string]interface{}{"projectId": "proj_p1", "exports": []interface{}{}})
+	req := httptest.NewRequest("POST", "/internal/runtime/functions/bad..id/metadata", bytes.NewReader(body))
+	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400 for malformed function id, got %d", w.Code)
+	}
+}
+
 // --- helper test ---
 
 func TestExportMetadata_ResponseShapeMatchesSDKContract(t *testing.T) {

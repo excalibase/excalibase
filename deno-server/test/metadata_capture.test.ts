@@ -87,7 +87,9 @@ Deno.test({
           handler: async (_ctx, _args) => ({ ok: true }),
           __metadata: { argsJsonSchema: { type: "object", properties: { status: { type: "string" } } } },
         }`);
-        const deploy = await rt.deploy("metafn", fnCode);
+        // Use the same runtime-id format the Go side ships: `projectId__fnId`.
+        // Forwarder splits on `__` to populate the callback URL + payload.
+        const deploy = await rt.deploy("proj_test__metafn", fnCode);
         assertEquals(deploy.status, 201);
 
         // Give the runtime a beat to fire-and-forget the HTTP callback.
@@ -99,6 +101,11 @@ Deno.test({
         }
         const cap = mock.captured[0]!;
         assertEquals(cap.fnId, "metafn");
+        // deno-lint-ignore no-explicit-any
+        const captured_body = cap.body as any;
+        if (captured_body?.projectId !== "proj_test") {
+          throw new Error(`projectId in body: ${captured_body?.projectId}`);
+        }
         // The callback body must include an `exports` array shaped for the
         // Go side: [{ name, kind, argsJsonSchema }]. We're permissive about
         // the exact set of keys but the shape must match.

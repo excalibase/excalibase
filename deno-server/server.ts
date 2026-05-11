@@ -139,6 +139,12 @@ const PORT = Number(Deno.env.get("PORT") || "8000");
 const V2_ENABLED = Deno.env.get("EXCALIBASE_FUNCTIONS_V2") === "1" ||
   Deno.env.get("EXCALIBASE_FUNCTIONS_V2") === "true";
 
+// Phase 2 metadata capture — when set, the runtime POSTs every worker's
+// scanned v2 export metadata to ${PROVISIONING_URL}/internal/runtime/
+// functions/{fnId}/metadata. Authenticated with the same RUNTIME_SECRET
+// the Go side uses to talk to /deploy. Best-effort; failures are logged.
+const PROVISIONING_URL = Deno.env.get("EXCALIBASE_PROVISIONING_URL") || "";
+
 // V2_KINDS — recognised tagged FunctionDef kinds. Used both in the worker
 // (kept as a literal in the template) and in shape checks here. Phase 3
 // codegen will key off these too.
@@ -359,6 +365,27 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       }
     }
 
+    // --- v2 export metadata scan + report ---
+    // After the user module loaded above, scan globalThis.__excalibase_default
+    // for the v2 tagged shape and build a name/kind/argsJsonSchema array.
+    // Since this phase has a single default export per function, the array
+    // has at most one entry. The export's __metadata.argsJsonSchema (set by
+    // the @excalibase/server tag wrappers when they call zodToJsonSchema)
+    // is preferred; we fall back to an empty schema when none is attached.
+    function __collectV2Metadata() {
+      if (!__V2_ENABLED) return [];
+      const exp = globalThis.__excalibase_default;
+      if (!__isV2Export(exp)) return [];
+      const meta = exp.__metadata || {};
+      const argsJsonSchema =
+        (meta && typeof meta.argsJsonSchema === 'object' && meta.argsJsonSchema !== null)
+          ? meta.argsJsonSchema
+          : { type: 'object', properties: {} };
+      // The name field is filled by the main thread (it knows the runtime
+      // id) before the HTTP forward — here we report a placeholder.
+      return [{ name: 'default', kind: exp.kind, argsJsonSchema: argsJsonSchema }];
+    }
+
     // --- worker dispatch ---
     // Each invoke message carries a unique reqId so the runtime can correlate
     // concurrent responses on the same worker without races. The same
@@ -428,6 +455,16 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         }
       }
     };
+    // Best-effort metadata emission. Captured before 'ready' so main can
+    // forward the payload as soon as deploy finishes; failures are
+    // swallowed so a malformed user export never blocks deploy.
+    try {
+      const __exports = __collectV2Metadata();
+      if (__exports.length > 0) {
+        self.postMessage({ type: 'metadata', exports: __exports });
+      }
+    } catch (_metaErr) { /* ignore */ }
+
     self.postMessage({ type: 'ready' });
   `;
 }
@@ -476,6 +513,11 @@ class FunctionRuntime {
       },
     } as any);
 
+    // Capture metadata reported during init. The worker emits it before
+    // 'ready'; we buffer here and forward to provisioning after the
+    // handshake so a failed HTTP callback never blocks the deploy.
+    let initMetadataExports: unknown = null;
+
     // Wait for the worker's 'ready' message. Installs a temporary handler
     // that swaps to the permanent router on first 'ready'.
     await new Promise<void>((resolve, reject) => {
@@ -485,6 +527,10 @@ class FunctionRuntime {
         reject(new Error("worker init timeout"));
       }, WORKER_INIT_TIMEOUT_MS);
       worker.onmessage = (e) => {
+        if (e.data?.type === "metadata") {
+          initMetadataExports = e.data.exports;
+          return;
+        }
         if (e.data?.type === "ready") {
           clearTimeout(timeout);
           resolve();
@@ -496,6 +542,14 @@ class FunctionRuntime {
         reject(new Error(err.message ?? "worker init error"));
       };
     });
+
+    // Fire-and-forget forward — provisioning callback failures must never
+    // affect deploy success. The Go side persists the payload on receipt.
+    if (initMetadataExports != null && PROVISIONING_URL !== "") {
+      forwardMetadataToProvisioning(id, initMetadataExports).catch((err) => {
+        console.warn(`[runtime] metadata forward failed for ${id}:`, err);
+      });
+    }
 
     const meta: ScriptMetadata = {
       id,
@@ -523,6 +577,17 @@ class FunctionRuntime {
         meta.logs.push({ level, msg: text, ts });
         if (meta.logs.length > LOG_RING_SIZE) {
           meta.logs.splice(0, meta.logs.length - LOG_RING_SIZE);
+        }
+        return;
+      }
+
+      if (msg.type === "metadata") {
+        // Late metadata (post-init). Forward as fire-and-forget — same
+        // best-effort semantics as the init-time path.
+        if (PROVISIONING_URL !== "") {
+          forwardMetadataToProvisioning(id, msg.exports).catch((err) => {
+            console.warn(`[runtime] late metadata forward failed for ${id}:`, err);
+          });
         }
         return;
       }
@@ -671,6 +736,40 @@ const metrics = {
 };
 
 const runtime = new FunctionRuntime();
+
+/**
+ * Best-effort callback: POST captured v2 export metadata back to the Go
+ * provisioning service. The runtime id is `${projectId}__${fnId}`; the Go
+ * route is `/internal/runtime/functions/{fnId}/metadata`, so we split.
+ * Auth: X-Excalibase-Runtime-Token shared with the deploy/invoke RPCs.
+ *
+ * Failures are logged and swallowed — a deploy never blocks on metadata
+ * capture, and Phase 3 codegen tolerates a missing exports array.
+ */
+async function forwardMetadataToProvisioning(runtimeID: string, exports: unknown): Promise<void> {
+  if (PROVISIONING_URL === "") return;
+  const sep = runtimeID.indexOf("__");
+  if (sep < 0) {
+    console.warn(`[runtime] metadata forward: runtime id ${runtimeID} missing __ separator`);
+    return;
+  }
+  const projectId = runtimeID.slice(0, sep);
+  const fnId = runtimeID.slice(sep + 2);
+  const url = `${PROVISIONING_URL.replace(/\/$/, "")}/internal/runtime/functions/${fnId}/metadata`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Excalibase-Runtime-Token": RUNTIME_SECRET,
+    },
+    body: JSON.stringify({ projectId, exports }),
+  });
+  // Drain the body so the connection can be reused.
+  await res.body?.cancel();
+  if (!res.ok) {
+    console.warn(`[runtime] metadata forward HTTP ${res.status} for ${runtimeID}`);
+  }
+}
 
 const JSON_HEADERS: Record<string, string> = { "Content-Type": "application/json" };
 

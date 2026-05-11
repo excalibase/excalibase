@@ -1,6 +1,7 @@
 package edgefn
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"regexp"
@@ -93,9 +94,16 @@ type Function struct {
 	//   "v1" → legacy default-export Fetch handler (req: Request) => Response
 	//   "v2" → tagged FunctionDef with kind: "query" | "mutation" | "action"
 	// Empty string on legacy persisted records is treated as "v1" by readers.
-	RuntimeShape string    `json:"runtimeShape,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	RuntimeShape string `json:"runtimeShape,omitempty"`
+	// ExportMetadata — opaque JSON array reported back by the Deno runtime
+	// after a v2 worker boots and scans its loaded module for tagged
+	// FunctionDef records. Shape is `[{name, kind, argsJsonSchema}]`. Stored
+	// verbatim so the SDK codegen endpoint can return it without re-parsing.
+	// `omitempty` keeps v1 records (and freshly created v2 records before
+	// the runtime callback fires) clean on the wire.
+	ExportMetadata json.RawMessage `json:"exportMetadata,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
 }
 
 // JwtVerificationRequired returns true unless the function has explicitly opted
@@ -219,6 +227,13 @@ func (f *Function) Bundle() (string, error) {
 	// where `index_exports.default` is the user's default export.
 	bundled := string(result.OutputFiles[0].Contents)
 	final := bundled + "\nglobalThis.__excalibase_default = __excalibase_bundle && __excalibase_bundle.default;\n"
+	// Metadata collector slot — the worker template reads
+	// globalThis.__excalibase_export_metadata after module load and posts
+	// it back to main. Initialising the slot here (rather than relying on
+	// the worker template alone) lets the bundler tests assert the
+	// contract end-to-end. Phase 3 codegen consumes the result via the
+	// _metadata endpoint.
+	final += "globalThis.__excalibase_export_metadata = globalThis.__excalibase_export_metadata || [];\n"
 
 	if len(final) > MaxCodeSize {
 		return "", fmt.Errorf("bundled code exceeds maximum size (%d KB)", MaxCodeSize/1024)

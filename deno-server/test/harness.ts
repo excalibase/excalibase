@@ -14,6 +14,12 @@ export interface RuntimeOptions {
    * Postgres URL. Required for Phase 1 ctx.db tests.
    */
   dbUrl?: string;
+  /**
+   * If set, EXCALIBASE_PROVISIONING_URL is wired so the runtime's metadata
+   * capture path posts callbacks back to this URL. Phase 2 metadata tests
+   * stand up a mock provisioning server and pass its URL here.
+   */
+  provisioningUrl?: string;
 }
 
 export interface RuntimeHandle {
@@ -52,6 +58,7 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
   if (opts.v2Enabled) env.EXCALIBASE_FUNCTIONS_V2 = "1";
   if (opts.allowedHosts) env.ALLOWED_HOSTS = opts.allowedHosts;
   if (opts.dbUrl) env.EXCALIBASE_DB_URL = opts.dbUrl;
+  if (opts.provisioningUrl) env.EXCALIBASE_PROVISIONING_URL = opts.provisioningUrl;
 
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
