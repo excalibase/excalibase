@@ -140,11 +140,14 @@ async function seedVectors(
   const sql = postgres(pgUrl, { onnotice: () => {} });
   try {
     const quoted = `nosql."${collection.replace(/"/g, '""')}"`;
+    const table = sql.unsafe(quoted);
     for (const r of rows) {
-      await sql.unsafe(
-        `INSERT INTO ${quoted} (data, embedding) VALUES ($1::jsonb, $2::vector)`,
-        [JSON.stringify({ title: r.title }), `[${r.embedding.join(",")}]`],
-      );
+      // Use `sql.json(...)` so postgres.js binds the JS object as a
+      // JSONB OBJECT rather than a JSONB STRING. Passing a pre-stringified
+      // value through `$1::jsonb` would double-encode (the runtime treats
+      // the string itself as the JSONB scalar).
+      const vec = `[${r.embedding.join(",")}]`;
+      await sql`INSERT INTO ${table} (data, embedding) VALUES (${sql.json({ title: r.title })}, ${vec}::vector)`;
     }
   } finally {
     await sql.end({ timeout: 1 });
@@ -297,10 +300,9 @@ Deno.test({
         }
         // Both skips must be filtered out, both keeps must be present.
         const set = new Set(parsed.data);
-        assertEquals(set.has("alpha-keep"), true);
-        assertEquals(set.has("gamma-keep"), true);
-        assertEquals(set.has("beta-skip"), false);
-        assertEquals(set.has("delta-skip"), false);
+        if (!set.has("alpha-keep") || !set.has("gamma-keep") || set.has("beta-skip") || set.has("delta-skip")) {
+          throw new Error("filter result unexpected: " + JSON.stringify(parsed.data));
+        }
       } finally {
         await rt.stop();
       }

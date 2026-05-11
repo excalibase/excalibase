@@ -111,12 +111,17 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
   }
 
   // Drain stdout/stderr in the background so the subprocess buffers don't fill.
+  // When `HARNESS_VERBOSE=1` we forward the bytes to our own stderr so test
+  // authors can see runtime logs while debugging without keeping a custom
+  // patched harness around. Off by default to keep CI output tidy.
+  const verbose = Deno.env.get("HARNESS_VERBOSE") === "1";
   const drain = async (stream: ReadableStream<Uint8Array>) => {
     const reader = stream.getReader();
     try {
       while (true) {
-        const { done } = await reader.read();
+        const { value, done } = await reader.read();
         if (done) break;
+        if (verbose && value) await Deno.stderr.write(value);
       }
     } catch (_) { /* ignore */ }
   };

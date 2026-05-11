@@ -14,6 +14,7 @@
 // `UpdateResult` / `DeleteResult` shapes from @excalibase/server.
 
 import type { Sql } from "./pool.ts";
+import { decodeCursor, encodeCursor } from "./cursor.ts";
 import { newCache, validateDoc, type ValidatorCache } from "./validator.ts";
 
 const COLLECTION_NAME_RE = /^[a-zA-Z_]\w{0,62}$/;
@@ -41,7 +42,9 @@ export interface DbOp {
     | "getById"
     | "update"
     | "delete"
-    | "count";
+    | "count"
+    | "search"
+    | "vectorSearch";
   readonly collection: string;
   readonly doc?: Readonly<Record<string, unknown>>;
   readonly docs?: ReadonlyArray<Readonly<Record<string, unknown>>>;
@@ -52,7 +55,14 @@ export interface DbOp {
     readonly limit?: number;
     readonly offset?: number;
     readonly sort?: Readonly<Record<string, 1 | -1>>;
+    readonly cursor?: string | null;
+    readonly cursorMode?: boolean;
+    readonly topK?: number;
   };
+  /** Free-text query for the `search` op. */
+  readonly query?: string;
+  /** Numeric vector for the `vectorSearch` op. */
+  readonly embedding?: ReadonlyArray<number>;
 }
 
 export interface DbResultOk {
@@ -179,6 +189,32 @@ function clampOffset(offset: number | undefined): number {
   return Math.floor(offset);
 }
 
+// Clamp the vector-search neighbour count. We share clampLimit's upper
+// bound (1000) so a runaway client can't ask for 1M nearest neighbours
+// and pull the entire collection.
+function clampTopK(topK: number | undefined): number {
+  if (typeof topK !== "number" || !Number.isFinite(topK) || topK <= 0) return 30;
+  if (topK > 1000) return 1000;
+  return Math.floor(topK);
+}
+
+// Convert a Postgres `timestamptz::text` literal (e.g. `2026-05-11
+// 12:00:00.123456+00`) into the ISO-8601 form CursorCodec validates
+// (`YYYY-MM-DDTHH:MM:SS[.fraction]Z`). We keep the fractional seconds
+// as-is so the cursor preserves sub-millisecond precision; truncating
+// to milliseconds would make cursors imprecise on dense inserts and
+// risk skipping rows. The function is tolerant of either `+00` (no
+// fractional offset) or `+00:00` Postgres might emit.
+function pgTimestampToIso(s: string): string {
+  // Replace the space separator with `T` and rewrite any UTC offset to `Z`.
+  let out = s.replace(" ", "T");
+  out = out.replace(/\+00(:00)?$/, "Z");
+  out = out.replace(/-00(:00)?$/, "Z");
+  // Some clients return `.000` already trimmed; in either case the
+  // cursor codec's ISO_INSTANT_RE accepts 0-9 fractional digits.
+  return out;
+}
+
 /**
  * Join an array of fragments with " AND " — equivalent to
  * `[f1, f2, f3] -> f1 AND f2 AND f3` as a postgres.js fragment.
@@ -260,8 +296,86 @@ export async function executeDbOp(
       }
       case "find": {
         const conds = compileWhere(sql, op.filter);
-        const order = compileOrderBy(sql, op.options?.sort);
         const limit = clampLimit(op.options?.limit);
+
+        // Cursor-mode path mirrors `DocumentQueryCompiler.compileFind` on
+        // the Java side: keyset over `(created_at DESC, id DESC)` with an
+        // optional `(created_at, id) < (cursorTs, cursorId)` cutoff. We
+        // fetch one extra row so we can decide whether `nextCursor` should
+        // be null (no more rows) or the encoded keyset of the last visible
+        // row (more rows available).
+        if (op.options?.cursorMode === true) {
+          const cursorToken = op.options?.cursor ?? null;
+          const fetchLimit = limit + 1;
+          // We SELECT `created_at::text` alongside the usual columns so the
+          // cursor we emit preserves Postgres' microsecond precision.
+          // postgres.js otherwise hydrates `timestamptz` into a JS Date,
+          // which truncates to millisecond resolution; a cursor minted
+          // from a truncated value would exclude rows whose actual
+          // `created_at` falls inside the same millisecond window,
+          // causing pagination to skip records on dense inserts.
+          let rows: Array<{
+            id: string;
+            data: unknown;
+            created_at: Date | string;
+            updated_at: Date | string;
+            created_at_text: string;
+          }>;
+          if (cursorToken && typeof cursorToken === "string") {
+            const cur = decodeCursor(cursorToken);
+            const baseConds = conds ?? [];
+            // IMPORTANT: bind via `::text::timestamptz` rather than the
+            // direct `::timestamptz` cast. postgres.js detects the cast
+            // target and pre-converts the JS string through a Date, which
+            // truncates sub-millisecond fractional seconds and would lead
+            // the keyset comparison to miss rows whose `created_at` shares
+            // a millisecond bucket with the cursor's timestamp. Routing
+            // through `::text` first forces Postgres to parse the string
+            // directly and preserves microsecond precision.
+            const keysetFrag = sql`(created_at, id) < (${cur.createdAt}::text::timestamptz, ${cur.id}::uuid)`;
+            const combined = baseConds.length === 0
+              ? keysetFrag
+              : joinAnd(sql, [...baseConds, keysetFrag]);
+            rows = await sql`
+              SELECT id, data, created_at, updated_at, created_at::text AS created_at_text
+              FROM ${table}
+              WHERE ${combined}
+              ORDER BY created_at DESC, id DESC
+              LIMIT ${fetchLimit}
+            `;
+          } else if (conds === null) {
+            rows = await sql`
+              SELECT id, data, created_at, updated_at, created_at::text AS created_at_text
+              FROM ${table}
+              ORDER BY created_at DESC, id DESC
+              LIMIT ${fetchLimit}
+            `;
+          } else {
+            rows = await sql`
+              SELECT id, data, created_at, updated_at, created_at::text AS created_at_text
+              FROM ${table}
+              WHERE ${joinAnd(sql, conds)}
+              ORDER BY created_at DESC, id DESC
+              LIMIT ${fetchLimit}
+            `;
+          }
+          const hasMore = rows.length > limit;
+          const visible = hasMore ? rows.slice(0, limit) : rows;
+          let nextCursor: string | null = null;
+          if (hasMore && visible.length > 0) {
+            const last = visible[visible.length - 1];
+            // `created_at::text` returns a Postgres-style timestamptz
+            // literal like `2026-05-11 12:00:00.123456+00`. CursorCodec
+            // validates ISO-8601 with a `Z` terminator, so normalise.
+            const createdAt = pgTimestampToIso(last.created_at_text);
+            nextCursor = encodeCursor({ createdAt, id: last.id });
+          }
+          return { ok: true, data: { docs: visible.map(rowToDoc), nextCursor } };
+        }
+
+        // Non-cursor path — classic offset/limit with optional sort. No
+        // change in shape: callers still get a plain `Doc[]`.
+        const order = compileOrderBy(sql, op.options?.sort);
         const offset = clampOffset(op.options?.offset);
         const rows = conds === null
           ? (order
@@ -339,6 +453,68 @@ export async function executeDbOp(
           ? await sql`SELECT COUNT(*)::bigint AS c FROM ${table}`
           : await sql`SELECT COUNT(*)::bigint AS c FROM ${table} WHERE ${joinAnd(sql, conds)}`;
         return { ok: true, data: Number(rows[0].c) };
+      }
+      case "search": {
+        // Full-text search over the generated `search_text` tsvector
+        // column. Mirrors `DocumentQueryCompiler.compileSearch` on the
+        // Java side: `websearch_to_tsquery` for the parser (so users can
+        // pass quoted phrases / OR-keywords directly) and `ts_rank` for
+        // the ORDER BY. The rank score is NOT exposed in the response —
+        // Java only returns the doc envelope, so we drop the rank column
+        // before mapping. Documenting that here so a future PR doesn't
+        // mistake the omission for a bug.
+        const queryText = op.query;
+        if (typeof queryText !== "string" || queryText.length === 0) {
+          return { ok: false, error: "search query must be a non-empty string" };
+        }
+        const limit = clampLimit(op.options?.limit);
+        const rows = await sql`
+          SELECT id, data, created_at, updated_at
+          FROM ${table}
+          WHERE search_text @@ websearch_to_tsquery(${queryText})
+          ORDER BY ts_rank(search_text, websearch_to_tsquery(${queryText})) DESC
+          LIMIT ${limit}
+        `;
+        return { ok: true, data: rows.map(rowToDoc) };
+      }
+      case "vectorSearch": {
+        // k-NN over `embedding vector(N)` via the cosine-distance
+        // operator `<=>`, which matches the operator class declared on
+        // the HNSW index (`vector_cosine_ops`) and the Java compiler's
+        // choice in `DocumentQueryCompiler.compileVectorSearch`. Any
+        // additional filter is AND-combined with the implicit "all rows"
+        // predicate so callers can narrow by tag/category before the
+        // similarity sort runs.
+        const embedding = op.embedding;
+        if (!Array.isArray(embedding) || embedding.length === 0) {
+          return { ok: false, error: "embedding must be a non-empty numeric array" };
+        }
+        for (const v of embedding) {
+          if (typeof v !== "number" || !Number.isFinite(v)) {
+            return { ok: false, error: "embedding values must be finite numbers" };
+          }
+        }
+        const topK = clampTopK(op.options?.topK);
+        // pgvector accepts the textual `[a,b,c]` literal cast to `vector`;
+        // the value is bound as a parameter so no user-supplied text ever
+        // lands in the SQL string itself.
+        const vecLiteral = `[${embedding.join(",")}]`;
+        const conds = compileWhere(sql, op.filter);
+        const rows = conds === null
+          ? await sql`
+              SELECT id, data, created_at, updated_at
+              FROM ${table}
+              ORDER BY embedding <=> ${vecLiteral}::vector
+              LIMIT ${topK}
+            `
+          : await sql`
+              SELECT id, data, created_at, updated_at
+              FROM ${table}
+              WHERE ${joinAnd(sql, conds)}
+              ORDER BY embedding <=> ${vecLiteral}::vector
+              LIMIT ${topK}
+            `;
+        return { ok: true, data: rows.map(rowToDoc) };
       }
       default: {
         return { ok: false, error: `unknown op: ${(op as { op: string }).op}` };

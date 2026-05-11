@@ -295,8 +295,19 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         update: (filter, patch) => __dbCall('update', name, { filter, patch }),
         delete: (filter) => __dbCall('delete', name, { filter }),
         count: (filter) => __dbCall('count', name, { filter }),
-        search: () => Promise.reject(new Error('Not implemented yet (Phase 1.5)')),
-        vectorSearch: () => Promise.reject(new Error('Not implemented yet (Phase 1.5)')),
+        // search/vectorSearch — Phase 1.5. The worker is a thin RPC
+        // facade; the main thread owns SQL composition + execution.
+        search: (query, options) => __dbCall('search', name, { query, options }),
+        vectorSearch: (embedding, options) => {
+          // The vectorSearch options block carries an optional filter
+          // which travels to the main thread as a top-level field,
+          // mirroring the rest of the DbOp shape. Forwarding it under
+          // options would force the SQL builder to special-case which
+          // key holds the filter for which op.
+          const opts = options || {};
+          const payload = { embedding, options: { topK: opts.topK }, filter: opts.filter };
+          return __dbCall('vectorSearch', name, payload);
+        },
       };
     }
 
