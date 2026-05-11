@@ -36,18 +36,29 @@ const MaxCodeSize = 512 * 1024
 // MaxFileCount caps files per function.
 const MaxFileCount = 50
 
-// validIDPattern — function IDs: 1-64 lowercase alphanumeric/hyphen/underscore.
-var validIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_\-]{0,63}$`)
+// validIDPattern — function IDs: 1-64 lowercase alphanumeric/hyphen/underscore,
+// optionally suffixed with `.<export>` to model the SDK's
+// `db.functions.<module>.<export>` namespace. Exactly one dot is allowed and
+// the export segment must itself be a non-empty alphanumeric/hyphen/underscore
+// token. Leading dots, trailing dots, adjacent dots, and chained dots are
+// rejected (TestValidateID_RejectsBadDotPlacement covers the matrix).
+var validIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_\-]*(?:\.[a-z0-9][a-z0-9_\-]*)?$`)
 
 // validPathPattern — file paths inside a function: relative, no traversal,
 // lowercase letters, digits, hyphen, underscore, forward slash, dot.
 // Max 128 chars. Used for index.ts, utils.ts, _shared/cors.ts, etc.
 var validPathPattern = regexp.MustCompile(`^[a-z0-9_][a-z0-9_\-./]{0,127}$`)
 
+// maxFunctionIDLength is enforced separately so the regex stays readable.
+const maxFunctionIDLength = 64
+
 // ValidateID checks the function id is safe for filesystem, URL, and runtime use.
 func ValidateID(id string) error {
+	if len(id) == 0 || len(id) > maxFunctionIDLength {
+		return fmt.Errorf("invalid function id: must be 1-%d characters", maxFunctionIDLength)
+	}
 	if !validIDPattern.MatchString(id) {
-		return fmt.Errorf("invalid function id: must be 1-64 lowercase alphanumeric/hyphen/underscore starting with a letter or digit")
+		return fmt.Errorf("invalid function id: must be lowercase alphanumeric/hyphen/underscore with an optional single dot separator")
 	}
 	return nil
 }

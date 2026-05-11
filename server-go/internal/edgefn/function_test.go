@@ -39,6 +39,28 @@ func TestFunction_Validate_RequiresValidID(t *testing.T) {
 	}
 }
 
+// Phase 3 SDK compatibility: db.functions.<module>.<export>(args) lands on
+// /functions/v1/{projectId}/{module}.{export}. The chi router treats that
+// as a single path segment, so the store must accept a single dot inside
+// the function id. Adjacent dots and leading/trailing dots remain invalid.
+func TestValidateID_AcceptsSingleDotForModuleDotExport(t *testing.T) {
+	cases := []string{"db.insert", "db.find", "db.insertmany", "auth.login"}
+	for _, id := range cases {
+		if err := ValidateID(id); err != nil {
+			t.Errorf("ValidateID(%q): unexpected error: %v", id, err)
+		}
+	}
+}
+
+func TestValidateID_RejectsBadDotPlacement(t *testing.T) {
+	bad := []string{".db", "db.", "db..insert", ".", "..", "a.b.c"}
+	for _, id := range bad {
+		if err := ValidateID(id); err == nil {
+			t.Errorf("ValidateID(%q): expected error, got nil", id)
+		}
+	}
+}
+
 func TestFunction_Validate_RequiresName(t *testing.T) {
 	fn := &Function{
 		ProjectID: "proj_test0001",
