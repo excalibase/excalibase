@@ -19,6 +19,24 @@
 // Workers run with net restricted to ALLOWED_HOSTS (or disabled) and NO
 // filesystem, env, run, ffi, or write permission. Secrets are injected as
 // a Deno.env mock so user code sees only its own project's env vars.
+//
+// Phase 1 ctx.db: queries and mutations receive a DbClient facade in the
+// worker that RPCs back to the main thread. The main thread owns the
+// postgres.js pool (see runtime/pool.ts) and executes each op against it,
+// posting the result back over postMessage. Actions still see ctx.db=null
+// (Convex pattern). The worker itself never opens a network socket — all
+// DB I/O happens here in the privileged main thread.
+//
+// Local @excalibase/server resolution: the worker template doesn't import
+// @excalibase/server directly — Phase 1 contract types are defined in the
+// runtime/* modules. The package lives at ../excalibase-server in the
+// workspace; once the worker bundler is added (Phase 2/3) it will resolve
+// via a `file:` spec rather than the npm registry.
+
+import { executeDbOp, newCache } from "./runtime/db.ts";
+import type { DbOp } from "./runtime/db.ts";
+import { closePool, getPool } from "./runtime/pool.ts";
+import type { ValidatorCache } from "./runtime/validator.ts";
 
 interface DeployRequest {
   id: string;
@@ -62,6 +80,9 @@ interface ScriptMetadata {
   nextReqId: number;
   // Ring buffer of recent user-code log lines. Capped at LOG_RING_SIZE.
   logs: LogEntry[];
+  // Per-worker JSON Schema validator cache. Lives for the lifetime of the
+  // deployed function; refreshed only when the function is redeployed.
+  dbCache: ValidatorCache;
 }
 
 /**
@@ -240,11 +261,47 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       }
     }
 
+    // --- ctx.db RPC facade ---
+    // The worker holds no DB connection of its own. Each ctx.db.<op>() call
+    // posts a {type:"db", rpcId, op, ...} message to the main thread; the
+    // main thread executes SQL against its singleton postgres.js pool and
+    // posts {type:"dbResult", rpcId, result} back. We keep a pending map
+    // keyed by rpcId so multiple concurrent calls inside one invocation
+    // can race without overwriting each other's resolvers.
+    const __dbPending = new Map();
+    let __nextDbRpcId = 1;
+
+    function __dbCall(op, collection, payload) {
+      const rpcId = __nextDbRpcId++;
+      return new Promise((resolve, reject) => {
+        __dbPending.set(rpcId, { resolve, reject });
+        self.postMessage({ type: 'db', rpcId, op, collection, ...payload });
+      });
+    }
+
+    function __makeCollectionApi(name) {
+      return {
+        insert: (doc) => __dbCall('insert', name, { doc }),
+        insertMany: (docs) => __dbCall('insertMany', name, { docs }),
+        find: (filter, options) => __dbCall('find', name, { filter, options }),
+        findOne: (filter) => __dbCall('findOne', name, { filter }),
+        getById: (id) => __dbCall('getById', name, { id }),
+        update: (filter, patch) => __dbCall('update', name, { filter, patch }),
+        delete: (filter) => __dbCall('delete', name, { filter }),
+        count: (filter) => __dbCall('count', name, { filter }),
+        search: () => Promise.reject(new Error('Not implemented yet (Phase 1.5)')),
+        vectorSearch: () => Promise.reject(new Error('Not implemented yet (Phase 1.5)')),
+      };
+    }
+
+    function __makeDbClient() {
+      return { collection: (name) => __makeCollectionApi(name) };
+    }
+
     // __dispatchV2 — runs the tagged FunctionDef contract:
     //   POST body must be { "args": <object> }; on missing args, 400.
     //   Calls handler(ctx, body.args); wraps result as { data } JSON.
-    //   ctx.db is null in phase 0 — phase 1 will replace it with a real
-    //   transaction-scoped client.
+    //   ctx.db is a real DbClient for query/mutation; null for action.
     async function __dispatchV2(reqId, reqData, fnDef) {
       try {
         const headers = reqData.headers || {};
@@ -267,13 +324,25 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           return;
         }
 
-        const ctx = { db: null, auth: { claims } };
+        // Convex parity: actions get db=null; query/mutation get a real
+        // DbClient facade. Unknown kinds default to null to be safe.
+        const db = (fnDef.kind === 'query' || fnDef.kind === 'mutation')
+          ? __makeDbClient()
+          : null;
+        const ctx = { db, auth: { claims } };
         try {
           const result = await fnDef.handler(ctx, body.args);
           self.postMessage({ type: 'success', reqId, status: 200,
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ data: result === undefined ? null : result }) });
         } catch (err) {
+          // Surface ValidationError from @excalibase/server as a 400.
+          if (err && err.name === 'ValidationError' && Array.isArray(err.issues)) {
+            self.postMessage({ type: 'success', reqId, status: 400,
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ error: 'validation', issues: err.issues }) });
+            return;
+          }
           // If the handler threw a zod-style issues array, relay it as 400.
           if (err && Array.isArray(err.issues)) {
             self.postMessage({ type: 'success', reqId, status: 400,
@@ -292,9 +361,28 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
 
     // --- worker dispatch ---
     // Each invoke message carries a unique reqId so the runtime can correlate
-    // concurrent responses on the same worker without races.
+    // concurrent responses on the same worker without races. The same
+    // handler also routes dbResult replies back to the right __dbCall().
     self.onmessage = async (e) => {
       const msg = e.data;
+      if (msg && msg.type === 'dbResult') {
+        const pending = __dbPending.get(msg.rpcId);
+        if (!pending) return;
+        __dbPending.delete(msg.rpcId);
+        if (msg.result && msg.result.ok === true) {
+          pending.resolve(msg.result.data);
+        } else {
+          const err = new Error(msg.result && msg.result.error || 'db error');
+          if (msg.result && msg.result.issues) {
+            // Surface validation issues so the handler can catch and
+            // re-render. Attach as an issues array for ValidationError parity.
+            err.issues = msg.result.issues;
+            err.name = 'ValidationError';
+          }
+          pending.reject(err);
+        }
+        return;
+      }
       if (msg && msg.type === 'invoke') {
         const reqId = msg.reqId;
         const reqData = msg.data;
@@ -417,6 +505,7 @@ class FunctionRuntime {
       pending: new Map(),
       nextReqId: 1,
       logs: [],
+      dbCache: newCache(),
     };
     this.scripts.set(id, meta);
 
@@ -435,6 +524,34 @@ class FunctionRuntime {
         if (meta.logs.length > LOG_RING_SIZE) {
           meta.logs.splice(0, meta.logs.length - LOG_RING_SIZE);
         }
+        return;
+      }
+
+      if (msg.type === "db") {
+        // Async db op from the worker — execute against the pool and post
+        // the result back. Errors are normalised into a {ok:false,error}
+        // envelope so the worker can reject the user's promise cleanly.
+        const rpcId = msg.rpcId;
+        if (typeof rpcId !== "number") return;
+        (async () => {
+          let result;
+          try {
+            const pool = getPool();
+            result = await executeDbOp(pool, meta.dbCache, msg as DbOp);
+          } catch (err) {
+            result = {
+              ok: false as const,
+              error: String((err instanceof Error ? err.message : err) ?? "db error"),
+            };
+          }
+          try {
+            worker.postMessage({ type: "dbResult", rpcId, result });
+          } catch (postErr) {
+            // Worker is gone — nothing to do; the pending invoke will
+            // surface a timeout instead.
+            console.debug("[runtime] dbResult postMessage failed:", postErr);
+          }
+        })();
         return;
       }
 
@@ -710,5 +827,15 @@ Deno.serve({ port: PORT }, async (req: Request) => {
     return Response.json({ error: msg }, { status: 500, headers: JSON_HEADERS });
   }
 });
+
+// Drain the postgres pool on SIGTERM/SIGINT so containers shut down cleanly.
+// The handlers are best-effort; if Deno exits before they finish, postgres
+// will close the sockets anyway.
+const shutdown = async () => {
+  try { await closePool(); } catch (_) { /* ignore */ }
+  Deno.exit(0);
+};
+try { Deno.addSignalListener("SIGTERM", shutdown); } catch (_) { /* not all platforms */ }
+try { Deno.addSignalListener("SIGINT", shutdown); } catch (_) { /* not all platforms */ }
 
 console.log(`Excalibase Deno runtime on :${PORT}${V2_ENABLED ? " (functions v2 enabled)" : ""}`);

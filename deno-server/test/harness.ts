@@ -58,6 +58,11 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
       "run",
       "--allow-net",
       "--allow-env",
+      // npm:postgres@3 lives in Deno's npm cache; the main thread needs
+      // read access to import it. Workers themselves remain read-disabled
+      // (--allow-read here applies to the parent process, not the worker
+      // permissions object passed to `new Worker`).
+      "--allow-read",
       "--unstable-worker-options",
       SERVER_PATH,
     ],
