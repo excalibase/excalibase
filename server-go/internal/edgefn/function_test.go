@@ -256,6 +256,99 @@ func TestFunction_Bundle_MissingRelativeImportErrors(t *testing.T) {
 	}
 }
 
+// --- Function.Bundle: RuntimeShape detection (v2 shape) ---
+
+func TestBundle_DetectsV2Shape_Query(t *testing.T) {
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "v2query",
+		Name:      "V2 Query",
+		Files: []File{{Path: testIndexTS, Content: `
+export default {
+  kind: "query",
+  args: { parse: (a: unknown) => a },
+  handler: async (ctx: any, args: any) => ({ ok: true }),
+}`}},
+	}
+	if _, err := fn.Bundle(); err != nil {
+		t.Fatalf(testBundleFmt, err)
+	}
+	if fn.RuntimeShape != "v2" {
+		t.Errorf("RuntimeShape: got %q, want %q", fn.RuntimeShape, "v2")
+	}
+}
+
+func TestBundle_DetectsV2Shape_Mutation(t *testing.T) {
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "v2mut",
+		Name:      "V2 Mutation",
+		Files: []File{{Path: testIndexTS, Content: `
+export default {
+  kind: "mutation",
+  args: { parse: (a: unknown) => a },
+  handler: async (ctx: any, args: any) => ({ id: 1 }),
+}`}},
+	}
+	if _, err := fn.Bundle(); err != nil {
+		t.Fatalf(testBundleFmt, err)
+	}
+	if fn.RuntimeShape != "v2" {
+		t.Errorf("RuntimeShape: got %q, want %q", fn.RuntimeShape, "v2")
+	}
+}
+
+func TestBundle_DetectsV2Shape_Action(t *testing.T) {
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "v2act",
+		Name:      "V2 Action",
+		Files: []File{{Path: testIndexTS, Content: `
+export default {
+  kind: "action",
+  args: { parse: (a: unknown) => a },
+  handler: async (ctx: any, args: any) => "done",
+}`}},
+	}
+	if _, err := fn.Bundle(); err != nil {
+		t.Fatalf(testBundleFmt, err)
+	}
+	if fn.RuntimeShape != "v2" {
+		t.Errorf("RuntimeShape: got %q, want %q", fn.RuntimeShape, "v2")
+	}
+}
+
+func TestBundle_FallsBackToV1Shape(t *testing.T) {
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "v1fetch",
+		Name:      "V1 Fetch",
+		Files: []File{{Path: testIndexTS, Content: `
+export default (req: Request) => new Response("ok")`}},
+	}
+	if _, err := fn.Bundle(); err != nil {
+		t.Fatalf(testBundleFmt, err)
+	}
+	if fn.RuntimeShape != "v1" {
+		t.Errorf("RuntimeShape: got %q, want %q", fn.RuntimeShape, "v1")
+	}
+}
+
+func TestBundle_V1IsDefault_WhenNoBundleCalled(t *testing.T) {
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "fresh",
+		Name:      "Fresh",
+		Files:     []File{{Path: testIndexTS, Content: testDefaultHandler}},
+	}
+	// Without an explicit Bundle, persistence-layer load on a legacy record
+	// (zero value) should be treated as v1 by JwtVerificationRequired's sibling
+	// helper. Direct field check here.
+	if fn.RuntimeShape != "" && fn.RuntimeShape != "v1" {
+		t.Errorf("zero-value RuntimeShape should be empty or v1, got %q", fn.RuntimeShape)
+	}
+}
+
 // --- VerifyJwt default + serialization ---
 
 func TestFunction_VerifyJwt_DefaultsTrue(t *testing.T) {

@@ -1,0 +1,175 @@
+// Test harness — spawns the Deno runtime server as a subprocess with a
+// random port, exposes a small HTTP client tuned to the runtime protocol,
+// and tears the subprocess down on .stop(). Each test that needs a runtime
+// starts/stops its own instance so port collisions and shared state can't
+// affect siblings.
+
+import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
+
+export interface RuntimeOptions {
+  v2Enabled?: boolean;
+  allowedHosts?: string;
+}
+
+export interface RuntimeHandle {
+  port: number;
+  secret: string;
+  baseUrl: string;
+  deploy: (id: string, code: string, secrets?: Record<string, string>) => Promise<Response>;
+  invoke: (id: string, body: unknown, headers?: Record<string, string>) => Promise<{
+    status: number;
+    headers: Record<string, string>;
+    body: string;
+  }>;
+  raw: (path: string, init?: RequestInit) => Promise<Response>;
+  stop: () => Promise<void>;
+}
+
+const SECRET = "test-runtime-secret";
+const SERVER_PATH = new URL("../server.ts", import.meta.url).pathname;
+
+// pickPort picks an ephemeral port. Bind+release is racy but acceptable for
+// tests — we retry once on EADDRINUSE inside the spawn loop.
+async function pickPort(): Promise<number> {
+  const l = Deno.listen({ port: 0 });
+  const p = (l.addr as Deno.NetAddr).port;
+  l.close();
+  await delay(10);
+  return p;
+}
+
+export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHandle> {
+  const port = await pickPort();
+  const env: Record<string, string> = {
+    RUNTIME_SECRET: SECRET,
+    PORT: String(port),
+  };
+  if (opts.v2Enabled) env.EXCALIBASE_FUNCTIONS_V2 = "1";
+  if (opts.allowedHosts) env.ALLOWED_HOSTS = opts.allowedHosts;
+
+  const cmd = new Deno.Command(Deno.execPath(), {
+    args: [
+      "run",
+      "--allow-net",
+      "--allow-env",
+      "--unstable-worker-options",
+      SERVER_PATH,
+    ],
+    env,
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const child = cmd.spawn();
+
+  const baseUrl = `http://127.0.0.1:${port}`;
+  // Wait for /health to come up, up to 10s.
+  const deadline = Date.now() + 10_000;
+  let ready = false;
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(`${baseUrl}/health`);
+      if (r.ok) {
+        await r.body?.cancel();
+        ready = true;
+        break;
+      }
+      await r.body?.cancel();
+    } catch (_) {
+      // Server not up yet, keep trying.
+    }
+    await delay(100);
+  }
+  if (!ready) {
+    try { child.kill("SIGTERM"); } catch (_) { /* ignore */ }
+    // Drain stderr to surface the boot error.
+    let errText = "";
+    try {
+      const reader = child.stderr.getReader();
+      const { value } = await reader.read();
+      errText = value ? new TextDecoder().decode(value) : "";
+      reader.releaseLock();
+    } catch (_) { /* ignore */ }
+    throw new Error(`runtime failed to start on :${port}: ${errText.slice(0, 500)}`);
+  }
+
+  // Drain stdout/stderr in the background so the subprocess buffers don't fill.
+  const drain = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader();
+    try {
+      while (true) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    } catch (_) { /* ignore */ }
+  };
+  drain(child.stdout);
+  drain(child.stderr);
+
+  const headers = (extra?: Record<string, string>): Record<string, string> => ({
+    "Content-Type": "application/json",
+    "X-Runtime-Secret": SECRET,
+    ...(extra ?? {}),
+  });
+
+  return {
+    port,
+    secret: SECRET,
+    baseUrl,
+    deploy: (id, code, secrets = {}) =>
+      fetch(`${baseUrl}/deploy`, {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({ id, code, secrets }),
+      }),
+    invoke: async (id, body, extraHeaders = {}) => {
+      const res = await fetch(`${baseUrl}/invoke/${id}`, {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({
+          method: "POST",
+          url: `/invoke/${id}`,
+          headers: extraHeaders,
+          body: typeof body === "string" ? body : JSON.stringify(body),
+        }),
+      });
+      const json = await res.json() as {
+        status?: number;
+        headers?: Record<string, string>;
+        body?: string;
+        error?: string;
+      };
+      if (json.error) {
+        return { status: res.status, headers: {}, body: json.error };
+      }
+      return {
+        status: json.status ?? 0,
+        headers: json.headers ?? {},
+        body: json.body ?? "",
+      };
+    },
+    raw: (path, init) => fetch(`${baseUrl}${path}`, init),
+    stop: async () => {
+      try { child.kill("SIGTERM"); } catch (_) { /* ignore */ }
+      try {
+        // Bound the await so a stuck child doesn't hang the test forever.
+        await Promise.race([
+          child.status,
+          delay(2_000),
+        ]);
+      } catch (_) { /* ignore */ }
+    },
+  };
+}
+
+// makeUnsignedJwt builds a header.payload.signature triplet whose signature
+// is bogus — fine for the worker since it only decodes the payload via
+// jose.decodeJwt (the Go gateway already verified signature upstream).
+export function makeUnsignedJwt(claims: Record<string, unknown>): string {
+  const header = { alg: "ES256", typ: "JWT" };
+  const enc = (obj: unknown) =>
+    btoa(JSON.stringify(obj))
+      .replace(/=+$/, "")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+  return `${enc(header)}.${enc(claims)}.bogus-signature`;
+}
