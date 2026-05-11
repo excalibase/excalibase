@@ -338,64 +338,7 @@ Deno.test({
   sanitizeResources: false,
 });
 
-Deno.test({
-  name: "parity: search() throws Phase 1.5 placeholder error",
-  async fn() {
-    const env = await bootEnv("ph");
-    try {
-      const code = bundle(`{
-        kind: "query",
-        args: { parse: (a) => a },
-        handler: async (ctx, _args) => {
-          try {
-            await ctx.db.collection("ph").search("foo");
-            return { ok: true };
-          } catch (e) {
-            return { error: String(e && e.message || e) };
-          }
-        },
-      }`);
-      await env.rt.deploy("p-search", code);
-      const res = await env.rt.invoke("p-search", { args: {} });
-      const parsed = JSON.parse(res.body);
-      assertEquals(parsed.data.ok, undefined);
-      assertEquals(typeof parsed.data.error, "string");
-      // Must mention Phase 1.5 so users know it's coming.
-      assertEquals(parsed.data.error.includes("Phase 1.5"), true);
-    } finally {
-      await env.cleanup();
-    }
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name: "parity: vectorSearch() throws Phase 1.5 placeholder error",
-  async fn() {
-    const env = await bootEnv("vec");
-    try {
-      const code = bundle(`{
-        kind: "query",
-        args: { parse: (a) => a },
-        handler: async (ctx, _args) => {
-          try {
-            await ctx.db.collection("vec").vectorSearch([0.1, 0.2, 0.3]);
-            return { ok: true };
-          } catch (e) {
-            return { error: String(e && e.message || e) };
-          }
-        },
-      }`);
-      await env.rt.deploy("p-vector", code);
-      const res = await env.rt.invoke("p-vector", { args: {} });
-      const parsed = JSON.parse(res.body);
-      assertEquals(parsed.data.ok, undefined);
-      assertEquals(parsed.data.error.includes("Phase 1.5"), true);
-    } finally {
-      await env.cleanup();
-    }
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
+// Phase 1.5: search() and vectorSearch() are no longer stubs — coverage
+// for the live implementations lives in dedicated integration suites
+// (`search.test.ts`, `vector_search.test.ts`). Removing the placeholder
+// assertions here keeps this file focused on the CRUD parity sweep.
