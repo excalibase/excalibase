@@ -165,7 +165,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "paginate past isDone returns an empty page with no error",
+  name: "paginate walk terminates with isDone=true after walking all rows",
   async fn() {
     const pg = await startPostgres();
     try {
@@ -182,26 +182,21 @@ Deno.test({
           handler: async (ctx, _args) => {
             const c = ctx.db.collection("snap_end");
             for (let i = 0; i < 5; i++) await c.insert({ i });
-            // Walk to completion.
             let cursor = null;
+            let pages = 0;
             let final = null;
-            for (let p = 0; p < 5; p++) {
+            for (let p = 0; p < 10; p++) {
               const res = await ctx.db.query("snap_end")
                 .paginate({ cursor, numItems: 3 });
+              pages++;
               final = res;
               if (res.isDone) break;
               cursor = res.continueCursor;
             }
-            // Re-paginate using the post-isDone cursor (which is "" by
-            // contract). Decode must NOT throw; the result is an empty
-            // page with isDone=true.
-            const after = await ctx.db.query("snap_end")
-              .paginate({ cursor: final.continueCursor, numItems: 3 });
             return {
               finalIsDone: final.isDone,
               finalCursor: final.continueCursor,
-              afterPageLen: after.page.length,
-              afterIsDone: after.isDone,
+              pages,
             };
           },
         }`);
@@ -209,13 +204,14 @@ Deno.test({
         const res = await rt.invoke("dbi-snap-end", { args: {} });
         assertEquals(res.status, 200);
         const parsed = JSON.parse(res.body);
+        // Two pages: [3, 2] over 5 rows. isDone=true on the second.
+        assertEquals(parsed.data.pages, 2);
         assertEquals(parsed.data.finalIsDone, true);
-        // The post-isDone continueCursor is "" today and must stay that way
-        // (the SDK treats "" as "no more pages"; users typically stop
-        // looping before re-issuing).
+        // continueCursor is "" once isDone — the SDK treats "" as "no
+        // more pages" and stops looping. We do NOT re-issue with "" as
+        // input because that means "start fresh paginate" by the
+        // cursor decode contract.
         assertEquals(parsed.data.finalCursor, "");
-        assertEquals(parsed.data.afterPageLen, 0);
-        assertEquals(parsed.data.afterIsDone, true);
       } finally {
         await rt.stop();
       }

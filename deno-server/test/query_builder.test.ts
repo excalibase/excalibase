@@ -48,9 +48,16 @@ async function seed(
     // deno-lint-ignore no-explicit-any
     const sqlAny: any = sql;
     const table = sqlAny.unsafe(`nosql."${collection}"`);
+    // Backdate the seeded _creation_time so it is strictly < Date.now()
+    // at the moment the test paginate() captures its snapshot watermark.
+    // The original `Date.now() + Math.random() * 1000` was forward-biased
+    // for ordering variety, but Phase 14's snapshot guard filters by
+    // `_creation_time <= snapshotTs` and would exclude every row.
+    const seedAt = Date.now() - 5_000;
+    let seq = 0;
     for (const d of docs) {
       const _id = `id-${Math.random().toString(36).slice(2, 12)}`;
-      const _ct = Date.now() + Math.random() * 1000;
+      const _ct = seedAt + (seq++);
       await sqlAny`
         INSERT INTO ${table} (_id, _creation_time, doc)
         VALUES (${_id}, ${_ct}, ${sqlAny.json(d)})

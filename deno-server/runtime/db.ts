@@ -552,17 +552,46 @@ export async function executeQueryPlan(
         ? Math.floor(opts.numItems)
         : 30;
       const direction = plan.order ?? "asc";
+
+      // Phase 14 — snapshot consistency watermark.
+      //
+      // The cursor blob carries a `snapshotTs` captured on the first page
+      // of a pagination chain (cursor=null). Subsequent pages add
+      // `_creation_time <= snapshotTs` to the WHERE clause so any row
+      // inserted AFTER the snapshot is invisible to that pagination
+      // session — the SKIP bug. We keep the keyset on
+      // `(_creation_time, _id)` as before; the snapshot only prunes the
+      // search space.
+      //
+      // Back-compat: pre-14 cursors decode with snapshotTs=undefined.
+      // The first time we see one we capture a fresh snapshot (current
+      // clock) — degraded first call only; every subsequent call inside
+      // the same chain is snapshot-consistent.
+      //
+      // UPDATE-shifts that mutate `_creation_time` would still let a
+      // row dup-appear, but `update` op preserves system columns by
+      // construction (it patches `doc` only). Documenting the divergence
+      // for explicit `_creation_time` writes lives in
+      // `docs/functions-query.md`.
+      let decodedCursor: ReturnType<typeof decodeCursor> | null = null;
+      if (typeof opts.cursor === "string" && opts.cursor.length > 0) {
+        decodedCursor = decodeCursor(opts.cursor);
+      }
+      const snapshotTs = decodedCursor?.snapshotTs ?? Date.now();
+
       // Cursor cutoff is `(_creation_time, _id) > (ct, id)` for asc
-      // (`<` for desc). Compiled inline below so we don't have to teach
+      // (`<` for desc). Compiled inline so we don't have to teach
       // `buildCondition` about system columns.
-      const cursorFrag = (() => {
-        if (typeof opts.cursor !== "string" || opts.cursor.length === 0) return null;
-        const cur = decodeCursor(opts.cursor);
-        if (direction === "desc") {
-          return sql`(_creation_time, _id) < (${cur.creationTime}, ${cur.id})`;
-        }
-        return sql`(_creation_time, _id) > (${cur.creationTime}, ${cur.id})`;
-      })();
+      const cursorFrag = decodedCursor === null
+        ? null
+        : direction === "desc"
+          ? sql`(_creation_time, _id) < (${decodedCursor.creationTime}, ${decodedCursor.id})`
+          : sql`(_creation_time, _id) > (${decodedCursor.creationTime}, ${decodedCursor.id})`;
+
+      // Snapshot guard — applied on EVERY page (including the very first
+      // one) so the snapshotTs we encode into `continueCursor` describes
+      // the exact set of rows visible to this chain.
+      const snapshotFrag = sql`_creation_time <= ${snapshotTs}`;
 
       // Build the SELECT ourselves so we can splice the keyset alongside
       // any user-supplied filter without abusing the FilterExpr type.
@@ -575,32 +604,23 @@ export async function executeQueryPlan(
         if (idx !== null) wherePieces.push(idx);
       }
       if (plan.filter) wherePieces.push(compileFilterExpr(sql, plan.filter));
+      wherePieces.push(snapshotFrag);
       if (cursorFrag !== null) wherePieces.push(cursorFrag);
 
-      let whereFrag: unknown | null = null;
-      if (wherePieces.length > 0) {
-        whereFrag = wherePieces[0];
-        for (let i = 1; i < wherePieces.length; i++) {
-          whereFrag = sql`${whereFrag} AND ${wherePieces[i]}`;
-        }
+      let whereFrag: unknown | null = wherePieces[0];
+      for (let i = 1; i < wherePieces.length; i++) {
+        whereFrag = sql`${whereFrag} AND ${wherePieces[i]}`;
       }
       const directionUpper = direction === "desc" ? "DESC" : "ASC";
       const orderFrag = sql.unsafe(`ORDER BY _creation_time ${directionUpper}, _id ${directionUpper}`);
       const limit = numItems + 1;
-      const rows: Array<DbRow> = whereFrag === null
-        ? await sql`
-            SELECT _id, _creation_time, doc
-            FROM ${table}
-            ${orderFrag}
-            LIMIT ${limit}
-          `
-        : await sql`
-            SELECT _id, _creation_time, doc
-            FROM ${table}
-            WHERE ${whereFrag}
-            ${orderFrag}
-            LIMIT ${limit}
-          `;
+      const rows: Array<DbRow> = await sql`
+        SELECT _id, _creation_time, doc
+        FROM ${table}
+        WHERE ${whereFrag}
+        ${orderFrag}
+        LIMIT ${limit}
+      `;
       const hasMore = rows.length > numItems;
       const visible = hasMore ? rows.slice(0, numItems) : rows;
       const page = visible.map(rowToDoc);
@@ -610,7 +630,7 @@ export async function executeQueryPlan(
         const ct = typeof last._creation_time === "number"
           ? last._creation_time
           : Number(last._creation_time);
-        continueCursor = encodeCursor({ creationTime: ct, id: last._id });
+        continueCursor = encodeCursor({ creationTime: ct, id: last._id, snapshotTs });
       }
       return { page, isDone: !hasMore, continueCursor };
     }

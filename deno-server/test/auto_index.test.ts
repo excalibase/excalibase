@@ -203,9 +203,15 @@ async function seed(
     // deno-lint-ignore no-explicit-any
     const sqlAny: any = sql;
     const table = sqlAny.unsafe(`nosql."${collection}"`);
+    // Backdate the seeded _creation_time so it is strictly < Date.now()
+    // at the moment any test paginate() captures its Phase 14 snapshot
+    // watermark. The original `+ Math.random() * 1000` was forward-biased
+    // for ordering variety.
+    const seedAt = Date.now() - 5_000;
+    let seq = 0;
     for (const d of docs) {
       const id = `id-${Math.random().toString(36).slice(2, 12)}`;
-      const ct = Date.now() + Math.random() * 1000;
+      const ct = seedAt + (seq++);
       await sqlAny`
         INSERT INTO ${table} (_id, _creation_time, doc)
         VALUES (${id}, ${ct}, ${sqlAny.json(d)})

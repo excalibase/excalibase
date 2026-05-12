@@ -63,7 +63,7 @@ compiles to a single SQL statement on the main thread.
 | `unique()` | `Doc` | Throws if 0 or >1 docs match. |
 | `collect()` | `Doc[]` | Throws if the result exceeds `EXCALIBASE_QUERY_MAX_RESULTS` (default 16384). |
 | `take(n)` | `Doc[]` | Up to `n` matching docs. |
-| `paginate(opts)` | `{ page, isDone, continueCursor }` | Keyset pagination keyed on `(_creation_time, _id)`. `opts.cursor` is `null` to walk from the start. |
+| `paginate(opts)` | `{ page, isDone, continueCursor }` | Keyset pagination keyed on `(_creation_time, _id)` with a Phase 14 snapshot watermark; see [Pagination snapshot consistency](#pagination-snapshot-consistency). `opts.cursor` is `null` to walk from the start. |
 
 ## Convex divergences
 
@@ -123,6 +123,47 @@ compiles the plan to a single `postgres.js` tagged template:
 - the Convex-shape projection is constant — `_id`, `_creation_time`,
   `doc` — so the terminal-specific bits are only the
   WHERE / ORDER / LIMIT shape.
+
+## Pagination snapshot consistency
+
+Phase 14 — `.paginate()` captures a millisecond-epoch `snapshotTs`
+on the first call (when `opts.cursor === null`) and encodes it into the
+returned `continueCursor`. Every subsequent page on the same chain adds
+`_creation_time <= snapshotTs` to the WHERE clause, so rows inserted
+after pagination started are invisible to that pagination session. This
+matches Convex's per-`paginate()` snapshot contract:
+
+- INSERTs that occur between page fetches do **not** appear on later
+  pages of the same chain (the SKIP bug is closed).
+- The cursor blob is now 3-field (`creationTime|id|snapshotTs`); the
+  pre-Phase-14 2-field form is still accepted on decode — pre-14
+  cursors capture a fresh snapshot on the next call (degraded only on
+  the first paginate after the runtime upgrade).
+- The keyset itself still uses `(_creation_time, _id)` so two rows with
+  identical `_creation_time` get a deterministic order via the `_id`
+  tiebreaker.
+
+Divergences from Convex worth knowing:
+
+- **UPDATEs that mutate `_creation_time`** (only possible via raw SQL —
+  the `update` op patches `doc` only) can shift a row into a later
+  page's range and cause a duplicate. Convex's storage layer treats
+  `_creationTime` as immutable; Excalibase tables enforce that by
+  convention but not via DB constraint. If you write raw SQL that
+  touches `_creation_time`, pagination is **not** snapshot-consistent
+  for that row.
+- **Manual snapshot escape hatch** — for true snapshot-by-instant
+  pagination without trusting the codec, add an explicit filter:
+  `q.filter(q => q.lte(q.field("_creationTime"), initialTs))`. This
+  remains effective even across runtime upgrades and is the
+  recommended pattern when a client needs to pin a snapshot for
+  longer than a single user-facing paginate session.
+- **Strict transaction-snapshot mode** is on the roadmap as Phase
+  14.1: opening a `REPEATABLE READ` transaction at the first
+  paginate and re-attaching to it via `SET TRANSACTION SNAPSHOT`
+  on subsequent calls. Reserved for environments that demand
+  Postgres-level isolation; the watermark above is the v1 default
+  because it imposes no long-lived transaction on the pool.
 
 ## Tuning
 
