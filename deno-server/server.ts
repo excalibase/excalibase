@@ -344,7 +344,12 @@ const MAX_INVOKE_BODY = 1024 * 1024; // 1 MB
 const MAX_SCRIPTS = 100;
 const INVOKE_TIMEOUT_MS = 30_000;
 const WORKER_INIT_TIMEOUT_MS = 5_000;
-const VALID_ID = /^[a-zA-Z0-9_-]{1,128}$/;
+// Allow dot so the Go side's runtime id (`projectId__moduleName.exportName`)
+// can register the parity-sweep `db.insert` / `db.find` bundle ids.
+// Provisioning's `f.RuntimeID()` is `${projectID}__${f.ID}` and `f.ID` is
+// user-supplied (e.g. `db.insert`); without the dot the runtime rejects every
+// dotted-id deploy as "Invalid function id".
+const VALID_ID = /^[a-zA-Z0-9_.\-]{1,128}$/;
 // Per-function log ring buffer capacity. Old entries are dropped first.
 const LOG_RING_SIZE = 100;
 // Cap on a single log line so one huge console.log() can't blow up memory.
@@ -1018,6 +1023,91 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       };
     }
 
+    // --- ctx.storage (Phase 10) ---
+    // Worker-side facade for the Convex file-storage surface. Mirrors
+    // https://docs.convex.dev/file-storage. Every op posts a
+    // {type:'storage', op, payload} message to the main thread, which
+    // translates it into an HTTP call against provisioning's
+    // /internal/storage/{projectId}/* routes (runtime-token auth) and
+    // posts {type:'storageResult', rpcId, result} back.
+    //
+    // QueryCtx gets a read-only surface (getUrl/get/getMetadata);
+    // MutationCtx and ActionCtx get the full read+write surface adding
+    // generateUploadUrl/store/delete.
+    const __storagePending = new Map();
+    let __nextStorageRpcId = 1;
+    function __storageCall(op, payload) {
+      const rpcId = __nextStorageRpcId++;
+      return new Promise((resolve, reject) => {
+        __storagePending.set(rpcId, { resolve, reject });
+        self.postMessage({ type: 'storage', rpcId, op, payload });
+      });
+    }
+    function __assertStorageId(id, who) {
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new Error(who + ": storageId must be a non-empty string");
+      }
+    }
+    function __makeStorageReader() {
+      return {
+        async getUrl(id) {
+          __assertStorageId(id, "ctx.storage.getUrl");
+          const reply = await __storageCall('getUrl', { storageId: id });
+          if (reply === null || reply === undefined) return null;
+          if (typeof reply !== 'string') {
+            throw new Error("ctx.storage.getUrl: unexpected RPC reply type");
+          }
+          return reply;
+        },
+        async get(id) {
+          __assertStorageId(id, "ctx.storage.get");
+          const reply = await __storageCall('get', { storageId: id });
+          if (reply === null || reply === undefined) return null;
+          // reply.bytes is a Uint8Array (structured-clone preserves it);
+          // reply.contentType is the persisted content type.
+          return new Blob([reply.bytes], { type: reply.contentType || 'application/octet-stream' });
+        },
+        async getMetadata(id) {
+          __assertStorageId(id, "ctx.storage.getMetadata");
+          const reply = await __storageCall('getMetadata', { storageId: id });
+          if (reply === null || reply === undefined) return null;
+          return reply;
+        },
+      };
+    }
+    function __makeStorageWriter() {
+      const reader = __makeStorageReader();
+      return Object.assign({}, reader, {
+        async generateUploadUrl() {
+          const reply = await __storageCall('generateUploadUrl', {});
+          if (!reply || typeof reply.url !== 'string') {
+            throw new Error("ctx.storage.generateUploadUrl: unexpected RPC reply");
+          }
+          return reply.url;
+        },
+        async store(blob, opts) {
+          if (!blob || typeof blob.arrayBuffer !== 'function') {
+            throw new Error("ctx.storage.store: blob argument is required");
+          }
+          const buf = await blob.arrayBuffer();
+          const bytes = new Uint8Array(buf);
+          const reply = await __storageCall('store', {
+            bytes,
+            contentType: blob.type || 'application/octet-stream',
+            sha256: opts && opts.sha256 ? opts.sha256 : undefined,
+          });
+          if (typeof reply !== 'string' || reply.length === 0) {
+            throw new Error("ctx.storage.store: RPC did not return a storage id");
+          }
+          return reply;
+        },
+        async delete(id) {
+          __assertStorageId(id, "ctx.storage.delete");
+          await __storageCall('delete', { storageId: id });
+        },
+      });
+    }
+
     // __dispatchHttp — Phase 7 httpAction/httpRouter dispatch. Skips the
     // {args}-parsing v2 path; reconstructs a raw Request from the invoke
     // envelope and forwards the handler's Response unchanged.
@@ -1058,7 +1148,8 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         // httpAction ctx parity: db is null (Convex contract), runX
         // surface is wired so the handler can compose with other functions.
         // Scheduler is also present — httpAction handlers can enqueue
-        // background work the same way actions can.
+        // background work the same way actions can. Phase 10: storage
+        // exposed as a writer (httpAction behaves like an ActionCtx).
         const ctx = {
           db: null,
           auth: __buildAuthCtx(claims),
@@ -1066,6 +1157,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           runMutation: __makeRunMutation(),
           runAction:   __makeRunAction(),
           scheduler:   __makeScheduler(),
+          storage:     __makeStorageWriter(),
         };
 
         // Find the handler. For httpAction the def itself carries it; for
@@ -1178,6 +1270,15 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           // path is uniform; the typed lib still keeps it off QueryCtx
           // (a query handler that tries to schedule is a compile error).
           scheduler:   __makeScheduler(),
+          // Phase 10: ctx.storage — kind-aware. QueryCtx gets the
+          // read-only surface so untyped bundles that try to call
+          // generateUploadUrl/store/delete from a query throw a clear
+          // "method missing" error at runtime (matches the type-level
+          // rejection enforced by @excalibase/server). Mutations and
+          // actions get the full writer surface.
+          storage:     fnDef.kind === 'query'
+            ? __makeStorageReader()
+            : __makeStorageWriter(),
         };
         try {
           const result = await fnDef.handler(ctx, body.args);
@@ -1287,6 +1388,18 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           pending.resolve(msg.result.data);
         } else {
           pending.reject(new Error(msg.result && msg.result.error || 'scheduler error'));
+        }
+        return;
+      }
+      // Phase 10: storage RPC reply.
+      if (msg && msg.type === 'storageResult') {
+        const pending = __storagePending.get(msg.rpcId);
+        if (!pending) return;
+        __storagePending.delete(msg.rpcId);
+        if (msg.result && msg.result.ok === true) {
+          pending.resolve(msg.result.data);
+        } else {
+          pending.reject(new Error(msg.result && msg.result.error || 'storage error'));
         }
         return;
       }
@@ -1847,6 +1960,36 @@ class FunctionRuntime {
         return;
       }
 
+      if (msg.type === "storage") {
+        // Phase 10: ctx.storage RPC. Translate the op into an HTTP call
+        // against provisioning's /internal/storage/{projectId}/* routes
+        // (runtime-token auth) and post the result back to the worker.
+        // The runtime id is `${projectId}__${fnId}` (Phase 7 convention);
+        // we split here so dispatchStorage knows which tenant to target.
+        const rpcId = msg.rpcId;
+        if (typeof rpcId !== "number") return;
+        const sep = meta.id.indexOf("__");
+        const projectId = sep > 0 ? meta.id.slice(0, sep) : "";
+        (async () => {
+          let result: { ok: true; data: unknown } | { ok: false; error: string };
+          try {
+            const data = await dispatchStorage(projectId, msg);
+            result = { ok: true, data };
+          } catch (err) {
+            result = {
+              ok: false,
+              error: String((err instanceof Error ? err.message : err) ?? "storage error"),
+            };
+          }
+          try {
+            worker.postMessage({ type: "storageResult", rpcId, result });
+          } catch (postErr) {
+            console.debug("[runtime] storageResult postMessage failed:", postErr);
+          }
+        })();
+        return;
+      }
+
       if (typeof msg.reqId !== "number") return;
       const pending = meta.pending.get(msg.reqId);
       if (!pending) return; // late delivery after timeout — ignore
@@ -2343,6 +2486,191 @@ async function forwardMetadataToProvisioning(runtimeID: string, exports: unknown
   await res.body?.cancel();
   if (!res.ok) {
     console.warn(`[runtime] metadata forward HTTP ${res.status} for ${runtimeID}`);
+  }
+}
+
+/**
+ * Phase 10 — dispatch `ctx.storage` RPC ops over the provisioning
+ * /internal/storage/{projectId}/* routes. The Deno runtime is the only
+ * caller; auth uses the X-Excalibase-Runtime-Token shared secret, same
+ * as /internal/invoke and /internal/runtime/functions/.../metadata.
+ *
+ * Op contract (matches the worker-side __makeStorageReader/Writer in the
+ * worker template):
+ *
+ *   "generateUploadUrl" — POST /internal/storage/{p}/upload-url
+ *      Returns: { url, storageId }
+ *
+ *   "store"             — generates a signed URL via upload-url, PUTs the
+ *      bytes carried in the payload, posts confirm-upload, returns the
+ *      minted storageId. Mirrors the Convex client direct-upload flow
+ *      but server-side.
+ *      Payload: { bytes: Uint8Array, contentType: string, sha256?: string }
+ *      Returns: string (storageId)
+ *
+ *   "getUrl"            — POST /internal/storage/{p}/download-url
+ *      Payload: { storageId }
+ *      Returns: string | null  (null on 404)
+ *
+ *   "get"               — GET on the signed URL, returns the bytes.
+ *      Payload: { storageId }
+ *      Returns: { bytes: Uint8Array, contentType: string } | null
+ *
+ *   "getMetadata"       — GET /internal/storage/{p}/metadata/{storageId}
+ *      Payload: { storageId }
+ *      Returns: { storageId, sha256, size, contentType? } | null  (null on 404)
+ *
+ *   "delete"            — DELETE /internal/storage/{p}/{storageId}
+ *      Payload: { storageId }
+ *      Returns: null  (idempotent — 204 on success)
+ */
+async function dispatchStorage(
+  projectId: string,
+  msg: { op: string; payload?: { storageId?: string; bytes?: Uint8Array; contentType?: string; sha256?: string } },
+): Promise<unknown> {
+  if (PROVISIONING_URL === "") {
+    throw new Error("ctx.storage: EXCALIBASE_PROVISIONING_URL is not configured");
+  }
+  if (!projectId) {
+    throw new Error("ctx.storage: projectId missing from invocation context");
+  }
+  const base = `${PROVISIONING_URL.replace(/\/$/, "")}/internal/storage/${encodeURIComponent(projectId)}`;
+  const tokenHeaders: Record<string, string> = {
+    "X-Excalibase-Runtime-Token": RUNTIME_SECRET,
+  };
+  const jsonHeaders: Record<string, string> = {
+    ...tokenHeaders,
+    "Content-Type": "application/json",
+  };
+  const payload = msg.payload || {};
+  const storageId = payload.storageId;
+
+  switch (msg.op) {
+    case "generateUploadUrl": {
+      const res = await fetch(`${base}/upload-url`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`generateUploadUrl HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }
+      return await res.json();
+    }
+    case "getUrl": {
+      const res = await fetch(`${base}/download-url`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ storageId }),
+      });
+      if (res.status === 404) {
+        await res.body?.cancel();
+        return null;
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`getUrl HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }
+      const body = await res.json() as { url: string };
+      return body.url;
+    }
+    case "get": {
+      // Two-step: ask provisioning for a signed GET URL, then fetch it.
+      const signed = await dispatchStorage(projectId, { op: "getUrl", payload: { storageId } }) as string | null;
+      if (signed === null) return null;
+      const r = await fetch(signed);
+      if (r.status === 404) {
+        await r.body?.cancel();
+        return null;
+      }
+      if (!r.ok) {
+        const text = await r.text();
+        throw new Error(`get HTTP ${r.status}: ${text.slice(0, 200)}`);
+      }
+      const ct = r.headers.get("content-type") || "application/octet-stream";
+      const buf = new Uint8Array(await r.arrayBuffer());
+      return { bytes: buf, contentType: ct };
+    }
+    case "getMetadata": {
+      if (typeof storageId !== "string" || storageId.length === 0) {
+        throw new Error("getMetadata: storageId required");
+      }
+      const res = await fetch(`${base}/metadata/${encodeURIComponent(storageId)}`, {
+        headers: tokenHeaders,
+      });
+      if (res.status === 404) {
+        await res.body?.cancel();
+        return null;
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`getMetadata HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }
+      return await res.json();
+    }
+    case "store": {
+      const bytes = payload.bytes;
+      const contentType = payload.contentType || "application/octet-stream";
+      if (!bytes || !(bytes instanceof Uint8Array)) {
+        throw new Error("store: payload.bytes (Uint8Array) required");
+      }
+      // 1. Mint upload-url + storageId.
+      const mint = await fetch(`${base}/upload-url`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ contentType, size: bytes.byteLength }),
+      });
+      if (!mint.ok) {
+        const text = await mint.text();
+        throw new Error(`store/upload-url HTTP ${mint.status}: ${text.slice(0, 200)}`);
+      }
+      const mintBody = await mint.json() as { url: string; storageId: string };
+      // 2. PUT the bytes to the signed URL.
+      const put = await fetch(mintBody.url, {
+        method: "PUT",
+        headers: { "Content-Type": contentType },
+        body: bytes,
+      });
+      if (!put.ok) {
+        await put.body?.cancel();
+        throw new Error(`store/PUT HTTP ${put.status}`);
+      }
+      await put.body?.cancel();
+      // 3. Confirm.
+      const confirm = await fetch(`${base}/confirm-upload`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          storageId: mintBody.storageId,
+          contentType,
+          size: bytes.byteLength,
+          sha256: payload.sha256 || "",
+        }),
+      });
+      if (!confirm.ok) {
+        const text = await confirm.text();
+        throw new Error(`store/confirm-upload HTTP ${confirm.status}: ${text.slice(0, 200)}`);
+      }
+      await confirm.body?.cancel();
+      return mintBody.storageId;
+    }
+    case "delete": {
+      if (typeof storageId !== "string" || storageId.length === 0) {
+        throw new Error("delete: storageId required");
+      }
+      const res = await fetch(`${base}/${encodeURIComponent(storageId)}`, {
+        method: "DELETE",
+        headers: tokenHeaders,
+      });
+      await res.body?.cancel();
+      if (!res.ok && res.status !== 404) {
+        throw new Error(`delete HTTP ${res.status}`);
+      }
+      return null;
+    }
+    default:
+      throw new Error(`ctx.storage: unsupported op ${msg.op}`);
   }
 }
 

@@ -33,10 +33,6 @@ import (
 
 const (
 	testStorageProjectID = "proj_storage_t"
-	// ctxStorageBucket is the per-project conventional bucket name used by
-	// ctx.storage. Kept here as a constant so the test pins the contract
-	// (handler must use this same value).
-	ctxStorageBucket = "_ctx_storage"
 )
 
 // inMemoryBucketStoreForTest is a minimal BucketStore that lets the tests

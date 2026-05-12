@@ -444,6 +444,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	var storageHandler *handler.StorageHandler
 	if storageSvc != nil {
 		storageHandler = handler.NewStorageHandler(storageSvc, store)
+		// Phase 10: ctx.storage internal routes share the Deno runtime
+		// secret. Empty value disables the routes (all calls 401).
+		storageHandler.SetRuntimeSecret(cfg.DenoRuntimeSecret)
 	}
 	emailTokensHandler := handler.NewEmailTokensHandler(
 		sqlStore.DB(),
@@ -683,6 +686,12 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store 
 			d.storageHandler.Routes(r)
 		})
 		d.storageHandler.PublicRoutes(r)
+		// Phase 10: ctx.storage runtime-to-provisioning routes. Auth via
+		// X-Excalibase-Runtime-Token shared secret — same secret the
+		// Deno runtime uses for /deploy and /internal/invoke. Mounted
+		// on the root router because internal callers don't have a
+		// user JWT and don't ride the project-access middleware.
+		d.storageHandler.InternalRoutes(r)
 	}
 }
 

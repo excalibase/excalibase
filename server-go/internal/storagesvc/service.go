@@ -266,6 +266,30 @@ func (s *Service) ListObjects(ctx context.Context, projectID, bucketName string,
 	return &ListObjectsResponse{Objects: objs, NextCursor: next}, nil
 }
 
+// DeleteObjectCatalogueOnly removes only the catalogue row for (bucket,
+// key); does NOT touch R2. Used by the Phase 10 internal ctx.storage
+// delete path which is idempotent and must succeed even when the R2
+// best-effort delete fails (the daily janitor reaps orphaned blobs,
+// matching the convention in DeleteObject's comments).
+func (s *Service) DeleteObjectCatalogueOnly(ctx context.Context, projectID, bucketName, key string) error {
+	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucket == nil {
+		// Bucket doesn't exist — nothing to remove. Idempotent.
+		return nil
+	}
+	obj, _ := s.store.GetObject(ctx, bucket.ID, key)
+	if err := s.store.DeleteObject(ctx, bucket.ID, key); err != nil {
+		return err
+	}
+	if obj != nil {
+		_ = s.store.AddQuotaBytes(ctx, projectID, -obj.Size)
+	}
+	return nil
+}
+
 // DeleteObject removes from both R2 and the catalogue. R2 first so a
 // dangling DB row is preferable to an orphaned blob (the janitor reaps
 // dangling rows; orphaned blobs cost money).
