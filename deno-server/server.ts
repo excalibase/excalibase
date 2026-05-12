@@ -2542,7 +2542,85 @@ async function handleInvoke(req: Request, id: string): Promise<Response> {
   }
   const invokeReq = JSON.parse(body) as InvokeRequest;
   const result = await runtime.invoke(id, invokeReq);
-  return Response.json(result, { headers: JSON_HEADERS });
+  // Phase 15b — opt-in response envelope. Graphql's Phase 15a subscription
+  // registry sets `X-Excalibase-Envelope: v1` on every invocation so the
+  // outer body becomes `{result, reads}`. With reads in hand, the registry
+  // can compare a committed table against the sub's tracked reads and skip
+  // the re-invoke when there's no overlap — the precise-dep filter the
+  // pre-15b conservative "any commit re-invokes any sub" path lacked.
+  //
+  // Legacy callers omit the header and get the bit-identical pre-15b shape
+  // (`InvokeResponse { status, headers, body: '{"data":...}'}`).
+  const enveloped = maybeApplyEnvelope(invokeReq, result);
+  return Response.json(enveloped, { headers: JSON_HEADERS });
+}
+
+/**
+ * Phase 15b — wrap an InvokeResponse body in the `{result, reads}` shape if
+ * the caller opted in via the `X-Excalibase-Envelope: v1` header.
+ *
+ * Header lookup is case-insensitive (HTTP header semantics; both the deno
+ * runtime's worker and the Go gateway preserve raw casing in the headers
+ * map). When the opt-in is present:
+ *   - `result` = whatever the handler returned (parsed out of the inner
+ *     `{data: ...}` v2 envelope). If the body is a v2 `{error}` shape or
+ *     not parseable, `result` is null.
+ *   - `reads` = `[...__reactiveReads]` captured by invokeOnce. Always an
+ *     array, possibly empty.
+ *
+ * When the opt-in is absent, the InvokeResponse passes through verbatim so
+ * pre-15b callers see no behaviour change.
+ */
+function maybeApplyEnvelope(
+  invokeReq: InvokeRequest,
+  response: InvokeResponse,
+): InvokeResponse {
+  const wantsEnvelope = readEnvelopeHeader(invokeReq.headers) === ENVELOPE_VERSION_V1;
+  if (!wantsEnvelope) return response;
+  // Pull the reads set off the augmented response (invokeOnce stamps the
+  // private `__reactiveReads` field on every return path that allocated a
+  // txn entry). Default to an empty array — defensive against the 409
+  // exhausted-retry path that does not allocate `__reactiveReads`.
+  const augmented = response as InvokeResponse & { __reactiveReads?: Set<string> };
+  const reads = augmented.__reactiveReads ? [...augmented.__reactiveReads] : [];
+  // The handler return value lives at `body.data` in the v2 success path
+  // (see __dispatchV2's success branch). Errors land at `body.error`. We
+  // surface only `result` per the Phase 15b contract — graphql 15a reads
+  // `body.path("result")` and routes errors through the HTTP status, not
+  // the envelope.
+  let handlerResult: unknown = null;
+  if (typeof response.body === "string" && response.body.length > 0) {
+    try {
+      const parsed = JSON.parse(response.body) as { data?: unknown };
+      if (parsed && typeof parsed === "object" && "data" in parsed) {
+        handlerResult = parsed.data;
+      }
+    } catch (_) { /* non-JSON body — surface null, preserve status */ }
+  }
+  return {
+    status: response.status,
+    headers: response.headers,
+    body: JSON.stringify({ result: handlerResult, reads }),
+  };
+}
+
+const ENVELOPE_HEADER_NAME = "x-excalibase-envelope";
+const ENVELOPE_VERSION_V1 = "v1";
+
+/**
+ * Case-insensitive lookup for the envelope opt-in header. The Go gateway
+ * passes incoming headers through Go's `http.Header` which canonicalizes
+ * keys, but the v2 worker bundle and ad-hoc callers may use arbitrary
+ * casing. We normalize on read to keep wire shape forgiving.
+ */
+function readEnvelopeHeader(headers: Record<string, string> | undefined): string {
+  if (!headers) return "";
+  for (const k of Object.keys(headers)) {
+    if (k.toLowerCase() === ENVELOPE_HEADER_NAME) {
+      return headers[k] ?? "";
+    }
+  }
+  return "";
 }
 
 function handleLogs(url: URL, id: string): Response {

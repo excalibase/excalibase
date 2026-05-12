@@ -41,7 +41,7 @@ Deno.test({
           handler: async (ctx, args) => {
             const xs = await ctx.db.collection("a").find({});
             const ys = await ctx.db.query("b").collect();
-            const n  = await ctx.db.query("c").count();
+            const n  = await ctx.db.collection("c").count({});
             await ctx.db.collection("sink").insert({ xs: xs.length, ys: ys.length, n });
             return { ok: true };
           },
@@ -107,7 +107,7 @@ Deno.test({
             await ctx.db.collection("things").find({});
             await ctx.db.collection("things").find({});
             await ctx.db.query("things").collect();
-            return await ctx.db.query("things").count();
+            return await ctx.db.collection("things").count({});
           },
         }`));
 
