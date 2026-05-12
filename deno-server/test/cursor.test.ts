@@ -62,3 +62,68 @@ Deno.test("decode rejects payload whose creationTime is not a finite number", ()
     .replace(/=+$/, "");
   assertThrows(() => decodeCursor(token), Error, "finite");
 });
+
+// Phase 14 — snapshotTs watermark.
+//
+// The cursor blob is extended to a 3-field payload
+// `creationTime|id|snapshotTs` so subsequent paginate() calls can exclude
+// rows inserted after pagination started. Backwards-compat: cursors minted
+// pre-14 use the 2-field shape `creationTime|id`; decode falls back to
+// snapshotTs=undefined and the runtime treats that as "no snapshot yet,
+// capture one on the next call".
+
+Deno.test("encode → decode round-trip preserves snapshotTs when provided", () => {
+  const creationTime = 1715472000123;
+  const id = "abc0123456789defghijklmnopqrst";
+  const snapshotTs = 1715472999999;
+  const token = encodeCursor({ creationTime, id, snapshotTs });
+  const decoded = decodeCursor(token);
+  assertEquals(decoded.creationTime, creationTime);
+  assertEquals(decoded.id, id);
+  assertEquals(decoded.snapshotTs, snapshotTs);
+});
+
+Deno.test("encode → decode round-trip omits snapshotTs when not provided", () => {
+  const creationTime = 1715472000123;
+  const id = "abc0123456789defghijklmnopqrst";
+  const token = encodeCursor({ creationTime, id });
+  const decoded = decodeCursor(token);
+  assertEquals(decoded.creationTime, creationTime);
+  assertEquals(decoded.id, id);
+  assertEquals(decoded.snapshotTs, undefined);
+});
+
+Deno.test("decode tolerates pre-Phase-14 2-field payloads (back-compat)", () => {
+  // Hand-craft a 2-field token like the pre-14 encoder produced.
+  const legacy = "1715472000123|abc0123456789defghijklmnopqrst";
+  const token = btoa(legacy)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+  const decoded = decodeCursor(token);
+  assertEquals(decoded.creationTime, 1715472000123);
+  assertEquals(decoded.id, "abc0123456789defghijklmnopqrst");
+  assertEquals(decoded.snapshotTs, undefined);
+});
+
+Deno.test("encode rejects non-finite snapshotTs", () => {
+  assertThrows(
+    () => encodeCursor({ creationTime: 1, id: "abc", snapshotTs: NaN }),
+    Error,
+    "snapshotTs",
+  );
+  assertThrows(
+    () => encodeCursor({ creationTime: 1, id: "abc", snapshotTs: Infinity }),
+    Error,
+    "snapshotTs",
+  );
+});
+
+Deno.test("decode rejects payload whose snapshotTs is not a finite number", () => {
+  const payload = "1715472000123|abc|not-a-number";
+  const token = btoa(payload)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+  assertThrows(() => decodeCursor(token), Error, "snapshotTs");
+});
