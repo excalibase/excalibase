@@ -20,6 +20,24 @@ export interface RuntimeOptions {
    * stand up a mock provisioning server and pass its URL here.
    */
   provisioningUrl?: string;
+  /**
+   * Phase 9a: override the mutation BEGIN isolation level. One of
+   *  - "SERIALIZABLE" (default at runtime if unset)
+   *  - "REPEATABLE READ"
+   *  - "READ COMMITTED"
+   * Sets EXCALIBASE_MUTATION_ISOLATION; the runtime validates at boot.
+   */
+  mutationIsolation?: string;
+  /**
+   * Phase 9a: cap on retry attempts when a mutation hits 40001/40P01.
+   * Sets EXCALIBASE_MUTATION_RETRY_MAX; runtime default is 5.
+   */
+  mutationRetryMax?: number;
+  /**
+   * Phase 9a: base backoff in milliseconds for the retry loop.
+   * Sets EXCALIBASE_MUTATION_RETRY_BACKOFF_MS; runtime default is 50.
+   */
+  mutationRetryBackoffMs?: number;
 }
 
 export interface RuntimeHandle {
@@ -59,6 +77,9 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
   if (opts.allowedHosts) env.ALLOWED_HOSTS = opts.allowedHosts;
   if (opts.dbUrl) env.EXCALIBASE_DB_URL = opts.dbUrl;
   if (opts.provisioningUrl) env.EXCALIBASE_PROVISIONING_URL = opts.provisioningUrl;
+  if (opts.mutationIsolation) env.EXCALIBASE_MUTATION_ISOLATION = opts.mutationIsolation;
+  if (opts.mutationRetryMax !== undefined) env.EXCALIBASE_MUTATION_RETRY_MAX = String(opts.mutationRetryMax);
+  if (opts.mutationRetryBackoffMs !== undefined) env.EXCALIBASE_MUTATION_RETRY_BACKOFF_MS = String(opts.mutationRetryBackoffMs);
 
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
