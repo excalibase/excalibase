@@ -462,6 +462,163 @@ func TestInternalStorage_RejectsInvalidProjectID(t *testing.T) {
 	}
 }
 
+// TestInternalStorage_ConfirmUpload_RejectsInvalidBody — malformed JSON
+// body must surface as 400 (defensive parse).
+func TestInternalStorage_ConfirmUpload_RejectsInvalidBody(t *testing.T) {
+	r, _ := newStorageInternalRouter(t, "the-secret")
+	req := httptest.NewRequest("POST",
+		"/internal/storage/"+testStorageProjectID+"/confirm-upload",
+		bytes.NewReader([]byte("not-json")))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(runtimeTokenHeader, "the-secret")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("malformed body: want 400, got %d", w.Code)
+	}
+}
+
+// TestInternalStorage_ConfirmUpload_RejectsEmptyStorageID — server must
+// require a non-empty storageId since downstream calls (delete, metadata)
+// key off it.
+func TestInternalStorage_ConfirmUpload_RejectsEmptyStorageID(t *testing.T) {
+	r, _ := newStorageInternalRouter(t, "the-secret")
+	req := httptest.NewRequest("POST",
+		"/internal/storage/"+testStorageProjectID+"/confirm-upload",
+		bytes.NewReader([]byte(`{"storageId":"","size":1,"contentType":"text/plain"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(runtimeTokenHeader, "the-secret")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("empty storageId: want 400, got %d", w.Code)
+	}
+}
+
+// TestInternalStorage_DownloadURL_RejectsEmptyStorageID — same guard on
+// the download-url path.
+func TestInternalStorage_DownloadURL_RejectsEmptyStorageID(t *testing.T) {
+	r, _ := newStorageInternalRouter(t, "the-secret")
+	req := httptest.NewRequest("POST",
+		"/internal/storage/"+testStorageProjectID+"/download-url",
+		bytes.NewReader([]byte(`{"storageId":""}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(runtimeTokenHeader, "the-secret")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("empty storageId: want 400, got %d", w.Code)
+	}
+}
+
+// TestInternalStorage_DownloadURL_RejectsInvalidBody — malformed JSON
+// body 400s on download-url path too.
+func TestInternalStorage_DownloadURL_RejectsInvalidBody(t *testing.T) {
+	r, _ := newStorageInternalRouter(t, "the-secret")
+	req := httptest.NewRequest("POST",
+		"/internal/storage/"+testStorageProjectID+"/download-url",
+		bytes.NewReader([]byte("not-json")))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(runtimeTokenHeader, "the-secret")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("malformed body: want 400, got %d", w.Code)
+	}
+}
+
+// TestInternalStorage_RejectsInvalidProjectIDOnAllRoutes — same project-id
+// validation must guard every internal route, not just upload-url. Hit
+// each one to lock the gate in place.
+func TestInternalStorage_RejectsInvalidProjectIDOnAllRoutes(t *testing.T) {
+	r, _ := newStorageInternalRouter(t, "the-secret")
+	type call struct {
+		method string
+		path   string
+		body   string
+	}
+	cases := []call{
+		{"POST", "/internal/storage/bad..p/upload-url", `{}`},
+		{"POST", "/internal/storage/bad..p/confirm-upload", `{"storageId":"kg2_a","size":1}`},
+		{"POST", "/internal/storage/bad..p/download-url", `{"storageId":"kg2_a"}`},
+		{"GET", "/internal/storage/bad..p/metadata/kg2_a", ""},
+		{"DELETE", "/internal/storage/bad..p/kg2_a", ""},
+	}
+	for _, c := range cases {
+		var body *strings.Reader
+		if c.body != "" {
+			body = strings.NewReader(c.body)
+		}
+		var req *http.Request
+		if body != nil {
+			req = httptest.NewRequest(c.method, c.path, body)
+		} else {
+			req = httptest.NewRequest(c.method, c.path, nil)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(runtimeTokenHeader, "the-secret")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s %s: want 400, got %d", c.method, c.path, w.Code)
+		}
+	}
+}
+
+// TestInternalStorage_RouteAuthCheckCoverage — every internal route must
+// reject a missing runtime token. The first three tests already cover a
+// subset; this one fans out across the remaining verbs to keep the auth
+// gate honest as the route table grows.
+func TestInternalStorage_RouteAuthCheckCoverage(t *testing.T) {
+	r, _ := newStorageInternalRouter(t, "the-secret")
+	type call struct {
+		method string
+		path   string
+		body   string
+	}
+	cases := []call{
+		{"POST", "/internal/storage/" + testStorageProjectID + "/confirm-upload", `{"storageId":"kg2_a","size":1}`},
+		{"POST", "/internal/storage/" + testStorageProjectID + "/download-url", `{"storageId":"kg2_a"}`},
+		{"GET", "/internal/storage/" + testStorageProjectID + "/metadata/kg2_a", ""},
+	}
+	for _, c := range cases {
+		var body *strings.Reader
+		if c.body != "" {
+			body = strings.NewReader(c.body)
+		}
+		var req *http.Request
+		if body != nil {
+			req = httptest.NewRequest(c.method, c.path, body)
+		} else {
+			req = httptest.NewRequest(c.method, c.path, nil)
+		}
+		// Intentionally NO runtime token header.
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s without token: want 401, got %d", c.method, c.path, w.Code)
+		}
+	}
+}
+
+// TestInternalStorage_EmptySecretDisablesRoutes — passing the runtime
+// secret as "" must lock down every internal route (no caller can present
+// an empty header value and pass).
+func TestInternalStorage_EmptySecretDisablesRoutes(t *testing.T) {
+	r, _ := newStorageInternalRouter(t, "")
+	req := httptest.NewRequest("POST",
+		"/internal/storage/"+testStorageProjectID+"/upload-url",
+		bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	// Token "" — handler should refuse regardless.
+	req.Header.Set(runtimeTokenHeader, "")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("empty secret: want 401, got %d", w.Code)
+	}
+}
+
 // mustPost is a tiny test helper: POST against the test router with the
 // runtime-token header, decode 2xx response body as raw bytes, t.Fatalf on
 // non-success.
