@@ -73,17 +73,23 @@ COPY --from=lib-build --chown=deno:deno /lib/dist/index.mjs ./vendor/excalibase-
 # Deno config + import map. MUST live next to server.ts so `deno run`
 # (cwd=/app) auto-discovers it without `--config`. The worker subprocess
 # inherits the parent process's resolved import map.
-COPY --chown=deno:deno deno-server/deno.json .
+COPY --chown=deno:deno excalibase-provisioning/deno-server/deno.json .
 
-COPY --chown=deno:deno deno-server/server.ts .
-COPY --chown=deno:deno deno-server/runtime ./runtime
+COPY --chown=deno:deno excalibase-provisioning/deno-server/server.ts .
+COPY --chown=deno:deno excalibase-provisioning/deno-server/runtime ./runtime
 
 # Phase 9b.G — pre-cache the vendored lib's transitive npm deps
 # (zod-to-json-schema, zod). Without this, the first deploy on a fresh
 # image triggers a registry fetch from inside the worker, which can be
 # slow on cold starts and (more importantly) fails when ALLOWED_HOSTS
 # locks the worker out of the public internet.
-RUN deno cache server.ts /app/vendor/excalibase-server/index.mjs
+#
+# The cache runs as root (we're pre-USER) so /deno-dir/* ends up owned
+# by root by default. Chown after so the `deno` user can still write
+# new cache entries at runtime when a function imports an npm: spec we
+# didn't pre-cache (e.g. a freshly-published @excalibase/server version).
+RUN deno cache server.ts /app/vendor/excalibase-server/index.mjs && \
+    chown -R deno:deno /deno-dir
 
 USER deno
 
