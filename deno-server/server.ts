@@ -439,6 +439,36 @@ const MUTATION_RETRY_BACKOFF_CAP_MS = 5_000;
 //  40P01 — deadlock_detected
 const RETRYABLE_SQLSTATES = new Set(["40001", "40P01"]);
 
+// Phase 9b.G — vendored @excalibase/server library resolution.
+//
+// User bundles emitted by the Go bundler still carry literal
+// `import { mutation } from "npm:@excalibase/server@X.Y.Z"` statements;
+// the package is workspace-internal and never published to npm. Instead
+// the runtime image vendors the lib at /opt/excalibase-server/dist/index.mjs
+// and `deno.json` maps every supported version key onto that file.
+//
+// The worker permissions object below grants scoped `read` access ONLY to
+// the vendored directory so the worker can load the file but cannot stat
+// any other host path. Inside the container this resolves to
+// /app/vendor/excalibase-server (Dockerfile COPY), or /opt/excalibase-server
+// when the operator chose the legacy mount layout — we accept both via
+// EXCALIBASE_VENDORED_LIB_DIR with the default matching the Dockerfile.
+//
+// On the host (deno test runs), the harness sets EXCALIBASE_VENDORED_LIB_DIR
+// to the symlinked sibling dist; absence of the var falls back to the
+// in-tree `./vendor/excalibase-server` relative to cwd.
+const VENDORED_LIB_DIR_RAW = Deno.env.get("EXCALIBASE_VENDORED_LIB_DIR") || "";
+function resolveVendoredLibDir(): string {
+  if (VENDORED_LIB_DIR_RAW) {
+    try { return Deno.realPathSync(VENDORED_LIB_DIR_RAW); } catch (_) { return VENDORED_LIB_DIR_RAW; }
+  }
+  // Default: ./vendor/excalibase-server relative to cwd (matches the
+  // Dockerfile's `COPY --from=lib-build /lib/dist ./vendor/excalibase-server`
+  // and the host-side symlink the deno-server test harness installs).
+  try { return Deno.realPathSync("./vendor/excalibase-server"); } catch (_) { return "./vendor/excalibase-server"; }
+}
+const VENDORED_LIB_DIR: string = resolveVendoredLibDir();
+
 /** Build the JS source that runs inside the Deno Web Worker. */
 function buildWorkerCode(userCode: string, secrets: Record<string, string>): string {
   // Phase 9b.F — user code is loaded as an ESM module via a Blob URL and
@@ -1754,6 +1784,14 @@ class FunctionRuntime {
     const netPermission: boolean | string[] =
       ALLOWED_HOSTS.length > 0 ? ALLOWED_HOSTS : false;
 
+    // Phase 9b.G — grant the worker scoped `read` access to the vendored
+    // @excalibase/server library directory ONLY. Without this Deno's import
+    // map resolution succeeds (the key matches) but the worker is then
+    // denied at the file:// load step ("Requires read access to …"). The
+    // permission is a path allow-list, not a blanket `true` — user code
+    // cannot read /etc/passwd, the host pgdata, or any other path.
+    const readPermission: boolean | string[] = [VENDORED_LIB_DIR];
+
     const worker = new Worker(URL.createObjectURL(blob), {
       type: "module",
       // deno-lint-ignore no-explicit-any
@@ -1761,7 +1799,7 @@ class FunctionRuntime {
         permissions: {
           net: netPermission,
           env: false,
-          read: false,
+          read: readPermission,
           write: false,
           run: false,
           ffi: false,

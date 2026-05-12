@@ -18,6 +18,12 @@ provisioning-data/
 # Encryption keys (never commit)
 .encryption-key
 
+# Vendored @excalibase/server build artifact (Phase 9b.G).
+# The deno-server image fetches/builds the sibling lib at construction
+# time; host-side `deno test` runs use a symlink at this path pointing at
+# ../excalibase-server/dist. Neither artifact belongs in the repo.
+deno-server/vendor/
+
 # OS
 .DS_Store
 Thumbs.db

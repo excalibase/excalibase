@@ -34,9 +34,56 @@ Two deployment modes:
 
 ## Build
 
+The Dockerfile is **multi-stage** (Phase 9b.G): stage 1 builds the sibling
+`@excalibase/server` library so the resulting image is self-contained and
+needs no host mount. Set the build context to the **parent** directory
+that has both `excalibase-provisioning/` and `excalibase-server/` as
+siblings:
+
 ```bash
-docker build -t excalibase/deno-runtime:latest .
+# From the monorepo root that contains both repos:
+docker build -t excalibase/deno-runtime:latest \
+  -f excalibase-provisioning/deno-server/Dockerfile \
+  .
 ```
+
+When the build context lacks `excalibase-server/`, the stage 1 `COPY`
+errors loudly — preferable to silently shipping an image that 404s every
+function deploy.
+
+### Vendoring `@excalibase/server` (Phase 9b.G)
+
+User function bundles import `npm:@excalibase/server@X.Y.Z` literally; the
+package is **workspace-internal** and never published to npm. The runtime
+resolves the import via Deno's import map (`deno.json` at `/app/`):
+
+```jsonc
+{
+  "imports": {
+    "npm:@excalibase/server@0.10.0": "./vendor/excalibase-server/index.mjs",
+    "zod-to-json-schema": "npm:zod-to-json-schema@^3.22.0",
+    "zod": "npm:zod@^3.22.0"
+  }
+}
+```
+
+**Wildcard caveat:** Deno 2.7's import map does NOT honour
+`npm:@excalibase/server@*` — each supported version must be pinned
+explicitly. When the lib version bumps, add the new entry to `deno.json`
+or the deploy fails fast with `npm package … does not exist`.
+
+**Local dev / e2e:** the host symlinks `vendor/excalibase-server/index.mjs`
+to the sibling `../../../excalibase-server/dist/index.mjs` (auto-created
+by `make e2e-reactive` in the graphql repo). The test harness reads from
+the same path so `deno test` and the container converge on the same file
+layout.
+
+**Multi-version support:** the import map can map MULTIPLE version keys
+to the SAME on-disk file. This means a single runtime image happily
+serves bundles pinned to 0.4.0, 0.7.0, AND 0.10.0 simultaneously — as
+long as the dist on disk is API-compatible with every pinned version.
+When a breaking change lands in the lib, ship a NEW runtime image with
+multiple dists side by side and remap the version keys accordingly.
 
 ## Deploy
 
@@ -168,7 +215,7 @@ curl -X POST http://localhost:24006/invoke/hello \
 | Permission | Default |
 |---|---|
 | `net` | `false`, or allowlist via `ALLOWED_HOSTS` env |
-| `read` | `false` |
+| `read` | scoped to `EXCALIBASE_VENDORED_LIB_DIR` only (default `/app/vendor/excalibase-server`) — the vendored `@excalibase/server` library lives there and the worker must load it via the import map. User code cannot read `/etc/passwd` or any other path. |
 | `write` | `false` |
 | `env` | `false` (real env hidden — only the per-function `Deno.env` mock is exposed) |
 | `run` | `false` |
