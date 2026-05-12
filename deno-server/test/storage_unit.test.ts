@@ -188,6 +188,47 @@ Deno.test("StorageWriter.delete rejects on empty id", async () => {
   );
 });
 
+Deno.test("getUrl rejects when the RPC reply is not a string", async () => {
+  const { rpc } = makeFakeRpc([{ wrong: "shape" }]);
+  const reader = createStorageReader(rpc);
+  await assertRejects(
+    () => reader.getUrl("kg2_x"),
+    Error,
+    "unexpected RPC reply type",
+  );
+});
+
+Deno.test("get rejects when the RPC reply lacks a 'bytes' field", async () => {
+  const { rpc } = makeFakeRpc([{ size: 0 }]);
+  const reader = createStorageReader(rpc);
+  await assertRejects(
+    () => reader.get("kg2_x"),
+    Error,
+    "unexpected RPC reply type",
+  );
+});
+
+Deno.test("generateUploadUrl rejects on malformed reply", async () => {
+  const { rpc } = makeFakeRpc([{ noUrl: "yikes" }]);
+  const writer = createStorageWriter(rpc);
+  await assertRejects(
+    () => writer.generateUploadUrl(),
+    Error,
+    "unexpected RPC reply shape",
+  );
+});
+
+Deno.test("store rejects when RPC returns a non-string", async () => {
+  const { rpc } = makeFakeRpc([{ foo: "bar" }]);
+  const writer = createStorageWriter(rpc);
+  const blob = new Blob(["x"], { type: "text/plain" });
+  await assertRejects(
+    () => writer.store(blob),
+    Error,
+    "did not return a storage id",
+  );
+});
+
 Deno.test("RPC error propagates as a rejected promise", async () => {
   const { rpc } = makeFakeRpc([{ __error: "upstream 500" }]);
   const reader = createStorageReader(rpc);
