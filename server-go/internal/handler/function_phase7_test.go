@@ -3,8 +3,10 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -474,5 +476,146 @@ func TestPublicHttpRoute_MatchesRouterRoute(t *testing.T) {
 	rtr.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("router method mismatch: got %d, want 404", w.Code)
+	}
+}
+
+// --- Phase 15b: X-Excalibase-Envelope header pass-through ---
+
+// TestInternalInvoke_ForwardsEnvelopeHeaderToRuntime confirms that the
+// `X-Excalibase-Envelope: v1` request header arrives at the runtime inside
+// the InvokeRequest's `headers` map. Graphql's Phase 15a registry sets this
+// header on every subscription invocation so the runtime knows to return
+// `{result, reads}` instead of the legacy `{data}` body shape. Stripping the
+// header at the gateway would silently break the precise-dep filter — the
+// registry would always see `reads: []` and fall back to "re-invoke on any
+// project commit".
+func TestInternalInvoke_ForwardsEnvelopeHeaderToRuntime(t *testing.T) {
+	v := newFakeVault()
+	store := edgefn.NewFunctionStore(t.TempDir())
+	secrets := edgefn.NewSecretsStore(v)
+
+	var gotEnvelope string
+	runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, testInvokePath) {
+			var body struct {
+				Headers map[string]string `json:"headers"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			// Header lookup must be case-insensitive on the inbound side —
+			// Go's http.Header canonicalizes incoming requests. The handler
+			// must preserve the value verbatim so the runtime sees it.
+			for k, val := range body.Headers {
+				if strings.EqualFold(k, "X-Excalibase-Envelope") {
+					gotEnvelope = val
+					break
+				}
+			}
+			w.Header().Set(sharedContentType, sharedMIMEJSON)
+			_, _ = w.Write([]byte(`{"status":200,"headers":{"content-type":"application/json"},"body":"{\"data\":\"ok\"}"}`))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/deploy") {
+			_, _ = w.Write([]byte(`{"id":"x","url":"x"}`))
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(runtime.Close)
+	client := edgefn.NewRuntimeClient(runtime.URL, "test-runtime-secret")
+	h := NewFunctionHandler(store, secrets, client, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}, nil, testAPIBase)
+	h.SetK8sClient(nil, "", "test-runtime-secret")
+
+	if err := store.Save(&edgefn.Function{
+		ProjectID: "proj_p1",
+		ID:        testInternalOnlyFnID,
+		Name:      "Internal",
+		Files:     []edgefn.File{{Path: testIndexTS, Content: testDefaultHandler}},
+		Active:    true,
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	rtr := chi.NewRouter()
+	rtr.Post(testInternalInvokeRoute, h.InternalInvoke)
+
+	req := httptest.NewRequest("POST", "/internal/invoke/proj_p1/"+testInternalOnlyFnID,
+		bytes.NewBufferString(`{"args":{}}`))
+	req.Header.Set("X-Excalibase-Runtime-Token", "test-runtime-secret")
+	req.Header.Set("X-Excalibase-Envelope", "v1")
+	w := httptest.NewRecorder()
+	rtr.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("internal invoke: got %d body=%s", w.Code, w.Body.String())
+	}
+	if gotEnvelope != "v1" {
+		t.Errorf("X-Excalibase-Envelope header passthrough: got %q, want %q", gotEnvelope, "v1")
+	}
+}
+
+// TestInternalInvoke_NoEnvelopeHeaderWhenAbsent confirms that the runtime
+// does NOT receive an envelope header when the caller omits it — legacy
+// callers (SDK direct invoke, ad-hoc curl) must not be forced into the
+// envelope shape behind their back.
+func TestInternalInvoke_NoEnvelopeHeaderWhenAbsent(t *testing.T) {
+	v := newFakeVault()
+	store := edgefn.NewFunctionStore(t.TempDir())
+	secrets := edgefn.NewSecretsStore(v)
+
+	var sawEnvelope bool
+	runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, testInvokePath) {
+			var body struct {
+				Headers map[string]string `json:"headers"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			for k := range body.Headers {
+				if strings.EqualFold(k, "X-Excalibase-Envelope") {
+					sawEnvelope = true
+					break
+				}
+			}
+			w.Header().Set(sharedContentType, sharedMIMEJSON)
+			_, _ = w.Write([]byte(`{"status":200,"headers":{"content-type":"application/json"},"body":"{\"data\":\"ok\"}"}`))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/deploy") {
+			_, _ = w.Write([]byte(`{"id":"x","url":"x"}`))
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(runtime.Close)
+	client := edgefn.NewRuntimeClient(runtime.URL, "test-runtime-secret")
+	h := NewFunctionHandler(store, secrets, client, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}, nil, testAPIBase)
+	h.SetK8sClient(nil, "", "test-runtime-secret")
+
+	if err := store.Save(&edgefn.Function{
+		ProjectID: "proj_p1",
+		ID:        testInternalOnlyFnID,
+		Name:      "Internal",
+		Files:     []edgefn.File{{Path: testIndexTS, Content: testDefaultHandler}},
+		Active:    true,
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	rtr := chi.NewRouter()
+	rtr.Post(testInternalInvokeRoute, h.InternalInvoke)
+
+	req := httptest.NewRequest("POST", "/internal/invoke/proj_p1/"+testInternalOnlyFnID,
+		bytes.NewBufferString(`{"args":{}}`))
+	req.Header.Set("X-Excalibase-Runtime-Token", "test-runtime-secret")
+	// Deliberately no X-Excalibase-Envelope — pre-15b client behavior.
+	w := httptest.NewRecorder()
+	rtr.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("internal invoke: got %d body=%s", w.Code, w.Body.String())
+	}
+	if sawEnvelope {
+		t.Errorf("envelope header must be absent when caller did not set it")
 	}
 }
