@@ -173,6 +173,13 @@ export interface DbResultErr {
   readonly ok: false;
   readonly error: string;
   readonly issues?: ReadonlyArray<{ readonly path: string; readonly message: string }>;
+  /**
+   * Phase 9a: SQLSTATE attached when the underlying error originated from
+   * postgres.js (`PostgresError.code`). The dispatcher consults this to
+   * detect retryable conflicts (40001 = serialization_failure, 40P01 =
+   * deadlock_detected) without needing to re-throw and lose typing.
+   */
+  readonly sqlState?: string;
 }
 
 export type DbResult = DbResultOk | DbResultErr;
@@ -894,7 +901,17 @@ export async function executeDbOp(
       }
     }
   } catch (e) {
-    return { ok: false, error: String((e instanceof Error ? e.message : e) ?? "db error") };
+    // Phase 9a: propagate the SQLSTATE on postgres.js errors so the
+    // outer dispatch can detect retryable conflicts (40001, 40P01) and
+    // route through the retry loop. PostgresError carries `.code` as a
+    // 5-char SQLSTATE string; non-PG errors fall through with no code.
+    const sqlState = typeof (e as { code?: unknown })?.code === "string"
+      ? ((e as { code: string }).code)
+      : undefined;
+    const message = String((e instanceof Error ? e.message : e) ?? "db error");
+    return sqlState
+      ? ({ ok: false, error: message, sqlState } as DbResultErr)
+      : ({ ok: false, error: message } as DbResultErr);
   }
 }
 

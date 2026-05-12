@@ -73,6 +73,32 @@ interface ActiveTxn {
   parentRefId?: string;
   /** Millisecond timestamp at which the txn was opened (or aliased). */
   openedAt: number;
+  /**
+   * Phase 9a: marked when a db/scheduler op fails with a retryable
+   * SQLSTATE (40001/40P01) inside this txn. Owners check this on
+   * finalize and signal the retry loop. Aliases never observe their
+   * own conflict since they share the parent's connection.
+   */
+  conflict?: { sqlState: string; message: string };
+}
+
+/**
+ * Phase 9a — internal-only sentinel thrown out of `invokeOnce` when the
+ * mutation hit a retryable Postgres conflict (40001 or 40P01). The
+ * outer `invoke` retry loop catches this and either retries or
+ * surfaces a 409 ConflictError envelope to the caller.
+ *
+ * Never escapes the runtime; the HTTP layer never sees this class.
+ */
+class MutationConflict extends Error {
+  readonly sqlState: string;
+  readonly pgMessage: string;
+  constructor(sqlState: string, pgMessage: string) {
+    super(`mutation conflict ${sqlState}: ${pgMessage}`);
+    this.name = "MutationConflict";
+    this.sqlState = sqlState;
+    this.pgMessage = pgMessage;
+  }
 }
 
 const txnMap: Map<string, ActiveTxn> = new Map();
@@ -91,22 +117,50 @@ function newTxnRefId(): string {
  * Open a new Postgres transaction by reserving a connection from the
  * singleton pool and issuing BEGIN. Returns the reserved sql handle —
  * caller must commit or rollback exactly once.
+ *
+ * Phase 9a: BEGIN now carries the configured isolation level
+ * (EXCALIBASE_MUTATION_ISOLATION; default SERIALIZABLE) so SSI catches
+ * read-write conflicts the way Convex's OCC catches its own conflicts.
+ * Operators can drop to REPEATABLE READ or READ COMMITTED via env when
+ * contention overhead is a documented and measured concern.
  */
 async function openTxn(): Promise<Sql> {
   const pool = getPool();
   // deno-lint-ignore no-explicit-any
   const reserved = await (pool as any).reserve();
+  // MUTATION_ISOLATION is validated at boot against ALLOWED_MUTATION_ISOLATIONS
+  // so this template string can never carry attacker-controlled SQL.
   // deno-lint-ignore no-explicit-any
-  await (reserved as any).unsafe("BEGIN");
+  await (reserved as any).unsafe(`BEGIN ISOLATION LEVEL ${MUTATION_ISOLATION}`);
   return reserved;
 }
 
-/** Commit a txn opened by openTxn and release the underlying connection. */
+/**
+ * Commit a txn opened by openTxn and release the underlying connection.
+ *
+ * Phase 9a: COMMIT itself can raise 40001 / 40P01 under SERIALIZABLE
+ * (the famous "conflict surfaces at commit time" property of SSI). When
+ * that happens we throw a `MutationConflict` so the outer retry loop
+ * can route through rollback + backoff. All other commit failures are
+ * left as plain Errors — they aren't retryable.
+ */
 async function commitTxn(sql: Sql): Promise<void> {
   try {
     // deno-lint-ignore no-explicit-any
     await (sql as any).unsafe("COMMIT");
+  } catch (err) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string" && RETRYABLE_SQLSTATES.has(code)) {
+      const pgMsg = (err instanceof Error ? err.message : String(err)) || "commit conflict";
+      throw new MutationConflict(code, pgMsg);
+    }
+    throw err;
   } finally {
+    // Release the connection back to the pool. After a failed COMMIT
+    // the session is in an aborted state — the pool will hand out a
+    // fresh connection on the retry; we don't try to reuse this one.
+    // Wrapping in try/catch since release() is a postgres.js extension
+    // and a noop on plain Sql handles in some test paths.
     // deno-lint-ignore no-explicit-any
     try { (sql as any).release?.(); } catch (_) { /* ignore */ }
   }
@@ -137,6 +191,32 @@ function sqlFor(txnRefId: string | undefined | null): Sql {
     return txnMap.get(txnRefId)!.sql;
   }
   return getPool();
+}
+
+/**
+ * Phase 9a: stamp a retryable SQLSTATE on the active txn entry so
+ * finalize() / the retry loop knows to roll back and re-invoke. Walks
+ * up alias chains so a conflict observed on a nested-mutation alias is
+ * recorded on the actual owning txn (which is the one that will be
+ * rolled back). Safe no-op when the ref is unknown.
+ */
+function markConflict(
+  txnRefId: string | undefined | null,
+  sqlState: string,
+  message: string,
+): void {
+  if (!txnRefId) return;
+  let cursor: string | undefined = txnRefId;
+  // bound the walk so a corrupted parent chain can't loop forever.
+  for (let i = 0; i < 16 && cursor; i++) {
+    const entry = txnMap.get(cursor);
+    if (!entry) return;
+    if (entry.owned) {
+      if (!entry.conflict) entry.conflict = { sqlState, message };
+      return;
+    }
+    cursor = entry.parentRefId;
+  }
 }
 
 interface DeployRequest {
@@ -265,6 +345,52 @@ const V2_KINDS = ["query", "mutation", "action", "httpAction", "httpRouter"];
 // carries the caller's depth + 1 in its envelope; the dispatcher rejects
 // any value above the limit before the message reaches the target worker.
 const RUN_MAX_DEPTH = Math.max(1, Number(Deno.env.get("EXCALIBASE_RUN_MAX_DEPTH") || "8"));
+
+// Phase 9a — mutation isolation level + retry-on-conflict tuning.
+//
+// EXCALIBASE_MUTATION_ISOLATION sets the BEGIN ISOLATION LEVEL clause for
+// every top-level mutation. Default SERIALIZABLE matches Convex semantics
+// (the commit boundary is the ordering boundary; SSI surfaces conflicts
+// at COMMIT time). Operators with bench-proven contention costs can drop
+// to REPEATABLE READ or READ COMMITTED at the cost of weaker guarantees.
+// Validated at boot — an unknown value crashes the process so a typo in
+// a Helm value doesn't silently downgrade isolation in prod.
+const ALLOWED_MUTATION_ISOLATIONS = new Set([
+  "SERIALIZABLE",
+  "REPEATABLE READ",
+  "READ COMMITTED",
+]);
+const MUTATION_ISOLATION_RAW = (Deno.env.get("EXCALIBASE_MUTATION_ISOLATION") || "SERIALIZABLE")
+  .toUpperCase()
+  .trim();
+if (!ALLOWED_MUTATION_ISOLATIONS.has(MUTATION_ISOLATION_RAW)) {
+  console.error(
+    `FATAL: EXCALIBASE_MUTATION_ISOLATION="${MUTATION_ISOLATION_RAW}" is invalid; ` +
+      `allowed: ${Array.from(ALLOWED_MUTATION_ISOLATIONS).join(", ")}`,
+  );
+  Deno.exit(1);
+}
+const MUTATION_ISOLATION: string = MUTATION_ISOLATION_RAW;
+
+// EXCALIBASE_MUTATION_RETRY_MAX caps the retry-loop attempt count. 1 means
+// "try once, never retry"; 5 (default) means up to 4 retries on
+// 40001/40P01. Above 50 makes no operational sense — clamp.
+const MUTATION_RETRY_MAX = Math.max(
+  1,
+  Math.min(50, Number(Deno.env.get("EXCALIBASE_MUTATION_RETRY_MAX") || "5")),
+);
+// EXCALIBASE_MUTATION_RETRY_BACKOFF_MS is the base for the exponential +
+// jitter backoff: sleepMs = base * 2^(attempt-1) * (0.5 + random()),
+// capped at 5000ms. Default 50.
+const MUTATION_RETRY_BACKOFF_MS = Math.max(
+  1,
+  Number(Deno.env.get("EXCALIBASE_MUTATION_RETRY_BACKOFF_MS") || "50"),
+);
+const MUTATION_RETRY_BACKOFF_CAP_MS = 5_000;
+// SQLSTATE codes the retry loop treats as retryable conflicts.
+//  40001 — serialization_failure (SSI / RR ordering)
+//  40P01 — deadlock_detected
+const RETRYABLE_SQLSTATES = new Set(["40001", "40P01"]);
 
 /** Build the JS source that runs inside the Deno Web Worker. */
 function buildWorkerCode(userCode: string, secrets: Record<string, string>): string {
@@ -1398,10 +1524,22 @@ class FunctionRuntime {
             const sql = sqlFor(msg.txnRefId as string | undefined);
             result = await executeDbOp(sql, meta.dbCache, msg as DbOp);
           } catch (err) {
+            // executeDbOp wraps its own errors into {ok:false}, so we
+            // should rarely land here. Anything that escapes is treated
+            // as a non-retryable runtime error and forwarded as-is.
             result = {
               ok: false as const,
               error: String((err instanceof Error ? err.message : err) ?? "db error"),
             };
+          }
+          // Phase 9a: mark the txn conflicted when the result envelope
+          // carries a retryable SQLSTATE. The outer retry loop checks
+          // this on finalize() and re-invokes the handler.
+          if (result && result.ok === false && typeof (result as { sqlState?: string }).sqlState === "string") {
+            const code = (result as { sqlState: string }).sqlState;
+            if (RETRYABLE_SQLSTATES.has(code)) {
+              markConflict(msg.txnRefId as string | undefined, code, result.error);
+            }
           }
           try {
             worker.postMessage({ type: "dbResult", rpcId, result });
@@ -1467,6 +1605,14 @@ class FunctionRuntime {
             const data = await dispatchScheduler(meta.id, msg, sql);
             result = { ok: true, data };
           } catch (err) {
+            // Phase 9a: scheduler INSERTs ride the mutation txn under
+            // SERIALIZABLE, so SSI can raise 40001 here too. Mark the
+            // conflict so finalize() will retry, just like db ops.
+            const code = (err as { code?: unknown }).code;
+            if (typeof code === "string" && RETRYABLE_SQLSTATES.has(code)) {
+              markConflict(msg.txnRefId as string | undefined, code,
+                err instanceof Error ? err.message : String(err));
+            }
             result = {
               ok: false,
               error: String((err instanceof Error ? err.message : err) ?? "scheduler error"),
@@ -1521,23 +1667,85 @@ class FunctionRuntime {
     const script = this.scripts.get(id);
     if (!script) throw new Error(`function not found: ${id}`);
 
+    // Phase 8.5: a nested invocation rides the parent's txn — never opens
+    // its own. Detect that path up front so the retry loop below skips for
+    // nested calls (the parent owns the retry boundary).
+    const inheritedTxnRefId = extractInheritedTxnRefId(req);
+    const isNested = inheritedTxnRefId !== "" && txnMap.has(inheritedTxnRefId);
+
+    // Only TOP-LEVEL MUTATIONS retry. Queries, actions, http*, v1 handlers,
+    // and nested-mutation aliases all run exactly once. This matches Convex
+    // semantics: actions don't retry (they can have external side effects),
+    // and nested mutations re-execute naturally when the outer parent's
+    // retry replays the entire handler chain.
+    if (script.kind !== "mutation" || isNested) {
+      return await this.invokeOnce(script, req, inheritedTxnRefId);
+    }
+
+    // Top-level mutation retry loop.
+    let attempt = 0;
+    let lastConflict: { sqlState: string; message: string } | null = null;
+    while (attempt < MUTATION_RETRY_MAX) {
+      attempt++;
+      const outcome = await this.invokeOnce(script, req, inheritedTxnRefId);
+      // invokeOnce surfaces a retryable conflict via the sentinel object
+      // (encoded into a private property so InvokeResponse stays clean).
+      // Any other outcome (success OR non-retryable error) is returned as-is.
+      const conflict = (outcome as InvokeResponse & { __conflict?: { sqlState: string; message: string } }).__conflict;
+      if (!conflict) return outcome;
+      lastConflict = conflict;
+      metrics.mutationRetriesTotal++;
+      if (attempt < MUTATION_RETRY_MAX) {
+        const backoff = backoffForAttempt(attempt);
+        console.log(
+          `[runtime] mutation ${id} conflict on attempt ${attempt} ` +
+          `(SQLSTATE ${conflict.sqlState}); retrying in ${backoff}ms`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+        continue;
+      }
+      // Exhausted — synthesise the ConflictError envelope and surface as 409.
+      console.error(
+        `[runtime] mutation ${id} exhausted ${MUTATION_RETRY_MAX} attempts ` +
+        `on SQLSTATE ${conflict.sqlState}: ${conflict.message}`,
+      );
+      return {
+        status: 409,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          error: "MUTATION_CONFLICT",
+          attempts: attempt,
+          code: conflict.sqlState,
+          message: conflict.message,
+        }),
+      };
+    }
+    // Defensive — unreachable because the loop always returns or sets
+    // lastConflict before exhausting. Surfaces as a 500 if we get here.
+    return {
+      status: 500,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        error: "internal: retry loop exited without resolution",
+        lastConflict,
+      }),
+    };
+  }
+
+  /**
+   * Run the worker exactly once, opening/closing the txn around it.
+   * Top-level mutations may be retried by the caller; everything else
+   * runs exactly once. On a retryable conflict, returns an InvokeResponse
+   * with a `__conflict` discriminator so the caller can choose to retry.
+   */
+  private async invokeOnce(
+    script: ScriptMetadata,
+    req: InvokeRequest,
+    inheritedTxnRefId: string,
+  ): Promise<InvokeResponse & { __conflict?: { sqlState: string; message: string } }> {
+    const id = script.id;
     script.invocations++;
     const reqId = script.nextReqId++;
-
-    // Phase 8.5: decide whether this invocation rides on an existing txn
-    // (nested ctx.runMutation from a parent mutation) or opens a fresh one
-    // (top-level mutation). Queries / actions / v1 handlers get neither.
-    // The parent's txn ref ride along in the request body alongside
-    // `runDepth` — dispatchRunX is the only producer of that field.
-    let inheritedTxnRefId = "";
-    if (typeof req.body === "string" && req.body.length > 0) {
-      try {
-        const parsed = JSON.parse(req.body) as { txnRefId?: unknown };
-        if (typeof parsed.txnRefId === "string" && parsed.txnRefId.length > 0) {
-          inheritedTxnRefId = parsed.txnRefId;
-        }
-      } catch (_) { /* not JSON — top-level path, treat as no parent */ }
-    }
 
     let activeTxnRefId = "";
     if (inheritedTxnRefId && txnMap.has(inheritedTxnRefId)) {
@@ -1572,18 +1780,49 @@ class FunctionRuntime {
       }
     }
 
-    const finalize = async (settled: "success" | "error") => {
-      if (!activeTxnRefId) return;
+    // finalize closes the txn. On success path it tries to COMMIT and
+    // surfaces any retryable conflict back to the retry loop via a
+    // returned sentinel. On error path it rolls back. Either way, the
+    // entry is removed from txnMap so a redeployed worker can't see
+    // stale txn refs.
+    const finalize = async (
+      settled: "success" | "error",
+    ): Promise<{ sqlState: string; message: string } | null> => {
+      if (!activeTxnRefId) return null;
       const entry = txnMap.get(activeTxnRefId);
       txnMap.delete(activeTxnRefId);
-      if (!entry || !entry.owned) return;
-      if (settled === "success") {
-        try { await commitTxn(entry.sql); } catch (commitErr) {
-          console.warn(`[runtime] commit failed for ${id}:`, commitErr);
-        }
-      } else {
+      if (!entry || !entry.owned) return null;
+      // A mid-flight db op may have stamped a conflict marker. In that
+      // case we go straight to rollback (commit would fail anyway with
+      // the same SQLSTATE) and report the conflict to the retry loop.
+      if (entry.conflict && settled !== "success") {
         await rollbackTxn(entry.sql);
+        return entry.conflict;
       }
+      if (entry.conflict && settled === "success") {
+        // Handler returned success but a prior db op was a retryable
+        // conflict — the handler swallowed the error. Roll back and
+        // surface the conflict; retrying the handler is safer than
+        // letting the (likely-incomplete) "success" return commit.
+        await rollbackTxn(entry.sql);
+        return entry.conflict;
+      }
+      if (settled === "success") {
+        try {
+          await commitTxn(entry.sql);
+          return null;
+        } catch (commitErr) {
+          if (commitErr instanceof MutationConflict) {
+            // COMMIT itself raised 40001/40P01 — classic SSI surface.
+            // The connection is already released inside commitTxn.
+            return { sqlState: commitErr.sqlState, message: commitErr.pgMessage };
+          }
+          console.warn(`[runtime] commit failed for ${id}:`, commitErr);
+          return null;
+        }
+      }
+      await rollbackTxn(entry.sql);
+      return null;
     };
 
     let res: InvokeResponse;
@@ -1626,7 +1865,13 @@ class FunctionRuntime {
         if (parsed && typeof parsed.error === "string") isError = true;
       } catch (_) { /* non-JSON body — treat as success */ }
     }
-    await finalize(isError ? "error" : "success");
+    const conflict = await finalize(isError ? "error" : "success");
+    if (conflict) {
+      // Encode the conflict into the InvokeResponse so the retry loop
+      // upstairs can pick it up without changing the public shape on
+      // success paths.
+      return Object.assign({}, res, { __conflict: conflict });
+    }
     return res;
   }
 
@@ -1687,7 +1932,46 @@ const metrics = {
   invocationsError: 0,
   deploysTotal: 0,
   timeoutsTotal: 0,
+  /**
+   * Phase 9a: total retry attempts triggered by 40001/40P01 across all
+   * mutations. Each retry is one event; an exhausted retry-loop adds
+   * `MUTATION_RETRY_MAX - 1` to this counter and yields a 409. A
+   * surge here usually means under-isolated workload or a missing
+   * predicate-supporting index — page operations.
+   */
+  mutationRetriesTotal: 0,
 };
+
+/**
+ * Phase 9a: parse the per-invocation txnRefId out of a v2 request body.
+ * The body is JSON `{args, txnRefId?, runDepth?}`. Anything else (non-JSON,
+ * missing field) means "no parent txn" — caller is top-level.
+ */
+function extractInheritedTxnRefId(req: InvokeRequest): string {
+  if (typeof req.body !== "string" || req.body.length === 0) return "";
+  try {
+    const parsed = JSON.parse(req.body) as { txnRefId?: unknown };
+    if (typeof parsed.txnRefId === "string" && parsed.txnRefId.length > 0) {
+      return parsed.txnRefId;
+    }
+  } catch (_) { /* not JSON — top-level path */ }
+  return "";
+}
+
+/**
+ * Phase 9a: exponential backoff with jitter. Formula:
+ *   base * 2^(attempt-1) * (0.5 + random())
+ * capped at MUTATION_RETRY_BACKOFF_CAP_MS. attempt is 1-indexed —
+ * attempt=1 means "we just finished attempt 1, sleep before attempt 2".
+ *
+ * Jitter avoids retry storms where every contending mutation wakes at
+ * the same moment and re-enters the same SSI race.
+ */
+function backoffForAttempt(attempt: number): number {
+  const exp = MUTATION_RETRY_BACKOFF_MS * Math.pow(2, attempt - 1);
+  const jittered = exp * (0.5 + Math.random());
+  return Math.min(MUTATION_RETRY_BACKOFF_CAP_MS, Math.floor(jittered));
+}
 
 const runtime = new FunctionRuntime();
 
@@ -1826,6 +2110,10 @@ function handleMetrics(): Response {
     "# HELP excalibase_fn_timeouts_total Total invocation timeouts",
     "# TYPE excalibase_fn_timeouts_total counter",
     `excalibase_fn_timeouts_total ${metrics.timeoutsTotal}`,
+    "",
+    "# HELP excalibase_mutation_retries_total Total mutation retry attempts on 40001/40P01",
+    "# TYPE excalibase_mutation_retries_total counter",
+    `excalibase_mutation_retries_total ${metrics.mutationRetriesTotal}`,
     "",
     "# HELP excalibase_fn_uptime_seconds Runtime uptime in seconds",
     "# TYPE excalibase_fn_uptime_seconds gauge",

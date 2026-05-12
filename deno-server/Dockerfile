@@ -22,4 +22,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD deno eval "const r = await fetch('http://localhost:8000/health'); if (!r.ok) Deno.exit(1);" || exit 1
 
-CMD ["deno", "run", "--allow-net", "--allow-env=RUNTIME_SECRET,ALLOWED_HOSTS", "--unstable-worker-options", "server.ts"]
+CMD ["deno", "run", "--allow-net", "--allow-env=RUNTIME_SECRET,ALLOWED_HOSTS,PORT,EXCALIBASE_FUNCTIONS_V2,EXCALIBASE_DB_URL,EXCALIBASE_PROVISIONING_URL,EXCALIBASE_RUN_MAX_DEPTH,EXCALIBASE_MUTATION_ISOLATION,EXCALIBASE_MUTATION_RETRY_MAX,EXCALIBASE_MUTATION_RETRY_BACKOFF_MS,EXCALIBASE_QUERY_MAX_RESULTS", "--unstable-worker-options", "server.ts"]

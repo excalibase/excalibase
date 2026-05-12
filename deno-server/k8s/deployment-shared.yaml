@@ -55,6 +55,15 @@ spec:
               key: secret
         - name: ALLOWED_HOSTS
           value: "" # Restrict to project PG hosts only, e.g. "pg-rw.ns:5432"
+        # Phase 9a — mutation isolation + retry knobs. Uncomment to
+        # override defaults (SERIALIZABLE, 5 retries, 50ms base backoff).
+        # See docs/functions-transactions.md for the tuning rationale.
+        # - name: EXCALIBASE_MUTATION_ISOLATION
+        #   value: "SERIALIZABLE"  # SERIALIZABLE | "REPEATABLE READ" | "READ COMMITTED"
+        # - name: EXCALIBASE_MUTATION_RETRY_MAX
+        #   value: "5"
+        # - name: EXCALIBASE_MUTATION_RETRY_BACKOFF_MS
+        #   value: "50"
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000
