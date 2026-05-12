@@ -41,6 +41,7 @@ import type { Sql } from "./runtime/pool.ts";
 import type { ValidatorCache } from "./runtime/validator.ts";
 import { SubscriptionRegistry, type CommitEvent } from "./runtime/reactive.ts";
 import { tryUpgradeWatchSocket } from "./runtime/ws_handler.ts";
+import { NatsBridge } from "./runtime/nats.ts";
 
 // ---------------------------------------------------------------------------
 // Phase 8.5 — Shared mutation transaction map.
@@ -2216,6 +2217,47 @@ const reactiveRegistry = new SubscriptionRegistry({
 });
 onCommit((event) => reactiveRegistry.dispatchCommit(event));
 
+// ---------------------------------------------------------------------------
+// Phase 9b.B — NATS bridge (cross-replica reactive).
+//
+// Strict invariant: when EXCALIBASE_NATS_URL is unset, the runtime
+// behaves IDENTICALLY to 9b.A — no bridge is constructed, no `npm:nats`
+// import fires, and the only reactive path is the in-process emitter
+// above. When it IS set, we:
+//
+//   1. Construct a NatsBridge with a per-process `runtimeId` (random
+//      UUID — distinct from the per-function runtime id used inside
+//      CommitEvent).
+//   2. Attach the bridge as a SECOND onCommit listener so every local
+//      commit fans out to `excalibase.fn.<projectId>.commits`.
+//   3. The bridge subscribes to `excalibase.fn.*.commits`. Messages
+//      whose envelope.senderId matches our own runtimeId are dropped
+//      (self-dedupe — without this, every local commit would dispatch
+//      twice: once locally, once from the NATS round-trip).
+//
+// The bridge runs `start()` async; if it can't connect, it retries with
+// 1s→30s exponential backoff. Local reactive on this replica is never
+// blocked by NATS state — commits fire on the local registry
+// SYNCHRONOUSLY via the same emitter the bridge attaches to.
+// ---------------------------------------------------------------------------
+const NATS_URL = Deno.env.get("EXCALIBASE_NATS_URL") ?? "";
+let natsBridge: NatsBridge | null = null;
+if (NATS_URL !== "") {
+  const processRuntimeId = crypto.randomUUID();
+  natsBridge = new NatsBridge({
+    url: NATS_URL,
+    runtimeId: processRuntimeId,
+    registry: reactiveRegistry,
+  });
+  natsBridge.attachCommitEmitter(onCommit);
+  // Fire-and-forget: start() retries internally; we don't want to delay
+  // HTTP listener boot on NATS being up.
+  natsBridge.start().catch((err) => {
+    console.warn(`[runtime] NATS bridge start failed terminally: ${err}`);
+  });
+  console.log(`[runtime] NATS bridge enabled (process id ${processRuntimeId.slice(0, 8)})`);
+}
+
 /**
  * Best-effort callback: POST captured v2 export metadata back to the Go
  * provisioning service. The runtime id is `${projectId}__${fnId}`; the Go
@@ -2451,8 +2493,10 @@ if (WS_PORT_RAW !== "") {
 
 // Drain the postgres pool on SIGTERM/SIGINT so containers shut down cleanly.
 // The handlers are best-effort; if Deno exits before they finish, postgres
-// will close the sockets anyway.
+// will close the sockets anyway. The NATS bridge (when present) is drained
+// before the pool so in-flight publishes get a chance to flush.
 const shutdown = async () => {
+  try { if (natsBridge) await natsBridge.stop(); } catch (_) { /* ignore */ }
   try { await closePool(); } catch (_) { /* ignore */ }
   Deno.exit(0);
 };
