@@ -480,7 +480,10 @@ Deno.test({
         }`);
         await rt.deploy("ai-metrics", code);
         await rt.invoke("ai-metrics", { args: {} });
-        const metricsRes = await rt.raw("/metrics", { method: "GET" });
+        const metricsRes = await rt.raw("/metrics", {
+          method: "GET",
+          headers: { "X-Runtime-Secret": rt.secret },
+        });
         const text = await metricsRes.text();
         // Body should declare the counter and the auto=true label line.
         if (!text.includes("excalibase_query_index_selected_total")) {
@@ -537,7 +540,10 @@ Deno.test({
         }`);
         await rt.deploy("ai-explicit", code);
         await rt.invoke("ai-explicit", { args: {} });
-        const metricsRes = await rt.raw("/metrics", { method: "GET" });
+        const metricsRes = await rt.raw("/metrics", {
+          method: "GET",
+          headers: { "X-Runtime-Secret": rt.secret },
+        });
         const text = await metricsRes.text();
         // The counter line for auto="true" should remain at 0 (or be absent).
         // We assert no `auto="true"` line with a non-zero count was emitted.

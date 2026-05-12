@@ -77,6 +77,14 @@ export interface QueryPlan {
   readonly vector?: VectorIndexHint;
   readonly filter?: FilterExpr;
   readonly order?: "asc" | "desc";
+  /**
+   * Phase 6.5 — name of the index chosen by `selectIndex()` when the
+   * worker performed automatic selection. Empty/undefined means the
+   * user passed an explicit `.withIndex(...)` hint, or no index was
+   * selected at all. The main thread reads this on the `query` op to
+   * label the `excalibase_query_index_selected_total` counter.
+   */
+  readonly autoSelectedIndex?: string;
 }
 
 export type QueryTerminal = "first" | "unique" | "collect" | "take" | "paginate";

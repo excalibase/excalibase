@@ -708,11 +708,94 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     // accumulated state. Terminal methods (.first/.unique/.collect/.take/
     // .paginate) post a {type:'db', op:'query', plan, terminal, extra}
     // RPC to the main thread, which compiles the plan to SQL.
+    //
+    // Phase 6.5 — automatic index selection. Mirrors Convex's behaviour:
+    // when the user writes .filter(q.eq("author", uid)) and a declared
+    // index covers a leading eq prefix, the worker stamps plan.index
+    // on the way out. Explicit .withIndex(...) always wins (caller-
+    // supplied index is final). The pure selector lives in
+    // runtime/index_selector.ts for unit-test friendliness; the worker
+    // shim re-implements the same algorithm inline since workers cannot
+    // import the runtime module directly.
     function __makeQuery(name) {
       __assertCollectionInSchema(name);
 
+      // Pull declared indexes off the bundled schema. Empty array when
+      // permissive (no schema) or when the table declares none.
+      function __declaredIndexes() {
+        const tables = __schemaTables();
+        if (tables === null) return [];
+        const def = tables[name];
+        if (!def || !Array.isArray(def.indexes)) return [];
+        return def.indexes;
+      }
+
+      // Collect top-level eq predicates from a FilterExpr AST. Returns
+      // null when the tree contains OR/NOT at any walked level (those
+      // break the prefix-match contract). Mirrors collectTopLevelEqs
+      // in runtime/index_selector.ts — keep the two in lock-step.
+      function __collectEqs(expr) {
+        if (!expr) return new Map();
+        const out = new Map();
+        function walk(node) {
+          if (!node || typeof node !== 'object') return true;
+          if (node.kind === 'eq') {
+            if (node.left && node.left.kind === 'field') {
+              out.set(node.left.name, node.right);
+            }
+            return true;
+          }
+          if (node.kind === 'and') {
+            if (!Array.isArray(node.args)) return true;
+            for (const a of node.args) { if (!walk(a)) return false; }
+            return true;
+          }
+          if (node.kind === 'or' || node.kind === 'not') return false;
+          return true;
+        }
+        return walk(expr) ? out : null;
+      }
+
+      // Greedy longest-prefix selector. Returns { name, bounds } or null.
+      function __selectIndex(plan) {
+        const indexes = __declaredIndexes();
+        if (indexes.length === 0) return null;
+        const eqs = __collectEqs(plan.filter);
+        if (eqs === null || eqs.size === 0) return null;
+        const scored = [];
+        for (const def of indexes) {
+          if (!Array.isArray(def.fields) || def.fields.length === 0) continue;
+          let p = 0;
+          for (; p < def.fields.length; p++) {
+            if (!eqs.has(def.fields[p])) break;
+          }
+          if (p > 0) scored.push({ def, prefix: p });
+        }
+        if (scored.length === 0) return null;
+        scored.sort((a, b) => {
+          if (b.prefix !== a.prefix) return b.prefix - a.prefix;
+          return a.def.name < b.def.name ? -1 : a.def.name > b.def.name ? 1 : 0;
+        });
+        const w = scored[0];
+        const bounds = [];
+        for (let i = 0; i < w.prefix; i++) {
+          const field = w.def.fields[i];
+          bounds.push({ field, op: 'eq', value: eqs.get(field) });
+        }
+        return { name: w.def.name, bounds };
+      }
+
+      function __maybeAutoIndex(plan) {
+        // Explicit hint wins — caller's choice is final.
+        if (plan.index) return plan;
+        const sel = __selectIndex(plan);
+        if (sel === null) return plan;
+        return Object.assign({}, plan, { index: sel, autoSelectedIndex: sel.name });
+      }
+
       function __terminal(plan, terminal, extra) {
-        return __dbCall('query', name, { plan, terminal, extra });
+        const finalPlan = __maybeAutoIndex(plan);
+        return __dbCall('query', name, { plan: finalPlan, terminal, extra });
       }
 
       function __indexQ(initial) {
@@ -1595,6 +1678,20 @@ class FunctionRuntime {
             // invocation registered one. sqlFor falls back to the pool
             // for queries/actions/v1.
             const sql = sqlFor(msg.txnRefId as string | undefined);
+            // Phase 6.5: tally index selection BEFORE issuing the op, so a
+            // failing SQL execution still counts the selection event. The
+            // counter is bucketed by (auto, table); `auto="true"` means
+            // the worker's selector found a declared index, `auto="false"`
+            // means the caller passed `.withIndex(...)`, and `auto="none"`
+            // means the query ran with no index at all.
+            if (msg.op === "query" && msg.plan && typeof msg.plan === "object") {
+              const plan = msg.plan as { autoSelectedIndex?: string; index?: { name?: string } };
+              const tableName = typeof msg.collection === "string" ? msg.collection : "";
+              const auto: "true" | "false" | "none" = typeof plan.autoSelectedIndex === "string"
+                ? "true"
+                : (plan.index && typeof plan.index.name === "string" ? "false" : "none");
+              bumpIndexSelection(auto, tableName);
+            }
             result = await executeDbOp(sql, meta.dbCache, msg as DbOp);
           } catch (err) {
             // executeDbOp wraps its own errors into {ok:false}, so we
@@ -2174,6 +2271,51 @@ const metrics = {
 };
 
 /**
+ * Phase 6.5 — observability for auto-index selection. Bucketed by
+ * (auto, table). `auto` is one of:
+ *   * "true"  — the worker's selector matched a declared index.
+ *   * "false" — the user passed an explicit `.withIndex(...)` hint.
+ *   * "none"  — the query op ran with no index at all (full scan path).
+ * Map key is `${auto}|${table}`. The pipe is safe as a delimiter: table
+ * names are regex-validated against [a-zA-Z_]\w{0,62} (no pipe), and
+ * `auto` is one of three literal strings.
+ */
+const indexSelectionCounts: Map<string, number> = new Map();
+
+function bumpIndexSelection(auto: "true" | "false" | "none", table: string): void {
+  // Key format: `${auto}|${table}` (the pipe is safe because table
+  // names are validated against [a-zA-Z_]\w{0,62} and `auto` is one
+  // of three literal strings).
+  const key = `${auto}|${table}`;
+  indexSelectionCounts.set(key, (indexSelectionCounts.get(key) ?? 0) + 1);
+}
+
+function escapePromLabel(value: string): string {
+  // Prometheus exposition: escape backslash, double quote, newline.
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+}
+
+function renderIndexSelectionMetric(): string[] {
+  if (indexSelectionCounts.size === 0) {
+    // Emit a 0 sample so scrapers see the metric exists even before
+    // the first query op. We pick the "none" + empty-table baseline.
+    return [`excalibase_query_index_selected_total{auto="none",table=""} 0`];
+  }
+  const lines: string[] = [];
+  for (const [key, count] of indexSelectionCounts.entries()) {
+    // Key format: `${auto}|${table}` — the `|` cannot appear in `auto`
+    // (literal true/false/none) nor in `table` (regex-validated).
+    const sep = key.indexOf("|");
+    const auto = key.slice(0, sep);
+    const table = key.slice(sep + 1);
+    lines.push(
+      `excalibase_query_index_selected_total{auto="${escapePromLabel(auto)}",table="${escapePromLabel(table)}"} ${count}`,
+    );
+  }
+  return lines;
+}
+
+/**
  * Phase 9a: parse the per-invocation txnRefId out of a v2 request body.
  * The body is JSON `{args, txnRefId?, runDepth?}`. Anything else (non-JSON,
  * missing field) means "no parent txn" — caller is top-level.
@@ -2397,6 +2539,10 @@ function handleMetrics(): Response {
     "# HELP excalibase_mutation_retries_total Total mutation retry attempts on 40001/40P01",
     "# TYPE excalibase_mutation_retries_total counter",
     `excalibase_mutation_retries_total ${metrics.mutationRetriesTotal}`,
+    "",
+    "# HELP excalibase_query_index_selected_total Query plans by index-selection mode (Phase 6.5)",
+    "# TYPE excalibase_query_index_selected_total counter",
+    ...renderIndexSelectionMetric(),
     "",
     "# HELP excalibase_fn_uptime_seconds Runtime uptime in seconds",
     "# TYPE excalibase_fn_uptime_seconds gauge",

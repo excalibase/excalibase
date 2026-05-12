@@ -75,10 +75,22 @@ They are tracked alongside the parity matrix in
   coordination — the subscription-aware status flag — is scheduled
   for Phase 9. The `page` / `isDone` / `continueCursor` triple matches
   Convex exactly.
-- Automatic index selection is not yet implemented. Convex picks an
-  index by matching the filter against declared indexes. Phase 6 keeps
-  `.withIndex()` explicit; Phase 6.5 will detect declared indexes
-  whose fields cover the filter and apply them transparently.
+- Automatic index selection (Phase 6.5) covers `.filter()` against
+  declared btree indexes only. When `plan.index` is unset and a
+  declared index's leading fields are eq-bound in the filter, the
+  worker stamps the index onto the plan and labels it `auto="true"`
+  on the `excalibase_query_index_selected_total` Prometheus counter.
+  Convex divergences still standing:
+  - `withSearchIndex` and `withVectorIndex` require explicit hints.
+    Convex auto-selects those too, but the heuristic is field-based,
+    not filter-based — scheduled for a Phase 6.5+1 follow-up.
+  - Range bounds (`gt`/`gte`/`lt`/`lte`) in the filter do NOT
+    contribute to prefix-matching today. A composite `[a, b]` with
+    `eq(a) AND gt(b)` matches on `a` only; the gt becomes a
+    post-filter. Convex documents the same behaviour.
+  - When the user calls `.withIndex(...)` explicitly, the explicit
+    hint is final — auto-selection is skipped and the counter
+    labels the call `auto="false"`.
 - `Query.getDependencies(): string[]` is an Excalibase extension. It
   returns the table names this query touches so the Phase 9 CDC
   scheduler can subscribe to the right watcher streams.
