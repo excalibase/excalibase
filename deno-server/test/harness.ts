@@ -45,6 +45,14 @@ export interface RuntimeOptions {
    * need reactive don't pay the bind cost.
    */
   wsEnabled?: boolean;
+  /**
+   * Phase 9b.B: when set, the runtime starts the NATS bridge with this URL.
+   * Unset → bridge disabled (single-replica reactive only, matches 9b.A
+   * behaviour). The bridge publishes CommitEvents to
+   * `excalibase.fn.<projectId>.commits` and subscribes to the wildcard
+   * `excalibase.fn.*.commits` so other replicas see local commits.
+   */
+  natsUrl?: string;
 }
 
 export interface RuntimeHandle {
@@ -94,6 +102,7 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
     wsPort = await pickPort();
     env.EXCALIBASE_DENO_WS_PORT = String(wsPort);
   }
+  if (opts.natsUrl) env.EXCALIBASE_NATS_URL = opts.natsUrl;
 
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
