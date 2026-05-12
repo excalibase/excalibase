@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { useGraphqlRealtime, type RealtimeRowEvent } from './useGraphqlRealtime';
 
 /**
@@ -118,13 +118,13 @@ describe('useGraphqlRealtime', () => {
     expect(subscribeMsg.id.length).toBeGreaterThan(0);
   });
 
-  test('moves to "live" status once subscribe is sent', async () => {
+  test('moves to "live" status once subscribe is sent', () => {
     const { result } = renderHook(() => useGraphqlRealtime(baseProps));
     const ws = MockWebSocket.instances[0];
     expect(result.current.status).toBe('connecting');
     act(() => ws.emitOpen());
     act(() => ws.emitMessage({ type: 'connection_ack' }));
-    await waitFor(() => expect(result.current.status).toBe('live'));
+    expect(result.current.status).toBe('live');
   });
 
   test('invokes onRowChanged with normalized payload for "next" CDC events', () => {
@@ -184,12 +184,12 @@ describe('useGraphqlRealtime', () => {
     expect(events[0]?.rowId).toBe('42');
   });
 
-  test('records lastEvent on the returned status object', async () => {
+  test('records lastEvent on the returned status object', () => {
     const { result } = renderHook(() => useGraphqlRealtime(baseProps));
     const ws = MockWebSocket.instances[0];
     act(() => ws.emitOpen());
     act(() => ws.emitMessage({ type: 'connection_ack' }));
-    await waitFor(() => expect(result.current.status).toBe('live'));
+    expect(result.current.status).toBe('live');
 
     const subId = JSON.parse(ws.sent[1]).id;
     act(() =>
@@ -200,7 +200,7 @@ describe('useGraphqlRealtime', () => {
         doc: { _id: 'gone' },
       }),
     );
-    await waitFor(() => expect(result.current.lastEvent?.rowId).toBe('gone'));
+    expect(result.current.lastEvent?.rowId).toBe('gone');
   });
 
   test('closes the socket on unmount and stops emitting events', () => {
@@ -235,7 +235,7 @@ describe('useGraphqlRealtime', () => {
     const firstSocket = MockWebSocket.instances[0];
     act(() => firstSocket.emitOpen());
     act(() => firstSocket.emitMessage({ type: 'connection_ack' }));
-    await waitFor(() => expect(result.current.status).toBe('live'));
+    expect(result.current.status).toBe('live');
 
     // Server-side drop.
     act(() => firstSocket.emitClose(1006, 'connection lost'));
@@ -251,7 +251,7 @@ describe('useGraphqlRealtime', () => {
 
     act(() => secondSocket.emitOpen());
     act(() => secondSocket.emitMessage({ type: 'connection_ack' }));
-    await waitFor(() => expect(result.current.status).toBe('live'));
+    expect(result.current.status).toBe('live');
   });
 
   test('caps reconnect backoff at 30 seconds', async () => {

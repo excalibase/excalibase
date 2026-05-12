@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Table2, Columns3, Download } from 'lucide-react';
 import {
   useTables, useColumns, useDropTable, useAddColumn, useDropColumn,
@@ -11,6 +12,9 @@ import { SkeletonTable } from '../components/ui/Skeleton';
 import { DataGrid } from '../components/tables/DataGrid';
 import { CreateTablePanel } from '../components/tables/CreateTablePanel';
 import { ColumnSchemaView } from '../components/tables/ColumnSchemaView';
+import { RealtimeIndicator } from '../components/RealtimeIndicator';
+import { useGraphqlRealtime } from '../realtime/useGraphqlRealtime';
+import { graphqlRealtimeWsUrl } from '../config/env';
 
 // csvSafe stringifies an arbitrary cell value without falling through to
 // "[object Object]" (S6551). Used for CSV export only.
@@ -37,6 +41,27 @@ export function TablesPage() {
   const insertRow = useInsertRow(pid);
   const updateRow = useUpdateRow(pid);
   const deleteRow = useDeleteRow(pid);
+  const qc = useQueryClient();
+
+  // Subscribe to graphql's CDC stream for the currently-selected table so the
+  // grid stays live without a polling interval. On any row change we
+  // invalidate the rows query — the simplest correct strategy; we don't try
+  // to splice deltas into the cache because the visible page depends on
+  // sort/offset and the row's new position may not be on-screen anyway.
+  const realtime = useGraphqlRealtime({
+    projectId: pid,
+    graphqlWsUrl: graphqlRealtimeWsUrl(),
+    jwt: localStorage.getItem('auth_token') ?? '',
+    collection: selectedTable,
+    source: 'rest',
+    schema: 'public',
+    onRowChanged: useCallback(
+      () => {
+        qc.invalidateQueries({ queryKey: ['schema-rows', pid, selectedTable] });
+      },
+      [qc, pid, selectedTable],
+    ),
+  });
 
   // Pagination & sorting
   const [page, setPage] = useState(0);
@@ -175,6 +200,7 @@ export function TablesPage() {
                 <Columns3 className="w-4 h-4 text-purple-400" />
                 <span className="text-sm font-medium text-text-primary">{selectedTable}</span>
                 {rowsData && <span className="text-xs text-text-tertiary">({rowsData.totalCount} rows)</span>}
+                <RealtimeIndicator status={realtime.status} className="ml-1" />
               </div>
               <div className="flex items-center gap-1">
                 <button onClick={() => setViewMode('data')} className={`px-2 py-1 text-xs rounded ${viewMode === 'data' ? 'bg-purple-500/10 text-purple-400' : 'text-text-tertiary hover:text-text-primary'}`}>Data</button>

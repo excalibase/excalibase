@@ -17,6 +17,8 @@ export default defineConfig({
         'src/components/auth/**/*.{ts,tsx}',
         'src/pages/SetupPage.tsx',
         'src/pages/RealtimePage.tsx',
+        'src/realtime/**/*.{ts,tsx}',
+        'src/components/RealtimeIndicator.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

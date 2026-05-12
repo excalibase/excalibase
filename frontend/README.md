@@ -47,6 +47,15 @@ npm run preview
 
 The Vite dev server proxies API calls to `http://localhost:24005`. Override via `VITE_API_URL` if the backend lives elsewhere.
 
+### Environment variables
+
+| Variable                          | Purpose                                                                 | Default                                |
+|-----------------------------------|-------------------------------------------------------------------------|----------------------------------------|
+| `VITE_API_URL`                    | Go provisioning API base URL                                            | `http://localhost:24005/api`           |
+| `VITE_EXCALIBASE_GRAPHQL_WS_URL`  | excalibase-graphql realtime WebSocket — drives live data on TablesPage  | `ws://localhost:10000/api/v1/realtime` |
+
+The studio's TablesPage subscribes to `VITE_EXCALIBASE_GRAPHQL_WS_URL` when a table is open so the data grid stays in sync without polling. The hook sends `connection_init` with the user's bearer JWT, subscribes to the selected collection, and re-runs the rows query on every CDC event. Auto-reconnect uses exponential backoff (1s → 30s with ±20% jitter).
+
 ## Backend
 
 The Go backend must be running for the app to work. From the repo root:
