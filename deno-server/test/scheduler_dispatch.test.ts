@@ -45,7 +45,10 @@ async function queryScheduled(
   const postgres = (await import("npm:postgres@3.4.4")).default;
   const sql = postgres(pgUrl, { onnotice: () => {} });
   try {
-    const rows = await sql.unsafe(
+    // postgres.js .unsafe params is typed against the `Sql` template
+    // generic; cast through `any` so heterogeneous values pass cleanly.
+    // deno-lint-ignore no-explicit-any
+    const rows = await (sql as any).unsafe(
       `SELECT id, project_id, module_name, export_name, status, args
        FROM excalibase_scheduled_functions WHERE ${where}`,
       params,

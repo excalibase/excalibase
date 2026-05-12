@@ -64,7 +64,8 @@ Deno.test({
     // and assert the export.kind reflects the user's default export, not
     // anything from the cron registry.
     type CapturedBody = { projectId: string; exports: Array<{ kind: string }> };
-    let captured: CapturedBody | null = null;
+    // eslint-disable-next-line prefer-const
+    let captured = null as CapturedBody | null;
     const ac = new AbortController();
     const port = await new Promise<number>((resolve) => {
       // deno-lint-ignore no-explicit-any
@@ -98,8 +99,9 @@ Deno.test({
       // Give the fire-and-forget callback a beat to land.
       await delay(300);
       assertExists(captured);
-      assertEquals(captured!.projectId, "proj_cron");
-      assertEquals(captured!.exports[0].kind, "action");
+      const cap = captured as CapturedBody;
+      assertEquals(cap.projectId, "proj_cron");
+      assertEquals(cap.exports[0].kind, "action");
     } finally {
       await rt.stop();
       ac.abort();
