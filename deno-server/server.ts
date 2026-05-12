@@ -597,6 +597,58 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       }
     }
 
+    // __buildAuthCtx — Phase 12: typed ctx.auth surface mirroring Convex's
+    // Auth interface. Carries the legacy raw claims plus a typed
+    // getUserIdentity() helper that surfaces standard OIDC claims under
+    // their Convex-documented names (sub -> subject, iss -> issuer, email,
+    // email_verified -> emailVerified, picture -> pictureUrl, name,
+    // given_name, family_name, etc.). Custom claims pass through via the
+    // spread so handler code can access them by their JWT key.
+    //
+    // Returns a fresh object per invocation so the helper closes over this
+    // request's claims; the per-call cost is negligible compared to the
+    // worker RPC overhead.
+    function __buildAuthCtx(claims) {
+      return {
+        claims: claims,
+        getUserIdentity: async () => {
+          if (!claims || typeof claims !== 'object') return null;
+          const sub = typeof claims.sub === 'string' ? claims.sub : '';
+          const iss = typeof claims.iss === 'string' ? claims.iss : '';
+          // Build the identity by spreading the raw claims first (so
+          // custom claims surface under their JWT keys), then overlaying
+          // the Convex-shape rename / type-coerced versions of the
+          // standard OIDC slots. The spread is shallow — that's enough
+          // because OIDC claims are scalar.
+          return Object.assign({}, claims, {
+            tokenIdentifier: iss + '|' + sub,
+            subject: sub,
+            issuer: iss,
+            name: typeof claims.name === 'string' ? claims.name : undefined,
+            email: typeof claims.email === 'string' ? claims.email : undefined,
+            emailVerified: typeof claims.email_verified === 'boolean'
+              ? claims.email_verified : undefined,
+            phoneNumber: typeof claims.phone_number === 'string'
+              ? claims.phone_number : undefined,
+            phoneNumberVerified: typeof claims.phone_number_verified === 'boolean'
+              ? claims.phone_number_verified : undefined,
+            pictureUrl: typeof claims.picture === 'string' ? claims.picture : undefined,
+            givenName: typeof claims.given_name === 'string' ? claims.given_name : undefined,
+            familyName: typeof claims.family_name === 'string' ? claims.family_name : undefined,
+            nickname: typeof claims.nickname === 'string' ? claims.nickname : undefined,
+            preferredUsername: typeof claims.preferred_username === 'string'
+              ? claims.preferred_username : undefined,
+            profileUrl: typeof claims.profile === 'string' ? claims.profile : undefined,
+            updatedAt: typeof claims.updated_at === 'string' ? claims.updated_at : undefined,
+            birthday: typeof claims.birthday === 'string' ? claims.birthday : undefined,
+            gender: typeof claims.gender === 'string' ? claims.gender : undefined,
+            language: typeof claims.locale === 'string' ? claims.locale : undefined,
+            timezone: typeof claims.zoneinfo === 'string' ? claims.zoneinfo : undefined,
+          });
+        },
+      };
+    }
+
     // --- ctx.db RPC facade ---
     // The worker holds no DB connection of its own. Each ctx.db.<op>() call
     // posts a {type:"db", rpcId, op, ...} message to the main thread; the
@@ -1040,7 +1092,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         // background work the same way actions can.
         const ctx = {
           db: null,
-          auth: { claims },
+          auth: __buildAuthCtx(claims),
           runQuery:    __makeRunQuery(),
           runMutation: __makeRunMutation(),
           runAction:   __makeRunAction(),
@@ -1142,7 +1194,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         __currentTxnRefId = typeof txnRefId === 'string' ? txnRefId : '';
         const ctx = {
           db,
-          auth: { claims },
+          auth: __buildAuthCtx(claims),
           // Phase 7: composition surface. Type-level read-only rules are
           // enforced by the lib (QueryCtx has no runMutation/runAction);
           // the worker exposes all three on every Ctx variant so a
