@@ -509,3 +509,91 @@ func TestFunctionStore_LoadsFromDiskOnStart(t *testing.T) {
 		t.Errorf("name: %q", got.Name)
 	}
 }
+
+// Phase 9b.F — fix the long-standing blocker that prevents any function with
+// an `npm:` external import from ever booting in the Deno worker.
+//
+// Background: esbuild's IIFE format synthesises a `__require()` stub that
+// throws "Dynamic require of \"npm:<pkg>\" is not supported" at runtime
+// because Deno workers have no synchronous require. Every Phase 3 / 9b.D
+// / 15d / 9b.E e2e suite silently yellow-shipped on top of this. The fix
+// is to emit ESM and rely on the worker template's `await import()` of a
+// Blob URL — Deno honours `npm:`/`node:`/`jsr:` external specifiers in
+// real ESM imports just like at top-level.
+//
+// This test pins the contract: Bundle() of any user source with an `npm:`
+// import MUST produce ESM (real `import` statements survive to the output,
+// no `__require(` shim). A bundle that contains `__require(` would boot
+// fail in the worker — we refuse to ship it.
+func TestBundle_NpmImportProducesESM(t *testing.T) {
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "esmnpm",
+		Name:      "ESM NPM",
+		Files: []File{{Path: testIndexTS, Content: `
+import { mutation } from "npm:@excalibase/server@0.10.0";
+import { z } from "npm:zod@3";
+export default mutation({
+  args: z.object({}),
+  handler: async () => ({ ok: true }),
+});`}},
+	}
+	out, err := fn.Bundle()
+	if err != nil {
+		t.Fatalf(testBundleFmt, err)
+	}
+
+	// The IIFE __require shim is the actual crash site at worker boot.
+	// If it appears anywhere in the output, the function will not run.
+	if strings.Contains(out, "__require(") {
+		t.Errorf("bundle contains IIFE __require() stub — workers will fail at boot:\n%s",
+			truncForLog(out))
+	}
+
+	// ESM output preserves the external import declarations verbatim so
+	// Deno resolves them via npm:/jsr:/node:/http(s): at module load time.
+	// We accept either the bare specifier or the `from "npm:..."` clause.
+	if !strings.Contains(out, `from "npm:@excalibase/server@0.10.0"`) {
+		t.Errorf("bundle missing ESM import of npm:@excalibase/server@0.10.0:\n%s",
+			truncForLog(out))
+	}
+	if !strings.Contains(out, `from "npm:zod@3"`) {
+		t.Errorf("bundle missing ESM import of npm:zod@3:\n%s", truncForLog(out))
+	}
+
+	// The v2 shape detection has to keep working through the change —
+	// the bundler stamp drives RuntimeShape and the runtime codegen path
+	// reads it back. Regress this and Phase 3 SDK breaks silently.
+	if fn.RuntimeShape != "v2" {
+		t.Errorf("RuntimeShape: got %q, want %q", fn.RuntimeShape, "v2")
+	}
+}
+
+// TestBundle_NoIIFERequireStubInLegacyShape — even bundles without npm:
+// imports must not emit __require(). Catches accidental regressions where
+// someone restores IIFE for "just the simple cases" — there is no simple
+// case, IIFE is banned end-to-end now.
+func TestBundle_NoIIFERequireStubInLegacyShape(t *testing.T) {
+	fn := &Function{
+		ProjectID: "proj_test0001",
+		ID:        "v1plain",
+		Name:      "V1 Plain",
+		Files: []File{{Path: testIndexTS, Content: `
+export default (_req: Request) => new Response("ok");`}},
+	}
+	out, err := fn.Bundle()
+	if err != nil {
+		t.Fatalf(testBundleFmt, err)
+	}
+	if strings.Contains(out, "__require(") {
+		t.Errorf("plain bundle still contains __require() stub:\n%s", truncForLog(out))
+	}
+}
+
+func truncForLog(s string) string {
+	const max = 1024
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "… [truncated]"
+}
