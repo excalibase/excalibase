@@ -37,7 +37,107 @@ import { executeDbOp, newCache } from "./runtime/db.ts";
 import type { DbOp } from "./runtime/db.ts";
 import { newId } from "./runtime/ids.ts";
 import { closePool, getPool } from "./runtime/pool.ts";
+import type { Sql } from "./runtime/pool.ts";
 import type { ValidatorCache } from "./runtime/validator.ts";
+
+// ---------------------------------------------------------------------------
+// Phase 8.5 — Shared mutation transaction map.
+//
+// Convex parity: when a mutation handler runs, every ctx.db.* and
+// ctx.scheduler.* op it performs (and every op performed by mutations it
+// invokes via ctx.runMutation) must ride the SAME Postgres transaction.
+// On handler return, the txn commits; on throw/timeout, it rolls back.
+//
+// We assign each invocation a unique `txnRefId` and stash the connection
+// in `txnMap`. The worker echoes `txnRefId` on every db/scheduler RPC so
+// the main-thread dispatch consults the map and routes through the txn
+// handle (or the pool, when no txn is active).
+//
+// For nested ctx.runMutation, the new invocation gets a fresh `txnRefId`
+// whose ActiveTxn shares the parent's `sql` handle. `owned=false` on the
+// alias entry means COMMIT/ROLLBACK is the parent's responsibility — the
+// nested call just clears its alias when it returns.
+//
+// Actions DO NOT open a txn. ActionCtx.runMutation calls the mutation
+// without forwarding a parent ref, so the mutation opens a fresh
+// top-level txn (Convex parity: the action's call-boundary is the new
+// top-level).
+// ---------------------------------------------------------------------------
+
+interface ActiveTxn {
+  /** Reserved Postgres connection with BEGIN already issued. */
+  sql: Sql;
+  /** True when this entry opened the txn — only owners commit/rollback. */
+  owned: boolean;
+  /** Non-empty for alias entries; carries the parent's txnRefId. */
+  parentRefId?: string;
+  /** Millisecond timestamp at which the txn was opened (or aliased). */
+  openedAt: number;
+}
+
+const txnMap: Map<string, ActiveTxn> = new Map();
+
+// nextTxnRefSeq generates a monotonically-increasing, process-unique key
+// for each top-level/alias txn entry. Globally unique across all
+// scripts; the `t` prefix makes a debug log line unambiguous.
+let nextTxnRefSeq = 1;
+function newTxnRefId(): string {
+  const id = `t${nextTxnRefSeq.toString(36)}_${Date.now().toString(36)}`;
+  nextTxnRefSeq++;
+  return id;
+}
+
+/**
+ * Open a new Postgres transaction by reserving a connection from the
+ * singleton pool and issuing BEGIN. Returns the reserved sql handle —
+ * caller must commit or rollback exactly once.
+ */
+async function openTxn(): Promise<Sql> {
+  const pool = getPool();
+  // deno-lint-ignore no-explicit-any
+  const reserved = await (pool as any).reserve();
+  // deno-lint-ignore no-explicit-any
+  await (reserved as any).unsafe("BEGIN");
+  return reserved;
+}
+
+/** Commit a txn opened by openTxn and release the underlying connection. */
+async function commitTxn(sql: Sql): Promise<void> {
+  try {
+    // deno-lint-ignore no-explicit-any
+    await (sql as any).unsafe("COMMIT");
+  } finally {
+    // deno-lint-ignore no-explicit-any
+    try { (sql as any).release?.(); } catch (_) { /* ignore */ }
+  }
+}
+
+/** Roll back a txn opened by openTxn and release the underlying connection. */
+async function rollbackTxn(sql: Sql): Promise<void> {
+  try {
+    // deno-lint-ignore no-explicit-any
+    await (sql as any).unsafe("ROLLBACK");
+  } catch (_) {
+    // Best-effort; if rollback fails the connection is destroyed on release
+    // anyway. We don't want the rollback path to throw and mask the
+    // user-handler error that triggered it.
+  } finally {
+    // deno-lint-ignore no-explicit-any
+    try { (sql as any).release?.(); } catch (_) { /* ignore */ }
+  }
+}
+
+/**
+ * Return the Sql handle that the given txnRefId should use.
+ * Falls back to the pool when the ref is unknown / undefined (e.g.
+ * legacy v1 handlers, queries, actions).
+ */
+function sqlFor(txnRefId: string | undefined | null): Sql {
+  if (txnRefId && txnMap.has(txnRefId)) {
+    return txnMap.get(txnRefId)!.sql;
+  }
+  return getPool();
+}
 
 interface DeployRequest {
   id: string;
@@ -307,12 +407,19 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     // can race without overwriting each other's resolvers.
     const __dbPending = new Map();
     let __nextDbRpcId = 1;
+    // Phase 8.5: per-invocation txn ref. Set by __dispatchV2/__dispatchHttp
+    // before calling the user handler so every db/scheduler/runX RPC the
+    // handler posts can be routed to the right Postgres connection on the
+    // main thread. Empty string means "no active txn" (use pool).
+    let __currentTxnRefId = '';
 
     function __dbCall(op, collection, payload) {
       const rpcId = __nextDbRpcId++;
       return new Promise((resolve, reject) => {
         __dbPending.set(rpcId, { resolve, reject });
-        self.postMessage({ type: 'db', rpcId, op, collection, ...payload });
+        self.postMessage({ type: 'db', rpcId, op, collection,
+          txnRefId: __currentTxnRefId,
+          ...payload });
       });
     }
 
@@ -541,6 +648,11 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         self.postMessage({
           type: 'runX', rpcId, op, ref, args,
           depth: nextDepth,
+          // Phase 8.5: forward the caller's txn ref so a mutation→mutation
+          // call can ride the parent's transaction. Main-thread dispatch
+          // only honours this when the caller's kind is "mutation"; for
+          // queries/actions the ref is recorded but ignored.
+          txnRefId: __currentTxnRefId,
         });
       });
     }
@@ -560,7 +672,12 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       const rpcId = __nextSchedRpcId++;
       return new Promise((resolve, reject) => {
         __schedPending.set(rpcId, { resolve, reject });
-        self.postMessage({ type: 'scheduler', rpcId, op, payload });
+        // Phase 8.5: route the scheduler INSERT through the mutation's txn
+        // when one is active. Action handlers carry no txnRefId, so their
+        // schedule lands on the pool — matching Convex's "actions commit
+        // independently" semantics.
+        self.postMessage({ type: 'scheduler', rpcId, op, payload,
+          txnRefId: __currentTxnRefId });
       });
     }
     function __makeScheduler() {
@@ -605,7 +722,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     // For an httpAction the default export's handler runs every time.
     // For an httpRouter we look up the matching (path, method) row in
     // the bundled __excalibase_route_handlers map; misses return 404.
-    async function __dispatchHttp(reqId, reqData, fnDef) {
+    async function __dispatchHttp(reqId, reqData, fnDef, txnRefId) {
       try {
         const headers = reqData.headers || {};
         const auth = headers['Authorization'] || headers['authorization'] || '';
@@ -616,6 +733,10 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         // Public traffic has no depth, so default to 0.
         const incomingDepth = typeof reqData.runDepth === 'number' ? reqData.runDepth : 0;
         __currentRunDepth = incomingDepth;
+        // Phase 8.5: http* handlers don't own a transaction (action-equivalent
+        // boundary). Forward any incoming txnRefId so a nested ctx.runMutation
+        // routes through the right entry on the main side.
+        __currentTxnRefId = typeof txnRefId === 'string' ? txnRefId : '';
 
         // Reconstruct a raw Request. The runtime accepts relative URLs;
         // Request requires an absolute one. Use the same synthetic base
@@ -699,7 +820,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     //   POST body must be { "args": <object> }; on missing args, 400.
     //   Calls handler(ctx, body.args); wraps result as { data } JSON.
     //   ctx.db is a real DbClient for query/mutation; null for action.
-    async function __dispatchV2(reqId, reqData, fnDef) {
+    async function __dispatchV2(reqId, reqData, fnDef, txnRefId) {
       try {
         const headers = reqData.headers || {};
         const auth = headers['Authorization'] || headers['authorization'] || '';
@@ -732,6 +853,11 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         // it for each nested call so the chain is end-to-end bounded.
         const incomingDepth = typeof body.runDepth === 'number' ? body.runDepth : 0;
         __currentRunDepth = incomingDepth;
+        // Phase 8.5: pick up the txn ref the main thread stamped on this
+        // invocation. Empty string means "no active txn" (query, action,
+        // or v1 fetch handler) and db/scheduler RPCs will fall back to the
+        // pool on the main side.
+        __currentTxnRefId = typeof txnRefId === 'string' ? txnRefId : '';
         const ctx = {
           db,
           auth: { claims },
@@ -864,6 +990,11 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       if (msg && msg.type === 'invoke') {
         const reqId = msg.reqId;
         const reqData = msg.data;
+        // Phase 8.5: main-thread stamps the txn ref onto every invoke
+        // envelope so this worker's db/scheduler/runX RPCs can echo it
+        // back. Empty string when no txn is active (queries, actions,
+        // v1 handlers, or the initial top-level call before main decides).
+        const txnRefId = typeof msg.txnRefId === 'string' ? msg.txnRefId : '';
 
         // v2 path — only if the flag is on AND the export matches the
         // tagged FunctionDef shape. Anything else falls through to legacy.
@@ -871,10 +1002,10 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         if (__V2_ENABLED && __isV2Export(exp)) {
           // Phase 7: httpAction / httpRouter take the raw-Request path.
           if (exp.kind === 'httpAction' || exp.kind === 'httpRouter') {
-            await __dispatchHttp(reqId, reqData, exp);
+            await __dispatchHttp(reqId, reqData, exp, txnRefId);
             return;
           }
-          await __dispatchV2(reqId, reqData, exp);
+          await __dispatchV2(reqId, reqData, exp, txnRefId);
           return;
         }
 
@@ -937,6 +1068,10 @@ interface RunXMessage {
   ref: { moduleName: string; exportName: string };
   args: unknown;
   depth: number;
+  // Phase 8.5: present when the caller's worker has an active mutation
+  // txn. dispatchRunX only forwards it to the target when the kind matrix
+  // permits shared-txn composition (mutation → mutation).
+  txnRefId?: string;
 }
 
 // dispatchRunX resolves a function reference against the runtime's local
@@ -988,11 +1123,23 @@ async function dispatchRunX(callerRuntimeID: string, msg: RunXMessage): Promise<
       );
     }
   }
+  // Phase 8.5: forward the caller's txn ref only when the caller is a
+  // mutation. From a mutation → another mutation we want shared-txn
+  // semantics; from an action → mutation we deliberately do NOT propagate
+  // (the action has no transactional boundary), so the inner mutation
+  // opens a fresh top-level txn — Convex parity.
+  const propagateTxn = callerKind === "mutation" && targetKind === "mutation"
+    && typeof msg.txnRefId === "string" && msg.txnRefId.length > 0;
+  const bodyPayload: Record<string, unknown> = {
+    args: msg.args,
+    runDepth: msg.depth,
+  };
+  if (propagateTxn) bodyPayload.txnRefId = msg.txnRefId;
   const invokeReq: InvokeRequest = {
     method: "POST",
     url: `/invoke/${targetID}`,
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ args: msg.args, runDepth: msg.depth }),
+    body: JSON.stringify(bodyPayload),
   };
   let res: InvokeResponse;
   try {
@@ -1036,27 +1183,25 @@ interface SchedulerMessage {
 }
 
 /**
- * dispatchScheduler executes one `ctx.scheduler.*` op on the project
- * Postgres. Resolves with the result that the worker's promise should
+ * dispatchScheduler executes one `ctx.scheduler.*` op against the supplied
+ * Sql handle. Resolves with the result that the worker's promise should
  * receive (a `ScheduledId` for `runAfter`/`runAt`, `null` for `cancel`).
  *
- * The implementation routes through the project pool unconditionally
- * (no shared-mutation-transaction yet — see the inline note for the
- * follow-up). Action-side semantics are correct: an action that fails
- * after scheduling leaves the row in place. Mutation-side rollback
- * semantics are NOT yet honoured; a mutation that throws after
- * scheduling will leave the pending row behind.
+ * Phase 8.5: `sql` is the active mutation transaction handle when the
+ * caller is a mutation (sqlFor(msg.txnRefId)) or the singleton pool
+ * otherwise. The caller passes the right handle so this function stays
+ * pool-agnostic and we can reuse the same SQL composition for both.
  */
 async function dispatchScheduler(
   callerRuntimeID: string,
   msg: SchedulerMessage,
+  sql: Sql,
 ): Promise<unknown> {
   const sep = callerRuntimeID.indexOf("__");
   if (sep < 0) {
     throw new Error("scheduler: caller runtime id missing project separator");
   }
   const projectID = callerRuntimeID.slice(0, sep);
-  const sql = getPool();
   if (msg.op === "runAfter") {
     const delayMs = msg.payload.delayMs ?? 0;
     const ref = msg.payload.ref;
@@ -1238,16 +1383,20 @@ class FunctionRuntime {
       }
 
       if (msg.type === "db") {
-        // Async db op from the worker — execute against the pool and post
-        // the result back. Errors are normalised into a {ok:false,error}
-        // envelope so the worker can reject the user's promise cleanly.
+        // Async db op from the worker — execute against the pool (or the
+        // active mutation txn, when one is registered) and post the result
+        // back. Errors are normalised into a {ok:false,error} envelope so
+        // the worker can reject the user's promise cleanly.
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
         (async () => {
           let result;
           try {
-            const pool = getPool();
-            result = await executeDbOp(pool, meta.dbCache, msg as DbOp);
+            // Phase 8.5: route through the shared mutation txn when this
+            // invocation registered one. sqlFor falls back to the pool
+            // for queries/actions/v1.
+            const sql = sqlFor(msg.txnRefId as string | undefined);
+            result = await executeDbOp(sql, meta.dbCache, msg as DbOp);
           } catch (err) {
             result = {
               ok: false as const,
@@ -1303,20 +1452,19 @@ class FunctionRuntime {
       }
 
       if (msg.type === "scheduler") {
-        // Phase 8: ctx.scheduler.{runAfter,runAt,cancel}. Each op routes
-        // through the project pool. The mutation-side rollback semantics
-        // require the INSERT to ride inside the caller's Postgres
-        // transaction; that wiring (shared txn map) is a follow-up. For
-        // now, runAfter/runAt INSERT through the pool unconditionally so
-        // action-side scheduling works end-to-end. A failing mutation
-        // will leave the inserted row behind until the shared-txn work
-        // lands — known limitation, tracked separately.
+        // Phase 8: ctx.scheduler.{runAfter,runAt,cancel}.
+        //
+        // Phase 8.5: route the INSERT/UPDATE through the active mutation
+        // txn when the caller is a mutation (txnMap has an entry for the
+        // worker's txnRefId). Action handlers carry no txnRefId, so they
+        // route through the pool and commit independently — Convex parity.
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
         (async () => {
           let result: { ok: true; data: unknown } | { ok: false; error: string };
           try {
-            const data = await dispatchScheduler(meta.id, msg);
+            const sql = sqlFor(msg.txnRefId as string | undefined);
+            const data = await dispatchScheduler(meta.id, msg, sql);
             result = { ok: true, data };
           } catch (err) {
             result = {
@@ -1376,27 +1524,110 @@ class FunctionRuntime {
     script.invocations++;
     const reqId = script.nextReqId++;
 
-    return await new Promise<InvokeResponse>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        script.pending.delete(reqId);
-        metrics.invocationsTotal++;
-        metrics.invocationsError++;
-        metrics.timeoutsTotal++;
-        reject(new Error(`execution timeout (${INVOKE_TIMEOUT_MS / 1000}s)`));
-
-        // If this was the last pending request and nothing succeeded since
-        // the timeout fired, the worker is likely stuck (infinite loop, deadlock).
-        // Terminate it to reclaim resources. The function can be redeployed
-        // on the next deploy call.
-        if (script.pending.size === 0) {
-          console.error(`[runtime] terminating stuck worker ${id} (no pending requests after timeout)`);
-          try { script.worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on invoke timeout:", terminateErr); }
-          this.scripts.delete(id);
+    // Phase 8.5: decide whether this invocation rides on an existing txn
+    // (nested ctx.runMutation from a parent mutation) or opens a fresh one
+    // (top-level mutation). Queries / actions / v1 handlers get neither.
+    // The parent's txn ref ride along in the request body alongside
+    // `runDepth` — dispatchRunX is the only producer of that field.
+    let inheritedTxnRefId = "";
+    if (typeof req.body === "string" && req.body.length > 0) {
+      try {
+        const parsed = JSON.parse(req.body) as { txnRefId?: unknown };
+        if (typeof parsed.txnRefId === "string" && parsed.txnRefId.length > 0) {
+          inheritedTxnRefId = parsed.txnRefId;
         }
-      }, INVOKE_TIMEOUT_MS);
-      script.pending.set(reqId, { resolve, reject, timeout });
-      script.worker.postMessage({ type: "invoke", reqId, data: req });
-    });
+      } catch (_) { /* not JSON — top-level path, treat as no parent */ }
+    }
+
+    let activeTxnRefId = "";
+    if (inheritedTxnRefId && txnMap.has(inheritedTxnRefId)) {
+      // Alias entry — reuse the parent's connection, owned=false so we
+      // don't double-commit. A new key keeps the map entry per-invocation
+      // (so we can clear it on return without touching the parent).
+      activeTxnRefId = newTxnRefId();
+      const parent = txnMap.get(inheritedTxnRefId)!;
+      txnMap.set(activeTxnRefId, {
+        sql: parent.sql,
+        owned: false,
+        parentRefId: inheritedTxnRefId,
+        openedAt: Date.now(),
+      });
+    } else if (script.kind === "mutation") {
+      // Top-level mutation — open a fresh transaction. If the pool isn't
+      // configured (EXCALIBASE_DB_URL unset, e.g. tests that don't touch
+      // ctx.db), fall back to no-txn mode: the handler can still run, and
+      // any db op it does attempt will surface its own error. This keeps
+      // mutations that never call ctx.db / ctx.scheduler working.
+      try {
+        const txn = await openTxn();
+        activeTxnRefId = newTxnRefId();
+        txnMap.set(activeTxnRefId, {
+          sql: txn,
+          owned: true,
+          openedAt: Date.now(),
+        });
+      } catch (err) {
+        console.debug(`[runtime] mutation ${id} runs without txn:`,
+          err instanceof Error ? err.message : err);
+      }
+    }
+
+    const finalize = async (settled: "success" | "error") => {
+      if (!activeTxnRefId) return;
+      const entry = txnMap.get(activeTxnRefId);
+      txnMap.delete(activeTxnRefId);
+      if (!entry || !entry.owned) return;
+      if (settled === "success") {
+        try { await commitTxn(entry.sql); } catch (commitErr) {
+          console.warn(`[runtime] commit failed for ${id}:`, commitErr);
+        }
+      } else {
+        await rollbackTxn(entry.sql);
+      }
+    };
+
+    let res: InvokeResponse;
+    try {
+      res = await new Promise<InvokeResponse>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          script.pending.delete(reqId);
+          metrics.invocationsTotal++;
+          metrics.invocationsError++;
+          metrics.timeoutsTotal++;
+          reject(new Error(`execution timeout (${INVOKE_TIMEOUT_MS / 1000}s)`));
+
+          // If this was the last pending request and nothing succeeded since
+          // the timeout fired, the worker is likely stuck (infinite loop, deadlock).
+          // Terminate it to reclaim resources. The function can be redeployed
+          // on the next deploy call.
+          if (script.pending.size === 0) {
+            console.error(`[runtime] terminating stuck worker ${id} (no pending requests after timeout)`);
+            try { script.worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on invoke timeout:", terminateErr); }
+            this.scripts.delete(id);
+          }
+        }, INVOKE_TIMEOUT_MS);
+        script.pending.set(reqId, { resolve, reject, timeout });
+        script.worker.postMessage({ type: "invoke", reqId, data: req, txnRefId: activeTxnRefId });
+      });
+    } catch (err) {
+      await finalize("error");
+      throw err;
+    }
+
+    // Phase 8.5: a v2 handler that threw is reported as a 200 envelope from
+    // the worker with `{error: ...}` in the body (see __dispatchV2's
+    // self.postMessage on the catch branches). Treat any non-2xx status,
+    // or any 200 whose body has a top-level `error` field, as a rollback
+    // trigger for the txn.
+    let isError = res.status < 200 || res.status >= 300;
+    if (!isError && res.body) {
+      try {
+        const parsed = JSON.parse(res.body) as { error?: unknown };
+        if (parsed && typeof parsed.error === "string") isError = true;
+      } catch (_) { /* non-JSON body — treat as success */ }
+    }
+    await finalize(isError ? "error" : "success");
+    return res;
   }
 
   delete(id: string): boolean {

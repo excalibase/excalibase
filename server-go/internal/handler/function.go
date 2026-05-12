@@ -549,6 +549,18 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Phase 8.5: sync the bundle's cron registry to excalibase_cron_jobs
+	// in a transaction that we hold open across the runtime deploy. On
+	// deploy failure we rollback so the table never drifts ahead of the
+	// runtime. On deploy success we commit, making the new schedule
+	// visible to the CronRunner on its next tick.
+	cronTx, cronCommit, cronErr := h.beginCronSync(r.Context(), projectID, fn.ID, fn.CronJobs)
+	if cronErr != nil {
+		_ = h.store.Delete(projectID, fn.ID)
+		httpError(w, "cron sync failed: "+safeError(cronErr), http.StatusBadGateway)
+		return
+	}
+
 	builtins := h.builtinEnv(r.Context(), projectID)
 	env, err := h.secrets.BuildEnvForDeploy(projectID, builtins)
 	if err != nil {
@@ -558,6 +570,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	client, err := h.runtimeClientFor(r.Context(), projectID)
 	if err != nil {
+		_ = rollbackCronSync(cronTx)
 		_ = h.store.Delete(projectID, fn.ID)
 		httpError(w, "runtime unavailable: "+safeError(err), http.StatusServiceUnavailable)
 		return
@@ -584,13 +597,20 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Secrets: env,
 	})
 	if deployErr != nil {
-		// Rollback the store record — the deploy didn't land, so we shouldn't
-		// keep a stale function around.
+		// Rollback the cron sync alongside the store record — the deploy
+		// didn't land, so we shouldn't keep stale crons (or a stale
+		// function) around.
+		_ = rollbackCronSync(cronTx)
 		if delErr := h.store.Delete(projectID, fn.ID); delErr != nil {
 			log.Printf("WARN: rollback function store: %v", delErr)
 		}
 		httpError(w, "failed to deploy: "+safeError(deployErr), http.StatusBadGateway)
 		return
+	}
+	// Phase 8.5: deploy succeeded — commit the cron sync so the cron
+	// registry table reflects the latest bundle.
+	if commitErr := cronCommit(); commitErr != nil {
+		log.Printf("WARN: commit cron sync for %s/%s: %v", projectID, fn.ID, commitErr)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

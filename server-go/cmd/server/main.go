@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/bootstrap"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
@@ -111,6 +112,14 @@ func runServer(cfg config.AppConfig) {
 		deps.backupHandler.SetScheduler(scheduler)
 	}
 
+	// Phase 8.5: deferred-execution scheduler — drains the Postgres-backed
+	// task queue + walks the cron registry. Enabled by default; disable
+	// via EXCALIBASE_SCHEDULER_ENABLED=false (operators running the worker
+	// out-of-process don't want the in-process replica to compete on the
+	// FOR UPDATE SKIP LOCKED claim path).
+	fnSchedHandles := startFunctionScheduler(sqlStore)
+	defer fnSchedHandles.Stop()
+
 	// Wire pause/resume — backup must run before pause, so PauseService
 	// depends on the BackupService that backupHandler exposes.
 	pausers := buildPausers(cfg, factory, dockerClientRef)
@@ -199,6 +208,36 @@ func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 		return nil, func() {}
 	}
 	return scheduler, scheduler.Stop
+}
+
+// startFunctionScheduler boots Phase 8.5's deferred-execution worker +
+// cron runner. The runners poll the platform DB; tenants are responsible
+// for ensuring excalibase_scheduled_functions + excalibase_cron_jobs
+// exist on whichever DB the runners point at. Boot is best-effort —
+// when the platform DB isn't a real *sql.DB (e.g. SQLite self-hosted),
+// we skip the boot rather than panicking.
+func startFunctionScheduler(sqlStore storage.PlatformStore) *bootstrap.SchedulerHandles {
+	cfg := bootstrap.SchedulerConfigFromEnv()
+	if !cfg.Enabled {
+		log.Println("Function scheduler disabled via EXCALIBASE_SCHEDULER_ENABLED")
+		return bootstrap.StartScheduler(context.Background(), cfg)
+	}
+	if sqlStore == nil {
+		return bootstrap.StartScheduler(context.Background(), cfg)
+	}
+	cfg.DB = sqlStore.DB()
+	if cfg.DB == nil {
+		log.Println("Function scheduler boot skipped: platform store has no *sql.DB handle")
+		// Disable to take the no-op path inside StartScheduler.
+		cfg.Enabled = false
+		return bootstrap.StartScheduler(context.Background(), cfg)
+	}
+	handles := bootstrap.StartScheduler(context.Background(), cfg)
+	if handles.Started() {
+		log.Printf("Function scheduler started (poll=%v, cronPoll=%v)",
+			cfg.PollInterval, cfg.CronPollInterval)
+	}
+	return handles
 }
 
 // handlerDeps groups all wired handlers + middleware used during route mounting.

@@ -54,12 +54,16 @@ type Invoker interface {
 //   excalibase_cron_jobs
 //     name             text NOT NULL
 //     project_id       text NOT NULL
+//     function_id      text NOT NULL   -- Phase 8.5: which function owns the row
 //     module_name      text NOT NULL
 //     export_name      text NOT NULL
 //     args             jsonb NOT NULL
 //     schedule         jsonb NOT NULL
 //     last_enqueued_at timestamptz
 //     PRIMARY KEY (project_id, name)
+//
+// `function_id` is added by SyncCronJobs at deploy time so a redeploy
+// can scope its DELETE/UPSERT to rows owned by the same function.
 func EnsureTables(ctx context.Context, db *sql.DB) error {
 	const ddl = `
 		CREATE TABLE IF NOT EXISTS excalibase_scheduled_functions (
@@ -80,6 +84,7 @@ func EnsureTables(ctx context.Context, db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS excalibase_cron_jobs (
 			name text NOT NULL,
 			project_id text NOT NULL,
+			function_id text NOT NULL DEFAULT '',
 			module_name text NOT NULL,
 			export_name text NOT NULL,
 			args jsonb NOT NULL,
@@ -87,6 +92,10 @@ func EnsureTables(ctx context.Context, db *sql.DB) error {
 			last_enqueued_at timestamptz,
 			PRIMARY KEY (project_id, name)
 		);
+		-- Idempotent ALTER for pre-Phase-8.5 databases (DEFAULT '' so
+		-- existing rows scoot through the NOT NULL constraint).
+		ALTER TABLE excalibase_cron_jobs
+			ADD COLUMN IF NOT EXISTS function_id text NOT NULL DEFAULT '';
 	`
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
 		return err

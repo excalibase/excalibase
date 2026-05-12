@@ -41,9 +41,21 @@ export function newCache(): ValidatorCache {
 }
 
 async function loadSchemaFromDb(sql: Sql, collection: string): Promise<unknown | null> {
-  // Use a try/catch — when the table does not exist in this deployment, we
-  // fall back to no-schema (no-op validation) without surfacing the error.
+  // Phase 8.5 caveat: when this runs inside a shared mutation txn, a
+  // raw error from the SELECT (e.g. "relation does not exist") aborts
+  // the whole transaction — any subsequent statement fails with
+  // "current transaction is aborted". To stay safe we pre-flight via
+  // information_schema (which always exists) so the path is single
+  // round-trip when the table is present and never poisons the txn
+  // when it isn't. The pg_catalog read is itself a regular SQL query
+  // that crosses the parameter boundary.
   try {
+    const presence = await sql`
+      SELECT 1 FROM information_schema.tables
+       WHERE table_schema = 'nosql' AND table_name = 'collection_schema'
+       LIMIT 1
+    `;
+    if (presence.length === 0) return null;
     const rows = await sql`
       SELECT schema FROM nosql.collection_schema WHERE collection = ${collection} LIMIT 1
     `;
