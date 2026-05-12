@@ -38,27 +38,10 @@ export interface RuntimeOptions {
    * Sets EXCALIBASE_MUTATION_RETRY_BACKOFF_MS; runtime default is 50.
    */
   mutationRetryBackoffMs?: number;
-  /**
-   * Phase 9b.A: open a sibling WebSocket listener for /functions/v1/{projectId}
-   * /_watch. Picks a free port via the same `pickPort` helper and exports it
-   * as `wsPort` on the returned handle. Defaults off so tests that don't
-   * need reactive don't pay the bind cost.
-   */
-  wsEnabled?: boolean;
-  /**
-   * Phase 9b.B: when set, the runtime starts the NATS bridge with this URL.
-   * Unset → bridge disabled (single-replica reactive only, matches 9b.A
-   * behaviour). The bridge publishes CommitEvents to
-   * `excalibase.fn.<projectId>.commits` and subscribes to the wildcard
-   * `excalibase.fn.*.commits` so other replicas see local commits.
-   */
-  natsUrl?: string;
 }
 
 export interface RuntimeHandle {
   port: number;
-  /** Sibling port for the reactive WS listener; undefined when wsEnabled=false. */
-  wsPort?: number;
   secret: string;
   baseUrl: string;
   deploy: (id: string, code: string, secrets?: Record<string, string>) => Promise<Response>;
@@ -97,12 +80,6 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
   if (opts.mutationIsolation) env.EXCALIBASE_MUTATION_ISOLATION = opts.mutationIsolation;
   if (opts.mutationRetryMax !== undefined) env.EXCALIBASE_MUTATION_RETRY_MAX = String(opts.mutationRetryMax);
   if (opts.mutationRetryBackoffMs !== undefined) env.EXCALIBASE_MUTATION_RETRY_BACKOFF_MS = String(opts.mutationRetryBackoffMs);
-  let wsPort: number | undefined;
-  if (opts.wsEnabled) {
-    wsPort = await pickPort();
-    env.EXCALIBASE_DENO_WS_PORT = String(wsPort);
-  }
-  if (opts.natsUrl) env.EXCALIBASE_NATS_URL = opts.natsUrl;
 
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
@@ -180,7 +157,6 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
 
   return {
     port,
-    wsPort,
     secret: SECRET,
     baseUrl,
     deploy: (id, code, secrets = {}) =>
