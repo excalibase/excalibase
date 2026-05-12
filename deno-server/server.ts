@@ -441,14 +441,26 @@ const RETRYABLE_SQLSTATES = new Set(["40001", "40P01"]);
 
 /** Build the JS source that runs inside the Deno Web Worker. */
 function buildWorkerCode(userCode: string, secrets: Record<string, string>): string {
-  // `Deno` is frozen inside workers, so we can't reassign `globalThis.Deno`.
-  // Instead we wrap user code in an IIFE that shadows `Deno` with a mock via
-  // a parameter. Inside the IIFE, any `Deno.env.get(...)` lookup resolves to
-  // our mock; outside, the real `Deno` is untouched. Worker permissions still
-  // apply either way.
+  // Phase 9b.F — user code is loaded as an ESM module via a Blob URL and
+  // `await import()`, not wrapped in an IIFE. The old IIFE approach was
+  // syntactically incompatible with `import`/`export` statements at the
+  // module top level; the Go bundler now emits ESM output for `npm:`
+  // imports to resolve in Deno (IIFE's synthesised `__require()` stub
+  // throws at worker boot).
   //
-  // We also expose a plain `env` helper (`env.KEY`) for ergonomics — users
-  // migrating from Supabase get `Deno.env.get`, new users get `env.KEY`.
+  // Secret injection: Deno's `Deno.env` and `Deno.serve` properties are
+  // configurable in workers (verified with Object.defineProperty at boot).
+  // We replace both on the worker's `globalThis.Deno` BEFORE awaiting the
+  // user-module import, so `Deno.env.get(KEY)` inside user code reads
+  // from the deploy-time secrets map. A plain `globalThis.env` namespace
+  // mirrors the surface for code that prefers `env.KEY`.
+  //
+  // Backwards compatibility: tests and legacy bundles that assign
+  // `globalThis.__excalibase_default = <expr>` as a plain statement still
+  // work — the dynamic import evaluates the module body for side effects
+  // and the global is populated. We then read `userModule.default` first
+  // (the ESM contract) and fall back to the global slot if the module
+  // exports nothing.
   const secretsJSON = JSON.stringify(secrets);
   return String.raw`
     // --- console interceptor ---
@@ -481,40 +493,87 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       }
     })();
 
-    (function(Deno, env) {
-      // --- user bundled code (may assign globalThis.__excalibase_default) ---
-      ${userCode}
-    })(
-      // Shadowed Deno — .env is our mock, everything else is copied from the real Deno.
-      (() => {
-        const __secrets = ${secretsJSON};
-        const mockEnv = {
-          get(key) { return __secrets[key]; },
-          has(key) { return Object.prototype.hasOwnProperty.call(__secrets, key); },
-          toObject() { return { ...__secrets }; },
-          set() { /* read-only */ },
-          delete() { /* read-only */ },
-        };
-        const shadowed = Object.create(globalThis.Deno);
-        Object.defineProperty(shadowed, 'env', { value: mockEnv, enumerable: true });
-        Object.defineProperty(shadowed, 'serve', {
+    // --- secret + Deno surface install ---
+    // Performed before the user module imports so any module-level
+    // Deno.env.get(...) reads the patched env. We do NOT swap globalThis.Deno
+    // wholesale (other Deno APIs the user might rely on stay reachable);
+    // instead we redefine the two properties that need to differ from the
+    // host environment.
+    (function() {
+      const __secrets = ${secretsJSON};
+      const __envApi = {
+        get(key) { return __secrets[key]; },
+        has(key) { return Object.prototype.hasOwnProperty.call(__secrets, key); },
+        toObject() { return { ...__secrets }; },
+        set() { /* read-only inside the worker */ },
+        delete() { /* read-only */ },
+      };
+      try {
+        Object.defineProperty(globalThis.Deno, 'env', {
+          value: __envApi, enumerable: true, configurable: true, writable: false,
+        });
+      } catch (e) {
+        // Older Deno builds may have frozen Deno; falling back to a worker
+        // crash is the right behaviour — the bundler contract assumes the
+        // secret surface is in place before the user module runs.
+        throw new Error('failed to install Deno.env shim in worker: ' + (e && e.message || e));
+      }
+      try {
+        Object.defineProperty(globalThis.Deno, 'serve', {
           value: () => {
             throw new Error('Deno.serve is not available inside Excalibase functions — export a default handler instead');
           },
-          enumerable: true,
+          enumerable: true, configurable: true, writable: false,
         });
-        return shadowed;
-      })(),
-      // Plain env namespace (non-Deno code path)
-      (() => {
-        const __secrets = ${secretsJSON};
-        return {
-          get(key) { return __secrets[key]; },
-          has(key) { return Object.prototype.hasOwnProperty.call(__secrets, key); },
-          toObject() { return { ...__secrets }; },
-        };
-      })()
-    );
+      } catch (_e) { /* non-fatal; serve is rare in user code */ }
+      // Plain env namespace mirrors the api for code that does not use
+      // Deno.env.* directly. Configurable=true so test injections can
+      // re-define if needed.
+      Object.defineProperty(globalThis, 'env', {
+        value: __envApi, enumerable: true, configurable: true, writable: false,
+      });
+    })();
+
+    // --- load user module ---
+    // The bundle is delivered as a single string (ESM by default in
+    // Phase 9b.F; legacy script-style globalThis.__excalibase_default = X
+    // bundles also work because dynamic import evaluates the module body
+    // and any side-effect assignment to globalThis survives). The Blob's
+    // MIME type tells Deno to strip TypeScript annotations on parse — the
+    // Go bundler already targets ES2022 JS, but inline test bundles in
+    // the harness rely on the parser tolerating TS syntax.
+    {
+      const __userCode = ${JSON.stringify(userCode)};
+      const __userBlob = new Blob([__userCode], { type: 'application/javascript' });
+      const __userUrl = URL.createObjectURL(__userBlob);
+      try {
+        const __userModule = await import(__userUrl);
+        // Prefer the ESM default export when present; fall back to the
+        // legacy global slot for test and historical bundles that did not
+        // use export default.
+        if (__userModule && __userModule.default !== undefined &&
+            globalThis.__excalibase_default === undefined) {
+          globalThis.__excalibase_default = __userModule.default;
+        }
+      } catch (__importErr) {
+        // The user module failed to load (parse error, unresolvable npm
+        // specifier, etc.). We MUST NOT let this bubble as an unhandled
+        // rejection — Deno tears the whole worker (and on some versions
+        // the parent process) down for unhandled errors in module
+        // evaluation. Post a structured boot-error message back to main
+        // and re-throw inside the worker so onerror fires cleanly on the
+        // main side. The main thread's deploy() promise rejects with the
+        // captured message.
+        const __msg = (__importErr && __importErr.message) || String(__importErr);
+        try {
+          self.postMessage({ type: 'bootError', error: __msg });
+        } catch (_postErr) { /* ignore */ }
+        throw new Error('user module failed to load: ' + __msg);
+      } finally {
+        // Best-effort revoke so the Blob URL doesn't pin its bytes.
+        try { URL.revokeObjectURL(__userUrl); } catch (_e) { /* ignore */ }
+      }
+    }
 
     // --- v2 helpers (only used when EXCALIBASE_FUNCTIONS_V2 is on) ---
     const __V2_ENABLED = ${V2_ENABLED ? "true" : "false"};
@@ -1728,6 +1787,20 @@ class FunctionRuntime {
           initMetadataExports = e.data.exports;
           return;
         }
+        if (e.data?.type === "bootError") {
+          // Phase 9b.F — the user module failed to load (parse error,
+          // unresolvable npm specifier, etc.). The worker has already
+          // posted a structured message and re-thrown; the onerror
+          // handler below will fire next. We pre-empt with the structured
+          // message so the caller sees a deploy error that names the
+          // root cause instead of a generic "worker init error".
+          clearTimeout(timeout);
+          try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on bootError:", terminateErr); }
+          reject(new Error(typeof e.data.error === "string" && e.data.error.length > 0
+            ? e.data.error
+            : "user module failed to load"));
+          return;
+        }
         if (e.data?.type === "ready") {
           clearTimeout(timeout);
           resolve();
@@ -1736,6 +1809,11 @@ class FunctionRuntime {
       worker.onerror = (err) => {
         clearTimeout(timeout);
         try { worker.terminate(); } catch (terminateErr) { console.debug("[runtime] terminate on error:", terminateErr); }
+        // Phase 9b.F — module-eval failure inside a Deno worker fires
+        // BOTH a structured bootError postMessage and the onerror event.
+        // Use preventDefault() so the error is not re-thrown on the
+        // parent process side (which would crash the runtime).
+        try { err.preventDefault(); } catch (_e) { /* not all envs expose it */ }
         reject(new Error(err.message ?? "worker init error"));
       };
     });

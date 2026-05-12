@@ -81,7 +81,11 @@ func ExtractSchema(bundleCode string) (Schema, bool, error) {
 	if _, err := vm.RunString(schemaSlotInit); err != nil {
 		return Schema{}, false, fmt.Errorf("init schema slot: %w", err)
 	}
-	if _, err := vm.RunString(bundleCode); err != nil {
+	// Phase 9b.F: bundles are now ESM. Goja parses ES5 only and rejects
+	// import/export keywords. Strip them so the bundle body — where the
+	// globalThis.__excalibase_schema assignment lives — is still parsable.
+	stripped := stripESMForGoja(bundleCode)
+	if _, err := vm.RunString(stripped); err != nil {
 		return Schema{}, false, fmt.Errorf("evaluate bundle for schema extraction: %w", err)
 	}
 	val := vm.Get("__excalibase_schema")

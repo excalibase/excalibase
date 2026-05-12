@@ -12,6 +12,7 @@ RUN apk update --no-cache && \
     chown -R deno:deno /app
 
 COPY --chown=deno:deno server.ts .
+COPY --chown=deno:deno runtime ./runtime
 
 RUN deno cache server.ts
 

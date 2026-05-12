@@ -21,9 +21,34 @@ import (
 // post-bundle marker, not a parser.
 var v2ShapePattern = regexp.MustCompile(`kind\s*:\s*"(query|mutation|action|httpAction|httpRouter)"`)
 
+// v2NpmImportPattern matches the case where the user pulls the kind
+// wrapper from `npm:@excalibase/server` rather than inlining the tagged
+// record literal. After Phase 9b.F the bundler emits ESM with `npm:`
+// imports preserved verbatim, so the call site (`mutation({...})`) is
+// detectable by its import declaration alone — the wrapper's runtime
+// behaviour is what stamps the actual `kind` field on the export at
+// worker boot. We accept any of the v2 wrappers including their
+// internal* variants.
+//
+// Without this fallback any function that uses `import { mutation }
+// from "npm:@excalibase/server"` would be misclassified as v1, sending
+// it down the legacy Fetch handler path and breaking dispatch.
+var v2NpmImportPattern = regexp.MustCompile(
+	`import[^;]*\b(?:query|mutation|action|httpAction|httpRouter|internalQuery|internalMutation|internalAction)\b[^;]*from\s*["']npm:@excalibase/server`,
+)
+
 // httpKindPattern picks the specific kind for httpAction / httpRouter so
 // Function.Kind reflects exactly what the bundle declared.
 var httpKindPattern = regexp.MustCompile(`kind\s*:\s*"(httpAction|httpRouter)"`)
+
+// httpKindNpmImportPattern is the npm:@excalibase/server companion to
+// httpKindPattern — when the bundle imports `httpAction` or `httpRouter`
+// from the lib and never inlines a kind literal, we still need to stamp
+// Function.Kind so the gateway can route /http/* requests at deploy
+// time. Mirrors v2NpmImportPattern but only for the two HTTP kinds.
+var httpKindNpmImportPattern = regexp.MustCompile(
+	`import[^;]*\b(httpAction|httpRouter)\b[^;]*from\s*["']npm:@excalibase/server`,
+)
 
 // httpRoutesPattern extracts the `__excalibase_routes: [...]` literal the
 // httpRouter() helper emits at deploy time. We capture the array contents
@@ -271,10 +296,15 @@ func (f *Function) RuntimeID() string {
 
 // Bundle produces the JS source shipped to the Deno runtime. Uses esbuild
 // with a virtual filesystem plugin so the user's source files never touch
-// disk. Entry point is always index.ts. Output format is IIFE assigned to
-// a global, then a trailer assigns the default export to
-// globalThis.__excalibase_default — which is the contract the worker
-// template in deno-server/server.ts reads from.
+// disk. Entry point is always index.ts.
+//
+// Phase 9b.F — output format is ESM, not IIFE. IIFE synthesises a synchronous
+// `__require()` stub for every external import; Deno workers have no
+// synchronous require so the stub throws at worker boot for any function
+// with an `npm:` / `jsr:` / `node:` import. ESM keeps the real `import`
+// declarations and Deno honours them via its own resolver. The worker
+// template loads the bundle through a Blob URL + `await import(...)`,
+// which is the only ESM-safe boot path inside a Deno worker.
 //
 // External imports (npm:, jsr:, node:, http:, https:) pass through to the
 // Deno runtime unchanged — Deno resolves and fetches them at worker start.
@@ -296,13 +326,17 @@ func (f *Function) Bundle() (string, error) {
 	result := esbuild.Build(esbuild.BuildOptions{
 		EntryPoints: []string{defaultEntrypoint},
 		Bundle:      true,
-		Format:      esbuild.FormatIIFE,
-		GlobalName:  "__excalibase_bundle",
-		Target:      esbuild.ES2022,
-		Platform:    esbuild.PlatformNeutral,
-		Write:       false,
-		LogLevel:    esbuild.LogLevelSilent,
-		Plugins:     []esbuild.Plugin{virtualFSPlugin(virtualFiles)},
+		// FormatESModule — see function-level comment. Replaces FormatIIFE
+		// + GlobalName ("__excalibase_bundle") which the IIFE format
+		// required to escape `index_exports.default` to the worker scope.
+		// The worker now reads `userModule.default` from the awaited
+		// dynamic import instead.
+		Format:   esbuild.FormatESModule,
+		Target:   esbuild.ES2022,
+		Platform: esbuild.PlatformNeutral,
+		Write:    false,
+		LogLevel: esbuild.LogLevelSilent,
+		Plugins:  []esbuild.Plugin{virtualFSPlugin(virtualFiles)},
 	})
 	if len(result.Errors) > 0 {
 		return "", fmt.Errorf("bundle error: %s", result.Errors[0].Text)
@@ -311,18 +345,16 @@ func (f *Function) Bundle() (string, error) {
 		return "", fmt.Errorf("bundle produced no output")
 	}
 
-	// Append the handler hoist. esbuild IIFE with GlobalName emits:
-	//   var __excalibase_bundle = (() => { ... return index_exports; })();
-	// where `index_exports.default` is the user's default export.
-	bundled := string(result.OutputFiles[0].Contents)
-	final := bundled + "\nglobalThis.__excalibase_default = __excalibase_bundle && __excalibase_bundle.default;\n"
+	// ESM bundle output ends with `export { ... as default }`. The worker
+	// template imports the bundle as a module and reads `mod.default`;
+	// no trailer-emitted globalThis assignment is needed.
+	final := string(result.OutputFiles[0].Contents)
 	// Metadata collector slot — the worker template reads
 	// globalThis.__excalibase_export_metadata after module load and posts
-	// it back to main. Initialising the slot here (rather than relying on
-	// the worker template alone) lets the bundler tests assert the
-	// contract end-to-end. Phase 3 codegen consumes the result via the
-	// _metadata endpoint.
-	final += "globalThis.__excalibase_export_metadata = globalThis.__excalibase_export_metadata || [];\n"
+	// it back to main. We append it as a top-level statement; in ESM,
+	// expression statements after the imports are legal. Phase 3 codegen
+	// consumes the result via the _metadata endpoint.
+	final += "\nglobalThis.__excalibase_export_metadata = globalThis.__excalibase_export_metadata || [];\n"
 
 	if len(final) > MaxCodeSize {
 		return "", fmt.Errorf("bundled code exceeds maximum size (%d KB)", MaxCodeSize/1024)
@@ -330,10 +362,14 @@ func (f *Function) Bundle() (string, error) {
 
 	// Stamp the detected shape on the receiver. This is the only place that
 	// writes RuntimeShape — persistence stores it, runtime codegen reads it.
-	// Pragmatic substring/regex scan: esbuild's IIFE output is non-minified
-	// and preserves the source object literal verbatim, so the kind marker
-	// survives unchanged. Phase 3 codegen consumes this field.
-	if v2ShapePattern.MatchString(final) {
+	// Pragmatic substring/regex scan: esbuild's ESM output preserves the
+	// source object literal verbatim, so the inline `kind:` marker still
+	// survives for hand-rolled records. For functions that wrap their def
+	// in a lib helper (`mutation()`, `query()`, etc.) we also detect the
+	// `import` declaration — the wrapper stamps `kind` at runtime, so the
+	// import is the only reliable bundle-time signal. Phase 3 codegen
+	// consumes this field.
+	if v2ShapePattern.MatchString(final) || v2NpmImportPattern.MatchString(final) {
 		f.RuntimeShape = RuntimeShapeV2
 	} else {
 		f.RuntimeShape = RuntimeShapeV1
@@ -342,6 +378,8 @@ func (f *Function) Bundle() (string, error) {
 	// Phase 7: detect httpAction / httpRouter and stamp Function.Kind. Both
 	// kinds are part of the v2 shape family (RuntimeShape stays "v2") but
 	// the gateway needs the precise discriminator to route requests.
+	// Inline `kind: "httpAction"` wins (most specific); the npm:-import
+	// pattern is the fallback for lib-wrapped exports.
 	if m := httpKindPattern.FindStringSubmatch(final); m != nil {
 		f.Kind = m[1]
 		if f.Kind == "httpRouter" {
@@ -350,6 +388,22 @@ func (f *Function) Bundle() (string, error) {
 				return "", rerr
 			}
 			f.HttpRoutes = routes
+		}
+	} else if m := httpKindNpmImportPattern.FindStringSubmatch(final); m != nil {
+		f.Kind = m[1]
+		if f.Kind == "httpRouter" {
+			// httpRouter relies on the lib's `__excalibase_routes`
+			// side-channel — same code path as the inline case. Extraction
+			// stays best-effort: if the side channel is missing we still
+			// stamp the kind but leave routes nil, and the gateway will
+			// 404 individual paths until the runtime metadata callback
+			// can re-populate.
+			routes, rerr := extractHttpRoutes(final)
+			if rerr == nil {
+				f.HttpRoutes = routes
+			} else {
+				f.HttpRoutes = nil
+			}
 		}
 	} else {
 		// Clear stale Kind/HttpRoutes if this bundle isn't an http* shape
@@ -416,6 +470,44 @@ func extractHttpRoutes(bundled string) (json.RawMessage, error) {
 	return json.RawMessage(out), nil
 }
 
+// esmImportPattern matches the ESM `import ... from "specifier";` declarations
+// at the start of an esbuild ESM bundle. Goja parses ES5 only and chokes on
+// import/export keywords, so we strip them before passing the bundle through
+// for side-channel extraction. Stripping is safe because the side channels
+// (`__excalibase_crons`, `__excalibase_schema`) are populated by globalThis
+// assignments emitted by the user's bundle body — they never depend on a
+// resolved import value at extraction time. The lib code that runs in goja
+// only needs the locally-defined object literals, which esbuild has already
+// inlined into the bundle body. We deliberately match each `import ... ;`
+// line independently rather than removing the whole prefix block, so an
+// odd source-style with a blank line between imports doesn't slip an
+// `export` declaration into the goja parse stream.
+var esmImportPattern = regexp.MustCompile(`(?m)^\s*import[^;]*?;\s*$`)
+
+// esmExportDefaultPattern strips the ESM `export { X as default };` /
+// `export default <expr>;` declarations. Without this the goja parse fails
+// on the `export` keyword. We replace `export default <expr>;` with
+// `var __excalibase_default = <expr>;` so any code that relied on the
+// global slot under the old IIFE flow keeps working inside goja — though
+// nothing in the extraction path consumes it today.
+var esmExportDefaultExprPattern = regexp.MustCompile(`(?m)^\s*export\s+default\s+`)
+var esmExportNamedPattern = regexp.MustCompile(`(?ms)^\s*export\s*\{[^}]*\}\s*;?\s*$`)
+
+// stripESMForGoja converts an ESM bundle into an ES5-eval-safe form so
+// goja can scan it for globalThis side channels (`__excalibase_crons`,
+// `__excalibase_schema`). Returns a string with import/export declarations
+// removed; the rest of the bundle (var decls, object literals, globalThis
+// assignments) is left verbatim.
+func stripESMForGoja(bundled string) string {
+	s := esmImportPattern.ReplaceAllString(bundled, "")
+	s = esmExportNamedPattern.ReplaceAllString(s, "")
+	// `export default <expr>;` → `var __excalibase_default = <expr>;`
+	// We only need the assignment so the expression is still evaluated
+	// for side effects.
+	s = esmExportDefaultExprPattern.ReplaceAllString(s, "var __excalibase_default = ")
+	return s
+}
+
 // extractCronJobs pulls the `globalThis.__excalibase_crons` value out of
 // the bundled JS by evaluating it in an isolated goja VM (same pattern
 // as ExtractSchema). Returns (nil, nil) when no registry was published,
@@ -427,6 +519,10 @@ func extractHttpRoutes(bundled string) (json.RawMessage, error) {
 // assigns it to globalThis. Evaluating the bundle is the most reliable
 // way to capture the resulting table without re-implementing the lib's
 // publish() side-effect in Go.
+//
+// Phase 9b.F: the bundle is now ESM. Goja parses ES5 only, so we strip
+// `import` / `export` declarations before eval. The side-channel
+// assignment runs in the bundle body which goja can still parse.
 //
 // Each entry is validated for shape: `name` (non-empty string), `schedule`
 // (object with `kind` in {cron, interval, daily, hourly}), `fnRef`
@@ -443,7 +539,8 @@ func extractCronJobs(bundled string) (json.RawMessage, error) {
 	if _, err := vm.RunString("globalThis = globalThis || {};\nglobalThis.__excalibase_crons = null;\n"); err != nil {
 		return nil, fmt.Errorf("init cron slot: %w", err)
 	}
-	if _, err := vm.RunString(bundled); err != nil {
+	stripped := stripESMForGoja(bundled)
+	if _, err := vm.RunString(stripped); err != nil {
 		return nil, fmt.Errorf("evaluate bundle for cron extraction: %w", err)
 	}
 	val := vm.Get("__excalibase_crons")

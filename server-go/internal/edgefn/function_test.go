@@ -145,6 +145,13 @@ func TestFunction_Validate_Happy(t *testing.T) {
 
 // --- Function.Bundle ---
 
+// Phase 9b.F — bundle output is ESM (esbuild FormatESModule). Previous IIFE
+// contract hoisted the default export onto `globalThis.__excalibase_default`
+// via a trailer; the new contract preserves `export { X as default }` so
+// Deno workers can `await import(blobUrl)` and read `mod.default`. Tests
+// here verify the ESM-style contract — the legacy global assertion would
+// now incorrectly fail, so we replace the substring checks accordingly.
+
 func TestFunction_Bundle_SingleFile(t *testing.T) {
 	fn := &Function{
 		ProjectID: "proj_test0001",
@@ -156,11 +163,13 @@ func TestFunction_Bundle_SingleFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testBundleFmt, err)
 	}
-	if !strings.Contains(code, "globalThis.__excalibase_default") {
-		t.Errorf("bundle should transform 'export default', got:\n%s", code)
-	}
-	if strings.Contains(code, "export default") {
-		t.Errorf("bundle should strip 'export default' keyword, got:\n%s", code)
+	// ESM bundle preserves a real `export ... default` form (either
+	// `export default <expr>` or the more common `export { X as default }`
+	// that esbuild emits for re-export hoisting).
+	hasExportDefault := strings.Contains(code, "export default") ||
+		strings.Contains(code, "as default")
+	if !hasExportDefault {
+		t.Errorf("ESM bundle missing default export, got:\n%s", code)
 	}
 }
 
@@ -182,15 +191,13 @@ func TestFunction_Bundle_MultiFileInlinedFromRelativeImport(t *testing.T) {
 	if !strings.Contains(code, "greet") || !strings.Contains(code, "`Hi ${") {
 		t.Errorf("utils.ts content should be inlined, got:\n%s", code)
 	}
-	if !strings.Contains(code, "__excalibase_default") {
+	// ESM default export must survive — either `export default` form
+	// or esbuild's `export { ... as default }` re-export.
+	if !(strings.Contains(code, "export default") || strings.Contains(code, "as default")) {
 		t.Error(testHoistMissing)
 	}
 	if strings.Contains(code, "from \"./utils.ts\"") || strings.Contains(code, "from './utils.ts'") {
 		t.Errorf("relative imports must be resolved away, got:\n%s", code)
-	}
-	// No top-level export keyword — IIFE wraps the module scope.
-	if strings.Contains(code, "export default") {
-		t.Error("'export default' should be stripped")
 	}
 }
 
@@ -209,7 +216,7 @@ func TestFunction_Bundle_NamespaceImportResolves(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testBundleFmt, err)
 	}
-	if !strings.Contains(code, "__excalibase_default") {
+	if !(strings.Contains(code, "export default") || strings.Contains(code, "as default")) {
 		t.Error(testHoistMissing)
 	}
 	// Both identifiers must be referenced in the bundled output.
@@ -233,7 +240,7 @@ func TestFunction_Bundle_RenamedImportResolves(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testBundleFmt, err)
 	}
-	if !strings.Contains(code, "__excalibase_default") {
+	if !(strings.Contains(code, "export default") || strings.Contains(code, "as default")) {
 		t.Error(testHoistMissing)
 	}
 	if !strings.Contains(code, "greet") {
