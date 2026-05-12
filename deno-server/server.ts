@@ -39,6 +39,8 @@ import { newId } from "./runtime/ids.ts";
 import { closePool, getPool } from "./runtime/pool.ts";
 import type { Sql } from "./runtime/pool.ts";
 import type { ValidatorCache } from "./runtime/validator.ts";
+import { SubscriptionRegistry, type CommitEvent } from "./runtime/reactive.ts";
+import { tryUpgradeWatchSocket } from "./runtime/ws_handler.ts";
 
 // ---------------------------------------------------------------------------
 // Phase 8.5 — Shared mutation transaction map.
@@ -65,8 +67,13 @@ import type { ValidatorCache } from "./runtime/validator.ts";
 // ---------------------------------------------------------------------------
 
 interface ActiveTxn {
-  /** Reserved Postgres connection with BEGIN already issued. */
-  sql: Sql;
+  /**
+   * Reserved Postgres connection with BEGIN already issued — or null for
+   * tracking-only entries (query/action v2 invocations that don't open a
+   * txn but still want their reads tracked for the reactive subscription
+   * registry). `sqlFor()` falls back to the pool when this is null.
+   */
+  sql: Sql | null;
   /** True when this entry opened the txn — only owners commit/rollback. */
   owned: boolean;
   /** Non-empty for alias entries; carries the parent's txnRefId. */
@@ -74,12 +81,72 @@ interface ActiveTxn {
   /** Millisecond timestamp at which the txn was opened (or aliased). */
   openedAt: number;
   /**
+   * Phase 9b.A: function kind that owns this entry — `"query"` or
+   * `"mutation"`. Drives commit-event emission (only mutations emit) and
+   * lets `finalize()` distinguish tracking-only entries from owning ones.
+   * Empty for v1 fetch handlers / aliases that don't carry a kind hint.
+   */
+  kind: string;
+  /**
+   * Phase 9b.A: id-of-the-function-that-was-invoked. Used for the
+   * CommitEvent.fnId payload so downstream consumers (NATS publisher in
+   * Phase 9b.B, observability in 9b.E) know which mutation committed.
+   */
+  fnId: string;
+  /**
+   * Phase 9b.A: project id parsed from the runtime id at invocation time,
+   * so the emitter never has to re-split. Used for CommitEvent.projectId
+   * and for cross-tenant subscription isolation in the registry.
+   */
+  projectId: string;
+  /**
+   * Phase 9b.A: collections written to inside this txn (INSERT/UPDATE/
+   * DELETE only). Captured BEFORE `txnMap.delete(...)` and shipped on the
+   * emitted CommitEvent. Reads MUST NOT land here — the dispatch site is
+   * the only place that adds.
+   */
+  writes: Set<string>;
+  /**
+   * Phase 9b.A: collections read inside this invocation (find / findOne /
+   * getById / count / search / vectorSearch / query). Used by the
+   * SubscriptionRegistry to learn which collections a query function
+   * depends on. NOT shipped on CommitEvent.
+   */
+  reads: Set<string>;
+  /**
    * Phase 9a: marked when a db/scheduler op fails with a retryable
    * SQLSTATE (40001/40P01) inside this txn. Owners check this on
    * finalize and signal the retry loop. Aliases never observe their
    * own conflict since they share the parent's connection.
    */
   conflict?: { sqlState: string; message: string };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9b.A — In-process commit emitter.
+//
+// Single-listener fan-out is enough for this phase: the local
+// SubscriptionRegistry is the only consumer. Phase 9b.B will add a NATS
+// publisher; that publisher will subscribe via `runtime.onCommit` and
+// serialise `CommitEvent` verbatim onto the subject
+// `excalibase.fn.<projectId>.commits`. Keep CommitEvent JSON-stable.
+//
+// We swallow listener errors so a buggy subscriber can't take down the
+// commit path — a failed listener means stale pushes, not lost commits.
+// ---------------------------------------------------------------------------
+type CommitListener = (e: CommitEvent) => void;
+const commitListeners = new Set<CommitListener>();
+
+function onCommit(handler: CommitListener): () => void {
+  commitListeners.add(handler);
+  return () => commitListeners.delete(handler);
+}
+
+function emitCommit(event: CommitEvent): void {
+  for (const fn of commitListeners) {
+    try { fn(event); }
+    catch (err) { console.warn(`[runtime] commit listener threw:`, err); }
+  }
 }
 
 /**
@@ -188,7 +255,12 @@ async function rollbackTxn(sql: Sql): Promise<void> {
  */
 function sqlFor(txnRefId: string | undefined | null): Sql {
   if (txnRefId && txnMap.has(txnRefId)) {
-    return txnMap.get(txnRefId)!.sql;
+    const entry = txnMap.get(txnRefId)!;
+    // Phase 9b.A — tracking-only entries (queries/actions) have `sql:null`
+    // because they never opened a connection. Fall back to the pool so the
+    // db dispatch issues an autocommit read; the dispatcher still picks up
+    // the entry for `reads` tracking on success.
+    if (entry.sql) return entry.sql;
   }
   return getPool();
 }
@@ -1541,6 +1613,35 @@ class FunctionRuntime {
               markConflict(msg.txnRefId as string | undefined, code, result.error);
             }
           }
+          // Phase 9b.A — write tracking. Append the collection name to the
+          // active txn's `writes` (mutations) or `reads` (everything else).
+          // The op classification mirrors `DbOp.op`:
+          //   writes: insert / insertMany / update / delete
+          //   reads:  find / findOne / getById / count / search /
+          //           vectorSearch / query
+          // Skip when the entry is absent (v1 fetch handlers) or when the
+          // op failed — a rolled-back/failed write never reaches commit
+          // and therefore must not appear in CommitEvent.deps.
+          if (result && result.ok === true) {
+            const ref = msg.txnRefId as string | undefined;
+            const entry = ref ? txnMap.get(ref) : undefined;
+            if (entry) {
+              const collection = msg.collection as string | undefined;
+              if (typeof collection === "string" && collection.length > 0) {
+                const isWrite = msg.op === "insert" || msg.op === "insertMany"
+                  || msg.op === "update" || msg.op === "delete";
+                if (isWrite) {
+                  entry.writes.add(collection);
+                } else {
+                  // Track query plan reads via `plan.collection` — the
+                  // worker passes `collection` redundantly so we don't have
+                  // to dig into the plan here. Defensive against future op
+                  // shapes that omit `collection`.
+                  entry.reads.add(collection);
+                }
+              }
+            }
+          }
           try {
             worker.postMessage({ type: "dbResult", rpcId, result });
           } catch (postErr) {
@@ -1737,15 +1838,33 @@ class FunctionRuntime {
    * Top-level mutations may be retried by the caller; everything else
    * runs exactly once. On a retryable conflict, returns an InvokeResponse
    * with a `__conflict` discriminator so the caller can choose to retry.
+   *
+   * Phase 9b.A: the returned envelope carries `__reactiveReads` /
+   * `__reactiveWrites` so `invokeWithReads` (the SubscriptionRegistry's
+   * entry point) can pull them out without re-walking txnMap. Both are
+   * always set — empty sets when no entry was allocated (v1 fetch
+   * handlers) so callers can iterate without null checks.
    */
   private async invokeOnce(
     script: ScriptMetadata,
     req: InvokeRequest,
     inheritedTxnRefId: string,
-  ): Promise<InvokeResponse & { __conflict?: { sqlState: string; message: string } }> {
+  ): Promise<InvokeResponse & {
+    __conflict?: { sqlState: string; message: string };
+    __reactiveReads?: Set<string>;
+    __reactiveWrites?: Set<string>;
+  }> {
     const id = script.id;
     script.invocations++;
     const reqId = script.nextReqId++;
+
+    // Phase 9b.A — parse projectId / fnId for CommitEvent payloads. The
+    // script id is `${projectId}__${fnId}`; v1 fetch handlers don't follow
+    // this shape but they also don't open mutations so the empty fallback
+    // is safe.
+    const sep = id.indexOf("__");
+    const projectId = sep > 0 ? id.slice(0, sep) : "";
+    const fnId = sep > 0 ? id.slice(sep + 2) : id;
 
     let activeTxnRefId = "";
     if (inheritedTxnRefId && txnMap.has(inheritedTxnRefId)) {
@@ -1759,6 +1878,11 @@ class FunctionRuntime {
         owned: false,
         parentRefId: inheritedTxnRefId,
         openedAt: Date.now(),
+        kind: script.kind,
+        fnId,
+        projectId,
+        writes: new Set(),
+        reads: new Set(),
       });
     } else if (script.kind === "mutation") {
       // Top-level mutation — open a fresh transaction. If the pool isn't
@@ -1773,25 +1897,66 @@ class FunctionRuntime {
           sql: txn,
           owned: true,
           openedAt: Date.now(),
+          kind: "mutation",
+          fnId,
+          projectId,
+          writes: new Set(),
+          reads: new Set(),
         });
       } catch (err) {
         console.debug(`[runtime] mutation ${id} runs without txn:`,
           err instanceof Error ? err.message : err);
       }
+    } else if (script.kind === "query") {
+      // Phase 9b.A — queries get a tracking-only entry (sql:null) so the
+      // db RPC dispatch can record `reads` for the SubscriptionRegistry.
+      // No transaction is opened; `sqlFor()` falls back to the pool. The
+      // dispatch site never tries to commit/rollback when owned=false AND
+      // sql=null, so the entry is purely a side-table for collections
+      // touched during this invocation.
+      activeTxnRefId = newTxnRefId();
+      txnMap.set(activeTxnRefId, {
+        sql: null,
+        owned: false,
+        openedAt: Date.now(),
+        kind: "query",
+        fnId,
+        projectId,
+        writes: new Set(),
+        reads: new Set(),
+      });
     }
 
+    // Captured for the caller — invokeWithReads pulls the entry's reads/
+    // writes BEFORE finalize deletes the txnMap entry. Defaults to empty
+    // sets so callers can always iterate even when no entry was allocated
+    // (e.g. v1 fetch handlers).
+    let capturedReads: Set<string> = new Set();
+    let capturedWrites: Set<string> = new Set();
     // finalize closes the txn. On success path it tries to COMMIT and
     // surfaces any retryable conflict back to the retry loop via a
     // returned sentinel. On error path it rolls back. Either way, the
     // entry is removed from txnMap so a redeployed worker can't see
     // stale txn refs.
+    //
+    // Phase 9b.A: on the success path for top-level mutations, we capture
+    // `writes` into a local set BEFORE deleting the entry, run COMMIT, and
+    // — only if COMMIT succeeded — fire `emitCommit({...deps: [...writes]})`.
+    // Rolled-back txns and non-success finalize paths emit nothing because
+    // the writes never happened on the wire.
     const finalize = async (
       settled: "success" | "error",
     ): Promise<{ sqlState: string; message: string } | null> => {
       if (!activeTxnRefId) return null;
       const entry = txnMap.get(activeTxnRefId);
       txnMap.delete(activeTxnRefId);
-      if (!entry || !entry.owned) return null;
+      if (!entry) return null;
+      // Capture reads/writes before the entry goes out of scope. Used by
+      // `invokeWithReads` for the SubscriptionRegistry.
+      capturedReads = entry.reads;
+      capturedWrites = entry.writes;
+      // Tracking-only entries (queries, aliases) — no txn to commit.
+      if (!entry.owned || !entry.sql) return null;
       // A mid-flight db op may have stamped a conflict marker. In that
       // case we go straight to rollback (commit would fail anyway with
       // the same SQLSTATE) and report the conflict to the retry loop.
@@ -1810,6 +1975,17 @@ class FunctionRuntime {
       if (settled === "success") {
         try {
           await commitTxn(entry.sql);
+          // Phase 9b.A: emit CommitEvent ONLY after a successful commit.
+          // A rolled-back or conflict-surfaced txn never reaches here.
+          if (entry.kind === "mutation" && entry.writes.size > 0) {
+            emitCommit({
+              projectId: entry.projectId,
+              fnId: entry.fnId,
+              runtimeId: id,
+              deps: [...entry.writes],
+              ts: Date.now(),
+            });
+          }
           return null;
         } catch (commitErr) {
           if (commitErr instanceof MutationConflict) {
@@ -1870,9 +2046,63 @@ class FunctionRuntime {
       // Encode the conflict into the InvokeResponse so the retry loop
       // upstairs can pick it up without changing the public shape on
       // success paths.
-      return Object.assign({}, res, { __conflict: conflict });
+      return Object.assign({}, res, {
+        __conflict: conflict,
+        __reactiveReads: capturedReads,
+        __reactiveWrites: capturedWrites,
+      });
     }
-    return res;
+    return Object.assign({}, res, {
+      __reactiveReads: capturedReads,
+      __reactiveWrites: capturedWrites,
+    });
+  }
+
+  /**
+   * Phase 9b.A — invoke a deployed function and return both its response
+   * AND the set of collections it read during execution. Used by the
+   * SubscriptionRegistry for register / re-execution paths. The body
+   * envelope here is the v2 `{args}` payload — same shape `dispatchRunX`
+   * uses for nested calls.
+   *
+   * Unlike `invoke`, this never goes through the mutation retry loop
+   * (subscriptions only target queries) so it's a thin wrapper around
+   * `invokeOnce`. If a caller mistakenly registers a mutation as a
+   * subscription, we still invoke it; the registry layer decides whether
+   * to accept it.
+   */
+  async invokeWithReads(id: string, body: unknown): Promise<{
+    status: number;
+    data: unknown;
+    error?: string;
+    reads: Set<string>;
+  }> {
+    const script = this.scripts.get(id);
+    if (!script) {
+      return { status: 404, data: null, error: `function not found: ${id}`, reads: new Set() };
+    }
+    const invokeReq: InvokeRequest = {
+      method: "POST",
+      url: `/invoke/${id}`,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ args: body ?? {}, runDepth: 0 }),
+    };
+    const outcome = await this.invokeOnce(script, invokeReq, "");
+    const reads = outcome.__reactiveReads ?? new Set<string>();
+    let data: unknown = null;
+    let error: string | undefined;
+    if (outcome.body) {
+      try {
+        const parsed = JSON.parse(outcome.body) as { data?: unknown; error?: unknown };
+        if (parsed && typeof parsed === "object") {
+          if (typeof parsed.error === "string") error = parsed.error;
+          if ("data" in parsed) data = parsed.data;
+        }
+      } catch (_) {
+        error = "non-JSON body";
+      }
+    }
+    return { status: outcome.status, data, error, reads };
   }
 
   delete(id: string): boolean {
@@ -1974,6 +2204,17 @@ function backoffForAttempt(attempt: number): number {
 }
 
 const runtime = new FunctionRuntime();
+
+// Phase 9b.A — single-replica reactive subscriptions. The registry holds
+// per-conn subscription state and re-executes query functions when a
+// committed mutation's `deps` intersects a subscription's tracked reads.
+// Wired to `onCommit` once at startup; Phase 9b.B will additionally wire
+// a NATS publisher onto the same emitter so cross-replica fan-out works
+// without changing this surface.
+const reactiveRegistry = new SubscriptionRegistry({
+  invokeWithReads: (id, args) => runtime.invokeWithReads(id, args),
+});
+onCommit((event) => reactiveRegistry.dispatchCommit(event));
 
 /**
  * Best-effort callback: POST captured v2 export metadata back to the Go
@@ -2149,6 +2390,15 @@ async function dispatch(req: Request, url: URL): Promise<Response> {
   if (url.pathname === "/scripts") return Response.json({ scripts: runtime.list() }, { headers: JSON_HEADERS });
   if (url.pathname === "/stats") return Response.json(runtime.stats(), { headers: JSON_HEADERS });
   if (url.pathname === "/metrics") return handleMetrics();
+  // Phase 9b.A debug endpoints — tests use these to assert internal state
+  // without coupling to log scraping. NOT part of the public API; gated
+  // behind the same X-Runtime-Secret check as everything else.
+  if (url.pathname === "/reactive/debug") {
+    return Response.json({ subscriptions: reactiveRegistry.size }, { headers: JSON_HEADERS });
+  }
+  if (url.pathname === "/reactive/debug/last-commit") {
+    return Response.json(reactiveRegistry.getLastCommit() ?? {}, { headers: JSON_HEADERS });
+  }
   return notFound();
 }
 
@@ -2168,6 +2418,36 @@ Deno.serve({ port: PORT }, async (req: Request) => {
     return Response.json({ error: msg }, { status: 500, headers: JSON_HEADERS });
   }
 });
+
+// Phase 9b.A — sibling WebSocket listener.
+//
+// The Go gateway (`server-go/internal/handler/function.go::forwardToRuntime`)
+// is HTTP-only — it has no WS-upgrade path. Rather than retrofit a WS
+// proxy in Go for this phase, we open a SECOND port on the Deno runtime
+// dedicated to reactive subscriptions. Clients (and eventually the SDK in
+// Phase 9b.C) connect directly to this port; the Go gateway sits in front
+// only for regular function invokes.
+//
+// Default port 8801, overridable via EXCALIBASE_DENO_WS_PORT. When unset,
+// the listener is skipped entirely — older deployments that don't expose
+// the WS port keep working without reactive support.
+const WS_PORT_RAW = Deno.env.get("EXCALIBASE_DENO_WS_PORT") || "";
+if (WS_PORT_RAW !== "") {
+  const wsPort = Number(WS_PORT_RAW);
+  if (!Number.isFinite(wsPort) || wsPort <= 0 || wsPort > 65535) {
+    console.error(`FATAL: EXCALIBASE_DENO_WS_PORT="${WS_PORT_RAW}" is not a valid port`);
+    Deno.exit(1);
+  }
+  Deno.serve({ port: wsPort }, (req: Request) => {
+    // No X-Runtime-Secret auth here — WS clients are EXTERNAL (browsers /
+    // SDKs), unlike the HTTP port which only the gateway should reach.
+    // Auth lives in the JWT query param consumed by `tryUpgradeWatchSocket`.
+    const upgraded = tryUpgradeWatchSocket(req, reactiveRegistry);
+    if (upgraded) return upgraded;
+    return new Response("not found", { status: 404 });
+  });
+  console.log(`[runtime] reactive WS listener on :${wsPort}`);
+}
 
 // Drain the postgres pool on SIGTERM/SIGINT so containers shut down cleanly.
 // The handlers are best-effort; if Deno exits before they finish, postgres
