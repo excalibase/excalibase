@@ -83,7 +83,11 @@ export function createStorageReader(rpc: StorageRpc): StorageReader {
         throw new Error("ctx.storage.get: unexpected RPC reply type");
       }
       const r = reply as { bytes: Uint8Array; contentType?: string };
-      return new Blob([r.bytes], { type: r.contentType || "application/octet-stream" });
+      // Re-wrap in a plain Uint8Array<ArrayBuffer> so Blob's strict BlobPart
+      // type accepts it (newer TS rejects Uint8Array<ArrayBufferLike>).
+      return new Blob([new Uint8Array(r.bytes)], {
+        type: r.contentType || "application/octet-stream",
+      });
     },
     async getMetadata(storageId) {
       assertId(storageId, "ctx.storage.getMetadata");

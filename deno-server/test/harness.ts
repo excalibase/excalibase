@@ -194,13 +194,21 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
     raw: (path, init) => fetch(`${baseUrl}${path}`, init),
     stop: async () => {
       try { child.kill("SIGTERM"); } catch (_) { /* ignore */ }
+      // Wait up to 5s for graceful shutdown; if still alive, SIGKILL.
+      let exited = false;
       try {
-        // Bound the await so a stuck child doesn't hang the test forever.
         await Promise.race([
-          child.status,
-          delay(2_000),
+          child.status.then(() => { exited = true; }),
+          delay(5_000),
         ]);
       } catch (_) { /* ignore */ }
+      if (!exited) {
+        try { child.kill("SIGKILL"); } catch (_) { /* ignore */ }
+        try { await Promise.race([child.status, delay(2_000)]); } catch (_) { /* ignore */ }
+      }
+      // Small grace so the OS releases the port (TIME_WAIT) before the next
+      // test in the suite calls pickPort() and reuses the same number.
+      await delay(100);
     },
   };
 }

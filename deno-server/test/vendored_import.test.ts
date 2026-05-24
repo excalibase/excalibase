@@ -54,11 +54,13 @@ async function vendoredDistPresent(): Promise<boolean> {
 // after the worker `await import()` resolves the blob URL.
 function esmBundleVendored(): string {
   // Bundle the user-facing surface: a mutation that returns its args
-  // back. We don't depend on zod here because that's a separate import
-  // path; this bundle only exercises the `@excalibase/server` resolution.
+  // back. The lib's defineFunction calls zodToJsonSchema(config.args), so
+  // args must be a real Zod schema (a duck-typed { parse } object crashes
+  // with "Cannot read properties of undefined (reading 'typeName')").
   return `import { mutation } from "npm:@excalibase/server@0.10.0";
+import { z } from "npm:zod@^3.22.0";
 var __default = mutation({
-  args: { parse: (a) => a },
+  args: z.object({}).passthrough(),
   handler: async (_ctx, args) => ({ echoed: args, lib: "vendored" }),
 });
 export { __default as default };
