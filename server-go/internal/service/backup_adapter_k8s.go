@@ -91,12 +91,24 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 		return nil, fmt.Errorf("create restore namespace: %w", err)
 	}
 
+	// Plant the real R2/S3 credentials from the same env the backup-write
+	// path reads (set by the chart from the r2-creds Secret). Falls back to
+	// "test"/"test" so the in-cluster mock-floci dev flow still works.
+	accessKey := envOrFallback("R2_ACCESS_KEY_ID", "BACKUP_DEFAULT_ACCESS_KEY_ID", "test")
+	secretKey := envOrFallback("R2_SECRET_ACCESS_KEY", "BACKUP_DEFAULT_SECRET_ACCESS_KEY", "test")
 	a.k8sClient.CreateSecret(ctx, newNamespace, s3CredsKey, map[string][]byte{
-		"ACCESS_KEY_ID":     []byte("test"),
-		"ACCESS_SECRET_KEY": []byte("test"),
+		"ACCESS_KEY_ID":     []byte(accessKey),
+		"ACCESS_SECRET_KEY": []byte(secretKey),
 	})
 
-	restoreSpec := buildRestoreSpec(inst.ProjectID, newProject, newNamespace, req)
+	// Bucket: mirror main.go's BackupDefaults — explicit BACKUP_DEFAULT_BUCKET
+	// wins, otherwise the hard default "excalibase-backups". R2_BUCKET is
+	// the STORAGE bucket (a different bucket from where Barman writes the
+	// CNPG backups) so do NOT use it here.
+	bucket := envOrFallback("BACKUP_DEFAULT_BUCKET", "excalibase-backups")
+	endpoint := envOrFallback("BACKUP_DEFAULT_ENDPOINT", "R2_ENDPOINT", "http://localstack.localstack.svc.cluster.local:4566")
+
+	restoreSpec := buildRestoreSpec(inst.ProjectID, newProject, newNamespace, req, bucket, endpoint)
 	restoreObj := &unstructured.Unstructured{Object: restoreSpec}
 	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, newNamespace, restoreObj); err != nil {
 		return nil, fmt.Errorf("apply restore CRD: %w", err)
@@ -112,9 +124,24 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	}, nil
 }
 
+// envOrFallback returns the first non-empty value among the listed env
+// vars; if none are set it returns fallback.
+func envOrFallback(envs ...string) string {
+	if len(envs) == 0 {
+		return ""
+	}
+	fallback := envs[len(envs)-1]
+	for _, e := range envs[:len(envs)-1] {
+		if v := os.Getenv(e); v != "" {
+			return v
+		}
+	}
+	return fallback
+}
+
 // buildRestoreSpec produces the recovery-bootstrap CNPG cluster CRD.
 // PITR fields are added when present in req.
-func buildRestoreSpec(sourceProject, newProject, newNamespace string, req domain.RestoreRequest) map[string]interface{} {
+func buildRestoreSpec(sourceProject, newProject, newNamespace string, req domain.RestoreRequest, bucket, endpoint string) map[string]interface{} {
 	spec := map[string]interface{}{
 		"apiVersion": "postgresql.cnpg.io/v1",
 		"kind":       "Cluster",
@@ -135,8 +162,8 @@ func buildRestoreSpec(sourceProject, newProject, newNamespace string, req domain
 					"name": "clusterBackup",
 					"barmanObjectStore": map[string]interface{}{
 						"serverName":      "cloud",
-						"destinationPath": fmt.Sprintf("s3://postgres-backups/%s", sourceProject),
-						"endpointURL":     "http://localstack.localstack.svc.cluster.local:4566",
+						"destinationPath": fmt.Sprintf("s3://%s/%s", bucket, sourceProject),
+						"endpointURL":     endpoint,
 						"s3Credentials": map[string]interface{}{
 							"accessKeyId":     map[string]interface{}{"name": s3CredsKey, "key": "ACCESS_KEY_ID"},
 							"secretAccessKey": map[string]interface{}{"name": s3CredsKey, "key": "ACCESS_SECRET_KEY"},
