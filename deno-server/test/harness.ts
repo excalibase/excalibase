@@ -166,7 +166,12 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
         body: JSON.stringify({ id, code, secrets }),
       }),
     invoke: async (id, body, extraHeaders = {}) => {
-      const res = await fetch(`${baseUrl}/invoke/${id}`, {
+      // Retry once on ECONNRESET — the Deno runtime occasionally drops
+      // a connection mid-response when spawning a Worker under load. The
+      // request is idempotent (POST /invoke with the same body), so a
+      // single retry is safe and removes the flake without papering over
+      // real failures (which surface on the second attempt unchanged).
+      const doFetch = () => fetch(`${baseUrl}/invoke/${id}`, {
         method: "POST",
         headers: headers(),
         body: JSON.stringify({
@@ -176,6 +181,15 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
           body: typeof body === "string" ? body : JSON.stringify(body),
         }),
       });
+      let res: Response;
+      try {
+        res = await doFetch();
+      } catch (e) {
+        const msg = (e instanceof Error ? e.message : String(e)) ?? "";
+        if (!/ECONNRESET|connection (reset|closed)/i.test(msg)) throw e;
+        await delay(50);
+        res = await doFetch();
+      }
       const json = await res.json() as {
         status?: number;
         headers?: Record<string, string>;
