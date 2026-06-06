@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Loader2, Save } from 'lucide-react';
 import { Button } from './Button';
 import { useTiers, useUpdateTier, sortTiers, type TierConfig, type TierConfigInput } from '../api/tiers';
@@ -11,24 +11,18 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
   const { data: tiers, isLoading } = useTiers();
   const update = useUpdateTier();
 
-  // Local draft keyed by tier; seeded from the server response and re-seeded
-  // whenever the query refetches so external changes don't get clobbered.
+  // Local draft of edits keyed by tier. A row with no entry renders the server
+  // value (see `toInput` fallback below), so there's no need to pre-seed from
+  // an effect — edits merge onto the row's current effective value.
   const [draft, setDraft] = useState<Record<string, TierConfigInput>>({});
-  useEffect(() => {
-    if (!tiers) return;
-    setDraft((prev) => {
-      const next = { ...prev };
-      for (const t of tiers) {
-        if (next[t.tier] == null) {
-          next[t.tier] = { maxProjects: t.maxProjects, instances: t.instances, storageSize: t.storageSize, memory: t.memory, cpu: t.cpu, backupEnabled: t.backupEnabled };
-        }
-      }
-      return next;
-    });
-  }, [tiers]);
 
-  const setField = (tier: string, patch: Partial<TierConfigInput>) =>
-    setDraft((d) => ({ ...d, [tier]: { ...d[tier], ...patch } }));
+  const toInput = (t: TierConfig): TierConfigInput => ({
+    maxProjects: t.maxProjects, instances: t.instances, storageSize: t.storageSize,
+    memory: t.memory, cpu: t.cpu, backupEnabled: t.backupEnabled,
+  });
+
+  const setField = (tier: string, base: TierConfigInput, patch: Partial<TierConfigInput>) =>
+    setDraft((d) => ({ ...d, [tier]: { ...base, ...patch } }));
 
   const isDirty = (t: TierConfig): boolean => {
     const d = draft[t.tier];
@@ -80,21 +74,21 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
           </thead>
           <tbody>
             {sortTiers(tiers ?? []).map((t) => {
-              const d = draft[t.tier] ?? t;
+              const d = draft[t.tier] ?? toInput(t);
               return (
                 <tr key={t.tier} className="border-b border-border-primary last:border-b-0">
                   <td className="px-6 py-3 font-medium uppercase text-xs">{t.tier}</td>
-                  <td className="px-4 py-3"><QtyInput value={d.cpu} disabled={!canMutate} onChange={(v) => setField(t.tier, { cpu: v })} placeholder="0.5" /></td>
-                  <td className="px-4 py-3"><QtyInput value={d.memory} disabled={!canMutate} onChange={(v) => setField(t.tier, { memory: v })} placeholder="4Gi" /></td>
-                  <td className="px-4 py-3"><QtyInput value={d.storageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, { storageSize: v })} placeholder="50Gi" /></td>
-                  <td className="px-4 py-3"><NumInput value={d.instances} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, { instances: v })} /></td>
-                  <td className="px-4 py-3"><NumInput value={d.maxProjects} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, { maxProjects: v })} /></td>
+                  <td className="px-4 py-3"><QtyInput value={d.cpu} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { cpu: v })} placeholder="0.5" /></td>
+                  <td className="px-4 py-3"><QtyInput value={d.memory} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { memory: v })} placeholder="4Gi" /></td>
+                  <td className="px-4 py-3"><QtyInput value={d.storageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { storageSize: v })} placeholder="50Gi" /></td>
+                  <td className="px-4 py-3"><NumInput value={d.instances} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { instances: v })} /></td>
+                  <td className="px-4 py-3"><NumInput value={d.maxProjects} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxProjects: v })} /></td>
                   <td className="px-4 py-3">
                     <input
                       type="checkbox"
                       checked={d.backupEnabled}
                       disabled={!canMutate}
-                      onChange={(e) => setField(t.tier, { backupEnabled: e.target.checked })}
+                      onChange={(e) => setField(t.tier, d, { backupEnabled: e.target.checked })}
                       className="h-4 w-4 accent-accent-primary disabled:opacity-50"
                     />
                   </td>
