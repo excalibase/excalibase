@@ -66,7 +66,7 @@ function extractRowId(doc: Record<string, unknown>): string {
   // Non-primitive ids (e.g. composite/object keys) must not fall through to
   // Object's default '[object Object]' stringification — serialize them.
   if (typeof id === 'object') return JSON.stringify(id);
-  return String(id as string | number | boolean | bigint | symbol);
+  return String(id);
 }
 
 interface NextFrame {

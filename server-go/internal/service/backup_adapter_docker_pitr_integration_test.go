@@ -147,7 +147,7 @@ func cleanupContainer(containerID string) error {
 // wiring) and then sub-tests exercise each target kind by restoring
 // into a fresh container. Each restore takes ~10–25s; total under a
 // minute beyond TargetName itself.
-func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) {
+func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) { //NOSONAR sequential PITR scenario; splitting would obscure the flow
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker required")
 	}

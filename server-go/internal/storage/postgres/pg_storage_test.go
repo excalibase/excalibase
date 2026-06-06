@@ -10,7 +10,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 )
 
-func TestPgStorage_BucketAndObjectLifecycle(t *testing.T) {
+func TestPgStorage_BucketAndObjectLifecycle(t *testing.T) { //NOSONAR sequential lifecycle scenario; splitting would obscure the flow
 	s := testStore(t)
 	ctx := context.Background()
 	const project = "proj-store"

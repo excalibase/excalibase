@@ -224,49 +224,47 @@ func applyNullableInstanceFields(inst *domain.DatabaseInstance, nf nullableInsta
 	} else {
 		inst.DeploymentMode = domain.ModeK8s
 	}
-	if nf.port.Valid {
-		p := int(nf.port.Int64)
-		inst.Port = &p
-	}
-	if nf.delProt.Valid {
-		inst.DeletionProtection = boolPtr(nf.delProt.Bool)
-	}
-	if nf.poolerEn.Valid {
-		inst.PoolerEnabled = boolPtr(nf.poolerEn.Bool)
-	}
-	if nf.netPol.Valid {
-		inst.NetworkPolicyEnabled = boolPtr(nf.netPol.Bool)
-	}
-	if nf.autoUpgrade.Valid {
-		inst.AutoMinorVersionUpgrade = boolPtr(nf.autoUpgrade.Bool)
-	}
-	if nf.backupEn.Valid {
-		inst.BackupEnabled = boolPtr(nf.backupEn.Bool)
-	}
-	if nf.maintDur.Valid {
-		d := int(nf.maintDur.Int64)
-		inst.MaintenanceWindowDurationMinutes = &d
-	}
-	if nf.backupRet.Valid {
-		d := int(nf.backupRet.Int64)
-		inst.BackupRetentionDays = &d
-	}
-	if nf.createdAt.Valid {
-		inst.CreatedAt = &domain.FlexTime{Time: nf.createdAt.Time}
-	}
-	if nf.updatedAt.Valid {
-		inst.UpdatedAt = &domain.FlexTime{Time: nf.updatedAt.Time}
-	}
-	if nf.lastHealth.Valid {
-		inst.LastHealthCheck = &domain.FlexTime{Time: nf.lastHealth.Time}
-	}
-	if nf.lastActiveAt.Valid {
-		inst.LastActiveAt = &domain.FlexTime{Time: nf.lastActiveAt.Time}
-	}
+	inst.Port = nullIntPtr(nf.port)
+	inst.DeletionProtection = nullBoolPtr(nf.delProt)
+	inst.PoolerEnabled = nullBoolPtr(nf.poolerEn)
+	inst.NetworkPolicyEnabled = nullBoolPtr(nf.netPol)
+	inst.AutoMinorVersionUpgrade = nullBoolPtr(nf.autoUpgrade)
+	inst.BackupEnabled = nullBoolPtr(nf.backupEn)
+	inst.MaintenanceWindowDurationMinutes = nullIntPtr(nf.maintDur)
+	inst.BackupRetentionDays = nullIntPtr(nf.backupRet)
+	inst.CreatedAt = nullFlexTime(nf.createdAt)
+	inst.UpdatedAt = nullFlexTime(nf.updatedAt)
+	inst.LastHealthCheck = nullFlexTime(nf.lastHealth)
+	inst.LastActiveAt = nullFlexTime(nf.lastActiveAt)
 	if nf.lastXactCount.Valid {
 		inst.LastXactCount = nf.lastXactCount.Int64
 	}
 	if nf.pauseReason.Valid {
 		inst.PauseReason = nf.pauseReason.String
 	}
+}
+
+// nullBoolPtr / nullIntPtr / nullFlexTime map sql.Null* columns onto optional
+// fields — nil when the column was NULL. They flatten what would otherwise be a
+// long if-ladder in applyNullableInstanceFields, keeping its complexity low.
+func nullBoolPtr(n sql.NullBool) *bool {
+	if n.Valid {
+		return boolPtr(n.Bool)
+	}
+	return nil
+}
+
+func nullIntPtr(n sql.NullInt64) *int {
+	if n.Valid {
+		v := int(n.Int64)
+		return &v
+	}
+	return nil
+}
+
+func nullFlexTime(n sql.NullTime) *domain.FlexTime {
+	if n.Valid {
+		return &domain.FlexTime{Time: n.Time}
+	}
+	return nil
 }

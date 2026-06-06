@@ -66,7 +66,8 @@ func TestMintToken_Unique(t *testing.T) {
 }
 
 func TestHashToken_Stable(t *testing.T) {
-	if hashToken("abc") != hashToken("abc") {
+	a, b := hashToken("abc"), hashToken("abc")
+	if a != b {
 		t.Error("hashToken not deterministic")
 	}
 	if hashToken("abc") == hashToken("abd") {

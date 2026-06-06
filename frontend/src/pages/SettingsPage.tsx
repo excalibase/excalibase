@@ -86,58 +86,11 @@ const excalibase = createClient({
   anonKey: '<paste your anon key from Auth settings>',
 })`;
 
-  let rollbackResults: RollbackResult[] = [];
-  if (project.rollbackLog) {
-    try {
-      rollbackResults = JSON.parse(project.rollbackLog) as RollbackResult[];
-    } catch {
-      // ignore parse error — just don't render rollback section
-    }
-  }
-
   return (
     <div data-testid="settings-page">
       <h3 className="text-lg font-semibold text-text-primary mb-4">Project Settings</h3>
 
-      {project.status === 'FAILED' && (
-        <div className="rounded-lg border border-red-500/40 bg-red-500/5 p-4 mb-6">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400 mb-1">
-                Provisioning failed at stage {project.failureStage ?? project.currentStage}
-                {project.failureStep ? ` (${project.failureStep})` : ''}
-              </div>
-              {project.failureReason && (
-                <div className="text-xs text-text-secondary font-mono break-words">
-                  {project.failureReason}
-                </div>
-              )}
-              {rollbackResults.length > 0 && (
-                <details className="mt-3">
-                  <summary className="text-xs text-text-tertiary cursor-pointer hover:text-text-secondary">
-                    Rollback log ({rollbackResults.length} action{rollbackResults.length === 1 ? '' : 's'})
-                  </summary>
-                  <ul className="mt-2 space-y-1">
-                    {rollbackResults.map((r, i) => (
-                      <li key={`${r.name}-${i}`} className="text-xs font-mono flex items-center gap-2">
-                        {r.ok ? (
-                          <Check className="w-3 h-3 text-green-400 flex-shrink-0" />
-                        ) : (
-                          <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />
-                        )}
-                        <span className={r.ok ? 'text-text-secondary' : 'text-red-400'}>
-                          {r.name}{r.error ? `: ${r.error}` : ''}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {project.status === 'FAILED' && <ProvisionFailedBanner project={project} />}
 
       <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8" data-testid="connect-section">
         <h4 className="text-sm font-medium text-text-primary mb-3">Connect to your project</h4>
@@ -253,6 +206,63 @@ const excalibase = createClient({
         destructive
         loading={deprovision.isPending}
       />
+    </div>
+  );
+}
+
+// parseRollbackLog safely decodes the JSON rollback log; a malformed/absent log
+// renders no rollback section rather than throwing.
+function parseRollbackLog(log?: string): RollbackResult[] {
+  if (!log) return [];
+  try {
+    return JSON.parse(log) as RollbackResult[];
+  } catch {
+    return [];
+  }
+}
+
+// ProvisionFailedBanner renders the failure stage/reason and optional rollback
+// log for a FAILED project. Extracted from SettingsPage to keep that component
+// flat (the nested failure/rollback conditionals dominated its complexity).
+function ProvisionFailedBanner({ project }: { readonly project: DatabaseInstance }) {
+  const rollbackResults = parseRollbackLog(project.rollbackLog);
+  return (
+    <div className="rounded-lg border border-red-500/40 bg-red-500/5 p-4 mb-6">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium text-red-400 mb-1">
+            Provisioning failed at stage {project.failureStage ?? project.currentStage}
+            {project.failureStep ? ` (${project.failureStep})` : ''}
+          </div>
+          {project.failureReason && (
+            <div className="text-xs text-text-secondary font-mono break-words">
+              {project.failureReason}
+            </div>
+          )}
+          {rollbackResults.length > 0 && (
+            <details className="mt-3">
+              <summary className="text-xs text-text-tertiary cursor-pointer hover:text-text-secondary">
+                Rollback log ({rollbackResults.length} action{rollbackResults.length === 1 ? '' : 's'})
+              </summary>
+              <ul className="mt-2 space-y-1">
+                {rollbackResults.map((r, i) => (
+                  <li key={`${r.name}-${i}`} className="text-xs font-mono flex items-center gap-2">
+                    {r.ok ? (
+                      <Check className="w-3 h-3 text-green-400 flex-shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0" />
+                    )}
+                    <span className={r.ok ? 'text-text-secondary' : 'text-red-400'}>
+                      {r.name}{r.error ? `: ${r.error}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

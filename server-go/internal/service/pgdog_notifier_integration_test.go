@@ -174,7 +174,7 @@ func waitForReload(reloadCount *int32) bool {
 	return false
 }
 
-func TestPgDogNotifier_Integration(t *testing.T) {
+func TestPgDogNotifier_Integration(t *testing.T) { //NOSONAR sequential integration scenario; splitting would obscure the flow
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
