@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/schema"
@@ -33,7 +32,7 @@ func (s *ProvisioningService) ScaleTier(ctx context.Context, projectID string, n
 		return err
 	}
 
-	tc, err := config.GetTierConfig(newTier)
+	tc, err := s.tierConfig(ctx, newTier)
 	if err != nil {
 		return err
 	}

@@ -133,7 +133,7 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 
 func TestPostgreSQLProvisionerStandard(t *testing.T) {
 	mock := k8s.NewMockClient()
-	mock.SetupPostgreSQLMock("std-db", "org1-std-db", 3)
+	mock.SetupPostgreSQLMock("std-db", "org1-std-db", 1)
 	prov := NewPostgreSQLProvisioner(mock, "")
 
 	tier, _ := config.GetTierConfig(domain.Standard)
@@ -151,15 +151,15 @@ func TestPostgreSQLProvisionerStandard(t *testing.T) {
 		t.Errorf("namespace: got %s", result.Namespace)
 	}
 
-	// Verify all 3 pods were checked
+	// Single-instance tier (no HA) — exactly one pod is waited on.
 	readyChecks := 0
 	for _, call := range mock.Calls {
 		if len(call) > 10 && call[:10] == "IsPodReady" {
 			readyChecks++
 		}
 	}
-	if readyChecks < 3 {
-		t.Errorf("expected 3 IsPodReady checks, got %d", readyChecks)
+	if readyChecks < 1 {
+		t.Errorf("expected 1 IsPodReady check, got %d", readyChecks)
 	}
 }
 
@@ -352,7 +352,10 @@ func TestPostgreSQL_ProvisionWithRollback_ReplicaStepCaptured(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // primary returns ready=true immediately; replica 2 enters select → ctx.Done()
 	pc := NewProvisionContext(nil, nil)
-	tier, _ := config.GetTierConfig(domain.Standard) // 3 instances
+	// Explicit multi-instance tier: the default tiers are single-instance for
+	// the alpha, but the provisioner still supports N replicas — this exercises
+	// the replica-wait/rollback path regardless of the default tier spec.
+	tier := config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2", BackupEnabled: true}
 
 	_, err := prov.ProvisionWithRollback(ctx, domain.ProvisioningRequest{
 		ProjectName: "rep-fail",

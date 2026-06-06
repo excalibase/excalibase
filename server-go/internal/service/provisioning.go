@@ -23,7 +23,8 @@ const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
 	store          storage.InstanceStore
-	orgStore       storage.OrgStore // optional, for org slug lookup
+	orgStore       storage.OrgStore        // optional, for org slug lookup
+	tierStore      storage.TierConfigStore // optional; DB-backed tier specs, falls back to config defaults
 	factory        *provisioner.Factory
 	vault          vaultclient.VaultClient  // optional
 	k8sClient      k8s.KubeClient           // optional, for role creation via pod exec
@@ -95,6 +96,24 @@ func (s *ProvisioningService) PublicationName() string {
 
 func (s *ProvisioningService) SetOrgStore(os storage.OrgStore) {
 	s.orgStore = os
+}
+
+// SetTierStore wires the DB-backed tier-config source. Optional: when unset
+// (or a tier row is missing), tier resolution falls back to config.GetTierConfig.
+func (s *ProvisioningService) SetTierStore(ts storage.TierConfigStore) {
+	s.tierStore = ts
+}
+
+// tierConfig resolves a tier's resource spec, preferring the DB-backed store
+// (so admin edits take effect without a redeploy) and falling back to the
+// hardcoded config defaults when the store is absent, errors, or has no row.
+func (s *ProvisioningService) tierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
+	if s.tierStore != nil {
+		if tc, ok, err := s.tierStore.GetTierConfig(ctx, tier); err == nil && ok {
+			return tc, nil
+		}
+	}
+	return config.GetTierConfig(tier)
 }
 
 func (s *ProvisioningService) SetSelfHostedMode(enabled bool) {
@@ -233,7 +252,7 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	// backup config injected when req.Backup is nil) propagate to the
 	// downstream prov.Provision call. Otherwise the mutated copy is
 	// scoped to the helper and the cluster comes up without backup.
-	inst, prov, tier, err := s.prepareProvisioning(&req)
+	inst, prov, tier, err := s.prepareProvisioning(ctx, &req)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +311,7 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 }
 
 // prepareProvisioning validates the request and creates the initial instance record.
-func (s *ProvisioningService) prepareProvisioning(req *domain.ProvisioningRequest) (*domain.DatabaseInstance, provisioner.DatabaseProvisioner, config.TierConfig, error) {
+func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *domain.ProvisioningRequest) (*domain.DatabaseInstance, provisioner.DatabaseProvisioner, config.TierConfig, error) {
 	if err := validateProvisioningRequest(*req); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
@@ -302,7 +321,7 @@ func (s *ProvisioningService) prepareProvisioning(req *domain.ProvisioningReques
 		return nil, nil, config.TierConfig{}, err
 	}
 
-	tier, err := config.GetTierConfig(req.Tier)
+	tier, err := s.tierConfig(ctx, req.Tier)
 	if err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}

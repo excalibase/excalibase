@@ -353,11 +353,12 @@ func TestScaleTier(t *testing.T) {
 		t.Errorf("tier: got %s, want STANDARD", inst.Tier)
 	}
 
-	// Verify CRD was patched with new instances/resources
+	// Verify CRD was patched with new instances/resources. Tiers are
+	// single-instance (no HA) for the alpha, so scaling tunes CPU/RAM only.
 	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
 	spec := got.Object["spec"].(map[string]interface{})
-	if spec["instances"] != int64(3) {
-		t.Errorf("CRD instances: got %v, want 3", spec["instances"])
+	if spec["instances"] != int64(1) {
+		t.Errorf("CRD instances: got %v, want 1", spec["instances"])
 	}
 	resources := spec["resources"].(map[string]interface{})
 	requests := resources["requests"].(map[string]interface{})

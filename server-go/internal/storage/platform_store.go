@@ -16,6 +16,7 @@ type PlatformStore interface {
 	UserStore
 	TokenStore
 	OrgStore
+	TierConfigStore
 	io.Closer
 
 	// Audit log writes — both concrete stores (sqlite, postgres) expose
@@ -44,4 +45,9 @@ type PlatformStore interface {
 	// RestoreJobs returns the RestoreJobStore the orchestrator writes
 	// async restore state into.
 	RestoreJobs() RestoreJobStore
+
+	// RlsPolicies returns the RlsPolicyStore that backs the
+	// /api/provision/{p}/rls-policies + column-policies endpoints
+	// excalibase-graphql consumes. See EXC-318.
+	RlsPolicies() RlsPolicyStore
 }

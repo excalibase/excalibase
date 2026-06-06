@@ -24,7 +24,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
-	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
@@ -105,6 +104,14 @@ func runServer(cfg config.AppConfig) {
 		dockerClient: dockerClientRef,
 	})
 	deps.fnHandler = fnHandler
+
+	policyPub, err := service.NewPolicyChangePublisher(cfg.NatsURL)
+	if err != nil {
+		log.Printf("WARN: policy change publisher: %v", err)
+	} else {
+		defer policyPub.Close()
+		deps.rlsPolicyHandler.SetPublisher(policyPub)
+	}
 
 	scheduler, schedulerStop := startBackupScheduler(cfg, sqlStore, deps.backupHandler)
 	defer schedulerStop()
@@ -262,6 +269,8 @@ type handlerDeps struct {
 	schemaHandler      *handler.SchemaHandler
 	realtimeHandler    *handler.RealtimeHandler
 	fnHandler          *handler.FunctionHandler
+	rlsPolicyHandler   *handler.RlsPolicyHandler
+	tierHandler        *handler.TierHandler
 	capDeps            *capacityDeps
 	rlUnauth           func(http.Handler) http.Handler
 	rlAuthed           func(http.Handler) http.Handler
@@ -296,6 +305,7 @@ func buildProvisioningService(
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
 	provSvc.SetVault(vc)
 	provSvc.SetOrgStore(sqlStore)
+	provSvc.SetTierStore(sqlStore)
 	provSvc.SetSelfHostedMode(!cfg.IsCloud())
 	provSvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
 	if cfg.ProvisionerMode == "docker" {
@@ -461,6 +471,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		promClient = handler.NewPromClient(cfg.PromURL)
 	}
 	adminHandler := handler.NewAdminHandler(provSvc, store, sqlStore, sqlStore, k8sClient, cfg.LokiURL, promClient)
+	tierHandler := handler.NewTierHandler(sqlStore)
 
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
 	authHandler.SetOrgStore(sqlStore)
@@ -494,6 +505,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		vaultHandler:       vaultHandler,
 		schemaHandler:      handler.NewSchemaHandler(vc),
 		realtimeHandler:    realtimeHandler,
+		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies()),
+		tierHandler:        tierHandler,
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
 			store:           store,
@@ -576,12 +589,20 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store s
 			r.Route("/audit", func(r chi.Router) { d.auditHandler.Routes(r) })
 			r.Route("/snapshot", func(r chi.Router) { d.snapshotHandler.Routes(r) })
 			r.Route("/migrations", func(r chi.Router) { d.migrationHandler.Routes(r) })
+			r.Route("/rls-policies", func(r chi.Router) { d.rlsPolicyHandler.RlsRoutes(r) })
+			r.Route("/column-policies", func(r chi.Router) { d.rlsPolicyHandler.ColumnRoutes(r) })
 		})
 	})
 }
 
 // mountSimpleAuthRoutes mounts the small auth-gated subtrees (alerts, setup, parameter groups).
 func mountSimpleAuthRoutes(r *chi.Mux, d *handlerDeps) {
+	// Read-only tier specs for any authenticated user (the provision page tier
+	// selector). Editing stays admin-only under /api/admin/tiers.
+	r.Route("/api/tiers", func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		r.Get("/", d.tierHandler.List)
+	})
 	r.Route("/api/alerts", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		d.alertHandler.Routes(r)
@@ -625,7 +646,11 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 	})
 	r.Route("/api/admin", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
-		d.adminHandler.Routes(r)
+		r.Group(func(r chi.Router) { d.adminHandler.Routes(r) })
+		r.Route("/tiers", func(r chi.Router) {
+			r.Use(auth.RequirePermission(auth.PermViewAny))
+			d.tierHandler.Routes(r)
+		})
 	})
 }
 
@@ -711,26 +736,19 @@ func startServer(cfg config.AppConfig, r *chi.Mux) {
 	}
 }
 
-// buildPlatformStore selects between Postgres (cloud) and SQLite (self-hosted)
-// based on the cloud flag and PLATFORM_DB_URL env.
+// buildPlatformStore opens the PostgreSQL platform store. The platform is
+// Postgres-only (self-hosted runs the same CNPG platform-db as cloud), so
+// PLATFORM_DB_URL is always required.
 func buildPlatformStore(cfg config.AppConfig) storage.PlatformStore {
-	if cfg.IsCloud() {
-		if cfg.PlatformDBURL == "" {
-			log.Fatal("cloud mode requires PLATFORM_DB_URL (PostgreSQL connection string)")
-		}
-		pgStore, err := pgstore.New(cfg.PlatformDBURL)
-		if err != nil {
-			log.Fatalf("Failed to init Postgres: %v", err)
-		}
-		log.Println("Cloud mode: using PostgreSQL platform store")
-		return pgStore
+	if cfg.PlatformDBURL == "" {
+		log.Fatal("PLATFORM_DB_URL (PostgreSQL connection string) is required")
 	}
-	sqliteStore, err := sqlitestore.New(cfg.DBPath)
+	pgStore, err := pgstore.New(cfg.PlatformDBURL)
 	if err != nil {
-		log.Fatalf("Failed to init SQLite: %v", err)
+		log.Fatalf("Failed to init Postgres platform store: %v", err)
 	}
-	log.Println("Self-hosted mode: using SQLite platform store")
-	return sqliteStore
+	log.Println("Using PostgreSQL platform store")
+	return pgStore
 }
 
 // buildVault selects the vault backend (remote HTTP, Postgres-backed Shamir,

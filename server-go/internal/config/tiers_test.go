@@ -15,8 +15,8 @@ func TestGetTierConfig(t *testing.T) {
 		cpu       string
 	}{
 		{domain.Free, 1, "5Gi", "512Mi", "0.5"},
-		{domain.Standard, 3, "50Gi", "4Gi", "2"},
-		{domain.Enterprise, 5, "500Gi", "16Gi", "4"},
+		{domain.Standard, 1, "50Gi", "4Gi", "2"},
+		{domain.Enterprise, 1, "500Gi", "16Gi", "4"},
 	}
 
 	for _, tt := range tests {
