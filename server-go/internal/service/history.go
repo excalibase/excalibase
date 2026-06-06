@@ -13,7 +13,6 @@ import (
 
 const statusFile = "status.json"
 
-
 type HistoryWriter struct {
 	basePath string
 }

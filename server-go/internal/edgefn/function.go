@@ -98,7 +98,6 @@ const (
 
 const defaultEntrypoint = "index.ts"
 
-
 // MaxCodeSize caps the bundled code at 512 KB (Deno runtime agrees).
 const MaxCodeSize = 512 * 1024
 
@@ -215,9 +214,9 @@ type Function struct {
 	// reads this slot to schedule each entry at its next due time without
 	// re-evaluating the module graph. nil/omitempty for bundles that
 	// don't call `cronJobs()`.
-	CronJobs   json.RawMessage `json:"cronJobs,omitempty"`
-	CreatedAt  time.Time       `json:"createdAt"`
-	UpdatedAt  time.Time       `json:"updatedAt"`
+	CronJobs  json.RawMessage `json:"cronJobs,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
 // JwtVerificationRequired returns true unless the function has explicitly opted
@@ -362,54 +361,11 @@ func (f *Function) Bundle() (string, error) {
 
 	// Stamp the detected shape on the receiver. This is the only place that
 	// writes RuntimeShape — persistence stores it, runtime codegen reads it.
-	// Pragmatic substring/regex scan: esbuild's ESM output preserves the
-	// source object literal verbatim, so the inline `kind:` marker still
-	// survives for hand-rolled records. For functions that wrap their def
-	// in a lib helper (`mutation()`, `query()`, etc.) we also detect the
-	// `import` declaration — the wrapper stamps `kind` at runtime, so the
-	// import is the only reliable bundle-time signal. Phase 3 codegen
-	// consumes this field.
-	if v2ShapePattern.MatchString(final) || v2NpmImportPattern.MatchString(final) {
-		f.RuntimeShape = RuntimeShapeV2
-	} else {
-		f.RuntimeShape = RuntimeShapeV1
-	}
+	f.stampRuntimeShape(final)
 
-	// Phase 7: detect httpAction / httpRouter and stamp Function.Kind. Both
-	// kinds are part of the v2 shape family (RuntimeShape stays "v2") but
-	// the gateway needs the precise discriminator to route requests.
-	// Inline `kind: "httpAction"` wins (most specific); the npm:-import
-	// pattern is the fallback for lib-wrapped exports.
-	if m := httpKindPattern.FindStringSubmatch(final); m != nil {
-		f.Kind = m[1]
-		if f.Kind == "httpRouter" {
-			routes, rerr := extractHttpRoutes(final)
-			if rerr != nil {
-				return "", rerr
-			}
-			f.HttpRoutes = routes
-		}
-	} else if m := httpKindNpmImportPattern.FindStringSubmatch(final); m != nil {
-		f.Kind = m[1]
-		if f.Kind == "httpRouter" {
-			// httpRouter relies on the lib's `__excalibase_routes`
-			// side-channel — same code path as the inline case. Extraction
-			// stays best-effort: if the side channel is missing we still
-			// stamp the kind but leave routes nil, and the gateway will
-			// 404 individual paths until the runtime metadata callback
-			// can re-populate.
-			routes, rerr := extractHttpRoutes(final)
-			if rerr == nil {
-				f.HttpRoutes = routes
-			} else {
-				f.HttpRoutes = nil
-			}
-		}
-	} else {
-		// Clear stale Kind/HttpRoutes if this bundle isn't an http* shape
-		// (e.g. redeploy that swapped the default export for a query).
-		f.Kind = ""
-		f.HttpRoutes = nil
+	// Phase 7: detect httpAction / httpRouter and stamp Function.Kind.
+	if err := f.stampHTTPKind(final); err != nil {
+		return "", err
 	}
 
 	// Phase 8: detect cron registry. Bundles that don't call cronJobs()
@@ -422,6 +378,61 @@ func (f *Function) Bundle() (string, error) {
 	f.CronJobs = cronJobs
 
 	return final, nil
+}
+
+// stampRuntimeShape sets f.RuntimeShape from a pragmatic substring/regex scan
+// of the bundled source. esbuild's ESM output preserves the source object
+// literal verbatim, so the inline `kind:` marker survives for hand-rolled
+// records. For functions that wrap their def in a lib helper (`mutation()`,
+// `query()`, etc.) the `import` declaration is the only reliable bundle-time
+// signal. Phase 3 codegen consumes this field.
+func (f *Function) stampRuntimeShape(final string) {
+	if v2ShapePattern.MatchString(final) || v2NpmImportPattern.MatchString(final) {
+		f.RuntimeShape = RuntimeShapeV2
+	} else {
+		f.RuntimeShape = RuntimeShapeV1
+	}
+}
+
+// stampHTTPKind detects httpAction / httpRouter shapes and stamps Function.Kind
+// + HttpRoutes. Both kinds belong to the v2 shape family but the gateway needs
+// the precise discriminator to route requests. Inline `kind: "httpAction"` wins
+// (most specific); the npm:-import pattern is the fallback for lib-wrapped
+// exports. Returns an error only when an inline httpRouter's route table fails
+// to parse.
+func (f *Function) stampHTTPKind(final string) error {
+	if m := httpKindPattern.FindStringSubmatch(final); m != nil {
+		f.Kind = m[1]
+		if f.Kind == "httpRouter" {
+			routes, rerr := extractHttpRoutes(final)
+			if rerr != nil {
+				return rerr
+			}
+			f.HttpRoutes = routes
+		}
+		return nil
+	}
+	if m := httpKindNpmImportPattern.FindStringSubmatch(final); m != nil {
+		f.Kind = m[1]
+		if f.Kind == "httpRouter" {
+			// httpRouter relies on the lib's `__excalibase_routes`
+			// side-channel. Extraction stays best-effort: if the side channel
+			// is missing we still stamp the kind but leave routes nil, and the
+			// gateway will 404 individual paths until the runtime metadata
+			// callback can re-populate.
+			if routes, rerr := extractHttpRoutes(final); rerr == nil {
+				f.HttpRoutes = routes
+			} else {
+				f.HttpRoutes = nil
+			}
+		}
+		return nil
+	}
+	// Clear stale Kind/HttpRoutes if this bundle isn't an http* shape
+	// (e.g. redeploy that swapped the default export for a query).
+	f.Kind = ""
+	f.HttpRoutes = nil
+	return nil
 }
 
 // extractHttpRoutes pulls the __excalibase_routes array out of the bundled
@@ -554,40 +565,53 @@ func extractCronJobs(bundled string) (json.RawMessage, error) {
 	if string(raw) == "null" || string(raw) == "[]" {
 		return nil, nil
 	}
-	var jobs []struct {
-		Name     string         `json:"name"`
-		Schedule map[string]any `json:"schedule"`
-		FnRef    map[string]any `json:"fnRef"`
-		Args     map[string]any `json:"args"`
-	}
+	var jobs []cronJobRecord
 	if err := json.Unmarshal(raw, &jobs); err != nil {
 		return nil, fmt.Errorf("parse extracted cron jobs: %w", err)
 	}
-	for i, j := range jobs {
-		if j.Name == "" {
-			return nil, fmt.Errorf("cronJobs[%d]: cron job name is required", i)
-		}
-		if j.Schedule == nil {
-			return nil, fmt.Errorf("cronJobs[%d] %q: schedule object is required", i, j.Name)
-		}
-		kind, _ := j.Schedule["kind"].(string)
-		if !validCronScheduleKinds[kind] {
-			return nil, fmt.Errorf("cronJobs[%d] %q: unknown schedule kind %q (want cron|interval|daily|hourly)", i, j.Name, kind)
-		}
-		if j.FnRef == nil {
-			return nil, fmt.Errorf("cronJobs[%d] %q: fnRef is required", i, j.Name)
-		}
-		mod, _ := j.FnRef["moduleName"].(string)
-		exp, _ := j.FnRef["exportName"].(string)
-		if mod == "" || exp == "" {
-			return nil, fmt.Errorf("cronJobs[%d] %q: fnRef.moduleName and fnRef.exportName must be non-empty", i, j.Name)
-		}
+	if err := validateCronJobs(jobs); err != nil {
+		return nil, err
 	}
 	out, err := json.Marshal(jobs)
 	if err != nil {
 		return nil, fmt.Errorf("re-marshal cronJobs: %w", err)
 	}
 	return json.RawMessage(out), nil
+}
+
+// cronJobRecord is the decoded shape of a single registered cron job, used by
+// extractCronJobs / validateCronJobs.
+type cronJobRecord struct {
+	Name     string         `json:"name"`
+	Schedule map[string]any `json:"schedule"`
+	FnRef    map[string]any `json:"fnRef"`
+	Args     map[string]any `json:"args"`
+}
+
+// validateCronJobs enforces the per-job invariants the runtime relies on:
+// a name, a schedule with a known kind, and a fnRef with module + export.
+func validateCronJobs(jobs []cronJobRecord) error {
+	for i, j := range jobs {
+		if j.Name == "" {
+			return fmt.Errorf("cronJobs[%d]: cron job name is required", i)
+		}
+		if j.Schedule == nil {
+			return fmt.Errorf("cronJobs[%d] %q: schedule object is required", i, j.Name)
+		}
+		kind, _ := j.Schedule["kind"].(string)
+		if !validCronScheduleKinds[kind] {
+			return fmt.Errorf("cronJobs[%d] %q: unknown schedule kind %q (want cron|interval|daily|hourly)", i, j.Name, kind)
+		}
+		if j.FnRef == nil {
+			return fmt.Errorf("cronJobs[%d] %q: fnRef is required", i, j.Name)
+		}
+		mod, _ := j.FnRef["moduleName"].(string)
+		exp, _ := j.FnRef["exportName"].(string)
+		if mod == "" || exp == "" {
+			return fmt.Errorf("cronJobs[%d] %q: fnRef.moduleName and fnRef.exportName must be non-empty", i, j.Name)
+		}
+	}
+	return nil
 }
 
 // bareJSKeyPattern matches an identifier-shaped object key that is NOT

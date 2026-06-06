@@ -139,10 +139,22 @@ func TestDockerBackupAdapter_R2_E2E(t *testing.T) {
 		t.Errorf("expected non-zero size, got %d", ref.SizeBytes)
 	}
 
-	// Round-trip download and verify gzip magic. Uses the small
-	// LimitReader pattern from the LocalStack variant — only checks
-	// the first 4 bytes so we don't pay egress on a multi-MB read.
-	body, err := uploader.Download(ctx, bucket, uploadedKey)
+	assertUploadedGzip(ctx, t, uploader, bucket, uploadedKey)
+	assertKeyInList(ctx, t, uploader, bucket,
+		fmt.Sprintf("integration-tests/backup-adapter-r2/%s/", inst.ProjectID), uploadedKey)
+
+	// BackupRecord persisted as COMPLETED.
+	got, _ := records.ListByProject(ctx, inst.ProjectID)
+	if len(got) != 1 || got[0].Status != "COMPLETED" {
+		t.Errorf("records: %+v", got)
+	}
+}
+
+// assertUploadedGzip round-trips the object and verifies the gzip magic bytes.
+// Uses a LimitReader so we only read the first 4 bytes (no multi-MB egress).
+func assertUploadedGzip(ctx context.Context, t *testing.T, uploader S3Uploader, bucket, key string) {
+	t.Helper()
+	body, err := uploader.Download(ctx, bucket, key)
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
@@ -154,31 +166,21 @@ func TestDockerBackupAdapter_R2_E2E(t *testing.T) {
 	if len(first) < 2 || first[0] != 0x1f || first[1] != 0x8b {
 		t.Errorf("uploaded blob is not gzip: % x", first)
 	}
+}
 
-	// List under the project's prefix should surface the object —
-	// proves R2's ListObjectsV2 paginator behaves the same as the
-	// LocalStack and AWS variants for our prefix scheme.
-	listed, err := uploader.List(ctx, bucket, fmt.Sprintf("integration-tests/backup-adapter-r2/%s/", inst.ProjectID))
+// assertKeyInList lists under prefix and fails if wantKey is absent.
+func assertKeyInList(ctx context.Context, t *testing.T, uploader S3Uploader, bucket, prefix, wantKey string) {
+	t.Helper()
+	listed, err := uploader.List(ctx, bucket, prefix)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	found := false
+	keys := make([]string, 0, len(listed))
 	for _, obj := range listed {
-		if obj.Key == uploadedKey {
-			found = true
+		if obj.Key == wantKey {
+			return
 		}
+		keys = append(keys, obj.Key)
 	}
-	if !found {
-		var keys []string
-		for _, obj := range listed {
-			keys = append(keys, obj.Key)
-		}
-		t.Errorf("uploaded key %q not in List under project prefix; saw %v", uploadedKey, strings.Join(keys, ", "))
-	}
-
-	// BackupRecord persisted as COMPLETED.
-	got, _ := records.ListByProject(ctx, inst.ProjectID)
-	if len(got) != 1 || got[0].Status != "COMPLETED" {
-		t.Errorf("records: %+v", got)
-	}
+	t.Errorf("key %q not in List under prefix %q; saw %v", wantKey, prefix, strings.Join(keys, ", "))
 }

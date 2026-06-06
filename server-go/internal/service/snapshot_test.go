@@ -11,7 +11,6 @@ import (
 
 const testSnapDB = "snap-db"
 
-
 func setupSnapshotTest(t *testing.T) *SnapshotService {
 	t.Helper()
 	dir := t.TempDir()

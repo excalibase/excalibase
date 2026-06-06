@@ -63,7 +63,10 @@ function newSubscriptionId(): string {
 function extractRowId(doc: Record<string, unknown>): string {
   const id = doc._id ?? doc.id;
   if (id === null || id === undefined) return '';
-  return String(id);
+  // Non-primitive ids (e.g. composite/object keys) must not fall through to
+  // Object's default '[object Object]' stringification — serialize them.
+  if (typeof id === 'object') return JSON.stringify(id);
+  return String(id as string | number | boolean | bigint | symbol);
 }
 
 interface NextFrame {
@@ -140,6 +143,18 @@ export function useGraphqlRealtime(
       }
       const ws = socket;
 
+      // Hoisted out of onopen so the setTimeout callback isn't nested a level
+      // deeper (keeps function nesting at or below the linter's limit).
+      const onAckTimeout = (): void => {
+        if (unmountedRef.current) return;
+        setStatus('offline');
+        try {
+          ws.close();
+        } catch {
+          // Already closing.
+        }
+      };
+
       ws.onopen = () => {
         if (unmountedRef.current) return;
         ws.send(
@@ -150,15 +165,7 @@ export function useGraphqlRealtime(
         );
         // Server must ack within ACK_TIMEOUT_MS; otherwise treat as a
         // failed handshake and reconnect.
-        ackTimer = setTimeout(() => {
-          if (unmountedRef.current) return;
-          setStatus('offline');
-          try {
-            ws.close();
-          } catch {
-            // Already closing.
-          }
-        }, ACK_TIMEOUT_MS);
+        ackTimer = setTimeout(onAckTimeout, ACK_TIMEOUT_MS);
       };
 
       ws.onmessage = (event: MessageEvent) => {

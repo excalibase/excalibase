@@ -20,7 +20,6 @@ import (
 
 const metricsHistoryFile = "metrics-history.json"
 
-
 type MetricsService struct {
 	store       storage.InstanceStore
 	k8sClient   k8s.KubeClient

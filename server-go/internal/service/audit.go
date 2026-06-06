@@ -15,7 +15,6 @@ const (
 	primaryPodSuffix      = "-postgres-1"
 )
 
-
 type AuditService struct {
 	store     storage.InstanceStore
 	k8sClient k8s.KubeClient

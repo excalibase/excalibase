@@ -21,16 +21,16 @@ import (
 // at provision time).
 //
 // Phase 2 contract:
-// - BasebackupTo invokes `wal-g backup-push` inside the sidecar; the
-//   sidecar streams the archive to S3 directly. To preserve the
-//   io.Writer interface, BasebackupTo writes the *manifest* (small —
-//   includes the backup name and size) into dst so callers can
-//   record it in the BackupRecord row. The actual bytes never
-//   transit the platform process.
-// - RestoreFrom is a no-op for now: Phase 3's restore orchestrator
-//   pre-stages the data dir using wal-g backup-fetch from inside a
-//   freshly-created restore container; the io.Reader contract is
-//   not the right shape there.
+//   - BasebackupTo invokes `wal-g backup-push` inside the sidecar; the
+//     sidecar streams the archive to S3 directly. To preserve the
+//     io.Writer interface, BasebackupTo writes the *manifest* (small —
+//     includes the backup name and size) into dst so callers can
+//     record it in the BackupRecord row. The actual bytes never
+//     transit the platform process.
+//   - RestoreFrom is a no-op for now: Phase 3's restore orchestrator
+//     pre-stages the data dir using wal-g backup-fetch from inside a
+//     freshly-created restore container; the io.Reader contract is
+//     not the right shape there.
 type WALGBackupRunner struct {
 	sdk     dockerSDK
 	sidecar string // sidecar container name, e.g. "excalibase-{projectId}-walg"

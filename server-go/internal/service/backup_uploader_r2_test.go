@@ -24,14 +24,14 @@ import (
 // reconfiguration. Skips with a clear message if any are missing.
 //
 // What's actually verified that LocalStack can't:
-//   1. Real path-style URL construction against the shared R2 cert
-//      (LocalStack accepts any addressing mode).
-//   2. Real multipart Upload + AbortMultipartUpload semantics
-//      (R2 has stricter etag formats than LocalStack).
-//   3. Region "auto" being accepted server-side (LocalStack ignores).
-//   4. Round-trip Upload → Download bytes (multi-part reassembly).
-//   5. Delete returning 204 (LocalStack returns 200 on missing key,
-//      R2 returns 404 — our impl swallows the typed NoSuchKey).
+//  1. Real path-style URL construction against the shared R2 cert
+//     (LocalStack accepts any addressing mode).
+//  2. Real multipart Upload + AbortMultipartUpload semantics
+//     (R2 has stricter etag formats than LocalStack).
+//  3. Region "auto" being accepted server-side (LocalStack ignores).
+//  4. Round-trip Upload → Download bytes (multi-part reassembly).
+//  5. Delete returning 204 (LocalStack returns 200 on missing key,
+//     R2 returns 404 — our impl swallows the typed NoSuchKey).
 //
 // The test cleans up after itself even on failure.
 func TestAWSS3Uploader_R2_E2E(t *testing.T) {
@@ -73,18 +73,35 @@ func TestAWSS3Uploader_R2_E2E(t *testing.T) {
 		_ = uploader.Delete(cleanCtx, bucket, key)
 	})
 
-	// Upload
+	uploadAndVerifySize(ctx, t, uploader, bucket, key, payload)
+	downloadAndVerifyBytes(ctx, t, uploader, bucket, key, payload)
+	listAndVerifySize(ctx, t, uploader, bucket, "integration-tests/backup-uploader-r2/", key, len(payload))
+
+	// Delete + idempotent re-Delete (R2 returns 404, we swallow).
+	if err := uploader.Delete(ctx, bucket, key); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := uploader.Delete(ctx, bucket, key); err != nil {
+		t.Errorf("re-Delete on missing key should be idempotent: %v", err)
+	}
+}
+
+// uploadAndVerifySize uploads payload and checks the returned size (0 is
+// tolerated because HeadObject is best-effort).
+func uploadAndVerifySize(ctx context.Context, t *testing.T, uploader S3Uploader, bucket, key string, payload []byte) {
+	t.Helper()
 	size, err := uploader.Upload(ctx, bucket, key, bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("Upload: %v", err)
 	}
 	if size != int64(len(payload)) && size != 0 {
-		// HeadObject is best-effort; size 0 means HEAD failed but
-		// upload succeeded. Either is acceptable for the contract.
 		t.Errorf("Upload size: got %d, want %d", size, len(payload))
 	}
+}
 
-	// Round-trip download
+// downloadAndVerifyBytes round-trips the object and asserts byte equality.
+func downloadAndVerifyBytes(ctx context.Context, t *testing.T, uploader S3Uploader, bucket, key string, payload []byte) {
+	t.Helper()
 	body, err := uploader.Download(ctx, bucket, key)
 	if err != nil {
 		t.Fatalf("Download: %v", err)
@@ -97,32 +114,25 @@ func TestAWSS3Uploader_R2_E2E(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Errorf("downloaded bytes don't match upload: got len=%d, want len=%d", len(got), len(payload))
 	}
+}
 
-	// List should find the object under the prefix.
-	listed, err := uploader.List(ctx, bucket, "integration-tests/backup-uploader-r2/")
+// listAndVerifySize lists under prefix and asserts wantKey is present with the
+// expected size.
+func listAndVerifySize(ctx context.Context, t *testing.T, uploader S3Uploader, bucket, prefix, wantKey string, wantSize int) {
+	t.Helper()
+	listed, err := uploader.List(ctx, bucket, prefix)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	found := false
 	for _, obj := range listed {
-		if obj.Key == key {
-			found = true
-			if obj.SizeBytes != int64(len(payload)) {
-				t.Errorf("listed size: got %d, want %d", obj.SizeBytes, len(payload))
+		if obj.Key == wantKey {
+			if obj.SizeBytes != int64(wantSize) {
+				t.Errorf("listed size: got %d, want %d", obj.SizeBytes, wantSize)
 			}
+			return
 		}
 	}
-	if !found {
-		t.Errorf("uploaded key %q not found in List", key)
-	}
-
-	// Delete + idempotent re-Delete (R2 returns 404, we swallow).
-	if err := uploader.Delete(ctx, bucket, key); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	if err := uploader.Delete(ctx, bucket, key); err != nil {
-		t.Errorf("re-Delete on missing key should be idempotent: %v", err)
-	}
+	t.Errorf("uploaded key %q not found in List", wantKey)
 }
 
 // envFirst returns the first non-empty value among the given env keys.

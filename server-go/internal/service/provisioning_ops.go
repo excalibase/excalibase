@@ -24,7 +24,6 @@ const (
 	errGetCRDFmt   = "get cluster CRD: %w"
 )
 
-
 // ScaleTier changes the instance count and resources by patching the CNPG Cluster CRD.
 func (s *ProvisioningService) ScaleTier(ctx context.Context, projectID string, newTier domain.TierType) error {
 	inst, err := s.GetInstance(projectID)
@@ -434,4 +433,3 @@ func generateProjectRef() string {
 	}
 	return "proj-" + string(out)
 }
-

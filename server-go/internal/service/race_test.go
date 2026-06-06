@@ -13,7 +13,6 @@ import (
 
 const testConcM = "conc-m"
 
-
 // TestConcurrentProvisionSameDisplayName verifies that concurrent provisions with
 // the same display name all succeed and receive distinct generated refs.
 // After the project-ref refactor, same display name is no longer a conflict.

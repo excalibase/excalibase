@@ -29,6 +29,7 @@ import (
 
 const errFunctionNotFound = "function not found"
 
+const errInvalidRequestBody = "invalid request body"
 
 // FunctionHandler exposes per-project edge function CRUD + invoke + secrets.
 // Routes are all scoped under /api/projects/{projectId}/functions and use the
@@ -501,7 +502,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, int64(edgefn.MaxCodeSize+16*1024))
 	var fn edgefn.Function
 	if err := json.NewDecoder(r.Body).Decode(&fn); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
 	fn.ProjectID = projectID
@@ -521,32 +522,9 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Extract user-declared schema (if any) and apply it before deploying
 	// the function bundle. If migration fails we roll back the store record
-	// so the deploy is atomic. Schema extraction is a no-op for bundles
-	// that don't call defineSchema — same behaviour as a v1 fetch handler.
-	if schema, found, sErr := edgefn.ExtractSchema(code); sErr != nil {
-		log.Printf("WARN: schema extraction failed for %s/%s: %v", projectID, fn.ID, sErr)
-	} else if found {
-		raw, mErr := json.Marshal(schema)
-		if mErr == nil {
-			fn.SchemaJSON = raw
-			// Re-save to persist SchemaJSON before migration runs.
-			if err := h.store.Save(&fn); err != nil {
-				log.Printf("WARN: save schema for %s/%s: %v", projectID, fn.ID, err)
-			}
-		}
-		if h.autoMigrate && h.projectDBFn != nil {
-			db, dbErr := h.projectDBFn(r.Context(), projectID)
-			if dbErr != nil {
-				_ = h.store.Delete(projectID, fn.ID)
-				httpError(w, "failed to open project db for migration: "+safeError(dbErr), http.StatusBadGateway)
-				return
-			}
-			if err := edgefn.ApplySchema(r.Context(), db, projectID, schema); err != nil {
-				_ = h.store.Delete(projectID, fn.ID)
-				httpError(w, "schema migration failed: "+safeError(err), http.StatusBadGateway)
-				return
-			}
-		}
+	// so the deploy is atomic.
+	if !h.applyExtractedSchema(w, r, projectID, code, &fn) {
+		return
 	}
 
 	// Phase 8.5: sync the bundle's cron registry to excalibase_cron_jobs
@@ -616,6 +594,45 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(fn)
+}
+
+// applyExtractedSchema extracts the user-declared schema from the bundled code,
+// persists it on the function record, and (when auto-migrate is on) applies it
+// to the project DB. On migration failure it rolls back the store record and
+// writes an HTTP error. Returns false when the caller should stop (an error
+// response has already been written); true when the deploy may continue.
+// Schema extraction is a no-op for bundles that don't call defineSchema.
+func (h *FunctionHandler) applyExtractedSchema(w http.ResponseWriter, r *http.Request, projectID, code string, fn *edgefn.Function) bool {
+	schema, found, sErr := edgefn.ExtractSchema(code)
+	if sErr != nil {
+		log.Printf("WARN: schema extraction failed for %s/%s: %v", projectID, fn.ID, sErr)
+		return true
+	}
+	if !found {
+		return true
+	}
+	if raw, mErr := json.Marshal(schema); mErr == nil {
+		fn.SchemaJSON = raw
+		// Re-save to persist SchemaJSON before migration runs.
+		if err := h.store.Save(fn); err != nil {
+			log.Printf("WARN: save schema for %s/%s: %v", projectID, fn.ID, err)
+		}
+	}
+	if !h.autoMigrate || h.projectDBFn == nil {
+		return true
+	}
+	db, dbErr := h.projectDBFn(r.Context(), projectID)
+	if dbErr != nil {
+		_ = h.store.Delete(projectID, fn.ID)
+		httpError(w, "failed to open project db for migration: "+safeError(dbErr), http.StatusBadGateway)
+		return false
+	}
+	if err := edgefn.ApplySchema(r.Context(), db, projectID, schema); err != nil {
+		_ = h.store.Delete(projectID, fn.ID)
+		httpError(w, "schema migration failed: "+safeError(err), http.StatusBadGateway)
+		return false
+	}
+	return true
 }
 
 // ApplySchemaFromStore applies the stored SchemaJSON for every function in
@@ -1100,7 +1117,7 @@ func (h *FunctionHandler) SetSecret(w http.ResponseWriter, r *http.Request) {
 		Value string `json:"value"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
 	if err := h.secrets.Set(projectID, body.Key, body.Value); err != nil {
@@ -1254,7 +1271,7 @@ func (h *FunctionHandler) ReceiveExportMetadata(w http.ResponseWriter, r *http.R
 		Exports   json.RawMessage `json:"exports"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
 	if err := edgefn.ValidateProjectID(body.ProjectID); err != nil {
@@ -1401,37 +1418,36 @@ func (h *FunctionHandler) PublicHttpInvoke(w http.ResponseWriter, r *http.Reques
 	subPath := "/" + strings.TrimLeft(chi.URLParam(r, "*"), "/")
 
 	for _, fn := range fns {
-		if fn.IsInternal {
+		if !httpFunctionMatches(fn, subPath, r.Method) {
 			continue
 		}
-		if fn.Kind == "httpAction" {
-			// Match path: the function id forms the sub-path. The Go-side
-			// gateway treats `/functions/v1/{p}/http/<fnId>` as the route
-			// for an httpAction whose fnId equals the segment.
-			if subPath == "/"+fn.ID {
-				if fn.JwtVerificationRequired() {
-					if !h.enforceJWT(w, r, projectID) {
-						return
-					}
-				}
-				h.forwardToRuntime(w, r, fn, false)
-				return
-			}
-			continue
+		if fn.JwtVerificationRequired() && !h.enforceJWT(w, r, projectID) {
+			return
 		}
-		if fn.Kind == "httpRouter" {
-			if matched := matchRouterRoute(fn.HttpRoutes, subPath, r.Method); matched {
-				if fn.JwtVerificationRequired() {
-					if !h.enforceJWT(w, r, projectID) {
-						return
-					}
-				}
-				h.forwardToRuntime(w, r, fn, false)
-				return
-			}
-		}
+		h.forwardToRuntime(w, r, fn, false)
+		return
 	}
 	httpError(w, errFunctionNotFound, http.StatusNotFound)
+}
+
+// httpFunctionMatches reports whether the public-facing http* function fn should
+// serve the request for subPath + method. Internal functions never match. An
+// httpAction matches when subPath equals "/"+fn.ID; an httpRouter matches when
+// its persisted route table contains the (path, method) pair.
+func httpFunctionMatches(fn *edgefn.Function, subPath, method string) bool {
+	if fn.IsInternal {
+		return false
+	}
+	switch fn.Kind {
+	case "httpAction":
+		// The Go-side gateway treats `/functions/v1/{p}/http/<fnId>` as the
+		// route for an httpAction whose fnId equals the segment.
+		return subPath == "/"+fn.ID
+	case "httpRouter":
+		return matchRouterRoute(fn.HttpRoutes, subPath, method)
+	default:
+		return false
+	}
 }
 
 // matchRouterRoute walks the persisted route table looking for a (path,

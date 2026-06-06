@@ -11,7 +11,6 @@ import (
 
 const testAudDB = "aud-db"
 
-
 func setupAuditTest(t *testing.T) (*AuditService, *k8s.MockClient) {
 	t.Helper()
 	dir := t.TempDir()

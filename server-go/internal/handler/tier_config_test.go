@@ -92,3 +92,18 @@ func TestTierHandler_Update_RejectsInvalidSpec(t *testing.T) {
 		t.Errorf("expected 400 for invalid spec, got %d", rec.Code)
 	}
 }
+
+func TestTierHandler_Routes_ListServed(t *testing.T) {
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{
+		domain.Free: {Instances: 1, CPU: "0.5", Memory: "512Mi", StorageSize: "5Gi"},
+	}}
+	h := NewTierHandler(store)
+	r := chi.NewRouter()
+	r.Route("/api/admin/tiers", h.Routes) // exercises Routes wiring
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest("GET", "/api/admin/tiers/", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET via Routes should 200, got %d", rec.Code)
+	}
+}

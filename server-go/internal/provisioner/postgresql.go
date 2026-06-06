@@ -16,6 +16,7 @@ import (
 
 const primaryPodSuffix = "-postgres-1"
 
+const clusterNameSuffix = "-postgres"
 
 // PostgreSQLProvisioner provisions PostgreSQL via CloudNativePG operator.
 type PostgreSQLProvisioner struct {
@@ -313,7 +314,7 @@ func (p *PostgreSQLProvisioner) Pause(ctx context.Context, namespace, projectID 
 // cluster's annotation that the provisioner stamps at create time.
 // If the annotation is missing (legacy cluster), fall back to 1.
 func (p *PostgreSQLProvisioner) Resume(ctx context.Context, namespace, projectID string) error {
-	clusterName := projectID + "-postgres"
+	clusterName := projectID + clusterNameSuffix
 	cluster, err := p.client.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, clusterName)
 	if err != nil {
 		return fmt.Errorf("get cluster for resume: %w", err)
@@ -330,7 +331,7 @@ func (p *PostgreSQLProvisioner) Resume(ctx context.Context, namespace, projectID
 }
 
 func (p *PostgreSQLProvisioner) patchClusterInstances(ctx context.Context, namespace, projectID string, instances int) error {
-	clusterName := projectID + "-postgres"
+	clusterName := projectID + clusterNameSuffix
 	cluster, err := p.client.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, clusterName)
 	if err != nil {
 		return fmt.Errorf("get cluster for instances patch: %w", err)
@@ -350,7 +351,7 @@ func (p *PostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, proj
 		log.Printf("WARN: failed to uninstall watcher: %v", err)
 	}
 	// Delete the CNPG cluster CRD
-	if err := p.client.DeleteCRD(ctx, k8s.CNPGClusterGVR, namespace, projectID+"-postgres"); err != nil {
+	if err := p.client.DeleteCRD(ctx, k8s.CNPGClusterGVR, namespace, projectID+clusterNameSuffix); err != nil {
 		log.Printf("WARN: failed to delete cluster CRD: %v", err)
 	}
 	// Delete namespace (cascades everything)

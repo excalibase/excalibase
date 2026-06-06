@@ -6,11 +6,10 @@ import (
 )
 
 const (
-	testProjABC       = "proj-abc"
-	testBaseURL       = "https://x"
+	testProjABC        = "proj-abc"
+	testBaseURL        = "https://x"
 	testPlatformBucket = "platform-bucket"
 )
-
 
 // TestObjectKey_BuildsExpectedPrefix pins the storage layout. Changing
 // this changes where every existing object lives — caller-of-last-resort

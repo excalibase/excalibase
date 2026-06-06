@@ -16,20 +16,19 @@ import (
 )
 
 const (
-	testDBName        = "test-db"
-	testProvisionFmt  = "Provision: %v"
-	testDelDB         = "del-db"
+	testDBName         = "test-db"
+	testProvisionFmt   = "Provision: %v"
+	testDelDB          = "del-db"
 	testDeprovisionFmt = "Deprovision: %v"
-	testVaultDel      = "vault-del"
-	testLegacyProj    = "legacy-proj"
-	testVaultErr      = "vault-err"
-	testSealedDel     = "sealed-del"
-	testCoolApp       = "My Cool App 🚀"
-	testNotPersisted  = "instance not persisted"
-	testUnexpErrFmt   = "unexpected err: %v"
-	testUser1         = "user-1"
+	testVaultDel       = "vault-del"
+	testLegacyProj     = "legacy-proj"
+	testVaultErr       = "vault-err"
+	testSealedDel      = "sealed-del"
+	testCoolApp        = "My Cool App 🚀"
+	testNotPersisted   = "instance not persisted"
+	testUnexpErrFmt    = "unexpected err: %v"
+	testUser1          = "user-1"
 )
-
 
 func setupProvisioningTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore, *k8s.MockClient) {
 	t.Helper()

@@ -13,8 +13,8 @@ import (
 type BackupRef struct {
 	ID         string `json:"id"`
 	ProjectID  string `json:"projectId"`
-	Type       string `json:"type"`             // MANUAL | SCHEDULED
-	Status     string `json:"status"`           // IN_PROGRESS | COMPLETED | FAILED
+	Type       string `json:"type"`   // MANUAL | SCHEDULED
+	Status     string `json:"status"` // IN_PROGRESS | COMPLETED | FAILED
 	StartedAt  string `json:"startedAt,omitempty"`
 	FinishedAt string `json:"finishedAt,omitempty"`
 	SizeBytes  int64  `json:"sizeBytes,omitempty"`

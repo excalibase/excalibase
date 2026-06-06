@@ -20,10 +20,10 @@ import (
 // inst it was called for so tests can assert dispatch passed the
 // right project context.
 type fakeBackupRunner struct {
-	mu          sync.Mutex
-	payload     []byte // bytes the runner writes to dst on BasebackupTo
-	failBackup  error
-	failRestore error
+	mu              sync.Mutex
+	payload         []byte // bytes the runner writes to dst on BasebackupTo
+	failBackup      error
+	failRestore     error
 	lastBackupInst  string // ProjectID
 	lastRestoreInst string
 	restoreSink     bytes.Buffer
@@ -336,8 +336,8 @@ func (f *fakeDockerClientForAdapter) StartContainer(_ context.Context, _ string)
 	f.started = true
 	return nil
 }
-func (f *fakeDockerClientForAdapter) StopContainer(_ context.Context, _ string) error    { return nil }
-func (f *fakeDockerClientForAdapter) RemoveContainer(_ context.Context, _ string) error  { return nil }
+func (f *fakeDockerClientForAdapter) StopContainer(_ context.Context, _ string) error   { return nil }
+func (f *fakeDockerClientForAdapter) RemoveContainer(_ context.Context, _ string) error { return nil }
 func (f *fakeDockerClientForAdapter) ContainerStatus(_ context.Context, _ string) (string, error) {
 	return "running", nil
 }
@@ -486,26 +486,33 @@ func TestBuildRecoveryTar_AllTargetKinds(t *testing.T) {
 		{"name", domain.RestoreRequest{TargetName: "before_bad"}, []string{"recovery_target_name = 'before_bad'", "recovery_target_action"}},
 	}
 	for _, c := range cases {
+		c := c
 		t.Run(c.name, func(t *testing.T) {
-			tarBytes := buildRecoveryTar(c.req)
-			if tarBytes == nil {
-				t.Fatal("expected non-nil tar")
-			}
-			files := readTarFiles(t, tarBytes)
-			if _, ok := files["recovery.signal"]; !ok {
-				t.Error("recovery.signal missing from tar")
-			}
-			autoConf, ok := files["postgresql.auto.conf"]
-			if !ok {
-				t.Fatal("postgresql.auto.conf missing from tar")
-			}
-			content := string(autoConf)
-			for _, want := range c.wantSubs {
-				if !strings.Contains(content, want) {
-					t.Errorf("postgresql.auto.conf missing %q\n got: %q", want, content)
-				}
-			}
+			assertRecoveryTar(t, buildRecoveryTar(c.req), c.wantSubs)
 		})
+	}
+}
+
+// assertRecoveryTar verifies a recovery tar contains recovery.signal plus a
+// postgresql.auto.conf that includes every expected substring.
+func assertRecoveryTar(t *testing.T, tarBytes []byte, wantSubs []string) {
+	t.Helper()
+	if tarBytes == nil {
+		t.Fatal("expected non-nil tar")
+	}
+	files := readTarFiles(t, tarBytes)
+	if _, ok := files["recovery.signal"]; !ok {
+		t.Error("recovery.signal missing from tar")
+	}
+	autoConf, ok := files["postgresql.auto.conf"]
+	if !ok {
+		t.Fatal("postgresql.auto.conf missing from tar")
+	}
+	content := string(autoConf)
+	for _, want := range wantSubs {
+		if !strings.Contains(content, want) {
+			t.Errorf("postgresql.auto.conf missing %q\n got: %q", want, content)
+		}
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 
 const testProjABC = "proj-abc"
 
-
 // newReqWithChiParam simulates a chi-routed request by seeding the chi
 // RouteContext with the given URL params. This mirrors how chi.URLParam
 // behaves inside a real router without needing to stand one up.

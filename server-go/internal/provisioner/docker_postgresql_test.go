@@ -361,3 +361,24 @@ func TestDockerProvisioner_FactoryRegistration(t *testing.T) {
 		t.Error("expected same provisioner instance")
 	}
 }
+
+func TestFactory_RegisteredAndGet(t *testing.T) {
+	docker := newMockDocker()
+	dp := NewDockerPostgreSQLProvisioner(docker)
+	factory := NewFactory(dp)
+
+	reg := factory.Registered()
+	if len(reg) != 1 || reg[0] != dp {
+		t.Errorf("Registered: got %v, want [dp]", reg)
+	}
+
+	// Unknown type is not registered.
+	if _, ok := factory.Get(domain.DatabaseType("nope")); ok {
+		t.Error("unknown db type should not resolve")
+	}
+
+	// Empty factory has no registrations.
+	if len(NewFactory().Registered()) != 0 {
+		t.Error("empty factory should have zero registrations")
+	}
+}

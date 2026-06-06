@@ -38,11 +38,37 @@ import (
 //     reload signal
 //   - Notifier with no NATS URL is silent (no panic on publish, no
 //     dependency on NATS being up)
-func TestPgDogNotifier_Integration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
+//
+// pgdogTestEnv bundles the wired collaborators a pgdog notifier subtest needs.
+type pgdogTestEnv struct {
+	store       *pgstore.Store
+	notifier    *PgDogNotifier
+	natsURL     string
+	reloadCount *int32
+}
 
-	// --- Postgres for the pgdog_databases / pgdog_users tables ----------
+// setupPgDogNotifierEnv starts Postgres + NATS, creates the pgdog tables,
+// subscribes to the reload subject, and builds the notifier under test. All
+// resources are registered for cleanup on the test.
+func setupPgDogNotifierEnv(ctx context.Context, t *testing.T) pgdogTestEnv {
+	t.Helper()
+	store := startPgDogPostgres(ctx, t)
+	natsURL := startNATS(ctx, t)
+	reloadCount := subscribeReload(t, natsURL)
+
+	n, err := NewPgDogNotifier(store, natsURL)
+	if err != nil {
+		t.Fatalf("NewPgDogNotifier: %v", err)
+	}
+	t.Cleanup(n.Close)
+	return pgdogTestEnv{store: store, notifier: n, natsURL: natsURL, reloadCount: reloadCount}
+}
+
+// startPgDogPostgres boots Postgres and creates the pgdog_databases /
+// pgdog_users tables (PgDog owns them in production; mirrored here for a
+// hermetic test). Returns the connected store.
+func startPgDogPostgres(ctx context.Context, t *testing.T) *pgstore.Store {
+	t.Helper()
 	pgPwd := testutil.FixturePassword("pgdog-int")
 	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
 		tcpg.WithDatabase("platform"),
@@ -67,9 +93,6 @@ func TestPgDogNotifier_Integration(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	// PgDog's tables aren't created by our migrations — PgDog owns
-	// them in production. Mirror the schema inline so this test is
-	// hermetic. Same SQL as coverage_gap_test.go's pgdogTablesSQL.
 	if _, err := store.DB().Exec(`
 		CREATE TABLE IF NOT EXISTS pgdog_databases (
 		    name TEXT NOT NULL,
@@ -93,8 +116,12 @@ func TestPgDogNotifier_Integration(t *testing.T) {
 		);`); err != nil {
 		t.Fatalf("create pgdog tables: %v", err)
 	}
+	return store
+}
 
-	// --- NATS ------------------------------------------------------------
+// startNATS boots a NATS container and returns its client URL.
+func startNATS(ctx context.Context, t *testing.T) string {
+	t.Helper()
 	natsC, err := tcgeneric.GenericContainer(ctx, tcgeneric.GenericContainerRequest{
 		ContainerRequest: tcgeneric.ContainerRequest{
 			Image:        "nats:2.10-alpine",
@@ -109,9 +136,13 @@ func TestPgDogNotifier_Integration(t *testing.T) {
 	t.Cleanup(func() { natsC.Terminate(ctx) })
 	natsHost, _ := natsC.Host(ctx)
 	natsPort, _ := natsC.MappedPort(ctx, "4222/tcp")
-	natsURL := fmt.Sprintf("nats://%s:%s", natsHost, natsPort.Port())
+	return fmt.Sprintf("nats://%s:%s", natsHost, natsPort.Port())
+}
 
-	// Subscribe BEFORE the notifier publishes so we don't race.
+// subscribeReload subscribes to pgdog.config.reload before the notifier
+// publishes (so we don't race) and returns a counter incremented per message.
+func subscribeReload(t *testing.T, natsURL string) *int32 {
+	t.Helper()
 	subConn, err := nats.Connect(natsURL)
 	if err != nil {
 		t.Fatalf("subscriber connect: %v", err)
@@ -125,20 +156,35 @@ func TestPgDogNotifier_Integration(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 	t.Cleanup(func() { sub.Unsubscribe() })
-	// Flush so the subscription is registered server-side before we publish.
 	if err := subConn.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
+	return &reloadCount
+}
 
-	// --- Notifier under test -------------------------------------------
-	n, err := NewPgDogNotifier(store, natsURL)
-	if err != nil {
-		t.Fatalf("NewPgDogNotifier: %v", err)
+// waitForReload polls the reload counter until it reaches at least 1 within 2s.
+func waitForReload(reloadCount *int32) bool {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(reloadCount) >= 1 {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	t.Cleanup(n.Close)
+	return false
+}
+
+func TestPgDogNotifier_Integration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	env := setupPgDogNotifierEnv(ctx, t)
+	store := env.store
+	n := env.notifier
+	reloadCount := env.reloadCount
 
 	t.Run("RegisterCluster_writes_DB_rows", func(t *testing.T) {
-		atomic.StoreInt32(&reloadCount, 0)
+		atomic.StoreInt32(reloadCount, 0)
 		if err := n.RegisterCluster(ctx, "proj-alpha", "ns-alpha", "app", "app", "secret-alpha"); err != nil {
 			t.Fatalf("RegisterCluster: %v", err)
 		}
@@ -175,15 +221,9 @@ func TestPgDogNotifier_Integration(t *testing.T) {
 	})
 
 	t.Run("RegisterCluster_publishes_reload_to_NATS", func(t *testing.T) {
-		// Allow a short window for the message to land.
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			if atomic.LoadInt32(&reloadCount) >= 1 {
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
+		if !waitForReload(reloadCount) {
+			t.Errorf("expected ≥1 reload signal; got %d", atomic.LoadInt32(reloadCount))
 		}
-		t.Errorf("expected ≥1 reload signal; got %d", atomic.LoadInt32(&reloadCount))
 	})
 
 	t.Run("RegisterCluster_idempotent_upsert", func(t *testing.T) {
@@ -208,7 +248,7 @@ func TestPgDogNotifier_Integration(t *testing.T) {
 	})
 
 	t.Run("DeregisterCluster_removes_rows_and_signals", func(t *testing.T) {
-		atomic.StoreInt32(&reloadCount, 0)
+		atomic.StoreInt32(reloadCount, 0)
 		if err := n.DeregisterCluster(ctx, "proj-alpha", "app"); err != nil {
 			t.Fatalf("Deregister: %v", err)
 		}
@@ -221,14 +261,9 @@ func TestPgDogNotifier_Integration(t *testing.T) {
 		if userRows != 0 {
 			t.Errorf("expected 0 user rows after deregister, got %d", userRows)
 		}
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			if atomic.LoadInt32(&reloadCount) >= 1 {
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
+		if !waitForReload(reloadCount) {
+			t.Errorf("deregister should publish reload signal; count=%d", atomic.LoadInt32(reloadCount))
 		}
-		t.Errorf("deregister should publish reload signal; count=%d", atomic.LoadInt32(&reloadCount))
 	})
 
 	t.Run("NoNATS_silent_register", func(t *testing.T) {

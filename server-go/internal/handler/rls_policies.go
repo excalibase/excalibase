@@ -26,6 +26,12 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	routePolicyID  = "/{policyId}"
+	errNotFound    = "not found"
+	errInvalidJSON = "invalid json"
+)
+
 // PolicyChangePublisher is implemented by whoever owns the NATS connection.
 // Wired from cmd/server/main.go; nil-tolerant so unit tests that don't
 // care about events can leave it unset.
@@ -51,18 +57,18 @@ func (h *RlsPolicyHandler) SetPublisher(p PolicyChangePublisher) { h.publisher =
 func (h *RlsPolicyHandler) RlsRoutes(r chi.Router) {
 	r.Get("/", h.ListRls)
 	r.Post("/", h.CreateRls)
-	r.Get("/{policyId}", h.GetRls)
-	r.Patch("/{policyId}", h.UpdateRls)
-	r.Delete("/{policyId}", h.DeleteRls)
+	r.Get(routePolicyID, h.GetRls)
+	r.Patch(routePolicyID, h.UpdateRls)
+	r.Delete(routePolicyID, h.DeleteRls)
 }
 
 // ColumnRoutes registers the column-policies sub-tree under the project router.
 func (h *RlsPolicyHandler) ColumnRoutes(r chi.Router) {
 	r.Get("/", h.ListColumn)
 	r.Post("/", h.CreateColumn)
-	r.Get("/{policyId}", h.GetColumn)
-	r.Patch("/{policyId}", h.UpdateColumn)
-	r.Delete("/{policyId}", h.DeleteColumn)
+	r.Get(routePolicyID, h.GetColumn)
+	r.Patch(routePolicyID, h.UpdateColumn)
+	r.Delete(routePolicyID, h.DeleteColumn)
 }
 
 // -------------------- RLS handlers --------------------
@@ -89,7 +95,7 @@ func (h *RlsPolicyHandler) GetRls(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "policyId")
 	p, err := h.store.GetRls(r.Context(), projectID, id)
 	if errors.Is(err, pgstore.ErrPolicyNotFound) {
-		httpError(w, "not found", http.StatusNotFound)
+		httpError(w, errNotFound, http.StatusNotFound)
 		return
 	}
 	if err != nil {
@@ -106,7 +112,7 @@ func (h *RlsPolicyHandler) CreateRls(w http.ResponseWriter, r *http.Request) {
 	}
 	var p domain.Policy
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		httpError(w, "invalid json", http.StatusBadRequest)
+		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
 	p.ProjectID = projectID
@@ -138,7 +144,7 @@ func (h *RlsPolicyHandler) UpdateRls(w http.ResponseWriter, r *http.Request) {
 
 	existing, err := h.store.GetRls(r.Context(), projectID, id)
 	if errors.Is(err, pgstore.ErrPolicyNotFound) {
-		httpError(w, "not found", http.StatusNotFound)
+		httpError(w, errNotFound, http.StatusNotFound)
 		return
 	}
 	if err != nil {
@@ -147,7 +153,7 @@ func (h *RlsPolicyHandler) UpdateRls(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(existing); err != nil {
-		httpError(w, "invalid json", http.StatusBadRequest)
+		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
 	existing.ID = id
@@ -177,7 +183,7 @@ func (h *RlsPolicyHandler) DeleteRls(w http.ResponseWriter, r *http.Request) {
 	existing, _ := h.store.GetRls(r.Context(), projectID, id)
 	if err := h.store.DeleteRls(r.Context(), projectID, id); err != nil {
 		if errors.Is(err, pgstore.ErrPolicyNotFound) {
-			httpError(w, "not found", http.StatusNotFound)
+			httpError(w, errNotFound, http.StatusNotFound)
 			return
 		}
 		httpError(w, safeError(err), http.StatusInternalServerError)
@@ -217,7 +223,7 @@ func (h *RlsPolicyHandler) GetColumn(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "policyId")
 	p, err := h.store.GetColumn(r.Context(), projectID, id)
 	if errors.Is(err, pgstore.ErrPolicyNotFound) {
-		httpError(w, "not found", http.StatusNotFound)
+		httpError(w, errNotFound, http.StatusNotFound)
 		return
 	}
 	if err != nil {
@@ -234,7 +240,7 @@ func (h *RlsPolicyHandler) CreateColumn(w http.ResponseWriter, r *http.Request) 
 	}
 	var p domain.ColumnPolicy
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		httpError(w, "invalid json", http.StatusBadRequest)
+		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
 	p.ProjectID = projectID
@@ -266,7 +272,7 @@ func (h *RlsPolicyHandler) UpdateColumn(w http.ResponseWriter, r *http.Request) 
 
 	existing, err := h.store.GetColumn(r.Context(), projectID, id)
 	if errors.Is(err, pgstore.ErrPolicyNotFound) {
-		httpError(w, "not found", http.StatusNotFound)
+		httpError(w, errNotFound, http.StatusNotFound)
 		return
 	}
 	if err != nil {
@@ -275,7 +281,7 @@ func (h *RlsPolicyHandler) UpdateColumn(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(existing); err != nil {
-		httpError(w, "invalid json", http.StatusBadRequest)
+		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
 	existing.ID = id
@@ -304,7 +310,7 @@ func (h *RlsPolicyHandler) DeleteColumn(w http.ResponseWriter, r *http.Request) 
 	existing, _ := h.store.GetColumn(r.Context(), projectID, id)
 	if err := h.store.DeleteColumn(r.Context(), projectID, id); err != nil {
 		if errors.Is(err, pgstore.ErrPolicyNotFound) {
-			httpError(w, "not found", http.StatusNotFound)
+			httpError(w, errNotFound, http.StatusNotFound)
 			return
 		}
 		httpError(w, safeError(err), http.StatusInternalServerError)
@@ -393,6 +399,18 @@ func validateColumn(p *domain.ColumnPolicy) error {
 	if len(p.Operations) == 0 {
 		return errors.New("at least one operation required")
 	}
+	if err := validateColumnMode(p); err != nil {
+		return err
+	}
+	if len(p.Assignments) == 0 {
+		return errors.New("at least one assignment required")
+	}
+	return nil
+}
+
+// validateColumnMode enforces the per-mode invariants on a column policy: which
+// of partial_spec / custom_masker_key each masking mode requires or forbids.
+func validateColumnMode(p *domain.ColumnPolicy) error {
 	switch p.Mode {
 	case domain.MaskHide, domain.MaskNull:
 		if p.PartialSpec != nil {
@@ -415,9 +433,6 @@ func validateColumn(p *domain.ColumnPolicy) error {
 		}
 	default:
 		return errors.New("unknown mode: " + string(p.Mode))
-	}
-	if len(p.Assignments) == 0 {
-		return errors.New("at least one assignment required")
 	}
 	return nil
 }

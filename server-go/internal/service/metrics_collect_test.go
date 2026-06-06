@@ -11,7 +11,6 @@ import (
 
 const testPersistM = "persist-m"
 
-
 func setupMetricsCollectTest(t *testing.T) (*MetricsService, *k8s.MockClient) {
 	t.Helper()
 	dir := t.TempDir()

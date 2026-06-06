@@ -189,57 +189,84 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		return nil, err
 	}
 
-	if deployMode.Valid && deployMode.String != "" {
-		inst.DeploymentMode = domain.DeploymentMode(deployMode.String)
+	nf := nullableInstanceFields{
+		deployMode: deployMode, port: port,
+		delProt: delProt, poolerEn: poolerEn, netPol: netPol,
+		autoUpgrade: autoUpgrade, backupEn: backupEn,
+		maintDur: maintDur, backupRet: backupRet,
+		createdAt: createdAt, updatedAt: updatedAt, lastHealth: lastHealth,
+		lastActiveAt: lastActiveAt, lastXactCount: lastXactCount,
+		pauseReason: pauseReason,
+	}
+	applyNullableInstanceFields(&inst, nf)
+
+	return &inst, nil
+}
+
+// nullableInstanceFields groups the sql.Null* values scanned for an instance row
+// so applyNullableInstanceFields can map them onto the domain struct in one pass.
+type nullableInstanceFields struct {
+	deployMode                       sql.NullString
+	port, maintDur, backupRet        sql.NullInt64
+	delProt, poolerEn, netPol        sql.NullBool
+	autoUpgrade, backupEn            sql.NullBool
+	createdAt, updatedAt, lastHealth sql.NullTime
+	lastActiveAt                     sql.NullTime
+	lastXactCount                    sql.NullInt64
+	pauseReason                      sql.NullString
+}
+
+// applyNullableInstanceFields copies the valid nullable columns onto inst,
+// applying the K8s default for an absent deployment mode.
+func applyNullableInstanceFields(inst *domain.DatabaseInstance, nf nullableInstanceFields) {
+	if nf.deployMode.Valid && nf.deployMode.String != "" {
+		inst.DeploymentMode = domain.DeploymentMode(nf.deployMode.String)
 	} else {
 		inst.DeploymentMode = domain.ModeK8s
 	}
-
-	if port.Valid {
-		p := int(port.Int64)
+	if nf.port.Valid {
+		p := int(nf.port.Int64)
 		inst.Port = &p
 	}
-	if delProt.Valid {
-		inst.DeletionProtection = boolPtr(delProt.Bool)
+	if nf.delProt.Valid {
+		inst.DeletionProtection = boolPtr(nf.delProt.Bool)
 	}
-	if poolerEn.Valid {
-		inst.PoolerEnabled = boolPtr(poolerEn.Bool)
+	if nf.poolerEn.Valid {
+		inst.PoolerEnabled = boolPtr(nf.poolerEn.Bool)
 	}
-	if netPol.Valid {
-		inst.NetworkPolicyEnabled = boolPtr(netPol.Bool)
+	if nf.netPol.Valid {
+		inst.NetworkPolicyEnabled = boolPtr(nf.netPol.Bool)
 	}
-	if autoUpgrade.Valid {
-		inst.AutoMinorVersionUpgrade = boolPtr(autoUpgrade.Bool)
+	if nf.autoUpgrade.Valid {
+		inst.AutoMinorVersionUpgrade = boolPtr(nf.autoUpgrade.Bool)
 	}
-	if backupEn.Valid {
-		inst.BackupEnabled = boolPtr(backupEn.Bool)
+	if nf.backupEn.Valid {
+		inst.BackupEnabled = boolPtr(nf.backupEn.Bool)
 	}
-	if maintDur.Valid {
-		d := int(maintDur.Int64)
+	if nf.maintDur.Valid {
+		d := int(nf.maintDur.Int64)
 		inst.MaintenanceWindowDurationMinutes = &d
 	}
-	if backupRet.Valid {
-		d := int(backupRet.Int64)
+	if nf.backupRet.Valid {
+		d := int(nf.backupRet.Int64)
 		inst.BackupRetentionDays = &d
 	}
-	if createdAt.Valid {
-		inst.CreatedAt = &domain.FlexTime{Time: createdAt.Time}
+	if nf.createdAt.Valid {
+		inst.CreatedAt = &domain.FlexTime{Time: nf.createdAt.Time}
 	}
-	if updatedAt.Valid {
-		inst.UpdatedAt = &domain.FlexTime{Time: updatedAt.Time}
+	if nf.updatedAt.Valid {
+		inst.UpdatedAt = &domain.FlexTime{Time: nf.updatedAt.Time}
 	}
-	if lastHealth.Valid {
-		inst.LastHealthCheck = &domain.FlexTime{Time: lastHealth.Time}
+	if nf.lastHealth.Valid {
+		inst.LastHealthCheck = &domain.FlexTime{Time: nf.lastHealth.Time}
 	}
-	if lastActiveAt.Valid {
-		inst.LastActiveAt = &domain.FlexTime{Time: lastActiveAt.Time}
+	if nf.lastActiveAt.Valid {
+		inst.LastActiveAt = &domain.FlexTime{Time: nf.lastActiveAt.Time}
 	}
-	if lastXactCount.Valid {
-		inst.LastXactCount = lastXactCount.Int64
+	if nf.lastXactCount.Valid {
+		inst.LastXactCount = nf.lastXactCount.Int64
 	}
-	if pauseReason.Valid {
-		inst.PauseReason = pauseReason.String
+	if nf.pauseReason.Valid {
+		inst.PauseReason = nf.pauseReason.String
 	}
-
-	return &inst, nil
 }

@@ -17,8 +17,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-
-
 // StorageHandler exposes Supabase-style storage endpoints under
 // /api/projects/{projectId}/storage. Bucket lifecycle, signed-URL
 // minting, list/delete, and a public fast-path for anonymous reads.
@@ -59,6 +57,11 @@ func (h *StorageHandler) SetRuntimeSecret(secret string) {
 // legal S3/R2 bucket names so the wire name uses a hyphen — the worker-
 // side branding still ties Id<"_storage"> to this bucket.
 const ctxStorageBucket = "ctx-storage"
+
+const (
+	errObjectNotFound    = "object not found"
+	errStorageIDRequired = "storageId required"
+)
 
 // Routes mounts the project-scoped storage endpoints. Caller is expected
 // to apply auth + RequireProjectAccess middleware at the parent.
@@ -213,7 +216,7 @@ func (h *StorageHandler) GetObjectMetadata(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	httpError(w, "object not found", http.StatusNotFound)
+	httpError(w, errObjectNotFound, http.StatusNotFound)
 }
 
 func (h *StorageHandler) DeleteObject(w http.ResponseWriter, r *http.Request) {
@@ -433,7 +436,7 @@ func (h *StorageHandler) InternalConfirmUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if req.StorageID == "" {
-		httpError(w, "storageId required", http.StatusBadRequest)
+		httpError(w, errStorageIDRequired, http.StatusBadRequest)
 		return
 	}
 	// We persist sha256 in the MimeType field-aware path? No — service's
@@ -489,14 +492,14 @@ func (h *StorageHandler) InternalSignDownloadURL(w http.ResponseWriter, r *http.
 		return
 	}
 	if req.StorageID == "" {
-		httpError(w, "storageId required", http.StatusBadRequest)
+		httpError(w, errStorageIDRequired, http.StatusBadRequest)
 		return
 	}
 	// Confirm catalogue presence first so missing ids surface as 404
 	// instead of returning a URL that would 404 on R2 later.
 	obj, _ := h.lookupObject(r.Context(), projectID, req.StorageID)
 	if obj == nil {
-		httpError(w, "object not found", http.StatusNotFound)
+		httpError(w, errObjectNotFound, http.StatusNotFound)
 		return
 	}
 	out, err := h.svc.SignDownloadURL(r.Context(), projectID, ctxStorageBucket, req.StorageID)
@@ -531,7 +534,7 @@ func (h *StorageHandler) InternalGetMetadata(w http.ResponseWriter, r *http.Requ
 	}
 	storageID := chi.URLParam(r, "storageId")
 	if storageID == "" {
-		httpError(w, "storageId required", http.StatusBadRequest)
+		httpError(w, errStorageIDRequired, http.StatusBadRequest)
 		return
 	}
 	obj, err := h.lookupObject(r.Context(), projectID, storageID)
@@ -540,7 +543,7 @@ func (h *StorageHandler) InternalGetMetadata(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if obj == nil {
-		httpError(w, "object not found", http.StatusNotFound)
+		httpError(w, errObjectNotFound, http.StatusNotFound)
 		return
 	}
 	writeJSON(w, internalMetadataResponse{
@@ -568,7 +571,7 @@ func (h *StorageHandler) InternalDeleteObject(w http.ResponseWriter, r *http.Req
 	}
 	storageID := chi.URLParam(r, "storageId")
 	if storageID == "" {
-		httpError(w, "storageId required", http.StatusBadRequest)
+		httpError(w, errStorageIDRequired, http.StatusBadRequest)
 		return
 	}
 	// Best-effort R2 delete. Failures here are tolerated — the janitor

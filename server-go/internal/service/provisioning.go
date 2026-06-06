@@ -20,7 +20,6 @@ import (
 
 const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
-
 type ProvisioningService struct {
 	store          storage.InstanceStore
 	orgStore       storage.OrgStore        // optional, for org slug lookup
@@ -844,7 +843,7 @@ func TierResourceFootprint(tier config.TierConfig) (cpuMilli, memBytes int64, er
 	if instances < 1 {
 		instances = 1
 	}
-	cpuMilli = pgCPU.MilliValue()*instances + 60   // watcher 50m + deno 10m
+	cpuMilli = pgCPU.MilliValue()*instances + 60       // watcher 50m + deno 10m
 	memBytes = pgMem.Value()*instances + 192*1024*1024 // watcher 128Mi + deno 64Mi
 	return cpuMilli, memBytes, nil
 }

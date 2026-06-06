@@ -14,7 +14,6 @@ const (
 	testPerfDBPod = "org-perf-db/perf-db-postgres-1"
 )
 
-
 func setupPerfTest(t *testing.T) (*PerformanceService, *k8s.MockClient) {
 	t.Helper()
 	dir := t.TempDir()

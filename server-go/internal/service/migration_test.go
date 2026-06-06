@@ -11,7 +11,6 @@ import (
 
 const testMigDB = "mig-db"
 
-
 func setupMigrationTest(t *testing.T) *MigrationService {
 	t.Helper()
 	dir := t.TempDir()

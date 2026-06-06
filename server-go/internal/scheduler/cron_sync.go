@@ -73,14 +73,31 @@ func SyncCronJobs(
 	//    Done before the UPSERT loop so a renamed cron (old name → new
 	//    name) doesn't accidentally leave both rows live.
 	if len(wantedNames) == 0 {
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM excalibase_cron_jobs
-			 WHERE project_id = $1 AND function_id = $2
-		`, projectID, functionID); err != nil {
-			return fmt.Errorf("sync cron: clear function rows: %w", err)
-		}
-		return nil
+		return deleteAllCronRows(ctx, tx, projectID, functionID)
 	}
+	if err := deleteStaleCronRows(ctx, tx, projectID, functionID, wantedNames); err != nil {
+		return err
+	}
+
+	// 2. UPSERT every row in the bundle.
+	return upsertCronRows(ctx, tx, projectID, functionID, jobs)
+}
+
+// deleteAllCronRows clears every cron row owned by this function — the
+// "redeploy without crons.ts" case where no schedules should survive.
+func deleteAllCronRows(ctx context.Context, tx *sql.Tx, projectID, functionID string) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM excalibase_cron_jobs
+		 WHERE project_id = $1 AND function_id = $2
+	`, projectID, functionID); err != nil {
+		return fmt.Errorf("sync cron: clear function rows: %w", err)
+	}
+	return nil
+}
+
+// deleteStaleCronRows removes rows owned by this function whose name is not in
+// wantedNames, so a renamed cron doesn't leave its old row live.
+func deleteStaleCronRows(ctx context.Context, tx *sql.Tx, projectID, functionID string, wantedNames map[string]struct{}) error {
 	names := make([]string, 0, len(wantedNames))
 	for n := range wantedNames {
 		names = append(names, n)
@@ -93,10 +110,13 @@ func SyncCronJobs(
 	`, projectID, functionID, asTextArray(names)); err != nil {
 		return fmt.Errorf("sync cron: delete stale rows: %w", err)
 	}
+	return nil
+}
 
-	// 2. UPSERT every row in the bundle. The PRIMARY KEY (project_id,
-	//    name) drives the ON CONFLICT clause; we set function_id on
-	//    insert so the next sync can scope its delete back to us.
+// upsertCronRows inserts or updates every row in the bundle. The PRIMARY KEY
+// (project_id, name) drives the ON CONFLICT clause; function_id is set on
+// insert so the next sync can scope its delete back to us.
+func upsertCronRows(ctx context.Context, tx *sql.Tx, projectID, functionID string, jobs []CronJobRow) error {
 	for _, j := range jobs {
 		args := j.Args
 		if len(args) == 0 {

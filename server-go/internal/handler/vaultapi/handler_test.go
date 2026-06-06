@@ -621,3 +621,39 @@ func TestGetPublicKey_AfterInit_ReturnsKey(t *testing.T) {
 		t.Errorf("unexpected status %d", w.Code)
 	}
 }
+
+func TestDeletePrefix_RemovesMatchingSecrets(t *testing.T) {
+	v := setupTestVault(t)
+	initAndUnsealVault(t, v)
+	r := setupRouter(v, nil)
+
+	if err := v.Put("projects/org-d/app/a", map[string]string{"k": "1"}); err != nil {
+		t.Fatalf("put a: %v", err)
+	}
+	if err := v.Put("projects/org-d/app/b", map[string]string{"k": "2"}); err != nil {
+		t.Fatalf("put b: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, withTestPAT(httptest.NewRequest("DELETE", "/secrets-list?prefix=projects/org-d/app", nil)))
+	if w.Code != 200 {
+		t.Fatalf("DeletePrefix expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["deleted"] == nil {
+		t.Errorf("expected deleted count in response, got %v", resp)
+	}
+}
+
+func TestDeletePrefix_RequiresPrefix(t *testing.T) {
+	v := setupTestVault(t)
+	initAndUnsealVault(t, v)
+	r := setupRouter(v, nil)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, withTestPAT(httptest.NewRequest("DELETE", "/secrets-list", nil)))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("missing prefix should 400, got %d", w.Code)
+	}
+}

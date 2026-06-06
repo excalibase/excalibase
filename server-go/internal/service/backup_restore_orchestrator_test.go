@@ -77,13 +77,22 @@ func TestOrchestrator_RunsAllStepsThenCompletes(t *testing.T) {
 	mu := sync.Mutex{}
 	orch.SetSteps([]RestoreStep{
 		{Name: "validate", Run: func(_ context.Context, _ *domain.RestoreJob) error {
-			mu.Lock(); steps = append(steps, "validate"); mu.Unlock(); return nil
+			mu.Lock()
+			steps = append(steps, "validate")
+			mu.Unlock()
+			return nil
 		}},
 		{Name: "fetch", Run: func(_ context.Context, _ *domain.RestoreJob) error {
-			mu.Lock(); steps = append(steps, "fetch"); mu.Unlock(); return nil
+			mu.Lock()
+			steps = append(steps, "fetch")
+			mu.Unlock()
+			return nil
 		}},
 		{Name: "create-target", Run: func(_ context.Context, _ *domain.RestoreJob) error {
-			mu.Lock(); steps = append(steps, "create-target"); mu.Unlock(); return nil
+			mu.Lock()
+			steps = append(steps, "create-target")
+			mu.Unlock()
+			return nil
 		}},
 	})
 
@@ -115,13 +124,22 @@ func TestOrchestrator_FailsAtStep_StopsAndPersistsReason(t *testing.T) {
 	mu := sync.Mutex{}
 	orch.SetSteps([]RestoreStep{
 		{Name: "ok-1", Run: func(_ context.Context, _ *domain.RestoreJob) error {
-			mu.Lock(); called = append(called, "ok-1"); mu.Unlock(); return nil
+			mu.Lock()
+			called = append(called, "ok-1")
+			mu.Unlock()
+			return nil
 		}},
 		{Name: "fail", Run: func(_ context.Context, _ *domain.RestoreJob) error {
-			mu.Lock(); called = append(called, "fail"); mu.Unlock(); return errors.New("disk full")
+			mu.Lock()
+			called = append(called, "fail")
+			mu.Unlock()
+			return errors.New("disk full")
 		}},
 		{Name: "ok-2", Run: func(_ context.Context, _ *domain.RestoreJob) error {
-			mu.Lock(); called = append(called, "ok-2"); mu.Unlock(); return nil
+			mu.Lock()
+			called = append(called, "ok-2")
+			mu.Unlock()
+			return nil
 		}},
 	})
 

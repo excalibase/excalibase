@@ -8,17 +8,16 @@ import (
 )
 
 const (
-	testProjX         = "proj-x"
-	testR2URL         = "https://acct.r2.cloudflarestorage.com"
+	testProjX = "proj-x"
+	testR2URL = "https://acct.r2.cloudflarestorage.com"
 )
-
 
 // memStore is an in-memory BucketStore for tests. Mirrors the contract
 // the SQL implementation has to satisfy — keeping it nearby so changes
 // to the interface flag here too.
 type memStore struct {
 	mu      sync.Mutex
-	buckets map[string]*Bucket          // id → bucket
+	buckets map[string]*Bucket            // id → bucket
 	objects map[string]map[string]*Object // bucketID → key → object
 	quotas  map[string]int64
 }
@@ -147,8 +146,8 @@ func (e stringError) Error() string { return string(e) }
 
 func TestValidateBucketName(t *testing.T) {
 	bad := []string{
-		"",                     // too short
-		"ab",                   // too short
+		"",                      // too short
+		"ab",                    // too short
 		strings.Repeat("a", 64), // too long
 		"-leading",
 		"trailing-",

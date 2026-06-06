@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
-	"os"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -16,7 +16,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/email"
-	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
@@ -24,6 +23,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
+	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
@@ -141,52 +141,64 @@ func runServer(cfg config.AppConfig) {
 	}
 
 	if sqlStore != nil {
-		orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
-			Jobs: sqlStore.RestoreJobs(),
-		})
-		backupSvc := deps.backupHandler.Service()
-		// Wrap the existing synchronous adapter.Restore as a single
-		// orchestrator step. K8s mode keeps its CNPG flow untouched
-		// (BackupService dispatches to K8sBackupAdapter); Docker mode
-		// returns the same RESTORING placeholder Phase 1B ships with.
-		// When the WAL-G fetch / restore-runner lands we replace this
-		// step with a multi-stage pipeline — RestoreOrchestrator's
-		// step list is the only thing that needs to change.
-		orchestrator.SetSteps([]service.RestoreStep{
-			{
-				Name: "delegate-to-adapter",
-				Run: func(ctx context.Context, j *domain.RestoreJob) error {
-					inst, err := store.FindByProjectID(j.SourceProjectID)
-					if err != nil || inst == nil {
-						return fmt.Errorf("source project %s not found", j.SourceProjectID)
-					}
-					req := domain.RestoreRequest{
-						NewProjectID: j.NewProjectID,
-					}
-					switch j.TargetKind {
-					case "time":
-						if t, err := time.Parse(time.RFC3339, j.TargetValue); err == nil {
-							req.TargetTime = &domain.FlexTime{Time: t}
-						}
-					case "xid":
-						req.TargetXID = j.TargetValue
-					case "lsn":
-						req.TargetLSN = j.TargetValue
-					case "name":
-						req.TargetName = j.TargetValue
-					}
-					_, err = backupSvc.RestoreFromBackup(ctx, j.SourceProjectID, req)
-					return err
-				},
-			},
-		})
-		_ = orchestrator.SweepStale(context.Background())
-		deps.backupHandler.SetRestoreOrchestrator(orchestrator)
+		wireRestoreOrchestrator(sqlStore, store, deps)
 	}
 
 	r := buildRouter(cfg, sqlStore, store, deps)
 
 	startServer(cfg, r)
+}
+
+// wireRestoreOrchestrator builds the restore orchestrator, registers the
+// single delegate-to-adapter step, sweeps stale jobs, and wires it into the
+// backup handler. Extracted from runServer to keep that function's branching
+// shallow.
+func wireRestoreOrchestrator(sqlStore storage.PlatformStore, store storage.InstanceStore, deps *handlerDeps) {
+	orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
+		Jobs: sqlStore.RestoreJobs(),
+	})
+	backupSvc := deps.backupHandler.Service()
+	// Wrap the existing synchronous adapter.Restore as a single
+	// orchestrator step. K8s mode keeps its CNPG flow untouched
+	// (BackupService dispatches to K8sBackupAdapter); Docker mode
+	// returns the same RESTORING placeholder Phase 1B ships with.
+	// When the WAL-G fetch / restore-runner lands we replace this
+	// step with a multi-stage pipeline — RestoreOrchestrator's
+	// step list is the only thing that needs to change.
+	orchestrator.SetSteps([]service.RestoreStep{
+		{
+			Name: "delegate-to-adapter",
+			Run: func(ctx context.Context, j *domain.RestoreJob) error {
+				return runRestoreStep(ctx, store, backupSvc, j)
+			},
+		},
+	})
+	_ = orchestrator.SweepStale(context.Background())
+	deps.backupHandler.SetRestoreOrchestrator(orchestrator)
+}
+
+// runRestoreStep resolves the source instance and dispatches the restore to
+// the backup service, translating the job's target kind into a RestoreRequest.
+func runRestoreStep(ctx context.Context, store storage.InstanceStore, backupSvc *service.BackupService, j *domain.RestoreJob) error {
+	inst, err := store.FindByProjectID(j.SourceProjectID)
+	if err != nil || inst == nil {
+		return fmt.Errorf("source project %s not found", j.SourceProjectID)
+	}
+	req := domain.RestoreRequest{NewProjectID: j.NewProjectID}
+	switch j.TargetKind {
+	case "time":
+		if t, err := time.Parse(time.RFC3339, j.TargetValue); err == nil {
+			req.TargetTime = &domain.FlexTime{Time: t}
+		}
+	case "xid":
+		req.TargetXID = j.TargetValue
+	case "lsn":
+		req.TargetLSN = j.TargetValue
+	case "name":
+		req.TargetName = j.TargetValue
+	}
+	_, err = backupSvc.RestoreFromBackup(ctx, j.SourceProjectID, req)
+	return err
 }
 
 // startBackupScheduler launches the cron runtime and replays the
@@ -197,7 +209,9 @@ func runServer(cfg config.AppConfig) {
 // platforms only fire once per tick.
 func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, backupHandler *handler.BackupHandler) (*service.BackupScheduler, func()) {
 	if backupHandler == nil || sqlStore == nil {
-		return nil, func() {}
+		return nil, func() {
+			// no-op stop: scheduler was never started, nothing to release.
+		}
 	}
 	var lock service.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
@@ -212,7 +226,9 @@ func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 	})
 	if err := scheduler.Start(context.Background()); err != nil {
 		log.Printf("WARN: backup scheduler start: %v", err)
-		return nil, func() {}
+		return nil, func() {
+			// no-op stop: scheduler failed to start, nothing to release.
+		}
 	}
 	return scheduler, scheduler.Stop
 }
@@ -336,7 +352,9 @@ func buildProvisioningService(
 // wirePgDogNotifier returns a cleanup func that closes the notifier on shutdown,
 // or a no-op when prerequisites (Postgres store + NATS) are unmet.
 func wirePgDogNotifier(cfg config.AppConfig, sqlStore storage.PlatformStore, provSvc *service.ProvisioningService) func() {
-	noop := func() {} // notifier never started
+	noop := func() {
+		// no-op cleanup: notifier was never started, nothing to close.
+	}
 	if cfg.PlatformDBURL == "" || cfg.NatsURL == "" {
 		return noop
 	}
@@ -758,7 +776,9 @@ func buildVault(cfg config.AppConfig, sqlStore storage.PlatformStore) (vaultclie
 	switch {
 	case cfg.VaultURL != "":
 		log.Printf("Using remote vault at %s", cfg.VaultURL)
-		return vaultclient.NewHTTPClient(cfg.VaultURL, cfg.VaultPAT), nil, func() {} // no local handle to close
+		return vaultclient.NewHTTPClient(cfg.VaultURL, cfg.VaultPAT), nil, func() {
+			// no-op cleanup: remote HTTP vault has no local handle to close.
+		}
 	case cfg.IsCloud():
 		pgStoreTyped, ok := sqlStore.(*pgstore.Store)
 		if !ok {

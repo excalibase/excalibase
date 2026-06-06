@@ -7,15 +7,14 @@ import (
 )
 
 const (
-	testOrigin         = "https://app.excalibase.io"
-	testAPIPath        = "/api/test"
-	corsOriginHeader   = "Access-Control-Allow-Origin"
-	corsOriginFmt      = "Allow-Origin: got %q, want %q"
-	testEvilOrigin     = "https://evil.com"
+	testOrigin          = "https://app.excalibase.io"
+	testAPIPath         = "/api/test"
+	corsOriginHeader    = "Access-Control-Allow-Origin"
+	corsOriginFmt       = "Allow-Origin: got %q, want %q"
+	testEvilOrigin      = "https://evil.com"
 	testLocalhostOrigin = "http://localhost:3000"
-	testAnythingOrigin = "https://anything.com"
+	testAnythingOrigin  = "https://anything.com"
 )
-
 
 func TestCORS_AllowedOrigin(t *testing.T) {
 	handler := CORS([]string{testOrigin})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

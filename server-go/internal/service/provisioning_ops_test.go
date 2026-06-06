@@ -13,12 +13,11 @@ import (
 )
 
 const (
-	testOpsDB       = "ops-db"
-	testOpsDBNS     = "org1-ops-db"
-	testExpectedErr = "expected error"
+	testOpsDB         = "ops-db"
+	testOpsDBNS       = "org1-ops-db"
+	testExpectedErr   = "expected error"
 	testOpsDBPostgres = "ops-db-postgres"
 )
-
 
 func setupOpsTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore, *k8s.MockClient) {
 	t.Helper()
@@ -158,8 +157,8 @@ func TestUpdateParametersPatchesCRD(t *testing.T) {
 	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
 
 	err := svc.UpdateParameters(context.Background(), testOpsDB, map[string]string{
-		"max_connections":  "200",
-		"work_mem":         "64MB",
+		"max_connections": "200",
+		"work_mem":        "64MB",
 	})
 	if err != nil {
 		t.Fatalf("UpdateParameters: %v", err)

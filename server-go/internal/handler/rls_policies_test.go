@@ -68,11 +68,11 @@ func rlsJSONBody(t *testing.T, v any) *bytes.Reader {
 
 func validPolicy() map[string]any {
 	return map[string]any{
-		"name":     "owner-can-read",
-		"resource": "orders",
-		"effect":   "ALLOW",
+		"name":       "owner-can-read",
+		"resource":   "orders",
+		"effect":     "ALLOW",
 		"operations": []string{"SELECT"},
-		"ruleLogic": "AND",
+		"ruleLogic":  "AND",
 		"rules": []map[string]any{
 			{"field": "user_id", "fieldType": "STRING", "operator": "EQ", "value": "ctx.user_id"},
 		},
@@ -133,8 +133,8 @@ func TestRlsHandler_BodyProjectIDIgnored(t *testing.T) {
 
 func TestRlsHandler_Create_RejectsInvalidPayload(t *testing.T) {
 	cases := []struct {
-		name  string
-		mutate func(p map[string]any)
+		name       string
+		mutate     func(p map[string]any)
 		wantSubstr string
 	}{
 		{"empty name", func(p map[string]any) { p["name"] = "" }, "name required"},
@@ -330,6 +330,125 @@ func TestColumnHandler_CreateAndDelete_EmitsEvents(t *testing.T) {
 		if e.Kind != "column" {
 			t.Errorf("expected kind=column, got %q", e.Kind)
 		}
+	}
+}
+
+func TestRlsHandler_Update_RoundTrips(t *testing.T) {
+	r, bus := setupRlsRouter(t)
+	created := createPolicy(t, r, "proj-a", validPolicy())
+
+	// PATCH a field and confirm it persists + emits an update event.
+	patch := validPolicy()
+	patch["priority"] = 250
+	req := httptest.NewRequest("PATCH", "/api/provision/proj-a/rls-policies/"+created.ID, rlsJSONBody(t, patch))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update: got %d body=%s", w.Code, w.Body.String())
+	}
+	var updated domain.Policy
+	json.Unmarshal(w.Body.Bytes(), &updated)
+	if updated.ID != created.ID {
+		t.Errorf("update changed id: %s vs %s", updated.ID, created.ID)
+	}
+	events := bus.snapshot()
+	if events[len(events)-1].Op != "update" {
+		t.Errorf("expected trailing update event, got %+v", events)
+	}
+}
+
+func TestRlsHandler_Update_NotFound(t *testing.T) {
+	r, _ := setupRlsRouter(t)
+	req := httptest.NewRequest("PATCH", "/api/provision/proj-a/rls-policies/ghost", rlsJSONBody(t, validPolicy()))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("update missing: got %d, want 404", w.Code)
+	}
+}
+
+func TestColumnHandler_GetAndList(t *testing.T) {
+	r, _ := setupRlsRouter(t)
+	// Create a column policy.
+	req := httptest.NewRequest("POST", "/api/provision/proj-a/column-policies/", rlsJSONBody(t, validColumnPolicy()))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: got %d body=%s", w.Code, w.Body.String())
+	}
+	var created domain.ColumnPolicy
+	json.Unmarshal(w.Body.Bytes(), &created)
+
+	// GET by id.
+	req = httptest.NewRequest("GET", "/api/provision/proj-a/column-policies/"+created.ID, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get: got %d", w.Code)
+	}
+	var got domain.ColumnPolicy
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if got.ID != created.ID {
+		t.Errorf("get id mismatch: %s vs %s", got.ID, created.ID)
+	}
+
+	// LIST scoped to project.
+	req = httptest.NewRequest("GET", "/api/provision/proj-a/column-policies/", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list: got %d", w.Code)
+	}
+	var list []domain.ColumnPolicy
+	json.Unmarshal(w.Body.Bytes(), &list)
+	if len(list) != 1 {
+		t.Errorf("list: got %d, want 1", len(list))
+	}
+}
+
+func TestColumnHandler_Get_NotFound(t *testing.T) {
+	r, _ := setupRlsRouter(t)
+	req := httptest.NewRequest("GET", "/api/provision/proj-a/column-policies/missing", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("get missing: got %d, want 404", w.Code)
+	}
+}
+
+func TestColumnHandler_Update_RoundTrips(t *testing.T) {
+	r, bus := setupRlsRouter(t)
+	req := httptest.NewRequest("POST", "/api/provision/proj-a/column-policies/", rlsJSONBody(t, validColumnPolicy()))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: got %d body=%s", w.Code, w.Body.String())
+	}
+	var created domain.ColumnPolicy
+	json.Unmarshal(w.Body.Bytes(), &created)
+
+	patch := validColumnPolicy()
+	patch["priority"] = 99
+	req = httptest.NewRequest("PATCH", "/api/provision/proj-a/column-policies/"+created.ID, rlsJSONBody(t, patch))
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update: got %d body=%s", w.Code, w.Body.String())
+	}
+	events := bus.snapshot()
+	if events[len(events)-1].Op != "update" || events[len(events)-1].Kind != "column" {
+		t.Errorf("expected trailing column update event, got %+v", events)
+	}
+}
+
+func TestColumnHandler_Update_NotFound(t *testing.T) {
+	r, _ := setupRlsRouter(t)
+	req := httptest.NewRequest("PATCH", "/api/provision/proj-a/column-policies/ghost", rlsJSONBody(t, validColumnPolicy()))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("update missing: got %d, want 404", w.Code)
 	}
 }
 

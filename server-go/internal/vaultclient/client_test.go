@@ -108,6 +108,39 @@ func TestHTTPClient_Delete(t *testing.T) {
 	}
 }
 
+func TestHTTPClient_DeletePrefix(t *testing.T) {
+	ts, _ := setupVaultServer(t, nil)
+	c := NewHTTPClient(ts.URL, testPAT)
+
+	// Seed a couple of secrets under a common prefix.
+	if err := c.Put("projects/org-z/app1/credentials/a", map[string]string{"k": "1"}); err != nil {
+		t.Fatalf("Put a: %v", err)
+	}
+	if err := c.Put("projects/org-z/app1/credentials/b", map[string]string{"k": "2"}); err != nil {
+		t.Fatalf("Put b: %v", err)
+	}
+
+	n, err := c.DeletePrefix("projects/org-z/app1")
+	if err != nil {
+		t.Fatalf("DeletePrefix: %v", err)
+	}
+	if n < 2 {
+		t.Errorf("expected >=2 deleted, got %d", n)
+	}
+	// The secrets should be gone.
+	if _, err := c.Get("projects/org-z/app1/credentials/a"); err == nil {
+		t.Error("secret a should be deleted")
+	}
+}
+
+func TestHTTPClient_DeletePrefix_RejectsEmpty(t *testing.T) {
+	ts, _ := setupVaultServer(t, nil)
+	c := NewHTTPClient(ts.URL, testPAT)
+	if _, err := c.DeletePrefix(""); err == nil {
+		t.Error("empty prefix should be rejected")
+	}
+}
+
 func TestHTTPClient_Sealed(t *testing.T) {
 	ts, v := setupVaultServer(t, nil)
 	c := NewHTTPClient(ts.URL, testPAT)

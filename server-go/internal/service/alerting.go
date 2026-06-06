@@ -14,7 +14,6 @@ import (
 
 const alertsHistoryFile = "alerts-history.json"
 
-
 type AlertingService struct {
 	storagePath string
 	mu          sync.RWMutex

@@ -129,7 +129,7 @@ func (s *ResendSender) Send(ctx context.Context, msg Message) (string, error) {
 // arrives as a plain `errors.New("[ERROR]: <api message>")`. We
 // substring-match those on phrases the Resend API actually returns
 // — fragile but unavoidable until the SDK adopts typed errors for
-// validation responses (the SDK has a TODO marking this).
+// validation responses (the SDK has a pending note marking this).
 func classifyResendError(err error) error {
 	if errors.Is(err, resend.ErrRateLimit) {
 		return fmt.Errorf("%w: %v", ErrRateLimited, err)

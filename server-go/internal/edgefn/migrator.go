@@ -130,9 +130,47 @@ func applyTable(ctx context.Context, tx *sql.Tx, tableName string, table TableSc
 		return fmt.Errorf("create table: %w", err)
 	}
 
-	// 2. Compound btree indexes — one per index spec. Each indexes the
-	//    extracted jsonb path so queries can use `doc->>'field'`.
-	for _, idx := range table.Indexes {
+	// 2. Compound btree indexes — one per index spec.
+	if err := applyBtreeIndexes(ctx, tx, tableName, table.Indexes); err != nil {
+		return err
+	}
+
+	// 3. Search indexes (tsvector).
+	if err := applySearchIndexes(ctx, tx, tableName, table.SearchIndexes); err != nil {
+		return err
+	}
+
+	// 4. Vector indexes (pgvector ivfflat).
+	if err := applyVectorIndexes(ctx, tx, tableName, table.VectorIndexes); err != nil {
+		return err
+	}
+
+	// Validator metadata is intentionally NOT applied as a DB constraint in
+	// v1. The application layer validates writes against the JSON Schema;
+	// keeping the constraint out of Postgres lets us evolve the validator
+	// shape without ALTER TABLE migrations on every push. We stash the raw
+	// validator JSON for future referential checks.
+	rawValidator, err := json.Marshal(table.Validator)
+	if err != nil {
+		return fmt.Errorf("marshal validator metadata: %w", err)
+	}
+	// Use a COMMENT to attach the schema so it survives across deploys
+	// without an extra metadata table. pg_description holds it.
+	commentSQL := fmt.Sprintf(
+		`COMMENT ON TABLE %s.%s IS %s`,
+		quoteIdent(nosqlSchemaName), quoteIdent(tableName),
+		quoteLiteral(string(rawValidator)),
+	)
+	if _, err := tx.ExecContext(ctx, commentSQL); err != nil {
+		return fmt.Errorf("comment validator: %w", err)
+	}
+	return nil
+}
+
+// applyBtreeIndexes creates one compound btree index per spec. Each indexes
+// the extracted jsonb path so queries can use `doc->>'field'`.
+func applyBtreeIndexes(ctx context.Context, tx *sql.Tx, tableName string, indexes []IndexSpec) error {
+	for _, idx := range indexes {
 		if err := validateIdent("index", idx.Name); err != nil {
 			return err
 		}
@@ -156,10 +194,13 @@ func applyTable(ctx context.Context, tx *sql.Tx, tableName string, table TableSc
 			return fmt.Errorf("create index %s: %w", idx.Name, err)
 		}
 	}
+	return nil
+}
 
-	// 3. Search indexes (tsvector). One generated column per searchField +
-	//    a GIN index on it. Idempotent via IF NOT EXISTS on both.
-	for _, idx := range table.SearchIndexes {
+// applySearchIndexes creates a stored tsvector generated column per searchField
+// plus a GIN index on it. Idempotent via IF NOT EXISTS on both.
+func applySearchIndexes(ctx context.Context, tx *sql.Tx, tableName string, indexes []SearchIndexSpec) error {
+	for _, idx := range indexes {
 		if err := validateIdent("search index", idx.Name); err != nil {
 			return err
 		}
@@ -191,11 +232,14 @@ func applyTable(ctx context.Context, tx *sql.Tx, tableName string, table TableSc
 			return fmt.Errorf("create search index %s: %w", idx.Name, err)
 		}
 	}
+	return nil
+}
 
-	// 4. Vector indexes (pgvector ivfflat). Each gets its own embedding
-	//    column at the declared dimensions. The application writes the
-	//    embedding directly to this column; the jsonb doc holds a copy too.
-	for _, idx := range table.VectorIndexes {
+// applyVectorIndexes creates a pgvector embedding column at the declared
+// dimensions plus an ivfflat cosine index per spec. The application writes the
+// embedding directly to this column; the jsonb doc holds a copy too.
+func applyVectorIndexes(ctx context.Context, tx *sql.Tx, tableName string, indexes []VectorIndexSpec) error {
+	for _, idx := range indexes {
 		if err := validateIdent("vector index", idx.Name); err != nil {
 			return err
 		}
@@ -226,26 +270,6 @@ func applyTable(ctx context.Context, tx *sql.Tx, tableName string, table TableSc
 		if _, err := tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("create vector index %s: %w", idx.Name, err)
 		}
-	}
-
-	// Validator metadata is intentionally NOT applied as a DB constraint in
-	// v1. The application layer validates writes against the JSON Schema;
-	// keeping the constraint out of Postgres lets us evolve the validator
-	// shape without ALTER TABLE migrations on every push. We stash the raw
-	// validator JSON for future referential checks.
-	rawValidator, err := json.Marshal(table.Validator)
-	if err != nil {
-		return fmt.Errorf("marshal validator metadata: %w", err)
-	}
-	// Use a COMMENT to attach the schema so it survives across deploys
-	// without an extra metadata table. pg_description holds it.
-	commentSQL := fmt.Sprintf(
-		`COMMENT ON TABLE %s.%s IS %s`,
-		quoteIdent(nosqlSchemaName), quoteIdent(tableName),
-		quoteLiteral(string(rawValidator)),
-	)
-	if _, err := tx.ExecContext(ctx, commentSQL); err != nil {
-		return fmt.Errorf("comment validator: %w", err)
 	}
 	return nil
 }

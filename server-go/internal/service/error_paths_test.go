@@ -13,7 +13,6 @@ import (
 
 const testK8SFailDB = "k8s-fail-db"
 
-
 // --- Error path tests: what happens when K8s operations fail ---
 
 func TestMetricsWhenPodExecFails(t *testing.T) {

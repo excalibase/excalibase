@@ -19,7 +19,6 @@ const (
 	testAlterPub            = "ALTER PUBLICATION"
 )
 
-
 // --- OperatorSetupService ---
 //
 // Pure-mock coverage. The mock GetDeployment returns true unconditionally,
