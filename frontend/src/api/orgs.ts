@@ -6,6 +6,9 @@ export interface Org {
   slug: string;
   tier: string;
   ownerId: string;
+  // The caller's membership role in this org (e.g. "owner"), included by the
+  // orgs-for-user listing. Optional: absent on admin/cross-org responses.
+  role?: string;
   createdAt?: string;
   updatedAt?: string;
 }

@@ -85,9 +85,9 @@ export function SetupPage() {
   // Continue (which clears issuedKeys) does the wizard advance to unseal.
   function resolveStep(): Step {
     if (issuedKeys) return 'shares';
-    if (!vaultStatus.initialized) return 'init';
+    if (!vaultStatus?.initialized) return 'init';
     if (vaultStatus.sealed) return 'unseal';
-    if (!setupStatus.hasAdmin) return 'admin';
+    if (!setupStatus?.hasAdmin) return 'admin';
     return 'done';
   }
   const step: Step = resolveStep();

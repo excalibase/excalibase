@@ -168,7 +168,7 @@ export function DataGrid({
 
   // commitEdit lifts the side-effectful "did the cell value change?" branch out
   // of the render path so the cell renderer stays shallow (S2004).
-  const commitEdit = useCallback((tableRowIndex: number, colIndex: number, columnName: string, val: unknown, newVal: string) => {
+  const commitEdit = useCallback((tableRowIndex: number, _colIndex: number, columnName: string, val: unknown, newVal: string) => {
     if (newVal !== safeString(val) && pkColumn && rowsData?.rows) {
       const pkIdx = rowsData.columns.findIndex((c: ColumnMeta) => c.name === pkColumn);
       const pkValue = safeString(rowsData.rows[tableRowIndex][pkIdx]);

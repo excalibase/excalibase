@@ -1,7 +1,7 @@
 import { cn } from '../utils/cn';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  readonly variant?: 'primary' | 'secondary' | 'danger';
+  readonly variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
   readonly size?: 'sm' | 'md' | 'lg';
   readonly children: React.ReactNode;
 }
@@ -19,6 +19,7 @@ export function Button({
     primary: 'bg-accent-primary hover:bg-accent-primary-hover text-white',
     secondary: 'bg-surface-hover hover:bg-bg-tertiary text-text-primary border border-border-primary',
     danger: 'bg-color-error hover:bg-red-600 text-white',
+    ghost: 'hover:bg-surface-hover text-text-secondary',
   };
 
   const sizes = {
