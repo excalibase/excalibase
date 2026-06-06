@@ -91,16 +91,6 @@ func TestLoadDenoFromEnv(t *testing.T) {
 	}
 }
 
-func TestLoadDBPath(t *testing.T) {
-	os.Setenv("DB_PATH", "/custom/path/db.sqlite")
-	defer os.Unsetenv("DB_PATH")
-
-	cfg := Load()
-	if cfg.DBPath != "/custom/path/db.sqlite" {
-		t.Errorf("DBPath: got %s", cfg.DBPath)
-	}
-}
-
 // --- parseCORSOrigins ---
 
 // TestParseCORSOriginsEmpty and TestParseCORSOriginsAllEmpty removed:

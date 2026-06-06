@@ -11,7 +11,6 @@ type AppConfig struct {
 	Port              string
 	StoragePath       string
 	LogLevel          string
-	DBPath            string
 	PlatformDBURL     string
 	NatsURL           string
 	CORSOrigins       []string
@@ -86,7 +85,6 @@ func Load() AppConfig {
 		Port:             envOr("PORT", "24005"),
 		StoragePath:      envOr("STORAGE_PATH", "../provisioning-data"),
 		LogLevel:         envOr("LOG_LEVEL", "debug"),
-		DBPath:           envOr("DB_PATH", "../provisioning-data/excalibase.db"),
 		PlatformDBURL:    envOr("PLATFORM_DB_URL", ""),
 		NatsURL:          envOr("NATS_URL", ""),
 		CORSOrigins:       parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
