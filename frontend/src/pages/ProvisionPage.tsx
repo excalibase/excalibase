@@ -5,6 +5,7 @@ import { DatabaseType, TierType } from '../types';
 import { Button } from '../components/Button';
 import { Database, Loader2, Server, Cloud, Link2 } from 'lucide-react';
 import { listMyOrgs, type Org } from '../api/orgs';
+import { useTiers, sortTiers, type TierConfig } from '../api/tiers';
 
 type DeployMode = 'k8s' | 'docker' | 'byoc';
 
@@ -26,11 +27,28 @@ const DB_TYPES = [
   { type: DatabaseType.MONGODB,    icon: '🍃', label: 'MongoDB',    desc: 'Coming soon',            disabled: true  },
 ];
 
-const TIERS = [
-  { tier: TierType.FREE,       label: 'Free',       features: ['1 instance', '5 GB storage', '512 MB RAM', '0.5 vCPU'] },
-  { tier: TierType.STANDARD,   label: 'Standard',   features: ['3 replicas', '50 GB storage', '4 GB RAM', '2 vCPU'] },
-  { tier: TierType.ENTERPRISE, label: 'Enterprise', features: ['5 replicas', '500 GB storage', '16 GB RAM', '4 vCPU'] },
+// Shown only while the live tier specs load (or if the endpoint is unreachable).
+// Tiers are single-instance on the current alpha; the real specs come from
+// GET /api/tiers and are admin-editable.
+const FALLBACK_TIERS = [
+  { tier: TierType.FREE,       label: 'Free',       features: ['1 instance', '5Gi storage', '512Mi RAM', '0.5 vCPU'] },
+  { tier: TierType.STANDARD,   label: 'Standard',   features: ['1 instance', '50Gi storage', '4Gi RAM', '2 vCPU'] },
+  { tier: TierType.ENTERPRISE, label: 'Enterprise', features: ['1 instance', '500Gi storage', '16Gi RAM', '4 vCPU'] },
 ];
+
+function tierLabel(tier: string): string {
+  return tier.charAt(0) + tier.slice(1).toLowerCase();
+}
+
+function tierFeatures(tc: TierConfig): string[] {
+  return [
+    tc.instances === 1 ? '1 instance' : `${tc.instances} instances`,
+    `${tc.storageSize} storage`,
+    `${tc.memory} RAM`,
+    `${tc.cpu} vCPU`,
+    ...(tc.backupEnabled ? ['Backups'] : []),
+  ];
+}
 
 export function ProvisionPage() {
   const navigate = useNavigate();
@@ -43,6 +61,13 @@ export function ProvisionPage() {
   const [orgId, setOrgId] = useState('');
   const [dbType, setDbType] = useState<DatabaseType>(DatabaseType.POSTGRESQL);
   const [tier, setTier] = useState<TierType>(TierType.FREE);
+
+  // Live tier specs (admin-editable, DB-backed). Falls back to a static list
+  // while loading or if the endpoint is unreachable.
+  const { data: tierConfigs } = useTiers();
+  const tierOptions = tierConfigs && tierConfigs.length > 0
+    ? sortTiers(tierConfigs).map((tc) => ({ tier: tc.tier, label: tierLabel(tc.tier), features: tierFeatures(tc) }))
+    : FALLBACK_TIERS;
 
   // BYOC fields
   const [byocHost, setByocHost] = useState('');
@@ -197,7 +222,7 @@ export function ProvisionPage() {
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
               <h2 className="font-semibold text-text-primary">Plan</h2>
               <div className="grid grid-cols-3 gap-3">
-                {TIERS.map(({ tier: t, label, features }) => (
+                {tierOptions.map(({ tier: t, label, features }) => (
                   <button key={t} type="button" onClick={() => setTier(t)}
                     className={`p-4 rounded-xl border-2 text-left transition-all ${
                       tier === t ? 'border-accent-primary bg-accent-primary/10'

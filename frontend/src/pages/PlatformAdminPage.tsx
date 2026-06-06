@@ -6,6 +6,7 @@ import { useAdminProjects, useClusterCapacity, useForceDropProject, useRevokeOrg
 import { listMyOrgs } from '../api/orgs';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/shared/StatusBadge';
+import { TierConfigTable } from '../components/TierConfigTable';
 import { Loader2, Trash2, ShieldAlert, Cpu, MemoryStick } from 'lucide-react';
 
 // PlatformAdminPage is the operator dashboard. Surfaces cluster capacity,
@@ -24,6 +25,7 @@ export function PlatformAdminPage() {
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <CapacityWidget />
+      <TierConfigTable canMutate={canMutate} />
       <ProjectsTable canMutate={canMutate} />
       <OrgsTable canMutate={canMutate} />
     </div>
