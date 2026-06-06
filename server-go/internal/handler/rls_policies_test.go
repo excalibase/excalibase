@@ -1,3 +1,5 @@
+//go:build integration
+
 package handler
 
 import (
@@ -11,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
-	"github.com/excalibase/provisioning-poc/internal/storage/sqlite"
+	pgtest "github.com/excalibase/provisioning-poc/internal/testutil/pgstore"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -36,18 +38,13 @@ func (c *captureBus) snapshot() []domain.PolicyChangeEvent {
 	return out
 }
 
-// setupRlsRouter wires an in-process SQLite store + handler under the same
+// setupRlsRouter wires a Postgres store + handler under the same
 // path shape that mountProvisioningRoutes uses, so /{projectId} chi param is
 // real. Returns the router + the captured event bus so tests can assert
 // on both HTTP response and emitted events.
 func setupRlsRouter(t *testing.T) (chi.Router, *captureBus) {
 	t.Helper()
-	dir := t.TempDir()
-	store, err := sqlite.New(dir + "/test.db")
-	if err != nil {
-		t.Fatalf("sqlite.New: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
+	store := pgtest.New(t)
 
 	bus := &captureBus{}
 	h := NewRlsPolicyHandler(store.RlsPolicies())

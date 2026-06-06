@@ -20,7 +20,6 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
-	sqlstore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
 
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -89,7 +88,7 @@ func (h *RlsPolicyHandler) GetRls(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "policyId")
 	p, err := h.store.GetRls(r.Context(), projectID, id)
-	if errors.Is(err, pgstore.ErrPolicyNotFound) || errors.Is(err, sqlstore.ErrPolicyNotFound) {
+	if errors.Is(err, pgstore.ErrPolicyNotFound) {
 		httpError(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -138,7 +137,7 @@ func (h *RlsPolicyHandler) UpdateRls(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "policyId")
 
 	existing, err := h.store.GetRls(r.Context(), projectID, id)
-	if errors.Is(err, pgstore.ErrPolicyNotFound) || errors.Is(err, sqlstore.ErrPolicyNotFound) {
+	if errors.Is(err, pgstore.ErrPolicyNotFound) {
 		httpError(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -177,7 +176,7 @@ func (h *RlsPolicyHandler) DeleteRls(w http.ResponseWriter, r *http.Request) {
 	// Capture resource for the NATS payload before deleting.
 	existing, _ := h.store.GetRls(r.Context(), projectID, id)
 	if err := h.store.DeleteRls(r.Context(), projectID, id); err != nil {
-		if errors.Is(err, pgstore.ErrPolicyNotFound) || errors.Is(err, sqlstore.ErrPolicyNotFound) {
+		if errors.Is(err, pgstore.ErrPolicyNotFound) {
 			httpError(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -217,7 +216,7 @@ func (h *RlsPolicyHandler) GetColumn(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "policyId")
 	p, err := h.store.GetColumn(r.Context(), projectID, id)
-	if errors.Is(err, pgstore.ErrPolicyNotFound) || errors.Is(err, sqlstore.ErrPolicyNotFound) {
+	if errors.Is(err, pgstore.ErrPolicyNotFound) {
 		httpError(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -266,7 +265,7 @@ func (h *RlsPolicyHandler) UpdateColumn(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "policyId")
 
 	existing, err := h.store.GetColumn(r.Context(), projectID, id)
-	if errors.Is(err, pgstore.ErrPolicyNotFound) || errors.Is(err, sqlstore.ErrPolicyNotFound) {
+	if errors.Is(err, pgstore.ErrPolicyNotFound) {
 		httpError(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -304,7 +303,7 @@ func (h *RlsPolicyHandler) DeleteColumn(w http.ResponseWriter, r *http.Request) 
 	id := chi.URLParam(r, "policyId")
 	existing, _ := h.store.GetColumn(r.Context(), projectID, id)
 	if err := h.store.DeleteColumn(r.Context(), projectID, id); err != nil {
-		if errors.Is(err, pgstore.ErrPolicyNotFound) || errors.Is(err, sqlstore.ErrPolicyNotFound) {
+		if errors.Is(err, pgstore.ErrPolicyNotFound) {
 			httpError(w, "not found", http.StatusNotFound)
 			return
 		}

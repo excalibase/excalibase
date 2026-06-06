@@ -27,15 +27,15 @@ type PlatformStore interface {
 
 	// DB exposes the underlying *sql.DB for handlers that manage their
 	// own bespoke tables (email_verifications, password_resets, etc.).
-	// Both concrete impls (sqlite, postgres) already define this.
+	// The concrete Postgres store defines this.
 	DB() *sql.DB
 
-	// Storage feature persistence — both concrete stores implement these
-	// alongside the existing methods (see sqlite_storage.go / pg_storage.go).
+	// Storage feature persistence — the concrete store implements these
+	// alongside the existing methods (see pg_storage.go).
 	storagesvc.BucketStore
 
 	// BackupRecords returns the BackupRecordStore for the underlying
-	// engine. Implemented by sqlite.NewBackupRecords / pg.NewBackupRecords.
+	// engine. Implemented by pg.NewBackupRecords.
 	BackupRecords() BackupRecordStore
 
 	// BackupSchedules returns the BackupScheduleStore the platform-side

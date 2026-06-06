@@ -1,3 +1,5 @@
+//go:build integration
+
 package handler
 
 import (
@@ -9,8 +11,9 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
-	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
+	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	pgtest "github.com/excalibase/provisioning-poc/internal/testutil/pgstore"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -33,18 +36,13 @@ var (
 	testPadminID = testutil.FixtureToken("padmin-id")
 )
 
-func setupOrgRouter(t *testing.T) (chi.Router, *sqlitestore.Store) {
+func setupOrgRouter(t *testing.T) (chi.Router, *pgstore.Store) {
 	return setupOrgRouterMode(t, true /* isCloud — existing tests expect multi-org */)
 }
 
-func setupOrgRouterMode(t *testing.T, isCloud bool) (chi.Router, *sqlitestore.Store) {
+func setupOrgRouterMode(t *testing.T, isCloud bool) (chi.Router, *pgstore.Store) {
 	t.Helper()
-	dir := t.TempDir()
-	store, err := sqlitestore.New(dir + "/test.db")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
+	store := pgtest.New(t)
 
 	// Create test users
 	store.CreateUser(t.Context(), &domain.User{

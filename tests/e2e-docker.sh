@@ -17,6 +17,7 @@ SERVER_DIR="$ROOT/server-go"
 DENO_DIR="$ROOT/deno-server"
 DATA_DIR=$(mktemp -d)
 PLATFORM_DB_NAME="excalibase-e2e-platform-db-$$"
+PLATFORM_DB_PORT=$((25300 + RANDOM % 100))
 SERVER_PID=""
 DENO_PID=""
 PASS=0
@@ -30,6 +31,7 @@ cleanup() {
   echo "--- Cleanup ---"
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null && wait "$SERVER_PID" 2>/dev/null || true
   [ -n "$DENO_PID" ] && kill "$DENO_PID" 2>/dev/null && wait "$DENO_PID" 2>/dev/null || true
+  docker rm -f "$PLATFORM_DB_NAME" >/dev/null 2>&1 || true
   # Remove any project containers we provisioned
   docker ps -a --filter "label=excalibase.managed=true" --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true
   rm -rf "$DATA_DIR"
@@ -47,9 +49,26 @@ cd "$SERVER_DIR"
 go build -o "$DATA_DIR/excalibase-server" ./cmd/server/ 2>&1
 pass "server binary built"
 
-# --- Step 1: Self-hosted uses SQLite + bbolt, no external platform-db needed ---
-echo "1. Self-hosted mode (SQLite + bbolt, no platform-db container)"
-pass "no platform-db needed (using SQLite at $DATA_DIR/excalibase.db)"
+# --- Step 1: Start platform-db Postgres container ---
+# The platform store is Postgres-only now (self-hosted and cloud both run a
+# platform-db). The vault still uses bbolt in self-hosted mode (unchanged).
+echo "1. Start platform-db Postgres (self-hosted shape)"
+docker run -d --name "$PLATFORM_DB_NAME" \
+  -p "$PLATFORM_DB_PORT:5432" \
+  -e POSTGRES_DB=platform \
+  -e POSTGRES_USER=platform \
+  -e POSTGRES_PASSWORD=platformpass \
+  postgres:16-alpine > /dev/null
+for i in $(seq 1 30); do
+  if docker exec "$PLATFORM_DB_NAME" pg_isready -U platform -d platform > /dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+docker exec "$PLATFORM_DB_NAME" pg_isready -U platform -d platform > /dev/null 2>&1 \
+  && pass "platform-db ready" || { fail "platform-db" "did not become ready"; exit 1; }
+
+PLATFORM_DB_URL="postgres://platform:platformpass@localhost:$PLATFORM_DB_PORT/platform?sslmode=disable"
 
 # --- Step 2: Start Deno runtime ---
 echo "2. Start Deno runtime"
@@ -74,15 +93,15 @@ done
 curl -sf -H "X-Runtime-Secret: $DENO_RUNTIME_SECRET" http://127.0.0.1:8000/health > /dev/null 2>&1 && pass "deno runtime healthy" || fail "deno" "not healthy after 15s"
 
 # --- Step 3: Start provisioning server ---
-echo "3. Start provisioning server (PROVISIONER_MODE=docker, self-hosted SQLite)"
+echo "3. Start provisioning server (PROVISIONER_MODE=docker, self-hosted → Postgres platform-db + bbolt vault)"
 cd "$ROOT"
-# Self-hosted mode uses SQLite for the platform store and bbolt for vault.
-# STORAGE_PATH must be writable; DB_PATH controls the SQLite file location.
+# Self-hosted mode: Postgres platform store + bbolt vault. STORAGE_PATH must be
+# writable (bbolt vault lives there); PLATFORM_DB_URL points at the platform-db.
 PORT=24055 \
 DEPLOYMENT_MODE=selfhosted \
 PROVISIONER_MODE=docker \
 STORAGE_PATH="$DATA_DIR" \
-DB_PATH="$DATA_DIR/excalibase.db" \
+PLATFORM_DB_URL="$PLATFORM_DB_URL" \
 CORS_ORIGINS="*" \
 PUBLIC_BASE_URL="http://localhost:24055" \
 DENO_RUNTIME_URL="http://127.0.0.1:8000" \

@@ -1,3 +1,5 @@
+//go:build integration
+
 package handler
 
 import (
@@ -9,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
-	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
+	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/go-chi/chi/v5"
 )
@@ -22,7 +24,7 @@ const (
 // wireSetupStatus mounts /api/auth/setup-status on the given base router,
 // sharing the store the register router was wired with so status reflects
 // users created via /api/auth/register or directly.
-func wireSetupStatus(t *testing.T, base chi.Router, store *sqlitestore.Store) chi.Router {
+func wireSetupStatus(t *testing.T, base chi.Router, store *pgstore.Store) chi.Router {
 	t.Helper()
 	h := NewAuthHandler(store, store)
 	base.Get(testSetupStatusPath, h.GetSetupStatus)

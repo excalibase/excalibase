@@ -1,3 +1,5 @@
+//go:build integration
+
 package handler
 
 import (
@@ -9,8 +11,9 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
-	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
+	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	pgtest "github.com/excalibase/provisioning-poc/internal/testutil/pgstore"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -20,14 +23,9 @@ const (
 )
 
 
-func setupRegisterRouter(t *testing.T) (chi.Router, *sqlitestore.Store) {
+func setupRegisterRouter(t *testing.T) (chi.Router, *pgstore.Store) {
 	t.Helper()
-	dir := t.TempDir()
-	store, err := sqlitestore.New(dir + "/test.db")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
+	store := pgtest.New(t)
 
 	authHandler := NewAuthHandler(store, store)
 	authHandler.SetOrgStore(store)

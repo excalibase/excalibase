@@ -17,7 +17,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
-	sqlitestore "github.com/excalibase/provisioning-poc/internal/storage/sqlite"
+	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	k8sunstructured "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -69,13 +69,13 @@ func unsealVaultInteractive(v *vault.Vault) error {
 func resetPasswordCLI() {
 	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
 	username := fs.String("username", "admin", "Username to reset password for")
-	dbPath := fs.String("db", "", "SQLite database path (default: from DB_PATH env or ../provisioning-data/excalibase.db)")
+	dbURL := fs.String("db", "", "PostgreSQL connection string (default: from PLATFORM_DB_URL env)")
 	vaultPath := fs.String("vault", "", "Vault database path (default: from STORAGE_PATH env)")
 	fs.Parse(os.Args[2:])
 
 	cfg := config.Load()
-	if *dbPath == "" {
-		*dbPath = cfg.DBPath
+	if *dbURL == "" {
+		*dbURL = cfg.PlatformDBURL
 	}
 	if *vaultPath == "" {
 		*vaultPath = filepath.Join(cfg.StoragePath, "vault.bolt")
@@ -91,8 +91,8 @@ func resetPasswordCLI() {
 		log.Fatalf("Vault: %v", err)
 	}
 
-	// 2. Open SQLite
-	sqlStore, err := sqlitestore.New(*dbPath)
+	// 2. Open the Postgres platform store
+	sqlStore, err := pgstore.New(*dbURL)
 	if err != nil {
 		log.Fatalf("Open database: %v", err)
 	}
@@ -136,21 +136,21 @@ type discoveredInstance struct {
 	Port      int
 	DBName    string
 	Status    string
-	InSQLite  bool
+	InStore  bool
 }
 
 // recoverInstancesCLI handles the `recover-instances` subcommand.
 func recoverInstancesCLI() {
 	fs := flag.NewFlagSet("recover-instances", flag.ExitOnError)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbURL := fs.String("db", "", "PostgreSQL connection string (default: from PLATFORM_DB_URL env)")
 	vaultPath := fs.String("vault", "", "Vault database path")
 	dryRun := fs.Bool("dry-run", false, "Show what would be recovered without writing")
 	nsPrefix := fs.String("prefix", "excalibase-", "Namespace prefix to scan")
 	fs.Parse(os.Args[2:])
 
 	cfg := config.Load()
-	if *dbPath == "" {
-		*dbPath = cfg.DBPath
+	if *dbURL == "" {
+		*dbURL = cfg.PlatformDBURL
 	}
 	if *vaultPath == "" {
 		*vaultPath = filepath.Join(cfg.StoragePath, "vault.bolt")
@@ -164,7 +164,7 @@ func recoverInstancesCLI() {
 		log.Fatalf("Vault: %v", err)
 	}
 
-	sqlStore, err := sqlitestore.New(*dbPath)
+	sqlStore, err := pgstore.New(*dbURL)
 	if err != nil {
 		log.Fatalf("Open database: %v", err)
 	}
@@ -276,7 +276,7 @@ func buildDiscoveredInstance(ctx context.Context, k8sClient k8s.KubeClient, ns s
 		Port:      5432,
 		DBName:    dbName,
 		Status:    status,
-		InSQLite:  existingMap[projectID] != nil,
+		InStore:  existingMap[projectID] != nil,
 	}
 }
 
@@ -288,7 +288,7 @@ func printRecoverySummary(discovered []discoveredInstance, existing []*domain.Da
 	newCount := 0
 	for _, d := range discovered {
 		marker := "EXISTS"
-		if !d.InSQLite {
+		if !d.InStore {
 			marker = "NEW"
 			newCount++
 		}
@@ -303,7 +303,7 @@ func printRecoverySummary(discovered []discoveredInstance, existing []*domain.Da
 	orphanCount := 0
 	for _, inst := range existing {
 		if !discoveredMap[inst.ProjectID] {
-			fmt.Printf("  [ORPHAN] %s — in SQLite but not found in K8s\n", inst.ProjectID)
+			fmt.Printf("  [ORPHAN] %s — in store but not found in K8s\n", inst.ProjectID)
 			orphanCount++
 		}
 	}
@@ -311,10 +311,10 @@ func printRecoverySummary(discovered []discoveredInstance, existing []*domain.Da
 }
 
 // saveRecoveredInstances inserts newly discovered instances into the store.
-func saveRecoveredInstances(sqlStore *sqlitestore.Store, discovered []discoveredInstance) {
+func saveRecoveredInstances(sqlStore *pgstore.Store, discovered []discoveredInstance) {
 	flexNow := &domain.FlexTime{Time: time.Now()}
 	for _, d := range discovered {
-		if d.InSQLite {
+		if d.InStore {
 			continue
 		}
 		port := d.Port

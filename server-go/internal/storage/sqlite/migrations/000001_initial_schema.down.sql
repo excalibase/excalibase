@@ -1,9 +1,0 @@
-DROP TABLE IF EXISTS audit_log;
-DROP TABLE IF EXISTS parameter_groups;
-DROP TABLE IF EXISTS backup_records;
-DROP TABLE IF EXISTS migration_records;
-DROP TABLE IF EXISTS alerts;
-DROP TABLE IF EXISTS database_metrics;
-DROP TABLE IF EXISTS database_instances;
-DROP TABLE IF EXISTS access_tokens;
-DROP TABLE IF EXISTS users;

@@ -1,4 +1,6 @@
-package sqlite
+//go:build integration
+
+package postgres
 
 import (
 	"context"
