@@ -63,10 +63,11 @@ function newSubscriptionId(): string {
 function extractRowId(doc: Record<string, unknown>): string {
   const id = doc._id ?? doc.id;
   if (id === null || id === undefined) return '';
-  // Non-primitive ids (e.g. composite/object keys) must not fall through to
-  // Object's default '[object Object]' stringification — serialize them.
-  if (typeof id === 'object') return JSON.stringify(id);
-  return String(id);
+  if (typeof id === 'string') return id;
+  // String() only ever sees narrowed primitives here (no object → no
+  // '[object Object]'); composite/object keys are JSON-serialized instead.
+  if (typeof id === 'number' || typeof id === 'bigint' || typeof id === 'boolean') return String(id);
+  return JSON.stringify(id);
 }
 
 interface NextFrame {
