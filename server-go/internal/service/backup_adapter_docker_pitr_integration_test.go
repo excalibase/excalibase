@@ -58,7 +58,7 @@ func TestDockerBackupAdapter_PITR_TargetName(t *testing.T) {
 
 	src := &domain.DatabaseInstance{
 		ProjectID: "src-pitr", OrgID: "org", Namespace: srcID,
-		DatabaseName: "app", Username: "postgres", Password: pgPwd,
+		DatabaseName: "app", Username: defaultPostgresSuperuser, Password: pgPwd,
 		PostgresVersion: "17", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	}
 	store.Save(src)
@@ -164,7 +164,7 @@ func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) { //NOSONAR seque
 
 	src := &domain.DatabaseInstance{
 		ProjectID: "src-variants", OrgID: "org", Namespace: srcID,
-		DatabaseName: "app", Username: "postgres", Password: pgPwd,
+		DatabaseName: "app", Username: defaultPostgresSuperuser, Password: pgPwd,
 		PostgresVersion: "17", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	}
 	store.Save(src)

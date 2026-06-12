@@ -5,6 +5,30 @@ import { useState } from 'react';
 import { api } from '../api/client';
 import type { DatabaseInstance } from '../types';
 
+// sanitizeHost restricts a host value coming from the provisioning API to a
+// safe hostname/IP shape before it is interpolated into displayed/copyable
+// URLs. This prevents an Open Redirect / URL-spoofing vector where a
+// compromised or malformed API response could inject path, query, credential
+// or scheme characters into the rendered endpoint URLs.
+function sanitizeHost(value: string): string {
+  // Allow only DNS hostnames and IPv4/IPv6 literals: letters, digits,
+  // dot, hyphen, colon and brackets. Anything else collapses to a safe default.
+  return /^[A-Za-z0-9.\-:[\]]+$/.test(value) ? value : 'localhost';
+}
+
+// sanitizePort restricts a port to digits only (1-65535 is enforced by the
+// backend); a non-numeric value falls back to the supplied default.
+function sanitizePort(value: number | string, fallback: string): string {
+  const port = String(value);
+  return /^[0-9]{1,5}$/.test(port) ? port : fallback;
+}
+
+// sanitizeDbName restricts a database identifier to characters valid for a
+// PostgreSQL identifier so it cannot break out of the connection string.
+function sanitizeDbName(value: string): string {
+  return /^[A-Za-z0-9_]+$/.test(value) ? value : 'app';
+}
+
 // buildDeploySnippet assembles the curl deploy example. Inlined as a separate
 // helper because the embedded JSON requires escaped double quotes which
 // confuse static analysis when written as a single template literal (S6535).
@@ -91,12 +115,13 @@ export function ApiInfoPage() {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
   }
 
-  const host = project.host || 'localhost';
-  const dbPort = project.port || 5432;
-  const restPort = import.meta.env.VITE_REST_PORT || '3000';
-  const graphqlPort = import.meta.env.VITE_GRAPHQL_PORT || '4000';
-  const authPort = import.meta.env.VITE_AUTH_PORT || '24000';
-  const edgeFnPort = import.meta.env.VITE_EDGEFN_PORT || '8000';
+  const host = sanitizeHost(project.host || 'localhost');
+  const dbPort = sanitizePort(project.port || 5432, '5432');
+  const dbName = sanitizeDbName(project.databaseName || 'app');
+  const restPort = sanitizePort(import.meta.env.VITE_REST_PORT || '3000', '3000');
+  const graphqlPort = sanitizePort(import.meta.env.VITE_GRAPHQL_PORT || '4000', '4000');
+  const authPort = sanitizePort(import.meta.env.VITE_AUTH_PORT || '24000', '24000');
+  const edgeFnPort = sanitizePort(import.meta.env.VITE_EDGEFN_PORT || '8000', '8000');
 
   return (
     <div data-testid="api-info-page">
@@ -158,10 +183,10 @@ export function ApiInfoPage() {
         <EndpointCard
           icon={Database}
           title="Database Direct"
-          url={`postgresql://excalibase_app@${host}:${dbPort}/${project.databaseName || 'app'}`}
+          url={`postgresql://excalibase_app@${host}:${dbPort}/${dbName}`}
           description="Direct PostgreSQL connection for tools like psql, pgAdmin, or DBeaver."
           snippets={[
-            { label: 'psql', code: `psql -h ${host} -p ${dbPort} -U excalibase_app -d ${project.databaseName || 'app'}` },
+            { label: 'psql', code: `psql -h ${host} -p ${dbPort} -U excalibase_app -d ${dbName}` },
           ]}
         />
 

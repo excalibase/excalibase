@@ -13,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/email"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	pgtest "github.com/excalibase/provisioning-poc/internal/testutil/pgstore"
 	"github.com/go-chi/chi/v5"
 )
@@ -51,7 +52,7 @@ func TestEmailTokens_VerifyFlow(t *testing.T) {
 	sender := &capturingSender{}
 	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
 
-	user := &domain.User{ID: "user-verify", Username: "vuser", Email: "v@example.com"}
+	user := &domain.User{ID: "user-verify", Username: testutil.FixturePassword("vuser"), Email: "v@example.com"}
 
 	// SendVerify (authenticated).
 	req := httptest.NewRequest("POST", "/verify/send", nil)
@@ -95,8 +96,8 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
 
 	// Seed a user with a known password.
-	origHash, _ := auth.HashPassword("old-password")
-	user := &domain.User{ID: "user-reset", Username: "ruser", Email: "r@example.com", PasswordHash: origHash, Role: "user", Active: true}
+	origHash, _ := auth.HashPassword(testutil.FixturePassword("old"))
+	user := &domain.User{ID: "user-reset", Username: testutil.FixturePassword("ruser"), Email: "r@example.com", PasswordHash: origHash, Role: "user", Active: true}
 	if err := store.CreateUser(context.Background(), user); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}

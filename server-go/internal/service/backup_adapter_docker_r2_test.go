@@ -111,7 +111,7 @@ func TestDockerBackupAdapter_R2_E2E(t *testing.T) {
 		OrgID:          "org",
 		Namespace:      pgID,
 		DatabaseName:   "app",
-		Username:       "postgres",
+		Username:       defaultPostgresSuperuser,
 		Password:       pgPwd,
 		DeploymentMode: domain.ModeDocker,
 		Status:         "ACTIVE",

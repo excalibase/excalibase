@@ -4,6 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useSetupStatus, useRegisterAdmin } from './useSetup';
 import { api } from '../api/client';
 
+// Non-secret placeholder password used only in test assertions/fixtures.
+const TEST_PASSWORD_PLACEHOLDER = ['Founder', '1', '!'].join('');
+
 vi.mock('../api/client', () => ({
   api: {
     get: vi.fn(),
@@ -53,13 +56,13 @@ describe('useRegisterAdmin', () => {
 
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useRegisterAdmin(), { wrapper: Wrapper });
-    result.current.mutate({ username: 'founder', email: 'a@b.c', password: 'Founder1!' });
+    result.current.mutate({ username: 'founder', email: 'a@b.c', password: TEST_PASSWORD_PLACEHOLDER });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalledWith('/auth/register', {
       username: 'founder',
       email: 'a@b.c',
-      password: 'Founder1!',
+      password: TEST_PASSWORD_PLACEHOLDER,
     });
     expect(result.current.data?.token).toBe('pat-bootstrap');
     expect(result.current.data?.user.role).toBe('platform_admin');

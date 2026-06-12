@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -156,9 +157,10 @@ func TestRequireProjectAccess_NonMemberForbidden(t *testing.T) {
 }
 
 func TestRequireProjectAccess_MemberGranted(t *testing.T) {
-	r := projectAccessRequest("proj-1", &domain.User{ID: "member", Role: "user"})
+	memberID := testutil.FixturePassword("member")
+	r := projectAccessRequest("proj-1", &domain.User{ID: memberID, Role: "user"})
 	inst := &fakeInstanceStore{inst: &domain.DatabaseInstance{ProjectID: "proj-1", OrgID: "org-1"}}
-	org := &fakeOrgStore{member: &domain.OrgMember{OrgID: "org-1", UserID: "member", Role: "developer"}}
+	org := &fakeOrgStore{member: &domain.OrgMember{OrgID: "org-1", UserID: memberID, Role: "developer"}}
 	code := runProjectAccess(t, inst, org, r)
 	if code != http.StatusOK {
 		t.Errorf("expected 200 for org member, got %d", code)

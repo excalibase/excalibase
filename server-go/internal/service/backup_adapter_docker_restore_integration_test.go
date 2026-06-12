@@ -82,7 +82,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 		OrgID:           "org",
 		Namespace:       srcID,
 		DatabaseName:    "app",
-		Username:        "postgres",
+		Username:        defaultPostgresSuperuser,
 		Password:        pgPwd,
 		PostgresVersion: "16-alpine",
 		DeploymentMode:  domain.ModeDocker,

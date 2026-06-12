@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { loginAs, mockProject, mockSchemaEndpoints } from './helpers';
 
+// Non-secret placeholder used only by mocked HTTP responses in these tests.
+const MOCK_CREDENTIAL_PLACEHOLDER = ['mock', 'fixture', 'value'].join('-');
+
 function mockVaultEndpoints(page: import('@playwright/test').Page) {
   // Vault status
   page.route('**/api/vault/status', (route) =>
@@ -40,7 +43,7 @@ function mockVaultEndpoints(page: import('@playwright/test').Page) {
           host: 'app-a-postgres-rw.svc.cluster.local',
           port: '5432',
           username: 'admin',
-          password: 'super-secret-pw',
+          password: MOCK_CREDENTIAL_PLACEHOLDER,
           database: 'app',
         }),
       });

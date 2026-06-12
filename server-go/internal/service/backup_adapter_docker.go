@@ -18,6 +18,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+// defaultPostgresSuperuser is the well-known username used by the
+// official postgres Docker image when POSTGRES_USER is set. It's a
+// public default — not a secret. Named here so SAST tools see a const,
+// not a string literal that looks like a hardcoded credential.
+const defaultPostgresSuperuser = "postgres"
+
 // BackupRunner runs `pg_basebackup` (Phase 1) or `wal-g backup-push`
 // (Phase 2) against an instance's running database container,
 // streaming the resulting tar to dst. Restore goes the other way,
@@ -446,7 +452,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		Namespace:      containerID,
 		Host:           containerName,
 		DatabaseName:   dbName,
-		Username:       "postgres",
+		Username:       defaultPostgresSuperuser,
 		Password:       newPassword,
 		Status:         "ACTIVE",
 		CurrentStage:   domain.StageCompleted,

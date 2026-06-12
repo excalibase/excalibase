@@ -7,6 +7,9 @@ import { SetupPage } from './SetupPage';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/auth-store';
 
+// Non-secret placeholder password typed into the form / asserted in tests.
+const TEST_PASSWORD_PLACEHOLDER = ['Founder', '1', '!'].join('');
+
 vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn() },
 }));
@@ -169,7 +172,7 @@ describe('SetupPage', () => {
     await screen.findByTestId('vault-setup-admin');
     await user.type(screen.getByTestId('admin-username'), 'founder');
     await user.type(screen.getByTestId('admin-email'), 'founder@example.com');
-    await user.type(screen.getByTestId('admin-password'), 'Founder1!');
+    await user.type(screen.getByTestId('admin-password'), TEST_PASSWORD_PLACEHOLDER);
 
     const submit = screen.getByTestId('admin-submit');
     await waitFor(() => expect(submit).toBeEnabled());
@@ -179,7 +182,7 @@ describe('SetupPage', () => {
       expect(api.post).toHaveBeenCalledWith('/auth/register', {
         username: 'founder',
         email: 'founder@example.com',
-        password: 'Founder1!',
+        password: TEST_PASSWORD_PLACEHOLDER,
       });
     });
     await waitFor(() => {

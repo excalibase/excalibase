@@ -109,7 +109,7 @@ func TestDockerBackupAdapter_IntegrationE2E(t *testing.T) {
 		OrgID:          "org",
 		Namespace:      pgID, // DockerProvisioner stamps container ID here
 		DatabaseName:   "app",
-		Username:       "postgres",
+		Username:       defaultPostgresSuperuser,
 		Password:       pgPwd,
 		DeploymentMode: domain.ModeDocker,
 		Status:         "ACTIVE",
