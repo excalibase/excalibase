@@ -31,9 +31,16 @@ func (h *VaultHandler) Routes(r chi.Router) {
 	r.Post("/unseal", h.Unseal)
 	r.Get("/pki/public-key", h.GetPublicKey)
 
-	// Auth-required routes
+	// Auth-required routes. Beyond authentication, every secret-touching
+	// route requires PermViewCredentials — a platform-level permission held
+	// by platform_admin / platform_operator (and the provisioning PAT the
+	// GraphQL engine + internal services authenticate with) but NOT by a
+	// normal dashboard tenant ("user") or platform_viewer. Without this,
+	// any authenticated tenant could read/write/delete ANY tenant's DB
+	// credentials stored in the vault.
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireAuth)
+		r.Use(auth.RequirePermission(auth.PermViewCredentials))
 		r.Post("/seal", h.Seal)
 		r.Post("/rekey", h.Rekey)
 		r.Get("/secrets-list", h.ListSecrets)

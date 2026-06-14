@@ -20,12 +20,38 @@ const (
 
 
 type OrgHandler struct {
-	orgStore  storage.OrgStore
-	userStore storage.UserStore
+	orgStore      storage.OrgStore
+	userStore     storage.UserStore
+	instanceStore storage.InstanceStore // optional; used to confirm a project belongs to the URL org
 }
 
 func NewOrgHandler(orgStore storage.OrgStore, userStore storage.UserStore) *OrgHandler {
 	return &OrgHandler{orgStore: orgStore, userStore: userStore}
+}
+
+// SetInstanceStore wires the instance store so the project-member endpoints
+// can confirm the URL's projectId actually belongs to the URL's orgId before
+// operating on it. Without this, a member of org A could enumerate/manage the
+// project members of a project owned by org B simply by putting B's projectId
+// in the path. nil leaves the (legacy) behaviour where the org<->project link
+// is not enforced — production always wires it.
+func (h *OrgHandler) SetInstanceStore(s storage.InstanceStore) {
+	h.instanceStore = s
+}
+
+// projectBelongsToOrg reports whether projectID is owned by orgID. Returns
+// false when the instance store is wired and either the project is unknown or
+// belongs to a different org. When the instance store is NOT wired it returns
+// true (link not enforced) so self-hosted/legacy deployments keep working.
+func (h *OrgHandler) projectBelongsToOrg(projectID, orgID string) bool {
+	if h.instanceStore == nil {
+		return true
+	}
+	inst, err := h.instanceStore.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return false
+	}
+	return inst.OrgID == orgID
 }
 
 // Routes wires all org endpoints. The isCloud flag gates the cloud-only
@@ -372,8 +398,13 @@ func (h *OrgHandler) ListProjectMembers(w http.ResponseWriter, r *http.Request) 
 		httpError(w, errOrgNotFound, http.StatusNotFound)
 		return
 	}
+	projectID := chi.URLParam(r, "projectId")
+	if !h.projectBelongsToOrg(projectID, orgID) {
+		httpError(w, errOrgNotFound, http.StatusNotFound)
+		return
+	}
 
-	members, err := h.orgStore.ListProjectMembers(r.Context(), chi.URLParam(r, "projectId"))
+	members, err := h.orgStore.ListProjectMembers(r.Context(), projectID)
 	if err != nil {
 		httpError(w, "failed to list members", http.StatusInternalServerError)
 		return
@@ -390,6 +421,12 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 
 	if !h.hasOrgPermission(r, orgID, user.ID, auth.OrgPermManageMembers) {
 		httpError(w, errInsufficientPerms, http.StatusForbidden)
+		return
+	}
+
+	projectID := chi.URLParam(r, "projectId")
+	if !h.projectBelongsToOrg(projectID, orgID) {
+		httpError(w, errOrgNotFound, http.StatusNotFound)
 		return
 	}
 
@@ -411,7 +448,6 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projectID := chi.URLParam(r, "projectId")
 	if err := h.orgStore.AddProjectMember(r.Context(), &domain.ProjectMember{
 		ProjectID: projectID, OrgID: orgID, UserID: req.UserID, Role: req.Role,
 	}); err != nil {
@@ -432,6 +468,12 @@ func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	projectID := chi.URLParam(r, "projectId")
+	if !h.projectBelongsToOrg(projectID, orgID) {
+		httpError(w, errOrgNotFound, http.StatusNotFound)
+		return
+	}
+
 	var req struct {
 		Role string `json:"role"`
 	}
@@ -440,7 +482,6 @@ func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	projectID := chi.URLParam(r, "projectId")
 	userID := chi.URLParam(r, "userId")
 	if err := h.orgStore.UpdateProjectMemberRole(r.Context(), projectID, userID, req.Role); err != nil {
 		httpError(w, "failed to update role", http.StatusInternalServerError)
@@ -459,6 +500,10 @@ func (h *OrgHandler) RemoveProjectMember(w http.ResponseWriter, r *http.Request)
 	}
 
 	projectID := chi.URLParam(r, "projectId")
+	if !h.projectBelongsToOrg(projectID, orgID) {
+		httpError(w, errOrgNotFound, http.StatusNotFound)
+		return
+	}
 	userID := chi.URLParam(r, "userId")
 	if err := h.orgStore.RemoveProjectMember(r.Context(), projectID, userID); err != nil {
 		httpError(w, "failed to remove member", http.StatusInternalServerError)

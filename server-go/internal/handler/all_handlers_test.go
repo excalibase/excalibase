@@ -554,7 +554,9 @@ func TestProvisioningHandlerRoutes(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(dir)
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
-	h := NewProvisioningHandler(svc, nil)
+	// ListInstances now fails closed (503) when no org store is wired; supply
+	// a fake so this route-wiring test still exercises the real list path.
+	h := NewProvisioningHandler(svc, &adminOrgStore{})
 
 	r := chi.NewRouter()
 	r.Route(testProvisionPath, h.Routes)

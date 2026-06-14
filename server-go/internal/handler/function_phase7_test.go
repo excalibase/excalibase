@@ -142,6 +142,50 @@ func TestInternalInvoke_RouteAuthCheck(t *testing.T) {
 	}
 }
 
+// TestInternalRoutes_EmptyRuntimeSecretFailsClosed proves the fail-open hole
+// is closed: when no runtimeSecret is configured, the internal routes must
+// reject every request with 503 ("internal route not configured") instead of
+// letting unauthenticated callers straight through. This covers both the
+// /internal/invoke bridge and the runtime /metadata callback.
+func TestInternalRoutes_EmptyRuntimeSecretFailsClosed(t *testing.T) {
+	store := edgefn.NewFunctionStore(t.TempDir())
+	v := newFakeVault()
+	secrets := edgefn.NewSecretsStore(v)
+	runtime, _ := mockFnRuntime(t)
+	client := edgefn.NewRuntimeClient(runtime.URL, "")
+	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}
+	h := NewFunctionHandler(store, secrets, client, instStore, nil, testAPIBase)
+	// runtimeSecret intentionally left "" (never SetK8sClient'd with a secret).
+
+	rtr := chi.NewRouter()
+	rtr.Post(testInternalInvokeRoute, h.InternalInvoke)
+	rtr.Post("/internal/runtime/functions/{fnId}/metadata", h.ReceiveExportMetadata)
+
+	// InternalInvoke — even with NO header (the empty-secret would have matched
+	// the empty header under the old fail-open guard) must now 503.
+	req := httptest.NewRequest("POST", "/internal/invoke/proj_p1/"+testInternalOnlyFnID,
+		bytes.NewBufferString(`{"args":{}}`))
+	w := httptest.NewRecorder()
+	rtr.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("InternalInvoke empty runtimeSecret: got %d, want 503 (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "internal route not configured") {
+		t.Errorf("InternalInvoke 503 body: got %s, want 'internal route not configured'", w.Body.String())
+	}
+
+	// ReceiveExportMetadata — same fail-closed behaviour.
+	req = httptest.NewRequest("POST", "/internal/runtime/functions/"+testInternalOnlyFnID+"/metadata",
+		bytes.NewBufferString(`{"projectId":"proj_p1","exports":[]}`))
+	w = httptest.NewRecorder()
+	rtr.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("ReceiveExportMetadata empty runtimeSecret: got %d, want 503 (body=%s)", w.Code, w.Body.String())
+	}
+}
+
 // --- Phase 7: HTTP action / router dispatch routes ---
 
 // httpActionBundle is a minimal index.ts content that makes Bundle()

@@ -1195,6 +1195,23 @@ func (h *FunctionHandler) RuntimeStatus(w http.ResponseWriter, r *http.Request) 
 // runtimeSecret that authenticates deploy/invoke RPCs authenticates this.
 const runtimeTokenHeader = "X-Excalibase-Runtime-Token"
 
+// authorizeRuntimeToken gates the internal runtime-only routes. It FAILS
+// CLOSED: if no runtimeSecret is configured the route is rejected with 503
+// rather than letting unauthenticated callers through. When a secret is
+// configured, the request must present an exactly-matching token header.
+// Returns true when the request is authorized to proceed.
+func (h *FunctionHandler) authorizeRuntimeToken(w http.ResponseWriter, r *http.Request) bool {
+	if h.runtimeSecret == "" {
+		httpError(w, "internal route not configured", http.StatusServiceUnavailable)
+		return false
+	}
+	if r.Header.Get(runtimeTokenHeader) != h.runtimeSecret {
+		httpError(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
 // exportMetadataEntry is the on-wire shape of one element returned by
 // ListExportMetadata. Mirrors what the SDK codegen reads:
 //
@@ -1254,8 +1271,7 @@ func (h *FunctionHandler) ListExportMetadata(w http.ResponseWriter, r *http.Requ
 // stored verbatim on the Function.ExportMetadata field so a later
 // /_metadata read can return it untouched.
 func (h *FunctionHandler) ReceiveExportMetadata(w http.ResponseWriter, r *http.Request) {
-	if h.runtimeSecret == "" || r.Header.Get(runtimeTokenHeader) != h.runtimeSecret {
-		httpError(w, "unauthorized", http.StatusUnauthorized)
+	if !h.authorizeRuntimeToken(w, r) {
 		return
 	}
 
@@ -1352,8 +1368,7 @@ func isInternalFromMetadata(raw json.RawMessage) bool {
 // without the Authorization-strip behaviour (internal callers carry a
 // runtime-token, not a user JWT).
 func (h *FunctionHandler) InternalInvoke(w http.ResponseWriter, r *http.Request) {
-	if h.runtimeSecret == "" || r.Header.Get(runtimeTokenHeader) != h.runtimeSecret {
-		httpError(w, "unauthorized", http.StatusUnauthorized)
+	if !h.authorizeRuntimeToken(w, r) {
 		return
 	}
 	projectID := chi.URLParam(r, "projectId")

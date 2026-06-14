@@ -37,10 +37,20 @@ var (
 )
 
 func setupOrgRouter(t *testing.T) (chi.Router, *pgstore.Store) {
-	return setupOrgRouterMode(t, true /* isCloud — existing tests expect multi-org */)
+	r, store, _ := setupOrgRouterWithInstances(t, true /* isCloud — existing tests expect multi-org */)
+	return r, store
 }
 
 func setupOrgRouterMode(t *testing.T, isCloud bool) (chi.Router, *pgstore.Store) {
+	r, store, _ := setupOrgRouterWithInstances(t, isCloud)
+	return r, store
+}
+
+// setupOrgRouterWithInstances builds the org router and also returns the
+// in-memory instance store wired into the handler. Project-member tests seed
+// it with project→org mappings; the handler uses it to confirm a URL project
+// actually belongs to the URL org (cross-org enumeration guard).
+func setupOrgRouterWithInstances(t *testing.T, isCloud bool) (chi.Router, *pgstore.Store, *inMemoryInstanceStore) {
 	t.Helper()
 	store := pgtest.New(t)
 
@@ -54,7 +64,9 @@ func setupOrgRouterMode(t *testing.T, isCloud bool) (chi.Router, *pgstore.Store)
 		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true,
 	})
 
+	instances := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}
 	orgHandler := NewOrgHandler(store, store)
+	orgHandler.SetInstanceStore(instances)
 	r := chi.NewRouter()
 	r.Route(testOrgsPath, func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
@@ -76,7 +88,7 @@ func setupOrgRouterMode(t *testing.T, isCloud bool) (chi.Router, *pgstore.Store)
 		})
 		orgHandler.Routes(r, isCloud)
 	})
-	return r, store
+	return r, store, instances
 }
 
 func orgRequest(r chi.Router, method, path, body string, userID string) *httptest.ResponseRecorder {
@@ -382,11 +394,15 @@ func TestInviteByEmail_PendingWhenUserNotExists(t *testing.T) {
 }
 
 func TestProjectMemberCRUD(t *testing.T) {
-	r, _ := setupOrgRouter(t)
+	r, _, instances := setupOrgRouterWithInstances(t, true)
 
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"ProjOrg","slug":"proj-org"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
+
+	// my-proj belongs to this org — seed the instance so the project↔org
+	// ownership check passes for the legitimate same-org flow.
+	instances.Save(&domain.DatabaseInstance{ProjectID: "my-proj", OrgID: org.ID})
 
 	// Alice (owner) adds bob as editor
 	w2 := orgRequest(r, "POST", testOrgsSlash+org.ID+testMyProjMembers,
@@ -468,17 +484,96 @@ func TestProjectMember_NonMemberCannotView(t *testing.T) {
 }
 
 func TestProjectMember_InvalidRoleRejected(t *testing.T) {
-	r, _ := setupOrgRouter(t)
+	r, _, instances := setupOrgRouterWithInstances(t, true)
 
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"ROrg","slug":"r-org"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
+
+	// proj1 belongs to this org so the request reaches role validation
+	// (rather than short-circuiting on the project↔org ownership check).
+	instances.Save(&domain.DatabaseInstance{ProjectID: "proj1", OrgID: org.ID})
 
 	// Add with invalid project role
 	w2 := orgRequest(r, "POST", testOrgsSlash+org.ID+testProj1Members,
 		`{"userId":"`+testBobID+`","role":"superuser"}`, testAliceID)
 	if w2.Code != http.StatusBadRequest {
 		t.Errorf("invalid project role: got %d, want %d. Body: %s", w2.Code, http.StatusBadRequest, w2.Body.String())
+	}
+}
+
+// TestProjectMember_CrossOrgProjectReturns404 proves the cross-org
+// enumeration hole is closed: a legitimate member/owner of org A cannot
+// read or mutate the project members of a project that belongs to org B
+// by putting B's projectId in A's URL. The handler looks the project up in
+// the instance store and 404s when its OrgID != the URL org.
+func TestProjectMember_CrossOrgProjectReturns404(t *testing.T) {
+	r, _, instances := setupOrgRouterWithInstances(t, true)
+
+	// Alice owns org A.
+	wA := orgRequest(r, "POST", testOrgsPath, `{"name":"OrgA","slug":"org-a"}`, testAliceID)
+	var orgA domain.Org
+	json.NewDecoder(wA.Body).Decode(&orgA)
+
+	// Bob owns org B, which owns project victim-proj.
+	wB := orgRequest(r, "POST", testOrgsPath, `{"name":"OrgB","slug":"org-b"}`, testBobID)
+	var orgB domain.Org
+	json.NewDecoder(wB.Body).Decode(&orgB)
+	instances.Save(&domain.DatabaseInstance{ProjectID: "victim-proj", OrgID: orgB.ID})
+
+	// Alice (member of org A) tries to list org B's project members through
+	// org A's URL: /api/orgs/{orgA}/projects/victim-proj/members.
+	base := testOrgsSlash + orgA.ID + "/projects/victim-proj/members"
+
+	wList := orgRequest(r, "GET", base, "", testAliceID)
+	if wList.Code != http.StatusNotFound {
+		t.Errorf("cross-org ListProjectMembers: got %d, want 404 (body=%s)", wList.Code, wList.Body.String())
+	}
+
+	wAdd := orgRequest(r, "POST", base, `{"userId":"`+testAliceID+`","role":"viewer"}`, testAliceID)
+	if wAdd.Code != http.StatusNotFound {
+		t.Errorf("cross-org AddProjectMember: got %d, want 404 (body=%s)", wAdd.Code, wAdd.Body.String())
+	}
+
+	wPatch := orgRequest(r, "PATCH", base+"/"+testBobID, `{"role":"viewer"}`, testAliceID)
+	if wPatch.Code != http.StatusNotFound {
+		t.Errorf("cross-org UpdateProjectMemberRole: got %d, want 404 (body=%s)", wPatch.Code, wPatch.Body.String())
+	}
+
+	wDel := orgRequest(r, "DELETE", base+"/"+testBobID, "", testAliceID)
+	if wDel.Code != http.StatusNotFound {
+		t.Errorf("cross-org RemoveProjectMember: got %d, want 404 (body=%s)", wDel.Code, wDel.Body.String())
+	}
+}
+
+// TestProjectMember_SameOrgProjectSucceeds confirms the legitimate flow is
+// untouched: an owner managing a project that genuinely belongs to their org
+// still passes the ownership check and the operation succeeds.
+func TestProjectMember_SameOrgProjectSucceeds(t *testing.T) {
+	r, _, instances := setupOrgRouterWithInstances(t, true)
+
+	w := orgRequest(r, "POST", testOrgsPath, `{"name":"OwnOrg","slug":"own-org"}`, testAliceID)
+	var org domain.Org
+	json.NewDecoder(w.Body).Decode(&org)
+	instances.Save(&domain.DatabaseInstance{ProjectID: "own-proj", OrgID: org.ID})
+
+	base := testOrgsSlash + org.ID + "/projects/own-proj/members"
+
+	// Add bob as editor — same-org, must succeed.
+	wAdd := orgRequest(r, "POST", base, `{"userId":"`+testBobID+`","role":"editor"}`, testAliceID)
+	if wAdd.Code != http.StatusCreated {
+		t.Fatalf("same-org AddProjectMember: got %d, want 201 (body=%s)", wAdd.Code, wAdd.Body.String())
+	}
+
+	// List shows the member.
+	wList := orgRequest(r, "GET", base, "", testAliceID)
+	if wList.Code != http.StatusOK {
+		t.Fatalf("same-org ListProjectMembers: got %d, want 200", wList.Code)
+	}
+	var members []domain.ProjectMember
+	json.NewDecoder(wList.Body).Decode(&members)
+	if len(members) != 1 || members[0].Role != "editor" {
+		t.Errorf("expected 1 editor member, got %+v", members)
 	}
 }
 

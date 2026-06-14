@@ -33,7 +33,11 @@ func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 	// Empty factory (no real K8s provisioners for unit tests)
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
-	h := NewProvisioningHandler(svc, nil)
+	// A non-nil orgStore is required: ListInstances now fails closed (503)
+	// when the org store is missing rather than dumping every tenant's
+	// instances. The fake returns no orgs, which is fine for these tests —
+	// they exercise the no-user (unscoped) and platform-admin branches.
+	h := NewProvisioningHandler(svc, &adminOrgStore{})
 
 	r := chi.NewRouter()
 	r.Route("/api/provision", func(r chi.Router) {
@@ -166,6 +170,40 @@ func TestListInstancesReturnsAll(t *testing.T) {
 	// Without auth context and nil orgStore, returns all instances
 	if len(result) != 3 {
 		t.Fatalf("expected 3 instances, got %d", len(result))
+	}
+}
+
+// TestListInstances_NilOrgStoreFailsClosed proves the all-tenant dump hole is
+// closed: when the org store isn't wired the handler can't scope instances to
+// the caller's orgs, so it must 503 rather than returning every tenant's
+// instances. Previously a nil orgStore fell open and leaked the full list.
+func TestListInstances_NilOrgStoreFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.NewFileSystemStore(dir)
+	if err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	// Seed instances that would be leaked under the old fail-open behaviour.
+	store.Save(&domain.DatabaseInstance{ProjectID: "a", OrgID: "org1", Status: "ACTIVE"})
+	store.Save(&domain.DatabaseInstance{ProjectID: "b", OrgID: "org2", Status: "ACTIVE"})
+
+	factory := provisioner.NewFactory()
+	svc := service.NewProvisioningService(store, factory, nil)
+	h := NewProvisioningHandler(svc, nil) // nil org store → must fail closed
+
+	r := chi.NewRouter()
+	r.Get("/api/provision/", h.ListInstances)
+
+	req := httptest.NewRequest("GET", testProvisionPrefix, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("nil orgStore: got %d, want 503 (body=%s)", w.Code, w.Body.String())
+	}
+	// The body must NOT contain any instance data.
+	if strings.Contains(w.Body.String(), `"projectId"`) {
+		t.Errorf("503 response leaked instance data: %s", w.Body.String())
 	}
 }
 

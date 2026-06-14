@@ -61,7 +61,7 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 	alertSvc := service.NewAlertingService(dir)
 	setupSvc := service.NewOperatorSetupService(mock)
 
-	provH := NewProvisioningHandler(provSvc, nil)
+	provH := NewProvisioningHandler(provSvc, &adminOrgStore{})
 	metricsH := NewMetricsHandler(metricsSvc)
 	backupH := NewBackupHandler(backupSvc)
 	perfH := NewPerformanceHandler(perfSvc)
@@ -849,7 +849,8 @@ func TestProvisioningHandlerRoutes_NewMethodsWired(t *testing.T) {
 	factory := provisioner.NewFactory()
 	mock := k8s.NewMockClient()
 	svc := service.NewProvisioningService(st, factory, mock)
-	h := NewProvisioningHandler(svc, nil)
+	// Non-nil org store: ListInstances fails closed (503) without one.
+	h := NewProvisioningHandler(svc, &adminOrgStore{})
 
 	r := chi.NewRouter()
 	r.Route("/p", h.Routes)

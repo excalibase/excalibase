@@ -453,6 +453,15 @@ func buildBackupService(
 }
 
 // buildHandlerDeps constructs every HTTP handler the router needs.
+// newOrgHandler builds the org handler and wires the instance store so the
+// project-member endpoints can verify a project belongs to the URL's org
+// before operating on it (prevents cross-org project-member enumeration).
+func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceStore) *handler.OrgHandler {
+	h := handler.NewOrgHandler(sqlStore, sqlStore)
+	h.SetInstanceStore(instances)
+	return h
+}
+
 func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	cfg, store, sqlStore := a.cfg, a.store, a.sqlStore
 	k8sClient, vc, localVault := a.k8sClient, a.vc, a.localVault
@@ -519,7 +528,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		storageHandler:     storageHandler,
 		adminHandler:       adminHandler,
 		authHandler:        authHandler,
-		orgHandler:         handler.NewOrgHandler(sqlStore, sqlStore),
+		orgHandler:         newOrgHandler(sqlStore, store),
 		vaultHandler:       vaultHandler,
 		schemaHandler:      handler.NewSchemaHandler(vc),
 		realtimeHandler:    realtimeHandler,

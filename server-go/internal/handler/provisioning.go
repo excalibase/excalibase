@@ -127,14 +127,26 @@ func (h *ProvisioningHandler) Resume(w http.ResponseWriter, r *http.Request) {
 func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 
+	// Fail closed when the org store isn't wired: without it we cannot scope
+	// instances to the caller's orgs, and returning the unfiltered all-tenant
+	// list would leak every tenant's instances. 503 signals a misconfigured
+	// deployment rather than silently dumping everything.
+	if h.orgStore == nil {
+		httpError(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	allInstances, err := h.svc.GetAllInstances()
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
 
-	// Platform admins see everything; also fallback if no orgStore or no user context
-	if user == nil || h.orgStore == nil || auth.HasPermission(user.Role, auth.PermViewAny) {
+	// Platform admins (PermViewAny) see everything. An unauthenticated request
+	// that reached this far also sees the unscoped list — but in practice this
+	// route is mounted behind RequireAuth, so user is non-nil; the nil-guard is
+	// retained only as defense against a misconfigured mount.
+	if user == nil || auth.HasPermission(user.Role, auth.PermViewAny) {
 		writeJSON(w, allInstances)
 		return
 	}
