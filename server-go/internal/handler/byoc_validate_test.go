@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -10,6 +12,14 @@ import (
 )
 
 func TestValidateBYOCHost(t *testing.T) {
+	// Stub DNS so public hostnames resolve to a routable address without
+	// depending on real network resolution in CI.
+	orig := lookupHost
+	t.Cleanup(func() { lookupHost = orig })
+	lookupHost = func(host string) ([]string, error) {
+		return []string{"203.0.113.10"}, nil
+	}
+
 	bad := []string{
 		"",                // empty
 		"localhost",       // loopback name
@@ -40,6 +50,63 @@ func TestValidateBYOCHost(t *testing.T) {
 	for _, h := range good {
 		if err := validateBYOCHost(h); err != nil {
 			t.Errorf("expected %q to be accepted, got %v", h, err)
+		}
+	}
+}
+
+// TestValidateBYOCHost_DNSRebindingBlocked verifies that a DNS name resolving
+// to an internal/metadata IP is rejected at validation time (closing the
+// DNS-rebinding SSRF gap), while a name resolving to a public IP is accepted.
+func TestValidateBYOCHost_DNSRebindingBlocked(t *testing.T) {
+	orig := lookupHost
+	t.Cleanup(func() { lookupHost = orig })
+
+	stub := map[string][]string{
+		"rebind.attacker.example":   {"169.254.169.254"}, // metadata
+		"private.attacker.example":  {"10.0.0.5"},        // RFC-1918
+		"loopback.attacker.example": {"203.0.113.9", "127.0.0.1"}, // one bad addr among good
+		"public.good.example":       {"203.0.113.10"},   // routable
+		"broken.example":            nil,                 // resolution failure
+	}
+	lookupHost = func(host string) ([]string, error) {
+		addrs, ok := stub[host]
+		if !ok || addrs == nil {
+			return nil, fmt.Errorf("no such host")
+		}
+		return addrs, nil
+	}
+
+	rejected := []string{
+		"rebind.attacker.example",
+		"private.attacker.example",
+		"loopback.attacker.example", // any internal addr in the set blocks
+		"broken.example",            // resolution failure → fail closed
+	}
+	for _, host := range rejected {
+		if err := validateBYOCHost(host); err == nil {
+			t.Errorf("expected %q to be rejected (resolves internal / unresolvable)", host)
+		}
+	}
+
+	if err := validateBYOCHost("public.good.example"); err != nil {
+		t.Errorf("expected public host to be accepted, got %v", err)
+	}
+}
+
+// TestClassifyBYOCIP asserts the shared IP-classification logic directly so the
+// block-list stays correct independent of the resolution path.
+func TestClassifyBYOCIP(t *testing.T) {
+	bad := []string{"127.0.0.1", "::1", "10.1.2.3", "192.168.0.5", "172.16.0.1",
+		"169.254.169.254", "0.0.0.0", "224.0.0.1", "169.254.10.10"}
+	for _, s := range bad {
+		if err := classifyBYOCIP(net.ParseIP(s)); err == nil {
+			t.Errorf("expected %q to be classified internal/non-routable", s)
+		}
+	}
+	good := []string{"8.8.8.8", "203.0.113.10", "1.1.1.1"}
+	for _, s := range good {
+		if err := classifyBYOCIP(net.ParseIP(s)); err != nil {
+			t.Errorf("expected %q to be classified public, got %v", s, err)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -56,6 +57,37 @@ func TestBuildLogQL_RejectsUnknownService(t *testing.T) {
 	_, err := buildLogQL("postgres", "", "")
 	if err == nil {
 		t.Error("unknown service should error")
+	}
+}
+
+// TestBuildLogQL_RejectsBroadSearch confirms the |~ regex filter blocks
+// trivially-broad patterns that would turn the proxy into a cluster-wide
+// scanner, while normal substring searches still pass.
+func TestBuildLogQL_RejectsBroadSearch(t *testing.T) {
+	broad := []string{".*", ".+", ".", "^.*$", "(.*)", "  ", "^.+$"}
+	for _, s := range broad {
+		if _, err := buildLogQL("auth", "", s); err == nil {
+			t.Errorf("expected broad search %q to be rejected", s)
+		}
+	}
+
+	// Over-length search is rejected.
+	long := strings.Repeat("a", maxLogSearchLen+1)
+	if _, err := buildLogQL("auth", "", long); err == nil {
+		t.Errorf("expected over-length search (%d chars) to be rejected", len(long))
+	}
+
+	// Normal substring searches still work.
+	normal := []string{"ERROR", "normalsearch", "connection refused", "user=admin"}
+	for _, s := range normal {
+		got, err := buildLogQL("auth", "", s)
+		if err != nil {
+			t.Errorf("expected normal search %q to pass, got %v", s, err)
+			continue
+		}
+		if !strings.Contains(got, "|~") {
+			t.Errorf("expected search %q to be applied as |~ filter, got %s", s, got)
+		}
 	}
 }
 

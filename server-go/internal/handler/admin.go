@@ -343,9 +343,39 @@ func buildLogQL(svc, projectID, search string) (string, error) {
 		return "", fmt.Errorf("unknown service: %s (try auth|graphql|provisioning|watcher|deno|cnpg|all)", svc)
 	}
 	if search != "" {
+		if err := validateLogSearch(search); err != nil {
+			return "", err
+		}
 		selector += " |~ " + lokiQuote(search)
 	}
 	return selector, nil
+}
+
+// maxLogSearchLen caps the user-supplied |~ regex. A bound keeps a platform
+// admin from pasting a pathological/catastrophic-backtracking pattern, and
+// keeps the filter to a genuine substring/regex search rather than a probe.
+const maxLogSearchLen = 200
+
+// validateLogSearch rejects empty-after-trim and trivially-broad patterns. The
+// /logs proxy is designed for targeted substring/regex searches; a bare `.*` /
+// `.+` (optionally anchored) matches every line, turning the proxy into a
+// cluster-wide credential-harvesting scanner. Normal searches pass through.
+func validateLogSearch(search string) error {
+	if len(search) > maxLogSearchLen {
+		return fmt.Errorf("q too long: %d chars (max %d)", len(search), maxLogSearchLen)
+	}
+	trimmed := strings.TrimSpace(search)
+	if trimmed == "" {
+		return fmt.Errorf("q must not be blank")
+	}
+	// Strip Loki regex anchors before testing for a match-everything pattern,
+	// so `^.*$`, `.*`, `.+`, `(.*)`, etc. are all caught.
+	bare := strings.Trim(trimmed, "^$()")
+	switch bare {
+	case ".*", ".+", ".", "", "(.*)", "(.+)":
+		return fmt.Errorf("q is too broad: %q matches every log line", search)
+	}
+	return nil
 }
 
 // escapeLokiValue rejects characters that could break out of the Loki label
