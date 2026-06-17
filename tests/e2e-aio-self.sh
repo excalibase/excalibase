@@ -57,9 +57,10 @@ for s in "$API_PROV/healthz:provisioning" "$API_AUTH/.well-known/jwks.json:auth"
   url="${s%:*}"; name="${s##*:}"
   curl -sf "$url" > /dev/null 2>&1 && pass "$name reachable" || fail "$name" "unreachable"
 done
-curl -sf -X POST "$API_GQL/graphql" -H 'Content-Type: application/json' \
-   -d '{"query":"{__schema{queryType{name}}}"}' | grep -q '"name":"Query"' \
-   && pass "graphql introspection" || fail "graphql" "no introspection"
+# Unauthenticated reachability uses the exempted health endpoint — introspection
+# now requires a JWT (fail-closed auth); F16 covers authenticated introspection.
+curl -sf "$API_GQL/actuator/health" | grep -q '"status":"UP"' \
+   && pass "graphql reachable" || fail "graphql" "health not UP"
 
 ###############################################################################
 section "F2. Cookie auth, scope, expiry, security headers"
