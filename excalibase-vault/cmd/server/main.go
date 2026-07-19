@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/excalibase/excalibase-vault/internal/handler"
+	"github.com/excalibase/provisioning-poc/pkg/kmsseal"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -21,6 +23,12 @@ func main() {
 	dbURL := os.Getenv("VAULT_DB_URL")
 	corsOrigins := envOr("CORS_ORIGINS", "*")
 	accessTokens := parseTokens(os.Getenv("VAULT_ACCESS_TOKENS"))
+
+	// KMS-wrapped unseal: if VAULT_UNSEAL_KEY_CIPHERTEXT is set, decrypt it into
+	// VAULT_UNSEAL_KEY so the auto-unseal below works with no plaintext key stored.
+	if err := kmsseal.ResolveUnsealKeyEnv(context.Background()); err != nil {
+		log.Fatalf("KMS unseal-key resolve: %v", err)
+	}
 
 	var v *vault.Vault
 	if dbURL != "" {

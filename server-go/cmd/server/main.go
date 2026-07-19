@@ -25,6 +25,7 @@ import (
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
+	"github.com/excalibase/provisioning-poc/pkg/kmsseal"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -35,6 +36,12 @@ func main() {
 		return
 	}
 	cfg := config.Load()
+	// KMS-wrapped unseal: when VAULT_UNSEAL_KEY_CIPHERTEXT is set, decrypt it into
+	// VAULT_UNSEAL_KEY before the embedded vault's env-based auto-unseal runs, so no
+	// plaintext unseal key is stored anywhere. No-op when unset (legacy plaintext).
+	if err := kmsseal.ResolveUnsealKeyEnv(context.Background()); err != nil {
+		log.Fatalf("KMS unseal-key resolve: %v", err)
+	}
 	runServer(cfg)
 }
 
