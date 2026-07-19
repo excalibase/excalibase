@@ -57,11 +57,44 @@ func handleCLIArgs() bool {
 	case "recover-instances":
 		recoverInstancesCLI()
 		return true
+	case "kms-encrypt-unseal":
+		kmsEncryptUnsealCLI()
+		return true
 	case "help", "--help", "-h":
 		printHelp()
 		return true
 	}
 	return false
+}
+
+// kmsEncryptUnsealCLI wraps a plaintext unseal key under a KMS key and prints the
+// base64 ciphertext to store in platform-bootstrap/unseal-key-ciphertext. One-time
+// operator step for KMS-envelope auto-unseal (kmsUnseal.enabled). Reads KMS_KEY_ID
+// + VAULT_UNSEAL_KEY (or args), honours AWS_ENDPOINT_URL_KMS (floci in CI).
+func kmsEncryptUnsealCLI() {
+	keyID := os.Getenv("KMS_KEY_ID")
+	if len(os.Args) > 2 && os.Args[2] != "" {
+		keyID = os.Args[2]
+	}
+	unseal := os.Getenv("VAULT_UNSEAL_KEY")
+	if len(os.Args) > 3 && os.Args[3] != "" {
+		unseal = os.Args[3]
+	}
+	if keyID == "" || unseal == "" {
+		fmt.Fprintln(os.Stderr, "usage: kms-encrypt-unseal <kms-key-id> <unseal-key>  (or KMS_KEY_ID + VAULT_UNSEAL_KEY env)")
+		os.Exit(2)
+	}
+	c, err := kmsseal.NewClient(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kms client: %v\n", err)
+		os.Exit(1)
+	}
+	ct, err := kmsseal.EncryptUnsealKey(context.Background(), c, keyID, unseal)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "encrypt: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(ct)
 }
 
 // printHelp prints CLI usage information.
@@ -72,6 +105,7 @@ func printHelp() {
 	fmt.Println("  (none)              Start the HTTP server")
 	fmt.Println("  reset-password      Reset admin password (vault-gated)")
 	fmt.Println("  recover-instances   Re-discover K8s clusters into SQLite (vault-gated)")
+	fmt.Println("  kms-encrypt-unseal  Wrap the unseal key under KMS → base64 ciphertext")
 	fmt.Println("  help                Show this help")
 }
 
