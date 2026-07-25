@@ -440,6 +440,7 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 		"excalibase.io/tier":      strings.ToLower(spec.Tier),
 	}
 	one := int32(1)
+	falseVal := false
 	cpuReqStr, cpuLimStr, memReqStr, memLimStr := denoTierResources(spec.Tier)
 	cpuReq, _ := resource.ParseQuantity(cpuReqStr)
 	cpuLim, _ := resource.ParseQuantity(cpuLimStr)
@@ -458,6 +459,10 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
+					// The Deno runtime executes tenant-authored code and never calls
+					// the k8s API — don't mount a service-account token it could pivot
+					// with if a function escapes its isolate (EXC-322).
+					AutomountServiceAccountToken: &falseVal,
 					Containers: []corev1.Container{{
 						Name:            name,
 						Image:           image,
