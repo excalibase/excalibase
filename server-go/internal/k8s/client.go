@@ -14,6 +14,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -522,6 +523,69 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	}
 	if _, err := c.clientset.CoreV1().Services(namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create deno service: %w", err)
+	}
+	if err := c.ensureDenoEgressPolicy(ctx, namespace, name); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureDenoEgressPolicy fences the Deno runtime's egress (EXC-330).
+//
+// The runtime executes tenant-authored code. Deno permissions already deny the
+// worker net access (DB I/O is brokered by the main thread), but the *pod* still
+// opens the Postgres pool — so an escape from the isolate would otherwise have
+// the pod's full network reach. This policy is the infra backstop under the Deno
+// sandbox: egress is allowed ONLY to DNS and to Postgres inside this project's
+// own namespace. Everything else is denied by omission — cloud metadata
+// (169.254.169.254), Vault / platform-db in the platform namespace, the k8s API,
+// and every other tenant's namespace.
+//
+// Egress-only: ingress is untouched so provisioning can still reach /deploy and
+// /invoke. Requires a NetworkPolicy-enforcing CNI (Calico/Cilium); with a CNI
+// that ignores policies the object is created but not enforced.
+func (c *Client) ensureDenoEgressPolicy(ctx context.Context, namespace, appName string) error {
+	dnsPort := intstr.FromInt(53)
+	pgPort := intstr.FromInt(5432)
+	udp := corev1.ProtocolUDP
+	tcp := corev1.ProtocolTCP
+
+	policy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "deno-runtime-egress",
+			Namespace: namespace,
+			Labels:    map[string]string{"excalibase.io/component": "edgefn"},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": appName}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{
+					// DNS resolution (kube-dns / CoreDNS).
+					To: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"},
+						},
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Protocol: &udp, Port: &dnsPort},
+						{Protocol: &tcp, Port: &dnsPort},
+					},
+				},
+				{
+					// This project's own Postgres only. An empty PodSelector with no
+					// NamespaceSelector means "pods in this namespace" — so it cannot
+					// reach another tenant's database.
+					To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
+					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &pgPort}},
+				},
+			},
+		},
+	}
+
+	_, err := c.clientset.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create deno egress policy: %w", err)
 	}
 	return nil
 }

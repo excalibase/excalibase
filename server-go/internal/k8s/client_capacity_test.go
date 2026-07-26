@@ -116,6 +116,42 @@ func TestEnsureDenoRuntime_CreatesDeploymentAndService(t *testing.T) {
 	}
 }
 
+// EXC-330: the Deno runtime's egress must be fenced to DNS + this project's own
+// Postgres, so an isolate escape can't reach Vault, platform-db, cloud metadata,
+// the k8s API, or another tenant's namespace.
+func TestEnsureDenoRuntime_CreatesEgressPolicy(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	ns := "proj-deno-np"
+
+	if err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{Tier: "STANDARD"}); err != nil {
+		t.Fatalf("EnsureDenoRuntime: %v", err)
+	}
+
+	np, err := c.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, "deno-runtime-egress", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("egress policy not created: %v", err)
+	}
+	if np.Spec.PodSelector.MatchLabels["app"] != "deno-runtime" {
+		t.Errorf("policy must target the deno-runtime pod, got %v", np.Spec.PodSelector.MatchLabels)
+	}
+	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != "Egress" {
+		t.Errorf("expected Egress-only policy (ingress must stay open for /invoke), got %v", np.Spec.PolicyTypes)
+	}
+	if len(np.Spec.Egress) != 2 {
+		t.Fatalf("expected exactly 2 egress allowances (DNS + own-namespace Postgres), got %d", len(np.Spec.Egress))
+	}
+	// The Postgres rule must be namespace-local: a peer with an empty PodSelector
+	// and NO NamespaceSelector means "this namespace only".
+	pg := np.Spec.Egress[1]
+	if len(pg.To) != 1 || pg.To[0].PodSelector == nil || pg.To[0].NamespaceSelector != nil {
+		t.Errorf("Postgres egress must be namespace-local, got %+v", pg.To)
+	}
+	if len(pg.Ports) != 1 || pg.Ports[0].Port.IntValue() != 5432 {
+		t.Errorf("expected only port 5432 for the DB rule, got %+v", pg.Ports)
+	}
+}
+
 func TestGetDeployment(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
