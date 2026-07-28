@@ -138,8 +138,19 @@ func TestEnsureDenoRuntime_CreatesEgressPolicy(t *testing.T) {
 	if len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != "Egress" {
 		t.Errorf("expected Egress-only policy (ingress must stay open for /invoke), got %v", np.Spec.PolicyTypes)
 	}
-	if len(np.Spec.Egress) != 2 {
-		t.Fatalf("expected exactly 2 egress allowances (DNS + own-namespace Postgres), got %d", len(np.Spec.Egress))
+	if len(np.Spec.Egress) != 3 {
+		t.Fatalf("expected 3 egress allowances (DNS + own-namespace Postgres + provisioning callback), got %d",
+			len(np.Spec.Egress))
+	}
+	// The metadata callback to provisioning must be allowed, or an enforcing CNI
+	// silently drops it (the runtime treats that POST as fire-and-forget).
+	prov := np.Spec.Egress[2]
+	if len(prov.To) != 1 || prov.To[0].NamespaceSelector == nil ||
+		prov.To[0].PodSelector.MatchLabels["app"] != "provisioning" {
+		t.Errorf("provisioning callback peer must be ns-scoped to the provisioning pod, got %+v", prov.To)
+	}
+	if len(prov.Ports) != 1 || prov.Ports[0].Port.IntValue() != 24005 {
+		t.Errorf("expected only provisioning's API port 24005, got %+v", prov.Ports)
 	}
 	// The Postgres rule must be namespace-local: a peer with an empty PodSelector
 	// and NO NamespaceSelector means "this namespace only".

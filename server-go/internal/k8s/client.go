@@ -530,6 +530,22 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	return nil
 }
 
+// platformNamespace is the namespace provisioning itself runs in — the peer the
+// Deno runtime's metadata callback targets. Read from the pod's own
+// serviceaccount namespace file (provisioning is the one component that keeps
+// its k8s token), overridable via POD_NAMESPACE, defaulting to the chart's value.
+func platformNamespace() string {
+	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+		return ns
+	}
+	if b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		if ns := strings.TrimSpace(string(b)); ns != "" {
+			return ns
+		}
+	}
+	return "excalibase-platform"
+}
+
 // ensureDenoEgressPolicy fences the Deno runtime's egress (EXC-330).
 //
 // The runtime executes tenant-authored code. Deno permissions already deny the
@@ -547,6 +563,7 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 func (c *Client) ensureDenoEgressPolicy(ctx context.Context, namespace, appName string) error {
 	dnsPort := intstr.FromInt(53)
 	pgPort := intstr.FromInt(5432)
+	provPort := intstr.FromInt(24005)
 	udp := corev1.ProtocolUDP
 	tcp := corev1.ProtocolTCP
 
@@ -578,6 +595,22 @@ func (c *Client) ensureDenoEgressPolicy(ctx context.Context, namespace, appName 
 					// reach another tenant's database.
 					To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
 					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &pgPort}},
+				},
+				{
+					// The runtime posts captured v2 export metadata back to
+					// provisioning (EXCALIBASE_PROVISIONING_URL → /internal/runtime/...).
+					// That callback is fire-and-forget, so without this rule an
+					// enforcing CNI would drop it *silently*. Scoped to the platform
+					// namespace's provisioning pod on its API port only.
+					To: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": platformNamespace()},
+						},
+						PodSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"app": "provisioning"},
+						},
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &provPort}},
 				},
 			},
 		},
