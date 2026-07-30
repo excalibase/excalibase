@@ -41,7 +41,7 @@ const errInvalidRequestBody = "invalid request body"
 //   - builds a per-project RuntimeClient pointing at the in-namespace service
 //   - caches clients per projectId
 type FunctionHandler struct {
-	store         *edgefn.FunctionStore
+	store         edgefn.Store
 	secrets       *edgefn.SecretsStore
 	vault         vaultclient.VaultClient // optional, for reading DB_URL + JWT tokens
 	instanceStore storage.InstanceStore
@@ -132,7 +132,7 @@ func (b *tokenBucket) take() bool {
 // in unit tests; in that case the legacy shared-client path is used (set via
 // SetSharedClient). For production, call SetK8sClient with a real client.
 func NewFunctionHandler(
-	store *edgefn.FunctionStore,
+	store edgefn.Store,
 	secrets *edgefn.SecretsStore,
 	client *edgefn.RuntimeClient,
 	instanceStore storage.InstanceStore,
@@ -514,7 +514,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Bundle + deploy to runtime with merged secrets.
-	code, err := fn.Bundle()
+	code, err := fn.BundleWith(h.sharedFilesFor(fn.ProjectID))
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
@@ -1159,7 +1159,7 @@ func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
 		return
 	}
 	for _, fn := range list {
-		code, err := fn.Bundle()
+		code, err := fn.BundleWith(h.sharedFilesFor(fn.ProjectID))
 		if err != nil {
 			log.Printf("WARN: redeploy bundle %s: %v", fn.ID, err)
 			continue
@@ -1486,4 +1486,20 @@ func matchRouterRoute(rawRoutes json.RawMessage, path, method string) bool {
 		}
 	}
 	return false
+}
+
+// sharedFilesFor returns the project's shared modules (EXC-334) when the active
+// store supports them. Best-effort: a lookup failure must not block a deploy, so
+// it degrades to "no shared files" and the bundler reports any unresolved import.
+func (h *FunctionHandler) sharedFilesFor(projectID string) []edgefn.File {
+	provider, ok := h.store.(edgefn.SharedFileStore)
+	if !ok {
+		return nil
+	}
+	files, err := provider.SharedFiles(projectID)
+	if err != nil {
+		log.Printf("WARN: load shared files for %s: %v", projectID, err)
+		return nil
+	}
+	return files
 }

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,4 +172,66 @@ func (s *FunctionStore) loadProjectDir(projDir string) {
 		}
 		s.fns[s.key(fn.ProjectID, fn.ID)] = &fn
 	}
+}
+
+// --- shared files (EXC-334), filesystem layout: {basePath}/shared/{projectId}/ ---
+
+func (s *FunctionStore) sharedDir(projectID string) string {
+	return filepath.Join(s.basePath, "shared", projectID)
+}
+
+// SharedFiles returns the project's shared modules. Paths are reconstructed
+// under `_shared/` so they match what the bundler expects.
+func (s *FunctionStore) SharedFiles(projectID string) ([]File, error) {
+	if err := validateProjectID(projectID); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(s.sharedDir(projectID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []File{}, nil
+		}
+		return nil, fmt.Errorf("read shared dir: %w", err)
+	}
+	out := make([]File, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(s.sharedDir(projectID), filepath.Base(e.Name())))
+		if readErr != nil {
+			log.Printf("WARN: read shared file %s: %v", e.Name(), readErr)
+			continue
+		}
+		out = append(out, File{Path: sharedPrefix + e.Name(), Content: string(data)})
+	}
+	return out, nil
+}
+
+func (s *FunctionStore) PutSharedFile(projectID string, file File) error {
+	if err := validateProjectID(projectID); err != nil {
+		return err
+	}
+	if err := ValidateSharedPath(file.Path); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.sharedDir(projectID), 0750); err != nil {
+		return fmt.Errorf("mkdir shared: %w", err)
+	}
+	name := filepath.Base(strings.TrimPrefix(file.Path, sharedPrefix))
+	if err := os.WriteFile(filepath.Join(s.sharedDir(projectID), name), []byte(file.Content), 0600); err != nil {
+		return fmt.Errorf("write shared file: %w", err)
+	}
+	return nil
+}
+
+func (s *FunctionStore) DeleteSharedFile(projectID, path string) error {
+	if err := validateProjectID(projectID); err != nil {
+		return err
+	}
+	name := filepath.Base(strings.TrimPrefix(path, sharedPrefix))
+	if err := os.Remove(filepath.Join(s.sharedDir(projectID), name)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove shared file: %w", err)
+	}
+	return nil
 }

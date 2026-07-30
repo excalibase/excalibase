@@ -287,6 +287,23 @@ func validateFilePath(p string) error {
 	return nil
 }
 
+// sharedPrefix is the directory project-level shared modules live under, matching
+// Supabase's convention. A function imports them as "../_shared/cors.ts".
+const sharedPrefix = "_shared/"
+
+// ValidateSharedPath checks a project-level shared module path (EXC-334). Same
+// safety rules as function files, plus it must sit under _shared/ so shared code
+// can never shadow a function's own index.ts or escape its namespace.
+func ValidateSharedPath(p string) error {
+	if err := validateFilePath(p); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(p, sharedPrefix) {
+		return fmt.Errorf("invalid shared file path %q: must start with %q", p, sharedPrefix)
+	}
+	return nil
+}
+
 // RuntimeID is the id under which this function is registered in the shared
 // Deno runtime. Prefixing with the project ref prevents cross-project collisions.
 func (f *Function) RuntimeID() string {
@@ -310,7 +327,21 @@ func (f *Function) RuntimeID() string {
 // Relative imports (./utils.ts, ../shared/cors.ts) are resolved from the
 // virtual filesystem provided in f.Files.
 func (f *Function) Bundle() (string, error) {
-	virtualFiles := make(map[string]string, len(f.Files))
+	return f.BundleWith(nil)
+}
+
+// BundleWith is Bundle plus the project's shared modules (EXC-334). Shared files
+// are seeded into the virtual filesystem first so `../_shared/x.ts` resolves;
+// the function's own files are applied after and therefore win any collision.
+// esbuild tree-shakes, so unreferenced shared modules cost nothing in the output.
+func (f *Function) BundleWith(shared []File) (string, error) {
+	virtualFiles := make(map[string]string, len(f.Files)+len(shared))
+	for _, file := range shared {
+		if err := ValidateSharedPath(file.Path); err != nil {
+			return "", err
+		}
+		virtualFiles[file.Path] = file.Content
+	}
 	hasIndex := false
 	for _, file := range f.Files {
 		virtualFiles[file.Path] = file.Content
@@ -645,6 +676,19 @@ func virtualFSPlugin(files map[string]string) esbuild.Plugin {
 						resolved = path.Clean(path.Join(importerDir, args.Path))
 					}
 					resolved = strings.TrimPrefix(resolved, "./")
+
+					// Supabase-style `../_shared/x.ts`: a function's files sit at the
+					// bundle root here, so a parent-relative shared import cleans to a
+					// path above the virtual root. Normalise it back into the shared
+					// namespace so code written (or copied) against Supabase's layout
+					// resolves. Only ever rewrites to a path that actually exists.
+					if _, ok := files[resolved]; !ok {
+						if idx := strings.Index(resolved, sharedPrefix); idx >= 0 {
+							if _, ok := files[resolved[idx:]]; ok {
+								resolved = resolved[idx:]
+							}
+						}
+					}
 
 					if _, ok := files[resolved]; ok {
 						return esbuild.OnResolveResult{Path: resolved, Namespace: "virtual"}, nil

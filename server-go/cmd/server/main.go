@@ -334,9 +334,25 @@ type handlerDeps struct {
 	rlDataPlane        func(http.Handler) http.Handler
 }
 
+// buildFunctionStore picks where tenant function source lives. Cloud mode uses
+// the platform Postgres store: STORAGE_PATH is an emptyDir in the AIO chart, so
+// the filesystem layout loses every tenant's code on pod restart, reschedule, or
+// scale-to-zero (EXC-333). Self-hosted/dev keeps the filesystem store.
+func buildFunctionStore(cfg config.AppConfig, sqlStore storage.PlatformStore) edgefn.Store {
+	if cfg.IsCloud() {
+		if pg, ok := sqlStore.(*pgstore.Store); ok {
+			log.Println("Cloud mode: edge functions stored in platform Postgres")
+			return edgefn.NewPostgresFunctionStore(pg.DB())
+		}
+		log.Println("WARN: cloud mode without a Postgres platform store — " +
+			"edge functions fall back to STORAGE_PATH and will NOT survive a pod restart")
+	}
+	return edgefn.NewFunctionStore(cfg.StoragePath)
+}
+
 // buildFunctionHandler wires the edge-function handler with stores + runtime client.
 func buildFunctionHandler(cfg config.AppConfig, vc vaultclient.VaultClient, store storage.InstanceStore, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient) *handler.FunctionHandler {
-	fnStore := edgefn.NewFunctionStore(cfg.StoragePath)
+	fnStore := buildFunctionStore(cfg, sqlStore)
 	fnSecrets := edgefn.NewSecretsStore(vc)
 	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
 	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
