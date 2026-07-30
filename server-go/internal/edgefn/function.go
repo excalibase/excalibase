@@ -232,6 +232,14 @@ func (f *Function) JwtVerificationRequired() bool {
 // Validate checks the function is structurally sound. Also bundles files to
 // confirm the bundle fits within MaxCodeSize before the function is persisted.
 func (f *Function) Validate() error {
+	return f.ValidateWith(nil)
+}
+
+// ValidateWith is Validate with the project's shared modules available to the
+// bundle step (EXC-334). Stores must use this — validation bundles the function,
+// so without the shared files a `_shared/…` import fails to resolve and the
+// function could never be saved.
+func (f *Function) ValidateWith(shared []File) error {
 	if err := validateProjectID(f.ProjectID); err != nil {
 		return err
 	}
@@ -244,7 +252,7 @@ func (f *Function) Validate() error {
 	if err := validateFileSet(f.Files); err != nil {
 		return err
 	}
-	if _, err := f.Bundle(); err != nil {
+	if _, err := f.BundleWith(shared); err != nil {
 		return err
 	}
 	return nil

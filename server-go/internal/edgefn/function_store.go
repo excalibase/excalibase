@@ -49,7 +49,12 @@ func (s *FunctionStore) pathFor(projectID, id string) string {
 // Save validates the function, bumps its version, and writes it to disk.
 // Version starts at 1; subsequent Saves with the same (projectId, id) increment it.
 func (s *FunctionStore) Save(fn *Function) error {
-	if err := fn.Validate(); err != nil {
+	// Bundle during validation needs the project's shared modules in scope.
+	shared, sErr := s.SharedFiles(fn.ProjectID)
+	if sErr != nil {
+		return fmt.Errorf("load shared files: %w", sErr)
+	}
+	if err := fn.ValidateWith(shared); err != nil {
 		return err
 	}
 

@@ -25,7 +25,13 @@ func NewPostgresFunctionStore(db *sql.DB) *PostgresFunctionStore {
 // Save upserts the function, preserving created_at and incrementing version on
 // replace — matching the filesystem store's semantics (version starts at 1).
 func (s *PostgresFunctionStore) Save(fn *Function) error {
-	if err := fn.Validate(); err != nil {
+	// Validate bundles the function, so the project's shared modules must be in
+	// scope or a `_shared/…` import would fail to resolve (EXC-334).
+	shared, err := s.SharedFiles(fn.ProjectID)
+	if err != nil {
+		return fmt.Errorf("load shared files: %w", err)
+	}
+	if err := fn.ValidateWith(shared); err != nil {
 		return err
 	}
 
