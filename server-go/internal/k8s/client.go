@@ -18,9 +18,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	yamlutil "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -137,7 +137,9 @@ func (c *Client) CreateNamespace(ctx context.Context, name string) error {
 	return err
 }
 
-// CreateNamespaceWithLabels creates a K8s namespace with the given labels.
+// CreateNamespaceWithLabels creates a K8s namespace with the given labels and
+// fences it with a default-deny ingress policy (EXC-325) so one tenant's pods
+// cannot reach another tenant's pods.
 func (c *Client) CreateNamespaceWithLabels(ctx context.Context, name string, labels map[string]string) error {
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -145,8 +147,64 @@ func (c *Client) CreateNamespaceWithLabels(ctx context.Context, name string, lab
 			Labels: labels,
 		},
 	}
-	_, err := c.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	return err
+	if _, err := c.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
+		return err
+	}
+	return c.ensureNamespaceIsolationPolicy(ctx, name)
+}
+
+// ensureNamespaceIsolationPolicy applies a default-deny INGRESS policy to every
+// pod in a project namespace, opening it only to traffic that legitimately
+// crosses in (EXC-325). Without it every project namespace is on a flat network
+// and a compromised pod in tenant A reaches tenant B's database directly.
+//
+// Allowed sources:
+//   - same namespace  (postgres replication, watcher→pg, deno→pg)
+//   - the platform namespace (provisioning → deno /deploy /invoke, and the
+//     schema handler's direct connection to the project's Postgres)
+//   - cnpg-system (the CloudNativePG operator managing the Postgres cluster)
+//   - monitoring (Prometheus scraping, when observability is enabled)
+//
+// Everything else — notably every OTHER {org}-{project} namespace — is denied by
+// omission. Egress is untouched (the Deno pod's egress is fenced separately by
+// ensureDenoEgressPolicy). Kubelet health probes are node-local and bypass
+// NetworkPolicy, so readiness/liveness are unaffected. Requires a
+// policy-enforcing CNI (Calico/Cilium); a CNI that ignores policies creates the
+// object without enforcing it.
+func (c *Client) ensureNamespaceIsolationPolicy(ctx context.Context, namespace string) error {
+	nsPeer := func(n string) networkingv1.NetworkPolicyPeer {
+		return networkingv1.NetworkPolicyPeer{
+			NamespaceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"kubernetes.io/metadata.name": n},
+			},
+		}
+	}
+	policy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "namespace-isolation",
+			Namespace: namespace,
+			Labels:    map[string]string{"excalibase.io/component": "isolation"},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			// All pods in the namespace.
+			PodSelector: metav1.LabelSelector{},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{{
+				From: []networkingv1.NetworkPolicyPeer{
+					// Same namespace: empty PodSelector, no NamespaceSelector.
+					{PodSelector: &metav1.LabelSelector{}},
+					nsPeer(platformNamespace()),
+					nsPeer("cnpg-system"),
+					nsPeer("monitoring"),
+				},
+			}},
+		},
+	}
+	_, err := c.clientset.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create namespace isolation policy: %w", err)
+	}
+	return nil
 }
 
 // DeleteNamespace deletes a K8s namespace.
