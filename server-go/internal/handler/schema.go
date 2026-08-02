@@ -23,7 +23,6 @@ const (
 	errInvalidBody = "invalid request body"
 )
 
-
 const (
 	connTTL     = 10 * time.Minute
 	maxConns    = 50
@@ -85,46 +84,53 @@ func schemaParam(r *http.Request) string {
 	return s
 }
 
+// Routes mounts the schema endpoints under a /{projectId} segment. Callers that
+// already bind {projectId} (and apply RequireProjectAccess) at the mount should
+// use RoutesInner instead so the ownership guard runs where {projectId} exists.
 func (h *SchemaHandler) Routes(r chi.Router) {
-	r.Route("/{projectId}", func(r chi.Router) {
-		r.Get("/tables", h.GetTables)
-		r.Post("/tables", h.CreateTable)
-		r.Patch("/tables/{tableName}", h.UpdateTable)
-		r.Delete("/tables/{tableName}", h.DropTable)
-		r.Get("/tables/{tableName}/columns", h.GetColumns)
-		r.Post("/tables/{tableName}/columns", h.AddColumn)
-		r.Patch("/tables/{tableName}/columns/{columnName}", h.AlterColumn)
-		r.Delete("/tables/{tableName}/columns/{columnName}", h.DropColumn)
-		r.Get("/relationships", h.GetRelationships)
-		r.Get("/tables/{tableName}/indexes", h.GetIndexes)
-		r.Post("/ddl", h.ExecuteDDL)
-		r.Post("/query", h.ExecuteQuery)
-		r.Get("/connection-test", h.TestConnection)
-		r.Get("/roles", h.GetRoles)
-		r.Post("/roles", h.CreateRole)
-		r.Delete("/roles/{roleName}", h.DropRole)
-		r.Get("/extensions", h.GetExtensions)
-		r.Post("/extensions", h.CreateExtension)
-		r.Delete("/extensions/{extName}", h.DropExtension)
-		r.Get("/policies", h.GetPolicies)
-		r.Post("/policies", h.CreatePolicy)
-		r.Delete("/policies/{policyName}", h.DropPolicy)
-		r.Get("/functions", h.GetFunctions)
-		r.Post("/functions", h.CreateFunction)
-		r.Delete("/functions/{funcName}", h.DropFunction)
-		r.Get("/triggers", h.GetTriggers)
-		r.Post("/triggers", h.CreateTrigger)
-		r.Delete("/triggers/{triggerName}", h.DropTrigger)
-		r.Post("/indexes", h.CreateIndex)
-		r.Delete("/indexes/{indexName}", h.DropIndex)
-		r.Get("/types", h.GetTypes)
-		r.Get(routeTableRows, h.GetRows)
-		r.Post(routeTableRows, h.InsertRow)
-		r.Patch(routeTableRows, h.UpdateRow)
-		r.Delete(routeTableRows, h.DeleteRow)
-		r.Get("/advisors/performance", h.RunPerformanceAdvisor)
-		r.Get("/advisors/security", h.RunSecurityAdvisor)
-	})
+	r.Route("/{projectId}", h.RoutesInner)
+}
+
+// RoutesInner registers the schema endpoints relative to an already-bound
+// {projectId}. The mount is responsible for RequireProjectAccess (EXC-349).
+func (h *SchemaHandler) RoutesInner(r chi.Router) {
+	r.Get("/tables", h.GetTables)
+	r.Post("/tables", h.CreateTable)
+	r.Patch("/tables/{tableName}", h.UpdateTable)
+	r.Delete("/tables/{tableName}", h.DropTable)
+	r.Get("/tables/{tableName}/columns", h.GetColumns)
+	r.Post("/tables/{tableName}/columns", h.AddColumn)
+	r.Patch("/tables/{tableName}/columns/{columnName}", h.AlterColumn)
+	r.Delete("/tables/{tableName}/columns/{columnName}", h.DropColumn)
+	r.Get("/relationships", h.GetRelationships)
+	r.Get("/tables/{tableName}/indexes", h.GetIndexes)
+	r.Post("/ddl", h.ExecuteDDL)
+	r.Post("/query", h.ExecuteQuery)
+	r.Get("/connection-test", h.TestConnection)
+	r.Get("/roles", h.GetRoles)
+	r.Post("/roles", h.CreateRole)
+	r.Delete("/roles/{roleName}", h.DropRole)
+	r.Get("/extensions", h.GetExtensions)
+	r.Post("/extensions", h.CreateExtension)
+	r.Delete("/extensions/{extName}", h.DropExtension)
+	r.Get("/policies", h.GetPolicies)
+	r.Post("/policies", h.CreatePolicy)
+	r.Delete("/policies/{policyName}", h.DropPolicy)
+	r.Get("/functions", h.GetFunctions)
+	r.Post("/functions", h.CreateFunction)
+	r.Delete("/functions/{funcName}", h.DropFunction)
+	r.Get("/triggers", h.GetTriggers)
+	r.Post("/triggers", h.CreateTrigger)
+	r.Delete("/triggers/{triggerName}", h.DropTrigger)
+	r.Post("/indexes", h.CreateIndex)
+	r.Delete("/indexes/{indexName}", h.DropIndex)
+	r.Get("/types", h.GetTypes)
+	r.Get(routeTableRows, h.GetRows)
+	r.Post(routeTableRows, h.InsertRow)
+	r.Patch(routeTableRows, h.UpdateRow)
+	r.Delete(routeTableRows, h.DeleteRow)
+	r.Get("/advisors/performance", h.RunPerformanceAdvisor)
+	r.Get("/advisors/security", h.RunSecurityAdvisor)
 }
 
 // --- Tables ---

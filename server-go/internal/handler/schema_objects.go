@@ -102,6 +102,10 @@ func (h *SchemaHandler) CreateExtension(w http.ResponseWriter, r *http.Request) 
 		httpError(w, "name is required", http.StatusBadRequest)
 		return
 	}
+	if !schema.IsExtensionAllowed(body.Name) {
+		httpError(w, "extension not permitted", http.StatusBadRequest)
+		return
+	}
 	if err := h.introspector.CreateExtension(r.Context(), db, body.Name, body.Schema); err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return

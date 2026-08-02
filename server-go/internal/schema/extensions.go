@@ -4,7 +4,27 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
+
+// extensionAllowlist is the set of Postgres extensions a tenant may install.
+// Deny-by-default: anything not listed is rejected. dblink / postgres_fdw /
+// file_fdw are deliberately excluded — they let a tenant open outbound network
+// connections or read server files from inside SQL, which on a flat network
+// (EXC-325) becomes a cross-tenant / metadata pivot. plpython3u / plperlu are
+// untrusted procedural languages (arbitrary code execution) and are excluded
+// for the same reason.
+var extensionAllowlist = map[string]bool{
+	"uuid-ossp": true, "pgcrypto": true, "citext": true, "pg_trgm": true,
+	"btree_gin": true, "btree_gist": true, "hstore": true, "ltree": true,
+	"unaccent": true, "postgis": true, "vector": true, "pg_stat_statements": true,
+	"tablefunc": true, "intarray": true, "cube": true, "earthdistance": true,
+}
+
+// IsExtensionAllowed reports whether an extension may be installed by a tenant.
+func IsExtensionAllowed(name string) bool {
+	return extensionAllowlist[strings.ToLower(strings.TrimSpace(name))]
+}
 
 // GetExtensions returns installed and available extensions.
 func (i *Introspector) GetExtensions(ctx context.Context, db *sql.DB) ([]ExtensionInfo, error) {
@@ -27,6 +47,9 @@ func (i *Introspector) GetExtensions(ctx context.Context, db *sql.DB) ([]Extensi
 
 // CreateExtension installs a PostgreSQL extension.
 func (i *Introspector) CreateExtension(ctx context.Context, db *sql.DB, name, extSchema string) error {
+	if !IsExtensionAllowed(name) {
+		return fmt.Errorf("extension %q is not permitted", name)
+	}
 	stmt := "CREATE EXTENSION IF NOT EXISTS " + QuoteIdent(name)
 	if extSchema != "" {
 		stmt += " SCHEMA " + QuoteIdent(extSchema)

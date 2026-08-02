@@ -626,7 +626,7 @@ func buildRouter(cfg config.AppConfig, sqlStore storage.PlatformStore, store sto
 	mountSimpleAuthRoutes(r, d)
 	mountAuthRoutes(r, d)
 	mountOrgAndAdminRoutes(r, cfg, d)
-	mountVaultAndSchemaRoutes(r, d)
+	mountVaultAndSchemaRoutes(r, sqlStore, store, d)
 	mountProjectScopedRoutes(r, sqlStore, store, d)
 	mountEmailRoutes(r, d)
 
@@ -739,13 +739,19 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 }
 
 // mountVaultAndSchemaRoutes mounts the optional vault routes and /api/schema.
-func mountVaultAndSchemaRoutes(r *chi.Mux, d *handlerDeps) {
+// The schema surface is project-scoped: {projectId} is bound at the mount so
+// RequireProjectAccess runs with it in scope (EXC-349). Binding the guard one
+// level higher — before {projectId} exists — would make it a silent no-op and
+// let any authenticated studio user read/modify any tenant's database.
+func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store storage.InstanceStore, d *handlerDeps) {
 	if d.vaultHandler != nil {
 		r.Route("/api/vault", func(r chi.Router) { d.vaultHandler.Routes(r) })
 	}
-	r.Route("/api/schema", func(r chi.Router) {
+	r.Route("/api/schema/{projectId}", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
-		d.schemaHandler.Routes(r)
+		r.Use(custommw.TenantContext)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		d.schemaHandler.RoutesInner(r)
 	})
 }
 
