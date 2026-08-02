@@ -23,22 +23,23 @@ type AppConfig struct {
 	VaultPAT          string
 	DeploymentMode    string // "selfhosted" (default) or "cloud"
 	PublicBaseURL     string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
+	RegistrationMode  string // "open" (default) or "invite" — invite closes open studio signup
 
 	// K8s client connection — priority: remote API > kubeconfig path > env KUBECONFIG > in-cluster > ~/.kube/config
-	KubeconfigPath        string // explicit kubeconfig file
-	KubeAPIURL            string // remote API server URL (for out-of-cluster platform deployments)
-	KubeBearerToken       string // ServiceAccount token for remote API
-	KubeCACert            string // PEM-encoded CA cert for remote API TLS
-	KubeInsecureSkipVerify bool  // disable TLS verification (dev only)
+	KubeconfigPath         string // explicit kubeconfig file
+	KubeAPIURL             string // remote API server URL (for out-of-cluster platform deployments)
+	KubeBearerToken        string // ServiceAccount token for remote API
+	KubeCACert             string // PEM-encoded CA cert for remote API TLS
+	KubeInsecureSkipVerify bool   // disable TLS verification (dev only)
 
 	// SES + R2 are read directly from K8s secrets at startup; see main.go.
 	// We only carry the public-facing knobs (URLs, default From) in config
 	// so per-deployment overrides don't require touching the secret.
-	EmailFromAddress  string
-	EmailFromName     string
-	EmailProductName  string
-	EmailReplyTo      string
-	StoragePublicURL  string
+	EmailFromAddress string
+	EmailFromName    string
+	EmailProductName string
+	EmailReplyTo     string
+	StoragePublicURL string
 
 	// LokiURL points at the cluster's Loki HTTP endpoint. When set, the
 	// admin /logs endpoint proxies queries to Loki and the per-project
@@ -73,6 +74,7 @@ type AppConfig struct {
 //   - Uses Postgres for platform store + vault backend (PLATFORM_DB_URL required)
 //   - Enables multi-org create/delete + tier enforcement endpoints
 //   - Enforces tier limits in the provisioning service
+//
 // Self-hosted mode (default):
 //   - Uses SQLite for platform store, bbolt for vault
 //   - Single default org, no tier enforcement, no billing endpoints
@@ -82,26 +84,27 @@ func (c AppConfig) IsCloud() bool {
 
 func Load() AppConfig {
 	return AppConfig{
-		Port:             envOr("PORT", "24005"),
-		StoragePath:      envOr("STORAGE_PATH", "../provisioning-data"),
-		LogLevel:         envOr("LOG_LEVEL", "debug"),
-		PlatformDBURL:    envOr("PLATFORM_DB_URL", ""),
-		NatsURL:          envOr("NATS_URL", ""),
-		CORSOrigins:       parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
-		WatcherChartPath:  envOr("WATCHER_CHART_PATH", "/charts/excalibase-watcher"),
-		DenoRuntimeURL:    envOr("DENO_RUNTIME_URL", "http://deno-runtime.serverless.svc.cluster.local:8000"),
-		DenoRuntimeSecret: envOr("DENO_RUNTIME_SECRET", ""),
-		DenoNamespace:    envOr("DENO_NAMESPACE", "serverless"),
-		DenoRuntimeImage: envOr("DENO_RUNTIME_IMAGE", "excalibase/deno-runtime:latest"),
-		VaultURL:         envOr("VAULT_URL", ""),
-		VaultPAT:         envOr("VAULT_PAT", ""),
-		DeploymentMode:         envOr("DEPLOYMENT_MODE", "selfhosted"),
-		PublicBaseURL:          envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
-		KubeconfigPath:         envOr("KUBECONFIG_PATH", ""),
-		KubeAPIURL:             envOr("KUBE_API_URL", ""),
-		KubeBearerToken:        envOr("KUBE_BEARER_TOKEN", ""),
-		KubeCACert:             envOr("KUBE_CA_CERT", ""),
-		KubeInsecureSkipVerify: envOr("KUBE_INSECURE_SKIP_VERIFY", "") == "true",
+		Port:                    envOr("PORT", "24005"),
+		StoragePath:             envOr("STORAGE_PATH", "../provisioning-data"),
+		LogLevel:                envOr("LOG_LEVEL", "debug"),
+		PlatformDBURL:           envOr("PLATFORM_DB_URL", ""),
+		NatsURL:                 envOr("NATS_URL", ""),
+		RegistrationMode:        envOr("REGISTRATION_MODE", "open"),
+		CORSOrigins:             parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
+		WatcherChartPath:        envOr("WATCHER_CHART_PATH", "/charts/excalibase-watcher"),
+		DenoRuntimeURL:          envOr("DENO_RUNTIME_URL", "http://deno-runtime.serverless.svc.cluster.local:8000"),
+		DenoRuntimeSecret:       envOr("DENO_RUNTIME_SECRET", ""),
+		DenoNamespace:           envOr("DENO_NAMESPACE", "serverless"),
+		DenoRuntimeImage:        envOr("DENO_RUNTIME_IMAGE", "excalibase/deno-runtime:latest"),
+		VaultURL:                envOr("VAULT_URL", ""),
+		VaultPAT:                envOr("VAULT_PAT", ""),
+		DeploymentMode:          envOr("DEPLOYMENT_MODE", "selfhosted"),
+		PublicBaseURL:           envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
+		KubeconfigPath:          envOr("KUBECONFIG_PATH", ""),
+		KubeAPIURL:              envOr("KUBE_API_URL", ""),
+		KubeBearerToken:         envOr("KUBE_BEARER_TOKEN", ""),
+		KubeCACert:              envOr("KUBE_CA_CERT", ""),
+		KubeInsecureSkipVerify:  envOr("KUBE_INSECURE_SKIP_VERIFY", "") == "true",
 		EmailFromAddress:        envOr("EMAIL_FROM", "noreply@excalibase.io"),
 		EmailFromName:           envOr("EMAIL_FROM_NAME", "Excalibase"),
 		EmailProductName:        envOr("EMAIL_PRODUCT_NAME", "Excalibase"),
@@ -111,9 +114,9 @@ func Load() AppConfig {
 		PromURL:                 envOr("PROM_URL", ""),
 		CapacityHeadroomPercent: envInt("CAPACITY_HEADROOM_PERCENT", 15),
 		ProvisionerMode:         envOr("PROVISIONER_MODE", "k8s"),
-		DockerHost:             envOr("DOCKER_HOST", ""),
-		DockerCertPath:         envOr("DOCKER_CERT_PATH", ""),
-		DockerTLSVerify:        envOr("DOCKER_TLS_VERIFY", "") != "",
+		DockerHost:              envOr("DOCKER_HOST", ""),
+		DockerCertPath:          envOr("DOCKER_CERT_PATH", ""),
+		DockerTLSVerify:         envOr("DOCKER_TLS_VERIFY", "") != "",
 	}
 }
 

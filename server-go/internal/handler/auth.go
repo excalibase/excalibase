@@ -15,16 +15,21 @@ import (
 
 const errNotAuthenticated = "not authenticated"
 
-
 type AuthHandler struct {
 	userStore  storage.UserStore
 	tokenStore storage.TokenStore
 	orgStore   storage.OrgStore // optional — resolves pending invites on user creation
+	inviteOnly bool             // when true, only invited emails (and the first admin) may register
 }
 
 func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) *AuthHandler {
 	return &AuthHandler{userStore: userStore, tokenStore: tokenStore}
 }
+
+// SetInviteOnly closes open self-registration: once the platform has its first
+// admin, only emails with a pending org invite may register. Default (false)
+// keeps registration open for back-compat / self-hosted single-tenant use.
+func (h *AuthHandler) SetInviteOnly(v bool) { h.inviteOnly = v }
 
 func (h *AuthHandler) SetOrgStore(orgStore storage.OrgStore) {
 	h.orgStore = orgStore
@@ -78,6 +83,23 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	role := "user"
 	if existing, _ := h.userStore.FindAllUsers(r.Context()); len(existing) == 0 {
 		role = "platform_admin"
+	}
+
+	// Invite-only gate (EXC-329 hardening): the very first registration always
+	// proceeds (it bootstraps the platform admin). After that, in invite-only
+	// mode a new account requires a pending org invite for its email — this is
+	// what stops anyone on the internet from minting a studio account.
+	if h.inviteOnly && role != "platform_admin" {
+		invited := false
+		if h.orgStore != nil {
+			if invites, err := h.orgStore.FindPendingInvitesByEmail(r.Context(), req.Email); err == nil && len(invites) > 0 {
+				invited = true
+			}
+		}
+		if !invited {
+			httpError(w, "registration is invite-only", http.StatusForbidden)
+			return
+		}
 	}
 
 	now := time.Now()

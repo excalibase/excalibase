@@ -559,6 +559,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
 	authHandler.SetOrgStore(sqlStore)
+	authHandler.SetInviteOnly(cfg.RegistrationMode == "invite")
 
 	var vaultHandler *handler.VaultHandler
 	if localVault != nil {
