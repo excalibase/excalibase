@@ -53,6 +53,9 @@ export DEPLOYMENT_MODE=selfhosted
 export CORS_ORIGINS="https://studio.example.com"
 export PUBLIC_BASE_URL="https://api.example.com"
 export STORAGE_PATH=/var/lib/excalibase
+# Platform store — Postgres required in both modes (no SQLite). Point at a
+# Postgres reachable from this host (local container or managed PG).
+export PLATFORM_DB_URL="postgres://platform:CHANGEME@platform-db:5432/platform?sslmode=disable"
 export DENO_RUNTIME_SECRET=$(openssl rand -hex 32)
 
 # Remote K8s API
@@ -115,6 +118,8 @@ DEPLOYMENT_MODE=selfhosted
 CORS_ORIGINS=https://studio.example.com
 PUBLIC_BASE_URL=https://api.example.com
 STORAGE_PATH=/var/lib/excalibase
+# Postgres required in both modes (no SQLite fallback).
+PLATFORM_DB_URL=postgres://platform:CHANGEME@platform-db:5432/platform?sslmode=disable
 DENO_RUNTIME_SECRET=<32-byte hex>
 KUBE_API_URL=https://target-cluster.example.com:6443
 KUBE_BEARER_TOKEN=<token>
