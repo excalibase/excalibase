@@ -18,8 +18,13 @@ COPY --from=build /bin/excalibase-provisioning /bin/excalibase-provisioning
 COPY charts/excalibase-watcher-go /charts/excalibase-watcher-go
 
 RUN adduser -D -u 1000 appuser
+# Writable state dir for selfhosted mode's bbolt vault (STORAGE_PATH). A fresh
+# named volume mounted here inherits this ownership, so the non-root user can
+# write vault.bolt. Cloud mode uses the Postgres vault and never touches this.
+RUN mkdir -p /var/lib/excalibase && chown appuser:appuser /var/lib/excalibase
 USER appuser
 ENV WATCHER_CHART_PATH=/charts/excalibase-watcher-go
+ENV STORAGE_PATH=/var/lib/excalibase
 
 EXPOSE 24005
 

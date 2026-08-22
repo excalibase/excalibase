@@ -35,6 +35,10 @@ type DockerClientOptions struct {
 	// Empty → 127.0.0.1 (loopback, internal-only). Set "0.0.0.0" to expose on
 	// the host's network interface (DOCKER_DB_PUBLIC=true).
 	BindAddress string
+	// Network is a user-defined docker network to attach provisioned DB
+	// containers to, so graphql/schema can resolve them by name. Empty →
+	// default bridge (no name resolution across containers).
+	Network string
 }
 
 // RealDockerClient implements DockerClient against a real Docker daemon via
@@ -42,6 +46,7 @@ type DockerClientOptions struct {
 type RealDockerClient struct {
 	c        *client.Client
 	bindAddr string // host IP for published DB ports; "" → 127.0.0.1
+	netName  string // user-defined network to attach DB containers to; "" → bridge
 }
 
 // RawClient returns the underlying SDK client. Used by the backup
@@ -91,7 +96,7 @@ func NewRealDockerClient(opts DockerClientOptions) (*RealDockerClient, error) {
 		return nil, fmt.Errorf("ping docker daemon: %w", err)
 	}
 
-	return &RealDockerClient{c: c, bindAddr: opts.BindAddress}, nil
+	return &RealDockerClient{c: c, bindAddr: opts.BindAddress, netName: opts.Network}, nil
 }
 
 // excalibaseLabel marks every container created by the provisioner so
@@ -127,6 +132,17 @@ func portBindings(ports map[string]string, hostIP string) (nat.PortSet, nat.Port
 	return exposed, bindings, nil
 }
 
+// networkingConfig attaches the container to a user-defined network so
+// consumers can resolve it by name (tenant DB creds are stored as
+// containerName:5432). Empty netName → no endpoints (default bridge).
+func networkingConfig(netName string) *network.NetworkingConfig {
+	nc := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{}}
+	if netName != "" {
+		nc.EndpointsConfig[netName] = &network.EndpointSettings{}
+	}
+	return nc
+}
+
 // CreateContainer creates a container with the given env + port bindings and
 // returns its ID. Does not start the container. ports maps "containerPort" →
 // "hostPort" (empty hostPort = random free port).
@@ -156,7 +172,7 @@ func (r *RealDockerClient) CreateContainer(ctx context.Context, name, img string
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 	}
 
-	resp, err := r.c.ContainerCreate(ctx, cfg, hostCfg, &network.NetworkingConfig{}, nil, name)
+	resp, err := r.c.ContainerCreate(ctx, cfg, hostCfg, networkingConfig(r.netName), nil, name)
 	if err != nil {
 		return "", fmt.Errorf("create container: %w", err)
 	}

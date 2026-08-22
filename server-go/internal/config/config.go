@@ -72,6 +72,7 @@ type AppConfig struct {
 	// the DB is reachable by the app internally but not from the LAN/internet.
 	// Set true only when the customer needs to connect external clients directly.
 	DockerDBPublic  bool
+	DockerNetwork   string // user-defined docker network for provisioned DB containers
 	DockerHost      string // explicit Docker URI; empty → env → unix socket
 	DockerCertPath  string // TLS certificate directory (ca.pem, cert.pem, key.pem)
 	DockerTLSVerify bool
@@ -136,6 +137,7 @@ func Load() AppConfig {
 		CapacityHeadroomPercent: envInt("CAPACITY_HEADROOM_PERCENT", 15),
 		ProvisionerMode:         envOr("PROVISIONER_MODE", "k8s"),
 		DockerDBPublic:          envOr("DOCKER_DB_PUBLIC", "") == "true",
+		DockerNetwork:           envOr("DOCKER_NETWORK", ""),
 		DockerHost:              envOr("DOCKER_HOST", ""),
 		DockerCertPath:          envOr("DOCKER_CERT_PATH", ""),
 		DockerTLSVerify:         envOr("DOCKER_TLS_VERIFY", "") != "",

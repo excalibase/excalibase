@@ -469,6 +469,7 @@ func buildBackupService(
 			CertPath:    os.Getenv("DOCKER_CERT_PATH"),
 			TLSVerify:   os.Getenv("DOCKER_TLS_VERIFY") != "",
 			BindAddress: dbBindAddr(cfg),
+			Network:     cfg.DockerNetwork,
 		})
 		if err == nil {
 			runner := service.NewDockerBackupRunner(dockerSDK.RawClient())
@@ -909,6 +910,13 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 	}
 	k8sClient, err := k8s.NewClientWith(k8sOpts)
 	if err != nil {
+		// Docker provisioner needs no Kubernetes. Degrade gracefully so the
+		// platform boots; k8s-only features (CNPG backup, k8s metrics) are
+		// simply unavailable in docker mode.
+		if cfg.ProvisionerMode == "docker" {
+			log.Printf("WARN: no K8s client (docker mode) — k8s-only features disabled: %v", err)
+			return nil
+		}
 		log.Fatalf("Failed to init K8s client: %v", err)
 	}
 	return k8sClient
@@ -933,6 +941,7 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 			CertPath:    cfg.DockerCertPath,
 			TLSVerify:   cfg.DockerTLSVerify,
 			BindAddress: dbBindAddr(cfg),
+			Network:     cfg.DockerNetwork,
 		})
 		if err != nil {
 			log.Fatalf("docker provisioner: %v", err)
