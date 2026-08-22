@@ -13,11 +13,17 @@ databases.
 
 All four support both deployment modes:
 
-- **`DEPLOYMENT_MODE=selfhosted`** (default) — SQLite platform store, bbolt
+- **`DEPLOYMENT_MODE=selfhosted`** (default) — Postgres platform store, bbolt
   vault, single default org, no billing/tier enforcement. All features
   unlocked.
-- **`DEPLOYMENT_MODE=cloud`** — Postgres platform store (CNPG), Postgres-backed
-  vault, multi-org, tier enforcement. Requires `PLATFORM_DB_URL` to be set.
+- **`DEPLOYMENT_MODE=cloud`** — Postgres platform store, Postgres-backed
+  vault, multi-org, tier enforcement.
+
+The platform store is **Postgres in both modes** — `PLATFORM_DB_URL` is always
+required (SQLite was removed to avoid maintaining two backends). The only
+mode difference in storage is the vault backend: bbolt (self-hosted) vs
+Postgres (cloud). On a single host, run a Postgres container alongside the
+platform for its own state (see docker-local.md).
 
 ## Which matrix should I use?
 
@@ -50,8 +56,8 @@ These apply to every matrix. Matrix-specific pages cover the rest.
 | `CORS_ORIGINS` | yes | `https://app.excalibase.io` | Comma-separated allow-list. No default means no origin allowed — fail-closed. |
 | `PUBLIC_BASE_URL` | yes | `https://api.excalibase.io` | Base URL for edge function invoke + SDK snippets. |
 | `LOG_LEVEL` | no | `debug` | `debug`, `info`, `warn`, `error` |
-| `STORAGE_PATH` | no | `../provisioning-data` | On-disk state dir (SQLite + bbolt vault). Self-hosted only. |
-| `PLATFORM_DB_URL` | cloud only | — | Postgres DSN. Required when `DEPLOYMENT_MODE=cloud`. |
+| `STORAGE_PATH` | no | `../provisioning-data` | On-disk dir for the bbolt vault. Self-hosted only. |
+| `PLATFORM_DB_URL` | **yes** | — | Postgres DSN for the platform store. Required in both modes (no SQLite fallback). |
 | `VAULT_URL` | optional | — | If set, use remote vault over HTTP instead of embedded. |
 | `VAULT_PAT` | with `VAULT_URL` | — | Personal access token for remote vault. |
 | `NATS_URL` | optional | — | NATS server for PgDog reload signals. |

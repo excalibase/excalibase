@@ -25,49 +25,111 @@ Use this when:
 ## docker-compose.yml
 
 ```yaml
-version: "3.9"
-
 services:
+  # Caddy terminates TLS (automatic Let's Encrypt) and fronts the HTTP
+  # services. Tenant Postgres containers are TCP and do NOT go through Caddy.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - provisioning
+      - studio
+
   provisioning:
     image: excalibase/provisioning:0.1.0
     restart: unless-stopped
-    ports:
-      - "24005:24005"
+    # No host port publish — Caddy reaches it over the compose network.
+    expose:
+      - "24005"
     environment:
       DEPLOYMENT_MODE: selfhosted
       PORT: "24005"
-      CORS_ORIGINS: "http://localhost:5173,https://studio.example.com"
-      PUBLIC_BASE_URL: "http://localhost:24005"
-      STORAGE_PATH: /var/lib/excalibase
+      # Postgres is required in BOTH modes — the platform store has no SQLite
+      # fallback. This points at the platform-db service below.
+      PLATFORM_DB_URL: "postgres://platform:${PLATFORM_DB_PASSWORD}@platform-db:5432/platform?sslmode=disable"
+      CORS_ORIGINS: "https://studio.example.com"
+      PUBLIC_BASE_URL: "https://api.example.com"
+      STORAGE_PATH: /var/lib/excalibase           # bbolt vault only
       DENO_RUNTIME_SECRET: ${DENO_RUNTIME_SECRET}
-
-      # Docker provisioner
+      # Docker provisioner (single-tenant; docker + cloud is refused at boot).
       PROVISIONER_MODE: docker
-      # Falls back to /var/run/docker.sock if DOCKER_HOST is not set
+      # DB container ports bind 127.0.0.1 by default (internal only). Set
+      # true only to expose provisioned DBs on the host interface for
+      # external clients.
+      DOCKER_DB_PUBLIC: "false"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - excalibase-data:/var/lib/excalibase
+    depends_on:
+      - platform-db
+
+  # The platform's OWN state (users, orgs, projects, tokens). Not a tenant DB.
+  platform-db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: ${PLATFORM_DB_PASSWORD}
+      POSTGRES_DB: platform
+    volumes:
+      - platform-db-data:/var/lib/postgresql/data
 
   studio:
     image: excalibase/studio:0.1.0
     restart: unless-stopped
-    ports:
-      - "5173:80"
+    expose:
+      - "80"
     environment:
-      VITE_API_URL: "http://localhost:24005"
+      VITE_API_URL: "https://api.example.com"
       VITE_DEPLOYMENT_MODE: selfhosted
     depends_on:
       - provisioning
 
 volumes:
   excalibase-data:
+  platform-db-data:
+  caddy-data:
+  caddy-config:
 ```
 
-Generate the runtime secret once and store it in `.env` next to the compose
-file:
+### Caddyfile
+
+Caddy auto-provisions Let's Encrypt certificates for these hostnames (point
+their DNS at this host first). HTTP→HTTPS redirect and HSTS are automatic.
+
+```caddy
+api.example.com {
+	reverse_proxy provisioning:24005
+	# Internet-facing? The admin API (/api/*) should not be open. Gate it to
+	# your IPs — the public edge-function path (/functions/v1/*) stays open:
+	#   @admin path /api/*
+	#   handle @admin {
+	#     @allowed remote_ip 203.0.113.0/24 198.51.100.7
+	#     handle @allowed { reverse_proxy provisioning:24005 }
+	#     respond 403
+	#   }
+	#   handle { reverse_proxy provisioning:24005 }
+}
+
+studio.example.com {
+	reverse_proxy studio:80
+}
+```
+
+Generate the secrets once and store them in `.env` next to the compose file:
 
 ```bash
-echo "DENO_RUNTIME_SECRET=$(openssl rand -hex 32)" > .env
+{
+  echo "DENO_RUNTIME_SECRET=$(openssl rand -hex 32)"
+  echo "PLATFORM_DB_PASSWORD=$(openssl rand -hex 24)"
+} > .env
 chmod 600 .env
 ```
 
