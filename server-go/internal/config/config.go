@@ -1,11 +1,15 @@
 package config
 
 import (
+	"errors"
 	"log"
 	"os"
 	"strconv"
 	"strings"
 )
+
+var errDockerCloudUnsupported = errors.New(
+	"PROVISIONER_MODE=docker is single-tenant only; DEPLOYMENT_MODE=cloud (multi-tenant) is not supported on the docker provisioner — use k8s for multi-tenant")
 
 type AppConfig struct {
 	Port              string
@@ -63,6 +67,11 @@ type AppConfig struct {
 	// databases are provisioned as containers on the Docker daemon instead
 	// of CNPG clusters on Kubernetes.
 	ProvisionerMode string
+	// DockerDBPublic exposes provisioned DB container ports on 0.0.0.0 (host's
+	// network interface) instead of 127.0.0.1. Default false = loopback only:
+	// the DB is reachable by the app internally but not from the LAN/internet.
+	// Set true only when the customer needs to connect external clients directly.
+	DockerDBPublic  bool
 	DockerHost      string // explicit Docker URI; empty → env → unix socket
 	DockerCertPath  string // TLS certificate directory (ca.pem, cert.pem, key.pem)
 	DockerTLSVerify bool
@@ -80,6 +89,18 @@ type AppConfig struct {
 //   - Single default org, no tier enforcement, no billing endpoints
 func (c AppConfig) IsCloud() bool {
 	return c.DeploymentMode == "cloud"
+}
+
+// Validate rejects unsupported config combinations at boot (fail-fast).
+// Docker mode is single-tenant by design (one customer/team/org, prod or dev);
+// cloud mode is the multi-tenant control plane. Running them together would put
+// a multi-tenant control plane on a runtime with no cross-tenant isolation, so
+// it is refused rather than silently insecure.
+func (c AppConfig) Validate() error {
+	if c.ProvisionerMode == "docker" && c.IsCloud() {
+		return errDockerCloudUnsupported
+	}
+	return nil
 }
 
 func Load() AppConfig {
@@ -114,6 +135,7 @@ func Load() AppConfig {
 		PromURL:                 envOr("PROM_URL", ""),
 		CapacityHeadroomPercent: envInt("CAPACITY_HEADROOM_PERCENT", 15),
 		ProvisionerMode:         envOr("PROVISIONER_MODE", "k8s"),
+		DockerDBPublic:          envOr("DOCKER_DB_PUBLIC", "") == "true",
 		DockerHost:              envOr("DOCKER_HOST", ""),
 		DockerCertPath:          envOr("DOCKER_CERT_PATH", ""),
 		DockerTLSVerify:         envOr("DOCKER_TLS_VERIFY", "") != "",

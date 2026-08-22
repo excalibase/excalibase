@@ -36,6 +36,9 @@ func main() {
 		return
 	}
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
 	// KMS-wrapped unseal: when VAULT_UNSEAL_KEY_CIPHERTEXT is set, decrypt it into
 	// VAULT_UNSEAL_KEY before the embedded vault's env-based auto-unseal runs, so no
 	// plaintext unseal key is stored anywhere. No-op when unset (legacy plaintext).
@@ -462,9 +465,10 @@ func buildBackupService(
 
 	if cfg.ProvisionerMode == "docker" && dockerClient != nil {
 		dockerSDK, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
-			Host:      os.Getenv("DOCKER_HOST"),
-			CertPath:  os.Getenv("DOCKER_CERT_PATH"),
-			TLSVerify: os.Getenv("DOCKER_TLS_VERIFY") != "",
+			Host:        os.Getenv("DOCKER_HOST"),
+			CertPath:    os.Getenv("DOCKER_CERT_PATH"),
+			TLSVerify:   os.Getenv("DOCKER_TLS_VERIFY") != "",
+			BindAddress: dbBindAddr(cfg),
 		})
 		if err == nil {
 			runner := service.NewDockerBackupRunner(dockerSDK.RawClient())
@@ -913,12 +917,22 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 // buildProvisionerFactory selects the K8s (CNPG) or Docker provisioner based
 // on PROVISIONER_MODE and returns the factory plus the docker client (nil
 // when not in docker mode).
+// dbBindAddr picks the host IP for published DB container ports: 0.0.0.0 when
+// the operator opts into public exposure, otherwise 127.0.0.1 (internal only).
+func dbBindAddr(cfg config.AppConfig) string {
+	if cfg.DockerDBPublic {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
+}
+
 func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*provisioner.Factory, provisioner.DockerClient) {
 	if cfg.ProvisionerMode == "docker" {
 		dockerClient, err := provisioner.NewRealDockerClient(provisioner.DockerClientOptions{
-			Host:      cfg.DockerHost,
-			CertPath:  cfg.DockerCertPath,
-			TLSVerify: cfg.DockerTLSVerify,
+			Host:        cfg.DockerHost,
+			CertPath:    cfg.DockerCertPath,
+			TLSVerify:   cfg.DockerTLSVerify,
+			BindAddress: dbBindAddr(cfg),
 		})
 		if err != nil {
 			log.Fatalf("docker provisioner: %v", err)

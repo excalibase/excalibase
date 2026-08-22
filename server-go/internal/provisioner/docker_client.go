@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
-	"github.com/containerd/errdefs"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
@@ -31,12 +31,17 @@ type DockerClientOptions struct {
 	// TLSVerify is kept for symmetry with DOCKER_TLS_VERIFY but has no
 	// effect unless CertPath is also set.
 	TLSVerify bool
+	// BindAddress is the host IP that provisioned DB ports are published on.
+	// Empty → 127.0.0.1 (loopback, internal-only). Set "0.0.0.0" to expose on
+	// the host's network interface (DOCKER_DB_PUBLIC=true).
+	BindAddress string
 }
 
 // RealDockerClient implements DockerClient against a real Docker daemon via
 // the official SDK. Satisfies the same interface the mock uses in tests.
 type RealDockerClient struct {
-	c *client.Client
+	c        *client.Client
+	bindAddr string // host IP for published DB ports; "" → 127.0.0.1
 }
 
 // RawClient returns the underlying SDK client. Used by the backup
@@ -86,7 +91,7 @@ func NewRealDockerClient(opts DockerClientOptions) (*RealDockerClient, error) {
 		return nil, fmt.Errorf("ping docker daemon: %w", err)
 	}
 
-	return &RealDockerClient{c: c}, nil
+	return &RealDockerClient{c: c, bindAddr: opts.BindAddress}, nil
 }
 
 // excalibaseLabel marks every container created by the provisioner so
@@ -101,9 +106,30 @@ func (r *RealDockerClient) Close() error {
 	return r.c.Close()
 }
 
-// CreateContainer creates a container with the given env + port bindings
-// and returns its ID. Does not start the container.
-// ports maps "containerPort" → "hostPort" (empty hostPort = random free port).
+// portBindings maps container→host ports, publishing each on hostIP. An empty
+// hostIP defaults to 127.0.0.1 (loopback) so provisioned DBs are not exposed on
+// the host's LAN/public interface unless the operator explicitly opts into
+// 0.0.0.0 (DOCKER_DB_PUBLIC=true).
+func portBindings(ports map[string]string, hostIP string) (nat.PortSet, nat.PortMap, error) {
+	if hostIP == "" {
+		hostIP = "127.0.0.1"
+	}
+	exposed := nat.PortSet{}
+	bindings := nat.PortMap{}
+	for containerPort, hostPort := range ports {
+		np, err := nat.NewPort("tcp", containerPort)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid container port %q: %w", containerPort, err)
+		}
+		exposed[np] = struct{}{}
+		bindings[np] = []nat.PortBinding{{HostIP: hostIP, HostPort: hostPort}}
+	}
+	return exposed, bindings, nil
+}
+
+// CreateContainer creates a container with the given env + port bindings and
+// returns its ID. Does not start the container. ports maps "containerPort" →
+// "hostPort" (empty hostPort = random free port).
 func (r *RealDockerClient) CreateContainer(ctx context.Context, name, img string, env, ports map[string]string) (string, error) {
 	if err := r.ensureImage(ctx, img); err != nil {
 		return "", err
@@ -114,15 +140,9 @@ func (r *RealDockerClient) CreateContainer(ctx context.Context, name, img string
 		envSlice = append(envSlice, k+"="+v)
 	}
 
-	exposed := nat.PortSet{}
-	bindings := nat.PortMap{}
-	for containerPort, hostPort := range ports {
-		np, err := nat.NewPort("tcp", containerPort)
-		if err != nil {
-			return "", fmt.Errorf("invalid container port %q: %w", containerPort, err)
-		}
-		exposed[np] = struct{}{}
-		bindings[np] = []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: hostPort}}
+	exposed, bindings, err := portBindings(ports, r.bindAddr)
+	if err != nil {
+		return "", err
 	}
 
 	cfg := &container.Config{
