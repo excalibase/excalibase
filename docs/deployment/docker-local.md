@@ -92,6 +92,28 @@ services:
     depends_on:
       - provisioning
 
+  # Data plane — serves the tenant's GraphQL + REST at /{projectId}/graphql and
+  # /{projectId}/api/v1. It has NO static database: POSTGRES_URL is unset, so it
+  # runs in provisioning-backed routing and fetches each project's DB creds from
+  # provisioning at request time (the provisioned DBs don't exist until the
+  # customer creates them). Caddy routes the project-scoped paths here.
+  graphql:
+    image: excalibase/excalibase-graphql:0.0.1
+    restart: unless-stopped
+    expose:
+      - "10000"
+    environment:
+      # No POSTGRES_URL → multi-tenant-only mode (per-project routing).
+      PROVISIONING_URL: "http://provisioning:24005/api"
+      PROVISIONING_PAT: ${GRAPHQL_PROVISIONING_PAT}
+      JWT_ENABLED: "true"
+      # End-user JWT validation. Simplest single-tenant option: an HS256 shared
+      # secret the tenant's own backend signs with. If you also run
+      # excalibase-auth, set APP_SECURITY_AUTH_JWKS_URL to its JWKS instead.
+      APP_SECURITY_AUTH_HMAC_SECRET: ${GRAPHQL_JWT_HMAC_SECRET}
+    depends_on:
+      - provisioning
+
 volumes:
   excalibase-data:
   platform-db-data:
@@ -106,16 +128,27 @@ their DNS at this host first). HTTP→HTTPS redirect and HSTS are automatic.
 
 ```caddy
 api.example.com {
-	reverse_proxy provisioning:24005
-	# Internet-facing? The admin API (/api/*) should not be open. Gate it to
-	# your IPs — the public edge-function path (/functions/v1/*) stays open:
+	# Data plane (tenant apps) → graphql. Project-scoped paths only.
+	@dataplane path_regexp dp ^/[^/]+/(graphql|api/v1)
+	handle @dataplane {
+		reverse_proxy graphql:10000
+	}
+	# Everything else is the control plane on provisioning:
+	#   /auth/*        end-user auth        (public)
+	#   /functions/v1/* edge-function invoke (public)
+	#   /api/*         admin/studio backend (gate this if internet-facing)
+	handle {
+		reverse_proxy provisioning:24005
+	}
+
+	# Internet-facing? The admin API (/api/*) should not be open — gate it to
+	# your IPs while the data plane and function-invoke stay public:
 	#   @admin path /api/*
 	#   handle @admin {
 	#     @allowed remote_ip 203.0.113.0/24 198.51.100.7
 	#     handle @allowed { reverse_proxy provisioning:24005 }
 	#     respond 403
 	#   }
-	#   handle { reverse_proxy provisioning:24005 }
 }
 
 studio.example.com {
@@ -123,12 +156,27 @@ studio.example.com {
 }
 ```
 
+### Data plane: the graphql PAT
+
+graphql fetches each project's DB credentials from provisioning, which requires
+a token with the credential-view permission. After first boot, mint one in the
+studio as the platform admin (Settings → Tokens) or via the API, and put it in
+`.env` as `GRAPHQL_PROVISIONING_PAT`. A plain end-user account's token will not
+work — that call is deliberately privileged.
+
+End-users of the tenant's app authenticate with a JWT (HS256 signed with
+`GRAPHQL_JWT_HMAC_SECRET`, or via excalibase-auth's JWKS). Row-level security
+keys off that JWT, so `JWT_ENABLED=true` is required for RLS to apply.
+
 Generate the secrets once and store them in `.env` next to the compose file:
 
 ```bash
 {
   echo "DENO_RUNTIME_SECRET=$(openssl rand -hex 32)"
   echo "PLATFORM_DB_PASSWORD=$(openssl rand -hex 24)"
+  echo "GRAPHQL_JWT_HMAC_SECRET=$(openssl rand -hex 32)"
+  # Filled in after first boot — see "the graphql PAT" above.
+  echo "GRAPHQL_PROVISIONING_PAT="
 } > .env
 chmod 600 .env
 ```
