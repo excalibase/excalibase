@@ -25,6 +25,14 @@ Use this when:
 ## docker-compose.yml
 
 ```yaml
+# One shared, explicitly-named network. Its name MUST equal DOCKER_NETWORK below:
+# provisioning attaches each tenant DB container to that network, and graphql /
+# provisioning reach those DBs by container name — the default bridge has no name
+# resolution.
+networks:
+  excalibase:
+    name: excalibase
+
 services:
   # Caddy terminates TLS (automatic Let's Encrypt) and fronts the HTTP
   # services. Tenant Postgres containers are TCP and do NOT go through Caddy.
@@ -38,6 +46,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    networks: [excalibase]
     depends_on:
       - provisioning
       - studio
@@ -64,11 +73,22 @@ services:
       # true only to expose provisioned DBs on the host interface for
       # external clients.
       DOCKER_DB_PUBLIC: "false"
+      # Attach provisioned tenant DBs to the shared network (must match the
+      # network name above) so graphql/schema can resolve them by name.
+      DOCKER_NETWORK: excalibase
+      # Plain postgres containers have no TLS; intra-network connects use disable.
+      SCHEMA_DB_SSLMODE: disable
+    # The container user (uid 1000) needs the host's docker group to use the
+    # socket. Replace 999 with your host's gid: `stat -c %g /var/run/docker.sock`.
+    group_add:
+      - "999"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - excalibase-data:/var/lib/excalibase
+    networks: [excalibase]
     depends_on:
-      - platform-db
+      platform-db:
+        condition: service_healthy
 
   # The platform's OWN state (users, orgs, projects, tokens). Not a tenant DB.
   platform-db:
@@ -78,8 +98,15 @@ services:
       POSTGRES_USER: platform
       POSTGRES_PASSWORD: ${PLATFORM_DB_PASSWORD}
       POSTGRES_DB: platform
+    # provisioning's Postgres connect does not retry — gate startup on readiness.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform -d platform"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
     volumes:
       - platform-db-data:/var/lib/postgresql/data
+    networks: [excalibase]
 
   studio:
     image: excalibase/studio:0.1.0
@@ -89,6 +116,7 @@ services:
     environment:
       VITE_API_URL: "https://api.example.com"
       VITE_DEPLOYMENT_MODE: selfhosted
+    networks: [excalibase]
     depends_on:
       - provisioning
 
@@ -111,6 +139,7 @@ services:
       # secret the tenant's own backend signs with. If you also run
       # excalibase-auth, set APP_SECURITY_AUTH_JWKS_URL to its JWKS instead.
       APP_SECURITY_AUTH_HMAC_SECRET: ${GRAPHQL_JWT_HMAC_SECRET}
+    networks: [excalibase]
     depends_on:
       - provisioning
 
