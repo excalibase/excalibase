@@ -875,7 +875,14 @@ func buildVault(cfg config.AppConfig, sqlStore storage.PlatformStore) (vaultclie
 		if vErr != nil {
 			log.Fatalf("Failed to init vault (bbolt): %v", vErr)
 		}
-		log.Println("Self-hosted mode: using bbolt vault store")
+		// Selfhosted has no bootstrap Job (that's k8s/cloud). Auto-init on first
+		// run and auto-unseal on restart so the platform is usable with zero
+		// operator steps; VAULT_UNSEAL_KEY, if set, is honoured instead of the
+		// on-disk key.
+		if err := vault.EnsureReady(localVault, cfg.StoragePath+"/unseal.key", os.Getenv("VAULT_UNSEAL_KEY")); err != nil {
+			log.Fatalf("Failed to ready vault (bbolt): %v", err)
+		}
+		log.Println("Self-hosted mode: using bbolt vault store (auto-init/unseal)")
 		return localVault, localVault, func() { localVault.Close() }
 	}
 }
