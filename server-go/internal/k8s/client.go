@@ -150,7 +150,40 @@ func (c *Client) CreateNamespaceWithLabels(ctx context.Context, name string, lab
 	if _, err := c.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
 		return err
 	}
-	return c.ensureNamespaceIsolationPolicy(ctx, name)
+	if err := c.ensureNamespaceIsolationPolicy(ctx, name); err != nil {
+		return err
+	}
+	return c.ensureNamespaceQuota(ctx, name)
+}
+
+// ensureNamespaceQuota caps the total object COUNT a tenant namespace may hold
+// (EXC-329) — a hard ceiling so one tenant can't balloon the shared box by
+// spawning many pods/PVCs (e.g. runaway edge-function deploys). Deliberately
+// count-based, NOT a CPU/memory-request quota: per-pod CPU/RAM is already capped
+// from the tier (CNPG cluster resources + deno tier resources), and a
+// request-based quota would reject CNPG's transient backup/maintenance pods that
+// don't declare requests. Generous limits: a healthy tenant runs ~3-5 pods
+// (Postgres + watcher + deno), so 20 leaves ample headroom for CNPG jobs.
+func (c *Client) ensureNamespaceQuota(ctx context.Context, namespace string) error {
+	quota := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "namespace-quota",
+			Namespace: namespace,
+			Labels:    map[string]string{"excalibase.io/component": "quota"},
+		},
+		Spec: corev1.ResourceQuotaSpec{
+			Hard: corev1.ResourceList{
+				corev1.ResourcePods:                   resource.MustParse("20"),
+				corev1.ResourcePersistentVolumeClaims: resource.MustParse("6"),
+				corev1.ResourceServices:               resource.MustParse("15"),
+			},
+		},
+	}
+	_, err := c.clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create namespace quota: %w", err)
+	}
+	return nil
 }
 
 // ensureNamespaceIsolationPolicy applies a default-deny INGRESS policy to every
