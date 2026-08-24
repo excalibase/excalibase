@@ -1,0 +1,251 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      deno: ${{ steps.filter.outputs.deno }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'server-go/**'
+            frontend:
+              - 'frontend/**'
+            deno:
+              - 'deno-server/**'
+            ci:
+              - '.github/workflows/**'
+
+  go-lint:
+    name: Go Lint
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: go vet ./...
+      - run: go build ./...
+
+  go-test:
+    name: Go Test
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      # Fast unit smoke (default build tags, no Docker). The 70% coverage gate
+      # + coverage artifact live in the go-integration job, which runs the full
+      # suite (-tags integration) where the store + handler tests execute — that
+      # is the true total. Measuring coverage here would see only ~52% because
+      # those suites are integration-tagged.
+      - run: go test ./internal/... -race -cover -timeout 5m
+
+  frontend-lint:
+    name: Frontend Type Check
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  frontend-test:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    needs: [changes, frontend-lint]
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        if: needs.changes.outputs.frontend == 'true'
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - if: needs.changes.outputs.frontend == 'true'
+        run: cd frontend && npm ci && npm audit --audit-level=high
+      - uses: actions/setup-go@v5
+        if: needs.changes.outputs.backend == 'true'
+        with:
+          go-version: '1.24'
+      - if: needs.changes.outputs.backend == 'true'
+        run: cd server-go && go vet ./...
+
+  go-integration:
+    name: Go Integration (testcontainers)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # Integration tests need a Docker daemon (testcontainers spins up
+    # Postgres, NATS, LocalStack, and one-off postgres containers for
+    # restore E2Es). ubuntu-latest has Docker available out of the box.
+    # Gated on backend changes — skipped on frontend-only PRs to keep
+    # CI cost down. Manually trigger on workflow_dispatch when needed.
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Run integration suite + coverage gate
+        # 12-min timeout covers the slowest path: PITR_TargetVariants
+        # (60s) + RestoreE2E (10s) + LocalStack/Postgres bring-up (~15s
+        # per testcontainer) + the rest of the integration suite. Coverage is
+        # measured here because -tags integration is the only build that runs
+        # the store + handler suites — it's the true total (~72%).
+        run: go test -tags=integration ./internal/... -race -cover -coverprofile=coverage.out -timeout 12m
+      - name: Check coverage threshold
+        run: |
+          total=$(go tool cover -func=coverage.out | grep "^total:" | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${total}%"
+          if (( $(echo "$total < 70" | bc -l) )); then
+            echo "Coverage ${total}% is below 70% threshold"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-coverage
+          path: server-go/coverage.out
+
+  real-r2-integration:
+    name: Real R2 E2E (gated)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # Only runs when R2_ACCESS_KEY_ID secret is set in the GH Actions
+    # environment. Unset = job is skipped cleanly. Set CI secrets in
+    # repo Settings → Secrets and Variables → Actions:
+    #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, R2_BUCKET
+    # Recommend a *separate* R2 credential pair for CI from production
+    # so CI key compromise doesn't blast prod backups.
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Real R2 round-trip
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        # Tests skip themselves cleanly when env is empty. The
+        # `|| exit 0` after the skip-detection isn't needed because
+        # `go test` exits 0 on `t.Skip`.
+        run: go test -tags=integration ./internal/service/ -run R2_E2E -timeout 5m -v
+
+  real-resend-integration:
+    name: Real Resend E2E (gated)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # Same shape as real-r2: gated on RESEND_API_KEY secret. Sends
+    # to delivered@resend.dev (Resend's documented test sink — never
+    # bounces real inboxes). Override RESEND_TEST_TO + RESEND_TEST_FROM
+    # if your account has a verified domain to exercise.
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Real Resend send
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_TEST_FROM: ${{ secrets.RESEND_TEST_FROM }}
+          RESEND_TEST_TO: ${{ secrets.RESEND_TEST_TO }}
+        run: go test -tags=integration ./internal/email/ -run Live -timeout 2m -v
+
+  sonarcloud:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    needs: [changes, go-integration]
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # SonarCloud needs full history for accurate blame/new-code analysis.
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: go-coverage
+          path: server-go
+        continue-on-error: true
+      # SonarSource/sonarqube-scan-action v6 wraps sonar-scanner-cli 8.x —
+      # the same engine SonarCloud runs, so local/CI scans match cloud
+      # results. Local validation: ./scripts/sonar-local.sh
+      - uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io

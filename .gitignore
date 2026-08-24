@@ -1,0 +1,64 @@
+# Go binary and build artifacts
+server-go/excalibase-server
+server-go/go-server.log
+excalibase-vault/server
+*.exe
+*.test
+*.out
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Runtime data (never commit)
+provisioning-data/
+*.log
+
+# Encryption keys (never commit)
+.encryption-key
+
+# Vendored @excalibase/server build artifact (Phase 9b.G).
+# The deno-server image fetches/builds the sibling lib at construction
+# time; host-side `deno test` runs use a symlink at this path pointing at
+# ../excalibase-server/dist. Neither artifact belongs in the repo.
+deno-server/vendor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iws
+*.iml
+*.ipr
+*.swp
+*.swo
+
+# Env files
+.env
+.env.local
+
+# Test coverage and artifacts
+coverage/
+*.coverprofile
+/tmp/
+**/test-results/
+**/playwright-report/
+/server-go/server
+/tests/pgdog/bench/bench.js
+/tests/pgdog/bench/Dockerfile
+/tests/pgdog/bench/nats.yaml
+/tests/pgdog/bench/supavisor.yaml
+/tests/pgdog/manifests/cluster-alpha.yaml
+/tests/pgdog/manifests/cluster-beta.yaml
+/tests/pgdog/manifests/cluster-delta.yaml
+/tests/pgdog/manifests/cluster-gamma.yaml
+/tests/pgdog/Makefile
+/tests/pgdog/pgdog-values.yaml
+/tests/pgdog/setup-config-db.sql
+/tests/pgdog/test.sh
+/tests/pgdog/test-nats-reload.sh
+.sonar-local-token

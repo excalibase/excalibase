@@ -1,0 +1,128 @@
+# Shared-fallback Deno runtime — ONE pod in the `serverless` namespace,
+# shared across ALL projects. Function ids are namespaced by `{projectId}__`
+# at the platform layer to avoid collisions.
+#
+# WHEN TO USE THIS:
+#   - Local dev / minikube without a working K8s API for the platform
+#   - Single-tenant deployments where isolation isn't a concern
+#   - As a fallback for environments where per-project pod creation isn't
+#     feasible
+#
+# WHEN NOT TO USE THIS:
+#   - Production multi-tenant. The platform's `EnsureDenoRuntime` (in
+#     `internal/k8s/client.go`) creates one Deno pod per project namespace
+#     automatically on first function deploy. That's the default and the
+#     recommended path. Don't run both — they don't conflict, but you'll
+#     waste resources on an unused shared pod.
+#
+# To deploy:
+#   kubectl apply -f deployment-shared.yaml
+#   # Then point the platform at it via DENO_RUNTIME_URL=http://deno-runtime.serverless.svc.cluster.local:8000
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: serverless
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deno-runtime
+  namespace: serverless
+  labels:
+    app: deno-runtime
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deno-runtime
+  template:
+    metadata:
+      labels:
+        app: deno-runtime
+    spec:
+      containers:
+      - name: runtime
+        image: excalibase/deno-runtime:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: RUNTIME_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: deno-runtime-secret
+              key: secret
+        - name: ALLOWED_HOSTS
+          value: "" # Restrict to project PG hosts only, e.g. "pg-rw.ns:5432"
+        # Phase 9a — mutation isolation + retry knobs. Uncomment to
+        # override defaults (SERIALIZABLE, 5 retries, 50ms base backoff).
+        # See docs/functions-transactions.md for the tuning rationale.
+        # - name: EXCALIBASE_MUTATION_ISOLATION
+        #   value: "SERIALIZABLE"  # SERIALIZABLE | "REPEATABLE READ" | "READ COMMITTED"
+        # - name: EXCALIBASE_MUTATION_RETRY_MAX
+        #   value: "5"
+        # - name: EXCALIBASE_MUTATION_RETRY_BACKOFF_MS
+        #   value: "50"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: false
+          allowPrivilegeEscalation: false
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deno-runtime
+  namespace: serverless
+spec:
+  selector:
+    app: deno-runtime
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+  type: ClusterIP
+---
+# NetworkPolicy: only allow ingress from excalibase-server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deno-runtime-ingress
+  namespace: serverless
+spec:
+  podSelector:
+    matchLabels:
+      app: deno-runtime
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          app: excalibase-server
+    ports:
+    - port: 8000
+      protocol: TCP

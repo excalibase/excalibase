@@ -1,0 +1,79 @@
+# Floci — local AWS emulator (S3 + others), drop-in LocalStack replacement.
+# Used for testing CNPG backups + future R2/S3 storage features without
+# touching real AWS. Port 4566 mirrors the LocalStack convention.
+#
+# Apply with: kubectl apply -n excalibase-platform -f tests/floci.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: floci
+  namespace: excalibase-platform
+  labels:
+    app: floci
+spec:
+  ports:
+    - name: aws
+      port: 4566
+      targetPort: 4566
+  selector:
+    app: floci
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: floci
+  namespace: excalibase-platform
+  labels:
+    app: floci
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: floci
+  template:
+    metadata:
+      labels:
+        app: floci
+    spec:
+      containers:
+        - name: floci
+          image: floci/floci:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 4566
+          env:
+            # Kubernetes injects FLOCI_PORT=tcp://... for any service named
+            # "floci", which collides with floci's own quarkus config
+            # (floci.port → FLOCI_PORT via MicroProfile Config). Pin our
+            # value back so floci starts cleanly.
+            - name: FLOCI_PORT
+              value: "4566"
+            - name: QUARKUS_HTTP_PORT
+              value: "4566"
+            # Floci accepts any AWS creds; we hardwire test creds so the
+            # CNPG barmanObjectStore secret + studio backup tests share
+            # the same constants.
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 4566
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+---
+# AWS credential secret used by CNPG barmanObjectStore + studio backup
+# tests. Floci accepts any value but we pin to "test/test" so docs and
+# scripts stay aligned.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: floci-aws-creds
+  namespace: excalibase-platform
+type: Opaque
+stringData:
+  ACCESS_KEY_ID: test
+  ACCESS_SECRET_KEY: test

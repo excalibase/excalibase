@@ -1,0 +1,67 @@
+replicaCount: 1
+
+image:
+  repository: excalibase/provisioning
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+namespace: excalibase-platform
+
+service:
+  port: 24005
+
+ingress:
+  enabled: true
+  className: nginx
+  host: api.excalibase.io
+  paths:
+    - /api/provision
+    - /api/vault
+    - /api/schema
+    - /api/auth
+    - /api/setup
+    - /api/alerts
+    - /api/parameter-groups
+    - /api/functions
+  tls:
+    enabled: true
+    secretName: provisioning-tls
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    nginx.ingress.kubernetes.io/limit-connections: "10"
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+storage:
+  size: 5Gi
+  storageClass: ""
+
+env:
+  PORT: "24005"
+  LOG_LEVEL: "info"
+  CORS_ORIGINS: "https://app.excalibase.io"
+  WATCHER_CHART_PATH: "/charts/excalibase-watcher"
+
+platformDB:
+  enabled: true
+  # Connection string for the CNPG platform-db cluster
+  # Format: postgres://platform:password@platform-db-rw.excalibase-platform:5432/platform?sslmode=require
+  url: ""
+  # If using a secret for the DB URL (recommended for production)
+  existingSecret: ""
+  existingSecretKey: "PLATFORM_DB_URL"
+
+serviceAccount:
+  name: provisioning-sa
+
+pdb:
+  enabled: true
+  minAvailable: 1

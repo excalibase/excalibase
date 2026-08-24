@@ -1,0 +1,17 @@
+# Snyk policy file. Currently empty: the codebase has zero Snyk Code
+# findings at any severity — see OPERATOR.md §9 for how we got there.
+#
+# This file is intentionally kept (not deleted) so future operators
+# know the project uses an explicit ignore policy rather than scanner
+# defaults. If a real false positive appears, document it here with:
+#
+#   - rule ID
+#   - file/path scope
+#   - human-readable reason
+#   - `expires` date (max 1 year)
+#   - `created` date
+#
+# Format: https://docs.snyk.io/manage-issues/policies/the-.snyk-file
+version: v1.25.0
+
+ignore: {}

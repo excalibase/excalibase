@@ -1,0 +1,21 @@
+apiVersion: v2
+name: excalibase-watcher-go
+description: Real-time CDC streaming from PostgreSQL and MySQL to NATS JetStream (Go edition)
+type: application
+version: 0.1.0
+# appVersion is pinned to the chart version. Bumped together by the
+# release pipeline; consumers can override via `--set image.tag=...`.
+appVersion: "0.1.0"
+keywords:
+  - cdc
+  - postgresql
+  - mysql
+  - nats
+  - change-data-capture
+  - golang
+home: https://github.com/excalibase/watcher-go
+sources:
+  - https://github.com/excalibase/watcher-go
+maintainers:
+  - name: Excalibase Team
+    url: https://github.com/excalibase

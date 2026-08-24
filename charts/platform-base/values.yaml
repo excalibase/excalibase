@@ -1,0 +1,35 @@
+platformDB:
+  instances: 3
+  image:
+    repository: ghcr.io/cloudnative-pg/postgresql
+    tag: "16.4"
+  resources:
+    requests:
+      cpu: 300m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  storage:
+    size: 10Gi
+    storageClass: ""
+  monitoring:
+    enabled: true
+  backup:
+    # Platform-DB → R2. Reuses the cluster-scoped r2-creds secret (the
+    # same one per-project clusters consume) so operators don't manage
+    # two sets of S3 credentials. Override s3Secret +
+    # s3AccessKeyIDKey / s3SecretAccessKeyKey when targeting a separate
+    # backup account.
+    enabled: true
+    destinationPath: "s3://excalibase-backups/_platform-db/"
+    endpointURL: ""               # required for R2; set via --set platformDB.backup.endpointURL=https://<account>.r2.cloudflarestorage.com
+    retentionPolicy: "30d"
+    s3Secret: r2-creds
+    s3AccessKeyIDKey: access_key_id
+    s3SecretAccessKeyKey: secret_access_key
+    # Inline creds only used when not reusing r2-creds. When empty,
+    # the chart skips creating its own secret and trusts s3Secret to
+    # already exist in the namespace.
+    s3AccessKeyID: ""
+    s3SecretAccessKey: ""

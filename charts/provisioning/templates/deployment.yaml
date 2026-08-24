@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provisioning
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: provisioning
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: provisioning
+  template:
+    metadata:
+      labels:
+        app: provisioning
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: provisioning
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            - name: STORAGE_PATH
+              value: /data
+            - name: DB_PATH
+              value: /data/excalibase.db
+            {{- if and .Values.platformDB .Values.platformDB.enabled }}
+            {{- if .Values.platformDB.existingSecret }}
+            - name: PLATFORM_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.platformDB.existingSecret }}
+                  key: {{ .Values.platformDB.existingSecretKey | default "PLATFORM_DB_URL" }}
+            {{- else if .Values.platformDB.url }}
+            - name: PLATFORM_DB_URL
+              value: {{ .Values.platformDB.url | quote }}
+            {{- end }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: provisioning-data
+        - name: tmp
+          emptyDir: {}

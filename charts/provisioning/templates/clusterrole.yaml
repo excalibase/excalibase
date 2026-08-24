@@ -1,0 +1,33 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: excalibase-provisioning
+rules:
+  # Namespace lifecycle
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create", "delete"]
+  # Pod operations (exec, logs, status)
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "pods/log"]
+    verbs: ["get", "list", "create"]
+  # Secrets (credentials)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  # CNPG CRDs
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters", "scheduledbackups", "backups"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  # Deployments (operator checks)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  # Metrics server
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # PodMonitors (metrics setup)
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["podmonitors"]
+    verbs: ["get", "list", "create", "update", "delete"]

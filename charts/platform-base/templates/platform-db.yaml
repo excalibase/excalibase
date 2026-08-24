@@ -1,0 +1,59 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: platform-db
+  namespace: excalibase-platform
+  labels:
+    app.kubernetes.io/name: platform-db
+    app.kubernetes.io/part-of: excalibase-platform
+spec:
+  instances: {{ .Values.platformDB.instances }}
+
+  imageName: "{{ .Values.platformDB.image.repository }}:{{ .Values.platformDB.image.tag }}"
+
+  postgresql:
+    parameters:
+      shared_buffers: "256MB"
+      effective_cache_size: "512MB"
+      max_connections: "200"
+
+  resources:
+    requests:
+      cpu: {{ .Values.platformDB.resources.requests.cpu | quote }}
+      memory: {{ .Values.platformDB.resources.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.platformDB.resources.limits.cpu | quote }}
+      memory: {{ .Values.platformDB.resources.limits.memory | quote }}
+
+  storage:
+    size: {{ .Values.platformDB.storage.size }}
+    {{- if .Values.platformDB.storage.storageClass }}
+    storageClass: {{ .Values.platformDB.storage.storageClass }}
+    {{- end }}
+
+  bootstrap:
+    initdb:
+      database: platform
+      owner: platform
+
+  {{- if .Values.platformDB.monitoring.enabled }}
+  monitoring:
+    enablePodMonitor: true
+  {{- end }}
+
+  {{- if .Values.platformDB.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.platformDB.backup.destinationPath }}
+      {{- if .Values.platformDB.backup.endpointURL }}
+      endpointURL: {{ .Values.platformDB.backup.endpointURL }}
+      {{- end }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Values.platformDB.backup.s3Secret }}
+          key: {{ .Values.platformDB.backup.s3AccessKeyIDKey | default "ACCESS_KEY_ID" }}
+        secretAccessKey:
+          name: {{ .Values.platformDB.backup.s3Secret }}
+          key: {{ .Values.platformDB.backup.s3SecretAccessKeyKey | default "ACCESS_SECRET_KEY" }}
+    retentionPolicy: {{ .Values.platformDB.backup.retentionPolicy | quote }}
+  {{- end }}

@@ -1,0 +1,44 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: provisioning
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: provisioning
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only allow traffic from within the platform namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              excalibase.io/type: platform
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+  egress:
+    # DNS
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Kubernetes API server (for client-go operations)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # Project namespace PostgreSQL (for pod exec role creation)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              excalibase.io/type: project
+      ports:
+        - protocol: TCP
+          port: 5432
