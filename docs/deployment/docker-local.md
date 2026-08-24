@@ -131,9 +131,14 @@ services:
     expose:
       - "10000"
     environment:
-      # No POSTGRES_URL → multi-tenant-only mode (per-project routing).
+      # Multi-tenant/Mode-3 requires POSTGRES_URL to be EXPLICITLY EMPTY.
+      # Omitting it falls back to graphql's dev default datasource and stays
+      # single-datasource (no per-project schema). Empty → multi-tenant only.
+      POSTGRES_URL: ""
       PROVISIONING_URL: "http://provisioning:24005/api"
       PROVISIONING_PAT: ${GRAPHQL_PROVISIONING_PAT}
+      # REQUIRED for multi-tenant: graphql builds the per-tenant GraphQL schema
+      # from the JWT's projectId+orgSlug. Without JWT it serves an empty schema.
       JWT_ENABLED: "true"
       # End-user JWT validation. Simplest single-tenant option: an HS256 shared
       # secret the tenant's own backend signs with. If you also run
