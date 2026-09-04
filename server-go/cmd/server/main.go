@@ -18,6 +18,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/email"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -615,9 +616,12 @@ func buildRouter(cfg config.AppConfig, sqlStore storage.PlatformStore, store sto
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(metrics.Middleware)
 	r.Use(custommw.SecurityHeaders)
 	r.Use(custommw.CORS(cfg.CORSOrigins))
 	r.Use(auth.ExtractAuth(sqlStore))
+
+	handler.RegisterPrometheusHandler(r)
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
