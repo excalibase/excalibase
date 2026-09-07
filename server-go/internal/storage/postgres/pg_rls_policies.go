@@ -78,7 +78,10 @@ func (r *RlsPolicyStore) UpsertRls(ctx context.Context, p *domain.Policy) error 
 	}
 	ops := operationsToStrings(p.Operations)
 
-	_, err = r.s.db.ExecContext(ctx, `
+	// The WHERE on DO UPDATE guards project ownership: a conflicting id owned by
+	// a different project is neither inserted nor updated (0 rows), so one
+	// project can't overwrite another's policy by reusing its id (SEC-H1).
+	res, err := r.s.db.ExecContext(ctx, `
 		INSERT INTO rls_policies (id, project_id, name, resource, effect, operations,
 		                          rule_logic, rules, assignments, priority, enabled,
 		                          created_at, updated_at)
@@ -93,10 +96,17 @@ func (r *RlsPolicyStore) UpsertRls(ctx context.Context, p *domain.Policy) error 
 			assignments = EXCLUDED.assignments,
 			priority    = EXCLUDED.priority,
 			enabled     = EXCLUDED.enabled,
-			updated_at  = NOW()`,
+			updated_at  = NOW()
+		WHERE rls_policies.project_id = EXCLUDED.project_id`,
 		p.ID, p.ProjectID, p.Name, p.Resource, string(p.Effect), pq.Array(ops),
 		string(p.RuleLogic), string(rules), string(assigns), p.Priority, p.Enabled)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("rls policy %q is owned by another project", p.ID)
+	}
+	return nil
 }
 
 func (r *RlsPolicyStore) DeleteRls(ctx context.Context, projectID, id string) error {
@@ -173,7 +183,8 @@ func (r *RlsPolicyStore) UpsertColumn(ctx context.Context, p *domain.ColumnPolic
 	ops := operationsToStrings(p.Operations)
 	customKey := sql.NullString{String: p.CustomMaskerKey, Valid: p.CustomMaskerKey != ""}
 
-	_, err = r.s.db.ExecContext(ctx, `
+	// project-ownership guard, same as UpsertRls (SEC-H1).
+	res, err := r.s.db.ExecContext(ctx, `
 		INSERT INTO column_policies (id, project_id, name, resource, columns, operations,
 		                              mode, partial_spec, custom_masker_key, assignments,
 		                              priority, enabled, created_at, updated_at)
@@ -189,10 +200,17 @@ func (r *RlsPolicyStore) UpsertColumn(ctx context.Context, p *domain.ColumnPolic
 			assignments       = EXCLUDED.assignments,
 			priority          = EXCLUDED.priority,
 			enabled           = EXCLUDED.enabled,
-			updated_at        = NOW()`,
+			updated_at        = NOW()
+		WHERE column_policies.project_id = EXCLUDED.project_id`,
 		p.ID, p.ProjectID, p.Name, p.Resource, pq.Array(p.Columns), pq.Array(ops),
 		string(p.Mode), partialJSON, customKey, string(assigns), p.Priority, p.Enabled)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("column policy %q is owned by another project", p.ID)
+	}
+	return nil
 }
 
 func (r *RlsPolicyStore) DeleteColumn(ctx context.Context, projectID, id string) error {
