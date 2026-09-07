@@ -535,7 +535,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)
-	migrationSvc := service.NewMigrationService(store, k8sClient, cfg.StoragePath)
+	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 

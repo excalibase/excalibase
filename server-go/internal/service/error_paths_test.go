@@ -106,19 +106,25 @@ func TestPerformanceWhenPgStatStatementsNotEnabled(t *testing.T) {
 func TestMigrationWhenSQLFails(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
-	mock := k8s.NewMockClient()
 	store.Save(&domain.DatabaseInstance{
 		ProjectID: "fail-sql", Namespace: "ns", Status: "ACTIVE",
 	})
-	mock.ExecError["ns/fail-sql-postgres-1"] = fmt.Errorf("ERROR: syntax error")
 
-	svc := NewMigrationService(store, mock, dir)
+	// App-role creds pointing at an unreachable DB, so the exec fails and is
+	// tracked as FAILED in the record rather than returned as an error.
+	vault := newFakeVault()
+	vault.Put("projects/fail-sql/credentials/excalibase_app", map[string]string{
+		"host": "127.0.0.1", "port": "1", "username": "excalibase_app",
+		"password": "x", "database": "app",
+	})
+
+	svc := NewMigrationService(store, vault, dir)
 	rec, err := svc.ApplyMigration(context.Background(), "fail-sql", domain.MigrationRequest{
 		SQL: "INVALID SQL",
 	})
 
 	if err != nil {
-		t.Fatalf("should not return error (failure tracked in record)")
+		t.Fatalf("should not return error (failure tracked in record): %v", err)
 	}
 	if rec.Status != "FAILED" {
 		t.Errorf("status: got %s, want FAILED", rec.Status)

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,19 +12,75 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
-	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/security"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
 type MigrationService struct {
 	store       storage.InstanceStore
-	k8sClient   k8s.KubeClient
+	vault       vaultclient.VaultClient
 	storagePath string
+	overrides   dsnOverrides
 }
 
-func NewMigrationService(store storage.InstanceStore, client k8s.KubeClient, storagePath string) *MigrationService {
-	return &MigrationService{store: store, k8sClient: client, storagePath: storagePath}
+// dsnOverrides lets local dev point the tenant connection at a port-forward
+// (SCHEMA_DB_HOST/PORT/SSLMODE), mirroring the schema handler.
+type dsnOverrides struct {
+	host    string
+	port    string
+	sslmode string
+}
+
+func NewMigrationService(store storage.InstanceStore, vault vaultclient.VaultClient, storagePath string) *MigrationService {
+	return &MigrationService{
+		store:       store,
+		vault:       vault,
+		storagePath: storagePath,
+		overrides: dsnOverrides{
+			host:    os.Getenv("SCHEMA_DB_HOST"),
+			port:    os.Getenv("SCHEMA_DB_PORT"),
+			sslmode: os.Getenv("SCHEMA_DB_SSLMODE"),
+		},
+	}
+}
+
+// buildTenantDSN composes a lib/pq connection string from vault credentials.
+// An explicit host override (local dev port-forward) flips sslmode to disable
+// unless a mode is given.
+func buildTenantDSN(creds map[string]string, o dsnOverrides) string {
+	host, port := creds["host"], creds["port"]
+	if o.host != "" {
+		host = o.host
+	}
+	if o.port != "" {
+		port = o.port
+	}
+	sslmode := "require"
+	if o.sslmode != "" {
+		sslmode = o.sslmode
+	} else if o.host != "" {
+		sslmode = "disable"
+	}
+	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		host, port, creds["username"], creds["password"], creds["database"], sslmode)
+}
+
+// openTenantDB opens a connection to the project's database as the non-superuser
+// excalibase_app role, using credentials from vault. This is the same role the
+// schema editor and data plane use — it holds CREATE on the database (so DDL
+// migrations work) but is NOT a superuser, so COPY ... TO PROGRAM and other
+// OS-level escapes are rejected by Postgres (SEC-C2).
+func (s *MigrationService) openTenantDB(projectID string) (*sql.DB, error) {
+	creds, err := s.vault.Get(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectID))
+	if err != nil {
+		return nil, fmt.Errorf("read excalibase_app credentials: %w", err)
+	}
+	db, err := sql.Open("postgres", buildTenantDSN(creds, s.overrides))
+	if err != nil {
+		return nil, fmt.Errorf("open tenant connection: %w", err)
+	}
+	return db, nil
 }
 
 func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string, req domain.MigrationRequest) (*domain.MigrationRecord, error) {
@@ -32,19 +89,22 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 		return nil, fmt.Errorf("project not found: %s", projectID)
 	}
 
-	pod := projectID + "-postgres-1"
+	db, err := s.openTenantDB(projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
 	now := time.Now()
 	migID := fmt.Sprintf("mig-%s", now.Format("20060102-150405"))
 
 	start := time.Now()
-	out, err := s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
-		[]string{"psql", "-U", "postgres", "-d", "app", "-c", req.SQL})
+	// Runs as excalibase_app (non-superuser). lib/pq sends the whole SQL as a
+	// simple query, so multi-statement migrations execute together.
+	_, execErr := db.ExecContext(ctx, req.SQL)
 	elapsed := time.Since(start).Milliseconds()
 
-	// Compute checksum from SQL — display-only fingerprint, not used
-	// for security. Truncated SHA-256 (chosen over MD5 to satisfy SAST
-	// rules even though either would be functionally equivalent for
-	// 8-char change detection).
+	// Display-only fingerprint (truncated SHA-256), not a security control.
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(req.SQL)))[:8]
 
 	record := &domain.MigrationRecord{
@@ -59,13 +119,13 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 	}
 
 	ft := &domain.FlexTime{Time: now}
-	if err != nil {
+	if execErr != nil {
 		record.Status = "FAILED"
-		record.ErrorMessage = err.Error()
-		record.Output = err.Error()
+		record.ErrorMessage = execErr.Error()
+		record.Output = execErr.Error()
 	} else {
 		record.Status = "APPLIED"
-		record.Output = out
+		record.Output = "ok"
 		record.AppliedAt = ft
 	}
 
