@@ -57,7 +57,7 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 	perfSvc := service.NewPerformanceService(store, mock)
 	auditSvc := service.NewAuditService(store, mock)
 	snapshotSvc := service.NewSnapshotService(store, mock, dir)
-	migrationSvc := service.NewMigrationService(store, mock, dir)
+	migrationSvc := service.NewMigrationService(store, newFakeVault(), dir)
 	alertSvc := service.NewAlertingService(dir)
 	setupSvc := service.NewOperatorSetupService(mock)
 

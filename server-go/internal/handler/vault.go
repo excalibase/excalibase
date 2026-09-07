@@ -25,22 +25,30 @@ func NewVaultHandler(v *vault.Vault) *VaultHandler {
 }
 
 func (h *VaultHandler) Routes(r chi.Router) {
-	// Public routes (no auth required)
+	// Public read-only routes. /status backs the first-run setup UI (which polls
+	// it before any user exists) and the PKI public key is public by design.
 	r.Get("/status", h.Status)
-	r.Post("/init", h.Init)
-	r.Post("/unseal", h.Unseal)
 	r.Get("/pki/public-key", h.GetPublicKey)
 
-	// Auth-required routes. Beyond authentication, every secret-touching
-	// route requires PermViewCredentials — a platform-level permission held
-	// by platform_admin / platform_operator (and the provisioning PAT the
-	// GraphQL engine + internal services authenticate with) but NOT by a
-	// normal dashboard tenant ("user") or platform_viewer. Without this,
-	// any authenticated tenant could read/write/delete ANY tenant's DB
-	// credentials stored in the vault.
+	// Auth-required routes. Beyond authentication, every secret-touching route
+	// requires PermViewCredentials — a platform-level permission held by
+	// platform_admin / platform_operator (and the provisioning PAT the GraphQL
+	// engine + internal services authenticate with) but NOT by a normal
+	// dashboard tenant ("user") or platform_viewer.
+	//
+	// init / unseal / rekey / seal are lifecycle operations that create or
+	// consume the master key material: /init returns the unseal shares, so an
+	// unauthenticated caller who reaches it first owns the vault (SEC-C1). Like
+	// HashiCorp Vault, these require an operator credential. The bootstrap Job
+	// registers the first admin, logs in for a PAT, then calls these with that
+	// PAT (PAT auth is validated against the platform DB, so it works even while
+	// the vault is sealed) — and the setup UI registers the admin before the
+	// vault steps for the same reason.
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.Use(auth.RequirePermission(auth.PermViewCredentials))
+		r.Post("/init", h.Init)
+		r.Post("/unseal", h.Unseal)
 		r.Post("/seal", h.Seal)
 		r.Post("/rekey", h.Rekey)
 		r.Get("/secrets-list", h.ListSecrets)
