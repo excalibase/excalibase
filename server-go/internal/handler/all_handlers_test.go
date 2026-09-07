@@ -74,6 +74,15 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	pgH := NewParameterGroupHandler(pgStore)
 
 	r := chi.NewRouter()
+	// These tests exercise handler logic, not the auth layer; inject a
+	// platform_admin so per-route permission gates (e.g. setup install requires
+	// manage_setup) are satisfied.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ctx := auth.SetUser(req.Context(), &domain.User{ID: "test-admin", Role: "platform_admin", Active: true})
+			next.ServeHTTP(w, req.WithContext(ctx))
+		})
+	})
 	r.Route("/api/provision", func(r chi.Router) {
 		r.Get("/", provH.ListInstances)
 		r.Post("/estimate", provH.EstimateCost)
