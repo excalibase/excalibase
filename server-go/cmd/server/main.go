@@ -668,23 +668,47 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store s
 			r.Use(custommw.TenantContext)
 			r.Use(custommw.RequireProjectAccess(store, sqlStore))
 			r.Use(d.rlDataPlane)
+
+			// Org-role tiers on top of membership (Owner⊇Admin⊇Developer⊇Viewer):
+			//   reads = any member (Viewer); writes = Developer; credentials +
+			//   destructive lifecycle = Admin. Platform admins bypass. (RBAC gate)
+			admin := custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore)
+			dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
+
+			// Reads — any member.
 			r.Get("/", d.provHandler.GetStatus)
-			r.Delete("/", d.provHandler.Delete)
-			r.Get("/credentials", d.provHandler.GetCredentials)
-			r.Patch("/deletion-protection", d.provHandler.SetDeletionProtection)
 			r.Get("/logs", d.provHandler.GetLogs)
-			r.Post("/credentials/rotate", d.provHandler.RotateCredentials)
-			r.Put("/maintenance-window", d.provHandler.SetMaintenanceWindow)
 			r.Get("/maintenance-window", d.provHandler.GetMaintenanceWindow)
 
+			// Developer+ — a routine write.
+			r.With(dev).Put("/maintenance-window", d.provHandler.SetMaintenanceWindow)
+
+			// Admin+ — credentials and destructive lifecycle.
+			r.With(admin).Delete("/", d.provHandler.Delete)
+			r.With(admin).Get("/credentials", d.provHandler.GetCredentials)
+			r.With(admin).Post("/credentials/rotate", d.provHandler.RotateCredentials)
+			r.With(admin).Patch("/deletion-protection", d.provHandler.SetDeletionProtection)
+
+			// Read-only subtrees — any member.
 			r.Route("/metrics", func(r chi.Router) { d.metricsHandler.Routes(r) })
-			r.Route("/backup", func(r chi.Router) { d.backupHandler.Routes(r) })
 			r.Route("/performance", func(r chi.Router) { d.perfHandler.Routes(r) })
-			r.Route("/audit", func(r chi.Router) { d.auditHandler.Routes(r) })
-			r.Route("/snapshot", func(r chi.Router) { d.snapshotHandler.Routes(r) })
-			r.Route("/migrations", func(r chi.Router) { d.migrationHandler.Routes(r) })
-			r.Route("/rls-policies", func(r chi.Router) { d.rlsPolicyHandler.RlsRoutes(r) })
-			r.Route("/column-policies", func(r chi.Router) { d.rlsPolicyHandler.ColumnRoutes(r) })
+
+			// Developer+ subtrees — schema/data-plane authoring.
+			r.Group(func(r chi.Router) {
+				r.Use(dev)
+				r.Route("/audit", func(r chi.Router) { d.auditHandler.Routes(r) })
+				r.Route("/migrations", func(r chi.Router) { d.migrationHandler.Routes(r) })
+				r.Route("/rls-policies", func(r chi.Router) { d.rlsPolicyHandler.RlsRoutes(r) })
+				r.Route("/column-policies", func(r chi.Router) { d.rlsPolicyHandler.ColumnRoutes(r) })
+			})
+
+			// Admin+ subtrees — backup/restore and full-DB snapshots (dump +
+			// restore are destructive/exfil; kept Admin-only as the safe default).
+			r.Group(func(r chi.Router) {
+				r.Use(admin)
+				r.Route("/backup", func(r chi.Router) { d.backupHandler.Routes(r) })
+				r.Route("/snapshot", func(r chi.Router) { d.snapshotHandler.Routes(r) })
+			})
 		})
 	})
 }
@@ -761,6 +785,8 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.TenantContext)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		// Viewers may browse (GET); DDL / /query / row writes require Developer+ (RBAC gate).
+		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		d.schemaHandler.RoutesInner(r)
 	})
 }

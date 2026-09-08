@@ -166,3 +166,57 @@ func TestRequireProjectAccess_MemberGranted(t *testing.T) {
 		t.Errorf("expected 200 for org member, got %d", code)
 	}
 }
+
+func runProjectRole(t *testing.T, minRole string, inst *fakeInstanceStore, org *fakeOrgStore, r *http.Request) int {
+	t.Helper()
+	h := RequireProjectRole(minRole, inst, org)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w.Code
+}
+
+// TestRequireProjectRole_Hierarchy pins the tenant-plane RBAC: Owner ⊇ Admin ⊇
+// Developer ⊇ Viewer. A viewer can never reach a developer/admin route; a
+// developer can never reach an admin route; higher roles inherit lower ones.
+func TestRequireProjectRole_Hierarchy(t *testing.T) {
+	inst := &fakeInstanceStore{inst: &domain.DatabaseInstance{ProjectID: "proj-1", OrgID: "org-1"}}
+	cases := []struct {
+		name, memberRole, minRole string
+		want                      int
+	}{
+		{"viewer blocked from admin", domain.OrgRoleViewer, domain.OrgRoleAdmin, http.StatusForbidden},
+		{"viewer blocked from developer", domain.OrgRoleViewer, domain.OrgRoleDeveloper, http.StatusForbidden},
+		{"developer blocked from admin", domain.OrgRoleDeveloper, domain.OrgRoleAdmin, http.StatusForbidden},
+		{"developer allowed developer", domain.OrgRoleDeveloper, domain.OrgRoleDeveloper, http.StatusOK},
+		{"admin allowed developer (cumulative)", domain.OrgRoleAdmin, domain.OrgRoleDeveloper, http.StatusOK},
+		{"admin allowed admin", domain.OrgRoleAdmin, domain.OrgRoleAdmin, http.StatusOK},
+		{"owner allowed admin (cumulative)", domain.OrgRoleOwner, domain.OrgRoleAdmin, http.StatusOK},
+		{"unknown role denied", "guest", domain.OrgRoleViewer, http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uid := "u-" + tc.memberRole
+			r := projectAccessRequest("proj-1", &domain.User{ID: uid, Role: "user"})
+			org := &fakeOrgStore{member: &domain.OrgMember{OrgID: "org-1", UserID: uid, Role: tc.memberRole}}
+			if code := runProjectRole(t, tc.minRole, inst, org, r); code != tc.want {
+				t.Errorf("got %d want %d", code, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequireProjectRole_PlatformAdminBypass(t *testing.T) {
+	r := projectAccessRequest("proj-1", &domain.User{ID: "op", Role: "platform_admin"})
+	if code := runProjectRole(t, domain.OrgRoleAdmin, &fakeInstanceStore{}, &fakeOrgStore{}, r); code != http.StatusOK {
+		t.Errorf("platform admin should bypass, got %d", code)
+	}
+}
+
+func TestRequireProjectRole_Unauthenticated(t *testing.T) {
+	r := projectAccessRequest("proj-1", nil)
+	if code := runProjectRole(t, domain.OrgRoleAdmin, &fakeInstanceStore{}, &fakeOrgStore{}, r); code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", code)
+	}
+}

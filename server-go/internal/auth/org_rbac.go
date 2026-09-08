@@ -42,6 +42,31 @@ func HasOrgPermission(role string, perm OrgPermission) bool {
 	return perms[perm]
 }
 
+// orgRoleRank ranks org roles for hierarchical comparison — Owner ⊇ Admin ⊇
+// Developer ⊇ Viewer, each role holding every capability of the ones below.
+// Unknown roles rank 0 (deny). Used to gate the tenant/project plane by role.
+func orgRoleRank(role string) int {
+	switch role {
+	case domain.OrgRoleOwner:
+		return 4
+	case domain.OrgRoleAdmin:
+		return 3
+	case domain.OrgRoleDeveloper:
+		return 2
+	case domain.OrgRoleViewer:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// OrgRoleAtLeast reports whether `have` is at or above `want` in the org-role
+// hierarchy (and is a known role). E.g. an admin satisfies a developer minimum.
+func OrgRoleAtLeast(have, want string) bool {
+	h := orgRoleRank(have)
+	return h > 0 && h >= orgRoleRank(want)
+}
+
 // ProjectPermission represents a project-level action.
 type ProjectPermission string
 
