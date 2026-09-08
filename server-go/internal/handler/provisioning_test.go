@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -141,6 +142,9 @@ func TestProvisionNoK8s(t *testing.T) {
 	body := `{"projectName":"test","orgId":"org","databaseType":"POSTGRESQL","tier":"FREE"}`
 	req := httptest.NewRequest("POST", testProvisionPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	// Authenticated platform_admin bypasses the create_project org check, so the
+	// request reaches the provisioner and fails there (the path under test).
+	req = req.WithContext(auth.SetUser(req.Context(), &domain.User{ID: "op", Role: "platform_admin", Active: true}))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

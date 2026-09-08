@@ -178,8 +178,27 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Set owner from authenticated user
-	if user := auth.GetUser(r.Context()); user != nil {
-		req.OwnerID = user.ID
+	user := auth.GetUser(r.Context())
+	if user == nil {
+		httpError(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	req.OwnerID = user.ID
+
+	// Creating a project requires the create_project org permission (Owner or
+	// Admin) in the TARGET org — so a Developer/Viewer in someone else's org
+	// can't spin up projects there. A user creating in their own freshly-made
+	// org is its Owner, so self-serve stays open. platform_admin bypasses.
+	if !auth.HasPermission(user.Role, auth.PermManageUsers) {
+		if req.OrgID == "" || h.orgStore == nil {
+			httpError(w, "org is required to create a project", http.StatusBadRequest)
+			return
+		}
+		member, merr := h.orgStore.GetOrgMember(r.Context(), req.OrgID, user.ID)
+		if merr != nil || member == nil || !auth.HasOrgPermission(member.Role, auth.OrgPermCreateProject) {
+			httpError(w, "insufficient org role to create a project (owner/admin required)", http.StatusForbidden)
+			return
+		}
 	}
 
 	resp, err := h.svc.Provision(r.Context(), req)

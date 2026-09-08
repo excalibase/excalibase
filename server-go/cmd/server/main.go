@@ -797,25 +797,32 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store 
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", d.fnHandler.List)
-		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/", d.fnHandler.Create)
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/_metadata", d.fnHandler.ListExportMetadata)
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/runtime/status", d.fnHandler.RuntimeStatus)
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/secrets", d.fnHandler.ListSecrets)
-		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/secrets", d.fnHandler.SetSecret)
-		r.With(auth.RequirePermission(auth.PermManageFunctions)).Delete("/secrets/{key}", d.fnHandler.DeleteSecret)
+		// Edge functions are a tenant-developer feature (author + deploy via
+		// Studio), so gate on ORG role, not platform perms — a normal developer
+		// holds no platform perm and was previously locked out. Reads = any
+		// member; deploy / secrets / invoke = Developer+. (End-users run
+		// functions via the public /functions/v1 path, not here.)
+		dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
+		r.Get("/", d.fnHandler.List)
+		r.Get("/_metadata", d.fnHandler.ListExportMetadata)
+		r.Get("/runtime/status", d.fnHandler.RuntimeStatus)
+		r.With(dev).Post("/", d.fnHandler.Create)
+		// Function secrets can hold API keys — Developer+ to read or write.
+		r.With(dev).Get("/secrets", d.fnHandler.ListSecrets)
+		r.With(dev).Post("/secrets", d.fnHandler.SetSecret)
+		r.With(dev).Delete("/secrets/{key}", d.fnHandler.DeleteSecret)
 		r.Route("/{fnId}", func(r chi.Router) {
-			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", d.fnHandler.Get)
-			r.With(auth.RequirePermission(auth.PermManageFunctions)).Delete("/", d.fnHandler.Delete)
-			r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/invoke", d.fnHandler.Invoke)
-			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/logs", d.fnHandler.Logs)
+			r.Get("/", d.fnHandler.Get)
+			r.With(dev).Delete("/", d.fnHandler.Delete)
+			r.With(dev).Post("/invoke", d.fnHandler.Invoke)
+			r.Get("/logs", d.fnHandler.Logs)
 		})
 	})
 	r.Route("/api/projects/{projectId}/schema", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
-		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
+		r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
 	})
 	r.Route("/api/projects/{projectId}/info", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
