@@ -299,9 +299,17 @@ func (h *StorageHandler) requireRuntimeToken(w http.ResponseWriter, r *http.Requ
 		httpError(w, errUnauthorized, http.StatusUnauthorized)
 		return false
 	}
+	projectID := chi.URLParam(r, "projectId")
+	if err := edgefn.ValidateProjectID(projectID); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return false
+	}
+	// Per-project: the token must match the derived secret for the project in
+	// the path, so a token minted for one project can't act on another (SEC-C5).
+	expected := edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID)
 	provided := r.Header.Get(runtimeTokenHeader)
 	if len(provided) == 0 ||
-		subtle.ConstantTimeCompare([]byte(provided), []byte(h.runtimeSecret)) != 1 {
+		subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
 		httpError(w, errUnauthorized, http.StatusUnauthorized)
 		return false
 	}
