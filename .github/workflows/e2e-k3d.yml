@@ -1,0 +1,139 @@
+name: E2E (k3d smoke)
+
+# Scoped control-plane smoke on a real Kubernetes cluster. We use k3d (k3s in
+# Docker), NOT minikube: minikube's docker driver aborts on hosted runners
+# (exit 29 "docker only supported on Linux with ...") whereas k3d's k3s-in-a-
+# container works reliably on ubuntu-latest.
+#
+# Scope (deliberately narrow — reliability over ambition):
+#   * bring up the provisioning service + its Postgres platform store, using
+#     the repo's own charts/provisioning helm chart (not hand-rolled manifests)
+#   * assert /healthz returns 200 once the deployment rolls out
+#
+# We do NOT run a full provision→ACTIVE→deprovision cycle here: that needs the
+# CloudNativePG operator (multi-tenant DB provisioning) or an in-cluster Docker
+# socket, which is too heavy/flaky for a 2-core/7GB hosted runner. A flaky e2e
+# is worse than none. Because even this scoped smoke builds an image, boots a
+# cluster, and waits on a helm rollout (~5-8 min), it runs on schedule +
+# manual dispatch + post-merge push to the CI branches — it does NOT gate PRs.
+on:
+  workflow_dispatch:
+  schedule:
+    # 03:30 UTC daily.
+    - cron: '30 3 * * *'
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  k3d-smoke:
+    name: k3d control-plane smoke
+    # Hosted 2-core/7GB runner. Safe for this scoped smoke (one Postgres + the
+    # provisioning pod, no CNPG/ingress/cert-manager). If the scope ever grows
+    # to the full multi-tenant stack, move this to a self-hosted label instead.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      K3D_VERSION: v5.7.4
+      CLUSTER: excalibase
+      NS: excalibase-platform
+      IMAGE: excalibase/provisioning:ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build provisioning image
+        run: docker build -t "$IMAGE" -f server-go/Dockerfile server-go
+
+      - name: Install k3d
+        run: curl -sSfL https://raw.githubusercontent.com/k3d-io/k3d/${K3D_VERSION}/install.sh | TAG=${K3D_VERSION} bash
+
+      - name: Create cluster
+        run: k3d cluster create "$CLUSTER" --agents 1 --wait --timeout 180s
+
+      - name: Import image into cluster
+        run: k3d image import "$IMAGE" -c "$CLUSTER"
+
+      - name: Deploy platform Postgres store
+        run: |
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -n "$NS" -f - <<'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: platform-db
+            labels: { app: platform-db }
+          spec:
+            replicas: 1
+            selector:
+              matchLabels: { app: platform-db }
+            template:
+              metadata:
+                labels: { app: platform-db }
+              spec:
+                containers:
+                  - name: postgres
+                    image: postgres:16-alpine
+                    env:
+                      - { name: POSTGRES_USER, value: platform }
+                      - { name: POSTGRES_PASSWORD, value: platform }
+                      - { name: POSTGRES_DB, value: platform }
+                    ports:
+                      - containerPort: 5432
+                    readinessProbe:
+                      exec:
+                        command: ["pg_isready", "-U", "platform"]
+                      initialDelaySeconds: 5
+                      periodSeconds: 5
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: platform-db
+          spec:
+            selector: { app: platform-db }
+            ports:
+              - port: 5432
+                targetPort: 5432
+          EOF
+          kubectl -n "$NS" rollout status deploy/platform-db --timeout=180s
+
+      - name: Install provisioning chart (Helm)
+        run: |
+          helm upgrade --install provisioning charts/provisioning \
+            --namespace "$NS" --create-namespace \
+            --set image.repository=excalibase/provisioning \
+            --set image.tag=ci \
+            --set image.pullPolicy=IfNotPresent \
+            --set ingress.enabled=false \
+            --set-string platformDB.url='postgres://platform:platform@platform-db.excalibase-platform:5432/platform?sslmode=disable'
+
+      - name: Wait for provisioning rollout
+        run: kubectl -n "$NS" rollout status deploy/provisioning --timeout=180s
+
+      - name: Assert /healthz
+        run: |
+          kubectl -n "$NS" port-forward svc/provisioning 24005:24005 &
+          PF_PID=$!
+          trap 'kill $PF_PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 12); do
+            if curl -fsS http://127.0.0.1:24005/healthz | grep -q ok; then
+              echo "healthz OK"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "healthz did not return ok within timeout"
+          exit 1
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n "$NS" get all || true
+          kubectl -n "$NS" describe pods || true
+          kubectl -n "$NS" logs deploy/provisioning --tail=200 || true
+
+      - name: Tear down cluster
+        if: always()
+        run: k3d cluster delete "$CLUSTER" || true
