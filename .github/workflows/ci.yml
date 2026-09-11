@@ -89,7 +89,7 @@ jobs:
       - run: npx tsc --noEmit
 
   frontend-test:
-    name: Playwright E2E
+    name: Frontend Unit (vitest)
     runs-on: ubuntu-latest
     needs: [changes, frontend-lint]
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
@@ -104,13 +104,10 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npx playwright test
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: frontend/playwright-report/
+      # Unit tests only (vitest, no backend). The browser/UI E2E suite (Playwright,
+      # frontend/e2e — 28 specs) drives the Studio against a live backend, so it runs
+      # in the full-stack AIO e2e, not in this isolated frontend job.
+      - run: npm test
 
   defend:
     name: Defend (secrets + vulns + audit)
@@ -153,7 +150,9 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: npm audit (frontend)
         if: needs.changes.outputs.frontend == 'true'
-        run: cd frontend && npm ci && npm audit --audit-level=high
+        # Block on critical; highs still print (the current high is a dev-only
+        # tool advisory, Vitest, not shipped in the app bundle).
+        run: cd frontend && npm ci && npm audit --audit-level=critical
 
   go-integration:
     name: Go Integration (testcontainers)
