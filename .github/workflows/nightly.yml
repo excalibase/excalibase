@@ -9,7 +9,7 @@ name: Nightly Live Integrations
 on:
   schedule:
     # 03:00 UTC daily.
-    - cron: '0 3 * * *'
+    - cron: '30 14 * * *'
   workflow_dispatch:
 
 permissions:
