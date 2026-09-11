@@ -1,0 +1,67 @@
+name: Nightly Live Integrations
+
+# The two live-external suites (real Cloudflare R2 round-trip, real Resend
+# email send) used to run on every backend PR. Sending a live email on the PR
+# path is nonsense, and hitting real R2 gates merges on a third party. They now
+# run nightly and on-demand instead, preserving the R2/email coverage without
+# blocking day-to-day PRs. Both suites self-skip cleanly (go test exits 0 on
+# t.Skip) when their secret is empty, so an unconfigured fork stays green.
+on:
+  schedule:
+    # 03:00 UTC daily.
+    - cron: '30 14 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-r2-integration:
+    name: Real R2 E2E (gated)
+    runs-on: ubuntu-latest
+    # Only does real work when R2_ACCESS_KEY_ID (+ friends) is set in the GH
+    # Actions environment. Unset = the test skips itself cleanly. Set CI
+    # secrets in repo Settings → Secrets and Variables → Actions:
+    #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, R2_BUCKET
+    # Recommend a *separate* R2 credential pair for CI from production
+    # so CI key compromise doesn't blast prod backups.
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Real R2 round-trip
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        # Tests skip themselves cleanly when env is empty. The
+        # `|| exit 0` after the skip-detection isn't needed because
+        # `go test` exits 0 on `t.Skip`.
+        run: go test -tags=integration ./internal/service/ -run R2_E2E -timeout 5m -v
+
+  real-resend-integration:
+    name: Real Resend E2E (gated)
+    runs-on: ubuntu-latest
+    # Same shape as real-r2: gated on RESEND_API_KEY secret. Sends
+    # to delivered@resend.dev (Resend's documented test sink — never
+    # bounces real inboxes). Override RESEND_TEST_TO + RESEND_TEST_FROM
+    # if your account has a verified domain to exercise.
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Real Resend send
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_TEST_FROM: ${{ secrets.RESEND_TEST_FROM }}
+          RESEND_TEST_TO: ${{ secrets.RESEND_TEST_TO }}
+        run: go test -tags=integration ./internal/email/ -run Live -timeout 2m -v

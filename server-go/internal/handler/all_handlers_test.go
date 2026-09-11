@@ -50,7 +50,15 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	perfSvc := service.NewPerformanceService(store, mock)
 	auditSvc := service.NewAuditService(store, mock)
 	snapshotSvc := service.NewSnapshotService(store, mock, dir)
-	migrationSvc := service.NewMigrationService(store, mock, dir)
+	migVault := newFakeVault()
+	// Migrations connect as excalibase_app via vault (SEC-C2). Seed creds for
+	// the seeded test project pointing at an unreachable DB so ApplyMigration
+	// gets past credential lookup and records a FAILED migration (200), the way
+	// the k8s exec mock used to behave, without needing a live Postgres.
+	migVault.data["projects/test-db/credentials/excalibase_app"] = map[string]string{
+		"host": "127.0.0.1", "port": "1", "username": "excalibase_app", "password": "x", "database": "app",
+	}
+	migrationSvc := service.NewMigrationService(store, migVault, dir)
 	alertSvc := service.NewAlertingService(dir)
 	setupSvc := service.NewOperatorSetupService(mock)
 
@@ -66,6 +74,15 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	pgH := NewParameterGroupHandler(pgStore)
 
 	r := chi.NewRouter()
+	// These tests exercise handler logic, not the auth layer; inject a
+	// platform_admin so per-route permission gates (e.g. setup install requires
+	// manage_setup) are satisfied.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ctx := auth.SetUser(req.Context(), &domain.User{ID: "test-admin", Role: "platform_admin", Active: true})
+			next.ServeHTTP(w, req.WithContext(ctx))
+		})
+	})
 	r.Route("/api/provision", func(r chi.Router) {
 		r.Get("/", provH.ListInstances)
 		r.Post("/estimate", provH.EstimateCost)

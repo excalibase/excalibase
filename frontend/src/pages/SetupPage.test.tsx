@@ -104,8 +104,13 @@ describe('SetupPage', () => {
     useAuthStore.getState().clearAuth();
   });
 
-  test('renders init step on a virgin vault', async () => {
+  test('renders admin step first on a virgin setup (SEC-C1: admin before vault)', async () => {
     renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    expect(await screen.findByTestId('vault-setup-admin')).toBeInTheDocument();
+  });
+
+  test('renders init step once the admin exists', async () => {
+    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
     expect(await screen.findByTestId('vault-setup-init')).toBeInTheDocument();
     expect(screen.getByTestId('vault-init-shares')).toHaveValue('5');
     expect(screen.getByTestId('vault-init-threshold')).toHaveValue('3');
@@ -113,7 +118,7 @@ describe('SetupPage', () => {
 
   test('rejects non-numeric shares input via inline error', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
 
     await screen.findByTestId('vault-setup-init');
     const sharesInput = screen.getByTestId('vault-init-shares');
@@ -129,7 +134,7 @@ describe('SetupPage', () => {
 
   test('init flow advances to shares-display when backend returns shares', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
 
     await screen.findByTestId('vault-setup-init');
     await user.click(screen.getByTestId('vault-init-submit'));
@@ -143,7 +148,7 @@ describe('SetupPage', () => {
 
   test('Continue button stays disabled until user confirms saving shares', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
 
     await screen.findByTestId('vault-setup-init');
     await user.click(screen.getByTestId('vault-init-submit'));
@@ -156,7 +161,7 @@ describe('SetupPage', () => {
   });
 
   test('renders unseal step when vault is initialized but sealed', async () => {
-    renderPage({ initialized: true, sealed: true, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({ initialized: true, sealed: true, threshold: 1, shares: 1, progress: 0, hasAdmin: true });
     expect(await screen.findByTestId('vault-setup-unseal')).toBeInTheDocument();
   });
 
@@ -219,7 +224,7 @@ describe('SetupPage', () => {
       configurable: true,
     });
 
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
     await screen.findByTestId('vault-setup-init');
     await user.click(screen.getByTestId('vault-init-submit'));
     await screen.findByTestId('vault-setup-shares');
@@ -230,7 +235,7 @@ describe('SetupPage', () => {
 
   test('shares step continue button advances to unseal once confirmed', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
 
     await screen.findByTestId('vault-setup-init');
     await user.click(screen.getByTestId('vault-init-submit'));
@@ -243,7 +248,7 @@ describe('SetupPage', () => {
 
   test('unseal form submits a share and clears input on progress', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: true, sealed: true, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({ initialized: true, sealed: true, threshold: 1, shares: 1, progress: 0, hasAdmin: true });
 
     const input = await screen.findByTestId('vault-unseal-input');
     await user.type(input, 'my-share-hex');

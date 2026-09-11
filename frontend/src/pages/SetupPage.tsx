@@ -84,10 +84,14 @@ export function SetupPage() {
   // initialized immediately after init returns. Only when the user clicks
   // Continue (which clears issuedKeys) does the wizard advance to unseal.
   function resolveStep(): Step {
+    // Register the admin first: vault init/unseal/rekey now require an operator
+    // credential (SEC-C1), and registering the first admin (auto-promoted) mints
+    // the PAT the api client then sends on those calls. In auto-unseal
+    // deployments the vault is already initialized, so we go straight to done.
+    if (!setupStatus?.hasAdmin) return 'admin';
     if (issuedKeys) return 'shares';
     if (!vaultStatus?.initialized) return 'init';
     if (vaultStatus.sealed) return 'unseal';
-    if (!setupStatus?.hasAdmin) return 'admin';
     return 'done';
   }
   const step: Step = resolveStep();

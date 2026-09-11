@@ -63,13 +63,15 @@ func NewAdminHandler(provSvc *service.ProvisioningService, store storage.Instanc
 }
 
 // Routes mounts admin endpoints under /api/admin. Caller is expected to apply
-// auth.RequireAuth + auth.RequirePermission(PermViewAny) at the parent route.
+// auth.RequireAuth at the parent route. Each route then requires its own
+// permission: reads need only view_any, but destructive operations require a
+// write/governance permission so a read-only role (platform_viewer) can never
+// force-drop a project or revoke an org (SEC-C6).
 func (h *AdminHandler) Routes(r chi.Router) {
-	r.Use(auth.RequirePermission(auth.PermViewAny))
-	r.Get("/projects", h.ListAllProjects)
-	r.Delete("/projects/{projectId}", h.ForceDropProject)
-	r.Delete("/orgs/{orgId}", h.RevokeOrg)
-	r.Get("/logs", h.QueryLogs)
+	r.With(auth.RequirePermission(auth.PermViewAny)).Get("/projects", h.ListAllProjects)
+	r.With(auth.RequirePermission(auth.PermViewAny)).Get("/logs", h.QueryLogs)
+	r.With(auth.RequirePermission(auth.PermDelete)).Delete("/projects/{projectId}", h.ForceDropProject)
+	r.With(auth.RequirePermission(auth.PermManageOrgs)).Delete("/orgs/{orgId}", h.RevokeOrg)
 }
 
 // ListAllProjects returns every project across every org with optional live

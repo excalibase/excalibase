@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -251,8 +252,10 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	// backup config injected when req.Backup is nil) propagate to the
 	// downstream prov.Provision call. Otherwise the mutated copy is
 	// scoped to the helper and the cluster comes up without backup.
+	start := time.Now()
 	inst, prov, tier, err := s.prepareProvisioning(ctx, &req)
 	if err != nil {
+		metrics.ObserveProvision(start, err)
 		return nil, err
 	}
 
@@ -303,10 +306,13 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		result, provErr = prov.Provision(ctx, req, tier, pc.SetStage)
 	}
 	if provErr != nil {
+		metrics.ObserveProvision(start, provErr)
 		return s.handleProvisionFailure(ctx, inst, req, provErr, pc), nil
 	}
 
-	return s.finalizeProvisioning(ctx, inst, req, result, pc)
+	resp, ferr := s.finalizeProvisioning(ctx, inst, req, result, pc)
+	metrics.ObserveProvision(start, ferr)
+	return resp, ferr
 }
 
 // prepareProvisioning validates the request and creates the initial instance record.

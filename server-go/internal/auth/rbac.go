@@ -15,6 +15,10 @@ const (
 	PermManageUsers     Permission = "manage_users"
 	PermManageFunctions Permission = "manage_functions"
 	PermViewAny         Permission = "view_any"
+	// PermManageOrgs gates cross-tenant org governance (revoke/evict an entire
+	// org and cascade-drop its projects). Reserved for platform_admin — never
+	// implied by a read permission (SEC-C6).
+	PermManageOrgs Permission = "manage_orgs"
 )
 
 var rolePermissions = map[string]map[Permission]bool{
@@ -23,6 +27,7 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermViewCredentials: true, PermManageBackups: true, PermRestore: true,
 		PermApplyMigrations: true, PermManageSnapshots: true, PermManageSetup: true,
 		PermManageUsers: true, PermManageFunctions: true, PermViewAny: true,
+		PermManageOrgs: true,
 	},
 	"platform_operator": {
 		PermProvision: true, PermDelete: true, PermViewInstances: true,

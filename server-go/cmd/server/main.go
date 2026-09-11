@@ -18,6 +18,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/email"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -534,7 +535,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)
-	migrationSvc := service.NewMigrationService(store, k8sClient, cfg.StoragePath)
+	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 
@@ -615,9 +616,12 @@ func buildRouter(cfg config.AppConfig, sqlStore storage.PlatformStore, store sto
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(metrics.Middleware)
 	r.Use(custommw.SecurityHeaders)
 	r.Use(custommw.CORS(cfg.CORSOrigins))
 	r.Use(auth.ExtractAuth(sqlStore))
+
+	handler.RegisterPrometheusHandler(r)
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
@@ -664,23 +668,47 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store s
 			r.Use(custommw.TenantContext)
 			r.Use(custommw.RequireProjectAccess(store, sqlStore))
 			r.Use(d.rlDataPlane)
+
+			// Org-role tiers on top of membership (Owner⊇Admin⊇Developer⊇Viewer):
+			//   reads = any member (Viewer); writes = Developer; credentials +
+			//   destructive lifecycle = Admin. Platform admins bypass. (RBAC gate)
+			admin := custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore)
+			dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
+
+			// Reads — any member.
 			r.Get("/", d.provHandler.GetStatus)
-			r.Delete("/", d.provHandler.Delete)
-			r.Get("/credentials", d.provHandler.GetCredentials)
-			r.Patch("/deletion-protection", d.provHandler.SetDeletionProtection)
 			r.Get("/logs", d.provHandler.GetLogs)
-			r.Post("/credentials/rotate", d.provHandler.RotateCredentials)
-			r.Put("/maintenance-window", d.provHandler.SetMaintenanceWindow)
 			r.Get("/maintenance-window", d.provHandler.GetMaintenanceWindow)
 
+			// Developer+ — a routine write.
+			r.With(dev).Put("/maintenance-window", d.provHandler.SetMaintenanceWindow)
+
+			// Admin+ — credentials and destructive lifecycle.
+			r.With(admin).Delete("/", d.provHandler.Delete)
+			r.With(admin).Get("/credentials", d.provHandler.GetCredentials)
+			r.With(admin).Post("/credentials/rotate", d.provHandler.RotateCredentials)
+			r.With(admin).Patch("/deletion-protection", d.provHandler.SetDeletionProtection)
+
+			// Read-only subtrees — any member.
 			r.Route("/metrics", func(r chi.Router) { d.metricsHandler.Routes(r) })
-			r.Route("/backup", func(r chi.Router) { d.backupHandler.Routes(r) })
 			r.Route("/performance", func(r chi.Router) { d.perfHandler.Routes(r) })
-			r.Route("/audit", func(r chi.Router) { d.auditHandler.Routes(r) })
-			r.Route("/snapshot", func(r chi.Router) { d.snapshotHandler.Routes(r) })
-			r.Route("/migrations", func(r chi.Router) { d.migrationHandler.Routes(r) })
-			r.Route("/rls-policies", func(r chi.Router) { d.rlsPolicyHandler.RlsRoutes(r) })
-			r.Route("/column-policies", func(r chi.Router) { d.rlsPolicyHandler.ColumnRoutes(r) })
+
+			// Developer+ subtrees — schema/data-plane authoring.
+			r.Group(func(r chi.Router) {
+				r.Use(dev)
+				r.Route("/audit", func(r chi.Router) { d.auditHandler.Routes(r) })
+				r.Route("/migrations", func(r chi.Router) { d.migrationHandler.Routes(r) })
+				r.Route("/rls-policies", func(r chi.Router) { d.rlsPolicyHandler.RlsRoutes(r) })
+				r.Route("/column-policies", func(r chi.Router) { d.rlsPolicyHandler.ColumnRoutes(r) })
+			})
+
+			// Admin+ subtrees — backup/restore and full-DB snapshots (dump +
+			// restore are destructive/exfil; kept Admin-only as the safe default).
+			r.Group(func(r chi.Router) {
+				r.Use(admin)
+				r.Route("/backup", func(r chi.Router) { d.backupHandler.Routes(r) })
+				r.Route("/snapshot", func(r chi.Router) { d.snapshotHandler.Routes(r) })
+			})
 		})
 	})
 }
@@ -757,6 +785,8 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.TenantContext)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		// Viewers may browse (GET); DDL / /query / row writes require Developer+ (RBAC gate).
+		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		d.schemaHandler.RoutesInner(r)
 	})
 }
@@ -767,25 +797,32 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store 
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", d.fnHandler.List)
-		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/", d.fnHandler.Create)
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/_metadata", d.fnHandler.ListExportMetadata)
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/runtime/status", d.fnHandler.RuntimeStatus)
-		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/secrets", d.fnHandler.ListSecrets)
-		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/secrets", d.fnHandler.SetSecret)
-		r.With(auth.RequirePermission(auth.PermManageFunctions)).Delete("/secrets/{key}", d.fnHandler.DeleteSecret)
+		// Edge functions are a tenant-developer feature (author + deploy via
+		// Studio), so gate on ORG role, not platform perms — a normal developer
+		// holds no platform perm and was previously locked out. Reads = any
+		// member; deploy / secrets / invoke = Developer+. (End-users run
+		// functions via the public /functions/v1 path, not here.)
+		dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
+		r.Get("/", d.fnHandler.List)
+		r.Get("/_metadata", d.fnHandler.ListExportMetadata)
+		r.Get("/runtime/status", d.fnHandler.RuntimeStatus)
+		r.With(dev).Post("/", d.fnHandler.Create)
+		// Function secrets can hold API keys — Developer+ to read or write.
+		r.With(dev).Get("/secrets", d.fnHandler.ListSecrets)
+		r.With(dev).Post("/secrets", d.fnHandler.SetSecret)
+		r.With(dev).Delete("/secrets/{key}", d.fnHandler.DeleteSecret)
 		r.Route("/{fnId}", func(r chi.Router) {
-			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/", d.fnHandler.Get)
-			r.With(auth.RequirePermission(auth.PermManageFunctions)).Delete("/", d.fnHandler.Delete)
-			r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/invoke", d.fnHandler.Invoke)
-			r.With(auth.RequirePermission(auth.PermViewAny)).Get("/logs", d.fnHandler.Logs)
+			r.Get("/", d.fnHandler.Get)
+			r.With(dev).Delete("/", d.fnHandler.Delete)
+			r.With(dev).Post("/invoke", d.fnHandler.Invoke)
+			r.Get("/logs", d.fnHandler.Logs)
 		})
 	})
 	r.Route("/api/projects/{projectId}/schema", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
-		r.With(auth.RequirePermission(auth.PermManageFunctions)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
+		r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
 	})
 	r.Route("/api/projects/{projectId}/info", func(r chi.Router) {
 		r.Use(custommw.TenantContext)

@@ -215,3 +215,25 @@ func TestListNamespaces_FiltersByPrefix(t *testing.T) {
 		t.Errorf("empty prefix should list all, got %d", len(all))
 	}
 }
+
+// TestEnsureDenoRuntime_NoServiceAccountToken pins SEC-C3/C4: the Deno runtime
+// pod must carry NO service-account token, so tenant code in the isolate cannot
+// read namespace Secrets (e.g. backup-s3-creds) via the k8s API. Only CNPG
+// mounts those creds into the Postgres pod; nothing tenant-controlled can.
+func TestEnsureDenoRuntime_NoServiceAccountToken(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	ns := "proj-deno-sa"
+
+	if err := c.EnsureDenoRuntime(ctx, ns, DenoRuntimeSpec{Tier: "STANDARD"}); err != nil {
+		t.Fatalf("EnsureDenoRuntime: %v", err)
+	}
+	dep, err := c.clientset.AppsV1().Deployments(ns).Get(ctx, "deno-runtime", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("deno deployment not created: %v", err)
+	}
+	amt := dep.Spec.Template.Spec.AutomountServiceAccountToken
+	if amt == nil || *amt != false {
+		t.Errorf("deno pod must set AutomountServiceAccountToken=false so it cannot read namespace secrets (SEC-C3/C4); got %v", amt)
+	}
+}

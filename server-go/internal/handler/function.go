@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/subtle"
 	"crypto/x509"
 	"database/sql"
 	"encoding/json"
@@ -221,8 +222,9 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 		return nil, fmt.Errorf("no namespace for project %s", projectID)
 	}
 	spec := k8s.DenoRuntimeSpec{
-		Image:         h.runtimeImage,
-		RuntimeSecret: h.runtimeSecret,
+		Image: h.runtimeImage,
+		// Per-project derived secret — the master never enters a tenant pod (SEC-C5).
+		RuntimeSecret: edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID),
 		Tier:          h.tierFor(projectID),
 	}
 	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, spec); err != nil {
@@ -241,7 +243,7 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	} else {
 		url = fmt.Sprintf("http://deno-runtime.%s.svc.cluster.local:8000", namespace)
 	}
-	client := edgefn.NewRuntimeClient(url, h.runtimeSecret)
+	client := edgefn.NewRuntimeClient(url, edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID))
 
 	h.clientMu.Lock()
 	h.clients[projectID] = client
@@ -1200,12 +1202,15 @@ const runtimeTokenHeader = "X-Excalibase-Runtime-Token"
 // rather than letting unauthenticated callers through. When a secret is
 // configured, the request must present an exactly-matching token header.
 // Returns true when the request is authorized to proceed.
-func (h *FunctionHandler) authorizeRuntimeToken(w http.ResponseWriter, r *http.Request) bool {
+func (h *FunctionHandler) authorizeRuntimeToken(w http.ResponseWriter, r *http.Request, projectID string) bool {
 	if h.runtimeSecret == "" {
 		httpError(w, "internal route not configured", http.StatusServiceUnavailable)
 		return false
 	}
-	if r.Header.Get(runtimeTokenHeader) != h.runtimeSecret {
+	// The presented token must match this project's derived secret — a token
+	// minted for another project does not authenticate here (SEC-C5).
+	expected := edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID)
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get(runtimeTokenHeader)), []byte(expected)) != 1 {
 		httpError(w, "unauthorized", http.StatusUnauthorized)
 		return false
 	}
@@ -1271,10 +1276,6 @@ func (h *FunctionHandler) ListExportMetadata(w http.ResponseWriter, r *http.Requ
 // stored verbatim on the Function.ExportMetadata field so a later
 // /_metadata read can return it untouched.
 func (h *FunctionHandler) ReceiveExportMetadata(w http.ResponseWriter, r *http.Request) {
-	if !h.authorizeRuntimeToken(w, r) {
-		return
-	}
-
 	fnID := chi.URLParam(r, "fnId")
 	if err := edgefn.ValidateID(fnID); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
@@ -1292,6 +1293,11 @@ func (h *FunctionHandler) ReceiveExportMetadata(w http.ResponseWriter, r *http.R
 	}
 	if err := edgefn.ValidateProjectID(body.ProjectID); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	// Authenticate against the project the runtime claims to be — its token must
+	// match that project's derived secret (SEC-C5).
+	if !h.authorizeRuntimeToken(w, r, body.ProjectID) {
 		return
 	}
 	if len(body.Exports) == 0 {
@@ -1368,13 +1374,13 @@ func isInternalFromMetadata(raw json.RawMessage) bool {
 // without the Authorization-strip behaviour (internal callers carry a
 // runtime-token, not a user JWT).
 func (h *FunctionHandler) InternalInvoke(w http.ResponseWriter, r *http.Request) {
-	if !h.authorizeRuntimeToken(w, r) {
-		return
-	}
 	projectID := chi.URLParam(r, "projectId")
 	fnID := chi.URLParam(r, "fnId")
 	if err := edgefn.ValidateProjectID(projectID); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if !h.authorizeRuntimeToken(w, r, projectID) {
 		return
 	}
 	fn, err := h.store.Get(projectID, fnID)

@@ -177,7 +177,7 @@ func TestReceiveExportMetadata_UpdatesStoredFunction(t *testing.T) {
 	}
 	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata", bytes.NewReader(body))
-	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret(h.runtimeSecret, "proj_p1"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -234,7 +234,7 @@ func TestReceiveExportMetadata_UnknownFunctionReturns404(t *testing.T) {
 	r, _, h := setupMetadataHandler(t)
 	body, _ := json.Marshal(map[string]interface{}{"projectId": "proj_p1", "exports": []interface{}{}})
 	req := httptest.NewRequest("POST", "/internal/runtime/functions/ghost/metadata", bytes.NewReader(body))
-	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret(h.runtimeSecret, "proj_p1"))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -245,7 +245,7 @@ func TestReceiveExportMetadata_UnknownFunctionReturns404(t *testing.T) {
 func TestReceiveExportMetadata_RejectsBadJSON(t *testing.T) {
 	r, _, h := setupMetadataHandler(t)
 	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata", strings.NewReader("not json"))
-	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret(h.runtimeSecret, "proj_p1"))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -257,7 +257,7 @@ func TestReceiveExportMetadata_RejectsMalformedProjectID(t *testing.T) {
 	r, _, h := setupMetadataHandler(t)
 	body, _ := json.Marshal(map[string]interface{}{"projectId": "has..bad", "exports": []interface{}{}})
 	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata", bytes.NewReader(body))
-	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret(h.runtimeSecret, "proj_p1"))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -269,7 +269,7 @@ func TestReceiveExportMetadata_RejectsNonArrayExports(t *testing.T) {
 	r, _, h := setupMetadataHandler(t)
 	body := []byte(`{"projectId":"proj_p1","exports":{"not":"an array"}}`)
 	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata", bytes.NewReader(body))
-	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret(h.runtimeSecret, "proj_p1"))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -283,7 +283,7 @@ func TestReceiveExportMetadata_EmptyBodyDefaultsToEmptyArray(t *testing.T) {
 	// should default to []. Function record gets ExportMetadata = []
 	body := []byte(`{"projectId":"proj_p1"}`)
 	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata", bytes.NewReader(body))
-	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret(h.runtimeSecret, "proj_p1"))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK && w.Code != http.StatusNoContent {
@@ -299,7 +299,7 @@ func TestReceiveExportMetadata_RejectsBadFunctionID(t *testing.T) {
 	r, _, h := setupMetadataHandler(t)
 	body, _ := json.Marshal(map[string]interface{}{"projectId": "proj_p1", "exports": []interface{}{}})
 	req := httptest.NewRequest("POST", "/internal/runtime/functions/bad..id/metadata", bytes.NewReader(body))
-	req.Header.Set("X-Excalibase-Runtime-Token", h.runtimeSecret)
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret(h.runtimeSecret, "proj_p1"))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {

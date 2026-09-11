@@ -134,7 +134,7 @@ func TestInternalInvoke_RouteAuthCheck(t *testing.T) {
 	// Correct header → forwards through to runtime → 200
 	req = httptest.NewRequest("POST", "/internal/invoke/proj_p1/"+testInternalOnlyFnID,
 		bytes.NewBufferString(`{"args":{}}`))
-	req.Header.Set("X-Excalibase-Runtime-Token", "test-runtime-secret")
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret("test-runtime-secret", "proj_p1"))
 	w = httptest.NewRecorder()
 	rtr.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -300,7 +300,7 @@ func TestInternalInvoke_404OnMissingFunction(t *testing.T) {
 	rtr.Post(testInternalInvokeRoute, h.InternalInvoke)
 	req := httptest.NewRequest("POST", "/internal/invoke/proj_p1/missing",
 		bytes.NewBufferString(`{"args":{}}`))
-	req.Header.Set("X-Excalibase-Runtime-Token", "secret")
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret("secret", "proj_p1"))
 	w := httptest.NewRecorder()
 	rtr.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -586,7 +586,7 @@ func TestInternalInvoke_ForwardsEnvelopeHeaderToRuntime(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/internal/invoke/proj_p1/"+testInternalOnlyFnID,
 		bytes.NewBufferString(`{"args":{}}`))
-	req.Header.Set("X-Excalibase-Runtime-Token", "test-runtime-secret")
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret("test-runtime-secret", "proj_p1"))
 	req.Header.Set("X-Excalibase-Envelope", "v1")
 	w := httptest.NewRecorder()
 	rtr.ServeHTTP(w, req)
@@ -652,7 +652,7 @@ func TestInternalInvoke_NoEnvelopeHeaderWhenAbsent(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/internal/invoke/proj_p1/"+testInternalOnlyFnID,
 		bytes.NewBufferString(`{"args":{}}`))
-	req.Header.Set("X-Excalibase-Runtime-Token", "test-runtime-secret")
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret("test-runtime-secret", "proj_p1"))
 	// Deliberately no X-Excalibase-Envelope — pre-15b client behavior.
 	w := httptest.NewRecorder()
 	rtr.ServeHTTP(w, req)

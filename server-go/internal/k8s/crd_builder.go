@@ -15,7 +15,6 @@ const (
 	postgresSuffix = "-postgres"
 )
 
-
 // GVRs for CloudNativePG CRDs.
 var (
 	CNPGClusterGVR = schema.GroupVersionResource{
@@ -166,6 +165,13 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 	params := map[string]interface{}{
 		"max_connections": "100",
 	}
+	// Runaway-query guard (per tier). Cancel queries and idle-in-transaction
+	// sessions past the tier's budget so one tenant can't peg a shared box with
+	// a never-ending query. Overridable via opts.Parameters below.
+	if opts.Tier.StatementTimeout != "" {
+		params["statement_timeout"] = opts.Tier.StatementTimeout
+		params["idle_in_transaction_session_timeout"] = opts.Tier.StatementTimeout
+	}
 	var sharedPreloadLibs []interface{}
 	for k, v := range opts.Parameters {
 		if k == "shared_preload_libraries" {
@@ -260,8 +266,8 @@ func BuildScheduledBackup(projectID, namespace, schedule string) *unstructured.U
 				"namespace": namespace,
 			},
 			"spec": map[string]interface{}{
-				"schedule":              schedule,
-				"backupOwnerReference":  "self",
+				"schedule":             schedule,
+				"backupOwnerReference": "self",
 				"cluster": map[string]interface{}{
 					"name": projectID + postgresSuffix,
 				},

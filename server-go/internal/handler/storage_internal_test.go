@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 	"github.com/go-chi/chi/v5"
 )
@@ -34,6 +35,9 @@ import (
 const (
 	testStorageProjectID = "proj_storage_t"
 )
+
+// Per-project runtime token the internal storage routes now expect (SEC-C5).
+var testStorageRuntimeToken = edgefn.DeriveRuntimeSecret("the-secret", testStorageProjectID)
 
 // inMemoryBucketStoreForTest is a minimal BucketStore that lets the tests
 // exercise the handler without touching the SQL implementations. Mirrors
@@ -235,7 +239,7 @@ func TestInternalStorage_UploadURL_AutoProvisionsBucket(t *testing.T) {
 		"/internal/storage/"+testStorageProjectID+"/upload-url",
 		bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -272,7 +276,7 @@ func TestInternalStorage_UploadURL_AutoProvisionsBucket(t *testing.T) {
 		"/internal/storage/"+testStorageProjectID+"/upload-url",
 		bytes.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
-	req2.Header.Set(runtimeTokenHeader, "the-secret")
+	req2.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	r.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Errorf("second upload-url: want 200, got %d (body=%s)", w2.Code, w2.Body.String())
@@ -324,7 +328,7 @@ func TestInternalStorage_DownloadURL_ReturnsNullOnMissing(t *testing.T) {
 		"/internal/storage/"+testStorageProjectID+"/download-url",
 		bytes.NewReader([]byte(`{"storageId":"kg2_unknown"}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -346,7 +350,7 @@ func TestInternalStorage_Metadata_ReturnsRow(t *testing.T) {
 
 	req := httptest.NewRequest("GET",
 		"/internal/storage/"+testStorageProjectID+"/metadata/"+minted.StorageID, nil)
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -381,7 +385,7 @@ func TestInternalStorage_Metadata_ReturnsNullOnMissing(t *testing.T) {
 	r, _ := newStorageInternalRouter(t, "the-secret")
 	req := httptest.NewRequest("GET",
 		"/internal/storage/"+testStorageProjectID+"/metadata/kg2_unknown", nil)
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -403,7 +407,7 @@ func TestInternalStorage_Delete_RemovesObject(t *testing.T) {
 	// First delete.
 	req := httptest.NewRequest("DELETE",
 		"/internal/storage/"+testStorageProjectID+"/"+minted.StorageID, nil)
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
@@ -413,7 +417,7 @@ func TestInternalStorage_Delete_RemovesObject(t *testing.T) {
 	// Metadata should now 404.
 	mreq := httptest.NewRequest("GET",
 		"/internal/storage/"+testStorageProjectID+"/metadata/"+minted.StorageID, nil)
-	mreq.Header.Set(runtimeTokenHeader, "the-secret")
+	mreq.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	mw := httptest.NewRecorder()
 	r.ServeHTTP(mw, mreq)
 	if mw.Code != http.StatusNotFound {
@@ -423,7 +427,7 @@ func TestInternalStorage_Delete_RemovesObject(t *testing.T) {
 	// Second delete: idempotent — still 204.
 	req2 := httptest.NewRequest("DELETE",
 		"/internal/storage/"+testStorageProjectID+"/"+minted.StorageID, nil)
-	req2.Header.Set(runtimeTokenHeader, "the-secret")
+	req2.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusNoContent {
@@ -454,7 +458,7 @@ func TestInternalStorage_RejectsInvalidProjectID(t *testing.T) {
 		"/internal/storage/bad..proj/upload-url",
 		bytes.NewReader([]byte(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -470,7 +474,7 @@ func TestInternalStorage_ConfirmUpload_RejectsInvalidBody(t *testing.T) {
 		"/internal/storage/"+testStorageProjectID+"/confirm-upload",
 		bytes.NewReader([]byte("not-json")))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -487,7 +491,7 @@ func TestInternalStorage_ConfirmUpload_RejectsEmptyStorageID(t *testing.T) {
 		"/internal/storage/"+testStorageProjectID+"/confirm-upload",
 		bytes.NewReader([]byte(`{"storageId":"","size":1,"contentType":"text/plain"}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -503,7 +507,7 @@ func TestInternalStorage_DownloadURL_RejectsEmptyStorageID(t *testing.T) {
 		"/internal/storage/"+testStorageProjectID+"/download-url",
 		bytes.NewReader([]byte(`{"storageId":""}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -519,7 +523,7 @@ func TestInternalStorage_DownloadURL_RejectsInvalidBody(t *testing.T) {
 		"/internal/storage/"+testStorageProjectID+"/download-url",
 		bytes.NewReader([]byte("not-json")))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -556,7 +560,7 @@ func TestInternalStorage_RejectsInvalidProjectIDOnAllRoutes(t *testing.T) {
 			req = httptest.NewRequest(c.method, c.path, nil)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(runtimeTokenHeader, "the-secret")
+		req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 		if w.Code != http.StatusBadRequest {
@@ -626,11 +630,31 @@ func mustPost(t *testing.T, r chi.Router, path, body string) []byte {
 	t.Helper()
 	req := httptest.NewRequest("POST", path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(runtimeTokenHeader, "the-secret")
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code < 200 || w.Code >= 300 {
 		t.Fatalf("%s %s: status %d (body=%s)", req.Method, path, w.Code, w.Body.String())
 	}
 	return w.Body.Bytes()
+}
+
+// TestInternalStorage_CrossProjectTokenRejected pins SEC-C5: a runtime token
+// minted for one project must NOT authenticate an internal storage call for a
+// different project. Before the per-project derivation, every deno pod shared
+// one secret, so project A's runtime could sign project B's storage URLs.
+func TestInternalStorage_CrossProjectTokenRejected(t *testing.T) {
+	r, _ := newStorageInternalRouter(t, "the-secret")
+	// Valid token, but for a DIFFERENT project than the path targets.
+	foreignToken := edgefn.DeriveRuntimeSecret("the-secret", "proj_other_tenant")
+	req := httptest.NewRequest("POST",
+		"/internal/storage/"+testStorageProjectID+"/upload-url",
+		strings.NewReader(`{"contentType":"text/plain","size":10}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(runtimeTokenHeader, foreignToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("cross-project runtime token must be rejected (SEC-C5): got %d (body=%s)", w.Code, w.Body.String())
+	}
 }

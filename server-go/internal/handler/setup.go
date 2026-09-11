@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/go-chi/chi/v5"
@@ -18,7 +19,9 @@ func NewSetupHandler(svc *service.OperatorSetupService) *SetupHandler { return &
 
 func (h *SetupHandler) Routes(r chi.Router) {
 	r.Get("/status", h.GetStatus)
-	r.Post("/install/{databaseType}", h.Install)
+	// Installing a DB operator applies a remote YAML cluster-wide — restrict to
+	// platform_admin (manage_setup), not any authenticated user (SEC-H5).
+	r.With(auth.RequirePermission(auth.PermManageSetup)).Post("/install/{databaseType}", h.Install)
 }
 
 func (h *SetupHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
