@@ -1,0 +1,20 @@
+title = "Excalibase gitleaks config"
+
+# Built-in gitleaks rules stay on; the allowlist below only exempts verified
+# test fixtures. Everything else (server-go, frontend, deno-server, configs,
+# history) is still scanned for real secrets.
+[extend]
+useDefault = true
+
+# Known TEST FIXTURES — generated keypairs / fabricated tokens in *_test.go,
+# verified (2026-09-11) as not-real secrets. Real credentials live in env/vault,
+# never in source. When a new fixture trips a rule, add its path here or annotate
+# the line with `//gitleaks:allow` — do NOT broadly exclude all *_test.go.
+[allowlist]
+description = "Verified test fixtures (fake keys/tokens)"
+paths = [
+  '''server-go/internal/vaultclient/integration_test\.go''',
+  '''server-go/internal/edgefn/integration_test\.go''',
+  '''server-go/internal/storage/postgres/pg_test\.go''',
+  '''server-go/internal/storage/sqlite/sqlite_test\.go''',
+]
