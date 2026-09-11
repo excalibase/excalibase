@@ -547,6 +547,13 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		// Phase 10: ctx.storage internal routes share the Deno runtime
 		// secret. Empty value disables the routes (all calls 401).
 		storageHandler.SetRuntimeSecret(cfg.DenoRuntimeSecret)
+		// Resumable/multipart uploads (tus) over the same R2 backend. Skipped
+		// silently when R2 isn't configured (TusComposer returns nil).
+		if err := storageHandler.EnableResumableUploads(storageSvc.TusComposer()); err != nil {
+			log.Printf("WARN: resumable uploads disabled: %v", err)
+		} else {
+			log.Printf("INFO: resumable (tus) uploads enabled at /api/projects/{projectId}/storage/tus")
+		}
 	}
 	emailTokensHandler := handler.NewEmailTokensHandler(
 		sqlStore.DB(),
