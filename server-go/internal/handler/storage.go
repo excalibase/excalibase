@@ -15,6 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 	"github.com/go-chi/chi/v5"
+	tusd "github.com/tus/tusd/v2/pkg/handler"
 )
 
 // StorageHandler exposes Supabase-style storage endpoints under
@@ -36,6 +37,7 @@ type StorageHandler struct {
 	svc           *storagesvc.Service
 	store         storage.InstanceStore // looks up project tier for quota enforcement
 	runtimeSecret string                // shared secret for /internal/storage/* (Phase 10)
+	tusd          *tusd.Handler         // resumable/multipart uploads; nil = feature disabled
 }
 
 func NewStorageHandler(svc *storagesvc.Service, store storage.InstanceStore) *StorageHandler {
@@ -75,6 +77,13 @@ func (h *StorageHandler) Routes(r chi.Router) {
 	r.Get("/buckets/{bucket}/objects/*", h.GetObjectMetadata)
 	r.Get("/buckets/{bucket}/download-url/*", h.SignDownloadURL)
 	r.Delete("/buckets/{bucket}/objects/*", h.DeleteObject)
+	// Resumable/multipart uploads (tus) — only when enabled via
+	// EnableResumableUploads. Both the collection root (POST create) and the
+	// per-upload resource (HEAD/PATCH/DELETE) route through serveTus.
+	if h.tusd != nil {
+		r.Handle("/tus", http.HandlerFunc(h.serveTus))
+		r.Handle("/tus/*", http.HandlerFunc(h.serveTus))
+	}
 }
 
 // PublicRoutes mounts the unauthenticated public-bucket fast-path. Mount
