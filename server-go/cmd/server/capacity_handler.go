@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,12 +14,31 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+// tierResolver returns the resource spec for a tier. Wired to
+// ProvisioningService.TierConfig so the capacity report reads the same
+// tier_configs table admission does; a nil resolver falls back to the
+// hardcoded config defaults.
+type tierResolver func(ctx context.Context, tier domain.TierType) (config.TierConfig, error)
+
 // capacityDeps holds the dependencies needed by the capacity HTTP handler.
 // Extracted from main() to keep its cognitive complexity below the threshold.
 type capacityDeps struct {
 	k8sClient       k8s.KubeClient
 	store           storage.InstanceStore
 	headroomPercent int
+	resolveTier     tierResolver
+}
+
+// resolver returns the wired tier resolver, or the config-default fallback
+// when none was injected (keeps the report working in deployments that never
+// set up the tier store).
+func (d *capacityDeps) resolver() tierResolver {
+	if d.resolveTier != nil {
+		return d.resolveTier
+	}
+	return func(_ context.Context, tier domain.TierType) (config.TierConfig, error) {
+		return config.GetTierConfig(tier)
+	}
 }
 
 // serveCapacity handles GET /api/capacity.
@@ -37,7 +57,7 @@ func (d *capacityDeps) serveCapacity(w http.ResponseWriter, r *http.Request) {
 
 	instances, _ := d.store.FindAll()
 	byTier := buildByTierMap(instances)
-	fits := buildTierFits(cap, byTier)
+	fits := buildTierFits(r.Context(), cap, byTier, d.resolver())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -67,8 +87,10 @@ func buildByTierMap(instances []*domain.DatabaseInstance) map[string]int {
 	return byTier
 }
 
-// buildTierFits computes per-tier capacity estimates (projects that can still fit).
-func buildTierFits(cap k8s.ClusterCapacity, byTier map[string]int) map[string]map[string]interface{} {
+// buildTierFits computes per-tier capacity estimates (projects that can still
+// fit). Tier specs come from the resolver so an admin edit to tier_configs is
+// reflected here without a redeploy.
+func buildTierFits(ctx context.Context, cap k8s.ClusterCapacity, byTier map[string]int, resolve tierResolver) map[string]map[string]interface{} {
 	tiers := map[string]domain.TierType{
 		"free":       domain.Free,
 		"standard":   domain.Standard,
@@ -76,7 +98,7 @@ func buildTierFits(cap k8s.ClusterCapacity, byTier map[string]int) map[string]ma
 	}
 	fits := map[string]map[string]interface{}{}
 	for label, t := range tiers {
-		tc, err := config.GetTierConfig(t)
+		tc, err := resolve(ctx, t)
 		if err != nil {
 			continue
 		}

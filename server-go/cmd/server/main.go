@@ -609,6 +609,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 			k8sClient:       k8sClient,
 			store:           store,
 			headroomPercent: cfg.CapacityHeadroomPercent,
+			// Same store-backed resolver admission uses, so the capacity report
+			// reflects admin edits to tier_configs without a redeploy.
+			resolveTier: provSvc.TierConfig,
 		},
 		rlUnauth:    custommw.RateLimit(custommw.PerIP, 30, time.Minute),
 		rlAuthed:    custommw.RateLimit(custommw.PerUser, 600, time.Minute),

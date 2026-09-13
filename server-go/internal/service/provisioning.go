@@ -116,6 +116,13 @@ func (s *ProvisioningService) tierConfig(ctx context.Context, tier domain.TierTy
 	return config.GetTierConfig(tier)
 }
 
+// TierConfig is the exported form of tierConfig for readers outside this
+// package (the capacity report), so every consumer of tier specs honours admin
+// edits in the tier_configs table exactly as admission does.
+func (s *ProvisioningService) TierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
+	return s.tierConfig(ctx, tier)
+}
+
 func (s *ProvisioningService) SetSelfHostedMode(enabled bool) {
 	s.selfHostedMode = enabled
 }
