@@ -35,7 +35,10 @@ var tiers = map[domain.TierType]TierConfig{
 		Instances:        1,
 		StorageSize:      "5Gi",
 		Memory:           "512Mi",
-		CPU:              "0.5",
+		// A free-tier DB should be small: 0.25 CPU is plenty for light/idle
+		// workloads and lets a free tenant fit alongside the platform on a
+		// modest node (a 0.5 request could not even be admitted on a 2-vCPU box).
+		CPU:              "0.25",
 		BackupEnabled:    false,
 		StatementTimeout: "15s",
 	},

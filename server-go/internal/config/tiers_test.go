@@ -14,7 +14,7 @@ func TestGetTierConfig(t *testing.T) {
 		memory    string
 		cpu       string
 	}{
-		{domain.Free, 1, "5Gi", "512Mi", "0.5"},
+		{domain.Free, 1, "5Gi", "512Mi", "0.25"},
 		{domain.Standard, 1, "50Gi", "4Gi", "2"},
 		{domain.Enterprise, 1, "500Gi", "16Gi", "4"},
 	}
