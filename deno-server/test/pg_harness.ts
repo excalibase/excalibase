@@ -40,11 +40,19 @@ async function isReady(host: string, port: number): Promise<boolean> {
   }
 }
 
+export interface StartPostgresOptions {
+  /** Image to run. Default postgres:16-alpine; pass pgvector/pgvector:pg16 for vector tests. */
+  image?: string;
+}
+
 /**
  * Start a Postgres container and wait until it accepts connections.
  * The caller is responsible for calling `handle.stop()` in a `finally`.
+ * Every DB-backed test should go through here so they all share one
+ * readiness contract (a real SQL handshake) and one teardown.
  */
-export async function startPostgres(): Promise<PgHandle> {
+export async function startPostgres(opts: StartPostgresOptions = {}): Promise<PgHandle> {
+  const image = opts.image ?? "postgres:16-alpine";
   const port = await findFreePort();
   const host = "127.0.0.1";
   const pass = "test-pass";
@@ -68,7 +76,7 @@ export async function startPostgres(): Promise<PgHandle> {
       // on the index tests can exceed it on a CI runner and take the backend
       // down mid-test ("could not resize shared memory segment").
       "--shm-size=256m",
-      "postgres:16-alpine",
+      image,
     ],
     stdout: "piped",
     stderr: "piped",

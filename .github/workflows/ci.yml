@@ -138,13 +138,17 @@ jobs:
           curl -fsSL https://deno.land/install.sh | sh -s v2.5.5
           echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
           "$HOME/.deno/bin/deno" --version
-      # Host-side runs resolve ./vendor/excalibase-server/index.mjs through a
-      # symlink (vendor/ is gitignored) — the same layout the image bakes in.
-      - name: Link vendored dist
+      # Host-side runs resolve ./vendor/excalibase-server/index.mjs exactly as
+      # the image does (vendor/ is gitignored). It must be a REAL directory,
+      # not a symlink: the worker's scoped read permission is the realpath of
+      # the vendored dir, so a symlinked path is lexically outside the grant
+      # and every vendored import fails with PermissionDenied.
+      - name: Stage vendored dist
         working-directory: deno-server
         run: |
-          mkdir -p vendor coverage
-          ln -sfn ../lib/excalibase-server/dist vendor/excalibase-server
+          rm -rf vendor/excalibase-server
+          mkdir -p vendor/excalibase-server coverage
+          cp -r lib/excalibase-server/dist/. vendor/excalibase-server/
           test -f vendor/excalibase-server/index.mjs
       # scripts/run-tests.sh runs one `deno test` per file (avoids testcontainer
       # contention); DENO_TEST_FLAGS threads --coverage through to each run.

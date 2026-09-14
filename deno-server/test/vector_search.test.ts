@@ -14,8 +14,8 @@
 // when collections declare a `vector` field.
 
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { delay } from "https://deno.land/std@0.224.0/async/delay.ts";
 import { startRuntime } from "./harness.ts";
+import { startPostgres } from "./pg_harness.ts";
 
 interface VecPgHandle {
   url: string;
@@ -24,83 +24,14 @@ interface VecPgHandle {
   stop: () => Promise<void>;
 }
 
-async function findFreePort(): Promise<number> {
-  const l = Deno.listen({ port: 0 });
-  const p = (l.addr as Deno.NetAddr).port;
-  l.close();
-  await delay(10);
-  return p;
-}
-
-async function isReady(host: string, port: number): Promise<boolean> {
-  try {
-    const conn = await Deno.connect({ hostname: host, port });
-    conn.close();
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-// Spin up a pgvector-enabled Postgres. Mirrors pg_harness.startPostgres but
-// uses the pgvector/pgvector image so CREATE EXTENSION succeeds without
-// adding compile-time deps to plain postgres:16-alpine.
+// Spin up a pgvector-enabled Postgres through the shared harness, so this
+// test gets the same readiness contract (a real SQL handshake over TCP —
+// TCP-listen + pg_isready is not enough, see pg_harness.ts) and the same
+// teardown as every other DB-backed test. Only the image differs:
+// pgvector/pgvector:pg16 ships the extension so CREATE EXTENSION succeeds.
 async function startPgVector(): Promise<VecPgHandle> {
-  const port = await findFreePort();
-  const host = "127.0.0.1";
-  const pass = "test-pass";
-  const db = "excalibase_test";
-  const name = `excalibase-pgvtest-${crypto.randomUUID().slice(0, 8)}`;
-
-  const run = new Deno.Command("docker", {
-    args: [
-      "run",
-      "-d",
-      "--rm",
-      "--name", name,
-      "-e", `POSTGRES_PASSWORD=${pass}`,
-      "-e", `POSTGRES_DB=${db}`,
-      "-p", `${port}:5432`,
-      "pgvector/pgvector:pg16",
-    ],
-    stdout: "piped",
-    stderr: "piped",
-  });
-  const { code, stderr } = await run.output();
-  if (code !== 0) {
-    throw new Error(`docker run failed: ${new TextDecoder().decode(stderr)}`);
-  }
-
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (await isReady(host, port)) break;
-    await delay(200);
-  }
-  // pg_isready loop — TCP up != accepting queries.
-  while (Date.now() < deadline) {
-    const probe = await new Deno.Command("docker", {
-      args: ["exec", name, "pg_isready", "-U", "postgres", "-d", db],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    if (probe.code === 0) break;
-    await delay(300);
-  }
-
-  const stop = async () => {
-    try {
-      await new Deno.Command("docker", {
-        args: ["kill", name],
-        stdout: "null",
-        stderr: "null",
-      }).output();
-    } catch (_) { /* already gone */ }
-  };
-
-  return {
-    url: `postgresql://postgres:${pass}@${host}:${port}/${db}`,
-    host, port, stop,
-  };
+  const pg = await startPostgres({ image: "pgvector/pgvector:pg16" });
+  return { url: pg.url, host: pg.host, port: pg.port, stop: pg.stop };
 }
 
 async function createVectorCollection(pgUrl: string, collection: string, dims: number): Promise<void> {
