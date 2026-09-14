@@ -131,7 +131,10 @@ jobs:
           npm run build
       - uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.5.5 # keep in step with deno-server/Dockerfile
+          # Exact versions are written without the v (setup-deno treats "vX.Y.Z"
+          # as a range and fails to resolve it). Keep in step with the
+          # deno-server/Dockerfile base image (alpine-2.5.5).
+          deno-version: "2.5.5"
       # Host-side runs resolve ./vendor/excalibase-server/index.mjs through a
       # symlink (vendor/ is gitignored) — the same layout the image bakes in.
       - name: Link vendored dist
