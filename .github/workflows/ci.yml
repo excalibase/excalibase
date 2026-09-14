@@ -151,14 +151,17 @@ jobs:
           cp -r lib/excalibase-server/dist/. vendor/excalibase-server/
           test -f vendor/excalibase-server/index.mjs
       # scripts/run-tests.sh runs one `deno test` per file (avoids testcontainer
-      # contention); DENO_TEST_FLAGS threads --coverage through to each run.
+      # contention). Each file gets its own coverage subdir — `deno test
+      # --coverage` clears its dir on start, so a shared one would keep only
+      # the last file's profile — and they are merged into a single lcov here.
       - name: Deno tests (with coverage)
         working-directory: deno-server
         env:
-          DENO_TEST_FLAGS: --coverage=cov
+          DENO_COVERAGE_DIR: cov
         run: |
           ./scripts/run-tests.sh
-          deno coverage cov --lcov --output=coverage/lcov.info
+          deno coverage cov/* --lcov --output=coverage/lcov.info
+          echo "lcov source files: $(grep -c '^SF:' coverage/lcov.info)"
       - uses: actions/upload-artifact@v4
         with:
           name: deno-coverage

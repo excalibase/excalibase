@@ -28,10 +28,17 @@ START=$(date +%s)
 run_file() {
   local f="$1"
   for attempt in $(seq 1 "$RETRIES"); do
-    # DENO_TEST_FLAGS lets CI thread extra flags (e.g. --coverage=cov) into
-    # every per-file run without changing the default local invocation.
+    # DENO_TEST_FLAGS threads extra flags into every per-file run.
+    # DENO_COVERAGE_DIR collects coverage into a SEPARATE subdir per file:
+    # `deno test --coverage=<dir>` clears <dir> on start, so a shared dir
+    # across these per-file processes keeps only the last file's profile.
+    # Merge afterwards with `deno coverage <dir>/* --lcov`.
+    local covflag=""
+    if [ -n "${DENO_COVERAGE_DIR:-}" ]; then
+      covflag="--coverage=${DENO_COVERAGE_DIR}/$(basename "$f" .test.ts)"
+    fi
     # shellcheck disable=SC2086
-    if deno test --allow-all --no-check --quiet ${DENO_TEST_FLAGS:-} "$f" > /tmp/dt-out.log 2>&1; then
+    if deno test --allow-all --no-check --quiet ${DENO_TEST_FLAGS:-} $covflag "$f" > /tmp/dt-out.log 2>&1; then
       if [ "$attempt" -gt 1 ]; then
         printf "  ✓ %s (passed on attempt %d)\n" "${f#test/}" "$attempt"
       else
