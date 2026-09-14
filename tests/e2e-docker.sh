@@ -50,8 +50,8 @@ go build -o "$DATA_DIR/excalibase-server" ./cmd/server/ 2>&1
 pass "server binary built"
 
 # --- Step 1: Start platform-db Postgres container ---
-# The platform store is Postgres-only now (self-hosted and cloud both run a
-# platform-db). The vault still uses bbolt in self-hosted mode (unchanged).
+# The platform store and the vault are Postgres-only (self-hosted and cloud
+# both run a platform-db).
 echo "1. Start platform-db Postgres (self-hosted shape)"
 docker run -d --name "$PLATFORM_DB_NAME" \
   -p "$PLATFORM_DB_PORT:5432" \
@@ -93,10 +93,11 @@ done
 curl -sf -H "X-Runtime-Secret: $DENO_RUNTIME_SECRET" http://127.0.0.1:8000/health > /dev/null 2>&1 && pass "deno runtime healthy" || fail "deno" "not healthy after 15s"
 
 # --- Step 3: Start provisioning server ---
-echo "3. Start provisioning server (PROVISIONER_MODE=docker, self-hosted → Postgres platform-db + bbolt vault)"
+echo "3. Start provisioning server (PROVISIONER_MODE=docker, self-hosted → Postgres platform-db + Postgres vault)"
 cd "$ROOT"
-# Self-hosted mode: Postgres platform store + bbolt vault. STORAGE_PATH must be
-# writable (bbolt vault lives there); PLATFORM_DB_URL points at the platform-db.
+# Self-hosted mode: Postgres platform store + Postgres vault. STORAGE_PATH must
+# be writable (the auto-generated unseal.key lives there); PLATFORM_DB_URL
+# points at the platform-db.
 PORT=24055 \
 DEPLOYMENT_MODE=selfhosted \
 PROVISIONER_MODE=docker \

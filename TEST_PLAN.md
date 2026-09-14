@@ -126,7 +126,7 @@ For each surface, four columns:
 
 | Surface | Where it lives | Tests today | Gap |
 |---|---|---|---|
-| In-process (Shamir + bbolt) | `internal/vault/vault.go`, `pkg/vault/vault_test.go` | covered | — |
+| In-process (Shamir + Postgres store) | `pkg/vault/vault.go`, `pkg/vault/vault_test.go`, `internal/storage/postgres/pg_vault_store_test.go` | covered | — |
 | HTTP client | `internal/vaultclient/client.go` | `client_test.go` | — |
 | Standalone vault HTTP service | `internal/handler/vaultapi/handler.go` | `handler_test.go` | — |
 | Setup wizard atomic init | `internal/handler/setup.go` | `setup_wizard_test.go`, Playwright `setup-wizard.spec.ts` | — |
@@ -269,7 +269,7 @@ Rotating these to a checklist so they're not lost:
 - [x] Docker restore E2E (testcontainers Postgres → backup → S3 → restore → `SELECT n FROM smoke` returns 4242)
 - [ ] Helm template render of `platform-base` with `platformDB.backup.endpointURL` set — chart YAML renders cleanly (verified) but actual `helm upgrade` against minikube not run
 - [ ] Live PgDog config reload via NATS publish — `tests/pgdog/test-nats-reload.sh` ran in earlier session per memory; not re-verified
-- [ ] Vault-from-shamir-shares unseal end-to-end — covered by setup-wizard spec mock; not exercised against a sealed bbolt vault recently
+- [ ] Vault-from-shamir-shares unseal end-to-end — covered by setup-wizard spec mock; not exercised against a sealed Postgres-backed vault recently
 
 ---
 

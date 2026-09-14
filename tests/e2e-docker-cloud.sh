@@ -2,9 +2,9 @@
 # E2E full-flow test for Docker provisioner mode in CLOUD storage shape:
 # Postgres platform store + Postgres vault store (the same shape AIO helm
 # uses in K8s, but with the Docker provisioner instead of CNPG). Catches
-# bugs that only surface when the platform DB is Postgres rather than
-# SQLite + bbolt — e.g. vault barrier serialization, schema migrations,
-# concurrent transaction handling.
+# bugs that only surface with the bootstrap-Job init flow (no auto-init) —
+# e.g. vault barrier serialization, schema migrations, concurrent
+# transaction handling.
 #
 # Prerequisites:
 #   - Docker 24+ running (docker ps works)
@@ -149,8 +149,7 @@ else
   echo "$R" | jq -r '.sealed' 2>/dev/null | grep -q false && pass "vault already unsealed" || fail "vault" "$R"
 fi
 
-# Verify the barrier landed in the Postgres vault_barrier table — proves
-# we're not silently using bbolt.
+# Verify the barrier landed in the Postgres vault_barrier table.
 BARRIER_COUNT=$(docker exec "$PLATFORM_DB_CONTAINER" psql -U platform -d platform -tAc \
   "SELECT count(*) FROM vault_barrier" 2>/dev/null || echo "0")
 [ "$BARRIER_COUNT" = "1" ] \

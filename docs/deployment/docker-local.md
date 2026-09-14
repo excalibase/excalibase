@@ -65,7 +65,7 @@ services:
       PLATFORM_DB_URL: "postgres://platform:${PLATFORM_DB_PASSWORD}@platform-db:5432/platform?sslmode=disable"
       CORS_ORIGINS: "https://studio.example.com"
       PUBLIC_BASE_URL: "https://api.example.com"
-      STORAGE_PATH: /var/lib/excalibase           # bbolt vault only
+      STORAGE_PATH: /var/lib/excalibase           # vault unseal.key only
       DENO_RUNTIME_SECRET: ${DENO_RUNTIME_SECRET}
       # Docker provisioner (single-tenant; docker + cloud is refused at boot).
       PROVISIONER_MODE: docker
