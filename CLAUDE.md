@@ -14,7 +14,7 @@ Excalibase Provisioning — database provisioning platform written in Go. Provis
 # Build Go server
 cd server-go && go build -o excalibase-server ./cmd/server/
 
-# Self-hosted mode (default) — Postgres platform DB + Postgres vault (auto-init/unseal), single default org, no tier enforcement
+# Self-hosted mode (default) — Postgres platform DB + Postgres vault, single default org, no tier enforcement
 PORT=24005 PLATFORM_DB_URL=postgres://platform:pass@localhost:5432/platform STORAGE_PATH=../provisioning-data CORS_ORIGINS=http://localhost:5173 ./excalibase-server
 
 # Cloud mode — Postgres platform DB + Postgres-backed vault, multi-tenant, tier enforcement
@@ -96,7 +96,7 @@ frontend/                        # React 18 studio (Vite, Tailwind, TanStack)
 ### Self-hosted vs Cloud (platform-wide)
 
 `DEPLOYMENT_MODE` env var (`selfhosted` default, or `cloud`):
-- **Self-hosted**: Postgres store + Postgres-backed vault that auto-inits on first boot and auto-unseals on restart (`VAULT_UNSEAL_KEY` or `STORAGE_PATH/unseal.key`), default org auto-created at first registration, no tier enforcement, single tenant
+- **Self-hosted**: Postgres store + Postgres-backed vault, default org auto-created at first registration, no tier enforcement, single tenant
 - **Cloud**: Postgres store + a vault that is one of (in priority): remote HTTP (`VAULT_URL` set), Postgres-backed in-process (init/unseal by the bootstrap Job). Multi-org create/delete, tier limits enforced. See `cmd/server/vault_wiring.go` and `buildVault` in `cmd/server/main.go`.
 
 ### Strategy Pattern for Database Provisioning
@@ -137,7 +137,7 @@ Postgres-only storage in both modes (`PLATFORM_DB_URL` always required): the CNP
 ### Vault
 
 Two deployment options, both implement the same `VaultClient` interface:
-- **In-process** (default) — Shamir secret sharing on the platform Postgres (`vault_barrier` / `vault_secrets`). Self-hosted auto-inits with one share persisted to `STORAGE_PATH/unseal.key` (or honours `VAULT_UNSEAL_KEY`); cloud is initialised by the bootstrap Job. Setup wizard at `/setup` creates the first admin.
+- **In-process** (default) — Shamir secret sharing on the platform Postgres (`vault_barrier` / `vault_secrets`). On k8s the chart bootstrap Job inits/unseals it in every deployment mode and keeps the share in the `platform-bootstrap` Secret; on the docker provisioner the binary auto-inits with one share persisted to `STORAGE_PATH/unseal.key` (or honours `VAULT_UNSEAL_KEY`). Setup wizard at `/setup` creates the first admin.
 - **Standalone HTTP** — set `VAULT_URL` + `VAULT_PAT` and the server skips local vault init; the local server's `/api/vault/*` routes are not mounted.
 
 Vault paths are org-scoped: `projects/{orgSlug}/{projectId}/credentials/{role}`. Backup S3 creds at `backup/s3`. Vault setup wizard handles share generation + first-admin creation atomically.

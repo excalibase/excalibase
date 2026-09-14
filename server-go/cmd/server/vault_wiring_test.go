@@ -15,9 +15,9 @@ func TestLocalVaultNeedsAutoReady(t *testing.T) {
 		cfg  config.AppConfig
 		want bool
 	}{
-		{"selfhosted on k8s auto-readies at boot", config.AppConfig{DeploymentMode: "selfhosted", ProvisionerMode: "k8s"}, true},
+		{"selfhosted on k8s relies on the bootstrap Job", config.AppConfig{DeploymentMode: "selfhosted", ProvisionerMode: "k8s"}, false},
 		{"selfhosted on docker auto-readies at boot", config.AppConfig{DeploymentMode: "selfhosted", ProvisionerMode: "docker"}, true},
-		{"cloud relies on the bootstrap Job", config.AppConfig{DeploymentMode: "cloud", ProvisionerMode: "k8s"}, false},
+		{"cloud on k8s relies on the bootstrap Job", config.AppConfig{DeploymentMode: "cloud", ProvisionerMode: "k8s"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

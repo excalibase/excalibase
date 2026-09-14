@@ -15,7 +15,7 @@ All four support both deployment modes:
 
 - **`DEPLOYMENT_MODE=selfhosted`** (default) — Postgres platform store and
   vault, single default org, no billing/tier enforcement. All features
-  unlocked. The vault auto-inits on first boot and auto-unseals on restart.
+  unlocked. On docker the vault auto-inits on first boot and auto-unseals on restart; on k8s the chart bootstrap Job does this.
 - **`DEPLOYMENT_MODE=cloud`** — Postgres platform store and vault, multi-org,
   tier enforcement. Vault init/unseal is done by the bootstrap Job.
 
@@ -55,7 +55,7 @@ These apply to every matrix. Matrix-specific pages cover the rest.
 | `CORS_ORIGINS` | yes | `https://app.excalibase.io` | Comma-separated allow-list. No default means no origin allowed — fail-closed. |
 | `PUBLIC_BASE_URL` | yes | `https://api.excalibase.io` | Base URL for edge function invoke + SDK snippets. |
 | `LOG_LEVEL` | no | `debug` | `debug`, `info`, `warn`, `error` |
-| `STORAGE_PATH` | no | `../provisioning-data` | On-disk dir for the auto-generated vault unseal key (`unseal.key`). Self-hosted only; unused when `VAULT_UNSEAL_KEY` is set. |
+| `STORAGE_PATH` | no | `../provisioning-data` | On-disk dir for the auto-generated vault unseal key (`unseal.key`). Docker provisioner only; unused when `VAULT_UNSEAL_KEY` is set or on k8s (the bootstrap Job holds the key). |
 | `PLATFORM_DB_URL` | **yes** | — | Postgres DSN for the platform store. Required in both modes (no SQLite fallback). |
 | `VAULT_URL` | optional | — | If set, use remote vault over HTTP instead of embedded. |
 | `VAULT_PAT` | with `VAULT_URL` | — | Personal access token for remote vault. |

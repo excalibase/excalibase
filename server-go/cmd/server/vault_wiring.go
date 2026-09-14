@@ -7,10 +7,12 @@ import (
 )
 
 // localVaultNeedsAutoReady reports whether the in-process vault must init and
-// unseal itself at boot. Cloud deployments have a bootstrap Job that does this
-// step; selfhosted and docker deployments have nobody else to do it.
+// unseal itself at boot. On k8s the chart's bootstrap Job does this step in
+// every deployment mode and keeps the unseal key in a Secret (STORAGE_PATH may
+// be an emptyDir, so a key file there would not survive a restart). The docker
+// provisioner has no Job, so the binary readies itself.
 func localVaultNeedsAutoReady(cfg config.AppConfig) bool {
-	return !cfg.IsCloud()
+	return cfg.ProvisionerMode == "docker"
 }
 
 // newLocalVault opens the in-process vault on the given store and, when

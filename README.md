@@ -14,7 +14,7 @@ curl -X POST http://localhost:24005/api/provision \
 
 - **9-stage provisioning pipeline** — namespace, CRD deployment, pod readiness, credential extraction, backup config, metrics setup, watcher deployment, role creation
 - **Three deployment modes per project** — Kubernetes (CNPG operator on any distro: EKS/GKE/AKS, RKE2, or single-node k0s/k3s/MicroK8s including rootless), Docker (local socket or remote daemon over TLS, Dokploy/CapRover-style), or BYOC (register an external DB you already manage). K8s vs Docker is a real trade-off: K8s provides ServiceAccount + Role + namespace isolation, Docker is operationally simpler but daemon access is root-equivalent and there's no per-project isolation enforced by the platform.
-- **Self-hosted or cloud** — `DEPLOYMENT_MODE=selfhosted` (Postgres store + Postgres vault with auto-init/unseal, single org) or `cloud` (Postgres store + Postgres vault or remote HTTP vault, multi-tenant + tier enforcement)
+- **Self-hosted or cloud** — `DEPLOYMENT_MODE=selfhosted` (Postgres store + Postgres vault, single org) or `cloud` (Postgres store + Postgres vault or remote HTTP vault, multi-tenant + tier enforcement)
 - **3 tiers** — FREE (1 pod), STANDARD (3 pods + HA), ENTERPRISE (5 pods)
 - **Real metrics** — per-pod CPU/memory from metrics-server + CNPG database metrics from port 9187
 - **Backup & PITR** — automated WAL archiving + scheduled backups + point-in-time recovery
