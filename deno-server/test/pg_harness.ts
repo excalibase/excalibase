@@ -64,6 +64,10 @@ export async function startPostgres(): Promise<PgHandle> {
       `POSTGRES_DB=${db}`,
       "-p",
       `${port}:5432`,
+      // Docker's default /dev/shm is 64 MB; Postgres parallel sorts/hashes
+      // on the index tests can exceed it on a CI runner and take the backend
+      // down mid-test ("could not resize shared memory segment").
+      "--shm-size=256m",
       "postgres:16-alpine",
     ],
     stdout: "piped",
@@ -90,20 +94,37 @@ export async function startPostgres(): Promise<PgHandle> {
     throw new Error(`postgres did not start on :${port} within 30s`);
   }
 
-  // TCP listening != accepting queries — Postgres listens before it finishes
-  // initdb. Poll `pg_isready` inside the container until it returns 0.
+  // TCP listening != accepting queries. Docker's port proxy accepts the host
+  // TCP connection before Postgres listens, and the official image runs a
+  // temporary initdb-phase server (unix socket only) that `docker exec
+  // pg_isready` happily reports as ready — then restarts it. A connection
+  // opened in that window dies with ECONNRESET, which is exactly what CI
+  // runners (slower than a dev box) hit. The only readiness signal that
+  // matches how the tests connect is a real SQL round-trip over TCP from
+  // the host, so retry that until it succeeds.
+  const url = `postgresql://postgres:${pass}@${host}:${port}/${db}`;
+  const postgres = (await import("npm:postgres@3.4.4")).default;
+  let accepting = false;
   while (Date.now() < deadline) {
-    const probe = await new Deno.Command("docker", {
-      args: ["exec", name, "pg_isready", "-U", "postgres", "-d", db],
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    if (probe.code === 0) break;
+    const sql = postgres(url, { max: 1, connect_timeout: 2, onnotice: () => {} });
+    try {
+      await sql`select 1`;
+      accepting = true;
+    } catch (_) {
+      // not ready yet (refused, reset, or still initialising)
+    } finally {
+      await sql.end({ timeout: 1 }).catch(() => {});
+    }
+    if (accepting) break;
     await delay(300);
+  }
+  if (!accepting) {
+    await stopContainer(name);
+    throw new Error(`postgres on :${port} did not accept SQL within 30s`);
   }
 
   return {
-    url: `postgresql://postgres:${pass}@${host}:${port}/${db}`,
+    url,
     host,
     port,
     containerId,
@@ -113,13 +134,15 @@ export async function startPostgres(): Promise<PgHandle> {
 
 async function stopContainer(name: string): Promise<void> {
   try {
+    // `rm -f` kills and waits for removal, so the next test's container never
+    // races a half-torn-down one (`kill` alone returns before --rm finishes).
     await new Deno.Command("docker", {
-      args: ["kill", name],
+      args: ["rm", "-f", name],
       stdout: "null",
       stderr: "null",
     }).output();
   } catch (_) {
-    // If kill fails the container is already gone (--rm) — fine.
+    // If rm fails the container is already gone — fine.
   }
 }
 
