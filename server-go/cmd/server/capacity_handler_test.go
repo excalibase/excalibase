@@ -38,10 +38,10 @@ func resolverWithFreeCPU(cpu string) tierResolver {
 
 func TestBuildTierFits_HonoursResolvedTierSpec(t *testing.T) {
 	ctx := context.Background()
-	cap := smallCluster()
+	capacity := smallCluster()
 
-	withDefault := buildTierFits(ctx, cap, map[string]int{}, resolverWithFreeCPU("0.5"))
-	withSmall := buildTierFits(ctx, cap, map[string]int{}, resolverWithFreeCPU("0.25"))
+	withDefault := buildTierFits(ctx, capacity, map[string]int{}, resolverWithFreeCPU("0.5"))
+	withSmall := buildTierFits(ctx, capacity, map[string]int{}, resolverWithFreeCPU("0.25"))
 
 	defFit := withDefault["free"]["projectsCanFit"].(int64)
 	smallFit := withSmall["free"]["projectsCanFit"].(int64)
