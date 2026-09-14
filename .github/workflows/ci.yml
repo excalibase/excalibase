@@ -31,8 +31,11 @@ jobs:
               - 'frontend/**'
             deno:
               - 'deno-server/**'
+            # Only the file that defines these jobs re-triggers the full Go
+            # suite. Touching cd.yml, nightly.yml, etc. must not cost a
+            # 17-minute integration run on a deno- or chart-only PR.
             ci:
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
 
   go-lint:
     name: Go Lint
