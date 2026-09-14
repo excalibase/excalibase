@@ -32,7 +32,6 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/localstack v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	github.com/tus/tusd/v2 v2.10.0
-	go.etcd.io/bbolt v1.4.3
 	golang.org/x/crypto v0.51.0
 	helm.sh/helm/v3 v3.20.1
 	k8s.io/api v0.35.3

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,7 +20,6 @@ const (
 	testExpect500Err = "expected error on 500"
 )
 
-
 // testPAT is the placeholder token used by tests that don't explicitly
 // pass their own token list. Returned from setupVaultServer so tests can
 // supply it to NewHTTPClient and authenticate against the placeholder.
@@ -29,8 +27,7 @@ const testPAT = "test-pat-placeholder"
 
 func setupVaultServer(t *testing.T, tokens []string) (*httptest.Server, *vault.Vault) {
 	t.Helper()
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, "test.bolt"))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf("create vault: %v", err)
 	}

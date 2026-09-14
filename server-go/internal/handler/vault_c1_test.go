@@ -3,7 +3,6 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,8 +16,7 @@ import (
 // /status and the PKI public key stay open (the pre-login setup UI polls them,
 // and the PKI key is public by design).
 func TestVault_InitUnsealRekeyRequireAuth(t *testing.T) {
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, "vault.bolt"))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf("new vault: %v", err)
 	}

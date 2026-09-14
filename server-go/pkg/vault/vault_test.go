@@ -2,24 +2,19 @@ package vault
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 const (
-	testVaultFile      = "vault.bolt"
 	testVaultCredsPath = "projects/my-app/credentials/admin"
 	testVaultIP        = "10.0.0.5"
 	testVaultKey       = "test/key"
 )
 
-
 func tempVault(t *testing.T) *Vault {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, testVaultFile)
-	v, err := New(path)
+	v, err := NewWithStore(NewMemoryStore())
 	if err != nil {
 		t.Fatalf("New vault: %v", err)
 	}
@@ -242,17 +237,16 @@ func TestRekey(t *testing.T) {
 }
 
 func TestPersistenceAcrossRestart(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, testVaultFile)
+	store := NewMemoryStore()
 
 	// Create vault, init, store secret
-	v1, _ := New(path)
+	v1, _ := NewWithStore(store)
 	result, _ := v1.Init(1, 1)
 	v1.Put("persistent/secret", map[string]string{"answer": "42"})
 	v1.Close()
 
-	// Reopen vault — should be initialized but sealed
-	v2, _ := New(path)
+	// Reopen vault on the same store — should be initialized but sealed
+	v2, _ := NewWithStore(store)
 	defer v2.Close()
 
 	if !v2.Initialized() {
@@ -440,11 +434,10 @@ func TestListSecretsRequiresUnseal(t *testing.T) {
 }
 
 func TestAutoUnsealFromEnv(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, testVaultFile)
+	store := NewMemoryStore()
 
 	// Create and init
-	v1, _ := New(path)
+	v1, _ := NewWithStore(store)
 	result, _ := v1.Init(1, 1)
 	v1.Close()
 
@@ -453,7 +446,7 @@ func TestAutoUnsealFromEnv(t *testing.T) {
 	defer os.Unsetenv("VAULT_UNSEAL_KEY")
 
 	// Reopen — should auto-unseal
-	v2, _ := New(path)
+	v2, _ := NewWithStore(store)
 	defer v2.Close()
 
 	if v2.Sealed() {

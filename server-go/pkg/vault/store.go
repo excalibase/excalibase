@@ -1,7 +1,7 @@
 package vault
 
-// VaultStore abstracts the storage backend for the vault.
-// Both bbolt (local dev) and Postgres (production) implement this.
+// VaultStore abstracts the storage backend for the vault. Postgres backs
+// every deployment mode; MemoryStore exists for tests.
 type VaultStore interface {
 	// GetBarrier reads the encrypted barrier key and metadata.
 	// Returns nil, nil, nil if not initialized.

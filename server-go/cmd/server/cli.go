@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -70,33 +69,28 @@ func resetPasswordCLI() {
 	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
 	username := fs.String("username", "admin", "Username to reset password for")
 	dbURL := fs.String("db", "", "PostgreSQL connection string (default: from PLATFORM_DB_URL env)")
-	vaultPath := fs.String("vault", "", "Vault database path (default: from STORAGE_PATH env)")
 	fs.Parse(os.Args[2:])
 
 	cfg := config.Load()
 	if *dbURL == "" {
 		*dbURL = cfg.PlatformDBURL
 	}
-	if *vaultPath == "" {
-		*vaultPath = filepath.Join(cfg.StoragePath, "vault.bolt")
-	}
 
-	// 1. Open vault and require unseal (proof of authority)
-	v, err := vault.New(*vaultPath)
-	if err != nil {
-		log.Fatalf("Open vault: %v", err)
-	}
-
-	if err := unsealVaultInteractive(v); err != nil {
-		log.Fatalf("Vault: %v", err)
-	}
-
-	// 2. Open the Postgres platform store
+	// 1. Open the Postgres platform store (also backs the vault)
 	sqlStore, err := pgstore.New(*dbURL)
 	if err != nil {
 		log.Fatalf("Open database: %v", err)
 	}
 	defer sqlStore.Close()
+
+	// 2. Open vault and require unseal (proof of authority)
+	v, err := openVaultOnPlatformDB(sqlStore)
+	if err != nil {
+		log.Fatalf("Open vault: %v", err)
+	}
+	if err := unsealVaultInteractive(v); err != nil {
+		log.Fatalf("Vault: %v", err)
+	}
 
 	// 3. Find user
 	ctx := context.Background()
@@ -136,14 +130,13 @@ type discoveredInstance struct {
 	Port      int
 	DBName    string
 	Status    string
-	InStore  bool
+	InStore   bool
 }
 
 // recoverInstancesCLI handles the `recover-instances` subcommand.
 func recoverInstancesCLI() {
 	fs := flag.NewFlagSet("recover-instances", flag.ExitOnError)
 	dbURL := fs.String("db", "", "PostgreSQL connection string (default: from PLATFORM_DB_URL env)")
-	vaultPath := fs.String("vault", "", "Vault database path")
 	dryRun := fs.Bool("dry-run", false, "Show what would be recovered without writing")
 	nsPrefix := fs.String("prefix", "excalibase-", "Namespace prefix to scan")
 	fs.Parse(os.Args[2:])
@@ -152,23 +145,20 @@ func recoverInstancesCLI() {
 	if *dbURL == "" {
 		*dbURL = cfg.PlatformDBURL
 	}
-	if *vaultPath == "" {
-		*vaultPath = filepath.Join(cfg.StoragePath, "vault.bolt")
-	}
-
-	v, err := vault.New(*vaultPath)
-	if err != nil {
-		log.Fatalf("Open vault: %v", err)
-	}
-	if err := unsealVaultInteractive(v); err != nil {
-		log.Fatalf("Vault: %v", err)
-	}
 
 	sqlStore, err := pgstore.New(*dbURL)
 	if err != nil {
 		log.Fatalf("Open database: %v", err)
 	}
 	defer sqlStore.Close()
+
+	v, err := openVaultOnPlatformDB(sqlStore)
+	if err != nil {
+		log.Fatalf("Open vault: %v", err)
+	}
+	if err := unsealVaultInteractive(v); err != nil {
+		log.Fatalf("Vault: %v", err)
+	}
 
 	ctx := context.Background()
 	users, _ := sqlStore.FindAllUsers(ctx)
@@ -276,7 +266,7 @@ func buildDiscoveredInstance(ctx context.Context, k8sClient k8s.KubeClient, ns s
 		Port:      5432,
 		DBName:    dbName,
 		Status:    status,
-		InStore:  existingMap[projectID] != nil,
+		InStore:   existingMap[projectID] != nil,
 	}
 }
 

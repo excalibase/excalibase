@@ -3,7 +3,6 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -17,8 +16,7 @@ import (
 // caller's role so we can prove the PermViewCredentials gate.
 func setupVaultRouterAs(t *testing.T, role string) (chi.Router, *vault.Vault) {
 	t.Helper()
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, "vault.bolt"))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf("new vault: %v", err)
 	}

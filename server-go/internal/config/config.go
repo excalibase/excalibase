@@ -86,7 +86,7 @@ type AppConfig struct {
 //   - Enforces tier limits in the provisioning service
 //
 // Self-hosted mode (default):
-//   - Uses SQLite for platform store, bbolt for vault
+//   - Uses Postgres for platform store + vault backend, auto-init/unseal at boot
 //   - Single default org, no tier enforcement, no billing endpoints
 func (c AppConfig) IsCloud() bool {
 	return c.DeploymentMode == "cloud"
