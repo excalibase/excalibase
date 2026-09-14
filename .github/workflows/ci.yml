@@ -109,6 +109,51 @@ jobs:
       # in the full-stack AIO e2e, not in this isolated frontend job.
       - run: npm test
 
+  deno-test:
+    name: Deno Unit (deno-server + vendored lib)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: deno-server/lib/excalibase-server/package-lock.json
+      # The vendored @excalibase/server lib ships its own jest suite; run it,
+      # then build the dist the Deno import map points at.
+      - name: Vendored lib — test + build
+        working-directory: deno-server/lib/excalibase-server
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.5.5 # keep in step with deno-server/Dockerfile
+      # Host-side runs resolve ./vendor/excalibase-server/index.mjs through a
+      # symlink (vendor/ is gitignored) — the same layout the image bakes in.
+      - name: Link vendored dist
+        working-directory: deno-server
+        run: |
+          mkdir -p vendor coverage
+          ln -sfn ../lib/excalibase-server/dist vendor/excalibase-server
+          test -f vendor/excalibase-server/index.mjs
+      # scripts/run-tests.sh runs one `deno test` per file (avoids testcontainer
+      # contention); DENO_TEST_FLAGS threads --coverage through to each run.
+      - name: Deno tests (with coverage)
+        working-directory: deno-server
+        env:
+          DENO_TEST_FLAGS: --coverage=cov
+        run: |
+          ./scripts/run-tests.sh
+          deno coverage cov --lcov --output=coverage/lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deno-coverage
+          path: deno-server/coverage/lcov.info
+
   defend:
     name: Defend (secrets + vulns + audit)
     runs-on: ubuntu-latest
@@ -196,8 +241,11 @@ jobs:
   sonarcloud:
     name: SonarCloud Scan
     runs-on: ubuntu-latest
-    needs: [changes, go-integration]
-    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    needs: [changes, go-integration, deno-test]
+    # !cancelled(): a skipped upstream job (e.g. go-integration on a deno-only
+    # PR) must not skip the scan; the coverage downloads below tolerate a
+    # missing artifact.
+    if: ${{ !cancelled() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.deno == 'true' || needs.changes.outputs.ci == 'true') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -207,6 +255,11 @@ jobs:
         with:
           name: go-coverage
           path: server-go
+        continue-on-error: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: deno-coverage
+          path: deno-server/coverage
         continue-on-error: true
       # SonarSource/sonarqube-scan-action v6 wraps sonar-scanner-cli 8.x —
       # the same engine SonarCloud runs, so local/CI scans match cloud
