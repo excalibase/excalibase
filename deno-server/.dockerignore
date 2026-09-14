@@ -1,0 +1,8 @@
+# Vendored @excalibase/server is built inside the image (stage lib-build);
+# never ship host-side installs or a stale dist into the build context.
+lib/excalibase-server/node_modules
+lib/excalibase-server/dist
+lib/excalibase-server/.git
+lib/excalibase-server/coverage
+node_modules
+test

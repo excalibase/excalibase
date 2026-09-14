@@ -29,24 +29,30 @@
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { startRuntime } from "./harness.ts";
 
-// Path the vendoring strategy lands the built lib at, both inside the
-// container (/opt/excalibase-server/dist/index.mjs) and on the host
-// (../../../excalibase-server/dist/index.mjs relative to this file).
-// The runtime's import map keys this exact resolution; the test asserts
-// the file is reachable before running so a missing build fails loudly
-// instead of producing a misleading worker-boot error.
-const VENDORED_DIST_HOST = new URL(
-  "../../../excalibase-server/dist/index.mjs",
-  import.meta.url,
-).pathname;
+// Where the built lib lives. The runtime's import map resolves
+// `npm:@excalibase/server@X` to ./vendor/excalibase-server/index.mjs
+// (relative to deno.json), and that is what the worker actually reads —
+// so that is the path this test must check. The vendored source is at
+// deno-server/lib/excalibase-server/ and CI (or a dev) stages its dist
+// into vendor/ as a real directory. The old sibling-clone location
+// (../../../excalibase-server/dist) is kept as a fallback for machines
+// still on that layout. The check runs before the suite so a missing build
+// fails loudly instead of producing a misleading worker-boot error.
+const VENDORED_DIST_CANDIDATES = [
+  new URL("../vendor/excalibase-server/index.mjs", import.meta.url).pathname,
+  new URL("../../../excalibase-server/dist/index.mjs", import.meta.url).pathname,
+];
+const VENDORED_DIST_HOST = VENDORED_DIST_CANDIDATES[0];
 
 async function vendoredDistPresent(): Promise<boolean> {
-  try {
-    const stat = await Deno.stat(VENDORED_DIST_HOST);
-    return stat.isFile;
-  } catch {
-    return false;
+  for (const p of VENDORED_DIST_CANDIDATES) {
+    try {
+      if ((await Deno.stat(p)).isFile) return true;
+    } catch {
+      // try the next candidate
+    }
   }
+  return false;
 }
 
 // A real `@excalibase/server@0.10.0` bundle — `import { mutation } from
@@ -87,10 +93,12 @@ Deno.test({
   async fn() {
     if (!(await vendoredDistPresent())) {
       throw new Error(
-        `vendored lib not built at ${VENDORED_DIST_HOST}; run ` +
-        `\`cd ../excalibase-server && npm install && npm run build\` ` +
-        `before invoking this suite (or run \`make e2e-reactive\` from ` +
-        `the graphql repo which handles the build).`,
+        `vendored lib not staged at ${VENDORED_DIST_HOST}; run ` +
+        `\`(cd lib/excalibase-server && npm ci && npm run build) && ` +
+        `mkdir -p vendor/excalibase-server && ` +
+        `cp -r lib/excalibase-server/dist/. vendor/excalibase-server/\` ` +
+        `from deno-server/ (a real directory, not a symlink — the worker's ` +
+        `read grant is the realpath of the vendored dir).`,
       );
     }
     const rt = await startRuntime({ v2Enabled: true });
