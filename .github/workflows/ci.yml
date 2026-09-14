@@ -129,12 +129,15 @@ jobs:
           npm ci
           npm test
           npm run build
-      - uses: denoland/setup-deno@v2
-        with:
-          # Exact versions are written without the v (setup-deno treats "vX.Y.Z"
-          # as a range and fails to resolve it). Keep in step with the
-          # deno-server/Dockerfile base image (alpine-2.5.5).
-          deno-version: "2.5.5"
+      # Install Deno with the official script pinned to the exact version the
+      # deno-server/Dockerfile base image uses (alpine-2.5.5). setup-deno@v2's
+      # version resolver failed on this version ("Could not resolve a version
+      # for the given range"), so we don't depend on it.
+      - name: Install Deno 2.5.5
+        run: |
+          curl -fsSL https://deno.land/install.sh | sh -s v2.5.5
+          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
+          "$HOME/.deno/bin/deno" --version
       # Host-side runs resolve ./vendor/excalibase-server/index.mjs through a
       # symlink (vendor/ is gitignored) — the same layout the image bakes in.
       - name: Link vendored dist
