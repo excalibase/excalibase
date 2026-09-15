@@ -378,13 +378,13 @@
       "height": 50,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
-      "text": "Store\n(pg/bbolt)",
+      "text": "Store\n(Postgres)",
       "fontSize": 15,
       "fontFamily": 2,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "p-store",
-      "originalText": "Store\n(pg/bbolt)",
+      "originalText": "Store\n(Postgres)",
       "lineHeight": 1.35
     },
     {

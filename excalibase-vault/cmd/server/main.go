@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,8 +20,10 @@ import (
 
 func main() {
 	port := envOr("PORT", "24010")
-	storagePath := envOr("VAULT_STORAGE_PATH", "./vault-data")
-	dbURL := os.Getenv("VAULT_DB_URL")
+	dbURL, err := vaultDBURL()
+	if err != nil {
+		log.Fatal(err)
+	}
 	corsOrigins := envOr("CORS_ORIGINS", "*")
 	accessTokens := parseTokens(os.Getenv("VAULT_ACCESS_TOKENS"))
 
@@ -30,30 +33,18 @@ func main() {
 		log.Fatalf("KMS unseal-key resolve: %v", err)
 	}
 
-	var v *vault.Vault
-	if dbURL != "" {
-		db, err := sql.Open("postgres", dbURL)
-		if err != nil {
-			log.Fatalf("Failed to connect Postgres: %v", err)
-		}
-		defer db.Close()
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("Failed to connect Postgres: %v", err)
+	}
+	defer db.Close()
 
-		vaultStore := vault.NewPostgresStore(db)
-		v, err = vault.NewWithStore(vaultStore)
-		if err != nil {
-			log.Fatalf("Failed to init vault (postgres): %v", err)
-		}
-		log.Println("Using PostgreSQL vault store")
-	} else {
-		vaultPath := storagePath + "/vault.bolt"
-		var err error
-		v, err = vault.New(vaultPath)
-		if err != nil {
-			log.Fatalf("Failed to init vault (bbolt): %v", err)
-		}
-		log.Println("Using bbolt vault store")
+	v, err := vault.NewWithStore(vault.NewPostgresStore(db))
+	if err != nil {
+		log.Fatalf("Failed to init vault (postgres): %v", err)
 	}
 	defer v.Close()
+	log.Println("Using PostgreSQL vault store")
 
 	// Auto-unseal
 	if unsealKey := os.Getenv("VAULT_UNSEAL_KEY"); unsealKey != "" && v.Initialized() && v.Sealed() {
@@ -93,6 +84,16 @@ func corsMiddleware(origins string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// vaultDBURL is the Postgres connection the vault stores its barrier and
+// secrets in. There is no file-backed fallback: the vault is Postgres-only.
+func vaultDBURL() (string, error) {
+	url := strings.TrimSpace(os.Getenv("VAULT_DB_URL"))
+	if url == "" {
+		return "", errors.New("VAULT_DB_URL is required (Postgres connection string for the vault store)")
+	}
+	return url, nil
 }
 
 func envOr(key, fallback string) string {

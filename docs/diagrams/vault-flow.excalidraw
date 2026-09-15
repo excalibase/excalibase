@@ -602,13 +602,13 @@
       "height": 72,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
-      "text": "Store\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nPostgres (production)\nbbolt (dev)\nPKI auto-init",
+      "text": "Store\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nPostgres (all modes)\nPKI auto-init",
       "fontSize": 10,
       "fontFamily": 2,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "v-store",
-      "originalText": "Store\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nPostgres (production)\nbbolt (dev)\nPKI auto-init",
+      "originalText": "Store\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nPostgres (all modes)\nPKI auto-init",
       "lineHeight": 1.35
     },
     {
