@@ -150,6 +150,11 @@ func runServer(cfg config.AppConfig) {
 		dockerClient: dockerClientRef,
 	})
 	deps.fnHandler = fnHandler
+	// BYOC hosts are pinned to a guard-validated address before the runtime
+	// sees them; the loop re-pins so DNS changes land within one interval.
+	fnHandler.SetEgressGuard(deps.egress)
+	stopRepin := fnHandler.StartBYOCRepin(handler.DefaultBYOCRepinInterval)
+	defer stopRepin()
 
 	policyPub, err := service.NewPolicyChangePublisher(cfg.NatsURL)
 	if err != nil {
@@ -315,6 +320,7 @@ func startFunctionScheduler(sqlStore storage.PlatformStore) *bootstrap.Scheduler
 // handlerDeps groups all wired handlers + middleware used during route mounting.
 // Centralising the bag keeps buildRouter focused on routing rather than wiring.
 type handlerDeps struct {
+	egress             *byoc.Guard
 	provHandler        *handler.ProvisioningHandler
 	metricsHandler     *handler.MetricsHandler
 	backupHandler      *handler.BackupHandler
@@ -675,6 +681,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provHandler.SetEgressGuard(egress)
 
 	return &handlerDeps{
+		egress:             egress,
 		provHandler:        provHandler,
 		metricsHandler:     handler.NewMetricsHandler(metricsSvc),
 		backupHandler:      handler.NewBackupHandler(backupSvc),

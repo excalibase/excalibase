@@ -370,3 +370,66 @@ func TestDefaultGuard_UsesRealResolverAndEmptyPolicy(t *testing.T) {
 		t.Errorf("Default().ValidateHost(loopback) = %v", err)
 	}
 }
+
+func TestGuard_ResolvePinned_ReturnsTheValidatedAddress(t *testing.T) {
+	resolver := newFakeResolver(map[string][]string{"db.example": {"203.0.113.10", "203.0.113.11"}})
+	g, _ := newTestGuard(t, Policy{}, resolver)
+
+	addr, err := g.ResolvePinned(context.Background(), "db.example", netip.Addr{})
+	if err != nil {
+		t.Fatalf("ResolvePinned = %v", err)
+	}
+	if addr.String() != "203.0.113.10" {
+		t.Errorf("pinned %s, want the first validated answer 203.0.113.10", addr)
+	}
+	if n := resolver.lookups("db.example"); n != 1 {
+		t.Errorf("pinning must resolve exactly once, got %d lookups", n)
+	}
+}
+
+func TestGuard_ResolvePinned_KeepsTheCurrentPinWhileItIsStillAnAnswer(t *testing.T) {
+	resolver := newFakeResolver(map[string][]string{"db.example": {"203.0.113.10", "203.0.113.11"}})
+	g, _ := newTestGuard(t, Policy{}, resolver)
+
+	current := netip.MustParseAddr("203.0.113.11")
+	addr, err := g.ResolvePinned(context.Background(), "db.example", current)
+	if err != nil || addr != current {
+		t.Fatalf("ResolvePinned = %s, %v; want the current pin %s", addr, err, current)
+	}
+	stale := netip.MustParseAddr("203.0.113.99")
+	addr, err = g.ResolvePinned(context.Background(), "db.example", stale)
+	if err != nil || addr.String() != "203.0.113.10" {
+		t.Fatalf("ResolvePinned with a stale pin = %s, %v; want the first answer", addr, err)
+	}
+}
+
+func TestGuard_ResolvePinned_RefusesRebindToInternal(t *testing.T) {
+	resolver := newFakeResolver(nil)
+	resolver.sequence["rebind.example"] = [][]string{
+		{"203.0.113.10"}, // registration
+		{"10.0.0.5"},     // deploy time (rebound)
+	}
+	g, _ := newTestGuard(t, Policy{}, resolver)
+	if err := g.ValidateHost(context.Background(), "rebind.example"); err != nil {
+		t.Fatalf("registration should pass: %v", err)
+	}
+	addr, err := g.ResolvePinned(context.Background(), "rebind.example", netip.MustParseAddr("203.0.113.10"))
+	if !errors.Is(err, ErrInternalAddress) {
+		t.Fatalf("ResolvePinned after rebind = %v, want ErrInternalAddress", err)
+	}
+	if addr.IsValid() {
+		t.Errorf("no address must be pinned on refusal, got %s", addr)
+	}
+	if strings.Contains(err.Error(), "10.0.0.5") {
+		t.Errorf("error leaks the resolved address: %v", err)
+	}
+}
+
+func TestIsBYOC(t *testing.T) {
+	byocProject := fakeModes{inst: &domain.DatabaseInstance{ProjectID: "byoc", DeploymentMode: domain.ModeBYOC}}
+	managed := fakeModes{inst: &domain.DatabaseInstance{ProjectID: "managed", DeploymentMode: domain.ModeK8s}}
+	missing := fakeModes{err: errors.New("not found")}
+	if !IsBYOC(byocProject, "byoc") || IsBYOC(managed, "managed") || IsBYOC(missing, "missing") || IsBYOC(nil, "byoc") {
+		t.Error("IsBYOC must be true only for a known project in BYOC mode")
+	}
+}

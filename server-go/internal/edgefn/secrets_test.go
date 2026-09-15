@@ -143,7 +143,7 @@ func TestSecretsStore_RejectsInvalidKey(t *testing.T) {
 func TestSecretsStore_RejectsReservedKeys(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
-	reserved := []string{"EXCALIBASE_URL", "EXCALIBASE_PROJECT_ID", "EXCALIBASE_ANON_KEY", "EXCALIBASE_SERVICE_KEY", "EXCALIBASE_DB_URL"}
+	reserved := []string{"EXCALIBASE_URL", "EXCALIBASE_PROJECT_ID", "EXCALIBASE_ANON_KEY", "EXCALIBASE_SERVICE_KEY", "EXCALIBASE_DB_URL", "EXCALIBASE_DB_HOST", "BYOC_PINNED"}
 	for _, k := range reserved {
 		if err := s.Set("proj_p1", k, "malicious"); err == nil {
 			t.Errorf("reserved key %q should be rejected", k)

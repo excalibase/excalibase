@@ -91,4 +91,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # target. Without this the worker's scoped `read` would fail at
 # module-resolve time even though the worker permissions allow it (Deno
 # enforces the parent's permissions as the upper bound).
-CMD ["deno", "run", "--allow-net", "--allow-read=/app/vendor", "--allow-env=RUNTIME_SECRET,ALLOWED_HOSTS,PORT,EXCALIBASE_FUNCTIONS_V2,EXCALIBASE_DB_URL,EXCALIBASE_PROVISIONING_URL,EXCALIBASE_RUN_MAX_DEPTH,EXCALIBASE_MUTATION_ISOLATION,EXCALIBASE_MUTATION_RETRY_MAX,EXCALIBASE_MUTATION_RETRY_BACKOFF_MS,EXCALIBASE_QUERY_MAX_RESULTS,EXCALIBASE_VENDORED_LIB_DIR", "--unstable-worker-options", "server.ts"]
+CMD ["deno", "run", "--allow-net", "--allow-read=/app/vendor", "--allow-env=RUNTIME_SECRET,ALLOWED_HOSTS,PORT,EXCALIBASE_FUNCTIONS_V2,EXCALIBASE_DB_URL,EXCALIBASE_DB_HOST,BYOC_PINNED,EXCALIBASE_PROVISIONING_URL,EXCALIBASE_RUN_MAX_DEPTH,EXCALIBASE_MUTATION_ISOLATION,EXCALIBASE_MUTATION_RETRY_MAX,EXCALIBASE_MUTATION_RETRY_BACKOFF_MS,EXCALIBASE_QUERY_MAX_RESULTS,EXCALIBASE_VENDORED_LIB_DIR", "--unstable-worker-options", "server.ts"]
