@@ -17,6 +17,15 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// backupDisposition renders the deprovision choice as a fixed literal for logs,
+// so request-derived data never reaches the log line.
+func backupDisposition(opts service.DeprovisionOptions) string {
+	if opts.DeleteBackups {
+		return "purge"
+	}
+	return "keep"
+}
+
 type ProvisioningHandler struct {
 	svc       *service.ProvisioningService
 	orgStore  storage.OrgStore
@@ -179,7 +188,7 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProvisioningRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
 
@@ -252,10 +261,10 @@ func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	tenant, _ := custommw.TenantIDFromContext(r.Context())
 	opts, err := decodeDeprovisionOptions(r)
 	if err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
-	log.Printf("tenant=%s action=deprovision path=%s deleteBackups=%t", tenant, r.URL.Path, opts.DeleteBackups)
+	log.Printf("tenant=%s action=deprovision path=%s backups=%s", tenant, r.URL.Path, backupDisposition(opts))
 	if err := h.svc.DeprovisionWithOptions(r.Context(), projectID, opts); err != nil {
 		log.Printf("tenant=%s action=deprovision status=failed err=%v", tenant, err)
 		httpError(w, safeError(err), http.StatusBadRequest)
@@ -365,7 +374,7 @@ func (h *ProvisioningHandler) SetMaintenanceWindow(w http.ResponseWriter, r *htt
 	projectID := chi.URLParam(r, "projectId")
 	var cfg domain.MaintenanceWindowConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
 	if err := h.svc.SetMaintenanceWindow(projectID, cfg); err != nil {
