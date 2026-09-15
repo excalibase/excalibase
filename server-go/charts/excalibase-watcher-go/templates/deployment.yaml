@@ -59,6 +59,18 @@ spec:
                   name: {{ include "excalibase-watcher-go.postgresSecretName" . }}
                   key: {{ .Values.postgres.existingSecretPasswordKey }}
             {{- end }}
+            {{- if and .Values.nats.enabled (or .Values.nats.username .Values.nats.existingSecret) }}
+            - name: WATCHER_NATS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "excalibase-watcher-go.natsSecretName" . }}
+                  key: {{ .Values.nats.existingSecretUsernameKey }}
+            - name: WATCHER_NATS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "excalibase-watcher-go.natsSecretName" . }}
+                  key: {{ .Values.nats.existingSecretPasswordKey }}
+            {{- end }}
             {{- if .Values.mysql.enabled }}
             - name: WATCHER_MYSQL_USERNAME
               valueFrom:

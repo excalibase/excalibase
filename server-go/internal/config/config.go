@@ -6,28 +6,42 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/natsauth"
 )
 
 var errDockerCloudUnsupported = errors.New(
 	"PROVISIONER_MODE=docker is single-tenant only; DEPLOYMENT_MODE=cloud (multi-tenant) is not supported on the docker provisioner — use k8s for multi-tenant")
 
 type AppConfig struct {
-	Port              string
-	StoragePath       string
-	LogLevel          string
-	PlatformDBURL     string
-	NatsURL           string
-	CORSOrigins       []string
-	WatcherChartPath  string
-	DenoRuntimeURL    string
-	DenoRuntimeSecret string
-	DenoNamespace     string
-	DenoRuntimeImage  string
-	VaultURL          string
-	VaultPAT          string
-	DeploymentMode    string // "selfhosted" (default) or "cloud"
-	PublicBaseURL     string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
-	RegistrationMode  string // "open" (default) or "invite" — invite closes open studio signup
+	Port          string
+	StoragePath   string
+	LogLevel      string
+	PlatformDBURL string
+	NatsURL       string
+	// NATS bus identity (EXC-324). NatsUser/NatsPassword are this service's
+	// own credential; the callout fields let it answer the NATS server's
+	// auth_callout requests for every other principal.
+	NatsUser              string
+	NatsPassword          string
+	NatsGraphQLPassword   string
+	NatsPgDogPassword     string
+	NatsCDCStream         string
+	NatsCalloutAccount    string
+	NatsCalloutUser       string
+	NatsCalloutPassword   string
+	NatsCalloutIssuerSeed string
+	CORSOrigins           []string
+	WatcherChartPath      string
+	DenoRuntimeURL        string
+	DenoRuntimeSecret     string
+	DenoNamespace         string
+	DenoRuntimeImage      string
+	VaultURL              string
+	VaultPAT              string
+	DeploymentMode        string // "selfhosted" (default) or "cloud"
+	PublicBaseURL         string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
+	RegistrationMode      string // "open" (default) or "invite" — invite closes open studio signup
 
 	// K8s client connection — priority: remote API > kubeconfig path > env KUBECONFIG > in-cluster > ~/.kube/config
 	KubeconfigPath         string // explicit kubeconfig file
@@ -132,6 +146,15 @@ func Load() AppConfig {
 		LogLevel:                envOr("LOG_LEVEL", "debug"),
 		PlatformDBURL:           envOr("PLATFORM_DB_URL", ""),
 		NatsURL:                 envOr("NATS_URL", ""),
+		NatsUser:                envOr("NATS_USER", natsauth.PrincipalProvisioning),
+		NatsPassword:            os.Getenv("NATS_PASSWORD"),
+		NatsGraphQLPassword:     os.Getenv("NATS_GRAPHQL_PASSWORD"),
+		NatsPgDogPassword:       os.Getenv("NATS_PGDOG_PASSWORD"),
+		NatsCDCStream:           envOr("NATS_CDC_STREAM", "CDC"),
+		NatsCalloutAccount:      envOr("NATS_AUTH_CALLOUT_ACCOUNT", "APP"),
+		NatsCalloutUser:         envOr("NATS_AUTH_CALLOUT_USER", "auth-callout"),
+		NatsCalloutPassword:     os.Getenv("NATS_AUTH_CALLOUT_PASSWORD"),
+		NatsCalloutIssuerSeed:   os.Getenv("NATS_AUTH_CALLOUT_ISSUER_SEED"),
 		RegistrationMode:        envOr("REGISTRATION_MODE", "open"),
 		CORSOrigins:             parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
 		WatcherChartPath:        envOr("WATCHER_CHART_PATH", "/charts/excalibase-watcher"),

@@ -80,3 +80,14 @@ MySQL secret name
 {{- printf "%s-mysql" (include "excalibase-watcher-go.fullname" .) }}
 {{- end }}
 {{- end }}
+
+{{/*
+NATS credential Secret name (EXC-324).
+*/}}
+{{- define "excalibase-watcher-go.natsSecretName" -}}
+{{- if .Values.nats.existingSecret }}
+{{- .Values.nats.existingSecret }}
+{{- else }}
+{{- printf "%s-nats" (include "excalibase-watcher-go.fullname" .) }}
+{{- end }}
+{{- end }}
