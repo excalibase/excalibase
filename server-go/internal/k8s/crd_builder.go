@@ -237,7 +237,7 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 func buildBackupSpec(projectID string, backup *BackupOpts) map[string]interface{} {
 	store := ObjectStoreOpts{EndpointURL: backup.EndpointURL, Bucket: backup.Bucket, SecretName: backup.SecretName}
 	if store.Bucket == "" {
-		store.Bucket = "postgres-backups"
+		store.Bucket = DefaultBackupBucket
 	}
 	if store.SecretName == "" {
 		store.SecretName = "backup-s3-creds"
@@ -251,12 +251,29 @@ func buildBackupSpec(projectID string, backup *BackupOpts) map[string]interface{
 	}
 }
 
+const (
+	// DefaultBackupBucket is the bucket Barman writes to when the backup
+	// options carry none (legacy default).
+	DefaultBackupBucket = "postgres-backups"
+	// barmanServerName is the Barman server name under destinationPath;
+	// every base backup and WAL segment lands beneath it.
+	barmanServerName = "cloud"
+)
+
+// BarmanObjectPrefix is the object-key prefix (relative to the bucket) that
+// holds everything Barman wrote for a project: destinationPath/serverName/.
+// The deprovision purge deletes exactly this prefix, so it is derived from
+// the same values buildBarmanObjectStore puts in the CRD.
+func BarmanObjectPrefix(projectID string) string {
+	return projectID + "/" + barmanServerName + "/"
+}
+
 // buildBarmanObjectStore is the one place the barmanObjectStore block is
-// shaped, so backup (write) and restore (read) agree on serverName,
-// destinationPath, endpoint and credential keys.
+// shaped, so backup (write), restore (read) and purge (delete) agree on
+// serverName, destinationPath, endpoint and credential keys.
 func buildBarmanObjectStore(projectID string, store ObjectStoreOpts) map[string]interface{} {
 	barman := map[string]interface{}{
-		"serverName":      "cloud",
+		"serverName":      barmanServerName,
 		"destinationPath": fmt.Sprintf("s3://%s/%s", store.Bucket, projectID),
 		"s3Credentials": map[string]interface{}{
 			"accessKeyId":     map[string]interface{}{"name": store.SecretName, "key": "ACCESS_KEY_ID"},

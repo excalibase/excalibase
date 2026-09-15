@@ -52,6 +52,10 @@ type ProvisioningService struct {
 	// Cloudflare R2 instead of the legacy floci/localstack mock.
 	backupDefaults *BackupDefaults
 
+	// backupPurger deletes a project's backup objects on request at
+	// deprovision time. nil means confirmDeleteBackups is refused.
+	backupPurger *BackupPurger
+
 	// defaultDeploymentMode stamps inst.DeploymentMode at provision time
 	// for k8s + docker pipelines (BYOC sets its own). Empty falls back
 	// to ModeK8s so legacy callers keep their existing behaviour.
@@ -594,25 +598,68 @@ func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *do
 	}, nil
 }
 
+var (
+	// ErrProjectNotFound is returned when the project row does not exist.
+	ErrProjectNotFound = errors.New("project not found")
+	// ErrBackupPurgeNotConfigured is returned when a caller asks to delete
+	// backups but no purger is wired; nothing is deprovisioned in that case.
+	ErrBackupPurgeNotConfigured = errors.New("backup purge is not configured on this platform")
+	// ErrBackupsNotPendingDelete guards the retry endpoint: only a row left
+	// in BACKUPS_PENDING_DELETE by a deprovision may have its backups purged.
+	ErrBackupsNotPendingDelete = errors.New("project is not pending backup deletion; deprovision it with confirmDeleteBackups first")
+)
+
+// DeprovisionOptions tunes what Deprovision removes beyond the project.
+type DeprovisionOptions struct {
+	// DeleteBackups purges the project's backup objects once its resources
+	// are gone. Default false: backups outlive the project.
+	DeleteBackups bool
+}
+
+// SetBackupPurger wires the object-store purge used when a deprovision asks
+// for its backups to be deleted.
+func (s *ProvisioningService) SetBackupPurger(p *BackupPurger) { s.backupPurger = p }
+
+// Deprovision removes the project and keeps its backups.
 func (s *ProvisioningService) Deprovision(ctx context.Context, projectID string) error {
+	return s.DeprovisionWithOptions(ctx, projectID, DeprovisionOptions{})
+}
+
+// DeprovisionWithOptions tears the project down: pooler, cluster/container,
+// vault paths, then (when asked) its backup objects, then the store row. A
+// failed purge never undoes the deprovision — the row is kept with status
+// BACKUPS_PENDING_DELETE so PurgeBackups can retry it.
+func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projectID string, opts DeprovisionOptions) error {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return fmt.Errorf("project not found: %s", projectID)
+		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
 	}
-
 	if inst.DeletionProtection != nil && *inst.DeletionProtection {
 		return fmt.Errorf("deletion protection is enabled for %s", projectID)
 	}
+	if opts.DeleteBackups && s.backupPurger == nil {
+		return ErrBackupPurgeNotConfigured
+	}
 
-	// Deregister from PgDog connection pooler
+	s.releaseProjectResources(ctx, inst, projectID)
+
+	if opts.DeleteBackups && !s.purgeBackupsOrMark(ctx, inst) {
+		return nil
+	}
+	return s.store.Delete(projectID)
+}
+
+// releaseProjectResources frees everything the project holds outside the
+// store row. Every step is best-effort: an outage logs and proceeds rather
+// than stranding the instance row.
+func (s *ProvisioningService) releaseProjectResources(ctx context.Context, inst *domain.DatabaseInstance, projectID string) {
 	if s.pgdog != nil {
 		if err := s.pgdog.DeregisterCluster(ctx, projectID, inst.Username); err != nil {
 			log.Printf("WARN: pgdog deregister: %v", err)
 		}
 	}
 
-	prov, ok := s.factory.Get(inst.DBType)
-	if ok {
+	if prov, ok := s.factory.Get(inst.DBType); ok {
 		if err := prov.Deprovision(ctx, inst.Namespace, projectID); err != nil {
 			log.Printf("WARN: K8s deprovision failed for %s: %v", projectID, err)
 		}
@@ -621,13 +668,62 @@ func (s *ProvisioningService) Deprovision(ctx context.Context, projectID string)
 	// Delete every vault path scoped to this project. Critical for BYOC where
 	// the credentials are live passwords on an externally managed database —
 	// without this the platform retains them indefinitely after the project
-	// row is gone. Best-effort: a vault outage logs and proceeds rather than
-	// stranding the instance row.
+	// row is gone.
 	if s.vault != nil && !s.vault.Sealed() {
 		s.deleteProjectVaultPaths(ctx, inst, projectID)
 	}
+}
 
-	return s.store.Delete(projectID)
+// purgeBackupsOrMark deletes the project's backup objects and reports whether
+// the store row may now be removed. On failure the row is turned into a
+// BACKUPS_PENDING_DELETE marker instead.
+func (s *ProvisioningService) purgeBackupsOrMark(ctx context.Context, inst *domain.DatabaseInstance) bool {
+	deleted, err := s.backupPurger.Purge(ctx, inst)
+	if errors.Is(err, ErrNoBackupsForMode) {
+		log.Printf("backup purge skipped for %s: %v", inst.ProjectID, err)
+		return true
+	}
+	if err != nil {
+		log.Printf("WARN: backup purge failed for %s, row kept as %s: %v", inst.ProjectID, domain.StatusBackupsPendingDelete, err)
+		s.markBackupsPendingDelete(inst, err)
+		return false
+	}
+	log.Printf("backup purge for %s deleted %d objects", inst.ProjectID, deleted)
+	return true
+}
+
+func (s *ProvisioningService) markBackupsPendingDelete(inst *domain.DatabaseInstance, cause error) {
+	inst.Status = string(domain.StatusBackupsPendingDelete)
+	inst.CurrentStage = domain.StatusBackupsPendingDelete
+	inst.FailureReason = "backup purge failed: " + cause.Error()
+	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
+	if err := s.store.Save(inst); err != nil {
+		log.Printf(warnPersistFmt, err)
+	}
+}
+
+// PurgeBackups retries the backup deletion for a row left in
+// BACKUPS_PENDING_DELETE and removes the row once the prefix is clean. Live
+// projects are refused so this can never be used to wipe a running
+// project's backups. Returns the number of objects deleted.
+func (s *ProvisioningService) PurgeBackups(ctx context.Context, projectID string) (int, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return 0, fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+	}
+	if inst.Status != string(domain.StatusBackupsPendingDelete) {
+		return 0, ErrBackupsNotPendingDelete
+	}
+	if s.backupPurger == nil {
+		return 0, ErrBackupPurgeNotConfigured
+	}
+	deleted, err := s.backupPurger.Purge(ctx, inst)
+	if err != nil {
+		s.markBackupsPendingDelete(inst, err)
+		return deleted, err
+	}
+	log.Printf("backup purge retry for %s deleted %d objects", projectID, deleted)
+	return deleted, s.store.Delete(projectID)
 }
 
 func (s *ProvisioningService) deleteProjectVaultPaths(ctx context.Context, inst *domain.DatabaseInstance, projectID string) {

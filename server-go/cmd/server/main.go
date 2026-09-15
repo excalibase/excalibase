@@ -428,6 +428,10 @@ func buildProvisioningService(
 	}
 
 	provSvc.SetBackupDefaults(backupDefaultsFromEnv())
+	// Deprovision with confirmDeleteBackups resolves the store through
+	// provSvc.BackupStorage() — the same source backups are written with.
+	provSvc.SetBackupPurger(service.NewBackupPurger(provSvc, dockerBackupKeyPrefix,
+		service.AWSObjectDeleterFactory(backupUsePathStyle())))
 	if name := os.Getenv("REALTIME_PUBLICATION_NAME"); name != "" {
 		provSvc.SetPublicationName(name)
 	}
@@ -438,6 +442,17 @@ func buildProvisioningService(
 
 	cleanup := wirePgDogNotifier(cfg, sqlStore, provSvc)
 	return provSvc, cleanup
+}
+
+// dockerBackupKeyPrefix is where the Docker backup adapter writes a project's
+// objects ({prefix}{projectId}/...). The purge derives its prefix from it.
+const dockerBackupKeyPrefix = "backups/"
+
+// backupUsePathStyle: path-style ON by default — works for R2, MinIO,
+// LocalStack. Operators targeting real AWS S3 set BACKUP_S3_PATH_STYLE=0 to
+// flip to virtual-host addressing.
+func backupUsePathStyle() bool {
+	return os.Getenv("BACKUP_S3_PATH_STYLE") != "0"
 }
 
 // backupDefaultsFromEnv is the single place the platform-wide backup object
@@ -521,16 +536,12 @@ func buildBackupService(
 			runner := service.NewDockerBackupRunner(dockerSDK.RawClient())
 			defaults := backupDefaultsFromEnv()
 			if defaults.AccessKeyID != "" && defaults.SecretAccessKey != "" && defaults.Endpoint != "" {
-				// Default path-style ON — works for R2, MinIO, LocalStack.
-				// Operators targeting real AWS S3 set BACKUP_S3_PATH_STYLE=0
-				// to flip to virtual-host addressing.
-				usePathStyle := os.Getenv("BACKUP_S3_PATH_STYLE") != "0"
 				uploader, err := service.NewAWSS3Uploader(context.Background(), service.AWSS3UploaderConfig{
 					AccessKeyID:     defaults.AccessKeyID,
 					SecretAccessKey: defaults.SecretAccessKey,
 					Endpoint:        defaults.Endpoint,
 					Region:          defaults.Region,
-					UsePathStyle:    usePathStyle,
+					UsePathStyle:    backupUsePathStyle(),
 				})
 				if err == nil {
 					dockerAdapter := service.NewDockerBackupAdapter(service.DockerBackupAdapterConfig{
@@ -538,7 +549,7 @@ func buildBackupService(
 						Uploader:  uploader,
 						Records:   sqlStore.BackupRecords(),
 						Bucket:    defaults.Bucket,
-						KeyPrefix: "backups/",
+						KeyPrefix: dockerBackupKeyPrefix,
 						Instances: store,
 					})
 					// Wire the docker client so Restore can create +
@@ -767,6 +778,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store s
 			r.With(admin).Get("/credentials", d.provHandler.GetCredentials)
 			r.With(admin).Post("/credentials/rotate", d.provHandler.RotateCredentials)
 			r.With(admin).Patch("/deletion-protection", d.provHandler.SetDeletionProtection)
+			r.With(admin).Post("/backups/purge", d.provHandler.PurgeBackups)
 
 			// Read-only subtrees — any member.
 			r.Route("/metrics", func(r chi.Router) { d.metricsHandler.Routes(r) })

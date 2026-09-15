@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -194,5 +195,29 @@ func TestAdmin_RevokeOrg_NotFound(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("unknown org should 404, got %d", w.Code)
+	}
+}
+
+func TestAdmin_ForceDropProject_ConfirmDeleteBackups(t *testing.T) {
+	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj-b": {ProjectID: "proj-b", OrgID: "org-1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeDocker, Namespace: "ctr-b"},
+	}}
+	provSvc := newDockerProvSvc(t, store)
+	deleter := &recordingDeleter{keys: []string{"backups/proj-b/manual/a.tar.gz", "backups/proj-c/manual/keep.tar.gz"}}
+	creds := &domain.S3Credentials{AccessKeyID: "k", SecretAccessKey: "s", Bucket: "b"}
+	provSvc.SetBackupPurger(service.NewBackupPurger(service.StaticBackupStorage(creds), "backups/",
+		func(_ context.Context, _ *domain.S3Credentials) (service.ObjectDeleter, error) { return deleter, nil }))
+	h := NewAdminHandler(provSvc, store, nil, &captureAudit{}, nil, "", nil)
+
+	r := chi.NewRouter()
+	r.Delete("/api/admin/projects/{projectId}", h.ForceDropProject)
+	req := httptest.NewRequest("DELETE", "/api/admin/projects/proj-b", strings.NewReader(`{"confirmDeleteBackups":true}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ForceDrop: %d body=%s", w.Code, w.Body.String())
+	}
+	if got := deleter.deletedKeys(); len(got) != 1 || got[0] != "backups/proj-b/manual/a.tar.gz" {
+		t.Fatalf("deleted = %v, want only proj-b's backup", got)
 	}
 }

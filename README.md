@@ -206,7 +206,8 @@ All endpoints (except `GET /healthz`, `GET /api/config`, login/register, vault i
 | POST | `/api/provision/byoc` | Yes | Register an externally managed database (no provisioning) |
 | POST | `/api/provision/estimate` | Yes | Cost estimate |
 | GET | `/api/provision/{id}` | Yes | Instance status |
-| DELETE | `/api/provision/{id}` | Yes | Delete instance (purges vault paths under `projects/{org}/{id}/`) |
+| DELETE | `/api/provision/{id}` | Yes | Delete instance (purges vault paths under `projects/{id}/`). Optional body `{"confirmDeleteBackups": true}` also deletes the project's backup objects in R2/S3 after the instance is gone; absent/false keeps them |
+| POST | `/api/provision/{id}/backups/purge` | Yes | Retry the backup deletion for a project left in `BACKUPS_PENDING_DELETE` (same Admin role as DELETE; 409 for a live project) |
 | PATCH | `/api/provision/{id}/deletion-protection` | Yes | Toggle deletion protection |
 | GET | `/api/provision/{id}/credentials` | Yes | Connection details |
 | POST | `/api/provision/{id}/credentials/rotate` | Yes | Rotate credentials |

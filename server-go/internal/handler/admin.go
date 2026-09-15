@@ -128,6 +128,11 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}
+	opts, err := decodeDeprovisionOptions(r)
+	if err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
 
 	// Force=true clears deletion_protection so service.Deprovision proceeds.
 	// We persist the cleared flag because rolling back on a partial-deprovision
@@ -141,7 +146,7 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	if err := h.provSvc.Deprovision(r.Context(), projectID); err != nil {
+	if err := h.provSvc.DeprovisionWithOptions(r.Context(), projectID, opts); err != nil {
 		httpError(w, "deprovision: "+safeError(err), http.StatusInternalServerError)
 		return
 	}
@@ -151,7 +156,7 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 		Action:     "admin.force_drop_project",
 		Resource:   "project",
 		ResourceID: projectID,
-		Details:    fmt.Sprintf("org=%s tier=%s", inst.OrgID, inst.Tier),
+		Details:    fmt.Sprintf("org=%s tier=%s deleteBackups=%t", inst.OrgID, inst.Tier, opts.DeleteBackups),
 	})
 	writeJSON(w, map[string]string{"status": "deprovisioned", "projectId": projectID})
 }
