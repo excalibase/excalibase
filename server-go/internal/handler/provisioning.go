@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/byoc"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -20,6 +21,8 @@ type ProvisioningHandler struct {
 	orgStore  storage.OrgStore
 	pauseSvc  *service.PauseService // optional; nil → /pause + /resume return 503
 	instances storage.InstanceStore
+	// egressGuard validates BYOC targets; nil → byoc.Default(). See byoc.go.
+	egressGuard *byoc.Guard
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
@@ -50,7 +53,8 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 }
 
 // Pause stops the project workload after taking a backup. Body:
-//   {"reason": "manual"}     // optional; defaults to manual
+//
+//	{"reason": "manual"}     // optional; defaults to manual
 //
 // 503 when pause service isn't wired, 400 for unsupported deployment
 // modes (BYOC), 404 for missing project, 500 on unexpected failures.

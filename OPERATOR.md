@@ -260,6 +260,16 @@ Out of scope. The operator brings their own backup story for an
 externally-managed database; the platform only stores connection
 credentials in vault and never holds the data.
 
+Egress hardening: BYOC hosts are validated at registration and again
+at every dial (schema browser, realtime, migrations) by
+`server-go/internal/byoc`. Internal ranges (loopback, RFC-1918, CGNAT,
+link-local, IPv6 ULA/site-local, v4-mapped/NAT64/6to4-embedded, cloud
+metadata) are always refused; a DNS name that later re-resolves to one
+of them is refused at connect time. Set `BYOC_EGRESS_ALLOWLIST`
+(comma-separated CIDRs, IPs, hostnames, `*.suffix`) to restrict BYOC
+targets to your approved destinations; a malformed value stops the
+server at boot. User-facing errors never include resolved addresses.
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:
