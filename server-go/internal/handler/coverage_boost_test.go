@@ -20,23 +20,22 @@ import (
 )
 
 const (
-	testMaintWindowPath = "/api/provision/test-db/maintenance-window"
-	testNewVaultFmt     = "new vault: %v"
-	testNotJSON         = "not json"
-	testSchemaPath      = "/schema"
-	testSchemaTables    = "/schema/proj1/tables"
-	testSchemaColumns   = "/schema/proj1/tables/users/columns"
-	testSchemaRows      = "/schema/proj1/tables/users/rows"
-	testSchemaTriggers  = "/schema/proj1/triggers"
-	testSchemaIndexes   = "/schema/proj1/indexes"
-	testSchemaRoles     = "/schema/proj1/roles"
+	testMaintWindowPath  = "/api/provision/test-db/maintenance-window"
+	testNewVaultFmt      = "new vault: %v"
+	testNotJSON          = "not json"
+	testSchemaPath       = "/schema"
+	testSchemaTables     = "/schema/proj1/tables"
+	testSchemaColumns    = "/schema/proj1/tables/users/columns"
+	testSchemaRows       = "/schema/proj1/tables/users/rows"
+	testSchemaTriggers   = "/schema/proj1/triggers"
+	testSchemaIndexes    = "/schema/proj1/indexes"
+	testSchemaRoles      = "/schema/proj1/roles"
 	testSchemaExtensions = "/schema/proj1/extensions"
-	testSchemaPolicies  = "/schema/proj1/policies"
-	testSchemaFunctions = "/schema/proj1/functions"
-	testSchemaDDL       = "/schema/proj1/ddl"
-	testSchemaQuery     = "/schema/proj1/query"
+	testSchemaPolicies   = "/schema/proj1/policies"
+	testSchemaFunctions  = "/schema/proj1/functions"
+	testSchemaDDL        = "/schema/proj1/ddl"
+	testSchemaQuery      = "/schema/proj1/query"
 )
-
 
 // fullRouterWithOpsRoutes returns a router that includes the provisioning ops
 // routes (GetLogs, RotateCredentials, maintenance window) that are not wired in
@@ -93,7 +92,10 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 			r.Route("/migrations", func(r chi.Router) { migrationH.Routes(r) })
 		})
 	})
-	r.Route("/api/alerts", func(r chi.Router) { alertH.Routes(r) })
+	r.Route("/api/alerts", func(r chi.Router) {
+		alertH.Routes(r)
+		r.Route("/project/{projectId}", alertH.ProjectRoutes)
+	})
 	r.Route("/api/setup", func(r chi.Router) { setupH.Routes(r) })
 	r.Route("/api/parameter-groups", func(r chi.Router) { pgH.Routes(r) })
 

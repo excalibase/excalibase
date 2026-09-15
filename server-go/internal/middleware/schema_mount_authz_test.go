@@ -7,6 +7,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -20,8 +21,12 @@ import (
 // schemaMount mirrors the fixed /api/schema/{projectId} wiring with a sentinel
 // leaf that records whether the guarded handler was reached.
 func schemaMount(inst *domain.DatabaseInstance, member *domain.OrgMember, reached *bool) chi.Router {
-	instStore := &fakeInstanceStore{inst: inst}
-	orgStore := &fakeOrgStore{member: member}
+	instStore := fakestore.NewInstances()
+	instStore.Save(inst)
+	orgStore := fakestore.NewOrgs()
+	if member != nil {
+		orgStore.AddMember(member.OrgID, member.UserID, member.Role)
+	}
 	r := chi.NewRouter()
 	r.Route("/api/schema/{projectId}", func(r chi.Router) {
 		r.Use(RequireProjectAccess(instStore, orgStore))
@@ -66,8 +71,8 @@ func TestSchemaMount_NonMemberBlockedOnEveryVerb(t *testing.T) {
 		reached := false
 		router := schemaMount(victim, nil /* not a member */, &reached)
 		code := do(t, router, c.method, c.path, mallory)
-		if code != http.StatusForbidden {
-			t.Errorf("%s %s: got %d, want 403 (non-member must be blocked)", c.method, c.path, code)
+		if code != http.StatusNotFound {
+			t.Errorf("%s %s: got %d, want 404 (non-member must be blocked without confirming the project exists)", c.method, c.path, code)
 		}
 		if reached {
 			t.Errorf("%s %s: guarded handler was reached by a non-member", c.method, c.path)

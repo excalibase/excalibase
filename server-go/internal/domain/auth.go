@@ -21,7 +21,11 @@ type AccessToken struct {
 	// Scopes is a comma-separated list of capability tags ("session",
 	// "read", "admin"). Empty = legacy all-purpose token (predates this
 	// column). New tokens always carry at least one scope.
-	Scopes    string     `json:"scopes,omitempty"`
+	Scopes string `json:"scopes,omitempty"`
+	// ProjectID binds the token to one project: every project-scoped route
+	// whose path names a different project answers 404. Empty = the token
+	// reaches every project its user is a member of.
+	ProjectID string     `json:"projectId,omitempty"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 	LastUsed  *time.Time `json:"lastUsed,omitempty"`

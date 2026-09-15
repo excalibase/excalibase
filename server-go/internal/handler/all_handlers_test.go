@@ -19,16 +19,15 @@ import (
 )
 
 const (
-	testPGCreds          = "pg-creds"
-	testStatusBodyFmt    = "status: %d, body: %s"
-	testStatusFmt        = "status: %d"
-	testMigrationsPath   = "/api/provision/test-db/migrations/"
-	testParamGroupsPath  = "/api/parameter-groups/"
+	testPGCreds            = "pg-creds"
+	testStatusBodyFmt      = "status: %d, body: %s"
+	testStatusFmt          = "status: %d"
+	testMigrationsPath     = "/api/provision/test-db/migrations/"
+	testParamGroupsPath    = "/api/parameter-groups/"
 	testParamGroupHighPerf = "/api/parameter-groups/high-perf"
-	testDBPodName        = "org1-test-db/test-db-postgres-1"
-	testProvisionPath    = "/provision"
+	testDBPodName          = "org1-test-db/test-db-postgres-1"
+	testProvisionPath      = "/provision"
 )
-
 
 func setupRouter(t *testing.T) chi.Router {
 	t.Helper()
@@ -99,7 +98,10 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 			r.Route("/migrations", func(r chi.Router) { migrationH.Routes(r) })
 		})
 	})
-	r.Route("/api/alerts", func(r chi.Router) { alertH.Routes(r) })
+	r.Route("/api/alerts", func(r chi.Router) {
+		alertH.Routes(r)
+		r.Route("/project/{projectId}", alertH.ProjectRoutes)
+	})
 	r.Route("/api/setup", func(r chi.Router) { setupH.Routes(r) })
 	r.Route("/api/parameter-groups", func(r chi.Router) { pgH.Routes(r) })
 

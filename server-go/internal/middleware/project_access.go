@@ -1,35 +1,97 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
-// RequireProjectAccess gates per-project handlers behind an org-membership
-// check. Without this, any authenticated user who knows or guesses a
-// projectID can call /api/provision/{projectId}/credentials and similar
-// endpoints — there is no per-resource ownership check elsewhere on the
-// happy path. Platform admins (PermManageUsers) bypass the check; everyone
-// else must be a member of the project's org.
+const (
+	projectAccessKey contextKey = "project_access"
+
+	errBodyUnauthenticated = `{"error":"unauthenticated"}`
+	errBodyProjectNotFound = `{"error":"project not found"}`
+	errBodyScope           = `{"error":"token lacks required scope: write"}`
+	errBodyRole            = `{"error":"insufficient project role"}`
+)
+
+// ProjectAccess is the outcome of binding the path project to the caller.
+// PlatformAdmin callers carry no membership row; everyone else does.
+type ProjectAccess struct {
+	Instance      *domain.DatabaseInstance
+	Member        *domain.OrgMember
+	PlatformAdmin bool
+}
+
+// RoleAtLeast reports whether the caller holds at least minRole on the
+// project's org. Platform admins satisfy every role.
+func (a *ProjectAccess) RoleAtLeast(minRole string) bool {
+	if a.PlatformAdmin {
+		return true
+	}
+	return a.Member != nil && auth.OrgRoleAtLeast(a.Member.Role, minRole)
+}
+
+// ProjectAccessFromContext returns the access resolved by RequireProjectAccess
+// for this request, or nil when the gate did not run.
+func ProjectAccessFromContext(ctx context.Context) *ProjectAccess {
+	access, _ := ctx.Value(projectAccessKey).(*ProjectAccess)
+	return access
+}
+
+// ResolveProjectAccess binds projectID to the caller. It returns nil when the
+// project must not be visible to the caller: unknown project, project without
+// an org, caller not a member, or the caller's token is bound to a different
+// project. Platform admins (PermManageUsers) skip the membership lookup but
+// never escape a token binding.
+func ResolveProjectAccess(ctx context.Context, user *domain.User, token *domain.AccessToken, projectID string, instStore storage.InstanceStore, orgStore storage.OrgStore) *ProjectAccess {
+	if user == nil || !auth.TokenBoundToProject(token, projectID) {
+		return nil
+	}
+	if auth.HasPermission(user.Role, auth.PermManageUsers) {
+		return &ProjectAccess{PlatformAdmin: true}
+	}
+	inst, err := instStore.FindByProjectID(projectID)
+	if err != nil || inst == nil || inst.OrgID == "" || orgStore == nil {
+		return nil
+	}
+	member, err := orgStore.GetOrgMember(ctx, inst.OrgID, user.ID)
+	if err != nil || member == nil {
+		return nil
+	}
+	return &ProjectAccess{Instance: inst, Member: member}
+}
+
+// RequireProjectAccess binds the {projectId} in the path to the caller before
+// the handler runs: session users must be a member of the project's org, and
+// a PAT bound to a project may not leave it. Anything the caller may not see
+// is a 404 — never a 403, which would confirm the project exists. A token
+// whose scopes do not allow the method (read-only PAT on a write) is a 403.
 //
 // Mount sequence: auth.RequireAuth → TenantContext → RequireProjectAccess.
-// Returns 401 if unauthenticated, 404 if the project doesn't exist (avoids
-// confirming existence to non-members), 403 otherwise.
+// The resolved access is cached on the context so RequireProjectRole does not
+// query membership a second time.
 func RequireProjectAccess(instStore storage.InstanceStore, orgStore storage.OrgStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			projectID := chi.URLParam(r, "projectId")
-			if projectID == "" {
+			if chi.URLParam(r, "projectId") == "" {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !checkProjectAccess(w, r, projectID, instStore, orgStore) {
+			access, ok := gateProjectAccess(w, r, instStore, orgStore)
+			if !ok {
 				return
 			}
-			next.ServeHTTP(w, r)
+			if !auth.TokenAllowsMethod(auth.GetToken(r.Context()), r.Method) {
+				http.Error(w, errBodyScope, http.StatusForbidden)
+				return
+			}
+			ctx := context.WithValue(r.Context(), projectAccessKey, access)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -38,12 +100,11 @@ func RequireProjectAccess(instStore storage.InstanceStore, orgStore storage.OrgS
 // (Owner ⊇ Admin ⊇ Developer ⊇ Viewer). Layer it on top of RequireProjectAccess
 // for routes that need more than bare membership — e.g. destructive lifecycle
 // and credential reads require Admin, schema/data writes require Developer.
-// Platform admins bypass. 401/404/403 like RequireProjectAccess, plus 403 when
-// the member's role is below the minimum.
+// 401/404 like RequireProjectAccess, plus 403 when the role is below minRole.
 func RequireProjectRole(minRole string, instStore storage.InstanceStore, orgStore storage.OrgStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !checkProjectRole(w, r, minRole, instStore, orgStore) {
+			if !gateProjectRole(w, r, minRole, instStore, orgStore) {
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -62,7 +123,7 @@ func RequireProjectRoleForWrites(minRole string, instStore storage.InstanceStore
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !checkProjectRole(w, r, minRole, instStore, orgStore) {
+			if !gateProjectRole(w, r, minRole, instStore, orgStore) {
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -70,64 +131,34 @@ func RequireProjectRoleForWrites(minRole string, instStore storage.InstanceStore
 	}
 }
 
-// checkProjectRole resolves the caller's org role for the project and enforces
-// the minimum. Platform admins (PermManageUsers) bypass.
-func checkProjectRole(w http.ResponseWriter, r *http.Request, minRole string, instStore storage.InstanceStore, orgStore storage.OrgStore) bool {
-	user := auth.GetUser(r.Context())
+// gateProjectAccess resolves access (reusing a cached resolution when the
+// request already passed RequireProjectAccess) and writes 401/404 on refusal.
+func gateProjectAccess(w http.ResponseWriter, r *http.Request, instStore storage.InstanceStore, orgStore storage.OrgStore) (*ProjectAccess, bool) {
+	ctx := r.Context()
+	user := auth.GetUser(ctx)
 	if user == nil {
-		http.Error(w, `{"error":"unauthenticated"}`, http.StatusUnauthorized)
-		return false
+		http.Error(w, errBodyUnauthenticated, http.StatusUnauthorized)
+		return nil, false
 	}
-	if auth.HasPermission(user.Role, auth.PermManageUsers) {
-		return true
+	access := ProjectAccessFromContext(ctx)
+	if access == nil {
+		access = ResolveProjectAccess(ctx, user, auth.GetToken(ctx), chi.URLParam(r, "projectId"), instStore, orgStore)
 	}
-	projectID := chi.URLParam(r, "projectId")
-	inst, err := instStore.FindByProjectID(projectID)
-	if err != nil || inst == nil {
-		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
-		return false
+	if access == nil {
+		http.Error(w, errBodyProjectNotFound, http.StatusNotFound)
+		return nil, false
 	}
-	if inst.OrgID == "" || orgStore == nil {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
-		return false
-	}
-	member, err := orgStore.GetOrgMember(r.Context(), inst.OrgID, user.ID)
-	if err != nil || member == nil {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
-		return false
-	}
-	if !auth.OrgRoleAtLeast(member.Role, minRole) {
-		http.Error(w, `{"error":"insufficient project role"}`, http.StatusForbidden)
-		return false
-	}
-	return true
+	return access, true
 }
 
-// checkProjectAccess performs the auth/membership check and writes error
-// responses. Returns true if access is granted.
-func checkProjectAccess(w http.ResponseWriter, r *http.Request, projectID string, instStore storage.InstanceStore, orgStore storage.OrgStore) bool {
-	user := auth.GetUser(r.Context())
-	if user == nil {
-		http.Error(w, `{"error":"unauthenticated"}`, http.StatusUnauthorized)
+// gateProjectRole enforces the minimum org role on top of gateProjectAccess.
+func gateProjectRole(w http.ResponseWriter, r *http.Request, minRole string, instStore storage.InstanceStore, orgStore storage.OrgStore) bool {
+	access, ok := gateProjectAccess(w, r, instStore, orgStore)
+	if !ok {
 		return false
 	}
-	// Platform admins bypass the per-project gate — needed for support and incident response.
-	if auth.HasPermission(user.Role, auth.PermManageUsers) {
-		return true
-	}
-	inst, err := instStore.FindByProjectID(projectID)
-	if err != nil || inst == nil {
-		http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
-		return false
-	}
-	if inst.OrgID == "" || orgStore == nil {
-		// Cannot verify membership → fail closed.
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
-		return false
-	}
-	member, err := orgStore.GetOrgMember(r.Context(), inst.OrgID, user.ID)
-	if err != nil || member == nil {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+	if !access.RoleAtLeast(minRole) {
+		http.Error(w, errBodyRole, http.StatusForbidden)
 		return false
 	}
 	return true

@@ -108,6 +108,11 @@ func authFailure(ctx context.Context) string {
 	return code
 }
 
+// SetToken returns a new context with the given token set (for testing).
+func SetToken(ctx context.Context, t *domain.AccessToken) context.Context {
+	return context.WithValue(ctx, tokenKey, t)
+}
+
 // GetToken returns the AccessToken used to authenticate the current
 // request, or nil. Useful for handlers that need to check scope.
 func GetToken(ctx context.Context) *domain.AccessToken {

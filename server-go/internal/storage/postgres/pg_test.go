@@ -812,3 +812,30 @@ func TestFindByOwnerEmpty(t *testing.T) {
 		t.Errorf("expected 0 results, got %d", len(result))
 	}
 }
+
+// TestTokenProjectBindingRoundTrip: a PAT's project binding and scopes must
+// survive the store, otherwise RequireProjectAccess cannot enforce them.
+func TestTokenProjectBindingRoundTrip(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	store.CreateUser(ctx, &domain.User{ID: "bu1", Username: testutil.FixtureToken("bounduser"), Email: "b@t.com", Role: "user", Active: true})
+	tok := &domain.AccessToken{
+		TokenHash: "boundhash", TokenPrefix: "bound_______", UserID: "bu1", Name: "ci",
+		Scopes: "read", ProjectID: testMyProject,
+	}
+	if err := store.CreateToken(ctx, tok); err != nil {
+		t.Fatalf("CreateToken: %v", err)
+	}
+	got, err := store.FindByTokenHash(ctx, "boundhash")
+	if err != nil || got == nil {
+		t.Fatalf("FindByTokenHash: %v %v", got, err)
+	}
+	if got.ProjectID != testMyProject || got.Scopes != "read" {
+		t.Errorf("binding lost: projectId=%q scopes=%q", got.ProjectID, got.Scopes)
+	}
+	listed, _ := store.ListTokensByUser(ctx, "bu1")
+	if len(listed) != 1 || listed[0].ProjectID != testMyProject {
+		t.Errorf("list dropped the binding: %+v", listed)
+	}
+}

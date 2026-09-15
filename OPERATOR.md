@@ -455,6 +455,62 @@ Stuck states:
 | `PAUSING` | Backup succeeded but the workload stop failed | `kubectl -n <project-ns> describe cluster`; retry `POST /pause` once the cause is cleared. |
 | `RESUMING` | The annotation is already `off` but the primary did not become ready within 5 min | The operator keeps recovering on its own — watch `kubectl -n <project-ns> get pods -w`; retry `POST /resume` when the pod is Ready (idempotent). |
 
+## 6.4. Project route authorization (path ↔ caller binding)
+
+Every route that names a project in its path binds that project to the
+caller **before** the handler runs (`RequireProjectAccess`, EXC-323):
+
+1. The project is loaded and its org resolved.
+2. A session user must be a member of that org; the route may additionally
+   demand a minimum org role (Owner ⊇ Admin ⊇ Developer ⊇ Viewer).
+3. A PAT created with `projectId` never leaves that project, and a PAT
+   whose scopes are `read` only cannot call a mutating method.
+4. Anything the caller may not see answers **404** — never 403, which would
+   confirm the project exists. Role and scope shortfalls on a project the
+   caller *can* see answer **403**. No credentials: **401**.
+
+Platform admins (`platform_admin`) bypass the membership check for support
+and incident response, but a project-bound PAT still confines them.
+
+| Route group | Min org role | Notes |
+|---|---|---|
+| `GET /api/provision/{id}`, `/logs`, `/maintenance-window`, `/metrics/*`, `/performance/*` | Viewer | any member |
+| `PUT /api/provision/{id}/maintenance-window` | Developer | |
+| `/api/provision/{id}/audit`, `/migrations`, `/rls-policies`, `/column-policies` | Developer | |
+| `DELETE /api/provision/{id}`, `/credentials`, `/credentials/rotate`, `/deletion-protection`, `/pause`, `/resume`, `/backups/purge` | Admin | lifecycle + secrets |
+| `/api/provision/{id}/backup/*`, `/snapshot/*` | Admin | dump/restore are destructive and exfil-capable |
+| `GET /api/schema/{id}/*` | Viewer | browse |
+| `POST/PATCH/DELETE /api/schema/{id}/*` (DDL, `/query`, row writes) | Developer | |
+| `GET /api/projects/{id}/functions`, `/{fnId}`, `/{fnId}/logs`, `/_metadata`, `/runtime/status` | Viewer | |
+| `POST /api/projects/{id}/functions`, `/{fnId}/invoke`, `DELETE /{fnId}`, `/secrets`, `/egress` | Developer | deploy, invoke, secrets, outbound allowlist |
+| `POST /api/projects/{id}/schema/apply` | Developer | |
+| `/api/projects/{id}/info`, `/realtime/*`, `/storage/*`, `GET /api/alerts/project/{id}` | Viewer | |
+| `/api/orgs/{orgId}/projects/{id}/members` | org member (list) / Admin (change) | project must belong to `{orgId}` |
+| `/api/admin/projects/{id}` | platform permission (`delete`) | platform plane, not the tenant gate |
+
+Public paths that carry a project id but authenticate differently:
+`/functions/v1/{id}/*` (end-user invoke: anon/JWT), `/internal/*` and
+`/internal/storage/{id}/*` (runtime shared secret), `/storage/v1/object/public/{id}/*`.
+
+A project-bound, read-only CI token:
+
+```bash
+curl -sf -X POST -H "Authorization: Bearer $SESSION" -H "Content-Type: application/json" \
+  https://<host>/api/auth/tokens \
+  -d '{"name":"ci-readonly","projectId":"<projectId>","scopes":["read"]}'
+# → {"token":"excali_…","projectId":"<projectId>","scopes":"read","expiresAt":"…"}
+# Binding to a project the caller cannot see is refused with 404.
+```
+
+`POST /api/auth/tokens/{hash}/rotate` (§1.1) is owner-only and re-issues the
+token with the same `projectId` and scopes, so a rotated CI token stays
+confined to its project.
+
+The wiring is pinned by `cmd/server/authz_matrix_test.go`, which drives the
+production router: every registered `{projectId}` route outside the public
+prefixes must refuse an anonymous caller (401) and a member of another org
+(404).
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:
