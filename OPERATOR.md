@@ -2,6 +2,8 @@
 
 This is the day-1 to day-N reference for running an Excalibase platform. It assumes you've cloned the chart repo (`excalibase-service`) and have a Kubernetes cluster (any distro: managed EKS/GKE/AKS, RKE2, k0s/k3s, or single-node minikube).
 
+For the ordered production install (prerequisites, secrets, `values-prod.yaml`, bootstrap, first admin, tiers) and the troubleshooting matrix, start with [docs/deployment/production-k8s-runbook.md](docs/deployment/production-k8s-runbook.md); this file is the API-level reference it links to.
+
 ## 1. Install
 
 ```bash
