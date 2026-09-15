@@ -9,6 +9,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const tokenColumns = `token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes, project_id`
+
 func (s *Store) CreateToken(ctx context.Context, t *domain.AccessToken) error {
 	createdAt := time.Now().UTC()
 	if t.CreatedAt != nil {
@@ -18,21 +20,16 @@ func (s *Store) CreateToken(ctx context.Context, t *domain.AccessToken) error {
 	if t.ExpiresAt != nil {
 		expiresAt = sql.NullTime{Valid: true, Time: t.ExpiresAt.UTC()}
 	}
-	var scopes sql.NullString
-	if t.Scopes != "" {
-		scopes = sql.NullString{Valid: true, String: t.Scopes}
-	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO access_tokens (token_hash, token_prefix, user_id, name, created_at, expires_at, scopes)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		t.TokenHash, t.TokenPrefix, t.UserID, t.Name, createdAt, expiresAt, scopes)
+		`INSERT INTO access_tokens (token_hash, token_prefix, user_id, name, created_at, expires_at, scopes, project_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		t.TokenHash, t.TokenPrefix, t.UserID, t.Name, createdAt, expiresAt, nullString(t.Scopes), nullString(t.ProjectID))
 	return err
 }
 
 func (s *Store) FindByTokenHash(ctx context.Context, hash string) (*domain.AccessToken, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes
-		 FROM access_tokens WHERE token_hash = $1`, hash)
+		`SELECT `+tokenColumns+` FROM access_tokens WHERE token_hash = $1`, hash)
 	t, err := scanPgToken(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -45,8 +42,7 @@ func (s *Store) FindByTokenHash(ctx context.Context, hash string) (*domain.Acces
 
 func (s *Store) ListTokensByUser(ctx context.Context, userID string) ([]*domain.AccessToken, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes
-		 FROM access_tokens WHERE user_id = $1`, userID)
+		`SELECT `+tokenColumns+` FROM access_tokens WHERE user_id = $1`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -91,11 +87,17 @@ type pgRowScanner interface {
 	Scan(dest ...interface{}) error
 }
 
+// nullString maps "" to SQL NULL so optional text columns stay NULL rather
+// than empty strings.
+func nullString(v string) sql.NullString {
+	return sql.NullString{Valid: v != "", String: v}
+}
+
 func scanPgToken(r pgRowScanner) (*domain.AccessToken, error) {
 	var t domain.AccessToken
 	var createdAt, expiresAt, lastUsed sql.NullTime
-	var scopes sql.NullString
-	if err := r.Scan(&t.TokenHash, &t.TokenPrefix, &t.UserID, &t.Name, &createdAt, &expiresAt, &lastUsed, &scopes); err != nil {
+	var scopes, projectID sql.NullString
+	if err := r.Scan(&t.TokenHash, &t.TokenPrefix, &t.UserID, &t.Name, &createdAt, &expiresAt, &lastUsed, &scopes, &projectID); err != nil {
 		return nil, err
 	}
 	if createdAt.Valid {
@@ -110,8 +112,7 @@ func scanPgToken(r pgRowScanner) (*domain.AccessToken, error) {
 		ts := lastUsed.Time
 		t.LastUsed = &ts
 	}
-	if scopes.Valid {
-		t.Scopes = scopes.String
-	}
+	t.Scopes = scopes.String
+	t.ProjectID = projectID.String
 	return &t, nil
 }

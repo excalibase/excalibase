@@ -16,12 +16,17 @@ import (
 const errNotAuthenticated = "not authenticated"
 
 type AuthHandler struct {
-	userStore  storage.UserStore
-	tokenStore storage.TokenStore
-	orgStore   storage.OrgStore // optional — resolves pending invites on user creation
-	auditLog   auditWriter      // optional — records PAT rotations
-	inviteOnly bool             // when true, only invited emails (and the first admin) may register
+	userStore     storage.UserStore
+	tokenStore    storage.TokenStore
+	orgStore      storage.OrgStore      // optional — resolves pending invites on user creation
+	instanceStore storage.InstanceStore // optional — lets CreateToken bind a PAT to a project the caller can see
+	auditLog      auditWriter           // optional — records PAT rotations
+	inviteOnly    bool                  // when true, only invited emails (and the first admin) may register
 }
+
+// SetInstanceStore wires the instance store CreateToken uses to confirm the
+// caller may see the project a new PAT is bound to.
+func (h *AuthHandler) SetInstanceStore(s storage.InstanceStore) { h.instanceStore = s }
 
 func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) *AuthHandler {
 	return &AuthHandler{userStore: userStore, tokenStore: tokenStore}

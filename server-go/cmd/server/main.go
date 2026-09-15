@@ -677,6 +677,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
 	authHandler.SetOrgStore(sqlStore)
 	authHandler.SetAuditLog(sqlStore)
+	authHandler.SetInstanceStore(store)
 	authHandler.SetInviteOnly(cfg.RegistrationMode == "invite")
 
 	var vaultHandler *handler.VaultHandler
@@ -728,10 +729,18 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 }
 
+// routerStores is the slice of the platform store the router itself needs:
+// token lookup for ExtractAuth and org membership for the project gates.
+// Narrow on purpose so the authz tests can drive the real mounts with fakes.
+type routerStores interface {
+	auth.TokenLookup
+	storage.OrgStore
+}
+
 // buildRouter wires the chi router with global middleware and mounts every
 // API subtree. The per-subtree mounting is delegated to focused helpers so
 // this top-level remains a manifest of which features are exposed.
-func buildRouter(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, d *handlerDeps) *chi.Mux {
+func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.InstanceStore, d *handlerDeps) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -752,7 +761,7 @@ func buildRouter(cfg config.AppConfig, sqlStore storage.PlatformStore, store sto
 	r.Get("/api/capacity", auth.RequireAuth(http.HandlerFunc(d.capDeps.serveCapacity)).ServeHTTP)
 
 	mountProvisioningRoutes(r, sqlStore, store, d)
-	mountSimpleAuthRoutes(r, d)
+	mountSimpleAuthRoutes(r, sqlStore, store, d)
 	mountAuthRoutes(r, d)
 	mountOrgAndAdminRoutes(r, cfg, d)
 	mountVaultAndSchemaRoutes(r, sqlStore, store, d)
@@ -775,7 +784,7 @@ func buildRouter(cfg config.AppConfig, sqlStore storage.PlatformStore, store sto
 }
 
 // mountProvisioningRoutes attaches /api/provision and its per-project sub-router.
-func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store storage.InstanceStore, d *handlerDeps) {
+func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	r.Route("/api/provision", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.Get("/", d.provHandler.ListInstances)
@@ -802,7 +811,8 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store s
 			// Developer+ — a routine write.
 			r.With(dev).Put("/maintenance-window", d.provHandler.SetMaintenanceWindow)
 
-			// Admin+ — credentials and destructive lifecycle.
+			// Admin+ — credentials and destructive lifecycle. Pause/resume stop
+			// and restart the tenant workload, so they sit with the lifecycle tier.
 			r.With(admin).Delete("/", d.provHandler.Delete)
 			r.With(admin).Get("/credentials", d.provHandler.GetCredentials)
 			r.With(admin).Post("/credentials/rotate", d.provHandler.RotateCredentials)
@@ -836,7 +846,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store s
 }
 
 // mountSimpleAuthRoutes mounts the small auth-gated subtrees (alerts, setup, parameter groups).
-func mountSimpleAuthRoutes(r *chi.Mux, d *handlerDeps) {
+func mountSimpleAuthRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	// Read-only tier specs for any authenticated user (the provision page tier
 	// selector). Editing stays admin-only under /api/admin/tiers.
 	r.Route("/api/tiers", func(r chi.Router) {
@@ -846,6 +856,13 @@ func mountSimpleAuthRoutes(r *chi.Mux, d *handlerDeps) {
 	r.Route("/api/alerts", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		d.alertHandler.Routes(r)
+		// The per-project read names a tenant: bind it to the caller like every
+		// other project route, under the segment where {projectId} exists.
+		r.Route("/project/{projectId}", func(r chi.Router) {
+			r.Use(custommw.TenantContext)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			d.alertHandler.ProjectRoutes(r)
+		})
 	})
 	r.Route("/api/setup", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
@@ -900,7 +917,7 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 // RequireProjectAccess runs with it in scope (EXC-349). Binding the guard one
 // level higher — before {projectId} exists — would make it a silent no-op and
 // let any authenticated studio user read/modify any tenant's database.
-func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store storage.InstanceStore, d *handlerDeps) {
+func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	if d.vaultHandler != nil {
 		r.Route("/api/vault", func(r chi.Router) { d.vaultHandler.Routes(r) })
 	}
@@ -915,7 +932,7 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store
 }
 
 // mountProjectScopedRoutes mounts every /api/projects/{projectId}/* subtree.
-func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store storage.InstanceStore, d *handlerDeps) {
+func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)

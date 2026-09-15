@@ -211,10 +211,13 @@ func rotate(f *tokenFixture, caller, target, body string) (int, map[string]inter
 	return w.Code, resp
 }
 
+const rotateProject = "rotate-proj"
+
 func TestRotateToken_ImmediateRevokePreservesBinding(t *testing.T) {
 	f := newTokenFixture(t)
 	expires := time.Now().Add(30 * 24 * time.Hour)
 	old := f.mint(nameCI, tokenUser, scopesRead, &expires)
+	f.ts.tokens[auth.HashToken(old)].ProjectID = rotateProject
 
 	code, resp := rotate(f, old, old, `{}`)
 	if code != http.StatusCreated {
@@ -231,8 +234,11 @@ func TestRotateToken_ImmediateRevokePreservesBinding(t *testing.T) {
 		t.Error("new token must authenticate")
 	}
 	stored := f.ts.tokens[auth.HashToken(fresh)]
-	if stored.Scopes != scopesRead || stored.Name != nameCI || stored.UserID != tokenUser {
+	if stored.Scopes != scopesRead || stored.Name != nameCI || stored.UserID != tokenUser || stored.ProjectID != rotateProject {
 		t.Errorf("binding not preserved: %+v", stored)
+	}
+	if got, _ := resp["projectId"].(string); got != rotateProject {
+		t.Errorf("response projectId %q want %q", got, rotateProject)
 	}
 	assertExpiresNear(t, resp["expiresAt"], time.Now().Add(30*24*time.Hour))
 	if resp["previousExpiresAt"] != nil {

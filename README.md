@@ -143,6 +143,10 @@ curl -X POST http://localhost:24005/api/provision \
 
 All endpoints (except `GET /healthz`, `GET /api/config`, login/register, vault init/unseal/status, and the public function invoke) require authentication via `Authorization: Bearer <token>` header.
 
+### Authorization
+
+Every route with a project in its path binds that project to the caller before the handler runs: the caller must be a member of the project's org (some routes require a minimum org role — Owner ⊇ Admin ⊇ Developer ⊇ Viewer), a PAT created with `projectId` never leaves that project, and a `read`-scoped PAT cannot mutate. A project the caller may not see answers **404** (not 403); a role or scope shortfall answers **403**. The full route → role table is in [OPERATOR.md §6.2](OPERATOR.md#62-project-route-authorization-path--caller-binding).
+
 ### Public
 
 | Method | Endpoint | Description |
@@ -162,9 +166,9 @@ All endpoints (except `GET /healthz`, `GET /api/config`, login/register, vault i
 | GET | `/api/auth/users` | Yes (admin) | List all users |
 | POST | `/api/auth/users` | Yes (admin) | Create user |
 | DELETE | `/api/auth/users/{id}` | Yes (admin) | Delete user |
-| GET | `/api/auth/tokens` | Yes | List personal access tokens (`tokenPrefix`, `scopes`, `expiresAt`, `lastUsed`) |
-| POST | `/api/auth/tokens` | Yes | Create PAT — `{name, expiresIn?}`; `expiresIn` is `30d`/`12h`/`never`, default `90d`, max `365d` |
-| POST | `/api/auth/tokens/{hash}/rotate` | Yes (owner) | Rotate PAT — `{graceSeconds?}` (0–3600, default 0); returns the new secret once, same scopes/lifetime |
+| GET | `/api/auth/tokens` | Yes | List personal access tokens (`tokenPrefix`, `scopes`, `projectId`, `expiresAt`, `lastUsed`) |
+| POST | `/api/auth/tokens` | Yes | Create PAT — `{name, expiresIn?, projectId?, scopes?: ["read"\|"write"\|"admin"]}`; `expiresIn` is `30d`/`12h`/`never`, default `90d`, max `365d`; `projectId` confines the token to one project (404 if the caller cannot see it) |
+| POST | `/api/auth/tokens/{hash}/rotate` | Yes (owner) | Rotate PAT — `{graceSeconds?}` (0–3600, default 0); returns the new secret once, same scopes/project binding/lifetime |
 | DELETE | `/api/auth/tokens/{hash}` | Yes | Revoke PAT |
 
 PATs expire: a request with an expired token gets `401 {"error":"token expired","code":"token_expired"}` (a missing or unknown token gets the generic 401 without a `code`). `{hash}` is the SHA-256 hex of the raw token (`echo -n "$TOKEN" | sha256sum`).
