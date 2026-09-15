@@ -162,9 +162,12 @@ All endpoints (except `GET /healthz`, `GET /api/config`, login/register, vault i
 | GET | `/api/auth/users` | Yes (admin) | List all users |
 | POST | `/api/auth/users` | Yes (admin) | Create user |
 | DELETE | `/api/auth/users/{id}` | Yes (admin) | Delete user |
-| GET | `/api/auth/tokens` | Yes | List personal access tokens |
-| POST | `/api/auth/tokens` | Yes | Create PAT |
+| GET | `/api/auth/tokens` | Yes | List personal access tokens (`tokenPrefix`, `scopes`, `expiresAt`, `lastUsed`) |
+| POST | `/api/auth/tokens` | Yes | Create PAT — `{name, expiresIn?}`; `expiresIn` is `30d`/`12h`/`never`, default `90d`, max `365d` |
+| POST | `/api/auth/tokens/{hash}/rotate` | Yes (owner) | Rotate PAT — `{graceSeconds?}` (0–3600, default 0); returns the new secret once, same scopes/lifetime |
 | DELETE | `/api/auth/tokens/{hash}` | Yes | Revoke PAT |
+
+PATs expire: a request with an expired token gets `401 {"error":"token expired","code":"token_expired"}` (a missing or unknown token gets the generic 401 without a `code`). `{hash}` is the SHA-256 hex of the raw token (`echo -n "$TOKEN" | sha256sum`).
 
 ### Organizations
 

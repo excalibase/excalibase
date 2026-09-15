@@ -71,6 +71,22 @@ func (s *Store) DeleteToken(ctx context.Context, tokenHash string) error {
 	return err
 }
 
+func (s *Store) UpdateTokenExpiry(ctx context.Context, tokenHash string, expiresAt *time.Time) error {
+	var value sql.NullTime
+	if expiresAt != nil {
+		value = sql.NullTime{Valid: true, Time: expiresAt.UTC()}
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE access_tokens SET expires_at = $2 WHERE token_hash = $1`, tokenHash, value)
+	return err
+}
+
+func (s *Store) TouchTokenLastUsed(ctx context.Context, tokenHash string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE access_tokens SET last_used = $2 WHERE token_hash = $1`, tokenHash, at.UTC())
+	return err
+}
+
 type pgRowScanner interface {
 	Scan(dest ...interface{}) error
 }

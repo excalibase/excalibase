@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -86,6 +87,11 @@ type TokenStore interface {
 	FindByTokenHash(ctx context.Context, hash string) (*domain.AccessToken, error)
 	ListTokensByUser(ctx context.Context, userID string) ([]*domain.AccessToken, error)
 	DeleteToken(ctx context.Context, tokenHash string) error
+	// UpdateTokenExpiry rewrites expires_at; nil clears it (never expires).
+	// Rotation uses it to shorten the old token to its grace window.
+	UpdateTokenExpiry(ctx context.Context, tokenHash string, expiresAt *time.Time) error
+	// TouchTokenLastUsed records when the token last authenticated a request.
+	TouchTokenLastUsed(ctx context.Context, tokenHash string, at time.Time) error
 }
 
 // AuditLogStore persists audit entries.

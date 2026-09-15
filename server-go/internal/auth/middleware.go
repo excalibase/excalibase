@@ -13,10 +13,11 @@ import (
 type contextKey string
 
 const (
-	userKey         contextKey = "auth_user"
-	tokenKey        contextKey = "auth_token"
-	contentTypeJSON            = "application/json"
-	headerContentType          = "Content-Type"
+	userKey           contextKey = "auth_user"
+	tokenKey          contextKey = "auth_token"
+	authFailureKey    contextKey = "auth_failure"
+	contentTypeJSON              = "application/json"
+	headerContentType            = "Content-Type"
 )
 
 // TokenLookup abstracts token + user lookup for the middleware.
@@ -56,35 +57,55 @@ func extractRawToken(r *http.Request) string {
 
 // ExtractAuth reads the bearer token (header or cookie), hashes it, and
 // looks up the user. Expired tokens are rejected — the request continues
-// unauthenticated, RequireAuth then 401s.
+// unauthenticated (so public routes such as login still work with a stale
+// cookie) and RequireAuth then 401s with the token_expired code.
 func ExtractAuth(lookup TokenLookup) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
-			raw := extractRawToken(r)
-			if raw != "" {
-				hash := HashToken(raw)
-				token, _ := lookup.FindByTokenHash(ctx, hash)
-				if token != nil && !tokenExpired(token) {
-					user, _ := lookup.FindUserByID(ctx, token.UserID)
-					if user != nil && user.Active {
-						ctx = context.WithValue(ctx, userKey, user)
-						ctx = context.WithValue(ctx, tokenKey, token)
-					}
-				}
+			if raw := extractRawToken(r); raw != "" {
+				ctx = authenticate(ctx, lookup, HashToken(raw))
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// tokenExpired returns true if the token has a non-nil expiry that is in
-// the past. NULL ExpiresAt = never expires (long-lived CI token).
-func tokenExpired(t *domain.AccessToken) bool {
-	if t.ExpiresAt == nil {
-		return false
+// authenticate resolves a token hash to a user and returns the enriched
+// context. An expired token leaves a failure marker instead of a user.
+func authenticate(ctx context.Context, lookup TokenLookup, hash string) context.Context {
+	token, _ := lookup.FindByTokenHash(ctx, hash)
+	if token == nil {
+		return ctx
 	}
-	return time.Now().After(*t.ExpiresAt)
+	now := time.Now()
+	if TokenExpiredAt(token, now) {
+		return context.WithValue(ctx, authFailureKey, ErrCodeTokenExpired)
+	}
+	user, _ := lookup.FindUserByID(ctx, token.UserID)
+	if user == nil || !user.Active {
+		return ctx
+	}
+	recordLastUsed(ctx, lookup, token, now)
+	ctx = context.WithValue(ctx, userKey, user)
+	return context.WithValue(ctx, tokenKey, token)
+}
+
+// recordLastUsed persists last_used at most once per throttle window per
+// token. Best-effort: a failed write must never fail the request.
+func recordLastUsed(ctx context.Context, lookup TokenLookup, token *domain.AccessToken, now time.Time) {
+	recorder, ok := lookup.(LastUsedRecorder)
+	if !ok || !lastUsedStale(token, now) {
+		return
+	}
+	_ = recorder.TouchTokenLastUsed(ctx, token.TokenHash, now)
+}
+
+// authFailure returns the machine-readable reason ExtractAuth refused the
+// presented token, or "" when no token was presented or it was unknown.
+func authFailure(ctx context.Context) string {
+	code, _ := ctx.Value(authFailureKey).(string)
+	return code
 }
 
 // GetToken returns the AccessToken used to authenticate the current
@@ -135,13 +156,24 @@ func TokenHasScope(t *domain.AccessToken, scope string) bool {
 func RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if GetUser(r.Context()) == nil {
-			w.Header().Set(headerContentType, contentTypeJSON)
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "authentication required"})
+			writeUnauthorized(w, authFailure(r.Context()))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// writeUnauthorized emits the 401 body. An expired token carries a distinct
+// code so clients can prompt for rotation instead of a generic re-login.
+func writeUnauthorized(w http.ResponseWriter, code string) {
+	body := map[string]string{"error": "authentication required"}
+	if code == ErrCodeTokenExpired {
+		body["error"] = "token expired"
+		body["code"] = code
+	}
+	w.Header().Set(headerContentType, contentTypeJSON)
+	w.WriteHeader(http.StatusUnauthorized)
+	json.NewEncoder(w).Encode(body)
 }
 
 // RequirePermission checks if the authenticated user has the given permission.

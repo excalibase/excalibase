@@ -676,6 +676,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
 	authHandler.SetOrgStore(sqlStore)
+	authHandler.SetAuditLog(sqlStore)
 	authHandler.SetInviteOnly(cfg.RegistrationMode == "invite")
 
 	var vaultHandler *handler.VaultHandler
@@ -871,6 +872,7 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 			r.Get("/", d.authHandler.ListTokens)
 			r.Post("/", d.authHandler.CreateToken)
 			r.Delete("/{tokenHash}", d.authHandler.RevokeToken)
+			r.Post("/{tokenHash}/rotate", d.authHandler.RotateToken)
 		})
 	})
 }

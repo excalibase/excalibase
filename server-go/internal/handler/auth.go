@@ -19,12 +19,17 @@ type AuthHandler struct {
 	userStore  storage.UserStore
 	tokenStore storage.TokenStore
 	orgStore   storage.OrgStore // optional — resolves pending invites on user creation
+	auditLog   auditWriter      // optional — records PAT rotations
 	inviteOnly bool             // when true, only invited emails (and the first admin) may register
 }
 
 func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) *AuthHandler {
 	return &AuthHandler{userStore: userStore, tokenStore: tokenStore}
 }
+
+// SetAuditLog enables audit entries for token rotation. Nil (the default)
+// keeps rotation working without an audit sink.
+func (h *AuthHandler) SetAuditLog(auditLog auditWriter) { h.auditLog = auditLog }
 
 // SetInviteOnly closes open self-registration: once the platform has its first
 // admin, only emails with a pending org invite may register. Default (false)
@@ -133,14 +138,17 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	h.resolvePendingInvites(r.Context(), user)
 
-	// Auto-login: create PAT
+	// Auto-login: a bounded session token, same shape as Login issues.
 	raw := auth.GenerateToken()
+	expiry := now.Add(sessionTokenTTL)
 	token := &domain.AccessToken{
 		TokenHash:   auth.HashToken(raw),
 		TokenPrefix: auth.TokenPrefix(raw),
 		UserID:      user.ID,
 		Name:        "registration",
+		Scopes:      "session",
 		CreatedAt:   &now,
+		ExpiresAt:   &expiry,
 	}
 	if err := h.tokenStore.CreateToken(r.Context(), token); err != nil {
 		// Don't 200 with a token the user can never use again — that would
@@ -151,8 +159,9 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]interface{}{
-		"token": raw,
-		"user":  user,
+		"token":     raw,
+		"expiresAt": expiry,
+		"user":      user,
 	})
 }
 
@@ -343,90 +352,6 @@ func (h *AuthHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "deleted"})
-}
-
-func (h *AuthHandler) ListTokens(w http.ResponseWriter, r *http.Request) {
-	user := auth.GetUser(r.Context())
-	if user == nil {
-		httpError(w, errNotAuthenticated, http.StatusUnauthorized)
-		return
-	}
-	tokens, err := h.tokenStore.ListTokensByUser(r.Context(), user.ID)
-	if err != nil {
-		httpError(w, "failed to list tokens", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, tokens)
-}
-
-func (h *AuthHandler) CreateToken(w http.ResponseWriter, r *http.Request) {
-	user := auth.GetUser(r.Context())
-	if user == nil {
-		httpError(w, errNotAuthenticated, http.StatusUnauthorized)
-		return
-	}
-
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.Name == "" {
-		httpError(w, "token name is required", http.StatusBadRequest)
-		return
-	}
-
-	raw := auth.GenerateToken()
-	now := time.Now()
-	token := &domain.AccessToken{
-		TokenHash:   auth.HashToken(raw),
-		TokenPrefix: auth.TokenPrefix(raw),
-		UserID:      user.ID,
-		Name:        req.Name,
-		CreatedAt:   &now,
-	}
-
-	if err := h.tokenStore.CreateToken(r.Context(), token); err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]interface{}{
-		"token":  raw, // returned once
-		"prefix": token.TokenPrefix,
-		"name":   req.Name,
-	})
-}
-
-func (h *AuthHandler) RevokeToken(w http.ResponseWriter, r *http.Request) {
-	tokenHash := chi.URLParam(r, "tokenHash")
-
-	// Confirm the token belongs to the caller before deleting. Without this
-	// any authenticated user could revoke any other user's token if they
-	// learned the hash. Platform admins (PermManageUsers) may revoke any
-	// token — supports incident response.
-	caller := auth.GetUser(r.Context())
-	if caller == nil {
-		httpError(w, "unauthenticated", http.StatusUnauthorized)
-		return
-	}
-	tok, err := h.tokenStore.FindByTokenHash(r.Context(), tokenHash)
-	if err != nil || tok == nil {
-		httpError(w, "token not found", http.StatusNotFound)
-		return
-	}
-	if tok.UserID != caller.ID && !auth.HasPermission(caller.Role, auth.PermManageUsers) {
-		httpError(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	if err := h.tokenStore.DeleteToken(r.Context(), tokenHash); err != nil {
-		httpError(w, "revoke failed", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]string{"status": "revoked"})
 }
 
 // GetSetupStatus reports whether the platform has at least one admin user.

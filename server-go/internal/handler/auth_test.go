@@ -18,14 +18,13 @@ import (
 )
 
 const (
-	routeUsers     = "/users"
-	routeTokens    = "/tokens"
-	routeLogin     = "/api/auth/login"
-	expect401Fmt   = "expected 401, got %d"
-	routeAuthUsers = "/api/auth/users"
+	routeUsers      = "/users"
+	routeTokens     = "/tokens"
+	routeLogin      = "/api/auth/login"
+	expect401Fmt    = "expected 401, got %d"
+	routeAuthUsers  = "/api/auth/users"
 	routeAuthTokens = "/api/auth/tokens"
 )
-
 
 // --- in-memory mock stores for auth tests ---
 
@@ -124,6 +123,20 @@ func (s *mockTokenStore) ListTokensByUser(_ context.Context, userID string) ([]*
 
 func (s *mockTokenStore) DeleteToken(_ context.Context, tokenHash string) error {
 	delete(s.tokens, tokenHash)
+	return nil
+}
+
+func (s *mockTokenStore) UpdateTokenExpiry(_ context.Context, tokenHash string, expiresAt *time.Time) error {
+	if tok, ok := s.tokens[tokenHash]; ok {
+		tok.ExpiresAt = expiresAt
+	}
+	return nil
+}
+
+func (s *mockTokenStore) TouchTokenLastUsed(_ context.Context, tokenHash string, at time.Time) error {
+	if tok, ok := s.tokens[tokenHash]; ok {
+		tok.LastUsed = &at
+	}
 	return nil
 }
 
