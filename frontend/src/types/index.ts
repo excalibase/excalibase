@@ -70,6 +70,8 @@ export interface DatabaseInstance {
   deploymentMode?: 'k8s' | 'docker' | 'byoc';
   lastActiveAt?: string;
   pauseReason?: 'idle_7d' | 'manual' | 'tier_limit' | '';
+  // Last successful project-scoped call seen by the platform (project_activity); absent when never seen.
+  lastSeenAt?: string;
 }
 
 export interface CredentialsResponse {

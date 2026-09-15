@@ -346,6 +346,10 @@ type handlerDeps struct {
 	rlUnauth           func(http.Handler) http.Handler
 	rlAuthed           func(http.Handler) http.Handler
 	rlDataPlane        func(http.Handler) http.Handler
+	// activity marks a project as seen on every successful project-scoped
+	// call (EXC-279). Mounted after the access guards so rejected calls never
+	// count.
+	activity func(http.Handler) http.Handler
 }
 
 // startFunctionReplayer boots the EXC-337 cold-start replay loop: it polls
@@ -692,6 +696,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 	provHandler := handler.NewProvisioningHandler(provSvc, sqlStore)
 	provHandler.SetEgressGuard(egress)
+	provHandler.SetActivityStore(sqlStore)
+	activityRecorder := service.NewActivityRecorder(service.ActivityRecorderConfig{Store: sqlStore})
 
 	return &handlerDeps{
 		egress:             egress,
@@ -726,6 +732,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlUnauth:    custommw.RateLimit(custommw.PerIP, 30, time.Minute),
 		rlAuthed:    custommw.RateLimit(custommw.PerUser, 600, time.Minute),
 		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
+		activity:    custommw.ProjectActivity(activityRecorder),
 	}
 }
 
@@ -770,8 +777,10 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 
 	// Phase 7: /http/* dispatch is mounted BEFORE the bare /{fnId} route so
 	// chi's router doesn't treat the literal segment "http" as a function id.
-	r.With(custommw.TenantContext).HandleFunc("/functions/v1/{projectId}/http/*", d.fnHandler.PublicHttpInvoke)
-	r.With(custommw.TenantContext).HandleFunc("/functions/v1/{projectId}/{fnId}", d.fnHandler.PublicInvoke)
+	// A successful invoke is end-user traffic, the strongest "this project is
+	// alive" signal the platform sees — so it feeds project_activity too.
+	r.With(custommw.TenantContext, d.activity).HandleFunc("/functions/v1/{projectId}/http/*", d.fnHandler.PublicHttpInvoke)
+	r.With(custommw.TenantContext, d.activity).HandleFunc("/functions/v1/{projectId}/{fnId}", d.fnHandler.PublicInvoke)
 	// Internal runtime → provisioning callback for export metadata capture.
 	// Authenticates via X-Excalibase-Runtime-Token (shared runtime secret),
 	// not JWT — this is server-to-server only.
@@ -779,7 +788,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	// Phase 7: server-to-server bridge used by ctx.runQuery/runMutation/
 	// runAction to invoke a sibling function. Same shared-secret auth as
 	// the metadata callback above.
-	r.Post("/internal/invoke/{projectId}/{fnId}", d.fnHandler.InternalInvoke)
+	r.With(d.activity).Post("/internal/invoke/{projectId}/{fnId}", d.fnHandler.InternalInvoke)
 	return r
 }
 
@@ -796,6 +805,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			r.Use(custommw.TenantContext)
 			r.Use(custommw.RequireProjectAccess(store, sqlStore))
 			r.Use(d.rlDataPlane)
+			r.Use(d.activity)
 
 			// Org-role tiers on top of membership (Owner⊇Admin⊇Developer⊇Viewer):
 			//   reads = any member (Viewer); writes = Developer; credentials +
@@ -927,6 +937,7 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		// Viewers may browse (GET); DDL / /query / row writes require Developer+ (RBAC gate).
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
+		r.Use(d.activity)
 		d.schemaHandler.RoutesInner(r)
 	})
 }
@@ -937,6 +948,7 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(d.activity)
 		// Edge functions are a tenant-developer feature (author + deploy via
 		// Studio), so gate on ORG role, not platform perms — a normal developer
 		// holds no platform perm and was previously locked out. Reads = any
@@ -966,18 +978,21 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(d.activity)
 		r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
 	})
 	r.Route("/api/projects/{projectId}/info", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetProjectInfo)
 	})
 	r.Route("/api/projects/{projectId}/realtime", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(d.activity)
 		d.realtimeHandler.Routes(r)
 	})
 	if d.storageHandler != nil {
@@ -985,6 +1000,7 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
 			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(d.activity)
 			d.storageHandler.Routes(r)
 		})
 		d.storageHandler.PublicRoutes(r)
