@@ -64,6 +64,26 @@ func unsealVaultInteractive(v *vault.Vault) error {
 	return nil
 }
 
+// openPlatformStoreCLI opens the platform store and requires an interactive
+// unseal of the vault that lives on it as proof of authority. Exits the
+// process on any failure; callers own closing the store.
+func openPlatformStoreCLI(dbURL string) *pgstore.Store {
+	sqlStore, err := pgstore.New(dbURL)
+	if err != nil {
+		log.Fatalf("Open database: %v", err)
+	}
+	v, err := openVaultOnPlatformDB(sqlStore)
+	if err != nil {
+		sqlStore.Close()
+		log.Fatalf("Open vault: %v", err)
+	}
+	if err := unsealVaultInteractive(v); err != nil {
+		sqlStore.Close()
+		log.Fatalf("Vault: %v", err)
+	}
+	return sqlStore
+}
+
 // resetPasswordCLI handles the `reset-password` subcommand.
 func resetPasswordCLI() {
 	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
@@ -76,23 +96,10 @@ func resetPasswordCLI() {
 		*dbURL = cfg.PlatformDBURL
 	}
 
-	// 1. Open the Postgres platform store (also backs the vault)
-	sqlStore, err := pgstore.New(*dbURL)
-	if err != nil {
-		log.Fatalf("Open database: %v", err)
-	}
+	sqlStore := openPlatformStoreCLI(*dbURL)
 	defer sqlStore.Close()
 
-	// 2. Open vault and require unseal (proof of authority)
-	v, err := openVaultOnPlatformDB(sqlStore)
-	if err != nil {
-		log.Fatalf("Open vault: %v", err)
-	}
-	if err := unsealVaultInteractive(v); err != nil {
-		log.Fatalf("Vault: %v", err)
-	}
-
-	// 3. Find user
+	// Find user
 	ctx := context.Background()
 	user, err := sqlStore.FindUserByUsername(ctx, *username)
 	if err != nil {
@@ -146,19 +153,8 @@ func recoverInstancesCLI() {
 		*dbURL = cfg.PlatformDBURL
 	}
 
-	sqlStore, err := pgstore.New(*dbURL)
-	if err != nil {
-		log.Fatalf("Open database: %v", err)
-	}
+	sqlStore := openPlatformStoreCLI(*dbURL)
 	defer sqlStore.Close()
-
-	v, err := openVaultOnPlatformDB(sqlStore)
-	if err != nil {
-		log.Fatalf("Open vault: %v", err)
-	}
-	if err := unsealVaultInteractive(v); err != nil {
-		log.Fatalf("Vault: %v", err)
-	}
 
 	ctx := context.Background()
 	users, _ := sqlStore.FindAllUsers(ctx)
