@@ -177,3 +177,29 @@ func TestLoadFnEgressDefaultHosts(t *testing.T) {
 		t.Fatalf("FnEgressDefaultHosts: got %q", cfg.FnEgressDefaultHosts)
 	}
 }
+
+func TestLoadJWTRequireAud(t *testing.T) {
+	os.Unsetenv("JWT_REQUIRE_AUD")
+	if !Load().JWTRequireAud {
+		t.Error("JWTRequireAud must default to true")
+	}
+	t.Setenv("JWT_REQUIRE_AUD", "false")
+	if Load().JWTRequireAud {
+		t.Error("JWT_REQUIRE_AUD=false must disable the audience check")
+	}
+	t.Setenv("JWT_REQUIRE_AUD", "true")
+	if !Load().JWTRequireAud {
+		t.Error("JWT_REQUIRE_AUD=true must enable the audience check")
+	}
+}
+
+func TestLoadJWTAudPrefix(t *testing.T) {
+	os.Unsetenv("AUTH_AUD_PREFIX")
+	if got := Load().JWTAudPrefix; got != "excalibase:" {
+		t.Errorf("JWTAudPrefix default: got %q, want %q", got, "excalibase:")
+	}
+	t.Setenv("AUTH_AUD_PREFIX", "acme:")
+	if got := Load().JWTAudPrefix; got != "acme:" {
+		t.Errorf("JWTAudPrefix from env: got %q, want %q", got, "acme:")
+	}
+}

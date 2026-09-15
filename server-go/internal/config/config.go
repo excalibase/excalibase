@@ -43,6 +43,15 @@ type AppConfig struct {
 	PublicBaseURL         string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
 	RegistrationMode      string // "open" (default) or "invite" — invite closes open studio signup
 
+	// JWTRequireAud gates the end-user JWT audience check (EXC-11). On by
+	// default; set JWT_REQUIRE_AUD=false only for a phased rollout where
+	// older tokens without an aud claim are still in circulation.
+	JWTRequireAud bool
+	// JWTAudPrefix is prepended to the project id to form the audience each
+	// per-project token must carry, e.g. "excalibase:proj_p1". Must match
+	// the auth service's AUTH_AUD_PREFIX.
+	JWTAudPrefix string
+
 	// K8s client connection — priority: remote API > kubeconfig path > env KUBECONFIG > in-cluster > ~/.kube/config
 	KubeconfigPath         string // explicit kubeconfig file
 	KubeAPIURL             string // remote API server URL (for out-of-cluster platform deployments)
@@ -156,6 +165,8 @@ func Load() AppConfig {
 		NatsCalloutPassword:     os.Getenv("NATS_AUTH_CALLOUT_PASSWORD"),
 		NatsCalloutIssuerSeed:   os.Getenv("NATS_AUTH_CALLOUT_ISSUER_SEED"),
 		RegistrationMode:        envOr("REGISTRATION_MODE", "open"),
+		JWTRequireAud:           envBool("JWT_REQUIRE_AUD", true),
+		JWTAudPrefix:            envOr("AUTH_AUD_PREFIX", "excalibase:"),
 		CORSOrigins:             parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
 		WatcherChartPath:        envOr("WATCHER_CHART_PATH", "/charts/excalibase-watcher"),
 		DenoRuntimeURL:          envOr("DENO_RUNTIME_URL", "http://deno-runtime.serverless.svc.cluster.local:8000"),
