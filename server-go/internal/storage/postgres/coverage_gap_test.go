@@ -13,7 +13,6 @@ import (
 
 const testProjY = "proj-y"
 
-
 // FindAllOrgs / UpdateOrg / DeleteOrg cover the platform-admin org
 // management surface. These were 0% because the smoke suite only walks
 // the per-user query path.
@@ -72,40 +71,13 @@ func TestPostgres_OrgCRUD(t *testing.T) {
 	}
 }
 
-// pgdogTablesSQL mirrors the schema created by the PgDog operator in
-// production. We don't ship a migration for these tables (PgDog owns
-// them), so tests have to build them inline.
-const pgdogTablesSQL = `
-CREATE TABLE IF NOT EXISTS pgdog_databases (
-    name TEXT NOT NULL,
-    host TEXT NOT NULL,
-    port INTEGER NOT NULL,
-    database_name TEXT NOT NULL,
-    role TEXT NOT NULL,
-    shard INTEGER NOT NULL DEFAULT 0,
-    pool_size INTEGER,
-    read_only BOOLEAN NOT NULL DEFAULT FALSE,
-    active BOOLEAN NOT NULL DEFAULT TRUE,
-    PRIMARY KEY (name, role, shard)
-);
-CREATE TABLE IF NOT EXISTS pgdog_users (
-    name TEXT NOT NULL,
-    database TEXT NOT NULL,
-    password TEXT,
-    pool_size INTEGER,
-    active BOOLEAN NOT NULL DEFAULT TRUE,
-    PRIMARY KEY (name, database)
-);`
-
 // PgDog config table CRUD — used by the PgDog notifier to register CNPG
-// clusters. Verify each op against the real Postgres schema.
+// clusters. The tables come from migration 000019 so the same DDL PgDog
+// reads in production is what these tests exercise.
 
-func TestPostgres_PgDogDatabase_RegisterAndRemove(t *testing.T) {
+func TestPostgres_PgDogDatabase_UpsertKeepsOneRowPerRoute(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	if _, err := store.DB().ExecContext(ctx, pgdogTablesSQL); err != nil {
-		t.Fatalf("create pgdog tables: %v", err)
-	}
 
 	pool := 10
 	db := &domain.PgDogDatabase{
@@ -115,39 +87,64 @@ func TestPostgres_PgDogDatabase_RegisterAndRemove(t *testing.T) {
 	if err := store.RegisterPgDogDatabase(ctx, db); err != nil {
 		t.Fatalf("RegisterPgDogDatabase: %v", err)
 	}
-	// Re-register is idempotent (ON CONFLICT DO NOTHING).
+	// Re-register with a moved host: still one row per (name, role, shard),
+	// and the row must carry the new host so PgDog reconnects to the right place.
+	db.Host = "h2.svc.local"
 	if err := store.RegisterPgDogDatabase(ctx, db); err != nil {
-		t.Errorf("re-register should be idempotent, got %v", err)
+		t.Fatalf("re-register: %v", err)
+	}
+	var rows int
+	var host string
+	if err := store.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*), MAX(host) FROM pgdog_databases WHERE name = 'proj-x' AND role = 'primary'`).
+		Scan(&rows, &host); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rows != 1 || host != "h2.svc.local" {
+		t.Errorf("want 1 row with host h2.svc.local, got rows=%d host=%q", rows, host)
 	}
 	if err := store.RemovePgDogDatabase(ctx, "proj-x"); err != nil {
 		t.Fatalf("RemovePgDogDatabase: %v", err)
 	}
 }
 
-func TestPostgres_PgDogUser_RegisterAndRemove(t *testing.T) {
+func TestPostgres_PgDogUsers_RegisterAndRemoveByDatabase(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	if _, err := store.DB().ExecContext(ctx, pgdogTablesSQL); err != nil {
-		t.Fatalf("create pgdog tables: %v", err)
-	}
 
-	// Register the parent database first to satisfy any FK (if defined).
 	store.RegisterPgDogDatabase(ctx, &domain.PgDogDatabase{
 		Name: testProjY, Host: "h", Port: 5432, DatabaseName: "appdb", Role: "primary",
 	})
 
 	pool := 5
-	user := &domain.PgDogUser{Name: "appuser", Database: testProjY, Password: testutil.FixtureSecret("pgdog-user"), PoolSize: &pool}
-	if err := store.RegisterPgDogUser(ctx, user); err != nil {
-		t.Fatalf("RegisterPgDogUser: %v", err)
+	for _, name := range []string{"excalibase_app", "auth_admin"} {
+		user := &domain.PgDogUser{Name: name, Database: testProjY, Password: testutil.FixtureSecret("pgdog-user"), PoolSize: &pool}
+		if err := store.RegisterPgDogUser(ctx, user); err != nil {
+			t.Fatalf("RegisterPgDogUser %s: %v", name, err)
+		}
 	}
-	// Update via ON CONFLICT
-	user.Password = testutil.FixtureSecret("pgdog-rotated")
-	if err := store.RegisterPgDogUser(ctx, user); err != nil {
+	// Password rotation via ON CONFLICT (name, database).
+	rotated := &domain.PgDogUser{Name: "excalibase_app", Database: testProjY, Password: testutil.FixtureSecret("pgdog-rotated")}
+	if err := store.RegisterPgDogUser(ctx, rotated); err != nil {
 		t.Fatalf("RegisterPgDogUser update: %v", err)
 	}
-	if err := store.RemovePgDogUser(ctx, "appuser", testProjY); err != nil {
-		t.Fatalf("RemovePgDogUser: %v", err)
+	// A user of another project must survive the removal below.
+	other := &domain.PgDogUser{Name: "excalibase_app", Database: "proj-other", Password: "o"}
+	if err := store.RegisterPgDogUser(ctx, other); err != nil {
+		t.Fatalf("RegisterPgDogUser other: %v", err)
+	}
+
+	if err := store.RemovePgDogUsers(ctx, testProjY); err != nil {
+		t.Fatalf("RemovePgDogUsers: %v", err)
+	}
+	var left, otherLeft int
+	store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM pgdog_users WHERE database = $1`, testProjY).Scan(&left)
+	store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM pgdog_users WHERE database = 'proj-other'`).Scan(&otherLeft)
+	if left != 0 {
+		t.Errorf("expected every %s user removed, %d left", testProjY, left)
+	}
+	if otherLeft != 1 {
+		t.Errorf("other project's user must be untouched, got %d", otherLeft)
 	}
 }
 

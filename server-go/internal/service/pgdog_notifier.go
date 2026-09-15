@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 
@@ -11,6 +12,26 @@ import (
 )
 
 const pgdogReloadSubject = "pgdog.config.reload"
+
+// ErrPgDogRoleNotRoutable is returned when a caller tries to expose a role
+// through the shared pooler that is not one of the engine-facing roles.
+var ErrPgDogRoleNotRoutable = errors.New("pgdog: role is not routable through the pooler")
+
+// pgdogRoutableRoles are the only roles provisioning ever registers with
+// PgDog. The CNPG owner ("app"), the docker-mode superuser and cdc_watcher
+// (REPLICATION cannot cross a transaction pooler) are deliberately absent:
+// a pgdog_users row is exactly the set of credentials that can reach a
+// tenant through the single shared PgDog address.
+var pgdogRoutableRoles = map[string]bool{
+	"excalibase_app": true,
+	"auth_admin":     true,
+}
+
+// PgDogRole is one (username, password) pair to expose for a project.
+type PgDogRole struct {
+	Name     string
+	Password string
+}
 
 // PgDogNotifier registers CNPG clusters with PgDog's config tables
 // and publishes reload signals via NATS.
@@ -30,10 +51,15 @@ func NewPgDogNotifier(store storage.PgDogConfigStore, natsURL string) (*PgDogNot
 	return &PgDogNotifier{store: store, nc: nc}, nil
 }
 
-// RegisterCluster adds a CNPG cluster's primary + replica to PgDog config.
-func (n *PgDogNotifier) RegisterCluster(ctx context.Context, projectID, namespace, dbName, username, password string) error {
+// RegisterCluster adds a CNPG cluster's primary + replica to PgDog config and
+// scopes each engine role to the project's logical database. Every role is
+// validated before anything is written so a rejected set leaves no route.
+func (n *PgDogNotifier) RegisterCluster(ctx context.Context, projectID, namespace, dbName string, roles []PgDogRole) error {
 	if n.store == nil {
 		return nil
+	}
+	if err := validatePgDogRoles(roles); err != nil {
+		return err
 	}
 
 	rwHost := fmt.Sprintf("%s-postgres-rw.%s.svc.cluster.local", projectID, namespace)
@@ -53,24 +79,38 @@ func (n *PgDogNotifier) RegisterCluster(ctx context.Context, projectID, namespac
 		return fmt.Errorf("register replica: %w", err)
 	}
 
-	if err := n.store.RegisterPgDogUser(ctx, &domain.PgDogUser{
-		Name: username, Database: projectID, Password: password,
-	}); err != nil {
-		return fmt.Errorf("register user: %w", err)
+	for _, role := range roles {
+		if err := n.store.RegisterPgDogUser(ctx, &domain.PgDogUser{
+			Name: role.Name, Database: projectID, Password: role.Password,
+		}); err != nil {
+			return fmt.Errorf("register user %s: %w", role.Name, err)
+		}
 	}
 
 	n.publishReload()
 	return nil
 }
 
-// DeregisterCluster removes a CNPG cluster from PgDog config.
-func (n *PgDogNotifier) DeregisterCluster(ctx context.Context, projectID, username string) error {
+func validatePgDogRoles(roles []PgDogRole) error {
+	if len(roles) == 0 {
+		return fmt.Errorf("%w: no roles given", ErrPgDogRoleNotRoutable)
+	}
+	for _, role := range roles {
+		if !pgdogRoutableRoles[role.Name] {
+			return fmt.Errorf("%w: %q", ErrPgDogRoleNotRoutable, role.Name)
+		}
+	}
+	return nil
+}
+
+// DeregisterCluster removes a project's routes and every user bound to them.
+func (n *PgDogNotifier) DeregisterCluster(ctx context.Context, projectID string) error {
 	if n.store == nil {
 		return nil
 	}
 
-	if err := n.store.RemovePgDogUser(ctx, username, projectID); err != nil {
-		log.Printf("WARN: pgdog remove user: %v", err)
+	if err := n.store.RemovePgDogUsers(ctx, projectID); err != nil {
+		log.Printf("WARN: pgdog remove users: %v", err)
 	}
 	if err := n.store.RemovePgDogDatabase(ctx, projectID); err != nil {
 		log.Printf("WARN: pgdog remove database: %v", err)

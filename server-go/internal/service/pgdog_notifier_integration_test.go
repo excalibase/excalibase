@@ -28,8 +28,8 @@ import (
 // What gets verified:
 //
 //   - RegisterCluster writes 2 rows to pgdog_databases (primary +
-//     replica) and 1 row to pgdog_users with the expected hosts +
-//     read-only flag
+//     replica) and one pgdog_users row per engine role with the
+//     expected hosts + read-only flag
 //   - Calling Register with the same projectId twice is upsert-safe
 //     (no UNIQUE violations)
 //   - RegisterCluster publishes a "reload" message on the
@@ -64,9 +64,8 @@ func setupPgDogNotifierEnv(ctx context.Context, t *testing.T) pgdogTestEnv {
 	return pgdogTestEnv{store: store, notifier: n, natsURL: natsURL, reloadCount: reloadCount}
 }
 
-// startPgDogPostgres boots Postgres and creates the pgdog_databases /
-// pgdog_users tables (PgDog owns them in production; mirrored here for a
-// hermetic test). Returns the connected store.
+// startPgDogPostgres boots Postgres and runs the platform migrations, which
+// include the pgdog_databases / pgdog_users tables. Returns the connected store.
 func startPgDogPostgres(ctx context.Context, t *testing.T) *pgstore.Store {
 	t.Helper()
 	pgPwd := testutil.FixturePassword("pgdog-int")
@@ -93,29 +92,6 @@ func startPgDogPostgres(ctx context.Context, t *testing.T) *pgstore.Store {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	if _, err := store.DB().Exec(`
-		CREATE TABLE IF NOT EXISTS pgdog_databases (
-		    name TEXT NOT NULL,
-		    host TEXT NOT NULL,
-		    port INTEGER NOT NULL,
-		    database_name TEXT NOT NULL,
-		    role TEXT NOT NULL,
-		    shard INTEGER NOT NULL DEFAULT 0,
-		    pool_size INTEGER,
-		    read_only BOOLEAN NOT NULL DEFAULT FALSE,
-		    active BOOLEAN NOT NULL DEFAULT TRUE,
-		    PRIMARY KEY (name, role, shard)
-		);
-		CREATE TABLE IF NOT EXISTS pgdog_users (
-		    name TEXT NOT NULL,
-		    database TEXT NOT NULL,
-		    password TEXT,
-		    pool_size INTEGER,
-		    active BOOLEAN NOT NULL DEFAULT TRUE,
-		    PRIMARY KEY (name, database)
-		);`); err != nil {
-		t.Fatalf("create pgdog tables: %v", err)
-	}
 	return store
 }
 
@@ -185,7 +161,7 @@ func TestPgDogNotifier_Integration(t *testing.T) { //NOSONAR sequential integrat
 
 	t.Run("RegisterCluster_writes_DB_rows", func(t *testing.T) {
 		atomic.StoreInt32(reloadCount, 0)
-		if err := n.RegisterCluster(ctx, "proj-alpha", "ns-alpha", "app", "app", "secret-alpha"); err != nil {
+		if err := n.RegisterCluster(ctx, "proj-alpha", "ns-alpha", "app", []PgDogRole{{Name: "excalibase_app", Password: "secret-alpha"}}); err != nil {
 			t.Fatalf("RegisterCluster: %v", err)
 		}
 		// Database rows.
@@ -211,7 +187,7 @@ func TestPgDogNotifier_Integration(t *testing.T) { //NOSONAR sequential integrat
 		}
 		// User row.
 		var userPass string
-		row = store.DB().QueryRow(`SELECT password FROM pgdog_users WHERE name = $1 AND database = $2`, "app", "proj-alpha")
+		row = store.DB().QueryRow(`SELECT password FROM pgdog_users WHERE name = $1 AND database = $2`, "excalibase_app", "proj-alpha")
 		if err := row.Scan(&userPass); err != nil {
 			t.Fatalf("query user: %v", err)
 		}
@@ -229,7 +205,7 @@ func TestPgDogNotifier_Integration(t *testing.T) { //NOSONAR sequential integrat
 	t.Run("RegisterCluster_idempotent_upsert", func(t *testing.T) {
 		// Second register with same projectId — must not 23505 the
 		// pgdog_databases UNIQUE constraint or duplicate rows.
-		if err := n.RegisterCluster(ctx, "proj-alpha", "ns-alpha", "app", "app", "rotated-secret"); err != nil {
+		if err := n.RegisterCluster(ctx, "proj-alpha", "ns-alpha", "app", []PgDogRole{{Name: "excalibase_app", Password: "rotated-secret"}}); err != nil {
 			t.Fatalf("re-register: %v", err)
 		}
 		var rows int
@@ -249,7 +225,7 @@ func TestPgDogNotifier_Integration(t *testing.T) { //NOSONAR sequential integrat
 
 	t.Run("DeregisterCluster_removes_rows_and_signals", func(t *testing.T) {
 		atomic.StoreInt32(reloadCount, 0)
-		if err := n.DeregisterCluster(ctx, "proj-alpha", "app"); err != nil {
+		if err := n.DeregisterCluster(ctx, "proj-alpha"); err != nil {
 			t.Fatalf("Deregister: %v", err)
 		}
 		var dbRows, userRows int
@@ -274,7 +250,7 @@ func TestPgDogNotifier_Integration(t *testing.T) { //NOSONAR sequential integrat
 			t.Fatalf("NewPgDogNotifier no-nats: %v", err)
 		}
 		t.Cleanup(nNoNATS.Close)
-		if err := nNoNATS.RegisterCluster(ctx, "proj-beta", "ns-beta", "app", "app", "secret-beta"); err != nil {
+		if err := nNoNATS.RegisterCluster(ctx, "proj-beta", "ns-beta", "app", []PgDogRole{{Name: "auth_admin", Password: "secret-beta"}}); err != nil {
 			t.Fatalf("Register no-nats: %v", err)
 		}
 		var rows int
