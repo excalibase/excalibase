@@ -381,6 +381,7 @@ Works against a local socket *or* a remote Docker daemon over TLS, same setup pa
 | `DENO_RUNTIME_SECRET` | | Shared secret for Deno runtime auth |
 | `DENO_NAMESPACE` | `serverless` | K8s namespace for Deno pods |
 | `DENO_RUNTIME_IMAGE` | `excalibase/deno-runtime:latest` | Per-project Deno pod image |
+| `EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS` | | Operator-level outbound allowlist merged into every project's edge-function egress: comma-separated `host`, `host:port` or `*.suffix` entries in Deno `--allow-net` form (e.g. `*.excalibase.io,api.resend.com`). Empty = projects start with no egress and opt hosts in via `PUT /api/projects/{id}/functions/egress`. Private / cluster-internal addresses are refused; a malformed list stops the server at boot. See `docs/functions-egress.md`. |
 
 **Pooler / CDC**
 

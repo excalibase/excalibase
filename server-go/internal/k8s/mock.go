@@ -13,26 +13,25 @@ import (
 
 const podNameFmt = "%s-postgres-%d"
 
-
 // MockClient is a test double for KubeClient.
 type MockClient struct {
-	mu              sync.Mutex
-	Namespaces      map[string]bool
-	NamespaceLabels map[string]map[string]string
-	CRDs            map[string]*unstructured.Unstructured
-	Secrets         map[string]map[string][]byte
-	Pods            map[string][]corev1.Pod
-	PodReady        map[string]bool
-	ExecOutput      map[string]string // key: "namespace/pod" → output
-	ExecError       map[string]error
-	Metrics         map[string][]PodResourceMetrics
-	HelmReleases    map[string]map[string]interface{} // key: "namespace/release" → values
-	Calls           []string // track method calls
-	HelmError            error // if non-nil, InstallHelmChart returns this error
-	NamespaceError       error // if non-nil, CreateNamespace returns this error
-	DeleteNamespaceError error // if non-nil, DeleteNamespace returns this error
-	CRDError             error // if non-nil, ApplyCRD returns this error
-	DeleteCRDError       error // if non-nil, DeleteCRD returns this error
+	mu                   sync.Mutex
+	Namespaces           map[string]bool
+	NamespaceLabels      map[string]map[string]string
+	CRDs                 map[string]*unstructured.Unstructured
+	Secrets              map[string]map[string][]byte
+	Pods                 map[string][]corev1.Pod
+	PodReady             map[string]bool
+	ExecOutput           map[string]string // key: "namespace/pod" → output
+	ExecError            map[string]error
+	Metrics              map[string][]PodResourceMetrics
+	HelmReleases         map[string]map[string]interface{} // key: "namespace/release" → values
+	Calls                []string                          // track method calls
+	HelmError            error                             // if non-nil, InstallHelmChart returns this error
+	NamespaceError       error                             // if non-nil, CreateNamespace returns this error
+	DeleteNamespaceError error                             // if non-nil, DeleteNamespace returns this error
+	CRDError             error                             // if non-nil, ApplyCRD returns this error
+	DeleteCRDError       error                             // if non-nil, DeleteCRD returns this error
 
 	// Wildcards — used when tests don't know the generated project ID upfront.
 	WildcardPodReady  bool              // IsPodReady returns true for any pod not in PodReady
@@ -40,8 +39,10 @@ type MockClient struct {
 	WildcardExecError error             // ExecInPod returns this for any pod not in ExecError
 
 	// DenoRuntimes — set of namespaces where EnsureDenoRuntime has been called.
-	DenoRuntimes        map[string]bool
-	EnsureDenoError     error
+	DenoRuntimes map[string]bool
+	// DenoSpecs — the last spec EnsureDenoRuntime received per namespace.
+	DenoSpecs       map[string]DenoRuntimeSpec
+	EnsureDenoError error
 
 	// Capacity returned by GetClusterCapacity. Tests set this to simulate
 	// cluster headroom for capacity-aware provisioning checks.
@@ -62,6 +63,7 @@ func NewMockClient() *MockClient {
 		ExecError:       make(map[string]error),
 		Metrics:         make(map[string][]PodResourceMetrics),
 		DenoRuntimes:    make(map[string]bool),
+		DenoSpecs:       make(map[string]DenoRuntimeSpec),
 	}
 }
 
@@ -281,6 +283,11 @@ func (m *MockClient) GetDeployment(ctx context.Context, namespace, name string) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "GetDeployment:"+namespace+"/"+name)
+	// The per-project Deno runtime is tracked by EnsureDenoRuntime, so its
+	// existence is answered truthfully; every other deployment "exists".
+	if name == "deno-runtime" {
+		return m.DenoRuntimes[namespace], nil
+	}
 	return true, nil
 }
 
@@ -303,6 +310,7 @@ func (m *MockClient) EnsureDenoRuntime(ctx context.Context, namespace string, sp
 		return m.EnsureDenoError
 	}
 	m.DenoRuntimes[namespace] = true
+	m.DenoSpecs[namespace] = spec
 	return nil
 }
 

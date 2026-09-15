@@ -48,9 +48,9 @@ func TestClassifyAddr_BlocksInternalRanges(t *testing.T) {
 	for _, tc := range blocked {
 		t.Run(tc.name, func(t *testing.T) {
 			addr := netip.MustParseAddr(tc.addr)
-			err := classifyAddr(addr)
+			err := ClassifyAddr(addr)
 			if !errors.Is(err, ErrInternalAddress) {
-				t.Fatalf("classifyAddr(%s) = %v, want ErrInternalAddress", tc.addr, err)
+				t.Fatalf("ClassifyAddr(%s) = %v, want ErrInternalAddress", tc.addr, err)
 			}
 		})
 	}
@@ -71,8 +71,8 @@ func TestClassifyAddr_AllowsPublicRanges(t *testing.T) {
 		"2002:0808:0808::1", // 6to4 embedding public
 	}
 	for _, s := range public {
-		if err := classifyAddr(netip.MustParseAddr(s)); err != nil {
-			t.Errorf("classifyAddr(%s) = %v, want nil", s, err)
+		if err := ClassifyAddr(netip.MustParseAddr(s)); err != nil {
+			t.Errorf("ClassifyAddr(%s) = %v, want nil", s, err)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package edgefn_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -18,6 +19,13 @@ import (
 // Exercises PostgresFunctionStore against a real Postgres (EXC-333). Also proves
 // migration 000013 applies, since pgstore.New runs migrations on connect.
 func newPGFunctionStore(t *testing.T) *edgefn.PostgresFunctionStore {
+	t.Helper()
+	return edgefn.NewPostgresFunctionStore(newPGPlatformDB(t))
+}
+
+// newPGPlatformDB starts a throwaway Postgres, runs the platform migrations
+// through pgstore.New and returns the migrated database.
+func newPGPlatformDB(t *testing.T) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
 
@@ -45,7 +53,7 @@ func newPGFunctionStore(t *testing.T) *edgefn.PostgresFunctionStore {
 		t.Fatalf("pgstore.New (runs migrations): %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return edgefn.NewPostgresFunctionStore(store.DB())
+	return store.DB()
 }
 
 func sampleFn(projectID, id string) *edgefn.Function {

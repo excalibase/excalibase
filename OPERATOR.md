@@ -279,6 +279,45 @@ of them is refused at connect time. Set `BYOC_EGRESS_ALLOWLIST`
 targets to your approved destinations; a malformed value stops the
 server at boot. User-facing errors never include resolved addresses.
 
+## 6.1. Edge-function egress (outbound allowlist)
+
+Function workers have **no network by default**: `fetch()` from a function
+fails with `NotCapable` until the project allowlists the host. The setting
+is per project, stored in the platform Postgres (`edge_function_settings`)
+and rendered into the runtime by provisioning — see
+[docs/functions-egress.md](docs/functions-egress.md) for the grammar.
+
+```bash
+# Read / set a project's allowlist (Developer+ on the org — same gate as deploy)
+curl -sf -H "Authorization: Bearer $PAT" \
+  "https://<host>/api/projects/<projectId>/functions/egress" | jq
+curl -sf -X PUT -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  "https://<host>/api/projects/<projectId>/functions/egress" \
+  -d '{"allowedHosts":["api.stripe.com","*.amazonaws.com"]}'
+
+# Operator floor every project gets in addition (same grammar; malformed = boot refuses)
+EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS="*.excalibase.io,api.resend.com"
+```
+
+What a `PUT` does, per mode:
+
+| Mode | Rendering | Rollout |
+|---|---|---|
+| k8s (per-project `deno-runtime` pod) | `ALLOWED_HOSTS` env on the Deployment + `excalibase.io/egress-hash` pod annotation; `deno-runtime-egress` NetworkPolicy re-rendered in the same call (public IPv4 on the allowlisted TCP ports, private ranges excepted; nothing when the list is empty) | Deployment rolls; the runtime replayer refills the pod |
+| docker (one shared runtime) | every deploy payload carries `allowedHosts`; the worker gets exactly that list | functions redeployed immediately |
+
+Verify on k8s:
+
+```bash
+kubectl -n <project-ns> get deploy deno-runtime -o jsonpath='{.spec.template.spec.containers[0].env}' | jq
+kubectl -n <project-ns> get networkpolicy deno-runtime-egress -o yaml | grep -A6 ipBlock
+```
+
+The NetworkPolicy is only a backstop (it cannot match hostnames) and needs
+an enforcing CNI (Calico / Cilium). On the shared docker runtime the
+container's own `ALLOWED_HOSTS` env is an operator baseline unioned into
+every worker.
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:
@@ -313,6 +352,8 @@ Watcher image tag is hard-coded in the provisioner (because it's deployed lazily
 | Deno runtime CrashLoopBackOff with "RUNTIME_SECRET environment variable is required" | `deno-runtime-secret` not deployed | `kubectl get secret -n excalibase-platform deno-runtime-secret`; if missing, re-run `helm upgrade`. |
 | Watcher CrashLoopBackOff with "permission denied to use replication slots" | Watcher trying to use CNPG `app` role instead of `cdc_watcher` | v1.0.0 fix moves watcher deploy after role creation; upgrade. |
 | Auth registration returns 503 "failed to connect to project database" | Stale auth pod with old vault path | `kubectl rollout restart -n excalibase-platform deployment/auth`. |
+| Function `fetch()` fails with `NotCapable: Requires net access to "<host>"` | Host not in the project's egress allowlist (default: no egress) | `PUT /api/projects/<id>/functions/egress` with the host — section 6.1. If the allowlist is set but the call times out on k8s, the NetworkPolicy port set does not cover the target port (entries without a port open 443 only) or the CNI does not enforce policies. |
+| `PUT /functions/egress` returns 400 | Entry outside the Deno `net` grammar or a private / cluster-internal address | The error names the entry; only `host`, `host:port`, `*.suffix[:port]` or public IP literals are accepted. |
 
 ## 9. Static analysis (Snyk Code + SonarCloud)
 

@@ -400,7 +400,28 @@ func buildFunctionHandler(cfg config.AppConfig, vc vaultclient.VaultClient, stor
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 	}
 	fnHandler.SetVault(vc)
+	wireFunctionEgress(cfg, sqlStore, fnHandler)
 	return fnHandler
+}
+
+// wireFunctionEgress attaches the per-project outbound allowlist store and the
+// operator default list (EXC-348). The store is the platform Postgres in every
+// mode; a malformed EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS stops the server rather
+// than silently widening (or narrowing) every project's egress.
+func wireFunctionEgress(cfg config.AppConfig, sqlStore storage.PlatformStore, fnHandler *handler.FunctionHandler) {
+	if pg, ok := sqlStore.(*pgstore.Store); ok {
+		fnHandler.SetEgressStore(edgefn.NewPostgresEgressStore(pg.DB()))
+	} else {
+		log.Println("WARN: no Postgres platform store — the edge-function egress allowlist API is unavailable")
+	}
+	defaults, err := edgefn.ParseEgressHostList(cfg.FnEgressDefaultHosts)
+	if err != nil {
+		log.Fatalf("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS: %v", err)
+	}
+	if len(defaults) > 0 {
+		log.Printf("Edge functions: operator egress default = %v", defaults)
+	}
+	fnHandler.SetEgressDefaults(defaults)
 }
 
 // buildProvisioningService wires the central provisioning service plus its
@@ -890,6 +911,10 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store 
 		r.With(dev).Get("/secrets", d.fnHandler.ListSecrets)
 		r.With(dev).Post("/secrets", d.fnHandler.SetSecret)
 		r.With(dev).Delete("/secrets/{key}", d.fnHandler.DeleteSecret)
+		// Outbound allowlist: it changes what deployed code can reach, so it
+		// carries the same Developer+ gate as a deploy (EXC-348).
+		r.With(dev).Get("/egress", d.fnHandler.GetEgress)
+		r.With(dev).Put("/egress", d.fnHandler.PutEgress)
 		r.Route("/{fnId}", func(r chi.Router) {
 			r.Get("/", d.fnHandler.Get)
 			r.With(dev).Delete("/", d.fnHandler.Delete)

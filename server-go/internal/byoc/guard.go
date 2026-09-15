@@ -85,7 +85,7 @@ func (g *Guard) resolveTarget(ctx context.Context, host string) ([]netip.Addr, e
 		return nil, err
 	}
 	for _, addr := range addrs {
-		if err := classifyAddr(addr); err != nil {
+		if err := ClassifyAddr(addr); err != nil {
 			return nil, fmt.Errorf("%w (%q)", err, host)
 		}
 	}

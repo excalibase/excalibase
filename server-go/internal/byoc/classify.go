@@ -28,10 +28,10 @@ var (
 	prefixV4Cmp = netip.MustParsePrefix("::/96")
 )
 
-// classifyAddr returns ErrInternalAddress when addr must never be dialled by
+// ClassifyAddr returns ErrInternalAddress when addr must never be dialled by
 // the platform on a user's behalf. Addresses that encapsulate an IPv4 address
 // are judged by the embedded IPv4.
-func classifyAddr(addr netip.Addr) error {
+func ClassifyAddr(addr netip.Addr) error {
 	addr = addr.Unmap()
 	if addr.IsLoopback() || addr.IsUnspecified() || addr.IsPrivate() ||
 		addr.IsMulticast() || addr.IsLinkLocalUnicast() ||
@@ -39,7 +39,7 @@ func classifyAddr(addr netip.Addr) error {
 		return ErrInternalAddress
 	}
 	if embedded, ok := embeddedIPv4(addr); ok {
-		return classifyAddr(embedded)
+		return ClassifyAddr(embedded)
 	}
 	for _, prefix := range blockedPrefixes {
 		if prefix.Contains(addr) {

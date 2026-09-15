@@ -63,3 +63,4 @@ These apply to every matrix. Matrix-specific pages cover the rest.
 | `DENO_RUNTIME_IMAGE` | no | `excalibase/deno-runtime:latest` | Image used for per-project edge function runtimes. |
 | `DENO_NAMESPACE` | no | `serverless` | Namespace for the shared-fallback Deno runtime. |
 | `DENO_RUNTIME_SECRET` | yes (for edge functions) | — | HMAC secret between platform and Deno runtime. |
+| `EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS` | no | — | Operator floor for edge-function outbound calls (`host`, `host:port`, `*.suffix`, comma-separated), unioned into every project's own allowlist. Empty = no egress until a project sets `PUT /api/projects/{id}/functions/egress`. See [functions-egress.md](../functions-egress.md). |

@@ -14,7 +14,7 @@ invocations through `/functions/v1/{projectId}/{name}` on the platform side.
 Studio UI
   ↓ POST /api/projects/{pid}/functions
 Platform (Go)
-  ↓ POST /deploy { id, code, secrets }   (X-Runtime-Secret header)
+  ↓ POST /deploy { id, code, secrets, allowedHosts? }   (X-Runtime-Secret header)
 Deno runtime (this server)
   ↓ spawn Web Worker per function
   ↓ inject secrets via Deno.env mock
@@ -219,7 +219,7 @@ curl -X POST http://localhost:24006/invoke/hello \
 
 | Permission | Default |
 |---|---|
-| `net` | `false`, or allowlist via `ALLOWED_HOSTS` env |
+| `net` | `false`, or the union of the `ALLOWED_HOSTS` env (runtime-wide) and the deploy payload's `allowedHosts` (per function). Entries are Deno `--allow-net` hosts: `host`, `host:port`, `*.suffix[:port]`, IP literal. A payload outside that shape is refused with 400. The control plane owns the per-project list (`PUT /api/projects/{id}/functions/egress`, EXC-348). |
 | `read` | scoped to `EXCALIBASE_VENDORED_LIB_DIR` only (default `/app/vendor/excalibase-server`) — the vendored `@excalibase/server` library lives there and the worker must load it via the import map. User code cannot read `/etc/passwd` or any other path. |
 | `write` | `false` |
 | `env` | `false` (real env hidden — only the per-function `Deno.env` mock is exposed) |
