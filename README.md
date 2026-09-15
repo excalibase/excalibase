@@ -327,6 +327,12 @@ Error messages are sanitized — PostgreSQL internal details are stripped from 5
 | `DEPLOYMENT_MODE` | `selfhosted` | `selfhosted` or `cloud`. Cloud requires `PLATFORM_DB_URL` and enables tier enforcement + multi-org. |
 | `PUBLIC_BASE_URL` | `https://api.excalibase.io` | Base URL emitted in SDK snippets and function invoke URLs |
 
+**BYOC (bring-your-own Postgres)**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BYOC_EGRESS_ALLOWLIST` | | Optional egress allowlist for BYOC targets: comma-separated CIDRs, IPs, hostnames or `*.suffix` wildcards (e.g. `203.0.113.0/24, *.rds.amazonaws.com`). Empty = any public address. Loopback, RFC-1918, link-local, ULA, CGNAT and cloud-metadata ranges are always refused, and the same check runs at every dial (DNS rebinding is refused at connect time). A malformed list stops the server at boot. See `server-go/internal/byoc`. |
+
 **Storage**
 
 | Variable | Default | Description |

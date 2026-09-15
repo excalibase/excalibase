@@ -12,6 +12,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/bootstrap"
+	"github.com/excalibase/provisioning-poc/internal/byoc"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
@@ -530,6 +531,29 @@ func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceSto
 	return h
 }
 
+// buildEgressGuard parses BYOC_EGRESS_ALLOWLIST into the guard every BYOC
+// validation and dial goes through. A malformed allowlist is a boot error:
+// silently running without it would widen egress.
+func buildEgressGuard(cfg config.AppConfig) *byoc.Guard {
+	policy, err := byoc.ParseAllowlist(cfg.BYOCEgressAllowlist)
+	if err != nil {
+		log.Fatalf("BYOC_EGRESS_ALLOWLIST: %v", err)
+	}
+	if !policy.Empty() {
+		log.Printf("BYOC egress allowlist active")
+	}
+	return byoc.NewGuard(policy, nil)
+}
+
+// newSchemaHandler wires the instance store so the schema browser can tell
+// BYOC projects apart and dial them through the egress guard.
+func newSchemaHandler(vc vaultclient.VaultClient, instances storage.InstanceStore, egress *byoc.Guard) *handler.SchemaHandler {
+	h := handler.NewSchemaHandler(vc)
+	h.SetInstanceStore(instances)
+	h.SetEgressGuard(egress)
+	return h
+}
+
 func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	cfg, store, sqlStore := a.cfg, a.store, a.sqlStore
 	k8sClient, vc, localVault := a.k8sClient, a.vc, a.localVault
@@ -540,7 +564,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)
+	egress := buildEgressGuard(cfg)
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
+	migrationSvc.SetEgressGuard(egress)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 
@@ -585,12 +611,15 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 
 	realtimeHandler := handler.NewRealtimeHandler(sqlStore, sqlStore, vc)
+	realtimeHandler.SetEgressGuard(egress)
 	if name := os.Getenv("REALTIME_PUBLICATION_NAME"); name != "" {
 		realtimeHandler.SetPublicationName(name)
 	}
+	provHandler := handler.NewProvisioningHandler(provSvc, sqlStore)
+	provHandler.SetEgressGuard(egress)
 
 	return &handlerDeps{
-		provHandler:        handler.NewProvisioningHandler(provSvc, sqlStore),
+		provHandler:        provHandler,
 		metricsHandler:     handler.NewMetricsHandler(metricsSvc),
 		backupHandler:      handler.NewBackupHandler(backupSvc),
 		perfHandler:        handler.NewPerformanceHandler(perfSvc),
@@ -606,7 +635,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		authHandler:        authHandler,
 		orgHandler:         newOrgHandler(sqlStore, store),
 		vaultHandler:       vaultHandler,
-		schemaHandler:      handler.NewSchemaHandler(vc),
+		schemaHandler:      newSchemaHandler(vc, store, egress),
 		realtimeHandler:    realtimeHandler,
 		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies()),
 		tierHandler:        tierHandler,

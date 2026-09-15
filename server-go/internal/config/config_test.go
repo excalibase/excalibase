@@ -12,7 +12,6 @@ const (
 	testACom    = "http://a.com"
 )
 
-
 func TestLoadDefaults(t *testing.T) {
 	cfg := Load()
 	if cfg.Port != "24005" {
@@ -155,5 +154,15 @@ func TestLoadCORSOriginsDefaultsToAppOrigin(t *testing.T) {
 	cfg := Load()
 	if len(cfg.CORSOrigins) != 1 || cfg.CORSOrigins[0] != "https://app.excalibase.io" {
 		t.Errorf("CORSOrigins default: got %v, want [https://app.excalibase.io]", cfg.CORSOrigins)
+	}
+}
+
+func TestLoadBYOCEgressAllowlist(t *testing.T) {
+	if got := Load().BYOCEgressAllowlist; got != "" {
+		t.Errorf("BYOCEgressAllowlist default: got %q, want empty", got)
+	}
+	t.Setenv("BYOC_EGRESS_ALLOWLIST", "203.0.113.0/24, *.rds.amazonaws.com")
+	if got := Load().BYOCEgressAllowlist; got != "203.0.113.0/24, *.rds.amazonaws.com" {
+		t.Errorf("BYOCEgressAllowlist from env: got %q", got)
 	}
 }

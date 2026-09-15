@@ -2,23 +2,44 @@ package handler
 
 import (
 	"context"
-	"fmt"
 	"net"
+	"net/netip"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/byoc"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestValidateBYOCHost(t *testing.T) {
-	// Stub DNS so public hostnames resolve to a routable address without
-	// depending on real network resolution in CI.
-	orig := lookupHost
-	t.Cleanup(func() { lookupHost = orig })
-	lookupHost = func(host string) ([]string, error) {
-		return []string{"203.0.113.10"}, nil
+// tableResolver is a fixed DNS table for handler tests so the BYOC path never
+// touches real DNS. Unknown names fail like NXDOMAIN.
+type tableResolver map[string][]string
+
+func (t tableResolver) LookupNetIP(_ context.Context, _ string, host string) ([]netip.Addr, error) {
+	answer, ok := t[host]
+	if !ok {
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 	}
+	out := make([]netip.Addr, 0, len(answer))
+	for _, s := range answer {
+		out = append(out, netip.MustParseAddr(s))
+	}
+	return out, nil
+}
+
+func newBYOCTestHandler(policy byoc.Policy, resolver byoc.Resolver) *ProvisioningHandler {
+	h := &ProvisioningHandler{}
+	h.SetEgressGuard(byoc.NewGuard(policy, resolver))
+	return h
+}
+
+func TestValidateBYOCHost(t *testing.T) {
+	h := newBYOCTestHandler(byoc.Policy{}, tableResolver{
+		"db.example.com":  {"203.0.113.10"},
+		"my-host.acme.io": {"203.0.113.10"},
+	})
+	ctx := context.Background()
 
 	bad := []string{
 		"",                // empty
@@ -34,10 +55,14 @@ func TestValidateBYOCHost(t *testing.T) {
 		"0.0.0.0",         // unspecified
 		"224.0.0.1",       // multicast
 		"169.254.10.10",   // link-local
+		"::1",             // v6 loopback
+		"fd00:ec2::254",   // v6 metadata (ULA)
+		"fe80::1",         // v6 link-local
+		"::ffff:10.0.0.1", // v4-mapped private
 	}
-	for _, h := range bad {
-		if err := validateBYOCHost(h); err == nil {
-			t.Errorf("expected %q to be rejected", h)
+	for _, host := range bad {
+		if err := h.validateBYOCHost(ctx, host); err == nil {
+			t.Errorf("expected %q to be rejected", host)
 		}
 	}
 
@@ -46,35 +71,27 @@ func TestValidateBYOCHost(t *testing.T) {
 		"8.8.8.8",         // public IP
 		"203.0.113.10",    // public IP (TEST-NET-3 but routable form)
 		"my-host.acme.io", // public DNS
+		"2001:4860:4860::8888",
 	}
-	for _, h := range good {
-		if err := validateBYOCHost(h); err != nil {
-			t.Errorf("expected %q to be accepted, got %v", h, err)
+	for _, host := range good {
+		if err := h.validateBYOCHost(ctx, host); err != nil {
+			t.Errorf("expected %q to be accepted, got %v", host, err)
 		}
 	}
 }
 
 // TestValidateBYOCHost_DNSRebindingBlocked verifies that a DNS name resolving
-// to an internal/metadata IP is rejected at validation time (closing the
-// DNS-rebinding SSRF gap), while a name resolving to a public IP is accepted.
+// to an internal/metadata IP is rejected at validation time, while a name
+// resolving to a public IP is accepted. Dial-time enforcement lives in the
+// byoc package tests.
 func TestValidateBYOCHost_DNSRebindingBlocked(t *testing.T) {
-	orig := lookupHost
-	t.Cleanup(func() { lookupHost = orig })
-
-	stub := map[string][]string{
-		"rebind.attacker.example":   {"169.254.169.254"}, // metadata
-		"private.attacker.example":  {"10.0.0.5"},        // RFC-1918
+	h := newBYOCTestHandler(byoc.Policy{}, tableResolver{
+		"rebind.attacker.example":   {"169.254.169.254"},          // metadata
+		"private.attacker.example":  {"10.0.0.5"},                 // RFC-1918
 		"loopback.attacker.example": {"203.0.113.9", "127.0.0.1"}, // one bad addr among good
-		"public.good.example":       {"203.0.113.10"},   // routable
-		"broken.example":            nil,                 // resolution failure
-	}
-	lookupHost = func(host string) ([]string, error) {
-		addrs, ok := stub[host]
-		if !ok || addrs == nil {
-			return nil, fmt.Errorf("no such host")
-		}
-		return addrs, nil
-	}
+		"public.good.example":       {"203.0.113.10"},             // routable
+	})
+	ctx := context.Background()
 
 	rejected := []string{
 		"rebind.attacker.example",
@@ -83,31 +100,20 @@ func TestValidateBYOCHost_DNSRebindingBlocked(t *testing.T) {
 		"broken.example",            // resolution failure → fail closed
 	}
 	for _, host := range rejected {
-		if err := validateBYOCHost(host); err == nil {
+		if err := h.validateBYOCHost(ctx, host); err == nil {
 			t.Errorf("expected %q to be rejected (resolves internal / unresolvable)", host)
 		}
 	}
 
-	if err := validateBYOCHost("public.good.example"); err != nil {
+	if err := h.validateBYOCHost(ctx, "public.good.example"); err != nil {
 		t.Errorf("expected public host to be accepted, got %v", err)
 	}
 }
 
-// TestClassifyBYOCIP asserts the shared IP-classification logic directly so the
-// block-list stays correct independent of the resolution path.
-func TestClassifyBYOCIP(t *testing.T) {
-	bad := []string{"127.0.0.1", "::1", "10.1.2.3", "192.168.0.5", "172.16.0.1",
-		"169.254.169.254", "0.0.0.0", "224.0.0.1", "169.254.10.10"}
-	for _, s := range bad {
-		if err := classifyBYOCIP(net.ParseIP(s)); err == nil {
-			t.Errorf("expected %q to be classified internal/non-routable", s)
-		}
-	}
-	good := []string{"8.8.8.8", "203.0.113.10", "1.1.1.1"}
-	for _, s := range good {
-		if err := classifyBYOCIP(net.ParseIP(s)); err != nil {
-			t.Errorf("expected %q to be classified public, got %v", s, err)
-		}
+func TestProvisioningHandler_DefaultGuardWhenNoneWired(t *testing.T) {
+	h := &ProvisioningHandler{}
+	if err := h.validateBYOCHost(context.Background(), "127.0.0.1"); err == nil {
+		t.Error("handler without an explicit guard must still block loopback")
 	}
 }
 
