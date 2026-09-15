@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strconv"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -18,14 +17,34 @@ const primaryPodSuffix = "-postgres-1"
 
 const clusterNameSuffix = "-postgres"
 
+// CNPG declarative hibernation (operator >= 1.20): the annotation drives
+// a clean shutdown that deletes the pods but keeps the PVCs; the
+// condition is what the operator reports back while hibernated.
+const (
+	hibernationAnnotation = "cnpg.io/hibernation"
+	hibernationCondition  = hibernationAnnotation
+	hibernationOn         = "on"
+	hibernationOff        = "off"
+
+	defaultResumeTimeout = 5 * time.Minute
+	defaultResumePoll    = 5 * time.Second
+)
+
 // PostgreSQLProvisioner provisions PostgreSQL via CloudNativePG operator.
 type PostgreSQLProvisioner struct {
 	client           k8s.KubeClient
 	watcherChartPath string
+	resumeTimeout    time.Duration
+	resumePoll       time.Duration
 }
 
 func NewPostgreSQLProvisioner(client k8s.KubeClient, watcherChartPath string) *PostgreSQLProvisioner {
-	return &PostgreSQLProvisioner{client: client, watcherChartPath: watcherChartPath}
+	return &PostgreSQLProvisioner{
+		client:           client,
+		watcherChartPath: watcherChartPath,
+		resumeTimeout:    defaultResumeTimeout,
+		resumePoll:       defaultResumePoll,
+	}
 }
 
 func (p *PostgreSQLProvisioner) SupportedType() domain.DatabaseType {
@@ -299,50 +318,82 @@ func (p *PostgreSQLProvisioner) stageBackup(ctx context.Context, req domain.Prov
 	return nil
 }
 
-// Pause patches the project's CNPG cluster spec.instances to 0.
-// CNPG operator gracefully drains then scales down all replicas.
-// PVCs are kept; data persists. Resume restores the count from
-// inst.Tier (caller must pass tier.Instances via the resumeReplicas
-// helper since the spec doesn't know the tier).
+// Pause hibernates the project's CNPG cluster declaratively
+// (cnpg.io/hibernation: "on"). The operator performs a clean shutdown,
+// deletes the pods and keeps the PVCs, so spec.instances (and the
+// excalibase.io/tier-instances annotation) stay untouched and the
+// cluster comes back at its tier size on Resume.
 func (p *PostgreSQLProvisioner) Pause(ctx context.Context, namespace, projectID string) error {
-	return p.patchClusterInstances(ctx, namespace, projectID, 0)
+	return p.setHibernation(ctx, namespace, projectID, hibernationOn)
 }
 
-// Resume patches spec.instances back. K8s provisioner can't infer
-// tier.Instances from the cluster CRD itself (it's the *desired*
-// count, not embedded in tier metadata), so we read tier from the
-// cluster's annotation that the provisioner stamps at create time.
-// If the annotation is missing (legacy cluster), fall back to 1.
+// Resume clears the hibernation annotation and blocks until the
+// operator reports a ready primary, bounded by resumeTimeout. A
+// timeout returns an error but leaves the annotation off: the
+// operator keeps recovering the cluster while the project stays in
+// RESUMING for the operator to inspect.
 func (p *PostgreSQLProvisioner) Resume(ctx context.Context, namespace, projectID string) error {
-	clusterName := projectID + clusterNameSuffix
-	cluster, err := p.client.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, clusterName)
-	if err != nil {
-		return fmt.Errorf("get cluster for resume: %w", err)
+	if err := p.setHibernation(ctx, namespace, projectID, hibernationOff); err != nil {
+		return err
 	}
-	count := 1
-	if anns, ok, _ := unstructured.NestedStringMap(cluster.Object, "metadata", "annotations"); ok {
-		if v, ok := anns["excalibase.io/tier-instances"]; ok {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				count = n
-			}
-		}
-	}
-	return p.patchClusterInstances(ctx, namespace, projectID, count)
+	return p.waitForClusterReady(ctx, namespace, projectID+clusterNameSuffix)
 }
 
-func (p *PostgreSQLProvisioner) patchClusterInstances(ctx context.Context, namespace, projectID string, instances int) error {
+func (p *PostgreSQLProvisioner) setHibernation(ctx context.Context, namespace, projectID, value string) error {
 	clusterName := projectID + clusterNameSuffix
 	cluster, err := p.client.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, clusterName)
 	if err != nil {
-		return fmt.Errorf("get cluster for instances patch: %w", err)
+		return fmt.Errorf("get cluster for hibernation=%s: %w", value, err)
 	}
-	if err := unstructured.SetNestedField(cluster.Object, int64(instances), "spec", "instances"); err != nil {
-		return fmt.Errorf("set spec.instances: %w", err)
+	annotations := cluster.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
 	}
-	if err := p.client.ApplyCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
-		return fmt.Errorf("apply cluster instances=%d: %w", instances, err)
+	annotations[hibernationAnnotation] = value
+	cluster.SetAnnotations(annotations)
+	if err := p.client.UpdateCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
+		return fmt.Errorf("update cluster hibernation=%s: %w", value, err)
 	}
 	return nil
+}
+
+// waitForClusterReady polls the Cluster status until the primary is
+// ready. CNPG leaves status.phase at "Cluster in healthy state" while
+// hibernated, so the phase is not a usable signal: readiness is
+// status.readyInstances >= 1 with the hibernation condition cleared.
+func (p *PostgreSQLProvisioner) waitForClusterReady(ctx context.Context, namespace, clusterName string) error {
+	deadline := time.Now().Add(p.resumeTimeout)
+	for time.Now().Before(deadline) {
+		cluster, err := p.client.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, clusterName)
+		if err == nil && clusterPrimaryReady(cluster) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(p.resumePoll):
+		}
+	}
+	return fmt.Errorf("cluster %s did not become ready within %v after resume", clusterName, p.resumeTimeout)
+}
+
+func clusterPrimaryReady(cluster *unstructured.Unstructured) bool {
+	ready, _, _ := unstructured.NestedInt64(cluster.Object, "status", "readyInstances")
+	return ready >= 1 && !clusterHibernated(cluster)
+}
+
+func clusterHibernated(cluster *unstructured.Unstructured) bool {
+	conditions, _, _ := unstructured.NestedSlice(cluster.Object, "status", "conditions")
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if condition["type"] == hibernationCondition && condition["status"] == "True" {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *PostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, projectID string) error {

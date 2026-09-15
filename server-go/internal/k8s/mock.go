@@ -123,6 +123,18 @@ func (m *MockClient) GetCRD(ctx context.Context, gvr schema.GroupVersionResource
 	return nil, fmt.Errorf("not found: %s", key)
 }
 
+func (m *MockClient) UpdateCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := namespace + "/" + obj.GetName()
+	m.Calls = append(m.Calls, "UpdateCRD:"+key)
+	if _, ok := m.CRDs[key]; !ok {
+		return fmt.Errorf("not found: %s", key)
+	}
+	m.CRDs[key] = obj
+	return nil
+}
+
 func (m *MockClient) DeleteCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

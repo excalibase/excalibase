@@ -808,6 +808,8 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.PlatformStore, store s
 			r.With(admin).Post("/credentials/rotate", d.provHandler.RotateCredentials)
 			r.With(admin).Patch("/deletion-protection", d.provHandler.SetDeletionProtection)
 			r.With(admin).Post("/backups/purge", d.provHandler.PurgeBackups)
+			r.With(admin).Post("/pause", d.provHandler.Pause)
+			r.With(admin).Post("/resume", d.provHandler.Resume)
 
 			// Read-only subtrees — any member.
 			r.Route("/metrics", func(r chi.Router) { d.metricsHandler.Routes(r) })

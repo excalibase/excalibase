@@ -15,6 +15,9 @@ type KubeClient interface {
 	DeleteNamespace(ctx context.Context, name string) error
 	ApplyCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error
 	GetCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error)
+	// UpdateCRD replaces an existing resource. Use it for objects fetched
+	// via GetCRD (they carry a resourceVersion, which Create rejects).
+	UpdateCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error
 	DeleteCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) error
 	GetPods(ctx context.Context, namespace string, labelSelector string) ([]corev1.Pod, error)
 	IsPodReady(ctx context.Context, namespace, name string) (bool, error)
