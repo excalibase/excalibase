@@ -7,6 +7,7 @@
 // fail to start.
 
 import postgres from "npm:postgres@3.4.4";
+import { poolConnectOptions } from "./pin.ts";
 
 // deno-lint-ignore no-explicit-any -- postgres.js types are heavy; the API
 // surface we use is small enough that `any` is the pragmatic call.
@@ -25,11 +26,19 @@ export function getPool(): Sql {
   if (!url) {
     throw new Error("EXCALIBASE_DB_URL is not set — ctx.db is unavailable");
   }
+  // EXC-359 — a pinned BYOC target must be an IP literal; the hostname is
+  // kept for TLS SNI so the pin does not change what the server presents.
+  const pinned = poolConnectOptions({
+    url,
+    pinned: Deno.env.get("BYOC_PINNED") === "1",
+    hostName: Deno.env.get("EXCALIBASE_DB_HOST"),
+  });
   cached = postgres(url, {
     onnotice: () => {}, // quieten Postgres NOTICEs in logs
     max: 10,
     idle_timeout: 30,
     connect_timeout: 10,
+    ...pinned,
   });
   return cached;
 }

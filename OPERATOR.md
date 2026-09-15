@@ -364,6 +364,21 @@ an enforcing CNI (Calico / Cilium). On the shared docker runtime the
 container's own `ALLOWED_HOSTS` env is an operator baseline unioned into
 every worker.
 
+## 6.2. Edge functions on a BYOC database (address pinning)
+
+The per-project Deno runtime cannot dial through the guard, so
+provisioning resolves the BYOC host at every function deploy (and on
+cold-start replay) and hands the runtime a DSN whose authority is the
+validated IP, plus `EXCALIBASE_DB_HOST` (the hostname, kept for TLS SNI)
+and `BYOC_PINNED=1`. The runtime refuses a BYOC DSN that is not an IP
+literal and lets the worker reach that `ip:port` in addition to the
+egress allowlist of section 6.1 — the database address is never taken
+from a hostname the worker could resolve itself. A deploy is refused
+with 400 when the host has been rebound to an internal address; pins are
+refreshed every 10 minutes so a legitimate DNS change is picked up within
+that window. TLS stays `sslmode=require` (encrypted, server certificate
+not verified) — the same mode managed projects use.
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:

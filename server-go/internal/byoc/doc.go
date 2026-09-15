@@ -31,6 +31,15 @@
 //     characters that would let them smuggle `host=`/`hostaddr=` into a
 //     keyword DSN or re-route a URL DSN. See credentials.go. Only tcp is
 //     dialled; unix sockets are refused.
+//   - Components that cannot dial through the guard: the per-project function
+//     runtime opens its own connections from the DSN provisioning hands it.
+//     Guard.ResolvePinned validates the host the same way a dial would and the
+//     runtime receives the validated IP in the DSN authority, the hostname
+//     separately for TLS SNI, and BYOC_PINNED=1; it refuses any BYOC DSN that
+//     is not an IP literal and grants the worker network access to that
+//     ip:port only. Provisioning re-pins every 10 minutes and on replay so a
+//     legitimate DNS change lands within one interval, while a name rebound
+//     to an internal range is refused and the last good pin stays.
 //   - Operator egress allowlist: BYOC_EGRESS_ALLOWLIST (comma-separated
 //     CIDRs, IPs, hostnames or *.suffix wildcards) restricts BYOC targets to
 //     the operator's expected destinations. It is an additional constraint:

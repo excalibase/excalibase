@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -71,6 +72,24 @@ func (g *Guard) ValidateCredentials(ctx context.Context, creds Credentials) erro
 		return err
 	}
 	return g.ValidateHost(ctx, creds.Host)
+}
+
+// ResolvePinned validates host exactly like a dial would and returns the
+// address a component that cannot dial through the guard (the function
+// runtime) must connect to instead of the name. current is the address the
+// caller is pinned to today (zero when none): it is kept while it is still
+// among the validated answers, so round-robin records do not flap the pin.
+// A name that has been rebound to an internal range is refused and the
+// caller keeps its previous pin.
+func (g *Guard) ResolvePinned(ctx context.Context, host string, current netip.Addr) (netip.Addr, error) {
+	addrs, err := g.resolveTarget(ctx, host)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if slices.Contains(addrs, current) {
+		return current, nil
+	}
+	return addrs[0], nil
 }
 
 // resolveTarget returns the addresses the platform may dial for host. Every
@@ -163,7 +182,7 @@ func (g *Guard) OpenDB(dsn string) (*sql.DB, error) {
 // deployment mode through the plain driver, since managed projects live on
 // cluster-internal hosts that the guard would (correctly) refuse.
 func (g *Guard) OpenProjectDB(modes ModeLookup, projectID, dsn string) (*sql.DB, error) {
-	if isBYOC(modes, projectID) {
+	if IsBYOC(modes, projectID) {
 		return g.OpenDB(dsn)
 	}
 	db, err := sql.Open("postgres", dsn)
@@ -173,7 +192,9 @@ func (g *Guard) OpenProjectDB(modes ModeLookup, projectID, dsn string) (*sql.DB,
 	return db, nil
 }
 
-func isBYOC(modes ModeLookup, projectID string) bool {
+// IsBYOC reports whether the project runs against an externally managed
+// database, i.e. whether its outbound connections must go through the guard.
+func IsBYOC(modes ModeLookup, projectID string) bool {
 	if modes == nil {
 		return false
 	}
