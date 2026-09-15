@@ -281,3 +281,26 @@ func TestPGStore_RejectsBadSharedPath(t *testing.T) {
 		t.Error("expected a non-_shared path to be rejected")
 	}
 }
+
+func TestPGStore_ProjectIDs_DistinctProjectsWithFunctions(t *testing.T) {
+	s := newPGFunctionStore(t)
+	for _, pair := range [][2]string{{"proj_pl1", "a"}, {"proj_pl1", "b"}, {"proj_pl2", "c"}} {
+		if err := s.Save(sampleFn(pair[0], pair[1])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids, err := s.ProjectIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != "proj_pl1" || ids[1] != "proj_pl2" {
+		t.Fatalf("project ids: got %v", ids)
+	}
+	if err := s.Delete("proj_pl2", "c"); err != nil {
+		t.Fatal(err)
+	}
+	ids, _ = s.ProjectIDs()
+	if len(ids) != 1 || ids[0] != "proj_pl1" {
+		t.Fatalf("after delete: got %v", ids)
+	}
+}

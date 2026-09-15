@@ -172,6 +172,9 @@ func runServer(cfg config.AppConfig) {
 	fnSchedHandles := startFunctionScheduler(sqlStore)
 	defer fnSchedHandles.Stop()
 
+	stopReplayer := startFunctionReplayer(fnHandler)
+	defer stopReplayer()
+
 	// Wire pause/resume — backup must run before pause, so PauseService
 	// depends on the BackupService that backupHandler exposes.
 	pausers := buildPausers(cfg, factory, dockerClientRef)
@@ -336,6 +339,38 @@ type handlerDeps struct {
 	rlUnauth           func(http.Handler) http.Handler
 	rlAuthed           func(http.Handler) http.Handler
 	rlDataPlane        func(http.Handler) http.Handler
+}
+
+// startFunctionReplayer boots the EXC-337 cold-start replay loop: it polls
+// every project's Deno runtime and re-deploys the project's functions from
+// the store whenever the runtime reports a new bootId (pod restart). Returns
+// a stop function that blocks until the loop has exited. Disable with
+// EXCALIBASE_FN_REPLAY_ENABLED=false; tune with EXCALIBASE_FN_REPLAY_POLL_MS.
+func startFunctionReplayer(fnHandler *handler.FunctionHandler) func() {
+	noop := func() {
+		// nothing started, nothing to stop
+	}
+	enabled, cfg := edgefn.ReplayConfigFromEnv()
+	if !enabled {
+		log.Println("Function replay disabled via EXCALIBASE_FN_REPLAY_ENABLED")
+		return noop
+	}
+	replayer, err := fnHandler.NewReplayer(cfg)
+	if err != nil {
+		log.Printf("WARN: function replay disabled: %v", err)
+		return noop
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		replayer.Run(ctx)
+	}()
+	log.Printf("Function replay on runtime cold start enabled (poll every %s)", cfg.Interval)
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // buildFunctionStore picks where tenant function source lives. Cloud mode uses

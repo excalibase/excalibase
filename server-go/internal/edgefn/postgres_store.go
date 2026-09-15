@@ -123,6 +123,25 @@ func (s *PostgresFunctionStore) List(projectID string) ([]*Function, error) {
 	return out, rows.Err()
 }
 
+// ProjectIDs returns every project that owns at least one function, sorted.
+func (s *PostgresFunctionStore) ProjectIDs() ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT project_id FROM edge_functions ORDER BY project_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list function projects: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]string, 0)
+	for rows.Next() {
+		var projectID string
+		if err := rows.Scan(&projectID); err != nil {
+			return nil, fmt.Errorf("scan project id: %w", err)
+		}
+		out = append(out, projectID)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresFunctionStore) Delete(projectID, id string) error {
 	if err := validateProjectID(projectID); err != nil {
 		return err

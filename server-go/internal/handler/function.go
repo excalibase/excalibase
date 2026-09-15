@@ -32,6 +32,10 @@ const errFunctionNotFound = "function not found"
 
 const errInvalidRequestBody = "invalid request body"
 
+// sharedClientKey is the clients-map slot for the single runtime used when no
+// k8s client is configured (self-hosted / docker mode).
+const sharedClientKey = "__shared__"
+
 // FunctionHandler exposes per-project edge function CRUD + invoke + secrets.
 // Routes are all scoped under /api/projects/{projectId}/functions and use the
 // new multi-file Function model.
@@ -157,7 +161,7 @@ func NewFunctionHandler(
 	// Backwards-compat: if a single shared client is supplied, use it for all
 	// projects until k8sClient is set.
 	if client != nil {
-		h.clients["__shared__"] = client
+		h.clients[sharedClientKey] = client
 	}
 	return h
 }
@@ -207,7 +211,7 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 		h.clientMu.Unlock()
 		return c, nil
 	}
-	if shared, ok := h.clients["__shared__"]; ok && h.k8sClient == nil {
+	if shared, ok := h.clients[sharedClientKey]; ok && h.k8sClient == nil {
 		h.clientMu.Unlock()
 		return shared, nil
 	}
@@ -237,18 +241,23 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 		return nil, fmt.Errorf("deno runtime did not become ready: %w", err)
 	}
 
+	h.clientMu.Lock()
+	client := h.newProjectClient(projectID, namespace)
+	h.clients[projectID] = client
+	h.clientMu.Unlock()
+	return client, nil
+}
+
+// newProjectClient builds a client for the project's in-namespace runtime
+// service, authenticated with the project-derived secret (SEC-C5).
+func (h *FunctionHandler) newProjectClient(projectID, namespace string) *edgefn.RuntimeClient {
 	var url string
 	if h.runtimeURLFn != nil {
 		url = h.runtimeURLFn(namespace)
 	} else {
 		url = fmt.Sprintf("http://deno-runtime.%s.svc.cluster.local:8000", namespace)
 	}
-	client := edgefn.NewRuntimeClient(url, edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID))
-
-	h.clientMu.Lock()
-	h.clients[projectID] = client
-	h.clientMu.Unlock()
-	return client, nil
+	return edgefn.NewRuntimeClient(url, edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID))
 }
 
 // waitForDenoReady polls the Deno runtime pod's readiness until it's up or
@@ -541,11 +550,10 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	builtins := h.builtinEnv(r.Context(), projectID)
-	env, err := h.secrets.BuildEnvForDeploy(projectID, builtins)
+	env, err := h.deployEnv(r.Context(), projectID)
 	if err != nil {
 		log.Printf("WARN: build env for %s/%s: %v", projectID, fn.ID, err)
-		env = builtins
+		env = h.builtinEnv(r.Context(), projectID)
 	}
 
 	client, err := h.runtimeClientFor(r.Context(), projectID)
@@ -555,27 +563,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "runtime unavailable: "+safeError(err), http.StatusServiceUnavailable)
 		return
 	}
-	// Phase 5b: inject the function's captured SchemaJSON into the bundle
-	// preamble so the worker-side schema helper (`runtime/schema.ts`) can
-	// pre-flight collection access and search/vector index lookup. Bundles
-	// without a defineSchema call get no preamble — the runtime falls back
-	// to permissive mode (any collection name OK).
-	codeWithMetadata := code
-	if len(fn.SchemaJSON) > 0 {
-		// json.RawMessage is verbatim JSON; embedding it as a JS object
-		// literal is safe because (a) the source was JSON-marshalled by
-		// ExtractSchema and (b) the assignment goes through a separate
-		// statement that the worker sandbox parses as JS. The slot name
-		// matches what deno-server/runtime/schema.ts reads at runtime.
-		preamble := "globalThis.__excalibase_function_metadata = { schemaJson: " +
-			string(fn.SchemaJSON) + " };\n"
-		codeWithMetadata = preamble + code
-	}
-	deployErr := client.Deploy(r.Context(), edgefn.DeployRequest{
-		ID:      fn.RuntimeID(),
-		Code:    codeWithMetadata,
-		Secrets: env,
-	})
+	deployErr := client.Deploy(r.Context(), deployRequestFor(&fn, code, env))
 	if deployErr != nil {
 		// Rollback the cron sync alongside the store record — the deploy
 		// didn't land, so we shouldn't keep stale crons (or a stale
@@ -596,6 +584,34 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(fn)
+}
+
+// deployEnv merges the project's user secrets over the platform builtins.
+func (h *FunctionHandler) deployEnv(ctx context.Context, projectID string) (map[string]string, error) {
+	builtins := h.builtinEnv(ctx, projectID)
+	if h.secrets == nil {
+		return builtins, nil
+	}
+	return h.secrets.BuildEnvForDeploy(projectID, builtins)
+}
+
+// deployRequestFor is the single place a runtime deploy payload is assembled,
+// so first deploy, secret-triggered redeploy and cold-start replay all ship
+// byte-identical bundles.
+//
+// Phase 5b: the function's captured SchemaJSON is injected as a preamble so
+// the worker-side schema helper (`runtime/schema.ts`) can pre-flight
+// collection access and search/vector index lookup. Bundles without a
+// defineSchema call get no preamble — the runtime falls back to permissive
+// mode. json.RawMessage is verbatim JSON, so embedding it as a JS object
+// literal is safe: the source was JSON-marshalled by ExtractSchema and the
+// slot name matches what deno-server/runtime/schema.ts reads.
+func deployRequestFor(fn *edgefn.Function, code string, env map[string]string) edgefn.DeployRequest {
+	if len(fn.SchemaJSON) > 0 {
+		code = "globalThis.__excalibase_function_metadata = { schemaJson: " +
+			string(fn.SchemaJSON) + " };\n" + code
+	}
+	return edgefn.DeployRequest{ID: fn.RuntimeID(), Code: code, Secrets: env}
 }
 
 // applyExtractedSchema extracts the user-declared schema from the bundled code,
@@ -1150,7 +1166,7 @@ func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
 	if err != nil || len(list) == 0 {
 		return
 	}
-	env, err := h.secrets.BuildEnvForDeploy(projectID, h.builtinEnv(r.Context(), projectID))
+	env, err := h.deployEnv(r.Context(), projectID)
 	if err != nil {
 		log.Printf("WARN: redeploy build env: %v", err)
 		return
@@ -1160,15 +1176,14 @@ func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
 		log.Printf("WARN: redeploy runtime client: %v", cerr)
 		return
 	}
+	shared := h.sharedFilesFor(projectID)
 	for _, fn := range list {
-		code, err := fn.BundleWith(h.sharedFilesFor(fn.ProjectID))
+		code, err := fn.BundleWith(shared)
 		if err != nil {
 			log.Printf("WARN: redeploy bundle %s: %v", fn.ID, err)
 			continue
 		}
-		if err := client.Deploy(r.Context(), edgefn.DeployRequest{
-			ID: fn.RuntimeID(), Code: code, Secrets: env,
-		}); err != nil {
+		if err := client.Deploy(r.Context(), deployRequestFor(fn, code, env)); err != nil {
 			log.Printf("WARN: redeploy %s: %v", fn.RuntimeID(), err)
 		}
 	}
