@@ -112,9 +112,14 @@ kubectl get pods -n serverless
 All requests except `/health` require the `X-Runtime-Secret` header. Constant-
 time comparison.
 
+Deployed functions live in memory only. `bootId` on `/health` is a random id
+minted once per process; provisioning polls it and replays the project's
+functions from its store when the id changes (see
+[docs/functions-runtime-replay.md](../docs/functions-runtime-replay.md)).
+
 | Method | Endpoint | Body | Returns |
 |--------|----------|------|---------|
-| GET | `/health` | — | `{ status, scripts, uptime }` |
+| GET | `/health` | — | `{ status, scripts, uptime, bootId }` |
 | POST | `/deploy` | `DeployRequest` | `{ id, url }` |
 | POST | `/invoke/{id}` | `InvokeRequest` | `InvokeResponse` |
 | DELETE | `/delete/{id}` | — | `{ status, id }` |
