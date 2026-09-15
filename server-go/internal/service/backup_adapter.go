@@ -43,6 +43,10 @@ type BackupAdapter interface {
 	Restore(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.ProvisioningResponse, error)
 }
 
+// defaultRestoreDatabase is the database name a restored project falls back
+// to when the source row carries none — matches the provisioners' default.
+const defaultRestoreDatabase = "app"
+
 // ErrUnsupportedBackupMode is returned when a project's DeploymentMode
 // has no adapter registered — most commonly BYOC, which has no
 // backup surface (operator owns it).

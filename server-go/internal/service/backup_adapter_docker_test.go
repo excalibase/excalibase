@@ -398,6 +398,7 @@ func TestDockerAdapter_Restore_HappyPath(t *testing.T) {
 	adapter.SetInstanceStore(store)
 	dc := &fakeDockerClientForAdapter{}
 	adapter.SetDockerClient(dc)
+	adapter.SetProjectRegistrar(&fakeRegistrar{})
 
 	src, _ := store.FindByProjectID("dk-1")
 
@@ -431,10 +432,8 @@ func TestDockerAdapter_Restore_HappyPath(t *testing.T) {
 	if !dc.healthy {
 		t.Error("WaitForHealthy never called")
 	}
-	// New instance row persisted, source untouched.
-	if got, _ := store.FindByProjectID("dk-restored"); got == nil {
-		t.Error("restored instance not persisted")
-	}
+	// Registration owns the new row (see backup_adapter_registration_test.go);
+	// here we only assert the source project is untouched.
 	if got, _ := store.FindByProjectID("dk-1"); got == nil {
 		t.Error("source instance was deleted (must remain)")
 	}
@@ -443,6 +442,7 @@ func TestDockerAdapter_Restore_HappyPath(t *testing.T) {
 func TestDockerAdapter_Restore_NoBaseBackup_Errors(t *testing.T) {
 	adapter, store, _, _, _ := setupDockerAdapter(t)
 	adapter.SetDockerClient(&fakeDockerClientForAdapter{})
+	adapter.SetProjectRegistrar(&fakeRegistrar{})
 	src, _ := store.FindByProjectID("dk-1")
 
 	// No BackupRecord, no S3 object → restore must error before
@@ -540,6 +540,7 @@ func TestDockerAdapter_Restore_WithTargetTime_WritesRecoveryTar(t *testing.T) {
 	adapter.SetInstanceStore(store)
 	dc := &fakeDockerClientForAdapter{}
 	adapter.SetDockerClient(dc)
+	adapter.SetProjectRegistrar(&fakeRegistrar{})
 
 	src, _ := store.FindByProjectID("dk-1")
 	uploader.objects["test-backups/backups/dk-1/manual/backup-pitr.tar.gz"] = minimalGzippedTar(t)
@@ -569,6 +570,7 @@ func TestDockerAdapter_Restore_NoTarget_NoRecoveryTar(t *testing.T) {
 	adapter.SetInstanceStore(store)
 	dc := &fakeDockerClientForAdapter{}
 	adapter.SetDockerClient(dc)
+	adapter.SetProjectRegistrar(&fakeRegistrar{})
 
 	src, _ := store.FindByProjectID("dk-1")
 	uploader.objects["test-backups/backups/dk-1/manual/backup-latest.tar.gz"] = minimalGzippedTar(t)

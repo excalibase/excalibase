@@ -111,7 +111,7 @@ func newLocalStackUploader(ctx context.Context, t *testing.T, bucket string) *AW
 // newRestoreAdapter wires a DockerBackupAdapter with a real docker SDK runner +
 // real docker client for restore, backed by a filesystem instance store and an
 // in-memory record store. Returns the adapter and its store.
-func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, bucket string) (*DockerBackupAdapter, *storage.FileSystemStore) {
+func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, bucket string) (*DockerBackupAdapter, *storage.FileSystemStore, *fakeVault) {
 	t.Helper()
 	dockerSDK, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -134,7 +134,15 @@ func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, b
 		Bucket: bucket, KeyPrefix: "backups/", Instances: store,
 	})
 	adapter.SetDockerClient(realDocker)
-	return adapter, store
+
+	// A restore ends in the shared registration path (EXC-366): real role
+	// SQL inside the restored container, real vault writes, real row.
+	vault := newFakeVault()
+	registrar := NewProvisioningService(store, provisioner.NewFactory(), nil)
+	registrar.SetDockerClient(realDocker)
+	registrar.SetVault(vault)
+	adapter.SetProjectRegistrar(registrar)
+	return adapter, store, vault
 }
 
 // waitForSmokeRows polls the restored container until `SELECT id FROM smoke

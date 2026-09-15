@@ -31,11 +31,20 @@ section() { printf "\n\033[36m=== %s ===\033[0m\n" "$1"; }
 cleanup() {
   echo ""
   echo "--- cleanup ---"
-  [ -n "$PROJ_A" ] && curl -sf -X DELETE -H "$AUTH" "$API/api/provision/$PROJ_A/" > /dev/null 2>&1 && echo "  deprovisioned $PROJ_A (api)" || true
-  # B's project record may not be in the platform DB — drop the namespace.
-  if [ -n "$PROJ_B" ] && [ -n "${ORG_ID:-}" ]; then
-    kubectl delete ns "$ORG_ID-$PROJ_B" --ignore-not-found --timeout=60s > /dev/null 2>&1 && echo "  cleaned ns for $PROJ_B" || true
-  fi
+  # Both projects are real platform projects (EXC-366): the restored one is
+  # registered exactly like a provisioned one, so both deprovision via the API.
+  for p in "$PROJ_A" "$PROJ_B"; do
+    [ -n "$p" ] && curl -sf -X DELETE -H "$AUTH" "$API/api/provision/$p/" > /dev/null 2>&1 && echo "  deprovisioned $p (api)" || true
+  done
+}
+
+# api_query runs SQL against a project through the platform's schema plane and
+# echoes the first cell of the first row. Going through the API is the point:
+# it proves the project row AND its vault credentials exist.
+api_query() {
+  curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+    -d "$(jq -n --arg q "$2" '{query:$q}')" "$API/api/schema/$1/query" \
+    | jq -r '.rows[0][0] // empty' 2>/dev/null
 }
 [ "${NO_CLEANUP:-0}" = "1" ] || trap cleanup EXIT
 
@@ -92,14 +101,9 @@ pass "A primary pod: $PG_A_POD"
 # ---------- insert canary ----------
 section "insert canary into A"
 CANARY="canary-$(date +%s%N | head -c 16)"
-kubectl -n "$NS_A" exec "$PG_A_POD" -- psql -U postgres -d app -c \
-  "CREATE TABLE IF NOT EXISTS restore_drill (marker text PRIMARY KEY, written_at timestamptz DEFAULT now());" > /dev/null 2>&1 \
-  || { fail "create drill table" ""; exit 1; }
-kubectl -n "$NS_A" exec "$PG_A_POD" -- psql -U postgres -d app -c \
-  "INSERT INTO restore_drill (marker) VALUES ('$CANARY');" > /dev/null 2>&1 \
-  || { fail "insert canary" ""; exit 1; }
-COUNT=$(kubectl -n "$NS_A" exec "$PG_A_POD" -- psql -U postgres -d app -tAc \
-  "SELECT count(*) FROM restore_drill WHERE marker = '$CANARY';" 2>/dev/null | tr -d '[:space:]')
+api_query "$PROJ_A" "CREATE TABLE IF NOT EXISTS restore_drill (marker text PRIMARY KEY, written_at timestamptz DEFAULT now())" > /dev/null
+api_query "$PROJ_A" "INSERT INTO restore_drill (marker) VALUES ('$CANARY')" > /dev/null
+COUNT=$(api_query "$PROJ_A" "SELECT count(*) FROM restore_drill WHERE marker = '$CANARY'")
 [ "$COUNT" = "1" ] && pass "canary present in A: $CANARY" || { fail "canary verify in A" "got $COUNT rows"; exit 1; }
 
 # ---------- trigger backup ----------
@@ -173,26 +177,25 @@ fi
 [ -z "$PROJ_B" ] || [ "$PROJ_B" = "null" ] && { fail "find B projectId" "resp=$(echo "$RRESP" | head -c 200)"; exit 1; }
 pass "project B: $PROJ_B"
 
-# Project record may not register in the platform DB (restore service quirk),
-# so wait for the CNPG cluster + primary pod directly via kubectl.
-NS_B="$ORG_ID-$PROJ_B"
-echo "    waiting for B primary in ns $NS_B (up to 240s)..."
-PG_B_POD=""
-for i in $(seq 1 120); do
-  PG_B_POD=$(kubectl -n "$NS_B" get pod -l cnpg.io/cluster \
-    -o jsonpath='{.items[?(@.metadata.labels.role=="primary")].metadata.name}' 2>/dev/null)
-  [ -n "$PG_B_POD" ] && \
-    [ "$(kubectl -n "$NS_B" get pod "$PG_B_POD" -o jsonpath='{.status.phase}' 2>/dev/null)" = "Running" ] && break
+# The restore registers B as a real project (EXC-366), so it is visible on the
+# platform API the moment the job completes — no kubectl needed.
+section "project B is registered"
+BS=""
+for i in $(seq 1 60); do
+  BS=$(curl -sf -H "$AUTH" "$API/api/provision/$PROJ_B/" | jq -r .status 2>/dev/null)
+  [ "$BS" = "ACTIVE" ] && break
   sleep 2
 done
-[ -n "$PG_B_POD" ] && pass "project B primary up: $PG_B_POD" || { fail "B primary wait" "no Running primary in $NS_B"; exit 1; }
+[ "$BS" = "ACTIVE" ] && pass "project B registered and ACTIVE" || { fail "B registration" "status=$BS"; exit 1; }
 
-# ---------- verify canary survived ----------
+SRC=$(curl -sf -H "$AUTH" "$API/api/provision/$PROJ_B/" | jq -r '.restoredFromProjectId // empty')
+[ "$SRC" = "$PROJ_A" ] && pass "B records its restore provenance ($SRC)" || fail "B provenance" "got '$SRC', want $PROJ_A"
+
+# ---------- verify canary survived, through the API ----------
 section "verify canary in B"
 
-GOT=$(kubectl -n "$NS_B" exec "$PG_B_POD" -- psql -U postgres -d app -tAc \
-  "SELECT count(*) FROM restore_drill WHERE marker = '$CANARY';" 2>/dev/null | tr -d '[:space:]')
-[ "$GOT" = "1" ] && pass "canary survived restore: $CANARY" || fail "canary in B" "got $GOT rows (expected 1)"
+GOT=$(api_query "$PROJ_B" "SELECT count(*) FROM restore_drill WHERE marker = '$CANARY'")
+[ "$GOT" = "1" ] && pass "canary survived restore (queried via API): $CANARY" || fail "canary in B" "got '$GOT' rows (expected 1)"
 
 # ---------- summary ----------
 section "summary"

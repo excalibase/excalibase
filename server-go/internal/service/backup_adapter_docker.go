@@ -68,6 +68,18 @@ type DockerBackupAdapter struct {
 	mu        sync.RWMutex
 	instances storage.InstanceStore
 	docker    provisioner.DockerClient // optional; required for Restore
+	// registrar finishes a restore the way a provision ends: roles, vault,
+	// instance row, PgDog, events. Required for Restore — persisting a row
+	// without the vault write is what made restored projects unusable.
+	registrar ProjectRegistrar
+}
+
+// SetProjectRegistrar wires the shared registration path. Called from main.go
+// once the provisioning service exists.
+func (a *DockerBackupAdapter) SetProjectRegistrar(r ProjectRegistrar) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.registrar = r
 }
 
 // DockerBackupAdapterConfig bundles the adapter's collaborators so
@@ -365,11 +377,12 @@ func (a *DockerBackupAdapter) List(ctx context.Context, inst *domain.DatabaseIns
 //  4. Gunzip + CopyToContainer into /var/lib/postgresql/data so the
 //     image's initdb is skipped on first start.
 //  5. Start the container + WaitForHealthy.
-//  6. Persist the new instance row pointing at the new container.
+//  6. Register it as a project through the shared registration path.
 //
-// Returns a `RESTORING` ProvisioningResponse on success — the
-// orchestrator's pipeline step interprets a nil error as restore
-// completed and stamps the RestoreJob COMPLETED.
+// Returns an ACTIVE ProvisioningResponse on success — the orchestrator's
+// pipeline step interprets a nil error as restore completed and stamps the
+// RestoreJob COMPLETED. A failure after the container exists leaves it
+// running for inspection with no project row, and fails the job.
 func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
@@ -377,6 +390,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	a.mu.RLock()
 	dc := a.docker
 	store := a.instances
+	registrar := a.registrar
 	a.mu.RUnlock()
 
 	newProject := req.GetNewProject()
@@ -389,6 +403,9 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	}
 	if dc == nil {
 		return nil, fmt.Errorf("docker restore: docker client not configured (call SetDockerClient)")
+	}
+	if registrar == nil {
+		return nil, ErrProjectRegistrarNotConfigured
 	}
 
 	// 2. Resolve the source backup. Default: most recent COMPLETED
@@ -410,7 +427,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	// download archived WALs, and write recovery directives.
 	dbName := inst.DatabaseName
 	if dbName == "" {
-		dbName = "app"
+		dbName = defaultRestoreDatabase
 	}
 	containerName := fmt.Sprintf("excalibase-%s-postgres", newProject)
 	newPassword := generateRestorePassword()
@@ -438,46 +455,105 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		// to inspect the container for diagnosis.
 		return nil, fmt.Errorf("restored container did not become healthy: %w", err)
 	}
-
-	// 6. Persist the instance row. Source project untouched — same
-	// shape as K8s adapter's Restore.
-	now := &domain.FlexTime{Time: time.Now()}
-	newInst := &domain.DatabaseInstance{
-		ProjectID:      newProject,
-		ProjectName:    req.GetNewProject(),
-		OrgID:          inst.OrgID,
-		DBType:         inst.DBType,
-		Tier:           inst.Tier,
-		DeploymentMode: domain.ModeDocker,
-		Namespace:      containerID,
-		Host:           containerName,
-		DatabaseName:   dbName,
-		Username:       defaultPostgresSuperuser,
-		Password:       newPassword,
-		Status:         "ACTIVE",
-		CurrentStage:   domain.StageCompleted,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+	if err := a.waitForPromotedPostgres(ctx, dc, containerID, dbName); err != nil {
+		return nil, err
 	}
-	port := 5432
-	newInst.Port = &port
-	if store != nil {
-		if err := store.Save(newInst); err != nil {
-			log.Printf("WARN: restore persist new instance: %v", err)
-		}
+
+	// 6. Register the restored database as a project, exactly the way a
+	// provision ends: roles + vault credentials, the ACTIVE row, PgDog and
+	// the project-created event. The container keeps the source's superuser
+	// password (the seeded data dir ignores POSTGRES_PASSWORD), so the admin
+	// role is reset to the password stamped on the row.
+	newInst := restoredDockerInstance(inst, restoredDockerSpec{
+		projectID:     newProject,
+		containerID:   containerID,
+		containerName: containerName,
+		dbName:        dbName,
+		password:      newPassword,
+		backupID:      srcRec.ID,
+	})
+	opts := RegistrationOptions{ResetRolePasswords: true, ResetAdminPassword: true}
+	if err := registrar.RegisterProject(ctx, newInst, opts); err != nil {
+		return nil, fmt.Errorf("register restored project: %w", err)
 	}
 
 	return &domain.ProvisioningResponse{
-		ProjectID:    newProject,
-		Status:       "RESTORING",
-		CurrentStage: domain.StageCompleted,
-		Host:         containerName,
-		Port:         &port,
-		DatabaseName: dbName,
-		Namespace:    containerID,
-		CreatedAt:    now,
+		ProjectID:    newInst.ProjectID,
+		ProjectName:  newInst.ProjectName,
+		Status:       newInst.Status,
+		CurrentStage: newInst.CurrentStage,
+		Host:         newInst.Host,
+		Port:         newInst.Port,
+		DatabaseName: newInst.DatabaseName,
+		Namespace:    newInst.Namespace,
+		CreatedAt:    newInst.CreatedAt,
 	}, nil
 }
+
+// restoredDockerSpec carries what the restore learned about the new container.
+type restoredDockerSpec struct {
+	projectID     string
+	containerID   string
+	containerName string
+	dbName        string
+	password      string
+	backupID      string
+}
+
+// restoredDockerInstance builds the project row for a restored container,
+// inheriting the source project's org, owner, type and tier.
+func restoredDockerInstance(src *domain.DatabaseInstance, spec restoredDockerSpec) *domain.DatabaseInstance {
+	port := 5432
+	return &domain.DatabaseInstance{
+		ProjectID:             spec.projectID,
+		ProjectName:           spec.projectID,
+		OrgID:                 src.OrgID,
+		OwnerID:               src.OwnerID,
+		DBType:                src.DBType,
+		Tier:                  src.Tier,
+		DeploymentMode:        domain.ModeDocker,
+		Namespace:             spec.containerID,
+		Host:                  spec.containerName,
+		Port:                  &port,
+		DatabaseName:          spec.dbName,
+		Username:              defaultPostgresSuperuser,
+		Password:              spec.password,
+		PostgresVersion:       src.PostgresVersion,
+		RestoredFromProjectID: src.ProjectID,
+		RestoredFromBackupID:  spec.backupID,
+		CreatedAt:             &domain.FlexTime{Time: time.Now()},
+	}
+}
+
+// promotedProbeSQL fails unless postgres is out of recovery. The exec API only
+// surfaces an exit code, so the probe has to signal through an error rather
+// than a result row.
+const promotedProbeSQL = `DO $$ BEGIN IF pg_is_in_recovery() THEN RAISE EXCEPTION 'still recovering'; END IF; END $$;`
+
+// waitForPromotedPostgres blocks until the restored container accepts queries
+// and has left recovery. Container health only says the process started:
+// seeding PGDATA from a base backup means postgres replays WAL first, and a
+// PITR restore promotes only once it reaches its target. Registration creates
+// roles, which needs a writable primary.
+func (a *DockerBackupAdapter) waitForPromotedPostgres(ctx context.Context, dc provisioner.DockerClient, containerID, dbName string) error {
+	probe := []string{"psql", "-U", defaultPostgresSuperuser, "-d", dbName, "-v", "ON_ERROR_STOP=1", "-c", promotedProbeSQL}
+	deadline := time.Now().Add(defaultRestoreReadyTimeout)
+	for time.Now().Before(deadline) {
+		if code, err := dc.ExecInContainer(ctx, containerID, probe); err == nil && code == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(dockerRestoreReadyPoll):
+		}
+	}
+	return fmt.Errorf("restored postgres did not finish recovery within %v (container kept for inspection)", defaultRestoreReadyTimeout)
+}
+
+// dockerRestoreReadyPoll is the gap between promotion probes. Shorter than the
+// K8s poll because exec into a local container is cheap.
+const dockerRestoreReadyPoll = time.Second
 
 // resolveSourceBackup returns the BackupRecord to restore from. When backupID
 // is set it must reference a COMPLETED record; otherwise the most recent

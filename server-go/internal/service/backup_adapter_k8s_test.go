@@ -50,13 +50,13 @@ func TestK8sRestoreResolvesStoreFromBackupConfig(t *testing.T) {
 	t.Setenv("R2_ACCESS_KEY_ID", "env-key")
 
 	mock := k8s.NewMockClient()
-	adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(r2Storage()))
+	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
 
 	resp, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst"})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if resp.ProjectID != "dst" || resp.Status != "RESTORING" {
+	if resp.ProjectID != "dst" || resp.Status != "ACTIVE" {
 		t.Errorf("response: %+v", resp)
 	}
 
@@ -78,7 +78,8 @@ func TestK8sRestoreUsesLocalstackOnlyWhenConfigured(t *testing.T) {
 	cfg := r2Storage()
 	cfg.Endpoint = testLocalstackEndpoint
 	mock := k8s.NewMockClient()
-	adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(cfg))
+	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
+	adapter.storage = StaticBackupStorage(cfg)
 
 	if _, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst"}); err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -100,6 +101,7 @@ func TestK8sRestoreFailsWhenStorageNotConfigured(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mock := k8s.NewMockClient()
 			adapter := NewK8sBackupAdapter(mock, t.TempDir(), source)
+			adapter.SetProjectRegistrar(&fakeRegistrar{})
 
 			_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst"})
 			if !errors.Is(err, ErrBackupStorageNotConfigured) {
@@ -114,7 +116,7 @@ func TestK8sRestoreFailsWhenStorageNotConfigured(t *testing.T) {
 
 func TestK8sRestoreCarriesPITRTarget(t *testing.T) {
 	mock := k8s.NewMockClient()
-	adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(r2Storage()))
+	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
 
 	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetName: "before-drop"})
 	if err != nil {

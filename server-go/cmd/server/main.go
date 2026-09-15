@@ -170,6 +170,7 @@ func runServer(cfg config.AppConfig) {
 		// Grant + enforcement writes ride the same subject so the engine
 		// evicts cached policies and grants together (EXC-370).
 		deps.tableGrantHandler.SetPublisher(policyPub)
+		provSvc.SetProjectEventPublisher(policyPub)
 	}
 
 	scheduler, schedulerStop := startBackupScheduler(cfg, sqlStore, deps.backupHandler)
@@ -799,6 +800,10 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
+	// A restore finishes the way a provision does: the adapters hand the
+	// recovered database to the provisioning service's registration path
+	// (EXC-366) instead of writing a half-project row themselves.
+	backupSvc.SetProjectRegistrar(provSvc)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)
@@ -860,6 +865,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provHandler.SetActivityStore(sqlStore)
 	wireProjectCors(sqlStore, provHandler)
 	activityRecorder := service.NewActivityRecorder(service.ActivityRecorderConfig{Store: sqlStore})
+	// Newly registered projects (provisioned or restored) get a last-seen
+	// marker straight away so idle-pause never sees them as stale.
+	provSvc.SetActivityRecorder(activityRecorder)
 
 	return &handlerDeps{
 		egress:             egress,

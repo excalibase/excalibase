@@ -91,6 +91,12 @@ type DatabaseInstance struct {
 	MetricsEndpoint     string `json:"metricsEndpoint,omitempty"`
 	GrafanaDashboardURL string `json:"grafanaDashboardUrl,omitempty"`
 
+	// Restore provenance. Both empty for a normally provisioned project;
+	// set when the project was created by restoring a backup, so support
+	// can answer "where did this data come from" without reading job rows.
+	RestoredFromProjectID string `json:"restoredFromProjectId,omitempty"`
+	RestoredFromBackupID  string `json:"restoredFromBackupId,omitempty"`
+
 	// Pause state. last_active_at is updated by the activity tracker (poll
 	// of pg_stat_database). PauseReason is empty for ACTIVE projects;
 	// idle_7d / manual / tier_limit when status is PAUSED.
