@@ -292,15 +292,9 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	)
 
 	// Populate S3 credentials from vault if backup enabled but no S3 creds provided
-	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 == nil && s.vault != nil && !s.vault.Sealed() {
-		if s3Creds, err := s.vault.Get("backup/s3"); err == nil {
-			req.Backup.S3 = &domain.S3Credentials{
-				AccessKeyID:     s3Creds["accessKeyId"],
-				SecretAccessKey: s3Creds["secretAccessKey"],
-				Bucket:          s3Creds["bucket"],
-				Region:          s3Creds["region"],
-				Endpoint:        s3Creds["endpoint"],
-			}
+	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 == nil {
+		if s3Creds, ok := s.vaultBackupStorage(); ok {
+			req.Backup.S3 = s3Creds
 		}
 	}
 
@@ -434,6 +428,42 @@ func (s *ProvisioningService) applyBackupDefaults(req *domain.ProvisioningReques
 			Endpoint:        s.backupDefaults.Endpoint,
 		},
 	}
+}
+
+// BackupStorage resolves the object store new backups are written to, in
+// the same order Provision applies it: platform defaults first (they fill
+// req.Backup.S3 before the vault lookup runs), then vault backup/s3. The
+// restore adapter reads through this so it can never target a different
+// store than the one the backup landed in.
+func (s *ProvisioningService) BackupStorage() (*domain.S3Credentials, bool) {
+	if d := s.backupDefaults; d != nil {
+		return &domain.S3Credentials{
+			AccessKeyID:     d.AccessKeyID,
+			SecretAccessKey: d.SecretAccessKey,
+			Bucket:          d.Bucket,
+			Region:          d.Region,
+			Endpoint:        d.Endpoint,
+		}, true
+	}
+	return s.vaultBackupStorage()
+}
+
+// vaultBackupStorage reads vault backup/s3 when the vault is wired and unsealed.
+func (s *ProvisioningService) vaultBackupStorage() (*domain.S3Credentials, bool) {
+	if s.vault == nil || s.vault.Sealed() {
+		return nil, false
+	}
+	s3Creds, err := s.vault.Get("backup/s3")
+	if err != nil || s3Creds == nil {
+		return nil, false
+	}
+	return &domain.S3Credentials{
+		AccessKeyID:     s3Creds["accessKeyId"],
+		SecretAccessKey: s3Creds["secretAccessKey"],
+		Bucket:          s3Creds["bucket"],
+		Region:          s3Creds["region"],
+		Endpoint:        s3Creds["endpoint"],
+	}, true
 }
 
 // enforceBackupTierPolicy rejects backup requests on tiers that do not support backup.

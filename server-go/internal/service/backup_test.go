@@ -15,7 +15,7 @@ func setupBackupTest(t *testing.T) (*BackupService, *storage.FileSystemStore) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	svc := NewBackupService(store, mock, dir)
+	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
 
 	store.Save(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
@@ -41,7 +41,7 @@ func TestTriggerManualBackup(t *testing.T) {
 func TestTriggerBackupNotFound(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
-	svc := NewBackupService(store, k8s.NewMockClient(), dir)
+	svc := NewBackupService(store, k8s.NewMockClient(), dir, StaticBackupStorage(r2Storage()))
 
 	_, err := svc.TriggerManualBackup(context.Background(), "nonexistent")
 	if err == nil {
@@ -71,7 +71,7 @@ func TestRestoreFromBackup(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	svc := NewBackupService(store, mock, dir)
+	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
 	store.Save(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
 		DBType: domain.PostgreSQL,
@@ -109,7 +109,7 @@ func TestRestoreFromBackup(t *testing.T) {
 func TestRestoreFromBackupNotFound(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
-	svc := NewBackupService(store, k8s.NewMockClient(), dir)
+	svc := NewBackupService(store, k8s.NewMockClient(), dir, StaticBackupStorage(r2Storage()))
 
 	_, err := svc.RestoreFromBackup(context.Background(), "nope", domain.RestoreRequest{
 		NewProjectName: "restored",

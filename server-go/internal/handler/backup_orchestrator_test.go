@@ -65,7 +65,7 @@ func setupBackupHandlerWithOrchestrator(t *testing.T) (*chi.Mux, *service.Restor
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	backupSvc := service.NewBackupService(store, mock, dir)
+	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
 
 	store.Save(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE",

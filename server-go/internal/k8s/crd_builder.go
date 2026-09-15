@@ -52,9 +52,8 @@ type BackupOpts struct {
 	RetentionDays int
 	// EndpointURL is the S3-compatible storage endpoint Barman writes to.
 	// For Cloudflare R2: https://<account_id>.r2.cloudflarestorage.com
-	// For AWS S3: empty (Barman defaults to AWS).
-	// For local dev: http://floci.excalibase-platform.svc.cluster.local:4566
-	// Empty string keeps the historical localstack default for backwards compat.
+	// For AWS S3: empty (the key is omitted and Barman defaults to AWS).
+	// A localstack/floci endpoint is only ever used when set explicitly.
 	EndpointURL string
 	// Bucket is the destination bucket name. Path within the bucket is
 	// automatically scoped to the project: s3://<bucket>/<projectID>/...
@@ -64,6 +63,27 @@ type BackupOpts struct {
 	// Same field names work for AWS S3, R2, MinIO, floci/localstack — Barman
 	// is provider-agnostic at this layer.
 	SecretName string
+}
+
+// ObjectStoreOpts locates the S3-compatible store a CNPG cluster reads
+// from or writes to. Backup and restore share it so a restore always
+// targets the store the backup landed in.
+type ObjectStoreOpts struct {
+	EndpointURL string // empty → omitted, Barman defaults to AWS S3
+	Bucket      string
+	SecretName  string // K8s Secret holding ACCESS_KEY_ID + ACCESS_SECRET_KEY
+}
+
+// RestoreClusterOpts describes a CNPG cluster bootstrapped by recovery
+// from another project's Barman object store.
+type RestoreClusterOpts struct {
+	SourceProjectID string
+	NewProjectID    string
+	Namespace       string
+	Store           ObjectStoreOpts
+	// RecoveryTarget is the optional PITR target (targetTime / targetXID /
+	// targetLSN / targetName) in CNPG's recoveryTarget shape.
+	RecoveryTarget map[string]interface{}
 }
 
 // BuildPostgreSQLCluster builds a CloudNativePG Cluster CRD as unstructured.
@@ -211,45 +231,68 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 
 // buildBackupSpec builds the backup section of the CNPG Cluster spec.
 // Provider-agnostic: works for AWS S3, Cloudflare R2, MinIO, floci. The
-// caller picks via BackupOpts{EndpointURL, Bucket, SecretName} — all 3
-// have legacy defaults so existing callers don't break.
+// caller picks via BackupOpts{EndpointURL, Bucket, SecretName}; bucket and
+// secret keep legacy defaults, the endpoint never does — an empty endpoint
+// means AWS S3, never a localstack mock.
 func buildBackupSpec(projectID string, backup *BackupOpts) map[string]interface{} {
-	bucket := backup.Bucket
-	if bucket == "" {
-		bucket = "postgres-backups"
+	store := ObjectStoreOpts{EndpointURL: backup.EndpointURL, Bucket: backup.Bucket, SecretName: backup.SecretName}
+	if store.Bucket == "" {
+		store.Bucket = "postgres-backups"
 	}
-	endpoint := backup.EndpointURL
-	if endpoint == "" {
-		// Legacy default for dev/test that still runs against localstack/floci.
-		// Production should always set EndpointURL via chart values.
-		endpoint = "http://floci.excalibase-platform.svc.cluster.local:4566"
+	if store.SecretName == "" {
+		store.SecretName = "backup-s3-creds"
 	}
-	secret := backup.SecretName
-	if secret == "" {
-		secret = "backup-s3-creds"
-	}
+	barman := buildBarmanObjectStore(projectID, store)
+	barman["wal"] = map[string]interface{}{"compression": "gzip", "maxParallel": int64(2)}
+	barman["data"] = map[string]interface{}{"compression": "gzip"}
 	return map[string]interface{}{
-		"retentionPolicy": fmt.Sprintf("%dd", backup.RetentionDays),
-		"barmanObjectStore": map[string]interface{}{
-			"serverName":      "cloud",
-			"destinationPath": fmt.Sprintf("s3://%s/%s", bucket, projectID),
-			"endpointURL":     endpoint,
-			"s3Credentials": map[string]interface{}{
-				"accessKeyId": map[string]interface{}{
-					"name": secret,
-					"key":  "ACCESS_KEY_ID",
-				},
-				"secretAccessKey": map[string]interface{}{
-					"name": secret,
-					"key":  "ACCESS_SECRET_KEY",
-				},
+		"retentionPolicy":   fmt.Sprintf("%dd", backup.RetentionDays),
+		"barmanObjectStore": barman,
+	}
+}
+
+// buildBarmanObjectStore is the one place the barmanObjectStore block is
+// shaped, so backup (write) and restore (read) agree on serverName,
+// destinationPath, endpoint and credential keys.
+func buildBarmanObjectStore(projectID string, store ObjectStoreOpts) map[string]interface{} {
+	barman := map[string]interface{}{
+		"serverName":      "cloud",
+		"destinationPath": fmt.Sprintf("s3://%s/%s", store.Bucket, projectID),
+		"s3Credentials": map[string]interface{}{
+			"accessKeyId":     map[string]interface{}{"name": store.SecretName, "key": "ACCESS_KEY_ID"},
+			"secretAccessKey": map[string]interface{}{"name": store.SecretName, "key": "ACCESS_SECRET_KEY"},
+		},
+	}
+	if store.EndpointURL != "" {
+		barman["endpointURL"] = store.EndpointURL
+	}
+	return barman
+}
+
+// BuildRestoreCluster builds a CNPG Cluster CRD that bootstraps by
+// recovering the source project's Barman backups from the given store.
+func BuildRestoreCluster(opts RestoreClusterOpts) *unstructured.Unstructured {
+	recovery := map[string]interface{}{"source": "clusterBackup"}
+	if opts.RecoveryTarget != nil {
+		recovery["recoveryTarget"] = opts.RecoveryTarget
+	}
+	barman := buildBarmanObjectStore(opts.SourceProjectID, opts.Store)
+	barman["wal"] = map[string]interface{}{"maxParallel": int64(8)}
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": cnpgAPIVersion,
+			"kind":       "Cluster",
+			"metadata": map[string]interface{}{
+				"name":      opts.NewProjectID + postgresSuffix,
+				"namespace": opts.Namespace,
 			},
-			"wal": map[string]interface{}{
-				"compression": "gzip",
-				"maxParallel": int64(2),
-			},
-			"data": map[string]interface{}{
-				"compression": "gzip",
+			"spec": map[string]interface{}{
+				"instances": int64(1),
+				"storage":   map[string]interface{}{"size": "5Gi"},
+				"bootstrap": map[string]interface{}{"recovery": recovery},
+				"externalClusters": []interface{}{
+					map[string]interface{}{"name": "clusterBackup", "barmanObjectStore": barman},
+				},
 			},
 		},
 	}

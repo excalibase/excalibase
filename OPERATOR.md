@@ -167,6 +167,15 @@ curl -X POST -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json'
 PITR (point-in-time recovery) reuses the same flow with a `targetTime`
 field in the body.
 
+**Where a restore reads from:** the K8s restore adapter resolves endpoint,
+bucket, region and credentials through `ProvisioningService.BackupStorage()`
+— the exact source the backup write path uses (env `BACKUP_DEFAULT_*` /
+`R2_*` first, then vault `backup/s3`). There is no separate restore
+default and no localstack fallback: with neither configured, `POST
+/backup/restore` fails with `backup storage not configured` before touching
+the cluster. A localstack/floci endpoint is only used when it is the
+configured backup endpoint (tests/CI).
+
 ### Docker mode (in-process backup adapter)
 
 > Status: Phases 0–3 landed (May 2026). PITR end-to-end verified

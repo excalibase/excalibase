@@ -415,7 +415,7 @@ cd frontend && npx playwright test
 - **Frontend**: React 18, Vite, Tailwind CSS, TanStack Query/Table, CodeMirror 6, cmdk
 - **K8s Operators**: CloudNativePG (PostgreSQL), Vitess (MySQL planned), MongoDB Community (planned)
 - **Metrics**: Kubernetes metrics-server (CPU/memory), CNPG Prometheus exporter
-- **Backup**: barmanObjectStore → S3 (LocalStack for dev, AWS for production)
+- **Backup**: barmanObjectStore → S3-compatible store (Cloudflare R2 in production; endpoint/bucket/creds from `BACKUP_DEFAULT_*` or vault `backup/s3`); restore reads from the same configured store
 - **Testing**: httptest, testcontainers-go (k3s + PostgreSQL), Playwright, Vitest
 
 ## License

@@ -51,7 +51,7 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 	factory := provisioner.NewFactory()
 	provSvc := service.NewProvisioningService(store, factory, mock)
 	metricsSvc := service.NewMetricsService(store, mock, dir)
-	backupSvc := service.NewBackupService(store, mock, dir)
+	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
 	perfSvc := service.NewPerformanceService(store, mock)
 	auditSvc := service.NewAuditService(store, mock)
 	snapshotSvc := service.NewSnapshotService(store, mock, dir)

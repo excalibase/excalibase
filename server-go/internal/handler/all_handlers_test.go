@@ -46,7 +46,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	factory := provisioner.NewFactory() // empty factory — no real provisioners
 	provSvc := service.NewProvisioningService(store, factory, mock)
 	metricsSvc := service.NewMetricsService(store, mock, dir)
-	backupSvc := service.NewBackupService(store, mock, dir)
+	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
 	perfSvc := service.NewPerformanceService(store, mock)
 	auditSvc := service.NewAuditService(store, mock)
 	snapshotSvc := service.NewSnapshotService(store, mock, dir)
@@ -817,4 +817,17 @@ func TestSnapshotDownloadSuccess(t *testing.T) {
 	if w.Code != 200 {
 		t.Errorf("download snapshot: got %d, body: %s", w.Code, w.Body.String())
 	}
+}
+
+// testBackupStorage is the R2-shaped backup store handler tests wire into
+// BackupService so K8s restores resolve a real endpoint instead of failing
+// with ErrBackupStorageNotConfigured.
+func testBackupStorage() service.BackupStorageSource {
+	return service.StaticBackupStorage(&domain.S3Credentials{
+		AccessKeyID:     "test-key",
+		SecretAccessKey: "test-secret",
+		Endpoint:        "https://acct.r2.cloudflarestorage.com",
+		Bucket:          "excalibase-backups",
+		Region:          "auto",
+	})
 }
