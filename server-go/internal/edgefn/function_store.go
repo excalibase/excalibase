@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -111,6 +112,22 @@ func (s *FunctionStore) List(projectID string) ([]*Function, error) {
 			out = append(out, fn)
 		}
 	}
+	return out, nil
+}
+
+// ProjectIDs returns every project that owns at least one function, sorted.
+func (s *FunctionStore) ProjectIDs() ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := make(map[string]bool)
+	for _, fn := range s.fns {
+		seen[fn.ProjectID] = true
+	}
+	out := make([]string, 0, len(seen))
+	for projectID := range seen {
+		out = append(out, projectID)
+	}
+	sort.Strings(out)
 	return out, nil
 }
 

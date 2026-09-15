@@ -13,7 +13,6 @@ import (
 
 const errCreateRequest = "create request: %w"
 
-
 // DeployRequest is the payload the platform sends to /deploy on the Deno runtime.
 // Code is the already-bundled JS source; Secrets are merged user + built-in env vars.
 type DeployRequest struct {
@@ -70,18 +69,45 @@ func (c *RuntimeClient) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 }
 
+// RuntimeStatus is what GET /health on the runtime reports. BootID is a random
+// id minted once per runtime process, so a changed value means the runtime
+// restarted and dropped every deployed function (EXC-337). Empty on runtimes
+// that predate the field.
+type RuntimeStatus struct {
+	Healthy bool
+	BootID  string
+	Scripts int
+}
+
 func (c *RuntimeClient) Health(ctx context.Context) (bool, error) {
+	status, err := c.Status(ctx)
+	return status.Healthy, err
+}
+
+// Status fetches /health and decodes the runtime's self-report. A non-200
+// answer is reported as unhealthy without error; transport failures error.
+func (c *RuntimeClient) Status(ctx context.Context) (RuntimeStatus, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/health", nil)
 	if err != nil {
-		return false, fmt.Errorf(errCreateRequest, err)
+		return RuntimeStatus{}, fmt.Errorf(errCreateRequest, err)
 	}
 	c.setHeaders(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return false, err
+		return RuntimeStatus{}, err
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode == 200, nil
+	if resp.StatusCode != http.StatusOK {
+		return RuntimeStatus{}, nil
+	}
+	var body struct {
+		BootID  string `json:"bootId"`
+		Scripts int    `json:"scripts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return RuntimeStatus{}, fmt.Errorf("decode health: %w", err)
+	}
+	return RuntimeStatus{Healthy: true, BootID: body.BootID, Scripts: body.Scripts}, nil
 }
 
 // Deploy registers or replaces a function in the runtime. The runtime

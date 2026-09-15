@@ -116,7 +116,9 @@ Empty array on the first call is fine. The user has no rows yet.
   `using (user_id = current_setting('request.user_id', true))`.
 * **Edge functions**: write a Deno handler, deploy it with `curl`,
   invoke it at `/functions/v1/<projectId>/<fnId>`.
-  See [functions-query.md](functions-query.md).
+  See [functions-query.md](functions-query.md). Deployed functions
+  survive runtime restarts — see
+  [functions-runtime-replay.md](functions-runtime-replay.md).
 * **Realtime**: open a WebSocket to `ws://<host>:3000/ws` and
   subscribe to a table.
 * **Backups**: nightly automatic. On-demand from the **Backups** tab.

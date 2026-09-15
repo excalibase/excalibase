@@ -31,6 +31,8 @@ type SharedFileStore interface {
 
 // Compile-time checks.
 var (
-	_ Store = (*FunctionStore)(nil)
-	_ Store = (*PostgresFunctionStore)(nil)
+	_ Store         = (*FunctionStore)(nil)
+	_ Store         = (*PostgresFunctionStore)(nil)
+	_ ProjectLister = (*FunctionStore)(nil)
+	_ ProjectLister = (*PostgresFunctionStore)(nil)
 )

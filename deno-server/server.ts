@@ -4,7 +4,11 @@
 //   POST /deploy        { id, code, secrets }        — register/replace a function
 //   POST /invoke/{id}   InvokeRequest                — run a function, get InvokeResponse
 //   DELETE /delete/{id}                              — unregister a function
-//   GET /health                                      — liveness
+//   GET /health                                      — liveness; { status, scripts, uptime, bootId }
+//
+// Deployed functions are held in memory only. `bootId` on /health is a random
+// id per process; provisioning replays the project's functions from its store
+// when it sees the id change (EXC-337).
 //
 // InvokeRequest = { method, url, headers, body }
 // InvokeResponse = { status, headers, body }
@@ -2813,9 +2817,19 @@ function badRequest(msg: string): Response {
   return Response.json({ error: msg }, { status: 400, headers: JSON_HEADERS });
 }
 
+// BOOT_ID is minted once per process. Deployed functions live in memory only,
+// so provisioning watches this value on /health: a change means this runtime
+// restarted and every function must be replayed from the store (EXC-337).
+const BOOT_ID = crypto.randomUUID();
+
 async function handleHealth(): Promise<Response> {
   return Response.json(
-    { status: "healthy", scripts: runtime.stats().totalScripts, uptime: performance.now() },
+    {
+      status: "healthy",
+      scripts: runtime.stats().totalScripts,
+      uptime: performance.now(),
+      bootId: BOOT_ID,
+    },
     { headers: JSON_HEADERS },
   );
 }
