@@ -118,7 +118,9 @@ Empty array on the first call is fine. The user has no rows yet.
   invoke it at `/functions/v1/<projectId>/<fnId>`.
   See [functions-query.md](functions-query.md). Deployed functions
   survive runtime restarts — see
-  [functions-runtime-replay.md](functions-runtime-replay.md).
+  [functions-runtime-replay.md](functions-runtime-replay.md). Outbound
+  `fetch()` is off until the project allowlists hosts — see
+  [functions-egress.md](functions-egress.md).
 * **Realtime**: open a WebSocket to `ws://<host>:3000/ws` and
   subscribe to a table.
 * **Backups**: nightly automatic. On-demand from the **Backups** tab.

@@ -19,6 +19,11 @@ type DeployRequest struct {
 	ID      string            `json:"id"`
 	Code    string            `json:"code"`
 	Secrets map[string]string `json:"secrets,omitempty"`
+	// AllowedHosts is the project's effective outbound allowlist (EXC-348).
+	// The runtime grants the worker `net` access to these hosts in addition
+	// to its own ALLOWED_HOSTS env — the only way a shared (docker) runtime
+	// can scope egress per project. Omitted = no extra hosts.
+	AllowedHosts []string `json:"allowedHosts,omitempty"`
 }
 
 // InvokeRequest is forwarded to the runtime on /invoke/{id}. The runtime

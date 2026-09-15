@@ -88,6 +88,12 @@ type FunctionHandler struct {
 	// true; flip to false (EXCALIBASE_AUTO_MIGRATE=false) to defer migration
 	// to an explicit POST /api/projects/{projectId}/schema/apply call.
 	autoMigrate bool
+
+	// egressStore holds each project's outbound allowlist; egressDefaults is
+	// the operator-level list merged into every project (EXC-348). nil store
+	// = the allowlist API is unavailable and runtimes get defaults only.
+	egressStore    edgefn.EgressStore
+	egressDefaults []string
 }
 
 // SetExpectedJWTIssuer configures the iss claim the function handler will
@@ -225,13 +231,7 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if namespace == "" {
 		return nil, fmt.Errorf("no namespace for project %s", projectID)
 	}
-	spec := k8s.DenoRuntimeSpec{
-		Image: h.runtimeImage,
-		// Per-project derived secret — the master never enters a tenant pod (SEC-C5).
-		RuntimeSecret: edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID),
-		Tier:          h.tierFor(projectID),
-	}
-	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, spec); err != nil {
+	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID)); err != nil {
 		return nil, fmt.Errorf("ensure deno runtime: %w", err)
 	}
 	// First-deploy race: EnsureDenoRuntime creates the Deployment but the pod
@@ -563,7 +563,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "runtime unavailable: "+safeError(err), http.StatusServiceUnavailable)
 		return
 	}
-	deployErr := client.Deploy(r.Context(), deployRequestFor(&fn, code, env))
+	deployErr := client.Deploy(r.Context(), deployRequestFor(&fn, code, env, h.effectiveEgressHosts(projectID)))
 	if deployErr != nil {
 		// Rollback the cron sync alongside the store record — the deploy
 		// didn't land, so we shouldn't keep stale crons (or a stale
@@ -606,12 +606,15 @@ func (h *FunctionHandler) deployEnv(ctx context.Context, projectID string) (map[
 // mode. json.RawMessage is verbatim JSON, so embedding it as a JS object
 // literal is safe: the source was JSON-marshalled by ExtractSchema and the
 // slot name matches what deno-server/runtime/schema.ts reads.
-func deployRequestFor(fn *edgefn.Function, code string, env map[string]string) edgefn.DeployRequest {
+//
+// allowedHosts is the project's effective egress allowlist (EXC-348); the
+// runtime grants the worker `net` access to exactly these hosts.
+func deployRequestFor(fn *edgefn.Function, code string, env map[string]string, allowedHosts []string) edgefn.DeployRequest {
 	if len(fn.SchemaJSON) > 0 {
 		code = "globalThis.__excalibase_function_metadata = { schemaJson: " +
 			string(fn.SchemaJSON) + " };\n" + code
 	}
-	return edgefn.DeployRequest{ID: fn.RuntimeID(), Code: code, Secrets: env}
+	return edgefn.DeployRequest{ID: fn.RuntimeID(), Code: code, Secrets: env, AllowedHosts: allowedHosts}
 }
 
 // applyExtractedSchema extracts the user-declared schema from the bundled code,
@@ -1177,13 +1180,14 @@ func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
 		return
 	}
 	shared := h.sharedFilesFor(projectID)
+	allowedHosts := h.effectiveEgressHosts(projectID)
 	for _, fn := range list {
 		code, err := fn.BundleWith(shared)
 		if err != nil {
 			log.Printf("WARN: redeploy bundle %s: %v", fn.ID, err)
 			continue
 		}
-		if err := client.Deploy(r.Context(), deployRequestFor(fn, code, env)); err != nil {
+		if err := client.Deploy(r.Context(), deployRequestFor(fn, code, env, allowedHosts)); err != nil {
 			log.Printf("WARN: redeploy %s: %v", fn.RuntimeID(), err)
 		}
 	}

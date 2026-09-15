@@ -269,6 +269,11 @@ interface DeployRequest {
   id: string;
   code: string;
   secrets?: Record<string, string>;
+  // EXC-348 — per-project outbound allowlist, in Deno net-permission form
+  // (host, host:port, *.suffix[:port] or IP literal). Unioned with the
+  // runtime-wide ALLOWED_HOSTS env for this worker only; the control plane
+  // validates entries before sending them and the runtime re-checks shape.
+  allowedHosts?: string[];
 }
 
 interface InvokeRequest {
@@ -359,9 +364,52 @@ const LOG_RING_SIZE = 100;
 // Cap on a single log line so one huge console.log() can't blow up memory.
 const MAX_LOG_LINE = 4 * 1024;
 
-// Allowed network hosts for workers — only project Postgres services
-// Format: "host1:port1,host2:port2" or empty for no network access
+// Runtime-wide allowed network hosts for workers, in Deno net-permission form:
+// "host1:port1,host2,*.suffix" or empty for no network access. On k8s this is
+// the project's rendered allowlist (one pod per project); on the shared docker
+// runtime it is an operator baseline that each deploy's `allowedHosts` extends.
 const ALLOWED_HOSTS = (Deno.env.get("ALLOWED_HOSTS") || "").split(",").filter(Boolean);
+
+// Bounds on a deploy's allowedHosts (EXC-348). Mirrors the control plane's
+// MaxEgressHosts; the shape check here only guards against a payload Deno
+// would read more loosely than intended (a bare "*", a scheme, a list).
+const MAX_ALLOWED_HOSTS = 64;
+const MAX_ALLOWED_HOST_LEN = 260;
+const ALLOWED_HOST_SHAPE = /^(\*\.)?[a-z0-9.\-\[\]:]+$/i;
+
+// AllowedHostsError marks a deploy refused for its allowedHosts — a client
+// error (400), unlike the runtime failures the outer handler maps to 500.
+class AllowedHostsError extends Error {}
+
+// parseAllowedHosts validates a deploy payload's allowedHosts. Throws on any
+// entry the worker permission must not receive; returns [] when absent.
+function parseAllowedHosts(raw: unknown): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.length > MAX_ALLOWED_HOSTS) {
+    throw new AllowedHostsError(`allowedHosts must be an array of at most ${MAX_ALLOWED_HOSTS} hosts`);
+  }
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (!isAllowedHostEntry(entry)) {
+      throw new AllowedHostsError("allowedHosts entries must be host, host:port or *.suffix");
+    }
+    if (!out.includes(entry)) out.push(entry);
+  }
+  return out;
+}
+
+function isAllowedHostEntry(entry: unknown): entry is string {
+  return typeof entry === "string" && entry.length > 0 && entry.length <= MAX_ALLOWED_HOST_LEN &&
+    ALLOWED_HOST_SHAPE.test(entry) && entry !== "*." && !entry.includes("*.*");
+}
+
+// workerNetPermission is the worker's `net` grant: the runtime-wide list
+// unioned with the deploy's own, or `false` (no network) when both are empty.
+function workerNetPermission(deployHosts: string[]): boolean | string[] {
+  const union = [...ALLOWED_HOSTS];
+  for (const host of deployHosts) if (!union.includes(host)) union.push(host);
+  return union.length > 0 ? union : false;
+}
 
 // Server port — defaults to 8000 for production; tests override via env so
 // concurrent test runs don't collide on the same port.
@@ -1768,6 +1816,7 @@ class FunctionRuntime {
     if (!id || !VALID_ID.test(id)) {
       throw new Error("Invalid function id");
     }
+    const allowedHosts = parseAllowedHosts(req.allowedHosts);
     if (!code || code.length > MAX_CODE_SIZE) {
       throw new Error(`code exceeds maximum size (${MAX_CODE_SIZE / 1024} KB)`);
     }
@@ -1785,8 +1834,7 @@ class FunctionRuntime {
     // fails to parse as plain JS.
     const blob = new Blob([workerCode], { type: "application/typescript" });
 
-    const netPermission: boolean | string[] =
-      ALLOWED_HOSTS.length > 0 ? ALLOWED_HOSTS : false;
+    const netPermission = workerNetPermission(allowedHosts);
 
     // Phase 9b.G — grant the worker scoped `read` access to the vendored
     // @excalibase/server library directory ONLY. Without this Deno's import
@@ -2846,7 +2894,13 @@ async function handleDeploy(req: Request): Promise<Response> {
   if (!parsed.id || !parsed.code) {
     return badRequest("missing id or code");
   }
-  const result = await runtime.deploy(parsed);
+  let result: { id: string; url: string };
+  try {
+    result = await runtime.deploy(parsed);
+  } catch (e) {
+    if (e instanceof AllowedHostsError) return badRequest(e.message);
+    throw e;
+  }
   return Response.json(result, { status: 201, headers: JSON_HEADERS });
 }
 

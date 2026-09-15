@@ -38,6 +38,7 @@ func (h *FunctionHandler) ReplayDeploys(ctx context.Context, projectID string) (
 		return nil, err
 	}
 	shared := h.sharedFilesFor(projectID)
+	allowedHosts := h.effectiveEgressHosts(projectID)
 	out := make([]edgefn.DeployRequest, 0, len(list))
 	for _, fn := range list {
 		code, err := fn.BundleWith(shared)
@@ -45,7 +46,7 @@ func (h *FunctionHandler) ReplayDeploys(ctx context.Context, projectID string) (
 			log.Printf("WARN: replay bundle %s/%s: %v", projectID, fn.ID, err)
 			continue
 		}
-		out = append(out, deployRequestFor(fn, code, env))
+		out = append(out, deployRequestFor(fn, code, env, allowedHosts))
 	}
 	return out, nil
 }

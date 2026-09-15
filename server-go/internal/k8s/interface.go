@@ -93,6 +93,10 @@ type DenoRuntimeSpec struct {
 	Image         string // container image, e.g. excalibase/deno-runtime:latest
 	RuntimeSecret string // X-Runtime-Secret env var
 	Tier          string // "FREE" (default), "STANDARD", "ENTERPRISE"
+	// AllowedHosts is the project's outbound allowlist, already canonical
+	// (edgefn.ParseEgressHosts), rendered as the runtime's ALLOWED_HOSTS env
+	// and mirrored into the egress NetworkPolicy. Empty = no egress (EXC-348).
+	AllowedHosts []string
 }
 
 // Verify Client implements KubeClient at compile time.

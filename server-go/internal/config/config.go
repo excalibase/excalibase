@@ -57,6 +57,13 @@ type AppConfig struct {
 	// always refused regardless of this list. Parsed by byoc.ParseAllowlist.
 	BYOCEgressAllowlist string
 
+	// FnEgressDefaultHosts is the operator-level outbound allowlist every
+	// project's edge functions get in addition to their own setting:
+	// comma-separated host, host:port or "*.suffix" entries in Deno
+	// net-permission form. Empty (default) = projects start with no egress.
+	// Parsed by edgefn.ParseEgressHostList; a malformed list stops the server.
+	FnEgressDefaultHosts string
+
 	// PromURL points at the cluster's Prometheus query endpoint. Used by
 	// the admin handler to enrich the project list with live CPU + memory.
 	// Optional — when empty, admin/projects responses omit usage fields.
@@ -141,6 +148,7 @@ func Load() AppConfig {
 		LokiURL:                 envOr("LOKI_URL", ""),
 		PromURL:                 envOr("PROM_URL", ""),
 		BYOCEgressAllowlist:     envOr("BYOC_EGRESS_ALLOWLIST", ""),
+		FnEgressDefaultHosts:    envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),
 		CapacityHeadroomPercent: envInt("CAPACITY_HEADROOM_PERCENT", 15),
 		ProvisionerMode:         envOr("PROVISIONER_MODE", "k8s"),
 		DockerDBPublic:          envOr("DOCKER_DB_PUBLIC", "") == "true",

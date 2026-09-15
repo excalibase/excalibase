@@ -166,3 +166,14 @@ func TestLoadBYOCEgressAllowlist(t *testing.T) {
 		t.Errorf("BYOCEgressAllowlist from env: got %q", got)
 	}
 }
+
+func TestLoadFnEgressDefaultHosts(t *testing.T) {
+	if cfg := Load(); cfg.FnEgressDefaultHosts != "" {
+		t.Fatalf("default must be empty (no egress), got %q", cfg.FnEgressDefaultHosts)
+	}
+	os.Setenv("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", "*.amazonaws.com,api.stripe.com")
+	defer os.Unsetenv("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS")
+	if cfg := Load(); cfg.FnEgressDefaultHosts != "*.amazonaws.com,api.stripe.com" {
+		t.Fatalf("FnEgressDefaultHosts: got %q", cfg.FnEgressDefaultHosts)
+	}
+}
