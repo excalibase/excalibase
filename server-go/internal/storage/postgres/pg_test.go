@@ -17,16 +17,15 @@ import (
 )
 
 const (
-	testUser1      = "user-1"
-	testApplyCNPG  = "apply CNPG cluster"
-	testDelHash    = "del-hash"
-	testAliceCorp  = "alice-corp"
-	testRoleFmt    = "role: got %q"
-	testMyProject  = "my-project"
-	testOrgInv     = "org-inv"
+	testUser1       = "user-1"
+	testApplyCNPG   = "apply CNPG cluster"
+	testDelHash     = "del-hash"
+	testAliceCorp   = "alice-corp"
+	testRoleFmt     = "role: got %q"
+	testMyProject   = "my-project"
+	testOrgInv      = "org-inv"
 	testNewGuyEmail = "newguy@test.com"
 )
-
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
@@ -412,6 +411,97 @@ func TestTokenDelete(t *testing.T) {
 	got, _ := store.FindByTokenHash(ctx, testDelHash)
 	if got != nil {
 		t.Error("token should be nil after deletion")
+	}
+}
+
+func TestTokenExpiryRoundTrip(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	store.CreateUser(ctx, &domain.User{ID: "eu1", Username: testutil.FixtureToken("expuser"), Email: "e@t.com", Role: "admin", Active: true})
+
+	expires := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Microsecond)
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "exp-h", TokenPrefix: "exp_________", UserID: "eu1", Name: "E", ExpiresAt: &expires})
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "never-h", TokenPrefix: "nvr_________", UserID: "eu1", Name: "N"})
+
+	got, _ := store.FindByTokenHash(ctx, "exp-h")
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(expires) {
+		t.Errorf("expiresAt: got %v want %v", got.ExpiresAt, expires)
+	}
+	never, _ := store.FindByTokenHash(ctx, "never-h")
+	if never.ExpiresAt != nil {
+		t.Errorf("nil expiry must persist as NULL, got %v", never.ExpiresAt)
+	}
+}
+
+func TestTokenUpdateExpiry(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	store.CreateUser(ctx, &domain.User{ID: "ue1", Username: testutil.FixtureToken("updexp"), Email: "u@t.com", Role: "admin", Active: true})
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "upd-h", TokenPrefix: "upd_________", UserID: "ue1", Name: "U"})
+
+	grace := time.Now().Add(10 * time.Minute).UTC().Truncate(time.Microsecond)
+	if err := store.UpdateTokenExpiry(ctx, "upd-h", &grace); err != nil {
+		t.Fatalf("UpdateTokenExpiry: %v", err)
+	}
+	got, _ := store.FindByTokenHash(ctx, "upd-h")
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(grace) {
+		t.Errorf("expiresAt after update: got %v want %v", got.ExpiresAt, grace)
+	}
+	if err := store.UpdateTokenExpiry(ctx, "upd-h", nil); err != nil {
+		t.Fatalf("UpdateTokenExpiry(nil): %v", err)
+	}
+	if got, _ = store.FindByTokenHash(ctx, "upd-h"); got.ExpiresAt != nil {
+		t.Errorf("nil should clear expiry, got %v", got.ExpiresAt)
+	}
+}
+
+func TestTokenTouchLastUsed(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	store.CreateUser(ctx, &domain.User{ID: "lu2", Username: testutil.FixtureToken("lastused"), Email: "lu@t.com", Role: "admin", Active: true})
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "touch-h", TokenPrefix: "tch_________", UserID: "lu2", Name: "T"})
+
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	if err := store.TouchTokenLastUsed(ctx, "touch-h", at); err != nil {
+		t.Fatalf("TouchTokenLastUsed: %v", err)
+	}
+	got, _ := store.FindByTokenHash(ctx, "touch-h")
+	if got.LastUsed == nil || !got.LastUsed.Equal(at) {
+		t.Errorf("lastUsed: got %v want %v", got.LastUsed, at)
+	}
+}
+
+// TestTokenRotationFlow drives the store calls the rotate handler makes:
+// insert the replacement, then shorten the old token to the grace window.
+func TestTokenRotationFlow(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	store.CreateUser(ctx, &domain.User{ID: "ru1", Username: testutil.FixtureToken("rotuser"), Email: "r@t.com", Role: "admin", Active: true})
+	created := time.Now().UTC().Truncate(time.Microsecond)
+	oldExpiry := created.Add(30 * 24 * time.Hour)
+	store.CreateToken(ctx, &domain.AccessToken{TokenHash: "old-h", TokenPrefix: "old_________", UserID: "ru1", Name: "ci", Scopes: "read", CreatedAt: &created, ExpiresAt: &oldExpiry})
+
+	old, _ := store.FindByTokenHash(ctx, "old-h")
+	newExpiry := created.Add(30 * 24 * time.Hour)
+	if err := store.CreateToken(ctx, &domain.AccessToken{TokenHash: "new-h", TokenPrefix: "new_________", UserID: old.UserID, Name: old.Name, Scopes: old.Scopes, ExpiresAt: &newExpiry}); err != nil {
+		t.Fatalf("create replacement: %v", err)
+	}
+	grace := created.Add(5 * time.Minute)
+	if err := store.UpdateTokenExpiry(ctx, "old-h", &grace); err != nil {
+		t.Fatalf("shorten old: %v", err)
+	}
+
+	tokens, _ := store.ListTokensByUser(ctx, "ru1")
+	if len(tokens) != 2 {
+		t.Fatalf("expected old+new, got %d", len(tokens))
+	}
+	replacement, _ := store.FindByTokenHash(ctx, "new-h")
+	if replacement.Scopes != "read" || replacement.Name != "ci" {
+		t.Errorf("replacement must keep scopes+name: %+v", replacement)
+	}
+	shortened, _ := store.FindByTokenHash(ctx, "old-h")
+	if shortened.ExpiresAt == nil || !shortened.ExpiresAt.Equal(grace) {
+		t.Errorf("old expiry: got %v want %v", shortened.ExpiresAt, grace)
 	}
 }
 

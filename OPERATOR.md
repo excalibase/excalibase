@@ -20,8 +20,32 @@ kubectl -n excalibase-platform get secret platform-bootstrap -o jsonpath='{.data
 ```
 
 The last command prints the **bootstrap admin password**. Log in once at `https://<your-host>/login` (username `admin`), then immediately:
-1. Mint a long-lived PAT for CI/scripts (Settings → Personal access tokens).
+1. Mint a PAT for CI/scripts (Settings → Personal access tokens, or the API below).
 2. Rotate or delete the bootstrap admin user (`/admin`) once a real platform_admin user exists.
+
+### 1.1. Personal access tokens: expiry and rotation
+
+Every PAT expires. The default lifetime is **90 days**; `expiresIn` accepts `<n>d` or a Go duration up to **365d**. Only an explicit `"expiresIn":"never"` mints a non-expiring token — reserve that for break-glass automation and rotate it on a schedule. Login session tokens are separate and always expire after 12h.
+
+```bash
+# Mint (the secret is returned exactly once)
+curl -X POST -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' \
+  -d '{"name":"ci-deploy","expiresIn":"30d"}' https://<host>/api/auth/tokens
+# → {"token":"excb_…","prefix":"excb_a1b2c3d","name":"ci-deploy","scopes":"","expiresAt":"2026-…"}
+
+# List — shows expiresAt and lastUsed (updated at most once a minute per token)
+curl -sf -H "Authorization: Bearer $PAT" https://<host>/api/auth/tokens | jq
+
+# Rotate — same owner/name/scopes, lifetime restarts from now.
+# graceSeconds (0–3600, default 0) keeps the OLD secret valid for that long so
+# a fleet can swap credentials without a hard cut; the old expiry is never extended.
+HASH=$(echo -n "$OLD_PAT" | sha256sum | awk '{print $1}')
+curl -X POST -H "Authorization: Bearer $OLD_PAT" -H 'Content-Type: application/json' \
+  -d '{"graceSeconds":300}' https://<host>/api/auth/tokens/$HASH/rotate
+# → {"token":"excb_…(new)","expiresAt":"…","previousExpiresAt":"…(now+300s)", …}
+```
+
+Only the token's owner can rotate it (an admin can revoke any token, then the user mints a new one). Each rotation writes an `access_token` / `token.rotate` audit row carrying the display prefixes and the grace window — never the secret. An expired token is refused with `401` and `"code":"token_expired"`, so a CI job that starts failing with that code needs a rotate, not a re-login.
 
 ## 2. Capacity check before provisioning
 
