@@ -47,7 +47,51 @@ curl -X POST -H "Authorization: Bearer $OLD_PAT" -H 'Content-Type: application/j
 # → {"token":"excb_…(new)","expiresAt":"…","previousExpiresAt":"…(now+300s)", …}
 ```
 
-Only the token's owner can rotate it (an admin can revoke any token, then the user mints a new one). Each rotation writes an `access_token` / `token.rotate` audit row carrying the display prefixes and the grace window — never the secret. An expired token is refused with `401` and `"code":"token_expired"`, so a CI job that starts failing with that code needs a rotate, not a re-login.
+Only the token's owner can rotate it, with one exception: a platform admin may rotate a **service account's** token (see 1.2), because that is exactly what the rotation job does. Admins can revoke any token. Each rotation writes an `access_token` / `token.rotate` audit row carrying the display prefixes and the grace window — never the secret. An expired token is refused with `401` and `"code":"token_expired"`, so a CI job that starts failing with that code needs a rotate, not a re-login.
+
+### 1.2. Service identity: service accounts and capability tokens
+
+The platform's own components no longer authenticate as a human admin. Each one has a **service principal** — a user with `kind = service` that has no password, is refused by `/api/auth/login` and `/api/auth/register`, and can never be added to an organization. Its only credential is a **capability token**.
+
+A capability token carries an explicit permission list. Each entry is `<resource>:<action>[:<selector>]`:
+
+| Permission | Grants |
+| --- | --- |
+| `vault:read:pki/signing/*` | `GET /api/vault/secrets/pki/signing/<leaf>` — the `*` stands for exactly one path segment and never crosses a `/` |
+| `projects:info:read` | `GET /api/projects/{projectId}/info` |
+| `policies:read` | `GET /api/provision/{projectId}/rls-policies` and `/column-policies`, list or by id |
+
+The list is **default-deny and absolute**: a token with a non-empty permission list may call only the endpoints its list names, and everything else — every write, every other route — answers `403`, regardless of the owning principal's platform role. `GET /api/auth/me` is always reachable so a service can validate its own credential. Tokens with an empty permission list (every human PAT and session) are untouched by this layer.
+
+The two principals the platform ships with:
+
+| Principal | Permissions | Consumer |
+| --- | --- | --- |
+| `svc-auth` | `vault:read:pki/signing/*`, `projects:info:read` | auth service — JWKS signing key at boot, per-project info hourly |
+| `svc-graphql` | `projects:info:read`, `policies:read` | engine — project credentials + CORS, RLS/column policies every 30 s |
+
+```bash
+# Create (idempotent by name — safe to re-run on every upgrade)
+curl -X POST -H "Authorization: Bearer $ADMIN_PAT" -H 'Content-Type: application/json' \
+  -d '{"name":"svc-graphql"}' https://<host>/api/admin/service-accounts
+
+# Mint its credential. Platform admins only, and a service account token MUST
+# carry at least one permission — a permission-less one is refused.
+curl -X POST -H "Authorization: Bearer $ADMIN_PAT" -H 'Content-Type: application/json' \
+  -d '{"name":"svc-graphql","expiresIn":"never","userId":"<id>",
+       "permissions":["projects:info:read","policies:read"]}' \
+  https://<host>/api/auth/tokens
+
+# Inspect (metadata only — never a secret) and rotate
+curl -sf -H "Authorization: Bearer $ADMIN_PAT" https://<host>/api/admin/service-accounts/svc-graphql/tokens | jq
+curl -X POST -H "Authorization: Bearer $ADMIN_PAT" -H 'Content-Type: application/json' \
+  -d '{"graceSeconds":600}' https://<host>/api/auth/tokens/<tokenHash>/rotate
+
+# Delete the principal — this revokes every token it owns
+curl -X DELETE -H "Authorization: Bearer $ADMIN_PAT" https://<host>/api/admin/service-accounts/svc-graphql
+```
+
+Rotation preserves the permission list and the lifetime. The secrets are delivered to the consumers as **files**, never env vars: the platform chart writes them into a Secret and mounts the keys at `/var/run/excalibase/auth-token` and `/var/run/excalibase/graphql-token`. Both consumers re-read the file on each call (within 5 s of a change), so rotating a token needs **no restart and no rollout** — the weekly rotation CronJob writes the new values into the Secret and the running pods pick them up. There is no longer a shared `provisioning-pat` admin credential; if you find one in a Secret, it predates this and can be deleted.
 
 ## 2. Capacity check before provisioning
 

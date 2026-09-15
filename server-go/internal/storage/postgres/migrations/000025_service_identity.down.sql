@@ -1,0 +1,4 @@
+ALTER TABLE access_tokens DROP COLUMN IF EXISTS permissions;
+DROP INDEX IF EXISTS idx_users_kind;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_kind_check;
+ALTER TABLE users DROP COLUMN IF EXISTS kind;

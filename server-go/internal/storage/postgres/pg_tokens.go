@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/lib/pq"
 )
 
-const tokenColumns = `token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes, project_id`
+const tokenColumns = `token_hash, token_prefix, user_id, name, created_at, expires_at, last_used, scopes, project_id, permissions`
 
 func (s *Store) CreateToken(ctx context.Context, t *domain.AccessToken) error {
 	createdAt := time.Now().UTC()
@@ -21,9 +22,9 @@ func (s *Store) CreateToken(ctx context.Context, t *domain.AccessToken) error {
 		expiresAt = sql.NullTime{Valid: true, Time: t.ExpiresAt.UTC()}
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO access_tokens (token_hash, token_prefix, user_id, name, created_at, expires_at, scopes, project_id)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		t.TokenHash, t.TokenPrefix, t.UserID, t.Name, createdAt, expiresAt, nullString(t.Scopes), nullString(t.ProjectID))
+		`INSERT INTO access_tokens (token_hash, token_prefix, user_id, name, created_at, expires_at, scopes, project_id, permissions)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		t.TokenHash, t.TokenPrefix, t.UserID, t.Name, createdAt, expiresAt, nullString(t.Scopes), nullString(t.ProjectID), pq.Array(t.Permissions))
 	return err
 }
 
@@ -97,7 +98,8 @@ func scanPgToken(r pgRowScanner) (*domain.AccessToken, error) {
 	var t domain.AccessToken
 	var createdAt, expiresAt, lastUsed sql.NullTime
 	var scopes, projectID sql.NullString
-	if err := r.Scan(&t.TokenHash, &t.TokenPrefix, &t.UserID, &t.Name, &createdAt, &expiresAt, &lastUsed, &scopes, &projectID); err != nil {
+	var permissions pq.StringArray
+	if err := r.Scan(&t.TokenHash, &t.TokenPrefix, &t.UserID, &t.Name, &createdAt, &expiresAt, &lastUsed, &scopes, &projectID, &permissions); err != nil {
 		return nil, err
 	}
 	if createdAt.Valid {
@@ -114,5 +116,8 @@ func scanPgToken(r pgRowScanner) (*domain.AccessToken, error) {
 	}
 	t.Scopes = scopes.String
 	t.ProjectID = projectID.String
+	if len(permissions) > 0 {
+		t.Permissions = []string(permissions)
+	}
 	return &t, nil
 }

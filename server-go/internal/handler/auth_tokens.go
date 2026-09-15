@@ -27,6 +27,13 @@ type createTokenRequest struct {
 	ExpiresIn string   `json:"expiresIn"`
 	ProjectID string   `json:"projectId"`
 	Scopes    []string `json:"scopes"`
+	// UserID mints the token for another user. Platform admins only, and only
+	// for a service principal — handing an admin a human's fresh secret would
+	// be a silent credential grant.
+	UserID string `json:"userId"`
+	// Permissions turns the token into a capability token (EXC-365). Platform
+	// admins only, and required when minting for a service principal.
+	Permissions []string `json:"permissions"`
 }
 
 type rotateTokenRequest struct {
@@ -59,7 +66,7 @@ func (h *AuthHandler) CreateToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	raw, token, err := h.issueToken(r.Context(), user.ID, req.name, req.scopes, req.projectID, req.lifetime)
+	raw, token, err := h.issueToken(r.Context(), req)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
@@ -71,8 +78,9 @@ func (h *AuthHandler) CreateToken(w http.ResponseWriter, r *http.Request) {
 // tokenSpec is a validated createTokenRequest: canonical scopes, parsed
 // lifetime and a project the caller is allowed to bind to.
 type tokenSpec struct {
-	name, scopes, projectID string
-	lifetime                auth.PATLifetime
+	userID, name, scopes, projectID string
+	permissions                     []string
+	lifetime                        auth.PATLifetime
 }
 
 // decodeCreateToken parses and validates a token-creation body. On refusal
@@ -102,7 +110,51 @@ func (h *AuthHandler) decodeCreateToken(w http.ResponseWriter, r *http.Request, 
 		httpError(w, "project not found", http.StatusNotFound)
 		return tokenSpec{}, false
 	}
-	return tokenSpec{name: req.Name, scopes: scopes, projectID: req.ProjectID, lifetime: lifetime}, true
+	spec := tokenSpec{userID: user.ID, name: req.Name, scopes: scopes, projectID: req.ProjectID, lifetime: lifetime}
+	if err := h.resolveTokenSubject(r, user, req, &spec); err != nil {
+		httpError(w, err.message, err.status)
+		return tokenSpec{}, false
+	}
+	return spec, true
+}
+
+// refusal is a handler-level rejection carrying the status it maps to.
+type refusal struct {
+	status  int
+	message string
+}
+
+func (e *refusal) Error() string { return e.message }
+
+// resolveTokenSubject applies the service-principal rules on top of a normal
+// self-minted PAT: only a platform admin may name another user or attach a
+// permission list, the named user must be a service principal, and a service
+// principal's token must always carry a permission list — an unbounded token
+// on a platform_admin service identity would be a full-platform credential.
+func (h *AuthHandler) resolveTokenSubject(r *http.Request, caller *domain.User, req createTokenRequest, spec *tokenSpec) *refusal {
+	if req.UserID == "" && len(req.Permissions) == 0 {
+		return nil
+	}
+	if !auth.HasPermission(caller.Role, auth.PermManageUsers) {
+		return &refusal{http.StatusForbidden, "only a platform admin may mint a token for a service account"}
+	}
+	if req.UserID == "" {
+		return &refusal{http.StatusBadRequest, "permissions require userId naming a service account"}
+	}
+	subject, _ := h.userStore.FindUserByID(r.Context(), req.UserID)
+	if subject == nil || !subject.IsService() {
+		return &refusal{http.StatusBadRequest, "userId must name a service account"}
+	}
+	permissions, err := auth.NormalizeCapabilities(req.Permissions)
+	if err != nil {
+		return &refusal{http.StatusBadRequest, err.Error()}
+	}
+	if len(permissions) == 0 {
+		return &refusal{http.StatusBadRequest, "a service account token requires at least one permission"}
+	}
+	spec.userID = subject.ID
+	spec.permissions = permissions
+	return nil
 }
 
 // callerCanSeeProject applies the same binding as the project routes: a PAT
@@ -119,18 +171,19 @@ func (h *AuthHandler) callerCanSeeProject(r *http.Request, user *domain.User, pr
 // issueToken mints and persists a PAT bound to userID (and, when projectID
 // is set, confined to that project). The raw secret is returned exactly once
 // and never stored.
-func (h *AuthHandler) issueToken(ctx context.Context, userID, name, scopes, projectID string, lifetime auth.PATLifetime) (string, *domain.AccessToken, error) {
+func (h *AuthHandler) issueToken(ctx context.Context, spec tokenSpec) (string, *domain.AccessToken, error) {
 	raw := auth.GenerateToken()
 	now := time.Now()
 	token := &domain.AccessToken{
 		TokenHash:   auth.HashToken(raw),
 		TokenPrefix: auth.TokenPrefix(raw),
-		UserID:      userID,
-		Name:        name,
-		Scopes:      scopes,
-		ProjectID:   projectID,
+		UserID:      spec.userID,
+		Name:        spec.name,
+		Scopes:      spec.scopes,
+		ProjectID:   spec.projectID,
+		Permissions: spec.permissions,
 		CreatedAt:   &now,
-		ExpiresAt:   lifetime.ExpiryFrom(now),
+		ExpiresAt:   spec.lifetime.ExpiryFrom(now),
 	}
 	if err := h.tokenStore.CreateToken(ctx, token); err != nil {
 		return "", nil, err
@@ -140,12 +193,13 @@ func (h *AuthHandler) issueToken(ctx context.Context, userID, name, scopes, proj
 
 func issuedTokenResponse(raw string, token *domain.AccessToken) map[string]interface{} {
 	return map[string]interface{}{
-		"token":     raw, // returned once
-		"prefix":    token.TokenPrefix,
-		"name":      token.Name,
-		"scopes":    token.Scopes,
-		"projectId": token.ProjectID,
-		"expiresAt": token.ExpiresAt,
+		"token":       raw, // returned once
+		"prefix":      token.TokenPrefix,
+		"name":        token.Name,
+		"scopes":      token.Scopes,
+		"projectId":   token.ProjectID,
+		"permissions": token.Permissions,
+		"expiresAt":   token.ExpiresAt,
 	}
 }
 
@@ -177,7 +231,14 @@ func (h *AuthHandler) RotateToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	raw, fresh, err := h.issueToken(r.Context(), tok.UserID, tok.Name, tok.Scopes, tok.ProjectID, auth.LifetimeOf(tok))
+	raw, fresh, err := h.issueToken(r.Context(), tokenSpec{
+		userID:      tok.UserID,
+		name:        tok.Name,
+		scopes:      tok.Scopes,
+		projectID:   tok.ProjectID,
+		permissions: tok.Permissions,
+		lifetime:    auth.LifetimeOf(tok),
+	})
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
@@ -209,12 +270,24 @@ func (h *AuthHandler) tokenForCaller(w http.ResponseWriter, r *http.Request, all
 		return nil, false
 	}
 	owner := tok.UserID == caller.ID
-	admin := allowAdmin && auth.HasPermission(caller.Role, auth.PermManageUsers)
+	admin := (allowAdmin || h.ownedByService(r.Context(), tok)) && auth.HasPermission(caller.Role, auth.PermManageUsers)
 	if !owner && !admin {
 		httpError(w, "forbidden", http.StatusForbidden)
 		return nil, false
 	}
 	return tok, true
+}
+
+// ownedByService reports whether the token belongs to a service principal.
+// Rotating one hands the caller a fresh secret, which is the point for a
+// service identity (the rotation job is an admin) but would be a silent
+// credential grant for a human — so admins may rotate only these.
+func (h *AuthHandler) ownedByService(ctx context.Context, tok *domain.AccessToken) bool {
+	if h.userStore == nil {
+		return false
+	}
+	owner, _ := h.userStore.FindUserByID(ctx, tok.UserID)
+	return owner.IsService()
 }
 
 // decodeGrace reads an optional JSON body; an empty body means no grace.
