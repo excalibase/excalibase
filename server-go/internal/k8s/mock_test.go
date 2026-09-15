@@ -12,7 +12,6 @@ const (
 	testPostgresNS = "t-postgres"
 )
 
-
 func TestMockClientCreateNamespace(t *testing.T) {
 	m := NewMockClient()
 	err := m.CreateNamespace(context.Background(), "test-ns")
@@ -186,5 +185,30 @@ func TestMockClientCallTracking(t *testing.T) {
 
 	if len(m.Calls) != 2 {
 		t.Errorf("expected 2 calls, got %d", len(m.Calls))
+	}
+}
+
+func TestMockClientUpdateCRD(t *testing.T) {
+	m := NewMockClient()
+	ctx := context.Background()
+	obj := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
+		ProjectID: "t", Namespace: "ns",
+		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
+	})
+
+	if err := m.UpdateCRD(ctx, CNPGClusterGVR, "ns", obj); err == nil {
+		t.Error("UpdateCRD on a missing object must fail")
+	}
+	_ = m.ApplyCRD(ctx, CNPGClusterGVR, "ns", obj)
+	obj.SetAnnotations(map[string]string{"k": "v"})
+	if err := m.UpdateCRD(ctx, CNPGClusterGVR, "ns", obj); err != nil {
+		t.Fatalf("UpdateCRD: %v", err)
+	}
+	got, _ := m.GetCRD(ctx, CNPGClusterGVR, "ns", testPostgresNS)
+	if got.GetAnnotations()["k"] != "v" {
+		t.Error("UpdateCRD should replace the stored object")
+	}
+	if m.Calls[len(m.Calls)-2] != "UpdateCRD:ns/"+testPostgresNS {
+		t.Errorf("UpdateCRD call not recorded: %v", m.Calls)
 	}
 }

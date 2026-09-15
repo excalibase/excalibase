@@ -21,8 +21,8 @@ type DatabaseProvisioner interface {
 }
 
 // Pauser is the optional interface a provisioner implements when it
-// supports stop-without-deprovision. K8s/CNPG patches cluster spec
-// instances to 0; Docker stops the container. Both paths preserve
+// supports stop-without-deprovision. K8s/CNPG hibernates the cluster
+// (cnpg.io/hibernation annotation); Docker stops the container. Both paths preserve
 // data volumes so Resume can spin the workload back up. Adapters
 // that lack pause (BYOC) just don't implement this interface and
 // the pauseService returns ErrPauseUnsupported.

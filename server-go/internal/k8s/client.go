@@ -252,6 +252,13 @@ func (c *Client) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResource, 
 	return err
 }
 
+// UpdateCRD replaces an existing unstructured CRD resource, keeping the
+// optimistic-concurrency check on the object's resourceVersion.
+func (c *Client) UpdateCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error {
+	_, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, obj, metav1.UpdateOptions{})
+	return err
+}
+
 // GetCRD fetches an unstructured CRD resource.
 func (c *Client) GetCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
 	return c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})

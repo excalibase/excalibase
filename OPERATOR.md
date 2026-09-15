@@ -379,6 +379,58 @@ refreshed every 10 minutes so a legitimate DNS change is picked up within
 that window. TLS stays `sslmode=require` (encrypted, server certificate
 not verified) — the same mode managed projects use.
 
+## 6.3. Pause / resume a project
+
+Pause stops a project's database without deprovisioning it (data and
+credentials stay; the tenant pays nothing for compute). Resume brings it
+back at its tier size. Both are synchronous HTTP calls.
+
+```bash
+# Pause (Admin on the org). Takes a backup first; if the backup fails the
+# project stays ACTIVE. Body is optional: {"reason":"manual"} (default).
+curl -sf -X POST -H "Authorization: Bearer $PAT" \
+  "https://<host>/api/provision/<projectId>/pause" | jq
+# -> {"projectId":"proj-…","status":"PAUSED","pauseReason":"manual"}
+
+# Resume. Blocks until the database is reachable again (k8s: up to 5 min).
+curl -sf -X POST -H "Authorization: Bearer $PAT" \
+  "https://<host>/api/provision/<projectId>/resume" | jq
+# -> {"projectId":"proj-…","status":"ACTIVE"}
+```
+
+What happens per mode:
+
+| Mode | Pause | Resume |
+|---|---|---|
+| k8s (CNPG) | Sets `cnpg.io/hibernation: "on"` on the Cluster. The operator does a clean shutdown, deletes the pods and keeps the PVCs. `spec.instances` is **not** changed, so nothing about the tier is lost. The call returns as soon as the annotation is set; the database itself stays reachable for up to `spec.smartShutdownTimeout` (180 s) because the project's CDC watcher keeps a replication session open and the operator waits for clients before switching to a fast shutdown — expect ~2–3 min until the pod is gone. | Sets the annotation to `"off"` and polls the Cluster until `status.readyInstances >= 1` and the `cnpg.io/hibernation` condition is cleared (bounded at 5 min, 5 s poll). Measured on a 1-instance cluster: ~13 s from annotation to first successful `pg_isready`; ~25 s end-to-end through `POST /resume`. |
+| docker | Stops the container. | Starts it and waits for the health check. |
+| BYOC | Refused (400) — the operator owns that database. | — |
+
+Requires CloudNativePG >= 1.20 (declarative hibernation). The
+`charts/platform-aio` install script and the nightly e2e pin 1.23.0.
+
+Do not read `status.phase` to decide whether a paused cluster is back:
+CNPG leaves it at `Cluster in healthy state` while hibernated and keeps
+the `Ready` condition `True`; only `readyInstances` (absent while
+hibernated) and the hibernation condition move.
+
+Verify on k8s:
+
+```bash
+kubectl -n <project-ns> get cluster <projectId>-postgres \
+  -o jsonpath='{.metadata.annotations.cnpg\.io/hibernation} {.status.readyInstances}{"\n"}'
+kubectl -n <project-ns> get cluster <projectId>-postgres \
+  -o jsonpath='{.status.conditions[?(@.type=="cnpg.io/hibernation")]}{"\n"}'
+kubectl -n <project-ns> get pods,pvc      # paused: no pods, PVCs Bound
+```
+
+Stuck states:
+
+| Status | Meaning | Fix |
+|---|---|---|
+| `PAUSING` | Backup succeeded but the workload stop failed | `kubectl -n <project-ns> describe cluster`; retry `POST /pause` once the cause is cleared. |
+| `RESUMING` | The annotation is already `off` but the primary did not become ready within 5 min | The operator keeps recovering on its own — watch `kubectl -n <project-ns> get pods -w`; retry `POST /resume` when the pod is Ready (idempotent). |
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:
