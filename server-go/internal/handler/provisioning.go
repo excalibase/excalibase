@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,6 +16,15 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
+
+// backupDisposition renders the deprovision choice as a fixed literal for logs,
+// so request-derived data never reaches the log line.
+func backupDisposition(opts service.DeprovisionOptions) string {
+	if opts.DeleteBackups {
+		return "purge"
+	}
+	return "keep"
+}
 
 type ProvisioningHandler struct {
 	svc       *service.ProvisioningService
@@ -47,6 +57,7 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 		r.Delete("/", h.Delete)
 		r.Get("/credentials", h.GetCredentials)
 		r.Patch("/deletion-protection", h.SetDeletionProtection)
+		r.Post("/backups/purge", h.PurgeBackups)
 		r.Post("/pause", h.Pause)
 		r.Post("/resume", h.Resume)
 	})
@@ -177,7 +188,7 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProvisioningRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
 
@@ -224,11 +235,37 @@ func (h *ProvisioningHandler) GetStatus(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, inst)
 }
 
+// deprovisionBody is the optional JSON body of DELETE /{projectId}.
+type deprovisionBody struct {
+	// ConfirmDeleteBackups also deletes every backup object under the
+	// project's prefix once the project is gone. Absent/false keeps them.
+	ConfirmDeleteBackups bool `json:"confirmDeleteBackups"`
+}
+
+// decodeDeprovisionOptions reads the optional deprovision body. An empty
+// body is the safe default (keep backups); malformed JSON is an error so a
+// typo can never silently turn into "keep" or "delete".
+func decodeDeprovisionOptions(r *http.Request) (service.DeprovisionOptions, error) {
+	var body deprovisionBody
+	if r.Body == nil {
+		return service.DeprovisionOptions{}, nil
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		return service.DeprovisionOptions{}, err
+	}
+	return service.DeprovisionOptions{DeleteBackups: body.ConfirmDeleteBackups}, nil
+}
+
 func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	tenant, _ := custommw.TenantIDFromContext(r.Context())
-	log.Printf("tenant=%s action=deprovision path=%s", tenant, r.URL.Path)
-	if err := h.svc.Deprovision(r.Context(), projectID); err != nil {
+	opts, err := decodeDeprovisionOptions(r)
+	if err != nil {
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
+		return
+	}
+	log.Printf("tenant=%s action=deprovision path=%s backups=%s", tenant, r.URL.Path, backupDisposition(opts))
+	if err := h.svc.DeprovisionWithOptions(r.Context(), projectID, opts); err != nil {
 		log.Printf("tenant=%s action=deprovision status=failed err=%v", tenant, err)
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
@@ -236,6 +273,27 @@ func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	log.Printf("tenant=%s action=deprovision status=ok", tenant)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Database instance deleted successfully"))
+}
+
+// PurgeBackups retries the backup deletion of a project whose deprovision
+// left it in BACKUPS_PENDING_DELETE. 409 for a live project, 404 when the
+// row is gone (nothing left to retry), 503 when no purger is wired.
+func (h *ProvisioningHandler) PurgeBackups(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	deleted, err := h.svc.PurgeBackups(r.Context(), projectID)
+	switch {
+	case errors.Is(err, service.ErrProjectNotFound):
+		httpError(w, safeError(err), http.StatusNotFound)
+	case errors.Is(err, service.ErrBackupsNotPendingDelete):
+		httpError(w, safeError(err), http.StatusConflict)
+	case errors.Is(err, service.ErrBackupPurgeNotConfigured):
+		httpError(w, safeError(err), http.StatusServiceUnavailable)
+	case err != nil:
+		log.Printf("action=purge_backups project=%s status=failed err=%v", projectID, err)
+		httpError(w, "backup purge failed; project stays pending, retry later", http.StatusInternalServerError)
+	default:
+		writeJSON(w, map[string]interface{}{"projectId": projectID, "status": "purged", "deletedObjects": deleted})
+	}
 }
 
 func (h *ProvisioningHandler) GetCredentials(w http.ResponseWriter, r *http.Request) {
@@ -316,7 +374,7 @@ func (h *ProvisioningHandler) SetMaintenanceWindow(w http.ResponseWriter, r *htt
 	projectID := chi.URLParam(r, "projectId")
 	var cfg domain.MaintenanceWindowConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		httpError(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
 	if err := h.svc.SetMaintenanceWindow(projectID, cfg); err != nil {

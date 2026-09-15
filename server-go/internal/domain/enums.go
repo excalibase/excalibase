@@ -57,6 +57,10 @@ const (
 	StatusPausing  ProvisioningStage = "PAUSING"
 	StatusPaused   ProvisioningStage = "PAUSED"
 	StatusResuming ProvisioningStage = "RESUMING"
+	// StatusBackupsPendingDelete marks a row whose resources are gone but
+	// whose backup objects could not be purged. The row is kept only so
+	// POST /backups/purge (or an operator sweep) can retry the deletion.
+	StatusBackupsPendingDelete ProvisioningStage = "BACKUPS_PENDING_DELETE"
 )
 
 // Pause reasons recorded on database_instances.pause_reason. Empty

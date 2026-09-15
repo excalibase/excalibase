@@ -167,6 +167,52 @@ curl -X POST -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json'
 PITR (point-in-time recovery) reuses the same flow with a `targetTime`
 field in the body.
 
+#### Backups on deprovision
+
+`DELETE /api/provision/{projectId}` keeps the project's backups by default —
+the R2 objects outlive the project so an accidental delete is recoverable via
+restore into a new project. To also delete them, send the confirmation field:
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' \
+  -d '{"confirmDeleteBackups": true}' \
+  https://<host>/api/provision/proj-abc123
+```
+
+What happens, in order:
+
+1. PgDog deregistration, cluster/container deletion, vault `projects/{id}/`
+   sweep — exactly as without the flag.
+2. Only then every object under the project's backup prefix is deleted, in
+   list+delete batches of at most 1000 keys (`ListObjectsV2` +
+   `DeleteObjects`). The prefix is `{projectId}/cloud/` for K8s (Barman
+   `destinationPath/serverName`) and `backups/{projectId}/` for Docker mode.
+   The store (endpoint, bucket, credentials) is resolved through
+   `ProvisioningService.BackupStorage()` — the same source backups are
+   written with. BYOC projects have nothing to purge and are skipped.
+3. The purge refuses to run when the computed prefix is empty or does not
+   contain the project id as a path segment, so a misconfigured key prefix can
+   never turn into a bucket-wide delete.
+4. If the purge fails (R2 outage, sealed vault, ...), the deprovision is
+   **not** rolled back. The row is kept with `status: BACKUPS_PENDING_DELETE`
+   and `failureReason: backup purge failed: ...` as a retry marker; it is
+   removed once the purge succeeds. Deleting twice is safe: an empty prefix
+   is a successful no-op.
+
+Retry a pending purge (same Admin role as DELETE; `409` if the project is
+still live, `404` once the row is gone):
+
+```bash
+curl -X POST -H "Authorization: Bearer $PAT" \
+  https://<host>/api/provision/proj-abc123/backups/purge
+# → {"projectId":"proj-abc123","status":"purged","deletedObjects":42}
+```
+
+Find rows waiting for a retry with
+`SELECT project_id, failure_reason FROM database_instances WHERE status = 'BACKUPS_PENDING_DELETE'`.
+`DELETE /api/admin/projects/{projectId}` (force drop) accepts the same
+`confirmDeleteBackups` body field.
+
 **Where a restore reads from:** the K8s restore adapter resolves endpoint,
 bucket, region and credentials through `ProvisioningService.BackupStorage()`
 — the exact source the backup write path uses (env `BACKUP_DEFAULT_*` /

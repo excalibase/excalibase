@@ -118,6 +118,60 @@ func (u *AWSS3Uploader) Delete(ctx context.Context, bucket, key string) error {
 	return nil
 }
 
+// ListKeys returns one page of keys under prefix (ObjectDeleter). A page is
+// at most maxKeys entries; the returned token continues the listing.
+func (u *AWSS3Uploader) ListKeys(ctx context.Context, bucket, prefix, continuationToken string, maxKeys int32) ([]string, string, error) {
+	input := &s3.ListObjectsV2Input{
+		Bucket:  aws.String(bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(maxKeys),
+	}
+	if continuationToken != "" {
+		input.ContinuationToken = aws.String(continuationToken)
+	}
+	page, err := u.client.ListObjectsV2(ctx, input)
+	if err != nil {
+		return nil, "", fmt.Errorf("s3 list %s/%s: %w", bucket, prefix, err)
+	}
+	keys := make([]string, 0, len(page.Contents))
+	for _, obj := range page.Contents {
+		if obj.Key != nil {
+			keys = append(keys, *obj.Key)
+		}
+	}
+	next := ""
+	if page.IsTruncated != nil && *page.IsTruncated && page.NextContinuationToken != nil {
+		next = *page.NextContinuationToken
+	}
+	return keys, next, nil
+}
+
+// DeleteKeys removes up to 1000 keys in one DeleteObjects call
+// (ObjectDeleter). Per-key failures reported by S3 surface as an error so the
+// caller keeps its retry marker instead of assuming the prefix is clean.
+func (u *AWSS3Uploader) DeleteKeys(ctx context.Context, bucket string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	objects := make([]types.ObjectIdentifier, 0, len(keys))
+	for _, key := range keys {
+		objects = append(objects, types.ObjectIdentifier{Key: aws.String(key)})
+	}
+	out, err := u.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucket),
+		Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+	})
+	if err != nil {
+		return fmt.Errorf("s3 delete objects in %s: %w", bucket, err)
+	}
+	if len(out.Errors) > 0 {
+		first := out.Errors[0]
+		return fmt.Errorf("s3 delete objects in %s: %d failed, first %s: %s",
+			bucket, len(out.Errors), aws.ToString(first.Key), aws.ToString(first.Message))
+	}
+	return nil
+}
+
 func (u *AWSS3Uploader) List(ctx context.Context, bucket, prefix string) ([]S3Object, error) {
 	paginator := s3.NewListObjectsV2Paginator(u.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
