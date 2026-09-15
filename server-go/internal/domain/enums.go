@@ -66,6 +66,9 @@ const (
 // Pause reasons recorded on database_instances.pause_reason. Empty
 // for ACTIVE projects.
 const (
+	// PauseReasonIdle is written by the idle-pause scheduler; the threshold
+	// is per-tier (tier_configs.auto_pause_after_days), hence no day count.
+	PauseReasonIdle      = "idle"
 	PauseReasonIdle7Days = "idle_7d"
 	PauseReasonManual    = "manual"
 	PauseReasonTierLimit = "tier_limit"

@@ -107,3 +107,33 @@ func TestTierHandler_Routes_ListServed(t *testing.T) {
 		t.Errorf("GET via Routes should 200, got %d", rec.Code)
 	}
 }
+
+func TestTierHandler_Update_AutoPauseAfterDaysRoundTrips(t *testing.T) {
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+	h := NewTierHandler(store)
+
+	body := `{"maxProjects":1,"instances":1,"storageSize":"5Gi","memory":"512Mi","cpu":"0.5","autoPauseAfterDays":3}`
+	rec := httptest.NewRecorder()
+	h.Update(rec, newTierReqWithParam("PUT", body, string(domain.Free)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := store.m[domain.Free].AutoPauseAfterDays; got != 3 {
+		t.Errorf("autoPauseAfterDays not persisted: %d", got)
+	}
+	var echoed tierConfigDTO
+	_ = json.Unmarshal(rec.Body.Bytes(), &echoed)
+	if echoed.AutoPauseAfterDays != 3 {
+		t.Errorf("autoPauseAfterDays not echoed: %+v", echoed)
+	}
+}
+
+func TestTierHandler_Update_RejectsNegativeAutoPause(t *testing.T) {
+	h := NewTierHandler(&fakeTierStore{m: map[domain.TierType]config.TierConfig{}})
+	rec := httptest.NewRecorder()
+	body := `{"instances":1,"storageSize":"5Gi","memory":"512Mi","cpu":"0.5","autoPauseAfterDays":-1}`
+	h.Update(rec, newTierReqWithParam("PUT", body, string(domain.Free)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for negative autoPauseAfterDays, got %d", rec.Code)
+	}
+}

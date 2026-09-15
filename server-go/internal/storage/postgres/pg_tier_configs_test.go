@@ -62,3 +62,29 @@ func TestTierConfigs_GetMissingReturnsNotFound(t *testing.T) {
 		t.Error("expected ok=false for unknown tier")
 	}
 }
+
+func TestTierConfigs_AutoPauseColumn(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	free, ok, err := store.GetTierConfig(ctx, domain.Free)
+	if err != nil || !ok {
+		t.Fatalf("GetTierConfig FREE: ok=%v err=%v", ok, err)
+	}
+	if free.AutoPauseAfterDays != 7 {
+		t.Errorf("FREE must be seeded with autoPauseAfterDays=7, got %d", free.AutoPauseAfterDays)
+	}
+	standard, _, _ := store.GetTierConfig(ctx, domain.Standard)
+	if standard.AutoPauseAfterDays != 0 {
+		t.Errorf("STANDARD must never auto-pause by default, got %d", standard.AutoPauseAfterDays)
+	}
+
+	want := config.TierConfig{MaxProjects: 1, Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5", AutoPauseAfterDays: 3}
+	if err := store.UpsertTierConfig(ctx, domain.Free, want); err != nil {
+		t.Fatalf("UpsertTierConfig: %v", err)
+	}
+	got, _, _ := store.GetTierConfig(ctx, domain.Free)
+	if got != want {
+		t.Errorf("round trip mismatch:\n got  %+v\n want %+v", got, want)
+	}
+}

@@ -15,6 +15,8 @@ import (
 type projectView struct {
 	*domain.DatabaseInstance
 	LastSeenAt *domain.FlexTime `json:"lastSeenAt,omitempty"`
+	// IdleWarnedAt is set while an idle-pause warning is outstanding.
+	IdleWarnedAt *domain.FlexTime `json:"idleWarnedAt,omitempty"`
 }
 
 // SetActivityStore wires the last-seen lookup. Optional: without it the
@@ -30,7 +32,7 @@ func (h *ProvisioningHandler) projectResponse(ctx context.Context, inst *domain.
 	if err != nil {
 		log.Printf("WARN: project activity lookup failed: %v", err)
 	}
-	return withLastSeen(inst, activity, ok)
+	return withActivity(inst, activity, ok)
 }
 
 // projectListResponse decorates a list with one activity read, not one per row.
@@ -45,15 +47,19 @@ func (h *ProvisioningHandler) projectListResponse(ctx context.Context, insts []*
 	out := make([]projectView, 0, len(insts))
 	for _, inst := range insts {
 		activity, ok := byProject[inst.ProjectID]
-		out = append(out, withLastSeen(inst, activity, ok))
+		out = append(out, withActivity(inst, activity, ok))
 	}
 	return out
 }
 
-func withLastSeen(inst *domain.DatabaseInstance, activity domain.ProjectActivity, seen bool) projectView {
+func withActivity(inst *domain.DatabaseInstance, activity domain.ProjectActivity, seen bool) projectView {
 	view := projectView{DatabaseInstance: inst}
-	if seen {
-		view.LastSeenAt = &domain.FlexTime{Time: activity.LastSeenAt}
+	if !seen {
+		return view
+	}
+	view.LastSeenAt = &domain.FlexTime{Time: activity.LastSeenAt}
+	if activity.IdleWarnedAt != nil {
+		view.IdleWarnedAt = &domain.FlexTime{Time: *activity.IdleWarnedAt}
 	}
 	return view
 }

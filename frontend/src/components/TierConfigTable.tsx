@@ -19,6 +19,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
   const toInput = (t: TierConfig): TierConfigInput => ({
     maxProjects: t.maxProjects, instances: t.instances, storageSize: t.storageSize,
     memory: t.memory, cpu: t.cpu, backupEnabled: t.backupEnabled,
+    autoPauseAfterDays: t.autoPauseAfterDays ?? 0,
   });
 
   const setField = (tier: string, base: TierConfigInput, patch: Partial<TierConfigInput>) =>
@@ -29,7 +30,8 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     if (d == null) return false;
     return (
       d.cpu !== t.cpu || d.memory !== t.memory || d.storageSize !== t.storageSize ||
-      d.maxProjects !== t.maxProjects || d.instances !== t.instances || d.backupEnabled !== t.backupEnabled
+      d.maxProjects !== t.maxProjects || d.instances !== t.instances || d.backupEnabled !== t.backupEnabled ||
+      d.autoPauseAfterDays !== (t.autoPauseAfterDays ?? 0)
     );
   };
 
@@ -69,6 +71,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
               <th className="text-left px-4 py-3 font-medium">Instances</th>
               <th className="text-left px-4 py-3 font-medium">Max projects</th>
               <th className="text-left px-4 py-3 font-medium">Backup</th>
+              <th className="text-left px-4 py-3 font-medium" title="Idle days before auto-pause (0 = never)">Auto-pause (days)</th>
               <th className="px-4 py-3" />
             </tr>
           </thead>
@@ -92,6 +95,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                       className="h-4 w-4 accent-accent-primary disabled:opacity-50"
                     />
                   </td>
+                  <td className="px-4 py-3"><NumInput value={d.autoPauseAfterDays} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { autoPauseAfterDays: v })} /></td>
                   <td className="px-4 py-3 text-right">
                     <Button
                       size="sm"

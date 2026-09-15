@@ -37,6 +37,9 @@ type tierConfigDTO struct {
 	Memory        string          `json:"memory"`
 	CPU           string          `json:"cpu"`
 	BackupEnabled bool            `json:"backupEnabled"`
+	// AutoPauseAfterDays: idle days before an ACTIVE project is auto-paused
+	// (warning one day earlier). 0 = never.
+	AutoPauseAfterDays int `json:"autoPauseAfterDays"`
 }
 
 func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
@@ -48,6 +51,8 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		Memory:        tc.Memory,
 		CPU:           tc.CPU,
 		BackupEnabled: tc.BackupEnabled,
+
+		AutoPauseAfterDays: tc.AutoPauseAfterDays,
 	}
 }
 
@@ -85,6 +90,8 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Memory:        dto.Memory,
 		CPU:           dto.CPU,
 		BackupEnabled: dto.BackupEnabled,
+
+		AutoPauseAfterDays: dto.AutoPauseAfterDays,
 	}
 	if err := validateTierConfig(tc); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
@@ -99,13 +106,17 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 // validateTierConfig rejects specs that would produce an invalid CNPG cluster.
 // Quantity strings (cpu/memory/storage) are required and non-empty; instances
-// must be at least 1; maxProjects is non-negative (0 = unlimited).
+// must be at least 1; maxProjects and autoPauseAfterDays are non-negative (0 =
+// unlimited / never).
 func validateTierConfig(tc config.TierConfig) error {
 	if tc.Instances < 1 {
 		return errors.New("instances must be >= 1")
 	}
 	if tc.MaxProjects < 0 {
 		return errors.New("maxProjects must be >= 0")
+	}
+	if tc.AutoPauseAfterDays < 0 {
+		return errors.New("autoPauseAfterDays must be >= 0 (0 = never)")
 	}
 	if tc.CPU == "" || tc.Memory == "" || tc.StorageSize == "" {
 		return errors.New("cpu, memory and storageSize are required")

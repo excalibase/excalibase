@@ -88,3 +88,38 @@ func TestProjectActivity_ListAndCascadeDelete(t *testing.T) {
 		t.Error("activity row must cascade-delete with its project")
 	}
 }
+
+func TestProjectActivity_IdleWarningLifecycle(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	saveActivityProject(t, store, activityProject)
+	created := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	warned := created.Add(6 * 24 * time.Hour)
+
+	// No activity row yet: the warning inserts one anchored at the fallback time.
+	if err := store.MarkIdleWarned(ctx, activityProject, created, warned); err != nil {
+		t.Fatalf("MarkIdleWarned: %v", err)
+	}
+	got, ok, _ := store.GetProjectActivity(ctx, activityProject)
+	if !ok || got.IdleWarnedAt == nil || !got.IdleWarnedAt.Equal(warned) || !got.LastSeenAt.Equal(created) {
+		t.Fatalf("warned row: ok=%v %+v", ok, got)
+	}
+
+	// Warning again must not move last_seen_at.
+	if err := store.MarkIdleWarned(ctx, activityProject, warned, warned.Add(time.Hour)); err != nil {
+		t.Fatalf("second MarkIdleWarned: %v", err)
+	}
+	got, _, _ = store.GetProjectActivity(ctx, activityProject)
+	if !got.LastSeenAt.Equal(created) {
+		t.Errorf("MarkIdleWarned must not overwrite last_seen_at: %+v", got)
+	}
+
+	// Fresh activity clears the warning so the next idle cycle warns again.
+	if err := store.TouchProjectActivity(ctx, activityProject, "api", warned.Add(2*time.Hour)); err != nil {
+		t.Fatalf("Touch: %v", err)
+	}
+	got, _, _ = store.GetProjectActivity(ctx, activityProject)
+	if got.IdleWarnedAt != nil {
+		t.Errorf("activity must clear idle_warned_at: %+v", got)
+	}
+}

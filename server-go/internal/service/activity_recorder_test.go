@@ -10,10 +10,12 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
-// fakeActivityStore counts writes so tests can prove the throttle holds.
+// fakeActivityStore counts writes so tests can prove the throttle holds, and
+// keeps the idle-warning marker so the scheduler tests can drive it.
 type fakeActivityStore struct {
 	mu      sync.Mutex
 	touches []touch
+	warned  map[string]time.Time
 	err     error
 }
 
@@ -29,18 +31,44 @@ func (f *fakeActivityStore) TouchProjectActivity(_ context.Context, projectID, s
 		return f.err
 	}
 	f.touches = append(f.touches, touch{projectID, source, at})
+	delete(f.warned, projectID)
 	return nil
+}
+
+func (f *fakeActivityStore) MarkIdleWarned(_ context.Context, projectID string, lastSeen, warnedAt time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	if _, ok := f.latestLocked(projectID); !ok {
+		f.touches = append(f.touches, touch{projectID, "created", lastSeen})
+	}
+	if f.warned == nil {
+		f.warned = map[string]time.Time{}
+	}
+	f.warned[projectID] = warnedAt
+	return nil
+}
+
+func (f *fakeActivityStore) latestLocked(projectID string) (domain.ProjectActivity, bool) {
+	for i := len(f.touches) - 1; i >= 0; i-- {
+		if f.touches[i].projectID == projectID {
+			row := domain.ProjectActivity{ProjectID: projectID, LastSeenAt: f.touches[i].at, LastSeenSource: f.touches[i].source}
+			if w, ok := f.warned[projectID]; ok {
+				row.IdleWarnedAt = &w
+			}
+			return row, true
+		}
+	}
+	return domain.ProjectActivity{}, false
 }
 
 func (f *fakeActivityStore) GetProjectActivity(_ context.Context, projectID string) (domain.ProjectActivity, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for i := len(f.touches) - 1; i >= 0; i-- {
-		if f.touches[i].projectID == projectID {
-			return domain.ProjectActivity{ProjectID: projectID, LastSeenAt: f.touches[i].at, LastSeenSource: f.touches[i].source}, true, nil
-		}
-	}
-	return domain.ProjectActivity{}, false, nil
+	row, ok := f.latestLocked(projectID)
+	return row, ok, nil
 }
 
 func (f *fakeActivityStore) ListProjectActivity(_ context.Context) (map[string]domain.ProjectActivity, error) {
@@ -48,7 +76,7 @@ func (f *fakeActivityStore) ListProjectActivity(_ context.Context) (map[string]d
 	defer f.mu.Unlock()
 	out := map[string]domain.ProjectActivity{}
 	for _, t := range f.touches {
-		out[t.projectID] = domain.ProjectActivity{ProjectID: t.projectID, LastSeenAt: t.at, LastSeenSource: t.source}
+		out[t.projectID], _ = f.latestLocked(t.projectID)
 	}
 	return out, nil
 }
