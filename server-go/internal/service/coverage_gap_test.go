@@ -387,7 +387,7 @@ func TestBackupService_GetInstance(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(dir)
 	store.Save(&domain.DatabaseInstance{ProjectID: "bk", Status: "ACTIVE"})
 
-	svc := NewBackupService(store, nil, dir)
+	svc := NewBackupService(store, nil, dir, nil)
 	got, err := svc.GetInstance("bk")
 	if err != nil {
 		t.Fatalf("GetInstance: %v", err)

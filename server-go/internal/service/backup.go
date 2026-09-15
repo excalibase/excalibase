@@ -24,12 +24,12 @@ type BackupService struct {
 	adapters map[domain.DeploymentMode]BackupAdapter
 }
 
-// NewBackupService keeps the legacy single-K8s wiring used by tests
-// and main.go before the adapter refactor. Internally it builds a
-// one-entry adapter map so dispatch still works.
-func NewBackupService(store storage.InstanceStore, client k8s.KubeClient, storagePath string) *BackupService {
+// NewBackupService keeps the single-K8s wiring used by tests. Internally
+// it builds a one-entry adapter map so dispatch still works. backupStorage
+// is the store backups are written to; restores read from the same one.
+func NewBackupService(store storage.InstanceStore, client k8s.KubeClient, storagePath string, backupStorage BackupStorageSource) *BackupService {
 	return NewBackupServiceWithAdapters(store, map[domain.DeploymentMode]BackupAdapter{
-		domain.ModeK8s: NewK8sBackupAdapter(client, storagePath),
+		domain.ModeK8s: NewK8sBackupAdapter(client, storagePath, backupStorage),
 	}, storagePath)
 }
 

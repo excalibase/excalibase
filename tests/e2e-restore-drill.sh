@@ -7,11 +7,18 @@
 # asserts the canary survives.  Cleanup tears down both projects.
 #
 # Requires: kubectl, jq, curl. Port-forwards on 24005/24000 already up.
+#
+# The restore reads from whatever object store the provisioning deployment
+# is configured to back up to (BACKUP_DEFAULT_ENDPOINT / R2_ENDPOINT env,
+# or vault backup/s3). Nothing here assumes a particular endpoint; the
+# preflight below only surfaces what the server will use so a mis-wired
+# cluster fails fast instead of wedging a CNPG recovery.
 
 set -uo pipefail
 
 API="${API_PROV:-http://localhost:24005}"
 NS=excalibase-platform
+PROV_DEPLOY="${PROV_DEPLOY:-provisioning}"
 PASS=0
 FAIL=0
 PROJ_A=""
@@ -31,6 +38,19 @@ cleanup() {
   fi
 }
 [ "${NO_CLEANUP:-0}" = "1" ] || trap cleanup EXIT
+
+# ---------- preflight: backup store the server restores from ----------
+section "preflight"
+STORE_ENDPOINT="${BACKUP_DEFAULT_ENDPOINT:-${R2_ENDPOINT:-}}"
+if [ -z "$STORE_ENDPOINT" ]; then
+  STORE_ENDPOINT=$(kubectl -n $NS get deploy "$PROV_DEPLOY" -o json 2>/dev/null \
+    | jq -r '[.spec.template.spec.containers[].env[]? | select(.name=="BACKUP_DEFAULT_ENDPOINT" or .name=="R2_ENDPOINT") | .value // empty] | first // empty')
+fi
+if [ -n "$STORE_ENDPOINT" ]; then
+  pass "restore reads from configured store: $STORE_ENDPOINT"
+else
+  echo "  (no BACKUP_DEFAULT_ENDPOINT / R2_ENDPOINT visible in env or deploy $PROV_DEPLOY — relying on vault backup/s3)"
+fi
 
 # ---------- auth ----------
 section "auth"

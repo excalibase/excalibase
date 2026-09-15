@@ -391,13 +391,7 @@ func buildProvisioningService(
 		provSvc.SetDefaultDeploymentMode(domain.ModeK8s)
 	}
 
-	provSvc.SetBackupDefaults(&service.BackupDefaults{
-		AccessKeyID:     envOr("BACKUP_DEFAULT_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID")),
-		SecretAccessKey: envOr("BACKUP_DEFAULT_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY")),
-		Endpoint:        envOr("BACKUP_DEFAULT_ENDPOINT", os.Getenv("R2_ENDPOINT")),
-		Bucket:          envOr("BACKUP_DEFAULT_BUCKET", "excalibase-backups"),
-		Region:          envOr("BACKUP_DEFAULT_REGION", "auto"),
-	})
+	provSvc.SetBackupDefaults(backupDefaultsFromEnv())
 	if name := os.Getenv("REALTIME_PUBLICATION_NAME"); name != "" {
 		provSvc.SetPublicationName(name)
 	}
@@ -408,6 +402,20 @@ func buildProvisioningService(
 
 	cleanup := wirePgDogNotifier(cfg, sqlStore, provSvc)
 	return provSvc, cleanup
+}
+
+// backupDefaultsFromEnv is the single place the platform-wide backup object
+// store is read from the environment. Backup (provisioning + Docker
+// uploader) and restore (K8s adapter via ProvisioningService.BackupStorage)
+// all derive from this one value — there is no separate restore default.
+func backupDefaultsFromEnv() *service.BackupDefaults {
+	return &service.BackupDefaults{
+		AccessKeyID:     envOr("BACKUP_DEFAULT_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID")),
+		SecretAccessKey: envOr("BACKUP_DEFAULT_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY")),
+		Endpoint:        envOr("BACKUP_DEFAULT_ENDPOINT", os.Getenv("R2_ENDPOINT")),
+		Bucket:          envOr("BACKUP_DEFAULT_BUCKET", "excalibase-backups"),
+		Region:          envOr("BACKUP_DEFAULT_REGION", "auto"),
+	}
 }
 
 // wirePgDogNotifier returns a cleanup func that closes the notifier on shutdown,
@@ -459,9 +467,10 @@ func buildBackupService(
 	sqlStore storage.PlatformStore,
 	k8sClient k8s.KubeClient,
 	dockerClient provisioner.DockerClient,
+	backupStorage service.BackupStorageSource,
 ) *service.BackupService {
 	adapters := map[domain.DeploymentMode]service.BackupAdapter{
-		domain.ModeK8s: service.NewK8sBackupAdapter(k8sClient, cfg.StoragePath),
+		domain.ModeK8s: service.NewK8sBackupAdapter(k8sClient, cfg.StoragePath, backupStorage),
 	}
 
 	if cfg.ProvisionerMode == "docker" && dockerClient != nil {
@@ -474,21 +483,17 @@ func buildBackupService(
 		})
 		if err == nil {
 			runner := service.NewDockerBackupRunner(dockerSDK.RawClient())
-			bucket := envOr("BACKUP_DEFAULT_BUCKET", "excalibase-backups")
-			endpoint := envOr("BACKUP_DEFAULT_ENDPOINT", os.Getenv("R2_ENDPOINT"))
-			ak := envOr("BACKUP_DEFAULT_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID"))
-			sk := envOr("BACKUP_DEFAULT_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY"))
-			region := envOr("BACKUP_DEFAULT_REGION", "auto")
-			if ak != "" && sk != "" && endpoint != "" {
+			defaults := backupDefaultsFromEnv()
+			if defaults.AccessKeyID != "" && defaults.SecretAccessKey != "" && defaults.Endpoint != "" {
 				// Default path-style ON — works for R2, MinIO, LocalStack.
 				// Operators targeting real AWS S3 set BACKUP_S3_PATH_STYLE=0
 				// to flip to virtual-host addressing.
 				usePathStyle := os.Getenv("BACKUP_S3_PATH_STYLE") != "0"
 				uploader, err := service.NewAWSS3Uploader(context.Background(), service.AWSS3UploaderConfig{
-					AccessKeyID:     ak,
-					SecretAccessKey: sk,
-					Endpoint:        endpoint,
-					Region:          region,
+					AccessKeyID:     defaults.AccessKeyID,
+					SecretAccessKey: defaults.SecretAccessKey,
+					Endpoint:        defaults.Endpoint,
+					Region:          defaults.Region,
 					UsePathStyle:    usePathStyle,
 				})
 				if err == nil {
@@ -496,7 +501,7 @@ func buildBackupService(
 						Runner:    runner,
 						Uploader:  uploader,
 						Records:   sqlStore.BackupRecords(),
-						Bucket:    bucket,
+						Bucket:    defaults.Bucket,
 						KeyPrefix: "backups/",
 						Instances: store,
 					})
@@ -531,7 +536,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provSvc, pgStore := a.provSvc, a.pgStore
 
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
-	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient)
+	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)

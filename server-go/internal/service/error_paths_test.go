@@ -164,7 +164,7 @@ func TestBackupTriggerWhenCRDFails(t *testing.T) {
 		ProjectID: "bk-fail", Namespace: "ns", Status: "ACTIVE",
 	})
 	// ApplyCRD always succeeds in mock, so this just tests the flow
-	svc := NewBackupService(store, mock, dir)
+	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
 	result, err := svc.TriggerManualBackup(context.Background(), "bk-fail")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
