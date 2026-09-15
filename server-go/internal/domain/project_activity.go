@@ -11,6 +11,10 @@ type ProjectActivity struct {
 	ProjectID      string
 	LastSeenAt     time.Time
 	LastSeenSource string
+	// IdleWarnedAt is when the idle-pause warning was issued for the current
+	// idle stretch; nil when no warning is outstanding. Fresh activity clears
+	// it. A warning older than the effective last-seen time is stale.
+	IdleWarnedAt *time.Time
 }
 
 // ActivitySource is the closed vocabulary recorded on

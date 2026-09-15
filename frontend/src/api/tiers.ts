@@ -14,6 +14,8 @@ export interface TierConfig {
   memory: string;
   cpu: string;
   backupEnabled: boolean;
+  // Idle days before an ACTIVE project is auto-paused (warning one day earlier); 0 = never.
+  autoPauseAfterDays: number;
 }
 
 export type TierConfigInput = Omit<TierConfig, 'tier'>;

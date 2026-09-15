@@ -45,3 +45,16 @@ func TestGetTierConfigUnknown(t *testing.T) {
 		t.Error("expected error for unknown tier")
 	}
 }
+
+func TestGetTierConfig_AutoPauseDefaults(t *testing.T) {
+	cases := map[domain.TierType]int{domain.Free: 7, domain.Standard: 0, domain.Enterprise: 0}
+	for tier, want := range cases {
+		tc, err := GetTierConfig(tier)
+		if err != nil {
+			t.Fatalf("GetTierConfig(%s): %v", tier, err)
+		}
+		if tc.AutoPauseAfterDays != want {
+			t.Errorf("%s autoPauseAfterDays: got %d, want %d", tier, tc.AutoPauseAfterDays, want)
+		}
+	}
+}

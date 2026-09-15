@@ -72,6 +72,8 @@ export interface DatabaseInstance {
   pauseReason?: 'idle_7d' | 'manual' | 'tier_limit' | '';
   // Last successful project-scoped call seen by the platform (project_activity); absent when never seen.
   lastSeenAt?: string;
+  // Set while an idle-pause warning is outstanding (cleared by fresh activity).
+  idleWarnedAt?: string;
 }
 
 export interface CredentialsResponse {

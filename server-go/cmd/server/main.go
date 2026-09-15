@@ -184,8 +184,9 @@ func runServer(cfg config.AppConfig) {
 	// Wire pause/resume — backup must run before pause, so PauseService
 	// depends on the BackupService that backupHandler exposes.
 	pausers := buildPausers(cfg, factory, dockerClientRef)
+	var pauseSvc *service.PauseService
 	if len(pausers) > 0 {
-		pauseSvc := service.NewPauseService(service.PauseServiceConfig{
+		pauseSvc = service.NewPauseService(service.PauseServiceConfig{
 			Instances: store,
 			Pausers:   pausers,
 			Backups:   deps.backupHandler.Service(),
@@ -193,6 +194,8 @@ func runServer(cfg config.AppConfig) {
 		deps.provHandler.SetPauseService(pauseSvc)
 		deps.provHandler.SetInstanceStore(store)
 	}
+	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender)
+	defer stopIdlePause()
 
 	if sqlStore != nil {
 		wireRestoreOrchestrator(sqlStore, store, deps)
@@ -287,6 +290,66 @@ func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 	return scheduler, scheduler.Stop
 }
 
+// startIdlePauseScheduler boots the EXC-280 sweep: every hour, ACTIVE projects
+// on tiers with autoPauseAfterDays = N > 0 are warned after N-1 idle days and
+// paused (pre-pause backup included, via PauseService) after N. Cloud replicas
+// elect a leader through a Postgres advisory lock so only one sweeps per tick.
+// Gated by EXCALIBASE_AUTOPAUSE_ENABLED (default: on in cloud, off self-hosted).
+func startIdlePauseScheduler(
+	cfg config.AppConfig,
+	sqlStore storage.PlatformStore,
+	store storage.InstanceStore,
+	provSvc *service.ProvisioningService,
+	pauseSvc *service.PauseService,
+	sender email.Sender,
+) func() {
+	noop := func() {
+		// nothing started, nothing to stop
+	}
+	if !cfg.AutoPauseEnabled {
+		log.Println("Idle auto-pause disabled (EXCALIBASE_AUTOPAUSE_ENABLED)")
+		return noop
+	}
+	if pauseSvc == nil || sqlStore == nil {
+		log.Println("WARN: idle auto-pause enabled but no pause service is wired (BYOC-only deployment?) — sweep not started")
+		return noop
+	}
+	var lock service.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() {
+		// FNV-1a("excalibase-idle-pause") — distinct from the backup scheduler's key.
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), 0x6168_0acb_1d1e_9a05)
+	}
+	scheduler := service.NewIdlePauseScheduler(service.IdlePauseSchedulerConfig{
+		Instances: store,
+		Activity:  sqlStore,
+		Tiers:     provSvc.TierConfig,
+		Pauser:    pauseSvc,
+		Audit:     sqlStore,
+		Lock:      lock,
+		Notifier: service.NewIdleWarnEmail(service.IdleWarnEmailConfig{
+			Users:        sqlStore,
+			Sender:       sender,
+			ProductName:  cfg.EmailProductName,
+			DashboardURL: studioURL(cfg),
+		}),
+	})
+	scheduler.Start(context.Background())
+	log.Printf("Idle auto-pause sweep started (every %s; warning at N-1 days, pause at N per tier)", service.DefaultIdlePauseInterval)
+	return scheduler.Stop
+}
+
+// studioURL is the first concrete CORS origin — the Studio the operator
+// serves — used as the dashboard link in owner-facing emails. Empty when the
+// allowlist is a wildcard.
+func studioURL(cfg config.AppConfig) string {
+	for _, origin := range cfg.CORSOrigins {
+		if strings.HasPrefix(origin, "http") {
+			return origin
+		}
+	}
+	return ""
+}
+
 // startFunctionScheduler boots Phase 8.5's deferred-execution worker +
 // cron runner. The runners poll the platform DB; tenants are responsible
 // for ensuring excalibase_scheduled_functions + excalibase_cron_jobs
@@ -350,6 +413,8 @@ type handlerDeps struct {
 	// call (EXC-279). Mounted after the access guards so rejected calls never
 	// count.
 	activity func(http.Handler) http.Handler
+	// emailSender is shared with post-construction wiring (idle-pause warnings).
+	emailSender email.Sender
 }
 
 // startFunctionReplayer boots the EXC-337 cold-start replay loop: it polls
@@ -733,6 +798,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlAuthed:    custommw.RateLimit(custommw.PerUser, 600, time.Minute),
 		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
 		activity:    custommw.ProjectActivity(activityRecorder),
+		emailSender: emailSender,
 	}
 }
 

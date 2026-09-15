@@ -41,6 +41,18 @@ func (s *activityStoreForHandler) TouchProjectActivity(_ context.Context, projec
 	return nil
 }
 
+func (s *activityStoreForHandler) MarkIdleWarned(_ context.Context, projectID string, lastSeen, warnedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, ok := s.rows[projectID]
+	if !ok {
+		row = domain.ProjectActivity{ProjectID: projectID, LastSeenAt: lastSeen, LastSeenSource: "created"}
+	}
+	row.IdleWarnedAt = &warnedAt
+	s.rows[projectID] = row
+	return nil
+}
+
 func (s *activityStoreForHandler) GetProjectActivity(_ context.Context, projectID string) (domain.ProjectActivity, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

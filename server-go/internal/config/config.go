@@ -89,6 +89,12 @@ type AppConfig struct {
 	DockerHost      string // explicit Docker URI; empty → env → unix socket
 	DockerCertPath  string // TLS certificate directory (ca.pem, cert.pem, key.pem)
 	DockerTLSVerify bool
+
+	// AutoPauseEnabled runs the hourly idle-pause sweep (EXC-280): projects on
+	// tiers with autoPauseAfterDays > 0 are warned at N-1 idle days and paused
+	// at N. EXCALIBASE_AUTOPAUSE_ENABLED overrides; defaults on in cloud mode,
+	// off self-hosted (a single operator owns their own projects).
+	AutoPauseEnabled bool
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -118,7 +124,9 @@ func (c AppConfig) Validate() error {
 }
 
 func Load() AppConfig {
+	deploymentMode := envOr("DEPLOYMENT_MODE", "selfhosted")
 	return AppConfig{
+		AutoPauseEnabled:        envBool("EXCALIBASE_AUTOPAUSE_ENABLED", deploymentMode == "cloud"),
 		Port:                    envOr("PORT", "24005"),
 		StoragePath:             envOr("STORAGE_PATH", "../provisioning-data"),
 		LogLevel:                envOr("LOG_LEVEL", "debug"),
@@ -133,7 +141,7 @@ func Load() AppConfig {
 		DenoRuntimeImage:        envOr("DENO_RUNTIME_IMAGE", "excalibase/deno-runtime:latest"),
 		VaultURL:                envOr("VAULT_URL", ""),
 		VaultPAT:                envOr("VAULT_PAT", ""),
-		DeploymentMode:          envOr("DEPLOYMENT_MODE", "selfhosted"),
+		DeploymentMode:          deploymentMode,
 		PublicBaseURL:           envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
 		KubeconfigPath:          envOr("KUBECONFIG_PATH", ""),
 		KubeAPIURL:              envOr("KUBE_API_URL", ""),
@@ -183,6 +191,18 @@ func parseCORSOrigins(raw string) []string {
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+// envBool reads a boolean flag. Accepts 1/true/yes/on and 0/false/no/off
+// (case-insensitive); unset or unrecognised values yield the fallback.
+func envBool(key string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
 	}
 	return fallback
 }
