@@ -33,6 +33,8 @@ type ProvisioningHandler struct {
 	instances storage.InstanceStore
 	// egressGuard validates BYOC targets; nil → byoc.Default(). See byoc.go.
 	egressGuard *byoc.Guard
+	// activity supplies lastSeenAt for GET / list; nil → field omitted.
+	activity storage.ProjectActivityStore
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
@@ -162,7 +164,7 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 	// route is mounted behind RequireAuth, so user is non-nil; the nil-guard is
 	// retained only as defense against a misconfigured mount.
 	if user == nil || auth.HasPermission(user.Role, auth.PermViewAny) {
-		writeJSON(w, allInstances)
+		writeJSON(w, h.projectListResponse(r.Context(), allInstances))
 		return
 	}
 
@@ -182,7 +184,7 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 	if filtered == nil {
 		filtered = []*domain.DatabaseInstance{}
 	}
-	writeJSON(w, filtered)
+	writeJSON(w, h.projectListResponse(r.Context(), filtered))
 }
 
 func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) {
@@ -232,7 +234,7 @@ func (h *ProvisioningHandler) GetStatus(w http.ResponseWriter, r *http.Request) 
 		httpError(w, safeError(err), http.StatusNotFound)
 		return
 	}
-	writeJSON(w, inst)
+	writeJSON(w, h.projectResponse(r.Context(), inst))
 }
 
 // deprovisionBody is the optional JSON body of DELETE /{projectId}.
