@@ -38,6 +38,10 @@ type ProvisioningHandler struct {
 	// corsStore backs /cors and the corsAllowedOrigins field on /info;
 	// nil → /cors returns 503 and /info reports no origins.
 	corsStore storage.ProjectCorsStore
+	// authSettingsStore backs /auth-settings and the requireEmailVerification
+	// + siteUrl fields on /info; nil → /auth-settings returns 503 and /info
+	// reports the zero value.
+	authSettingsStore storage.ProjectAuthSettingsStore
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
@@ -51,6 +55,11 @@ func (h *ProvisioningHandler) SetPauseService(s *service.PauseService) { h.pause
 // SetInstanceStore lets the pause handlers look up the post-transition
 // state for the response shape.
 func (h *ProvisioningHandler) SetInstanceStore(s storage.InstanceStore) { h.instances = s }
+
+// SetAuthSettingsStore wires the per-project auth settings store (EXC-367).
+func (h *ProvisioningHandler) SetAuthSettingsStore(s storage.ProjectAuthSettingsStore) {
+	h.authSettingsStore = s
+}
 
 func (h *ProvisioningHandler) Routes(r chi.Router) {
 	r.Get("/", h.ListInstances)
@@ -416,22 +425,17 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Resolve org metadata. Refuse to forge a slug from the raw OrgID — the
-	// auth service mints JWTs from this payload and a UUID-as-slug feeds
-	// downstream verification with the wrong `iss` claim. If we can't
-	// resolve the real slug/name, surface that as 503 so the caller knows
-	// to retry rather than caching a poisoned value.
-	if h.orgStore == nil {
-		httpError(w, "org store not configured", http.StatusServiceUnavailable)
+	org, ok := h.resolveInfoOrg(w, r, inst.OrgID)
+	if !ok {
 		return
 	}
-	if inst.OrgID == "" {
-		httpError(w, "project has no org assignment", http.StatusServiceUnavailable)
-		return
-	}
-	org, oerr := h.orgStore.FindOrgByID(r.Context(), inst.OrgID)
-	if oerr != nil || org == nil {
-		httpError(w, "org metadata unavailable", http.StatusServiceUnavailable)
+
+	// The auth service resolves email-verification + redirect behavior from
+	// these fields and caches it; a read failure is a 503 so it keeps its
+	// last good settings rather than a wrong default.
+	authSettings, aerr := h.authSettingsForInfo(r.Context(), inst.ProjectID)
+	if aerr != nil {
+		httpError(w, "auth settings unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -444,14 +448,39 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 	}
 
 	info := domain.ProjectInfo{
-		ProjectID:          inst.ProjectID,
-		ProjectName:        inst.ProjectName,
-		OrgID:              inst.OrgID,
-		OrgSlug:            org.Slug,
-		OrgName:            org.Name,
-		RealtimeAutoEnable: true, // v1: hardcoded; per-project override is a future column on instances
-		CorsAllowedOrigins: corsOrigins,
+		ProjectID:                inst.ProjectID,
+		ProjectName:              inst.ProjectName,
+		OrgID:                    inst.OrgID,
+		OrgSlug:                  org.Slug,
+		OrgName:                  org.Name,
+		RealtimeAutoEnable:       true, // v1: hardcoded; per-project override is a future column on instances
+		CorsAllowedOrigins:       corsOrigins,
+		RequireEmailVerification: authSettings.RequireEmailVerification,
+		SiteURL:                  authSettings.SiteURL,
 	}
 
 	writeJSON(w, info)
+}
+
+// resolveInfoOrg looks up the org metadata GetProjectInfo embeds in its
+// response, writing the error response itself when it can't. Refuses to
+// forge a slug from the raw org id — the auth service mints JWTs from this
+// payload and a UUID-as-slug feeds downstream verification with the wrong
+// `iss` claim, so any lookup failure is a 503 telling the caller to retry
+// rather than caching a poisoned value.
+func (h *ProvisioningHandler) resolveInfoOrg(w http.ResponseWriter, r *http.Request, orgID string) (*domain.Org, bool) {
+	if h.orgStore == nil {
+		httpError(w, "org store not configured", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	if orgID == "" {
+		httpError(w, "project has no org assignment", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	org, err := h.orgStore.FindOrgByID(r.Context(), orgID)
+	if err != nil || org == nil {
+		httpError(w, "org metadata unavailable", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	return org, true
 }

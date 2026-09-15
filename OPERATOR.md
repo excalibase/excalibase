@@ -516,6 +516,20 @@ excalibase-graphql caches for 30 s per project. If provisioning is
 unreachable the data plane keeps serving the last list it saw; a project
 it has never resolved is denied. See [docs/project-cors.md](docs/project-cors.md).
 
+## 6.2.2. Per-project auth settings
+
+`GET`/`PUT /api/projects/{id}/auth-settings` (EXC-367, Developer+) store two
+fields the auth service reads through `/info` at signup/login time:
+`requireEmailVerification` (bool, default `false`) gates whether a new
+signup must confirm its email before it can log in, and `siteUrl` is the
+canonical origin used to build redirect/callback links. `siteUrl` must be an
+absolute `http`/`https` URL with a host and no userinfo, query, fragment or
+trailing slash (a path is allowed); an empty string clears it back to unset.
+A project with no row reads as the zero value on both `/auth-settings` and
+`/info`. As with CORS and edge-function egress, a platform-store read
+failure answers `/info` with **503** rather than a wrong default — the auth
+service is expected to keep its last-known-good copy.
+
 ## 6.3. Pause / resume a project
 
 Pause stops a project's database without deprovisioning it (data and
@@ -599,6 +613,7 @@ and incident response, but a project-bound PAT still confines them.
 | `POST /api/projects/{id}/schema/apply` | Developer | |
 | `GET/PUT /api/projects/{id}/cors` | Developer | browser-origin allowlist the data plane enforces |
 | `/api/projects/{id}/info`, `/realtime/*`, `/storage/*`, `GET /api/alerts/project/{id}` | Viewer | |
+| `/api/projects/{id}/auth-settings` | Developer | `requireEmailVerification` + `siteUrl` |
 | `/api/orgs/{orgId}/projects/{id}/members` | org member (list) / Admin (change) | project must belong to `{orgId}` |
 | `/api/admin/projects/{id}` | platform permission (`delete`) | platform plane, not the tenant gate |
 

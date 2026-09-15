@@ -18,4 +18,11 @@ type ProjectInfo struct {
 	// canonical absolute origins, or the single "*" entry. Empty means the
 	// data plane sends no CORS headers for the project. Never null.
 	CorsAllowedOrigins []string `json:"corsAllowedOrigins"`
+	// RequireEmailVerification and SiteURL are the project's auth settings
+	// (EXC-367): whether the auth service must verify a new signup's email
+	// before it can log in, and the site URL used to build redirect/callback
+	// links. No row = the zero value (verification off, no site URL). Never
+	// null.
+	RequireEmailVerification bool   `json:"requireEmailVerification"`
+	SiteURL                  string `json:"siteUrl"`
 }

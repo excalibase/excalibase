@@ -523,6 +523,18 @@ func wireProjectCors(sqlStore storage.PlatformStore, provHandler *handler.Provis
 	log.Println("WARN: no Postgres platform store — the per-project CORS allowlist API is unavailable")
 }
 
+// wireProjectAuthSettings attaches the per-project auth settings store
+// (EXC-367). It lives in the platform Postgres; without it the
+// /auth-settings API is unavailable and /info reports the zero value
+// (verification off, no site URL) rather than guessing.
+func wireProjectAuthSettings(sqlStore storage.PlatformStore, provHandler *handler.ProvisioningHandler) {
+	if authStore, ok := sqlStore.(storage.ProjectAuthSettingsStore); ok {
+		provHandler.SetAuthSettingsStore(authStore)
+		return
+	}
+	log.Println("WARN: no Postgres platform store — the per-project auth settings API is unavailable")
+}
+
 // buildProvisioningService wires the central provisioning service plus its
 // optional collaborators (backup defaults, PgDog notifier, etc). Returns the
 // service and a cleanup function for any goroutine-owning collaborators.
@@ -865,6 +877,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provHandler.SetEgressGuard(egress)
 	provHandler.SetActivityStore(sqlStore)
 	wireProjectCors(sqlStore, provHandler)
+	wireProjectAuthSettings(sqlStore, provHandler)
 	activityRecorder := service.NewActivityRecorder(service.ActivityRecorderConfig{Store: sqlStore})
 	// Newly registered projects (provisioned or restored) get a last-seen
 	// marker straight away so idle-pause never sees them as stale.
@@ -1179,6 +1192,18 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetCors)
 		r.Put("/", d.provHandler.PutCors)
+	})
+	// Auth settings (EXC-367): requireEmailVerification + siteUrl feed the
+	// auth service's signup/redirect behavior, so reads and writes carry the
+	// same Developer+ gate as the other data-plane authoring surfaces.
+	r.Route("/api/projects/{projectId}/auth-settings", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		r.Use(d.activity)
+		r.Get("/", d.provHandler.GetAuthSettings)
+		r.Put("/", d.provHandler.PutAuthSettings)
 	})
 	r.Route("/api/projects/{projectId}/realtime", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
