@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,7 +21,6 @@ import (
 
 const (
 	testMaintWindowPath = "/api/provision/test-db/maintenance-window"
-	testVaultFile       = "vault.bolt"
 	testNewVaultFmt     = "new vault: %v"
 	testNotJSON         = "not json"
 	testSchemaPath      = "/schema"
@@ -254,8 +252,7 @@ func TestGetMaintenanceWindow_NotFound_Returns404(t *testing.T) {
 
 func newSealedVaultSchemaRouter(t *testing.T) chi.Router {
 	t.Helper()
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, testVaultFile))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf(testNewVaultFmt, err)
 	}
@@ -274,8 +271,7 @@ func newSealedVaultSchemaRouter(t *testing.T) chi.Router {
 // for any project. vault.Get returns ErrNotFound → handleDBError returns 404.
 func newUninitializedVaultSchemaRouter(t *testing.T) chi.Router {
 	t.Helper()
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, testVaultFile))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf(testNewVaultFmt, err)
 	}
@@ -1056,8 +1052,7 @@ func TestSchemaExecuteQuery_InvalidJSON_SealedVault_Returns503(t *testing.T) {
 
 func newBadDBSchemaRouter(t *testing.T) chi.Router {
 	t.Helper()
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, testVaultFile))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf(testNewVaultFmt, err)
 	}
@@ -1094,8 +1089,7 @@ func TestSchemaHandleDBError_GenericPingError_Returns500(t *testing.T) {
 
 func TestSchemaGetDB_PoolFull_Returns500(t *testing.T) {
 	t.Helper()
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, testVaultFile))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf(testNewVaultFmt, err)
 	}

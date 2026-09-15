@@ -14,7 +14,7 @@ curl -X POST http://localhost:24005/api/provision \
 
 - **9-stage provisioning pipeline** — namespace, CRD deployment, pod readiness, credential extraction, backup config, metrics setup, watcher deployment, role creation
 - **Three deployment modes per project** — Kubernetes (CNPG operator on any distro: EKS/GKE/AKS, RKE2, or single-node k0s/k3s/MicroK8s including rootless), Docker (local socket or remote daemon over TLS, Dokploy/CapRover-style), or BYOC (register an external DB you already manage). K8s vs Docker is a real trade-off: K8s provides ServiceAccount + Role + namespace isolation, Docker is operationally simpler but daemon access is root-equivalent and there's no per-project isolation enforced by the platform.
-- **Self-hosted or cloud** — `DEPLOYMENT_MODE=selfhosted` (SQLite + bbolt vault, single org) or `cloud` (Postgres store + remote HTTP vault or bbolt fallback, multi-tenant + tier enforcement)
+- **Self-hosted or cloud** — `DEPLOYMENT_MODE=selfhosted` (Postgres store + Postgres vault, single org) or `cloud` (Postgres store + Postgres vault or remote HTTP vault, multi-tenant + tier enforcement)
 - **3 tiers** — FREE (1 pod), STANDARD (3 pods + HA), ENTERPRISE (5 pods)
 - **Real metrics** — per-pod CPU/memory from metrics-server + CNPG database metrics from port 9187
 - **Backup & PITR** — automated WAL archiving + scheduled backups + point-in-time recovery
@@ -22,7 +22,7 @@ curl -X POST http://localhost:24005/api/provision \
 - **Schema management** — full SQL schema introspection, CRUD for tables/columns/roles/extensions/policies/functions/triggers/indexes
 - **Realtime** — per-table CDC publication toggle (ALTER PUBLICATION) backed by a watcher daemon
 - **Edge functions** — per-project Deno workers with multi-file bundling (esbuild), secrets, log streaming, public invoke at `/functions/v1/{projectId}/{name}`
-- **Vault** — Shamir secret sharing for credentials, AES-256-GCM at rest; runs in-process (bbolt) or as a standalone HTTP service
+- **Vault** — Shamir secret sharing for credentials, AES-256-GCM at rest; runs in-process (Postgres-backed) or as a standalone HTTP service
 
 ## Architecture
 
@@ -41,7 +41,7 @@ server-go/       Go backend (chi router, client-go, Docker SDK)
 │   ├── storage/
 │   │   ├── sqlite/    SQLite store (self-hosted)
 │   │   └── postgres/  Postgres store (cloud, via CNPG)
-│   ├── vault/        Shamir-based in-process vault (bbolt + AES-256-GCM)
+│   ├── vault/        Shamir-based in-process vault (Postgres + AES-256-GCM)
 │   ├── vaultclient/  VaultClient interface — in-process or HTTP-remote
 │   ├── auth/         3-level RBAC (platform/org/project), JWT, argon2id
 │   ├── middleware/   CORS, security headers, TenantContext
@@ -405,9 +405,9 @@ cd frontend && npx playwright test
 
 ## Tech Stack
 
-- **Backend**: Go 1.24+, chi router, client-go, Docker SDK, Helm SDK, bbolt vault, NATS client, esbuild
+- **Backend**: Go 1.24+, chi router, client-go, Docker SDK, Helm SDK, NATS client, esbuild
 - **Storage**: SQLite (self-hosted) / PostgreSQL via CNPG (cloud), auto-migrate on startup
-- **Vault**: in-process Shamir + bbolt, or standalone HTTP service via `VAULT_URL`
+- **Vault**: in-process Shamir on the platform Postgres, or standalone HTTP service via `VAULT_URL`
 - **Auth**: argon2id password hashing, PATs (`excali_…` prefix), JWT minted via separate auth service
 - **Connection Pooler**: PgDog fork (Postgres-backed config + NATS reload)
 - **Edge Functions**: Deno workers, esbuild bundling, public Supabase-style invoke

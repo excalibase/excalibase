@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/testutil"
@@ -29,11 +28,9 @@ const (
 	testContentType      = "Content-Type"
 )
 
-
 func setupTestVault(t *testing.T) *vault.Vault {
 	t.Helper()
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, "test.bolt"))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf("create vault: %v", err)
 	}

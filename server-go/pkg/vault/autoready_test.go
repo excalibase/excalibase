@@ -12,7 +12,7 @@ import (
 func TestEnsureReady_FirstRunInitsAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "unseal.key")
-	v, err := New(filepath.Join(dir, testVaultFile))
+	v, err := NewWithStore(NewMemoryStore())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -33,21 +33,21 @@ func TestEnsureReady_FirstRunInitsAndPersists(t *testing.T) {
 	}
 }
 
-// A restart re-opens the same bbolt file (initialized but sealed) and must
+// A restart re-opens the same store (initialized but sealed) and must
 // auto-unseal from the persisted key.
 func TestEnsureReady_RestartUnsealsFromFile(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "unseal.key")
-	vaultPath := filepath.Join(dir, testVaultFile)
+	store := NewMemoryStore()
 
-	v1, _ := New(vaultPath)
+	v1, _ := NewWithStore(store)
 	if err := EnsureReady(v1, keyPath, ""); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 	v1.Close()
 
-	// Simulate restart: same file, fresh handle → initialized but sealed.
-	v2, err := New(vaultPath)
+	// Simulate restart: same store, fresh handle → initialized but sealed.
+	v2, err := NewWithStore(store)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -67,10 +67,10 @@ func TestEnsureReady_RestartUnsealsFromFile(t *testing.T) {
 func TestEnsureReady_RestartUnsealsFromEnvKey(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "unseal.key")
-	vaultPath := filepath.Join(dir, testVaultFile)
+	store := NewMemoryStore()
 
 	// First init WITHOUT persisting to file: operator will hold the key.
-	v1, _ := New(vaultPath)
+	v1, _ := NewWithStore(store)
 	res, err := v1.Init(1, 1)
 	if err != nil {
 		t.Fatalf("init: %v", err)
@@ -78,7 +78,7 @@ func TestEnsureReady_RestartUnsealsFromEnvKey(t *testing.T) {
 	envKey := res.Shares[0]
 	v1.Close()
 
-	v2, _ := New(vaultPath)
+	v2, _ := NewWithStore(store)
 	if err := EnsureReady(v2, keyPath, envKey); err != nil {
 		t.Fatalf("EnsureReady with env key: %v", err)
 	}
@@ -90,14 +90,14 @@ func TestEnsureReady_RestartUnsealsFromEnvKey(t *testing.T) {
 // Sealed with no key available anywhere → clear error, not a silent bad state.
 func TestEnsureReady_SealedNoKeyErrors(t *testing.T) {
 	dir := t.TempDir()
-	vaultPath := filepath.Join(dir, testVaultFile)
-	v1, _ := New(vaultPath)
+	store := NewMemoryStore()
+	v1, _ := NewWithStore(store)
 	if _, err := v1.Init(1, 1); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	v1.Close()
 
-	v2, _ := New(vaultPath)
+	v2, _ := NewWithStore(store)
 	// No env key, no key file → cannot unseal.
 	if err := EnsureReady(v2, filepath.Join(dir, "missing.key"), ""); err == nil {
 		t.Error("expected an error when sealed with no unseal key available")

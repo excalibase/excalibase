@@ -2,7 +2,6 @@ package vaultclient
 
 import (
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/handler/vaultapi"
@@ -11,19 +10,17 @@ import (
 )
 
 const (
-	testVaultHost      = "app-a-postgres-rw.ns-app-a.svc.cluster.local"
-	testVaultCredsPath = "projects/org-a/app-a/credentials/admin"
-	testIntegSecretPath     = "test/secret"
+	testVaultHost       = "app-a-postgres-rw.ns-app-a.svc.cluster.local"
+	testVaultCredsPath  = "projects/org-a/app-a/credentials/admin"
+	testIntegSecretPath = "test/secret"
 )
-
 
 // Integration tests: vault service (handler) ↔ HTTP client ↔ platform operations
 // Simulates the full flow: platform stores credentials in vault, auth/graphql reads them.
 
 func setupIntegrationServer(t *testing.T, tokens []string) (*httptest.Server, *vault.Vault) {
 	t.Helper()
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, "int-test.bolt"))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf("create vault: %v", err)
 	}

@@ -17,11 +17,6 @@ var (
 	ErrNotInitialized = errors.New("vault is not initialized")
 	ErrAlreadyInit    = errors.New("vault is already initialized")
 	ErrNotFound       = errors.New("secret not found")
-
-	bucketBarrier = []byte("barrier")
-	bucketSecrets = []byte("secrets")
-	keyBarrier    = []byte("barrier_key")
-	keyMeta       = []byte("meta")
 )
 
 type Vault struct {
@@ -63,16 +58,7 @@ type barrierMeta struct {
 	Shares           int    `json:"shares"`
 }
 
-// New creates a vault with bbolt backend (local dev).
-func New(path string) (*Vault, error) {
-	store, err := NewBoltStore(path)
-	if err != nil {
-		return nil, err
-	}
-	return newVault(store)
-}
-
-// NewWithStore creates a vault with any VaultStore backend.
+// NewWithStore creates a vault on the given VaultStore backend.
 func NewWithStore(store VaultStore) (*Vault, error) {
 	return newVault(store)
 }

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -99,8 +98,7 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 	}
 
 	// 2. Create + init + unseal vault, store credentials
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, testVaultFile))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf("new vault: %v", err)
 	}
@@ -703,8 +701,7 @@ func TestSchemaHandler_DropFunction(t *testing.T) {
 
 func TestSchemaHandler_VaultSealed(t *testing.T) {
 	// Create vault, init and then seal it
-	dir := t.TempDir()
-	v, _ := vault.New(filepath.Join(dir, testVaultFile))
+	v, _ := vault.NewWithStore(vault.NewMemoryStore())
 	initResult, _ := v.Init(5, 3)
 	// Unseal first (to get a valid state), then seal
 	for _, share := range initResult.Shares[:3] {
@@ -725,8 +722,7 @@ func TestSchemaHandler_VaultSealed(t *testing.T) {
 }
 
 func TestSchemaHandler_ProjectNotFound(t *testing.T) {
-	dir := t.TempDir()
-	v, _ := vault.New(filepath.Join(dir, testVaultFile))
+	v, _ := vault.NewWithStore(vault.NewMemoryStore())
 	initResult, _ := v.Init(5, 3)
 	for _, share := range initResult.Shares[:3] {
 		if _, err := v.Unseal(share); err != nil {

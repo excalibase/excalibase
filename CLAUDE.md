@@ -14,8 +14,8 @@ Excalibase Provisioning — database provisioning platform written in Go. Provis
 # Build Go server
 cd server-go && go build -o excalibase-server ./cmd/server/
 
-# Self-hosted mode (default) — SQLite + bbolt vault, single default org, no tier enforcement
-PORT=24005 STORAGE_PATH=../provisioning-data CORS_ORIGINS=http://localhost:5173 ./excalibase-server
+# Self-hosted mode (default) — Postgres platform DB + Postgres vault, single default org, no tier enforcement
+PORT=24005 PLATFORM_DB_URL=postgres://platform:pass@localhost:5432/platform STORAGE_PATH=../provisioning-data CORS_ORIGINS=http://localhost:5173 ./excalibase-server
 
 # Cloud mode — Postgres platform DB + Postgres-backed vault, multi-tenant, tier enforcement
 DEPLOYMENT_MODE=cloud PLATFORM_DB_URL=postgres://platform:pass@localhost:5432/platform ./excalibase-server
@@ -23,7 +23,7 @@ DEPLOYMENT_MODE=cloud PLATFORM_DB_URL=postgres://platform:pass@localhost:5432/pl
 # Docker provisioner mode (Postgres in containers instead of CNPG clusters)
 PROVISIONER_MODE=docker DOCKER_HOST=unix:///var/run/docker.sock ./excalibase-server
 
-# Remote vault service (HTTP) instead of in-process bbolt
+# Remote vault service (HTTP) instead of in-process Postgres-backed vault
 VAULT_URL=http://vault:8200 VAULT_PAT=excali_... ./excalibase-server
 
 # Run tests (fast, unit only — excludes k8s integration)
@@ -48,8 +48,8 @@ Clean architecture with strict layer separation:
 ```
 Handler (HTTP) → Service (business logic) → Provisioner (strategy) → K8s Client (client-go)
                                                                   → Docker Client
-                                           → Storage (SQLite or Postgres)
-                                           → Vault (in-process bbolt or HTTP)
+                                           → Storage (Postgres)
+                                           → Vault (in-process Postgres-backed or HTTP)
                                            → PgDog Notifier (NATS)
                                            → Edge Function Runtime (Deno HTTP)
 ```
@@ -77,7 +77,7 @@ server-go/
 │   │   └── postgres/            # Postgres store (cloud)
 │   ├── security/                # AES-256-GCM for filesystem state
 │   ├── middleware/              # CORS, security headers, TenantContext
-│   └── vault/                   # In-process Shamir vault (bbolt + AES-256-GCM)
+│   └── vault/                   # In-process Shamir vault (Postgres + AES-256-GCM)
 charts/
 ├── platform-base/               # CNPG platform-db cluster (3 instances, S3 backup)
 ├── platform-aio/                # All-in-one chart bundling provisioning + deps
@@ -96,8 +96,8 @@ frontend/                        # React 18 studio (Vite, Tailwind, TanStack)
 ### Self-hosted vs Cloud (platform-wide)
 
 `DEPLOYMENT_MODE` env var (`selfhosted` default, or `cloud`):
-- **Self-hosted**: SQLite store + bbolt vault, default org auto-created at first registration, no tier enforcement, single tenant
-- **Cloud**: Postgres store (`PLATFORM_DB_URL` required) + a vault that is one of (in priority): remote HTTP (`VAULT_URL` set), bbolt fallback. Multi-org create/delete, tier limits enforced. ("Postgres-backed vault" was the original plan; the implemented fallback is bbolt + the standalone HTTP vault service — see `internal/vault/` and `cmd/server/main.go` vault-init switch.)
+- **Self-hosted**: Postgres store + Postgres-backed vault, default org auto-created at first registration, no tier enforcement, single tenant
+- **Cloud**: Postgres store + a vault that is one of (in priority): remote HTTP (`VAULT_URL` set), Postgres-backed in-process (init/unseal by the bootstrap Job). Multi-org create/delete, tier limits enforced. See `cmd/server/vault_wiring.go` and `buildVault` in `cmd/server/main.go`.
 
 ### Strategy Pattern for Database Provisioning
 
@@ -132,16 +132,12 @@ CRDs built as `unstructured.Unstructured` objects via `BuildPostgreSQLCluster()`
 
 ### Storage
 
-Dual-backend storage — switch via `DEPLOYMENT_MODE` (and `PLATFORM_DB_URL` for cloud):
-- **SQLite** (self-hosted): `STORAGE_PATH/excalibase.db`
-- **PostgreSQL** (cloud): CNPG platform-db cluster, auto-migrates on startup
-
-Both implement the same `PlatformStore` interface (InstanceStore + UserStore + TokenStore + OrgStore + PgDogConfigStore + AuditLogStore).
+Postgres-only storage in both modes (`PLATFORM_DB_URL` always required): the CNPG platform-db cluster (or any Postgres), auto-migrates on startup. The `PlatformStore` interface (InstanceStore + UserStore + TokenStore + OrgStore + PgDogConfigStore + AuditLogStore) is implemented by `internal/storage/postgres`; the same connection backs the vault tables (`vault_barrier`, `vault_secrets`).
 
 ### Vault
 
 Two deployment options, both implement the same `VaultClient` interface:
-- **In-process** (default self-hosted) — Shamir secret sharing on a bbolt file at `STORAGE_PATH/vault.bolt`. Setup wizard at `/setup` creates shares and the first admin.
+- **In-process** (default) — Shamir secret sharing on the platform Postgres (`vault_barrier` / `vault_secrets`). On k8s the chart bootstrap Job inits/unseals it in every deployment mode and keeps the share in the `platform-bootstrap` Secret; on the docker provisioner the binary auto-inits with one share persisted to `STORAGE_PATH/unseal.key` (or honours `VAULT_UNSEAL_KEY`). Setup wizard at `/setup` creates the first admin.
 - **Standalone HTTP** — set `VAULT_URL` + `VAULT_PAT` and the server skips local vault init; the local server's `/api/vault/*` routes are not mounted.
 
 Vault paths are org-scoped: `projects/{orgSlug}/{projectId}/credentials/{role}`. Backup S3 creds at `backup/s3`. Vault setup wizard handles share generation + first-admin creation atomically.
@@ -250,7 +246,7 @@ Tier enforcement is bypassed entirely in self-hosted mode.
 - `internal/k8s/crd_builder.go` — CNPG CRD generation
 - `internal/k8s/helm.go` — Helm SDK for watcher + Deno pod deployment
 - `internal/middleware/tenant.go` — TenantContext middleware (resolves project + org)
-- `internal/vault/vault.go` — bbolt + Shamir + AES-256-GCM
+- `pkg/vault/vault.go` — Shamir + AES-256-GCM on any `VaultStore` (`store_postgres.go`; `store_memory.go` for tests)
 - `internal/vaultclient/client.go` — VaultClient interface, HTTP implementation
 
 ## Helm Charts

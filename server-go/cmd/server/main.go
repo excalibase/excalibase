@@ -894,44 +894,32 @@ func buildPlatformStore(cfg config.AppConfig) storage.PlatformStore {
 	return pgStore
 }
 
-// buildVault selects the vault backend (remote HTTP, Postgres-backed Shamir,
-// or bbolt) and returns the client, the local instance (nil for HTTP), and a
-// cleanup function that closes the local vault if any.
+// buildVault selects the vault backend (remote HTTP, or in-process Shamir on
+// the Postgres platform store) and returns the client, the local instance (nil
+// for HTTP), and a cleanup function that closes the local vault if any.
 func buildVault(cfg config.AppConfig, sqlStore storage.PlatformStore) (vaultclient.VaultClient, *vault.Vault, func()) {
-	switch {
-	case cfg.VaultURL != "":
+	if cfg.VaultURL != "" {
 		log.Printf("Using remote vault at %s", cfg.VaultURL)
 		return vaultclient.NewHTTPClient(cfg.VaultURL, cfg.VaultPAT), nil, func() {
 			// no-op cleanup: remote HTTP vault has no local handle to close.
 		}
-	case cfg.IsCloud():
-		pgStoreTyped, ok := sqlStore.(*pgstore.Store)
-		if !ok {
-			log.Fatal("cloud mode requires a Postgres platform store for vault backend")
-		}
-		vaultStore := vault.NewPostgresStore(pgStoreTyped.DB())
-		localVault, vErr := vault.NewWithStore(vaultStore)
-		if vErr != nil {
-			log.Fatalf("Failed to init vault (postgres): %v", vErr)
-		}
-		log.Println("Cloud mode: using PostgreSQL vault store")
-		return localVault, localVault, func() { localVault.Close() }
-	default:
-		vaultPath := cfg.StoragePath + "/vault.bolt"
-		localVault, vErr := vault.New(vaultPath)
-		if vErr != nil {
-			log.Fatalf("Failed to init vault (bbolt): %v", vErr)
-		}
-		// Selfhosted has no bootstrap Job (that's k8s/cloud). Auto-init on first
-		// run and auto-unseal on restart so the platform is usable with zero
-		// operator steps; VAULT_UNSEAL_KEY, if set, is honoured instead of the
-		// on-disk key.
-		if err := vault.EnsureReady(localVault, cfg.StoragePath+"/unseal.key", os.Getenv("VAULT_UNSEAL_KEY")); err != nil {
-			log.Fatalf("Failed to ready vault (bbolt): %v", err)
-		}
-		log.Println("Self-hosted mode: using bbolt vault store (auto-init/unseal)")
-		return localVault, localVault, func() { localVault.Close() }
 	}
+	platformStore, ok := sqlStore.(*pgstore.Store)
+	if !ok {
+		log.Fatal("vault requires the Postgres platform store")
+	}
+	autoReady := localVaultNeedsAutoReady(cfg)
+	localVault, err := newLocalVault(
+		vault.NewPostgresStore(platformStore.DB()),
+		autoReady,
+		cfg.StoragePath+"/unseal.key",
+		os.Getenv("VAULT_UNSEAL_KEY"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to init vault (postgres): %v", err)
+	}
+	log.Printf("Using PostgreSQL vault store (auto-init/unseal at boot: %v)", autoReady)
+	return localVault, localVault, func() { localVault.Close() }
 }
 
 // bootstrapDefaultOrgIfNeeded creates the default org for self-hosted mode

@@ -17,9 +17,9 @@ import (
 //
 // This is the docker/selfhosted equivalent of the k8s bootstrap Job's vault
 // init+unseal step. Cloud/k8s deployments keep using that Job and do not call
-// this. The persisted key sits next to the bbolt file on the same disk — fine
-// for single-tenant selfhosted; operators wanting separation set VAULT_UNSEAL_KEY
-// and remove the file.
+// this. The persisted key lives on the STORAGE_PATH disk while the vault data
+// lives in the platform Postgres — fine for single-tenant selfhosted; operators
+// wanting separation set VAULT_UNSEAL_KEY and remove the file.
 func EnsureReady(v *Vault, keyFilePath, envKey string) error {
 	if !v.Initialized() {
 		res, err := v.Init(1, 1)

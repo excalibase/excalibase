@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,17 +16,16 @@ import (
 )
 
 const (
-	testVaultInitPath   = "/api/vault/init"
-	testVaultUnsealPath = "/api/vault/unseal"
-	testVaultCredsPath  = "/api/vault/secrets/projects/my-app/credentials/admin"
-	testVaultPKIPath    = "/api/vault/pki/public-key"
+	testVaultInitPath    = "/api/vault/init"
+	testVaultUnsealPath  = "/api/vault/unseal"
+	testVaultCredsPath   = "/api/vault/secrets/projects/my-app/credentials/admin"
+	testVaultPKIPath     = "/api/vault/pki/public-key"
 	testVaultTestKeyPath = "/api/vault/secrets/test/key"
-	testExpect503Fmt    = "expected 503, got %d"
-	testVaultRekeyPath  = "/api/vault/rekey"
-	testExpect400Fmt    = "expected 400, got %d"
-	testVaultListPath   = "/api/vault/secrets-list"
+	testExpect503Fmt     = "expected 503, got %d"
+	testVaultRekeyPath   = "/api/vault/rekey"
+	testExpect400Fmt     = "expected 400, got %d"
+	testVaultListPath    = "/api/vault/secrets-list"
 )
-
 
 // fakeAuthMiddleware injects a fake admin user so auth-protected vault routes pass.
 func fakeAuthMiddleware(next http.Handler) http.Handler {
@@ -40,8 +38,7 @@ func fakeAuthMiddleware(next http.Handler) http.Handler {
 
 func setupVaultRouter(t *testing.T) (chi.Router, *vault.Vault) {
 	t.Helper()
-	dir := t.TempDir()
-	v, err := vault.New(filepath.Join(dir, "vault.bolt"))
+	v, err := vault.NewWithStore(vault.NewMemoryStore())
 	if err != nil {
 		t.Fatalf("new vault: %v", err)
 	}

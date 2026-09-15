@@ -13,17 +13,16 @@ databases.
 
 All four support both deployment modes:
 
-- **`DEPLOYMENT_MODE=selfhosted`** (default) — Postgres platform store, bbolt
+- **`DEPLOYMENT_MODE=selfhosted`** (default) — Postgres platform store and
   vault, single default org, no billing/tier enforcement. All features
-  unlocked.
-- **`DEPLOYMENT_MODE=cloud`** — Postgres platform store, Postgres-backed
-  vault, multi-org, tier enforcement.
+  unlocked. On docker the vault auto-inits on first boot and auto-unseals on restart; on k8s the chart bootstrap Job does this.
+- **`DEPLOYMENT_MODE=cloud`** — Postgres platform store and vault, multi-org,
+  tier enforcement. Vault init/unseal is done by the bootstrap Job.
 
-The platform store is **Postgres in both modes** — `PLATFORM_DB_URL` is always
-required (SQLite was removed to avoid maintaining two backends). The only
-mode difference in storage is the vault backend: bbolt (self-hosted) vs
-Postgres (cloud). On a single host, run a Postgres container alongside the
-platform for its own state (see docker-local.md).
+The platform store and the vault are **Postgres in both modes** —
+`PLATFORM_DB_URL` is always required (SQLite and bbolt were removed to avoid
+maintaining two backends). On a single host, run a Postgres container
+alongside the platform for its own state (see docker-local.md).
 
 ## Which matrix should I use?
 
@@ -56,7 +55,7 @@ These apply to every matrix. Matrix-specific pages cover the rest.
 | `CORS_ORIGINS` | yes | `https://app.excalibase.io` | Comma-separated allow-list. No default means no origin allowed — fail-closed. |
 | `PUBLIC_BASE_URL` | yes | `https://api.excalibase.io` | Base URL for edge function invoke + SDK snippets. |
 | `LOG_LEVEL` | no | `debug` | `debug`, `info`, `warn`, `error` |
-| `STORAGE_PATH` | no | `../provisioning-data` | On-disk dir for the bbolt vault. Self-hosted only. |
+| `STORAGE_PATH` | no | `../provisioning-data` | On-disk dir for the auto-generated vault unseal key (`unseal.key`). Docker provisioner only; unused when `VAULT_UNSEAL_KEY` is set or on k8s (the bootstrap Job holds the key). |
 | `PLATFORM_DB_URL` | **yes** | — | Postgres DSN for the platform store. Required in both modes (no SQLite fallback). |
 | `VAULT_URL` | optional | — | If set, use remote vault over HTTP instead of embedded. |
 | `VAULT_PAT` | with `VAULT_URL` | — | Personal access token for remote vault. |

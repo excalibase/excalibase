@@ -3,8 +3,8 @@ package vaultclient
 import (
 	"bytes"
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -20,7 +20,6 @@ const (
 	errVaultStatusFmt = "vault returned %d"
 	errDecodeResponse = "decode response: %w"
 )
-
 
 // VaultClient defines the interface for vault operations.
 // Both *vault.Vault (in-process) and *HTTPClient (remote) satisfy this.
