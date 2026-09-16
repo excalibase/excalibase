@@ -60,6 +60,17 @@ GRANT USAGE ON SCHEMA auth TO %s;
 GRANT SELECT ON ALL TABLES IN SCHEMA auth TO %s;
 ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO %s;
 
+-- Reserved schema for platform bookkeeping (scheduler and cron tables). It is
+-- deliberately outside public, which the generated APIs expose. excalibase_app
+-- needs CREATE here because it both applies the table DDL and moves the legacy
+-- public tables in with ALTER TABLE ... SET SCHEMA, which requires CREATE on
+-- the destination. Owning what it creates also means no default-privilege
+-- grant is required for it to read its own tables afterwards.
+CREATE SCHEMA IF NOT EXISTS excalibase;
+GRANT USAGE, CREATE ON SCHEMA excalibase TO %s;
+GRANT ALL ON ALL TABLES IN SCHEMA excalibase TO %s;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA excalibase TO %s;
+
 -- cdc_watcher: dedicated role with REPLICATION attribute used ONLY by the
 -- watcher daemon to consume the logical slot. No DML grants. Separating
 -- this from excalibase_app means a leaked excalibase_app credential cannot
@@ -89,6 +100,7 @@ ALTER PUBLICATION %s OWNER TO %s;
 		appRole, safeAppPass, // excalibase_app DO block
 		appRole, appRole, appRole, appRole, appRole, // GRANT public
 		appRole, appRole, appRole, // GRANT auth read
+		appRole, appRole, appRole, // GRANT reserved excalibase schema
 		watcherRole, safeWatcherPass, // cdc_watcher DO block
 		schema.QuoteLiteral(publicationName), // pubname check (literal)
 		pubIdent,                             // CREATE PUBLICATION ident

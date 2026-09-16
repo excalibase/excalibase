@@ -71,7 +71,17 @@ const (
 // `function_id` is written by SyncCronJobs at deploy time so a redeploy can
 // scope its DELETE/UPSERT to rows owned by the same function.
 const schedulerDDL = `
-	CREATE SCHEMA IF NOT EXISTS excalibase;
+	-- The create stays behind a catalog guard because the IF NOT EXISTS form
+	-- still checks CREATE on the database even when the schema is already
+	-- there, and the tenant app role deliberately lacks that. Provisioning
+	-- pre-creates the schema, so this only fires on a database provisioned
+	-- before it did.
+	DO $$
+	BEGIN
+		IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'excalibase') THEN
+			EXECUTE 'CREATE SCHEMA excalibase';
+		END IF;
+	END $$;
 	DO $$
 	BEGIN
 		IF to_regclass('public.excalibase_scheduled_functions') IS NOT NULL

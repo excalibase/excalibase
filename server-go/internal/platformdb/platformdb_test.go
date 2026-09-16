@@ -16,9 +16,18 @@ func TestReservedSchemaName(t *testing.T) {
 }
 
 func TestSchedulerDDL_CreatesReservedSchemaFirst(t *testing.T) {
-	create := strings.Index(schedulerDDL, "CREATE SCHEMA IF NOT EXISTS excalibase")
+	// The unguarded form still checks CREATE on the database even when the
+	// schema already exists, and the tenant app role does not have that, so
+	// the create must stay behind a pg_namespace guard.
+	if strings.Contains(schedulerDDL, "CREATE SCHEMA IF NOT EXISTS") {
+		t.Error("scheduler DDL uses CREATE SCHEMA IF NOT EXISTS, which needs CREATE on the database")
+	}
+	create := strings.Index(schedulerDDL, "EXECUTE 'CREATE SCHEMA excalibase'")
 	if create < 0 {
 		t.Fatal("scheduler DDL does not create the reserved schema")
+	}
+	if !strings.Contains(schedulerDDL, "FROM pg_namespace WHERE nspname = 'excalibase'") {
+		t.Error("scheduler DDL creates the reserved schema without a guard")
 	}
 	table := strings.Index(schedulerDDL, "CREATE TABLE IF NOT EXISTS excalibase.")
 	if table < 0 {
