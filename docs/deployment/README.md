@@ -11,6 +11,11 @@ databases.
 | 3 | **Docker local** | Docker host | Same host via `/var/run/docker.sock` | [docker-local.md](./docker-local.md) |
 | 4 | **Docker remote + TLS** | Anywhere | Remote Docker host over TCP + TLS | [docker-remote-tls.md](./docker-remote-tls.md) |
 
+For a production install of matrix 1 with the all-in-one Helm chart
+(`charts/platform-aio` in `excalibase-service`) — prerequisites, secrets,
+install order, day-2 and troubleshooting — follow
+[production-k8s-runbook.md](./production-k8s-runbook.md).
+
 All four support both deployment modes:
 
 - **`DEPLOYMENT_MODE=selfhosted`** (default) — Postgres platform store and
