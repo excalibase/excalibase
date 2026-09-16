@@ -1770,7 +1770,7 @@ async function dispatchScheduler(
     const id = newId();
     const scheduledForMs = Date.now() + Math.max(0, delayMs);
     await sql`
-      INSERT INTO excalibase_scheduled_functions
+      INSERT INTO excalibase.excalibase_scheduled_functions
         (id, project_id, module_name, export_name, args, scheduled_for, status)
       VALUES
         (${id}, ${projectID}, ${ref.moduleName}, ${ref.exportName},
@@ -1786,7 +1786,7 @@ async function dispatchScheduler(
     const args = msg.payload.args ?? {};
     const id = newId();
     await sql`
-      INSERT INTO excalibase_scheduled_functions
+      INSERT INTO excalibase.excalibase_scheduled_functions
         (id, project_id, module_name, export_name, args, scheduled_for, status)
       VALUES
         (${id}, ${projectID}, ${ref.moduleName}, ${ref.exportName},
@@ -1801,7 +1801,7 @@ async function dispatchScheduler(
       throw new Error("scheduler.cancel: id required");
     }
     await sql`
-      UPDATE excalibase_scheduled_functions
+      UPDATE excalibase.excalibase_scheduled_functions
          SET status = 'cancelled'
        WHERE id = ${id} AND status = 'pending'
     `;

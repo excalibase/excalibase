@@ -140,7 +140,7 @@ func listCronRows(t *testing.T, db *sql.DB, projectID string) []map[string]any {
 	t.Helper()
 	rows, err := db.Query(`
 		SELECT name, project_id, module_name, export_name, args, schedule
-		  FROM excalibase_cron_jobs
+		  FROM excalibase.excalibase_cron_jobs
 		 WHERE project_id = $1
 		 ORDER BY name`, projectID)
 	if err != nil {

@@ -19,7 +19,7 @@ func TestCronRunner_EnqueuesNextDueForCronJob(t *testing.T) {
 	// Seed a daily cron — fires at 00:00 UTC every day. We don't care which
 	// concrete time it picks; only that it picks SOMETHING in the future.
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_cron_jobs
+		INSERT INTO excalibase.excalibase_cron_jobs
 		  (name, project_id, module_name, export_name, args, schedule, last_enqueued_at)
 		VALUES
 		  ('daily-digest', 'proj_a', 'jobs', 'sendDigest', '{}',
@@ -34,7 +34,7 @@ func TestCronRunner_EnqueuesNextDueForCronJob(t *testing.T) {
 	}
 	var count int
 	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM excalibase_scheduled_functions
+		`SELECT count(*) FROM excalibase.excalibase_scheduled_functions
 		 WHERE project_id = $1 AND module_name = $2 AND export_name = $3`,
 		"proj_a", "jobs", "sendDigest",
 	).Scan(&count); err != nil {
@@ -45,7 +45,7 @@ func TestCronRunner_EnqueuesNextDueForCronJob(t *testing.T) {
 	}
 	var lastEnqueued *time.Time
 	_ = db.QueryRowContext(ctx,
-		`SELECT last_enqueued_at FROM excalibase_cron_jobs WHERE name = $1 AND project_id = $2`,
+		`SELECT last_enqueued_at FROM excalibase.excalibase_cron_jobs WHERE name = $1 AND project_id = $2`,
 		"daily-digest", "proj_a",
 	).Scan(&lastEnqueued)
 	if lastEnqueued == nil {
@@ -62,7 +62,7 @@ func TestCronRunner_IsIdempotentWithinPeriod(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_cron_jobs
+		INSERT INTO excalibase.excalibase_cron_jobs
 		  (name, project_id, module_name, export_name, args, schedule, last_enqueued_at)
 		VALUES
 		  ('hourly-purge', 'proj_a', 'jobs', 'purge', '{}',
@@ -79,7 +79,7 @@ func TestCronRunner_IsIdempotentWithinPeriod(t *testing.T) {
 	}
 	var count int
 	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM excalibase_scheduled_functions
+		`SELECT count(*) FROM excalibase.excalibase_scheduled_functions
 		 WHERE project_id = $1 AND module_name = $2`,
 		"proj_a", "jobs",
 	).Scan(&count); err != nil {
@@ -99,7 +99,7 @@ func TestCronRunner_HandlesIntervalSchedule(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_cron_jobs
+		INSERT INTO excalibase.excalibase_cron_jobs
 		  (name, project_id, module_name, export_name, args, schedule, last_enqueued_at)
 		VALUES
 		  ('heartbeat', 'proj_b', 'jobs', 'beat', '{}',
@@ -114,7 +114,7 @@ func TestCronRunner_HandlesIntervalSchedule(t *testing.T) {
 	}
 	var count int
 	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM excalibase_scheduled_functions
+		`SELECT count(*) FROM excalibase.excalibase_scheduled_functions
 		 WHERE project_id = $1 AND module_name = $2 AND export_name = $3`,
 		"proj_b", "jobs", "beat",
 	).Scan(&count); err != nil {
@@ -133,7 +133,7 @@ func TestCronRunner_HandlesDailySchedule(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_cron_jobs
+		INSERT INTO excalibase.excalibase_cron_jobs
 		  (name, project_id, module_name, export_name, args, schedule, last_enqueued_at)
 		VALUES
 		  ('daily-x', 'proj_c', 'jobs', 'x', '{}',
@@ -148,7 +148,7 @@ func TestCronRunner_HandlesDailySchedule(t *testing.T) {
 	}
 	var count int
 	_ = db.QueryRowContext(ctx,
-		`SELECT count(*) FROM excalibase_scheduled_functions WHERE project_id = $1`,
+		`SELECT count(*) FROM excalibase.excalibase_scheduled_functions WHERE project_id = $1`,
 		"proj_c",
 	).Scan(&count)
 	if count != 1 {

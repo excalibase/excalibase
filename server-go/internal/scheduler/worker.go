@@ -25,7 +25,7 @@ type WorkerConfig struct {
 	Logger *log.Logger
 }
 
-// Worker drains pending entries from `excalibase_scheduled_functions`. One
+// Worker drains pending entries from `excalibase.excalibase_scheduled_functions`. One
 // worker per replica; FOR UPDATE SKIP LOCKED keeps concurrent workers
 // from double-firing a row.
 type Worker struct {
@@ -108,7 +108,7 @@ func (w *Worker) Tick(ctx context.Context) error {
 }
 
 // pendingRow mirrors the columns claimDue selects out of
-// `excalibase_scheduled_functions`.
+// `excalibase.excalibase_scheduled_functions`.
 type pendingRow struct {
 	ID         string
 	ProjectID  string
@@ -131,7 +131,7 @@ func (w *Worker) claimDue(ctx context.Context) ([]pendingRow, error) {
 
 	rs, err := tx.QueryContext(ctx, `
 		SELECT id, project_id, module_name, export_name, args, attempts
-		  FROM excalibase_scheduled_functions
+		  FROM excalibase.excalibase_scheduled_functions
 		 WHERE status = 'pending' AND scheduled_for <= now()
 		 ORDER BY scheduled_for
 		 LIMIT $1
@@ -161,7 +161,7 @@ func (w *Worker) claimDue(ctx context.Context) ([]pendingRow, error) {
 		ids = append(ids, r.ID)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE excalibase_scheduled_functions
+		UPDATE excalibase.excalibase_scheduled_functions
 		   SET status = 'running'
 		 WHERE id = ANY($1::text[])
 	`, asTextArray(ids)); err != nil {
@@ -181,7 +181,7 @@ func (w *Worker) dispatch(ctx context.Context, r pendingRow) {
 	err := w.invoker.Invoke(ctx, r.ProjectID, r.ModuleName, r.ExportName, r.Args)
 	if err == nil {
 		if _, dbErr := w.db.ExecContext(ctx, `
-			UPDATE excalibase_scheduled_functions
+			UPDATE excalibase.excalibase_scheduled_functions
 			   SET status = 'completed', attempts = attempts + 1
 			 WHERE id = $1
 		`, r.ID); dbErr != nil {
@@ -192,7 +192,7 @@ func (w *Worker) dispatch(ctx context.Context, r pendingRow) {
 	nextAttempts := r.Attempts + 1
 	if nextAttempts >= w.maxAttempts {
 		if _, dbErr := w.db.ExecContext(ctx, `
-			UPDATE excalibase_scheduled_functions
+			UPDATE excalibase.excalibase_scheduled_functions
 			   SET status = 'failed', attempts = $2, last_error = $3
 			 WHERE id = $1
 		`, r.ID, nextAttempts, err.Error()); dbErr != nil {
@@ -202,7 +202,7 @@ func (w *Worker) dispatch(ctx context.Context, r pendingRow) {
 	}
 	backoff := backoffDelay(nextAttempts)
 	if _, dbErr := w.db.ExecContext(ctx, `
-		UPDATE excalibase_scheduled_functions
+		UPDATE excalibase.excalibase_scheduled_functions
 		   SET status = 'pending',
 		       attempts = $2,
 		       last_error = $3,

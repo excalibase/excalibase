@@ -3,7 +3,7 @@
 // Function bundles declare their cron registry via `cronJobs()` from
 // @excalibase/server. The bundler captures the registry as a JSON array
 // of `{name, schedule, fnRef, args}` rows on Function.CronJobs. At deploy
-// time the platform syncs that array to the `excalibase_cron_jobs` table
+// time the platform syncs that array to the `excalibase.excalibase_cron_jobs` table
 // so the CronRunner can find each job at its next due time.
 //
 // The sync runs inside the caller-supplied transaction so it commits or
@@ -87,7 +87,7 @@ func SyncCronJobs(
 // "redeploy without crons.ts" case where no schedules should survive.
 func deleteAllCronRows(ctx context.Context, tx *sql.Tx, projectID, functionID string) error {
 	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM excalibase_cron_jobs
+		DELETE FROM excalibase.excalibase_cron_jobs
 		 WHERE project_id = $1 AND function_id = $2
 	`, projectID, functionID); err != nil {
 		return fmt.Errorf("sync cron: clear function rows: %w", err)
@@ -103,7 +103,7 @@ func deleteStaleCronRows(ctx context.Context, tx *sql.Tx, projectID, functionID 
 		names = append(names, n)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM excalibase_cron_jobs
+		DELETE FROM excalibase.excalibase_cron_jobs
 		 WHERE project_id = $1
 		   AND function_id = $2
 		   AND name <> ALL($3::text[])
@@ -129,7 +129,7 @@ func upsertCronRows(ctx context.Context, tx *sql.Tx, projectID, functionID strin
 			return fmt.Errorf("sync cron: row %q missing fnRef", j.Name)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO excalibase_cron_jobs
+			INSERT INTO excalibase.excalibase_cron_jobs
 			  (name, project_id, function_id, module_name, export_name, args, schedule)
 			VALUES
 			  ($1, $2, $3, $4, $5, $6, $7)

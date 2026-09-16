@@ -357,8 +357,9 @@ func studioURL(cfg config.AppConfig) string {
 
 // startFunctionScheduler boots Phase 8.5's deferred-execution worker +
 // cron runner. The runners poll the platform DB; tenants are responsible
-// for ensuring excalibase_scheduled_functions + excalibase_cron_jobs
-// exist on whichever DB the runners point at. Boot is best-effort —
+// for ensuring excalibase.excalibase_scheduled_functions +
+// excalibase.excalibase_cron_jobs exist on whichever DB the runners point
+// at (the reserved schema, never the tenant's public schema). Boot is best-effort —
 // when the platform DB isn't a real *sql.DB (e.g. SQLite self-hosted),
 // we skip the boot rather than panicking.
 func startFunctionScheduler(sqlStore storage.PlatformStore) *bootstrap.SchedulerHandles {

@@ -2,7 +2,8 @@
 //
 // `ctx.scheduler.runAfter` / `runAt` / `cancel` post RPC messages from the
 // worker; the main thread translates them into INSERT/UPDATE statements on
-// `excalibase_scheduled_functions` in the project database. Calling the
+// `excalibase.excalibase_scheduled_functions` in the project database —
+// the reserved schema, never the tenant's user-facing `public`. Calling the
 // scheduler from a mutation must respect the mutation's transactional
 // boundary — a rollback unrolls the insert too.
 
@@ -19,7 +20,8 @@ async function ensureSchedulerTables(pgUrl: string): Promise<void> {
   const sql = postgres(pgUrl, { onnotice: () => {} });
   try {
     await sql.unsafe(`
-      CREATE TABLE IF NOT EXISTS excalibase_scheduled_functions (
+      CREATE SCHEMA IF NOT EXISTS excalibase;
+      CREATE TABLE IF NOT EXISTS excalibase.excalibase_scheduled_functions (
         id text PRIMARY KEY,
         project_id text NOT NULL,
         module_name text NOT NULL,
@@ -50,7 +52,7 @@ async function queryScheduled(
     // deno-lint-ignore no-explicit-any
     const rows = await (sql as any).unsafe(
       `SELECT id, project_id, module_name, export_name, status, args
-       FROM excalibase_scheduled_functions WHERE ${where}`,
+       FROM excalibase.excalibase_scheduled_functions WHERE ${where}`,
       params,
     );
     return rows as unknown as Array<Record<string, unknown>>;

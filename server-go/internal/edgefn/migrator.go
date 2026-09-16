@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/platformdb"
 )
 
 // nosqlSchemaName is the postgres schema under which the NoSQL tables live.
@@ -56,11 +58,11 @@ func quoteIdent(ident string) string {
 // have their own database, so collisions within nosql.* would only happen
 // across different schemas the user themselves declared.
 //
-// Phase 8: ApplySchema also creates the Phase 8 scheduler/cron tables
-// (`excalibase_scheduled_functions`, `excalibase_cron_jobs`) on every
-// deploy. These tables live at the public schema (not under `nosql.*`)
-// because they are platform metadata, not user data. The DDL is
-// idempotent so re-application is free.
+// Phase 8: ApplySchema also creates the Phase 8 scheduler/cron tables on
+// every deploy. Being platform metadata rather than user data, they live
+// in the reserved `excalibase` schema — not under `nosql.*` and never in
+// the tenant's `public` schema, which the generated APIs expose. The DDL
+// is idempotent so re-application is free.
 func ApplySchema(ctx context.Context, db *sql.DB, projectID string, schema Schema) error {
 	// Short-circuit on empty schema BEFORE any DB access so callers (and
 	// unit tests) can pass a nil DB when there's nothing to migrate.
@@ -282,42 +284,12 @@ func quoteLiteral(s string) string {
 }
 
 // ensureSchedulerTables creates the Phase 8 scheduler bookkeeping tables
-// on the project database. Idempotent: every CREATE uses IF NOT EXISTS
-// so re-application during normal deploys is a no-op.
+// on the project database. Idempotent: every statement is guarded, so
+// re-application during normal deploys is a no-op.
 //
-// Mirrors `scheduler.EnsureTables` — kept duplicated here (rather than
-// imported) so the migrator package stays free of cross-package
-// dependencies on the runtime worker.
+// The DDL lives in internal/platformdb — a dependency-free package shared
+// with the runtime worker's scheduler.EnsureTables, so both call sites get
+// byte-identical schema instead of two copies that drift apart.
 func ensureSchedulerTables(ctx context.Context, db *sql.DB) error {
-	const ddl = `
-		CREATE TABLE IF NOT EXISTS excalibase_scheduled_functions (
-			id text PRIMARY KEY,
-			project_id text NOT NULL,
-			module_name text NOT NULL,
-			export_name text NOT NULL,
-			args jsonb NOT NULL,
-			scheduled_for timestamptz NOT NULL,
-			status text NOT NULL DEFAULT 'pending',
-			attempts int NOT NULL DEFAULT 0,
-			last_error text,
-			created_at timestamptz NOT NULL DEFAULT now()
-		);
-		CREATE INDEX IF NOT EXISTS excalibase_scheduled_functions_due_idx
-			ON excalibase_scheduled_functions (status, scheduled_for)
-			WHERE status = 'pending';
-		CREATE TABLE IF NOT EXISTS excalibase_cron_jobs (
-			name text NOT NULL,
-			project_id text NOT NULL,
-			module_name text NOT NULL,
-			export_name text NOT NULL,
-			args jsonb NOT NULL,
-			schedule jsonb NOT NULL,
-			last_enqueued_at timestamptz,
-			PRIMARY KEY (project_id, name)
-		);
-	`
-	if _, err := db.ExecContext(ctx, ddl); err != nil {
-		return err
-	}
-	return nil
+	return platformdb.EnsureSchedulerTables(ctx, db)
 }
