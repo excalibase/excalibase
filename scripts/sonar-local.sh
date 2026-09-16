@@ -68,6 +68,6 @@ docker run --rm \
   -Dsonar.organization=
 
 echo ""
-echo "[sonar-local] Done. Dashboard: http://localhost:9000/dashboard?id=excalibase_excalibase-provisioning"
+echo "[sonar-local] Done. Dashboard: http://localhost:9000/dashboard?id=excalibase"
 echo "[sonar-local] Stop the server: docker stop ${CONTAINER}"
 echo "[sonar-local] Wipe state: docker rm -f ${CONTAINER} && rm ${TOKEN_FILE}"
