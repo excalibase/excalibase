@@ -122,6 +122,22 @@ nats:
   url: "nats://nats:4222"
   streamName: "CDC"
   subjectPrefix: "cdc"
+
+  # Project-scoped bus credential (EXC-324). The control plane mints these
+  # per project and the watcher may then publish ONLY under its own
+  # cdc.<projectId>.> prefix. Delivered through a Secret, never as a literal
+  # in the rendered Deployment. Leave blank only on a NATS server without
+  # auth_callout.
+  username: ""
+  password: ""
+  existingSecret: ""
+  existingSecretUsernameKey: "nats-username"
+  existingSecretPasswordKey: "nats-password"
+
+  # Request/reply inbox prefix. Must match what the callout grants this
+  # principal, otherwise JetStream publish acks land on a subject the
+  # watcher may not subscribe to and every publish times out.
+  inboxPrefix: ""
   storage: "memory"             # memory | file
   maxAgeMinutes: 60
 

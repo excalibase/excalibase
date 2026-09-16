@@ -545,6 +545,54 @@ production router: every registered `{projectId}` route outside the public
 prefixes must refuse an anonymous caller (401) and a member of another org
 (404).
 
+## 6.5. NATS subject authorization (auth callout)
+
+The message bus is not shared-secret. NATS runs with `auth_callout`, and
+provisioning is the callout responder: it subscribes to `$SYS.REQ.USER.AUTH`,
+verifies the presented username/password against the `nats_credentials` table
+and signs a short user JWT whose subject permissions come from
+`internal/natsauth.PermissionsFor`. An unknown user, a wrong password or an
+unreachable responder means the connection is refused — there is no open
+fallback.
+
+| Principal | Publish | Subscribe |
+|---|---|---|
+| `svc-graphql` | `$JS.API.INFO`, `$JS.API.STREAM.INFO.CDC`, `$JS.API.CONSUMER.>`, `$JS.ACK.>` | `cdc.>`, `policies.>`, `_INBOX_svc-graphql.>` |
+| `svc-provisioning` | `policies.>`, `pgdog.>`, `$JS.API.INFO`, `$JS.API.STREAM.>` | `_INBOX_svc-provisioning.>` |
+| `svc-pgdog` | *(deny all)* | `pgdog.config.reload` |
+| `tenant-watcher:<projectId>` | `cdc.<projectId>.>`, `$JS.API.INFO`, `$JS.API.STREAM.INFO.CDC` | `_INBOX_tw_<projectId>.>` |
+
+A per-tenant watcher therefore cannot subscribe to anything — not `cdc.>`,
+not even its own project's subjects — and cannot publish into another
+project's prefix. Each principal gets its own inbox prefix so request
+replies never land on a subject another tenant may read; the client must set
+the matching prefix (`WATCHER_NATS_INBOX_PREFIX`, `app.nats.inbox-prefix`)
+or every JetStream publish will time out.
+
+Environment on provisioning:
+
+| Variable | Meaning |
+|---|---|
+| `NATS_AUTH_CALLOUT_ISSUER_SEED` | account nkey seed (`SA…`) that signs user JWTs; **enables the responder** |
+| `NATS_AUTH_CALLOUT_USER` / `_PASSWORD` | the credential the responder itself connects with (in the `AUTH` account, exempt from the callout) |
+| `NATS_AUTH_CALLOUT_ACCOUNT` | account clients are placed into (default `APP`) |
+| `NATS_USER` / `NATS_PASSWORD` | provisioning's own bus credential (`svc-provisioning`) |
+| `NATS_GRAPHQL_PASSWORD` / `NATS_PGDOG_PASSWORD` | the other services' passwords; provisioning hashes them into `nats_credentials` at every boot, so the Secret is the single source of truth and rotation is "change the Secret, restart" |
+| `NATS_CDC_STREAM` | shared JetStream stream name (default `CDC`) |
+
+Tenant credentials are minted at provision time, rotated on re-provision and
+deleted on deprovision, so a surviving watcher pod cannot reconnect after its
+project is gone. Only bcrypt hashes are stored; the plaintext exists once, in
+the watcher's Secret in the tenant namespace.
+
+**Runbook — a watcher stops publishing after a re-provision.** Its credential
+was rotated; the pod is holding the old one. `kubectl rollout restart
+deploy/<project>-excalibase-watcher-go -n <tenant-ns>` picks up the new
+Secret. If it still fails, check provisioning's log for
+`NATS auth callout disabled` (the issuer seed is missing, so *every*
+connection is being refused) and confirm the `platform-nats` Secret was
+seeded by the bootstrap Job.
+
 ## 7. Image upgrade
 
 The 5 images that ship in lockstep:

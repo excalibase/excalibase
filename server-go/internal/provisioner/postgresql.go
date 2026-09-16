@@ -11,6 +11,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/natsauth"
 )
 
 const primaryPodSuffix = "-postgres-1"
@@ -425,14 +426,32 @@ func (p *PostgreSQLProvisioner) ConfigureBackup(ctx context.Context, namespace, 
 	return p.client.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, backup)
 }
 
+// WatcherSpec carries everything the per-project CDC watcher needs: its
+// replication role on the tenant database and its own NATS bus identity.
+type WatcherSpec struct {
+	Namespace string
+	ProjectID string
+	DBName    string
+	// Username/Password are the cdc_watcher Postgres role.
+	Username string
+	Password string
+	// NatsUser/NatsPassword are the project-scoped bus credential minted by
+	// the control plane (EXC-324). Blank leaves the watcher unauthenticated,
+	// which only works on a NATS server without auth_callout.
+	NatsUser     string
+	NatsPassword string
+}
+
 // DeployWatcher installs the per-project CDC watcher Helm chart with inline
 // cdc_watcher credentials. Must be called AFTER the role exists (after
 // createProjectRoles). Soft-fails: logs WARN if the chart install errors so
 // provisioning still completes.
-func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, namespace, projectID, dbName, username, password string) error {
+func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, spec WatcherSpec) error {
 	if p.watcherChartPath == "" {
 		return nil
 	}
+	namespace, projectID, dbName := spec.Namespace, spec.ProjectID, spec.DBName
+	username, password := spec.Username, spec.Password
 	values := map[string]interface{}{
 		"postgres": map[string]interface{}{
 			"enabled":           true,
@@ -450,6 +469,14 @@ func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, namespace, pr
 			"streamName":    "CDC",
 			"subjectPrefix": fmt.Sprintf("cdc.%s", projectID),
 			"enabled":       true,
+			// Project-scoped bus credential. The chart puts these in a
+			// Secret in the tenant namespace; they never appear in the
+			// rendered Deployment manifest.
+			"username": spec.NatsUser,
+			"password": spec.NatsPassword,
+			// Replies to this watcher's JetStream publishes land under a
+			// prefix only it may subscribe to (natsauth.PermissionsFor).
+			"inboxPrefix": natsauth.InboxPrefixFor(spec.NatsUser),
 		},
 		"resources": map[string]interface{}{
 			"limits":   map[string]interface{}{"cpu": "200m", "memory": "256Mi"},

@@ -45,6 +45,10 @@ data:
     nats:
       enabled: {{ .Values.nats.enabled }}
       url: {{ .Values.nats.url | quote }}
+      # Credentials come from the Secret via env, never from this ConfigMap.
+      username: ""
+      password: ""
+      inbox_prefix: {{ .Values.nats.inboxPrefix | quote }}
       stream_name: {{ .Values.nats.streamName | quote }}
       subject_prefix: {{ .Values.nats.subjectPrefix | quote }}
       max_age_minutes: {{ .Values.nats.maxAgeMinutes }}

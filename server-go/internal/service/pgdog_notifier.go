@@ -7,11 +7,14 @@ import (
 	"log"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/natsauth"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/nats-io/nats.go"
 )
 
-const pgdogReloadSubject = "pgdog.config.reload"
+// pgdogReloadSubject must stay in step with natsauth.SubjectPgDogReload,
+// which is what the svc-pgdog principal is allowed to subscribe to.
+const pgdogReloadSubject = natsauth.SubjectPgDogReload
 
 // ErrPgDogRoleNotRoutable is returned when a caller tries to expose a role
 // through the shared pooler that is not one of the engine-facing roles.
@@ -40,11 +43,13 @@ type PgDogNotifier struct {
 	nc    *nats.Conn
 }
 
-func NewPgDogNotifier(store storage.PgDogConfigStore, natsURL string) (*PgDogNotifier, error) {
+// NewPgDogNotifier dials NATS. opts carries the svc-provisioning credential
+// and inbox prefix (see natsauth.ClientOptions).
+func NewPgDogNotifier(store storage.PgDogConfigStore, natsURL string, opts ...nats.Option) (*PgDogNotifier, error) {
 	if natsURL == "" {
 		return &PgDogNotifier{store: store}, nil
 	}
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(natsURL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats connect: %w", err)
 	}

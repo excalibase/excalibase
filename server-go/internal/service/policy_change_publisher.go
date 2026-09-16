@@ -23,12 +23,13 @@ type PolicyChangePublisher struct {
 }
 
 // NewPolicyChangePublisher dials NATS. A blank natsURL yields a no-op
-// publisher — useful for local dev / unit tests.
-func NewPolicyChangePublisher(natsURL string) (*PolicyChangePublisher, error) {
+// publisher — useful for local dev / unit tests. opts carries the
+// svc-provisioning credential and inbox prefix (see natsauth.ClientOptions).
+func NewPolicyChangePublisher(natsURL string, opts ...nats.Option) (*PolicyChangePublisher, error) {
 	if natsURL == "" {
 		return &PolicyChangePublisher{}, nil
 	}
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(natsURL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats connect: %w", err)
 	}

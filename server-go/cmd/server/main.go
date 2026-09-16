@@ -21,6 +21,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/metrics"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
+	"github.com/excalibase/provisioning-poc/internal/natsauth"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -31,6 +32,7 @@ import (
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/nats-io/nats.go"
 )
 
 func main() {
@@ -156,7 +158,10 @@ func runServer(cfg config.AppConfig) {
 	stopRepin := fnHandler.StartBYOCRepin(handler.DefaultBYOCRepinInterval)
 	defer stopRepin()
 
-	policyPub, err := service.NewPolicyChangePublisher(cfg.NatsURL)
+	stopCallout := startNatsAuthCallout(cfg, sqlStore)
+	defer stopCallout()
+
+	policyPub, err := service.NewPolicyChangePublisher(cfg.NatsURL, provisioningNatsOptions(cfg)...)
 	if err != nil {
 		log.Printf("WARN: policy change publisher: %v", err)
 	} else {
@@ -548,8 +553,82 @@ func buildProvisioningService(
 	}
 	provSvc.SetLokiURL(cfg.LokiURL)
 
+	wireNatsCredentialMinter(sqlStore, provSvc)
+
 	cleanup := wirePgDogNotifier(cfg, sqlStore, provSvc)
 	return provSvc, cleanup
+}
+
+// wireNatsCredentialMinter lets provisioning issue project-scoped bus
+// credentials (EXC-324). Without a Postgres-backed store there is nowhere to
+// persist the hashes, so watchers stay unauthenticated.
+func wireNatsCredentialMinter(sqlStore storage.PlatformStore, provSvc *service.ProvisioningService) {
+	credStore, ok := sqlStore.(storage.NatsCredentialStore)
+	if !ok {
+		return
+	}
+	provSvc.SetNatsCredentialMinter(service.NewNatsCredentialMinter(credStore))
+}
+
+// startNatsAuthCallout answers the NATS server's auth_callout requests. It is
+// what makes every other principal's credential mean anything: without it a
+// server configured for callout refuses every connection.
+func startNatsAuthCallout(cfg config.AppConfig, sqlStore storage.PlatformStore) func() {
+	noop := func() {
+		// no-op cleanup: the responder was never started.
+	}
+	if cfg.NatsURL == "" || cfg.NatsCalloutIssuerSeed == "" {
+		log.Println("NATS auth callout disabled (no issuer seed)")
+		return noop
+	}
+	credStore, ok := sqlStore.(storage.NatsCredentialStore)
+	if !ok {
+		log.Println("WARN: NATS auth callout needs the Postgres platform store; not started")
+		return noop
+	}
+	// The chart mints the service passwords into a Secret; the callout reads
+	// hashes from the database, so each boot re-derives them from the Secret.
+	if err := natsauth.SeedServicePrincipals(context.Background(), credStore, map[string]string{
+		natsauth.PrincipalProvisioning: cfg.NatsPassword,
+		natsauth.PrincipalGraphQL:      cfg.NatsGraphQLPassword,
+		natsauth.PrincipalPgDog:        cfg.NatsPgDogPassword,
+	}); err != nil {
+		log.Printf("WARN: NATS service credentials not seeded: %v", err)
+	}
+
+	responder, err := natsauth.NewResponder(credStore, cfg.NatsCalloutIssuerSeed, cfg.NatsCalloutAccount, cfg.NatsCDCStream)
+	if err != nil {
+		log.Printf("WARN: NATS auth callout: %v", err)
+		return noop
+	}
+	conn, err := nats.Connect(cfg.NatsURL, nats.UserInfo(cfg.NatsCalloutUser, cfg.NatsCalloutPassword),
+		nats.MaxReconnects(-1), nats.ReconnectWait(2*time.Second))
+	if err != nil {
+		log.Printf("WARN: NATS auth callout connect: %v", err)
+		return noop
+	}
+	if err := responder.Start(conn); err != nil {
+		conn.Close()
+		log.Printf("WARN: NATS auth callout subscribe: %v", err)
+		return noop
+	}
+	log.Println("NATS auth callout responder listening on " + natsauth.CalloutSubject)
+	return func() {
+		responder.Close()
+		conn.Close()
+	}
+}
+
+// provisioningNatsOptions are the dial options provisioning's own publishers
+// use. A configuration error is fatal for the bus, not for the process: the
+// publishers are already best-effort.
+func provisioningNatsOptions(cfg config.AppConfig) []nats.Option {
+	opts, err := natsauth.ClientOptions(cfg.NatsUser, cfg.NatsPassword, cfg.NatsCDCStream)
+	if err != nil {
+		log.Printf("WARN: NATS client options: %v", err)
+		return nil
+	}
+	return opts
 }
 
 // dockerBackupKeyPrefix is where the Docker backup adapter writes a project's
@@ -590,7 +669,7 @@ func wirePgDogNotifier(cfg config.AppConfig, sqlStore storage.PlatformStore, pro
 	if !ok {
 		return noop
 	}
-	pgdogNotifier, err := service.NewPgDogNotifier(pgStore, cfg.NatsURL)
+	pgdogNotifier, err := service.NewPgDogNotifier(pgStore, cfg.NatsURL, provisioningNatsOptions(cfg)...)
 	if err != nil {
 		log.Printf("WARN: pgdog notifier: %v", err)
 		return noop

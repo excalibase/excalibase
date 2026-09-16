@@ -30,6 +30,7 @@ type ProvisioningService struct {
 	k8sClient      k8s.KubeClient           // optional, for role creation via pod exec
 	dockerClient   provisioner.DockerClient // optional, for role creation via container exec (Docker mode)
 	pgdog          *PgDogNotifier           // optional, for PgDog config registration
+	natsCreds      *NatsCredentialMinter    // optional, for project-scoped NATS credentials (EXC-324)
 	selfHostedMode bool                     // skip tier enforcement
 	// publicationName is the CDC publication created during role setup.
 	// Must match watcher's publication_name config and graphql's
@@ -85,6 +86,12 @@ func (s *ProvisioningService) SetVault(v vaultclient.VaultClient) {
 
 func (s *ProvisioningService) SetPgDogNotifier(n *PgDogNotifier) {
 	s.pgdog = n
+}
+
+// SetNatsCredentialMinter enables project-scoped NATS credentials. Nil keeps
+// watchers unauthenticated, which only works without auth_callout.
+func (s *ProvisioningService) SetNatsCredentialMinter(m *NatsCredentialMinter) {
+	s.natsCreds = m
 }
 
 func (s *ProvisioningService) SetPublicationName(name string) {
@@ -662,6 +669,12 @@ func (s *ProvisioningService) releaseProjectResources(ctx context.Context, inst 
 		}
 	}
 
+	// Revoke the project's bus identity so a surviving watcher pod cannot
+	// reconnect and keep publishing after the project is gone.
+	if err := s.natsCreds.RevokeProject(ctx, projectID); err != nil {
+		log.Printf("WARN: nats credential revoke failed for %s: %v", projectID, err)
+	}
+
 	// Delete every vault path scoped to this project. Critical for BYOC where
 	// the credentials are live passwords on an externally managed database —
 	// without this the platform retains them indefinitely after the project
@@ -945,7 +958,22 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, req domain
 	// not the CNPG `app` secret which lacks REPLICATION.
 	if pgProv, ok := s.factory.Get(domain.PostgreSQL); ok {
 		if pg, ok := pgProv.(*provisioner.PostgreSQLProvisioner); ok {
-			if err := pg.DeployWatcher(ctx, namespace, projectID, dbName, "cdc_watcher", watcherPass); err != nil {
+			// Mint the watcher's bus identity before the pod starts. Rotating
+			// here means a re-provision invalidates the old pod's credential.
+			natsUser, natsPass, err := s.natsCreds.MintTenantWatcher(ctx, projectID)
+			if err != nil {
+				return pc.Fail(fmt.Errorf("mint watcher nats credential: %w", err))
+			}
+			spec := provisioner.WatcherSpec{
+				Namespace:    namespace,
+				ProjectID:    projectID,
+				DBName:       dbName,
+				Username:     "cdc_watcher",
+				Password:     watcherPass,
+				NatsUser:     natsUser,
+				NatsPassword: natsPass,
+			}
+			if err := pg.DeployWatcher(ctx, spec); err != nil {
 				log.Printf("WARN: watcher deployment for %s: %v", projectID, err)
 			}
 		}
