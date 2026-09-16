@@ -75,6 +75,13 @@ func (r *Responder) Start(conn *nats.Conn) error {
 	if err != nil {
 		return fmt.Errorf("nats callout subscribe: %w", err)
 	}
+	// Subscribe only buffers the SUB frame. Until the server has registered it,
+	// a connecting client's authorization request reaches no one and the server
+	// times it out as an authorization violation, so Start must not report
+	// readiness before the subscription is live.
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("nats callout subscribe flush: %w", err)
+	}
 	r.conn, r.sub = conn, sub
 	return nil
 }
