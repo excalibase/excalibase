@@ -94,10 +94,12 @@ func TestOperatorSetup_GetStatus(t *testing.T) {
 // verify both happy path and the early-return when store==nil.
 
 type fakePgDogStore struct {
-	databases   []domain.PgDogDatabase
-	users       []domain.PgDogUser
-	registerErr error
-	removeErr   error
+	databases            []domain.PgDogDatabase
+	users                []domain.PgDogUser
+	removedDatabases     []string
+	removedUserDatabases []string
+	registerErr          error
+	removeErr            error
 }
 
 func (f *fakePgDogStore) RegisterPgDogDatabase(_ context.Context, d *domain.PgDogDatabase) error {
@@ -108,8 +110,12 @@ func (f *fakePgDogStore) RegisterPgDogDatabase(_ context.Context, d *domain.PgDo
 	return nil
 }
 
-func (f *fakePgDogStore) RemovePgDogDatabase(_ context.Context, _ string) error {
-	return f.removeErr
+func (f *fakePgDogStore) RemovePgDogDatabase(_ context.Context, name string) error {
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	f.removedDatabases = append(f.removedDatabases, name)
+	return nil
 }
 
 func (f *fakePgDogStore) RegisterPgDogUser(_ context.Context, u *domain.PgDogUser) error {
@@ -120,9 +126,15 @@ func (f *fakePgDogStore) RegisterPgDogUser(_ context.Context, u *domain.PgDogUse
 	return nil
 }
 
-func (f *fakePgDogStore) RemovePgDogUser(_ context.Context, _, _ string) error {
-	return f.removeErr
+func (f *fakePgDogStore) RemovePgDogUsers(_ context.Context, database string) error {
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	f.removedUserDatabases = append(f.removedUserDatabases, database)
+	return nil
 }
+
+var testPgDogAppRole = []PgDogRole{{Name: "excalibase_app", Password: "p"}}
 
 func TestPgDogNotifier_NewWithEmptyURL(t *testing.T) {
 	n, err := NewPgDogNotifier(nil, "")
@@ -147,7 +159,7 @@ func TestPgDogNotifier_NewWithBadURL(t *testing.T) {
 func TestPgDogNotifier_RegisterCluster_NilStore(t *testing.T) {
 	n, _ := NewPgDogNotifier(nil, "")
 	// store==nil branch returns nil without attempting any work.
-	if err := n.RegisterCluster(context.Background(), "p", "ns", "db", "u", "p"); err != nil {
+	if err := n.RegisterCluster(context.Background(), "p", "ns", "db", testPgDogAppRole); err != nil {
 		t.Errorf("expected nil error when store is nil, got %v", err)
 	}
 }
@@ -156,7 +168,8 @@ func TestPgDogNotifier_RegisterCluster_HappyPath(t *testing.T) {
 	store := &fakePgDogStore{}
 	n, _ := NewPgDogNotifier(store, "")
 
-	if err := n.RegisterCluster(context.Background(), "proj-1", "ns-1", "appdb", "appuser", testutil.FixtureSecret("pgdog-cluster")); err != nil {
+	roles := []PgDogRole{{Name: "excalibase_app", Password: testutil.FixtureSecret("pgdog-cluster")}}
+	if err := n.RegisterCluster(context.Background(), "proj-1", "ns-1", "appdb", roles); err != nil {
 		t.Fatalf("RegisterCluster: %v", err)
 	}
 	// Two databases (primary + replica) and one user must be persisted.
@@ -177,7 +190,7 @@ func TestPgDogNotifier_RegisterCluster_StoreError(t *testing.T) {
 	store := &fakePgDogStore{registerErr: errors.New("db down")}
 	n, _ := NewPgDogNotifier(store, "")
 
-	err := n.RegisterCluster(context.Background(), "p", "ns", "db", "u", "p")
+	err := n.RegisterCluster(context.Background(), "p", "ns", "db", testPgDogAppRole)
 	if err == nil {
 		t.Error("expected error when store.RegisterPgDogDatabase fails")
 	}
@@ -185,7 +198,7 @@ func TestPgDogNotifier_RegisterCluster_StoreError(t *testing.T) {
 
 func TestPgDogNotifier_DeregisterCluster_NilStore(t *testing.T) {
 	n, _ := NewPgDogNotifier(nil, "")
-	if err := n.DeregisterCluster(context.Background(), "p", "u"); err != nil {
+	if err := n.DeregisterCluster(context.Background(), "p"); err != nil {
 		t.Errorf("expected nil for nil-store path, got %v", err)
 	}
 }
@@ -196,7 +209,7 @@ func TestPgDogNotifier_DeregisterCluster_StoreErrorsAreLogged(t *testing.T) {
 	store := &fakePgDogStore{removeErr: errors.New("transient")}
 	n, _ := NewPgDogNotifier(store, "")
 
-	if err := n.DeregisterCluster(context.Background(), "p", "u"); err != nil {
+	if err := n.DeregisterCluster(context.Background(), "p"); err != nil {
 		t.Errorf("Deregister should swallow store errors, got %v", err)
 	}
 }

@@ -1,0 +1,155 @@
+diff --git a/pgdog/src/backend/databases.rs b/pgdog/src/backend/databases.rs
+index 3ff2110..4e25198 100644
+--- a/pgdog/src/backend/databases.rs
++++ b/pgdog/src/backend/databases.rs
+@@ -124,10 +124,12 @@ pub async fn cancel_all(database: &str) -> Result<(), Error> {
+ /// If PGDOG_CONFIG_DATABASE_URL is set, reload from Postgres instead of TOML.
+ pub fn reload() -> Result<(), Error> {
+     let new_config = if let Some(db_url) = crate::config::postgres_config_url() {
+-        // Reload from Postgres — run async in a blocking context
++        // Reload from Postgres. `block_on` on a worker thread panics unless the
++        // thread is first moved out of the scheduler with `block_in_place`
++        // (this path is reached from the SIGHUP handler inside the runtime).
+         let rt = tokio::runtime::Handle::current();
+-        rt.block_on(async {
+-            crate::config::from_postgres(&db_url).await
++        tokio::task::block_in_place(|| {
++            rt.block_on(async { crate::config::from_postgres(&db_url).await })
+         })?
+     } else {
+         let old_config = config();
+diff --git a/pgdog/src/config/nats_watcher.rs b/pgdog/src/config/nats_watcher.rs
+index 0f51f03..ce94792 100644
+--- a/pgdog/src/config/nats_watcher.rs
++++ b/pgdog/src/config/nats_watcher.rs
+@@ -5,11 +5,20 @@
+ //! a config reload from the platform-db.
+ //!
+ //! Activated by setting `PGDOG_NATS_URL` env var (e.g. `nats://nats:4222`).
++//!
++//! The payload is never interpreted: a message only schedules a reload from
++//! the config database, so a rogue publisher cannot inject routes. It can
++//! still force pool rebuilds, which is why the connection authenticates
++//! (`PGDOG_NATS_USER`/`PGDOG_NATS_PASSWORD` or `PGDOG_NATS_CREDS_FILE`) and
++//! bursts are coalesced into one reload per `RELOAD_COALESCE` window.
+ 
+ use futures::StreamExt;
++use std::time::Duration;
++use tokio::time::timeout;
+ use tracing::{error, info, warn};
+ 
+ const SUBJECT: &str = "pgdog.config.reload";
++const RELOAD_COALESCE: Duration = Duration::from_millis(500);
+ 
+ /// Start the NATS watcher. Runs forever, reconnects automatically.
+ pub async fn watch(nats_url: &str) {
+@@ -35,8 +44,18 @@ pub async fn watch(nats_url: &str) {
+     };
+ 
+     while let Some(msg) = subscriber.next().await {
+-        let payload = std::str::from_utf8(&msg.payload).unwrap_or("(binary)");
+-        info!("received NATS reload signal: {}", payload);
++        info!("received NATS reload signal ({} bytes)", msg.payload.len());
++
++        // Coalesce a burst (bulk provision, or a flood from a misbehaving
++        // publisher) into a single reload.
++        tokio::time::sleep(RELOAD_COALESCE).await;
++        let mut coalesced = 0usize;
++        while let Ok(Some(_)) = timeout(Duration::ZERO, subscriber.next()).await {
++            coalesced += 1;
++        }
++        if coalesced > 0 {
++            info!("coalesced {} additional reload signals", coalesced);
++        }
+ 
+         // Reload config from Postgres (async) then rebuild pools (sync)
+         if let Some(db_url) = crate::config::postgres_config_url() {
+@@ -60,13 +79,34 @@ pub async fn watch(nats_url: &str) {
+     warn!("NATS subscription ended, config watcher stopped");
+ }
+ 
++fn connect_options() -> async_nats::ConnectOptions {
++    let require_tls = std::env::var("PGDOG_NATS_TLS")
++        .map(|v| v == "true" || v == "1")
++        .unwrap_or(false);
++    let options = async_nats::ConnectOptions::new().require_tls(require_tls);
++
++    if let Ok(creds) = std::env::var("PGDOG_NATS_CREDS_FILE") {
++        match std::fs::read_to_string(&creds) {
++            Ok(contents) => match async_nats::ConnectOptions::with_credentials(&contents) {
++                Ok(with_creds) => return with_creds.require_tls(require_tls),
++                Err(e) => error!("PGDOG_NATS_CREDS_FILE is not a valid NATS creds file: {}", e),
++            },
++            Err(e) => error!("cannot read PGDOG_NATS_CREDS_FILE {}: {}", creds, e),
++        }
++    }
++    if let (Ok(user), Ok(password)) = (
++        std::env::var("PGDOG_NATS_USER"),
++        std::env::var("PGDOG_NATS_PASSWORD"),
++    ) {
++        return options.user_and_password(user, password);
++    }
++    warn!("NATS config watcher is connecting without credentials; set PGDOG_NATS_USER/PGDOG_NATS_PASSWORD or PGDOG_NATS_CREDS_FILE");
++    options
++}
++
+ async fn connect_with_retry(nats_url: &str) -> Option<async_nats::Client> {
+     for attempt in 1..=10 {
+-        match async_nats::ConnectOptions::new()
+-            .require_tls(false)
+-            .connect(nats_url)
+-            .await
+-        {
++        match connect_options().connect(nats_url).await {
+             Ok(client) => {
+                 info!("connected to NATS (attempt {})", attempt);
+                 return Some(client);
+diff --git a/pgdog/src/main.rs b/pgdog/src/main.rs
+index 001b814..0a2e4e8 100644
+--- a/pgdog/src/main.rs
++++ b/pgdog/src/main.rs
+@@ -128,6 +128,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
+     Ok(())
+ }
+ 
++/// With Postgres-backed config every (user, database) row is a tenant route
++/// behind one shared address. `auth_type = trust` would let any client that
++/// knows a role name pick any tenant, and passthrough auth would let a client
++/// mint a pool for a database that was never registered, so both are refused.
++fn refuse_unauthenticated_routing() -> Result<(), Box<dyn std::error::Error>> {
++    let general = &config::config().config.general;
++    if matches!(general.auth_type, config::AuthType::Trust) {
++        return Err("auth_type = trust is not allowed with PGDOG_CONFIG_DATABASE_URL".into());
++    }
++    if general.passthrough_auth() {
++        return Err("passthrough_auth is not allowed with PGDOG_CONFIG_DATABASE_URL".into());
++    }
++    Ok(())
++}
++
+ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Error>> {
+     // Preload TLS. Resulting primitives
+     // are async, so doing this after Tokio launched seems prudent.
+@@ -137,6 +152,7 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
+     if let Some(db_url) = config::postgres_config_url() {
+         info!("loading config from postgres: {}", db_url.split('@').last().unwrap_or("***"));
+         config::from_postgres(&db_url).await?;
++        refuse_unauthenticated_routing()?;
+     }
+ 
+     // Load databases and connect if needed.
+diff --git a/sql/pgdog_config_tables.sql b/sql/pgdog_config_tables.sql
+index 36125df..0716a39 100644
+--- a/sql/pgdog_config_tables.sql
++++ b/sql/pgdog_config_tables.sql
+@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS pgdog_databases (
+     read_only BOOLEAN DEFAULT FALSE,
+     active BOOLEAN DEFAULT TRUE,
+     created_at TIMESTAMPTZ DEFAULT NOW(),
+-    updated_at TIMESTAMPTZ DEFAULT NOW()
++    updated_at TIMESTAMPTZ DEFAULT NOW(),
++    -- one route per (logical db, role, shard); provisioning upserts on it
++    UNIQUE(name, role, shard)
+ );
+ 
+ CREATE TABLE IF NOT EXISTS pgdog_users (

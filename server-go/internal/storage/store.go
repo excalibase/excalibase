@@ -133,5 +133,7 @@ type PgDogConfigStore interface {
 	RegisterPgDogDatabase(ctx context.Context, db *domain.PgDogDatabase) error
 	RemovePgDogDatabase(ctx context.Context, name string) error
 	RegisterPgDogUser(ctx context.Context, user *domain.PgDogUser) error
-	RemovePgDogUser(ctx context.Context, name, database string) error
+	// RemovePgDogUsers drops every user routed to the logical database, so a
+	// deprovision never leaves a stale (user, database) pair behind.
+	RemovePgDogUsers(ctx context.Context, database string) error
 }
