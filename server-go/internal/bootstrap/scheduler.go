@@ -100,6 +100,18 @@ func StartScheduler(ctx context.Context, cfg SchedulerBootConfig) *SchedulerHand
 		logger.Printf("scheduler boot skipped: no DB wired")
 		return &SchedulerHandles{}
 	}
+	if cfg.Invoker == nil && cfg.NewWorker == nil {
+		// Same reasoning as the nil DB above: the default worker dereferences
+		// the invoker for every due task, so starting without one turns the
+		// first scheduled task into a panic instead of a clear failure. A
+		// caller supplying its own worker factory owns that contract itself.
+		logger := cfg.Logger
+		if logger == nil {
+			logger = log.Default()
+		}
+		logger.Printf("scheduler boot skipped: no invoker wired")
+		return &SchedulerHandles{}
+	}
 
 	newWorker := cfg.NewWorker
 	if newWorker == nil {
