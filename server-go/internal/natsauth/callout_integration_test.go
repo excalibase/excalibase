@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -167,13 +168,38 @@ authorization {
 	return path
 }
 
+// permissionRecorder collects the permission violations NATS reports
+// asynchronously. The client invokes the error handler on its own goroutine,
+// so the value is guarded rather than read straight from the test goroutine.
+type permissionRecorder struct {
+	mu        sync.Mutex
+	violation error
+}
+
+func (recorder *permissionRecorder) record(err error) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.violation = err
+}
+
+func (recorder *permissionRecorder) allowed() bool {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return recorder.violation == nil
+}
+
+// attach installs the recorder as the connection's error handler.
+func (recorder *permissionRecorder) attach(conn *nats.Conn) {
+	conn.SetErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) { recorder.record(err) })
+}
+
 // publishAllowed reports whether a publish was accepted. NATS reports
 // permission violations asynchronously, so the connection is flushed and
 // then checked for the error the server pushed back.
 func publishAllowed(t *testing.T, conn *nats.Conn, subject string) bool {
 	t.Helper()
-	var permErr error
-	conn.SetErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) { permErr = err })
+	var recorder permissionRecorder
+	recorder.attach(conn)
 	if err := conn.Publish(subject, []byte("x")); err != nil {
 		return false
 	}
@@ -181,13 +207,13 @@ func publishAllowed(t *testing.T, conn *nats.Conn, subject string) bool {
 		return false
 	}
 	time.Sleep(200 * time.Millisecond)
-	return permErr == nil
+	return recorder.allowed()
 }
 
 func subscribeAllowed(t *testing.T, conn *nats.Conn, subject string) bool {
 	t.Helper()
-	var permErr error
-	conn.SetErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) { permErr = err })
+	var recorder permissionRecorder
+	recorder.attach(conn)
 	sub, err := conn.SubscribeSync(subject)
 	if err != nil {
 		return false
@@ -197,7 +223,7 @@ func subscribeAllowed(t *testing.T, conn *nats.Conn, subject string) bool {
 		return false
 	}
 	time.Sleep(200 * time.Millisecond)
-	return permErr == nil
+	return recorder.allowed()
 }
 
 // TestCallout_TenantWatcherIsConfinedToItsOwnProject is the EXC-324
