@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -42,19 +43,36 @@ type calloutEnv struct {
 	passwords map[string]string
 }
 
-// connectAs dials the server with one principal's minted credential.
+// handshakePingRace is the client error raised when the server pings inside
+// the connect handshake, where the client accepts only a PONG. auth_callout
+// widens that window because the server holds the connection open until the
+// responder answers, so a loaded machine hits it. It says nothing about
+// whether the principal was authorized.
+const handshakePingRace = "expected 'PONG', got 'PING'"
+
+// connectAs dials the server with one principal's minted credential. Only the
+// handshake race above is retried; an authorization refusal is returned as-is
+// so the deny tests still observe a real denial.
 func (e *calloutEnv) connectAs(t *testing.T, principal string) (*nats.Conn, error) {
 	t.Helper()
-	conn, err := nats.Connect(e.url,
-		nats.UserInfo(principal, e.passwords[principal]),
-		nats.Timeout(connectTimeout),
-		nats.MaxReconnects(0),
-	)
-	if err != nil {
-		return nil, err
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		var conn *nats.Conn
+		conn, err = nats.Connect(e.url,
+			nats.UserInfo(principal, e.passwords[principal]),
+			nats.Timeout(connectTimeout),
+			nats.MaxReconnects(0),
+		)
+		if err == nil {
+			t.Cleanup(conn.Close)
+			return conn, nil
+		}
+		if !strings.Contains(err.Error(), handshakePingRace) {
+			return nil, err
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	t.Cleanup(conn.Close)
-	return conn, nil
+	return nil, err
 }
 
 // mustConnectAs fails the test if the principal cannot connect at all.
