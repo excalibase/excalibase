@@ -499,6 +499,18 @@ func wireFunctionEgress(cfg config.AppConfig, sqlStore storage.PlatformStore, fn
 	fnHandler.SetEgressDefaults(defaults)
 }
 
+// wireProjectCors attaches the per-project browser-origin allowlist store
+// (EXC-23). It lives in the platform Postgres; without it the /cors API is
+// unavailable and /info reports no origins, so the data plane sends no CORS
+// headers rather than guessing.
+func wireProjectCors(sqlStore storage.PlatformStore, provHandler *handler.ProvisioningHandler) {
+	if corsStore, ok := sqlStore.(storage.ProjectCorsStore); ok {
+		provHandler.SetCorsStore(corsStore)
+		return
+	}
+	log.Println("WARN: no Postgres platform store — the per-project CORS allowlist API is unavailable")
+}
+
 // buildProvisioningService wires the central provisioning service plus its
 // optional collaborators (backup defaults, PgDog notifier, etc). Returns the
 // service and a cleanup function for any goroutine-owning collaborators.
@@ -762,6 +774,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provHandler := handler.NewProvisioningHandler(provSvc, sqlStore)
 	provHandler.SetEgressGuard(egress)
 	provHandler.SetActivityStore(sqlStore)
+	wireProjectCors(sqlStore, provHandler)
 	activityRecorder := service.NewActivityRecorder(service.ActivityRecorderConfig{Store: sqlStore})
 
 	return &handlerDeps{
@@ -1053,6 +1066,18 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetProjectInfo)
+	})
+	// Browser-origin allowlist (EXC-23): it decides which web apps may call
+	// the project's data plane, so reads and writes carry the same Developer+
+	// gate as the other data-plane authoring surfaces.
+	r.Route("/api/projects/{projectId}/cors", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		r.Use(d.activity)
+		r.Get("/", d.provHandler.GetCors)
+		r.Put("/", d.provHandler.PutCors)
 	})
 	r.Route("/api/projects/{projectId}/realtime", func(r chi.Router) {
 		r.Use(custommw.TenantContext)

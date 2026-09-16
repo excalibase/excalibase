@@ -14,4 +14,8 @@ type ProjectInfo struct {
 	// collection tables to the cdc_watcher publication. v1 defaults to
 	// true; future: per-project override stored on instances row.
 	RealtimeAutoEnable bool `json:"realtimeAutoEnable"`
+	// CorsAllowedOrigins is the project's browser-origin allowlist (EXC-23):
+	// canonical absolute origins, or the single "*" entry. Empty means the
+	// data plane sends no CORS headers for the project. Never null.
+	CorsAllowedOrigins []string `json:"corsAllowedOrigins"`
 }

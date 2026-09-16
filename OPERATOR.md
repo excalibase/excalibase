@@ -405,6 +405,37 @@ refreshed every 10 minutes so a legitimate DNS change is picked up within
 that window. TLS stays `sslmode=require` (encrypted, server certificate
 not verified) — the same mode managed projects use.
 
+## 6.2.1. Browser origins (per-project CORS)
+
+A project's data plane (`/{projectId}/graphql`, `/{projectId}/api/v1/*`
+and the WebSocket upgrades) answers CORS from a **per-project allowlist**,
+not from a global setting. A new project has **no origins**: excalibase-graphql
+sends no `Access-Control-Allow-Origin` for it, so a browser app is blocked
+until the project opts its origins in. Non-browser clients (curl, server
+SDKs, the function runtime) never send `Origin` and are unaffected.
+
+```bash
+# Read / set the allowlist (Developer+ on the org)
+curl -sf -H "Authorization: Bearer $PAT" \
+  "https://<host>/api/projects/<projectId>/cors" | jq
+curl -sf -X PUT -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  "https://<host>/api/projects/<projectId>/cors" \
+  -d '{"allowedOrigins":["https://app.example.com","http://localhost:5173"]}'
+
+# Every origin — has to be said explicitly and on its own
+curl -sf -X PUT -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" \
+  "https://<host>/api/projects/<projectId>/cors" \
+  -d '{"allowedOrigins":["*"],"allowWildcard":true}'
+```
+
+Rules: absolute origins only (`scheme://host[:port]`, no path, no
+subdomain wildcard), lower-cased, default ports dropped, deduplicated,
+max 32. Stored in the platform Postgres (`project_cors_settings`) and
+exposed as `corsAllowedOrigins` on `GET /api/projects/{id}/info`, which
+excalibase-graphql caches for 30 s per project. If provisioning is
+unreachable the data plane keeps serving the last list it saw; a project
+it has never resolved is denied. See [docs/project-cors.md](docs/project-cors.md).
+
 ## 6.3. Pause / resume a project
 
 Pause stops a project's database without deprovisioning it (data and
@@ -486,6 +517,7 @@ and incident response, but a project-bound PAT still confines them.
 | `GET /api/projects/{id}/functions`, `/{fnId}`, `/{fnId}/logs`, `/_metadata`, `/runtime/status` | Viewer | |
 | `POST /api/projects/{id}/functions`, `/{fnId}/invoke`, `DELETE /{fnId}`, `/secrets`, `/egress` | Developer | deploy, invoke, secrets, outbound allowlist |
 | `POST /api/projects/{id}/schema/apply` | Developer | |
+| `GET/PUT /api/projects/{id}/cors` | Developer | browser-origin allowlist the data plane enforces |
 | `/api/projects/{id}/info`, `/realtime/*`, `/storage/*`, `GET /api/alerts/project/{id}` | Viewer | |
 | `/api/orgs/{orgId}/projects/{id}/members` | org member (list) / Admin (change) | project must belong to `{orgId}` |
 | `/api/admin/projects/{id}` | platform permission (`delete`) | platform plane, not the tenant gate |
@@ -549,6 +581,8 @@ Watcher image tag is hard-coded in the provisioner (because it's deployed lazily
 | Auth registration returns 503 "failed to connect to project database" | Stale auth pod with old vault path | `kubectl rollout restart -n excalibase-platform deployment/auth`. |
 | Function `fetch()` fails with `NotCapable: Requires net access to "<host>"` | Host not in the project's egress allowlist (default: no egress) | `PUT /api/projects/<id>/functions/egress` with the host — section 6.1. If the allowlist is set but the call times out on k8s, the NetworkPolicy port set does not cover the target port (entries without a port open 443 only) or the CNI does not enforce policies. |
 | `PUT /functions/egress` returns 400 | Entry outside the Deno `net` grammar or a private / cluster-internal address | The error names the entry; only `host`, `host:port`, `*.suffix[:port]` or public IP literals are accepted. |
+| Browser app gets a CORS error against `/{projectId}/graphql` while curl works | The page's origin is not on the project's allowlist (default: none) | `PUT /api/projects/<id>/cors` with the exact origin the browser sends (`scheme://host[:port]`, no path) — section 6.2.1. Changes reach the data plane within 30 s. |
+| `PUT /cors` returns 400 | Entry is not an absolute origin, carries a path, uses a subdomain wildcard, or `"*"` was sent without `allowWildcard` / alongside other entries | The error names the entry. |
 
 ## 9. Static analysis (Snyk Code + SonarCloud)
 

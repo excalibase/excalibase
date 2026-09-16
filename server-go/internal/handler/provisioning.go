@@ -35,6 +35,9 @@ type ProvisioningHandler struct {
 	egressGuard *byoc.Guard
 	// activity supplies lastSeenAt for GET / list; nil → field omitted.
 	activity storage.ProjectActivityStore
+	// corsStore backs /cors and the corsAllowedOrigins field on /info;
+	// nil → /cors returns 503 and /info reports no origins.
+	corsStore storage.ProjectCorsStore
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {
@@ -432,6 +435,14 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// The data plane resolves CORS from this field and caches it; a read
+	// failure is a 503 so it keeps its last good list rather than a deny.
+	corsOrigins, cerr := h.corsOriginsForInfo(r.Context(), inst.ProjectID)
+	if cerr != nil {
+		httpError(w, "cors allowlist unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	info := domain.ProjectInfo{
 		ProjectID:          inst.ProjectID,
 		ProjectName:        inst.ProjectName,
@@ -439,6 +450,7 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		OrgSlug:            org.Slug,
 		OrgName:            org.Name,
 		RealtimeAutoEnable: true, // v1: hardcoded; per-project override is a future column on instances
+		CorsAllowedOrigins: corsOrigins,
 	}
 
 	writeJSON(w, info)
