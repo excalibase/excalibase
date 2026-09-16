@@ -4,7 +4,7 @@
 // have its job table extracted from the bundle and persisted on the
 // Function record (Go-side, via the bundler scan). The runtime relies on
 // the Go cron runner to translate the registry rows into pending entries
-// on `excalibase_scheduled_functions` at each due time.
+// on `excalibase.excalibase_scheduled_functions` at each due time.
 //
 // These tests stay on the worker side — they confirm that:
 //   * the worker can boot with a bundle that imports cronJobs() without

@@ -62,7 +62,7 @@ func TestSyncCronJobs_RejectsRowMissingSchedule(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM excalibase_cron_jobs").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM excalibase.excalibase_cron_jobs").WillReturnResult(sqlmock.NewResult(0, 0))
 	tx, _ := db.Begin()
 	jobs := []CronJobRow{{Name: "j1"}}
 	jobs[0].FnRef.ModuleName = "m"
@@ -82,7 +82,7 @@ func TestSyncCronJobs_RejectsRowMissingFnRef(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM excalibase_cron_jobs").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM excalibase.excalibase_cron_jobs").WillReturnResult(sqlmock.NewResult(0, 0))
 	tx, _ := db.Begin()
 	jobs := []CronJobRow{{Name: "j1", Schedule: json.RawMessage(`{"kind":"hourly"}`)}}
 	err = SyncCronJobs(context.Background(), tx, "proj", "fn", jobs)
@@ -100,7 +100,7 @@ func TestSyncCronJobs_PropagatesDeleteError(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM excalibase_cron_jobs").
+	mock.ExpectExec("DELETE FROM excalibase.excalibase_cron_jobs").
 		WillReturnError(errors.New("boom"))
 	tx, _ := db.Begin()
 	err = SyncCronJobs(context.Background(), tx, "proj", "fn", nil)
@@ -118,9 +118,9 @@ func TestSyncCronJobs_PropagatesUpsertError(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM excalibase_cron_jobs").
+	mock.ExpectExec("DELETE FROM excalibase.excalibase_cron_jobs").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("INSERT INTO excalibase_cron_jobs").
+	mock.ExpectExec("INSERT INTO excalibase.excalibase_cron_jobs").
 		WillReturnError(errors.New("boom"))
 	tx, _ := db.Begin()
 	row := CronJobRow{

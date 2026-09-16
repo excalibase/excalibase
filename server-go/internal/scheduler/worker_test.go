@@ -111,7 +111,7 @@ func TestWorker_PicksUpAndCompletes(t *testing.T) {
 
 	// Seed: one pending task whose scheduled_for is in the past.
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_scheduled_functions
+		INSERT INTO excalibase.excalibase_scheduled_functions
 		  (id, project_id, module_name, export_name, args, scheduled_for, status, attempts)
 		VALUES
 		  ('task001', 'proj_a', 'jobs', 'send', '{"to":"ada@example.com"}', now() - interval '1 second', 'pending', 0)
@@ -137,7 +137,7 @@ func TestWorker_PicksUpAndCompletes(t *testing.T) {
 	var status string
 	var attempts int
 	if err := db.QueryRowContext(ctx,
-		`SELECT status, attempts FROM excalibase_scheduled_functions WHERE id = $1`,
+		`SELECT status, attempts FROM excalibase.excalibase_scheduled_functions WHERE id = $1`,
 		"task001",
 	).Scan(&status, &attempts); err != nil {
 		t.Fatalf("select: %v", err)
@@ -158,7 +158,7 @@ func TestWorker_DoesNotPickFutureTasks(t *testing.T) {
 	inv := &stubInvoker{}
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_scheduled_functions
+		INSERT INTO excalibase.excalibase_scheduled_functions
 		  (id, project_id, module_name, export_name, args, scheduled_for, status)
 		VALUES
 		  ('future001', 'proj_a', 'jobs', 'send', '{}', now() + interval '1 hour', 'pending')
@@ -192,7 +192,7 @@ func TestWorker_RetriesOnFailureUpToMaxAttempts(t *testing.T) {
 	}}
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_scheduled_functions
+		INSERT INTO excalibase.excalibase_scheduled_functions
 		  (id, project_id, module_name, export_name, args, scheduled_for, status)
 		VALUES
 		  ('retry001', 'proj_a', 'jobs', 'flaky', '{}', now() - interval '1 second', 'pending')
@@ -209,7 +209,7 @@ func TestWorker_RetriesOnFailureUpToMaxAttempts(t *testing.T) {
 			t.Fatalf("tick %d: %v", i, err)
 		}
 		if _, err := db.ExecContext(ctx,
-			`UPDATE excalibase_scheduled_functions SET scheduled_for = now() - interval '1 second' WHERE id = $1 AND status = 'pending'`,
+			`UPDATE excalibase.excalibase_scheduled_functions SET scheduled_for = now() - interval '1 second' WHERE id = $1 AND status = 'pending'`,
 			"retry001",
 		); err != nil {
 			t.Fatalf("rewind %d: %v", i, err)
@@ -219,7 +219,7 @@ func TestWorker_RetriesOnFailureUpToMaxAttempts(t *testing.T) {
 	var attempts int
 	var lastErr sql.NullString
 	if err := db.QueryRowContext(ctx,
-		`SELECT status, attempts, last_error FROM excalibase_scheduled_functions WHERE id = $1`,
+		`SELECT status, attempts, last_error FROM excalibase.excalibase_scheduled_functions WHERE id = $1`,
 		"retry001",
 	).Scan(&status, &attempts, &lastErr); err != nil {
 		t.Fatalf("select: %v", err)
@@ -245,7 +245,7 @@ func TestWorker_SkipsLockedRows(t *testing.T) {
 	inv := &stubInvoker{}
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_scheduled_functions
+		INSERT INTO excalibase.excalibase_scheduled_functions
 		  (id, project_id, module_name, export_name, args, scheduled_for, status)
 		VALUES
 		  ('once001', 'proj_a', 'jobs', 'send', '{}', now() - interval '1 second', 'pending')
@@ -282,7 +282,7 @@ func TestCancel_BlocksDispatchOfPending(t *testing.T) {
 	inv := &stubInvoker{}
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_scheduled_functions
+		INSERT INTO excalibase.excalibase_scheduled_functions
 		  (id, project_id, module_name, export_name, args, scheduled_for, status)
 		VALUES
 		  ('cancel001', 'proj_a', 'jobs', 'send', '{}', now() - interval '1 second', 'pending')
@@ -302,7 +302,7 @@ func TestCancel_BlocksDispatchOfPending(t *testing.T) {
 	}
 	var status string
 	_ = db.QueryRowContext(ctx,
-		`SELECT status FROM excalibase_scheduled_functions WHERE id = $1`,
+		`SELECT status FROM excalibase.excalibase_scheduled_functions WHERE id = $1`,
 		"cancel001",
 	).Scan(&status)
 	if status != "cancelled" {
@@ -318,7 +318,7 @@ func TestCancel_NoopOnCompleted(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO excalibase_scheduled_functions
+		INSERT INTO excalibase.excalibase_scheduled_functions
 		  (id, project_id, module_name, export_name, args, scheduled_for, status)
 		VALUES
 		  ('done001', 'proj_a', 'jobs', 'send', '{}', now(), 'completed')
@@ -331,7 +331,7 @@ func TestCancel_NoopOnCompleted(t *testing.T) {
 	}
 	var status string
 	_ = db.QueryRowContext(ctx,
-		`SELECT status FROM excalibase_scheduled_functions WHERE id = $1`,
+		`SELECT status FROM excalibase.excalibase_scheduled_functions WHERE id = $1`,
 		"done001",
 	).Scan(&status)
 	if status != "completed" {

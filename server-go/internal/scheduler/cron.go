@@ -23,7 +23,7 @@ type CronRunnerConfig struct {
 }
 
 // CronRunner walks the cron registry and enqueues the next due
-// excalibase_scheduled_functions row per job. One CronRunner per replica;
+// excalibase.excalibase_scheduled_functions row per job. One CronRunner per replica;
 // the per-row update to `last_enqueued_at` is the idempotency lock that
 // keeps concurrent runners from double-enqueuing.
 type CronRunner struct {
@@ -81,7 +81,7 @@ func (cr *CronRunner) Run(ctx context.Context) error {
 func (cr *CronRunner) Tick(ctx context.Context) error {
 	rows, err := cr.db.QueryContext(ctx, `
 		SELECT name, project_id, module_name, export_name, args, schedule, last_enqueued_at
-		  FROM excalibase_cron_jobs
+		  FROM excalibase.excalibase_cron_jobs
 		 ORDER BY project_id, name
 	`)
 	if err != nil {
@@ -149,14 +149,14 @@ func (cr *CronRunner) enqueue(
 	defer func() { _ = tx.Rollback() }()
 	id := cr.idGen()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO excalibase_scheduled_functions
+		INSERT INTO excalibase.excalibase_scheduled_functions
 		  (id, project_id, module_name, export_name, args, scheduled_for, status)
 		VALUES ($1, $2, $3, $4, $5, $6, 'pending')
 	`, id, projectID, moduleName, exportName, args, nextDue); err != nil {
 		return fmt.Errorf("insert task: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE excalibase_cron_jobs
+		UPDATE excalibase.excalibase_cron_jobs
 		   SET last_enqueued_at = $3
 		 WHERE project_id = $1 AND name = $2
 	`, projectID, name, nextDue); err != nil {

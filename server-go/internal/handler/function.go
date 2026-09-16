@@ -569,7 +569,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Phase 8.5: sync the bundle's cron registry to excalibase_cron_jobs
+	// Phase 8.5: sync the bundle's cron registry to excalibase.excalibase_cron_jobs
 	// in a transaction that we hold open across the runtime deploy. On
 	// deploy failure we rollback so the table never drifts ahead of the
 	// runtime. On deploy success we commit, making the new schedule
