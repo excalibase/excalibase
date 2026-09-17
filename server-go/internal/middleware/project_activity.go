@@ -67,6 +67,7 @@ var activitySourceBySegment = []struct {
 }{
 	{"rls-policies", SourcePolicyFetch},
 	{"column-policies", SourcePolicyFetch},
+	{"table-grants", SourcePolicyFetch},
 	{"info", SourceInfo},
 	{"functions", SourceFunctions},
 	{"schema", SourceSchema},

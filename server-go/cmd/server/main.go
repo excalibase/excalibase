@@ -167,6 +167,9 @@ func runServer(cfg config.AppConfig) {
 	} else {
 		defer policyPub.Close()
 		deps.rlsPolicyHandler.SetPublisher(policyPub)
+		// Grant + enforcement writes ride the same subject so the engine
+		// evicts cached policies and grants together (EXC-370).
+		deps.tableGrantHandler.SetPublisher(policyPub)
 	}
 
 	scheduler, schedulerStop := startBackupScheduler(cfg, sqlStore, deps.backupHandler)
@@ -410,6 +413,7 @@ type handlerDeps struct {
 	realtimeHandler    *handler.RealtimeHandler
 	fnHandler          *handler.FunctionHandler
 	rlsPolicyHandler   *handler.RlsPolicyHandler
+	tableGrantHandler  *handler.TableGrantHandler
 	tierHandler        *handler.TierHandler
 	capDeps            *capacityDeps
 	rlUnauth           func(http.Handler) http.Handler
@@ -878,6 +882,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		schemaHandler:      newSchemaHandler(vc, store, egress),
 		realtimeHandler:    realtimeHandler,
 		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies()),
+		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants()),
 		tierHandler:        tierHandler,
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
@@ -1001,6 +1006,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 				r.Route("/migrations", func(r chi.Router) { d.migrationHandler.Routes(r) })
 				r.Route("/rls-policies", func(r chi.Router) { d.rlsPolicyHandler.RlsRoutes(r) })
 				r.Route("/column-policies", func(r chi.Router) { d.rlsPolicyHandler.ColumnRoutes(r) })
+				r.Route("/table-grants", func(r chi.Router) { d.tableGrantHandler.Routes(r) })
 			})
 
 			// Admin+ subtrees — backup/restore and full-DB snapshots (dump +
