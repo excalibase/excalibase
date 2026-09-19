@@ -4,13 +4,20 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // deleteBucketPageSize bounds one page of the cascade walk.
 const deleteBucketPageSize = 100
+
+// uploadURLTTL bounds how long a signed PUT stays usable. It is also the
+// floor for how long an unconfirmed object is left alone before the reaper
+// may collect it.
+const uploadURLTTL = 5 * time.Minute
 
 // Service is the platform-db-aware storage layer. It owns the metadata
 // (buckets, objects, quotas) and delegates to an ObjectStore for the actual
@@ -35,6 +42,9 @@ type BucketStore interface {
 	CreateBucket(ctx context.Context, b *Bucket) error
 	GetBucket(ctx context.Context, projectID, name string) (*Bucket, error)
 	ListBuckets(ctx context.Context, projectID string) ([]Bucket, error)
+	// ListAllBuckets spans every project. Only the reaper uses it: finding
+	// abandoned uploads means walking the whole blob plane, not one tenant.
+	ListAllBuckets(ctx context.Context) ([]Bucket, error)
 	DeleteBucket(ctx context.Context, projectID, name string) error
 	// SetBucketStatus records where a bucket is in its lifecycle. Used to
 	// mark a bucket deleting before its bytes go, so a crash mid-cascade is
@@ -142,7 +152,7 @@ func (s *Service) DeleteBucket(ctx context.Context, projectID, name string) erro
 	if err := s.purgeBucketObjects(ctx, projectID, bucket.ID); err != nil {
 		return err
 	}
-	remaining, err := s.objects.ListObjectKeys(ctx, projectID, bucket.ID, 1)
+	remaining, err := s.objects.ListObjects(ctx, projectID, bucket.ID, 1)
 	if err != nil {
 		return fmt.Errorf("verify bucket empty: %w", err)
 	}
@@ -202,13 +212,19 @@ func (s *Service) SignUploadURL(ctx context.Context, projectID, bucketName, tier
 		return nil, err
 	}
 
-	url, expires, err := s.objects.SignedPutURL(ctx, projectID, bucket.ID, req.Key, req.MimeType, 5*time.Minute)
+	mediaType, err := normaliseMIME(req.MimeType)
 	if err != nil {
 		return nil, err
 	}
-	headers := map[string]string{}
-	if req.MimeType != "" {
-		headers["Content-Type"] = req.MimeType
+	url, expires, err := s.objects.SignedPutURL(ctx, projectID, bucket.ID, req.Key, mediaType, req.Size, uploadURLTTL)
+	if err != nil {
+		return nil, err
+	}
+	// The signature covers both headers, so the client must send exactly
+	// these values or the PUT is rejected by the object store itself.
+	headers := map[string]string{
+		"Content-Type":   mediaType,
+		"Content-Length": strconv.FormatInt(req.Size, 10),
 	}
 	return &UploadURLResponse{
 		URL:       url,
@@ -240,51 +256,54 @@ func (s *Service) uploadTarget(ctx context.Context, projectID, bucketName string
 
 // validateUploadRequest enforces per-bucket size limits, MIME allowlists,
 // and per-project storage quotas before a presigned PUT URL is issued.
+// Size and content type are required, not hints: a limit that is only
+// checked when the caller volunteers the metadata is not a limit.
 func (s *Service) validateUploadRequest(ctx context.Context, projectID, tier string, bucket *Bucket, req UploadURLRequest) error {
-	// A negative size would credit the project's quota instead of spending it.
-	if req.Size < 0 {
-		return invalidf("size must not be negative")
+	if req.Size <= 0 {
+		return invalidf("size is required and must be greater than zero")
 	}
-	// Per-bucket file size limit (0 = no limit).
-	if bucket.FileSize > 0 && req.Size > bucket.FileSize {
-		return invalidf("file exceeds bucket size limit %d bytes", bucket.FileSize)
-	}
-	// MIME allowlist (empty = any).
-	if err := s.checkMIMEAllowlist(bucket.AllowedTypes, req.MimeType); err != nil {
+	mediaType, err := normaliseMIME(req.MimeType)
+	if err != nil {
 		return err
 	}
-	// Per-project quota — only block when we have an actual limit AND a size hint.
-	if cap := s.quotaForTier(tier); cap > 0 && req.Size > 0 {
-		used, err := s.store.GetQuotaBytes(ctx, projectID)
-		if err != nil {
-			return fmt.Errorf("read quota: %w", err)
-		}
-		if used+req.Size > cap {
-			return invalidf("project storage quota exceeded (%d / %d bytes)", used, cap)
-		}
+	return s.enforceObjectLimits(ctx, projectID, tier, bucket, req.Size, mediaType)
+}
+
+// enforceObjectLimits applies the per-bucket size cap, the MIME allow-list
+// and the per-project quota to one object. It runs twice per upload: against
+// the declared metadata before a URL is issued, and against what the object
+// store actually holds when the upload is confirmed.
+func (s *Service) enforceObjectLimits(ctx context.Context, projectID, tier string, bucket *Bucket, size int64, mediaType string) error {
+	if size <= 0 {
+		return invalidf("object size must be greater than zero")
+	}
+	if bucket.FileSize > 0 && size > bucket.FileSize {
+		return invalidf("file exceeds bucket size limit %d bytes", bucket.FileSize)
+	}
+	if err := checkMIMEAllowlist(bucket.AllowedTypes, mediaType); err != nil {
+		return err
+	}
+	cap := s.quotaForTier(tier)
+	if cap <= 0 {
+		return nil
+	}
+	used, err := s.store.GetQuotaBytes(ctx, projectID)
+	if err != nil {
+		return fmt.Errorf("read quota: %w", err)
+	}
+	if used+size > cap {
+		return invalidf("project storage quota exceeded (%d / %d bytes)", used, cap)
 	}
 	return nil
 }
 
-// checkMIMEAllowlist returns an error if mimeType is not in the allowlist.
-// An empty allowlist permits any type; a "*/*" entry acts as a wildcard.
-func (s *Service) checkMIMEAllowlist(allowed []string, mimeType string) error {
-	if len(allowed) == 0 || mimeType == "" {
-		return nil
-	}
-	for _, a := range allowed {
-		if a == mimeType || a == "*/*" {
-			return nil
-		}
-	}
-	return invalidf("mime type %q not allowed in bucket", mimeType)
-}
-
-// ConfirmUpload records that a previously-signed upload completed. We
-// trust the size+mime the client reports for now; in v1.2 we'll add a
-// HEAD-back-to-R2 reconciliation in a daily janitor that catches any
-// drift.
-func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, ownerID string, req ConfirmUploadRequest) (*Object, error) {
+// ConfirmUpload records that a previously-signed upload completed. What the
+// caller says it uploaded is not evidence: the size and content type are read
+// back from the object store and the bucket's limits are applied to those.
+// An object that breaks them is deleted and the confirmation refused, so a
+// PUT that dodged the signed URL's constraints cannot become a stored object.
+// Quota is charged the verified size.
+func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, tier, ownerID string, req ConfirmUploadRequest) (*Object, error) {
 	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
 	if err != nil {
 		return nil, err
@@ -292,18 +311,37 @@ func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, owne
 	if req.Size < 0 {
 		return nil, invalidf("size must not be negative")
 	}
+	size, contentType, etag, err := s.objects.HeadObject(ctx, projectID, bucket.ID, req.Key)
+	if err != nil {
+		if errors.Is(err, ErrObjectNotFound) {
+			return nil, invalidf("no object stored at key %q", req.Key)
+		}
+		return nil, fmt.Errorf("inspect uploaded object: %w", err)
+	}
+	mediaType, err := normaliseMIME(contentType)
+	if err != nil {
+		// The store holds something with no usable type; it cannot be
+		// checked against the bucket's allow-list, so it does not stay.
+		return nil, s.rejectStoredObject(ctx, projectID, bucket.ID, req.Key, err)
+	}
+	if err := s.enforceObjectLimits(ctx, projectID, tier, bucket, size, mediaType); err != nil {
+		return nil, s.rejectStoredObject(ctx, projectID, bucket.ID, req.Key, err)
+	}
+
 	id, err := randomID("obj")
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
 	obj := &Object{
-		ID:        id,
-		BucketID:  bucket.ID,
-		Key:       req.Key,
-		Size:      req.Size,
-		MimeType:  req.MimeType,
-		ETag:      req.ETag,
+		ID:       id,
+		BucketID: bucket.ID,
+		Key:      req.Key,
+		Size:     size,
+		MimeType: mediaType,
+		// The caller may carry its own digest (the runtime records a sha256
+		// here); absent that, the store's ETag is what we have.
+		ETag:      firstNonEmpty(req.ETag, etag),
 		OwnerID:   ownerID,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -313,10 +351,30 @@ func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, owne
 	}
 	// Quota is what the platform bills and enforces on; a confirm that
 	// recorded the object but not its bytes would under-count forever.
-	if err := s.store.AddQuotaBytes(ctx, projectID, req.Size); err != nil {
+	if err := s.store.AddQuotaBytes(ctx, projectID, size); err != nil {
 		return nil, fmt.Errorf("charge quota: %w", err)
 	}
 	return obj, nil
+}
+
+// rejectStoredObject removes an object that must not be kept and returns the
+// reason it was rejected. A failed cleanup is reported alongside it rather
+// than hidden — the caller still sees the violation, and the reaper will
+// collect what is left.
+func (s *Service) rejectStoredObject(ctx context.Context, projectID, bucketID, key string, reason error) error {
+	if err := s.objects.DeleteObject(ctx, projectID, bucketID, key); err != nil {
+		return errors.Join(reason, fmt.Errorf("delete rejected object: %w", err))
+	}
+	return reason
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // SignDownloadURL returns either a signed GET URL (private buckets) or

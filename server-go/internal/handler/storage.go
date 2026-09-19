@@ -219,7 +219,12 @@ func (h *StorageHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		ownerID = user.ID
 	}
-	obj, err := h.svc.ConfirmUpload(r.Context(), projectID, bucketName, ownerID, req)
+	tier, err := h.tierFor(projectID)
+	if err != nil {
+		storageError(w, "read project tier", err)
+		return
+	}
+	obj, err := h.svc.ConfirmUpload(r.Context(), projectID, bucketName, tier, ownerID, req)
 	if err != nil {
 		storageError(w, "confirm upload", err)
 		return
@@ -398,12 +403,12 @@ func mintStorageID() (string, error) {
 }
 
 // internalUploadURLRequest — body shape posted by the runtime to
-// /internal/storage/{projectId}/upload-url. ContentType + Size are
-// optional hints used for the signed URL's Content-Type header and the
-// quota preflight respectively.
+// /internal/storage/{projectId}/upload-url. ContentType + Size are required:
+// they are bound into the signed PUT and checked against the project's quota,
+// so an upload with neither cannot be authorised at all.
 type internalUploadURLRequest struct {
-	ContentType string `json:"contentType,omitempty"`
-	Size        int64  `json:"size,omitempty"`
+	ContentType string `json:"contentType"`
+	Size        int64  `json:"size"`
 }
 
 // internalUploadURLResponse — what the runtime expects back. The storage
@@ -465,9 +470,10 @@ func (h *StorageHandler) InternalSignUploadURL(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// internalConfirmUploadRequest records the metadata the client observed
-// after the PUT to the signed URL completed. The storageId comes from
-// the upload-url response; the runtime forwards it verbatim.
+// internalConfirmUploadRequest names the upload that finished. Size and
+// contentType are accepted for wire compatibility with the runtime but no
+// longer believed: the object store is read back for both. Sha256 is the
+// runtime's own digest and is kept as the catalogue ETag.
 type internalConfirmUploadRequest struct {
 	StorageID   string `json:"storageId"`
 	ContentType string `json:"contentType,omitempty"`
@@ -509,11 +515,14 @@ func (h *StorageHandler) InternalConfirmUpload(w http.ResponseWriter, r *http.Re
 	if etagForCatalogue == "" {
 		etagForCatalogue = req.Sha256
 	}
-	_, err := h.svc.ConfirmUpload(r.Context(), projectID, ctxStorageBucket, "" /* ownerID */, storagesvc.ConfirmUploadRequest{
-		Key:      req.StorageID,
-		Size:     req.Size,
-		MimeType: req.ContentType,
-		ETag:     etagForCatalogue,
+	tier, err := h.tierFor(projectID)
+	if err != nil {
+		storageError(w, "read project tier", err)
+		return
+	}
+	_, err = h.svc.ConfirmUpload(r.Context(), projectID, ctxStorageBucket, tier, "" /* ownerID */, storagesvc.ConfirmUploadRequest{
+		Key:  req.StorageID,
+		ETag: etagForCatalogue,
 	})
 	if err != nil {
 		storageError(w, "confirm upload", err)

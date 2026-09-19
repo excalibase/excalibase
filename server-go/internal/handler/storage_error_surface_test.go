@@ -40,11 +40,14 @@ func newStorageRouterWith(store storagesvc.BucketStore) (chi.Router, *StorageHan
 }
 
 func TestInternalStorage_Delete_CatalogueFailureIsNot204(t *testing.T) {
-	r, _ := newStorageRouterWith(&catalogueFailingStore{newInMemoryBucketStoreForTest()})
-	mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/upload-url",
-		`{"contentType":"text/plain","size":4}`)
-	mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/confirm-upload",
-		`{"storageId":"kg2_a","contentType":"text/plain","size":4,"sha256":"d"}`)
+	store := &catalogueFailingStore{newInMemoryBucketStoreForTest()}
+	r, _ := newStorageRouterWith(store)
+	_ = store.CreateBucket(context.Background(), &storagesvc.Bucket{
+		ID: "bkt_cat", ProjectID: testStorageProjectID, Name: ctxStorageBucket,
+	})
+	_ = store.CreateObject(context.Background(), &storagesvc.Object{
+		ID: "obj_cat", BucketID: "bkt_cat", Key: "kg2_a", Size: 4,
+	})
 
 	req := httptest.NewRequest("DELETE", "/internal/storage/"+testStorageProjectID+"/kg2_a", nil)
 	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)

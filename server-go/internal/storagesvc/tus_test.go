@@ -46,6 +46,16 @@ func (m *memBucketStore) GetBucket(_ context.Context, projectID, name string) (*
 func (m *memBucketStore) ListBuckets(_ context.Context, projectID string) ([]Bucket, error) {
 	return nil, nil
 }
+func (m *memBucketStore) ListAllBuckets(_ context.Context) ([]Bucket, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Bucket{}
+	for _, b := range m.buckets {
+		out = append(out, *b)
+	}
+	return out, nil
+}
+
 func (m *memBucketStore) DeleteBucket(_ context.Context, projectID, name string) error { return nil }
 func (m *memBucketStore) SetBucketStatus(_ context.Context, projectID, name, status string) error {
 	return nil
@@ -140,7 +150,7 @@ func TestStartResumableUpload_QuotaExceeded(t *testing.T) {
 	_ = store.CreateBucket(context.Background(), &Bucket{ID: "b1", ProjectID: "proj1", Name: "media"})
 	svc := newTestService(t, store, map[string]int64{"free": 100})
 	_, err := svc.StartResumableUpload(context.Background(), "proj1", "media", "free",
-		UploadURLRequest{Key: "big.bin", Size: 200})
+		UploadURLRequest{Key: "big.bin", MimeType: "application/octet-stream", Size: 200})
 	if err == nil || !strings.Contains(err.Error(), "quota") {
 		t.Fatalf("expected quota error, got %v", err)
 	}

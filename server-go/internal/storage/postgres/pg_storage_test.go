@@ -256,4 +256,31 @@ func TestPgStorage_DeleteObjectReleasesQuotaExactlyOnce(t *testing.T) {
 		t.Errorf("quota after repeat: got %d, want 0", used)
 	}
 	_ = s.DeleteBucket(ctx, project, "files")
+// The storage reaper sweeps every project, so it needs the buckets of all of
+// them, not one tenant's.
+func TestPgStorage_ListAllBucketsSpansProjects(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, b := range []*storagesvc.Bucket{
+		{ID: "bkt_all_a", ProjectID: "proj-all-a", Name: "files", CreatedAt: now, UpdatedAt: now},
+		{ID: "bkt_all_b", ProjectID: "proj-all-b", Name: "files", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := s.CreateBucket(ctx, b); err != nil {
+			t.Fatalf("CreateBucket %s: %v", b.ID, err)
+		}
+	}
+	all, err := s.ListAllBuckets(ctx)
+	if err != nil {
+		t.Fatalf("ListAllBuckets: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, b := range all {
+		seen[b.ID] = true
+	}
+	if !seen["bkt_all_a"] || !seen["bkt_all_b"] {
+		t.Errorf("both projects' buckets should be listed, got %d buckets", len(all))
+	}
+	_ = s.DeleteBucket(ctx, "proj-all-a", "files")
+	_ = s.DeleteBucket(ctx, "proj-all-b", "files")
 }

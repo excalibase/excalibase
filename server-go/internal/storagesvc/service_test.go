@@ -66,6 +66,16 @@ func (m *memStore) ListBuckets(_ context.Context, projectID string) ([]Bucket, e
 	return out, nil
 }
 
+func (m *memStore) ListAllBuckets(_ context.Context) ([]Bucket, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Bucket{}
+	for _, b := range m.buckets {
+		out = append(out, *b)
+	}
+	return out, nil
+}
+
 func (m *memStore) DeleteBucket(_ context.Context, projectID, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -239,7 +249,7 @@ func TestService_QuotaEnforcement(t *testing.T) {
 
 	// 200-byte upload would push over → reject.
 	_, err := svc.SignUploadURL(ctx, testProjX, "files", "FREE", UploadURLRequest{
-		Key: "big.txt", Size: 200,
+		Key: "big.txt", MimeType: "text/plain", Size: 200,
 	})
 	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
 		t.Errorf("expected quota error, got %v", err)
@@ -247,7 +257,7 @@ func TestService_QuotaEnforcement(t *testing.T) {
 
 	// 50-byte upload fits → ok.
 	_, err = svc.SignUploadURL(ctx, testProjX, "files", "FREE", UploadURLRequest{
-		Key: "small.txt", Size: 50,
+		Key: "small.txt", MimeType: "text/plain", Size: 50,
 	})
 	if err != nil {
 		t.Errorf("under-quota upload rejected: %v", err)
@@ -272,7 +282,7 @@ func TestService_BucketSizeLimit(t *testing.T) {
 	})
 
 	_, err := svc.SignUploadURL(ctx, testProjX, "avatars", "FREE", UploadURLRequest{
-		Key: "big.png", Size: 5 * 1024 * 1024,
+		Key: "big.png", MimeType: "image/png", Size: 5 * 1024 * 1024,
 	})
 	if err == nil || !strings.Contains(err.Error(), "size limit") {
 		t.Errorf("expected size-limit error, got %v", err)

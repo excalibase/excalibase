@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"encoding/json"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,14 +14,14 @@ import (
 // not happen. Both routers below run against an object store that refuses
 // every call (closed port), which is the finding's "make R2 reject deletes".
 
-func newFailingStorageInternalRouter(t *testing.T) chi.Router {
+func newFailingStorageInternalRouter(t *testing.T) (chi.Router, *inMemoryBucketStoreForTest) {
 	t.Helper()
-	svc := storagesvc.NewService(newInMemoryBucketStoreForTest(), newOfflineR2(t), nil)
-	h := NewStorageHandler(svc, nil)
+	store := newInMemoryBucketStoreForTest()
+	h := NewStorageHandler(storagesvc.NewService(store, newOfflineR2(t), nil), nil)
 	h.SetRuntimeSecret("the-secret")
 	r := chi.NewRouter()
 	h.InternalRoutes(r)
-	return r
+	return r, store
 }
 
 // newOfflineR2 points the client at a closed local port so every network
@@ -39,20 +39,18 @@ func newOfflineR2(t *testing.T) *storagesvc.R2Client {
 }
 
 func TestInternalStorage_Delete_FailedObjectStoreDeleteIsNot204(t *testing.T) {
-	r := newFailingStorageInternalRouter(t)
-	mint := mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/upload-url",
-		`{"contentType":"text/plain","size":4}`)
-	var minted struct {
-		StorageID string `json:"storageId"`
-	}
-	if err := json.Unmarshal(mint, &minted); err != nil {
-		t.Fatalf("mint decode: %v", err)
-	}
-	mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/confirm-upload",
-		`{"storageId":"`+minted.StorageID+`","contentType":"text/plain","size":4,"sha256":"d"}`)
+	r, store := newFailingStorageInternalRouter(t)
+	// The catalogue row is seeded directly: the point under test is the
+	// delete, and the object store this router talks to answers nothing.
+	_ = store.CreateBucket(context.Background(), &storagesvc.Bucket{
+		ID: "bkt_fail", ProjectID: testStorageProjectID, Name: ctxStorageBucket,
+	})
+	_ = store.CreateObject(context.Background(), &storagesvc.Object{
+		ID: "obj_fail", BucketID: "bkt_fail", Key: "kg2_stuck", Size: 4,
+	})
 
 	req := httptest.NewRequest("DELETE",
-		"/internal/storage/"+testStorageProjectID+"/"+minted.StorageID, nil)
+		"/internal/storage/"+testStorageProjectID+"/kg2_stuck", nil)
 	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

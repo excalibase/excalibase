@@ -120,10 +120,15 @@ func (h *StorageHandler) recordTusUpload(event tusd.HookEvent) (tusd.HTTPRespons
 	if user := auth.GetUser(ctx); user != nil {
 		ownerID = user.ID
 	}
-	if _, err := h.svc.ConfirmUpload(ctx, projectID, bucket, ownerID, storagesvc.ConfirmUploadRequest{
-		Key:      key,
-		Size:     event.Upload.Size,
-		MimeType: event.Upload.MetaData["filetype"],
+	// Size and type come back from the object store, not from the tus
+	// metadata, so a resumable upload is held to the same limits as a
+	// presigned one.
+	tier, err := h.tierFor(projectID)
+	if err != nil {
+		return tusd.HTTPResponse{}, tusd.NewError("ERR_TUS_TIER", errStorageFailed, http.StatusInternalServerError)
+	}
+	if _, err := h.svc.ConfirmUpload(ctx, projectID, bucket, tier, ownerID, storagesvc.ConfirmUploadRequest{
+		Key: key,
 	}); err != nil {
 		return tusd.HTTPResponse{}, err
 	}

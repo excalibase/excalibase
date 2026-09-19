@@ -94,6 +94,16 @@ func (m *inMemoryBucketStoreForTest) ListBuckets(_ context.Context, projectID st
 	return out, nil
 }
 
+func (m *inMemoryBucketStoreForTest) ListAllBuckets(_ context.Context) ([]storagesvc.Bucket, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []storagesvc.Bucket{}
+	for _, b := range m.buckets {
+		out = append(out, *b)
+	}
+	return out, nil
+}
+
 func (m *inMemoryBucketStoreForTest) DeleteBucket(_ context.Context, projectID, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -192,15 +202,22 @@ func (e stringErrorForStorageTest) Error() string { return string(e) }
 // internal routes mounted at /internal/storage. Returns the router plus
 // the bucket store so tests can inspect persistence directly.
 func newStorageInternalRouter(t *testing.T, runtimeSecret string) (chi.Router, *inMemoryBucketStoreForTest) {
+	r, store, _ := newStorageInternalRouterWithBackend(t, runtimeSecret)
+	return r, store
+}
+
+// newStorageInternalRouterWithBackend also hands back the blob plane, so a
+// test can say what the object store really holds before confirming.
+func newStorageInternalRouterWithBackend(t *testing.T, runtimeSecret string) (chi.Router, *inMemoryBucketStoreForTest, *storageBackendStub) {
 	t.Helper()
 	store := newInMemoryBucketStoreForTest()
-	svc := storagesvc.NewServiceWithObjectStore(store, newFakeObjectStoreForTest(), nil)
-	h := NewStorageHandler(svc, nil)
+	backend := newStorageBackendStub()
+	h := NewStorageHandler(newStubbedStorageService(t, store, backend, nil), nil)
 	h.SetRuntimeSecret(runtimeSecret)
 
 	r := chi.NewRouter()
 	h.InternalRoutes(r)
-	return r, store
+	return r, store, backend
 }
 
 const (
@@ -215,7 +232,7 @@ func TestInternalStorage_UploadURL_RejectsMissingRuntimeToken(t *testing.T) {
 	r, _ := newStorageInternalRouter(t, "the-secret")
 	req := httptest.NewRequest("POST",
 		"/internal/storage/"+testStorageProjectID+"/upload-url",
-		bytes.NewReader([]byte(`{"contentType":"image/png"}`)))
+		bytes.NewReader([]byte(`{"contentType":"image/png","size":16}`)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -231,7 +248,7 @@ func TestInternalStorage_UploadURL_RejectsWrongRuntimeToken(t *testing.T) {
 	r, _ := newStorageInternalRouter(t, "the-secret")
 	req := httptest.NewRequest("POST",
 		"/internal/storage/"+testStorageProjectID+"/upload-url",
-		bytes.NewReader([]byte(`{"contentType":"image/png"}`)))
+		bytes.NewReader([]byte(`{"contentType":"image/png","size":16}`)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(runtimeTokenHeader, "wrong-secret")
 	w := httptest.NewRecorder()
@@ -246,7 +263,7 @@ func TestInternalStorage_UploadURL_RejectsWrongRuntimeToken(t *testing.T) {
 // `_ctx_storage` bucket. Subsequent calls reuse the same bucket.
 func TestInternalStorage_UploadURL_AutoProvisionsBucket(t *testing.T) {
 	r, store := newStorageInternalRouter(t, "the-secret")
-	body := []byte(`{"contentType":"image/png"}`)
+	body := []byte(`{"contentType":"image/png","size":16}`)
 	req := httptest.NewRequest("POST",
 		"/internal/storage/"+testStorageProjectID+"/upload-url",
 		bytes.NewReader(body))
@@ -271,8 +288,11 @@ func TestInternalStorage_UploadURL_AutoProvisionsBucket(t *testing.T) {
 	if resp.Method != "PUT" {
 		t.Errorf("method: want PUT, got %q", resp.Method)
 	}
-	if !strings.HasPrefix(resp.URL, "https://") {
-		t.Errorf("url should be https: %q", resp.URL)
+	if !strings.Contains(resp.URL, resp.StorageID) {
+		t.Errorf("signed URL should address the minted storage id: %q", resp.URL)
+	}
+	if !strings.Contains(resp.URL, "content-length") {
+		t.Errorf("signed PUT must bind the content length: %q", resp.URL)
 	}
 	// Bucket auto-created.
 	b, err := store.GetBucket(context.Background(), testStorageProjectID, ctxStorageBucket)
@@ -300,7 +320,7 @@ func TestInternalStorage_UploadURL_AutoProvisionsBucket(t *testing.T) {
 // upload via /confirm-upload), then download-url returns a signed GET URL
 // for that storage id.
 func TestInternalStorage_DownloadURL_RoundTrip(t *testing.T) {
-	r, _ := newStorageInternalRouter(t, "the-secret")
+	r, _, backend := newStorageInternalRouterWithBackend(t, "the-secret")
 
 	// 1. upload-url → get storageId
 	mint := mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/upload-url",
@@ -312,6 +332,7 @@ func TestInternalStorage_DownloadURL_RoundTrip(t *testing.T) {
 	if minted.StorageID == "" {
 		t.Fatalf("no storage id minted")
 	}
+	backend.put(minted.StorageID, 4, "text/plain")
 
 	// 2. confirm-upload (records the metadata row)
 	confirmBody := `{"storageId":"` + minted.StorageID + `","contentType":"text/plain","size":4,"sha256":"deadbeef"}`
@@ -326,8 +347,8 @@ func TestInternalStorage_DownloadURL_RoundTrip(t *testing.T) {
 	if err := json.Unmarshal(dl, &dlResp); err != nil {
 		t.Fatalf("dl decode: %v", err)
 	}
-	if !strings.HasPrefix(dlResp.URL, "https://") {
-		t.Errorf("download URL: want https, got %q", dlResp.URL)
+	if !strings.Contains(dlResp.URL, minted.StorageID) {
+		t.Errorf("download URL should address the storage id, got %q", dlResp.URL)
 	}
 }
 
@@ -351,11 +372,12 @@ func TestInternalStorage_DownloadURL_ReturnsNullOnMissing(t *testing.T) {
 // TestInternalStorage_Metadata_ReturnsRow — once an object is recorded
 // via confirm-upload, GET /metadata/{storageId} returns the metadata row.
 func TestInternalStorage_Metadata_ReturnsRow(t *testing.T) {
-	r, _ := newStorageInternalRouter(t, "the-secret")
+	r, _, backend := newStorageInternalRouterWithBackend(t, "the-secret")
 	mint := mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/upload-url",
 		`{"contentType":"image/jpeg","size":1024}`)
 	var minted struct{ StorageID string `json:"storageId"` }
 	_ = json.Unmarshal(mint, &minted)
+	backend.put(minted.StorageID, 1024, "image/jpeg")
 
 	confirmBody := `{"storageId":"` + minted.StorageID + `","contentType":"image/jpeg","size":1024,"sha256":"abc123"}`
 	mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/confirm-upload", confirmBody)
@@ -408,11 +430,12 @@ func TestInternalStorage_Metadata_ReturnsNullOnMissing(t *testing.T) {
 // TestInternalStorage_Delete_RemovesObject — delete is idempotent: a second
 // DELETE on the same id returns 204 again.
 func TestInternalStorage_Delete_RemovesObject(t *testing.T) {
-	r, _ := newStorageInternalRouter(t, "the-secret")
+	r, _, backend := newStorageInternalRouterWithBackend(t, "the-secret")
 	mint := mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/upload-url",
 		`{"contentType":"text/plain","size":4}`)
 	var minted struct{ StorageID string `json:"storageId"` }
 	_ = json.Unmarshal(mint, &minted)
+	backend.put(minted.StorageID, 4, "text/plain")
 	mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/confirm-upload",
 		`{"storageId":"`+minted.StorageID+`","contentType":"text/plain","size":4,"sha256":"d"}`)
 

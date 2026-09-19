@@ -58,6 +58,26 @@ func (s *Store) ListBuckets(ctx context.Context, projectID string) ([]storagesvc
 	return out, rows.Err()
 }
 
+// ListAllBuckets spans every project, for the storage reaper's sweep.
+func (s *Store) ListAllBuckets(ctx context.Context) ([]storagesvc.Bucket, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, project_id, name, public, file_size_limit, allowed_mime_types, created_at, updated_at
+		 FROM storage_buckets ORDER BY project_id, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []storagesvc.Bucket{}
+	for rows.Next() {
+		b, err := scanBucket(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *b)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) DeleteBucket(ctx context.Context, projectID, name string) error {
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM storage_buckets WHERE project_id = $1 AND name = $2`, projectID, name)

@@ -16,13 +16,17 @@ import (
 // outstanding presigned URL from addressing a later bucket's objects. Names
 // are resolved to ids at the API boundary.
 type ObjectStore interface {
-	SignedPutURL(ctx context.Context, projectID, bucketID, key, mimeType string, ttl time.Duration) (string, time.Time, error)
+	SignedPutURL(ctx context.Context, projectID, bucketID, key, mimeType string, size int64, ttl time.Duration) (string, time.Time, error)
 	SignedGetURL(ctx context.Context, projectID, bucketID, key string, ttl time.Duration) (string, time.Time, error)
 	PublicURL(projectID, bucketID, key string) (string, error)
 	// DeleteObject is idempotent: an object that is already gone is success.
 	DeleteObject(ctx context.Context, projectID, bucketID, key string) error
-	// ListObjectKeys returns up to limit keys stored under the bucket's own
-	// prefix. Used to verify emptiness, so it must never see a neighbouring
-	// bucket's keys.
-	ListObjectKeys(ctx context.Context, projectID, bucketID string, limit int32) ([]string, error)
+	// HeadObject reports what the store actually holds for a key. Returns
+	// ErrObjectNotFound when there is nothing there.
+	HeadObject(ctx context.Context, projectID, bucketID, key string) (size int64, contentType, etag string, err error)
+	// ListObjects returns up to limit objects stored under the bucket's own
+	// prefix, keyed relative to the bucket. Used to verify emptiness before a
+	// bucket's metadata is dropped and to find uploads that were never
+	// confirmed, so it must never see a neighbouring bucket's keys.
+	ListObjects(ctx context.Context, projectID, bucketID string, limit int32) ([]StoredObject, error)
 }

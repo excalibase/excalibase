@@ -17,16 +17,18 @@ import (
 // fails in the pre-create callback before any S3 call, and completion is
 // exercised by invoking the callback directly).
 func newTusStorageRouter(t *testing.T) (chi.Router, *StorageHandler, *inMemoryBucketStoreForTest) {
+	r, h, store, _ := newTusStorageRouterWithBackend(t)
+	return r, h, store
+}
+
+// newTusStorageRouterWithBackend also hands back the blob plane: a resumable
+// upload is confirmed the same way a presigned one is, by reading the stored
+// object back, so the completion test needs a store that holds it.
+func newTusStorageRouterWithBackend(t *testing.T) (chi.Router, *StorageHandler, *inMemoryBucketStoreForTest, *storageBackendStub) {
 	t.Helper()
 	store := newInMemoryBucketStoreForTest()
-	r2, err := storagesvc.NewR2Client(storagesvc.R2Config{
-		AccessKeyID: "k", SecretAccessKey: "s",
-		Endpoint: testR2URL, Bucket: testPlatformBucket,
-	})
-	if err != nil {
-		t.Fatalf("r2 client: %v", err)
-	}
-	svc := storagesvc.NewService(store, r2, nil)
+	backend := newStorageBackendStub()
+	svc := newStubbedStorageService(t, store, backend, nil)
 	h := NewStorageHandler(svc, nil)
 	if err := h.EnableResumableUploads(svc.TusComposer()); err != nil {
 		t.Fatalf("enable resumable uploads: %v", err)
@@ -34,7 +36,7 @@ func newTusStorageRouter(t *testing.T) (chi.Router, *StorageHandler, *inMemoryBu
 
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/storage", func(r chi.Router) { h.Routes(r) })
-	return r, h, store
+	return r, h, store, backend
 }
 
 func TestTus_OptionsReachableUnderProjectPath(t *testing.T) {
@@ -122,8 +124,9 @@ func TestTus_PrepareUpload_BuildsKeyAndKeepsMetadata(t *testing.T) {
 }
 
 func TestTus_RecordUpload_WritesMetadata(t *testing.T) {
-	_, h, store := newTusStorageRouter(t)
+	_, h, store, backend := newTusStorageRouterWithBackend(t)
 	_ = store.CreateBucket(context.Background(), &storagesvc.Bucket{ID: "b1", ProjectID: "proj1", Name: "media"})
+	backend.put("clips/a.mp4", 4096, "video/mp4")
 
 	ctx := context.WithValue(context.Background(), tusProjectCtxKey, "proj1")
 	event := tusd.HookEvent{

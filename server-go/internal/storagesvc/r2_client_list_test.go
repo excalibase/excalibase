@@ -25,7 +25,7 @@ func newStubbedR2(t *testing.T, handler http.HandlerFunc) *R2Client {
 	return c
 }
 
-func TestR2_ListObjectKeys_ReturnsKeysUnderBucketPrefix(t *testing.T) {
+func TestR2_ListObjects_ReturnsKeysUnderBucketPrefix(t *testing.T) {
 	var gotPrefix string
 	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPrefix = r.URL.Query().Get("prefix")
@@ -38,12 +38,16 @@ func TestR2_ListObjectKeys_ReturnsKeysUnderBucketPrefix(t *testing.T) {
 </ListBucketResult>`))
 	})
 
-	keys, err := c.ListObjectKeys(context.Background(), testProjABC, "assets", 10)
+	objects, err := c.ListObjects(context.Background(), testProjABC, "assets", 10)
 	if err != nil {
 		t.Fatalf("ListObjectKeys: %v", err)
 	}
-	if len(keys) != 2 || keys[0] != "projects/proj-abc/buckets/assets/a.txt" {
-		t.Errorf("unexpected keys: %v", keys)
+	if len(objects) != 2 {
+		t.Fatalf("unexpected objects: %v", objects)
+	}
+	// Keys come back relative to the bucket, matching the catalogue's view.
+	if objects[0].Key != "a.txt" && objects[1].Key != "a.txt" {
+		t.Errorf("unexpected keys: %v", objects)
 	}
 	if want := "projects/proj-abc/buckets/assets/"; gotPrefix != want {
 		t.Errorf("listing prefix: got %q, want %q", gotPrefix, want)
@@ -52,31 +56,31 @@ func TestR2_ListObjectKeys_ReturnsKeysUnderBucketPrefix(t *testing.T) {
 
 // limit 0 means "as many as the backend will give"; the request must still
 // carry a valid max-keys rather than asking for zero.
-func TestR2_ListObjectKeys_DefaultsLimit(t *testing.T) {
+func TestR2_ListObjects_DefaultsLimit(t *testing.T) {
 	var gotMaxKeys string
 	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
 		gotMaxKeys = r.URL.Query().Get("max-keys")
 		_, _ = w.Write([]byte(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListBucketResult>`))
 	})
 
-	keys, err := c.ListObjectKeys(context.Background(), testProjABC, "assets", 0)
+	objects, err := c.ListObjects(context.Background(), testProjABC, "assets", 0)
 	if err != nil {
 		t.Fatalf("ListObjectKeys: %v", err)
 	}
-	if len(keys) != 0 {
-		t.Errorf("empty listing should yield no keys, got %v", keys)
+	if len(objects) != 0 {
+		t.Errorf("empty listing should yield no keys, got %v", objects)
 	}
 	if gotMaxKeys == "" || gotMaxKeys == "0" {
 		t.Errorf("max-keys should default to a positive value, got %q", gotMaxKeys)
 	}
 }
 
-func TestR2_ListObjectKeys_ReportsBackendError(t *testing.T) {
+func TestR2_ListObjectsStub_ReportsBackendError(t *testing.T) {
 	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
 	})
-	if _, err := c.ListObjectKeys(context.Background(), testProjABC, "assets", 5); err == nil {
+	if _, err := c.ListObjects(context.Background(), testProjABC, "assets", 5); err == nil {
 		t.Fatal("a refused listing must not read as an empty bucket")
 	}
 }

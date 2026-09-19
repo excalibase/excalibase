@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // errInjectingStore wraps memStore and fails one chosen operation, so the
@@ -16,6 +17,8 @@ type errInjectingStore struct {
 	releaseQuotaErr error
 	getBucketErr    error
 	createObjectErr error
+	quotaReadErr    error
+	listBucketErr   error
 	listObjectsErr  error
 	setStatusErr    error
 	statusWrites    []string
@@ -62,6 +65,20 @@ func (e *errInjectingStore) DeleteObjectAndReleaseQuota(ctx context.Context, pro
 	return e.memStore.DeleteObjectAndReleaseQuota(ctx, projectID, bucketID, key)
 }
 
+func (e *errInjectingStore) GetQuotaBytes(ctx context.Context, projectID string) (int64, error) {
+	if e.quotaReadErr != nil {
+		return 0, e.quotaReadErr
+	}
+	return e.memStore.GetQuotaBytes(ctx, projectID)
+}
+
+func (e *errInjectingStore) ListAllBuckets(ctx context.Context) ([]Bucket, error) {
+	if e.listBucketErr != nil {
+		return nil, e.listBucketErr
+	}
+	return e.memStore.ListAllBuckets(ctx)
+}
+
 func (e *errInjectingStore) AddQuotaBytes(ctx context.Context, projectID string, delta int64) error {
 	if e.quotaErr != nil {
 		return e.quotaErr
@@ -80,10 +97,10 @@ func seedBucket(t *testing.T, svc *Service, blobs *fakeObjectStore, name, key st
 	if err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
-	if _, err := svc.ConfirmUpload(ctx, testProjX, name, "u", ConfirmUploadRequest{Key: key, Size: size}); err != nil {
+	blobs.put(testProjX, bucket.ID, key, size, "text/plain")
+	if _, err := svc.ConfirmUpload(ctx, testProjX, name, "FREE", "u", ConfirmUploadRequest{Key: key}); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
-	blobs.put(testProjX, bucket.ID, key)
 	return bucket
 }
 
@@ -141,7 +158,7 @@ func TestService_DeleteBucket_RefusesWhenUnrecordedBytesRemain(t *testing.T) {
 	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	bucket, _ := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
-	blobs.put(testProjX, bucket.ID, "never-confirmed.bin") // bytes, no row
+	blobs.put(testProjX, bucket.ID, "never-confirmed.bin", 10, "application/octet-stream") // bytes, no row
 
 	err := svc.DeleteBucket(ctx, testProjX, "assets")
 	if err == nil || !strings.Contains(err.Error(), "still holds") {
@@ -161,7 +178,7 @@ func TestService_DeleteBucket_PrefixDoesNotMatchNeighbourBucket(t *testing.T) {
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
 	neighbour, _ := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets2"})
-	blobs.put(testProjX, neighbour.ID, "keep.bin")
+	blobs.put(testProjX, neighbour.ID, "keep.bin", 10, "text/plain")
 
 	if err := svc.DeleteBucket(ctx, testProjX, "assets"); err != nil {
 		t.Fatalf("a neighbour bucket's objects must not block this delete: %v", err)
@@ -184,7 +201,7 @@ func TestService_Uploads_RejectedWhileBucketIsDeleting(t *testing.T) {
 	if _, err := svc.SignUploadURL(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "x", Size: 1}); !errors.Is(err, ErrBucketDeleting) {
 		t.Errorf("SignUploadURL: want ErrBucketDeleting, got %v", err)
 	}
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "assets", "u", ConfirmUploadRequest{Key: "x", Size: 1}); !errors.Is(err, ErrBucketDeleting) {
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "x"}); !errors.Is(err, ErrBucketDeleting) {
 		t.Errorf("ConfirmUpload: want ErrBucketDeleting, got %v", err)
 	}
 	if _, err := svc.StartResumableUpload(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "x", Size: 1}); !errors.Is(err, ErrBucketDeleting) {
@@ -263,12 +280,14 @@ func TestService_DeleteObject_AlreadyGoneIsSuccess(t *testing.T) {
 
 func TestService_ConfirmUpload_ReportsQuotaFailure(t *testing.T) {
 	store := newErrStore()
-	svc := NewServiceWithObjectStore(store, newFakeObjectStore(), nil)
+	blobs := newFakeObjectStore()
+	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
 	store.quotaErr = errors.New("platform db unavailable")
 
-	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "u", ConfirmUploadRequest{Key: "a.txt", Size: 10})
+	blobs.put(testProjX, bucketOf(t, store, "assets"), "a.txt", 10, "text/plain")
+	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"})
 	if err == nil || !strings.Contains(err.Error(), "charge quota") {
 		t.Fatalf("an uncharged upload must not report success, got %v", err)
 	}
@@ -332,7 +351,7 @@ func TestService_ReportsBucketLookupFailure(t *testing.T) {
 		"DeleteBucket":    func() error { return svc.DeleteBucket(ctx, testProjX, "assets") },
 		"DeleteObject":    func() error { return svc.DeleteObject(ctx, testProjX, "assets", "k") },
 		"SignUploadURL":   func() error { _, e := svc.SignUploadURL(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k"}); return e },
-		"ConfirmUpload":   func() error { _, e := svc.ConfirmUpload(ctx, testProjX, "assets", "u", ConfirmUploadRequest{Key: "k"}); return e },
+		"ConfirmUpload":   func() error { _, e := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k"}); return e },
 		"SignDownloadURL": func() error { _, e := svc.SignDownloadURL(ctx, testProjX, "assets", "k"); return e },
 		"ListObjects":     func() error { _, e := svc.ListObjects(ctx, testProjX, "assets", ListObjectsRequest{}); return e },
 	}
@@ -346,12 +365,14 @@ func TestService_ReportsBucketLookupFailure(t *testing.T) {
 
 func TestService_ConfirmUpload_ReportsRecordFailure(t *testing.T) {
 	store := newErrStore()
-	svc := NewServiceWithObjectStore(store, newFakeObjectStore(), nil)
+	blobs := newFakeObjectStore()
+	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
 	store.createObjectErr = errors.New("platform db unavailable")
 
-	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "u", ConfirmUploadRequest{Key: "k", Size: 1})
+	blobs.put(testProjX, bucketOf(t, store, "assets"), "k", 1, "text/plain")
+	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k"})
 	if err == nil || !strings.Contains(err.Error(), "record object") {
 		t.Fatalf("want a record-object failure, got %v", err)
 	}
@@ -454,8 +475,9 @@ func TestService_RejectsNegativeSizes(t *testing.T) {
 	if _, err := svc.SignUploadURL(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k", Size: -1}); err == nil {
 		t.Error("SignUploadURL must refuse a negative size")
 	}
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "assets", "u", ConfirmUploadRequest{Key: "k", Size: -100}); err == nil {
-		t.Error("ConfirmUpload must refuse a negative size")
+	blobs.putAt(testProjX, bucketOf(t, store, "assets"), "k", -100, "text/plain", time.Now().UTC())
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k"}); err == nil {
+		t.Error("ConfirmUpload must refuse an object the store reports with a negative size")
 	}
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 0 {
 		t.Errorf("a negative size must never credit the quota, got %d", used)
@@ -463,4 +485,14 @@ func TestService_RejectsNegativeSizes(t *testing.T) {
 	if _, err := svc.StartResumableUpload(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k", Size: -1}); err == nil {
 		t.Error("StartResumableUpload must refuse a negative size")
 	}
+}
+
+// bucketOf resolves a bucket's id, the identity the blob plane is keyed by.
+func bucketOf(t *testing.T, store BucketStore, name string) string {
+	t.Helper()
+	bucket, err := store.GetBucket(context.Background(), testProjX, name)
+	if err != nil || bucket == nil {
+		t.Fatalf("GetBucket %q: %v", name, err)
+	}
+	return bucket.ID
 }
