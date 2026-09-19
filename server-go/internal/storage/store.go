@@ -2,14 +2,31 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+// ErrProjectExists is returned by InstanceStore.Create when the project id is
+// already registered. A project id identifies a tenant's database, so a
+// collision is always a conflict — never an overwrite of the existing row.
+var ErrProjectExists = errors.New("project id already registered")
+
+// ErrProjectNotFound is returned by InstanceStore.Update when there is no row
+// to update. Update never inserts: a missing row means the caller is working
+// from a stale view.
+var ErrProjectNotFound = errors.New("project not found")
+
 // InstanceStore persists database instance metadata and credentials.
 type InstanceStore interface {
-	Save(instance *domain.DatabaseInstance) error
+	// Create registers a new project. Returns ErrProjectExists when the
+	// project id is taken.
+	Create(instance *domain.DatabaseInstance) error
+	// Update persists changes to an existing project. It never changes the
+	// project's id or its owning org, and returns ErrProjectNotFound when
+	// the row is absent.
+	Update(instance *domain.DatabaseInstance) error
 	FindByProjectID(projectID string) (*domain.DatabaseInstance, error)
 	FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error)
 	FindAll() ([]*domain.DatabaseInstance, error)

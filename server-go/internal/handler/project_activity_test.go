@@ -115,7 +115,7 @@ func getJSON(t *testing.T, r http.Handler, path string) (int, []byte) {
 
 func TestProjectActivity_ProjectScopedCallBumpsLastSeenOncePerWindow(t *testing.T) {
 	r, store, activity := setupActivityRouter(t)
-	_ = store.Save(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
+	_ = store.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
 
 	for i := 0; i < 3; i++ {
 		if code, body := getJSON(t, r, "/api/provision/p1/"); code != http.StatusOK {
@@ -143,8 +143,8 @@ func TestProjectActivity_MissingProjectDoesNotBump(t *testing.T) {
 
 func TestProjectActivity_LastSeenAtExposedOnGetAndList(t *testing.T) {
 	r, store, activity := setupActivityRouter(t)
-	_ = store.Save(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
-	_ = store.Save(&domain.DatabaseInstance{ProjectID: "p2", OrgID: "o", Status: "ACTIVE"})
+	_ = store.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
+	_ = store.Create(&domain.DatabaseInstance{ProjectID: "p2", OrgID: "o", Status: "ACTIVE"})
 	seen := time.Date(2026, 9, 10, 8, 30, 0, 0, time.UTC)
 	_ = activity.TouchProjectActivity(context.Background(), "p1", custommw.SourceFunctions.String(), seen)
 
@@ -179,7 +179,7 @@ func TestProjectActivity_NoStoreLeavesResponsesUnchanged(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(t.TempDir())
 	provSvc := service.NewProvisioningService(store, provisioner.NewFactory(), k8s.NewMockClient())
 	h := NewProvisioningHandler(provSvc, nil)
-	_ = store.Save(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
+	_ = store.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
 
 	r := chi.NewRouter()
 	r.Get("/api/provision/{projectId}", h.GetStatus)

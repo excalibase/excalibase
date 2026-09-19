@@ -74,7 +74,7 @@ func setupPauseHandler(t *testing.T) (*chi.Mux, *storage.FileSystemStore, *fakeP
 
 func TestPauseHandler_Pause_HappyPath(t *testing.T) {
 	r, store, pauser, bk := setupPauseHandler(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: "ACTIVE",
 		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "container-p1",
 	})
@@ -107,7 +107,7 @@ func TestPauseHandler_Pause_HappyPath(t *testing.T) {
 
 func TestPauseHandler_Pause_Idempotent(t *testing.T) {
 	r, store, pauser, bk := setupPauseHandler(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: string(domain.StatusPaused),
 		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "container-p1",
 		PauseReason: domain.PauseReasonIdle7Days,
@@ -127,7 +127,7 @@ func TestPauseHandler_Pause_Idempotent(t *testing.T) {
 
 func TestPauseHandler_Pause_BYOCRefused(t *testing.T) {
 	r, store, _, _ := setupPauseHandler(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "byoc-1", OrgID: "o", Status: "ACTIVE",
 		DeploymentMode: domain.ModeBYOC,
 	})
@@ -143,7 +143,7 @@ func TestPauseHandler_Pause_BYOCRefused(t *testing.T) {
 
 func TestPauseHandler_Resume_HappyPath(t *testing.T) {
 	r, store, pauser, _ := setupPauseHandler(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: string(domain.StatusPaused),
 		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "container-p1",
 		PauseReason: domain.PauseReasonIdle7Days,
@@ -187,7 +187,7 @@ func TestPauseHandler_NoServiceConfigured(t *testing.T) {
 	// Don't call SetPauseService — pause endpoint should return 503
 	r := chi.NewRouter()
 	r.Route("/api/provision", func(r chi.Router) { h.Routes(r) })
-	store.Save(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
 
 	req := httptest.NewRequest("POST", "/api/provision/p1/pause", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()

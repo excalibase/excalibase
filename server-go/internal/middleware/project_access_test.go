@@ -55,7 +55,7 @@ func memberUser(id string) *domain.User { return &domain.User{ID: id, Role: test
 // storesWithMember seeds one project in testOrg and one member with the role.
 func storesWithMember(userID, role string) (*fakestore.Instances, *fakestore.Orgs) {
 	inst := fakestore.NewInstances()
-	inst.Save(&domain.DatabaseInstance{ProjectID: testProject, OrgID: testOrg})
+	inst.Create(&domain.DatabaseInstance{ProjectID: testProject, OrgID: testOrg})
 	orgs := fakestore.NewOrgs()
 	orgs.AddMember(testOrg, userID, role)
 	return inst, orgs
@@ -124,7 +124,7 @@ func TestRequireProjectAccess_FailsClosed(t *testing.T) {
 	memberID := testutil.FixturePassword("member")
 	t.Run("instance without org", func(t *testing.T) {
 		inst := fakestore.NewInstances()
-		inst.Save(&domain.DatabaseInstance{ProjectID: testProject})
+		inst.Create(&domain.DatabaseInstance{ProjectID: testProject})
 		orgs := fakestore.NewOrgs()
 		orgs.AddMember(testOrg, memberID, domain.OrgRoleOwner)
 		r := projectRequest(http.MethodGet, testProject, memberUser(memberID), nil)

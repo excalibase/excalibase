@@ -393,13 +393,11 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	registrar := a.registrar
 	a.mu.RUnlock()
 
-	newProject := req.GetNewProject()
-	// Collision check first so the existing-target test path doesn't
-	// require a docker client (matches the K8s adapter ordering).
-	if store != nil {
-		if existing, _ := store.FindByProjectID(newProject); existing != nil {
-			return nil, fmt.Errorf("target project %q already exists", newProject)
-		}
+	newProject := req.TargetProjectID
+	// Collision check first so nothing is created for a target id that is
+	// taken (matches the K8s adapter ordering).
+	if err := assertProjectIDAvailable(store, newProject); err != nil {
+		return nil, err
 	}
 	if dc == nil {
 		return nil, fmt.Errorf("docker restore: docker client not configured (call SetDockerClient)")
@@ -466,6 +464,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	// role is reset to the password stamped on the row.
 	newInst := restoredDockerInstance(inst, restoredDockerSpec{
 		projectID:     newProject,
+		projectName:   req.NewProjectName,
 		containerID:   containerID,
 		containerName: containerName,
 		dbName:        dbName,
@@ -493,6 +492,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 // restoredDockerSpec carries what the restore learned about the new container.
 type restoredDockerSpec struct {
 	projectID     string
+	projectName   string
 	containerID   string
 	containerName string
 	dbName        string
@@ -506,7 +506,7 @@ func restoredDockerInstance(src *domain.DatabaseInstance, spec restoredDockerSpe
 	port := 5432
 	return &domain.DatabaseInstance{
 		ProjectID:             spec.projectID,
-		ProjectName:           spec.projectID,
+		ProjectName:           spec.projectName,
 		OrgID:                 src.OrgID,
 		OwnerID:               src.OwnerID,
 		DBType:                src.DBType,

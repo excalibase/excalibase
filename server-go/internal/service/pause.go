@@ -84,7 +84,7 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 	inst.Status = string(domain.StatusPausing)
 	inst.PauseReason = reason
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-	if err := s.instances.Save(inst); err != nil {
+	if err := s.instances.Update(inst); err != nil {
 		log.Printf("WARN: persist PAUSING for %s: %v", projectID, err)
 	}
 
@@ -97,7 +97,7 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 	// 4. Stamp PAUSED.
 	inst.Status = string(domain.StatusPaused)
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-	return s.instances.Save(inst)
+	return s.instances.Update(inst)
 }
 
 // Resume transitions PAUSED → RESUMING → workload-start → ACTIVE.
@@ -124,7 +124,7 @@ func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 
 	inst.Status = string(domain.StatusResuming)
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-	_ = s.instances.Save(inst)
+	_ = s.instances.Update(inst)
 
 	if err := pauser.Resume(ctx, inst.Namespace, projectID); err != nil {
 		return fmt.Errorf("resume: provisioner start failed (status remains RESUMING): %w", err)
@@ -134,5 +134,5 @@ func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 	inst.PauseReason = ""
 	inst.LastActiveAt = &domain.FlexTime{Time: time.Now()}
 	inst.UpdatedAt = inst.LastActiveAt
-	return s.instances.Save(inst)
+	return s.instances.Update(inst)
 }

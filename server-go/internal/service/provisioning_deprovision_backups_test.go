@@ -12,7 +12,7 @@ const testPurgeProject = "purge-db"
 
 func saveActiveProject(t *testing.T, svc *ProvisioningService, projectID string) {
 	t.Helper()
-	err := svc.store.Save(&domain.DatabaseInstance{
+	err := svc.store.Create(&domain.DatabaseInstance{
 		ProjectID:      projectID,
 		OrgID:          "org1",
 		DBType:         domain.PostgreSQL,
@@ -109,7 +109,7 @@ func TestDeprovisionWithDeleteBackupsSkipsBYOC(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
 	deleter := newFakeObjectDeleter()
 	svc.SetBackupPurger(newTestPurger(deleter))
-	if err := store.Save(&domain.DatabaseInstance{ProjectID: "byoc-1", OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeBYOC, Status: "ACTIVE"}); err != nil {
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: "byoc-1", OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeBYOC, Status: "ACTIVE"}); err != nil {
 		t.Fatal(err)
 	}
 	err := svc.DeprovisionWithOptions(context.Background(), "byoc-1", DeprovisionOptions{DeleteBackups: true})
@@ -128,7 +128,7 @@ func TestPurgeBackupsRetriesPendingRow(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
 	deleter := newFakeObjectDeleter(testPurgeProject + "/cloud/wals/x.gz")
 	svc.SetBackupPurger(newTestPurger(deleter))
-	if err := store.Save(&domain.DatabaseInstance{ProjectID: testPurgeProject, OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeK8s, Status: string(domain.StatusBackupsPendingDelete)}); err != nil {
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: testPurgeProject, OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeK8s, Status: string(domain.StatusBackupsPendingDelete)}); err != nil {
 		t.Fatal(err)
 	}
 	deleted, err := svc.PurgeBackups(context.Background(), testPurgeProject)
@@ -163,7 +163,7 @@ func TestPurgeBackupsKeepsMarkerOnFailure(t *testing.T) {
 	deleter := newFakeObjectDeleter(testPurgeProject + "/cloud/wals/x.gz")
 	deleter.deleteErr = errors.New("still down")
 	svc.SetBackupPurger(newTestPurger(deleter))
-	if err := store.Save(&domain.DatabaseInstance{ProjectID: testPurgeProject, OrgID: "org1", DBType: domain.PostgreSQL, Status: string(domain.StatusBackupsPendingDelete)}); err != nil {
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: testPurgeProject, OrgID: "org1", DBType: domain.PostgreSQL, Status: string(domain.StatusBackupsPendingDelete)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.PurgeBackups(context.Background(), testPurgeProject); err == nil {

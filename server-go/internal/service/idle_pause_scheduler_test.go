@@ -35,7 +35,7 @@ func (f *fakeIdlePauser) Pause(_ context.Context, projectID, reason string) erro
 	inst, _ := f.instances.FindByProjectID(projectID)
 	inst.Status = string(domain.StatusPaused)
 	inst.PauseReason = reason
-	return f.instances.Save(inst)
+	return f.instances.Update(inst)
 }
 
 func (f *fakeIdlePauser) count() int {
@@ -127,7 +127,7 @@ func newIdleFixture(t *testing.T) *idleFixture {
 func (f *idleFixture) project(t *testing.T, id string, tier domain.TierType, age time.Duration) {
 	t.Helper()
 	created := f.clock.Now().Add(-age)
-	if err := f.instances.Save(&domain.DatabaseInstance{
+	if err := f.instances.Create(&domain.DatabaseInstance{
 		ProjectID: id, OrgID: "o", OwnerID: "u1", Tier: tier, Status: "ACTIVE",
 		DeploymentMode: domain.ModeDocker, CreatedAt: &domain.FlexTime{Time: created},
 	}); err != nil {
@@ -219,7 +219,7 @@ func TestIdlePause_SkipsRecentlyResumed(t *testing.T) {
 	_ = f.activity.TouchProjectActivity(context.Background(), "p1", "api", f.clock.Now().Add(-20*day))
 	inst, _ := f.instances.FindByProjectID("p1")
 	inst.LastActiveAt = &domain.FlexTime{Time: f.clock.Now().Add(-time.Hour)}
-	_ = f.instances.Save(inst)
+	_ = f.instances.Create(inst)
 
 	report := f.run(t)
 	if len(report.Paused) != 0 || len(report.Warned) != 0 {
@@ -234,7 +234,7 @@ func TestIdlePause_ResumeStartsAFreshWarningCycle(t *testing.T) {
 	_ = f.activity.MarkIdleWarned(context.Background(), "p1", f.clock.Now().Add(-16*day), warnedAt)
 	inst, _ := f.instances.FindByProjectID("p1")
 	inst.LastActiveAt = &domain.FlexTime{Time: f.clock.Now().Add(-6*day - time.Hour)}
-	_ = f.instances.Save(inst)
+	_ = f.instances.Create(inst)
 
 	report := f.run(t)
 	if len(report.Warned) != 1 {
@@ -258,7 +258,7 @@ func TestIdlePause_SkipsNonActiveProjects(t *testing.T) {
 	f.project(t, "p1", domain.Free, 30*day)
 	inst, _ := f.instances.FindByProjectID("p1")
 	inst.Status = "PROVISIONING"
-	_ = f.instances.Save(inst)
+	_ = f.instances.Create(inst)
 
 	report := f.run(t)
 	if len(report.Paused) != 0 || len(report.Warned) != 0 {
@@ -303,7 +303,7 @@ func TestIdlePause_OptionalCollaboratorsMayBeNil(t *testing.T) {
 		Instances: instances, Activity: &fakeActivityStore{}, Tiers: tierResolverForTest,
 		Pauser: pauser, Lock: &fakeLeaderLock{}, Now: clock.Now,
 	})
-	_ = instances.Save(&domain.DatabaseInstance{
+	_ = instances.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", Tier: domain.Free, Status: "ACTIVE",
 		CreatedAt: &domain.FlexTime{Time: clock.Now().Add(-6*day - time.Hour)},
 	})

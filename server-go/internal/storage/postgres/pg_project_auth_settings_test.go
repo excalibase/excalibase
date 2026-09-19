@@ -14,7 +14,7 @@ import (
 
 func saveAuthSettingsProject(t *testing.T, store *Store, projectID string) {
 	t.Helper()
-	if err := store.Save(&domain.DatabaseInstance{ProjectID: projectID, OrgID: "org1", Status: "ACTIVE"}); err != nil {
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: projectID, OrgID: "org1", Status: "ACTIVE"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 }

@@ -20,7 +20,7 @@ func setupPerfTest(t *testing.T) (*PerformanceService, *k8s.MockClient) {
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testPerfDB, Namespace: "org-perf-db", Status: "ACTIVE",
 		DBType: domain.PostgreSQL,
 	})

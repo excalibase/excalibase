@@ -78,7 +78,7 @@ func setupDeleteBackupsRouter(t *testing.T) (chi.Router, *storage.FileSystemStor
 	r := chi.NewRouter()
 	r.Route("/api/provision", func(r chi.Router) { h.Routes(r) })
 	for _, id := range []string{"proj-1", "proj-2"} {
-		if err := store.Save(&domain.DatabaseInstance{ProjectID: id, OrgID: "org1", DeploymentMode: domain.ModeK8s, Status: "ACTIVE"}); err != nil {
+		if err := store.Create(&domain.DatabaseInstance{ProjectID: id, OrgID: "org1", DeploymentMode: domain.ModeK8s, Status: "ACTIVE"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -154,7 +154,7 @@ func TestPurgeBackupsEndpoint(t *testing.T) {
 	// Pending marker: purged, row removed, count reported.
 	inst, _ := store.FindByProjectID("proj-1")
 	inst.Status = string(domain.StatusBackupsPendingDelete)
-	if err := store.Save(inst); err != nil {
+	if err := store.Update(inst); err != nil {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest(http.MethodPost, "/api/provision/proj-1/backups/purge", nil)

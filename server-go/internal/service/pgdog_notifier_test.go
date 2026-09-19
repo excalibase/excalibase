@@ -191,7 +191,7 @@ func TestDeprovision_DeregistersPgDogByProject(t *testing.T) {
 	n, _ := NewPgDogNotifier(store, "")
 	svc.SetPgDogNotifier(n)
 
-	fsStore.Save(&domain.DatabaseInstance{
+	fsStore.Create(&domain.DatabaseInstance{
 		ProjectID: "pgdog-del",
 		OrgID:     "org1",
 		DBType:    domain.PostgreSQL,

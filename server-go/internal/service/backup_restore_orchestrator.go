@@ -78,11 +78,15 @@ func (o *RestoreOrchestrator) Start(ctx context.Context, source *domain.Database
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
+	if req.TargetProjectID == "" {
+		return nil, ErrTargetProjectIDMissing
+	}
 	kind, value := req.RestoreTargetKind()
 	job := domain.RestoreJob{
 		ID:              newRestoreJobID(),
 		SourceProjectID: source.ProjectID,
-		NewProjectID:    req.GetNewProject(),
+		NewProjectID:    req.TargetProjectID,
+		NewProjectName:  req.NewProjectName,
 		Status:          domain.RestoreStatusRunning,
 		TargetKind:      kind,
 		TargetValue:     value,

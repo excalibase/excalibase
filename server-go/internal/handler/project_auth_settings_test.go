@@ -213,7 +213,7 @@ func setupAuthSettingsInfoRouter(t *testing.T) (*chi.Mux, *ProvisioningHandler, 
 	if err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	if err := fsStore.Save(&domain.DatabaseInstance{ProjectID: testAuthProject, ProjectName: "web", OrgID: "org-auth", Status: "ACTIVE"}); err != nil {
+	if err := fsStore.Create(&domain.DatabaseInstance{ProjectID: testAuthProject, ProjectName: "web", OrgID: "org-auth", Status: "ACTIVE"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	svc := service.NewProvisioningService(fsStore, provisioner.NewFactory(), nil)

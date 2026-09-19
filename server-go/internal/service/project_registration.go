@@ -25,6 +25,10 @@ const (
 // project without the minimum identity (a project id).
 var ErrProjectRegistrationInvalid = errors.New("project registration: project id is required")
 
+// ErrProjectCredentialsExist is returned when a project being registered
+// already has credentials filed in vault under its id.
+var ErrProjectCredentialsExist = errors.New("project registration: credentials already exist for this project id")
+
 // ProjectRegistrar turns a live database into a project the API can serve.
 // Implemented by *ProvisioningService; the backup adapters depend on this
 // narrow surface so a restore finishes exactly the way a provision does.
@@ -55,6 +59,13 @@ type RegistrationOptions struct {
 	// Context threads an in-flight provision's rollback registry. When nil,
 	// RegisterProject owns a private one and rolls it back on failure.
 	Context *provisioner.ProvisionContext
+	// RowAlreadyCreated says the project row was created earlier in this
+	// operation — the provision pipeline inserts it up front so its stages
+	// are observable. Registration then updates that row instead of
+	// creating it. A restore leaves this false, so a target id that is
+	// already registered is refused instead of repointing its owner's
+	// project (EXC-415).
+	RowAlreadyCreated bool
 }
 
 // SetActivityRecorder wires the last-seen writer. Optional: without it a newly
@@ -91,12 +102,22 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 		return rollbackIfOwned(ctx, pc, owned, err)
 	}
 	markProjectActive(inst)
-	if err := s.store.Save(inst); err != nil {
+	if err := s.persistProjectRow(inst, opts); err != nil {
 		return rollbackIfOwned(ctx, pc, owned, fmt.Errorf("persist project row: %w", err))
 	}
 	s.registerWithPgDog(ctx, inst, engineRoles)
 	s.announceProject(ctx, inst)
 	return nil
+}
+
+// persistProjectRow writes the registered project. Creating is the default so
+// an id that is already registered is a conflict; only an operation that
+// created the row itself earlier may update it.
+func (s *ProvisioningService) persistProjectRow(inst *domain.DatabaseInstance, opts RegistrationOptions) error {
+	if opts.RowAlreadyCreated {
+		return s.store.Update(inst)
+	}
+	return s.store.Create(inst)
 }
 
 // rollbackIfOwned runs the compensations RegisterProject registered itself.
@@ -252,6 +273,10 @@ type projectRoleSpec struct {
 func (s *ProvisioningService) createProjectRoles(ctx context.Context, spec projectRoleSpec, creds projectRoleCredentials, pc *provisioner.ProvisionContext) error {
 	pc.SetStage(domain.StageRoleCreation)
 
+	if err := s.assertNoStoredCredentials(spec.projectID); err != nil {
+		return pc.Fail(err)
+	}
+
 	pc.SetStep("store admin credentials")
 	if err := s.putRoleCredentials(spec, roleAdmin, spec.adminUsername, spec.adminPassword, pc); err != nil {
 		return pc.Fail(err)
@@ -303,6 +328,22 @@ func resetTargets(spec projectRoleSpec, creds projectRoleCredentials) []RolePass
 		targets = append(targets, RolePassword{Role: spec.adminUsername, Password: spec.adminPassword})
 	}
 	return targets
+}
+
+// assertNoStoredCredentials refuses to register a project whose vault prefix
+// already holds credentials. Registration only ever runs for a project being
+// brought into existence, so entries under its id belong to a different
+// project that happens to share the id — writing there would hand that
+// project's clients the new database's credentials (EXC-415).
+func (s *ProvisioningService) assertNoStoredCredentials(projectID string) error {
+	existing, err := s.vault.List(vaultCredentialPrefix(projectID))
+	if err != nil {
+		return fmt.Errorf("list existing credentials: %w", err)
+	}
+	if len(existing) > 0 {
+		return ErrProjectCredentialsExist
+	}
+	return nil
 }
 
 // putRoleCredentials writes one role's connection details to vault and

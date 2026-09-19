@@ -69,7 +69,7 @@ func setupPauseTest(t *testing.T) (*PauseService, *storage.FileSystemStore, *fak
 
 func TestPauseService_Pause_HappyPath_BackupThenPause(t *testing.T) {
 	svc, store, pauser, bk := setupPauseTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: "ACTIVE",
 		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "container-p1",
 	})
@@ -94,7 +94,7 @@ func TestPauseService_Pause_HappyPath_BackupThenPause(t *testing.T) {
 
 func TestPauseService_Pause_BackupFails_StaysActive(t *testing.T) {
 	svc, store, pauser, bk := setupPauseTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: "ACTIVE",
 		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "container-p1",
 	})
@@ -115,7 +115,7 @@ func TestPauseService_Pause_BackupFails_StaysActive(t *testing.T) {
 
 func TestPauseService_Pause_AlreadyPaused_NoOp(t *testing.T) {
 	svc, store, pauser, bk := setupPauseTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: string(domain.StatusPaused),
 		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "container-p1",
 		PauseReason: domain.PauseReasonIdle7Days,
@@ -134,7 +134,7 @@ func TestPauseService_Pause_AlreadyPaused_NoOp(t *testing.T) {
 
 func TestPauseService_Pause_BYOC_Refused(t *testing.T) {
 	svc, store, _, _ := setupPauseTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "byoc-1", OrgID: "o", Status: "ACTIVE",
 		DeploymentMode: domain.ModeBYOC,
 	})
@@ -150,7 +150,7 @@ func TestPauseService_Pause_BYOC_Refused(t *testing.T) {
 
 func TestPauseService_Resume_HappyPath(t *testing.T) {
 	svc, store, pauser, _ := setupPauseTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: string(domain.StatusPaused),
 		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "container-p1",
 		PauseReason:  domain.PauseReasonIdle7Days,
@@ -177,7 +177,7 @@ func TestPauseService_Resume_HappyPath(t *testing.T) {
 
 func TestPauseService_Resume_NotPaused_NoOp(t *testing.T) {
 	svc, store, pauser, _ := setupPauseTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: "ACTIVE",
 		DeploymentMode: domain.ModeDocker,
 	})
@@ -202,7 +202,7 @@ func TestPauseService_Pause_WorkloadStopFails_RetainsPausing(t *testing.T) {
 	// back the backup (nothing to undo) but we DO leave the project
 	// in PAUSING so an operator sees a stuck state and can intervene.
 	svc, store, pauser, _ := setupPauseTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", Status: "ACTIVE",
 		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "container-p1",
 	})

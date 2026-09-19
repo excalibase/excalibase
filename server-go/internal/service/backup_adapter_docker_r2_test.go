@@ -116,7 +116,7 @@ func TestDockerBackupAdapter_R2_E2E(t *testing.T) {
 		DeploymentMode: domain.ModeDocker,
 		Status:         "ACTIVE",
 	}
-	store.Save(inst)
+	store.Create(inst)
 
 	// --- Trigger + verify ---------------------------------------------------
 	ref, err := adapter.TriggerManual(ctx, inst)

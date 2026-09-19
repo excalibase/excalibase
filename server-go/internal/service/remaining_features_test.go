@@ -18,7 +18,7 @@ func TestUpdateNetworkPolicy(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "np-db", OrgID: "org1", Namespace: "org1-np-db",
 		Status: "ACTIVE", DBType: domain.PostgreSQL,
 	})

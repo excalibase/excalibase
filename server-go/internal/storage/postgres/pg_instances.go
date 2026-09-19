@@ -2,12 +2,22 @@ package postgres
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/lib/pq"
 )
 
-func (s *Store) Save(inst *domain.DatabaseInstance) error {
+// uniqueViolation is the SQLSTATE Postgres raises when an INSERT hits a unique
+// or primary-key constraint.
+const uniqueViolation = "23505"
+
+// Create registers a new project. A project id already in the table is a
+// conflict, never an overwrite: the row belongs to whoever registered it and
+// repointing it would move a live tenant's database to another org.
+func (s *Store) Create(inst *domain.DatabaseInstance) error {
 	mode := inst.DeploymentMode
 	if mode == "" {
 		mode = domain.ModeK8s
@@ -27,52 +37,7 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 			restored_from_project_id, restored_from_backup_id,
 			last_active_at, last_xact_count, pause_reason,
 			created_at, updated_at, last_health_check
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45)
-		ON CONFLICT (project_id) DO UPDATE SET
-			project_name = EXCLUDED.project_name,
-			org_id = EXCLUDED.org_id,
-			owner_id = EXCLUDED.owner_id,
-			database_type = EXCLUDED.database_type,
-			tier = EXCLUDED.tier,
-			namespace = EXCLUDED.namespace,
-			deployment_mode = EXCLUDED.deployment_mode,
-			host = EXCLUDED.host,
-			read_only_host = EXCLUDED.read_only_host,
-			port = EXCLUDED.port,
-			database_name = EXCLUDED.database_name,
-			username = EXCLUDED.username,
-			password = EXCLUDED.password,
-			deletion_protection = EXCLUDED.deletion_protection,
-			pooler_enabled = EXCLUDED.pooler_enabled,
-			pooler_host = EXCLUDED.pooler_host,
-			ssl_mode = EXCLUDED.ssl_mode,
-			webhook_url = EXCLUDED.webhook_url,
-			postgres_version = EXCLUDED.postgres_version,
-			tags = EXCLUDED.tags,
-			status = EXCLUDED.status,
-			current_stage = EXCLUDED.current_stage,
-			current_step = EXCLUDED.current_step,
-			failure_reason = EXCLUDED.failure_reason,
-			failure_stage = EXCLUDED.failure_stage,
-			failure_step = EXCLUDED.failure_step,
-			rollback_log = EXCLUDED.rollback_log,
-			network_policy_enabled = EXCLUDED.network_policy_enabled,
-			maintenance_window = EXCLUDED.maintenance_window,
-			maintenance_window_duration_min = EXCLUDED.maintenance_window_duration_min,
-			auto_minor_version_upgrade = EXCLUDED.auto_minor_version_upgrade,
-			backup_enabled = EXCLUDED.backup_enabled,
-			backup_schedule = EXCLUDED.backup_schedule,
-			backup_retention_days = EXCLUDED.backup_retention_days,
-			metrics_endpoint = EXCLUDED.metrics_endpoint,
-			grafana_dashboard_url = EXCLUDED.grafana_dashboard_url,
-			restored_from_project_id = EXCLUDED.restored_from_project_id,
-			restored_from_backup_id = EXCLUDED.restored_from_backup_id,
-			last_active_at = EXCLUDED.last_active_at,
-			last_xact_count = EXCLUDED.last_xact_count,
-			pause_reason = EXCLUDED.pause_reason,
-			created_at = EXCLUDED.created_at,
-			updated_at = EXCLUDED.updated_at,
-			last_health_check = EXCLUDED.last_health_check`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
@@ -87,7 +52,91 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 		flexTimePtr(inst.LastActiveAt), inst.LastXactCount, inst.PauseReason,
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 	)
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && string(pqErr.Code) == uniqueViolation {
+		return storage.ErrProjectExists
+	}
 	return err
+}
+
+// Update persists changes to an existing project. project_id and org_id are
+// absent from the SET list on purpose: a project's identity and its owning org
+// are fixed at creation, so no update path can move a tenant's database.
+func (s *Store) Update(inst *domain.DatabaseInstance) error {
+	mode := inst.DeploymentMode
+	if mode == "" {
+		mode = domain.ModeK8s
+	}
+	res, err := s.db.Exec(`
+		UPDATE database_instances SET
+			project_name = $2,
+			owner_id = $3,
+			database_type = $4,
+			tier = $5,
+			namespace = $6,
+			deployment_mode = $7,
+			host = $8,
+			read_only_host = $9,
+			port = $10,
+			database_name = $11,
+			username = $12,
+			password = $13,
+			deletion_protection = $14,
+			pooler_enabled = $15,
+			pooler_host = $16,
+			ssl_mode = $17,
+			webhook_url = $18,
+			postgres_version = $19,
+			tags = $20,
+			status = $21,
+			current_stage = $22,
+			current_step = $23,
+			failure_reason = $24,
+			failure_stage = $25,
+			failure_step = $26,
+			rollback_log = $27,
+			network_policy_enabled = $28,
+			maintenance_window = $29,
+			maintenance_window_duration_min = $30,
+			auto_minor_version_upgrade = $31,
+			backup_enabled = $32,
+			backup_schedule = $33,
+			backup_retention_days = $34,
+			metrics_endpoint = $35,
+			grafana_dashboard_url = $36,
+			restored_from_project_id = $37,
+			restored_from_backup_id = $38,
+			last_active_at = $39,
+			last_xact_count = $40,
+			pause_reason = $41,
+			updated_at = $42,
+			last_health_check = $43
+		WHERE project_id = $1`,
+		inst.ProjectID, inst.ProjectName, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
+		mode,
+		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
+		derefBool(inst.DeletionProtection), derefBool(inst.PoolerEnabled), inst.PoolerHost, inst.SSLMode,
+		inst.WebhookURL, inst.PostgresVersion, inst.Tags,
+		inst.Status, inst.CurrentStage, inst.CurrentStep, inst.FailureReason, inst.FailureStage, inst.FailureStep, inst.RollbackLog,
+		derefBool(inst.NetworkPolicyEnabled),
+		inst.MaintenanceWindow, inst.MaintenanceWindowDurationMinutes, derefBool(inst.AutoMinorVersionUpgrade),
+		derefBool(inst.BackupEnabled), inst.BackupSchedule, inst.BackupRetentionDays,
+		inst.MetricsEndpoint, inst.GrafanaDashboardURL,
+		inst.RestoredFromProjectID, inst.RestoredFromBackupID,
+		flexTimePtr(inst.LastActiveAt), inst.LastXactCount, inst.PauseReason,
+		flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return storage.ErrProjectNotFound
+	}
+	return nil
 }
 
 const pgInstanceColumns = `

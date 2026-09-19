@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -36,7 +37,7 @@ func TestRestoreRequestValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{"latest with name", RestoreRequest{NewProjectName: "p"}, false},
-		{"single target with id", RestoreRequest{TargetXID: "1", NewProjectID: "id"}, false},
+		{"single target with id", RestoreRequest{TargetXID: "1", NewProjectName: "id", TargetProjectID: "id"}, false},
 		{"two targets rejected", RestoreRequest{TargetTime: ts, TargetXID: "1", NewProjectName: "p"}, true},
 		{"missing new project", RestoreRequest{TargetXID: "1"}, true},
 		{"all empty", RestoreRequest{}, true},
@@ -74,12 +75,18 @@ func TestRestoreRecoveryTarget(t *testing.T) {
 	}
 }
 
-func TestGetNewProjectPriority(t *testing.T) {
-	if got := (RestoreRequest{NewProjectName: "name", NewProjectID: "id"}).GetNewProject(); got != "name" {
-		t.Errorf("name should win, got %q", got)
+// The display name is the only naming a restore request carries; the target
+// project id is stamped on by the server, never decoded from the body.
+func TestRestoreRequestCarriesNoCallerChosenProjectID(t *testing.T) {
+	var r RestoreRequest
+	if err := json.Unmarshal([]byte(`{"newProjectName":"name","targetProjectId":"id","newProjectId":"id"}`), &r); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	if got := (RestoreRequest{NewProjectID: "id"}).GetNewProject(); got != "id" {
-		t.Errorf("id fallback, got %q", got)
+	if r.NewProjectName != "name" {
+		t.Errorf("newProjectName: got %q", r.NewProjectName)
+	}
+	if r.TargetProjectID != "" {
+		t.Errorf("target project id must not come from the body, got %q", r.TargetProjectID)
 	}
 }
 

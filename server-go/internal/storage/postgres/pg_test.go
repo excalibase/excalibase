@@ -75,7 +75,7 @@ func TestInstance_DeploymentMode_RoundTrips(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			id := "mode-" + c.name
-			if err := store.Save(&domain.DatabaseInstance{
+			if err := store.Create(&domain.DatabaseInstance{
 				ProjectID: id, OrgID: "org1", Status: "ACTIVE",
 				DeploymentMode: c.mode,
 			}); err != nil {
@@ -94,7 +94,7 @@ func TestInstance_DeploymentMode_RoundTrips(t *testing.T) {
 
 func TestInstance_LegacyRow_DefaultsToK8s(t *testing.T) {
 	store := testStore(t)
-	if err := store.Save(&domain.DatabaseInstance{
+	if err := store.Create(&domain.DatabaseInstance{
 		ProjectID: "legacy-1", OrgID: "org1", Status: "ACTIVE",
 	}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -125,7 +125,7 @@ func TestInstanceSaveAndFind(t *testing.T) {
 		CreatedAt: ft,
 	}
 
-	if err := store.Save(inst); err != nil {
+	if err := store.Create(inst); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -149,8 +149,8 @@ func TestInstanceSaveAndFind(t *testing.T) {
 
 func TestInstanceFindAll(t *testing.T) {
 	store := testStore(t)
-	store.Save(&domain.DatabaseInstance{ProjectID: "a", OrgID: "org", Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "b", OrgID: "org", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "a", OrgID: "org", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "b", OrgID: "org", Status: "ACTIVE"})
 
 	all, _ := store.FindAll()
 	if len(all) != 2 {
@@ -160,7 +160,7 @@ func TestInstanceFindAll(t *testing.T) {
 
 func TestInstanceDelete(t *testing.T) {
 	store := testStore(t)
-	store.Save(&domain.DatabaseInstance{ProjectID: "del", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "del", Status: "ACTIVE"})
 	store.Delete("del")
 
 	got, _ := store.FindByProjectID("del")
@@ -171,8 +171,10 @@ func TestInstanceDelete(t *testing.T) {
 
 func TestInstanceUpdate(t *testing.T) {
 	store := testStore(t)
-	store.Save(&domain.DatabaseInstance{ProjectID: "upd", Status: "PROVISIONING"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "upd", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "upd", Status: "PROVISIONING"})
+	if err := store.Update(&domain.DatabaseInstance{ProjectID: "upd", Status: "ACTIVE"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
 
 	got, _ := store.FindByProjectID("upd")
 	if got.Status != "ACTIVE" {
@@ -183,9 +185,9 @@ func TestInstanceUpdate(t *testing.T) {
 func TestInstanceOwnerID(t *testing.T) {
 	store := testStore(t)
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "owned-1", OwnerID: testUser1, Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "owned-2", OwnerID: testUser1, Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "other", OwnerID: "user-2", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "owned-1", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "owned-2", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "other", OwnerID: "user-2", Status: "ACTIVE"})
 
 	owned, err := store.FindByOwner(testUser1)
 	if err != nil {
@@ -223,7 +225,7 @@ func TestInstancePersistsDisplayNameAndRollbackFields(t *testing.T) {
 		FailureReason: "forbidden: CRD missing",
 		RollbackLog:   `[{"name":"delete namespace","ok":true}]`,
 	}
-	if err := store.Save(inst); err != nil {
+	if err := store.Create(inst); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	got, err := store.FindByProjectID("proj_a1b2c3d4e5")
@@ -511,7 +513,7 @@ func TestMetricsAppendAndHistory(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "m-db", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "m-db", Status: "ACTIVE"})
 
 	now := &domain.FlexTime{Time: time.Now()}
 	active := 5

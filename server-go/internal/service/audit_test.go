@@ -16,7 +16,7 @@ func setupAuditTest(t *testing.T) (*AuditService, *k8s.MockClient) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testAudDB, Namespace: "org-aud-db", Status: "ACTIVE",
 	})
 	mock.ExecOutput["org-aud-db/aud-db-postgres-1"] = "pgaudit.log|all\npgaudit.log_level|log"

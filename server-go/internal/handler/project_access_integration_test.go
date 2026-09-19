@@ -68,7 +68,7 @@ func e2eSeed(t *testing.T, store *pgstore.Store) {
 		if err := store.AddOrgMember(ctx, &domain.OrgMember{OrgID: o.id, UserID: o.member, Role: o.role}); err != nil {
 			t.Fatalf("AddOrgMember: %v", err)
 		}
-		if err := store.Save(&domain.DatabaseInstance{ProjectID: o.project, OrgID: o.id, OwnerID: o.owner, DBType: domain.PostgreSQL, Tier: domain.Free, Status: "ACTIVE"}); err != nil {
+		if err := store.Create(&domain.DatabaseInstance{ProjectID: o.project, OrgID: o.id, OwnerID: o.owner, DBType: domain.PostgreSQL, Tier: domain.Free, Status: "ACTIVE"}); err != nil {
 			t.Fatalf("Save instance: %v", err)
 		}
 	}

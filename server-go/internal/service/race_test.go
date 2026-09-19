@@ -75,7 +75,7 @@ func TestConcurrentMetricsCollection(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testConcM, Namespace: "ns", Status: "ACTIVE",
 		DBType: domain.PostgreSQL, Tier: domain.Free,
 	})
@@ -117,7 +117,7 @@ func TestConcurrentStoreAccess(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			store.Save(&domain.DatabaseInstance{
+			store.Create(&domain.DatabaseInstance{
 				ProjectID: "conc-db",
 				Status:    "ACTIVE",
 			})

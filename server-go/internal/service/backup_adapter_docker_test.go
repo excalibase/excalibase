@@ -169,7 +169,7 @@ func setupDockerAdapter(t *testing.T) (*DockerBackupAdapter, *storage.FileSystem
 		Records:  records,
 		Bucket:   "test-backups",
 	})
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID:      "dk-1",
 		OrgID:          "org",
 		Namespace:      "excalibase-dk-1-postgres",
@@ -410,7 +410,7 @@ func TestDockerAdapter_Restore_HappyPath(t *testing.T) {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
 
-	resp, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectID: "dk-restored"})
+	resp, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-restored", TargetProjectID: "dk-restored"})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -441,13 +441,14 @@ func TestDockerAdapter_Restore_HappyPath(t *testing.T) {
 
 func TestDockerAdapter_Restore_NoBaseBackup_Errors(t *testing.T) {
 	adapter, store, _, _, _ := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
 	adapter.SetDockerClient(&fakeDockerClientForAdapter{})
 	adapter.SetProjectRegistrar(&fakeRegistrar{})
 	src, _ := store.FindByProjectID("dk-1")
 
 	// No BackupRecord, no S3 object → restore must error before
 	// touching docker.
-	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectID: "dk-fresh"})
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-fresh", TargetProjectID: "dk-fresh"})
 	if err == nil {
 		t.Fatal("expected error when no base backup exists")
 	}
@@ -458,16 +459,17 @@ func TestDockerAdapter_Restore_NoBaseBackup_Errors(t *testing.T) {
 
 func TestDockerAdapter_Restore_NoDockerClient_Errors(t *testing.T) {
 	adapter, store, _, _, _ := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
 	src, _ := store.FindByProjectID("dk-1")
 	// Don't call SetDockerClient — should refuse rather than silently no-op.
-	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectID: "dk-fresh"})
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-fresh", TargetProjectID: "dk-fresh"})
 	if err == nil {
 		t.Error("expected error when docker client not wired")
 	}
 }
 
 func TestBuildRecoveryTar_NoTarget_ReturnsNil(t *testing.T) {
-	got := buildRecoveryTar(domain.RestoreRequest{NewProjectID: "p"})
+	got := buildRecoveryTar(domain.RestoreRequest{NewProjectName: "p", TargetProjectID: "p"})
 	if got != nil {
 		t.Errorf("no target should produce no recovery tar; got %d bytes", len(got))
 	}
@@ -551,7 +553,7 @@ func TestDockerAdapter_Restore_WithTargetTime_WritesRecoveryTar(t *testing.T) {
 
 	target := time.Now().UTC().Add(-1 * time.Hour)
 	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{
-		NewProjectID: "dk-pitr",
+		NewProjectName: "dk-pitr", TargetProjectID: "dk-pitr",
 		TargetTime:   &domain.FlexTime{Time: target},
 	})
 	if err != nil {
@@ -579,7 +581,7 @@ func TestDockerAdapter_Restore_NoTarget_NoRecoveryTar(t *testing.T) {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
 
-	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectID: "dk-latest"})
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-latest", TargetProjectID: "dk-latest"})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -591,17 +593,17 @@ func TestDockerAdapter_Restore_NoTarget_NoRecoveryTar(t *testing.T) {
 func TestDockerAdapter_Restore_RejectsCollidingProjectID(t *testing.T) {
 	adapter, store, _, _, _ := setupDockerAdapter(t)
 	inst, _ := store.FindByProjectID("dk-1")
-	store.Save(&domain.DatabaseInstance{ProjectID: "existing-target", OrgID: "org", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "existing-target", OrgID: "org", Status: "ACTIVE"})
 	adapter.SetInstanceStore(store)
 
 	_, err := adapter.Restore(context.Background(), inst, domain.RestoreRequest{
-		NewProjectID: "existing-target",
+		NewProjectName: "existing-target", TargetProjectID: "existing-target",
 	})
 	if err == nil {
 		t.Fatal("expected error for colliding new project id")
 	}
-	if !strings.Contains(err.Error(), "exists") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, ErrProjectIDTaken) {
+		t.Errorf("err: got %v, want ErrProjectIDTaken", err)
 	}
 }
 

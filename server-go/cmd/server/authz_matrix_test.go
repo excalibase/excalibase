@@ -69,8 +69,8 @@ func matrixRouter(t *testing.T) (http.Handler, callers) {
 func buildMatrix(t *testing.T) (http.Handler, callers, callers) {
 	t.Helper()
 	instances := fakestore.NewInstances()
-	instances.Save(&domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"})
-	instances.Save(&domain.DatabaseInstance{ProjectID: matrixProjectB, OrgID: matrixOrgB, Status: "ACTIVE"})
+	instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"})
+	instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectB, OrgID: matrixOrgB, Status: "ACTIVE"})
 
 	platform := &fakePlatform{Orgs: fakestore.NewOrgs(), Tokens: fakestore.NewTokens()}
 	platform.AddMember(matrixOrgA, matrixDevID, domain.OrgRoleDeveloper)

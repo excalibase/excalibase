@@ -13,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/security"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -25,6 +26,9 @@ type K8sBackupAdapter struct {
 	// storage is the object store backups are written to; restores read
 	// from it. Resolved per call so vault rotation is picked up.
 	storage BackupStorageSource
+	// instances is consulted before a restore creates anything, so a target
+	// id that is already registered is refused rather than built over.
+	instances storage.InstanceStore
 	// registrar finishes a restore the way a provision ends: roles, vault,
 	// instance row, PgDog, events. Restore refuses to run without it —
 	// a restored project nobody registered is invisible to the API.
@@ -60,6 +64,9 @@ func NewK8sBackupAdapter(client k8s.KubeClient, storagePath string, storage Back
 // SetProjectRegistrar wires the shared registration path. Called from main.go
 // once the provisioning service exists.
 func (a *K8sBackupAdapter) SetProjectRegistrar(r ProjectRegistrar) { a.registrar = r }
+
+// SetInstanceStore wires the store a restore checks its target id against.
+func (a *K8sBackupAdapter) SetInstanceStore(s storage.InstanceStore) { a.instances = s }
 
 // Configure is a no-op for the K8s adapter today. CNPG ScheduledBackup
 // CRDs are written by the provisioner during the BACKUP_CONFIGURATION
@@ -134,7 +141,10 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if a.registrar == nil {
 		return nil, ErrProjectRegistrarNotConfigured
 	}
-	newProject := req.GetNewProject()
+	newProject := req.TargetProjectID
+	if err := assertProjectIDAvailable(a.instances, newProject); err != nil {
+		return nil, err
+	}
 	newNamespace := fmt.Sprintf("%s-%s", inst.OrgID, newProject)
 
 	if err := a.createRestoreCluster(ctx, inst, req, store, newNamespace); err != nil {
@@ -176,7 +186,7 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, inst *domai
 	}
 	restoreObj := k8s.BuildRestoreCluster(k8s.RestoreClusterOpts{
 		SourceProjectID: inst.ProjectID,
-		NewProjectID:    req.GetNewProject(),
+		NewProjectID:    req.TargetProjectID,
 		Namespace:       newNamespace,
 		Store:           k8s.ObjectStoreOpts{EndpointURL: store.Endpoint, Bucket: store.Bucket, SecretName: s3CredsKey},
 		RecoveryTarget:  req.RecoveryTarget(),
@@ -226,7 +236,7 @@ func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.Dat
 	now := &domain.FlexTime{Time: time.Now()}
 	return &domain.DatabaseInstance{
 		ProjectID:             newProject,
-		ProjectName:           newProject,
+		ProjectName:           req.NewProjectName,
 		OrgID:                 src.OrgID,
 		OwnerID:               src.OwnerID,
 		DBType:                src.DBType,

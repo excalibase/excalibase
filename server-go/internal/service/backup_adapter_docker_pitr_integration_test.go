@@ -61,7 +61,7 @@ func TestDockerBackupAdapter_PITR_TargetName(t *testing.T) {
 		DatabaseName: "app", Username: defaultPostgresSuperuser, Password: pgPwd,
 		PostgresVersion: "17", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	}
-	store.Save(src)
+	store.Create(src)
 
 	// --- Trigger backup of the empty DB ----------------------------------
 	// This basebackup captures the initial empty state. Recovery on
@@ -109,7 +109,7 @@ func TestDockerBackupAdapter_PITR_TargetName(t *testing.T) {
 
 	// --- Restore from the EMPTY backup with TargetName="mark" -----------
 	resp, err := adapter.Restore(ctx, src, domain.RestoreRequest{
-		NewProjectID: "pitr-restored",
+		NewProjectName: "pitr-restored", TargetProjectID: "pitr-restored",
 		BackupID:     ref.ID, // pin to the empty-state backup
 		TargetName:   "mark",
 	})
@@ -167,7 +167,7 @@ func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) { //NOSONAR seque
 		DatabaseName: "app", Username: defaultPostgresSuperuser, Password: pgPwd,
 		PostgresVersion: "17", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	}
-	store.Save(src)
+	store.Create(src)
 
 	// Take an empty-state backup we'll restore from for every variant.
 	ref, err := adapter.TriggerManual(ctx, src)
@@ -236,7 +236,8 @@ func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) { //NOSONAR seque
 	// Helper to run one variant and tear down its container.
 	runVariant := func(t *testing.T, label string, req domain.RestoreRequest) {
 		t.Helper()
-		req.NewProjectID = "pitr-variant-" + label
+		req.NewProjectName = "pitr-variant-" + label
+		req.TargetProjectID = req.NewProjectName
 		req.BackupID = ref.ID
 		resp, err := adapter.Restore(ctx, src, req)
 		if err != nil {

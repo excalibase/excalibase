@@ -62,12 +62,26 @@ func (f *fakeRestoreJobStoreForHandler) ListRunningRestoreJobs(_ context.Context
 
 func setupBackupHandlerWithOrchestrator(t *testing.T) (*chi.Mux, *service.RestoreOrchestrator) {
 	t.Helper()
+	router, orch, _ := buildBackupHandlerHarness(t)
+	return router, orch
+}
+
+// setupBackupHandlerWithStore exposes the harness's instance store for tests
+// that assert on the rows a restore may or may not touch.
+func setupBackupHandlerWithStore(t *testing.T) (*chi.Mux, *storage.FileSystemStore) {
+	t.Helper()
+	router, _, store := buildBackupHandlerHarness(t)
+	return router, store
+}
+
+func buildBackupHandlerHarness(t *testing.T) (*chi.Mux, *service.RestoreOrchestrator, *storage.FileSystemStore) {
+	t.Helper()
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 	})
 
@@ -82,13 +96,13 @@ func setupBackupHandlerWithOrchestrator(t *testing.T) (*chi.Mux, *service.Restor
 
 	r := chi.NewRouter()
 	r.Route("/api/provision/{projectId}/backup", func(r chi.Router) { h.Routes(r) })
-	return r, orch
+	return r, orch, store
 }
 
 func TestBackupHandler_Restore_AsyncReturnsRunningJob(t *testing.T) {
 	r, _ := setupBackupHandlerWithOrchestrator(t)
 
-	body := `{"newProjectId":"dst"}`
+	body := `{"newProjectName":"dst"}`
 	req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -104,8 +118,14 @@ func TestBackupHandler_Restore_AsyncReturnsRunningJob(t *testing.T) {
 	if got.ID == "" {
 		t.Errorf("job id missing")
 	}
-	if got.SourceProjectID != "p1" || got.NewProjectID != "dst" {
-		t.Errorf("ids: %+v", got)
+	if got.SourceProjectID != "p1" {
+		t.Errorf("source id: %+v", got)
+	}
+	if !strings.HasPrefix(got.NewProjectID, "proj-") || got.NewProjectID == "dst" {
+		t.Errorf("the restore target id must be server-generated, got %q", got.NewProjectID)
+	}
+	if got.NewProjectName != "dst" {
+		t.Errorf("display name: %q", got.NewProjectName)
 	}
 	if got.Status != domain.RestoreStatusRunning {
 		t.Errorf("initial status: got %s", got.Status)
@@ -115,7 +135,7 @@ func TestBackupHandler_Restore_AsyncReturnsRunningJob(t *testing.T) {
 func TestBackupHandler_GetRestoreJob_ReturnsCompletedAfterRun(t *testing.T) {
 	r, _ := setupBackupHandlerWithOrchestrator(t)
 
-	body := `{"newProjectId":"dst"}`
+	body := `{"newProjectName":"dst"}`
 	req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -172,7 +192,7 @@ func (r *recordingBackupAdapter) Restore(_ context.Context, inst *domain.Databas
 	r.mu.Lock()
 	r.restoreHits++
 	r.mu.Unlock()
-	return &domain.ProvisioningResponse{ProjectID: req.GetNewProject(), Status: "RESTORING"}, nil
+	return &domain.ProvisioningResponse{ProjectID: req.TargetProjectID, Status: "RESTORING"}, nil
 }
 
 // TestBackupHandler_Restore_OrchestratorDelegatesToAdapter pins the
@@ -186,7 +206,7 @@ func TestBackupHandler_Restore_OrchestratorDelegatesToAdapter(t *testing.T) {
 	backupSvc := service.NewBackupServiceWithAdapters(store, map[domain.DeploymentMode]service.BackupAdapter{
 		domain.ModeK8s: rec,
 	}, dir)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 	})
 
@@ -198,7 +218,7 @@ func TestBackupHandler_Restore_OrchestratorDelegatesToAdapter(t *testing.T) {
 		{Name: "delegate-to-adapter", Run: func(ctx context.Context, j *domain.RestoreJob) error {
 			inst, _ := store.FindByProjectID(j.SourceProjectID)
 			_, err := backupSvc.RestoreFromBackup(ctx, inst.ProjectID, domain.RestoreRequest{
-				NewProjectID: j.NewProjectID,
+				NewProjectName: j.NewProjectID, TargetProjectID: j.NewProjectID,
 			})
 			return err
 		}},
@@ -209,7 +229,7 @@ func TestBackupHandler_Restore_OrchestratorDelegatesToAdapter(t *testing.T) {
 	r := chi.NewRouter()
 	r.Route("/api/provision/{projectId}/backup", func(r chi.Router) { h.Routes(r) })
 
-	body := `{"newProjectId":"dst"}`
+	body := `{"newProjectName":"dst"}`
 	req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -242,7 +262,7 @@ func TestBackupHandler_Restore_OrchestratorDelegatesToAdapter(t *testing.T) {
 
 func TestBackupHandler_Restore_RejectsTwoTargets(t *testing.T) {
 	r, _ := setupBackupHandlerWithOrchestrator(t)
-	body := `{"newProjectId":"dst","targetXid":"123","targetLsn":"0/15"}`
+	body := `{"newProjectName":"dst","targetXid":"123","targetLsn":"0/15"}`
 	req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

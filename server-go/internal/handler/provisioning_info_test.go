@@ -64,7 +64,7 @@ func TestGetProjectInfo_Success(t *testing.T) {
 		t.Fatalf("CreateOrg: %v", err)
 	}
 
-	if err := store.Save(&domain.DatabaseInstance{
+	if err := store.Create(&domain.DatabaseInstance{
 		ProjectID:   "proj-i1nd88wser",
 		ProjectName: "blog",
 		OrgID:       testUUID,
@@ -123,7 +123,7 @@ func TestGetProjectInfo_ExposesCorsAllowedOrigins(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateOrg: %v", err)
 	}
-	if err := store.Save(&domain.DatabaseInstance{
+	if err := store.Create(&domain.DatabaseInstance{
 		ProjectID: "proj-cors-info", ProjectName: "web",
 		OrgID: "a1b2c3d4-0000-4000-8000-000000000001", OwnerID: "owner-cors", Status: "ACTIVE",
 	}); err != nil {
@@ -182,7 +182,7 @@ func TestGetProjectInfo_InvalidProjectID(t *testing.T) {
 func TestGetProjectInfo_OrgMissing_Returns503(t *testing.T) {
 	r, store := setupInfoRouter(t)
 
-	if err := store.Save(&domain.DatabaseInstance{
+	if err := store.Create(&domain.DatabaseInstance{
 		ProjectID:   "proj-orphan",
 		ProjectName: "orphaned",
 		OrgID:       "unknown-org-id",

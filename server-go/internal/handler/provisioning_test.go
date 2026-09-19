@@ -76,7 +76,7 @@ func TestListInstancesEmpty(t *testing.T) {
 func TestListInstancesWithData(t *testing.T) {
 	r, store := setupTestRouter(t)
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "db1",
 		OrgID:     "org1",
 		Status:    "ACTIVE",
@@ -112,7 +112,7 @@ func TestGetStatus(t *testing.T) {
 	r, store := setupTestRouter(t)
 
 	port := 5432
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID:    "test-db",
 		OrgID:        "org1",
 		Status:       "ACTIVE",
@@ -157,9 +157,9 @@ func TestProvisionNoK8s(t *testing.T) {
 func TestListInstancesReturnsAll(t *testing.T) {
 	r, store := setupTestRouter(t)
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "a", OwnerID: testUser1, Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "b", OwnerID: testUser1, Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "a", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "b", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
 
 	req := httptest.NewRequest("GET", testProvisionPrefix, nil)
 	w := httptest.NewRecorder()
@@ -188,8 +188,8 @@ func TestListInstances_NilOrgStoreFailsClosed(t *testing.T) {
 		t.Fatalf("init store: %v", err)
 	}
 	// Seed instances that would be leaked under the old fail-open behaviour.
-	store.Save(&domain.DatabaseInstance{ProjectID: "a", OrgID: "org1", Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "b", OrgID: "org2", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "a", OrgID: "org1", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "b", OrgID: "org2", Status: "ACTIVE"})
 
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
@@ -216,7 +216,7 @@ func TestGetCredentialsForCDS(t *testing.T) {
 
 	port := 5432
 	pgUsername := testutil.FixtureToken("pguser")
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID:    "cds-project",
 		OrgID:        "org1",
 		OwnerID:      testUser1,

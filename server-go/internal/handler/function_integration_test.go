@@ -19,6 +19,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -106,8 +107,21 @@ type e2eInstanceStore struct {
 	insts map[string]*domain.DatabaseInstance
 }
 
-func (s *e2eInstanceStore) Save(inst *domain.DatabaseInstance) error {
+func (s *e2eInstanceStore) Create(inst *domain.DatabaseInstance) error {
+	if _, taken := s.insts[inst.ProjectID]; taken {
+		return storage.ErrProjectExists
+	}
 	s.insts[inst.ProjectID] = inst
+	return nil
+}
+func (s *e2eInstanceStore) Update(inst *domain.DatabaseInstance) error {
+	existing, ok := s.insts[inst.ProjectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	updated := *inst
+	updated.OrgID = existing.OrgID
+	s.insts[inst.ProjectID] = &updated
 	return nil
 }
 func (s *e2eInstanceStore) FindByProjectID(id string) (*domain.DatabaseInstance, error) {

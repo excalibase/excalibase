@@ -19,7 +19,7 @@ func setupBackupTest(t *testing.T) (*BackupService, *storage.FileSystemStore) {
 	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
 	svc.SetProjectRegistrar(&fakeRegistrar{})
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
 		DBType: domain.PostgreSQL,
 	})
@@ -76,13 +76,13 @@ func TestRestoreFromBackup(t *testing.T) {
 	mock.WildcardPodReady = true
 	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
 	svc.SetProjectRegistrar(&fakeRegistrar{})
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
 		DBType: domain.PostgreSQL,
 	})
 
 	resp, err := svc.RestoreFromBackup(context.Background(), "bk-db", domain.RestoreRequest{
-		NewProjectName: "bk-db-restored",
+		NewProjectName: "bk-db-restored", TargetProjectID: "bk-db-restored",
 	})
 	if err != nil {
 		t.Fatalf("RestoreFromBackup: %v", err)
@@ -116,7 +116,7 @@ func TestRestoreFromBackupNotFound(t *testing.T) {
 	svc := NewBackupService(store, k8s.NewMockClient(), dir, StaticBackupStorage(r2Storage()))
 
 	_, err := svc.RestoreFromBackup(context.Background(), "nope", domain.RestoreRequest{
-		NewProjectName: "restored",
+		NewProjectName: "restored", TargetProjectID: "restored",
 	})
 	if err == nil {
 		t.Error("expected error for missing project")
@@ -128,7 +128,7 @@ func TestRestoreFromBackupPITR(t *testing.T) {
 	targetTime := &domain.FlexTime{Time: time.Now().Add(-1 * time.Hour)}
 
 	resp, err := svc.RestoreFromBackup(context.Background(), "bk-db", domain.RestoreRequest{
-		NewProjectName: "bk-db-pitr",
+		NewProjectName: "bk-db-pitr", TargetProjectID: "bk-db-pitr",
 		TargetTime:     targetTime,
 	})
 	if err != nil {

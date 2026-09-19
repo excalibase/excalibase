@@ -10,6 +10,7 @@ import (
 	"errors"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // Instances is an InstanceStore keyed by project id. Err, when set, is
@@ -24,9 +25,24 @@ func NewInstances() *Instances {
 	return &Instances{Items: map[string]*domain.DatabaseInstance{}}
 }
 
-// Save stores the instance under its project id.
-func (s *Instances) Save(inst *domain.DatabaseInstance) error {
+// Create registers the instance, refusing an id that is already taken.
+func (s *Instances) Create(inst *domain.DatabaseInstance) error {
+	if _, taken := s.Items[inst.ProjectID]; taken {
+		return storage.ErrProjectExists
+	}
 	s.Items[inst.ProjectID] = inst
+	return nil
+}
+
+// Update persists changes to an existing instance, keeping its org.
+func (s *Instances) Update(inst *domain.DatabaseInstance) error {
+	existing, ok := s.Items[inst.ProjectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	updated := *inst
+	updated.OrgID = existing.OrgID
+	s.Items[inst.ProjectID] = &updated
 	return nil
 }
 

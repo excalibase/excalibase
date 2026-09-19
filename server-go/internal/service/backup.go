@@ -28,8 +28,10 @@ type BackupService struct {
 // it builds a one-entry adapter map so dispatch still works. backupStorage
 // is the store backups are written to; restores read from the same one.
 func NewBackupService(store storage.InstanceStore, client k8s.KubeClient, storagePath string, backupStorage BackupStorageSource) *BackupService {
+	adapter := NewK8sBackupAdapter(client, storagePath, backupStorage)
+	adapter.SetInstanceStore(store)
 	return NewBackupServiceWithAdapters(store, map[domain.DeploymentMode]BackupAdapter{
-		domain.ModeK8s: NewK8sBackupAdapter(client, storagePath, backupStorage),
+		domain.ModeK8s: adapter,
 	}, storagePath)
 }
 
@@ -109,7 +111,16 @@ func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string,
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
+	if req.TargetProjectID == "" {
+		return nil, ErrTargetProjectIDMissing
+	}
 	return adapter.Restore(ctx, inst, req)
+}
+
+// AllocateProjectID reserves the id a restore will register its new project
+// under. The caller of a restore never names it — see EXC-415.
+func (s *BackupService) AllocateProjectID() (string, error) {
+	return allocateProjectID(s.store)
 }
 
 func (s *BackupService) GetInstance(projectID string) (*domain.DatabaseInstance, error) {

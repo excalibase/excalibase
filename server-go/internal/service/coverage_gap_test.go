@@ -417,7 +417,7 @@ func TestProvisionBYOC_HappyPath_NoVaultNoOrgStore(t *testing.T) {
 func TestBackupService_GetInstance(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
-	store.Save(&domain.DatabaseInstance{ProjectID: "bk", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "bk", Status: "ACTIVE"})
 
 	svc := NewBackupService(store, nil, dir, nil)
 	got, err := svc.GetInstance("bk")

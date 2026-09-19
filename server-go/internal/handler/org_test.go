@@ -402,7 +402,7 @@ func TestProjectMemberCRUD(t *testing.T) {
 
 	// my-proj belongs to this org — seed the instance so the project↔org
 	// ownership check passes for the legitimate same-org flow.
-	instances.Save(&domain.DatabaseInstance{ProjectID: "my-proj", OrgID: org.ID})
+	instances.Create(&domain.DatabaseInstance{ProjectID: "my-proj", OrgID: org.ID})
 
 	// Alice (owner) adds bob as editor
 	w2 := orgRequest(r, "POST", testOrgsSlash+org.ID+testMyProjMembers,
@@ -492,7 +492,7 @@ func TestProjectMember_InvalidRoleRejected(t *testing.T) {
 
 	// proj1 belongs to this org so the request reaches role validation
 	// (rather than short-circuiting on the project↔org ownership check).
-	instances.Save(&domain.DatabaseInstance{ProjectID: "proj1", OrgID: org.ID})
+	instances.Create(&domain.DatabaseInstance{ProjectID: "proj1", OrgID: org.ID})
 
 	// Add with invalid project role
 	w2 := orgRequest(r, "POST", testOrgsSlash+org.ID+testProj1Members,
@@ -519,7 +519,7 @@ func TestProjectMember_CrossOrgProjectReturns404(t *testing.T) {
 	wB := orgRequest(r, "POST", testOrgsPath, `{"name":"OrgB","slug":"org-b"}`, testBobID)
 	var orgB domain.Org
 	json.NewDecoder(wB.Body).Decode(&orgB)
-	instances.Save(&domain.DatabaseInstance{ProjectID: "victim-proj", OrgID: orgB.ID})
+	instances.Create(&domain.DatabaseInstance{ProjectID: "victim-proj", OrgID: orgB.ID})
 
 	// Alice (member of org A) tries to list org B's project members through
 	// org A's URL: /api/orgs/{orgA}/projects/victim-proj/members.
@@ -555,7 +555,7 @@ func TestProjectMember_SameOrgProjectSucceeds(t *testing.T) {
 	w := orgRequest(r, "POST", testOrgsPath, `{"name":"OwnOrg","slug":"own-org"}`, testAliceID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
-	instances.Save(&domain.DatabaseInstance{ProjectID: "own-proj", OrgID: org.ID})
+	instances.Create(&domain.DatabaseInstance{ProjectID: "own-proj", OrgID: org.ID})
 
 	base := testOrgsSlash + org.ID + "/projects/own-proj/members"
 

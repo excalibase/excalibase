@@ -171,7 +171,7 @@ func TestProvisionSameDisplayNameDoesNotBlock(t *testing.T) {
 		"password": []byte("testpassword123"),
 		"dbname":   []byte("app"),
 	}
-	store.Save(&domain.DatabaseInstance{ProjectID: "proj-aaaaaaaaaa", ProjectName: "Blog", OrgID: "org1", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "proj-aaaaaaaaaa", ProjectName: "Blog", OrgID: "org1", Status: "ACTIVE"})
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		ProjectName: "Blog",
@@ -191,7 +191,7 @@ func TestProvisionExceedsFreeTierLimit(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
 
 	// Org already has 1 project (FREE tier max)
-	store.Save(&domain.DatabaseInstance{ProjectID: "proj-existing01", OrgID: "org1", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "proj-existing01", OrgID: "org1", Status: "ACTIVE"})
 
 	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		ProjectName: "second-db",
@@ -229,7 +229,7 @@ func TestProvisionStandardTierAllowsMultipleProjects(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
 
 	// Org already has 1 project but STANDARD allows 5
-	store.Save(&domain.DatabaseInstance{ProjectID: "proj-stdfirst01", OrgID: "org1", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "proj-stdfirst01", OrgID: "org1", Status: "ACTIVE"})
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		ProjectName: "std-second",
@@ -332,7 +332,7 @@ func TestDeprovision(t *testing.T) {
 	svc, store, mock := setupProvisioningTest(t)
 	mock.SetupPostgreSQLMock(testDelDB, "org1-del-db", 1)
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testDelDB,
 		OrgID:     "org1",
 		DBType:    domain.PostgreSQL,
@@ -377,7 +377,7 @@ func TestDeprovisionDeletesVaultCredentials(t *testing.T) {
 	// A path outside the project — must NOT be deleted.
 	v.Put("projects/other-proj/credentials/admin", map[string]string{"password": "untouched"})
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testVaultDel,
 		OrgID:     "org1",
 		DBType:    domain.PostgreSQL,
@@ -420,7 +420,7 @@ func TestDeprovisionDoesNotSweepLegacyOrgScopedPaths(t *testing.T) {
 	canonical := "projects/legacy-proj/credentials/excalibase_app"
 	v.Put(canonical, map[string]string{"password": "current"})
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testLegacyProj,
 		OrgID:     "org9",
 		DBType:    domain.PostgreSQL,
@@ -444,7 +444,7 @@ func TestDeprovisionContinuesWhenVaultListFails(t *testing.T) {
 	v := &errVault{err: errors.New("vault outage")}
 	svc.SetVault(v)
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testVaultErr,
 		OrgID:     "org1",
 		DBType:    domain.PostgreSQL,
@@ -468,7 +468,7 @@ func TestDeprovisionSkipsVaultWhenSealed(t *testing.T) {
 	v := &sealedVault{}
 	svc.SetVault(v)
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testSealedDel,
 		OrgID:     "org1",
 		DBType:    domain.PostgreSQL,
@@ -488,7 +488,7 @@ func TestDeprovisionSkipsVaultWhenSealed(t *testing.T) {
 func TestDeprovisionDeletionProtection(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
 	protected := true
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID:          "protected-db",
 		DBType:             domain.PostgreSQL,
 		Status:             "ACTIVE",
@@ -504,7 +504,7 @@ func TestDeprovisionDeletionProtection(t *testing.T) {
 func TestGetCredentials(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
 	port := 5432
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID:    "cred-db",
 		Host:         "host.local",
 		Port:         &port,
@@ -532,7 +532,7 @@ func TestGetCredentials(t *testing.T) {
 
 func TestSetDeletionProtection(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
-	store.Save(&domain.DatabaseInstance{ProjectID: "dp-db", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "dp-db", Status: "ACTIVE"})
 
 	if err := svc.SetDeletionProtection("dp-db", true); err != nil {
 		t.Fatalf("SetDeletionProtection: %v", err)
@@ -546,8 +546,8 @@ func TestSetDeletionProtection(t *testing.T) {
 
 func TestGetAllInstances(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
-	store.Save(&domain.DatabaseInstance{ProjectID: "a", Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "b", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "a", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "b", Status: "ACTIVE"})
 
 	all, _ := svc.GetAllInstances()
 	if len(all) != 2 {
@@ -1013,9 +1013,9 @@ func TestProvisionFailure_NamespaceFailureHasNoRollbackLog(t *testing.T) {
 
 func TestGetInstancesByOwner(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
-	store.Save(&domain.DatabaseInstance{ProjectID: "a", OwnerID: testUser1, Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "b", OwnerID: testUser1, Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "a", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "b", OwnerID: testUser1, Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "c", OwnerID: "user-2", Status: "ACTIVE"})
 
 	owned, err := svc.GetInstancesByOwner(testUser1)
 	if err != nil {

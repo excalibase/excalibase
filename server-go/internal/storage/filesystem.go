@@ -49,10 +49,34 @@ func NewFileSystemStore(basePath string) (*FileSystemStore, error) {
 	return store, nil
 }
 
-func (s *FileSystemStore) Save(inst *domain.DatabaseInstance) error {
+// Create registers a new project, refusing an id that is already taken.
+func (s *FileSystemStore) Create(inst *domain.DatabaseInstance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, taken := s.cache[inst.ProjectID]; taken {
+		return ErrProjectExists
+	}
+	return s.write(inst)
+}
+
+// Update persists changes to an existing project, keeping the org it was
+// created in whatever the caller put on the struct.
+func (s *FileSystemStore) Update(inst *domain.DatabaseInstance) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, ok := s.cache[inst.ProjectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	updated := *inst
+	updated.OrgID = existing.OrgID
+	return s.write(&updated)
+}
+
+// write persists the instance to disk and the cache. Callers hold s.mu.
+func (s *FileSystemStore) write(inst *domain.DatabaseInstance) error {
 	dir := s.projectDir(inst.ProjectID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create project dir: %w", err)

@@ -35,6 +35,7 @@ func newRestoreReadyAdapter(t *testing.T, mock *k8s.MockClient, reg ProjectRegis
 	t.Helper()
 	mock.WildcardPodReady = true
 	adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(r2Storage()))
+	adapter.SetInstanceStore(emptyInstanceStore(t))
 	adapter.SetProjectRegistrar(reg)
 	adapter.readyPoll = time.Millisecond
 	adapter.readyTimeout = 200 * time.Millisecond
@@ -47,7 +48,7 @@ func TestK8sRestoreRegistersTheRestoredProject(t *testing.T) {
 	adapter := newRestoreReadyAdapter(t, mock, reg)
 
 	resp, err := adapter.Restore(context.Background(), sourceInstance(),
-		domain.RestoreRequest{NewProjectName: "dst", BackupID: "bk-9"})
+		domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst", BackupID: "bk-9"})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -69,11 +70,23 @@ func TestK8sRestoreRegistersTheRestoredProject(t *testing.T) {
 	}
 }
 
+// emptyInstanceStore is a store with no projects — a restore target id is
+// always free in it, so tests exercise the path past the collision check.
+func emptyInstanceStore(t *testing.T) storage.InstanceStore {
+	t.Helper()
+	store, err := storage.NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	return store
+}
+
 func TestK8sRestoreRefusesWithoutRegistrar(t *testing.T) {
 	mock := k8s.NewMockClient()
 	adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(r2Storage()))
+	adapter.SetInstanceStore(emptyInstanceStore(t))
 
-	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst"})
+	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
 	if !errors.Is(err, ErrProjectRegistrarNotConfigured) {
 		t.Fatalf("err: got %v, want ErrProjectRegistrarNotConfigured", err)
 	}
@@ -87,7 +100,7 @@ func TestK8sRestoreFailsWhenRegistrationFails(t *testing.T) {
 	reg := &fakeRegistrar{err: errors.New("vault sealed")}
 	adapter := newRestoreReadyAdapter(t, mock, reg)
 
-	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst"})
+	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
 	if err == nil {
 		t.Fatal("registration failure must fail the restore so the job is marked FAILED")
 	}
@@ -102,7 +115,7 @@ func TestK8sRestoreFailsWhenPrimaryNeverReady(t *testing.T) {
 	adapter := newRestoreReadyAdapter(t, mock, reg)
 	mock.WildcardPodReady = false
 
-	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst"})
+	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
 	if err == nil {
 		t.Fatal("restore must fail when the recovered primary never becomes ready")
 	}
@@ -141,7 +154,7 @@ func TestDockerRestoreRegistersInsteadOfSavingTheRowItself(t *testing.T) {
 	reg := &fakeRegistrar{}
 	h.adapter.SetProjectRegistrar(reg)
 
-	resp, err := h.adapter.Restore(context.Background(), h.source, domain.RestoreRequest{NewProjectName: "dst"})
+	resp, err := h.adapter.Restore(context.Background(), h.source, domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -170,7 +183,7 @@ func TestDockerRestoreFailsWhenRegistrationFails(t *testing.T) {
 	h := newDockerRestoreHarness(t)
 	h.adapter.SetProjectRegistrar(&fakeRegistrar{err: errors.New("vault sealed")})
 
-	if _, err := h.adapter.Restore(context.Background(), h.source, domain.RestoreRequest{NewProjectName: "dst"}); err == nil {
+	if _, err := h.adapter.Restore(context.Background(), h.source, domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"}); err == nil {
 		t.Fatal("registration failure must fail the restore so the job is marked FAILED")
 	}
 	if saved, _ := h.instances.FindByProjectID("dst"); saved != nil {
@@ -181,7 +194,7 @@ func TestDockerRestoreFailsWhenRegistrationFails(t *testing.T) {
 func TestDockerRestoreRefusesWithoutRegistrar(t *testing.T) {
 	h := newDockerRestoreHarness(t)
 
-	_, err := h.adapter.Restore(context.Background(), h.source, domain.RestoreRequest{NewProjectName: "dst"})
+	_, err := h.adapter.Restore(context.Background(), h.source, domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
 	if !errors.Is(err, ErrProjectRegistrarNotConfigured) {
 		t.Fatalf("err: got %v, want ErrProjectRegistrarNotConfigured", err)
 	}

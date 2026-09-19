@@ -43,3 +43,39 @@ func TestRestoreJobs_ListRunning(t *testing.T) {
 		t.Errorf("running: %+v", got)
 	}
 }
+
+// The restore target id is generated (EXC-415), so the job row is the only
+// place the new project's admin can learn it. Project-scoped lookup (EXC-399)
+// must still resolve for BOTH named projects and for nobody else.
+func TestRestoreJobs_GeneratedTargetIDStaysProjectScoped(t *testing.T) {
+	store := testStore(t)
+	rs := NewRestoreJobs(store)
+	ctx := context.Background()
+
+	const generatedTarget = "proj-gen4t9xq2p"
+	if err := rs.UpsertRestoreJob(ctx, &domain.RestoreJob{
+		ID: "j-scoped", SourceProjectID: "proj-source01", NewProjectID: generatedTarget,
+		NewProjectName: "restored orders",
+		Status:         domain.RestoreStatusRunning, TargetKind: "latest",
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	for _, caller := range []string{"proj-source01", generatedTarget} {
+		got, err := rs.FindRestoreJob(ctx, caller, "j-scoped")
+		if err != nil || got == nil {
+			t.Fatalf("caller %q must see the job: %v", caller, err)
+		}
+		if got.NewProjectID != generatedTarget || got.NewProjectName != "restored orders" {
+			t.Errorf("caller %q got: %+v", caller, got)
+		}
+	}
+
+	got, err := rs.FindRestoreJob(ctx, "proj-stranger1", "j-scoped")
+	if err != nil {
+		t.Fatalf("Find as a third project: %v", err)
+	}
+	if got != nil {
+		t.Errorf("a project named nowhere on the job must not reach it: %+v", got)
+	}
+}

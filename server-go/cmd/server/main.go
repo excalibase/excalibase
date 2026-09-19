@@ -253,7 +253,10 @@ func runRestoreStep(ctx context.Context, store storage.InstanceStore, backupSvc 
 	if err != nil || inst == nil {
 		return fmt.Errorf("source project %s not found", j.SourceProjectID)
 	}
-	req := domain.RestoreRequest{NewProjectID: j.NewProjectID}
+	req := domain.RestoreRequest{
+		TargetProjectID: j.NewProjectID,
+		NewProjectName:  j.NewProjectName,
+	}
 	switch j.TargetKind {
 	case "time":
 		if t, err := time.Parse(time.RFC3339, j.TargetValue); err == nil {
@@ -735,8 +738,10 @@ func buildBackupService(
 	dockerClient provisioner.DockerClient,
 	backupStorage service.BackupStorageSource,
 ) *service.BackupService {
+	k8sAdapter := service.NewK8sBackupAdapter(k8sClient, cfg.StoragePath, backupStorage)
+	k8sAdapter.SetInstanceStore(store)
 	adapters := map[domain.DeploymentMode]service.BackupAdapter{
-		domain.ModeK8s: service.NewK8sBackupAdapter(k8sClient, cfg.StoragePath, backupStorage),
+		domain.ModeK8s: k8sAdapter,
 	}
 
 	if cfg.ProvisionerMode == "docker" && dockerClient != nil {
