@@ -455,10 +455,22 @@ func TestSnapshotListHandler(t *testing.T) {
 func TestSnapshotDeleteHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	mock.ExecOutput[testDBPodName] = "-- dump output"
 
-	w := doRequest(r, "DELETE", "/api/provision/test-db/snapshot/fake-id", "")
+	snapshotID := exportSnapshotID(t, r, "test-db")
+	w := doRequest(r, "DELETE", "/api/provision/test-db/snapshot/"+snapshotID, "")
 	if w.Code != 200 {
 		t.Errorf("delete snapshot: %d", w.Code)
+	}
+}
+
+func TestSnapshotDeleteUnknownID(t *testing.T) {
+	r, store, mock := fullRouter(t)
+	seedInstance(store, mock)
+
+	w := doRequest(r, "DELETE", "/api/provision/test-db/snapshot/fake-id", "")
+	if w.Code != 404 {
+		t.Errorf("delete unknown snapshot: got %d, want 404", w.Code)
 	}
 }
 

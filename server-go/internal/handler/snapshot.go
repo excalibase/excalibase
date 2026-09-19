@@ -2,12 +2,20 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/security"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/go-chi/chi/v5"
 )
+
+// errSnapshotNotFound is the single answer for "no such snapshot" and "that
+// snapshot belongs to another project" — confirming existence would defeat
+// the ownership check.
+const errSnapshotNotFound = "snapshot not found"
 
 type SnapshotHandler struct{ svc *service.SnapshotService }
 
@@ -35,11 +43,28 @@ func (h *SnapshotHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, list)
 }
 
+// snapshotIDParam validates the {snapshotId} path parameter at the handler
+// boundary. A malformed id is a bad request and never reaches the store.
+func snapshotIDParam(w http.ResponseWriter, r *http.Request) (string, bool) {
+	snapshotID := chi.URLParam(r, "snapshotId")
+	if err := security.ValidateIdentifier(snapshotID); err != nil {
+		httpError(w, "invalid snapshot id", http.StatusBadRequest)
+		return "", false
+	}
+	return snapshotID, true
+}
+
 func (h *SnapshotHandler) Download(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
-	snapshotID := chi.URLParam(r, "snapshotId")
+	snapshotID, ok := snapshotIDParam(w, r)
+	if !ok {
+		return
+	}
 	data, filename, err := h.svc.DownloadSnapshot(projectID, snapshotID)
-	if err != nil { httpError(w, safeError(err), http.StatusNotFound); return }
+	if err != nil {
+		httpError(w, errSnapshotNotFound, http.StatusNotFound)
+		return
+	}
 	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Write(data)
@@ -47,7 +72,20 @@ func (h *SnapshotHandler) Download(w http.ResponseWriter, r *http.Request) {
 
 func (h *SnapshotHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
-	snapshotID := chi.URLParam(r, "snapshotId")
-	h.svc.DeleteSnapshot(projectID, snapshotID)
+	snapshotID, ok := snapshotIDParam(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DeleteSnapshot(projectID, snapshotID); err != nil {
+		if errors.Is(err, service.ErrSnapshotNotFound) {
+			httpError(w, errSnapshotNotFound, http.StatusNotFound)
+			return
+		}
+		// The store's error names the file it could not remove; the caller
+		// gets the outcome, the operator gets the detail from the log.
+		log.Printf("ERROR: delete snapshot %s for project %s: %v", snapshotID, projectID, err)
+		httpError(w, "snapshot delete failed", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "deleted"})
 }
