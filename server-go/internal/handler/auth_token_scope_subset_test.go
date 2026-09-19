@@ -38,8 +38,8 @@ func newSubsetFixture(t *testing.T, role string) *subsetFixture {
 	}
 
 	instances := fakestore.NewInstances()
-	instances.Save(&domain.DatabaseInstance{ProjectID: subsetProjectA, OrgID: subsetOrg})
-	instances.Save(&domain.DatabaseInstance{ProjectID: subsetProjectB, OrgID: subsetOrg})
+	instances.Create(&domain.DatabaseInstance{ProjectID: subsetProjectA, OrgID: subsetOrg})
+	instances.Create(&domain.DatabaseInstance{ProjectID: subsetProjectB, OrgID: subsetOrg})
 	orgs := fakestore.NewOrgs()
 	orgs.AddMember(subsetOrg, subsetUserID, domain.OrgRoleAdmin)
 
