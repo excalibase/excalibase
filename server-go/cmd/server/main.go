@@ -1208,6 +1208,12 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		// Listing the published tables is a read any member may make; enabling
+		// or disabling one alters the database publication, so it sits on the
+		// same Developer+ rung as every other data-plane authoring surface. The
+		// mount enforced membership and nothing else, which let a Viewer call
+		// /disable-all (EXC-395).
+		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(d.activity)
 		d.realtimeHandler.Routes(r)
 	})
@@ -1216,6 +1222,13 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)
 			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			// Listing buckets and objects and minting a download URL are reads
+			// any member may make; creating or dropping a bucket, uploading,
+			// confirming and deleting objects change what the project stores,
+			// so they carry the Developer+ gate the rest of the data plane
+			// does. The mount enforced membership and nothing else, which let a
+			// Viewer delete a bucket and everything in it (EXC-395).
+			r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 			r.Use(d.activity)
 			d.storageHandler.Routes(r)
 		})
