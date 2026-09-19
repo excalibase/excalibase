@@ -30,12 +30,11 @@ func TestAdvisoryLock_ReleaseReturnsTheConnection(t *testing.T) {
 	store := testStore(t)
 	baseline := inUse(t, store)
 
-	lock := NewAdvisoryLock(store.DB(), testLockKeyA)
-	got, err := lock.Acquire(context.Background())
+	lease, got, err := NewAdvisoryLock(store.DB(), testLockKeyA).Acquire(context.Background())
 	if err != nil || !got {
 		t.Fatalf("Acquire = %v, %v; want true", got, err)
 	}
-	if err := lock.Release(context.Background()); err != nil {
+	if err := lease.Release(context.Background()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	if held := inUse(t, store); held != baseline {
@@ -49,16 +48,15 @@ func TestAdvisoryLock_ContestedClaimHoldsNoConnection(t *testing.T) {
 	store := testStore(t)
 	baseline := inUse(t, store)
 
-	holder := NewAdvisoryLock(store.DB(), testLockKeyA)
-	if got, err := holder.Acquire(context.Background()); err != nil || !got {
+	holder, got, err := NewAdvisoryLock(store.DB(), testLockKeyA).Acquire(context.Background())
+	if err != nil || !got {
 		t.Fatalf("holder Acquire = %v, %v", got, err)
 	}
 	defer holder.Release(context.Background())
 	held := inUse(t, store)
 
-	loser := NewAdvisoryLock(store.DB(), testLockKeyA)
-	if got, err := loser.Acquire(context.Background()); err != nil || got {
-		t.Fatalf("contested Acquire = %v, %v; want false", got, err)
+	if lease, got, err := NewAdvisoryLock(store.DB(), testLockKeyA).Acquire(context.Background()); err != nil || got || lease != nil {
+		t.Fatalf("contested Acquire = %v, %v, %v; want no lease", lease, got, err)
 	}
 	if now := inUse(t, store); now != held {
 		t.Fatalf("connections in use after a lost claim = %d, want %d", now, held)
@@ -76,8 +74,8 @@ func TestAdvisoryLock_RepeatedContestedClaimsDoNotExhaustThePool(t *testing.T) {
 	store := testStore(t)
 	store.DB().SetMaxOpenConns(5)
 
-	holder := NewAdvisoryLock(store.DB(), testLockKeyB)
-	if got, err := holder.Acquire(context.Background()); err != nil || !got {
+	holder, got, err := NewAdvisoryLock(store.DB(), testLockKeyB).Acquire(context.Background())
+	if err != nil || !got {
 		t.Fatalf("holder Acquire = %v, %v", got, err)
 	}
 	defer holder.Release(context.Background())
@@ -85,8 +83,7 @@ func TestAdvisoryLock_RepeatedContestedClaimsDoNotExhaustThePool(t *testing.T) {
 
 	for i := 0; i < 50; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), lockTestTimeout)
-		loser := NewAdvisoryLock(store.DB(), testLockKeyB)
-		got, err := loser.Acquire(ctx)
+		_, got, err := NewAdvisoryLock(store.DB(), testLockKeyB).Acquire(ctx)
 		cancel()
 		if err != nil {
 			t.Fatalf("claim %d: %v", i, err)
@@ -108,11 +105,11 @@ func TestAdvisoryLock_IsReusableAfterRelease(t *testing.T) {
 	lock := NewAdvisoryLock(store.DB(), testLockKeyA)
 
 	for i := 0; i < 3; i++ {
-		got, err := lock.Acquire(context.Background())
+		lease, got, err := lock.Acquire(context.Background())
 		if err != nil || !got {
 			t.Fatalf("tick %d: Acquire = %v, %v", i, got, err)
 		}
-		if err := lock.Release(context.Background()); err != nil {
+		if err := lease.Release(context.Background()); err != nil {
 			t.Fatalf("tick %d: Release: %v", i, err)
 		}
 	}
@@ -124,8 +121,67 @@ func TestAdvisoryLock_IsReusableAfterRelease(t *testing.T) {
 // Releasing a lock that was never acquired is a no-op, not an error: the
 // schedulers defer Release on paths that may not have taken it.
 func TestAdvisoryLock_ReleaseWithoutAcquireIsSafe(t *testing.T) {
+	if err := (&AdvisoryLease{}).Release(context.Background()); err != nil {
+		t.Fatalf("releasing a lease that holds nothing: %v", err)
+	}
+}
+
+// A lock object is not a leadership flag. Two callers on the same object get
+// separate sessions, so only one holds the key — and when the holder
+// releases, the other must not be left believing it leads.
+func TestAdvisoryLock_ASecondCallerDoesNotInheritLeadership(t *testing.T) {
 	store := testStore(t)
-	if err := NewAdvisoryLock(store.DB(), testLockKeyA).Release(context.Background()); err != nil {
-		t.Fatalf("Release without Acquire: %v", err)
+	lock := NewAdvisoryLock(store.DB(), testLockKeyA)
+
+	first, got, err := lock.Acquire(context.Background())
+	if err != nil || !got {
+		t.Fatalf("first Acquire = %v, %v; want the lock", got, err)
+	}
+	second, got, err := lock.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("second Acquire: %v", err)
+	}
+	if got {
+		t.Fatal("two callers must not both hold the key; the second took it without the database saying so")
+	}
+	if second != nil {
+		t.Fatal("a refused Acquire must hand back no lease")
+	}
+
+	// The holder finishing must not leave the other caller able to release
+	// a lock it never had.
+	if err := first.Release(context.Background()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if err := first.Release(context.Background()); err != nil {
+		t.Fatalf("releasing twice must be a no-op, got %v", err)
+	}
+	if held := inUse(t, store); held != 0 && held != 1 {
+		t.Fatalf("connections in use after release = %d", held)
+	}
+
+	third, got, err := lock.Acquire(context.Background())
+	if err != nil || !got {
+		t.Fatalf("the key must be free again: %v, %v", got, err)
+	}
+	third.Release(context.Background())
+}
+
+// A lease whose connection has gone reports itself invalid, so a replica
+// that lost its session stops believing it still leads.
+func TestAdvisoryLease_ReportsAnInvalidLeaseAfterRelease(t *testing.T) {
+	store := testStore(t)
+	lease, got, err := NewAdvisoryLock(store.DB(), testLockKeyA).Acquire(context.Background())
+	if err != nil || !got {
+		t.Fatalf("Acquire = %v, %v", got, err)
+	}
+	if !lease.Valid(context.Background()) {
+		t.Fatal("a freshly taken lease must be valid")
+	}
+	if err := lease.Release(context.Background()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if lease.Valid(context.Background()) {
+		t.Fatal("a released lease must not report itself valid")
 	}
 }

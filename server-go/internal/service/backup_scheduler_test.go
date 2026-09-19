@@ -54,25 +54,46 @@ func (f *fakeScheduleStore) DeleteSchedule(_ context.Context, projectID string) 
 	return nil
 }
 
-// fakeLeaderLock allows tests to flip leadership state.
+// fakeLeaderLock hands out leases, counting how often the lock itself was
+// asked — a standing claim asks once, not once per job.
 type fakeLeaderLock struct {
-	mu       sync.Mutex
-	acquired bool
+	mu        sync.Mutex
+	acquired  bool
+	acquires  int
+	refuse    bool
+	leaseDead bool
 }
 
-func (l *fakeLeaderLock) Acquire(_ context.Context) (bool, error) {
+func (l *fakeLeaderLock) Acquire(_ context.Context) (storage.LeaderLease, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.acquires++
+	if l.refuse {
+		return nil, false, nil
+	}
 	l.acquired = true
-	return true, nil
+	return &fakeLease{lock: l, dead: l.leaseDead}, true, nil
 }
 
-func (l *fakeLeaderLock) Release(_ context.Context) error {
+func (l *fakeLeaderLock) acquireCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.acquired = false
+	return l.acquires
+}
+
+type fakeLease struct {
+	lock *fakeLeaderLock
+	dead bool
+}
+
+func (le *fakeLease) Release(context.Context) error {
+	le.lock.mu.Lock()
+	defer le.lock.mu.Unlock()
+	le.lock.acquired = false
 	return nil
 }
+
+func (le *fakeLease) Valid(context.Context) bool { return !le.dead }
 
 func setupScheduler(t *testing.T) (*BackupScheduler, *fakeScheduleStore, *storage.FileSystemStore, *fakeAdapter, *fakeLeaderLock) {
 	t.Helper()
@@ -192,7 +213,7 @@ func TestScheduler_NotLeader_DoesNotFire(t *testing.T) {
 	instances.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
-	scheduler.lock = &refusingLock{}
+	scheduler.leadership = NewLeadership(&refusingLock{})
 
 	scheduler.Register(context.Background(), &domain.BackupSchedule{
 		ProjectID: "p1", Cron: "@every 200ms", RetentionDays: 7, Enabled: true,
@@ -211,5 +232,6 @@ func TestScheduler_NotLeader_DoesNotFire(t *testing.T) {
 // refusingLock always returns acquired=false.
 type refusingLock struct{}
 
-func (l *refusingLock) Acquire(_ context.Context) (bool, error) { return false, nil }
-func (l *refusingLock) Release(_ context.Context) error         { return nil }
+func (l *refusingLock) Acquire(context.Context) (storage.LeaderLease, bool, error) {
+	return nil, false, nil
+}

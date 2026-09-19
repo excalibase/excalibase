@@ -7,9 +7,9 @@ import (
 )
 
 // A store hands readers a Clone so they cannot reach back into the stored
-// row. A shallow copy would still share every pointer field, so this walks
-// the struct by reflection: a pointer field added later fails here until
-// Clone handles it.
+// row. A shallow copy would still share every reference field, so this walks
+// the struct by reflection over pointers, maps and slices alike: a reference
+// field added later fails here until Clone handles it.
 func TestCloneSharesNoPointerWithTheOriginal(t *testing.T) {
 	original := fullyPopulatedInstance()
 	clone := original.Clone()
@@ -22,7 +22,9 @@ func TestCloneSharesNoPointerWithTheOriginal(t *testing.T) {
 	cv := reflect.ValueOf(clone).Elem()
 	for i := 0; i < ov.NumField(); i++ {
 		field := ov.Type().Field(i)
-		if ov.Field(i).Kind() != reflect.Ptr {
+		switch ov.Field(i).Kind() {
+		case reflect.Ptr, reflect.Map, reflect.Slice:
+		default:
 			continue
 		}
 		if ov.Field(i).IsNil() {

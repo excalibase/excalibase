@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
@@ -73,29 +75,69 @@ type errStore struct{}
 
 func (errStore) Error() string { return "store unavailable" }
 
-// Public function invocation carries a project id but sits outside the
-// project-access gate: invoking into a namespace being removed would fail
-// with a runtime error instead of saying why.
-func TestPublicInvokeRefusesADeletingProject(t *testing.T) {
-	dir := t.TempDir()
-	store := edgefn.NewFunctionStore(dir)
-	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
-		"proj_p1": {ProjectID: "proj_p1", OrgID: "default", Status: string(domain.StatusDeleting)},
-	}}
-	h := NewFunctionHandler(store, edgefn.NewSecretsStore(newFakeVault()), nil, instStore, nil, testAPIBase)
+// Invoking a project a teardown owns is refused where the handler already
+// resolves the project — not by a lookup keyed on the public route's
+// attacker-controlled path parameter.
+func TestInvokeRefusesADeletingProject(t *testing.T) {
+	h, instances := invokeHandler(t, string(domain.StatusDeleting))
+	if _, err := h.runtimeClientFor(context.Background(), "proj_p1"); !errors.Is(err, ErrProjectDeleting) {
+		t.Fatalf("runtimeClientFor = %v, want ErrProjectDeleting", err)
+	}
+	if instances.reads == 0 {
+		t.Error("the cold path is expected to read the project it is resolving")
+	}
+}
 
+// An unknown project id never reaches the platform database through the
+// invoke route: the function lookup answers first, so a public caller
+// cannot make the handler read (or remember) arbitrary ids.
+func TestInvokeOfAnUnknownProjectNeverReadsTheInstanceStore(t *testing.T) {
+	h, instances := invokeHandler(t, "ACTIVE")
 	r := chi.NewRouter()
 	r.HandleFunc(testPublicInvokeRoute, h.PublicInvoke)
-	r.HandleFunc("/functions/v1/{projectId}/http/*", h.PublicHttpInvoke)
 
-	for _, path := range []string{"/functions/v1/proj_p1/fn1", "/functions/v1/proj_p1/http/anything"} {
-		req := httptest.NewRequest(http.MethodPost, path, nil)
+	for i := 0; i < 50; i++ {
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/functions/v1/proj_unknown%d/fn1", i), nil)
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-		if w.Code != http.StatusConflict {
-			t.Errorf("POST %s: got %d, want 409 (body=%s)", path, w.Code, w.Body.String())
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("unknown project %d: got %d, want 404", i, w.Code)
 		}
 	}
+	if instances.reads != 0 {
+		t.Fatalf("instance-store reads for unknown projects = %d, want 0", instances.reads)
+	}
+}
+
+// A warm project is served without any platform-database read, and the
+// teardown claim is what makes the next invocation check again.
+func TestClaimingAProjectDropsItsWarmRuntimeClient(t *testing.T) {
+	h, _ := invokeHandler(t, "ACTIVE")
+	h.clientMu.Lock()
+	h.clients["proj_p1"] = &edgefn.RuntimeClient{}
+	h.clientMu.Unlock()
+
+	h.ProjectDeleting("proj_p1")
+
+	h.clientMu.Lock()
+	_, warm := h.clients["proj_p1"]
+	h.clientMu.Unlock()
+	if warm {
+		t.Fatal("a claimed project must lose its cached runtime client so the next call re-checks")
+	}
+}
+
+// invokeHandler builds a function handler over a counted instance store.
+func invokeHandler(t *testing.T, status string) (*FunctionHandler, *countingInstances) {
+	t.Helper()
+	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default", Namespace: "ns-1", Status: status},
+	}}
+	counting := &countingInstances{InstanceStore: instStore}
+	h := NewFunctionHandler(edgefn.NewFunctionStore(t.TempDir()),
+		edgefn.NewSecretsStore(newFakeVault()), nil, counting, nil, testAPIBase)
+	h.SetK8sClient(k8s.NewMockClient(), "img", "secret")
+	return h, counting
 }
 
 // Each refusal reason the delete endpoint can hit maps to its own status, so
@@ -145,5 +187,49 @@ func TestDeleteOfABuildingProjectIs409(t *testing.T) {
 func TestBusyStateFallsBackToAGenericPhrase(t *testing.T) {
 	if got := busyState(fmt.Errorf("%w: proj-1 is WEIRD", storage.ErrProjectBusy)); got == "WEIRD" {
 		t.Error("the response must not echo an unrecognised state back")
+	}
+}
+
+// countingInstances records how often a path reaches the platform database.
+type countingInstances struct {
+	storage.InstanceStore
+	reads int
+}
+
+func (s *countingInstances) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
+	s.reads++
+	return s.InstanceStore.FindByProjectID(projectID)
+}
+
+// Resolving a runtime must never guess: an unknown project, an unreadable
+// store and a missing instance store are all refusals, not a namespace.
+func TestInstanceForRefusesWhatItCannotResolve(t *testing.T) {
+	h, _ := invokeHandler(t, "ACTIVE")
+	if _, err := h.instanceFor("proj_missing"); err == nil {
+		t.Error("an unknown project must not resolve to a runtime")
+	}
+
+	failing := fakestore.NewInstances()
+	failing.Err = errStoreDown
+	h.instanceStore = failing
+	if _, err := h.instanceFor("proj_p1"); err == nil {
+		t.Error("an unreadable store must not resolve to a runtime")
+	}
+
+	h.instanceStore = nil
+	if _, err := h.instanceFor("proj_p1"); err == nil {
+		t.Error("without an instance store nothing may be resolved")
+	}
+}
+
+// A live project resolves to its recorded namespace.
+func TestInstanceForResolvesALiveProject(t *testing.T) {
+	h, _ := invokeHandler(t, "ACTIVE")
+	inst, err := h.instanceFor("proj_p1")
+	if err != nil {
+		t.Fatalf("instanceFor: %v", err)
+	}
+	if inst.Namespace != "ns-1" {
+		t.Errorf("namespace = %q, want ns-1", inst.Namespace)
 	}
 }

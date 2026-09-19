@@ -4,6 +4,8 @@ import (
 	"context"
 	"hash/fnv"
 	"sync"
+
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // DeletionClaimer grants one teardown at a time per project. The DELETE is
@@ -44,34 +46,30 @@ func (c *inProcessDeletionClaimer) Claim(_ context.Context, projectID string) (f
 	}, true, nil
 }
 
-// AdvisoryLocker is the Postgres advisory lock the store already exposes for
-// leader election. Deletion reuses it, keyed per project.
-type AdvisoryLocker interface {
-	Acquire(ctx context.Context) (bool, error)
-	Release(ctx context.Context) error
-}
-
 // advisoryDeletionClaimer holds the claim as a Postgres advisory lock, so it
 // is visible to every control-plane replica sharing the platform database and
-// is released automatically if the holder's connection dies.
+// is released automatically if the holder's connection dies. Unlike the
+// schedulers' standing leadership, a deletion claim is per call: it covers
+// exactly one teardown run.
 type advisoryDeletionClaimer struct {
-	newLock func(key int64) AdvisoryLocker
+	newLock func(key int64) storage.LeaderLock
 }
 
 // NewAdvisoryDeletionClaimer builds a claimer over per-project advisory locks.
 // newLock returns a lock for one int64 key; the key is derived from the
 // project id.
-func NewAdvisoryDeletionClaimer(newLock func(key int64) AdvisoryLocker) DeletionClaimer {
+func NewAdvisoryDeletionClaimer(newLock func(key int64) storage.LeaderLock) DeletionClaimer {
 	return &advisoryDeletionClaimer{newLock: newLock}
 }
 
 func (c *advisoryDeletionClaimer) Claim(ctx context.Context, projectID string) (func(), bool, error) {
-	lock := c.newLock(deletionLockKey(projectID))
-	got, err := lock.Acquire(ctx)
+	// One lease per claim: the teardown that took it is the only thing that
+	// can give it back, and a claim that lost holds nothing to give back.
+	lease, got, err := c.newLock(deletionLockKey(projectID)).Acquire(ctx)
 	if err != nil || !got {
 		return nil, false, err
 	}
-	return func() { _ = lock.Release(context.WithoutCancel(ctx)) }, true, nil
+	return func() { _ = lease.Release(context.WithoutCancel(ctx)) }, true, nil
 }
 
 // deletionLockKey maps a project id onto the advisory-lock key space. The

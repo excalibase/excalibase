@@ -321,7 +321,7 @@ func TestIdlePause_OptionalCollaboratorsMayBeNil(t *testing.T) {
 func TestIdlePause_TickRespectsLeaderLock(t *testing.T) {
 	f := newIdleFixture(t)
 	f.project(t, "p1", domain.Free, 8*day)
-	f.scheduler.lock = &refusingLock{}
+	f.scheduler.leadership = NewLeadership(&refusingLock{})
 	f.scheduler.interval = 10 * time.Millisecond
 
 	f.scheduler.Start(context.Background())

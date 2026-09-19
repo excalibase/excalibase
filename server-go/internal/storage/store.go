@@ -82,6 +82,22 @@ func CheckDeploymentMode(projectID string, mode domain.DeploymentMode) error {
 	}
 }
 
+// LeaderLease is one holder's claim on a leader lock. Only its holder can
+// release it, and releasing twice does nothing.
+type LeaderLease interface {
+	Release(ctx context.Context) error
+	// Valid reports whether the lease still holds what it was given. A
+	// holder whose session died must stop believing it leads.
+	Valid(ctx context.Context) bool
+}
+
+// LeaderLock guards multi-replica scheduling. Acquire hands back a lease
+// when this caller now leads, and (nil, false, nil) when another holder
+// already does.
+type LeaderLock interface {
+	Acquire(ctx context.Context) (LeaderLease, bool, error)
+}
+
 // InstanceStore persists database instance metadata and credentials.
 type InstanceStore interface {
 	// Create registers a new project. Returns ErrProjectExists when the

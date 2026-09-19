@@ -282,7 +282,7 @@ func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 			// no-op stop: scheduler was never started, nothing to release.
 		}
 	}
-	var lock service.LeaderLock = service.AlwaysLeader{}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
 		// FNV-1a("excalibase-backup-scheduler") — distinct from any
 		// other advisory lock the platform might use.
@@ -326,7 +326,7 @@ func startIdlePauseScheduler(
 		log.Println("WARN: idle auto-pause enabled but no pause service is wired — sweep not started")
 		return noop
 	}
-	var lock service.LeaderLock = service.AlwaysLeader{}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
 		// FNV-1a("excalibase-idle-pause") — distinct from the backup scheduler's key.
 		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), 0x6168_0acb_1d1e_9a05)
@@ -569,7 +569,7 @@ func buildProvisioningService(
 	// advisory lock, released automatically if the holder's connection dies.
 	if pg, ok := sqlStore.(*pgstore.Store); ok {
 		provSvc.SetDeletionClaimer(service.NewAdvisoryDeletionClaimer(
-			func(key int64) service.AdvisoryLocker { return pgstore.NewAdvisoryLock(pg.DB(), key) }))
+			func(key int64) storage.LeaderLock { return pgstore.NewAdvisoryLock(pg.DB(), key) }))
 	}
 
 	provSvc.SetBackupDefaults(backupDefaultsFromEnv())

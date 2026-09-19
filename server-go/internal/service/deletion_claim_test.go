@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 func TestInProcessClaimerGrantsOneHolderAtATime(t *testing.T) {
@@ -32,12 +34,22 @@ type fakeLock struct {
 	acquerErr error
 }
 
-func (l *fakeLock) Acquire(context.Context) (bool, error) { l.acquired++; return l.got, l.acquerErr }
-func (l *fakeLock) Release(context.Context) error         { l.released++; return nil }
+func (l *fakeLock) Acquire(context.Context) (storage.LeaderLease, bool, error) {
+	l.acquired++
+	if l.acquerErr != nil || !l.got {
+		return nil, false, l.acquerErr
+	}
+	return &countingLease{lock: l}, true, nil
+}
+
+type countingLease struct{ lock *fakeLock }
+
+func (le *countingLease) Release(context.Context) error { le.lock.released++; return nil }
+func (le *countingLease) Valid(context.Context) bool    { return true }
 
 func TestAdvisoryClaimerHoldsAndReleasesTheLock(t *testing.T) {
 	lock := &fakeLock{got: true}
-	claimer := NewAdvisoryDeletionClaimer(func(int64) AdvisoryLocker { return lock })
+	claimer := NewAdvisoryDeletionClaimer(func(int64) storage.LeaderLock { return lock })
 
 	release, ok, err := claimer.Claim(context.Background(), "proj-1")
 	if err != nil || !ok {
@@ -50,7 +62,7 @@ func TestAdvisoryClaimerHoldsAndReleasesTheLock(t *testing.T) {
 }
 
 func TestAdvisoryClaimerReportsARefusedLock(t *testing.T) {
-	claimer := NewAdvisoryDeletionClaimer(func(int64) AdvisoryLocker { return &fakeLock{} })
+	claimer := NewAdvisoryDeletionClaimer(func(int64) storage.LeaderLock { return &fakeLock{} })
 	if _, ok, err := claimer.Claim(context.Background(), "proj-1"); ok || err != nil {
 		t.Fatalf("Claim = %v, %v; want refused without error", ok, err)
 	}
@@ -58,7 +70,7 @@ func TestAdvisoryClaimerReportsARefusedLock(t *testing.T) {
 
 func TestAdvisoryClaimerReportsLockErrors(t *testing.T) {
 	want := errors.New("database unreachable")
-	claimer := NewAdvisoryDeletionClaimer(func(int64) AdvisoryLocker {
+	claimer := NewAdvisoryDeletionClaimer(func(int64) storage.LeaderLock {
 		return &fakeLock{acquerErr: want}
 	})
 	if _, ok, err := claimer.Claim(context.Background(), "proj-1"); ok || !errors.Is(err, want) {

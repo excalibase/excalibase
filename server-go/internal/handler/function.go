@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
@@ -53,9 +54,6 @@ type FunctionHandler struct {
 	vault         vaultclient.VaultClient // optional, for reading DB_URL + JWT tokens
 	instanceStore storage.InstanceStore
 	orgStore      storage.OrgStore
-	// deletingCache keeps the per-invoke deletion check off the platform
-	// database. See project_deleting_cache.go.
-	deletingCache *projectStatusCache
 	publicBaseURL string
 
 	// Per-project runtime fan-out
@@ -186,7 +184,6 @@ func NewFunctionHandler(
 		store:         store,
 		secrets:       secrets,
 		instanceStore: instanceStore,
-		deletingCache: newProjectStatusCache(),
 		orgStore:      orgStore,
 		publicBaseURL: publicBaseURL,
 		clients:       make(map[string]*edgefn.RuntimeClient),
@@ -260,7 +257,11 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if h.k8sClient == nil {
 		return nil, fmt.Errorf("no runtime client available")
 	}
-	namespace := h.namespaceFor(projectID)
+	inst, err := h.instanceFor(projectID)
+	if err != nil {
+		return nil, err
+	}
+	namespace := inst.Namespace
 	if namespace == "" {
 		return nil, fmt.Errorf("no namespace for project %s", projectID)
 	}
@@ -337,22 +338,16 @@ func (h *FunctionHandler) isDenoPodReady(ctx context.Context, namespace string) 
 	return false
 }
 
-// refuseInvokeWhileDeleting is the invoke path's deletion check. It reads
-// through a short-TTL cache because invocation is served without touching
-// the platform database once the project's runtime client is cached.
-func (h *FunctionHandler) refuseInvokeWhileDeleting(w http.ResponseWriter, projectID string) bool {
-	if !h.deletingCache.deleting(h.instanceStore, projectID) {
-		return false
-	}
-	httpError(w, "project is being deleted", http.StatusConflict)
-	return true
-}
-
-// ProjectDeleting lets the provisioning service tell this replica a project
-// has been claimed for teardown, so invocation stops at once rather than at
-// the end of the cache TTL.
+// ProjectDeleting is how the provisioning service tells this replica a
+// project has been claimed for teardown. It drops the project's cached
+// runtime client, so the next invocation takes the cold path — which reads
+// the project's row and refuses it. Nothing is added to the invoke path for
+// the common case: a warm project is served with no platform-database read
+// at all, exactly as before.
 func (h *FunctionHandler) ProjectDeleting(projectID string) {
-	h.deletingCache.ProjectDeleting(projectID)
+	h.clientMu.Lock()
+	defer h.clientMu.Unlock()
+	delete(h.clients, projectID)
 }
 
 // tierFor looks up the project's tier from the instance store. Falls back to
@@ -370,6 +365,34 @@ func (h *FunctionHandler) tierFor(projectID string) string {
 		return "FREE"
 	}
 	return string(inst.Tier)
+}
+
+// ErrProjectDeleting is returned when a project under teardown is asked to
+// serve traffic. Its namespace, database and credentials are being removed,
+// so there is nothing left to serve from.
+var ErrProjectDeleting = errors.New("project is being deleted")
+
+// instanceFor reads the project's row on the paths that already need it —
+// resolving a runtime, sizing it, deploying into it — and refuses a project
+// a teardown owns. Placing the check here keeps it off the public invoke
+// route's hot path and out of reach of unknown project ids: by the time a
+// caller gets here the project has already been resolved for the handler's
+// own purposes.
+func (h *FunctionHandler) instanceFor(projectID string) (*domain.DatabaseInstance, error) {
+	if h.instanceStore == nil {
+		return nil, fmt.Errorf("no instance store configured")
+	}
+	inst, err := h.instanceStore.FindByProjectID(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("read project: %w", err)
+	}
+	if inst == nil {
+		return nil, fmt.Errorf("unknown project %s", projectID)
+	}
+	if domain.IsDeletionStatus(inst.Status) {
+		return nil, fmt.Errorf("%w: %s", ErrProjectDeleting, projectID)
+	}
+	return inst, nil
 }
 
 // namespaceFor returns the K8s namespace recorded on the project's instance
@@ -1094,9 +1117,6 @@ func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	fnID := chi.URLParam(r, "fnId")
 
-	if h.refuseInvokeWhileDeleting(w, projectID) {
-		return
-	}
 	if !h.allowProject(projectID) {
 		w.Header().Set("Retry-After", "1")
 		httpError(w, "rate limit exceeded", http.StatusTooManyRequests)
@@ -1233,6 +1253,10 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 	}
 
 	client, err := h.runtimeClientFor(r.Context(), fn.ProjectID)
+	if errors.Is(err, ErrProjectDeleting) {
+		httpError(w, "project is being deleted", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		httpError(w, "runtime unavailable: "+safeError(err), http.StatusServiceUnavailable)
 		return
@@ -1563,9 +1587,6 @@ func (h *FunctionHandler) InternalInvoke(w http.ResponseWriter, r *http.Request)
 	if !h.authorizeRuntimeToken(w, r, projectID) {
 		return
 	}
-	if h.refuseInvokeWhileDeleting(w, projectID) {
-		return
-	}
 	fn, err := h.store.Get(projectID, fnID)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
@@ -1604,9 +1625,6 @@ func (h *FunctionHandler) PublicHttpInvoke(w http.ResponseWriter, r *http.Reques
 	projectID := chi.URLParam(r, "projectId")
 	if err := edgefn.ValidateProjectID(projectID); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
-		return
-	}
-	if h.refuseInvokeWhileDeleting(w, projectID) {
 		return
 	}
 	if !h.allowProject(projectID) {

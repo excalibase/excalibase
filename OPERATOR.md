@@ -164,6 +164,23 @@ pipeline stops at its next step, rolls back what it created, and the project
 reports `FAILED` — nothing is registered into a project whose record is on
 its way out.
 
+### Function invocation while a project is being deleted
+
+Invoking a function of a project under teardown answers `409`. The check sits
+where the handler already resolves the project (the per-project runtime
+lookup), so a warm project is still served without reading the platform
+database, and an unknown project id on the public route is answered by the
+function lookup without reaching the database at all.
+
+Claiming a project for deletion drops its cached runtime client on the
+replica that ran the `DELETE`, so that replica refuses the next invocation
+immediately. **Another replica keeps serving until its own cached runtime
+client is dropped** — in practice until the namespace goes, which the
+teardown waits for, so the window closes before the project's resources do.
+On a single shared runtime (docker / self-hosted), where clients are not
+per-project, invocation is not refused this way; the project's functions stop
+resolving when its record is removed at the end of the teardown.
+
 ### Backups retained after a project is deleted
 
 Deleting a project **keeps its backups** unless the request carries

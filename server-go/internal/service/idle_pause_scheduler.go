@@ -58,7 +58,7 @@ type IdlePauseSchedulerConfig struct {
 	Pauser    IdlePauser
 	Notifier  IdleWarnNotifier
 	Audit     AuditWriter
-	Lock      LeaderLock
+	Lock      storage.LeaderLock
 	// Now is injectable for tests; defaults to time.Now.
 	Now func() time.Time
 	// Interval between sweeps; defaults to DefaultIdlePauseInterval.
@@ -87,7 +87,7 @@ type IdlePauseScheduler struct {
 	pauser      IdlePauser
 	notifier    IdleWarnNotifier
 	audit       AuditWriter
-	lock        LeaderLock
+	leadership  *Leadership
 	now         func() time.Time
 	interval    time.Duration
 	resumeGrace time.Duration
@@ -102,7 +102,7 @@ type IdlePauseScheduler struct {
 func NewIdlePauseScheduler(c IdlePauseSchedulerConfig) *IdlePauseScheduler {
 	s := &IdlePauseScheduler{
 		instances: c.Instances, activity: c.Activity, tiers: c.Tiers, pauser: c.Pauser,
-		notifier: c.Notifier, audit: c.Audit, lock: c.Lock,
+		notifier: c.Notifier, audit: c.Audit, leadership: NewLeadership(c.Lock),
 		now: c.Now, interval: c.Interval, resumeGrace: c.ResumeGrace, logger: c.Logger,
 	}
 	if s.now == nil {
@@ -144,6 +144,10 @@ func (s *IdlePauseScheduler) Stop() {
 	s.mu.Unlock()
 	cancel()
 	<-done
+	// Hand the claim back so another replica leads immediately.
+	if err := s.leadership.Close(context.Background()); err != nil {
+		s.logger.Printf("idle-pause: stand down: %v", err)
+	}
 }
 
 func (s *IdlePauseScheduler) loop(ctx context.Context, done chan struct{}) {
@@ -164,7 +168,7 @@ func (s *IdlePauseScheduler) loop(ctx context.Context, done chan struct{}) {
 func (s *IdlePauseScheduler) tick(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, idlePauseTickBudget)
 	defer cancel()
-	acquired, err := s.lock.Acquire(ctx)
+	acquired, err := s.leadership.IsLeader(ctx)
 	if err != nil {
 		s.logger.Printf("idle-pause: leader lock error: %v", err)
 		return
@@ -172,7 +176,6 @@ func (s *IdlePauseScheduler) tick(parent context.Context) {
 	if !acquired {
 		return
 	}
-	defer func() { _ = s.lock.Release(ctx) }()
 	report, err := s.RunOnce(ctx)
 	if err != nil {
 		s.logger.Printf("idle-pause: sweep failed: %v", err)
