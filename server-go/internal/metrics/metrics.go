@@ -13,6 +13,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	dto "github.com/prometheus/client_model/go"
 )
 
 var (
@@ -35,6 +36,28 @@ var (
 			Buckets: prometheus.ExponentialBuckets(1, 2, 10), // ~1s .. ~1024s
 		},
 		[]string{"result"},
+	)
+
+	// natsConnected is 1 while a named platform client holds a live NATS
+	// connection and 0 while it is disconnected or still retrying. Reload
+	// signals and policy-change events are only delivered while it is 1.
+	natsConnected = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "excalibase_nats_connected",
+			Help: "1 when the named platform client is connected to NATS, 0 otherwise.",
+		},
+		[]string{"client"},
+	)
+
+	// natsPublishDropped counts events a publisher could not put on the bus.
+	// The label is the publisher, not the subject, which carries a project
+	// id and would blow up cardinality.
+	natsPublishDropped = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "excalibase_nats_publish_dropped_total",
+			Help: "Events dropped because the NATS bus was not available.",
+		},
+		[]string{"publisher"},
 	)
 
 	// provisionErrors counts failed provisioning operations.
@@ -77,4 +100,30 @@ func ObserveProvision(start time.Time, err error) {
 		provisionErrors.Inc()
 	}
 	provisionDuration.WithLabelValues(result).Observe(time.Since(start).Seconds())
+}
+
+// SetNatsConnected records whether a named platform client currently has a
+// usable NATS connection.
+func SetNatsConnected(client string, connected bool) {
+	value := 0.0
+	if connected {
+		value = 1.0
+	}
+	natsConnected.WithLabelValues(client).Set(value)
+}
+
+// NatsConnected reports the last recorded connection state for a client. It
+// exists so a health check and a test can read the same value the gauge
+// exposes, rather than a second copy of it.
+func NatsConnected(client string) bool {
+	var sample dto.Metric
+	if err := natsConnected.WithLabelValues(client).Write(&sample); err != nil {
+		return false
+	}
+	return sample.GetGauge().GetValue() == 1
+}
+
+// CountNatsPublishDropped records one event that never reached the bus.
+func CountNatsPublishDropped(publisher string) {
+	natsPublishDropped.WithLabelValues(publisher).Inc()
 }

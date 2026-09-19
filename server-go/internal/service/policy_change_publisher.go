@@ -14,8 +14,12 @@ import (
 	"log"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 	"github.com/nats-io/nats.go"
 )
+
+// policyPublisherName labels this publisher's bus metrics.
+const policyPublisherName = "policy-change-publisher"
 
 // PolicyChangePublisher publishes RLS / CLS policy mutation events to NATS.
 type PolicyChangePublisher struct {
@@ -24,7 +28,12 @@ type PolicyChangePublisher struct {
 
 // NewPolicyChangePublisher dials NATS. A blank natsURL yields a no-op
 // publisher — useful for local dev / unit tests. opts carries the
-// svc-provisioning credential and inbox prefix (see natsauth.ClientOptions).
+// svc-provisioning credential, inbox prefix and the shared resilience
+// options (see natsauth.ClientOptions).
+//
+// With those options the dial does not block on a bus that is down: the
+// publisher is constructed, reports NotConnected, and starts delivering once
+// the bus is back.
 func NewPolicyChangePublisher(natsURL string, opts ...nats.Option) (*PolicyChangePublisher, error) {
 	if natsURL == "" {
 		return &PolicyChangePublisher{}, nil
@@ -36,9 +45,15 @@ func NewPolicyChangePublisher(natsURL string, opts ...nats.Option) (*PolicyChang
 	return &PolicyChangePublisher{nc: nc}, nil
 }
 
-// PublishPolicyChange satisfies handler.PolicyChangePublisher. Failures
-// are logged but never returned — the policy write already committed
-// and the consumer's TTL cache will eventually catch up.
+// Connected reports whether events published right now would reach the bus.
+func (p *PolicyChangePublisher) Connected() bool {
+	return p != nil && p.nc != nil && p.nc.IsConnected()
+}
+
+// PublishPolicyChange satisfies handler.PolicyChangePublisher. The interface
+// returns nothing — the policy write has already committed — so a dropped
+// event is surfaced on excalibase_nats_publish_dropped_total rather than
+// disappearing into a log line nobody alerts on.
 func (p *PolicyChangePublisher) PublishPolicyChange(_ context.Context, evt domain.PolicyChangeEvent) {
 	if p == nil || p.nc == nil {
 		return
@@ -49,7 +64,13 @@ func (p *PolicyChangePublisher) PublishPolicyChange(_ context.Context, evt domai
 		return
 	}
 	subject := fmt.Sprintf("policies.%s.changed", evt.ProjectID)
+	if !p.Connected() {
+		metrics.CountNatsPublishDropped(policyPublisherName)
+		log.Printf("WARN: policy change dropped (%s): nats bus not connected", subject)
+		return
+	}
 	if err := p.nc.Publish(subject, payload); err != nil {
+		metrics.CountNatsPublishDropped(policyPublisherName)
 		log.Printf("WARN: policy change publish (%s): %v", subject, err)
 	}
 }

@@ -24,6 +24,10 @@ const (
 	projectA           = "proj-a"
 	projectB           = "proj-b"
 	connectTimeout     = 5 * time.Second
+	// readinessTimeout bounds the probe loop that proves the responder is
+	// actually answering before a test starts measuring anything.
+	readinessTimeout      = 30 * time.Second
+	readinessPollInterval = 100 * time.Millisecond
 )
 
 // memoryCredentialStore stands in for the Postgres-backed store. The
@@ -87,6 +91,16 @@ func (e *calloutEnv) mustConnectAs(t *testing.T, principal string) *nats.Conn {
 
 func setupCalloutEnv(t *testing.T, principals ...string) *calloutEnv {
 	t.Helper()
+	env, _ := setupCalloutEnvWith(t, nil, principals...)
+	return env
+}
+
+// setupCalloutEnvWith brings up the server and responder and hands both back,
+// so a test can drive the responder's lifecycle (drain, shutdown) directly.
+// optionsFor is called once the principals' credentials exist, which is what
+// a verifier substitute needs to answer correctly.
+func setupCalloutEnvWith(t *testing.T, optionsFor func(*calloutEnv) []ResponderOption, principals ...string) (*calloutEnv, *Responder) {
+	t.Helper()
 	ctx := context.Background()
 
 	accountKP, err := nkeys.CreateAccount()
@@ -137,7 +151,11 @@ func setupCalloutEnv(t *testing.T, principals ...string) *calloutEnv {
 	port, _ := container.MappedPort(ctx, "4222/tcp")
 	env.url = fmt.Sprintf("nats://%s:%s", host, port.Port())
 
-	responder, err := NewResponder(store, string(issuerSeed), appAccount, "CDC")
+	var opts []ResponderOption
+	if optionsFor != nil {
+		opts = optionsFor(env)
+	}
+	responder, err := NewResponder(store, string(issuerSeed), appAccount, "CDC", opts...)
 	if err != nil {
 		t.Fatalf("NewResponder: %v", err)
 	}
@@ -151,7 +169,35 @@ func setupCalloutEnv(t *testing.T, principals ...string) *calloutEnv {
 	}
 	t.Cleanup(responder.Close)
 
-	return env
+	waitForCalloutReadiness(t, env, principals)
+	return env, responder
+}
+
+// waitForCalloutReadiness blocks until the responder's subscription is live
+// on the server and a real authorization round-trip succeeds. Flushing the
+// responder connection only proves the SUB frame left the client, so the
+// probe below — not a sleep — is what makes the environment observable.
+func waitForCalloutReadiness(t *testing.T, env *calloutEnv, principals []string) {
+	t.Helper()
+	if len(principals) == 0 {
+		return
+	}
+	deadline := time.Now().Add(readinessTimeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		conn, err := nats.Connect(env.url,
+			nats.UserInfo(principals[0], env.passwords[principals[0]]),
+			nats.Timeout(connectTimeout),
+			nats.MaxReconnects(0),
+		)
+		if err == nil {
+			conn.Close()
+			return
+		}
+		lastErr = err
+		time.Sleep(readinessPollInterval)
+	}
+	t.Fatalf("callout responder never became ready: %v", lastErr)
 }
 
 // writeServerConf renders the auth_callout server configuration the charts
@@ -171,13 +217,14 @@ accounts {
 system_account: SYS
 
 authorization {
+  timeout: %d
   auth_callout {
     issuer: %q
     auth_users: [ %q ]
     account: AUTH
   }
 }
-`, calloutAccountUser, calloutPassword, issuerPub, calloutAccountUser)
+`, calloutAccountUser, calloutPassword, int(ServerAuthTimeout.Seconds()), issuerPub, calloutAccountUser)
 
 	path := filepath.Join(t.TempDir(), "nats.conf")
 	if err := os.WriteFile(path, []byte(conf), 0o600); err != nil {
