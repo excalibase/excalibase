@@ -48,7 +48,7 @@ func TestR2_SignedPutURL_RejectsBadKey(t *testing.T) {
 
 func TestR2_SignedGetURL(t *testing.T) {
 	c := newR2(t)
-	url, expires, err := c.SignedGetURL(context.Background(), testProjABC, "files", "b.txt", time.Minute)
+	url, expires, err := c.SignedGetURL(context.Background(), testProjABC, "files", "b.txt", false, time.Minute)
 	if err != nil {
 		t.Fatalf("SignedGetURL: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestR2_SignedGetURL(t *testing.T) {
 
 func TestR2_SignedGetURL_RejectsBadKey(t *testing.T) {
 	c := newR2(t)
-	if _, _, err := c.SignedGetURL(context.Background(), testProjABC, "files", "..", 0); err == nil {
+	if _, _, err := c.SignedGetURL(context.Background(), testProjABC, "files", "..", false, 0); err == nil {
 		t.Error("bad key should fail")
 	}
 }
@@ -85,7 +85,7 @@ func TestR2_DeleteObject_BadKey(t *testing.T) {
 
 func TestR2_HeadObject_BadKey(t *testing.T) {
 	c := newR2(t)
-	if _, _, _, err := c.HeadObject(context.Background(), testProjABC, "files", ".."); err == nil {
+	if _, err := c.HeadObject(context.Background(), testProjABC, "files", ".."); err == nil {
 		t.Error("bad key head should fail")
 	}
 }

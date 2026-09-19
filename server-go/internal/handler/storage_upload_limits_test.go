@@ -273,3 +273,33 @@ func TestInternalStorage_UploadURL_RejectsMalformedBody(t *testing.T) {
 		t.Fatalf("malformed body: want 400, got %d (body=%s)", w.Code, w.Body.String())
 	}
 }
+
+// The tier a quota is measured against must be read, not assumed: a failed
+// lookup fails the confirm rather than charging against the wrong cap.
+func TestStorageRoutes_ConfirmUpload_FailsOnTierLookupFailure(t *testing.T) {
+	store := newInMemoryBucketStoreForTest()
+	backend := newStorageBackendStub()
+	svc := newStubbedStorageService(t, store, backend, nil)
+	h := NewStorageHandler(svc, tierLookupFailingStore{})
+	h.SetRuntimeSecret("the-secret")
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/storage", func(r chi.Router) { h.Routes(r) })
+	h.InternalRoutes(r)
+	_ = doStorage(t, r, "POST", "/api/projects/proj-s/storage/buckets", map[string]any{"name": "files"})
+	backend.put("a.txt", 10, "text/plain")
+
+	w := doStorage(t, r, "POST", "/api/projects/proj-s/storage/buckets/files/confirm-upload",
+		map[string]any{"key": "a.txt"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("tier lookup failure on confirm: want 500, got %d (body=%s)", w.Code, w.Body.String())
+	}
+
+	req := httptest.NewRequest("POST", "/internal/storage/"+testStorageProjectID+"/confirm-upload",
+		strings.NewReader(`{"storageId":"kg2_a"}`))
+	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
+	iw := httptest.NewRecorder()
+	r.ServeHTTP(iw, req)
+	if iw.Code != http.StatusInternalServerError {
+		t.Fatalf("tier lookup failure on internal confirm: want 500, got %d (body=%s)", iw.Code, iw.Body.String())
+	}
+}

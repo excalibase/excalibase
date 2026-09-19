@@ -61,7 +61,7 @@ func (s *Store) ListBuckets(ctx context.Context, projectID string) ([]storagesvc
 // ListAllBuckets spans every project, for the storage reaper's sweep.
 func (s *Store) ListAllBuckets(ctx context.Context) ([]storagesvc.Bucket, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, project_id, name, public, file_size_limit, allowed_mime_types, created_at, updated_at
+		`SELECT id, project_id, name, public, status, file_size_limit, allowed_mime_types, created_at, updated_at
 		 FROM storage_buckets ORDER BY project_id, name`)
 	if err != nil {
 		return nil, err
@@ -129,6 +129,68 @@ func (s *Store) CreateObject(ctx context.Context, o *storagesvc.Object) error {
 		o.ID, o.BucketID, o.Key, o.Size, o.MimeType, o.ETag, o.OwnerID,
 		o.CreatedAt, o.UpdatedAt)
 	return err
+}
+
+// RecordObjectWithinQuota writes an object row and moves the project's usage
+// by the difference between what it now holds and what the row it replaces
+// held, inside one transaction that refuses to cross capBytes.
+//
+// The quota row is taken first and held for the duration, so two confirms for
+// the same project serialise on it: each sees the other's spend rather than
+// both reading a total that was already stale. A repeat of the same confirm
+// moves the usage by zero; an overwrite moves it by the difference, in either
+// direction. Returns false when the charge would exceed the cap, having
+// written nothing.
+func (s *Store) RecordObjectWithinQuota(ctx context.Context, projectID string, o *storagesvc.Object, capBytes int64) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin record object: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+
+	// Insert-or-touch returns the current usage AND locks the row.
+	var used int64
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO storage_quota (project_id, bytes_used, updated_at)
+		 VALUES ($1, 0, NOW())
+		 ON CONFLICT (project_id) DO UPDATE SET project_id = EXCLUDED.project_id
+		 RETURNING bytes_used`, projectID).Scan(&used)
+	if err != nil {
+		return false, fmt.Errorf("lock quota: %w", err)
+	}
+
+	var previous int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT COALESCE((SELECT size FROM storage_objects WHERE bucket_id = $1 AND key = $2), 0)`,
+		o.BucketID, o.Key).Scan(&previous)
+	if err != nil {
+		return false, fmt.Errorf("read previous size: %w", err)
+	}
+
+	delta := o.Size - previous
+	if capBytes > 0 && used+delta > capBytes {
+		return false, nil
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO storage_objects (id, bucket_id, key, size, mime_type, etag, owner_id, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 ON CONFLICT (bucket_id, key) DO UPDATE SET
+		   size = EXCLUDED.size, mime_type = EXCLUDED.mime_type, etag = EXCLUDED.etag,
+		   updated_at = EXCLUDED.updated_at`,
+		o.ID, o.BucketID, o.Key, o.Size, o.MimeType, o.ETag, o.OwnerID,
+		o.CreatedAt, o.UpdatedAt); err != nil {
+		return false, fmt.Errorf("write object row: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE storage_quota SET bytes_used = GREATEST(0, bytes_used + $2), updated_at = NOW()
+		 WHERE project_id = $1`, projectID, delta); err != nil {
+		return false, fmt.Errorf("charge quota: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit record object: %w", err)
+	}
+	return true, nil
 }
 
 func (s *Store) GetObject(ctx context.Context, bucketID, key string) (*storagesvc.Object, error) {

@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -256,6 +257,8 @@ func TestPgStorage_DeleteObjectReleasesQuotaExactlyOnce(t *testing.T) {
 		t.Errorf("quota after repeat: got %d, want 0", used)
 	}
 	_ = s.DeleteBucket(ctx, project, "files")
+}
+
 // The storage reaper sweeps every project, so it needs the buckets of all of
 // them, not one tenant's.
 func TestPgStorage_ListAllBucketsSpansProjects(t *testing.T) {
@@ -283,4 +286,101 @@ func TestPgStorage_ListAllBucketsSpansProjects(t *testing.T) {
 	}
 	_ = s.DeleteBucket(ctx, "proj-all-a", "files")
 	_ = s.DeleteBucket(ctx, "proj-all-b", "files")
+}
+
+// EXC-405 follow-up, finding 5 — confirming the same key repeatedly charges
+// the project once, and an overwrite moves the usage by the difference.
+func TestPgStorage_RecordObjectChargesTheDelta(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	const project = "proj-delta"
+	now := time.Now().UTC()
+	if err := s.CreateBucket(ctx, &storagesvc.Bucket{
+		ID: "bkt_delta", ProjectID: project, Name: "files", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	record := func(size int64) bool {
+		t.Helper()
+		ok, err := s.RecordObjectWithinQuota(ctx, project, &storagesvc.Object{
+			ID: "obj_delta", BucketID: "bkt_delta", Key: "a.bin", Size: size,
+			MimeType: "application/octet-stream", CreatedAt: now, UpdatedAt: now,
+		}, 0)
+		if err != nil {
+			t.Fatalf("RecordObjectWithinQuota: %v", err)
+		}
+		return ok
+	}
+
+	for i := 0; i < 3; i++ {
+		if !record(500) {
+			t.Fatalf("confirm %d should have been recorded", i)
+		}
+	}
+	if used, _ := s.GetQuotaBytes(ctx, project); used != 500 {
+		t.Errorf("three identical confirms charged %d, want 500", used)
+	}
+	record(900)
+	if used, _ := s.GetQuotaBytes(ctx, project); used != 900 {
+		t.Errorf("after growing: got %d, want 900", used)
+	}
+	record(100)
+	if used, _ := s.GetQuotaBytes(ctx, project); used != 100 {
+		t.Errorf("after shrinking: got %d, want 100", used)
+	}
+	_ = s.DeleteBucket(ctx, project, "files")
+}
+
+// Finding 6 — the cap is enforced by the write that spends against it, so two
+// confirms racing near the cap cannot both be admitted.
+func TestPgStorage_RecordObjectConditionalOnCapUnderConcurrency(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	const project = "proj-race"
+	const capBytes = 1000
+	now := time.Now().UTC()
+	if err := s.CreateBucket(ctx, &storagesvc.Bucket{
+		ID: "bkt_race", ProjectID: project, Name: "files", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+
+	// Two 600-byte objects against a 1000-byte cap: whatever the order, the
+	// second one must lose.
+	results := make(chan bool, 2)
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, key := range []string{"a.bin", "b.bin"} {
+		wg.Add(1)
+		go func(key string) {
+			defer wg.Done()
+			ok, err := s.RecordObjectWithinQuota(ctx, project, &storagesvc.Object{
+				ID: "obj_" + key, BucketID: "bkt_race", Key: key, Size: 600,
+				MimeType: "application/octet-stream", CreatedAt: now, UpdatedAt: now,
+			}, capBytes)
+			results <- ok
+			errs <- err
+		}(key)
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RecordObjectWithinQuota: %v", err)
+		}
+	}
+	admitted := 0
+	for ok := range results {
+		if ok {
+			admitted++
+		}
+	}
+	if admitted != 1 {
+		t.Errorf("exactly one confirm may be admitted under the cap, got %d", admitted)
+	}
+	if used, _ := s.GetQuotaBytes(ctx, project); used != 600 {
+		t.Errorf("usage %d, want 600 — the cap must bound what was charged", used)
+	}
+	_ = s.DeleteBucket(ctx, project, "files")
 }

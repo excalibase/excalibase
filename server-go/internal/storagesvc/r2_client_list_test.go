@@ -2,10 +2,12 @@ package storagesvc
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // An S3 stub is the only way to exercise the request/response halves of the
@@ -129,11 +131,42 @@ func TestR2_HeadObject_ReturnsSizeAndType(t *testing.T) {
 		w.Header().Set("ETag", `"abc123"`)
 		w.WriteHeader(http.StatusOK)
 	})
-	size, contentType, etag, err := c.HeadObject(context.Background(), testProjABC, "assets", "a.png")
+	stat, err := c.HeadObject(context.Background(), testProjABC, "assets", "a.png")
 	if err != nil {
 		t.Fatalf("HeadObject: %v", err)
 	}
-	if size != 42 || contentType != "image/png" || etag != "abc123" {
-		t.Errorf("head: got size=%d type=%q etag=%q", size, contentType, etag)
+	if stat.Size != 42 || stat.ContentType != "image/png" || stat.ETag != "abc123" {
+		t.Errorf("head: got %+v", stat)
+	}
+}
+
+// The write time comes back too: it decides whether a confirmation is still
+// in time, and whether the reaper may take the object.
+func TestR2_HeadObject_ReturnsLastModified(t *testing.T) {
+	written := time.Date(2026, 9, 20, 3, 0, 0, 0, time.UTC)
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "10")
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Last-Modified", written.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+	})
+	stat, err := c.HeadObject(context.Background(), testProjABC, "assets", "a.txt")
+	if err != nil {
+		t.Fatalf("HeadObject: %v", err)
+	}
+	if !stat.LastModified.Equal(written) {
+		t.Errorf("last modified: got %v, want %v", stat.LastModified, written)
+	}
+}
+
+// A key that is not there is a sentinel the confirm path acts on, not an
+// unexplained failure.
+func TestR2_HeadObject_MissingKeyIsSentinel(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	_, err := c.HeadObject(context.Background(), testProjABC, "assets", "ghost.txt")
+	if !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("want ErrObjectNotFound, got %v", err)
 	}
 }

@@ -69,24 +69,31 @@ func (f *fakeObjectStore) SignedPutURL(_ context.Context, projectID, bucketID, k
 	return "https://fake/" + fakeStoreKey(projectID, bucketID, key), time.Now().Add(ttl), nil
 }
 
-func (f *fakeObjectStore) HeadObject(_ context.Context, projectID, bucketID, key string) (int64, string, string, error) {
+func (f *fakeObjectStore) HeadObject(_ context.Context, projectID, bucketID, key string) (ObjectStat, error) {
 	if f.headErr != nil {
-		return 0, "", "", f.headErr
+		return ObjectStat{}, f.headErr
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	obj, ok := f.objects[fakeStoreKey(projectID, bucketID, key)]
 	if !ok {
-		return 0, "", "", fmt.Errorf("head %q: %w", key, ErrObjectNotFound)
+		return ObjectStat{}, fmt.Errorf("head %q: %w", key, ErrObjectNotFound)
 	}
-	return obj.size, obj.mimeType, "fake-etag", nil
+	return ObjectStat{
+		Size: obj.size, ContentType: obj.mimeType,
+		ETag: "fake-etag", LastModified: obj.lastModified,
+	}, nil
 }
 
-func (f *fakeObjectStore) SignedGetURL(_ context.Context, projectID, bucketID, key string, ttl time.Duration) (string, time.Time, error) {
+func (f *fakeObjectStore) SignedGetURL(_ context.Context, projectID, bucketID, key string, download bool, ttl time.Duration) (string, time.Time, error) {
 	if f.signErr != nil {
 		return "", time.Time{}, f.signErr
 	}
-	return "https://fake/" + fakeStoreKey(projectID, bucketID, key), time.Now().Add(ttl), nil
+	url := "https://fake/" + fakeStoreKey(projectID, bucketID, key)
+	if download {
+		url += "?response-content-disposition=attachment"
+	}
+	return url, time.Now().Add(ttl), nil
 }
 
 func (f *fakeObjectStore) PublicURL(projectID, bucketID, key string) (string, error) {

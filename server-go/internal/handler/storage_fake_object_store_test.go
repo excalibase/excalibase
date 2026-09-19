@@ -45,22 +45,29 @@ func (f *fakeObjectStoreForTest) put(projectID, bucketID, key string, size int64
 	}
 }
 
-func (f *fakeObjectStoreForTest) HeadObject(_ context.Context, projectID, bucketID, key string) (int64, string, string, error) {
+func (f *fakeObjectStoreForTest) HeadObject(_ context.Context, projectID, bucketID, key string) (storagesvc.ObjectStat, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	obj, ok := f.objects[fakeBlobKey(projectID, bucketID, key)]
 	if !ok {
-		return 0, "", "", fmt.Errorf("head %q: %w", key, storagesvc.ErrObjectNotFound)
+		return storagesvc.ObjectStat{}, fmt.Errorf("head %q: %w", key, storagesvc.ErrObjectNotFound)
 	}
-	return obj.size, obj.mimeType, "fake-etag", nil
+	return storagesvc.ObjectStat{
+		Size: obj.size, ContentType: obj.mimeType,
+		ETag: "fake-etag", LastModified: obj.written,
+	}, nil
 }
 
 func (f *fakeObjectStoreForTest) SignedPutURL(_ context.Context, projectID, bucket, key, _ string, _ int64, ttl time.Duration) (string, time.Time, error) {
 	return "https://fake.invalid/" + fakeBlobKey(projectID, bucket, key), time.Now().Add(ttl), nil
 }
 
-func (f *fakeObjectStoreForTest) SignedGetURL(_ context.Context, projectID, bucket, key string, ttl time.Duration) (string, time.Time, error) {
-	return "https://fake.invalid/" + fakeBlobKey(projectID, bucket, key), time.Now().Add(ttl), nil
+func (f *fakeObjectStoreForTest) SignedGetURL(_ context.Context, projectID, bucket, key string, download bool, ttl time.Duration) (string, time.Time, error) {
+	url := "https://fake.invalid/" + fakeBlobKey(projectID, bucket, key)
+	if download {
+		url += "?response-content-disposition=attachment"
+	}
+	return url, time.Now().Add(ttl), nil
 }
 
 func (f *fakeObjectStoreForTest) PublicURL(projectID, bucket, key string) (string, error) {

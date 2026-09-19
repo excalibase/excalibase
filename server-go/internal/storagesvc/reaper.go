@@ -15,6 +15,22 @@ const DefaultUnconfirmedGrace = time.Hour
 // reaperPageSize bounds one listing of a bucket's objects.
 const reaperPageSize = 1000
 
+// confirmSafetyMargin is how much earlier than the reaper's grace a
+// confirmation stops being accepted. The two windows must not touch: a
+// confirm admitted at the same instant the reaper decided an object was
+// abandoned would record a row for bytes about to be deleted. The margin is
+// the signed URL's own lifetime, which bounds how long a PUT can still be in
+// flight when the window closes.
+const confirmSafetyMargin = uploadURLTTL
+
+// confirmWindow is how old a stored object may be and still be confirmable.
+func confirmWindow(grace time.Duration) time.Duration {
+	if grace <= confirmSafetyMargin {
+		return grace / 2
+	}
+	return grace - confirmSafetyMargin
+}
+
 // ReapReport says what one sweep did. Deleted holds "<bucket>/<key>" for each
 // abandoned object removed; Failed names the buckets that could not be swept.
 type ReapReport struct {
@@ -48,6 +64,12 @@ func (s *Service) ReapUnconfirmedUploads(ctx context.Context, grace time.Duratio
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
+		// A bucket mid-delete belongs to the delete path, which purges every
+		// object under its prefix regardless of age. Sweeping it here would
+		// race that purge over the same keys for no gain.
+		if bucket.Status == BucketStatusDeleting {
+			continue
+		}
 		if err := s.reapBucket(ctx, bucket, cutoff, &report); err != nil {
 			report.Failed = append(report.Failed, bucket.ProjectID+"/"+bucket.Name)
 		}
@@ -66,6 +88,10 @@ func (s *Service) reapBucket(ctx context.Context, bucket Bucket, cutoff time.Tim
 		if !obj.LastModified.Before(cutoff) {
 			continue
 		}
+		// Re-read the row immediately before deleting. A confirmation cannot
+		// land in this gap — it is refused once an object is older than the
+		// confirm window, which closes before this cutoff — but reading late
+		// keeps the gap as small as it can be.
 		row, err := s.store.GetObject(ctx, bucket.ID, obj.Key)
 		if err != nil {
 			return fmt.Errorf("look up object %q: %w", obj.Key, err)

@@ -59,3 +59,38 @@ func checkMIMEAllowlist(allowed []string, mediaType string) error {
 	}
 	return invalidf("mime type %q not allowed in bucket", mediaType)
 }
+
+// renderableTypes are the media types a browser executes or renders as a
+// document rather than showing as a file. On a public bucket — served to
+// anyone, from the platform's own domain — an object of one of these types is
+// a script the platform hosts on a viewer's behalf.
+var renderableTypes = map[string]bool{
+	"text/html":                true,
+	"application/xhtml+xml":    true,
+	"image/svg+xml":            true,
+	"text/xml":                 true,
+	"application/xml":          true,
+	"text/javascript":          true,
+	"application/javascript":   true,
+	"application/x-javascript": true,
+	"text/ecmascript":          true,
+	"application/ecmascript":   true,
+}
+
+// checkPublicBucketType refuses a renderable type on a public bucket unless
+// the bucket's allow-list names it. Naming it is the owner saying they mean
+// to host markup; the default is that they do not. A private bucket is
+// unaffected: its objects are only reachable through a signed URL, which the
+// download path neutralises.
+func checkPublicBucketType(bucket *Bucket, mediaType string) error {
+	if !bucket.Public || !renderableTypes[mediaType] {
+		return nil
+	}
+	for _, entry := range bucket.AllowedTypes {
+		named, err := normaliseMIME(entry)
+		if err == nil && named == mediaType {
+			return nil
+		}
+	}
+	return invalidf("mime type %q is not allowed in a public bucket unless the bucket lists it explicitly", mediaType)
+}

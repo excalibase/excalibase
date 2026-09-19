@@ -19,6 +19,8 @@ type errInjectingStore struct {
 	createObjectErr error
 	quotaReadErr    error
 	listBucketErr   error
+	recordObjectErr error
+	getObjectErr    error
 	listObjectsErr  error
 	setStatusErr    error
 	statusWrites    []string
@@ -37,6 +39,20 @@ func (e *errInjectingStore) SetBucketStatus(ctx context.Context, projectID, name
 	}
 	e.statusWrites = append(e.statusWrites, status)
 	return e.memStore.SetBucketStatus(ctx, projectID, name, status)
+}
+
+func (e *errInjectingStore) GetObject(ctx context.Context, bucketID, key string) (*Object, error) {
+	if e.getObjectErr != nil {
+		return nil, e.getObjectErr
+	}
+	return e.memStore.GetObject(ctx, bucketID, key)
+}
+
+func (e *errInjectingStore) RecordObjectWithinQuota(ctx context.Context, projectID string, o *Object, capBytes int64) (bool, error) {
+	if e.recordObjectErr != nil {
+		return false, e.recordObjectErr
+	}
+	return e.memStore.RecordObjectWithinQuota(ctx, projectID, o, capBytes)
 }
 
 func (e *errInjectingStore) CreateObject(ctx context.Context, o *Object) error {
@@ -149,26 +165,6 @@ func TestService_DeleteBucket_RetryCompletesAfterFailure(t *testing.T) {
 	}
 }
 
-// Bytes from an upload that was never confirmed have no catalogue row. The
-// catalogue walk cannot see them, so the emptiness check on the object store
-// is what keeps the bucket record alive to find them by.
-func TestService_DeleteBucket_RefusesWhenUnrecordedBytesRemain(t *testing.T) {
-	store := newMemStore()
-	blobs := newFakeObjectStore()
-	svc := NewServiceWithObjectStore(store, blobs, nil)
-	ctx := context.Background()
-	bucket, _ := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
-	blobs.put(testProjX, bucket.ID, "never-confirmed.bin", 10, "application/octet-stream") // bytes, no row
-
-	err := svc.DeleteBucket(ctx, testProjX, "assets")
-	if err == nil || !strings.Contains(err.Error(), "still holds") {
-		t.Fatalf("expected the emptiness check to refuse, got %v", err)
-	}
-	if b, _ := store.GetBucket(ctx, testProjX, "assets"); b == nil {
-		t.Error("bucket record must survive so the stray bytes stay findable")
-	}
-}
-
 // The emptiness check must key off the bucket's own prefix. "assets2" is not
 // part of "assets", in either direction.
 func TestService_DeleteBucket_PrefixDoesNotMatchNeighbourBucket(t *testing.T) {
@@ -278,18 +274,18 @@ func TestService_DeleteObject_AlreadyGoneIsSuccess(t *testing.T) {
 	}
 }
 
-func TestService_ConfirmUpload_ReportsQuotaFailure(t *testing.T) {
+func TestService_ConfirmUpload_ReportsWriteFailure(t *testing.T) {
 	store := newErrStore()
 	blobs := newFakeObjectStore()
 	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
-	store.quotaErr = errors.New("platform db unavailable")
+	store.recordObjectErr = errors.New("platform db unavailable")
 
 	blobs.put(testProjX, bucketOf(t, store, "assets"), "a.txt", 10, "text/plain")
 	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"})
-	if err == nil || !strings.Contains(err.Error(), "charge quota") {
-		t.Fatalf("an uncharged upload must not report success, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "record object") {
+		t.Fatalf("an unrecorded upload must not report success, got %v", err)
 	}
 }
 
@@ -369,7 +365,7 @@ func TestService_ConfirmUpload_ReportsRecordFailure(t *testing.T) {
 	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
-	store.createObjectErr = errors.New("platform db unavailable")
+	store.recordObjectErr = errors.New("platform db unavailable")
 
 	blobs.put(testProjX, bucketOf(t, store, "assets"), "k", 1, "text/plain")
 	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k"})

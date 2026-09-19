@@ -111,6 +111,32 @@ func (m *memStore) CreateObject(_ context.Context, o *Object) error {
 	return nil
 }
 
+// RecordObjectWithinQuota mirrors the SQL contract: the row and the charge
+// move together, by the difference from what the row held before, and the cap
+// is decided by the same write.
+func (m *memStore) RecordObjectWithinQuota(_ context.Context, projectID string, o *Object, capBytes int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.objects[o.BucketID]; !ok {
+		m.objects[o.BucketID] = map[string]*Object{}
+	}
+	var previous int64
+	if existing, ok := m.objects[o.BucketID][o.Key]; ok {
+		previous = existing.Size
+	}
+	delta := o.Size - previous
+	if capBytes > 0 && m.quotas[projectID]+delta > capBytes {
+		return false, nil
+	}
+	copied := *o
+	m.objects[o.BucketID][o.Key] = &copied
+	m.quotas[projectID] += delta
+	if m.quotas[projectID] < 0 {
+		m.quotas[projectID] = 0
+	}
+	return true, nil
+}
+
 func (m *memStore) GetObject(_ context.Context, bucketID, key string) (*Object, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -34,11 +34,11 @@ func TestService_ConfirmUpload_ReportsQuotaChargeFailure(t *testing.T) {
 	svc := serviceOverStub(t, store, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
-	store.quotaErr = errors.New("platform db unavailable")
+	store.recordObjectErr = errors.New("platform db unavailable")
 
 	_, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"})
-	if err == nil || !strings.Contains(err.Error(), "charge quota") {
-		t.Fatalf("want a quota-charge failure, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "record object") {
+		t.Fatalf("want a record failure, got %v", err)
 	}
 }
 

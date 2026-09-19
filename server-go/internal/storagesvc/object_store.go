@@ -17,16 +17,30 @@ import (
 // are resolved to ids at the API boundary.
 type ObjectStore interface {
 	SignedPutURL(ctx context.Context, projectID, bucketID, key, mimeType string, size int64, ttl time.Duration) (string, time.Time, error)
-	SignedGetURL(ctx context.Context, projectID, bucketID, key string, ttl time.Duration) (string, time.Time, error)
+	// SignedGetURL mints a read URL. When download is set, the signature also
+	// pins the response's Content-Disposition and Content-Type, so the object
+	// is handed to the browser as a file instead of being rendered.
+	SignedGetURL(ctx context.Context, projectID, bucketID, key string, download bool, ttl time.Duration) (string, time.Time, error)
 	PublicURL(projectID, bucketID, key string) (string, error)
 	// DeleteObject is idempotent: an object that is already gone is success.
 	DeleteObject(ctx context.Context, projectID, bucketID, key string) error
 	// HeadObject reports what the store actually holds for a key. Returns
 	// ErrObjectNotFound when there is nothing there.
-	HeadObject(ctx context.Context, projectID, bucketID, key string) (size int64, contentType, etag string, err error)
+	HeadObject(ctx context.Context, projectID, bucketID, key string) (ObjectStat, error)
 	// ListObjects returns up to limit objects stored under the bucket's own
 	// prefix, keyed relative to the bucket. Used to verify emptiness before a
 	// bucket's metadata is dropped and to find uploads that were never
 	// confirmed, so it must never see a neighbouring bucket's keys.
 	ListObjects(ctx context.Context, projectID, bucketID string, limit int32) ([]StoredObject, error)
+}
+
+// ObjectStat is what the object store says about one stored object. It is
+// the only account of an upload the platform trusts: the caller's claims
+// about size and type are not evidence, and the write time decides whether a
+// confirmation is still in time.
+type ObjectStat struct {
+	Size         int64
+	ContentType  string
+	ETag         string
+	LastModified time.Time
 }

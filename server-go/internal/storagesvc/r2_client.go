@@ -155,7 +155,15 @@ func (r *R2Client) SignedPutURL(ctx context.Context, projectID, bucketID, key, m
 
 // SignedGetURL returns a presigned URL the client can GET bytes from.
 // Used for private buckets; public buckets return PublicURL() instead.
-func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucketID, key string, ttl time.Duration) (string, time.Time, error) {
+//
+// With download set, the signed request also carries
+// response-content-disposition and response-content-type, which S3/R2 apply
+// to the response it serves. That turns an object the browser would execute
+// — markup, SVG, script — into a download of an inert type, on the one path
+// where the platform still has a say. (A public bucket's URL is not signed at
+// all, so nothing can be pinned there; those types are refused at upload
+// instead.)
+func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucketID, key string, download bool, ttl time.Duration) (string, time.Time, error) {
 	if ttl == 0 {
 		ttl = 5 * time.Minute
 	}
@@ -163,10 +171,15 @@ func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucketID, key st
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	signed, err := r.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+	in := &s3.GetObjectInput{
 		Bucket: aws.String(r.cfg.Bucket),
 		Key:    aws.String(storeKey),
-	}, s3.WithPresignExpires(ttl))
+	}
+	if download {
+		in.ResponseContentDisposition = aws.String("attachment")
+		in.ResponseContentType = aws.String("application/octet-stream")
+	}
+	signed, err := r.presign.PresignGetObject(ctx, in, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("presign get: %w", err)
 	}
@@ -279,10 +292,10 @@ func isNotFound(err error) bool {
 // HeadObject queries R2 for the size + content-type of an existing object.
 // Used after the client confirms upload, to validate what they claimed
 // matches what's actually in R2.
-func (r *R2Client) HeadObject(ctx context.Context, projectID, bucketID, key string) (size int64, contentType, etag string, err error) {
+func (r *R2Client) HeadObject(ctx context.Context, projectID, bucketID, key string) (ObjectStat, error) {
 	storeKey, err := objectKey(projectID, bucketID, key)
 	if err != nil {
-		return 0, "", "", err
+		return ObjectStat{}, err
 	}
 	out, err := r.s3.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(r.cfg.Bucket),
@@ -292,18 +305,22 @@ func (r *R2Client) HeadObject(ctx context.Context, projectID, bucketID, key stri
 		// "there is nothing at this key" is a sentinel the service acts on;
 		// anything else is a real failure to reach the store.
 		if isNotFound(err) {
-			return 0, "", "", fmt.Errorf("head object %q: %w", key, ErrObjectNotFound)
+			return ObjectStat{}, fmt.Errorf("head object %q: %w", key, ErrObjectNotFound)
 		}
-		return 0, "", "", fmt.Errorf("head object: %w", err)
+		return ObjectStat{}, fmt.Errorf("head object: %w", err)
 	}
+	stat := ObjectStat{}
 	if out.ContentLength != nil {
-		size = *out.ContentLength
+		stat.Size = *out.ContentLength
 	}
 	if out.ContentType != nil {
-		contentType = *out.ContentType
+		stat.ContentType = *out.ContentType
 	}
 	if out.ETag != nil {
-		etag = strings.Trim(*out.ETag, "\"")
+		stat.ETag = strings.Trim(*out.ETag, "\"")
 	}
-	return size, contentType, etag, nil
+	if out.LastModified != nil {
+		stat.LastModified = *out.LastModified
+	}
+	return stat, nil
 }

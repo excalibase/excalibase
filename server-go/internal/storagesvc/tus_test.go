@@ -71,6 +71,16 @@ func (m *memBucketStore) CreateObject(_ context.Context, o *Object) error {
 	return nil
 }
 
+func (m *memBucketStore) RecordObjectWithinQuota(_ context.Context, projectID string, o *Object, capBytes int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.objects[o.BucketID]; !ok {
+		m.objects[o.BucketID] = map[string]*Object{}
+	}
+	m.objects[o.BucketID][o.Key] = o
+	return true, nil
+}
+
 func (m *memBucketStore) GetObject(_ context.Context, bucketID, key string) (*Object, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
