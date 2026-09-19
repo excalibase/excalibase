@@ -76,8 +76,8 @@ func TestDeprovisionPurgeFailureMarksRowPendingDelete(t *testing.T) {
 	saveActiveProject(t, svc, testPurgeProject)
 
 	err := svc.DeprovisionWithOptions(context.Background(), testPurgeProject, DeprovisionOptions{DeleteBackups: true})
-	if err != nil {
-		t.Fatalf("purge failure must not fail the deprovision: %v", err)
+	if err == nil {
+		t.Fatal("a purge the caller asked for and did not get must be reported")
 	}
 	inst, _ := store.FindByProjectID(testPurgeProject)
 	if inst == nil {
@@ -88,6 +88,9 @@ func TestDeprovisionPurgeFailureMarksRowPendingDelete(t *testing.T) {
 	}
 	if inst.FailureReason == "" {
 		t.Fatal("failure reason should record why the purge failed")
+	}
+	if inst.DeletionStep != domain.DeletionStepDeleteBackups {
+		t.Fatalf("deletion step = %q, want %s", inst.DeletionStep, domain.DeletionStepDeleteBackups)
 	}
 }
 

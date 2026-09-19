@@ -95,6 +95,9 @@ func serveMockInvoke(w http.ResponseWriter, path string, scripts map[string]edge
 // FunctionHandler.orgSlugFor.
 type inMemoryInstanceStore struct {
 	insts map[string]*domain.DatabaseInstance
+	// findAllErr makes FindAll fail, so callers that cascade over every
+	// project can be tested against a store they cannot read.
+	findAllErr error
 }
 
 func (s *inMemoryInstanceStore) Create(inst *domain.DatabaseInstance) error {
@@ -118,6 +121,9 @@ func (s *inMemoryInstanceStore) FindByProjectID(id string) (*domain.DatabaseInst
 	return s.insts[id], nil
 }
 func (s *inMemoryInstanceStore) FindAll() ([]*domain.DatabaseInstance, error) {
+	if s.findAllErr != nil {
+		return nil, s.findAllErr
+	}
 	out := make([]*domain.DatabaseInstance, 0, len(s.insts))
 	for _, v := range s.insts {
 		out = append(out, v)

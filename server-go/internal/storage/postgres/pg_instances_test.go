@@ -114,3 +114,65 @@ func TestInstance_UnsupportedDeploymentMode_IsRefused(t *testing.T) {
 		t.Fatalf("FindAll = %v, want ErrUnsupportedDeploymentMode", err)
 	}
 }
+
+// A deleted project must take its configuration, grants and credentials with
+// it: rows keyed by a project id that no longer exists would otherwise apply
+// to whatever project is issued that id next.
+func TestInstances_DeleteRemovesProjectOwnedRows(t *testing.T) {
+	store := testStore(t)
+	inst := instanceRow("proj-owned01", "org-owned")
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	seedProjectOwnedRows(t, store, inst.ProjectID)
+	seedProjectOwnedRows(t, store, "proj-other01")
+
+	if err := store.Delete(inst.ProjectID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	for _, table := range projectOwnedTables {
+		var left int
+		if err := store.DB().QueryRow(`SELECT count(*) FROM `+table+` WHERE project_id = $1`, inst.ProjectID).Scan(&left); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if left != 0 {
+			t.Errorf("%s still holds %d row(s) for the deleted project", table, left)
+		}
+		var others int
+		if err := store.DB().QueryRow(`SELECT count(*) FROM `+table+` WHERE project_id = $1`, "proj-other01").Scan(&others); err != nil {
+			t.Fatalf("count %s for other project: %v", table, err)
+		}
+		if others != 1 {
+			t.Errorf("%s: other project's row count = %d, want 1", table, others)
+		}
+	}
+}
+
+// seedProjectOwnedRows puts exactly one row per project-owned table so the
+// delete has something to remove in each of them.
+func seedProjectOwnedRows(t *testing.T, store *Store, projectID string) {
+	t.Helper()
+	statements := []string{
+		`INSERT INTO rls_policies (id, project_id, name, resource, effect, operations, rules, assignments) VALUES ($1||'-rls', $1, 'p', 'r', 'ALLOW', '{SELECT}', '[]'::jsonb, '[]'::jsonb)`,
+		`INSERT INTO column_policies (id, project_id, name, resource, columns, operations, mode, assignments) VALUES ($1||'-col', $1, 'p', 'r', '{c}', '{SELECT}', 'HIDE', '[]'::jsonb)`,
+		`INSERT INTO table_grants (id, project_id, resource, role_name, operations) VALUES ($1||'-grant', $1, 'public.r', 'anon', '{SELECT}')`,
+		`INSERT INTO project_exposure_settings (project_id) VALUES ($1)`,
+		`INSERT INTO project_cors_settings (project_id) VALUES ($1)`,
+		`INSERT INTO edge_function_settings (project_id) VALUES ($1)`,
+		`INSERT INTO edge_functions (project_id, id, doc) VALUES ($1, 'fn', '{}'::jsonb)`,
+		`INSERT INTO edge_shared_files (project_id, path, content) VALUES ($1, '_shared/cors.ts', '')`,
+		`INSERT INTO backup_schedules (project_id, cron_spec) VALUES ($1, '0 2 * * *')`,
+		`INSERT INTO nats_credentials (principal, project_id, password_hash) VALUES ($1||'-nats', $1, 'h')`,
+		`INSERT INTO storage_buckets (id, project_id, name) VALUES ($1||'-bucket', $1, 'b')`,
+		`INSERT INTO storage_quota (project_id) VALUES ($1)`,
+		`INSERT INTO users (id, username, email, password_hash) VALUES ($1||'-user', $1||'-user', $1||'@example.test', 'h')`,
+		`INSERT INTO orgs (id, name, slug, owner_id) VALUES ($1||'-org', 'o', $1||'-org', $1||'-user')`,
+		`INSERT INTO project_members (project_id, org_id, user_id, role) VALUES ($1, $1||'-org', $1||'-user', 'viewer')`,
+		`INSERT INTO access_tokens (token_hash, token_prefix, user_id, name, project_id) VALUES ($1||'-tok', 'exc_', $1||'-user', 'n', $1)`,
+	}
+	for _, stmt := range statements {
+		if _, err := store.DB().Exec(stmt, projectID); err != nil {
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+}

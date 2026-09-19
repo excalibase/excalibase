@@ -1356,11 +1356,40 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 			log.Fatalf("docker provisioner: %v", err)
 		}
 		log.Printf("Provisioner mode: docker (host=%s)", cfg.DockerHost)
-		return provisioner.NewFactory(provisioner.NewDockerPostgreSQLProvisioner(dockerClient)), dockerClient
+		dockerProvisioner := provisioner.NewDockerPostgreSQLProvisioner(dockerClient)
+		dockerProvisioner.SetDeletionPoller(deletionPoller())
+		return provisioner.NewFactory(dockerProvisioner), dockerClient
 	}
 	log.Println("Provisioner mode: k8s (CNPG)")
 	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
+	pgProvisioner.SetDeletionPoller(deletionPoller())
 	return provisioner.NewFactory(pgProvisioner), nil
+}
+
+// Teardown wait budget. CNPG finalizers plus PVC release routinely take a
+// couple of minutes on a busy node.
+const (
+	deletionPollInterval = 2 * time.Second
+	defaultDeletionWait  = 5 * time.Minute
+)
+
+// deletionPoller bounds how long a teardown waits for the project's
+// resources to actually disappear. Clusters with slow storage detach need a
+// longer budget than the default; DELETION_WAIT_TIMEOUT (a Go duration, e.g.
+// "10m") raises it. An unparseable value is fatal rather than silently
+// falling back — an operator who set it meant it.
+func deletionPoller() provisioner.Poller {
+	poller := provisioner.NewPoller(deletionPollInterval, defaultDeletionWait)
+	raw := os.Getenv("DELETION_WAIT_TIMEOUT")
+	if raw == "" {
+		return poller
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		log.Fatalf("DELETION_WAIT_TIMEOUT must be a positive Go duration, got %q", raw)
+	}
+	poller.Timeout = timeout
+	return poller
 }
 
 // buildPausers extracts the Pauser-implementing provisioners from

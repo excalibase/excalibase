@@ -45,13 +45,24 @@ type DockerClient interface {
 // not a string literal that looks like a hardcoded credential.
 const defaultPostgresSuperuser = "postgres"
 
+// containerNotFound is the ContainerStatus value for a container the daemon
+// does not know about — the state teardown waits for.
+const containerNotFound = "not_found"
+
 // DockerPostgreSQLProvisioner provisions PostgreSQL via Docker containers.
 type DockerPostgreSQLProvisioner struct {
-	docker DockerClient
+	docker         DockerClient
+	deletionPoller Poller
 }
 
 func NewDockerPostgreSQLProvisioner(docker DockerClient) *DockerPostgreSQLProvisioner {
-	return &DockerPostgreSQLProvisioner{docker: docker}
+	return &DockerPostgreSQLProvisioner{docker: docker, deletionPoller: NewPoller(defaultDeletionPoll, defaultDeletionTimeout)}
+}
+
+// SetDeletionPoller overrides how long teardown waits for the project's
+// container to actually disappear.
+func (p *DockerPostgreSQLProvisioner) SetDeletionPoller(poller Poller) {
+	p.deletionPoller = poller
 }
 
 func (p *DockerPostgreSQLProvisioner) SupportedType() domain.DatabaseType {
@@ -158,11 +169,31 @@ func (p *DockerPostgreSQLProvisioner) Resume(ctx context.Context, namespace, _ s
 	return nil
 }
 
+// Deprovision removes the project's container and returns only once the
+// daemon reports it gone. A container that is already absent counts as
+// removed, so a retried teardown is idempotent.
 func (p *DockerPostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, projectID string) error {
+	status, err := p.docker.ContainerStatus(ctx, namespace)
+	if err != nil {
+		return fmt.Errorf("container status: %w", err)
+	}
+	if status == containerNotFound {
+		return nil
+	}
 	if err := p.docker.StopContainer(ctx, namespace); err != nil {
 		return fmt.Errorf("stop container: %w", err)
 	}
-	return p.docker.RemoveContainer(ctx, namespace)
+	if err := p.docker.RemoveContainer(ctx, namespace); err != nil {
+		return fmt.Errorf("remove container: %w", err)
+	}
+	return p.deletionPoller.WaitUntilClear(ctx, "container "+namespace,
+		func(ctx context.Context) ([]string, error) {
+			status, err := p.docker.ContainerStatus(ctx, namespace)
+			if err != nil || status == containerNotFound {
+				return nil, err
+			}
+			return []string{namespace + " (" + status + ")"}, nil
+		})
 }
 
 func (p *DockerPostgreSQLProvisioner) GetStatus(ctx context.Context, namespace, projectID string) (*ProvisioningStatus, error) {

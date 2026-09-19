@@ -101,6 +101,9 @@ type fakePgDogStore struct {
 	removedUserDatabases []string
 	registerErr          error
 	removeErr            error
+	// removeDatabaseErr fails only the database removal, so the two
+	// failures in DeregisterCluster can be told apart.
+	removeDatabaseErr error
 }
 
 func (f *fakePgDogStore) RegisterPgDogDatabase(_ context.Context, d *domain.PgDogDatabase) error {
@@ -114,6 +117,9 @@ func (f *fakePgDogStore) RegisterPgDogDatabase(_ context.Context, d *domain.PgDo
 func (f *fakePgDogStore) RemovePgDogDatabase(_ context.Context, name string) error {
 	if f.removeErr != nil {
 		return f.removeErr
+	}
+	if f.removeDatabaseErr != nil {
+		return f.removeDatabaseErr
 	}
 	f.removedDatabases = append(f.removedDatabases, name)
 	return nil
@@ -222,14 +228,23 @@ func TestPgDogNotifier_DeregisterCluster_NilStore(t *testing.T) {
 	}
 }
 
-func TestPgDogNotifier_DeregisterCluster_StoreErrorsAreLogged(t *testing.T) {
-	// Deregister logs warnings rather than failing — the operation should
-	// still succeed end-to-end so a flaky pgdog table doesn't block deletion.
+func TestPgDogNotifier_DeregisterCluster_ReportsDatabaseRemovalError(t *testing.T) {
+	store := &fakePgDogStore{removeDatabaseErr: errors.New("gone wrong")}
+	n, _ := NewPgDogNotifier(store, "")
+
+	if err := n.DeregisterCluster(context.Background(), "p"); err == nil {
+		t.Error("a route left in the gateway must be reported")
+	}
+}
+
+func TestPgDogNotifier_DeregisterCluster_ReportsStoreErrors(t *testing.T) {
+	// A route left in the gateway still points at the tenant's database, so
+	// the failure reaches the caller rather than a log line.
 	store := &fakePgDogStore{removeErr: errors.New("transient")}
 	n, _ := NewPgDogNotifier(store, "")
 
-	if err := n.DeregisterCluster(context.Background(), "p"); err != nil {
-		t.Errorf("Deregister should swallow store errors, got %v", err)
+	if err := n.DeregisterCluster(context.Background(), "p"); err == nil {
+		t.Error("Deregister must report store errors")
 	}
 }
 

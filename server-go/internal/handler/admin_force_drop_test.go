@@ -80,17 +80,24 @@ func (c *captureAudit) LogAudit(_ context.Context, e *domain.AuditEntry) error {
 	return nil
 }
 
-// adminDockerMock is a no-op DockerClient for the admin deprovision path —
-// Deprovision only calls StopContainer + RemoveContainer.
-type adminDockerMock struct{}
+// adminDockerMock is a DockerClient for the admin deprovision path. It
+// tracks removal so ContainerStatus reports the container gone, which is
+// what teardown waits for.
+type adminDockerMock struct{ removed bool }
 
 func (adminDockerMock) CreateContainer(context.Context, string, string, map[string]string, map[string]string) (string, error) {
 	return "ctr", nil
 }
-func (adminDockerMock) StartContainer(context.Context, string) error  { return nil }
-func (adminDockerMock) StopContainer(context.Context, string) error   { return nil }
-func (adminDockerMock) RemoveContainer(context.Context, string) error { return nil }
-func (adminDockerMock) ContainerStatus(context.Context, string) (string, error) {
+func (adminDockerMock) StartContainer(context.Context, string) error { return nil }
+func (adminDockerMock) StopContainer(context.Context, string) error  { return nil }
+func (m *adminDockerMock) RemoveContainer(context.Context, string) error {
+	m.removed = true
+	return nil
+}
+func (m *adminDockerMock) ContainerStatus(context.Context, string) (string, error) {
+	if m.removed {
+		return "not_found", nil
+	}
 	return "running", nil
 }
 func (adminDockerMock) WaitForHealthy(context.Context, string) error { return nil }
@@ -106,7 +113,7 @@ func (adminDockerMock) CopyFromContainer(context.Context, string, string) (io.Re
 
 func newDockerProvSvc(t *testing.T, store *inMemoryInstanceStore) *service.ProvisioningService {
 	t.Helper()
-	dp := provisioner.NewDockerPostgreSQLProvisioner(adminDockerMock{})
+	dp := provisioner.NewDockerPostgreSQLProvisioner(&adminDockerMock{})
 	factory := provisioner.NewFactory(dp)
 	return service.NewProvisioningService(store, factory, k8s.NewMockClient())
 }
