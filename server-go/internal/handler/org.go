@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -17,7 +18,6 @@ const (
 	errOrgNotFound       = "org not found"
 	errInsufficientPerms = "insufficient permissions"
 )
-
 
 type OrgHandler struct {
 	orgStore      storage.OrgStore
@@ -201,7 +201,7 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name *string         `json:"name,omitempty"`
+		Name *string          `json:"name,omitempty"`
 		Tier *domain.TierType `json:"tier,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -297,6 +297,17 @@ func (h *OrgHandler) InviteOrgMember(w http.ResponseWriter, r *http.Request) {
 	h.resolveAndAddMember(w, r, orgID, req.UserID, req.Email, req.Role)
 }
 
+// resolveInvitee finds the user an invite names, by id or by email.
+func (h *OrgHandler) resolveInvitee(ctx context.Context, userID, email string) (*domain.User, error) {
+	if userID != "" {
+		return h.userStore.FindUserByID(ctx, userID)
+	}
+	if email == "" {
+		return nil, nil
+	}
+	return h.userStore.FindUserByEmail(ctx, email)
+}
+
 // isValidOrgRole checks if the role is one of the allowed org-level roles.
 func isValidOrgRole(role string) bool {
 	switch role {
@@ -309,8 +320,14 @@ func isValidOrgRole(role string) bool {
 // resolveAndAddMember looks up the user by email if needed, then either adds
 // them as a member directly (user exists) or creates a pending invite.
 func (h *OrgHandler) resolveAndAddMember(w http.ResponseWriter, r *http.Request, orgID, userID, email, role string) {
-	if userID == "" && email != "" && h.userStore != nil {
-		if u, _ := h.userStore.FindUserByEmail(r.Context(), email); u != nil {
+	if h.userStore != nil {
+		if u, _ := h.resolveInvitee(r.Context(), userID, email); u != nil {
+			if u.IsService() {
+				// A service principal is platform-scoped: it authenticates
+				// with a capability token, never through an org membership.
+				httpError(w, "service accounts cannot be organization members", http.StatusBadRequest)
+				return
+			}
 			userID = u.ID
 		}
 	}

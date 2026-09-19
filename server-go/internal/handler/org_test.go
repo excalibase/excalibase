@@ -728,3 +728,37 @@ func TestOrgRolePermissions(t *testing.T) {
 		}
 	}
 }
+
+// TestInviteServiceAccountIsRefused pins that a service principal stays
+// platform-scoped: it authenticates with a capability token and must never
+// acquire project access by becoming an organization member.
+func TestInviteServiceAccountIsRefused(t *testing.T) {
+	r, store := setupOrgRouter(t)
+
+	svcID := testutil.FixtureToken("svc-id")
+	store.CreateUser(t.Context(), &domain.User{
+		ID: svcID, Username: "svc-graphql", Email: "svc-graphql@svc.excalibase.internal",
+		Role: "platform_admin", Active: true, Kind: domain.UserKindService,
+	})
+
+	w := orgRequest(r, "POST", testOrgsPath, `{"name":"SvcOrg","slug":"svc-org"}`, testAliceID)
+	var org domain.Org
+	json.NewDecoder(w.Body).Decode(&org)
+
+	for _, body := range []string{
+		`{"userId":"` + svcID + `","role":"developer"}`,
+		`{"email":"svc-graphql@svc.excalibase.internal","role":"developer"}`,
+	} {
+		invite := orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, body, testAliceID)
+		if invite.Code != http.StatusBadRequest {
+			t.Fatalf("invite %s: got %d, want %d. Body: %s", body, invite.Code, http.StatusBadRequest, invite.Body.String())
+		}
+	}
+
+	members := orgRequest(r, "GET", testOrgsSlash+org.ID+testMembersPath, "", testAliceID)
+	var listed []domain.OrgMember
+	json.NewDecoder(members.Body).Decode(&listed)
+	if len(listed) != 1 {
+		t.Fatalf("expected only the owner, got %d members", len(listed))
+	}
+}

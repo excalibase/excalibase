@@ -68,7 +68,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check duplicates (indexed lookups)
+	// Check duplicates (indexed lookups). A service principal occupies its
+	// name too: registration can never take over a service identity.
 	existing, _ := h.userStore.FindUserByUsername(r.Context(), req.Username)
 	if existing != nil {
 		httpError(w, "username already taken", http.StatusConflict)
@@ -120,6 +121,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		PasswordHash: hash,
 		Role:         role,
 		Active:       true,
+		Kind:         domain.UserKindHuman,
 		CreatedAt:    &now,
 	}
 
@@ -187,7 +189,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, _ := h.userStore.FindUserByUsername(r.Context(), req.Username)
-	if user == nil || !auth.CheckPassword(req.Password, user.PasswordHash) {
+	// A service principal has no password and must never hold a session: its
+	// only credential is a capability token minted by a platform admin. The
+	// refusal is indistinguishable from a wrong password so the login form
+	// does not confirm which names are service identities.
+	if user == nil || user.IsService() || !auth.CheckPassword(req.Password, user.PasswordHash) {
 		httpError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}

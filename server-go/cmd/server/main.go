@@ -408,6 +408,7 @@ type handlerDeps struct {
 	storageHandler     *handler.StorageHandler
 	adminHandler       *handler.AdminHandler
 	authHandler        *handler.AuthHandler
+	svcAcctHandler     *handler.ServiceAccountHandler
 	orgHandler         *handler.OrgHandler
 	vaultHandler       *handler.VaultHandler
 	schemaHandler      *handler.SchemaHandler
@@ -885,6 +886,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		storageHandler:     storageHandler,
 		adminHandler:       adminHandler,
 		authHandler:        authHandler,
+		svcAcctHandler:     handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
 		orgHandler:         newOrgHandler(sqlStore, store),
 		vaultHandler:       vaultHandler,
 		schemaHandler:      newSchemaHandler(vc, store, egress),
@@ -927,6 +929,10 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Use(custommw.SecurityHeaders)
 	r.Use(custommw.CORS(cfg.CORSOrigins))
 	r.Use(auth.ExtractAuth(sqlStore))
+	// Capability tokens (the platform's own service principals) are
+	// default-deny: mounted here, the gate covers every route including ones
+	// added later. Human PATs and sessions pass straight through.
+	r.Use(custommw.CapabilityGate)
 
 	handler.RegisterPrometheusHandler(r)
 
@@ -1092,6 +1098,7 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 			r.Use(auth.RequirePermission(auth.PermViewAny))
 			d.tierHandler.Routes(r)
 		})
+		r.Route("/service-accounts", func(r chi.Router) { d.svcAcctHandler.Routes(r) })
 	})
 }
 
