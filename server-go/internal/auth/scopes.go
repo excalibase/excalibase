@@ -76,3 +76,74 @@ func TokenAllowsMethod(t *domain.AccessToken, method string) bool {
 	}
 	return false
 }
+
+// IsSessionToken reports whether a request was authenticated by a browser
+// session rather than a personal access token. /login and /register are the
+// only places that stamp ScopeSession, and NormalizeScopes refuses it from a
+// creation request, so the scope is the one reliable discriminator.
+func IsSessionToken(t *domain.AccessToken) bool {
+	if t == nil || t.Scopes == "" {
+		return false
+	}
+	return scopeSet(t.Scopes)[ScopeSession]
+}
+
+// IsUnrestrictedCredential reports whether the credential authenticating a
+// request carries no restriction of its own: a browser session, or a legacy
+// all-purpose PAT with neither scopes nor a project binding. A capability
+// token is never unrestricted however wide its permission list looks — its
+// authority is delegated to a machine, not held by the user directly.
+//
+// It is the gate on the doors that hand out platform-wide authority (minting
+// or rotating a capability token, creating or deleting a service principal):
+// those grants outlive any narrowing on the credential that asked for them,
+// so a restricted PAT must not be a door to one.
+func IsUnrestrictedCredential(t *domain.AccessToken) bool {
+	if t == nil || IsCapabilityToken(t) {
+		return false
+	}
+	if IsSessionToken(t) {
+		return true
+	}
+	return t.Scopes == "" && t.ProjectID == ""
+}
+
+// ScopesSubsetOf reports whether every scope in requested is one the holder
+// already carries. An empty holder set is the legacy all-purpose token, which
+// restricts nothing; an empty requested set asks for an all-purpose token,
+// which only an all-purpose holder may grant.
+func ScopesSubsetOf(requested, holder string) bool {
+	if holder == "" {
+		return true
+	}
+	if requested == "" {
+		return false
+	}
+	granted := scopeSet(holder)
+	for scope := range scopeSet(requested) {
+		if !granted[scope] {
+			return false
+		}
+	}
+	return true
+}
+
+// ProjectBindingWithin reports whether a new token's project binding stays
+// inside the holder's. An unbound holder may bind anywhere it can reach; a
+// bound holder may only mint tokens for its own project, never an unbound one.
+func ProjectBindingWithin(requested, holder string) bool {
+	if holder == "" {
+		return true
+	}
+	return requested == holder
+}
+
+func scopeSet(scopes string) map[string]bool {
+	set := map[string]bool{}
+	for _, scope := range strings.Split(scopes, ",") {
+		if trimmed := strings.TrimSpace(scope); trimmed != "" {
+			set[trimmed] = true
+		}
+	}
+	return set
+}

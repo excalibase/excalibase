@@ -22,6 +22,7 @@ const (
 	statusFmt         = "status: got %d body %s"
 	expiresWithinSlop = 5 * time.Second
 	scopesRead        = "read"
+	scopesReadWrite   = "read,write"
 	nameCaller        = "caller"
 	nameCI            = "ci"
 )
@@ -216,7 +217,9 @@ const rotateProject = "rotate-proj"
 func TestRotateToken_ImmediateRevokePreservesBinding(t *testing.T) {
 	f := newTokenFixture(t)
 	expires := time.Now().Add(30 * 24 * time.Hour)
-	old := f.mint(nameCI, tokenUser, scopesRead, &expires)
+	// Rotation is a POST, so the caller needs a write-capable scope
+	// (auth.RequireAuth enforces scopes on every authenticated route).
+	old := f.mint(nameCI, tokenUser, scopesReadWrite, &expires)
 	f.ts.tokens[auth.HashToken(old)].ProjectID = rotateProject
 
 	code, resp := rotate(f, old, old, `{}`)
@@ -234,7 +237,7 @@ func TestRotateToken_ImmediateRevokePreservesBinding(t *testing.T) {
 		t.Error("new token must authenticate")
 	}
 	stored := f.ts.tokens[auth.HashToken(fresh)]
-	if stored.Scopes != scopesRead || stored.Name != nameCI || stored.UserID != tokenUser || stored.ProjectID != rotateProject {
+	if stored.Scopes != scopesReadWrite || stored.Name != nameCI || stored.UserID != tokenUser || stored.ProjectID != rotateProject {
 		t.Errorf("binding not preserved: %+v", stored)
 	}
 	if got, _ := resp["projectId"].(string); got != rotateProject {

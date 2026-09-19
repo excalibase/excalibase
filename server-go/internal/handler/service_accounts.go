@@ -53,13 +53,16 @@ func NewServiceAccountHandler(userStore storage.UserStore, tokenStore storage.To
 }
 
 // Routes mounts the subtree. The caller applies auth.RequireAuth; every route
-// here additionally requires the platform user-management permission.
+// here additionally requires the platform user-management permission, and the
+// two that change which machine identities exist require an unrestricted
+// credential on top — a narrowed PAT must not be able to register the
+// principal a capability token would then be minted for (EXC-396).
 func (h *ServiceAccountHandler) Routes(r chi.Router) {
 	r.Use(auth.RequirePermission(auth.PermManageUsers))
 	r.Get("/", h.List)
-	r.Post("/", h.Create)
 	r.Get("/{name}/tokens", h.ListTokens)
-	r.Delete("/{name}", h.Delete)
+	r.With(auth.RequireUnrestrictedCredential).Post("/", h.Create)
+	r.With(auth.RequireUnrestrictedCredential).Delete("/{name}", h.Delete)
 }
 
 // Create registers a service principal, or returns the existing one unchanged

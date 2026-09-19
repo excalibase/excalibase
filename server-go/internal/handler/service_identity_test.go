@@ -662,3 +662,62 @@ func TestServiceAccountAuditSinkIsOptional(t *testing.T) {
 		t.Fatalf("a handler with no sink wrote %d audit entries", len(f.audit.entries))
 	}
 }
+
+// --- EXC-396: only an unrestricted credential may hand out service authority ---
+
+// mintScopedPAT stores a PAT narrowed to the given scopes and returns the raw
+// secret. The owner is the platform admin, so only the credential — never the
+// role — decides the outcome.
+func (f *identityFixture) mintScopedPAT(name, scopes string) string {
+	raw := testutil.FixtureToken(name)
+	now := time.Now()
+	f.ts.tokens[auth.HashToken(raw)] = &domain.AccessToken{
+		TokenHash: auth.HashToken(raw), TokenPrefix: auth.TokenPrefix(raw),
+		UserID: adminUserID, Name: name, Scopes: scopes, CreatedAt: &now,
+	}
+	return raw
+}
+
+// TestServiceAccountLifecycleNeedsAnUnrestrictedCredential: registering or
+// deleting a service principal decides which machine identities exist, so a
+// narrowed PAT must not reach it however wide its owner's role is.
+func TestServiceAccountLifecycleNeedsAnUnrestrictedCredential(t *testing.T) {
+	cases := []struct {
+		name, method, path string
+		want               int
+	}{
+		{"create", http.MethodPost, routeServiceAccounts, http.StatusForbidden},
+		{"delete", http.MethodDelete, routeServiceAccounts + "/" + svcAuthName, http.StatusForbidden},
+		{"list stays readable", http.MethodGet, routeServiceAccounts, http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newIdentityFixture(t)
+			f.createServiceAccount(t, svcAuthName)
+			scoped := f.mintScopedPAT("admin-ci", "read,write")
+
+			w := f.do(tc.method, tc.path, scoped, `{"name":"`+svcGraphqlName+`"}`)
+			if w.Code != tc.want {
+				t.Fatalf("%s as a scoped PAT: "+bodyFmt, tc.method, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestCapabilityTokenCannotRotateItself records what the gate actually does:
+// CapabilityGate allows a capability token only the GET routes its permission
+// list names, so rotation — a POST — never reaches the handler. Nothing in
+// the platform self-rotates; the runbook rotates service tokens with an
+// operator credential (§4.4).
+func TestCapabilityTokenCannotRotateItself(t *testing.T) {
+	f := newIdentityFixture(t)
+	raw := f.mintCapability(t, svcGraphqlName, []string{permPolicies})
+
+	w := f.do(http.MethodPost, routeAuthTokens+"/"+auth.HashToken(raw)+rotateSuffix, raw, "")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("capability token rotating itself: "+bodyFmt, w.Code, w.Body.String())
+	}
+	if f.ts.tokens[auth.HashToken(raw)] == nil {
+		t.Fatal("a refused rotation retired the old secret")
+	}
+}

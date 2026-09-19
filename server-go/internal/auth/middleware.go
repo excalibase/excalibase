@@ -130,9 +130,7 @@ func RequireScope(scope string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t := GetToken(r.Context())
 			if t == nil || !TokenHasScope(t, scope) {
-				w.Header().Set(headerContentType, contentTypeJSON)
-				w.WriteHeader(http.StatusForbidden)
-				json.NewEncoder(w).Encode(map[string]string{"error": "token lacks required scope: " + scope})
+				writeForbidden(w, "token lacks required scope: "+scope)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -157,15 +155,50 @@ func TokenHasScope(t *domain.AccessToken, scope string) bool {
 	return false
 }
 
-// RequireAuth rejects requests without a valid authenticated user.
+// RequireAuth rejects requests without a valid authenticated user, and
+// enforces the authenticating token's scopes against the request method.
+//
+// The scope check lives here, not at each call site, because it is an
+// absence that no diff review surfaces: RequireProjectAccess used to be the
+// only place that ran it, so every route without a {projectId} — platform
+// users, service accounts, tier configs, parameter groups, operator install —
+// let a read-only PAT write (EXC-396). Every authenticated subtree mounts
+// RequireAuth, so mounting the check here covers routes added later too.
+//
+// Sessions, legacy all-purpose tokens and write-capable PATs are unaffected;
+// capability tokens stay governed by middleware.CapabilityGate on top.
 func RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if GetUser(r.Context()) == nil {
 			writeUnauthorized(w, authFailure(r.Context()))
 			return
 		}
+		if !TokenAllowsMethod(GetToken(r.Context()), r.Method) {
+			writeForbidden(w, "token lacks required scope: "+ScopeWrite)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// RequireUnrestrictedCredential refuses a narrowed PAT on the routes that
+// hand out or destroy platform-wide authority. See IsUnrestrictedCredential
+// for why a scope-restricted or project-bound token is not enough there.
+func RequireUnrestrictedCredential(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !IsUnrestrictedCredential(GetToken(r.Context())) {
+			writeForbidden(w, "this route requires a session or an unrestricted token")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// writeForbidden emits the 403 body used by the token-level gates.
+func writeForbidden(w http.ResponseWriter, message string) {
+	w.Header().Set(headerContentType, contentTypeJSON)
+	w.WriteHeader(http.StatusForbidden)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 // writeUnauthorized emits the 401 body. An expired token carries a distinct
@@ -187,9 +220,7 @@ func RequirePermission(perm Permission) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user := GetUser(r.Context())
 			if user == nil || !HasPermission(user.Role, perm) {
-				w.Header().Set(headerContentType, contentTypeJSON)
-				w.WriteHeader(http.StatusForbidden)
-				json.NewEncoder(w).Encode(map[string]string{"error": "insufficient permissions"})
+				writeForbidden(w, "insufficient permissions")
 				return
 			}
 			next.ServeHTTP(w, r)
