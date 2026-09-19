@@ -626,8 +626,11 @@ func startNatsAuthCallout(cfg config.AppConfig, sqlStore storage.PlatformStore) 
 		log.Printf("WARN: NATS auth callout: %v", err)
 		return noop
 	}
-	conn, err := nats.Connect(cfg.NatsURL, nats.UserInfo(cfg.NatsCalloutUser, cfg.NatsCalloutPassword),
-		nats.MaxReconnects(-1), nats.ReconnectWait(2*time.Second))
+	// The callout user is the delegated auth account's own login, not a
+	// permission-matrix principal, so it takes the shared options directly.
+	calloutOpts := append(natsauth.BaseOptions(cfg.NatsCalloutUser),
+		nats.UserInfo(cfg.NatsCalloutUser, cfg.NatsCalloutPassword))
+	conn, err := nats.Connect(cfg.NatsURL, calloutOpts...)
 	if err != nil {
 		log.Printf("WARN: NATS auth callout connect: %v", err)
 		return noop

@@ -9,6 +9,7 @@ import (
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/natsauth"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/lib/pq"
@@ -148,11 +149,29 @@ func TestPgDogNotifier_NewWithEmptyURL(t *testing.T) {
 	n.Close()
 }
 
-func TestPgDogNotifier_NewWithBadURL(t *testing.T) {
-	// bogus scheme → nats.Connect fails fast, surfacing the wrap.
-	_, err := NewPgDogNotifier(nil, "nats://127.0.0.1:1")
-	if err == nil {
-		t.Error("expected NATS connect error against unreachable URL")
+func TestPgDogNotifier_NewWithUnreachableBusKeepsRetrying(t *testing.T) {
+	// With the shared dial options an unreachable bus is a state, not a
+	// construction failure: the notifier comes up disconnected and keeps
+	// retrying, instead of taking the control plane down with it.
+	opts, err := natsauth.ClientOptions(natsauth.PrincipalProvisioning, "", "CDC")
+	if err != nil {
+		t.Fatalf("ClientOptions: %v", err)
+	}
+	n, err := NewPgDogNotifier(nil, "nats://127.0.0.1:1", opts...)
+	if err != nil {
+		t.Fatalf("construction failed against an unreachable bus: %v", err)
+	}
+	defer n.Close()
+	if n.Connected() {
+		t.Error("notifier reports connected against an unreachable bus")
+	}
+}
+
+func TestPgDogNotifier_NewWithMalformedURLStillFails(t *testing.T) {
+	// A URL that cannot be parsed is a configuration error, not a transient
+	// outage, and must not be retried silently forever.
+	if _, err := NewPgDogNotifier(nil, "://nope"); err == nil {
+		t.Error("expected a connect error for a malformed NATS URL")
 	}
 }
 

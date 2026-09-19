@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/nats-io/nats.go"
@@ -15,6 +16,9 @@ import (
 // pgdogReloadSubject must stay in step with natsauth.SubjectPgDogReload,
 // which is what the svc-pgdog principal is allowed to subscribe to.
 const pgdogReloadSubject = natsauth.SubjectPgDogReload
+
+// pgdogPublisherName labels this publisher's bus metrics.
+const pgdogPublisherName = "pgdog-notifier"
 
 // ErrPgDogRoleNotRoutable is returned when a caller tries to expose a role
 // through the shared pooler that is not one of the engine-facing roles.
@@ -125,11 +129,26 @@ func (n *PgDogNotifier) DeregisterCluster(ctx context.Context, projectID string)
 	return nil
 }
 
+// Connected reports whether a reload signal published right now would reach
+// PgDog.
+func (n *PgDogNotifier) Connected() bool {
+	return n != nil && n.nc != nil && n.nc.IsConnected()
+}
+
+// publishReload signals PgDog to re-read its config. A signal that cannot be
+// sent is counted, not swallowed: PgDog would otherwise keep routing on a
+// stale config with nothing to show for it.
 func (n *PgDogNotifier) publishReload() {
 	if n.nc == nil {
 		return
 	}
+	if !n.Connected() {
+		metrics.CountNatsPublishDropped(pgdogPublisherName)
+		log.Print("WARN: pgdog reload dropped: nats bus not connected")
+		return
+	}
 	if err := n.nc.Publish(pgdogReloadSubject, []byte("reload")); err != nil {
+		metrics.CountNatsPublishDropped(pgdogPublisherName)
 		log.Printf("WARN: pgdog nats publish: %v", err)
 	}
 }
