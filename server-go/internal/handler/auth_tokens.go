@@ -110,6 +110,10 @@ func (h *AuthHandler) decodeCreateToken(w http.ResponseWriter, r *http.Request, 
 		httpError(w, "project not found", http.StatusNotFound)
 		return tokenSpec{}, false
 	}
+	if err := restrictToCallerToken(auth.GetToken(r.Context()), req.ProjectID, scopes); err != nil {
+		httpError(w, err.message, err.status)
+		return tokenSpec{}, false
+	}
 	spec := tokenSpec{userID: user.ID, name: req.Name, scopes: scopes, projectID: req.ProjectID, lifetime: lifetime}
 	if err := h.resolveTokenSubject(r, user, req, &spec); err != nil {
 		httpError(w, err.message, err.status)
@@ -125,6 +129,36 @@ type refusal struct {
 }
 
 func (e *refusal) Error() string { return e.message }
+
+// restrictToCallerToken keeps a personal access token from minting a broader
+// one (EXC-396). A PAT that could widen its own project binding or scopes
+// would make the narrow token it was issued as meaningless — the CI credential
+// bound to one project and to reads would be a full-account credential.
+//
+// PATs may still mint PATs: the documented install path mints the long-lived
+// platform-services token with an operator PAT
+// (docs/deployment/production-k8s-runbook.md §3.4). Subsetting keeps that
+// working while closing the escalation.
+//
+// A session-authenticated request is the user acting directly and is
+// unrestricted; so is a legacy all-purpose PAT, which carries no restriction
+// to preserve. A request with no resolvable token is refused rather than
+// waved through.
+func restrictToCallerToken(caller *domain.AccessToken, projectID, scopes string) *refusal {
+	if caller == nil {
+		return &refusal{http.StatusForbidden, "the authenticating token could not be resolved"}
+	}
+	if auth.IsSessionToken(caller) {
+		return nil
+	}
+	if !auth.ProjectBindingWithin(projectID, caller.ProjectID) {
+		return &refusal{http.StatusForbidden, "a project-bound token may only mint tokens bound to the same project"}
+	}
+	if !auth.ScopesSubsetOf(scopes, caller.Scopes) {
+		return &refusal{http.StatusForbidden, "a token may not mint a token with scopes it does not hold"}
+	}
+	return nil
+}
 
 // resolveTokenSubject applies the service-principal rules on top of a normal
 // self-minted PAT: only a platform admin may name another user or attach a
@@ -225,6 +259,12 @@ func (h *AuthHandler) RevokeToken(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) RotateToken(w http.ResponseWriter, r *http.Request) {
 	tok, ok := h.tokenForCaller(w, r, false)
 	if !ok {
+		return
+	}
+	// Rotation returns a fresh secret for tok, so the same subset rule that
+	// governs creation governs this door too.
+	if err := restrictToCallerToken(auth.GetToken(r.Context()), tok.ProjectID, tok.Scopes); err != nil {
+		httpError(w, err.message, err.status)
 		return
 	}
 	grace, ok := decodeGrace(w, r)
