@@ -19,10 +19,14 @@ import (
 // backupDisposition renders the deprovision choice as a fixed literal for logs,
 // so request-derived data never reaches the log line.
 func backupDisposition(opts service.DeprovisionOptions) string {
-	if opts.DeleteBackups {
+	switch {
+	case opts.DeleteBackups == nil:
+		return "unstated"
+	case *opts.DeleteBackups:
 		return "purge"
+	default:
+		return "keep"
 	}
-	return "keep"
 }
 
 type ProvisioningHandler struct {
@@ -248,13 +252,17 @@ func (h *ProvisioningHandler) GetStatus(w http.ResponseWriter, r *http.Request) 
 // deprovisionBody is the optional JSON body of DELETE /{projectId}.
 type deprovisionBody struct {
 	// ConfirmDeleteBackups also deletes every backup object under the
-	// project's prefix once the project is gone. Absent/false keeps them.
-	ConfirmDeleteBackups bool `json:"confirmDeleteBackups"`
+	// project's prefix once the project is gone. Absent leaves the choice
+	// unstated, which on a retry inherits what the running deletion
+	// recorded; false keeps them.
+	ConfirmDeleteBackups *bool `json:"confirmDeleteBackups"`
 }
 
-// decodeDeprovisionOptions reads the optional deprovision body. An empty
-// body is the safe default (keep backups); malformed JSON is an error so a
-// typo can never silently turn into "keep" or "delete".
+// decodeDeprovisionOptions reads the optional deprovision body. An absent
+// field leaves the backup choice unstated — the safe default for a bare
+// retry, which must not drop a purge an earlier attempt was told to perform.
+// Malformed JSON is an error so a typo can never silently turn into "keep"
+// or "delete".
 func decodeDeprovisionOptions(r *http.Request) (service.DeprovisionOptions, error) {
 	var body deprovisionBody
 	if r.Body == nil {
@@ -275,14 +283,58 @@ func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("tenant=%s action=deprovision path=%s backups=%s", tenant, r.URL.Path, backupDisposition(opts))
+	// Read the row before it is removed: its backups, if the deletion is not
+	// purging them, outlive the only record that names them.
+	inst, _ := h.svc.GetInstance(projectID)
 	if err := h.svc.DeprovisionWithOptions(r.Context(), projectID, opts); err != nil {
 		log.Printf("tenant=%s action=deprovision status=failed err=%v", tenant, err)
-		httpError(w, safeError(err), http.StatusBadRequest)
+		writeDeprovisionError(w, err)
 		return
 	}
 	log.Printf("tenant=%s action=deprovision status=ok", tenant)
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Database instance deleted successfully"))
+	writeJSON(w, h.deleteResponse(projectID, inst))
+}
+
+// deleteResponse reports the deletion and, when the project's backups were
+// kept, the object-store prefix they remain under. The platform has no
+// endpoint that lists or purges the backups of a project whose record is
+// gone, so handing the caller the prefix is the only way they can still find
+// them. See OPERATOR.md, "Backups retained after a project is deleted".
+func (h *ProvisioningHandler) deleteResponse(projectID string, inst *domain.DatabaseInstance) map[string]interface{} {
+	resp := map[string]interface{}{"projectId": projectID, "status": "DELETED"}
+	if inst == nil || inst.DeletionDeleteBackups {
+		return resp
+	}
+	if prefix, ok := h.svc.RetainedBackupPrefix(inst); ok {
+		resp["retainedBackupPrefix"] = prefix
+		resp["retainedBackupsNote"] = "the project's backups were kept and are no longer reachable through this API; " +
+			"they remain in the platform's object store under the prefix above"
+	}
+	return resp
+}
+
+// writeDeprovisionError separates a refused request — the caller asked for
+// something the platform will not do — from a teardown that started and did
+// not finish. The latter is a 500 with a fixed message: the underlying cause
+// is a cluster/vault detail that belongs in the server log, while the row
+// keeps the failing step so an operator can see it through GET.
+func writeDeprovisionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrProjectNotFound):
+		httpError(w, "project not found", http.StatusNotFound)
+	case errors.Is(err, service.ErrBackupPurgeNotConfigured):
+		httpError(w, safeError(err), http.StatusBadRequest)
+	case errors.Is(err, service.ErrDeletionProtected):
+		httpError(w, safeError(err), http.StatusBadRequest)
+	case errors.Is(err, service.ErrDeletionInProgress):
+		httpError(w, "a deletion of this project is already running; wait for it to finish", http.StatusConflict)
+	case errors.Is(err, storage.ErrBackupPurgeAlreadyConfirmed):
+		httpError(w, "this deletion was already confirmed to delete the project's backups and cannot be changed to keep them",
+			http.StatusConflict)
+	default:
+		httpError(w, "deletion did not complete; the project remains in DELETING — retry the request",
+			http.StatusInternalServerError)
+	}
 }
 
 // PurgeBackups retries the backup deletion of a project whose deprovision
@@ -309,6 +361,10 @@ func (h *ProvisioningHandler) PurgeBackups(w http.ResponseWriter, r *http.Reques
 func (h *ProvisioningHandler) GetCredentials(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	creds, err := h.svc.GetCredentials(projectID)
+	if errors.Is(err, service.ErrProjectDeleting) {
+		httpError(w, safeError(err), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		httpError(w, safeError(err), http.StatusNotFound)
 		return
@@ -418,6 +474,13 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 	inst, err := h.svc.GetInstance(projectID)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusNotFound)
+		return
+	}
+	// The data plane mints JWTs and routes traffic from this payload. A
+	// project under teardown is no longer a project it may serve, and it is
+	// about to stop existing, so it reads the same as an unknown one.
+	if inst.Status == string(domain.StatusDeleting) {
+		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}
 

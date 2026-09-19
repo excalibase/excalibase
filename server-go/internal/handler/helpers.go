@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // validPathID allows only alphanumeric, hyphens, underscores, max 64 chars.
@@ -101,4 +104,19 @@ func safeError(err error) string {
 func schemaError(w http.ResponseWriter, err error, code int) {
 	log.Printf("schema error: %v", err)
 	httpError(w, safeError(err), code)
+}
+
+// refuseWhileDeleting writes 409 and reports true when the project is being
+// torn down. Routes that carry a project id but sit outside
+// RequireProjectAccess call it themselves — the gate cannot see them.
+func refuseWhileDeleting(w http.ResponseWriter, instances storage.InstanceStore, projectID string) bool {
+	if instances == nil {
+		return false
+	}
+	inst, err := instances.FindByProjectID(projectID)
+	if err != nil || inst == nil || !domain.IsDeletionStatus(inst.Status) {
+		return false
+	}
+	httpError(w, "project is being deleted", http.StatusConflict)
+	return true
 }

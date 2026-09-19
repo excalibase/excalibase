@@ -145,6 +145,22 @@ func (s *e2eInstanceStore) FindByOwner(ownerID string) ([]*domain.DatabaseInstan
 }
 func (s *e2eInstanceStore) Delete(id string) error { delete(s.insts, id); return nil }
 
+func (s *e2eInstanceStore) BeginDeletion(projectID string, deleteBackups *bool) (bool, error) {
+	inst, ok := s.insts[projectID]
+	if !ok {
+		return false, storage.ErrProjectNotFound
+	}
+	return storage.ApplyBeginDeletion(inst, deleteBackups)
+}
+
+func (s *e2eInstanceStore) RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error {
+	inst, ok := s.insts[projectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	return storage.ApplyDeletionFailure(inst, status, step, reason)
+}
+
 type e2eFakeVault struct{ data map[string]map[string]string }
 
 func (f *e2eFakeVault) Get(p string) (map[string]string, error) {

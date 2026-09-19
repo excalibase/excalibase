@@ -118,11 +118,13 @@ func (n *PgDogNotifier) DeregisterCluster(ctx context.Context, projectID string)
 		return nil
 	}
 
+	// A route or user left behind still points at the tenant's database, so
+	// neither failure may be swallowed — the caller decides what to do.
 	if err := n.store.RemovePgDogUsers(ctx, projectID); err != nil {
-		log.Printf("WARN: pgdog remove users: %v", err)
+		return fmt.Errorf("pgdog remove users: %w", err)
 	}
 	if err := n.store.RemovePgDogDatabase(ctx, projectID); err != nil {
-		log.Printf("WARN: pgdog remove database: %v", err)
+		return fmt.Errorf("pgdog remove database: %w", err)
 	}
 
 	n.publishReload()

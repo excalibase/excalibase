@@ -74,6 +74,16 @@ type DatabaseInstance struct {
 	FailureStep   string            `json:"failureStep,omitempty"`
 	RollbackLog   string            `json:"rollbackLog,omitempty"` // JSON array of cleanup results
 
+	// Deletion progress. Both empty until a teardown fails: DeletionStep is
+	// the step that did not complete and DeletionError why, so a retry of
+	// the same DELETE resumes from an observable point instead of guessing.
+	DeletionStep  string `json:"deletionStep,omitempty"`
+	DeletionError string `json:"deletionError,omitempty"`
+	// DeletionDeleteBackups records the backup decision the deletion was
+	// started with. It is part of the deletion state, not of the request, so
+	// a retry cannot drop a purge the first attempt was told to perform.
+	DeletionDeleteBackups bool `json:"deletionDeleteBackups,omitempty"`
+
 	// Network
 	NetworkPolicyEnabled *bool `json:"networkPolicyEnabled,omitempty"`
 

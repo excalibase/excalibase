@@ -436,8 +436,9 @@ func TestDeprovisionDoesNotSweepLegacyOrgScopedPaths(t *testing.T) {
 	// Legacy path is intentionally not swept by Deprovision.
 }
 
-// Vault outage during list must log+continue, not strand the instance row.
-func TestDeprovisionContinuesWhenVaultListFails(t *testing.T) {
+// A vault outage leaves live credentials behind, so the teardown stops and
+// keeps the row that says they exist.
+func TestDeprovisionFailsWhenVaultListFails(t *testing.T) {
 	svc, store, mock := setupProvisioningTest(t)
 	mock.SetupPostgreSQLMock(testVaultErr, "org1-vault-err", 1)
 
@@ -452,16 +453,21 @@ func TestDeprovisionContinuesWhenVaultListFails(t *testing.T) {
 		Status:    "ACTIVE",
 	})
 
-	if err := svc.Deprovision(context.Background(), testVaultErr); err != nil {
-		t.Fatalf("Deprovision must succeed despite vault list failure: %v", err)
+	if err := svc.Deprovision(context.Background(), testVaultErr); err == nil {
+		t.Fatal("Deprovision must report the vault failure")
 	}
-	if inst, _ := store.FindByProjectID(testVaultErr); inst != nil {
-		t.Error("instance row should still be deleted")
+	inst, _ := store.FindByProjectID(testVaultErr)
+	if inst == nil {
+		t.Fatal("instance row must survive so the cleanup can be retried")
+	}
+	if inst.Status != string(domain.StatusDeleting) {
+		t.Errorf("status: got %q, want %q", inst.Status, domain.StatusDeleting)
 	}
 }
 
-// Sealed vault must skip the cleanup branch entirely (no calls into vault).
-func TestDeprovisionSkipsVaultWhenSealed(t *testing.T) {
+// A sealed vault cannot remove the project's credentials, so the teardown
+// fails instead of dropping the record that they exist.
+func TestDeprovisionFailsWhenVaultSealed(t *testing.T) {
 	svc, store, mock := setupProvisioningTest(t)
 	mock.SetupPostgreSQLMock(testSealedDel, "org1-sealed-del", 1)
 
@@ -476,12 +482,14 @@ func TestDeprovisionSkipsVaultWhenSealed(t *testing.T) {
 		Status:    "ACTIVE",
 	})
 
-	if err := svc.Deprovision(context.Background(), testSealedDel); err != nil {
-		t.Fatalf(testDeprovisionFmt, err)
+	if err := svc.Deprovision(context.Background(), testSealedDel); err == nil {
+		t.Fatal("a sealed vault must fail the teardown, not be skipped")
 	}
-	if v.listCalls != 0 || v.deleteCalls != 0 || v.deletePrefixCalls != 0 {
-		t.Errorf("sealed vault must not be called: list=%d delete=%d deletePrefix=%d",
-			v.listCalls, v.deleteCalls, v.deletePrefixCalls)
+	if v.deletePrefixCalls != 0 {
+		t.Errorf("sealed vault must not be written to: deletePrefix=%d", v.deletePrefixCalls)
+	}
+	if inst, _ := store.FindByProjectID(testSealedDel); inst == nil {
+		t.Error("instance row must survive so the cleanup can be retried")
 	}
 }
 

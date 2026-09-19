@@ -2,12 +2,14 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/storage/driver"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
@@ -48,8 +50,9 @@ func (c *Client) UninstallHelmChart(ctx context.Context, namespace, releaseName 
 	uninstall.Wait = true
 	uninstall.Timeout = 2 * time.Minute
 
-	_, err = uninstall.Run(releaseName)
-	if err != nil {
+	// A release that is already gone is the state the caller asked for, so a
+	// retried teardown succeeds instead of stalling on the first step.
+	if _, err = uninstall.Run(releaseName); err != nil && !errors.Is(err, driver.ErrReleaseNotFound) {
 		return fmt.Errorf("uninstall %s: %w", releaseName, err)
 	}
 	return nil

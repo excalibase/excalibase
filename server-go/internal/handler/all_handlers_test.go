@@ -42,7 +42,9 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	mock := k8s.NewMockClient()
 	pgStore, _ := storage.NewFileSystemParameterGroupStore(dir)
 
-	factory := provisioner.NewFactory() // empty factory — no real provisioners
+	// Teardown must observe the project's resources gone, so the factory
+	// carries a real provisioner over the k8s mock.
+	factory := provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, ""))
 	provSvc := service.NewProvisioningService(store, factory, mock)
 	metricsSvc := service.NewMetricsService(store, mock, dir)
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
@@ -366,8 +368,8 @@ func TestDeleteHandler(t *testing.T) {
 func TestDeleteNotFound(t *testing.T) {
 	r, _, _ := fullRouter(t)
 	w := doRequest(r, "DELETE", "/api/provision/nope", "")
-	if w.Code != 400 {
-		t.Errorf("delete not found: got %d, want 400", w.Code)
+	if w.Code != 404 {
+		t.Errorf("delete not found: got %d, want 404", w.Code)
 	}
 }
 

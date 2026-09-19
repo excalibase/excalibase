@@ -95,6 +95,9 @@ func serveMockInvoke(w http.ResponseWriter, path string, scripts map[string]edge
 // FunctionHandler.orgSlugFor.
 type inMemoryInstanceStore struct {
 	insts map[string]*domain.DatabaseInstance
+	// findAllErr makes FindAll fail, so callers that cascade over every
+	// project can be tested against a store they cannot read.
+	findAllErr error
 }
 
 func (s *inMemoryInstanceStore) Create(inst *domain.DatabaseInstance) error {
@@ -109,6 +112,9 @@ func (s *inMemoryInstanceStore) Update(inst *domain.DatabaseInstance) error {
 	if !ok {
 		return storage.ErrProjectNotFound
 	}
+	if err := storage.CheckUpdatable(existing); err != nil {
+		return err
+	}
 	updated := *inst
 	updated.OrgID = existing.OrgID
 	s.insts[inst.ProjectID] = &updated
@@ -118,6 +124,9 @@ func (s *inMemoryInstanceStore) FindByProjectID(id string) (*domain.DatabaseInst
 	return s.insts[id], nil
 }
 func (s *inMemoryInstanceStore) FindAll() ([]*domain.DatabaseInstance, error) {
+	if s.findAllErr != nil {
+		return nil, s.findAllErr
+	}
 	out := make([]*domain.DatabaseInstance, 0, len(s.insts))
 	for _, v := range s.insts {
 		out = append(out, v)
@@ -1299,4 +1308,33 @@ func TestFunctionHandler_ProjectScopingPreventsCollision(t *testing.T) {
 
 func bytes_Contains(haystack []byte, needle string) bool {
 	return bytes.Contains(haystack, []byte(needle))
+}
+
+// BeginDeletion claims the project for teardown. See storage.InstanceStore.
+func (s *inMemoryInstanceStore) BeginDeletion(projectID string, deleteBackups *bool) (bool, error) {
+	existing, ok := s.insts[projectID]
+	if !ok {
+		return false, storage.ErrProjectNotFound
+	}
+	claimed := *existing
+	effective, err := storage.ApplyBeginDeletion(&claimed, deleteBackups)
+	if err != nil {
+		return false, err
+	}
+	s.insts[projectID] = &claimed
+	return effective, nil
+}
+
+// RecordDeletionFailure stores how far a teardown got. See storage.InstanceStore.
+func (s *inMemoryInstanceStore) RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error {
+	existing, ok := s.insts[projectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	failed := *existing
+	if err := storage.ApplyDeletionFailure(&failed, status, step, reason); err != nil {
+		return err
+	}
+	s.insts[projectID] = &failed
+	return nil
 }

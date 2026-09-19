@@ -50,7 +50,7 @@ func TestDeprovisionWithDeleteBackupsPurgesAfterResourcesGone(t *testing.T) {
 	svc.SetBackupPurger(newTestPurger(deleter))
 	saveActiveProject(t, svc, testPurgeProject)
 
-	err := svc.DeprovisionWithOptions(context.Background(), testPurgeProject, DeprovisionOptions{DeleteBackups: true})
+	err := svc.DeprovisionWithOptions(context.Background(), testPurgeProject, DeprovisionOptions{DeleteBackups: DeleteBackupsOption(true)})
 	if err != nil {
 		t.Fatalf(testDeprovisionFmt, err)
 	}
@@ -75,9 +75,9 @@ func TestDeprovisionPurgeFailureMarksRowPendingDelete(t *testing.T) {
 	svc.SetBackupPurger(newTestPurger(deleter))
 	saveActiveProject(t, svc, testPurgeProject)
 
-	err := svc.DeprovisionWithOptions(context.Background(), testPurgeProject, DeprovisionOptions{DeleteBackups: true})
-	if err != nil {
-		t.Fatalf("purge failure must not fail the deprovision: %v", err)
+	err := svc.DeprovisionWithOptions(context.Background(), testPurgeProject, DeprovisionOptions{DeleteBackups: DeleteBackupsOption(true)})
+	if err == nil {
+		t.Fatal("a purge the caller asked for and did not get must be reported")
 	}
 	inst, _ := store.FindByProjectID(testPurgeProject)
 	if inst == nil {
@@ -89,6 +89,9 @@ func TestDeprovisionPurgeFailureMarksRowPendingDelete(t *testing.T) {
 	if inst.FailureReason == "" {
 		t.Fatal("failure reason should record why the purge failed")
 	}
+	if inst.DeletionStep != domain.DeletionStepDeleteBackups {
+		t.Fatalf("deletion step = %q, want %s", inst.DeletionStep, domain.DeletionStepDeleteBackups)
+	}
 }
 
 func TestDeprovisionWithDeleteBackupsRefusedWhenPurgerNotWired(t *testing.T) {
@@ -96,7 +99,7 @@ func TestDeprovisionWithDeleteBackupsRefusedWhenPurgerNotWired(t *testing.T) {
 	mock.SetupPostgreSQLMock(testPurgeProject, "org1-"+testPurgeProject, 1)
 	saveActiveProject(t, svc, testPurgeProject)
 
-	err := svc.DeprovisionWithOptions(context.Background(), testPurgeProject, DeprovisionOptions{DeleteBackups: true})
+	err := svc.DeprovisionWithOptions(context.Background(), testPurgeProject, DeprovisionOptions{DeleteBackups: DeleteBackupsOption(true)})
 	if !errors.Is(err, ErrBackupPurgeNotConfigured) {
 		t.Fatalf("err = %v, want ErrBackupPurgeNotConfigured", err)
 	}
@@ -113,7 +116,7 @@ func TestDeprovisionWithDeleteBackupsSkipsModeWithoutBackups(t *testing.T) {
 	if err := store.Create(&domain.DatabaseInstance{ProjectID: "unwired-1", OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: unwired, Status: "ACTIVE"}); err != nil {
 		t.Fatal(err)
 	}
-	err := svc.DeprovisionWithOptions(context.Background(), "unwired-1", DeprovisionOptions{DeleteBackups: true})
+	err := svc.DeprovisionWithOptions(context.Background(), "unwired-1", DeprovisionOptions{DeleteBackups: DeleteBackupsOption(true)})
 	if err != nil {
 		t.Fatalf(testDeprovisionFmt, err)
 	}
