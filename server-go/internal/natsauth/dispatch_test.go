@@ -171,3 +171,61 @@ func TestDefaultWorkersScalesWithTheProcessorBudgetAndStaysBounded(t *testing.T)
 		t.Errorf("defaultWorkers() = %d, want %d derived from GOMAXPROCS", workers, clampWorkers(expected))
 	}
 }
+
+func TestClampWorkersHoldsThePoolBetweenItsFloorAndCeiling(t *testing.T) {
+	cases := []struct {
+		name     string
+		workers  int
+		expected int
+	}{
+		{"a single-CPU pod still gets a usable pool", 1, minWorkers},
+		{"a mid-sized node keeps its derived size", minWorkers + 1, minWorkers + 1},
+		{"a very large node is capped", maxWorkers * 4, maxWorkers},
+		{"the ceiling itself is kept", maxWorkers, maxWorkers},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := clampWorkers(testCase.workers); got != testCase.expected {
+				t.Errorf("clampWorkers(%d) = %d, want %d", testCase.workers, got, testCase.expected)
+			}
+		})
+	}
+}
+
+// TestResponderOptionsRejectNonPositiveSizes: a mis-set env var must not
+// silently produce a pool that can never admit anything.
+func TestResponderOptionsRejectNonPositiveSizes(t *testing.T) {
+	responder, _ := newTestResponder(t, PrincipalGraphQL, testPassword)
+	defaultWorkerCount, defaultQueue := responder.workers, responder.queueCapacity
+
+	WithWorkers(0)(responder)
+	WithWorkers(-4)(responder)
+	WithQueueCapacity(0)(responder)
+	WithQueueCapacity(-1)(responder)
+	WithVerifier(nil)(responder)
+
+	if responder.workers != defaultWorkerCount {
+		t.Errorf("workers = %d after non-positive overrides, want the default %d", responder.workers, defaultWorkerCount)
+	}
+	if responder.queueCapacity != defaultQueue {
+		t.Errorf("queue capacity = %d after non-positive overrides, want the default %d", responder.queueCapacity, defaultQueue)
+	}
+	if responder.verifier == nil {
+		t.Error("a nil verifier replaced the credential check")
+	}
+}
+
+// TestNewResponderDerivesItsPoolFromTheProcessorBudget documents the default
+// sizing, which is what the 5s authorization budget is spent against.
+func TestNewResponderDerivesItsPoolFromTheProcessorBudget(t *testing.T) {
+	responder, _ := newTestResponder(t, PrincipalGraphQL, testPassword)
+	if responder.workers != defaultWorkers() {
+		t.Errorf("workers = %d, want %d", responder.workers, defaultWorkers())
+	}
+	if want := responder.workers * queueDepthPerWorker; responder.queueCapacity != want {
+		t.Errorf("queue capacity = %d, want %d", responder.queueCapacity, want)
+	}
+	if admissionWaitBudget >= ServerAuthTimeout {
+		t.Errorf("admission budget %v leaves no margin inside the %v authorization timeout", admissionWaitBudget, ServerAuthTimeout)
+	}
+}
