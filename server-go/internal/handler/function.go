@@ -104,12 +104,35 @@ type FunctionHandler struct {
 	egressGuard *byoc.Guard
 	pinMu       sync.Mutex
 	pins        map[string]byocPin
+
+	// requireAud / audPrefix implement the EXC-11 audience binding. Set at
+	// construction to fail closed; see SetAudienceRequirement.
+	requireAud bool
+	audPrefix  string
 }
 
 // SetExpectedJWTIssuer configures the iss claim the function handler will
 // require on inbound JWTs. Empty (default) disables the check.
 func (h *FunctionHandler) SetExpectedJWTIssuer(iss string) {
 	h.expectedJWTIssuer = iss
+}
+
+// DefaultAudPrefix is what the auth service puts in front of the projectId in
+// the aud claim.
+const DefaultAudPrefix = "excalibase:"
+
+// SetAudienceRequirement configures the EXC-11 audience binding: every end-user
+// token must carry audPrefix+projectId in its aud claim. Handlers require the
+// audience from construction, so turning it off is always a deliberate act;
+// main.go passes the operator's JWT_REQUIRE_AUD (default true). A blank prefix
+// falls back to DefaultAudPrefix so a missing config value can never weaken the
+// check to a bare projectId.
+func (h *FunctionHandler) SetAudienceRequirement(requireAud bool, audPrefix string) {
+	h.requireAud = requireAud
+	h.audPrefix = DefaultAudPrefix
+	if audPrefix != "" {
+		h.audPrefix = audPrefix
+	}
 }
 
 // tokenBucket is a minimal in-memory leaky-bucket limiter. One per project.
@@ -161,6 +184,10 @@ func NewFunctionHandler(
 	publicBaseURL string,
 ) *FunctionHandler {
 	h := &FunctionHandler{
+		// Fail closed: a handler built without an explicit decision still
+		// requires the project audience.
+		requireAud:    true,
+		audPrefix:     DefaultAudPrefix,
 		store:         store,
 		secrets:       secrets,
 		instanceStore: instanceStore,
@@ -971,8 +998,88 @@ func (h *FunctionHandler) validateProjectJWT(tokenStr, expectedProjectID string)
 		}
 	}
 
+	if err := h.checkTokenUse(claims); err != nil {
+		return "", err
+	}
+	if err := h.checkAudience(claims, expectedProjectID); err != nil {
+		return "", err
+	}
+
 	scope, _ := claims["scope"].(string)
 	return scope, nil
+}
+
+// Machine-readable rejection codes surfaced in the 401 body so an operator can
+// tell a stale-token rollout problem from a credential-type mix-up.
+const (
+	errCodeAudMismatch        = "aud_mismatch"
+	errCodeRefreshNotAccepted = "refresh_token_not_accepted"
+	// tokenUseRefresh is the token_use value the auth service stamps on
+	// refresh credentials. They are exchanged at the auth service's token
+	// endpoint, never presented to a project API.
+	tokenUseRefresh = "refresh"
+)
+
+// codedJWTError carries a stable error code alongside a human-readable reason.
+// enforceJWT surfaces the code (and only the code) to the caller.
+type codedJWTError struct {
+	code   string
+	reason string
+}
+
+func (e *codedJWTError) Error() string { return e.code + ": " + e.reason }
+
+// Code returns the stable machine-readable rejection code.
+func (e *codedJWTError) Code() string { return e.code }
+
+// checkTokenUse refuses refresh credentials on API calls. A missing token_use
+// claim is accepted — legacy access tokens predate the claim.
+func (h *FunctionHandler) checkTokenUse(claims jwt.MapClaims) error {
+	if use, _ := claims["token_use"].(string); use == tokenUseRefresh {
+		return &codedJWTError{code: errCodeRefreshNotAccepted, reason: "refresh credentials are not API access tokens"}
+	}
+	return nil
+}
+
+// checkAudience enforces that the token was minted for THIS project: its aud
+// claim must contain audPrefix+projectId. Disabled (accept anything) when
+// requireAud is false, which exists purely for a phased rollout.
+func (h *FunctionHandler) checkAudience(claims jwt.MapClaims, expectedProjectID string) error {
+	if !h.requireAud {
+		return nil
+	}
+	want := h.audPrefix + expectedProjectID
+	for _, got := range normalizeAudience(claims["aud"]) {
+		if got == want {
+			return nil
+		}
+	}
+	return &codedJWTError{code: errCodeAudMismatch, reason: "jwt aud does not contain the project audience"}
+}
+
+// normalizeAudience flattens the two shapes RFC 7519 allows for aud — a single
+// string, or an array of strings — into a slice. Empty strings and non-string
+// array members are dropped; anything else yields nil.
+func normalizeAudience(raw interface{}) []string {
+	switch v := raw.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+	case []string:
+		return v
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // writeCORSHeaders sets permissive CORS headers for edge functions. Edge
@@ -1049,6 +1156,13 @@ func (h *FunctionHandler) enforceJWT(w http.ResponseWriter, r *http.Request, pro
 		if isVaultUnavailableError(err) {
 			log.Printf("ERROR: jwt verify unavailable for %s: %v", projectID, err)
 			httpError(w, "auth temporarily unavailable", http.StatusServiceUnavailable)
+			return false
+		}
+		// A coded rejection answers with the bare code so operators can
+		// distinguish an audience-rollout failure from a bad signature.
+		var coded *codedJWTError
+		if errors.As(err, &coded) {
+			httpError(w, coded.Code(), http.StatusUnauthorized)
 			return false
 		}
 		httpError(w, "invalid jwt: "+safeError(err), http.StatusUnauthorized)

@@ -53,6 +53,15 @@ func isValidSlug(slug string) bool {
 	return validSlug.MatchString(slug)
 }
 
+// logSanitizer strips the line terminators an attacker would use to forge
+// extra log records out of a value that came from a request.
+var logSanitizer = strings.NewReplacer("\n", "", "\r", "")
+
+// safeLog makes a request-derived value safe to write to the log.
+func safeLog(s string) string {
+	return logSanitizer.Replace(s)
+}
+
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)

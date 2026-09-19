@@ -405,6 +405,7 @@ type handlerDeps struct {
 	setupHandler       *handler.SetupHandler
 	pgHandler          *handler.ParameterGroupHandler
 	emailTokensHandler *handler.EmailTokensHandler
+	internalEmail      *handler.InternalEmailHandler
 	storageHandler     *handler.StorageHandler
 	adminHandler       *handler.AdminHandler
 	authHandler        *handler.AuthHandler
@@ -487,6 +488,8 @@ func buildFunctionHandler(cfg config.AppConfig, vc vaultclient.VaultClient, stor
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 	}
 	fnHandler.SetVault(vc)
+	// EXC-11: end-user tokens must name this project in their aud claim.
+	fnHandler.SetAudienceRequirement(cfg.JWTRequireAud, cfg.JWTAudPrefix)
 	wireFunctionEgress(cfg, sqlStore, fnHandler)
 	return fnHandler
 }
@@ -920,6 +923,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
 		activity:    custommw.ProjectActivity(activityRecorder),
 		emailSender: emailSender,
+		// EXC-11: server-to-server mail relay for excalibase-auth. Its
+		// authorization is the capability gate, wired at the mount below.
+		internalEmail: handler.NewInternalEmailHandler(emailSender),
 	}
 }
 
@@ -1230,10 +1236,23 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 	}
 }
 
-// mountEmailRoutes mounts /api/email (verify + reset flows).
+// mountEmailRoutes mounts /api/email (verify + reset flows) plus the
+// /internal/email/send relay used by excalibase-auth.
 func mountEmailRoutes(r *chi.Mux, d *handlerDeps) {
 	r.Route("/api/email", func(r chi.Router) {
 		d.emailTokensHandler.Routes(r)
+	})
+	if d.internalEmail == nil {
+		return
+	}
+	// The relay is a service-only route: RequireAuth answers 401 without a
+	// valid token, and RequireCapability refuses everything that is not a
+	// service token granting email:send — a studio session or an ordinary
+	// PAT included, since neither carries a permission list.
+	r.Group(func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireCapability(custommw.EmailRelayCapability()))
+		d.internalEmail.Routes(r)
 	})
 }
 

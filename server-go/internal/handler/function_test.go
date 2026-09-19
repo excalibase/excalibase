@@ -804,6 +804,10 @@ func TestFunctionHandler_PublicInvoke_JWTValidSignatureAllowed(t *testing.T) {
 		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
 	}}, nil, "")
 	h.SetVault(v)
+	// EXC-11: this case predates audience binding and covers signature
+	// acceptance, so it opts out. TestFunctionHandler_PublicInvoke_Aud* cover
+	// the audience requirement directly.
+	h.SetAudienceRequirement(false, "")
 
 	// verifyJwt default → nil means true
 	store.Save(&edgefn.Function{
@@ -1067,6 +1071,8 @@ func TestFunctionHandler_PublicInvoke_JWTScopeForwardedToRuntime(t *testing.T) {
 		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
 	}}, nil, "")
 	h.SetVault(v)
+	// EXC-11: this case is about scope forwarding, not audience binding.
+	h.SetAudienceRequirement(false, "")
 
 	store.Save(&edgefn.Function{
 		ProjectID: "proj_p1", ID: "secure", Name: "Secure",

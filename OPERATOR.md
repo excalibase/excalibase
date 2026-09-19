@@ -60,6 +60,7 @@ A capability token carries an explicit permission list. Each entry is `<resource
 | `vault:read:pki/signing/*` | `GET /api/vault/secrets/pki/signing/<leaf>` — the `*` stands for exactly one path segment and never crosses a `/` |
 | `projects:info:read` | `GET /api/projects/{projectId}/info` |
 | `policies:read` | `GET /api/provision/{projectId}/rls-policies` and `/column-policies`, list or by id |
+| `email:send` | `POST /internal/email/send` — the transactional mail relay; the only write any capability may make |
 
 The list is **default-deny and absolute**: a token with a non-empty permission list may call only the endpoints its list names, and everything else — every write, every other route — answers `403`, regardless of the owning principal's platform role. `GET /api/auth/me` is always reachable so a service can validate its own credential. Tokens with an empty permission list (every human PAT and session) are untouched by this layer.
 
@@ -67,7 +68,7 @@ The two principals the platform ships with:
 
 | Principal | Permissions | Consumer |
 | --- | --- | --- |
-| `svc-auth` | `vault:read:pki/signing/*`, `projects:info:read` | auth service — JWKS signing key at boot, per-project info hourly |
+| `svc-auth` | `vault:read:pki/signing/*`, `projects:info:read`, `email:send` | auth service — JWKS signing key at boot, per-project info hourly, verification and reset mail |
 | `svc-graphql` | `projects:info:read`, `policies:read` | engine — project credentials + CORS, RLS/column policies every 30 s |
 
 ```bash

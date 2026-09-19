@@ -10,7 +10,7 @@ import (
 )
 
 // permsAuth is the permission list the auth service principal is minted with.
-var permsAuth = []string{"vault:read:pki/signing/*", "projects:info:read"}
+var permsAuth = []string{"vault:read:pki/signing/*", "projects:info:read", "email:send"}
 
 // permsGraphql is the permission list the graphql service principal is minted with.
 var permsGraphql = []string{"projects:info:read", "policies:read"}
@@ -33,6 +33,10 @@ func TestRequiredCapability(t *testing.T) {
 		{name: "rls policy by id", method: http.MethodGet, path: "/api/provision/proj-1/rls-policies/pol-9", want: "policies:read", found: true},
 		{name: "column policies list", method: http.MethodGet, path: "/api/provision/proj-1/column-policies", want: "policies:read", found: true},
 		{name: "head is a read", method: http.MethodHead, path: "/api/provision/proj-1/rls-policies", want: "policies:read", found: true},
+		{name: "email relay send", method: http.MethodPost, path: "/internal/email/send", want: "email:send", found: true},
+
+		{name: "email relay read", method: http.MethodGet, path: "/internal/email/send"},
+		{name: "email relay sibling route", method: http.MethodPost, path: "/internal/email/send/again"},
 
 		{name: "vault secret write", method: http.MethodPut, path: "/api/vault/secrets/pki/signing/private"},
 		{name: "vault secret delete", method: http.MethodDelete, path: "/api/vault/secrets/pki/signing/private"},
@@ -122,6 +126,7 @@ func TestCapabilityGateEnforcesGraphqlToken(t *testing.T) {
 		{http.MethodGet, "/api/provision/proj-1/credentials"},
 		{http.MethodPost, "/api/auth/tokens"},
 		{http.MethodGet, "/api/admin/projects"},
+		{http.MethodPost, "/internal/email/send"},
 	}
 	for _, c := range denied {
 		code, reached := serveWithToken(t, token, c.method, c.path)
@@ -138,6 +143,9 @@ func TestCapabilityGateEnforcesAuthToken(t *testing.T) {
 	}
 	if code, _ := serveWithToken(t, token, http.MethodGet, "/api/projects/proj-1/info"); code != http.StatusOK {
 		t.Fatalf("project info = %d, want 200", code)
+	}
+	if code, _ := serveWithToken(t, token, http.MethodPost, "/internal/email/send"); code != http.StatusOK {
+		t.Fatalf("email relay = %d, want 200", code)
 	}
 	denied := []struct{ method, path string }{
 		{http.MethodGet, "/api/vault/secrets/pki/other"},
@@ -173,5 +181,48 @@ func TestCapabilityGateRefusesAnUnknownPermission(t *testing.T) {
 	// /me stays reachable so a service can still discover its identity.
 	if code, _ := serveWithToken(t, token, http.MethodGet, "/api/auth/me"); code != http.StatusOK {
 		t.Fatalf("self read = %d, want 200", code)
+	}
+}
+
+// serveRequireCapability runs RequireCapability(want) in front of a handler
+// that records that it ran.
+func serveRequireCapability(want auth.Capability, token *domain.AccessToken) (int, bool) {
+	reached := false
+	handler := RequireCapability(want)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/internal/email/send", nil)
+	if token != nil {
+		req = req.WithContext(auth.SetToken(req.Context(), token))
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec.Code, reached
+}
+
+// A route that exists only for a service principal must refuse every caller
+// that is not one — a human PAT or studio session reaching it would mean any
+// logged-in user could drive the platform's outbound mail.
+func TestRequireCapabilityAdmitsOnlyGrantedServiceTokens(t *testing.T) {
+	want := EmailRelayCapability()
+	cases := []struct {
+		name  string
+		token *domain.AccessToken
+		code  int
+	}{
+		{name: "no token", token: nil, code: http.StatusForbidden},
+		{name: "human PAT", token: &domain.AccessToken{Name: "ci"}, code: http.StatusForbidden},
+		{name: "studio session", token: &domain.AccessToken{Name: "session", Scopes: "admin"}, code: http.StatusForbidden},
+		{name: "service token without the capability", token: &domain.AccessToken{Name: "svc-graphql", Permissions: permsGraphql}, code: http.StatusForbidden},
+		{name: "service token with the capability", token: &domain.AccessToken{Name: "svc-auth", Permissions: permsAuth}, code: http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, reached := serveRequireCapability(want, tc.token)
+			if code != tc.code || reached != (tc.code == http.StatusOK) {
+				t.Fatalf("code=%d reached=%v, want %d", code, reached, tc.code)
+			}
+		})
 	}
 }
