@@ -169,5 +169,3 @@ Deployment / follow-ups (not code in this repo):
     encrypted value and give PgDog the key. Until then, the platform DB role
     used by PgDog must be read-only and the table must not be exposed via
     any API.
-13. BYOC registration (`provisioning.go:196-224`) never registers with PgDog
-    — correct, the external database is not behind the pooler.

@@ -1,4 +1,4 @@
-package byoc
+package publicaddr
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 )
 
 // ErrInternalAddress marks a target that resolves to a non-public address.
-var ErrInternalAddress = errors.New("host is not a publicly routable address; BYOC requires a publicly reachable host")
+var ErrInternalAddress = errors.New("host is not a publicly routable address; the platform only dials publicly reachable hosts")
 
 // blockedPrefixes covers ranges that netip's Is* helpers do not: this-network,
 // CGNAT (Alibaba metadata lives here), IETF protocol assignments, benchmarking,

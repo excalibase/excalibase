@@ -6,7 +6,6 @@ import {
   useInstance,
   useCredentials,
   useProvisionDatabase,
-  useProvisionBYOC,
   useDeprovisionDatabase,
   useConfigureBackup,
   useTriggerBackup,
@@ -64,15 +63,6 @@ describe('useProvisioning hooks', () => {
     result.current.mutate({ projectName: 'p', orgId: 'o', databaseType: 'POSTGRESQL', tier: 'FREE' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalledWith('/provision', expect.objectContaining({ projectName: 'p' }));
-  });
-
-  test('useProvisionBYOC POSTs to /provision/byoc', async () => {
-    vi.mocked(api.post).mockResolvedValueOnce({ data: { projectId: 'p' } } as never);
-    const { Wrapper } = makeWrapper();
-    const { result } = renderHook(() => useProvisionBYOC(), { wrapper: Wrapper });
-    result.current.mutate({ projectName: 'p', orgId: 'o', host: 'db.example.com', port: 5432, database: 'db', username: 'u', password: 'p' });
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(api.post).toHaveBeenCalledWith('/provision/byoc', expect.objectContaining({ projectName: 'p' }));
   });
 
   test('useDeprovisionDatabase DELETEs', async () => {

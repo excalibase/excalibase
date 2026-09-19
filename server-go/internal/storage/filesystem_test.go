@@ -150,7 +150,7 @@ func TestFileSystemStore_LegacyRow_DefaultsToK8s(t *testing.T) {
 func TestFileSystemStore_DeploymentMode_RoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewFileSystemStore(dir)
-	cases := []domain.DeploymentMode{domain.ModeK8s, domain.ModeDocker, domain.ModeBYOC}
+	cases := []domain.DeploymentMode{domain.ModeK8s, domain.ModeDocker}
 	for _, mode := range cases {
 		t.Run(string(mode), func(t *testing.T) {
 			id := "mode-" + string(mode)

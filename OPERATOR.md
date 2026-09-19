@@ -300,7 +300,7 @@ What happens, in order:
    `destinationPath/serverName`) and `backups/{projectId}/` for Docker mode.
    The store (endpoint, bucket, credentials) is resolved through
    `ProvisioningService.BackupStorage()` — the same source backups are
-   written with. BYOC projects have nothing to purge and are skipped.
+   written with. A mode with no platform backups is skipped.
 3. The purge refuses to run when the computed prefix is empty or does not
    contain the project id as a path segment, so a misconfigured key prefix can
    never turn into a bucket-wide delete.
@@ -420,21 +420,12 @@ Studio + REST API surface is identical to K8s mode — the platform
 dispatches to a `BackupAdapter` based on the project's `DeploymentMode`
 so the user-visible behaviour is uniform.
 
-### BYOC
+### Databases you run yourself
 
-Out of scope. The operator brings their own backup story for an
-externally-managed database; the platform only stores connection
-credentials in vault and never holds the data.
-
-Egress hardening: BYOC hosts are validated at registration and again
-at every dial (schema browser, realtime, migrations) by
-`server-go/internal/byoc`. Internal ranges (loopback, RFC-1918, CGNAT,
-link-local, IPv6 ULA/site-local, v4-mapped/NAT64/6to4-embedded, cloud
-metadata) are always refused; a DNS name that later re-resolves to one
-of them is refused at connect time. Set `BYOC_EGRESS_ALLOWLIST`
-(comma-separated CIDRs, IPs, hostnames, `*.suffix`) to restrict BYOC
-targets to your approved destinations; a malformed value stops the
-server at boot. User-facing errors never include resolved addresses.
+The platform hosts the databases and apps it provisions, so a database you
+run yourself is not a project here. To put the API engine in front of it,
+run the open-source engine standalone — see
+[github.com/excalibase/excalibase-graphql](https://github.com/excalibase/excalibase-graphql).
 
 ## 6.1. Edge-function egress (outbound allowlist)
 
@@ -474,21 +465,6 @@ The NetworkPolicy is only a backstop (it cannot match hostnames) and needs
 an enforcing CNI (Calico / Cilium). On the shared docker runtime the
 container's own `ALLOWED_HOSTS` env is an operator baseline unioned into
 every worker.
-
-## 6.2. Edge functions on a BYOC database (address pinning)
-
-The per-project Deno runtime cannot dial through the guard, so
-provisioning resolves the BYOC host at every function deploy (and on
-cold-start replay) and hands the runtime a DSN whose authority is the
-validated IP, plus `EXCALIBASE_DB_HOST` (the hostname, kept for TLS SNI)
-and `BYOC_PINNED=1`. The runtime refuses a BYOC DSN that is not an IP
-literal and lets the worker reach that `ip:port` in addition to the
-egress allowlist of section 6.1 — the database address is never taken
-from a hostname the worker could resolve itself. A deploy is refused
-with 400 when the host has been rebound to an internal address; pins are
-refreshed every 10 minutes so a legitimate DNS change is picked up within
-that window. TLS stays `sslmode=require` (encrypted, server certificate
-not verified) — the same mode managed projects use.
 
 ## 6.2.1. Browser origins (per-project CORS)
 
@@ -560,7 +536,6 @@ What happens per mode:
 |---|---|---|
 | k8s (CNPG) | Sets `cnpg.io/hibernation: "on"` on the Cluster. The operator does a clean shutdown, deletes the pods and keeps the PVCs. `spec.instances` is **not** changed, so nothing about the tier is lost. The call returns as soon as the annotation is set; the database itself stays reachable for up to `spec.smartShutdownTimeout` (180 s) because the project's CDC watcher keeps a replication session open and the operator waits for clients before switching to a fast shutdown — expect ~2–3 min until the pod is gone. | Sets the annotation to `"off"` and polls the Cluster until `status.readyInstances >= 1` and the `cnpg.io/hibernation` condition is cleared (bounded at 5 min, 5 s poll). Measured on a 1-instance cluster: ~13 s from annotation to first successful `pg_isready`; ~25 s end-to-end through `POST /resume`. |
 | docker | Stops the container. | Starts it and waits for the health check. |
-| BYOC | Refused (400) — the operator owns that database. | — |
 
 Requires CloudNativePG >= 1.20 (declarative hibernation). The
 `charts/platform-aio` install script and the nightly e2e pin 1.23.0.

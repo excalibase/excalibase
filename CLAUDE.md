@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Excalibase Provisioning — database provisioning platform written in Go. Provisions PostgreSQL in **two production-grade modes**: Kubernetes (CloudNativePG operator — works against any distro from EKS/GKE/AKS down to single-node k0s/k3s/RKE2) or Docker (containers on a local or remote Docker daemon, Dokploy/CapRover-style). Also supports BYOC — registering an externally managed database without provisioning. Includes org/project RBAC, PgDog connection pooler integration, edge functions runtime, realtime publication management, and a React studio.
+Excalibase Provisioning — database provisioning platform written in Go. Provisions PostgreSQL in **two production-grade modes**: Kubernetes (CloudNativePG operator — works against any distro from EKS/GKE/AKS down to single-node k0s/k3s/RKE2) or Docker (containers on a local or remote Docker daemon, Dokploy/CapRover-style). Includes org/project RBAC, PgDog connection pooler integration, edge functions runtime, realtime publication management, and a React studio.
 
 **Mode trade-offs (deliberate user choice):**
 - **K8s mode** has a real auth/isolation surface — the provisioner runs with a least-privilege ServiceAccount + Role, projects get separate namespaces, NetworkPolicies are available. More moving parts to operate, but tighter security posture.
@@ -91,7 +91,6 @@ frontend/                        # React 18 studio (Vite, Tailwind, TanStack)
 `DeploymentMode` on `DatabaseInstance` controls how a project is provisioned:
 - **K8s** — full 9-stage pipeline against CNPG. Works on any distro (managed EKS/GKE/AKS, self-hosted RKE2, or single-node k0s/k3s/MicroK8s — including rootless). Provisioner authenticates as a ServiceAccount with a least-privilege ClusterRole; projects are namespace-isolated. Default when `PROVISIONER_MODE=k8s`.
 - **Docker** — runs Postgres as a container on a Docker daemon (local socket *or* a remote daemon over TLS, Dokploy/CapRover-style). Simpler to operate, but requires root-equivalent access to the daemon (same constraint applies to Podman unless explicitly rootless). Per-project isolation is process-level only — there is no equivalent of K8s namespaces / NetworkPolicies. `PROVISIONER_MODE=docker`. Backup/restore/PITR landed via WAL-G sidecar (May 2026) — see `OPERATOR.md` §6 for ops; `DOCKER_BACKUP_PLAN.md` is the historical design doc.
-- **BYOC** — `POST /api/provision/byoc` registers an externally managed DB; no provisioning, just stores credentials in vault and creates the instance row. Every BYOC target goes through `internal/byoc` (SSRF guard): internal IPv4/IPv6 ranges + cloud metadata refused, host must be a single hostname/IP (no multi-host, `hostaddr` or DSN-field injection), the guard is also the lib/pq dialer for BYOC projects so a rebound DNS name is refused at connect time, and `BYOC_EGRESS_ALLOWLIST` optionally pins targets to operator-approved CIDRs/hostnames. Threat model in `internal/byoc/doc.go`.
 
 ### Self-hosted vs Cloud (platform-wide)
 
@@ -118,7 +117,7 @@ Stages register rollback compensations into a `ProvisionContext`; failure runs t
 
 After `ROLE_CREATION` the provisioner publishes vault entries at `projects/{orgSlug}/{projectId}/credentials/{role}` and (if PgDog is configured) registers the cluster.
 
-`Deprovision` reverses the chain: PgDog deregister → operator/container teardown → vault path purge under `projects/{orgSlug}/{projectId}/` → store delete. The vault purge is critical for BYOC (live external credentials).
+`Deprovision` reverses the chain: PgDog deregister → operator/container teardown → vault path purge under `projects/{orgSlug}/{projectId}/` → store delete.
 
 ### Kubernetes Integration
 
@@ -209,7 +208,7 @@ Tier enforcement is bypassed entirely in self-hosted mode.
 - **R2 / S3 integration**: 2 tests gated on `R2_ACCESS_KEY_ID` (uploader-only + full pipeline). LocalStack covers the structural path; real R2 catches TLS-SAN / multipart quirks LocalStack doesn't reproduce.
 - **Resend integration**: 1 live test gated on `RESEND_API_KEY`
 - **Sister-repo contracts**: `internal/service/contract_test.go` pins ProjectID format, vault path shape, NATS CDC subject, JWT vault paths, PgDog reload subject. Runs in default `go test`.
-- **Playwright E2E**: 27 spec files, 131 passing + 4 skipped (gated on `REAL_E2E=1` or `STUDIO_LIVE=1`); covers vault setup wizard, BYOC flow, deployment modes, edge functions, realtime, advisors, schema CRUD, backup history + restore (`backups.spec.ts`), live studio-vs-data-plane (`studio-live-data.spec.ts`)
+- **Playwright E2E**: 26 spec files, gated on `REAL_E2E=1` or `STUDIO_LIVE=1` for the live ones; covers vault setup wizard, deployment modes, edge functions, realtime, advisors, schema CRUD, backup history + restore (`backups.spec.ts`), live studio-vs-data-plane (`studio-live-data.spec.ts`)
 - **Frontend unit**: Vitest suite for hooks and components (≥80% coverage)
 - All critical paths use `MockClient` (fake K8s) and `fakeVault` for hermetic tests
 
@@ -219,7 +218,7 @@ Tier enforcement is bypassed entirely in self-hosted mode.
 - `internal/config/config.go` — env var parsing, `IsCloud()`
 - `internal/provisioner/postgresql.go` — CNPG 9-stage pipeline
 - `internal/provisioner/docker.go` — Docker SDK provisioner
-- `internal/service/provisioning.go` — orchestration + vault cleanup on deprovision + BYOC
+- `internal/service/provisioning.go` — orchestration + vault cleanup on deprovision
 - `internal/service/pgdog_notifier.go` — NATS publish + config table CRUD
 - `internal/service/backup.go` — adapter dispatch shim (resolveAdapter → K8s | Docker)
 - `internal/service/backup_adapter.go` — `BackupAdapter` interface + `BackupRef` + `ErrUnsupportedBackupMode`
@@ -238,7 +237,6 @@ Tier enforcement is bypassed entirely in self-hosted mode.
 - `internal/handler/auth.go` — register, login, token management (argon2id)
 - `internal/handler/function.go` — edge function CRUD + invoke + secrets + log SSE
 - `internal/handler/realtime.go` — publication membership API
-- `internal/handler/byoc.go` — BYOC registration
 - `internal/handler/setup.go` — vault init wizard + first-admin creation
 - `internal/auth/password.go` — argon2id hashing
 - `internal/auth/org_rbac.go` — org + project permission maps

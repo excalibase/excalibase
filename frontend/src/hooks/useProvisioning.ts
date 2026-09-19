@@ -83,31 +83,6 @@ export const useProvisionDatabase = () => {
   });
 };
 
-export interface BYOCRequest {
-  projectName: string;
-  orgId: string;
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  password: string;
-  sslMode?: string;
-}
-
-export const useProvisionBYOC = () => {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (request: BYOCRequest) => {
-      const response = await api.post<DatabaseInstance>('/provision/byoc', request);
-      return response.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instances'] });
-    },
-  });
-};
-
 export const useDeprovisionDatabase = () => {
   const queryClient = useQueryClient();
 

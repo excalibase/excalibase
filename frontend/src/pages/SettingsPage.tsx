@@ -135,47 +135,44 @@ const excalibase = createClient({
         </div>
       </div>
 
-      {/* Pause / Resume — pre-pause backup runs automatically (see backend);
-          BYOC instances are read-only here so the buttons hide. */}
-      {project.deploymentMode !== 'byoc' && (
-        <div className="rounded-lg border border-border-primary bg-surface-card p-4" data-testid="lifecycle-section">
-          <h4 className="text-sm font-medium text-text-primary mb-2">Lifecycle</h4>
-          {project.status === 'PAUSED' ? (
-            <>
-              <p className="text-xs text-text-secondary mb-3">
-                This project is paused {project.pauseReason ? `(${project.pauseReason})` : ''}. Click Resume to bring it back online.
-                {project.lastActiveAt && (
-                  <> Last active: {new Date(project.lastActiveAt).toLocaleString()}.</>
-                )}
-              </p>
-              <button
-                onClick={() => projectId && resumeProject.mutate(projectId)}
-                disabled={resumeProject.isPending}
-                className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                data-testid="resume-project-btn"
-              >
-                {resumeProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
-                Resume Project
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="text-xs text-text-secondary mb-3">
-                Pause stops the database workload after taking a backup. Data persists; you can Resume anytime.
-              </p>
-              <button
-                onClick={() => projectId && pauseProject.mutate({ projectId })}
-                disabled={pauseProject.isPending || project.status !== 'ACTIVE'}
-                className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                data-testid="pause-project-btn"
-              >
-                {pauseProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PauseCircle className="w-4 h-4" />}
-                Pause Project
-              </button>
-            </>
-          )}
-        </div>
-      )}
+      {/* Pause / Resume — pre-pause backup runs automatically (see backend). */}
+      <div className="rounded-lg border border-border-primary bg-surface-card p-4" data-testid="lifecycle-section">
+        <h4 className="text-sm font-medium text-text-primary mb-2">Lifecycle</h4>
+        {project.status === 'PAUSED' ? (
+          <>
+            <p className="text-xs text-text-secondary mb-3">
+              This project is paused {project.pauseReason ? `(${project.pauseReason})` : ''}. Click Resume to bring it back online.
+              {project.lastActiveAt && (
+                <> Last active: {new Date(project.lastActiveAt).toLocaleString()}.</>
+              )}
+            </p>
+            <button
+              onClick={() => projectId && resumeProject.mutate(projectId)}
+              disabled={resumeProject.isPending}
+              className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+              data-testid="resume-project-btn"
+            >
+              {resumeProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
+              Resume Project
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-text-secondary mb-3">
+              Pause stops the database workload after taking a backup. Data persists; you can Resume anytime.
+            </p>
+            <button
+              onClick={() => projectId && pauseProject.mutate({ projectId })}
+              disabled={pauseProject.isPending || project.status !== 'ACTIVE'}
+              className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+              data-testid="pause-project-btn"
+            >
+              {pauseProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PauseCircle className="w-4 h-4" />}
+              Pause Project
+            </button>
+          </>
+        )}
+      </div>
 
       <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4">
         <h4 className="text-sm font-medium text-red-400 mb-2">Danger Zone</h4>

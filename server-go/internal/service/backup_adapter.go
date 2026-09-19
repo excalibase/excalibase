@@ -48,7 +48,7 @@ type BackupAdapter interface {
 const defaultRestoreDatabase = "app"
 
 // ErrUnsupportedBackupMode is returned when a project's DeploymentMode
-// has no adapter registered — most commonly BYOC, which has no
+// has no adapter registered — a mode with no
 // backup surface (operator owns it).
 var ErrUnsupportedBackupMode = errors.New("backup not supported for this deployment mode")
 

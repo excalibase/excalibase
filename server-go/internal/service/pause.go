@@ -50,7 +50,7 @@ func NewPauseService(c PauseServiceConfig) *PauseService {
 }
 
 // ErrPauseUnsupported is returned when a project's deployment mode
-// has no Pauser registered (BYOC, primarily — operator owns the DB
+// has no Pauser registered (the operator owns the DB
 // lifecycle, we don't touch it).
 var ErrPauseUnsupported = errors.New("pause not supported for this deployment mode")
 

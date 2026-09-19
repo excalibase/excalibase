@@ -10,7 +10,7 @@ import (
 
 // WalLagAdvertiser is the optional sub-interface BackupAdapters
 // implement when they can report continuous-archive lag. Docker
-// adapter (Phase 2 + WAL-G) supports it; K8s and BYOC do not.
+// adapter (Phase 2 + WAL-G) supports it; K8s does not.
 type WalLagAdvertiser interface {
 	WalLag(ctx context.Context, inst *domain.DatabaseInstance) (WalLagInfo, error)
 }
@@ -49,7 +49,7 @@ func (s *BackupService) GetWalLag(ctx context.Context, projectID string) (WalLag
 }
 
 // ErrWalLagUnsupported is returned by GetWalLag when the adapter
-// doesn't implement WalLagAdvertiser. K8s and BYOC adapters fall
+// doesn't implement WalLagAdvertiser. The K8s adapter falls
 // here; the HTTP handler maps it to 501 Not Implemented.
 var ErrWalLagUnsupported = fmt.Errorf("wal-lag not supported for this deployment mode")
 

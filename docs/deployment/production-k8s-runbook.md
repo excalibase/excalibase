@@ -202,7 +202,7 @@ are not rendered (verified against `templates/*.yaml`). Only
 
 Not exposed as values today (must be set by editing the Deployment env after
 install, and re-applied after every `helm upgrade`): `EXCALIBASE_AUTOPAUSE_ENABLED`,
-`EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS`, `BYOC_EGRESS_ALLOWLIST`,
+`EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS`,
 `BACKUP_DEFAULT_*`, `LOG_LEVEL` (all read in `server-go/internal/config/config.go`
 or `cmd/server/main.go`; none in `templates/provisioning.yaml`). No ticket found.
 
@@ -460,11 +460,8 @@ the re-unseal a silent no-op (§5.3). No ticket found.
   malformed value stops the server at boot. On k8s the list is rendered as
   `ALLOWED_HOSTS` env plus a `deno-runtime-egress` NetworkPolicy
   (OPERATOR.md §6.1).
-* BYOC: internal ranges and cloud metadata are always refused;
-  `BYOC_EGRESS_ALLOWLIST` (CIDRs, IPs, hostnames, `*.suffix`) restricts
-  targets further (OPERATOR.md §6, `server-go/internal/byoc/doc.go`).
 
-Both env vars must be added to the provisioning Deployment by hand (§3.1).
+The env var must be added to the provisioning Deployment by hand (§3.1).
 
 ### 4.6 PDB, HPA and scaling knobs
 
@@ -594,7 +591,7 @@ blocks forever (`values.yaml` comment on `platformDb.enablePDB`).
 | CDC lag metric (alerts use retained-WAL as proxy) | EXC-34 |
 | platform-db backup not wired (`platformDb.backup.*` values inert) | none found |
 | `resources:` and `ingress.annotations:` in `values-prod.yaml` not rendered | none found |
-| `EXCALIBASE_AUTOPAUSE_ENABLED`, `EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS`, `BYOC_EGRESS_ALLOWLIST` not chart values | none found |
+| `EXCALIBASE_AUTOPAUSE_ENABLED`, `EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS` not chart values | none found |
 | Bootstrap Job stores a 12h session token as `provisioning-pat`; auth/graphql break after 12h unless replaced (§3.4) | none found; incident recorded in `aio-e2e/k8s-dataplane/README.md` |
 | HAProxy-as-Ingress: nginx-only annotations and regex paths | none found |
 | PgDog: notifier wiring is present but PgDog itself is not deployed | tracked outside this repo |

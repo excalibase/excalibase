@@ -25,8 +25,6 @@ var reservedSecretKeys = map[string]bool{
 	"EXCALIBASE_ANON_KEY":    true,
 	"EXCALIBASE_SERVICE_KEY": true,
 	"EXCALIBASE_DB_URL":      true,
-	"EXCALIBASE_DB_HOST":     true,
-	"BYOC_PINNED":            true,
 }
 
 // ValidateSecretKey returns nil if the key is a valid env var identifier

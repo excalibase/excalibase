@@ -183,20 +183,6 @@ R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -d "{\"projectName\":\"cloud-blocked\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
 echo "$R" | grep -q "reached the maximum" && cpass "tier enforcement blocks over-limit" || cfail "tier" "$R"
 
-# C7. BYOC still works in cloud
-echo "C7. BYOC provision (display name 'byoc-test')"
-R=$(curl -s -X POST http://localhost:24005/api/provision/byoc \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"byoc-test\",\"orgId\":\"$ORG_ID\",\"host\":\"external-db.example.com\",\"port\":5432,\"database\":\"mydb\",\"username\":\"user\",\"password\":\"pass\"}")
-BYOC_PROJECT_ID=$(echo "$R" | jq -r '.projectId')
-[ -n "$BYOC_PROJECT_ID" ] && [[ "$BYOC_PROJECT_ID" == proj-* ]] && cpass "BYOC provision (ref=$BYOC_PROJECT_ID)" || cfail "byoc" "$R"
-
-# C5. Vault has BYOC credentials
-echo "C8. BYOC credentials in vault"
-R=$(curl -s "http://localhost:24010/secrets-list?prefix=projects/default/$BYOC_PROJECT_ID/" -H "Authorization: Bearer vault-service-token")
-COUNT=$(echo "$R" | jq '.paths | length')
-[ "$COUNT" -ge 1 ] && cpass "BYOC creds in vault" || cfail "byoc vault ($COUNT)" "$R"
-
 echo ""
 echo "============================="
 echo "CLOUD: $CLOUD_PASS passed, $CLOUD_FAIL failed"

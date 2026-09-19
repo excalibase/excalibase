@@ -24,7 +24,7 @@ type DatabaseProvisioner interface {
 // supports stop-without-deprovision. K8s/CNPG hibernates the cluster
 // (cnpg.io/hibernation annotation); Docker stops the container. Both paths preserve
 // data volumes so Resume can spin the workload back up. Adapters
-// that lack pause (BYOC) just don't implement this interface and
+// that lack pause just don't implement this interface and
 // the pauseService returns ErrPauseUnsupported.
 type Pauser interface {
 	Pause(ctx context.Context, namespace, projectID string) error

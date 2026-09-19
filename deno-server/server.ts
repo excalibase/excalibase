@@ -21,8 +21,7 @@
 //
 // Security: every request (except /health) requires X-Runtime-Secret header.
 // Workers run with net restricted to the egress allowlist (ALLOWED_HOSTS env
-// unioned with the deploy's allowedHosts, or disabled) plus, for a pinned
-// BYOC deploy, its validated database ip:port (see runtime/pin.ts) and NO
+// unioned with the deploy's allowedHosts, or disabled) and NO
 // filesystem, env, run, ffi, or write permission. Secrets are injected as
 // a Deno.env mock so user code sees only its own project's env vars.
 //
@@ -43,7 +42,6 @@ import { executeDbOp, newCache } from "./runtime/db.ts";
 import type { DbOp } from "./runtime/db.ts";
 import { newId } from "./runtime/ids.ts";
 import { closePool, getPool } from "./runtime/pool.ts";
-import { PinError, workerNetGrant } from "./runtime/pin.ts";
 import type { Sql } from "./runtime/pool.ts";
 import type { ValidatorCache } from "./runtime/validator.ts";
 
@@ -407,11 +405,12 @@ function isAllowedHostEntry(entry: unknown): entry is string {
 }
 
 // egressAllowlist is the runtime-wide list unioned with the deploy's own
-// (EXC-348). workerNetGrant turns it into the worker's `net` permission.
-function egressAllowlist(deployHosts: string[]): string[] {
+// (EXC-348). It becomes the worker's `net` permission; an empty list means
+// the worker gets no network access at all.
+function egressAllowlist(deployHosts: string[]): boolean | string[] {
   const union = [...ALLOWED_HOSTS];
   for (const host of deployHosts) if (!union.includes(host)) union.push(host);
-  return union;
+  return union.length > 0 ? union : false;
 }
 
 // Server port — defaults to 8000 for production; tests override via env so
@@ -1837,10 +1836,8 @@ class FunctionRuntime {
     // fails to parse as plain JS.
     const blob = new Blob([workerCode], { type: "application/typescript" });
 
-    // The egress allowlist (EXC-348) plus, for a pinned BYOC deploy, the
-    // database address provisioning validated (EXC-359); an unpinned BYOC
-    // DSN is refused here. `false` when there is nothing to grant.
-    const netPermission: boolean | string[] = workerNetGrant(secrets, egressAllowlist(allowedHosts));
+    // The egress allowlist (EXC-348); `false` when there is nothing to grant.
+    const netPermission: boolean | string[] = egressAllowlist(allowedHosts);
 
     // Phase 9b.G — grant the worker scoped `read` access to the vendored
     // @excalibase/server library directory ONLY. Without this Deno's import
@@ -2904,7 +2901,7 @@ async function handleDeploy(req: Request): Promise<Response> {
     const result = await runtime.deploy(parsed);
     return Response.json(result, { status: 201, headers: JSON_HEADERS });
   } catch (error: unknown) {
-    if (error instanceof AllowedHostsError || error instanceof PinError) return badRequest(error.message);
+    if (error instanceof AllowedHostsError) return badRequest(error.message);
     throw error;
   }
 }

@@ -255,6 +255,9 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	}
 	applyNullableInstanceFields(&inst, nf)
 
+	if err := storage.CheckDeploymentMode(inst.ProjectID, inst.DeploymentMode); err != nil {
+		return nil, err
+	}
 	return &inst, nil
 }
 

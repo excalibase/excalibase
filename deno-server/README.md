@@ -219,7 +219,7 @@ curl -X POST http://localhost:24006/invoke/hello \
 
 | Permission | Default |
 |---|---|
-| `net` | `false`, or the union of the `ALLOWED_HOSTS` env (runtime-wide) and the deploy payload's `allowedHosts` (per function). Entries are Deno `--allow-net` hosts: `host`, `host:port`, `*.suffix[:port]`, IP literal. A payload outside that shape is refused with 400. The control plane owns the per-project list (`PUT /api/projects/{id}/functions/egress`, EXC-348). A deploy whose secrets carry `BYOC_PINNED=1` additionally gets the `ip:port` of its `EXCALIBASE_DB_URL` (an IP literal provisioning validated; a hostname is refused with 400) — see `runtime/pin.ts` (EXC-359). |
+| `net` | `false`, or the union of the `ALLOWED_HOSTS` env (runtime-wide) and the deploy payload's `allowedHosts` (per function). Entries are Deno `--allow-net` hosts: `host`, `host:port`, `*.suffix[:port]`, IP literal. A payload outside that shape is refused with 400. The control plane owns the per-project list (`PUT /api/projects/{id}/functions/egress`, EXC-348). |
 | `read` | scoped to `EXCALIBASE_VENDORED_LIB_DIR` only (default `/app/vendor/excalibase-server`) — the vendored `@excalibase/server` library lives there and the worker must load it via the import map. User code cannot read `/etc/passwd` or any other path. |
 | `write` | `false` |
 | `env` | `false` (real env hidden — only the per-function `Deno.env` mock is exposed) |

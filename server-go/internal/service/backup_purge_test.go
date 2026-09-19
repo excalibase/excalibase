@@ -99,7 +99,7 @@ func TestProjectBackupPrefix(t *testing.T) {
 		{"k8s follows barman destinationPath/serverName", domain.ModeK8s, "proj-1", "proj-1/cloud/", nil},
 		{"empty mode defaults to k8s", "", "proj-1", "proj-1/cloud/", nil},
 		{"docker follows the uploader key prefix", domain.ModeDocker, "proj-1", "backups/proj-1/", nil},
-		{"byoc has no backups", domain.ModeBYOC, "proj-1", "", ErrNoBackupsForMode},
+		{"an unknown mode has no backups", domain.DeploymentMode("unwired"), "proj-1", "", ErrNoBackupsForMode},
 		{"empty project id is refused", domain.ModeK8s, "", "", ErrBackupPrefixUnsafe},
 		{"blank project id is refused", domain.ModeDocker, "   ", "", ErrBackupPrefixUnsafe},
 		{"path traversal is refused", domain.ModeK8s, "../other", "", ErrBackupPrefixUnsafe},

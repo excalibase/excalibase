@@ -41,13 +41,6 @@ rebuilt from the platform builtins plus the project's secrets. Secret-triggered
 redeploys use the same code path, so the three deploy flows ship identical
 bundles.
 
-For a BYOC project the rebuilt environment re-pins the database host through
-the egress guard (EXC-359): the DSN carries the address that resolved and
-validated at replay time, so a runtime restart also picks up a legitimate DNS
-change. A host that has been rebound to an internal address fails the replay
-for that project — nothing is sent to the runtime and the replayer retries with
-backoff. Between restarts the same re-pin runs every 10 minutes.
-
 Replays are idempotent: `POST /deploy` replaces a function in place, so
 replaying a runtime that already holds a function is harmless.
 

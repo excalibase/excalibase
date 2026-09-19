@@ -7,7 +7,7 @@ React + TypeScript + Vite frontend for the Excalibase database provisioning plat
 - **Setup wizard** — vault initialization (Shamir shares + threshold) and first-admin registration in a single guided flow at `/setup`
 - **Dashboard** — list of all instances, status pills, deletion-protection toggle
 - **Provisioning flow visualizer** — real-time 9-stage pipeline with rollback log on failure
-- **Project creation** — three modes: Kubernetes (CNPG), Docker (containers), or BYOC (register an external DB)
+- **Project creation** — two modes: Kubernetes (CNPG) or Docker (containers)
 - **Schema browser** — tables, columns, roles, extensions, RLS policies, functions, triggers, indexes; row CRUD with paginated, sortable, filterable views
 - **Edge functions** — multi-file Deno functions with Monaco editor, secrets management, log streaming, public invoke URL
 - **Realtime** — per-table CDC publication toggle (enables/disables logical replication membership)
@@ -92,10 +92,10 @@ npm run test:ui          # interactive UI
 # Playwright E2E (26 spec files, ~120 tests; requires backend at localhost:24005)
 npx playwright test
 npx playwright test --ui
-npx playwright test e2e/byoc.spec.ts        # one file
+npx playwright test e2e/pause-resume.spec.ts  # one file
 ```
 
-E2E spec coverage: vault setup, BYOC flow, Docker-mode flow, K8s-mode flow, edge functions, realtime, schema CRUD, advisors, RBAC (auth/users), org members.
+E2E spec coverage: vault setup, Docker-mode flow, K8s-mode flow, edge functions, realtime, schema CRUD, advisors, RBAC (auth/users), org members.
 
 ## Conventions
 

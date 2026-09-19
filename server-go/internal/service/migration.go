@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/excalibase/provisioning-poc/internal/byoc"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/security"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -23,7 +22,6 @@ type MigrationService struct {
 	vault       vaultclient.VaultClient
 	storagePath string
 	overrides   dsnOverrides
-	egressGuard *byoc.Guard // BYOC dial guard; nil → byoc.Default()
 }
 
 // dsnOverrides lets local dev point the tenant connection at a port-forward
@@ -78,22 +76,11 @@ func (s *MigrationService) openTenantDB(projectID string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read excalibase_app credentials: %w", err)
 	}
-	db, err := s.egress().OpenProjectDB(s.store, projectID, buildTenantDSN(creds, s.overrides))
+	db, err := sql.Open("postgres", buildTenantDSN(creds, s.overrides))
 	if err != nil {
 		return nil, fmt.Errorf("open tenant connection: %w", err)
 	}
 	return db, nil
-}
-
-// SetEgressGuard installs the operator-configured BYOC guard used when
-// dialling BYOC projects; nil → byoc.Default().
-func (s *MigrationService) SetEgressGuard(g *byoc.Guard) { s.egressGuard = g }
-
-func (s *MigrationService) egress() *byoc.Guard {
-	if s.egressGuard != nil {
-		return s.egressGuard
-	}
-	return byoc.Default()
 }
 
 func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string, req domain.MigrationRequest) (*domain.MigrationRecord, error) {

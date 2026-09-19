@@ -12,7 +12,6 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/bootstrap"
-	"github.com/excalibase/provisioning-poc/internal/byoc"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
@@ -155,12 +154,6 @@ func runServer(cfg config.AppConfig) {
 		dockerClient: dockerClientRef,
 	})
 	deps.fnHandler = fnHandler
-	// BYOC hosts are pinned to a guard-validated address before the runtime
-	// sees them; the loop re-pins so DNS changes land within one interval.
-	fnHandler.SetEgressGuard(deps.egress)
-	stopRepin := fnHandler.StartBYOCRepin(handler.DefaultBYOCRepinInterval)
-	defer stopRepin()
-
 	stopCallout := startNatsAuthCallout(cfg, sqlStore)
 	defer stopCallout()
 
@@ -326,7 +319,7 @@ func startIdlePauseScheduler(
 		return noop
 	}
 	if pauseSvc == nil || sqlStore == nil {
-		log.Println("WARN: idle auto-pause enabled but no pause service is wired (BYOC-only deployment?) — sweep not started")
+		log.Println("WARN: idle auto-pause enabled but no pause service is wired — sweep not started")
 		return noop
 	}
 	var lock service.LeaderLock = service.AlwaysLeader{}
@@ -399,7 +392,6 @@ func startFunctionScheduler(sqlStore storage.PlatformStore) *bootstrap.Scheduler
 // handlerDeps groups all wired handlers + middleware used during route mounting.
 // Centralising the bag keeps buildRouter focused on routing rather than wiring.
 type handlerDeps struct {
-	egress             *byoc.Guard
 	provHandler        *handler.ProvisioningHandler
 	metricsHandler     *handler.MetricsHandler
 	backupHandler      *handler.BackupHandler
@@ -723,8 +715,7 @@ type handlerDepsArgs struct {
 }
 
 // buildBackupService wires the BackupService with the right adapter
-// map for the current deployment mode. K8s adapter is always present
-// (BYOC flows through K8s today; future BYOC adapter can layer in).
+// map for the current deployment mode. K8s adapter is always present.
 // Docker adapter is added when both ProvisionerMode=docker and the
 // platform has R2/S3 credentials available — without a bucket the
 // Docker adapter has nowhere to put bytes, so we keep it out and the
@@ -797,26 +788,11 @@ func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceSto
 	return h
 }
 
-// buildEgressGuard parses BYOC_EGRESS_ALLOWLIST into the guard every BYOC
-// validation and dial goes through. A malformed allowlist is a boot error:
-// silently running without it would widen egress.
-func buildEgressGuard(cfg config.AppConfig) *byoc.Guard {
-	policy, err := byoc.ParseAllowlist(cfg.BYOCEgressAllowlist)
-	if err != nil {
-		log.Fatalf("BYOC_EGRESS_ALLOWLIST: %v", err)
-	}
-	if !policy.Empty() {
-		log.Printf("BYOC egress allowlist active")
-	}
-	return byoc.NewGuard(policy, nil)
-}
-
-// newSchemaHandler wires the instance store so the schema browser can tell
-// BYOC projects apart and dial them through the egress guard.
-func newSchemaHandler(vc vaultclient.VaultClient, instances storage.InstanceStore, egress *byoc.Guard) *handler.SchemaHandler {
+// newSchemaHandler wires the instance store so the schema browser can
+// resolve a project's instance row.
+func newSchemaHandler(vc vaultclient.VaultClient, instances storage.InstanceStore) *handler.SchemaHandler {
 	h := handler.NewSchemaHandler(vc)
 	h.SetInstanceStore(instances)
-	h.SetEgressGuard(egress)
 	return h
 }
 
@@ -834,9 +810,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)
-	egress := buildEgressGuard(cfg)
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
-	migrationSvc.SetEgressGuard(egress)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
 
@@ -883,12 +857,10 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 
 	realtimeHandler := handler.NewRealtimeHandler(sqlStore, sqlStore, vc)
-	realtimeHandler.SetEgressGuard(egress)
 	if name := os.Getenv("REALTIME_PUBLICATION_NAME"); name != "" {
 		realtimeHandler.SetPublicationName(name)
 	}
 	provHandler := handler.NewProvisioningHandler(provSvc, sqlStore)
-	provHandler.SetEgressGuard(egress)
 	provHandler.SetActivityStore(sqlStore)
 	wireProjectCors(sqlStore, provHandler)
 	wireProjectAuthSettings(sqlStore, provHandler)
@@ -898,7 +870,6 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provSvc.SetActivityRecorder(activityRecorder)
 
 	return &handlerDeps{
-		egress:             egress,
 		provHandler:        provHandler,
 		metricsHandler:     handler.NewMetricsHandler(metricsSvc),
 		backupHandler:      handler.NewBackupHandler(backupSvc),
@@ -916,7 +887,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		svcAcctHandler:     handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
 		orgHandler:         newOrgHandler(sqlStore, store),
 		vaultHandler:       vaultHandler,
-		schemaHandler:      newSchemaHandler(vc, store, egress),
+		schemaHandler:      newSchemaHandler(vc, store),
 		realtimeHandler:    realtimeHandler,
 		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies()),
 		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants()),
@@ -1007,7 +978,6 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 		r.Get("/", d.provHandler.ListInstances)
 		r.Post("/", d.provHandler.Provision)
 		r.Post("/estimate", d.provHandler.EstimateCost)
-		r.Post("/byoc", d.provHandler.ProvisionBYOC)
 
 		r.Route("/{projectId}", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
@@ -1395,7 +1365,7 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 
 // buildPausers extracts the Pauser-implementing provisioners from
 // the factory + docker client. Returns an empty map when no pauser
-// is wired (BYOC-only deployments). PauseService consults this map
+// is wired. PauseService consults this map
 // at request time to pick the right Pauser per instance's mode.
 func buildPausers(cfg config.AppConfig, factory *provisioner.Factory, dc provisioner.DockerClient) map[domain.DeploymentMode]provisioner.Pauser {
 	out := map[domain.DeploymentMode]provisioner.Pauser{}

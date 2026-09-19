@@ -27,18 +27,6 @@ type ProvisioningRequest struct {
 	AppPassword     string            `json:"appPassword,omitempty"` // optional: password for excalibase_app role
 }
 
-// BYOCRequest is used to register an externally managed database.
-type BYOCRequest struct {
-	ProjectName string `json:"projectName"`
-	OrgID       string `json:"orgId"`
-	Host        string `json:"host"`
-	Port        int    `json:"port"`
-	Database    string `json:"database"`
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	SSLMode     string `json:"sslMode,omitempty"`
-}
-
 type BackupSettings struct {
 	Enabled   bool            `json:"enabled"`
 	Schedule  string          `json:"schedule,omitempty"`

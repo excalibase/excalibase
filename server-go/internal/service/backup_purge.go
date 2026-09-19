@@ -19,7 +19,7 @@ var (
 	// tenants' backups, so the purge refuses before listing anything.
 	ErrBackupPrefixUnsafe = errors.New("backup prefix is not scoped to the project; refusing to delete")
 	// ErrNoBackupsForMode is returned for deployment modes that never write
-	// backups to the platform object store (BYOC).
+	// backups to the platform object store.
 	ErrNoBackupsForMode = errors.New("deployment mode has no platform-managed backups")
 )
 
@@ -81,7 +81,7 @@ func AWSObjectDeleterFactory(usePathStyle bool) ObjectDeleterFactory {
 //	k8s    → {projectID}/cloud/           (Barman destinationPath/serverName)
 //	docker → {dockerKeyPrefix}{projectID}/ (DockerBackupAdapter key layout)
 //
-// BYOC projects have no platform backups (ErrNoBackupsForMode). The result
+// A mode with no platform backups yields ErrNoBackupsForMode. The result
 // is validated with validateBackupPrefix before it is returned.
 func ProjectBackupPrefix(mode domain.DeploymentMode, projectID, dockerKeyPrefix string) (string, error) {
 	if strings.TrimSpace(projectID) == "" || strings.ContainsAny(projectID, "/\\") || strings.Contains(projectID, "..") {
@@ -93,8 +93,6 @@ func ProjectBackupPrefix(mode domain.DeploymentMode, projectID, dockerKeyPrefix 
 		prefix = k8s.BarmanObjectPrefix(projectID)
 	case domain.ModeDocker:
 		prefix = dockerKeyPrefix + projectID + "/"
-	case domain.ModeBYOC:
-		return "", ErrNoBackupsForMode
 	default:
 		return "", fmt.Errorf("%w: unknown deployment mode %q", ErrNoBackupsForMode, mode)
 	}

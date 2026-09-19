@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
-	"github.com/excalibase/provisioning-poc/internal/byoc"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -23,7 +22,6 @@ type RealtimeHandler struct {
 	orgStore        storage.OrgStore
 	vault           vaultclient.VaultClient
 	publicationName string
-	egressGuard     *byoc.Guard // BYOC dial guard; nil → byoc.Default()
 }
 
 func NewRealtimeHandler(store storage.InstanceStore, orgStore storage.OrgStore, vault vaultclient.VaultClient) *RealtimeHandler {
@@ -149,20 +147,10 @@ func (h *RealtimeHandler) dial(r *http.Request) (*service.RealtimeService, *sql.
 	}
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		creds["username"], creds["password"], creds["host"], creds["port"], creds["database"])
-	db, err := h.egress().OpenProjectDB(h.store, projectID, dsn)
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open db: %w", err)
 	}
 	return service.NewRealtimeServiceWithName(db, h.publicationName), db, nil
 }
 
-// SetEgressGuard installs the operator-configured BYOC guard used when
-// dialling BYOC projects; nil → byoc.Default().
-func (h *RealtimeHandler) SetEgressGuard(g *byoc.Guard) { h.egressGuard = g }
-
-func (h *RealtimeHandler) egress() *byoc.Guard {
-	if h.egressGuard != nil {
-		return h.egressGuard
-	}
-	return byoc.Default()
-}
