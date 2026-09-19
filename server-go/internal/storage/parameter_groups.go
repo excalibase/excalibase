@@ -61,8 +61,15 @@ func (s *FileSystemParameterGroupStore) Save(pg *domain.ParameterGroup) error {
 		return err
 	}
 
+	// The handler already refuses a malformed name; re-check at the file-IO
+	// boundary so no future caller can reach this join unvalidated.
+	name, err := security.SafePathComponent(pg.Name)
+	if err != nil {
+		return fmt.Errorf("invalid parameter group name")
+	}
+
 	dir := filepath.Join(s.basePath, paramGroupsKey)
-	if err := os.WriteFile(filepath.Join(dir, pg.Name+".json"), data, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name+".json"), data, 0644); err != nil {
 		return fmt.Errorf("write parameter group: %w", err)
 	}
 
@@ -92,8 +99,14 @@ func (s *FileSystemParameterGroupStore) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	path := filepath.Join(s.basePath, paramGroupsKey, name+".json")
-	os.Remove(path)
+	component, err := security.SafePathComponent(name)
+	if err != nil {
+		return fmt.Errorf("invalid parameter group name")
+	}
+	path := filepath.Join(s.basePath, paramGroupsKey, component+".json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete parameter group: %w", err)
+	}
 	delete(s.cache, name)
 	return nil
 }
