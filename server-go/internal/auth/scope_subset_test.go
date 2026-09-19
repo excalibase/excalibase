@@ -27,6 +27,31 @@ func TestIsSessionToken(t *testing.T) {
 	}
 }
 
+func TestIsUnrestrictedCredential(t *testing.T) {
+	cases := []struct {
+		name  string
+		token *domain.AccessToken
+		want  bool
+	}{
+		{"no token", nil, false},
+		{"login session", &domain.AccessToken{Scopes: ScopeSession}, true},
+		{"legacy all-purpose PAT", &domain.AccessToken{}, true},
+		{"read-only PAT", &domain.AccessToken{Scopes: ScopeRead}, false},
+		{"write PAT", &domain.AccessToken{Scopes: "read,write"}, false},
+		{"project-bound but unscoped PAT", &domain.AccessToken{ProjectID: "proj-a"}, false},
+		{"capability token", &domain.AccessToken{Permissions: []string{"policies:read"}}, false},
+		{"session carrying permissions is still a capability token",
+			&domain.AccessToken{Scopes: ScopeSession, Permissions: []string{"policies:read"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsUnrestrictedCredential(tc.token); got != tc.want {
+				t.Errorf("IsUnrestrictedCredential = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestScopesSubsetOf(t *testing.T) {
 	cases := []struct {
 		name              string

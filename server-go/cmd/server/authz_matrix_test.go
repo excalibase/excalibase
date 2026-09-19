@@ -39,6 +39,11 @@ const (
 	callerOtherOrg       = "otherOrg"
 	callerBoundElsewhere = "boundElsewhere"
 	callerReadOnly       = "readOnly"
+
+	matrixAdminID       = "admin-a"
+	callerAdminReadOnly = "adminReadOnly"
+	callerAdminWrite    = "adminWrite"
+	callerAdminSession  = "adminSession"
 )
 
 // callers are the principals of the authz matrix, keyed by name; the value
@@ -52,8 +57,16 @@ type fakePlatform struct {
 }
 
 // matrixRouter builds the production router over fake stores and returns the
-// bearer tokens of each caller class.
+// bearer tokens of each project-route caller class.
 func matrixRouter(t *testing.T) (http.Handler, callers) {
+	router, project, _ := buildMatrix(t)
+	return router, project
+}
+
+// buildMatrix builds the production router and both caller sets: the
+// project-route principals, and the platform-admin credentials the
+// RequirePermission routes are driven with.
+func buildMatrix(t *testing.T) (http.Handler, callers, callers) {
 	t.Helper()
 	instances := fakestore.NewInstances()
 	instances.Save(&domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"})
@@ -65,21 +78,26 @@ func matrixRouter(t *testing.T) (http.Handler, callers) {
 	platform.Users[matrixDevID] = &domain.User{ID: matrixDevID, Role: "user", Active: true}
 	platform.Users[matrixOtherID] = &domain.User{ID: matrixOtherID, Role: "user", Active: true}
 
-	who := callers{callerAnonymous: ""}
-	issue := func(name, userID string, tok domain.AccessToken) {
+	platform.Users[matrixAdminID] = &domain.User{ID: matrixAdminID, Role: "platform_admin", Active: true}
+
+	who, admins := callers{callerAnonymous: ""}, callers{}
+	issue := func(into callers, name, userID string, tok domain.AccessToken) {
 		raw := testutil.FixtureToken(name)
 		tok.TokenHash = auth.HashToken(raw)
 		tok.UserID = userID
 		platform.ByHash[tok.TokenHash] = &tok
-		who[name] = raw
+		into[name] = raw
 	}
-	issue(callerDeveloper, matrixDevID, domain.AccessToken{Scopes: auth.ScopeSession})
-	issue(callerOtherOrg, matrixOtherID, domain.AccessToken{Scopes: auth.ScopeSession})
-	issue(callerBoundElsewhere, matrixDevID, domain.AccessToken{ProjectID: matrixProjectB})
-	issue(callerReadOnly, matrixDevID, domain.AccessToken{ProjectID: matrixProjectA, Scopes: auth.ScopeRead})
+	issue(who, callerDeveloper, matrixDevID, domain.AccessToken{Scopes: auth.ScopeSession})
+	issue(who, callerOtherOrg, matrixOtherID, domain.AccessToken{Scopes: auth.ScopeSession})
+	issue(who, callerBoundElsewhere, matrixDevID, domain.AccessToken{ProjectID: matrixProjectB})
+	issue(who, callerReadOnly, matrixDevID, domain.AccessToken{ProjectID: matrixProjectA, Scopes: auth.ScopeRead})
+	issue(admins, callerAdminReadOnly, matrixAdminID, domain.AccessToken{Scopes: auth.ScopeRead})
+	issue(admins, callerAdminWrite, matrixAdminID, domain.AccessToken{Scopes: "read,write"})
+	issue(admins, callerAdminSession, matrixAdminID, domain.AccessToken{Scopes: auth.ScopeSession})
 
 	cfg := config.AppConfig{DeploymentMode: "selfhosted"}
-	return buildRouter(cfg, platform, instances, matrixDeps(t, instances)), who
+	return buildRouter(cfg, platform, instances, matrixDeps(t, instances)), who, admins
 }
 
 // matrixDeps wires the handlers whose registration or reachable path the
@@ -101,6 +119,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		migrationHandler: handler.NewMigrationHandler(service.NewMigrationService(instances, nil, dir)),
 		alertHandler:     handler.NewAlertHandler(service.NewAlertingService(dir)),
 		setupHandler:     handler.NewSetupHandler(service.NewOperatorSetupService(mock)),
+		pgHandler:        handler.NewParameterGroupHandler(&fakeParameterGroups{groups: map[string]*domain.ParameterGroup{}}),
 		rlUnauth:         custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
 		rlAuthed:         custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlDataPlane:      custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
@@ -256,5 +275,91 @@ func TestEveryProjectRouteIsGated(t *testing.T) {
 	}
 	if seen < len(projectRoutes) {
 		t.Fatalf("walked only %d project routes; the router lost mounts", seen)
+	}
+}
+
+// EXC-396: a token's scopes must decide which methods it may use on EVERY
+// authenticated route. Before this, scope enforcement lived only inside
+// RequireProjectAccess, so a read-only PAT owned by a platform admin could
+// write anything the {projectId} routes did not cover.
+
+// fakeParameterGroups is an in-memory store so the parameter-group routes
+// answer for real instead of panicking on a nil dependency.
+type fakeParameterGroups struct{ groups map[string]*domain.ParameterGroup }
+
+func (f *fakeParameterGroups) Save(pg *domain.ParameterGroup) error {
+	f.groups[pg.Name] = pg
+	return nil
+}
+func (f *fakeParameterGroups) FindByName(name string) (*domain.ParameterGroup, error) {
+	return f.groups[name], nil
+}
+func (f *fakeParameterGroups) FindAll() ([]*domain.ParameterGroup, error) {
+	out := make([]*domain.ParameterGroup, 0, len(f.groups))
+	for _, pg := range f.groups {
+		out = append(out, pg)
+	}
+	return out, nil
+}
+func (f *fakeParameterGroups) Delete(name string) error {
+	delete(f.groups, name)
+	return nil
+}
+
+// permissionRoutes are representative endpoints from the route families
+// guarded by RequirePermission or bare RequireAuth — every family that has no
+// {projectId} and therefore never met a scope check.
+// permissionRoute is one representative endpoint. unrestrictedOnly marks the
+// service-account lifecycle, which refuses ANY narrowed PAT (EXC-396), not
+// just a read-only one.
+type permissionRoute struct {
+	group, method, path string
+	unrestrictedOnly    bool
+}
+
+var permissionRoutes = []permissionRoute{
+	{group: "parameter groups read", method: http.MethodGet, path: "/api/parameter-groups/"},
+	{group: "parameter groups create", method: http.MethodPost, path: "/api/parameter-groups/"},
+	{group: "parameter groups update", method: http.MethodPut, path: "/api/parameter-groups/pg-1"},
+	{group: "parameter groups delete", method: http.MethodDelete, path: "/api/parameter-groups/pg-1"},
+	{group: "platform users read", method: http.MethodGet, path: "/api/auth/users/"},
+	{group: "platform users create", method: http.MethodPost, path: "/api/auth/users/"},
+	{group: "platform users delete", method: http.MethodDelete, path: "/api/auth/users/u-1"},
+	{group: "service accounts read", method: http.MethodGet, path: "/api/admin/service-accounts/"},
+	{group: "service accounts create", method: http.MethodPost, path: "/api/admin/service-accounts/", unrestrictedOnly: true},
+	{group: "tier config read", method: http.MethodGet, path: "/api/admin/tiers/"},
+	{group: "tier config update", method: http.MethodPut, path: "/api/admin/tiers/STANDARD"},
+	{group: "operator install", method: http.MethodPost, path: "/api/setup/install/postgres"},
+	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a"},
+}
+
+// refusedBy reports whether the caller must be refused on the route.
+func refusedBy(caller string, route permissionRoute) bool {
+	if !isMutating(route.method) {
+		return false
+	}
+	if caller == callerAdminReadOnly {
+		return true
+	}
+	return route.unrestrictedOnly && caller == callerAdminWrite
+}
+
+func TestPermissionRouteScopeMatrix(t *testing.T) {
+	router, _, admins := buildMatrix(t)
+	for _, route := range permissionRoutes {
+		for caller, token := range admins {
+			t.Run(route.group+"/"+caller, func(t *testing.T) {
+				code := matrixRequest(router, route.method, route.path, token)
+				if refusedBy(caller, route) {
+					if code != http.StatusForbidden {
+						t.Fatalf("%s %s as %s: got %d want 403", route.method, route.path, caller, code)
+					}
+					return
+				}
+				if gateRefusal(code) {
+					t.Fatalf("%s %s as %s: gate refused with %d, expected the handler to run", route.method, route.path, caller, code)
+				}
+			})
+		}
 	}
 }

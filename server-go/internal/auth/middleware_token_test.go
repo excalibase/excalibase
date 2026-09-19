@@ -208,3 +208,36 @@ func TestRequireScope_NoTokenIn401Path(t *testing.T) {
 		t.Errorf("missing token must be rejected, got %d", w.Code)
 	}
 }
+
+// TestRequireAuth_EnforcesTokenScopeForMethod pins the central scope gate:
+// the token's scopes decide which HTTP methods it may use on EVERY
+// authenticated route, not only the project-scoped ones.
+func TestRequireAuth_EnforcesTokenScopeForMethod(t *testing.T) {
+	cases := []struct {
+		name   string
+		scopes string
+		method string
+		want   int
+	}{
+		{"read PAT reads", ScopeRead, http.MethodGet, http.StatusOK},
+		{"read PAT writes", ScopeRead, http.MethodPost, http.StatusForbidden},
+		{"read PAT updates", ScopeRead, http.MethodPut, http.StatusForbidden},
+		{"read PAT deletes", ScopeRead, http.MethodDelete, http.StatusForbidden},
+		{"write PAT writes", "read,write", http.MethodPost, http.StatusOK},
+		{"admin PAT writes", ScopeAdmin, http.MethodPost, http.StatusOK},
+		{"session writes", ScopeSession, http.MethodDelete, http.StatusOK},
+		{"legacy all-purpose PAT writes", "", http.MethodPost, http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := SetUser(context.Background(), &domain.User{ID: "u1", Role: "platform_admin", Active: true})
+			ctx = SetToken(ctx, &domain.AccessToken{TokenHash: "h", UserID: "u1", Scopes: tc.scopes})
+			req := httptest.NewRequest(tc.method, "/api/parameter-groups/", nil).WithContext(ctx)
+			w := httptest.NewRecorder()
+			RequireAuth(okHandler()).ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Errorf("%s %s with scopes %q: got %d, want %d", tc.method, req.URL.Path, tc.scopes, w.Code, tc.want)
+			}
+		})
+	}
+}

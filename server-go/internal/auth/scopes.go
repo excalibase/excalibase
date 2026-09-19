@@ -88,6 +88,26 @@ func IsSessionToken(t *domain.AccessToken) bool {
 	return scopeSet(t.Scopes)[ScopeSession]
 }
 
+// IsUnrestrictedCredential reports whether the credential authenticating a
+// request carries no restriction of its own: a browser session, or a legacy
+// all-purpose PAT with neither scopes nor a project binding. A capability
+// token is never unrestricted however wide its permission list looks — its
+// authority is delegated to a machine, not held by the user directly.
+//
+// It is the gate on the doors that hand out platform-wide authority (minting
+// or rotating a capability token, creating or deleting a service principal):
+// those grants outlive any narrowing on the credential that asked for them,
+// so a restricted PAT must not be a door to one.
+func IsUnrestrictedCredential(t *domain.AccessToken) bool {
+	if t == nil || IsCapabilityToken(t) {
+		return false
+	}
+	if IsSessionToken(t) {
+		return true
+	}
+	return t.Scopes == "" && t.ProjectID == ""
+}
+
 // ScopesSubsetOf reports whether every scope in requested is one the holder
 // already carries. An empty holder set is the legacy all-purpose token, which
 // restricts nothing; an empty requested set asks for an all-purpose token,
