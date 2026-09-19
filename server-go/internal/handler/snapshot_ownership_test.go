@@ -2,10 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -119,5 +123,48 @@ func TestSnapshotTraversalIDRejected(t *testing.T) {
 				t.Errorf("%s %s: got %d, want 400", c.method, c.path, w.Code)
 			}
 		})
+	}
+}
+
+// snapshotRouterAt mounts the snapshot routes over a storage path the test
+// controls, so it can make the store fail underneath the handler.
+func snapshotRouterAt(t *testing.T, storagePath string) chi.Router {
+	t.Helper()
+	store, _ := storage.NewFileSystemStore(storagePath)
+	mock := k8s.NewMockClient()
+	seedSnapshotProject(store, mock, projectA)
+	handler := NewSnapshotHandler(service.NewSnapshotService(store, mock, storagePath))
+
+	router := chi.NewRouter()
+	router.Route("/api/provision/{projectId}/snapshot", func(r chi.Router) { handler.Routes(r) })
+	return router
+}
+
+// TestSnapshotDeleteFailureIsOpaque500 covers the handler's error mapping: a
+// store failure is a 500, and the response says so without naming a path on
+// the server's disk.
+func TestSnapshotDeleteFailureIsOpaque500(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses file permission checks")
+	}
+	storagePath := t.TempDir()
+	router := snapshotRouterAt(t, storagePath)
+	snapshotID := exportSnapshotID(t, router, projectA)
+
+	snapshotDir := filepath.Join(storagePath, "snapshots", projectA)
+	if err := os.Chmod(snapshotDir, 0500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(snapshotDir, 0700) })
+
+	w := doRequest(router, "DELETE", "/api/provision/"+projectA+"/snapshot/"+snapshotID, "")
+	if w.Code != 500 {
+		t.Fatalf("delete on a read-only store: got %d, want 500 (body: %s)", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, leak := range []string{storagePath, "snapshots/", ".json"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response leaks %q: %s", leak, body)
+		}
 	}
 }

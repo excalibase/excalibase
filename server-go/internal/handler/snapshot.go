@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -80,7 +81,10 @@ func (h *SnapshotHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			httpError(w, errSnapshotNotFound, http.StatusNotFound)
 			return
 		}
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		// The store's error names the file it could not remove; the caller
+		// gets the outcome, the operator gets the detail from the log.
+		log.Printf("ERROR: delete snapshot %s for project %s: %v", snapshotID, projectID, err)
+		httpError(w, "snapshot delete failed", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "deleted"})
