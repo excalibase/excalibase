@@ -105,22 +105,23 @@ func TestDeprovisionWithDeleteBackupsRefusedWhenPurgerNotWired(t *testing.T) {
 	}
 }
 
-func TestDeprovisionWithDeleteBackupsSkipsBYOC(t *testing.T) {
+func TestDeprovisionWithDeleteBackupsSkipsModeWithoutBackups(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
 	deleter := newFakeObjectDeleter()
 	svc.SetBackupPurger(newTestPurger(deleter))
-	if err := store.Create(&domain.DatabaseInstance{ProjectID: "byoc-1", OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeBYOC, Status: "ACTIVE"}); err != nil {
+	unwired := domain.DeploymentMode("unwired")
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: "unwired-1", OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: unwired, Status: "ACTIVE"}); err != nil {
 		t.Fatal(err)
 	}
-	err := svc.DeprovisionWithOptions(context.Background(), "byoc-1", DeprovisionOptions{DeleteBackups: true})
+	err := svc.DeprovisionWithOptions(context.Background(), "unwired-1", DeprovisionOptions{DeleteBackups: true})
 	if err != nil {
 		t.Fatalf(testDeprovisionFmt, err)
 	}
-	if inst, _ := store.FindByProjectID("byoc-1"); inst != nil {
-		t.Fatal("BYOC row should be deleted; it has no backups to purge")
+	if inst, _ := store.FindByProjectID("unwired-1"); inst != nil {
+		t.Fatal("the row should be deleted; a mode with no platform backups has nothing to purge")
 	}
 	if deleter.listCalls != 0 {
-		t.Fatal("object store must not be listed for BYOC")
+		t.Fatal("object store must not be listed for a mode with no platform backups")
 	}
 }
 

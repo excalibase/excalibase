@@ -67,7 +67,7 @@ export interface DatabaseInstance {
   lastHealthCheck?: string;
   grafanaDashboardUrl?: string;
   // Pause-related (set when project is PAUSED or has been tracked)
-  deploymentMode?: 'k8s' | 'docker' | 'byoc';
+  deploymentMode?: 'k8s' | 'docker';
   lastActiveAt?: string;
   pauseReason?: 'idle_7d' | 'manual' | 'tier_limit' | '';
   // Last successful project-scoped call seen by the platform (project_activity); absent when never seen.

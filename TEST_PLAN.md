@@ -36,7 +36,6 @@ For each surface, four columns:
 | 9-stage K8s pipeline | `internal/provisioner/postgresql.go` | unit + `internal/k8s/*_integration_test.go` (k3s, build-tagged) | — |
 | Rollback on stage failure | `internal/service/provisioning_test.go` (PopulatesFailureStageAndStep, RollbackDeletesNamespace, PersistsRollbackLog, RollsBackVaultWritesOnRoleCreationFailure) | covered | LOW: real-cluster rollback verification (currently MockClient) |
 | Docker provisioner | `internal/provisioner/docker_postgresql.go` | `docker_postgresql_test.go`, `docker_client_integration_test.go` (`-tags=integration`) | LOW: per-project Docker network isolation (cross-project reachability test) |
-| BYOC provisioning | `internal/handler/byoc.go` | `byoc_test.go`, `byoc.spec.ts` | — |
 | Capacity pre-flight | `internal/k8s/capacity.go` | `capacity_test.go`, `provisioning_test.go::TestProvision_RefusesWhenClusterFull` | — |
 | Tier enforcement | `internal/config/tiers.go` | `tiers_test.go`, `provisioning_test.go::ExceedsFreeTierLimit/Standard...` | — |
 | Deployment-mode persistence | `internal/storage/{postgres,sqlite}/migrations/000007*` | `pg_test.go`, `sqlite_test.go::DeploymentMode_RoundTrips`, `LegacyRow_DefaultsToK8s`; `provisioning_test.go::SetsDeploymentMode_*` | — |
@@ -153,7 +152,6 @@ For each surface, four columns:
 | `auth-users.spec.ts` | platform-admin user CRUD | mocked |
 | `orgs.spec.ts` | org list + create + empty state | mocked |
 | `vault.spec.ts` | secrets list + reveal + sealed redirect | mocked |
-| `byoc.spec.ts` | BYOC mode UI | mocked |
 | `deployment-mode.spec.ts` | mode selector toggles UI | mocked |
 | `tables.spec.ts`, `indexes.spec.ts`, `triggers.spec.ts`, `types.spec.ts`, `extensions.spec.ts`, `roles.spec.ts`, `rls.spec.ts`, `migrations.spec.ts`, `sql-editor.spec.ts` | studio DB action surfaces | mocked schema API; verifies UI behaviour, not actual DB action |
 | `realtime.spec.ts` | per-table CDC toggle UI | mocked |

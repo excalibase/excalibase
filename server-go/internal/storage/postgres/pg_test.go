@@ -70,7 +70,6 @@ func TestInstance_DeploymentMode_RoundTrips(t *testing.T) {
 	}{
 		{"k8s", domain.ModeK8s},
 		{"docker", domain.ModeDocker},
-		{"byoc", domain.ModeBYOC},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

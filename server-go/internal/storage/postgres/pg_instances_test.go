@@ -82,3 +82,35 @@ func TestInstances_UpdateMissingRowIsAnError(t *testing.T) {
 		t.Error("a failed Update must not create the row")
 	}
 }
+
+// The platform only operates the deployment modes it provisions. A row in any
+// other mode must be refused at both ends: the schema will not accept it, and
+// a row written before the constraint existed must not be read back as a
+// managed instance the platform would then pause, back up or deprovision.
+func TestInstance_UnsupportedDeploymentMode_IsRefused(t *testing.T) {
+	store := testStore(t)
+
+	_, err := store.DB().Exec(`
+		INSERT INTO database_instances (project_id, org_id, database_type, deployment_mode, status)
+		VALUES ('mode-external', 'org1', 'POSTGRESQL', 'byoc', 'ACTIVE')`)
+	if err == nil {
+		t.Fatal("the deployment_mode constraint must refuse a mode the platform does not operate")
+	}
+
+	if _, err := store.DB().Exec(
+		`ALTER TABLE database_instances DROP CONSTRAINT database_instances_deployment_mode_check`); err != nil {
+		t.Fatalf("drop constraint: %v", err)
+	}
+	if _, err := store.DB().Exec(`
+		INSERT INTO database_instances (project_id, org_id, database_type, deployment_mode, status)
+		VALUES ('mode-external', 'org1', 'POSTGRESQL', 'byoc', 'ACTIVE')`); err != nil {
+		t.Fatalf("seed pre-constraint row: %v", err)
+	}
+
+	if _, err := store.FindByProjectID("mode-external"); !errors.Is(err, storage.ErrUnsupportedDeploymentMode) {
+		t.Fatalf("FindByProjectID = %v, want ErrUnsupportedDeploymentMode", err)
+	}
+	if _, err := store.FindAll(); !errors.Is(err, storage.ErrUnsupportedDeploymentMode) {
+		t.Fatalf("FindAll = %v, want ErrUnsupportedDeploymentMode", err)
+	}
+}

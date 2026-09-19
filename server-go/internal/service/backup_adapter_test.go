@@ -130,11 +130,11 @@ func TestBackupAdapter_EmptyModeFallsBackToK8s(t *testing.T) {
 func TestBackupAdapter_UnsupportedModeReturnsError(t *testing.T) {
 	svc, store, _, _ := setupAdapterTest(t)
 	store.Create(&domain.DatabaseInstance{
-		ProjectID: "byoc-1", OrgID: "org",
-		DeploymentMode: domain.ModeBYOC, Status: "ACTIVE",
+		ProjectID: "unwired-1", OrgID: "org",
+		DeploymentMode: domain.DeploymentMode("unwired"), Status: "ACTIVE",
 	})
 
-	_, err := svc.TriggerManualBackup(context.Background(), "byoc-1")
+	_, err := svc.TriggerManualBackup(context.Background(), "unwired-1")
 	if err == nil {
 		t.Fatal("expected error for unsupported mode")
 	}

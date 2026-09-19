@@ -201,15 +201,6 @@ if [ -z "${SKIP_PROVISIONED:-}" ]; then
   fi
 
   ###############################################################################
-  section "F9. BYOC SSRF guard"
-  for bad in 127.0.0.1 169.254.169.254 10.0.0.1 localhost; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$PAT_HDR" -H 'Content-Type: application/json' \
-      -d "{\"projectName\":\"byoc-test\",\"orgId\":\"$ORG_ID\",\"host\":\"$bad\",\"port\":5432,\"database\":\"x\",\"username\":\"u\",\"password\":\"p\"}" \
-      "$API_PROV/api/provision/byoc")
-    [ "$code" = "400" ] && pass "BYOC rejects $bad" || fail "BYOC $bad" "got $code"
-  done
-
-  ###############################################################################
   section "F10. Schema browser — tables, columns, roles, extensions"
   TABLES=$(curl -s -o /dev/null -w '%{http_code}' -H "$PAT_HDR" "$API_PROV/api/schema/$PROJECT_ID/tables")
   [ "$TABLES" = "200" ] && pass "tables list" || fail "tables list" "got $TABLES"

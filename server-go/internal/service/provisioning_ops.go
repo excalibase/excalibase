@@ -429,7 +429,7 @@ func validateProvisioningRequest(req domain.ProvisioningRequest) error {
 }
 
 // allocateProjectID returns a fresh project id no registered project holds.
-// Every project id in the platform — provisioned, BYOC or restored — comes
+// Every project id in the platform — provisioned or restored — comes
 // from here, so no caller can name the project it is creating.
 func allocateProjectID(store storage.InstanceStore) (string, error) {
 	if store == nil {

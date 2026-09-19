@@ -118,23 +118,18 @@ func TestRegisterProjectRefusesAnExistingProjectID(t *testing.T) {
 // Provisioning generates the project id too: a request can only ask for a
 // display name, so it can never land on an existing project's row.
 func TestProvisionCannotNameAnExistingProject(t *testing.T) {
-	store, err := storage.NewFileSystemStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	svc, store, _ := setupProvisioningTest(t)
 	victim := victimProject()
 	if err := store.Create(victim); err != nil {
 		t.Fatalf("seed victim: %v", err)
 	}
 
-	svc := NewProvisioningService(store, provisioner.NewFactory(), k8s.NewMockClient())
-	resp, err := svc.ProvisionBYOC(context.Background(), domain.BYOCRequest{
+	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		ProjectName: victim.ProjectID, OrgID: "org-attacker",
-		Host: "attacker-db", Port: 5432, Database: "appdb",
-		Username: "attacker", Password: "attacker-password",
+		DBType: domain.PostgreSQL, Tier: domain.Free,
 	})
 	if err != nil {
-		t.Fatalf("ProvisionBYOC: %v", err)
+		t.Fatalf("Provision: %v", err)
 	}
 	if resp.ProjectID == victim.ProjectID {
 		t.Fatal("a provision request must not be able to name an existing project id")
@@ -233,25 +228,26 @@ func TestRestoreFromBackupRequiresAnAllocatedTargetID(t *testing.T) {
 	}
 }
 
-// BYOC registration surfaces both failures it can hit: no id to allocate, and
-// a row that will not persist. Neither may produce a half-registered project.
-func TestProvisionBYOCFailsWhenTheProjectCannotBeRegistered(t *testing.T) {
-	req := domain.BYOCRequest{
-		ProjectName: "external", OrgID: "org-a", Host: "db.example.com",
-		Port: 5432, Database: "appdb", Username: "app", Password: "app-password",
+// Provisioning surfaces both registration failures it can hit: no id to
+// allocate, and a row that will not persist. Neither may produce a
+// half-registered project.
+func TestProvisionFailsWhenTheProjectCannotBeRegistered(t *testing.T) {
+	req := domain.ProvisioningRequest{
+		ProjectName: "external", OrgID: "org-a",
+		DBType: domain.PostgreSQL, Tier: domain.Free,
 	}
 
 	lookupBroken := fakestore.NewInstances()
 	lookupBroken.Err = errors.New("platform db down")
 	svc := NewProvisioningService(lookupBroken, provisioner.NewFactory(), k8s.NewMockClient())
-	if _, err := svc.ProvisionBYOC(context.Background(), req); err == nil {
-		t.Error("BYOC must fail when no project id can be allocated")
+	if _, err := svc.Provision(context.Background(), req); err == nil {
+		t.Error("provisioning must fail when no project id can be allocated")
 	}
 
 	svc = NewProvisioningService(
 		failingCreateStore{InstanceStore: fakestore.NewInstances(), err: errors.New("platform db down")},
 		provisioner.NewFactory(), k8s.NewMockClient())
-	if _, err := svc.ProvisionBYOC(context.Background(), req); err == nil {
-		t.Error("BYOC must fail when the project row cannot be written")
+	if _, err := svc.Provision(context.Background(), req); err == nil {
+		t.Error("provisioning must fail when the project row cannot be written")
 	}
 }

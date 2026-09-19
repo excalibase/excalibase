@@ -368,50 +368,6 @@ func TestBoolPtrIntPtr(t *testing.T) {
 	}
 }
 
-// --- ProvisioningService.ProvisionBYOC ---
-//
-// BYOC short-circuits the K8s pipeline: it just stores credentials and
-// records the instance. No vault, no orgStore — both are optional.
-// Covers the happy-path branch and the unique-ref retry guard.
-
-func TestProvisionBYOC_HappyPath_NoVaultNoOrgStore(t *testing.T) {
-	svc, store, _ := setupProvisioningTest(t)
-
-	resp, err := svc.ProvisionBYOC(context.Background(), domain.BYOCRequest{
-		ProjectName: "external-pg",
-		OrgID:       "org-x",
-		Host:        "db.example.com",
-		Port:        5432,
-		Database:    "appdb",
-		Username:    "ext",
-		Password:    testutil.FixturePassword("byoc-ext"),
-	})
-	if err != nil {
-		t.Fatalf("ProvisionBYOC: %v", err)
-	}
-	if resp.Status != "ACTIVE" {
-		t.Errorf("status: got %s, want ACTIVE", resp.Status)
-	}
-	if resp.CurrentStage != domain.StageCompleted {
-		t.Errorf("stage: got %s, want COMPLETED", resp.CurrentStage)
-	}
-	if resp.Host != "db.example.com" {
-		t.Errorf("host: got %s, want db.example.com", resp.Host)
-	}
-
-	// Persisted instance reflects the BYOC mode + display name.
-	got, err := store.FindByProjectID(resp.ProjectID)
-	if err != nil || got == nil {
-		t.Fatalf("FindByProjectID: %v / %v", err, got)
-	}
-	if got.DeploymentMode != domain.ModeBYOC {
-		t.Errorf("deploymentMode: got %s, want BYOC", got.DeploymentMode)
-	}
-	if got.ProjectName != "external-pg" {
-		t.Errorf("projectName preserved as display name: got %s", got.ProjectName)
-	}
-}
-
 // --- BackupService.GetInstance ---
 
 func TestBackupService_GetInstance(t *testing.T) {

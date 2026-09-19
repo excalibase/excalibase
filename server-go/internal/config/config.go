@@ -74,12 +74,6 @@ type AppConfig struct {
 	// on busy minikube clusters and only sees logs since pod start).
 	LokiURL string
 
-	// BYOCEgressAllowlist restricts where BYOC (bring-your-own Postgres)
-	// connections may go: comma-separated CIDRs, IPs, hostnames or
-	// "*.suffix" wildcards. Empty = any public address. Internal ranges are
-	// always refused regardless of this list. Parsed by byoc.ParseAllowlist.
-	BYOCEgressAllowlist string
-
 	// FnEgressDefaultHosts is the operator-level outbound allowlist every
 	// project's edge functions get in addition to their own setting:
 	// comma-separated host, host:port or "*.suffix" entries in Deno
@@ -189,7 +183,6 @@ func Load() AppConfig {
 		StoragePublicURL:        envOr("STORAGE_PUBLIC_URL", ""),
 		LokiURL:                 envOr("LOKI_URL", ""),
 		PromURL:                 envOr("PROM_URL", ""),
-		BYOCEgressAllowlist:     envOr("BYOC_EGRESS_ALLOWLIST", ""),
 		FnEgressDefaultHosts:    envOr("EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS", ""),
 		CapacityHeadroomPercent: envInt("CAPACITY_HEADROOM_PERCENT", 15),
 		ProvisionerMode:         envOr("PROVISIONER_MODE", "k8s"),

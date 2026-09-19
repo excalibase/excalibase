@@ -30,7 +30,6 @@ type DeploymentMode string
 const (
 	ModeK8s    DeploymentMode = "k8s"
 	ModeDocker DeploymentMode = "docker"
-	ModeBYOC   DeploymentMode = "byoc"
 )
 
 // ProvisioningStage represents stages in the provisioning pipeline.

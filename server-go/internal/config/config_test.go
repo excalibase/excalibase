@@ -157,16 +157,6 @@ func TestLoadCORSOriginsDefaultsToAppOrigin(t *testing.T) {
 	}
 }
 
-func TestLoadBYOCEgressAllowlist(t *testing.T) {
-	if got := Load().BYOCEgressAllowlist; got != "" {
-		t.Errorf("BYOCEgressAllowlist default: got %q, want empty", got)
-	}
-	t.Setenv("BYOC_EGRESS_ALLOWLIST", "203.0.113.0/24, *.rds.amazonaws.com")
-	if got := Load().BYOCEgressAllowlist; got != "203.0.113.0/24, *.rds.amazonaws.com" {
-		t.Errorf("BYOCEgressAllowlist from env: got %q", got)
-	}
-}
-
 func TestLoadFnEgressDefaultHosts(t *testing.T) {
 	if cfg := Load(); cfg.FnEgressDefaultHosts != "" {
 		t.Fatalf("default must be empty (no egress), got %q", cfg.FnEgressDefaultHosts)

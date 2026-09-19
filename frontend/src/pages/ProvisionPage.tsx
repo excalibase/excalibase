@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useProvisionDatabase, useProvisionBYOC } from '../hooks/useProvisioning';
+import { useProvisionDatabase } from '../hooks/useProvisioning';
 import { DatabaseType, TierType } from '../types';
 import { Button } from '../components/Button';
-import { Database, Loader2, Server, Cloud, Link2 } from 'lucide-react';
+import { Database, Loader2, Server, Cloud } from 'lucide-react';
 import { listMyOrgs, type Org } from '../api/orgs';
 import { useTiers, sortTiers, type TierConfig } from '../api/tiers';
 
-type DeployMode = 'k8s' | 'docker' | 'byoc';
+type DeployMode = 'k8s' | 'docker';
 
 function optionTileClass(disabled: boolean | undefined, selected: boolean): string {
   if (disabled) return 'border-border-primary bg-bg-secondary opacity-50 cursor-not-allowed';
@@ -18,7 +18,6 @@ function optionTileClass(disabled: boolean | undefined, selected: boolean): stri
 const DEPLOY_MODES = [
   { mode: 'k8s' as DeployMode, icon: Cloud, label: 'Kubernetes', desc: 'CloudNativePG operator' },
   { mode: 'docker' as DeployMode, icon: Server, label: 'Docker', desc: 'Docker container (coming soon)', disabled: true },
-  { mode: 'byoc' as DeployMode, icon: Link2, label: 'BYOC', desc: 'Bring your own connection' },
 ];
 
 const DB_TYPES = [
@@ -53,7 +52,6 @@ function tierFeatures(tc: TierConfig): string[] {
 export function ProvisionPage() {
   const navigate = useNavigate();
   const provision = useProvisionDatabase();
-  const byoc = useProvisionBYOC();
 
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [deployMode, setDeployMode] = useState<DeployMode>('k8s');
@@ -69,13 +67,6 @@ export function ProvisionPage() {
     ? sortTiers(tierConfigs).map((tc) => ({ tier: tc.tier, label: tierLabel(tc.tier), features: tierFeatures(tc) }))
     : FALLBACK_TIERS;
 
-  // BYOC fields
-  const [byocHost, setByocHost] = useState('');
-  const [byocPort, setByocPort] = useState('5432');
-  const [byocDatabase, setByocDatabase] = useState('');
-  const [byocUsername, setByocUsername] = useState('');
-  const [byocPassword, setByocPassword] = useState('');
-
   useEffect(() => {
     listMyOrgs().then((data) => {
       setOrgs(data);
@@ -83,22 +74,13 @@ export function ProvisionPage() {
     });
   }, []);
 
-  const isPending = provision.isPending || byoc.isPending;
-  const error = provision.error || byoc.error;
+  const isPending = provision.isPending;
+  const error = provision.error;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (deployMode === 'byoc') {
-      const result = await byoc.mutateAsync({
-        projectName, orgId,
-        host: byocHost, port: Number.parseInt(byocPort, 10),
-        database: byocDatabase, username: byocUsername, password: byocPassword,
-      });
-      navigate(`/project/${result.projectId}`);
-    } else {
-      const result = await provision.mutateAsync({ projectName, orgId, databaseType: dbType, tier });
-      navigate(`/project/${result.projectId}`);
-    }
+    const result = await provision.mutateAsync({ projectName, orgId, databaseType: dbType, tier });
+    navigate(`/project/${result.projectId}`);
   };
 
   return (
@@ -107,7 +89,7 @@ export function ProvisionPage() {
         {/* Deployment Mode */}
         <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
           <h2 className="font-semibold text-text-primary">Deployment Mode</h2>
-          <div className="grid grid-cols-3 gap-3" data-testid="deploy-mode-selector">
+          <div className="grid grid-cols-2 gap-3" data-testid="deploy-mode-selector">
             {DEPLOY_MODES.map(({ mode, icon: Icon, label, desc, disabled }) => {
               const modeClass = optionTileClass(disabled, deployMode === mode);
               return (
@@ -156,50 +138,6 @@ export function ProvisionPage() {
             </div>
           </div>
         </div>
-
-        {/* BYOC Connection Form */}
-        {deployMode === 'byoc' && (
-          <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4" data-testid="byoc-form">
-            <h2 className="font-semibold text-text-primary">Connection Details</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="byoc-host" className="block text-sm font-medium text-text-primary mb-1.5">Host</label>
-                <input id="byoc-host" type="text" value={byocHost} onChange={(e) => setByocHost(e.target.value)}
-                  placeholder="db.example.com" required
-                  className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-primary"
-                />
-              </div>
-              <div>
-                <label htmlFor="byoc-port" className="block text-sm font-medium text-text-primary mb-1.5">Port</label>
-                <input id="byoc-port" type="number" value={byocPort} onChange={(e) => setByocPort(e.target.value)}
-                  required
-                  className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
-                />
-              </div>
-              <div>
-                <label htmlFor="byoc-database" className="block text-sm font-medium text-text-primary mb-1.5">Database</label>
-                <input id="byoc-database" type="text" value={byocDatabase} onChange={(e) => setByocDatabase(e.target.value)}
-                  placeholder="mydb" required
-                  className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-primary"
-                />
-              </div>
-              <div>
-                <label htmlFor="byoc-username" className="block text-sm font-medium text-text-primary mb-1.5">Username</label>
-                <input id="byoc-username" type="text" value={byocUsername} onChange={(e) => setByocUsername(e.target.value)}
-                  placeholder="postgres" required
-                  className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-primary"
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label htmlFor="byoc-password" className="block text-sm font-medium text-text-primary mb-1.5">Password</label>
-                <input id="byoc-password" type="password" value={byocPassword} onChange={(e) => setByocPassword(e.target.value)}
-                  required
-                  className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
-                />
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* K8s-specific: DB Engine + Tier */}
         {deployMode === 'k8s' && (
@@ -250,10 +188,9 @@ export function ProvisionPage() {
             Cancel
           </Button>
           <Button type="submit" className="flex-1" disabled={isPending || !orgId}>
-            {isPending && deployMode === 'byoc' && <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Connecting...</>}
-          {isPending && deployMode !== 'byoc' && <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Provisioning...</>}
-          {!isPending && deployMode === 'byoc' && <><Database className="w-4 h-4 mr-2 inline" /> Connect Database</>}
-          {!isPending && deployMode !== 'byoc' && <><Database className="w-4 h-4 mr-2 inline" /> Provision Database</>}
+            {isPending
+              ? <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Provisioning...</>
+              : <><Database className="w-4 h-4 mr-2 inline" /> Provision Database</>}
           </Button>
         </div>
       </form>

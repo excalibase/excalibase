@@ -9,7 +9,6 @@ import (
 	"strconv"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
-	"github.com/excalibase/provisioning-poc/internal/byoc"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -31,8 +30,6 @@ type ProvisioningHandler struct {
 	orgStore  storage.OrgStore
 	pauseSvc  *service.PauseService // optional; nil → /pause + /resume return 503
 	instances storage.InstanceStore
-	// egressGuard validates BYOC targets; nil → byoc.Default(). See byoc.go.
-	egressGuard *byoc.Guard
 	// activity supplies lastSeenAt for GET / list; nil → field omitted.
 	activity storage.ProjectActivityStore
 	// corsStore backs /cors and the corsAllowedOrigins field on /info;
@@ -65,7 +62,6 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 	r.Get("/", h.ListInstances)
 	r.Post("/", h.Provision)
 	r.Post("/estimate", h.EstimateCost)
-	r.Post("/byoc", h.ProvisionBYOC)
 	r.Route("/{projectId}", func(r chi.Router) {
 		r.Get("/", h.GetStatus)
 		r.Delete("/", h.Delete)
@@ -81,8 +77,8 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 //
 //	{"reason": "manual"}     // optional; defaults to manual
 //
-// 503 when pause service isn't wired, 400 for unsupported deployment
-// modes (BYOC), 404 for missing project, 500 on unexpected failures.
+// 503 when pause service isn't wired, 400 for a deployment mode with no
+// pauser, 404 for missing project, 500 on unexpected failures.
 func (h *ProvisioningHandler) Pause(w http.ResponseWriter, r *http.Request) {
 	if h.pauseSvc == nil {
 		httpError(w, "pause service not configured", http.StatusServiceUnavailable)

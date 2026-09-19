@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -66,7 +65,7 @@ type ProvisioningService struct {
 	projectEvents ProjectEventPublisher
 
 	// defaultDeploymentMode stamps inst.DeploymentMode at provision time
-	// for k8s + docker pipelines (BYOC sets its own). Empty falls back
+	// for the k8s + docker pipelines. Empty falls back
 	// to ModeK8s so legacy callers keep their existing behaviour.
 	defaultDeploymentMode domain.DeploymentMode
 }
@@ -151,7 +150,7 @@ func (s *ProvisioningService) SetDockerClient(dc provisioner.DockerClient) {
 }
 
 // SetDefaultDeploymentMode sets the deployment mode written onto every
-// new k8s/docker provision. BYOC ignores this — it always sets ModeBYOC.
+// new k8s/docker provision.
 func (s *ProvisioningService) SetDefaultDeploymentMode(m domain.DeploymentMode) {
 	s.defaultDeploymentMode = m
 }
@@ -201,69 +200,6 @@ func (s *ProvisioningService) SetBackupDefaults(d *BackupDefaults) {
 // against, and so tests can assert the policy applied correctly.
 func (s *ProvisioningService) CapacityHeadroom() int {
 	return s.capacityHeadroomPercent
-}
-
-// ProvisionBYOC registers an externally managed database (no provisioning pipeline).
-// Validates connectivity, stores credentials in vault, creates instance record.
-func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOCRequest) (*domain.ProvisioningResponse, error) {
-	// Generate opaque project ref (display name stays as req.ProjectName)
-	projectRef, err := s.generateUniqueProjectRef()
-	if err != nil {
-		return nil, err
-	}
-
-	// Store credentials in vault under the project ref. Vault paths are
-	// project-scoped only — see `projects/{projectId}/...` scheme. Errors are
-	// fatal: no point creating an ACTIVE instance row pointing at credentials
-	// the platform can't read back.
-	if s.vault != nil {
-		port := strconv.Itoa(req.Port)
-		creds := map[string]string{
-			"host":     req.Host,
-			"port":     port,
-			"username": req.Username,
-			"password": req.Password,
-			"database": req.Database,
-		}
-		if err := s.vault.Put(vaultCredentialPath(projectRef, "excalibase_app"), creds); err != nil {
-			return nil, fmt.Errorf("vault put excalibase_app: %w", err)
-		}
-		if err := s.vault.Put(vaultCredentialPath(projectRef, "admin"), creds); err != nil {
-			return nil, fmt.Errorf("vault put admin: %w", err)
-		}
-	}
-
-	// Create instance record
-	portInt := req.Port
-	inst := &domain.DatabaseInstance{
-		ProjectID:      projectRef,
-		ProjectName:    req.ProjectName,
-		OrgID:          req.OrgID,
-		DBType:         domain.PostgreSQL,
-		Tier:           domain.Free,
-		DeploymentMode: domain.ModeBYOC,
-		Host:           req.Host,
-		Port:           &portInt,
-		DatabaseName:   req.Database,
-		Status:         "ACTIVE",
-		CurrentStage:   domain.StageCompleted,
-	}
-
-	if err := s.store.Create(inst); err != nil {
-		return nil, fmt.Errorf("create instance: %w", err)
-	}
-
-	log.Printf("BYOC project registered: %s (ref=%s, host=%s)", req.ProjectName, projectRef, req.Host)
-
-	return &domain.ProvisioningResponse{
-		ProjectID:    projectRef,
-		ProjectName:  req.ProjectName,
-		Status:       "ACTIVE",
-		CurrentStage: domain.StageCompleted,
-		Host:         req.Host,
-		Port:         &portInt,
-		DatabaseName: req.Database,
-	}, nil
 }
 
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
@@ -652,7 +588,7 @@ func (s *ProvisioningService) releaseProjectResources(ctx context.Context, inst 
 		log.Printf("WARN: nats credential revoke failed for %s: %v", projectID, err)
 	}
 
-	// Delete every vault path scoped to this project. Critical for BYOC where
+	// Delete every vault path scoped to this project. Critical where
 	// the credentials are live passwords on an externally managed database —
 	// without this the platform retains them indefinitely after the project
 	// row is gone.

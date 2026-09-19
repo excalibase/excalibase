@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -17,6 +18,24 @@ var ErrProjectExists = errors.New("project id already registered")
 // to update. Update never inserts: a missing row means the caller is working
 // from a stale view.
 var ErrProjectNotFound = errors.New("project not found")
+
+// ErrUnsupportedDeploymentMode is returned when a stored instance row names a
+// deployment mode the platform does not operate. The platform hosts the
+// databases it provisions, so only k8s and docker are operable; anything else
+// must fail loudly rather than be read as a managed instance the platform
+// would then try to pause, back up or deprovision.
+var ErrUnsupportedDeploymentMode = errors.New("database_instances row has a deployment_mode the platform does not operate")
+
+// CheckDeploymentMode reports whether mode names an operable deployment. An
+// empty mode predates the column and reads as k8s.
+func CheckDeploymentMode(projectID string, mode domain.DeploymentMode) error {
+	switch mode {
+	case "", domain.ModeK8s, domain.ModeDocker:
+		return nil
+	default:
+		return fmt.Errorf("%w: project %q is %q", ErrUnsupportedDeploymentMode, projectID, mode)
+	}
+}
 
 // InstanceStore persists database instance metadata and credentials.
 type InstanceStore interface {

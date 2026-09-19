@@ -132,16 +132,16 @@ func TestPauseService_Pause_AlreadyPaused_NoOp(t *testing.T) {
 	}
 }
 
-func TestPauseService_Pause_BYOC_Refused(t *testing.T) {
+func TestPauseService_Pause_ModeWithoutPauser_Refused(t *testing.T) {
 	svc, store, _, _ := setupPauseTest(t)
 	store.Create(&domain.DatabaseInstance{
-		ProjectID: "byoc-1", OrgID: "o", Status: "ACTIVE",
-		DeploymentMode: domain.ModeBYOC,
+		ProjectID: "unwired-1", OrgID: "o", Status: "ACTIVE",
+		DeploymentMode: domain.DeploymentMode("unwired"),
 	})
 
-	err := svc.Pause(context.Background(), "byoc-1", domain.PauseReasonManual)
+	err := svc.Pause(context.Background(), "unwired-1", domain.PauseReasonManual)
 	if err == nil {
-		t.Fatal("BYOC must refuse pause — operator owns the DB lifecycle")
+		t.Fatal("a mode with no pauser wired must refuse pause, not silently succeed")
 	}
 	if !errors.Is(err, ErrPauseUnsupported) {
 		t.Errorf("expected ErrPauseUnsupported, got %v", err)

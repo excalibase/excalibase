@@ -13,7 +13,7 @@ curl -X POST http://localhost:24005/api/provision \
 ```
 
 - **9-stage provisioning pipeline** — namespace, CRD deployment, pod readiness, credential extraction, backup config, metrics setup, watcher deployment, role creation
-- **Three deployment modes per project** — Kubernetes (CNPG operator on any distro: EKS/GKE/AKS, RKE2, or single-node k0s/k3s/MicroK8s including rootless), Docker (local socket or remote daemon over TLS, Dokploy/CapRover-style), or BYOC (register an external DB you already manage). K8s vs Docker is a real trade-off: K8s provides ServiceAccount + Role + namespace isolation, Docker is operationally simpler but daemon access is root-equivalent and there's no per-project isolation enforced by the platform.
+- **Two deployment modes per project** — Kubernetes (CNPG operator on any distro: EKS/GKE/AKS, RKE2, or single-node k0s/k3s/MicroK8s including rootless) or Docker (local socket or remote daemon over TLS, Dokploy/CapRover-style). K8s vs Docker is a real trade-off: K8s provides ServiceAccount + Role + namespace isolation, Docker is operationally simpler but daemon access is root-equivalent and there's no per-project isolation enforced by the platform.
 - **Self-hosted or cloud** — `DEPLOYMENT_MODE=selfhosted` (Postgres store + Postgres vault, single org) or `cloud` (Postgres store + Postgres vault or remote HTTP vault, multi-tenant + tier enforcement)
 - **3 tiers** — FREE (1 pod), STANDARD (3 pods + HA), ENTERPRISE (5 pods)
 - **Real metrics** — per-pod CPU/memory from metrics-server + CNPG database metrics from port 9187
@@ -24,13 +24,20 @@ curl -X POST http://localhost:24005/api/provision \
 - **Edge functions** — per-project Deno workers with multi-file bundling (esbuild), secrets, log streaming, public invoke at `/functions/v1/{projectId}/{name}`
 - **Vault** — Shamir secret sharing for credentials, AES-256-GCM at rest; runs in-process (Postgres-backed) or as a standalone HTTP service
 
+## Using the engine with your own database
+
+The platform hosts the databases and the apps it provisions, so a database
+you run yourself is not a project here. To put the API engine in front of
+a database you already operate, run the open-source engine standalone —
+see [github.com/excalibase/excalibase-graphql](https://github.com/excalibase/excalibase-graphql).
+
 ## Architecture
 
 ```
 server-go/       Go backend (chi router, client-go, Docker SDK)
 ├── cmd/server/    Entry point, router wiring, mode selection
 ├── internal/
-│   ├── handler/     HTTP handlers (auth, orgs, provisioning, BYOC, schema,
+│   ├── handler/     HTTP handlers (auth, orgs, provisioning, schema,
 │   │                edge functions, realtime, setup, vaultapi, etc.)
 │   ├── service/     Business logic (provisioning, metrics, backup, migrations,
 │   │                snapshots, alerting, PgDog notifier)
@@ -210,7 +217,6 @@ PATs expire: a request with an expired token gets `401 {"error":"token expired",
 |--------|----------|------|-------------|
 | GET | `/api/provision` | Yes | List all instances |
 | POST | `/api/provision` | Yes | Provision new database (K8s or Docker) |
-| POST | `/api/provision/byoc` | Yes | Register an externally managed database (no provisioning) |
 | POST | `/api/provision/estimate` | Yes | Cost estimate |
 | GET | `/api/provision/{id}` | Yes | Instance status |
 | DELETE | `/api/provision/{id}` | Yes | Delete instance (purges vault paths under `projects/{id}/`). Optional body `{"confirmDeleteBackups": true}` also deletes the project's backup objects in R2/S3 after the instance is gone; absent/false keeps them |
@@ -339,12 +345,6 @@ Error messages are sanitized — PostgreSQL internal details are stripped from 5
 | `DEPLOYMENT_MODE` | `selfhosted` | `selfhosted` or `cloud`. Cloud requires `PLATFORM_DB_URL` and enables tier enforcement + multi-org. |
 | `PUBLIC_BASE_URL` | `https://api.excalibase.io` | Base URL emitted in SDK snippets and function invoke URLs |
 
-**BYOC (bring-your-own Postgres)**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BYOC_EGRESS_ALLOWLIST` | | Optional egress allowlist for BYOC targets: comma-separated CIDRs, IPs, hostnames or `*.suffix` wildcards (e.g. `203.0.113.0/24, *.rds.amazonaws.com`). Empty = any public address. Loopback, RFC-1918, link-local, ULA, CGNAT and cloud-metadata ranges are always refused, and the same check runs at every dial (DNS rebinding is refused at connect time). A malformed list stops the server at boot. See `server-go/internal/byoc`. |
-
 **Storage**
 
 | Variable | Default | Description |
@@ -420,7 +420,7 @@ go test ./internal/... -race -cover -timeout 7m
 cd frontend && npx playwright test
 ```
 
-16 Go packages (84 test files), ~25 Postgres integration tests, ~45 k8s tests, 26 Playwright E2E spec files (~120 tests, including BYOC and Docker-mode flows). Integration tests use testcontainers-go (real PostgreSQL + k3s in Docker).
+16 Go packages (84 test files), ~25 Postgres integration tests, ~45 k8s tests, 25 Playwright E2E spec files (~115 tests, including Docker-mode flows). Integration tests use testcontainers-go (real PostgreSQL + k3s in Docker).
 
 ## Tech Stack
 

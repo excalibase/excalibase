@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/excalibase/provisioning-poc/internal/byoc"
+	"github.com/excalibase/provisioning-poc/internal/publicaddr"
 )
 
 // ErrInvalidEgressHost marks an allowlist entry the runtime must not be given.
@@ -87,7 +87,7 @@ func validateEgressHost(entry string) error {
 		return fmt.Errorf("%w: %q — only a leading \"*.\" wildcard is supported", ErrInvalidEgressHost, entry)
 	}
 	if addr, isLiteral := parseEgressLiteral(host); isLiteral {
-		if err := byoc.ClassifyAddr(addr); err != nil {
+		if err := publicaddr.ClassifyAddr(addr); err != nil {
 			return fmt.Errorf("%w: %q is not a public address", ErrInvalidEgressHost, entry)
 		}
 		return nil
@@ -134,7 +134,7 @@ func validateEgressHostname(entry, host string) error {
 	if _, isLiteral := parseEgressLiteral(host); isLiteral {
 		return fmt.Errorf("%w: %q", ErrInvalidEgressHost, entry)
 	}
-	if err := byoc.ValidateHostSyntax(host); err != nil {
+	if err := publicaddr.ValidateHostSyntax(host); err != nil {
 		return fmt.Errorf("%w: %q is not a public hostname", ErrInvalidEgressHost, entry)
 	}
 	return nil

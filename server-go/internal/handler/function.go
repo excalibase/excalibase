@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/excalibase/provisioning-poc/internal/byoc"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
@@ -97,13 +96,6 @@ type FunctionHandler struct {
 	// = the allowlist API is unavailable and runtimes get defaults only.
 	egressStore    edgefn.EgressStore
 	egressDefaults []string
-
-	// egressGuard validates and pins BYOC database hosts before their DSN is
-	// handed to the runtime (EXC-359); nil → byoc.Default(). pins remembers
-	// the address each BYOC project was last deployed with, see function_byoc.go.
-	egressGuard *byoc.Guard
-	pinMu       sync.Mutex
-	pins        map[string]byocPin
 
 	// requireAud / audPrefix implement the EXC-11 audience binding. Set at
 	// construction to fail closed; see SetAudienceRequirement.
@@ -430,14 +422,12 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) (str
 //   - ORG_SLUG     — the owning org's slug, omitted if not resolvable
 //   - DB_URL       — postgres DSN for the project's database (excalibase_app
 //     role). Sourced from vault at projects/{projectId}/credentials/excalibase_app.
-//     Absent if vault is sealed or the role doesn't exist. For BYOC projects
-//     the authority is the guard-validated IP, with DB_HOST carrying the
-//     hostname for TLS and BYOC_PINNED=1 marking the pin (EXC-359).
+//     Absent if vault is sealed or the role doesn't exist.
 //   - ANON_KEY     — JWT for the anon role from
 //     projects/{projectId}/credentials/jwt_keys/anon_token.
 //   - SERVICE_KEY  — JWT for the service role (bypasses RLS) from
 //     projects/{projectId}/credentials/jwt_keys/service_token.
-func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) (map[string]string, error) {
+func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[string]string {
 	base := h.publicBaseURL
 	if base == "" {
 		base = "https://api.excalibase.io"
@@ -450,15 +440,9 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) (map
 		env["EXCALIBASE_ORG_SLUG"] = slug
 	}
 
-	// DB_URL — build from vault-stored app credentials if available. A BYOC
-	// project whose host no longer resolves to a public address is refused
-	// here, so nothing reaches the runtime (EXC-359).
+	// DB_URL — build from vault-stored app credentials if available.
 	if h.secrets != nil {
-		dbEnv, err := h.buildDBEnv(ctx, projectID)
-		if err != nil {
-			return nil, err
-		}
-		maps.Copy(env, dbEnv)
+		maps.Copy(env, h.buildDBEnv(projectID))
 	}
 
 	// ANON_KEY + SERVICE_KEY — fetched from vault where the auth service
@@ -473,36 +457,31 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) (map
 		}
 	}
 
-	return env, nil
+	return env
 }
 
-// buildDBEnv returns the database env entries for a deploy: EXCALIBASE_DB_URL
-// for every project with app credentials in vault, plus the BYOC pin markers
-// (see pinnedDBEnv) when the database is externally managed. Missing
-// credentials yield no entries; only a refused BYOC pin is an error.
-func (h *FunctionHandler) buildDBEnv(ctx context.Context, projectID string) (map[string]string, error) {
+// buildDBEnv returns EXCALIBASE_DB_URL for a project with app credentials in
+// vault. Missing credentials yield no entries.
+func (h *FunctionHandler) buildDBEnv(projectID string) map[string]string {
 	if h.vault == nil {
-		return nil, nil
+		return nil
 	}
 	path := fmt.Sprintf("projects/%s/credentials/excalibase_app", projectID)
 	creds, err := h.vault.Get(path)
 	if err != nil || creds == nil {
-		return nil, nil
+		return nil
 	}
 	target := dbTarget{
 		host: creds["host"], port: creds["port"],
 		user: creds["username"], pass: creds["password"], db: creds["database"],
 	}
 	if target.host == "" || target.user == "" || target.db == "" {
-		return nil, nil
+		return nil
 	}
 	if target.port == "" {
 		target.port = "5432"
 	}
-	if byoc.IsBYOC(h.instanceStore, projectID) {
-		return h.pinnedDBEnv(ctx, projectID, target)
-	}
-	return map[string]string{"EXCALIBASE_DB_URL": target.url(target.host)}, nil
+	return map[string]string{"EXCALIBASE_DB_URL": target.url(target.host)}
 }
 
 // dbTarget is the vault-stored app credential set a deploy DSN is built from.
@@ -510,12 +489,11 @@ type dbTarget struct {
 	host, port, user, pass, db string
 }
 
-// url renders the DSN with dialHost in the authority. Intentionally
-// sslmode=require — managed project DBs terminate TLS inside the cluster and
-// BYOC keeps the same mode with SNI carried separately (EXCALIBASE_DB_HOST).
-func (t dbTarget) url(dialHost string) string {
+// url renders the DSN. Intentionally sslmode=require — managed project
+// databases terminate TLS inside the cluster.
+func (t dbTarget) url(host string) string {
 	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=require",
-		t.user, t.pass, net.JoinHostPort(dialHost, t.port), t.db)
+		t.user, t.pass, net.JoinHostPort(host, t.port), t.db)
 }
 
 // readVaultString reads a vault path and returns a single string value. The
@@ -608,10 +586,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	env, ok := h.createEnv(w, r, projectID, fn.ID, cronTx)
-	if !ok {
-		return
-	}
+	env := h.createEnv(r.Context(), projectID, fn.ID)
 
 	client, err := h.runtimeClientFor(r.Context(), projectID)
 	if err != nil {
@@ -643,35 +618,23 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(fn)
 }
 
-// createEnv builds the env for a first deploy. A refused database target
-// (BYOC host rebound to an internal address) aborts the deploy: cron sync and
-// the store record are rolled back and a 400 is written. Unavailable user
-// secrets degrade to builtins only, as before.
-func (h *FunctionHandler) createEnv(w http.ResponseWriter, r *http.Request, projectID, fnID string, cronTx *sql.Tx) (map[string]string, bool) {
-	builtins, err := h.builtinEnv(r.Context(), projectID)
-	if err != nil {
-		_ = rollbackCronSync(cronTx)
-		_ = h.store.Delete(projectID, fnID)
-		httpError(w, "database target refused: "+safeError(err), http.StatusBadRequest)
-		return nil, false
-	}
+// createEnv builds the env for a first deploy. Unavailable user secrets
+// degrade to builtins only.
+func (h *FunctionHandler) createEnv(ctx context.Context, projectID, fnID string) map[string]string {
+	builtins := h.builtinEnv(ctx, projectID)
 	env, err := h.mergeSecrets(projectID, builtins)
 	if err != nil {
 		log.Printf("WARN: build env for %s/%s: %v", projectID, fnID, err)
-		return builtins, true
+		return builtins
 	}
-	return env, true
+	return env
 }
 
 // deployEnv merges the project's user secrets over the platform builtins.
-// Either failure is an error: replay and redeploy must not ship a function
-// without its secrets or with an unpinned BYOC target.
+// A secrets failure is an error: replay and redeploy must not ship a
+// function without its secrets.
 func (h *FunctionHandler) deployEnv(ctx context.Context, projectID string) (map[string]string, error) {
-	builtins, err := h.builtinEnv(ctx, projectID)
-	if err != nil {
-		return nil, err
-	}
-	return h.mergeSecrets(projectID, builtins)
+	return h.mergeSecrets(projectID, h.builtinEnv(ctx, projectID))
 }
 
 func (h *FunctionHandler) mergeSecrets(projectID string, builtins map[string]string) (map[string]string, error) {

@@ -1,4 +1,4 @@
-package byoc
+package publicaddr
 
 import (
 	"errors"

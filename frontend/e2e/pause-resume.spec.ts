@@ -147,17 +147,6 @@ test.describe('Project Pause / Resume', () => {
     await expect(pauseBtn).toBeDisabled();
   });
 
-  test('BYOC project hides the lifecycle section entirely', async ({ page }) => {
-    await mockProjectStatus(page, { status: 'ACTIVE', deploymentMode: 'byoc' });
-
-    await page.goto(SETTINGS_URL);
-    // Lifecycle section is not rendered for BYOC — the platform doesn't
-    // own the workload, so pause/resume don't apply.
-    await expect(page.getByTestId('lifecycle-section')).not.toBeVisible();
-    // Settings page itself still loads.
-    await expect(page.getByText('Danger Zone')).toBeVisible();
-  });
-
   test('Resume click triggers POST and surfaces the new ACTIVE status', async ({ page }) => {
     let getCalls = 0;
     await page.route(`**/api/provision/${PROJECT}*`, (route: Route) => {

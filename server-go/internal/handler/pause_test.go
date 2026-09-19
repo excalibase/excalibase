@@ -125,19 +125,19 @@ func TestPauseHandler_Pause_Idempotent(t *testing.T) {
 	}
 }
 
-func TestPauseHandler_Pause_BYOCRefused(t *testing.T) {
+func TestPauseHandler_Pause_ModeWithoutPauserRefused(t *testing.T) {
 	r, store, _, _ := setupPauseHandler(t)
 	store.Create(&domain.DatabaseInstance{
-		ProjectID: "byoc-1", OrgID: "o", Status: "ACTIVE",
-		DeploymentMode: domain.ModeBYOC,
+		ProjectID: "unwired-1", OrgID: "o", Status: "ACTIVE",
+		DeploymentMode: domain.DeploymentMode("unwired"),
 	})
 
-	req := httptest.NewRequest("POST", "/api/provision/byoc-1/pause", strings.NewReader(`{}`))
+	req := httptest.NewRequest("POST", "/api/provision/unwired-1/pause", strings.NewReader(`{}`))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
 	if w.Code != 400 {
-		t.Errorf("BYOC pause should 400, got %d (body=%s)", w.Code, w.Body.String())
+		t.Errorf("pause on a mode with no pauser should 400, got %d (body=%s)", w.Code, w.Body.String())
 	}
 }
 

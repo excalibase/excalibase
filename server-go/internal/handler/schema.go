@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/excalibase/provisioning-poc/internal/byoc"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -44,26 +43,11 @@ type SchemaHandler struct {
 	dbHostOverride    string // if set, overrides vault host (for local dev with port-forward)
 	dbPortOverride    string // if set, overrides vault port
 	dbSSLModeOverride string // if set, overrides sslmode (for testing)
-	// instances + egressGuard route BYOC projects through the SSRF guard at
-	// dial time (see package byoc). Without an instance store every project
-	// is treated as managed and dialled directly.
-	instances   storage.InstanceStore
-	egressGuard *byoc.Guard
+	instances storage.InstanceStore
 }
 
-// SetInstanceStore lets getDB tell BYOC projects apart from managed ones.
-// main.go must wire it: without it the BYOC dial guard never engages.
+// SetInstanceStore lets the handler resolve a project's instance row.
 func (h *SchemaHandler) SetInstanceStore(s storage.InstanceStore) { h.instances = s }
-
-// SetEgressGuard installs the operator-configured BYOC guard; nil → byoc.Default().
-func (h *SchemaHandler) SetEgressGuard(g *byoc.Guard) { h.egressGuard = g }
-
-func (h *SchemaHandler) egress() *byoc.Guard {
-	if h.egressGuard != nil {
-		return h.egressGuard
-	}
-	return byoc.Default()
-}
 
 func NewSchemaHandler(v vaultclient.VaultClient) *SchemaHandler {
 	h := &SchemaHandler{
@@ -392,7 +376,7 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		host, port, creds["username"], creds["password"], creds["database"], sslmode)
 
-	db, err := h.egress().OpenProjectDB(h.instances, projectId, connStr)
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, err
 	}

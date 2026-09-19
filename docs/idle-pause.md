@@ -55,8 +55,8 @@ the platform walks every `ACTIVE` project whose tier has
   again.
 
 A project resumed less than 24 hours ago is never paused, whatever its history.
-Each pause is audited as `project.idle_pause`. BYOC projects have no pauser and
-are skipped by `PauseService`.
+Each pause is audited as `project.idle_pause`. A project whose deployment mode
+has no pauser wired is skipped by `PauseService`.
 
 ## Configuration
 
