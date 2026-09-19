@@ -21,6 +21,8 @@ type fakePauser struct {
 	resumeErr   error
 }
 
+func (f *fakePauser) StopReplication(_ context.Context, _, _ string) error { return nil }
+
 func (f *fakePauser) Pause(_ context.Context, _, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -41,12 +43,18 @@ type fakeBackupTrigger struct {
 	err   error
 }
 
+func (f *fakeBackupTrigger) BackupsConfigured(string) (bool, error) { return true, nil }
+
+func (f *fakeBackupTrigger) BackupStatus(_ context.Context, _, _ string) (string, error) {
+	return "COMPLETED", nil
+}
+
 func (f *fakeBackupTrigger) TriggerManualBackup(_ context.Context, _ string) (map[string]interface{}, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
-	return map[string]interface{}{"status": "COMPLETED"}, nil
+	return map[string]interface{}{"id": "bk-1", "status": "IN_PROGRESS"}, nil
 }
 
 func setupPauseTest(t *testing.T) (*PauseService, *storage.FileSystemStore, *fakePauser, *fakeBackupTrigger) {

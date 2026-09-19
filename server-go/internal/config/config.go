@@ -113,6 +113,10 @@ type AppConfig struct {
 	// database to be observed ready before it gives up and compensates.
 	RestoreReadyTimeout time.Duration
 
+	// PauseTimeout bounds each observed wait inside a pause: the pre-pause
+	// backup finishing and the project's database stopping.
+	PauseTimeout time.Duration
+
 	// AutoPauseEnabled runs the hourly idle-pause sweep (EXC-280): projects on
 	// tiers with autoPauseAfterDays > 0 are warned at N-1 idle days and paused
 	// at N. EXCALIBASE_AUTOPAUSE_ENABLED overrides; defaults on in cloud mode,
@@ -198,6 +202,7 @@ func Load() AppConfig {
 		DockerCertPath:          envOr("DOCKER_CERT_PATH", ""),
 		DockerTLSVerify:         envOr("DOCKER_TLS_VERIFY", "") != "",
 		RestoreReadyTimeout:     envDuration("EXCALIBASE_RESTORE_READY_TIMEOUT", defaultRestoreReadyTimeout),
+		PauseTimeout:            envDuration("EXCALIBASE_PAUSE_TIMEOUT", defaultPauseTimeout),
 	}
 }
 
@@ -226,9 +231,14 @@ func parseCORSOrigins(raw string) []string {
 // observed ready. Restores replay WAL, so the budget is generous.
 const defaultRestoreReadyTimeout = 15 * time.Minute
 
+// defaultPauseTimeout bounds each observed wait inside a pause. Stopping a
+// busy database takes minutes: the pre-pause backup has to finish and
+// postgres has to shut down cleanly.
+const defaultPauseTimeout = 10 * time.Minute
+
 // parseDuration reads a Go duration, treating an empty value as "not set".
 // A value that is present but unreadable is an error: silently falling back
-// would run a restore on a budget the operator did not choose.
+// would run the platform on a budget the operator did not choose.
 func parseDuration(raw string, fallback time.Duration) (time.Duration, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

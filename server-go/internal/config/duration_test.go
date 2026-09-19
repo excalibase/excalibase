@@ -41,3 +41,12 @@ func TestLoadReadsTheRestoreReadyTimeout(t *testing.T) {
 		t.Errorf("RestoreReadyTimeout: got %v, want 42m", got)
 	}
 }
+
+func TestLoadReadsThePauseTimeout(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.excalibase.io")
+	t.Setenv("EXCALIBASE_PAUSE_TIMEOUT", "25m")
+
+	if got := Load().PauseTimeout; got != 25*time.Minute {
+		t.Errorf("PauseTimeout: got %v, want 25m", got)
+	}
+}

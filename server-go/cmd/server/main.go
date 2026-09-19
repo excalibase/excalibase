@@ -200,6 +200,10 @@ func runServer(cfg config.AppConfig) {
 			Instances: store,
 			Pausers:   pausers,
 			Backups:   deps.backupHandler.Service(),
+			// A resume puts the CDC watcher back only after the primary is
+			// serving; the control plane holds its credentials (EXC-363).
+			Replication: provSvc,
+			Poller:      service.NewPausePoller(cfg.PauseTimeout),
 		})
 		deps.provHandler.SetPauseService(pauseSvc)
 		deps.provHandler.SetInstanceStore(store)

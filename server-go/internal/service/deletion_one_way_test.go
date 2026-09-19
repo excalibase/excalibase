@@ -89,6 +89,8 @@ func TestResumeLosesToAnInFlightDeletion(t *testing.T) {
 // the final one — the window the review's interleaving needs.
 type orderedPauser struct{ before func() }
 
+func (p *orderedPauser) StopReplication(context.Context, string, string) error { return nil }
+
 func (p *orderedPauser) Pause(context.Context, string, string) error { return nil }
 func (p *orderedPauser) Resume(context.Context, string, string) error {
 	p.before()

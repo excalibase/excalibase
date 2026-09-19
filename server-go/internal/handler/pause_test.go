@@ -27,6 +27,8 @@ type fakePauserForHandler struct {
 	resumeErr   error
 }
 
+func (f *fakePauserForHandler) StopReplication(_ context.Context, _, _ string) error { return nil }
+
 func (f *fakePauserForHandler) Pause(_ context.Context, _, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -41,11 +43,24 @@ func (f *fakePauserForHandler) Resume(_ context.Context, _, _ string) error {
 }
 
 // fakeBackupTriggerForHandler — counts trigger calls.
-type fakeBackupTriggerForHandler struct{ calls int }
+type fakeBackupTriggerForHandler struct {
+	calls int
+	// status overrides what the pre-pause backup is observed to report.
+	status string
+}
+
+func (f *fakeBackupTriggerForHandler) BackupsConfigured(string) (bool, error) { return true, nil }
+
+func (f *fakeBackupTriggerForHandler) BackupStatus(_ context.Context, _, _ string) (string, error) {
+	if f.status != "" {
+		return f.status, nil
+	}
+	return "COMPLETED", nil
+}
 
 func (f *fakeBackupTriggerForHandler) TriggerManualBackup(_ context.Context, _ string) (map[string]interface{}, error) {
 	f.calls++
-	return map[string]interface{}{"status": "COMPLETED"}, nil
+	return map[string]interface{}{"id": "bk-1", "status": "IN_PROGRESS"}, nil
 }
 
 func setupPauseHandler(t *testing.T) (*chi.Mux, *storage.FileSystemStore, *fakePauserForHandler, *fakeBackupTriggerForHandler) {
@@ -70,6 +85,18 @@ func setupPauseHandler(t *testing.T) (*chi.Mux, *storage.FileSystemStore, *fakeP
 	r := chi.NewRouter()
 	r.Route("/api/provision", func(r chi.Router) { h.Routes(r) })
 	return r, store, pauser, bk
+}
+
+// seedPausableProject creates the project the observed-pause handler tests
+// act on.
+func seedPausableProject(t *testing.T, store *storage.FileSystemStore) {
+	t.Helper()
+	if err := store.Create(&domain.DatabaseInstance{
+		ProjectID: "pause-db", OrgID: "o", Status: "ACTIVE",
+		DeploymentMode: domain.ModeDocker, Tier: domain.Free, Namespace: "container-pause-db",
+	}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
 }
 
 func TestPauseHandler_Pause_HappyPath(t *testing.T) {

@@ -37,6 +37,11 @@ type BackupAdapter interface {
 	// untrusted request data — see DOCKER_BACKUP_IMPL.md §8.1 (IDOR).
 	List(ctx context.Context, inst *domain.DatabaseInstance) ([]BackupRef, error)
 
+	// BackupsConfigured reports whether this adapter has somewhere to write
+	// a project's backups. A caller that must not proceed without a backup
+	// asks first rather than discovering it from a failure.
+	BackupsConfigured() bool
+
 	// Restore provisions a NEW project seeded from a backup. The source
 	// project is untouched. Returns the new project's provisioning
 	// response with status RESTORING.

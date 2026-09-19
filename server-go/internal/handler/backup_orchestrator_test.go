@@ -208,6 +208,8 @@ type recordingBackupAdapter struct {
 func (r *recordingBackupAdapter) Configure(_ context.Context, _ *domain.DatabaseInstance, _ string, _ int) error {
 	return nil
 }
+func (r *recordingBackupAdapter) BackupsConfigured() bool { return true }
+
 func (r *recordingBackupAdapter) TriggerManual(_ context.Context, _ *domain.DatabaseInstance) (service.BackupRef, error) {
 	return service.BackupRef{}, nil
 }

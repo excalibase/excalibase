@@ -33,6 +33,8 @@ func (f *fakeAdapter) Configure(_ context.Context, _ *domain.DatabaseInstance, _
 	return f.configureErr
 }
 
+func (f *fakeAdapter) BackupsConfigured() bool { return true }
+
 func (f *fakeAdapter) TriggerManual(_ context.Context, inst *domain.DatabaseInstance) (BackupRef, error) {
 	f.muCount.Lock()
 	f.triggerCalls++

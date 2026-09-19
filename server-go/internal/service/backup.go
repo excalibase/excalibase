@@ -133,6 +133,44 @@ func (s *BackupService) ListBackups(projectID string) ([]map[string]interface{},
 	return result, nil
 }
 
+// BackupsConfigured answers, for one project, whether the platform has
+// anywhere to write its backups.
+func (s *BackupService) BackupsConfigured(projectID string) (bool, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return false, fmt.Errorf("project not found: %s", projectID)
+	}
+	adapter, err := resolveAdapter(s.adapters, inst)
+	if err != nil {
+		return false, err
+	}
+	return adapter.BackupsConfigured(), nil
+}
+
+// BackupStatus reports one backup's current status. Listing is what syncs a
+// backup record with what the engine says about it, so this is also how a
+// caller watching a backup sees it finish.
+func (s *BackupService) BackupStatus(ctx context.Context, projectID, backupID string) (string, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return "", fmt.Errorf("project not found: %s", projectID)
+	}
+	adapter, err := resolveAdapter(s.adapters, inst)
+	if err != nil {
+		return "", err
+	}
+	refs, err := adapter.List(ctx, inst)
+	if err != nil {
+		return "", err
+	}
+	for _, ref := range refs {
+		if ref.ID == backupID {
+			return ref.Status, nil
+		}
+	}
+	return "", fmt.Errorf("backup %s not found for project %s", backupID, projectID)
+}
+
 func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {

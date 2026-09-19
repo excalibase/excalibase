@@ -22,6 +22,9 @@ type mockDockerClient struct {
 	copyCalls  int        // counter for CopyToContainer calls
 	copyDst    string     // last CopyToContainer destination path
 	copyBytes  int64      // total bytes drained from CopyToContainer streams
+	// stopKeepsRunning models a container the daemon accepts a stop for but
+	// which is still running while postgres shuts down.
+	stopKeepsRunning bool
 }
 
 func newMockDocker() *mockDockerClient {
@@ -50,7 +53,9 @@ func (m *mockDockerClient) StopContainer(_ context.Context, containerID string) 
 	if m.failOn == "stop" {
 		return fmt.Errorf("stop failed")
 	}
-	m.containers[containerID] = "stopped"
+	if !m.stopKeepsRunning {
+		m.containers[containerID] = "stopped"
+	}
 	m.stops++
 	return nil
 }

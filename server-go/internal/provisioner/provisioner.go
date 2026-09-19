@@ -27,7 +27,16 @@ type DatabaseProvisioner interface {
 // that lack pause just don't implement this interface and
 // the pauseService returns ErrPauseUnsupported.
 type Pauser interface {
+	// StopReplication ends the tenant watcher's replication session.
+	// CNPG's smart shutdown waits on open replication connections, so a
+	// watcher still streaming holds the primary up for minutes (EXC-363).
+	StopReplication(ctx context.Context, namespace, projectID string) error
+	// Pause stops the workload and returns only once no database pod is
+	// running. A Terminating pod still counts as running: it still holds
+	// the CPU request cluster capacity admission plans against.
 	Pause(ctx context.Context, namespace, projectID string) error
+	// Resume starts the workload and returns only once the database is
+	// serving again.
 	Resume(ctx context.Context, namespace, projectID string) error
 }
 
