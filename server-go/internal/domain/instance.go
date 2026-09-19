@@ -74,6 +74,16 @@ type DatabaseInstance struct {
 	FailureStep   string            `json:"failureStep,omitempty"`
 	RollbackLog   string            `json:"rollbackLog,omitempty"` // JSON array of cleanup results
 
+	// Deletion progress. Both empty until a teardown fails: DeletionStep is
+	// the step that did not complete and DeletionError why, so a retry of
+	// the same DELETE resumes from an observable point instead of guessing.
+	DeletionStep  string `json:"deletionStep,omitempty"`
+	DeletionError string `json:"deletionError,omitempty"`
+	// DeletionDeleteBackups records the backup decision the deletion was
+	// started with. It is part of the deletion state, not of the request, so
+	// a retry cannot drop a purge the first attempt was told to perform.
+	DeletionDeleteBackups bool `json:"deletionDeleteBackups,omitempty"`
+
 	// Network
 	NetworkPolicyEnabled *bool `json:"networkPolicyEnabled,omitempty"`
 
@@ -126,4 +136,42 @@ func (inst *DatabaseInstance) WALGEnv() []string {
 	// tests that don't need real S3 don't break; real credential
 	// injection lives in the production wiring path.
 	return []string{}
+}
+
+// Clone returns an independent copy of the instance. A store hands readers a
+// clone rather than the row it holds: a shallow copy would still share every
+// pointer field, so a caller that wrote through inst.DeletionProtection or a
+// timestamp would rewrite the stored row without going through Update — and
+// so slip past the checks Update makes, the deletion door among them.
+//
+// Every pointer field must be copied here; instance_clone_test.go walks the
+// struct by reflection and fails when a newly added one is missed.
+func (inst *DatabaseInstance) Clone() *DatabaseInstance {
+	if inst == nil {
+		return nil
+	}
+	copied := *inst
+	copied.ID = clonePtr(inst.ID)
+	copied.Port = clonePtr(inst.Port)
+	copied.DeletionProtection = clonePtr(inst.DeletionProtection)
+	copied.PoolerEnabled = clonePtr(inst.PoolerEnabled)
+	copied.NetworkPolicyEnabled = clonePtr(inst.NetworkPolicyEnabled)
+	copied.AutoMinorVersionUpgrade = clonePtr(inst.AutoMinorVersionUpgrade)
+	copied.BackupEnabled = clonePtr(inst.BackupEnabled)
+	copied.MaintenanceWindowDurationMinutes = clonePtr(inst.MaintenanceWindowDurationMinutes)
+	copied.BackupRetentionDays = clonePtr(inst.BackupRetentionDays)
+	copied.LastActiveAt = clonePtr(inst.LastActiveAt)
+	copied.CreatedAt = clonePtr(inst.CreatedAt)
+	copied.UpdatedAt = clonePtr(inst.UpdatedAt)
+	copied.LastHealthCheck = clonePtr(inst.LastHealthCheck)
+	return &copied
+}
+
+// clonePtr copies what a pointer points at, keeping nil as nil.
+func clonePtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	copied := *p
+	return &copied
 }

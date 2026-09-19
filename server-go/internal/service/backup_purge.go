@@ -76,6 +76,11 @@ func AWSObjectDeleterFactory(usePathStyle bool) ObjectDeleterFactory {
 	}
 }
 
+// DockerKeyPrefix is the docker-mode key prefix this purger deletes under.
+// Exposed so callers can name a project's retained backups without repeating
+// the layout.
+func (p *BackupPurger) DockerKeyPrefix() string { return p.dockerKeyPrefix }
+
 // ProjectBackupPrefix computes the object prefix holding a project's backups:
 //
 //	k8s    → {projectID}/cloud/           (Barman destinationPath/serverName)

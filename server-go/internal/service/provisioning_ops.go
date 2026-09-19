@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -252,9 +251,13 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 		return nil, fmt.Errorf("rotate password: %w", err)
 	}
 
+	// The database already has the new password. Failing to store it leaves
+	// the platform holding a credential that no longer opens the database,
+	// so the caller has to hear about it — and a refusal means a teardown
+	// owns the project and this rotation touched a database on its way out.
 	inst.Password = newPassword
 	if err := s.store.Update(inst); err != nil {
-		log.Printf("WARN: failed to persist instance state: %v", err)
+		return nil, fmt.Errorf("persist rotated credentials: %w", err)
 	}
 
 	return s.GetCredentials(projectID)

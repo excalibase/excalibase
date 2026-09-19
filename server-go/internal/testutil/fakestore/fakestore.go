@@ -40,9 +40,12 @@ func (s *Instances) Update(inst *domain.DatabaseInstance) error {
 	if !ok {
 		return storage.ErrProjectNotFound
 	}
-	updated := *inst
+	if err := storage.CheckUpdatable(existing); err != nil {
+		return err
+	}
+	updated := inst.Clone()
 	updated.OrgID = existing.OrgID
-	s.Items[inst.ProjectID] = &updated
+	s.Items[inst.ProjectID] = updated
 	return nil
 }
 
@@ -51,7 +54,11 @@ func (s *Instances) FindByProjectID(projectID string) (*domain.DatabaseInstance,
 	if s.Err != nil {
 		return nil, s.Err
 	}
-	return s.Items[projectID], nil
+	inst, ok := s.Items[projectID]
+	if !ok {
+		return nil, nil
+	}
+	return inst.Clone(), nil
 }
 
 // FindByOwner returns every instance whose OwnerID matches.
@@ -59,7 +66,7 @@ func (s *Instances) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, err
 	out := make([]*domain.DatabaseInstance, 0)
 	for _, inst := range s.Items {
 		if inst.OwnerID == ownerID {
-			out = append(out, inst)
+			out = append(out, inst.Clone())
 		}
 	}
 	return out, nil
@@ -69,7 +76,7 @@ func (s *Instances) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, err
 func (s *Instances) FindAll() ([]*domain.DatabaseInstance, error) {
 	out := make([]*domain.DatabaseInstance, 0, len(s.Items))
 	for _, inst := range s.Items {
-		out = append(out, inst)
+		out = append(out, inst.Clone())
 	}
 	return out, nil
 }
@@ -165,4 +172,33 @@ func (s *Tokens) FindUserByID(_ context.Context, id string) (*domain.User, error
 		return nil, errors.New("user not found")
 	}
 	return u, nil
+}
+
+// BeginDeletion claims the project for teardown. See storage.InstanceStore.
+func (s *Instances) BeginDeletion(projectID string, deleteBackups *bool) (bool, error) {
+	existing, ok := s.Items[projectID]
+	if !ok {
+		return false, storage.ErrProjectNotFound
+	}
+	claimed := existing.Clone()
+	effective, err := storage.ApplyBeginDeletion(claimed, deleteBackups)
+	if err != nil {
+		return false, err
+	}
+	s.Items[projectID] = claimed
+	return effective, nil
+}
+
+// RecordDeletionFailure stores how far a teardown got. See storage.InstanceStore.
+func (s *Instances) RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error {
+	existing, ok := s.Items[projectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	failed := existing.Clone()
+	if err := storage.ApplyDeletionFailure(failed, status, step, reason); err != nil {
+		return err
+	}
+	s.Items[projectID] = failed
+	return nil
 }

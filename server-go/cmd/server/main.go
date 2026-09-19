@@ -141,6 +141,10 @@ func runServer(cfg config.AppConfig) {
 
 	provSvc, provCleanup := buildProvisioningService(cfg, store, sqlStore, factory, k8sClient, vc, dockerClientRef)
 	defer provCleanup()
+	// Function invocation caches "is this project live" for a few seconds so
+	// it does not read the platform database per request; this tells it the
+	// moment a project is claimed for teardown.
+	provSvc.AddDeletionObserver(fnHandler)
 
 	deps := buildHandlerDeps(handlerDepsArgs{
 		cfg:          cfg,
@@ -278,7 +282,7 @@ func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 			// no-op stop: scheduler was never started, nothing to release.
 		}
 	}
-	var lock service.LeaderLock = service.AlwaysLeader{}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
 		// FNV-1a("excalibase-backup-scheduler") — distinct from any
 		// other advisory lock the platform might use.
@@ -322,7 +326,7 @@ func startIdlePauseScheduler(
 		log.Println("WARN: idle auto-pause enabled but no pause service is wired — sweep not started")
 		return noop
 	}
-	var lock service.LeaderLock = service.AlwaysLeader{}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
 		// FNV-1a("excalibase-idle-pause") — distinct from the backup scheduler's key.
 		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), 0x6168_0acb_1d1e_9a05)
@@ -558,6 +562,14 @@ func buildProvisioningService(
 		provSvc.SetDefaultDeploymentMode(domain.ModeDocker)
 	} else {
 		provSvc.SetDefaultDeploymentMode(domain.ModeK8s)
+	}
+
+	// Several control-plane replicas share one platform database, so the
+	// teardown claim has to be visible to all of them: a per-project Postgres
+	// advisory lock, released automatically if the holder's connection dies.
+	if pg, ok := sqlStore.(*pgstore.Store); ok {
+		provSvc.SetDeletionClaimer(service.NewAdvisoryDeletionClaimer(
+			func(key int64) storage.LeaderLock { return pgstore.NewAdvisoryLock(pg.DB(), key) }))
 	}
 
 	provSvc.SetBackupDefaults(backupDefaultsFromEnv())
@@ -1356,11 +1368,40 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 			log.Fatalf("docker provisioner: %v", err)
 		}
 		log.Printf("Provisioner mode: docker (host=%s)", cfg.DockerHost)
-		return provisioner.NewFactory(provisioner.NewDockerPostgreSQLProvisioner(dockerClient)), dockerClient
+		dockerProvisioner := provisioner.NewDockerPostgreSQLProvisioner(dockerClient)
+		dockerProvisioner.SetDeletionPoller(deletionPoller())
+		return provisioner.NewFactory(dockerProvisioner), dockerClient
 	}
 	log.Println("Provisioner mode: k8s (CNPG)")
 	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
+	pgProvisioner.SetDeletionPoller(deletionPoller())
 	return provisioner.NewFactory(pgProvisioner), nil
+}
+
+// Teardown wait budget. CNPG finalizers plus PVC release routinely take a
+// couple of minutes on a busy node.
+const (
+	deletionPollInterval = 2 * time.Second
+	defaultDeletionWait  = 5 * time.Minute
+)
+
+// deletionPoller bounds how long a teardown waits for the project's
+// resources to actually disappear. Clusters with slow storage detach need a
+// longer budget than the default; DELETION_WAIT_TIMEOUT (a Go duration, e.g.
+// "10m") raises it. An unparseable value is fatal rather than silently
+// falling back — an operator who set it meant it.
+func deletionPoller() provisioner.Poller {
+	poller := provisioner.NewPoller(deletionPollInterval, defaultDeletionWait)
+	raw := os.Getenv("DELETION_WAIT_TIMEOUT")
+	if raw == "" {
+		return poller
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		log.Fatalf("DELETION_WAIT_TIMEOUT must be a positive Go duration, got %q", raw)
+	}
+	poller.Timeout = timeout
+	return poller
 }
 
 // buildPausers extracts the Pauser-implementing provisioners from

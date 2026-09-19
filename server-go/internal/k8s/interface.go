@@ -13,12 +13,26 @@ type KubeClient interface {
 	CreateNamespace(ctx context.Context, name string) error
 	CreateNamespaceWithLabels(ctx context.Context, name string, labels map[string]string) error
 	DeleteNamespace(ctx context.Context, name string) error
+	// NamespaceExists reports whether the namespace object is still present.
+	// A namespace stuck in Terminating still exists, so a teardown that
+	// polls this waits for the operator finalizers to finish.
+	NamespaceExists(ctx context.Context, name string) (bool, error)
+	// ListPVCs returns the names of the PersistentVolumeClaims in a
+	// namespace. Teardown waits for these: a claim outliving its pods still
+	// holds the volume, and a Terminating pod still holds its CPU request,
+	// which is what cluster capacity admission plans against.
+	ListPVCs(ctx context.Context, namespace string) ([]string, error)
 	ApplyCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error
 	GetCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error)
 	// UpdateCRD replaces an existing resource. Use it for objects fetched
 	// via GetCRD (they carry a resourceVersion, which Create rejects).
 	UpdateCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error
 	DeleteCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) error
+	// CRDExists reports whether the named resource is still present. Used to
+	// confirm a database Cluster is really gone before its namespace is
+	// deleted — a namespace removed under a live Cluster wedges the
+	// operator's finalizers.
+	CRDExists(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (bool, error)
 	GetPods(ctx context.Context, namespace string, labelSelector string) ([]corev1.Pod, error)
 	IsPodReady(ctx context.Context, namespace, name string) (bool, error)
 	GetSecret(ctx context.Context, namespace, name string) (map[string][]byte, error)

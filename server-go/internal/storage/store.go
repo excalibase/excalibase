@@ -19,6 +19,51 @@ var ErrProjectExists = errors.New("project id already registered")
 // from a stale view.
 var ErrProjectNotFound = errors.New("project not found")
 
+// ErrProjectDeleting is returned by Update when the stored row is already
+// being torn down. Deletion is a one-way door enforced here rather than by
+// convention: a caller that read the row before the teardown started would
+// otherwise write it back to a usable status — reviving a project whose
+// namespace, cluster and credentials are already going away, and wiping the
+// record of how far the teardown got. Only the deletion flow's own narrow
+// writes may touch such a row.
+var ErrProjectDeleting = errors.New("project is being deleted")
+
+// ErrProjectBusy is returned when a deletion is asked for while the project
+// is still being built. The build creates resources and credentials the
+// teardown would not see, so the two must not overlap.
+var ErrProjectBusy = errors.New("project is busy")
+
+// StaleBuildAfter is how long a PROVISIONING row keeps counting as a live
+// build. The pipeline stamps updated_at on every stage, so a running
+// provision never reaches it; a row that has not moved for this long belongs
+// to a process that is gone, and must stay deletable. Matches the restore
+// orchestrator's staleness window.
+const StaleBuildAfter = 30 * time.Minute
+
+// CheckNotBuilding refuses a deletion claim while a build is in flight,
+// judging "in flight" by how recently the row moved.
+func CheckNotBuilding(projectID, status string, updatedAt, now time.Time) error {
+	if !domain.IsBuildingStatus(status) {
+		return nil
+	}
+	if now.Sub(updatedAt) >= StaleBuildAfter {
+		// The build stopped moving long ago; its process is gone.
+		return nil
+	}
+	return fmt.Errorf("%w: %s is %s", ErrProjectBusy, projectID, status)
+}
+
+// ErrProjectNotDeleting is returned by the deletion flow's narrow writes when
+// the row they name is not being torn down. They exist only to move a
+// teardown forward, so they must never be a second way into a deletion state.
+var ErrProjectNotDeleting = errors.New("project is not being deleted")
+
+// ErrBackupPurgeAlreadyConfirmed is returned when a retried deletion asks to
+// keep backups that an earlier attempt was already told to purge. The first
+// confirmation stands: the objects may already be partly gone, so silently
+// switching to "keep" would report a set of backups that no longer exists.
+var ErrBackupPurgeAlreadyConfirmed = errors.New("this deletion was already confirmed to delete the project's backups")
+
 // ErrUnsupportedDeploymentMode is returned when a stored instance row names a
 // deployment mode the platform does not operate. The platform hosts the
 // databases it provisions, so only k8s and docker are operable; anything else
@@ -37,19 +82,108 @@ func CheckDeploymentMode(projectID string, mode domain.DeploymentMode) error {
 	}
 }
 
+// LeaderLease is one holder's claim on a leader lock. Only its holder can
+// release it, and releasing twice does nothing.
+type LeaderLease interface {
+	Release(ctx context.Context) error
+	// Valid reports whether the lease still holds what it was given. A
+	// holder whose session died must stop believing it leads.
+	Valid(ctx context.Context) bool
+}
+
+// LeaderLock guards multi-replica scheduling. Acquire hands back a lease
+// when this caller now leads, and (nil, false, nil) when another holder
+// already does.
+type LeaderLock interface {
+	Acquire(ctx context.Context) (LeaderLease, bool, error)
+}
+
 // InstanceStore persists database instance metadata and credentials.
 type InstanceStore interface {
 	// Create registers a new project. Returns ErrProjectExists when the
 	// project id is taken.
 	Create(instance *domain.DatabaseInstance) error
 	// Update persists changes to an existing project. It never changes the
-	// project's id or its owning org, and returns ErrProjectNotFound when
-	// the row is absent.
+	// project's id or its owning org, returns ErrProjectNotFound when the
+	// row is absent, and ErrProjectDeleting when the stored row is already
+	// being torn down — the write is refused outright rather than reviving
+	// a project whose resources are going away.
 	Update(instance *domain.DatabaseInstance) error
+	// BeginDeletion claims the project for teardown: it moves the row into
+	// DELETING and records whether the project's backups are to be purged.
+	// deleteBackups nil means the caller expressed no preference, which on a
+	// retry inherits the decision the first attempt recorded — a bare retry
+	// can never drop a purge someone confirmed. It returns the decision now
+	// in force, or ErrBackupPurgeAlreadyConfirmed when the caller asks to
+	// keep backups an earlier attempt was told to delete.
+	BeginDeletion(projectID string, deleteBackups *bool) (bool, error)
+	// RecordDeletionFailure stores how far a teardown got on a row that is
+	// already being deleted. status lets the backup step leave its own retry
+	// marker. It refuses rows that are not being deleted, so it can never be
+	// used to push a live project into a deletion state.
+	RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error
 	FindByProjectID(projectID string) (*domain.DatabaseInstance, error)
 	FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error)
 	FindAll() ([]*domain.DatabaseInstance, error)
 	Delete(projectID string) error
+}
+
+// ApplyBeginDeletionIntent builds the explicit form of the backup decision
+// passed to BeginDeletion.
+func ApplyBeginDeletionIntent(delete bool) *bool { return &delete }
+
+// ApplyBeginDeletion applies the claim rules to an in-memory row so every
+// store enforces the same one-way door. It reports the backup decision now in
+// force. Callers persist the row afterwards.
+func ApplyBeginDeletion(inst *domain.DatabaseInstance, deleteBackups *bool) (bool, error) {
+	if err := CheckNotBuilding(inst.ProjectID, inst.Status, lastMoved(inst), time.Now()); err != nil {
+		return false, err
+	}
+	effective := inst.DeletionDeleteBackups
+	switch {
+	case deleteBackups == nil:
+		// No preference: the recorded decision stands.
+	case *deleteBackups:
+		effective = true
+	case inst.DeletionDeleteBackups && domain.IsDeletionStatus(inst.Status):
+		return false, fmt.Errorf("%w: %s", ErrBackupPurgeAlreadyConfirmed, inst.ProjectID)
+	default:
+		effective = false
+	}
+	inst.DeletionDeleteBackups = effective
+	inst.Status = string(domain.StatusDeleting)
+	inst.CurrentStage = domain.StatusDeleting
+	inst.DeletionStep = ""
+	inst.DeletionError = ""
+	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
+	return effective, nil
+}
+
+// ApplyDeletionFailure records a stopped teardown on an in-memory row,
+// refusing rows no teardown owns.
+func ApplyDeletionFailure(inst *domain.DatabaseInstance, status domain.ProvisioningStage, step, reason string) error {
+	if !domain.IsDeletionStatus(inst.Status) {
+		return fmt.Errorf("%w: %s is %s", ErrProjectNotDeleting, inst.ProjectID, inst.Status)
+	}
+	inst.Status = string(status)
+	inst.CurrentStage = status
+	inst.DeletionStep = step
+	inst.DeletionError = reason
+	if status == domain.StatusBackupsPendingDelete {
+		// The retry marker also carries the reason on failure_reason, where
+		// the purge-retry endpoint and the project view already read it.
+		inst.FailureReason = reason
+	}
+	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
+	return nil
+}
+
+// CheckUpdatable reports whether a general Update may write the stored row.
+func CheckUpdatable(stored *domain.DatabaseInstance) error {
+	if domain.IsDeletionStatus(stored.Status) {
+		return fmt.Errorf("%w: %s", ErrProjectDeleting, stored.ProjectID)
+	}
+	return nil
 }
 
 // ParameterGroupStore persists parameter groups.
@@ -184,4 +318,16 @@ type NatsCredentialStore interface {
 	LookupNatsCredentialHash(ctx context.Context, principal string) (string, bool, error)
 	DeleteNatsCredential(ctx context.Context, principal string) error
 	DeleteNatsCredentialsForProject(ctx context.Context, projectID string) error
+}
+
+// lastMoved is when the row was last written. A row that has never been
+// updated is judged by when it was created.
+func lastMoved(inst *domain.DatabaseInstance) time.Time {
+	if inst.UpdatedAt != nil {
+		return inst.UpdatedAt.Time
+	}
+	if inst.CreatedAt != nil {
+		return inst.CreatedAt.Time
+	}
+	return time.Time{}
 }

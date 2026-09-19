@@ -60,6 +60,51 @@ const (
 	// whose backup objects could not be purged. The row is kept only so
 	// POST /backups/purge (or an operator sweep) can retry the deletion.
 	StatusBackupsPendingDelete ProvisioningStage = "BACKUPS_PENDING_DELETE"
+	// StatusDeleting marks a project whose teardown has started. The row
+	// survives until every cleanup step is observed complete, so a failed
+	// or timed-out teardown keeps the record needed to retry it. A project
+	// in this state is no longer usable and must not be served as active.
+	StatusDeleting ProvisioningStage = "DELETING"
+)
+
+// StatusProvisioning is the status a project holds while its provisioning
+// pipeline is building it. It is the one state in which another flow is
+// actively creating Kubernetes resources, vault credentials and bus
+// identities for the project.
+const StatusProvisioning = "PROVISIONING"
+
+// IsBuildingStatus reports whether a status means a pipeline is currently
+// creating resources for the project. Deleting such a project would race the
+// build: the teardown can observe nothing left, remove the record, and the
+// build then finishes into live, unowned resources.
+//
+// Only PROVISIONING qualifies. PAUSING and RESUMING toggle an existing
+// workload rather than creating anything, and both are states a failed
+// pause/resume deliberately leaves behind — refusing deletion there would
+// make a stuck project undeletable. ACTIVE, PAUSED and FAILED are settled.
+func IsBuildingStatus(status string) bool {
+	return status == StatusProvisioning
+}
+
+// IsDeletionStatus reports whether a status means a teardown already owns the
+// project. Both states are points of no return: the resources behind the
+// project are being removed, so nothing may write the row back to a usable
+// state. BACKUPS_PENDING_DELETE is one of them — its resources are already
+// gone and only the backup purge is outstanding.
+func IsDeletionStatus(status string) bool {
+	return status == string(StatusDeleting) || status == string(StatusBackupsPendingDelete)
+}
+
+// DeletionSteps are the teardown steps, in the order Deprovision runs them.
+// The name of the step that failed is persisted on the row so a retry —
+// and an operator — can see exactly how far the teardown got.
+const (
+	DeletionStepRevokeNats      = "REVOKE_NATS_CREDENTIALS"
+	DeletionStepDeregisterPgDog = "DEREGISTER_PGDOG"
+	DeletionStepDeleteResources = "DELETE_DATABASE_RESOURCES"
+	DeletionStepDeleteBackups   = "DELETE_BACKUPS"
+	DeletionStepDeleteVault     = "DELETE_VAULT_CREDENTIALS"
+	DeletionStepDeleteRecord    = "DELETE_PROJECT_RECORD"
 )
 
 // Pause reasons recorded on database_instances.pause_reason. Empty

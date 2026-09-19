@@ -13,20 +13,11 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
-// LeaderLock guards multi-replica backup firings. The scheduler only
-// fires cron jobs when Acquire returns true. Concrete implementations:
-// - PgAdvisoryLock (Postgres pg_try_advisory_lock) for cloud
-// - alwaysLeader for self-hosted single-process deployments
-type LeaderLock interface {
-	Acquire(ctx context.Context) (acquired bool, err error)
-	Release(ctx context.Context) error
-}
-
 // BackupSchedulerConfig wires the scheduler's collaborators.
 type BackupSchedulerConfig struct {
 	Schedules storage.BackupScheduleStore
 	Backups   *BackupService
-	Lock      LeaderLock
+	Lock      storage.LeaderLock
 	// Logger is optional; defaults to the std log package.
 	Logger *log.Logger
 }
@@ -35,10 +26,10 @@ type BackupSchedulerConfig struct {
 // schedule on Start and replays each row into a robfig/cron job.
 // New registrations are persisted then live-added without a restart.
 type BackupScheduler struct {
-	store   storage.BackupScheduleStore
-	backups *BackupService
-	lock    LeaderLock
-	logger  *log.Logger
+	store      storage.BackupScheduleStore
+	backups    *BackupService
+	leadership *Leadership
+	logger     *log.Logger
 
 	mu     sync.Mutex
 	cron   *cron.Cron
@@ -55,12 +46,12 @@ func NewBackupScheduler(c BackupSchedulerConfig) *BackupScheduler {
 		logger = log.Default()
 	}
 	return &BackupScheduler{
-		store:   c.Schedules,
-		backups: c.Backups,
-		lock:    c.Lock,
-		logger:  logger,
-		jobs:    make(map[string]cron.EntryID),
-		parser:  cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor),
+		store:      c.Schedules,
+		backups:    c.Backups,
+		leadership: NewLeadership(c.Lock),
+		logger:     logger,
+		jobs:       make(map[string]cron.EntryID),
+		parser:     cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor),
 	}
 }
 
@@ -134,6 +125,11 @@ func (s *BackupScheduler) Stop() {
 	}
 	s.jobs = make(map[string]cron.EntryID)
 	s.running = false
+	// Hand the claim back so another replica leads immediately, rather than
+	// waiting for this process's session to be reaped.
+	if err := s.leadership.Close(context.Background()); err != nil {
+		s.logger.Printf("scheduler: stand down: %v", err)
+	}
 }
 
 // JobCount returns the number of cron entries currently registered.
@@ -169,7 +165,7 @@ func (s *BackupScheduler) fireOne(projectID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	acquired, err := s.lock.Acquire(ctx)
+	acquired, err := s.leadership.IsLeader(ctx)
 	if err != nil {
 		s.logger.Printf("scheduler: leader lock error for %s: %v", projectID, err)
 		return
@@ -178,16 +174,8 @@ func (s *BackupScheduler) fireOne(projectID string) {
 		// Another replica owns the lease; sit this tick out.
 		return
 	}
-	defer func() { _ = s.lock.Release(ctx) }()
 
 	if _, err := s.backups.TriggerManualBackup(ctx, projectID); err != nil {
 		s.logger.Printf("scheduler: backup trigger %s failed: %v", projectID, err)
 	}
 }
-
-// AlwaysLeader is a no-op LeaderLock for single-process self-hosted
-// deployments where there's only ever one platform replica.
-type AlwaysLeader struct{}
-
-func (AlwaysLeader) Acquire(_ context.Context) (bool, error) { return true, nil }
-func (AlwaysLeader) Release(_ context.Context) error         { return nil }

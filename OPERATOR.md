@@ -116,6 +116,99 @@ curl -X DELETE -H "Authorization: Bearer $PAT" \
   https://<host>/api/admin/projects/proj-abc123
 ```
 
+### Deleting a project is observed, not fire-and-forget
+
+`DELETE /api/provision/<projectId>/` runs the teardown and only removes the
+project record once every step is observed complete: the tenant watcher is
+stopped, NATS credentials revoked, the PgDog routes removed, the database
+Cluster deleted **and waited out**, the namespace deleted and waited until no
+namespace, pod or PVC carrying the project id is left, backups purged if that
+was asked for, and the vault prefix emptied.
+
+* A step that fails or times out returns `500` and leaves the row in
+  `DELETING` carrying `deletionStep` and `deletionError`. `GET
+  /api/provision/<projectId>/` shows them. Re-issuing the same `DELETE`
+  resumes — already-removed resources count as done.
+* While a project is `DELETING`, only three requests are accepted against it:
+  `GET` its status, the `DELETE` retry, and `POST .../backups/purge`.
+  Everything else answers `409`.
+* A `DELETE` arriving while another teardown of the same project is still
+  running answers `409`. The call is synchronous and can outlive a proxy
+  timeout, so a client retry is safe: it is refused, not run in parallel.
+* Raise `DELETION_WAIT_TIMEOUT` (a Go duration, e.g. `10m`) on clusters where
+  storage detach is slow.
+
+### Deleting a project that is still being provisioned
+
+A `DELETE` while the project's provisioning pipeline is still building it
+answers `409 project is busy: PROVISIONING; retry when it settles`. The build
+is creating namespaces, clusters, vault credentials and bus identities that a
+teardown running alongside it would not see — it could observe "nothing
+remains", drop the record, and leave the finished build's resources live and
+unowned.
+
+The pipeline stamps `updated_at` on every stage, so a running provision is
+never mistaken for a dead one. **A provision whose process died** (platform
+restart mid-build) leaves the row in `PROVISIONING` with a timestamp that
+stops moving: after **30 minutes** without movement the row is no longer
+treated as a live build and deletes normally. The same window the restore
+orchestrator uses for stale jobs.
+
+If you cannot wait, `DELETE /api/admin/projects/<projectId>` (section 3) is
+the operator path — it clears deletion protection and runs the same observed
+teardown.
+
+If the door closes under a provision that is genuinely still running (the
+stale window elapsed on a very slow build, or the admin path was used), the
+pipeline stops at its next step, rolls back what it created, and the project
+reports `FAILED` — nothing is registered into a project whose record is on
+its way out.
+
+### Function invocation while a project is being deleted
+
+Invoking a function of a project under teardown answers `409`. The check sits
+where the handler already resolves the project (the per-project runtime
+lookup), so a warm project is still served without reading the platform
+database, and an unknown project id on the public route is answered by the
+function lookup without reaching the database at all.
+
+Claiming a project for deletion drops its cached runtime client on the
+replica that ran the `DELETE`, so that replica refuses the next invocation
+immediately. **Another replica keeps serving until its own cached runtime
+client is dropped** — in practice until the namespace goes, which the
+teardown waits for, so the window closes before the project's resources do.
+On a single shared runtime (docker / self-hosted), where clients are not
+per-project, invocation is not refused this way; the project's functions stop
+resolving when its record is removed at the end of the teardown.
+
+### Backups retained after a project is deleted
+
+Deleting a project **keeps its backups** unless the request carries
+`{"confirmDeleteBackups": true}`. The decision is recorded on the row when the
+deletion starts, so a retry cannot drop a purge that was already confirmed;
+asking to keep backups after confirming a purge answers `409`.
+
+When backups are kept, the `200` response carries the object-store prefix they
+remain under:
+
+```json
+{"projectId":"proj-abc123","status":"DELETED",
+ "retainedBackupPrefix":"backups/proj-abc123/"}
+```
+
+**Record that prefix.** The platform has no endpoint that lists or purges the
+backups of a project whose record is gone — `POST .../backups/purge` needs the
+row, and the row is deleted with the project. Retained objects are reachable
+only with object-store credentials, by prefix:
+
+```bash
+aws s3 ls "s3://$BUCKET/backups/proj-abc123/" --endpoint-url "$R2_ENDPOINT"
+aws s3 rm --recursive "s3://$BUCKET/backups/proj-abc123/" --endpoint-url "$R2_ENDPOINT"
+```
+
+Whether the platform should instead keep a tombstone so an owner can find and
+purge their own retained backups is an open product question — today it cannot.
+
 ## 4. Revoke an org (cascade-drop all its projects)
 
 ```bash

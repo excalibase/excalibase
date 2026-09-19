@@ -16,12 +16,17 @@ const podNameFmt = "%s-postgres-%d"
 
 // MockClient is a test double for KubeClient.
 type MockClient struct {
-	mu                   sync.Mutex
-	Namespaces           map[string]bool
-	NamespaceLabels      map[string]map[string]string
-	CRDs                 map[string]*unstructured.Unstructured
-	Secrets              map[string]map[string][]byte
-	Pods                 map[string][]corev1.Pod
+	mu              sync.Mutex
+	Namespaces      map[string]bool
+	NamespaceLabels map[string]map[string]string
+	CRDs            map[string]*unstructured.Unstructured
+	Secrets         map[string]map[string][]byte
+	Pods            map[string][]corev1.Pod
+	PVCs            map[string][]string // namespace → PersistentVolumeClaim names
+	// StuckNamespaces model a namespace whose deletion is accepted but never
+	// completes — a finalizer or a Terminating pod holds it. DeleteNamespace
+	// returns nil for these, yet the namespace and its contents survive.
+	StuckNamespaces      map[string]bool
 	PodReady             map[string]bool
 	ExecOutput           map[string]string // key: "namespace/pod" → output
 	ExecError            map[string]error
@@ -34,6 +39,10 @@ type MockClient struct {
 	DeleteNamespaceError error                             // if non-nil, DeleteNamespace returns this error
 	CRDError             error                             // if non-nil, ApplyCRD returns this error
 	DeleteCRDError       error                             // if non-nil, DeleteCRD returns this error
+	UninstallHelmError   error                             // if non-nil, UninstallHelmChart returns this error
+	NamespaceExistsError error                             // if non-nil, NamespaceExists returns this error
+	GetPodsError         error                             // if non-nil, GetPods returns this error
+	ListPVCsError        error                             // if non-nil, ListPVCs returns this error
 
 	// Wildcards — used when tests don't know the generated project ID upfront.
 	WildcardPodReady  bool              // IsPodReady returns true for any pod not in PodReady
@@ -60,6 +69,8 @@ func NewMockClient() *MockClient {
 		CRDs:            make(map[string]*unstructured.Unstructured),
 		Secrets:         make(map[string]map[string][]byte),
 		Pods:            make(map[string][]corev1.Pod),
+		PVCs:            make(map[string][]string),
+		StuckNamespaces: make(map[string]bool),
 		PodReady:        make(map[string]bool),
 		ExecOutput:      make(map[string]string),
 		ExecError:       make(map[string]error),
@@ -99,8 +110,34 @@ func (m *MockClient) DeleteNamespace(ctx context.Context, name string) error {
 	if m.DeleteNamespaceError != nil {
 		return m.DeleteNamespaceError
 	}
+	if m.StuckNamespaces[name] {
+		return nil
+	}
+	// Real namespace deletion cascades: nothing inside it survives.
 	delete(m.Namespaces, name)
+	delete(m.Pods, name)
+	delete(m.PVCs, name)
 	return nil
+}
+
+func (m *MockClient) NamespaceExists(ctx context.Context, name string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "NamespaceExists:"+name)
+	if m.NamespaceExistsError != nil {
+		return false, m.NamespaceExistsError
+	}
+	return m.Namespaces[name], nil
+}
+
+func (m *MockClient) ListPVCs(ctx context.Context, namespace string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ListPVCs:"+namespace)
+	if m.ListPVCsError != nil {
+		return nil, m.ListPVCsError
+	}
+	return m.PVCs[namespace], nil
 }
 
 func (m *MockClient) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error {
@@ -148,10 +185,21 @@ func (m *MockClient) DeleteCRD(ctx context.Context, gvr schema.GroupVersionResou
 	return nil
 }
 
+func (m *MockClient) CRDExists(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "CRDExists:"+namespace+"/"+name)
+	_, ok := m.CRDs[namespace+"/"+name]
+	return ok, nil
+}
+
 func (m *MockClient) GetPods(ctx context.Context, namespace, labelSelector string) ([]corev1.Pod, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "GetPods:"+namespace)
+	if m.GetPodsError != nil {
+		return nil, m.GetPodsError
+	}
 	return m.Pods[namespace], nil
 }
 
@@ -343,6 +391,9 @@ func (m *MockClient) UninstallHelmChart(ctx context.Context, namespace, releaseN
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "UninstallHelmChart:"+namespace+"/"+releaseName)
+	if m.UninstallHelmError != nil {
+		return m.UninstallHelmError
+	}
 	delete(m.HelmReleases, namespace+"/"+releaseName)
 	return nil
 }
