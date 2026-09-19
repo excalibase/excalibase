@@ -22,7 +22,7 @@ const (
 // seedSnapshotProject registers a project the snapshot service can dump from.
 func seedSnapshotProject(store *storage.FileSystemStore, mock *k8s.MockClient, projectID string) {
 	namespace := "org1-" + projectID
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: projectID, OrgID: "org1", DBType: domain.PostgreSQL,
 		Tier: domain.Free, Namespace: namespace, Status: "ACTIVE",
 	})
