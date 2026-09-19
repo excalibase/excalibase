@@ -125,11 +125,21 @@ func (m *memStore) ListObjects(_ context.Context, bucketID, prefix string, limit
 	return out, "", nil
 }
 
-func (m *memStore) DeleteObject(_ context.Context, bucketID, key string) error {
+// DeleteObjectAndReleaseQuota mirrors the SQL contract: the row goes and its
+// own size is released, together or not at all.
+func (m *memStore) DeleteObjectAndReleaseQuota(_ context.Context, projectID, bucketID, key string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	obj, ok := m.objects[bucketID][key]
+	if !ok {
+		return false, nil
+	}
 	delete(m.objects[bucketID], key)
-	return nil
+	m.quotas[projectID] -= obj.Size
+	if m.quotas[projectID] < 0 {
+		m.quotas[projectID] = 0
+	}
+	return true, nil
 }
 
 func (m *memStore) GetQuotaBytes(_ context.Context, projectID string) (int64, error) {

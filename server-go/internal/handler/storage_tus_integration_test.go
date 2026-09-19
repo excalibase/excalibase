@@ -104,7 +104,8 @@ func TestTus_ResumableMultipartUpload_LandsObjectAndMetadata(t *testing.T) {
 	patchAt(t, r, uploadPath, half, payload[half:])
 
 	// 3) Object present in S3 at the canonical key.
-	const wantKey = "projects/proj1/buckets/media/clips/big.bin"
+	// Keys are namespaced by the bucket id, not its name.
+	const wantKey = "projects/proj1/buckets/b1/clips/big.bin"
 	head, err := s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(platformBucket), Key: aws.String(wantKey),
 	})

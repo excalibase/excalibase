@@ -70,7 +70,9 @@ func (m *memBucketStore) GetObject(_ context.Context, bucketID, key string) (*Ob
 func (m *memBucketStore) ListObjects(_ context.Context, bucketID, prefix string, limit int, _ string) ([]Object, string, error) {
 	return nil, "", nil
 }
-func (m *memBucketStore) DeleteObject(_ context.Context, bucketID, key string) error { return nil }
+func (m *memBucketStore) DeleteObjectAndReleaseQuota(_ context.Context, projectID, bucketID, key string) (bool, error) {
+	return false, nil
+}
 func (m *memBucketStore) GetQuotaBytes(_ context.Context, projectID string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -105,7 +107,7 @@ func TestStartResumableUpload_BuildsCanonicalKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartResumableUpload: %v", err)
 	}
-	want := "projects/proj1/buckets/media/videos/clip.mp4"
+	want := "projects/proj1/buckets/b1/videos/clip.mp4"
 	if key != want {
 		t.Errorf("key = %q, want %q", key, want)
 	}

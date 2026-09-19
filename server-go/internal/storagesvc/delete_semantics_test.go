@@ -13,8 +13,8 @@ type errInjectingStore struct {
 	*memStore
 	deleteObjectErr error
 	quotaErr        error
+	releaseQuotaErr error
 	getBucketErr    error
-	getObjectErr    error
 	createObjectErr error
 	listObjectsErr  error
 	setStatusErr    error
@@ -36,13 +36,6 @@ func (e *errInjectingStore) SetBucketStatus(ctx context.Context, projectID, name
 	return e.memStore.SetBucketStatus(ctx, projectID, name, status)
 }
 
-func (e *errInjectingStore) GetObject(ctx context.Context, bucketID, key string) (*Object, error) {
-	if e.getObjectErr != nil {
-		return nil, e.getObjectErr
-	}
-	return e.memStore.GetObject(ctx, bucketID, key)
-}
-
 func (e *errInjectingStore) CreateObject(ctx context.Context, o *Object) error {
 	if e.createObjectErr != nil {
 		return e.createObjectErr
@@ -57,11 +50,16 @@ func (e *errInjectingStore) ListObjects(ctx context.Context, bucketID, prefix st
 	return e.memStore.ListObjects(ctx, bucketID, prefix, limit, cursor)
 }
 
-func (e *errInjectingStore) DeleteObject(ctx context.Context, bucketID, key string) error {
+func (e *errInjectingStore) DeleteObjectAndReleaseQuota(ctx context.Context, projectID, bucketID, key string) (bool, error) {
 	if e.deleteObjectErr != nil {
-		return e.deleteObjectErr
+		return false, e.deleteObjectErr
 	}
-	return e.memStore.DeleteObject(ctx, bucketID, key)
+	// The row and its release commit together, so an injected failure here
+	// leaves both in place — exactly what the SQL transaction guarantees.
+	if e.releaseQuotaErr != nil {
+		return false, e.releaseQuotaErr
+	}
+	return e.memStore.DeleteObjectAndReleaseQuota(ctx, projectID, bucketID, key)
 }
 
 func (e *errInjectingStore) AddQuotaBytes(ctx context.Context, projectID string, delta int64) error {
@@ -73,17 +71,20 @@ func (e *errInjectingStore) AddQuotaBytes(ctx context.Context, projectID string,
 
 func newErrStore() *errInjectingStore { return &errInjectingStore{memStore: newMemStore()} }
 
-// seedBucket creates a bucket plus one object present in both planes.
-func seedBucket(t *testing.T, svc *Service, blobs *fakeObjectStore, name, key string, size int64) {
+// seedBucket creates a bucket plus one object present in both planes. The
+// blob plane is addressed by the bucket's id, the way the service does.
+func seedBucket(t *testing.T, svc *Service, blobs *fakeObjectStore, name, key string, size int64) *Bucket {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: name}); err != nil {
+	bucket, err := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: name})
+	if err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
 	if _, err := svc.ConfirmUpload(ctx, testProjX, name, "u", ConfirmUploadRequest{Key: key, Size: size}); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
-	blobs.put(testProjX, name, key)
+	blobs.put(testProjX, bucket.ID, key)
+	return bucket
 }
 
 // The bucket is marked deleting BEFORE any byte is removed, so a crash
@@ -139,8 +140,8 @@ func TestService_DeleteBucket_RefusesWhenUnrecordedBytesRemain(t *testing.T) {
 	blobs := newFakeObjectStore()
 	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
-	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
-	blobs.put(testProjX, "assets", "never-confirmed.bin") // bytes, no row
+	bucket, _ := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
+	blobs.put(testProjX, bucket.ID, "never-confirmed.bin") // bytes, no row
 
 	err := svc.DeleteBucket(ctx, testProjX, "assets")
 	if err == nil || !strings.Contains(err.Error(), "still holds") {
@@ -159,13 +160,13 @@ func TestService_DeleteBucket_PrefixDoesNotMatchNeighbourBucket(t *testing.T) {
 	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
-	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets2"})
-	blobs.put(testProjX, "assets2", "keep.bin")
+	neighbour, _ := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets2"})
+	blobs.put(testProjX, neighbour.ID, "keep.bin")
 
 	if err := svc.DeleteBucket(ctx, testProjX, "assets"); err != nil {
 		t.Fatalf("a neighbour bucket's objects must not block this delete: %v", err)
 	}
-	if !blobs.has(testProjX, "assets2", "keep.bin") {
+	if !blobs.has(testProjX, neighbour.ID, "keep.bin") {
 		t.Error("neighbour bucket's object was deleted")
 	}
 }
@@ -215,16 +216,21 @@ func TestService_DeleteBucket_ReportsCatalogueFailure(t *testing.T) {
 	}
 }
 
-func TestService_DeleteBucket_ReportsQuotaFailure(t *testing.T) {
+// The release commits with the row, so a failure there fails the delete and
+// leaves both in place for the retry.
+func TestService_DeleteBucket_ReportsQuotaReleaseFailure(t *testing.T) {
 	store := newErrStore()
 	blobs := newFakeObjectStore()
 	svc := NewServiceWithObjectStore(store, blobs, nil)
 	seedBucket(t, svc, blobs, "assets", "a.txt", 10)
-	store.quotaErr = errors.New("platform db unavailable")
+	store.releaseQuotaErr = errors.New("platform db unavailable")
 
 	err := svc.DeleteBucket(context.Background(), testProjX, "assets")
-	if err == nil || !strings.Contains(err.Error(), "release quota") {
-		t.Fatalf("quota failure must surface, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "delete object row") {
+		t.Fatalf("release failure must surface, got %v", err)
+	}
+	if used, _ := store.GetQuotaBytes(context.Background(), testProjX); used != 10 {
+		t.Errorf("a failed release must not half-apply: got %d, want the original 10", used)
 	}
 }
 
@@ -366,19 +372,6 @@ func TestService_ListObjects_ReportsStoreFailure(t *testing.T) {
 	}
 }
 
-func TestService_DeleteObject_ReportsObjectLookupFailure(t *testing.T) {
-	store := newErrStore()
-	svc := NewServiceWithObjectStore(store, newFakeObjectStore(), nil)
-	ctx := context.Background()
-	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
-	store.getObjectErr = errors.New("platform db unavailable")
-
-	err := svc.DeleteObject(ctx, testProjX, "assets", "k")
-	if err == nil || !strings.Contains(err.Error(), "load object") {
-		t.Fatalf("want a load-object failure, got %v", err)
-	}
-}
-
 // A presign that fails is not a URL: SignUploadURL must not answer with one.
 func TestService_SignUploadURL_ReportsPresignFailure(t *testing.T) {
 	store := newMemStore()
@@ -393,5 +386,81 @@ func TestService_SignUploadURL_ReportsPresignFailure(t *testing.T) {
 	}
 	if _, err := svc.SignDownloadURL(ctx, testProjX, "assets", "k"); err == nil {
 		t.Fatal("a failed presign must surface on download too")
+	}
+}
+
+// EXC-404 follow-up, finding 2 — releasing the quota is not a separate step
+// that may be lost. If the row goes and the release does not, the retry finds
+// no row, computes a size of zero and the bytes are charged to the project
+// forever. Row and release therefore move together.
+func TestService_DeleteObject_RetryReleasesQuotaExactlyOnce(t *testing.T) {
+	store := newErrStore()
+	blobs := newFakeObjectStore()
+	svc := NewServiceWithObjectStore(store, blobs, nil)
+	ctx := context.Background()
+	seedBucket(t, svc, blobs, "assets", "a.txt", 300)
+	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 300 {
+		t.Fatalf("pre-delete quota: got %d, want 300", used)
+	}
+
+	store.releaseQuotaErr = errors.New("platform db unavailable")
+	if err := svc.DeleteObject(ctx, testProjX, "assets", "a.txt"); err == nil {
+		t.Fatal("a failed release must not report success")
+	}
+
+	store.releaseQuotaErr = nil
+	if err := svc.DeleteObject(ctx, testProjX, "assets", "a.txt"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 0 {
+		t.Fatalf("retry must converge on the exact quota: got %d, want 0", used)
+	}
+}
+
+// Same guarantee for the bucket cascade.
+func TestService_DeleteBucket_RetryReleasesQuotaExactlyOnce(t *testing.T) {
+	store := newErrStore()
+	blobs := newFakeObjectStore()
+	svc := NewServiceWithObjectStore(store, blobs, nil)
+	ctx := context.Background()
+	seedBucket(t, svc, blobs, "assets", "a.txt", 300)
+
+	store.releaseQuotaErr = errors.New("platform db unavailable")
+	if err := svc.DeleteBucket(ctx, testProjX, "assets"); err == nil {
+		t.Fatal("a failed release must not report success")
+	}
+
+	store.releaseQuotaErr = nil
+	if err := svc.DeleteBucket(ctx, testProjX, "assets"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 0 {
+		t.Fatalf("retry must converge on the exact quota: got %d, want 0", used)
+	}
+	if b, _ := store.GetBucket(ctx, testProjX, "assets"); b != nil {
+		t.Error("bucket record should be gone after the successful retry")
+	}
+}
+
+// EXC-404 follow-up, finding 4 — a negative size would credit the project's
+// quota, so it is refused wherever a size is accepted.
+func TestService_RejectsNegativeSizes(t *testing.T) {
+	store := newMemStore()
+	blobs := newFakeObjectStore()
+	svc := NewServiceWithObjectStore(store, blobs, nil)
+	ctx := context.Background()
+	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
+
+	if _, err := svc.SignUploadURL(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k", Size: -1}); err == nil {
+		t.Error("SignUploadURL must refuse a negative size")
+	}
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "assets", "u", ConfirmUploadRequest{Key: "k", Size: -100}); err == nil {
+		t.Error("ConfirmUpload must refuse a negative size")
+	}
+	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 0 {
+		t.Errorf("a negative size must never credit the quota, got %d", used)
+	}
+	if _, err := svc.StartResumableUpload(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k", Size: -1}); err == nil {
+		t.Error("StartResumableUpload must refuse a negative size")
 	}
 }

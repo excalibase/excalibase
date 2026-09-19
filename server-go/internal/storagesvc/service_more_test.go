@@ -138,7 +138,10 @@ func TestService_SignDownloadURL_PublicBucket(t *testing.T) {
 	if !resp.Public {
 		t.Errorf("expected Public=true")
 	}
-	if !strings.Contains(resp.URL, "projects/"+testProjX+"/buckets/pub/logo.png") {
+	bucket, _ := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "pub"})
+	_ = bucket
+	stored, _ := store.GetBucket(ctx, testProjX, "pub")
+	if !strings.Contains(resp.URL, "projects/"+testProjX+"/buckets/"+stored.ID+"/logo.png") {
 		t.Errorf("public url missing key path: %s", resp.URL)
 	}
 }
@@ -191,9 +194,10 @@ func TestService_DeleteBucket_CascadesObjects(t *testing.T) {
 	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
+	bucket, _ := store.GetBucket(ctx, testProjX, "files")
 	for _, k := range []string{"a", "b", "c"} {
 		_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "u", ConfirmUploadRequest{Key: k, Size: 100})
-		blobs.put(testProjX, "files", k)
+		blobs.put(testProjX, bucket.ID, k)
 	}
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 300 {
 		t.Fatalf("pre-delete quota: got %d, want 300", used)
@@ -206,7 +210,7 @@ func TestService_DeleteBucket_CascadesObjects(t *testing.T) {
 		t.Errorf("post-delete quota: got %d, want 0", used)
 	}
 	for _, k := range []string{"a", "b", "c"} {
-		if blobs.has(testProjX, "files", k) {
+		if blobs.has(testProjX, bucket.ID, k) {
 			t.Errorf("object %q bytes survived the cascade", k)
 		}
 	}
@@ -223,7 +227,8 @@ func TestService_DeleteObject_DecrementsQuota(t *testing.T) {
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "u", ConfirmUploadRequest{Key: "k", Size: 200})
-	blobs.put(testProjX, "files", "k")
+	bucket, _ := store.GetBucket(ctx, testProjX, "files")
+	blobs.put(testProjX, bucket.ID, "k")
 
 	if err := svc.DeleteObject(ctx, testProjX, "files", "k"); err != nil {
 		t.Fatalf("DeleteObject: %v", err)
@@ -231,7 +236,7 @@ func TestService_DeleteObject_DecrementsQuota(t *testing.T) {
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 0 {
 		t.Errorf("post-delete quota: got %d, want 0", used)
 	}
-	if blobs.has(testProjX, "files", "k") {
+	if blobs.has(testProjX, bucket.ID, "k") {
 		t.Error("object bytes survived the delete")
 	}
 }

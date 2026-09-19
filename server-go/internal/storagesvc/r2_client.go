@@ -70,27 +70,34 @@ func NewR2Client(cfg R2Config) (*R2Client, error) {
 	}, nil
 }
 
-// bucketPrefix is the key namespace holding every object of one (project,
-// bucket). The trailing slash is load-bearing: without it a prefix listing
-// for bucket "assets" would also match every key of "assets2", and an
-// emptiness check on one bucket could be satisfied — or blocked — by a
-// neighbour's objects.
-func bucketPrefix(projectID, bucket string) (string, error) {
-	if projectID == "" || bucket == "" {
-		return "", fmt.Errorf("r2: project + bucket required")
+// bucketPrefix is the key namespace holding every object of one bucket.
+//
+// It is keyed by the bucket's id, never its name. A presigned PUT lives for
+// its whole TTL and cannot be recalled: with a name-based prefix, deleting a
+// bucket and re-creating it under the same name would hand an outstanding URL
+// a write into the new bucket's space — bytes with no catalogue row, inside a
+// live bucket whose emptiness was already verified. Ids are never reused, so
+// an outstanding URL can only ever address the bucket it was issued for, and
+// after that bucket is gone its writes land in a namespace nothing reads.
+//
+// The trailing slash is load-bearing too: without it a prefix listing for one
+// id would also match any id that starts with it.
+func bucketPrefix(projectID, bucketID string) (string, error) {
+	if projectID == "" || bucketID == "" {
+		return "", fmt.Errorf("r2: project + bucket id required")
 	}
-	return fmt.Sprintf("projects/%s/buckets/%s/", projectID, bucket), nil
+	return fmt.Sprintf("projects/%s/buckets/%s/", projectID, bucketID), nil
 }
 
-// objectKey builds the storage key for a (project, bucket, user-key)
+// objectKey builds the storage key for a (project, bucket id, user-key)
 // tuple. Single platform R2 bucket is partitioned by this prefix:
 //
-//	projects/<projectId>/buckets/<bucket>/<key>
+//	projects/<projectId>/buckets/<bucketId>/<key>
 //
 // The key is path-cleaned but NOT URL-encoded — R2 stores raw UTF-8.
 // We DO refuse "/.." sequences so callers can't escape the prefix.
-func objectKey(projectID, bucket, userKey string) (string, error) {
-	prefix, err := bucketPrefix(projectID, bucket)
+func objectKey(projectID, bucketID, userKey string) (string, error) {
+	prefix, err := bucketPrefix(projectID, bucketID)
 	if err != nil {
 		return "", err
 	}
@@ -117,11 +124,11 @@ func objectKey(projectID, bucket, userKey string) (string, error) {
 // Content-Type is encoded into the signed URL — the client MUST PUT with
 // that exact header or R2 rejects the request. This binds the URL to a
 // specific MIME type, preventing image-bucket → executable-upload tricks.
-func (r *R2Client) SignedPutURL(ctx context.Context, projectID, bucket, key, mimeType string, ttl time.Duration) (string, time.Time, error) {
+func (r *R2Client) SignedPutURL(ctx context.Context, projectID, bucketID, key, mimeType string, ttl time.Duration) (string, time.Time, error) {
 	if ttl == 0 {
 		ttl = 5 * time.Minute
 	}
-	storeKey, err := objectKey(projectID, bucket, key)
+	storeKey, err := objectKey(projectID, bucketID, key)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -141,11 +148,11 @@ func (r *R2Client) SignedPutURL(ctx context.Context, projectID, bucket, key, mim
 
 // SignedGetURL returns a presigned URL the client can GET bytes from.
 // Used for private buckets; public buckets return PublicURL() instead.
-func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucket, key string, ttl time.Duration) (string, time.Time, error) {
+func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucketID, key string, ttl time.Duration) (string, time.Time, error) {
 	if ttl == 0 {
 		ttl = 5 * time.Minute
 	}
-	storeKey, err := objectKey(projectID, bucket, key)
+	storeKey, err := objectKey(projectID, bucketID, key)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -163,8 +170,8 @@ func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucket, key stri
 // to the R2 public bucket URL pattern when no custom domain is configured.
 // Caller is responsible for ensuring the bucket is actually public — this
 // function just constructs a URL string.
-func (r *R2Client) PublicURL(projectID, bucket, key string) (string, error) {
-	storeKey, err := objectKey(projectID, bucket, key)
+func (r *R2Client) PublicURL(projectID, bucketID, key string) (string, error) {
+	storeKey, err := objectKey(projectID, bucketID, key)
 	if err != nil {
 		return "", err
 	}
@@ -181,8 +188,8 @@ func (r *R2Client) PublicURL(projectID, bucket, key string) (string, error) {
 // bucket-cascade-delete (caller iterates keys + calls this). An object that
 // is already absent counts as deleted, so a retried delete converges instead
 // of failing forever on the second attempt.
-func (r *R2Client) DeleteObject(ctx context.Context, projectID, bucket, key string) error {
-	storeKey, err := objectKey(projectID, bucket, key)
+func (r *R2Client) DeleteObject(ctx context.Context, projectID, bucketID, key string) error {
+	storeKey, err := objectKey(projectID, bucketID, key)
 	if err != nil {
 		return err
 	}
@@ -203,8 +210,8 @@ func (r *R2Client) DeleteObject(ctx context.Context, projectID, bucket, key stri
 // A bucket delete uses it to prove the blob plane really is empty before the
 // catalogue is dropped — the catalogue alone cannot prove it, since an
 // upload that was never confirmed leaves bytes with no row.
-func (r *R2Client) ListObjectKeys(ctx context.Context, projectID, bucket string, limit int32) ([]string, error) {
-	prefix, err := bucketPrefix(projectID, bucket)
+func (r *R2Client) ListObjectKeys(ctx context.Context, projectID, bucketID string, limit int32) ([]string, error) {
+	prefix, err := bucketPrefix(projectID, bucketID)
 	if err != nil {
 		return nil, err
 	}
@@ -247,8 +254,8 @@ func isNotFound(err error) bool {
 // HeadObject queries R2 for the size + content-type of an existing object.
 // Used after the client confirms upload, to validate what they claimed
 // matches what's actually in R2.
-func (r *R2Client) HeadObject(ctx context.Context, projectID, bucket, key string) (size int64, contentType, etag string, err error) {
-	storeKey, err := objectKey(projectID, bucket, key)
+func (r *R2Client) HeadObject(ctx context.Context, projectID, bucketID, key string) (size int64, contentType, etag string, err error) {
+	storeKey, err := objectKey(projectID, bucketID, key)
 	if err != nil {
 		return 0, "", "", err
 	}

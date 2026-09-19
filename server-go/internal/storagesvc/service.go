@@ -44,7 +44,11 @@ type BucketStore interface {
 	CreateObject(ctx context.Context, o *Object) error
 	GetObject(ctx context.Context, bucketID, key string) (*Object, error)
 	ListObjects(ctx context.Context, bucketID, prefix string, limit int, cursor string) ([]Object, string, error)
-	DeleteObject(ctx context.Context, bucketID, key string) error
+	// DeleteObjectAndReleaseQuota removes an object's row and releases the
+	// bytes it was charged for, in one transaction: a release that could be
+	// lost separately would charge the project forever, because the retry
+	// finds no row and so no size. Returns false when there was no row.
+	DeleteObjectAndReleaseQuota(ctx context.Context, projectID, bucketID, key string) (removed bool, err error)
 
 	GetQuotaBytes(ctx context.Context, projectID string) (int64, error)
 	AddQuotaBytes(ctx context.Context, projectID string, delta int64) error
@@ -135,10 +139,10 @@ func (s *Service) DeleteBucket(ctx context.Context, projectID, name string) erro
 			return fmt.Errorf("mark bucket deleting: %w", err)
 		}
 	}
-	if err := s.purgeBucketObjects(ctx, projectID, name, bucket.ID); err != nil {
+	if err := s.purgeBucketObjects(ctx, projectID, bucket.ID); err != nil {
 		return err
 	}
-	remaining, err := s.objects.ListObjectKeys(ctx, projectID, name, 1)
+	remaining, err := s.objects.ListObjectKeys(ctx, projectID, bucket.ID, 1)
 	if err != nil {
 		return fmt.Errorf("verify bucket empty: %w", err)
 	}
@@ -151,7 +155,7 @@ func (s *Service) DeleteBucket(ctx context.Context, projectID, name string) erro
 // purgeBucketObjects walks the catalogue page by page and deletes each
 // object's bytes before its row, so a row never survives its bytes in the
 // other direction. Stops at the first failure — the caller keeps the bucket.
-func (s *Service) purgeBucketObjects(ctx context.Context, projectID, name, bucketID string) error {
+func (s *Service) purgeBucketObjects(ctx context.Context, projectID, bucketID string) error {
 	cursor := ""
 	for {
 		objs, next, err := s.store.ListObjects(ctx, bucketID, "", deleteBucketPageSize, cursor)
@@ -159,7 +163,7 @@ func (s *Service) purgeBucketObjects(ctx context.Context, projectID, name, bucke
 			return fmt.Errorf("list objects for cascade: %w", err)
 		}
 		for _, o := range objs {
-			if err := s.purgeObject(ctx, projectID, name, bucketID, o.Key, o.Size); err != nil {
+			if err := s.purgeObject(ctx, projectID, bucketID, o.Key); err != nil {
 				return err
 			}
 		}
@@ -170,18 +174,17 @@ func (s *Service) purgeBucketObjects(ctx context.Context, projectID, name, bucke
 	}
 }
 
-// purgeObject removes one object's bytes, then its row, then its quota
-// charge. Every step reports its own failure: a caller that saw success must
-// be able to rely on all three having happened.
-func (s *Service) purgeObject(ctx context.Context, projectID, bucketName, bucketID, key string, size int64) error {
-	if err := s.objects.DeleteObject(ctx, projectID, bucketName, key); err != nil {
+// purgeObject removes one object's bytes, then its row and quota charge
+// together. Both steps report their own failure: a caller that saw success
+// can rely on the bytes being gone and the project no longer paying for them.
+// Re-running after a failure converges, because the row — and with it the
+// size to release — survives until the release itself commits.
+func (s *Service) purgeObject(ctx context.Context, projectID, bucketID, key string) error {
+	if err := s.objects.DeleteObject(ctx, projectID, bucketID, key); err != nil {
 		return fmt.Errorf("delete object bytes: %w", err)
 	}
-	if err := s.store.DeleteObject(ctx, bucketID, key); err != nil {
+	if _, err := s.store.DeleteObjectAndReleaseQuota(ctx, projectID, bucketID, key); err != nil {
 		return fmt.Errorf("delete object row: %w", err)
-	}
-	if err := s.store.AddQuotaBytes(ctx, projectID, -size); err != nil {
-		return fmt.Errorf("release quota: %w", err)
 	}
 	return nil
 }
@@ -199,7 +202,7 @@ func (s *Service) SignUploadURL(ctx context.Context, projectID, bucketName, tier
 		return nil, err
 	}
 
-	url, expires, err := s.objects.SignedPutURL(ctx, projectID, bucketName, req.Key, req.MimeType, 5*time.Minute)
+	url, expires, err := s.objects.SignedPutURL(ctx, projectID, bucket.ID, req.Key, req.MimeType, 5*time.Minute)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +241,10 @@ func (s *Service) uploadTarget(ctx context.Context, projectID, bucketName string
 // validateUploadRequest enforces per-bucket size limits, MIME allowlists,
 // and per-project storage quotas before a presigned PUT URL is issued.
 func (s *Service) validateUploadRequest(ctx context.Context, projectID, tier string, bucket *Bucket, req UploadURLRequest) error {
+	// A negative size would credit the project's quota instead of spending it.
+	if req.Size < 0 {
+		return invalidf("size must not be negative")
+	}
 	// Per-bucket file size limit (0 = no limit).
 	if bucket.FileSize > 0 && req.Size > bucket.FileSize {
 		return invalidf("file exceeds bucket size limit %d bytes", bucket.FileSize)
@@ -282,6 +289,9 @@ func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, owne
 	if err != nil {
 		return nil, err
 	}
+	if req.Size < 0 {
+		return nil, invalidf("size must not be negative")
+	}
 	id, err := randomID("obj")
 	if err != nil {
 		return nil, err
@@ -323,13 +333,13 @@ func (s *Service) SignDownloadURL(ctx context.Context, projectID, bucketName, ke
 		return nil, ErrBucketNotFound
 	}
 	if bucket.Public {
-		url, err := s.objects.PublicURL(projectID, bucketName, key)
+		url, err := s.objects.PublicURL(projectID, bucket.ID, key)
 		if err != nil {
 			return nil, invalidf("invalid object key")
 		}
 		return &DownloadURLResponse{URL: url, Public: true}, nil
 	}
-	url, expires, err := s.objects.SignedGetURL(ctx, projectID, bucketName, key, 5*time.Minute)
+	url, expires, err := s.objects.SignedGetURL(ctx, projectID, bucket.ID, key, 5*time.Minute)
 	if err != nil {
 		return nil, err
 	}
@@ -373,15 +383,7 @@ func (s *Service) DeleteObject(ctx context.Context, projectID, bucketName, key s
 	if bucket == nil {
 		return ErrBucketNotFound
 	}
-	obj, err := s.store.GetObject(ctx, bucket.ID, key)
-	if err != nil {
-		return fmt.Errorf("load object: %w", err)
-	}
-	size := int64(0)
-	if obj != nil {
-		size = obj.Size
-	}
-	return s.purgeObject(ctx, projectID, bucketName, bucket.ID, key, size)
+	return s.purgeObject(ctx, projectID, bucket.ID, key)
 }
 
 func (s *Service) quotaForTier(tier string) int64 {

@@ -24,8 +24,8 @@ type catalogueFailingStore struct {
 	*inMemoryBucketStoreForTest
 }
 
-func (c *catalogueFailingStore) DeleteObject(_ context.Context, _, _ string) error {
-	return errors.New("platform db unavailable")
+func (c *catalogueFailingStore) DeleteObjectAndReleaseQuota(_ context.Context, _, _, _ string) (bool, error) {
+	return false, errors.New("platform db unavailable")
 }
 
 func newStorageRouterWith(store storagesvc.BucketStore) (chi.Router, *StorageHandler) {

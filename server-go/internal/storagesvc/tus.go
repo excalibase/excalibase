@@ -41,5 +41,5 @@ func (s *Service) StartResumableUpload(ctx context.Context, projectID, bucketNam
 	if err := s.validateUploadRequest(ctx, projectID, tier, bucket, req); err != nil {
 		return "", err
 	}
-	return objectKey(projectID, bucketName, req.Key)
+	return objectKey(projectID, bucket.ID, req.Key)
 }

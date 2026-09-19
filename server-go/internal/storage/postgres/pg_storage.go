@@ -127,8 +127,10 @@ func (s *Store) ListObjects(ctx context.Context, bucketID, prefix string, limit 
 	args := []interface{}{bucketID}
 	idx := 2
 	if prefix != "" {
-		q += fmt.Sprintf(" AND key LIKE $%d", idx)
-		args = append(args, prefix+"%")
+		// starts_with, not LIKE: a user prefix is a literal key prefix, and
+		// "%" or "_" in it must not widen the match to a neighbour's objects.
+		q += fmt.Sprintf(" AND starts_with(key, $%d)", idx)
+		args = append(args, prefix)
 		idx++
 	}
 	if cursor != "" {
@@ -159,10 +161,31 @@ func (s *Store) ListObjects(ctx context.Context, bucketID, prefix string, limit 
 	return out, next, nil
 }
 
-func (s *Store) DeleteObject(ctx context.Context, bucketID, key string) error {
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM storage_objects WHERE bucket_id = $1 AND key = $2`, bucketID, key)
-	return err
+// DeleteObjectAndReleaseQuota drops the row and releases exactly the bytes
+// that row was charged for, in one statement. Splitting the two would let the
+// release be lost: the retry finds no row, so no size, and the project keeps
+// paying for bytes that are gone. The size comes from the deleted row itself,
+// never from a caller.
+func (s *Store) DeleteObjectAndReleaseQuota(ctx context.Context, projectID, bucketID, key string) (bool, error) {
+	var removed int64
+	err := s.db.QueryRowContext(ctx,
+		`WITH deleted AS (
+		     DELETE FROM storage_objects
+		     WHERE bucket_id = $2 AND key = $3
+		     RETURNING size
+		 ), released AS (
+		     INSERT INTO storage_quota (project_id, bytes_used, updated_at)
+		     SELECT $1, -size, NOW() FROM deleted
+		     ON CONFLICT (project_id) DO UPDATE SET
+		       bytes_used = GREATEST(0, storage_quota.bytes_used + EXCLUDED.bytes_used),
+		       updated_at = NOW()
+		 )
+		 SELECT COUNT(*) FROM deleted`,
+		projectID, bucketID, key).Scan(&removed)
+	if err != nil {
+		return false, err
+	}
+	return removed > 0, nil
 }
 
 func (s *Store) GetQuotaBytes(ctx context.Context, projectID string) (int64, error) {
