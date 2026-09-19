@@ -29,8 +29,10 @@ const (
 // --- in-memory mock stores for auth tests ---
 
 type mockUserStore struct {
-	users    map[string]*domain.User
-	failSave bool
+	users      map[string]*domain.User
+	failSave   bool
+	failList   bool
+	failDelete bool
 }
 
 func newMockUserStore() *mockUserStore {
@@ -68,6 +70,9 @@ func (s *mockUserStore) FindUserByEmail(_ context.Context, email string) (*domai
 }
 
 func (s *mockUserStore) FindAllUsers(_ context.Context) ([]*domain.User, error) {
+	if s.failList {
+		return nil, errors.New("db error")
+	}
 	list := make([]*domain.User, 0, len(s.users))
 	for _, u := range s.users {
 		list = append(list, u)
@@ -76,6 +81,9 @@ func (s *mockUserStore) FindAllUsers(_ context.Context) ([]*domain.User, error) 
 }
 
 func (s *mockUserStore) DeleteUser(_ context.Context, id string) error {
+	if s.failDelete {
+		return errors.New("db error")
+	}
 	delete(s.users, id)
 	return nil
 }
@@ -91,8 +99,10 @@ func (s *mockUserStore) UpdateUserPassword(_ context.Context, username, hash str
 }
 
 type mockTokenStore struct {
-	tokens   map[string]*domain.AccessToken
-	failSave bool
+	tokens     map[string]*domain.AccessToken
+	failSave   bool
+	failList   bool
+	failDelete bool
 }
 
 func newMockTokenStore() *mockTokenStore {
@@ -112,6 +122,9 @@ func (s *mockTokenStore) FindByTokenHash(_ context.Context, hash string) (*domai
 }
 
 func (s *mockTokenStore) ListTokensByUser(_ context.Context, userID string) ([]*domain.AccessToken, error) {
+	if s.failList {
+		return nil, errors.New("db error")
+	}
 	var result []*domain.AccessToken
 	for _, tok := range s.tokens {
 		if tok.UserID == userID {
@@ -122,6 +135,9 @@ func (s *mockTokenStore) ListTokensByUser(_ context.Context, userID string) ([]*
 }
 
 func (s *mockTokenStore) DeleteToken(_ context.Context, tokenHash string) error {
+	if s.failDelete {
+		return errors.New("db error")
+	}
 	delete(s.tokens, tokenHash)
 	return nil
 }

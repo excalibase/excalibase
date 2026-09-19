@@ -157,3 +157,21 @@ func TestTokenGrants(t *testing.T) {
 		t.Fatal("a malformed entry must not void the valid ones")
 	}
 }
+
+func TestTokenGrantsSelfImplicitly(t *testing.T) {
+	// Every capability token may validate its own credential, whatever its
+	// permission list says — a service must be able to reach /api/auth/me.
+	narrow := &domain.AccessToken{Permissions: []string{"policies:read"}}
+	if !TokenGrants(narrow, SelfCapability()) {
+		t.Fatal("a capability token must always grant self:read")
+	}
+	// The implicit grant does not extend to a non-capability token: the
+	// gate leaves human PATs alone rather than granting them anything here.
+	if TokenGrants(&domain.AccessToken{}, SelfCapability()) {
+		t.Fatal("a permission-less token must not be granted through this path")
+	}
+	// The grant is exactly self:read; a token cannot reach self:write by it.
+	if TokenGrants(narrow, Capability{Resource: "self", Action: "write"}) {
+		t.Fatal("only self:read is implicit")
+	}
+}

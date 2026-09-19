@@ -46,6 +46,9 @@ func TestRequiredCapability(t *testing.T) {
 		{name: "admin listing", method: http.MethodGet, path: "/api/admin/projects"},
 		{name: "token minting", method: http.MethodPost, path: "/api/auth/tokens"},
 		{name: "empty vault selector", method: http.MethodGet, path: "/api/vault/secrets/"},
+		// An empty path is left as-is by normalization and matches no route,
+		// so no capability can authorize it.
+		{name: "empty path", method: http.MethodGet, path: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
