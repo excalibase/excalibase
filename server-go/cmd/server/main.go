@@ -125,7 +125,10 @@ func runServer(cfg config.AppConfig) {
 	var store storage.InstanceStore = sqlStore
 
 	// Keep filesystem store as fallback for parameter groups (until migrated)
-	pgStore, _ := storage.NewFileSystemParameterGroupStore(cfg.StoragePath)
+	pgStore, err := buildParameterGroupStore(cfg)
+	if err != nil {
+		log.Fatalf("parameter-group store: %v", err)
+	}
 
 	vc, localVault, vaultCleanup := buildVault(cfg, sqlStore)
 	defer vaultCleanup()

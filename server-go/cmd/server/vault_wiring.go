@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 )
@@ -35,4 +36,12 @@ func newLocalVault(store vault.VaultStore, autoReady bool, keyFilePath, envKey s
 // without any auto-ready step; CLI subcommands unseal interactively.
 func openVaultOnPlatformDB(platformStore *pgstore.Store) (*vault.Vault, error) {
 	return vault.NewWithStore(vault.NewPostgresStore(platformStore.DB()))
+}
+
+// buildParameterGroupStore opens the filesystem-backed parameter-group store.
+// Its error must abort boot: the constructor returns a nil pointer on
+// directory-creation failure and every method dereferences the receiver, so a
+// discarded error leaves a store that panics on the first request.
+func buildParameterGroupStore(cfg config.AppConfig) (*storage.FileSystemParameterGroupStore, error) {
+	return storage.NewFileSystemParameterGroupStore(cfg.StoragePath)
 }

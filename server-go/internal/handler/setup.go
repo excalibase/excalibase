@@ -6,6 +6,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/security"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/go-chi/chi/v5"
 )
@@ -53,45 +54,113 @@ func NewParameterGroupHandler(store interface {
 	return &ParameterGroupHandler{store: store}
 }
 
+// errInvalidParamGroupName is the fixed answer for a rejected name — it never
+// echoes the name back into the response.
+const errInvalidParamGroupName = "invalid parameter group name"
+
 func (h *ParameterGroupHandler) Routes(r chi.Router) {
+	// Reads stay open to any authenticated caller (the provision page's group
+	// selector). Parameter groups are global, cluster-wide configuration, so
+	// writing one is a platform-admin act — the same tier as installing an
+	// operator above.
+	admin := auth.RequirePermission(auth.PermManageSetup)
 	r.Get("/", h.List)
-	r.Post("/", h.Create)
+	r.With(admin).Post("/", h.Create)
 	r.Get(routeNameParam, h.Get)
-	r.Put(routeNameParam, h.Update)
-	r.Delete(routeNameParam, h.Delete)
+	r.With(admin).Put(routeNameParam, h.Update)
+	r.With(admin).Delete(routeNameParam, h.Delete)
+}
+
+// paramGroupName validates the {name} path parameter at the handler boundary,
+// before it can reach a path join in the store.
+func paramGroupName(w http.ResponseWriter, r *http.Request) (string, bool) {
+	name := chi.URLParam(r, "name")
+	if err := security.ValidateIdentifier(name); err != nil {
+		httpError(w, errInvalidParamGroupName, http.StatusBadRequest)
+		return "", false
+	}
+	return name, true
+}
+
+// decodeParameterGroup reads the request body, refusing a malformed one
+// instead of continuing with a zero-valued group.
+func decodeParameterGroup(w http.ResponseWriter, r *http.Request) (domain.ParameterGroup, bool) {
+	var pg domain.ParameterGroup
+	if err := json.NewDecoder(r.Body).Decode(&pg); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return domain.ParameterGroup{}, false
+	}
+	return pg, true
 }
 
 func (h *ParameterGroupHandler) List(w http.ResponseWriter, r *http.Request) {
-	all, _ := h.store.FindAll()
+	all, err := h.store.FindAll()
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, all)
 }
 
 func (h *ParameterGroupHandler) Get(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	pg, _ := h.store.FindByName(name)
-	if pg == nil { httpError(w, "not found", http.StatusNotFound); return }
+	name, ok := paramGroupName(w, r)
+	if !ok {
+		return
+	}
+	pg, err := h.store.FindByName(name)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
+	if pg == nil {
+		httpError(w, "not found", http.StatusNotFound)
+		return
+	}
 	writeJSON(w, pg)
 }
 
 func (h *ParameterGroupHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var pg domain.ParameterGroup
-	json.NewDecoder(r.Body).Decode(&pg)
-	if err := h.store.Save(&pg); err != nil { httpError(w, safeError(err), http.StatusInternalServerError); return }
+	pg, ok := decodeParameterGroup(w, r)
+	if !ok {
+		return
+	}
+	if err := security.ValidateIdentifier(pg.Name); err != nil {
+		httpError(w, errInvalidParamGroupName, http.StatusBadRequest)
+		return
+	}
+	if err := h.store.Save(&pg); err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, pg)
 }
 
 func (h *ParameterGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	var pg domain.ParameterGroup
-	json.NewDecoder(r.Body).Decode(&pg)
+	name, ok := paramGroupName(w, r)
+	if !ok {
+		return
+	}
+	pg, ok := decodeParameterGroup(w, r)
+	if !ok {
+		return
+	}
 	pg.Name = name
-	h.store.Save(&pg)
+	if err := h.store.Save(&pg); err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, pg)
 }
 
 func (h *ParameterGroupHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	h.store.Delete(name)
+	name, ok := paramGroupName(w, r)
+	if !ok {
+		return
+	}
+	if err := h.store.Delete(name); err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "deleted"})
 }
