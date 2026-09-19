@@ -87,7 +87,11 @@ func (h *StorageHandler) prepareTusUpload(event tusd.HookEvent) (tusd.HTTPRespon
 		return tusd.HTTPResponse{}, tusd.FileInfoChanges{},
 			tusd.NewError("ERR_TUS_METADATA", "resumable upload requires 'bucket' and 'key' (or 'filename') metadata", http.StatusBadRequest)
 	}
-	tier := h.tierFor(projectID)
+	tier, err := h.tierFor(projectID)
+	if err != nil {
+		return tusd.HTTPResponse{}, tusd.FileInfoChanges{},
+			tusd.NewError("ERR_TUS_TIER", errStorageFailed, http.StatusInternalServerError)
+	}
 	storeKey, err := h.svc.StartResumableUpload(ctx, projectID, bucket, tier, storagesvc.UploadURLRequest{
 		Key:      key,
 		MimeType: event.Upload.MetaData["filetype"],

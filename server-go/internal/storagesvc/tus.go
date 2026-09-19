@@ -2,7 +2,6 @@ package storagesvc
 
 import (
 	"context"
-	"errors"
 
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 	"github.com/tus/tusd/v2/pkg/memorylocker"
@@ -20,10 +19,10 @@ import (
 // that's sufficient for a single control-plane replica. Returns nil when no R2
 // client is configured, letting the caller skip mounting the tus routes.
 func (s *Service) TusComposer() *tusd.StoreComposer {
-	if s.r2 == nil {
+	if s.tusR2 == nil {
 		return nil
 	}
-	store := s3store.New(s.r2.cfg.Bucket, s.r2.s3)
+	store := s3store.New(s.tusR2.cfg.Bucket, s.tusR2.s3)
 	composer := tusd.NewStoreComposer()
 	store.UseIn(composer)
 	memorylocker.New().UseIn(composer)
@@ -35,15 +34,12 @@ func (s *Service) TusComposer() *tusd.StoreComposer {
 // the bytes must land at. It mirrors SignUploadURL minus the presign step, so a
 // tus upload is subject to the same guardrails as a single-PUT upload.
 func (s *Service) StartResumableUpload(ctx context.Context, projectID, bucketName, tier string, req UploadURLRequest) (string, error) {
-	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
+	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
 	if err != nil {
 		return "", err
-	}
-	if bucket == nil {
-		return "", errors.New(errBucketNotFound)
 	}
 	if err := s.validateUploadRequest(ctx, projectID, tier, bucket, req); err != nil {
 		return "", err
 	}
-	return objectKey(projectID, bucketName, req.Key)
+	return objectKey(projectID, bucket.ID, req.Key)
 }

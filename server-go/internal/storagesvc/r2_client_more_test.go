@@ -62,10 +62,11 @@ func TestR2_SignedGetURL_RejectsBadKey(t *testing.T) {
 	}
 }
 
-func TestR2_PublicURL_BadKeyReturnsEmpty(t *testing.T) {
+func TestR2_PublicURL_BadKeyReportsError(t *testing.T) {
 	c := newR2(t)
-	if got := c.PublicURL(testProjABC, "files", "../escape"); got != "" {
-		t.Errorf("bad key should give empty URL, got %q", got)
+	got, err := c.PublicURL(testProjABC, "files", "../escape")
+	if err == nil {
+		t.Errorf("bad key should report an error, got URL %q", got)
 	}
 }
 
@@ -81,5 +82,46 @@ func TestR2_HeadObject_BadKey(t *testing.T) {
 	c := newR2(t)
 	if _, _, _, err := c.HeadObject(context.Background(), testProjABC, "files", ".."); err == nil {
 		t.Error("bad key head should fail")
+	}
+}
+
+// TestBucketPrefix_TrailingSlashIsolatesBuckets — the emptiness check that
+// gates a bucket delete lists by this prefix. Without the trailing slash,
+// "assets" would match every key of "assets2": one bucket's delete could be
+// blocked by, or could delete, a neighbour's objects.
+func TestBucketPrefix_TrailingSlashIsolatesBuckets(t *testing.T) {
+	assets, err := bucketPrefix(testProjABC, "assets")
+	if err != nil {
+		t.Fatalf("bucketPrefix: %v", err)
+	}
+	if want := "projects/proj-abc/buckets/assets/"; assets != want {
+		t.Fatalf("bucketPrefix: got %q, want %q", assets, want)
+	}
+	neighbour, err := objectKey(testProjABC, "assets2", "keep.bin")
+	if err != nil {
+		t.Fatalf("objectKey: %v", err)
+	}
+	if strings.HasPrefix(neighbour, assets) {
+		t.Errorf("%q must not fall under the %q prefix", neighbour, assets)
+	}
+	own, _ := objectKey(testProjABC, "assets", "keep.bin")
+	if !strings.HasPrefix(own, assets) {
+		t.Errorf("%q must fall under the %q prefix", own, assets)
+	}
+}
+
+func TestBucketPrefix_RequiresProjectAndBucket(t *testing.T) {
+	if _, err := bucketPrefix("", "b"); err == nil {
+		t.Error("empty project should fail")
+	}
+	if _, err := bucketPrefix("p", ""); err == nil {
+		t.Error("empty bucket should fail")
+	}
+}
+
+func TestR2_ListObjectKeys_RejectsBadBucket(t *testing.T) {
+	c := newR2(t)
+	if _, err := c.ListObjectKeys(context.Background(), testProjABC, "", 10); err == nil {
+		t.Error("missing bucket should fail before any network call")
 	}
 }

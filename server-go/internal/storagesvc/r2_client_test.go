@@ -100,7 +100,10 @@ func TestPublicURL_UsesCustomDomainWhenSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewR2Client: %v", err)
 	}
-	got := c.PublicURL(testProjABC, "avatars", "u/1.png")
+	got, err := c.PublicURL(testProjABC, "avatars", "u/1.png")
+	if err != nil {
+		t.Fatalf("PublicURL: %v", err)
+	}
 	want := "https://files.excalibase.io/projects/proj-abc/buckets/avatars/u/1.png"
 	if got != want {
 		t.Errorf("PublicURL: got %q, want %q", got, want)
@@ -117,7 +120,10 @@ func TestPublicURL_FallsBackWhenNoCustomDomain(t *testing.T) {
 		Endpoint: "https://acct.r2.cloudflarestorage.com",
 		Bucket:   testPlatformBucket,
 	})
-	got := c.PublicURL(testProjABC, "files", "x.txt")
+	got, err := c.PublicURL(testProjABC, "files", "x.txt")
+	if err != nil {
+		t.Fatalf("PublicURL: %v", err)
+	}
 	if !strings.Contains(got, testPlatformBucket) || !strings.Contains(got, "projects/proj-abc/buckets/files/x.txt") {
 		t.Errorf("fallback URL malformed: %s", got)
 	}

@@ -107,6 +107,18 @@ func (m *inMemoryBucketStoreForTest) DeleteBucket(_ context.Context, projectID, 
 	return errStorageTestNotFound
 }
 
+func (m *inMemoryBucketStoreForTest) SetBucketStatus(_ context.Context, projectID, name, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.buckets {
+		if b.ProjectID == projectID && b.Name == name {
+			b.Status = status
+			return nil
+		}
+	}
+	return errStorageTestNotFound
+}
+
 func (m *inMemoryBucketStoreForTest) CreateObject(_ context.Context, o *storagesvc.Object) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -141,11 +153,19 @@ func (m *inMemoryBucketStoreForTest) ListObjects(_ context.Context, bucketID, pr
 	return out, "", nil
 }
 
-func (m *inMemoryBucketStoreForTest) DeleteObject(_ context.Context, bucketID, key string) error {
+func (m *inMemoryBucketStoreForTest) DeleteObjectAndReleaseQuota(_ context.Context, projectID, bucketID, key string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	obj, ok := m.objects[bucketID][key]
+	if !ok {
+		return false, nil
+	}
 	delete(m.objects[bucketID], key)
-	return nil
+	m.quotas[projectID] -= obj.Size
+	if m.quotas[projectID] < 0 {
+		m.quotas[projectID] = 0
+	}
+	return true, nil
 }
 
 func (m *inMemoryBucketStoreForTest) GetQuotaBytes(_ context.Context, projectID string) (int64, error) {
@@ -174,15 +194,7 @@ func (e stringErrorForStorageTest) Error() string { return string(e) }
 func newStorageInternalRouter(t *testing.T, runtimeSecret string) (chi.Router, *inMemoryBucketStoreForTest) {
 	t.Helper()
 	store := newInMemoryBucketStoreForTest()
-	r2, err := storagesvc.NewR2Client(storagesvc.R2Config{
-		AccessKeyID: "k", SecretAccessKey: "s",
-		Endpoint: testR2URL,
-		Bucket:   testPlatformBucket,
-	})
-	if err != nil {
-		t.Fatalf("r2 client: %v", err)
-	}
-	svc := storagesvc.NewService(store, r2, nil)
+	svc := storagesvc.NewServiceWithObjectStore(store, newFakeObjectStoreForTest(), nil)
 	h := NewStorageHandler(svc, nil)
 	h.SetRuntimeSecret(runtimeSecret)
 

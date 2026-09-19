@@ -17,14 +17,7 @@ import (
 func newStorageRouter(t *testing.T) (chi.Router, *inMemoryBucketStoreForTest) {
 	t.Helper()
 	store := newInMemoryBucketStoreForTest()
-	r2, err := storagesvc.NewR2Client(storagesvc.R2Config{
-		AccessKeyID: "k", SecretAccessKey: "s",
-		Endpoint: testR2URL, Bucket: testPlatformBucket,
-	})
-	if err != nil {
-		t.Fatalf("r2 client: %v", err)
-	}
-	h := NewStorageHandler(storagesvc.NewService(store, r2, nil), nil)
+	h := NewStorageHandler(storagesvc.NewServiceWithObjectStore(store, newFakeObjectStoreForTest(), nil), nil)
 
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/storage", func(r chi.Router) { h.Routes(r) })
@@ -142,10 +135,9 @@ func TestStorageRoutes_ObjectLifecycle(t *testing.T) {
 		t.Errorf("download url: got %d body=%s", w.Code, w.Body.String())
 	}
 
-	// Delete the object (R2 delete errors offline but DB row is removed;
-	// handler returns 204 either way).
-	if w := doStorage(t, r, "DELETE", base+"/buckets/files/objects/a.txt", nil); w.Code != http.StatusOK && w.Code != http.StatusNoContent && w.Code != http.StatusBadRequest {
-		t.Errorf("delete object unexpected status: %d body=%s", w.Code, w.Body.String())
+	// Delete the object: 204 means both the bytes and the row are gone.
+	if w := doStorage(t, r, "DELETE", base+"/buckets/files/objects/a.txt", nil); w.Code != http.StatusNoContent {
+		t.Errorf("delete object: want 204, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 

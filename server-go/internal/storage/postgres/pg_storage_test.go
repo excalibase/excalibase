@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -88,9 +89,13 @@ func TestPgStorage_BucketAndObjectLifecycle(t *testing.T) { //NOSONAR sequential
 		t.Errorf("ListObjects prefix: got %d, want 1", len(sub))
 	}
 
-	// DeleteObject.
-	if err := s.DeleteObject(ctx, bkt.ID, "a.png"); err != nil {
-		t.Fatalf("DeleteObject: %v", err)
+	// Delete releases the row and its bytes together.
+	removed, err := s.DeleteObjectAndReleaseQuota(ctx, project, bkt.ID, "a.png")
+	if err != nil {
+		t.Fatalf("DeleteObjectAndReleaseQuota: %v", err)
+	}
+	if !removed {
+		t.Error("delete should report that a row was removed")
 	}
 	if gone, _ := s.GetObject(ctx, bkt.ID, "a.png"); gone != nil {
 		t.Error("object should be gone after delete")
@@ -125,4 +130,130 @@ func TestPgStorage_QuotaDeltaAccumulates(t *testing.T) {
 	if used, _ := s.GetQuotaBytes(ctx, project); used != 300 {
 		t.Errorf("quota accumulation: got %d, want 300", used)
 	}
+}
+
+// A bucket is born active and can be marked deleting; the status survives a
+// round-trip so an interrupted cascade is still visible after a restart.
+func TestPgStorage_BucketStatusRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	const project = "proj-status"
+	now := time.Now().UTC()
+	if err := s.CreateBucket(ctx, &storagesvc.Bucket{
+		ID: "bkt_status", ProjectID: project, Name: "assets",
+		Status: storagesvc.BucketStatusActive, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	got, _ := s.GetBucket(ctx, project, "assets")
+	if got == nil || got.Status != storagesvc.BucketStatusActive {
+		t.Fatalf("new bucket should be active: %+v", got)
+	}
+
+	if err := s.SetBucketStatus(ctx, project, "assets", storagesvc.BucketStatusDeleting); err != nil {
+		t.Fatalf("SetBucketStatus: %v", err)
+	}
+	got, _ = s.GetBucket(ctx, project, "assets")
+	if got == nil || got.Status != storagesvc.BucketStatusDeleting {
+		t.Fatalf("bucket should be deleting: %+v", got)
+	}
+	listed, _ := s.ListBuckets(ctx, project)
+	if len(listed) != 1 || listed[0].Status != storagesvc.BucketStatusDeleting {
+		t.Errorf("listed status: %+v", listed)
+	}
+	_ = s.DeleteBucket(ctx, project, "assets")
+}
+
+func TestPgStorage_SetBucketStatus_UnknownBucket(t *testing.T) {
+	s := testStore(t)
+	err := s.SetBucketStatus(context.Background(), "nope", "missing", storagesvc.BucketStatusDeleting)
+	if err == nil {
+		t.Error("marking a bucket that does not exist must fail")
+	}
+}
+
+// EXC-404 follow-up, finding 3 — the object-listing prefix is a literal key
+// prefix, not a pattern. A caller whose folder name contains % or _ must not
+// see its neighbours' objects.
+func TestPgStorage_ListObjectsPrefixIsLiteral(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	const project = "proj-prefix"
+	now := time.Now().UTC()
+	if err := s.CreateBucket(ctx, &storagesvc.Bucket{
+		ID: "bkt_prefix", ProjectID: project, Name: "files", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	keys := []string{"a%b.txt", "axb.txt", "a_c.txt", "azc.txt"}
+	for i, k := range keys {
+		if err := s.CreateObject(ctx, &storagesvc.Object{
+			ID: "obj_prefix_" + strconv.Itoa(i), BucketID: "bkt_prefix", Key: k,
+			Size: 1, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateObject %q: %v", k, err)
+		}
+	}
+
+	cases := map[string][]string{
+		"a%": {"a%b.txt"},
+		"a_": {"a_c.txt"},
+	}
+	for prefix, want := range cases {
+		got, _, err := s.ListObjects(ctx, "bkt_prefix", prefix, 100, "")
+		if err != nil {
+			t.Fatalf("ListObjects %q: %v", prefix, err)
+		}
+		if len(got) != len(want) || (len(got) > 0 && got[0].Key != want[0]) {
+			var keys []string
+			for _, o := range got {
+				keys = append(keys, o.Key)
+			}
+			t.Errorf("prefix %q matched %v, want %v", prefix, keys, want)
+		}
+	}
+	_ = s.DeleteBucket(ctx, project, "files")
+}
+
+// The row and the bytes it was charged for go together, and a repeated delete
+// neither fails nor releases the bytes twice.
+func TestPgStorage_DeleteObjectReleasesQuotaExactlyOnce(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	const project = "proj-release"
+	now := time.Now().UTC()
+	if err := s.CreateBucket(ctx, &storagesvc.Bucket{
+		ID: "bkt_release", ProjectID: project, Name: "files", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if err := s.CreateObject(ctx, &storagesvc.Object{
+		ID: "obj_release", BucketID: "bkt_release", Key: "a.bin", Size: 300,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateObject: %v", err)
+	}
+	if err := s.AddQuotaBytes(ctx, project, 300); err != nil {
+		t.Fatalf("AddQuotaBytes: %v", err)
+	}
+
+	removed, err := s.DeleteObjectAndReleaseQuota(ctx, project, "bkt_release", "a.bin")
+	if err != nil || !removed {
+		t.Fatalf("first delete: removed=%v err=%v", removed, err)
+	}
+	if used, _ := s.GetQuotaBytes(ctx, project); used != 0 {
+		t.Errorf("quota after delete: got %d, want 0", used)
+	}
+
+	removed, err = s.DeleteObjectAndReleaseQuota(ctx, project, "bkt_release", "a.bin")
+	if err != nil {
+		t.Fatalf("repeat delete: %v", err)
+	}
+	if removed {
+		t.Error("a repeated delete must not claim it removed a row")
+	}
+	if used, _ := s.GetQuotaBytes(ctx, project); used != 0 {
+		t.Errorf("quota after repeat: got %d, want 0", used)
+	}
+	_ = s.DeleteBucket(ctx, project, "files")
 }

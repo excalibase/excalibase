@@ -112,7 +112,7 @@ func TestTus_PrepareUpload_BuildsKeyAndKeepsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareTusUpload: %v", err)
 	}
-	want := "projects/proj1/buckets/media/clips/a.mp4"
+	want := "projects/proj1/buckets/b1/clips/a.mp4"
 	if changes.ID != want {
 		t.Errorf("upload id = %q, want %q", changes.ID, want)
 	}
