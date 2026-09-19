@@ -10,6 +10,9 @@ import (
 )
 
 // permsAuth is the permission list the auth service principal is minted with.
+// Source of truth: serviceTokens.auth.permissions in excalibase-service
+// charts/platform-aio/values.yaml; cmd/server's contract test drives the same
+// lists against the real router.
 var permsAuth = []string{
 	"vault:read:pki/signing/*",
 	"vault:read:projects/*/credentials/auth_admin",
@@ -49,6 +52,11 @@ func TestRequiredCapability(t *testing.T) {
 		{name: "rls policies list", method: http.MethodGet, path: "/api/provision/proj-1/rls-policies", want: "policies:read", found: true},
 		{name: "rls policy by id", method: http.MethodGet, path: "/api/provision/proj-1/rls-policies/pol-9", want: "policies:read", found: true},
 		{name: "column policies list", method: http.MethodGet, path: "/api/provision/proj-1/column-policies", want: "policies:read", found: true},
+		// EXC-370 added the exposure list the engine fetches in the same
+		// round as the two policy reads; it belongs to the same grant.
+		{name: "table grants list", method: http.MethodGet, path: "/api/provision/proj-1/table-grants", want: "policies:read", found: true},
+		{name: "table grants list trailing slash", method: http.MethodGet, path: "/api/provision/proj-1/table-grants/", want: "policies:read", found: true},
+		{name: "table grant by id", method: http.MethodGet, path: "/api/provision/proj-1/table-grants/grant-9", want: "policies:read", found: true},
 		{name: "head is a read", method: http.MethodHead, path: "/api/provision/proj-1/rls-policies", want: "policies:read", found: true},
 		{name: "email relay send", method: http.MethodPost, path: "/internal/email/send", want: "email:send", found: true},
 
@@ -60,6 +68,10 @@ func TestRequiredCapability(t *testing.T) {
 		{name: "vault secret list", method: http.MethodGet, path: "/api/vault/secrets-list"},
 		{name: "vault unseal", method: http.MethodPost, path: "/api/vault/unseal"},
 		{name: "policy write", method: http.MethodPost, path: "/api/provision/proj-1/rls-policies"},
+		{name: "grant create", method: http.MethodPost, path: "/api/provision/proj-1/table-grants/"},
+		{name: "grant update", method: http.MethodPatch, path: "/api/provision/proj-1/table-grants/grant-9"},
+		{name: "grant delete", method: http.MethodDelete, path: "/api/provision/proj-1/table-grants/grant-9"},
+		{name: "exposure enforcement toggle", method: http.MethodPut, path: "/api/provision/proj-1/table-grants/enforcement"},
 		{name: "project status", method: http.MethodGet, path: "/api/provision/proj-1"},
 		{name: "project credentials", method: http.MethodGet, path: "/api/provision/proj-1/credentials"},
 		{name: "info of a nested resource", method: http.MethodGet, path: "/api/projects/proj-1/info/extra"},
@@ -127,6 +139,7 @@ func TestCapabilityGateEnforcesGraphqlToken(t *testing.T) {
 		{http.MethodGet, "/api/projects/proj-1/info"},
 		{http.MethodGet, "/api/provision/proj-1/rls-policies"},
 		{http.MethodGet, "/api/provision/proj-1/column-policies"},
+		{http.MethodGet, "/api/provision/proj-1/table-grants/"},
 		{http.MethodGet, "/api/auth/me"},
 	}
 	for _, c := range allowed {
@@ -145,6 +158,10 @@ func TestCapabilityGateEnforcesGraphqlToken(t *testing.T) {
 		{http.MethodGet, credentialPath("proj-1", "admin")},
 		{http.MethodGet, credentialPath("proj-1", "cdc_watcher")},
 		{http.MethodPost, "/api/provision/proj-1/rls-policies"},
+		{http.MethodPost, "/api/provision/proj-1/table-grants/"},
+		{http.MethodPatch, "/api/provision/proj-1/table-grants/grant-9"},
+		{http.MethodDelete, "/api/provision/proj-1/table-grants/grant-9"},
+		{http.MethodPut, "/api/provision/proj-1/table-grants/enforcement"},
 		{http.MethodDelete, "/api/provision/proj-1"},
 		{http.MethodGet, "/api/provision/proj-1/credentials"},
 		{http.MethodPost, "/api/auth/tokens"},
@@ -185,6 +202,7 @@ func TestCapabilityGateEnforcesAuthToken(t *testing.T) {
 		{http.MethodGet, credentialPath("proj-1", "auth_admin") + "/password"},
 		{http.MethodGet, "/api/vault/secrets/projects/proj-1/credentials"},
 		{http.MethodGet, "/api/provision/proj-1/rls-policies"},
+		{http.MethodGet, "/api/provision/proj-1/table-grants/"},
 		{http.MethodPut, "/api/vault/secrets/pki/signing/private"},
 		{http.MethodPut, credentialPath("proj-1", "auth_admin")},
 		{http.MethodDelete, credentialPath("proj-1", "auth_admin")},

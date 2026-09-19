@@ -67,10 +67,12 @@ func relayRouter(t *testing.T, sender email.Sender) (http.Handler, callers) {
 	}
 	issue(relayCallerSession, relayAdminUserID, domain.AccessToken{Scopes: auth.ScopeSession})
 	issue(relayCallerAdminPAT, relayAdminUserID, domain.AccessToken{Name: "ci"})
+	// chartPermissions (service_token_contract_test.go) is the single copy of
+	// what the chart mints these principals with.
 	issue(relayCallerOtherSvc, relayOtherServiceUser, domain.AccessToken{
-		Name: "svc-graphql", Permissions: []string{"projects:info:read", "policies:read"}})
+		Name: "svc-graphql", Permissions: chartPermissions[svcGraphql]})
 	issue(relayCallerAuthSvc, relayServiceUserID, domain.AccessToken{
-		Name: "svc-auth", Permissions: []string{"vault:read:pki/signing/*", "projects:info:read", "email:send"}})
+		Name: "svc-auth", Permissions: chartPermissions[svcAuth]})
 
 	deps := matrixDeps(t, instances)
 	deps.internalEmail = handler.NewInternalEmailHandler(sender)
