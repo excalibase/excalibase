@@ -239,3 +239,18 @@ func TestBackupRecordJSON(t *testing.T) {
 		t.Errorf("status: got %s", got.Status)
 	}
 }
+
+// Both deletion statuses mean a teardown owns the project: the storage door
+// and the API gate branch on this, so it has to name exactly those two.
+func TestIsDeletionStatus(t *testing.T) {
+	for _, status := range []string{"DELETING", "BACKUPS_PENDING_DELETE"} {
+		if !IsDeletionStatus(status) {
+			t.Errorf("%s should count as a deletion status", status)
+		}
+	}
+	for _, status := range []string{"ACTIVE", "PAUSED", "FAILED", "PROVISIONING", ""} {
+		if IsDeletionStatus(status) {
+			t.Errorf("%s must not count as a deletion status", status)
+		}
+	}
+}

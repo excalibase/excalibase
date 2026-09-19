@@ -88,6 +88,12 @@ func (errInstanceStore) FindAll() ([]*domain.DatabaseInstance, error) {
 	return nil, errors.New("db down")
 }
 func (errInstanceStore) Delete(string) error { return nil }
+func (errInstanceStore) BeginDeletion(string, *bool) (bool, error) {
+	return false, errors.New("db down")
+}
+func (errInstanceStore) RecordDeletionFailure(string, domain.ProvisioningStage, string, string) error {
+	return errors.New("db down")
+}
 
 func TestAdmin_ListAllProjects_StoreError(t *testing.T) {
 	h := NewAdminHandler(nil, errInstanceStore{}, nil, nil, nil, "", nil)

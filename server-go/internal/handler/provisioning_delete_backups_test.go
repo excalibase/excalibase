@@ -154,10 +154,14 @@ func TestPurgeBackupsEndpoint(t *testing.T) {
 		t.Fatal("live project backups must not be purged")
 	}
 
-	// Pending marker: purged, row removed, count reported.
-	inst, _ := store.FindByProjectID("proj-1")
-	inst.Status = string(domain.StatusBackupsPendingDelete)
-	if err := store.Update(inst); err != nil {
+	// Pending marker: purged, row removed, count reported. The marker is
+	// reached the way a real deletion reaches it — the store refuses to have
+	// it set by a general update.
+	if _, err := store.BeginDeletion("proj-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordDeletionFailure("proj-1", domain.StatusBackupsPendingDelete,
+		domain.DeletionStepDeleteBackups, "r2 unavailable"); err != nil {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest(http.MethodPost, "/api/provision/proj-1/backups/purge", nil)

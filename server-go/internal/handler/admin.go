@@ -158,7 +158,7 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 		Action:     "admin.force_drop_project",
 		Resource:   "project",
 		ResourceID: projectID,
-		Details:    fmt.Sprintf("org=%s tier=%s deleteBackups=%t", inst.OrgID, inst.Tier, opts.DeleteBackups),
+		Details:    fmt.Sprintf("org=%s tier=%s backups=%s", inst.OrgID, inst.Tier, backupDisposition(opts)),
 	})
 	writeJSON(w, map[string]string{"status": "deprovisioned", "projectId": projectID})
 }

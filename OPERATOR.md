@@ -116,6 +116,56 @@ curl -X DELETE -H "Authorization: Bearer $PAT" \
   https://<host>/api/admin/projects/proj-abc123
 ```
 
+### Deleting a project is observed, not fire-and-forget
+
+`DELETE /api/provision/<projectId>/` runs the teardown and only removes the
+project record once every step is observed complete: the tenant watcher is
+stopped, NATS credentials revoked, the PgDog routes removed, the database
+Cluster deleted **and waited out**, the namespace deleted and waited until no
+namespace, pod or PVC carrying the project id is left, backups purged if that
+was asked for, and the vault prefix emptied.
+
+* A step that fails or times out returns `500` and leaves the row in
+  `DELETING` carrying `deletionStep` and `deletionError`. `GET
+  /api/provision/<projectId>/` shows them. Re-issuing the same `DELETE`
+  resumes — already-removed resources count as done.
+* While a project is `DELETING`, only three requests are accepted against it:
+  `GET` its status, the `DELETE` retry, and `POST .../backups/purge`.
+  Everything else answers `409`.
+* A `DELETE` arriving while another teardown of the same project is still
+  running answers `409`. The call is synchronous and can outlive a proxy
+  timeout, so a client retry is safe: it is refused, not run in parallel.
+* Raise `DELETION_WAIT_TIMEOUT` (a Go duration, e.g. `10m`) on clusters where
+  storage detach is slow.
+
+### Backups retained after a project is deleted
+
+Deleting a project **keeps its backups** unless the request carries
+`{"confirmDeleteBackups": true}`. The decision is recorded on the row when the
+deletion starts, so a retry cannot drop a purge that was already confirmed;
+asking to keep backups after confirming a purge answers `409`.
+
+When backups are kept, the `200` response carries the object-store prefix they
+remain under:
+
+```json
+{"projectId":"proj-abc123","status":"DELETED",
+ "retainedBackupPrefix":"backups/proj-abc123/"}
+```
+
+**Record that prefix.** The platform has no endpoint that lists or purges the
+backups of a project whose record is gone — `POST .../backups/purge` needs the
+row, and the row is deleted with the project. Retained objects are reachable
+only with object-store credentials, by prefix:
+
+```bash
+aws s3 ls "s3://$BUCKET/backups/proj-abc123/" --endpoint-url "$R2_ENDPOINT"
+aws s3 rm --recursive "s3://$BUCKET/backups/proj-abc123/" --endpoint-url "$R2_ENDPOINT"
+```
+
+Whether the platform should instead keep a tombstone so an owner can find and
+purge their own retained backups is an open product question — today it cannot.
+
 ## 4. Revoke an org (cascade-drop all its projects)
 
 ```bash

@@ -219,3 +219,53 @@ func TestRevokeOrgRefusesWhenProjectsCannotBeListed(t *testing.T) {
 		t.Error("org must not be deleted when its projects could not be listed")
 	}
 }
+
+// A deletion that keeps the project's backups hands the caller the prefix
+// they stay under: once the record is gone, nothing in the API names them.
+func TestDeleteReportsRetainedBackups(t *testing.T) {
+	r, store, deleter := setupDeleteBackupsRouter(t)
+	req := httptest.NewRequest(http.MethodDelete, "/api/provision/proj-1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	prefix, _ := resp["retainedBackupPrefix"].(string)
+	if prefix == "" || !strings.Contains(prefix, "proj-1") {
+		t.Fatalf("retainedBackupPrefix = %q, want the project's prefix", prefix)
+	}
+	if inst, _ := store.FindByProjectID("proj-1"); inst != nil {
+		t.Error("row should be gone")
+	}
+	if len(deleter.deletedKeys()) != 0 {
+		t.Error("backups must be kept")
+	}
+}
+
+// A retry that asks to keep backups an earlier attempt was told to purge is
+// a conflict, not a silent change of plan.
+func TestDeleteRefusesToDowngradeAConfirmedPurge(t *testing.T) {
+	r, store, _ := setupDeleteBackupsRouter(t)
+	if _, err := store.BeginDeletion("proj-1", service.DeleteBackupsOption(true)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordDeletionFailure("proj-1", domain.StatusBackupsPendingDelete,
+		domain.DeletionStepDeleteBackups, "r2 unavailable"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/provision/proj-1",
+		strings.NewReader(`{"confirmDeleteBackups": false}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if inst, _ := store.FindByProjectID("proj-1"); inst == nil {
+		t.Error("row must survive a refused retry")
+	}
+}

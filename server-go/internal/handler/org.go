@@ -432,6 +432,13 @@ func (h *OrgHandler) ListProjectMembers(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, members)
 }
 
+// projectMemberWriteAllowed refuses membership writes against a project being
+// torn down: its member rows go with it, so a write here would either be lost
+// or outlive the project it names.
+func (h *OrgHandler) projectMemberWriteAllowed(w http.ResponseWriter, projectID string) bool {
+	return !refuseWhileDeleting(w, h.instanceStore, projectID)
+}
+
 func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	orgID := chi.URLParam(r, "orgId")
@@ -444,6 +451,9 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	if !h.projectBelongsToOrg(projectID, orgID) {
 		httpError(w, errOrgNotFound, http.StatusNotFound)
+		return
+	}
+	if !h.projectMemberWriteAllowed(w, projectID) {
 		return
 	}
 
@@ -490,6 +500,9 @@ func (h *OrgHandler) UpdateProjectMemberRole(w http.ResponseWriter, r *http.Requ
 		httpError(w, errOrgNotFound, http.StatusNotFound)
 		return
 	}
+	if !h.projectMemberWriteAllowed(w, projectID) {
+		return
+	}
 
 	var req struct {
 		Role string `json:"role"`
@@ -519,6 +532,9 @@ func (h *OrgHandler) RemoveProjectMember(w http.ResponseWriter, r *http.Request)
 	projectID := chi.URLParam(r, "projectId")
 	if !h.projectBelongsToOrg(projectID, orgID) {
 		httpError(w, errOrgNotFound, http.StatusNotFound)
+		return
+	}
+	if !h.projectMemberWriteAllowed(w, projectID) {
 		return
 	}
 	userID := chi.URLParam(r, "userId")

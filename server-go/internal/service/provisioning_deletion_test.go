@@ -249,26 +249,38 @@ func (s *stubbornVault) GetPublicKey() (string, error)         { return "", nil 
 type failingStore struct {
 	storage.InstanceStore
 	updateErr error
-	// failFrom is the 1-based update call from which updateErr starts being
-	// returned, so a test can let markDeleting through and fail the write
-	// that records the failure.
-	failFrom int
-	updates  int
+	// beginErr fails the deletion claim itself.
+	beginErr error
+	// recordErr fails the write that records how far a teardown got.
+	recordErr error
 }
 
 func (s *failingStore) Update(inst *domain.DatabaseInstance) error {
-	s.updates++
-	if s.updateErr != nil && s.updates >= s.failFrom {
+	if s.updateErr != nil {
 		return s.updateErr
 	}
 	return s.InstanceStore.Update(inst)
+}
+
+func (s *failingStore) BeginDeletion(projectID string, deleteBackups *bool) (bool, error) {
+	if s.beginErr != nil {
+		return false, s.beginErr
+	}
+	return s.InstanceStore.BeginDeletion(projectID, deleteBackups)
+}
+
+func (s *failingStore) RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error {
+	if s.recordErr != nil {
+		return s.recordErr
+	}
+	return s.InstanceStore.RecordDeletionFailure(projectID, status, step, reason)
 }
 
 // If the row cannot even be pinned to DELETING, nothing is torn down: the
 // record that tracks the teardown has to exist before the teardown starts.
 func TestDeprovisionStopsWhenDeletingStateCannotBePersisted(t *testing.T) {
 	svc, store, mock := setupDeletionTest(t)
-	svc.store = &failingStore{InstanceStore: store, updateErr: errors.New("db down"), failFrom: 1}
+	svc.store = &failingStore{InstanceStore: store, beginErr: errors.New("db down")}
 
 	if err := svc.Deprovision(context.Background(), testDeletingProj); err == nil {
 		t.Fatal(testWantErrNil)
@@ -283,8 +295,7 @@ func TestDeprovisionStopsWhenDeletingStateCannotBePersisted(t *testing.T) {
 func TestDeprovisionReportsFailureEvenWhenItCannotBeRecorded(t *testing.T) {
 	svc, store, mock := setupDeletionTest(t)
 	mock.DeleteNamespaceError = errors.New("forbidden")
-	// Update 1 is markDeleting; update 2 records the failing step.
-	svc.store = &failingStore{InstanceStore: store, updateErr: errors.New("db down"), failFrom: 2}
+	svc.store = &failingStore{InstanceStore: store, recordErr: errors.New("db down")}
 
 	if err := svc.Deprovision(context.Background(), testDeletingProj); err == nil {
 		t.Fatal(testWantErrNil)
@@ -325,9 +336,7 @@ func TestDeprovisionFailsWhenVaultCannotBeListed(t *testing.T) {
 // Credentials of a project under teardown open a database on its way out.
 func TestGetCredentialsRefusedWhileDeleting(t *testing.T) {
 	svc, store, _ := setupDeletionTest(t)
-	inst, _ := store.FindByProjectID(testDeletingProj)
-	inst.Status = string(domain.StatusDeleting)
-	if err := store.Update(inst); err != nil {
+	if _, err := store.BeginDeletion(testDeletingProj, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.GetCredentials(testDeletingProj); !errors.Is(err, ErrProjectDeleting) {

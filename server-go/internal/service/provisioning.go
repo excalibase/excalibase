@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -63,6 +64,12 @@ type ProvisioningService struct {
 	// projectEvents announces a newly registered project to the data plane.
 	// Optional; nil means no announcement is published.
 	projectEvents ProjectEventPublisher
+
+	// deletionClaimer grants one teardown at a time per project. Lazily set
+	// to the in-process claimer; multi-replica deployments wire the
+	// advisory-lock one so the claim holds across them.
+	deletionClaimer DeletionClaimer
+	claimerOnce     sync.Once
 
 	// defaultDeploymentMode stamps inst.DeploymentMode at provision time
 	// for the k8s + docker pipelines. Empty falls back
@@ -530,14 +537,25 @@ var (
 	// ErrProjectDeleting is returned when a project under teardown is asked
 	// to serve as a live project.
 	ErrProjectDeleting = errors.New("project is being deleted")
+	// ErrDeletionInProgress is returned when a teardown of the same project
+	// is already running. The synchronous DELETE can outlive an edge proxy's
+	// timeout and be retried while the first run is still working; refusing
+	// the second is what keeps the two from tearing down in parallel.
+	ErrDeletionInProgress = errors.New("a deletion of this project is already running")
 )
 
 // DeprovisionOptions tunes what Deprovision removes beyond the project.
 type DeprovisionOptions struct {
 	// DeleteBackups purges the project's backup objects once its resources
-	// are gone. Default false: backups outlive the project.
-	DeleteBackups bool
+	// are gone. nil means the caller expressed no preference — a retry then
+	// inherits whatever the running deletion recorded, so a bare retry can
+	// never drop a purge someone already confirmed. A caller that explicitly
+	// asks to keep backups over a confirmed purge is refused.
+	DeleteBackups *bool
 }
+
+// DeleteBackupsOption builds the explicit form of the option.
+func DeleteBackupsOption(delete bool) *bool { return &delete }
 
 // SetBackupPurger wires the object-store purge used when a deprovision asks
 // for its backups to be deleted.
@@ -571,17 +589,37 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 	if err != nil || inst == nil {
 		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
 	}
-	if inst.DeletionProtection != nil && *inst.DeletionProtection {
+	// Protection is checked before the first claim only: once a teardown
+	// owns the row the decision to delete has been made and recorded, and a
+	// protection flag set meanwhile must not strand it half torn down.
+	if !domain.IsDeletionStatus(inst.Status) && inst.DeletionProtection != nil && *inst.DeletionProtection {
 		return fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
 	}
-	if opts.DeleteBackups && s.backupPurger == nil {
+	if opts.DeleteBackups != nil && *opts.DeleteBackups && s.backupPurger == nil {
 		return ErrBackupPurgeNotConfigured
 	}
 
-	if err := s.markDeleting(inst); err != nil {
+	release, claimed, err := s.claimer().Claim(ctx, projectID)
+	if err != nil {
+		return fmt.Errorf("claim project for deletion: %w", err)
+	}
+	if !claimed {
+		return fmt.Errorf("%w: %s", ErrDeletionInProgress, projectID)
+	}
+	defer release()
+
+	deleteBackups, err := s.store.BeginDeletion(projectID, opts.DeleteBackups)
+	if err != nil {
 		return err
 	}
-	for _, step := range s.deletionSteps(opts) {
+	if deleteBackups && s.backupPurger == nil {
+		return s.recordDeletionFailure(inst, domain.DeletionStepDeleteBackups, ErrBackupPurgeNotConfigured)
+	}
+	// Work from the claimed row, not the pre-claim snapshot.
+	if inst, err = s.store.FindByProjectID(projectID); err != nil || inst == nil {
+		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+	}
+	for _, step := range s.deletionSteps(deleteBackups) {
 		if err := step.run(ctx, inst); err != nil {
 			return s.recordDeletionFailure(inst, step.name, err)
 		}
@@ -589,18 +627,59 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 	return nil
 }
 
+// SetDeletionClaimer replaces the default in-process teardown claim. Wire the
+// advisory-lock claimer when several control-plane replicas share a database.
+func (s *ProvisioningService) SetDeletionClaimer(c DeletionClaimer) { s.deletionClaimer = c }
+
+func (s *ProvisioningService) claimer() DeletionClaimer {
+	s.claimerOnce.Do(func() {
+		if s.deletionClaimer == nil {
+			s.deletionClaimer = newInProcessDeletionClaimer()
+		}
+	})
+	return s.deletionClaimer
+}
+
+// RetainedBackupPrefix is the object-store prefix a deleted project's backups
+// are kept under when the deletion did not ask for them to be purged. The
+// delete response carries it because once the row is gone nothing else names
+// it: the platform has no endpoint that lists or purges backups of a project
+// it no longer has a record of.
+func (s *ProvisioningService) RetainedBackupPrefix(inst *domain.DatabaseInstance) (string, bool) {
+	keyPrefix, ok := s.backupKeyPrefix()
+	if !ok && inst.DeploymentMode == domain.ModeDocker {
+		// Docker's layout is whatever key prefix the purger was wired with.
+		// Without one, any prefix we returned would name the wrong place.
+		return "", false
+	}
+	prefix, err := ProjectBackupPrefix(inst.DeploymentMode, inst.ProjectID, keyPrefix)
+	if err != nil {
+		return "", false
+	}
+	return prefix, true
+}
+
+// backupKeyPrefix is the docker-mode key prefix the purger was wired with,
+// and whether there is a purger to have been wired at all.
+func (s *ProvisioningService) backupKeyPrefix() (string, bool) {
+	if s.backupPurger == nil {
+		return "", false
+	}
+	return s.backupPurger.DockerKeyPrefix(), true
+}
+
 // deletionSteps is the teardown order. NATS and PgDog go first so nothing
 // reconnects to a database that is about to disappear; the provisioner then
 // removes the database resources and waits them out; backups are purged only
 // once those resources are gone; the credentials that reach them are removed
 // last, and the row itself only after all of it.
-func (s *ProvisioningService) deletionSteps(opts DeprovisionOptions) []deletionStep {
+func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	steps := []deletionStep{
 		{domain.DeletionStepRevokeNats, s.revokeNatsCredentials},
 		{domain.DeletionStepDeregisterPgDog, s.deregisterPgDog},
 		{domain.DeletionStepDeleteResources, s.deleteDatabaseResources},
 	}
-	if opts.DeleteBackups {
+	if deleteBackups {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteBackups, s.purgeBackups})
 	}
 	return append(steps,
@@ -609,33 +688,18 @@ func (s *ProvisioningService) deletionSteps(opts DeprovisionOptions) []deletionS
 	)
 }
 
-// markDeleting pins the row in DELETING before anything is touched, so a
-// teardown interrupted by a crash is still visible as one in flight.
-func (s *ProvisioningService) markDeleting(inst *domain.DatabaseInstance) error {
-	inst.Status = string(domain.StatusDeleting)
-	inst.CurrentStage = domain.StatusDeleting
-	inst.DeletionStep = ""
-	inst.DeletionError = ""
-	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-	if err := s.store.Update(inst); err != nil {
-		return fmt.Errorf("mark project deleting: %w", err)
-	}
-	return nil
-}
-
 // recordDeletionFailure persists which step failed and why, then returns the
 // original error so the caller reports failure. The row stays in DELETING and
 // the same DELETE resumes from it.
 func (s *ProvisioningService) recordDeletionFailure(inst *domain.DatabaseInstance, step string, cause error) error {
 	log.Printf("deletion of %s stopped at %s: %v", inst.ProjectID, step, cause)
-	inst.DeletionStep = step
-	inst.DeletionError = cause.Error()
-	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-	if inst.Status != string(domain.StatusBackupsPendingDelete) {
-		inst.Status = string(domain.StatusDeleting)
-		inst.CurrentStage = domain.StatusDeleting
+	status := domain.StatusDeleting
+	if step == domain.DeletionStepDeleteBackups {
+		// The project's resources are gone by now; only the backup objects
+		// are outstanding, which is what POST /backups/purge retries.
+		status = domain.StatusBackupsPendingDelete
 	}
-	if err := s.store.Update(inst); err != nil {
+	if err := s.store.RecordDeletionFailure(inst.ProjectID, status, step, cause.Error()); err != nil {
 		log.Printf(warnPersistFmt, err)
 	}
 	return fmt.Errorf("deletion step %s: %w", step, cause)
@@ -676,7 +740,6 @@ func (s *ProvisioningService) purgeBackups(ctx context.Context, inst *domain.Dat
 		return nil
 	}
 	if err != nil {
-		s.markBackupsPendingDelete(inst, err)
 		return err
 	}
 	log.Printf("backup purge for %s deleted %d objects", inst.ProjectID, deleted)
@@ -687,16 +750,6 @@ func (s *ProvisioningService) purgeBackups(ctx context.Context, inst *domain.Dat
 // project remains visible as DELETING with everything needed to retry.
 func (s *ProvisioningService) deleteProjectRecord(_ context.Context, inst *domain.DatabaseInstance) error {
 	return s.store.Delete(inst.ProjectID)
-}
-
-func (s *ProvisioningService) markBackupsPendingDelete(inst *domain.DatabaseInstance, cause error) {
-	inst.Status = string(domain.StatusBackupsPendingDelete)
-	inst.CurrentStage = domain.StatusBackupsPendingDelete
-	inst.FailureReason = "backup purge failed: " + cause.Error()
-	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-	if err := s.store.Update(inst); err != nil {
-		log.Printf(warnPersistFmt, err)
-	}
 }
 
 // PurgeBackups retries the backup deletion for a row left in
@@ -716,7 +769,10 @@ func (s *ProvisioningService) PurgeBackups(ctx context.Context, projectID string
 	}
 	deleted, err := s.backupPurger.Purge(ctx, inst)
 	if err != nil {
-		s.markBackupsPendingDelete(inst, err)
+		if rerr := s.store.RecordDeletionFailure(projectID, domain.StatusBackupsPendingDelete,
+			domain.DeletionStepDeleteBackups, "backup purge failed: "+err.Error()); rerr != nil {
+			log.Printf(warnPersistFmt, rerr)
+		}
 		return deleted, err
 	}
 	log.Printf("backup purge retry for %s deleted %d objects", projectID, deleted)
