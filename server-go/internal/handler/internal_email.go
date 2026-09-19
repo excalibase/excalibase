@@ -66,25 +66,32 @@ func (h *InternalEmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "malformed request body", http.StatusBadRequest)
 		return
 	}
+	// The project ref is the only request field that reaches the log, so it is
+	// held to the same shape every other project path parameter is.
+	if !isValidID(req.ProjectID) {
+		httpError(w, "invalid project id", http.StatusBadRequest)
+		return
+	}
 	if strings.TrimSpace(req.To) == "" {
 		httpError(w, "missing recipient", http.StatusBadRequest)
 		return
 	}
 
-	msg, err := buildInternalEmail(req)
+	msg, template, err := buildInternalEmail(req)
 	if err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	msg.To = []string{req.To}
 
+	projectID := safeLog(req.ProjectID)
 	if _, err := h.sender.Send(r.Context(), msg); err != nil {
 		if errors.Is(err, email.ErrNotConfigured) {
-			log.Printf("INFO: email provider not configured; dropping %s for %s", req.Template, req.ProjectID)
+			log.Printf("INFO: email provider not configured; dropping %s for %s", template, projectID)
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		log.Printf("ERROR: email relay failed for %s template %s: %v", req.ProjectID, req.Template, err)
+		log.Printf("ERROR: email relay failed for %s template %s: %v", projectID, template, err)
 		httpError(w, "email provider failed", http.StatusBadGateway)
 		return
 	}
@@ -92,23 +99,27 @@ func (h *InternalEmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildInternalEmail dispatches on the template name. Unknown or missing
-// templates are a client error, never a silent no-op.
-func buildInternalEmail(req internalEmailRequest) (email.Message, error) {
+// templates are a client error, never a silent no-op. The template name it
+// returns is the matched constant, not the request string, so callers can log
+// it without carrying the caller's bytes along.
+func buildInternalEmail(req internalEmailRequest) (email.Message, string, error) {
 	switch req.Template {
 	case emailTemplateVerify:
-		return email.BuildVerifyEmail(email.VerifyEmailData{
+		msg, err := email.BuildVerifyEmail(email.VerifyEmailData{
 			UserEmail:   req.Data["userEmail"],
 			VerifyURL:   req.Data["verifyUrl"],
 			ExpiresHour: atoiOrZero(req.Data["expiresHour"]),
 		})
+		return msg, emailTemplateVerify, err
 	case emailTemplateReset:
-		return email.BuildPasswordResetEmail(email.PasswordResetData{
+		msg, err := email.BuildPasswordResetEmail(email.PasswordResetData{
 			UserEmail:  req.Data["userEmail"],
 			ResetURL:   req.Data["resetUrl"],
 			ExpiresMin: atoiOrZero(req.Data["expiresMin"]),
 		})
+		return msg, emailTemplateReset, err
 	default:
-		return email.Message{}, errors.New("unknown or missing template")
+		return email.Message{}, "", errors.New("unknown or missing template")
 	}
 }
 

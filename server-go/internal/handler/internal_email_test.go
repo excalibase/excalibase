@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -176,5 +178,74 @@ func TestInternalEmailSend_NilSenderIsUnavailable(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503 when no sender is wired, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// captureLogs redirects the standard logger for the duration of fn and returns
+// everything written to it.
+func captureLogs(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(previous)
+	fn()
+	return buf.String()
+}
+
+// A caller that smuggles CR/LF into projectId must be rejected at the boundary,
+// and nothing it sent may reach the log — forged log lines are the whole point
+// of the attack.
+func TestInternalEmailSend_ProjectIDWithControlCharactersRejected(t *testing.T) {
+	cases := []struct {
+		name      string
+		projectID string
+	}{
+		{"line feed", `proj_p1\nERROR: forged relay failure`},
+		{"carriage return", `proj_p1\rERROR: forged relay failure`},
+		{"missing", ``},
+		{"illegal characters", `proj p1;DROP`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := &recordingEmailSender{err: errors.New("provider exploded")}
+			r := newInternalEmailRouter(sender)
+			body := `{"projectId":"` + tc.projectID + `","to":"` + testRecipient +
+				`","template":"verify_email","data":{"verifyUrl":"` + testVerifyURL + `"}}`
+
+			var w *httptest.ResponseRecorder
+			logged := captureLogs(t, func() { w = postInternalEmail(r, body) })
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
+			}
+			if len(sender.sent) != 0 {
+				t.Errorf("sender must not be called")
+			}
+			if strings.Contains(logged, "forged") {
+				t.Errorf("injected text reached the log: %q", logged)
+			}
+		})
+	}
+}
+
+// Even for a project id that passed validation, the relay failure log must be
+// a single line naming the template by its validated constant.
+func TestInternalEmailSend_RelayFailureLogsOneLine(t *testing.T) {
+	sender := &recordingEmailSender{err: errors.New("provider exploded")}
+	r := newInternalEmailRouter(sender)
+	body := `{"projectId":"proj_p1","to":"` + testRecipient +
+		`","template":"verify_email","data":{"verifyUrl":"` + testVerifyURL + `"}}`
+
+	logged := captureLogs(t, func() { postInternalEmail(r, body) })
+
+	if strings.Count(strings.TrimSpace(logged), "\n") != 0 {
+		t.Errorf("relay failure log must be one line, got %q", logged)
+	}
+	if !strings.Contains(logged, emailTemplateVerify) {
+		t.Errorf("log must name the validated template, got %q", logged)
+	}
+	if strings.Contains(logged, testRecipient) {
+		t.Errorf("log must never carry the recipient address, got %q", logged)
 	}
 }
