@@ -194,6 +194,21 @@ func RequireUnrestrictedCredential(next http.Handler) http.Handler {
 	})
 }
 
+// RequireUnrestrictedCredentialForWrites is the method-aware variant: reads
+// pass untouched, so the service principals that fetch one named secret keep
+// working, but anything that creates, overwrites or destroys the material
+// behind the route refuses a narrowed PAT. Mounted on the vault subtree, where
+// a project-bound credential must never reach platform-wide key material.
+func RequireUnrestrictedCredentialForWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			next.ServeHTTP(w, r)
+			return
+		}
+		RequireUnrestrictedCredential(next).ServeHTTP(w, r)
+	})
+}
+
 // writeForbidden emits the 403 body used by the token-level gates.
 func writeForbidden(w http.ResponseWriter, message string) {
 	w.Header().Set(headerContentType, contentTypeJSON)

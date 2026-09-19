@@ -4,6 +4,23 @@ This is the day-1 to day-N reference for running an Excalibase platform. It assu
 
 For the ordered production install (prerequisites, secrets, `values-prod.yaml`, bootstrap, first admin, tiers) and the troubleshooting matrix, start with [docs/deployment/production-k8s-runbook.md](docs/deployment/production-k8s-runbook.md); this file is the API-level reference it links to.
 
+## 0. Who may call what — the role ladder
+
+Every route the control plane mounts has a row in `server-go/internal/routepolicy`: its authentication class, the platform permission it needs, the path parameter that names the tenant, what resolves the caller's right to that tenant, and the minimum org role. A test walks the real router and fails if a mounted route has no row, if a row matches no route, or if driving the router with synthetic callers contradicts the row — so this table is the answer to "who can do this?", not a description of it.
+
+Project-scoped routes sit on one of three rungs, decided by what the call can destroy or disclose:
+
+| Rung | What it covers |
+|------|----------------|
+| **viewer** | Reads only: project status and logs, metrics, performance, project info, schema browsing, listing buckets and objects, minting a download URL, listing realtime tables, alerts. |
+| **developer** | Data-plane authoring — everything that changes what the tenant's database or edge serves and is undone by authoring it back: schema DDL, `/query` and row writes, migrations, RLS and column policies, table grants, edge functions (deploy, secrets, egress), the browser-origin allowlist, auth settings, realtime publication membership, and storage buckets and objects. A bucket is a container inside the project the way a table is, so dropping one sits with `DROP TABLE`, not with project teardown. |
+| **admin** | Project lifecycle and credentials — what a tenant cannot author their way back out of: delete the project, read or rotate its database credentials, deletion protection, pause and resume, backups and restores, backup purge, and full-database snapshots. |
+| **owner** | Deleting the org. Everything else admin covers. |
+
+Org-scoped routes read on membership and write on the org **admin** rung. Platform-wide routes (users, service accounts, tier configs, parameter groups, operator install, vault) carry a platform permission instead of an org role; the routes that hand out or destroy platform-wide authority — minting and deleting service accounts, and vault init / unseal / seal / rekey / secret writes — additionally refuse any narrowed PAT, so a project-bound credential can never reach them even when its owner is a platform admin.
+
+Anything a caller may not see answers **404**, never 403: a 403 would confirm the project exists.
+
 ## 1. Install
 
 ```bash

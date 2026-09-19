@@ -202,3 +202,62 @@ func (s *Instances) RecordDeletionFailure(projectID string, status domain.Provis
 	s.Items[projectID] = failed
 	return nil
 }
+
+// Users is a storage.UserStore holding the accounts the authorization tests
+// need. Only lookups are modelled; the mutating methods answer without
+// persisting, which is all a gate-level test asks of them.
+type Users struct{ ByID map[string]*domain.User }
+
+// NewUsers returns an empty user store.
+func NewUsers() *Users { return &Users{ByID: map[string]*domain.User{}} }
+
+// Add registers the user under its id.
+func (s *Users) Add(u *domain.User) { s.ByID[u.ID] = u }
+
+// FindUserByID returns the user or an error when unknown.
+func (s *Users) FindUserByID(_ context.Context, id string) (*domain.User, error) {
+	u := s.ByID[id]
+	if u == nil {
+		return nil, errors.New("user not found")
+	}
+	return u, nil
+}
+
+// FindUserByUsername returns the matching user or nil.
+func (s *Users) FindUserByUsername(_ context.Context, username string) (*domain.User, error) {
+	for _, u := range s.ByID {
+		if u.Username == username {
+			return u, nil
+		}
+	}
+	return nil, nil
+}
+
+// FindUserByEmail returns the matching user or nil.
+func (s *Users) FindUserByEmail(_ context.Context, email string) (*domain.User, error) {
+	for _, u := range s.ByID {
+		if u.Email == email {
+			return u, nil
+		}
+	}
+	return nil, nil
+}
+
+// FindAllUsers returns every registered user.
+func (s *Users) FindAllUsers(context.Context) ([]*domain.User, error) {
+	out := make([]*domain.User, 0, len(s.ByID))
+	for _, u := range s.ByID {
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+func (s *Users) CreateUser(_ context.Context, u *domain.User) error {
+	s.ByID[u.ID] = u
+	return nil
+}
+func (s *Users) DeleteUser(_ context.Context, id string) error {
+	delete(s.ByID, id)
+	return nil
+}
+func (s *Users) UpdateUserPassword(context.Context, string, string) error { return nil }

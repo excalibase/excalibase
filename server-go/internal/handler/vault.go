@@ -47,6 +47,12 @@ func (h *VaultHandler) Routes(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.Use(auth.RequirePermission(auth.PermViewCredentials))
+		// PermViewCredentials asks what the caller's role is, not what their
+		// credential was narrowed to, so an operator's project-bound PAT
+		// satisfied it and could seal, rekey or overwrite platform-wide key
+		// material. Reads stay open — the service principals fetch one named
+		// secret with a capability token (EXC-395).
+		r.Use(auth.RequireUnrestrictedCredentialForWrites)
 		r.Post("/init", h.Init)
 		r.Post("/unseal", h.Unseal)
 		r.Post("/seal", h.Seal)

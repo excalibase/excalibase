@@ -573,8 +573,10 @@ func (h *OrgHandler) isMemberOrPlatformAdmin(r *http.Request, orgID, userID stri
 	if user != nil && auth.HasPermission(user.Role, auth.PermManageUsers) {
 		return true
 	}
-	_, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
-	return err == nil
+	// A store that reports "no such member" as (nil, nil) rather than an error
+	// must not read as membership, and must not be dereferenced below.
+	member, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
+	return err == nil && member != nil
 }
 
 func (h *OrgHandler) hasOrgPermission(r *http.Request, orgID, userID string, perm auth.OrgPermission) bool {
@@ -585,7 +587,7 @@ func (h *OrgHandler) hasOrgPermission(r *http.Request, orgID, userID string, per
 	}
 
 	member, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
-	if err != nil {
+	if err != nil || member == nil {
 		return false
 	}
 	return auth.HasOrgPermission(member.Role, perm)
