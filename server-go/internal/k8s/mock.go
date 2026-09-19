@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +28,7 @@ type MockClient struct {
 	Metrics              map[string][]PodResourceMetrics
 	HelmReleases         map[string]map[string]interface{} // key: "namespace/release" → values
 	Calls                []string                          // track method calls
+	ExecCommands         []string                          // every argv ExecInPod was called with, joined by " "
 	HelmError            error                             // if non-nil, InstallHelmChart returns this error
 	NamespaceError       error                             // if non-nil, CreateNamespace returns this error
 	DeleteNamespaceError error                             // if non-nil, DeleteNamespace returns this error
@@ -193,6 +195,7 @@ func (m *MockClient) ExecInPod(ctx context.Context, namespace, pod, container st
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "ExecInPod:"+namespace+"/"+pod)
+	m.ExecCommands = append(m.ExecCommands, strings.Join(cmd, " "))
 	key := namespace + "/" + pod
 	if err, ok := m.ExecError[key]; ok && err != nil {
 		return "", err

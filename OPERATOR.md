@@ -193,6 +193,42 @@ curl -X POST -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json'
 PITR (point-in-time recovery) reuses the same flow with a `targetTime`
 field in the body.
 
+#### What a restore leaves behind
+
+A restore ends exactly the way a provision does. Once the recovered database
+is up — the CNPG primary pod Ready in K8s mode, postgres out of recovery in
+Docker mode — the platform runs the same registration path a new project goes
+through:
+
+1. Platform roles (`auth_admin`, `excalibase_app`, `cdc_watcher`) are created,
+   and — because a restored database arrives carrying the source project's
+   roles and passwords — their passwords are **reset** to freshly generated
+   ones. The restored project therefore has its own credentials; leaking the
+   source's does not grant access to it, and vice versa.
+2. Those credentials are written to vault under
+   `projects/{newProjectId}/credentials/{role}`, which is what the schema
+   plane, graphql and auth read. Without this step the project exists but
+   every data-plane call fails with "project credentials not found in vault".
+3. The instance row is saved `ACTIVE`, carrying the source's org, tier and
+   deployment mode plus `restoredFromProjectId` / `restoredFromBackupId` so
+   support can trace where the data came from.
+4. The project is registered with PgDog, the project-created event is
+   published, and a `project_activity` marker is written so the new project is
+   not a candidate for idle-pause.
+
+So `GET /api/provision/{newProjectId}/`, `POST /api/schema/{newProjectId}/query`,
+graphql and auth all work as soon as the restore job reports `COMPLETED` —
+no manual SQL, no re-provisioning.
+
+**When a restore fails:** the job row goes `FAILED` with `failureReason`
+naming the step that failed, and **no project row is written**. The recovered
+database is deliberately left running (the namespace in K8s mode, the
+container in Docker mode) so the failure can be diagnosed. Clean up with
+`kubectl delete ns {orgId}-{newProjectId}` or `docker rm -f
+excalibase-{newProjectId}-postgres` once you are done, then re-run the
+restore. There is no half-registered state to repair: a project either has
+its credentials or it has no row at all.
+
 #### Backups on deprovision
 
 `DELETE /api/provision/{projectId}` keeps the project's backups by default —

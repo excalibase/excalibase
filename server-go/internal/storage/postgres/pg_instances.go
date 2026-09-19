@@ -24,9 +24,10 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 			maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 			backup_enabled, backup_schedule, backup_retention_days,
 			metrics_endpoint, grafana_dashboard_url,
+			restored_from_project_id, restored_from_backup_id,
 			last_active_at, last_xact_count, pause_reason,
 			created_at, updated_at, last_health_check
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45)
 		ON CONFLICT (project_id) DO UPDATE SET
 			project_name = EXCLUDED.project_name,
 			org_id = EXCLUDED.org_id,
@@ -64,6 +65,8 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 			backup_retention_days = EXCLUDED.backup_retention_days,
 			metrics_endpoint = EXCLUDED.metrics_endpoint,
 			grafana_dashboard_url = EXCLUDED.grafana_dashboard_url,
+			restored_from_project_id = EXCLUDED.restored_from_project_id,
+			restored_from_backup_id = EXCLUDED.restored_from_backup_id,
 			last_active_at = EXCLUDED.last_active_at,
 			last_xact_count = EXCLUDED.last_xact_count,
 			pause_reason = EXCLUDED.pause_reason,
@@ -80,6 +83,7 @@ func (s *Store) Save(inst *domain.DatabaseInstance) error {
 		inst.MaintenanceWindow, inst.MaintenanceWindowDurationMinutes, derefBool(inst.AutoMinorVersionUpgrade),
 		derefBool(inst.BackupEnabled), inst.BackupSchedule, inst.BackupRetentionDays,
 		inst.MetricsEndpoint, inst.GrafanaDashboardURL,
+		inst.RestoredFromProjectID, inst.RestoredFromBackupID,
 		flexTimePtr(inst.LastActiveAt), inst.LastXactCount, inst.PauseReason,
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 	)
@@ -97,6 +101,7 @@ const pgInstanceColumns = `
 	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 	backup_enabled, backup_schedule, backup_retention_days,
 	metrics_endpoint, grafana_dashboard_url,
+	restored_from_project_id, restored_from_backup_id,
 	last_active_at, last_xact_count, pause_reason,
 	created_at, updated_at, last_health_check`
 
@@ -182,6 +187,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&inst.MaintenanceWindow, &maintDur, &autoUpgrade,
 		&backupEn, &inst.BackupSchedule, &backupRet,
 		&inst.MetricsEndpoint, &inst.GrafanaDashboardURL,
+		&inst.RestoredFromProjectID, &inst.RestoredFromBackupID,
 		&lastActiveAt, &lastXactCount, &pauseReason,
 		&createdAt, &updatedAt, &lastHealth,
 	)

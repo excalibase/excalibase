@@ -75,7 +75,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 	// --- LocalStack S3 + real docker adapter wiring -----------------------
 	bucket := "excalibase-restore-e2e"
 	uploader := newLocalStackUploader(ctx, t, bucket)
-	adapter, store := newRestoreAdapter(ctx, t, uploader, bucket)
+	adapter, store, vault := newRestoreAdapter(ctx, t, uploader, bucket)
 
 	src := &domain.DatabaseInstance{
 		ProjectID:       "src-restore",
@@ -117,6 +117,39 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 	// HEALTHCHECK — pg may still be replaying WAL.
 	waitForQueryResult(ctx, t, resp.Namespace, src.Password,
 		"SELECT n FROM smoke", "4242", 60*time.Second)
+
+	// --- Verify the restored project is usable through the platform ------
+	// The row must exist (the API resolves projects through it) and the
+	// vault must hold excalibase_app credentials that the restored database
+	// actually accepts — the two halves of EXC-366.
+	registered, err := store.FindByProjectID("restored-001")
+	if err != nil || registered == nil {
+		t.Fatalf("restored project was not registered in the platform store: %v", err)
+	}
+	if registered.Status != "ACTIVE" || registered.RestoredFromProjectID != src.ProjectID {
+		t.Errorf("registered row: %+v", registered)
+	}
+	appCreds, err := vault.Get(vaultCredentialPath("restored-001", roleApp))
+	if err != nil {
+		t.Fatalf("excalibase_app credentials missing from vault: %v", err)
+	}
+	assertRoleCanConnect(ctx, t, resp.Namespace, appCreds)
+}
+
+// assertRoleCanConnect proves the password the platform filed in vault is the
+// one the restored database accepts — the reset actually reached the role.
+func assertRoleCanConnect(ctx context.Context, t *testing.T, containerID string, creds map[string]string) {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, "docker", "exec",
+		"-e", "PGPASSWORD="+creds["password"], containerID,
+		"psql", "-h", "127.0.0.1", "-U", creds["username"], "-d", creds["database"], "-tAc", "SELECT 1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("vault credentials rejected by the restored database: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if strings.TrimSpace(string(out)) != "1" {
+		t.Errorf("unexpected query output: %q", string(out))
+	}
 }
 
 // dockerExecPSQLQuery runs a SQL query and returns stdout.

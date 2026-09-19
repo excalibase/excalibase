@@ -46,6 +46,10 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	provSvc := service.NewProvisioningService(store, factory, mock)
 	metricsSvc := service.NewMetricsService(store, mock, dir)
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
+	// Restore ends in the shared registration path (EXC-366); the mock
+	// reports the recovered primary Ready straight away.
+	mock.WildcardPodReady = true
+	backupSvc.SetProjectRegistrar(provSvc)
 	perfSvc := service.NewPerformanceService(store, mock)
 	auditSvc := service.NewAuditService(store, mock)
 	snapshotSvc := service.NewSnapshotService(store, mock, dir)

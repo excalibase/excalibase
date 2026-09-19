@@ -15,7 +15,9 @@ func setupBackupTest(t *testing.T) (*BackupService, *storage.FileSystemStore) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
+	mock.WildcardPodReady = true
 	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
+	svc.SetProjectRegistrar(&fakeRegistrar{})
 
 	store.Save(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
@@ -71,7 +73,9 @@ func TestRestoreFromBackup(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
+	mock.WildcardPodReady = true
 	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
+	svc.SetProjectRegistrar(&fakeRegistrar{})
 	store.Save(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
 		DBType: domain.PostgreSQL,
@@ -86,7 +90,7 @@ func TestRestoreFromBackup(t *testing.T) {
 	if resp.ProjectID != "bk-db-restored" {
 		t.Errorf("projectId: got %s", resp.ProjectID)
 	}
-	if resp.Status != "RESTORING" {
+	if resp.Status != "ACTIVE" {
 		t.Errorf("status: got %s", resp.Status)
 	}
 

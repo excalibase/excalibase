@@ -2,9 +2,36 @@ package service
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
 )
+
+// RolePassword pairs a database role with the password it must end up with.
+type RolePassword struct {
+	Role     string
+	Password string
+}
+
+// BuildProjectRoleResetSQL emits one ALTER ROLE per entry. A cluster restored
+// from a backup already carries the source project's roles — with the source's
+// passwords — so BuildProjectRoleSQL's CREATE-if-absent blocks are no-ops
+// there and the freshly generated passwords the platform files in vault would
+// never reach the database. Running this afterwards makes "what vault holds"
+// and "what the database accepts" the same thing again.
+//
+// Pure, like BuildProjectRoleSQL: deterministic by input, no side effects.
+func BuildProjectRoleResetSQL(roles []RolePassword) string {
+	var b strings.Builder
+	for _, r := range roles {
+		if r.Role == "" || r.Password == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "\nALTER ROLE %s WITH LOGIN PASSWORD %s;",
+			schema.QuoteIdent(r.Role), schema.QuoteLiteral(r.Password))
+	}
+	return b.String()
+}
 
 // BuildProjectRoleSQL produces the role-creation SQL run as the postgres
 // superuser at provisioning time. Output:

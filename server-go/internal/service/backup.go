@@ -43,6 +43,17 @@ func NewBackupServiceWithAdapters(store storage.InstanceStore, adapters map[doma
 // RegisterAdapter adds or replaces an adapter at runtime. Used when
 // the Docker client is wired post-construction (matches the rest of
 // the service's setter-style dependency injection).
+// SetProjectRegistrar hands the shared registration path to every adapter
+// that restores into a new project. Without it a restore refuses to run
+// rather than producing a database no API route can reach.
+func (s *BackupService) SetProjectRegistrar(r ProjectRegistrar) {
+	for _, adapter := range s.adapters {
+		if setter, ok := adapter.(interface{ SetProjectRegistrar(ProjectRegistrar) }); ok {
+			setter.SetProjectRegistrar(r)
+		}
+	}
+}
+
 func (s *BackupService) RegisterAdapter(mode domain.DeploymentMode, adapter BackupAdapter) {
 	if s.adapters == nil {
 		s.adapters = make(map[domain.DeploymentMode]BackupAdapter)

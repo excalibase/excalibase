@@ -54,7 +54,7 @@ func TestDockerBackupAdapter_PITR_TargetName(t *testing.T) {
 	// --- LocalStack S3 + adapter wiring ----------------------------------
 	bucket := "excalibase-pitr-e2e"
 	uploader := newLocalStackUploader(ctx, t, bucket)
-	adapter, store := newRestoreAdapter(ctx, t, uploader, bucket)
+	adapter, store, _ := newRestoreAdapter(ctx, t, uploader, bucket)
 
 	src := &domain.DatabaseInstance{
 		ProjectID: "src-pitr", OrgID: "org", Namespace: srcID,
@@ -160,7 +160,7 @@ func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) { //NOSONAR seque
 
 	bucket := "excalibase-pitr-variants"
 	uploader := newLocalStackUploader(ctx, t, bucket)
-	adapter, store := newRestoreAdapter(ctx, t, uploader, bucket)
+	adapter, store, _ := newRestoreAdapter(ctx, t, uploader, bucket)
 
 	src := &domain.DatabaseInstance{
 		ProjectID: "src-variants", OrgID: "org", Namespace: srcID,
