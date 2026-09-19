@@ -30,6 +30,7 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 			deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 			webhook_url, postgres_version, tags,
 			status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
+			deletion_step, deletion_error,
 			network_policy_enabled,
 			maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 			backup_enabled, backup_schedule, backup_retention_days,
@@ -37,13 +38,14 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 			restored_from_project_id, restored_from_backup_id,
 			last_active_at, last_xact_count, pause_reason,
 			created_at, updated_at, last_health_check
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
 		derefBool(inst.DeletionProtection), derefBool(inst.PoolerEnabled), inst.PoolerHost, inst.SSLMode,
 		inst.WebhookURL, inst.PostgresVersion, inst.Tags,
 		inst.Status, inst.CurrentStage, inst.CurrentStep, inst.FailureReason, inst.FailureStage, inst.FailureStep, inst.RollbackLog,
+		inst.DeletionStep, inst.DeletionError,
 		derefBool(inst.NetworkPolicyEnabled),
 		inst.MaintenanceWindow, inst.MaintenanceWindowDurationMinutes, derefBool(inst.AutoMinorVersionUpgrade),
 		derefBool(inst.BackupEnabled), inst.BackupSchedule, inst.BackupRetentionDays,
@@ -110,7 +112,9 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 			last_xact_count = $40,
 			pause_reason = $41,
 			updated_at = $42,
-			last_health_check = $43
+			last_health_check = $43,
+			deletion_step = $44,
+			deletion_error = $45
 		WHERE project_id = $1`,
 		inst.ProjectID, inst.ProjectName, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
@@ -125,6 +129,7 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 		inst.RestoredFromProjectID, inst.RestoredFromBackupID,
 		flexTimePtr(inst.LastActiveAt), inst.LastXactCount, inst.PauseReason,
 		flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
+		inst.DeletionStep, inst.DeletionError,
 	)
 	if err != nil {
 		return err
@@ -146,6 +151,7 @@ const pgInstanceColumns = `
 	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 	webhook_url, postgres_version, tags,
 	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
+	deletion_step, deletion_error,
 	network_policy_enabled,
 	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 	backup_enabled, backup_schedule, backup_retention_days,
@@ -187,9 +193,50 @@ func (s *Store) FindAll() ([]*domain.DatabaseInstance, error) {
 	return result, nil
 }
 
+// projectOwnedTables hold a project's configuration, grants and credentials.
+// They are keyed by project_id without a foreign key, so removing the
+// project row alone would leave them behind — policies and grants naming a
+// project id that a later project could be issued. Delete clears them in the
+// same transaction as the row, so the project is gone or it is not.
+//
+// Deliberately excluded: the history tables (database_metrics, alerts,
+// backup_records, migration_records, restore_jobs, audit_log), which record
+// what happened rather than what the project can do.
+var projectOwnedTables = []string{
+	"rls_policies",
+	"column_policies",
+	"table_grants",
+	"project_exposure_settings",
+	"project_cors_settings",
+	"edge_function_settings",
+	"edge_functions",
+	"edge_shared_files",
+	"backup_schedules",
+	"nats_credentials",
+	"storage_buckets", // storage_objects cascade from these
+	"storage_quota",
+	"project_members",
+	"access_tokens",
+}
+
+// Delete removes the project and everything filed under it.
 func (s *Store) Delete(projectID string) error {
-	_, err := s.db.Exec(`DELETE FROM database_instances WHERE project_id = $1`, projectID)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin delete project: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, table := range projectOwnedTables {
+		// Table names come from the constant list above, never from input.
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE project_id = $1`, projectID); err != nil {
+			return fmt.Errorf("delete %s rows: %w", table, err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM database_instances WHERE project_id = $1`, projectID); err != nil {
+		return fmt.Errorf("delete project row: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error) {
@@ -232,6 +279,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&delProt, &poolerEn, &inst.PoolerHost, &inst.SSLMode,
 		&inst.WebhookURL, &inst.PostgresVersion, &inst.Tags,
 		&inst.Status, &inst.CurrentStage, &inst.CurrentStep, &inst.FailureReason, &inst.FailureStage, &inst.FailureStep, &inst.RollbackLog,
+		&inst.DeletionStep, &inst.DeletionError,
 		&netPol,
 		&inst.MaintenanceWindow, &maintDur, &autoUpgrade,
 		&backupEn, &inst.BackupSchedule, &backupRet,

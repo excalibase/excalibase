@@ -48,6 +48,10 @@ func ProjectAccessFromContext(ctx context.Context) *ProjectAccess {
 // an org, caller not a member, or the caller's token is bound to a different
 // project. Platform admins (PermManageUsers) skip the membership lookup but
 // never escape a token binding.
+//
+// A project in DELETING is deliberately still resolved: its owner has to be
+// able to read the stalled teardown and retry the DELETE. The data plane is
+// where a project under teardown stops being served — see GetProjectInfo.
 func ResolveProjectAccess(ctx context.Context, user *domain.User, token *domain.AccessToken, projectID string, instStore storage.InstanceStore, orgStore storage.OrgStore) *ProjectAccess {
 	if user == nil || !auth.TokenBoundToProject(token, projectID) {
 		return nil

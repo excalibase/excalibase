@@ -238,9 +238,44 @@ func (c *Client) ensureNamespaceIsolationPolicy(ctx context.Context, namespace s
 	return nil
 }
 
-// DeleteNamespace deletes a K8s namespace.
+// DeleteNamespace deletes a K8s namespace. An already-absent namespace is a
+// success so a retried teardown is idempotent.
 func (c *Client) DeleteNamespace(ctx context.Context, name string) error {
-	return c.clientset.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
+	err := c.clientset.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// NamespaceExists reports whether the namespace object is still present. A
+// namespace in Terminating is still present — that is the point.
+func (c *Client) NamespaceExists(ctx context.Context, name string) (bool, error) {
+	_, err := c.clientset.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get namespace %s: %w", name, err)
+	}
+	return true, nil
+}
+
+// ListPVCs returns the names of the PersistentVolumeClaims in a namespace. A
+// namespace that is already gone holds no claims.
+func (c *Client) ListPVCs(ctx context.Context, namespace string) ([]string, error) {
+	list, err := c.clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list pvcs in %s: %w", namespace, err)
+	}
+	names := make([]string, 0, len(list.Items))
+	for _, pvc := range list.Items {
+		names = append(names, pvc.Name)
+	}
+	return names, nil
 }
 
 // ApplyCRD creates or updates an unstructured CRD resource.
@@ -264,9 +299,26 @@ func (c *Client) GetCRD(ctx context.Context, gvr schema.GroupVersionResource, na
 	return c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 }
 
-// DeleteCRD deletes a CRD resource.
+// DeleteCRD deletes a CRD resource. An already-absent resource is a success
+// so a retried teardown is idempotent.
 func (c *Client) DeleteCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) error {
-	return c.dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	err := c.dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// CRDExists reports whether the named resource is still present.
+func (c *Client) CRDExists(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (bool, error) {
+	_, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get %s %s/%s: %w", gvr.Resource, namespace, name, err)
+	}
+	return true, nil
 }
 
 // GetPods lists pods in a namespace with optional label selector.

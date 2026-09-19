@@ -52,8 +52,8 @@ func TestGetStatusPodError(t *testing.T) {
 	}
 }
 
-// TestDeprovisionWithCRDDeleteError covers the warn-and-continue branch in
-// Deprovision when DeleteCRD fails. The namespace must still be deleted.
+// A namespace deleted under a live database Cluster wedges the operator's
+// finalizers, so a failing cluster delete stops the teardown there.
 func TestDeprovisionWithCRDDeleteError(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.Namespaces[testOrg1Proj] = true
@@ -61,11 +61,11 @@ func TestDeprovisionWithCRDDeleteError(t *testing.T) {
 	prov := NewPostgreSQLProvisioner(mock, "")
 
 	err := prov.Deprovision(context.Background(), testOrg1Proj, "proj")
-	if err != nil {
-		t.Fatalf("Deprovision should succeed even when CRD delete fails: %v", err)
+	if err == nil {
+		t.Fatal("expected the cluster delete failure to be reported")
 	}
-	if mock.Namespaces[testOrg1Proj] {
-		t.Error("namespace should have been deleted despite CRD delete failure")
+	if !mock.Namespaces[testOrg1Proj] {
+		t.Error("namespace must not be deleted while the cluster delete failed")
 	}
 }
 

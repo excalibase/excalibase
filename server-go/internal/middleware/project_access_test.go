@@ -238,3 +238,23 @@ func TestRequireProjectRoleForWrites(t *testing.T) {
 		})
 	}
 }
+
+// A project under teardown stays reachable through the gate: its owner must
+// be able to read its DELETING status and retry the DELETE that stalled.
+// Hiding it here would make a failed teardown unrecoverable through the API.
+func TestRequireProjectAccess_DeletingProjectStaysReachable(t *testing.T) {
+	inst := fakestore.NewInstances()
+	inst.Create(&domain.DatabaseInstance{
+		ProjectID: testProject, OrgID: testOrg, Status: string(domain.StatusDeleting),
+	})
+	memberID := testutil.FixturePassword("member")
+	orgs := fakestore.NewOrgs()
+	orgs.AddMember(testOrg, memberID, "owner")
+
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		r := projectRequest(method, testProject, memberUser(memberID), nil)
+		if code := serve(t, RequireProjectAccess(inst, orgs), r); code != http.StatusOK {
+			t.Errorf("%s on a DELETING project: got %d, want 200", method, code)
+		}
+	}
+}

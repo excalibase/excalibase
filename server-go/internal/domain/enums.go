@@ -60,6 +60,23 @@ const (
 	// whose backup objects could not be purged. The row is kept only so
 	// POST /backups/purge (or an operator sweep) can retry the deletion.
 	StatusBackupsPendingDelete ProvisioningStage = "BACKUPS_PENDING_DELETE"
+	// StatusDeleting marks a project whose teardown has started. The row
+	// survives until every cleanup step is observed complete, so a failed
+	// or timed-out teardown keeps the record needed to retry it. A project
+	// in this state is no longer usable and must not be served as active.
+	StatusDeleting ProvisioningStage = "DELETING"
+)
+
+// DeletionSteps are the teardown steps, in the order Deprovision runs them.
+// The name of the step that failed is persisted on the row so a retry —
+// and an operator — can see exactly how far the teardown got.
+const (
+	DeletionStepRevokeNats      = "REVOKE_NATS_CREDENTIALS"
+	DeletionStepDeregisterPgDog = "DEREGISTER_PGDOG"
+	DeletionStepDeleteResources = "DELETE_DATABASE_RESOURCES"
+	DeletionStepDeleteBackups   = "DELETE_BACKUPS"
+	DeletionStepDeleteVault     = "DELETE_VAULT_CREDENTIALS"
+	DeletionStepDeleteRecord    = "DELETE_PROJECT_RECORD"
 )
 
 // Pause reasons recorded on database_instances.pause_reason. Empty

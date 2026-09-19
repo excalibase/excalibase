@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -69,7 +70,8 @@ func setupDeleteBackupsRouter(t *testing.T) (chi.Router, *storage.FileSystemStor
 		t.Fatalf("init store: %v", err)
 	}
 	deleter := &recordingDeleter{keys: []string{"proj-1/cloud/base/b1/data.tar.gz", "proj-2/cloud/base/b1/data.tar.gz"}}
-	svc := service.NewProvisioningService(store, provisioner.NewFactory(), nil)
+	mock := k8s.NewMockClient()
+	svc := service.NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
 	creds := &domain.S3Credentials{AccessKeyID: "k", SecretAccessKey: "s", Bucket: "b"}
 	svc.SetBackupPurger(service.NewBackupPurger(service.StaticBackupStorage(creds), "backups/",
 		func(_ context.Context, _ *domain.S3Credentials) (service.ObjectDeleter, error) { return deleter, nil }))
@@ -78,7 +80,7 @@ func setupDeleteBackupsRouter(t *testing.T) (chi.Router, *storage.FileSystemStor
 	r := chi.NewRouter()
 	r.Route("/api/provision", func(r chi.Router) { h.Routes(r) })
 	for _, id := range []string{"proj-1", "proj-2"} {
-		if err := store.Create(&domain.DatabaseInstance{ProjectID: id, OrgID: "org1", DeploymentMode: domain.ModeK8s, Status: "ACTIVE"}); err != nil {
+		if err := store.Create(&domain.DatabaseInstance{ProjectID: id, OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeK8s, Status: "ACTIVE"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -91,7 +93,8 @@ func TestDeleteWithoutConfirmKeepsBackups(t *testing.T) {
 		req := httptest.NewRequest(http.MethodDelete, "/api/provision/proj-1", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
-		if w.Code != http.StatusOK && w.Code != http.StatusBadRequest {
+		// The first body deletes the project; the rest find it already gone.
+		if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
 			t.Fatalf("body %q: status %d", body, w.Code)
 		}
 	}

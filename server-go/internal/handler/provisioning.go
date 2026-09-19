@@ -277,12 +277,30 @@ func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	log.Printf("tenant=%s action=deprovision path=%s backups=%s", tenant, r.URL.Path, backupDisposition(opts))
 	if err := h.svc.DeprovisionWithOptions(r.Context(), projectID, opts); err != nil {
 		log.Printf("tenant=%s action=deprovision status=failed err=%v", tenant, err)
-		httpError(w, safeError(err), http.StatusBadRequest)
+		writeDeprovisionError(w, err)
 		return
 	}
 	log.Printf("tenant=%s action=deprovision status=ok", tenant)
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Database instance deleted successfully"))
+	writeJSON(w, map[string]string{"projectId": projectID, "status": "DELETED"})
+}
+
+// writeDeprovisionError separates a refused request — the caller asked for
+// something the platform will not do — from a teardown that started and did
+// not finish. The latter is a 500 with a fixed message: the underlying cause
+// is a cluster/vault detail that belongs in the server log, while the row
+// keeps the failing step so an operator can see it through GET.
+func writeDeprovisionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrProjectNotFound):
+		httpError(w, "project not found", http.StatusNotFound)
+	case errors.Is(err, service.ErrBackupPurgeNotConfigured):
+		httpError(w, safeError(err), http.StatusBadRequest)
+	case errors.Is(err, service.ErrDeletionProtected):
+		httpError(w, safeError(err), http.StatusBadRequest)
+	default:
+		httpError(w, "deletion did not complete; the project remains in DELETING — retry the request",
+			http.StatusInternalServerError)
+	}
 }
 
 // PurgeBackups retries the backup deletion of a project whose deprovision
@@ -309,6 +327,10 @@ func (h *ProvisioningHandler) PurgeBackups(w http.ResponseWriter, r *http.Reques
 func (h *ProvisioningHandler) GetCredentials(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	creds, err := h.svc.GetCredentials(projectID)
+	if errors.Is(err, service.ErrProjectDeleting) {
+		httpError(w, safeError(err), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		httpError(w, safeError(err), http.StatusNotFound)
 		return
@@ -418,6 +440,13 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 	inst, err := h.svc.GetInstance(projectID)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusNotFound)
+		return
+	}
+	// The data plane mints JWTs and routes traffic from this payload. A
+	// project under teardown is no longer a project it may serve, and it is
+	// about to stop existing, so it reads the same as an unknown one.
+	if inst.Status == string(domain.StatusDeleting) {
+		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}
 

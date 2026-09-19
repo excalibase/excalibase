@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -147,7 +148,8 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := h.provSvc.DeprovisionWithOptions(r.Context(), projectID, opts); err != nil {
-		httpError(w, "deprovision: "+safeError(err), http.StatusInternalServerError)
+		log.Printf("action=force_drop_project project=%s status=failed err=%v", projectID, err)
+		writeDeprovisionError(w, err)
 		return
 	}
 
@@ -183,7 +185,14 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dropped, failed := h.deprovisionOrgProjects(r.Context(), orgID)
+	dropped, failed, err := h.deprovisionOrgProjects(r.Context(), orgID)
+	if err != nil {
+		// Without the project list the cascade cannot know what it would be
+		// leaving behind, so nothing is deleted.
+		log.Printf("action=revoke_org org=%s status=failed err=%v", orgID, err)
+		httpError(w, "projects could not be listed; nothing was deleted", http.StatusInternalServerError)
+		return
+	}
 
 	// Delete org row last — only after all projects are gone, so org listing
 	// stays consistent if a project drop fails midway.
@@ -214,31 +223,42 @@ func (h *AdminHandler) RevokeOrg(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// deprovisionOrgProjects removes deletion protection and deprovisions all
-// projects belonging to the given org. Returns counts of dropped and failed IDs.
-func (h *AdminHandler) deprovisionOrgProjects(ctx context.Context, orgID string) (int, []string) {
-	instances, _ := h.store.FindAll()
+// deprovisionOrgProjects removes deletion protection and deprovisions every
+// project belonging to the org. It returns how many were torn down and the
+// ids of those that were not; a project that fails leaves its row in
+// DELETING with the reason, and the caller keeps the org. The reasons go to
+// the server log rather than the response — they name cluster and vault
+// internals. An unreadable project list is an error, not an empty cascade.
+func (h *AdminHandler) deprovisionOrgProjects(ctx context.Context, orgID string) (int, []string, error) {
+	instances, err := h.store.FindAll()
+	if err != nil {
+		return 0, nil, fmt.Errorf("list projects: %w", err)
+	}
 	dropped := 0
 	var failed []string
 	for _, inst := range instances {
 		if inst.OrgID != orgID {
 			continue
 		}
-		if inst.DeletionProtection != nil && *inst.DeletionProtection {
-			falseVal := false
-			inst.DeletionProtection = &falseVal
-			if err := h.store.Update(inst); err != nil {
-				failed = append(failed, inst.ProjectID+": save protection clear: "+err.Error())
-				continue
-			}
-		}
-		if err := h.provSvc.Deprovision(ctx, inst.ProjectID); err != nil {
-			failed = append(failed, inst.ProjectID+": "+err.Error())
+		if err := h.dropOrgProject(ctx, inst); err != nil {
+			log.Printf("action=revoke_org org=%s project=%s status=failed err=%v", orgID, inst.ProjectID, err)
+			failed = append(failed, inst.ProjectID)
 			continue
 		}
 		dropped++
 	}
-	return dropped, failed
+	return dropped, failed, nil
+}
+
+func (h *AdminHandler) dropOrgProject(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if inst.DeletionProtection != nil && *inst.DeletionProtection {
+		falseVal := false
+		inst.DeletionProtection = &falseVal
+		if err := h.store.Update(inst); err != nil {
+			return fmt.Errorf("clear deletion protection: %w", err)
+		}
+	}
+	return h.provSvc.Deprovision(ctx, inst.ProjectID)
 }
 
 func extractUserID(r *http.Request) string {
