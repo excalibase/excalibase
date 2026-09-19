@@ -65,6 +65,11 @@ const (
 	// or timed-out teardown keeps the record needed to retry it. A project
 	// in this state is no longer usable and must not be served as active.
 	StatusDeleting ProvisioningStage = "DELETING"
+	// StatusRestoring marks a project whose database has been recovered but
+	// not yet proved usable. A restore registers its target in this state and
+	// only flips it to ACTIVE once a query has answered, so a recovery that
+	// never happened is never served as a working project.
+	StatusRestoring ProvisioningStage = "RESTORING"
 )
 
 // StatusProvisioning is the status a project holds while its provisioning

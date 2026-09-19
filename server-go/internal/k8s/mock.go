@@ -37,6 +37,7 @@ type MockClient struct {
 	HelmError            error                             // if non-nil, InstallHelmChart returns this error
 	NamespaceError       error                             // if non-nil, CreateNamespace returns this error
 	DeleteNamespaceError error                             // if non-nil, DeleteNamespace returns this error
+	PodReadyError        error                             // if non-nil, IsPodReady returns this error
 	CRDError             error                             // if non-nil, ApplyCRD returns this error
 	DeleteCRDError       error                             // if non-nil, DeleteCRD returns this error
 	UninstallHelmError   error                             // if non-nil, UninstallHelmChart returns this error
@@ -45,9 +46,13 @@ type MockClient struct {
 	ListPVCsError        error                             // if non-nil, ListPVCs returns this error
 
 	// Wildcards — used when tests don't know the generated project ID upfront.
-	WildcardPodReady  bool              // IsPodReady returns true for any pod not in PodReady
-	WildcardSecret    map[string][]byte // GetSecret returns this if name not in Secrets
-	WildcardExecError error             // ExecInPod returns this for any pod not in ExecError
+	WildcardPodReady bool // IsPodReady returns true for any pod not in PodReady
+	// AutoReconcileClusters makes ApplyCRD stamp the healthy status a CNPG
+	// operator would write, for tests that need a Cluster to be observed
+	// ready rather than to exercise the wait itself.
+	AutoReconcileClusters bool
+	WildcardSecret        map[string][]byte // GetSecret returns this if name not in Secrets
+	WildcardExecError     error             // ExecInPod returns this for any pod not in ExecError
 
 	// DenoRuntimes — set of namespaces where EnsureDenoRuntime has been called.
 	DenoRuntimes map[string]bool
@@ -148,7 +153,21 @@ func (m *MockClient) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResour
 		return m.CRDError
 	}
 	m.CRDs[namespace+"/"+obj.GetName()] = obj
+	if m.AutoReconcileClusters && obj.GetKind() == "Cluster" {
+		markClusterHealthy(obj)
+	}
 	return nil
+}
+
+// markClusterHealthy writes the status a reconciled CNPG Cluster carries.
+// Callers that observe readiness read this; without it an applied Cluster
+// looks exactly like one no operator ever picked up.
+func markClusterHealthy(obj *unstructured.Unstructured) {
+	_ = unstructured.SetNestedMap(obj.Object, map[string]interface{}{
+		"phase":          "Cluster in healthy state",
+		"currentPrimary": obj.GetName() + "-1",
+		"readyInstances": int64(1),
+	}, "status")
 }
 
 func (m *MockClient) GetCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
@@ -207,6 +226,9 @@ func (m *MockClient) IsPodReady(ctx context.Context, namespace, name string) (bo
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "IsPodReady:"+namespace+"/"+name)
+	if m.PodReadyError != nil {
+		return false, m.PodReadyError
+	}
 	key := namespace + "/" + name
 	if ready, ok := m.PodReady[key]; ok {
 		return ready, nil

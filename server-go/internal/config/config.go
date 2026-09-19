@@ -2,10 +2,12 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 )
@@ -107,6 +109,10 @@ type AppConfig struct {
 	DockerCertPath  string // TLS certificate directory (ca.pem, cert.pem, key.pem)
 	DockerTLSVerify bool
 
+	// RestoreReadyTimeout bounds how long a restore waits for the recovered
+	// database to be observed ready before it gives up and compensates.
+	RestoreReadyTimeout time.Duration
+
 	// AutoPauseEnabled runs the hourly idle-pause sweep (EXC-280): projects on
 	// tiers with autoPauseAfterDays > 0 are warned at N-1 idle days and paused
 	// at N. EXCALIBASE_AUTOPAUSE_ENABLED overrides; defaults on in cloud mode,
@@ -191,6 +197,7 @@ func Load() AppConfig {
 		DockerHost:              envOr("DOCKER_HOST", ""),
 		DockerCertPath:          envOr("DOCKER_CERT_PATH", ""),
 		DockerTLSVerify:         envOr("DOCKER_TLS_VERIFY", "") != "",
+		RestoreReadyTimeout:     envDuration("EXCALIBASE_RESTORE_READY_TIMEOUT", defaultRestoreReadyTimeout),
 	}
 }
 
@@ -213,6 +220,38 @@ func parseCORSOrigins(raw string) []string {
 		log.Fatal("CORS_ORIGINS contained only empty values; refusing to start")
 	}
 	return origins
+}
+
+// defaultRestoreReadyTimeout bounds the wait for a recovered database to be
+// observed ready. Restores replay WAL, so the budget is generous.
+const defaultRestoreReadyTimeout = 15 * time.Minute
+
+// parseDuration reads a Go duration, treating an empty value as "not set".
+// A value that is present but unreadable is an error: silently falling back
+// would run a restore on a budget the operator did not choose.
+func parseDuration(raw string, fallback time.Duration) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a duration (e.g. 15m, 90s)", raw)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%q must be positive", raw)
+	}
+	return d, nil
+}
+
+// envDuration refuses to start on a misconfigured duration rather than
+// silently substituting the default.
+func envDuration(key string, fallback time.Duration) time.Duration {
+	d, err := parseDuration(os.Getenv(key), fallback)
+	if err != nil {
+		log.Fatalf("%s: %v", key, err)
+	}
+	return d
 }
 
 func envOr(key, fallback string) string {

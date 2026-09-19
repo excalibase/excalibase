@@ -883,6 +883,10 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// recovered database to the provisioning service's registration path
 	// (EXC-366) instead of writing a half-project row themselves.
 	backupSvc.SetProjectRegistrar(provSvc)
+	// A restore is COMPLETED only once the recovered database has answered a
+	// query with the credentials registration filed for it (EXC-401).
+	backupSvc.SetDatabaseProbe(service.NewVaultDatabaseProbe(vc))
+	backupSvc.SetRestoreReadyTimeout(cfg.RestoreReadyTimeout)
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)

@@ -169,6 +169,7 @@ func setupDockerAdapter(t *testing.T) (*DockerBackupAdapter, *storage.FileSystem
 		Records:  records,
 		Bucket:   "test-backups",
 	})
+	adapter.SetDatabaseProbe(alwaysAnswers{})
 	store.Create(&domain.DatabaseInstance{
 		ProjectID:      "dk-1",
 		OrgID:          "org",
@@ -318,6 +319,9 @@ type fakeDockerClientForAdapter struct {
 	copyBytes   int64
 	copyCalls   int
 	failOn      string // "create" | "copy" | "start" | "health"
+	// execCode is what ExecInContainer reports; non-zero stands for a
+	// postgres that has not finished recovery.
+	execCode int
 }
 
 func (f *fakeDockerClientForAdapter) CreateContainer(_ context.Context, name, img string, env map[string]string, _ map[string]string) (string, error) {
@@ -349,7 +353,7 @@ func (f *fakeDockerClientForAdapter) WaitForHealthy(_ context.Context, _ string)
 	return nil
 }
 func (f *fakeDockerClientForAdapter) ExecInContainer(_ context.Context, _ string, _ []string) (int, error) {
-	return 0, nil
+	return f.execCode, nil
 }
 func (f *fakeDockerClientForAdapter) CopyToContainer(_ context.Context, _ string, dst string, content io.Reader) error {
 	if f.failOn == "copy" {
@@ -398,7 +402,7 @@ func TestDockerAdapter_Restore_HappyPath(t *testing.T) {
 	adapter.SetInstanceStore(store)
 	dc := &fakeDockerClientForAdapter{}
 	adapter.SetDockerClient(dc)
-	adapter.SetProjectRegistrar(&fakeRegistrar{})
+	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
 
 	src, _ := store.FindByProjectID("dk-1")
 
@@ -443,7 +447,7 @@ func TestDockerAdapter_Restore_NoBaseBackup_Errors(t *testing.T) {
 	adapter, store, _, _, _ := setupDockerAdapter(t)
 	adapter.SetInstanceStore(store)
 	adapter.SetDockerClient(&fakeDockerClientForAdapter{})
-	adapter.SetProjectRegistrar(&fakeRegistrar{})
+	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
 	src, _ := store.FindByProjectID("dk-1")
 
 	// No BackupRecord, no S3 object → restore must error before
@@ -542,7 +546,7 @@ func TestDockerAdapter_Restore_WithTargetTime_WritesRecoveryTar(t *testing.T) {
 	adapter.SetInstanceStore(store)
 	dc := &fakeDockerClientForAdapter{}
 	adapter.SetDockerClient(dc)
-	adapter.SetProjectRegistrar(&fakeRegistrar{})
+	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
 
 	src, _ := store.FindByProjectID("dk-1")
 	uploader.objects["test-backups/backups/dk-1/manual/backup-pitr.tar.gz"] = minimalGzippedTar(t)
@@ -554,7 +558,7 @@ func TestDockerAdapter_Restore_WithTargetTime_WritesRecoveryTar(t *testing.T) {
 	target := time.Now().UTC().Add(-1 * time.Hour)
 	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{
 		NewProjectName: "dk-pitr", TargetProjectID: "dk-pitr",
-		TargetTime:   &domain.FlexTime{Time: target},
+		TargetTime: &domain.FlexTime{Time: target},
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -572,7 +576,7 @@ func TestDockerAdapter_Restore_NoTarget_NoRecoveryTar(t *testing.T) {
 	adapter.SetInstanceStore(store)
 	dc := &fakeDockerClientForAdapter{}
 	adapter.SetDockerClient(dc)
-	adapter.SetProjectRegistrar(&fakeRegistrar{})
+	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
 
 	src, _ := store.FindByProjectID("dk-1")
 	uploader.objects["test-backups/backups/dk-1/manual/backup-latest.tar.gz"] = minimalGzippedTar(t)

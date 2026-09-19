@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -48,10 +49,13 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	provSvc := service.NewProvisioningService(store, factory, mock)
 	metricsSvc := service.NewMetricsService(store, mock, dir)
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
-	// Restore ends in the shared registration path (EXC-366); the mock
-	// reports the recovered primary Ready straight away.
+	// Restore ends in the shared registration path (EXC-366) and completes
+	// only once the recovered database is observed ready and answers a query
+	// (EXC-401); the mock reconciles the Cluster and the probe answers.
 	mock.WildcardPodReady = true
+	mock.AutoReconcileClusters = true
 	backupSvc.SetProjectRegistrar(provSvc)
+	backupSvc.SetDatabaseProbe(answeringProbe{})
 	perfSvc := service.NewPerformanceService(store, mock)
 	auditSvc := service.NewAuditService(store, mock)
 	snapshotSvc := service.NewSnapshotService(store, mock, dir)
@@ -851,3 +855,9 @@ func testBackupStorage() service.BackupStorageSource {
 		Region:          "auto",
 	})
 }
+
+// answeringProbe stands in for the restored database in handler tests, whose
+// subject is the HTTP surface rather than the connection.
+type answeringProbe struct{}
+
+func (answeringProbe) Probe(context.Context, string) error { return nil }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -52,6 +53,26 @@ func (s *BackupService) SetProjectRegistrar(r ProjectRegistrar) {
 	for _, adapter := range s.adapters {
 		if setter, ok := adapter.(interface{ SetProjectRegistrar(ProjectRegistrar) }); ok {
 			setter.SetProjectRegistrar(r)
+		}
+	}
+}
+
+// SetDatabaseProbe hands every adapter the check that proves a recovered
+// database serves queries before its project is activated.
+func (s *BackupService) SetDatabaseProbe(p DatabaseProbe) {
+	for _, adapter := range s.adapters {
+		if setter, ok := adapter.(interface{ SetDatabaseProbe(DatabaseProbe) }); ok {
+			setter.SetDatabaseProbe(p)
+		}
+	}
+}
+
+// SetRestoreReadyTimeout bounds how long every adapter waits for a recovered
+// database to be observed ready.
+func (s *BackupService) SetRestoreReadyTimeout(d time.Duration) {
+	for _, adapter := range s.adapters {
+		if setter, ok := adapter.(interface{ SetRestoreReadyTimeout(time.Duration) }); ok {
+			setter.SetRestoreReadyTimeout(d)
 		}
 	}
 }

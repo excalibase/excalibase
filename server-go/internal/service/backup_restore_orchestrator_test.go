@@ -196,8 +196,8 @@ func TestOrchestrator_RejectsTwoTargets(t *testing.T) {
 	now := time.Now()
 	_, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, domain.RestoreRequest{
 		NewProjectName: "dst", TargetProjectID: "dst",
-		TargetTime:   &domain.FlexTime{Time: now},
-		TargetXID:    "12345",
+		TargetTime: &domain.FlexTime{Time: now},
+		TargetXID:  "12345",
 	})
 	if err == nil {
 		t.Error("expected error for two targets")
@@ -217,7 +217,7 @@ func TestOrchestrator_SweepStale_FailsOldRunning(t *testing.T) {
 	jobs.jobs["old"] = old
 	jobs.mu.Unlock()
 
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs, StaleAfter: 30 * time.Minute})
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
 	if err := orch.SweepStale(context.Background()); err != nil {
 		t.Fatalf("SweepStale: %v", err)
 	}

@@ -29,14 +29,12 @@ type StepFn func(ctx context.Context, j *domain.RestoreJob) error
 // a registered set of RestoreSteps. Steps are run sequentially; the
 // first failure marks the RestoreJob FAILED and stops further steps.
 //
-// Phase 3 fires-and-forgets — RestoreFromBackup returns RUNNING
-// immediately and the goroutine drives the steps. Resumability after
-// platform restart: ListRunning runs at startup; jobs older than
-// staleAfter are marked FAILED.
+// RestoreFromBackup returns RUNNING immediately and the goroutine drives
+// the steps. That goroutine is the only thing driving a job, so a platform
+// restart abandons every RUNNING job — SweepStale fails them at boot.
 type RestoreOrchestrator struct {
-	jobs       storage.RestoreJobStore
-	logger     *log.Logger
-	staleAfter time.Duration
+	jobs   storage.RestoreJobStore
+	logger *log.Logger
 
 	mu    sync.Mutex
 	steps []RestoreStep
@@ -44,9 +42,8 @@ type RestoreOrchestrator struct {
 
 // RestoreOrchestratorConfig wires the collaborators.
 type RestoreOrchestratorConfig struct {
-	Jobs       storage.RestoreJobStore
-	Logger     *log.Logger
-	StaleAfter time.Duration // default 30m
+	Jobs   storage.RestoreJobStore
+	Logger *log.Logger
 }
 
 func NewRestoreOrchestrator(c RestoreOrchestratorConfig) *RestoreOrchestrator {
@@ -54,11 +51,7 @@ func NewRestoreOrchestrator(c RestoreOrchestratorConfig) *RestoreOrchestrator {
 	if logger == nil {
 		logger = log.Default()
 	}
-	stale := c.StaleAfter
-	if stale == 0 {
-		stale = 30 * time.Minute
-	}
-	return &RestoreOrchestrator{jobs: c.Jobs, logger: logger, staleAfter: stale}
+	return &RestoreOrchestrator{jobs: c.Jobs, logger: logger}
 }
 
 // SetSteps replaces the step pipeline. Order matters — steps run
@@ -109,26 +102,28 @@ func (o *RestoreOrchestrator) Get(ctx context.Context, projectID, id string) (*d
 	return o.jobs.FindRestoreJob(ctx, projectID, id)
 }
 
-// SweepStale marks any RUNNING job older than staleAfter as FAILED.
-// Called at platform start so a previous-process crash mid-restore
-// surfaces as a failed row instead of an orphan stuck "RUNNING"
-// indefinitely. The user can then re-trigger.
+// abandonedRestoreReason is what a caller sees on a job whose process died.
+// A restore cannot be resumed by observation: the only place that knows how
+// far it got is the goroutine that is gone, and the target project it was
+// building was never activated, so nothing usable was left behind. Marking
+// the job FAILED lets the user re-trigger, which is a clean start.
+const abandonedRestoreReason = "the platform restarted while this restore was running; start it again"
+
+// SweepStale marks every RUNNING job as FAILED. Called at platform start:
+// restores are driven by an in-process goroutine, so after a restart no job
+// still has one, regardless of how recently it was updated. Leaving a young
+// job RUNNING would strand it forever — no later sweep runs to catch it.
 func (o *RestoreOrchestrator) SweepStale(ctx context.Context) error {
 	running, err := o.jobs.ListRunningRestoreJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("list running: %w", err)
 	}
-	cutoff := time.Now().Add(-o.staleAfter)
 	for i := range running {
 		j := running[i]
-		t, err := time.Parse(time.RFC3339, j.UpdatedAt)
-		if err != nil {
-			continue
-		}
-		if t.Before(cutoff) {
-			j.Status = domain.RestoreStatusFailed
-			j.FailureReason = "platform restart while RUNNING; orphan swept"
-			_ = o.jobs.UpsertRestoreJob(ctx, &j)
+		j.Status = domain.RestoreStatusFailed
+		j.FailureReason = abandonedRestoreReason
+		if err := o.jobs.UpsertRestoreJob(ctx, &j); err != nil {
+			o.logger.Printf("restore %s: mark abandoned: %v", j.ID, err)
 		}
 	}
 	return nil

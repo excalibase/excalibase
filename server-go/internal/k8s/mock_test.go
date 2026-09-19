@@ -2,7 +2,10 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 )
@@ -210,5 +213,38 @@ func TestMockClientUpdateCRD(t *testing.T) {
 	}
 	if m.Calls[len(m.Calls)-2] != "UpdateCRD:ns/"+testPostgresNS {
 		t.Errorf("UpdateCRD call not recorded: %v", m.Calls)
+	}
+}
+
+func TestMockClientAutoReconcileStampsClusterStatus(t *testing.T) {
+	m := NewMockClient()
+	m.AutoReconcileClusters = true
+	cluster := BuildRestoreCluster(RestoreClusterOpts{
+		SourceProjectID: "src", NewProjectID: "dst", Namespace: "ns",
+		Store: ObjectStoreOpts{Bucket: "b"},
+	})
+
+	if err := m.ApplyCRD(context.Background(), CNPGClusterGVR, "ns", cluster); err != nil {
+		t.Fatalf("ApplyCRD: %v", err)
+	}
+
+	obj, err := m.GetCRD(context.Background(), CNPGClusterGVR, "ns", "dst-postgres")
+	if err != nil {
+		t.Fatalf("GetCRD: %v", err)
+	}
+	primary, _, _ := unstructured.NestedString(obj.Object, "status", "currentPrimary")
+	ready, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyInstances")
+	if primary != "dst-postgres-1" || ready != 1 {
+		t.Errorf("reconciled status: primary=%q ready=%d", primary, ready)
+	}
+}
+
+func TestMockClientPodReadyErrorIsReported(t *testing.T) {
+	m := NewMockClient()
+	m.WildcardPodReady = true
+	m.PodReadyError = errors.New("apiserver unreachable")
+
+	if _, err := m.IsPodReady(context.Background(), "ns", "pod-1"); err == nil {
+		t.Fatal("a configured readiness error must surface")
 	}
 }

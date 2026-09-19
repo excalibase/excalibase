@@ -17,7 +17,8 @@ func setupBackupTest(t *testing.T) (*BackupService, *storage.FileSystemStore) {
 	mock := k8s.NewMockClient()
 	mock.WildcardPodReady = true
 	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
-	svc.SetProjectRegistrar(&fakeRegistrar{})
+	svc.SetProjectRegistrar(&fakeRegistrar{store: store})
+	armRestore(svc, mock, store)
 
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
@@ -75,7 +76,8 @@ func TestRestoreFromBackup(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.WildcardPodReady = true
 	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
-	svc.SetProjectRegistrar(&fakeRegistrar{})
+	svc.SetProjectRegistrar(&fakeRegistrar{store: store})
+	armRestore(svc, mock, store)
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
 		DBType: domain.PostgreSQL,
@@ -129,7 +131,7 @@ func TestRestoreFromBackupPITR(t *testing.T) {
 
 	resp, err := svc.RestoreFromBackup(context.Background(), "bk-db", domain.RestoreRequest{
 		NewProjectName: "bk-db-pitr", TargetProjectID: "bk-db-pitr",
-		TargetTime:     targetTime,
+		TargetTime: targetTime,
 	})
 	if err != nil {
 		t.Fatalf("RestoreFromBackup PITR: %v", err)

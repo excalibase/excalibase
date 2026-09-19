@@ -72,6 +72,39 @@ type DockerBackupAdapter struct {
 	// instance row, PgDog, events. Required for Restore — persisting a row
 	// without the vault write is what made restored projects unusable.
 	registrar ProjectRegistrar
+	// probe proves the restored container serves queries with the
+	// credentials registration filed, before the project becomes ACTIVE.
+	probe DatabaseProbe
+	// readyTimeout bounds the wait for the restored container to finish
+	// recovery. Zero means the package default.
+	readyTimeout time.Duration
+}
+
+// SetRestoreReadyTimeout bounds the wait for the restored container to
+// finish recovery.
+func (a *DockerBackupAdapter) SetRestoreReadyTimeout(d time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.readyTimeout = d
+}
+
+// restoreTimeout resolves the configured budget, falling back to the package
+// default only when nothing was wired.
+func (a *DockerBackupAdapter) restoreTimeout() time.Duration {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.readyTimeout > 0 {
+		return a.readyTimeout
+	}
+	return defaultRestoreReadyTimeout
+}
+
+// SetDatabaseProbe wires the check that proves a restored database serves
+// queries. Without it a restore refuses to run.
+func (a *DockerBackupAdapter) SetDatabaseProbe(p DatabaseProbe) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.probe = p
 }
 
 // SetProjectRegistrar wires the shared registration path. Called from main.go
@@ -391,6 +424,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	dc := a.docker
 	store := a.instances
 	registrar := a.registrar
+	probe := a.probe
 	a.mu.RUnlock()
 
 	newProject := req.TargetProjectID
@@ -404,6 +438,9 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	}
 	if registrar == nil {
 		return nil, ErrProjectRegistrarNotConfigured
+	}
+	if probe == nil {
+		return nil, ErrDatabaseProbeNotConfigured
 	}
 
 	// 2. Resolve the source backup. Default: most recent COMPLETED
@@ -442,26 +479,14 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	if err != nil {
 		return nil, err
 	}
+	pc := provisioner.NewProvisionContext(nil, nil)
+	pc.RegisterCleanup("remove restored container", func(ctx context.Context) error {
+		return dc.RemoveContainer(ctx, containerID)
+	})
 
-	// 5. Start + wait for ready.
-	if err := dc.StartContainer(ctx, containerID); err != nil {
-		_ = dc.RemoveContainer(ctx, containerID)
-		return nil, fmt.Errorf("start restored container: %w", err)
-	}
-	if err := dc.WaitForHealthy(ctx, containerID); err != nil {
-		// Don't auto-remove on health failure — operator may want
-		// to inspect the container for diagnosis.
-		return nil, fmt.Errorf("restored container did not become healthy: %w", err)
-	}
-	if err := a.waitForPromotedPostgres(ctx, dc, containerID, dbName); err != nil {
-		return nil, err
-	}
-
-	// 6. Register the restored database as a project, exactly the way a
-	// provision ends: roles + vault credentials, the ACTIVE row, PgDog and
-	// the project-created event. The container keeps the source's superuser
-	// password (the seeded data dir ignores POSTGRES_PASSWORD), so the admin
-	// role is reset to the password stamped on the row.
+	// 5-6. Start the container, observe it healthy and past recovery, then
+	// register the project unverified and prove it answers a query with the
+	// credentials registration filed. Anything short of that compensates.
 	newInst := restoredDockerInstance(inst, restoredDockerSpec{
 		projectID:     newProject,
 		projectName:   req.NewProjectName,
@@ -471,9 +496,8 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		password:      newPassword,
 		backupID:      srcRec.ID,
 	})
-	opts := RegistrationOptions{ResetRolePasswords: true, ResetAdminPassword: true}
-	if err := registrar.RegisterProject(ctx, newInst, opts); err != nil {
-		return nil, fmt.Errorf("register restored project: %w", err)
+	if err := a.startAndVerify(ctx, pc, dc, store, registrar, probe, containerID, dbName, newInst); err != nil {
+		return nil, failRestore(ctx, pc, newProject, err)
 	}
 
 	return &domain.ProvisioningResponse{
@@ -487,6 +511,34 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		Namespace:    newInst.Namespace,
 		CreatedAt:    newInst.CreatedAt,
 	}, nil
+}
+
+// startAndVerify brings the restored container up, waits until postgres has
+// finished recovery inside it, and finishes the project the verified way. The
+// container keeps the source's superuser password (the seeded data directory
+// ignores POSTGRES_PASSWORD), so the admin role is reset to the password
+// stamped on the row.
+func (a *DockerBackupAdapter) startAndVerify(
+	ctx context.Context,
+	pc *provisioner.ProvisionContext,
+	dc provisioner.DockerClient,
+	store storage.InstanceStore,
+	registrar ProjectRegistrar,
+	probe DatabaseProbe,
+	containerID, dbName string,
+	newInst *domain.DatabaseInstance,
+) error {
+	if err := dc.StartContainer(ctx, containerID); err != nil {
+		return fmt.Errorf("start restored container: %w", err)
+	}
+	if err := dc.WaitForHealthy(ctx, containerID); err != nil {
+		return fmt.Errorf("restored container did not become healthy: %w", err)
+	}
+	if err := a.waitForPromotedPostgres(ctx, dc, containerID, dbName); err != nil {
+		return err
+	}
+	return registerVerifiedProject(ctx, pc, registrar, store, probe, newInst,
+		RegistrationOptions{ResetRolePasswords: true, ResetAdminPassword: true})
 }
 
 // restoredDockerSpec carries what the restore learned about the new container.
@@ -537,7 +589,8 @@ const promotedProbeSQL = `DO $$ BEGIN IF pg_is_in_recovery() THEN RAISE EXCEPTIO
 // roles, which needs a writable primary.
 func (a *DockerBackupAdapter) waitForPromotedPostgres(ctx context.Context, dc provisioner.DockerClient, containerID, dbName string) error {
 	probe := []string{"psql", "-U", defaultPostgresSuperuser, "-d", dbName, "-v", "ON_ERROR_STOP=1", "-c", promotedProbeSQL}
-	deadline := time.Now().Add(defaultRestoreReadyTimeout)
+	timeout := a.restoreTimeout()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if code, err := dc.ExecInContainer(ctx, containerID, probe); err == nil && code == 0 {
 			return nil
@@ -548,7 +601,7 @@ func (a *DockerBackupAdapter) waitForPromotedPostgres(ctx context.Context, dc pr
 		case <-time.After(dockerRestoreReadyPoll):
 		}
 	}
-	return fmt.Errorf("restored postgres did not finish recovery within %v (container kept for inspection)", defaultRestoreReadyTimeout)
+	return fmt.Errorf("restored postgres did not finish recovery within %v", timeout)
 }
 
 // dockerRestoreReadyPoll is the gap between promotion probes. Shorter than the
