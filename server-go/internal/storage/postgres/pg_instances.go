@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -178,14 +179,19 @@ func (s *Store) BeginDeletion(projectID string, deleteBackups *bool) (bool, erro
 
 	var status string
 	var recorded bool
-	err = tx.QueryRow(
-		`SELECT status, deletion_delete_backups FROM database_instances WHERE project_id = $1 FOR UPDATE`,
-		projectID).Scan(&status, &recorded)
+	var lastMoved time.Time
+	err = tx.QueryRow(`
+		SELECT status, deletion_delete_backups, COALESCE(updated_at, created_at, to_timestamp(0))
+		FROM database_instances WHERE project_id = $1 FOR UPDATE`,
+		projectID).Scan(&status, &recorded, &lastMoved)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, storage.ErrProjectNotFound
 	}
 	if err != nil {
 		return false, fmt.Errorf("lock project row: %w", err)
+	}
+	if err := storage.CheckNotBuilding(projectID, status, lastMoved, time.Now()); err != nil {
+		return false, err
 	}
 
 	effective, err := effectiveBackupIntent(projectID, status, recorded, deleteBackups)

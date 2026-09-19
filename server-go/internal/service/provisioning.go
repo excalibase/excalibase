@@ -70,6 +70,10 @@ type ProvisioningService struct {
 	// advisory-lock one so the claim holds across them.
 	deletionClaimer DeletionClaimer
 	claimerOnce     sync.Once
+	// deletionObservers are told the moment a project is claimed for
+	// teardown, so in-process caches of "is this project still live" stop
+	// serving it without waiting for their own expiry. Optional.
+	deletionObservers []DeletionObserver
 
 	// defaultDeploymentMode stamps inst.DeploymentMode at provision time
 	// for the k8s + docker pipelines. Empty falls back
@@ -230,19 +234,33 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		return nil, fmt.Errorf("create instance: %w", err)
 	}
 
+	// A teardown that claims the project mid-build owns it from that moment.
+	// The pipeline must stop rather than keep creating resources the
+	// teardown has already looked for and not found: it cancels the
+	// provision context, and the provisioner's next call to the cluster
+	// returns. Stage and step persistence is where the pipeline learns this,
+	// because the store refuses those writes once the door is closed.
+	ctx, abort := context.WithCancelCause(ctx)
+	defer abort(nil)
+	persist := func() {
+		if err := s.store.Update(inst); err != nil {
+			if isProjectGone(err) {
+				log.Printf("provisioning of %s stops: %v", inst.ProjectID, err)
+				abort(err)
+				return
+			}
+			log.Printf(warnPersistFmt, err)
+		}
+	}
 	pc := provisioner.NewProvisionContext(
 		func(stage domain.ProvisioningStage) {
 			inst.CurrentStage = stage
 			inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-			if err := s.store.Update(inst); err != nil {
-				log.Printf(warnPersistFmt, err)
-			}
+			persist()
 		},
 		func(step string) {
 			inst.CurrentStep = step
-			if err := s.store.Update(inst); err != nil {
-				log.Printf(warnPersistFmt, err)
-			}
+			persist()
 		},
 	)
 
@@ -261,9 +279,16 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		// Legacy path — no rollback support.
 		result, provErr = prov.Provision(ctx, req, tier, pc.SetStage)
 	}
+	// A cancelled context outranks whatever the provisioner reported: the
+	// project stopped being ours to build, so nothing it produced may be
+	// registered. handleProvisionFailure runs the compensations.
+	if cause := context.Cause(ctx); cause != nil && isProjectGone(cause) {
+		metrics.ObserveProvision(start, cause)
+		return s.handleProvisionFailure(context.WithoutCancel(ctx), inst, req, cause, pc), nil
+	}
 	if provErr != nil {
 		metrics.ObserveProvision(start, provErr)
-		return s.handleProvisionFailure(ctx, inst, req, provErr, pc), nil
+		return s.handleProvisionFailure(context.WithoutCancel(ctx), inst, req, provErr, pc), nil
 	}
 
 	resp, ferr := s.finalizeProvisioning(ctx, inst, req, result, pc)
@@ -462,6 +487,9 @@ func (s *ProvisioningService) handleProvisionFailure(
 	inst.Status = "FAILED"
 	inst.CurrentStage = domain.StageFailed
 	if saveErr := s.store.Update(inst); saveErr != nil {
+		// A refusal here is the expected outcome when a teardown claimed the
+		// project: the row is its to write now, and the compensations above
+		// have already undone what this pipeline built. Nothing else to do.
 		log.Printf(warnPersistFmt, saveErr)
 	}
 
@@ -544,6 +572,13 @@ var (
 	ErrDeletionInProgress = errors.New("a deletion of this project is already running")
 )
 
+// isProjectGone reports whether an error means the project stopped being the
+// caller's to work on — a teardown claimed it, or its record is already gone.
+// Every in-flight pipeline treats it as a stop signal.
+func isProjectGone(err error) bool {
+	return errors.Is(err, storage.ErrProjectDeleting) || errors.Is(err, storage.ErrProjectNotFound)
+}
+
 // DeprovisionOptions tunes what Deprovision removes beyond the project.
 type DeprovisionOptions struct {
 	// DeleteBackups purges the project's backup objects once its resources
@@ -612,6 +647,9 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 	if err != nil {
 		return err
 	}
+	for _, observer := range s.deletionObservers {
+		observer.ProjectDeleting(projectID)
+	}
 	if deleteBackups && s.backupPurger == nil {
 		return s.recordDeletionFailure(inst, domain.DeletionStepDeleteBackups, ErrBackupPurgeNotConfigured)
 	}
@@ -625,6 +663,18 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 		}
 	}
 	return nil
+}
+
+// DeletionObserver is told when a project is claimed for teardown. It exists
+// for in-process caches that would otherwise keep treating the project as
+// live until their own entry expires.
+type DeletionObserver interface {
+	ProjectDeleting(projectID string)
+}
+
+// AddDeletionObserver registers an observer of teardown claims.
+func (s *ProvisioningService) AddDeletionObserver(o DeletionObserver) {
+	s.deletionObservers = append(s.deletionObservers, o)
 }
 
 // SetDeletionClaimer replaces the default in-process teardown claim. Wire the

@@ -138,6 +138,32 @@ was asked for, and the vault prefix emptied.
 * Raise `DELETION_WAIT_TIMEOUT` (a Go duration, e.g. `10m`) on clusters where
   storage detach is slow.
 
+### Deleting a project that is still being provisioned
+
+A `DELETE` while the project's provisioning pipeline is still building it
+answers `409 project is busy: PROVISIONING; retry when it settles`. The build
+is creating namespaces, clusters, vault credentials and bus identities that a
+teardown running alongside it would not see — it could observe "nothing
+remains", drop the record, and leave the finished build's resources live and
+unowned.
+
+The pipeline stamps `updated_at` on every stage, so a running provision is
+never mistaken for a dead one. **A provision whose process died** (platform
+restart mid-build) leaves the row in `PROVISIONING` with a timestamp that
+stops moving: after **30 minutes** without movement the row is no longer
+treated as a live build and deletes normally. The same window the restore
+orchestrator uses for stale jobs.
+
+If you cannot wait, `DELETE /api/admin/projects/<projectId>` (section 3) is
+the operator path — it clears deletion protection and runs the same observed
+teardown.
+
+If the door closes under a provision that is genuinely still running (the
+stale window elapsed on a very slow build, or the admin path was used), the
+pipeline stops at its next step, rolls back what it created, and the project
+reports `FAILED` — nothing is registered into a project whose record is on
+its way out.
+
 ### Backups retained after a project is deleted
 
 Deleting a project **keeps its backups** unless the request carries

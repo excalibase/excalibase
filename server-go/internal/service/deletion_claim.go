@@ -75,8 +75,9 @@ func (c *advisoryDeletionClaimer) Claim(ctx context.Context, projectID string) (
 }
 
 // deletionLockKey maps a project id onto the advisory-lock key space. The
-// high bit is cleared so the key is always positive and never collides with
-// the platform's negative-keyed singleton locks.
+// high bit is cleared so the key is always a positive int64; the platform's
+// two singleton scheduler keys are fixed constants in main.go, and a hash
+// collision with either is no more likely than with any other key.
 func deletionLockKey(projectID string) int64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte("project-deletion:" + projectID))

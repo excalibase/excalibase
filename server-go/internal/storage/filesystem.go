@@ -73,9 +73,9 @@ func (s *FileSystemStore) Update(inst *domain.DatabaseInstance) error {
 	if err := CheckUpdatable(existing); err != nil {
 		return err
 	}
-	updated := *inst
+	updated := inst.Clone()
 	updated.OrgID = existing.OrgID
-	return s.write(&updated)
+	return s.write(updated)
 }
 
 // BeginDeletion claims the project for teardown. See InstanceStore.
@@ -87,12 +87,12 @@ func (s *FileSystemStore) BeginDeletion(projectID string, deleteBackups *bool) (
 	if !ok {
 		return false, ErrProjectNotFound
 	}
-	claimed := *existing
-	effective, err := ApplyBeginDeletion(&claimed, deleteBackups)
+	claimed := existing.Clone()
+	effective, err := ApplyBeginDeletion(claimed, deleteBackups)
 	if err != nil {
 		return false, err
 	}
-	return effective, s.write(&claimed)
+	return effective, s.write(claimed)
 }
 
 // RecordDeletionFailure stores how far a teardown got. See InstanceStore.
@@ -104,11 +104,11 @@ func (s *FileSystemStore) RecordDeletionFailure(projectID string, status domain.
 	if !ok {
 		return ErrProjectNotFound
 	}
-	failed := *existing
-	if err := ApplyDeletionFailure(&failed, status, step, reason); err != nil {
+	failed := existing.Clone()
+	if err := ApplyDeletionFailure(failed, status, step, reason); err != nil {
 		return err
 	}
-	return s.write(&failed)
+	return s.write(failed)
 }
 
 // write persists the instance to disk and the cache. Callers hold s.mu.
@@ -150,7 +150,9 @@ func (s *FileSystemStore) write(inst *domain.DatabaseInstance) error {
 		return fmt.Errorf("write metadata: %w", err)
 	}
 
-	s.cache[inst.ProjectID] = inst
+	// Keep our own copy: the caller still holds its struct and must not be
+	// able to change the stored row by writing through it afterwards.
+	s.cache[inst.ProjectID] = inst.Clone()
 	return nil
 }
 
@@ -162,16 +164,7 @@ func (s *FileSystemStore) FindByProjectID(projectID string) (*domain.DatabaseIns
 	if !ok {
 		return nil, nil
 	}
-	return copyInstance(inst), nil
-}
-
-// copyInstance hands the caller its own struct. Readers must never receive
-// the cached pointer: a caller that mutates what it read would rewrite the
-// store's view without going through Update, and so slip past the checks
-// Update makes — the deletion door among them.
-func copyInstance(inst *domain.DatabaseInstance) *domain.DatabaseInstance {
-	copied := *inst
-	return &copied
+	return inst.Clone(), nil
 }
 
 func (s *FileSystemStore) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error) {
@@ -181,7 +174,7 @@ func (s *FileSystemStore) FindByOwner(ownerID string) ([]*domain.DatabaseInstanc
 	result := make([]*domain.DatabaseInstance, 0)
 	for _, inst := range s.cache {
 		if inst.OwnerID == ownerID {
-			result = append(result, copyInstance(inst))
+			result = append(result, inst.Clone())
 		}
 	}
 	return result, nil
@@ -193,7 +186,7 @@ func (s *FileSystemStore) FindAll() ([]*domain.DatabaseInstance, error) {
 
 	result := make([]*domain.DatabaseInstance, 0, len(s.cache))
 	for _, inst := range s.cache {
-		result = append(result, copyInstance(inst))
+		result = append(result, inst.Clone())
 	}
 	return result, nil
 }

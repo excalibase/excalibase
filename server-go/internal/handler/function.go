@@ -53,6 +53,9 @@ type FunctionHandler struct {
 	vault         vaultclient.VaultClient // optional, for reading DB_URL + JWT tokens
 	instanceStore storage.InstanceStore
 	orgStore      storage.OrgStore
+	// deletingCache keeps the per-invoke deletion check off the platform
+	// database. See project_deleting_cache.go.
+	deletingCache *projectStatusCache
 	publicBaseURL string
 
 	// Per-project runtime fan-out
@@ -183,6 +186,7 @@ func NewFunctionHandler(
 		store:         store,
 		secrets:       secrets,
 		instanceStore: instanceStore,
+		deletingCache: newProjectStatusCache(),
 		orgStore:      orgStore,
 		publicBaseURL: publicBaseURL,
 		clients:       make(map[string]*edgefn.RuntimeClient),
@@ -331,6 +335,24 @@ func (h *FunctionHandler) isDenoPodReady(ctx context.Context, namespace string) 
 		}
 	}
 	return false
+}
+
+// refuseInvokeWhileDeleting is the invoke path's deletion check. It reads
+// through a short-TTL cache because invocation is served without touching
+// the platform database once the project's runtime client is cached.
+func (h *FunctionHandler) refuseInvokeWhileDeleting(w http.ResponseWriter, projectID string) bool {
+	if !h.deletingCache.deleting(h.instanceStore, projectID) {
+		return false
+	}
+	httpError(w, "project is being deleted", http.StatusConflict)
+	return true
+}
+
+// ProjectDeleting lets the provisioning service tell this replica a project
+// has been claimed for teardown, so invocation stops at once rather than at
+// the end of the cache TTL.
+func (h *FunctionHandler) ProjectDeleting(projectID string) {
+	h.deletingCache.ProjectDeleting(projectID)
 }
 
 // tierFor looks up the project's tier from the instance store. Falls back to
@@ -1072,7 +1094,7 @@ func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	fnID := chi.URLParam(r, "fnId")
 
-	if refuseWhileDeleting(w, h.instanceStore, projectID) {
+	if h.refuseInvokeWhileDeleting(w, projectID) {
 		return
 	}
 	if !h.allowProject(projectID) {
@@ -1541,7 +1563,7 @@ func (h *FunctionHandler) InternalInvoke(w http.ResponseWriter, r *http.Request)
 	if !h.authorizeRuntimeToken(w, r, projectID) {
 		return
 	}
-	if refuseWhileDeleting(w, h.instanceStore, projectID) {
+	if h.refuseInvokeWhileDeleting(w, projectID) {
 		return
 	}
 	fn, err := h.store.Get(projectID, fnID)
@@ -1584,7 +1606,7 @@ func (h *FunctionHandler) PublicHttpInvoke(w http.ResponseWriter, r *http.Reques
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
-	if refuseWhileDeleting(w, h.instanceStore, projectID) {
+	if h.refuseInvokeWhileDeleting(w, projectID) {
 		return
 	}
 	if !h.allowProject(projectID) {

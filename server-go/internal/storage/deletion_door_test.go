@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -146,3 +147,70 @@ func TestFileSystemStoreEnforcesTheDeletionDoor(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// A build in flight is creating resources the teardown would not see, so a
+// deletion claim waits. A build that stopped moving belongs to a process
+// that is gone and must stay deletable — otherwise a crashed provision
+// leaves a project nobody can remove.
+func TestCheckNotBuilding(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	cases := []struct {
+		name      string
+		status    string
+		lastMoved time.Time
+		refused   bool
+	}{
+		{"a live build is busy", domain.StatusProvisioning, now.Add(-time.Minute), true},
+		{"a build at the edge of the window is busy", domain.StatusProvisioning, now.Add(-StaleBuildAfter + time.Second), true},
+		{"a build that stopped moving is deletable", domain.StatusProvisioning, now.Add(-StaleBuildAfter), false},
+		{"a long-dead build is deletable", domain.StatusProvisioning, now.Add(-24 * time.Hour), false},
+		{"active is never busy", "ACTIVE", now, false},
+		{"pausing is not a build", string(domain.StatusPausing), now, false},
+		{"resuming is not a build", string(domain.StatusResuming), now, false},
+		{"paused is not a build", string(domain.StatusPaused), now, false},
+		{"failed is not a build", "FAILED", now, false},
+		{"already deleting is not a build", string(domain.StatusDeleting), now, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckNotBuilding("proj-1", tc.status, tc.lastMoved, now)
+			if tc.refused != errors.Is(err, ErrProjectBusy) {
+				t.Fatalf("err = %v, refused want %v", err, tc.refused)
+			}
+		})
+	}
+}
+
+// The claim applies the same rule, so no store can skip it.
+func TestApplyBeginDeletionRefusesALiveBuild(t *testing.T) {
+	now := FlexNow()
+	building := &domain.DatabaseInstance{
+		ProjectID: "proj-1", Status: domain.StatusProvisioning, UpdatedAt: now,
+	}
+	if _, err := ApplyBeginDeletion(building, nil); !errors.Is(err, ErrProjectBusy) {
+		t.Fatalf("err = %v, want ErrProjectBusy", err)
+	}
+	if building.Status != domain.StatusProvisioning {
+		t.Errorf("a refused claim changed the row: %q", building.Status)
+	}
+
+	stale := &domain.DatabaseInstance{
+		ProjectID: "proj-1", Status: domain.StatusProvisioning,
+		UpdatedAt: &domain.FlexTime{Time: time.Now().Add(-StaleBuildAfter - time.Minute)},
+	}
+	if _, err := ApplyBeginDeletion(stale, nil); err != nil {
+		t.Fatalf("a build that stopped moving must stay deletable: %v", err)
+	}
+}
+
+// A row with no timestamps at all has never moved, so it cannot be a live
+// build holding a deletion off forever.
+func TestApplyBeginDeletionOnATimestamplessBuildProceeds(t *testing.T) {
+	inst := &domain.DatabaseInstance{ProjectID: "proj-1", Status: domain.StatusProvisioning}
+	if _, err := ApplyBeginDeletion(inst, nil); err != nil {
+		t.Fatalf("err = %v, want the claim to proceed", err)
+	}
+}
+
+// FlexNow is the current time in the shape the instance row stores.
+func FlexNow() *domain.FlexTime { return &domain.FlexTime{Time: time.Now()} }

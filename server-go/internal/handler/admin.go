@@ -137,8 +137,10 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 
 	// Force=true clears deletion_protection so service.Deprovision proceeds.
 	// We persist the cleared flag because rolling back on a partial-deprovision
-	// failure is correct: protection should not silently re-enable.
-	if inst.DeletionProtection != nil && *inst.DeletionProtection {
+	// failure is correct: protection should not silently re-enable. A row a
+	// teardown already owns is skipped: the store refuses general writes to
+	// it, and its deletion was decided when the claim was taken.
+	if !domain.IsDeletionStatus(inst.Status) && inst.DeletionProtection != nil && *inst.DeletionProtection {
 		falseVal := false
 		inst.DeletionProtection = &falseVal
 		if err := h.store.Update(inst); err != nil {
@@ -251,7 +253,7 @@ func (h *AdminHandler) deprovisionOrgProjects(ctx context.Context, orgID string)
 }
 
 func (h *AdminHandler) dropOrgProject(ctx context.Context, inst *domain.DatabaseInstance) error {
-	if inst.DeletionProtection != nil && *inst.DeletionProtection {
+	if !domain.IsDeletionStatus(inst.Status) && inst.DeletionProtection != nil && *inst.DeletionProtection {
 		falseVal := false
 		inst.DeletionProtection = &falseVal
 		if err := h.store.Update(inst); err != nil {

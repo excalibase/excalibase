@@ -43,17 +43,10 @@ func (s *Instances) Update(inst *domain.DatabaseInstance) error {
 	if err := storage.CheckUpdatable(existing); err != nil {
 		return err
 	}
-	updated := *inst
+	updated := inst.Clone()
 	updated.OrgID = existing.OrgID
-	s.Items[inst.ProjectID] = &updated
+	s.Items[inst.ProjectID] = updated
 	return nil
-}
-
-// copyInstance hands the caller its own struct, matching the real stores: a
-// reader must not be able to rewrite the store by mutating what it read.
-func copyInstance(inst *domain.DatabaseInstance) *domain.DatabaseInstance {
-	copied := *inst
-	return &copied
 }
 
 // FindByProjectID returns the stored instance or nil.
@@ -65,7 +58,7 @@ func (s *Instances) FindByProjectID(projectID string) (*domain.DatabaseInstance,
 	if !ok {
 		return nil, nil
 	}
-	return copyInstance(inst), nil
+	return inst.Clone(), nil
 }
 
 // FindByOwner returns every instance whose OwnerID matches.
@@ -73,7 +66,7 @@ func (s *Instances) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, err
 	out := make([]*domain.DatabaseInstance, 0)
 	for _, inst := range s.Items {
 		if inst.OwnerID == ownerID {
-			out = append(out, copyInstance(inst))
+			out = append(out, inst.Clone())
 		}
 	}
 	return out, nil
@@ -83,7 +76,7 @@ func (s *Instances) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, err
 func (s *Instances) FindAll() ([]*domain.DatabaseInstance, error) {
 	out := make([]*domain.DatabaseInstance, 0, len(s.Items))
 	for _, inst := range s.Items {
-		out = append(out, copyInstance(inst))
+		out = append(out, inst.Clone())
 	}
 	return out, nil
 }
@@ -187,12 +180,12 @@ func (s *Instances) BeginDeletion(projectID string, deleteBackups *bool) (bool, 
 	if !ok {
 		return false, storage.ErrProjectNotFound
 	}
-	claimed := *existing
-	effective, err := storage.ApplyBeginDeletion(&claimed, deleteBackups)
+	claimed := existing.Clone()
+	effective, err := storage.ApplyBeginDeletion(claimed, deleteBackups)
 	if err != nil {
 		return false, err
 	}
-	s.Items[projectID] = &claimed
+	s.Items[projectID] = claimed
 	return effective, nil
 }
 
@@ -202,10 +195,10 @@ func (s *Instances) RecordDeletionFailure(projectID string, status domain.Provis
 	if !ok {
 		return storage.ErrProjectNotFound
 	}
-	failed := *existing
-	if err := storage.ApplyDeletionFailure(&failed, status, step, reason); err != nil {
+	failed := existing.Clone()
+	if err := storage.ApplyDeletionFailure(failed, status, step, reason); err != nil {
 		return err
 	}
-	s.Items[projectID] = &failed
+	s.Items[projectID] = failed
 	return nil
 }

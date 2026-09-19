@@ -28,6 +28,31 @@ var ErrProjectNotFound = errors.New("project not found")
 // writes may touch such a row.
 var ErrProjectDeleting = errors.New("project is being deleted")
 
+// ErrProjectBusy is returned when a deletion is asked for while the project
+// is still being built. The build creates resources and credentials the
+// teardown would not see, so the two must not overlap.
+var ErrProjectBusy = errors.New("project is busy")
+
+// StaleBuildAfter is how long a PROVISIONING row keeps counting as a live
+// build. The pipeline stamps updated_at on every stage, so a running
+// provision never reaches it; a row that has not moved for this long belongs
+// to a process that is gone, and must stay deletable. Matches the restore
+// orchestrator's staleness window.
+const StaleBuildAfter = 30 * time.Minute
+
+// CheckNotBuilding refuses a deletion claim while a build is in flight,
+// judging "in flight" by how recently the row moved.
+func CheckNotBuilding(projectID, status string, updatedAt, now time.Time) error {
+	if !domain.IsBuildingStatus(status) {
+		return nil
+	}
+	if now.Sub(updatedAt) >= StaleBuildAfter {
+		// The build stopped moving long ago; its process is gone.
+		return nil
+	}
+	return fmt.Errorf("%w: %s is %s", ErrProjectBusy, projectID, status)
+}
+
 // ErrProjectNotDeleting is returned by the deletion flow's narrow writes when
 // the row they name is not being torn down. They exist only to move a
 // teardown forward, so they must never be a second way into a deletion state.
@@ -95,6 +120,9 @@ func ApplyBeginDeletionIntent(delete bool) *bool { return &delete }
 // store enforces the same one-way door. It reports the backup decision now in
 // force. Callers persist the row afterwards.
 func ApplyBeginDeletion(inst *domain.DatabaseInstance, deleteBackups *bool) (bool, error) {
+	if err := CheckNotBuilding(inst.ProjectID, inst.Status, lastMoved(inst), time.Now()); err != nil {
+		return false, err
+	}
 	effective := inst.DeletionDeleteBackups
 	switch {
 	case deleteBackups == nil:
@@ -274,4 +302,16 @@ type NatsCredentialStore interface {
 	LookupNatsCredentialHash(ctx context.Context, principal string) (string, bool, error)
 	DeleteNatsCredential(ctx context.Context, principal string) error
 	DeleteNatsCredentialsForProject(ctx context.Context, projectID string) error
+}
+
+// lastMoved is when the row was last written. A row that has never been
+// updated is judged by when it was created.
+func lastMoved(inst *domain.DatabaseInstance) time.Time {
+	if inst.UpdatedAt != nil {
+		return inst.UpdatedAt.Time
+	}
+	if inst.CreatedAt != nil {
+		return inst.CreatedAt.Time
+	}
+	return time.Time{}
 }

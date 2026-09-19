@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -328,6 +329,8 @@ func writeDeprovisionError(w http.ResponseWriter, err error) {
 		httpError(w, safeError(err), http.StatusBadRequest)
 	case errors.Is(err, service.ErrDeletionInProgress):
 		httpError(w, "a deletion of this project is already running; wait for it to finish", http.StatusConflict)
+	case errors.Is(err, storage.ErrProjectBusy):
+		httpError(w, "project is busy: "+busyState(err)+"; retry when it settles", http.StatusConflict)
 	case errors.Is(err, storage.ErrBackupPurgeAlreadyConfirmed):
 		httpError(w, "this deletion was already confirmed to delete the project's backups and cannot be changed to keep them",
 			http.StatusConflict)
@@ -356,6 +359,16 @@ func (h *ProvisioningHandler) PurgeBackups(w http.ResponseWriter, r *http.Reques
 	default:
 		writeJSON(w, map[string]interface{}{"projectId": projectID, "status": "purged", "deletedObjects": deleted})
 	}
+}
+
+// busyState names the state that made the project busy, taken from the fixed
+// set of statuses the platform writes — never from the error text, so nothing
+// request-derived reaches the response.
+func busyState(err error) string {
+	if strings.Contains(err.Error(), domain.StatusProvisioning) {
+		return domain.StatusProvisioning
+	}
+	return "an operation in progress"
 }
 
 func (h *ProvisioningHandler) GetCredentials(w http.ResponseWriter, r *http.Request) {

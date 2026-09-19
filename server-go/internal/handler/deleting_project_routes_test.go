@@ -127,3 +127,23 @@ func TestWriteDeprovisionErrorStatuses(t *testing.T) {
 		})
 	}
 }
+
+// A DELETE while the project is still being built answers 409 naming the
+// state, so the caller knows to retry rather than that the request was wrong.
+func TestDeleteOfABuildingProjectIs409(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeDeprovisionError(w, fmt.Errorf("%w: proj-1 is %s", storage.ErrProjectBusy, domain.StatusProvisioning))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), domain.StatusProvisioning) {
+		t.Errorf("the response must name the state: %s", w.Body.String())
+	}
+}
+
+// An unrecognised busy state still answers 409 without echoing the error.
+func TestBusyStateFallsBackToAGenericPhrase(t *testing.T) {
+	if got := busyState(fmt.Errorf("%w: proj-1 is WEIRD", storage.ErrProjectBusy)); got == "WEIRD" {
+		t.Error("the response must not echo an unrecognised state back")
+	}
+}

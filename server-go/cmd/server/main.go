@@ -141,6 +141,10 @@ func runServer(cfg config.AppConfig) {
 
 	provSvc, provCleanup := buildProvisioningService(cfg, store, sqlStore, factory, k8sClient, vc, dockerClientRef)
 	defer provCleanup()
+	// Function invocation caches "is this project live" for a few seconds so
+	// it does not read the platform database per request; this tells it the
+	// moment a project is claimed for teardown.
+	provSvc.AddDeletionObserver(fnHandler)
 
 	deps := buildHandlerDeps(handlerDepsArgs{
 		cfg:          cfg,
