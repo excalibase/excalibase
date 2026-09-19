@@ -19,11 +19,21 @@ import "time"
 // Public=true means the prefix can be read without auth via the public
 // path (/storage/v1/object/public/{bucket}/{key}). Public buckets still
 // require auth to UPLOAD — public is read-only-from-the-internet.
+// Bucket lifecycle states. A bucket is "active" from creation; it moves to
+// "deleting" before any of its bytes are removed and never moves back — the
+// row itself goes when the delete completes. The marker is what keeps a
+// half-finished cascade from looking like a healthy bucket.
+const (
+	BucketStatusActive   = "active"
+	BucketStatusDeleting = "deleting"
+)
+
 type Bucket struct {
 	ID         string    `json:"id"`
 	ProjectID  string    `json:"projectId"`
 	Name       string    `json:"name"`
 	Public     bool      `json:"public"`
+	Status     string    `json:"status,omitempty"`
 	FileSize   int64     `json:"fileSizeLimit,omitempty"`   // optional per-bucket cap (bytes)
 	AllowedTypes []string `json:"allowedMimeTypes,omitempty"` // optional MIME allowlist
 	CreatedAt  time.Time `json:"createdAt"`

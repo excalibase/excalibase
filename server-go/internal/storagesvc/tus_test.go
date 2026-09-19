@@ -47,6 +47,9 @@ func (m *memBucketStore) ListBuckets(_ context.Context, projectID string) ([]Buc
 	return nil, nil
 }
 func (m *memBucketStore) DeleteBucket(_ context.Context, projectID, name string) error { return nil }
+func (m *memBucketStore) SetBucketStatus(_ context.Context, projectID, name, status string) error {
+	return nil
+}
 
 func (m *memBucketStore) CreateObject(_ context.Context, o *Object) error {
 	m.mu.Lock()

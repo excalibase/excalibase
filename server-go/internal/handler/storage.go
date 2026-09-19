@@ -6,6 +6,9 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -63,7 +66,32 @@ const ctxStorageBucket = "ctx-storage"
 const (
 	errObjectNotFound    = "object not found"
 	errStorageIDRequired = "storageId required"
+	// errStorageFailed is the single message every internal storage failure
+	// gets. The real cause is logged server-side; the caller learns only
+	// that the operation did not happen.
+	errStorageFailed = "storage operation failed"
 )
+
+// storageError maps a storage-service error onto a response. Sentinels and
+// validation errors carry text written for the caller; anything else is an
+// internal fault, logged in full and answered with a fixed message so no
+// platform detail reaches the client.
+func storageError(w http.ResponseWriter, op string, err error) {
+	var invalid *storagesvc.ValidationError
+	switch {
+	case errors.Is(err, storagesvc.ErrBucketNotFound), errors.Is(err, storagesvc.ErrObjectNotFound):
+		httpError(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, storagesvc.ErrBucketExists):
+		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, storagesvc.ErrBucketDeleting):
+		httpError(w, err.Error(), http.StatusConflict)
+	case errors.As(err, &invalid):
+		httpError(w, invalid.Error(), http.StatusBadRequest)
+	default:
+		log.Printf("storage %s: %v", op, err)
+		httpError(w, errStorageFailed, http.StatusInternalServerError)
+	}
+}
 
 // Routes mounts the project-scoped storage endpoints. Caller is expected
 // to apply auth + RequireProjectAccess middleware at the parent.
@@ -97,7 +125,7 @@ func (h *StorageHandler) ListBuckets(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	buckets, err := h.svc.ListBuckets(r.Context(), projectID)
 	if err != nil {
-		httpError(w, "list buckets: "+safeError(err), http.StatusInternalServerError)
+		storageError(w, "list buckets", err)
 		return
 	}
 	if buckets == nil {
@@ -115,7 +143,7 @@ func (h *StorageHandler) CreateBucket(w http.ResponseWriter, r *http.Request) {
 	}
 	bucket, err := h.svc.CreateBucket(r.Context(), projectID, req)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "create bucket", err)
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
@@ -126,7 +154,7 @@ func (h *StorageHandler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	bucketName := chi.URLParam(r, "bucket")
 	if err := h.svc.DeleteBucket(r.Context(), projectID, bucketName); err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "delete bucket", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -138,9 +166,12 @@ func (h *StorageHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := 100
 	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			limit = n
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			httpError(w, "limit must be an integer", http.StatusBadRequest)
+			return
 		}
+		limit = n
 	}
 	out, err := h.svc.ListObjects(r.Context(), projectID, bucketName, storagesvc.ListObjectsRequest{
 		Prefix: q.Get("prefix"),
@@ -148,7 +179,7 @@ func (h *StorageHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 		Limit:  limit,
 	})
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "list objects", err)
 		return
 	}
 	writeJSON(w, out)
@@ -162,10 +193,14 @@ func (h *StorageHandler) SignUploadURL(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
-	tier := h.tierFor(projectID)
+	tier, err := h.tierFor(projectID)
+	if err != nil {
+		storageError(w, "read project tier", err)
+		return
+	}
 	out, err := h.svc.SignUploadURL(r.Context(), projectID, bucketName, tier, req)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "sign upload url", err)
 		return
 	}
 	writeJSON(w, out)
@@ -186,7 +221,7 @@ func (h *StorageHandler) ConfirmUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	obj, err := h.svc.ConfirmUpload(r.Context(), projectID, bucketName, ownerID, req)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "confirm upload", err)
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
@@ -199,7 +234,7 @@ func (h *StorageHandler) SignDownloadURL(w http.ResponseWriter, r *http.Request)
 	key := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
 	out, err := h.svc.SignDownloadURL(r.Context(), projectID, bucketName, key)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "sign download url", err)
 		return
 	}
 	writeJSON(w, out)
@@ -216,7 +251,7 @@ func (h *StorageHandler) GetObjectMetadata(w http.ResponseWriter, r *http.Reques
 		Prefix: key, Limit: 1,
 	})
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "object metadata", err)
 		return
 	}
 	for _, o := range resp.Objects {
@@ -233,7 +268,7 @@ func (h *StorageHandler) DeleteObject(w http.ResponseWriter, r *http.Request) {
 	bucketName := chi.URLParam(r, "bucket")
 	key := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
 	if err := h.svc.DeleteObject(r.Context(), projectID, bucketName, key); err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "delete object", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -249,7 +284,7 @@ func (h *StorageHandler) PublicGetObject(w http.ResponseWriter, r *http.Request)
 	key := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
 	out, err := h.svc.SignDownloadURL(r.Context(), projectID, bucketName, key)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusNotFound)
+		storageError(w, "public object", err)
 		return
 	}
 	if !out.Public {
@@ -260,22 +295,24 @@ func (h *StorageHandler) PublicGetObject(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, out.URL, http.StatusFound)
 }
 
-// tierFor looks up the project's tier from the instance store. Falls
-// back to FREE when missing — matches the conservative default in
-// service.tierForTier so quota math doesn't suddenly become unlimited
-// for orphaned projects.
-func (h *StorageHandler) tierFor(projectID string) string {
+// tierFor looks up the project's tier, which decides the storage quota. A
+// store failure is reported, never guessed around: answering FREE for a
+// lookup that did not happen would silently apply the wrong cap. A project
+// with no instance row, or no tier on it, genuinely has the FREE allowance —
+// the tightest one — so that is not a guess.
+func (h *StorageHandler) tierFor(projectID string) (string, error) {
+	const freeTier = "FREE"
 	if h.store == nil {
-		return "FREE"
+		return freeTier, nil
 	}
 	inst, err := h.store.FindByProjectID(projectID)
-	if err != nil || inst == nil {
-		return "FREE"
+	if err != nil {
+		return "", fmt.Errorf("look up project tier: %w", err)
 	}
-	if inst.Tier == "" {
-		return "FREE"
+	if inst == nil || inst.Tier == "" {
+		return freeTier, nil
 	}
-	return string(inst.Tier)
+	return string(inst.Tier), nil
 }
 
 // --- Phase 10: ctx.storage internal routes ---
@@ -343,7 +380,7 @@ func (h *StorageHandler) ensureCtxStorageBucket(ctx context.Context, projectID s
 		Name:   ctxStorageBucket,
 		Public: false,
 	})
-	if err != nil && !strings.Contains(err.Error(), "already exists") {
+	if err != nil && !errors.Is(err, storagesvc.ErrBucketExists) {
 		return err
 	}
 	return nil
@@ -392,11 +429,12 @@ func (h *StorageHandler) InternalSignUploadURL(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var req internalUploadURLRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, errInvalidBody, http.StatusBadRequest)
+		return
 	}
 	if err := h.ensureCtxStorageBucket(r.Context(), projectID); err != nil {
-		httpError(w, "ensure ctx-storage bucket: "+safeError(err), http.StatusInternalServerError)
+		storageError(w, "ensure ctx-storage bucket", err)
 		return
 	}
 	storageID, err := mintStorageID()
@@ -404,7 +442,11 @@ func (h *StorageHandler) InternalSignUploadURL(w http.ResponseWriter, r *http.Re
 		httpError(w, "mint storage id", http.StatusInternalServerError)
 		return
 	}
-	tier := h.tierFor(projectID)
+	tier, err := h.tierFor(projectID)
+	if err != nil {
+		storageError(w, "read project tier", err)
+		return
+	}
 	out, err := h.svc.SignUploadURL(r.Context(), projectID, ctxStorageBucket, tier,
 		storagesvc.UploadURLRequest{
 			Key:      storageID,
@@ -412,7 +454,7 @@ func (h *StorageHandler) InternalSignUploadURL(w http.ResponseWriter, r *http.Re
 			Size:     req.Size,
 		})
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "sign upload url", err)
 		return
 	}
 	writeJSON(w, internalUploadURLResponse{
@@ -474,7 +516,7 @@ func (h *StorageHandler) InternalConfirmUpload(w http.ResponseWriter, r *http.Re
 		ETag:     etagForCatalogue,
 	})
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "confirm upload", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -514,14 +556,18 @@ func (h *StorageHandler) InternalSignDownloadURL(w http.ResponseWriter, r *http.
 	}
 	// Confirm catalogue presence first so missing ids surface as 404
 	// instead of returning a URL that would 404 on R2 later.
-	obj, _ := h.lookupObject(r.Context(), projectID, req.StorageID)
+	obj, err := h.lookupObject(r.Context(), projectID, req.StorageID)
+	if err != nil {
+		storageError(w, "look up object", err)
+		return
+	}
 	if obj == nil {
 		httpError(w, errObjectNotFound, http.StatusNotFound)
 		return
 	}
 	out, err := h.svc.SignDownloadURL(r.Context(), projectID, ctxStorageBucket, req.StorageID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusBadRequest)
+		storageError(w, "sign download url", err)
 		return
 	}
 	writeJSON(w, internalDownloadURLResponse{URL: out.URL})
@@ -556,7 +602,7 @@ func (h *StorageHandler) InternalGetMetadata(w http.ResponseWriter, r *http.Requ
 	}
 	obj, err := h.lookupObject(r.Context(), projectID, storageID)
 	if err != nil {
-		httpError(w, err.Error(), http.StatusInternalServerError)
+		storageError(w, "look up object", err)
 		return
 	}
 	if obj == nil {
@@ -571,12 +617,11 @@ func (h *StorageHandler) InternalGetMetadata(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// InternalDeleteObject removes the storage id from both R2 and the
-// catalogue. Idempotent — a delete on an already-removed id still returns
-// 204 so retries from a flaky runtime → provisioning network don't
-// observe spurious failures. The R2 delete is best-effort (the daily
-// janitor reaps orphaned blobs); the catalogue row is the authoritative
-// view and MUST be removed for getMetadata to start returning 404.
+// InternalDeleteObject removes the storage id from both the blob store and
+// the catalogue; 204 means both happened. Idempotent in the only sense that
+// is safe: an id whose bucket or object is already gone is success, because
+// nothing is left to remove. A blob-store or catalogue failure is a 5xx, so
+// the runtime retries instead of believing the object is gone.
 func (h *StorageHandler) InternalDeleteObject(w http.ResponseWriter, r *http.Request) {
 	if !h.requireRuntimeToken(w, r) {
 		return
@@ -591,13 +636,11 @@ func (h *StorageHandler) InternalDeleteObject(w http.ResponseWriter, r *http.Req
 		httpError(w, errStorageIDRequired, http.StatusBadRequest)
 		return
 	}
-	// Best-effort R2 delete. Failures here are tolerated — the janitor
-	// reaps orphaned blobs and a future getUrl will return null because
-	// the catalogue row is gone (next line).
-	_ = h.svc.DeleteObject(r.Context(), projectID, ctxStorageBucket, storageID)
-	// Authoritative catalogue cleanup. Bucket-missing / object-missing
-	// are both no-ops here (DeleteObjectCatalogueOnly is idempotent).
-	_ = h.svc.DeleteObjectCatalogueOnly(r.Context(), projectID, ctxStorageBucket, storageID)
+	err := h.svc.DeleteObject(r.Context(), projectID, ctxStorageBucket, storageID)
+	if err != nil && !errors.Is(err, storagesvc.ErrBucketNotFound) {
+		storageError(w, "delete object", err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -609,8 +652,8 @@ func (h *StorageHandler) lookupObject(ctx context.Context, projectID, storageID 
 		Prefix: storageID, Limit: 1,
 	})
 	if err != nil {
-		// "bucket not found" is fine — means we never even auto-provisioned.
-		if strings.Contains(err.Error(), "not found") {
+		// A bucket that was never auto-provisioned holds no objects.
+		if errors.Is(err, storagesvc.ErrBucketNotFound) {
 			return nil, nil
 		}
 		return nil, err

@@ -2,6 +2,7 @@ package storagesvc
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -69,7 +70,7 @@ func TestService_ConfirmUpload_RecordsObjectAndQuota(t *testing.T) {
 func TestService_ConfirmUpload_MissingBucket(t *testing.T) {
 	svc := NewService(newMemStore(), newTestR2(t), nil)
 	_, err := svc.ConfirmUpload(context.Background(), testProjX, "nope", "u", ConfirmUploadRequest{Key: "x"})
-	if err == nil || !strings.Contains(err.Error(), errBucketNotFound) {
+	if err == nil || !errors.Is(err, ErrBucketNotFound) {
 		t.Errorf("expected bucket-not-found, got %v", err)
 	}
 }
@@ -119,7 +120,7 @@ func TestService_ListObjects_ClampsLimit(t *testing.T) {
 func TestService_ListObjects_MissingBucket(t *testing.T) {
 	svc := NewService(newMemStore(), newTestR2(t), nil)
 	_, err := svc.ListObjects(context.Background(), testProjX, "nope", ListObjectsRequest{})
-	if err == nil || !strings.Contains(err.Error(), errBucketNotFound) {
+	if err == nil || !errors.Is(err, ErrBucketNotFound) {
 		t.Errorf("expected bucket-not-found, got %v", err)
 	}
 }
@@ -163,44 +164,15 @@ func TestService_SignDownloadURL_PrivateBucket(t *testing.T) {
 func TestService_SignDownloadURL_MissingBucket(t *testing.T) {
 	svc := NewService(newMemStore(), newTestR2(t), nil)
 	_, err := svc.SignDownloadURL(context.Background(), testProjX, "nope", "k")
-	if err == nil || !strings.Contains(err.Error(), errBucketNotFound) {
+	if err == nil || !errors.Is(err, ErrBucketNotFound) {
 		t.Errorf("expected bucket-not-found, got %v", err)
-	}
-}
-
-func TestService_DeleteObjectCatalogueOnly(t *testing.T) {
-	store := newMemStore()
-	svc := NewService(store, newTestR2(t), nil)
-	ctx := context.Background()
-	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
-	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "u", ConfirmUploadRequest{Key: "k.txt", Size: 300})
-
-	if err := svc.DeleteObjectCatalogueOnly(ctx, testProjX, "files", "k.txt"); err != nil {
-		t.Fatalf("DeleteObjectCatalogueOnly: %v", err)
-	}
-	// Quota should be decremented back to 0.
-	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 0 {
-		t.Errorf("quota after delete: got %d, want 0", used)
-	}
-	// Listing should no longer surface it.
-	out, _ := svc.ListObjects(ctx, testProjX, "files", ListObjectsRequest{})
-	if len(out.Objects) != 0 {
-		t.Errorf("expected 0 objects after delete, got %d", len(out.Objects))
-	}
-}
-
-func TestService_DeleteObjectCatalogueOnly_MissingBucketIsNoop(t *testing.T) {
-	svc := NewService(newMemStore(), newTestR2(t), nil)
-	// Idempotent: deleting from a non-existent bucket succeeds.
-	if err := svc.DeleteObjectCatalogueOnly(context.Background(), testProjX, "nope", "k"); err != nil {
-		t.Errorf("expected nil for missing bucket, got %v", err)
 	}
 }
 
 func TestService_DeleteObject_MissingBucket(t *testing.T) {
 	svc := NewService(newMemStore(), newTestR2(t), nil)
 	err := svc.DeleteObject(context.Background(), testProjX, "nope", "k")
-	if err == nil || !strings.Contains(err.Error(), errBucketNotFound) {
+	if err == nil || !errors.Is(err, ErrBucketNotFound) {
 		t.Errorf("expected bucket-not-found, got %v", err)
 	}
 }
@@ -208,31 +180,35 @@ func TestService_DeleteObject_MissingBucket(t *testing.T) {
 func TestService_DeleteBucket_MissingBucket(t *testing.T) {
 	svc := NewService(newMemStore(), newTestR2(t), nil)
 	err := svc.DeleteBucket(context.Background(), testProjX, "nope")
-	if err == nil || !strings.Contains(err.Error(), errBucketNotFound) {
+	if err == nil || !errors.Is(err, ErrBucketNotFound) {
 		t.Errorf("expected bucket-not-found, got %v", err)
 	}
 }
 
 func TestService_DeleteBucket_CascadesObjects(t *testing.T) {
 	store := newMemStore()
-	svc := NewService(store, newTestR2(t), nil)
+	blobs := newFakeObjectStore()
+	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	for _, k := range []string{"a", "b", "c"} {
 		_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "u", ConfirmUploadRequest{Key: k, Size: 100})
+		blobs.put(testProjX, "files", k)
 	}
-	// Quota reflects the 3 objects.
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 300 {
 		t.Fatalf("pre-delete quota: got %d, want 300", used)
 	}
 
-	// DeleteBucket walks objects (r2 delete errors offline but is swallowed),
-	// decrements quota, then drops the bucket row.
 	if err := svc.DeleteBucket(ctx, testProjX, "files"); err != nil {
 		t.Fatalf("DeleteBucket: %v", err)
 	}
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 0 {
 		t.Errorf("post-delete quota: got %d, want 0", used)
+	}
+	for _, k := range []string{"a", "b", "c"} {
+		if blobs.has(testProjX, "files", k) {
+			t.Errorf("object %q bytes survived the cascade", k)
+		}
 	}
 	// Bucket gone → subsequent lookups treat it as missing.
 	if _, err := svc.ListObjects(ctx, testProjX, "files", ListObjectsRequest{}); err == nil {
@@ -242,15 +218,21 @@ func TestService_DeleteBucket_CascadesObjects(t *testing.T) {
 
 func TestService_DeleteObject_DecrementsQuota(t *testing.T) {
 	store := newMemStore()
-	svc := NewService(store, newTestR2(t), nil)
+	blobs := newFakeObjectStore()
+	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "u", ConfirmUploadRequest{Key: "k", Size: 200})
+	blobs.put(testProjX, "files", "k")
 
-	// R2 delete will error offline; DeleteObject returns that error before
-	// touching the catalogue (R2-first ordering). Assert the error surfaces.
-	if err := svc.DeleteObject(ctx, testProjX, "files", "k"); err == nil {
-		t.Log("DeleteObject returned nil (r2 delete unexpectedly succeeded)")
+	if err := svc.DeleteObject(ctx, testProjX, "files", "k"); err != nil {
+		t.Fatalf("DeleteObject: %v", err)
+	}
+	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 0 {
+		t.Errorf("post-delete quota: got %d, want 0", used)
+	}
+	if blobs.has(testProjX, "files", "k") {
+		t.Error("object bytes survived the delete")
 	}
 }
 

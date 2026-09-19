@@ -19,9 +19,9 @@ import (
 func (s *Store) CreateBucket(ctx context.Context, b *storagesvc.Bucket) error {
 	allowed, _ := json.Marshal(b.AllowedTypes)
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO storage_buckets (id, project_id, name, public, file_size_limit, allowed_mime_types, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)`,
-		b.ID, b.ProjectID, b.Name, b.Public, b.FileSize, string(allowed),
+		`INSERT INTO storage_buckets (id, project_id, name, public, status, file_size_limit, allowed_mime_types, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)`,
+		b.ID, b.ProjectID, b.Name, b.Public, bucketStatusOrDefault(b.Status), b.FileSize, string(allowed),
 		b.CreatedAt, b.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") {
@@ -34,14 +34,14 @@ func (s *Store) CreateBucket(ctx context.Context, b *storagesvc.Bucket) error {
 
 func (s *Store) GetBucket(ctx context.Context, projectID, name string) (*storagesvc.Bucket, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, project_id, name, public, file_size_limit, allowed_mime_types, created_at, updated_at
+		`SELECT id, project_id, name, public, status, file_size_limit, allowed_mime_types, created_at, updated_at
 		 FROM storage_buckets WHERE project_id = $1 AND name = $2`, projectID, name)
 	return scanBucket(row)
 }
 
 func (s *Store) ListBuckets(ctx context.Context, projectID string) ([]storagesvc.Bucket, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, project_id, name, public, file_size_limit, allowed_mime_types, created_at, updated_at
+		`SELECT id, project_id, name, public, status, file_size_limit, allowed_mime_types, created_at, updated_at
 		 FROM storage_buckets WHERE project_id = $1 ORDER BY name`, projectID)
 	if err != nil {
 		return nil, err
@@ -69,6 +69,34 @@ func (s *Store) DeleteBucket(ctx context.Context, projectID, name string) error 
 		return fmt.Errorf("bucket not found")
 	}
 	return nil
+}
+
+// SetBucketStatus moves a bucket through its lifecycle. A status write that
+// matches no row is an error: the caller believes the bucket exists.
+func (s *Store) SetBucketStatus(ctx context.Context, projectID, name, status string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE storage_buckets SET status = $3, updated_at = NOW()
+		 WHERE project_id = $1 AND name = $2`, projectID, name, status)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("bucket not found")
+	}
+	return nil
+}
+
+// bucketStatusOrDefault keeps rows written before the status column existed
+// readable as active.
+func bucketStatusOrDefault(status string) string {
+	if status == "" {
+		return storagesvc.BucketStatusActive
+	}
+	return status
 }
 
 func (s *Store) CreateObject(ctx context.Context, o *storagesvc.Object) error {
@@ -168,13 +196,15 @@ func scanBucket(r scannable) (*storagesvc.Bucket, error) {
 	var allowedRaw sql.NullString
 	var fileSize sql.NullInt64
 	var created, updated time.Time
-	err := r.Scan(&b.ID, &b.ProjectID, &b.Name, &b.Public, &fileSize, &allowedRaw, &created, &updated)
+	var status sql.NullString
+	err := r.Scan(&b.ID, &b.ProjectID, &b.Name, &b.Public, &status, &fileSize, &allowedRaw, &created, &updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	b.Status = bucketStatusOrDefault(status.String)
 	if fileSize.Valid {
 		b.FileSize = fileSize.Int64
 	}

@@ -4,22 +4,25 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
 
-const errBucketNotFound = "bucket not found"
-
+// deleteBucketPageSize bounds one page of the cascade walk.
+const deleteBucketPageSize = 100
 
 // Service is the platform-db-aware storage layer. It owns the metadata
-// (buckets, objects, quotas) and delegates to R2Client for the actual
+// (buckets, objects, quotas) and delegates to an ObjectStore for the actual
 // blob plane. Persistence interface keeps tests fast (in-memory) while
 // production uses sqlite/postgres.
 type Service struct {
-	store BucketStore
-	r2    *R2Client
+	store   BucketStore
+	objects ObjectStore
+	// tusR2 is the concrete client the resumable-upload composer needs; it
+	// reaches into the S3 SDK types the ObjectStore interface deliberately
+	// hides. Nil when the service runs on a non-R2 blob plane.
+	tusR2 *R2Client
 	// Per-tier byte quotas. Looked up by project tier; missing keys fall
 	// back to free-tier limit. Zero = unlimited.
 	tierQuotaBytes map[string]int64
@@ -33,6 +36,10 @@ type BucketStore interface {
 	GetBucket(ctx context.Context, projectID, name string) (*Bucket, error)
 	ListBuckets(ctx context.Context, projectID string) ([]Bucket, error)
 	DeleteBucket(ctx context.Context, projectID, name string) error
+	// SetBucketStatus records where a bucket is in its lifecycle. Used to
+	// mark a bucket deleting before its bytes go, so a crash mid-cascade is
+	// visible rather than silent.
+	SetBucketStatus(ctx context.Context, projectID, name, status string) error
 
 	CreateObject(ctx context.Context, o *Object) error
 	GetObject(ctx context.Context, bucketID, key string) (*Object, error)
@@ -47,7 +54,17 @@ type BucketStore interface {
 // per-project byte caps. Pass nil to disable quota enforcement
 // (everyone gets unlimited; useful for self-hosted single-tenant).
 func NewService(store BucketStore, r2 *R2Client, tierQuotas map[string]int64) *Service {
-	return &Service{store: store, r2: r2, tierQuotaBytes: tierQuotas}
+	s := &Service{store: store, tusR2: r2, tierQuotaBytes: tierQuotas}
+	if r2 != nil {
+		s.objects = r2
+	}
+	return s
+}
+
+// NewServiceWithObjectStore wires an arbitrary blob plane. Resumable (tus)
+// uploads stay disabled: the composer needs the concrete S3 client.
+func NewServiceWithObjectStore(store BucketStore, objects ObjectStore, tierQuotas map[string]int64) *Service {
+	return &Service{store: store, objects: objects, tierQuotaBytes: tierQuotas}
 }
 
 // CreateBucket validates name shape + uniqueness and persists.
@@ -57,8 +74,12 @@ func (s *Service) CreateBucket(ctx context.Context, projectID string, req Create
 	if err := validateBucketName(req.Name); err != nil {
 		return nil, err
 	}
-	if existing, _ := s.store.GetBucket(ctx, projectID, req.Name); existing != nil {
-		return nil, fmt.Errorf("bucket %q already exists in project", req.Name)
+	existing, err := s.store.GetBucket(ctx, projectID, req.Name)
+	if err != nil {
+		return nil, fmt.Errorf("check existing bucket: %w", err)
+	}
+	if existing != nil {
+		return nil, ErrBucketExists
 	}
 	id, err := randomID("bkt")
 	if err != nil {
@@ -70,6 +91,7 @@ func (s *Service) CreateBucket(ctx context.Context, projectID string, req Create
 		ProjectID:    projectID,
 		Name:         req.Name,
 		Public:       req.Public,
+		Status:       BucketStatusActive,
 		FileSize:     req.FileSizeLimit,
 		AllowedTypes: req.AllowedMimeTypes,
 		CreatedAt:    now,
@@ -86,36 +108,82 @@ func (s *Service) ListBuckets(ctx context.Context, projectID string) ([]Bucket, 
 	return s.store.ListBuckets(ctx, projectID)
 }
 
-// DeleteBucket cascades through every object via R2 then drops the row.
-// We could foreign-key-cascade in SQL but R2 needs explicit DELETE per
-// object — there's no S3 batch delete that respects bucket-level rules.
-// Best-effort: a partial failure leaves orphaned objects in R2 that the
-// daily janitor will clean up.
+// DeleteBucket removes a bucket and everything in it. The ordering is the
+// point of this function:
+//
+//	mark deleting → delete the bytes → verify the prefix is empty → drop metadata
+//
+// Doing metadata first would leave bytes nobody holds a record of: nothing
+// could ever find, delete or bill them. Doing it in this order instead risks
+// catalogue rows that outlive their bytes — which is why the bucket is marked
+// deleting up front, so that state is explicit rather than silent, and a
+// repeated DELETE finishes the job. Any failure leaves the bucket record in
+// place so that retry is possible; already-missing objects count as deleted.
 func (s *Service) DeleteBucket(ctx context.Context, projectID, name string) error {
 	bucket, err := s.store.GetBucket(ctx, projectID, name)
 	if err != nil {
-		return err
+		return fmt.Errorf("load bucket: %w", err)
 	}
 	if bucket == nil {
-		return errors.New(errBucketNotFound)
+		return ErrBucketNotFound
 	}
-	// Walk all objects in pages and delete each.
+	if s.objects == nil {
+		return errObjectStoreUnset
+	}
+	if bucket.Status != BucketStatusDeleting {
+		if err := s.store.SetBucketStatus(ctx, projectID, name, BucketStatusDeleting); err != nil {
+			return fmt.Errorf("mark bucket deleting: %w", err)
+		}
+	}
+	if err := s.purgeBucketObjects(ctx, projectID, name, bucket.ID); err != nil {
+		return err
+	}
+	remaining, err := s.objects.ListObjectKeys(ctx, projectID, name, 1)
+	if err != nil {
+		return fmt.Errorf("verify bucket empty: %w", err)
+	}
+	if len(remaining) > 0 {
+		return fmt.Errorf("bucket prefix still holds %d object(s) in the object store", len(remaining))
+	}
+	return s.store.DeleteBucket(ctx, projectID, name)
+}
+
+// purgeBucketObjects walks the catalogue page by page and deletes each
+// object's bytes before its row, so a row never survives its bytes in the
+// other direction. Stops at the first failure — the caller keeps the bucket.
+func (s *Service) purgeBucketObjects(ctx context.Context, projectID, name, bucketID string) error {
 	cursor := ""
 	for {
-		objs, next, err := s.store.ListObjects(ctx, bucket.ID, "", 100, cursor)
+		objs, next, err := s.store.ListObjects(ctx, bucketID, "", deleteBucketPageSize, cursor)
 		if err != nil {
 			return fmt.Errorf("list objects for cascade: %w", err)
 		}
 		for _, o := range objs {
-			_ = s.r2.DeleteObject(ctx, projectID, name, o.Key)
-			_ = s.store.AddQuotaBytes(ctx, projectID, -o.Size)
+			if err := s.purgeObject(ctx, projectID, name, bucketID, o.Key, o.Size); err != nil {
+				return err
+			}
 		}
 		if next == "" {
-			break
+			return nil
 		}
 		cursor = next
 	}
-	return s.store.DeleteBucket(ctx, projectID, name)
+}
+
+// purgeObject removes one object's bytes, then its row, then its quota
+// charge. Every step reports its own failure: a caller that saw success must
+// be able to rely on all three having happened.
+func (s *Service) purgeObject(ctx context.Context, projectID, bucketName, bucketID, key string, size int64) error {
+	if err := s.objects.DeleteObject(ctx, projectID, bucketName, key); err != nil {
+		return fmt.Errorf("delete object bytes: %w", err)
+	}
+	if err := s.store.DeleteObject(ctx, bucketID, key); err != nil {
+		return fmt.Errorf("delete object row: %w", err)
+	}
+	if err := s.store.AddQuotaBytes(ctx, projectID, -size); err != nil {
+		return fmt.Errorf("release quota: %w", err)
+	}
+	return nil
 }
 
 // SignUploadURL mints a presigned PUT URL after enforcing per-bucket and
@@ -123,18 +191,15 @@ func (s *Service) DeleteBucket(ctx context.Context, projectID, name string) erro
 // bypassing Excalibase. The client MUST call ConfirmUpload after the PUT
 // to record the object metadata.
 func (s *Service) SignUploadURL(ctx context.Context, projectID, bucketName, tier string, req UploadURLRequest) (*UploadURLResponse, error) {
-	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
+	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
 	if err != nil {
 		return nil, err
-	}
-	if bucket == nil {
-		return nil, errors.New(errBucketNotFound)
 	}
 	if err := s.validateUploadRequest(ctx, projectID, tier, bucket, req); err != nil {
 		return nil, err
 	}
 
-	url, expires, err := s.r2.SignedPutURL(ctx, projectID, bucketName, req.Key, req.MimeType, 5*time.Minute)
+	url, expires, err := s.objects.SignedPutURL(ctx, projectID, bucketName, req.Key, req.MimeType, 5*time.Minute)
 	if err != nil {
 		return nil, err
 	}
@@ -150,12 +215,32 @@ func (s *Service) SignUploadURL(ctx context.Context, projectID, bucketName, tier
 	}, nil
 }
 
+// uploadTarget resolves the bucket an upload is destined for and refuses one
+// whose bytes are being purged — accepting an upload there would race the
+// emptiness check and leave the new object stranded under a deleted bucket.
+func (s *Service) uploadTarget(ctx context.Context, projectID, bucketName string) (*Bucket, error) {
+	if s.objects == nil {
+		return nil, errObjectStoreUnset
+	}
+	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
+	if err != nil {
+		return nil, fmt.Errorf("load bucket: %w", err)
+	}
+	if bucket == nil {
+		return nil, ErrBucketNotFound
+	}
+	if bucket.Status == BucketStatusDeleting {
+		return nil, ErrBucketDeleting
+	}
+	return bucket, nil
+}
+
 // validateUploadRequest enforces per-bucket size limits, MIME allowlists,
 // and per-project storage quotas before a presigned PUT URL is issued.
 func (s *Service) validateUploadRequest(ctx context.Context, projectID, tier string, bucket *Bucket, req UploadURLRequest) error {
 	// Per-bucket file size limit (0 = no limit).
 	if bucket.FileSize > 0 && req.Size > bucket.FileSize {
-		return fmt.Errorf("file exceeds bucket size limit %d bytes", bucket.FileSize)
+		return invalidf("file exceeds bucket size limit %d bytes", bucket.FileSize)
 	}
 	// MIME allowlist (empty = any).
 	if err := s.checkMIMEAllowlist(bucket.AllowedTypes, req.MimeType); err != nil {
@@ -168,7 +253,7 @@ func (s *Service) validateUploadRequest(ctx context.Context, projectID, tier str
 			return fmt.Errorf("read quota: %w", err)
 		}
 		if used+req.Size > cap {
-			return fmt.Errorf("project storage quota exceeded (%d / %d bytes)", used, cap)
+			return invalidf("project storage quota exceeded (%d / %d bytes)", used, cap)
 		}
 	}
 	return nil
@@ -185,7 +270,7 @@ func (s *Service) checkMIMEAllowlist(allowed []string, mimeType string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("mime type %q not allowed in bucket", mimeType)
+	return invalidf("mime type %q not allowed in bucket", mimeType)
 }
 
 // ConfirmUpload records that a previously-signed upload completed. We
@@ -193,12 +278,9 @@ func (s *Service) checkMIMEAllowlist(allowed []string, mimeType string) error {
 // HEAD-back-to-R2 reconciliation in a daily janitor that catches any
 // drift.
 func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, ownerID string, req ConfirmUploadRequest) (*Object, error) {
-	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
+	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
 	if err != nil {
 		return nil, err
-	}
-	if bucket == nil {
-		return nil, errors.New(errBucketNotFound)
 	}
 	id, err := randomID("obj")
 	if err != nil {
@@ -217,29 +299,37 @@ func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, owne
 		UpdatedAt: now,
 	}
 	if err := s.store.CreateObject(ctx, obj); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("record object: %w", err)
 	}
-	_ = s.store.AddQuotaBytes(ctx, projectID, req.Size)
+	// Quota is what the platform bills and enforces on; a confirm that
+	// recorded the object but not its bytes would under-count forever.
+	if err := s.store.AddQuotaBytes(ctx, projectID, req.Size); err != nil {
+		return nil, fmt.Errorf("charge quota: %w", err)
+	}
 	return obj, nil
 }
 
 // SignDownloadURL returns either a signed GET URL (private buckets) or
 // the static public URL (public buckets). Public URLs don't expire.
 func (s *Service) SignDownloadURL(ctx context.Context, projectID, bucketName, key string) (*DownloadURLResponse, error) {
+	if s.objects == nil {
+		return nil, errObjectStoreUnset
+	}
 	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load bucket: %w", err)
 	}
 	if bucket == nil {
-		return nil, errors.New(errBucketNotFound)
+		return nil, ErrBucketNotFound
 	}
 	if bucket.Public {
-		return &DownloadURLResponse{
-			URL:    s.r2.PublicURL(projectID, bucketName, key),
-			Public: true,
-		}, nil
+		url, err := s.objects.PublicURL(projectID, bucketName, key)
+		if err != nil {
+			return nil, invalidf("invalid object key")
+		}
+		return &DownloadURLResponse{URL: url, Public: true}, nil
 	}
-	url, expires, err := s.r2.SignedGetURL(ctx, projectID, bucketName, key, 5*time.Minute)
+	url, expires, err := s.objects.SignedGetURL(ctx, projectID, bucketName, key, 5*time.Minute)
 	if err != nil {
 		return nil, err
 	}
@@ -251,69 +341,47 @@ func (s *Service) SignDownloadURL(ctx context.Context, projectID, bucketName, ke
 func (s *Service) ListObjects(ctx context.Context, projectID, bucketName string, req ListObjectsRequest) (*ListObjectsResponse, error) {
 	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load bucket: %w", err)
 	}
 	if bucket == nil {
-		return nil, errors.New(errBucketNotFound)
+		return nil, ErrBucketNotFound
 	}
 	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 100
 	}
 	objs, next, err := s.store.ListObjects(ctx, bucket.ID, req.Prefix, req.Limit, req.Cursor)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list objects: %w", err)
 	}
 	return &ListObjectsResponse{Objects: objs, NextCursor: next}, nil
 }
 
-// DeleteObjectCatalogueOnly removes only the catalogue row for (bucket,
-// key); does NOT touch R2. Used by the Phase 10 internal ctx.storage
-// delete path which is idempotent and must succeed even when the R2
-// best-effort delete fails (the daily janitor reaps orphaned blobs,
-// matching the convention in DeleteObject's comments).
-func (s *Service) DeleteObjectCatalogueOnly(ctx context.Context, projectID, bucketName, key string) error {
-	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
-	if err != nil {
-		return err
-	}
-	if bucket == nil {
-		// Bucket doesn't exist — nothing to remove. Idempotent.
-		return nil
-	}
-	obj, _ := s.store.GetObject(ctx, bucket.ID, key)
-	if err := s.store.DeleteObject(ctx, bucket.ID, key); err != nil {
-		return err
-	}
-	if obj != nil {
-		_ = s.store.AddQuotaBytes(ctx, projectID, -obj.Size)
-	}
-	return nil
-}
-
-// DeleteObject removes from both R2 and the catalogue. R2 first so a
-// dangling DB row is preferable to an orphaned blob (the janitor reaps
-// dangling rows; orphaned blobs cost money).
+// DeleteObject removes an object from both the blob plane and the catalogue.
+// Bytes first, then the row: a caller that retries after a failure can always
+// find the object again through its row, whereas bytes without a row are
+// unreachable. Both must succeed for the call to report success. A bucket
+// that does not exist yields ErrBucketNotFound; an object that is already
+// gone from the blob plane counts as deleted, so retries converge.
 func (s *Service) DeleteObject(ctx context.Context, projectID, bucketName, key string) error {
+	if s.objects == nil {
+		return errObjectStoreUnset
+	}
 	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
 	if err != nil {
-		return err
+		return fmt.Errorf("load bucket: %w", err)
 	}
 	if bucket == nil {
-		return errors.New(errBucketNotFound)
+		return ErrBucketNotFound
 	}
-	obj, _ := s.store.GetObject(ctx, bucket.ID, key)
-	if err := s.r2.DeleteObject(ctx, projectID, bucketName, key); err != nil {
-		return err
+	obj, err := s.store.GetObject(ctx, bucket.ID, key)
+	if err != nil {
+		return fmt.Errorf("load object: %w", err)
 	}
-	if err := s.store.DeleteObject(ctx, bucket.ID, key); err != nil {
-		// R2 already deleted; warn but don't fail the user request.
-		// A dangling DB row will be cleaned by the janitor.
-		_ = err
-	}
+	size := int64(0)
 	if obj != nil {
-		_ = s.store.AddQuotaBytes(ctx, projectID, -obj.Size)
+		size = obj.Size
 	}
-	return nil
+	return s.purgeObject(ctx, projectID, bucketName, bucket.ID, key, size)
 }
 
 func (s *Service) quotaForTier(tier string) int64 {
@@ -335,7 +403,7 @@ func (s *Service) quotaForTier(tier string) int64 {
 // and consecutive hyphens to keep URLs sane.
 func validateBucketName(name string) error {
 	if len(name) < 3 || len(name) > 63 {
-		return fmt.Errorf("bucket name must be 3-63 chars, got %d", len(name))
+		return invalidf("bucket name must be 3-63 chars, got %d", len(name))
 	}
 	for i, ch := range name {
 		switch {
@@ -343,10 +411,10 @@ func validateBucketName(name string) error {
 			// ok
 		case ch == '-':
 			if i == 0 || i == len(name)-1 {
-				return fmt.Errorf("bucket name can't start/end with hyphen")
+				return invalidf("bucket name can't start/end with hyphen")
 			}
 		default:
-			return fmt.Errorf("bucket name must be lowercase letters/digits/hyphens only")
+			return invalidf("bucket name must be lowercase letters/digits/hyphens only")
 		}
 	}
 	return nil

@@ -79,6 +79,18 @@ func (m *memStore) DeleteBucket(_ context.Context, projectID, name string) error
 	return errNotFound
 }
 
+func (m *memStore) SetBucketStatus(_ context.Context, projectID, name, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.buckets {
+		if b.ProjectID == projectID && b.Name == name {
+			b.Status = status
+			return nil
+		}
+	}
+	return errNotFound
+}
+
 func (m *memStore) CreateObject(_ context.Context, o *Object) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

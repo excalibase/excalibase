@@ -2,6 +2,7 @@ package storagesvc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -11,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 )
 
 // R2Config holds the credentials + endpoint for Cloudflare R2 (or any
@@ -68,6 +70,18 @@ func NewR2Client(cfg R2Config) (*R2Client, error) {
 	}, nil
 }
 
+// bucketPrefix is the key namespace holding every object of one (project,
+// bucket). The trailing slash is load-bearing: without it a prefix listing
+// for bucket "assets" would also match every key of "assets2", and an
+// emptiness check on one bucket could be satisfied — or blocked — by a
+// neighbour's objects.
+func bucketPrefix(projectID, bucket string) (string, error) {
+	if projectID == "" || bucket == "" {
+		return "", fmt.Errorf("r2: project + bucket required")
+	}
+	return fmt.Sprintf("projects/%s/buckets/%s/", projectID, bucket), nil
+}
+
 // objectKey builds the storage key for a (project, bucket, user-key)
 // tuple. Single platform R2 bucket is partitioned by this prefix:
 //
@@ -76,8 +90,9 @@ func NewR2Client(cfg R2Config) (*R2Client, error) {
 // The key is path-cleaned but NOT URL-encoded — R2 stores raw UTF-8.
 // We DO refuse "/.." sequences so callers can't escape the prefix.
 func objectKey(projectID, bucket, userKey string) (string, error) {
-	if projectID == "" || bucket == "" {
-		return "", fmt.Errorf("r2: project + bucket required")
+	prefix, err := bucketPrefix(projectID, bucket)
+	if err != nil {
+		return "", err
 	}
 	// Refuse traversal at the segment level — `path.Clean` would turn
 	// "foo/../bar" into "bar" silently, which is technically safe but
@@ -92,7 +107,7 @@ func objectKey(projectID, bucket, userKey string) (string, error) {
 	if cleaned == "/" || cleaned == "" {
 		return "", fmt.Errorf("r2: invalid key %q", userKey)
 	}
-	return fmt.Sprintf("projects/%s/buckets/%s%s", projectID, bucket, cleaned), nil
+	return prefix + strings.TrimPrefix(cleaned, "/"), nil
 }
 
 // SignedPutURL returns a presigned URL the client can PUT bytes to
@@ -148,22 +163,24 @@ func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucket, key stri
 // to the R2 public bucket URL pattern when no custom domain is configured.
 // Caller is responsible for ensuring the bucket is actually public — this
 // function just constructs a URL string.
-func (r *R2Client) PublicURL(projectID, bucket, key string) string {
+func (r *R2Client) PublicURL(projectID, bucket, key string) (string, error) {
 	storeKey, err := objectKey(projectID, bucket, key)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	if r.cfg.PublicURL != "" {
-		return strings.TrimRight(r.cfg.PublicURL, "/") + "/" + storeKey
+		return strings.TrimRight(r.cfg.PublicURL, "/") + "/" + storeKey, nil
 	}
 	// Fallback: R2's default pub-<hash>.r2.dev requires explicit per-bucket
 	// public access enable in the Cloudflare dashboard. Without that,
 	// callers SHOULD configure PublicURL or use signed URLs.
-	return fmt.Sprintf("%s/%s/%s", strings.TrimRight(r.cfg.Endpoint, "/"), url.PathEscape(r.cfg.Bucket), storeKey)
+	return fmt.Sprintf("%s/%s/%s", strings.TrimRight(r.cfg.Endpoint, "/"), url.PathEscape(r.cfg.Bucket), storeKey), nil
 }
 
 // DeleteObject removes a single key. Used on object delete and as part of
-// bucket-cascade-delete (caller iterates keys + calls this).
+// bucket-cascade-delete (caller iterates keys + calls this). An object that
+// is already absent counts as deleted, so a retried delete converges instead
+// of failing forever on the second attempt.
 func (r *R2Client) DeleteObject(ctx context.Context, projectID, bucket, key string) error {
 	storeKey, err := objectKey(projectID, bucket, key)
 	if err != nil {
@@ -174,9 +191,57 @@ func (r *R2Client) DeleteObject(ctx context.Context, projectID, bucket, key stri
 		Key:    aws.String(storeKey),
 	})
 	if err != nil {
+		if isNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("delete object: %w", err)
 	}
 	return nil
+}
+
+// ListObjectKeys returns up to limit keys stored under the bucket's prefix.
+// A bucket delete uses it to prove the blob plane really is empty before the
+// catalogue is dropped — the catalogue alone cannot prove it, since an
+// upload that was never confirmed leaves bytes with no row.
+func (r *R2Client) ListObjectKeys(ctx context.Context, projectID, bucket string, limit int32) ([]string, error) {
+	prefix, err := bucketPrefix(projectID, bucket)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	out, err := r.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(r.cfg.Bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list objects: %w", err)
+	}
+	keys := make([]string, 0, len(out.Contents))
+	for _, o := range out.Contents {
+		if o.Key != nil {
+			keys = append(keys, *o.Key)
+		}
+	}
+	return keys, nil
+}
+
+// isNotFound reports whether an S3 error means "the key isn't there".
+// R2 answers a delete of a missing key with 204, but other S3-compatible
+// backends return NoSuchKey — both mean the same thing. DeleteObject has no
+// modelled error shape for it, so the wire code is what identifies it.
+func isNotFound(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.ErrorCode() {
+	case "NoSuchKey", "NotFound", "NoSuchBucket":
+		return true
+	}
+	return false
 }
 
 // HeadObject queries R2 for the size + content-type of an existing object.

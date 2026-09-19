@@ -126,3 +126,43 @@ func TestPgStorage_QuotaDeltaAccumulates(t *testing.T) {
 		t.Errorf("quota accumulation: got %d, want 300", used)
 	}
 }
+
+// A bucket is born active and can be marked deleting; the status survives a
+// round-trip so an interrupted cascade is still visible after a restart.
+func TestPgStorage_BucketStatusRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	const project = "proj-status"
+	now := time.Now().UTC()
+	if err := s.CreateBucket(ctx, &storagesvc.Bucket{
+		ID: "bkt_status", ProjectID: project, Name: "assets",
+		Status: storagesvc.BucketStatusActive, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	got, _ := s.GetBucket(ctx, project, "assets")
+	if got == nil || got.Status != storagesvc.BucketStatusActive {
+		t.Fatalf("new bucket should be active: %+v", got)
+	}
+
+	if err := s.SetBucketStatus(ctx, project, "assets", storagesvc.BucketStatusDeleting); err != nil {
+		t.Fatalf("SetBucketStatus: %v", err)
+	}
+	got, _ = s.GetBucket(ctx, project, "assets")
+	if got == nil || got.Status != storagesvc.BucketStatusDeleting {
+		t.Fatalf("bucket should be deleting: %+v", got)
+	}
+	listed, _ := s.ListBuckets(ctx, project)
+	if len(listed) != 1 || listed[0].Status != storagesvc.BucketStatusDeleting {
+		t.Errorf("listed status: %+v", listed)
+	}
+	_ = s.DeleteBucket(ctx, project, "assets")
+}
+
+func TestPgStorage_SetBucketStatus_UnknownBucket(t *testing.T) {
+	s := testStore(t)
+	err := s.SetBucketStatus(context.Background(), "nope", "missing", storagesvc.BucketStatusDeleting)
+	if err == nil {
+		t.Error("marking a bucket that does not exist must fail")
+	}
+}
