@@ -27,11 +27,16 @@ const (
 	testVaultListPath    = "/api/vault/secrets-list"
 )
 
-// fakeAuthMiddleware injects a fake admin user so auth-protected vault routes pass.
+// fakeAuthMiddleware injects a fake admin user so auth-protected vault routes
+// pass. It sets the session token too: ExtractAuth only ever resolves a user
+// from a token, so a user without one is a state production cannot reach, and
+// the unrestricted-credential gate on the key-material writes would read it as
+// a narrowed PAT.
 func fakeAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := &domain.User{ID: "test-admin", Username: "admin", Role: "platform_admin", Active: true}
 		ctx := auth.SetUser(r.Context(), user)
+		ctx = auth.SetToken(ctx, &domain.AccessToken{UserID: user.ID, Scopes: auth.ScopeSession})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
