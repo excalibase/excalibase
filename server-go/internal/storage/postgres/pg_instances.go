@@ -30,7 +30,7 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 			deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 			webhook_url, postgres_version, tags,
 			status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
-			deletion_step, deletion_error,
+			deletion_step, deletion_error, deletion_delete_backups,
 			network_policy_enabled,
 			maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 			backup_enabled, backup_schedule, backup_retention_days,
@@ -38,14 +38,14 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 			restored_from_project_id, restored_from_backup_id,
 			last_active_at, last_xact_count, pause_reason,
 			created_at, updated_at, last_health_check
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
 		derefBool(inst.DeletionProtection), derefBool(inst.PoolerEnabled), inst.PoolerHost, inst.SSLMode,
 		inst.WebhookURL, inst.PostgresVersion, inst.Tags,
 		inst.Status, inst.CurrentStage, inst.CurrentStep, inst.FailureReason, inst.FailureStage, inst.FailureStep, inst.RollbackLog,
-		inst.DeletionStep, inst.DeletionError,
+		inst.DeletionStep, inst.DeletionError, inst.DeletionDeleteBackups,
 		derefBool(inst.NetworkPolicyEnabled),
 		inst.MaintenanceWindow, inst.MaintenanceWindowDurationMinutes, derefBool(inst.AutoMinorVersionUpgrade),
 		derefBool(inst.BackupEnabled), inst.BackupSchedule, inst.BackupRetentionDays,
@@ -115,7 +115,7 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 			last_health_check = $43,
 			deletion_step = $44,
 			deletion_error = $45
-		WHERE project_id = $1`,
+		WHERE project_id = $1 AND status <> ALL($46)`,
 		inst.ProjectID, inst.ProjectName, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
@@ -130,6 +130,7 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 		flexTimePtr(inst.LastActiveAt), inst.LastXactCount, inst.PauseReason,
 		flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 		inst.DeletionStep, inst.DeletionError,
+		pq.Array(deletionStatuses),
 	)
 	if err != nil {
 		return err
@@ -139,7 +140,104 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 		return err
 	}
 	if affected == 0 {
+		return s.explainRefusedUpdate(inst.ProjectID)
+	}
+	return nil
+}
+
+// deletionStatuses are the statuses a general Update may not write over. The
+// predicate lives in the UPDATE itself so the door holds across control-plane
+// replicas and across any caller, not only the ones that remember to check.
+var deletionStatuses = []string{string(domain.StatusDeleting), string(domain.StatusBackupsPendingDelete)}
+
+// explainRefusedUpdate turns "no rows matched" into the reason: either the row
+// is gone, or a teardown owns it.
+func (s *Store) explainRefusedUpdate(projectID string) error {
+	var status string
+	err := s.db.QueryRow(`SELECT status FROM database_instances WHERE project_id = $1`, projectID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
 		return storage.ErrProjectNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read project status: %w", err)
+	}
+	if domain.IsDeletionStatus(status) {
+		return fmt.Errorf("%w: %s", storage.ErrProjectDeleting, projectID)
+	}
+	return storage.ErrProjectNotFound
+}
+
+// BeginDeletion claims the project for teardown in one conditional write. See
+// storage.InstanceStore.
+func (s *Store) BeginDeletion(projectID string, deleteBackups *bool) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("begin deletion claim: %w", err)
+	}
+	defer tx.Rollback()
+
+	var status string
+	var recorded bool
+	err = tx.QueryRow(
+		`SELECT status, deletion_delete_backups FROM database_instances WHERE project_id = $1 FOR UPDATE`,
+		projectID).Scan(&status, &recorded)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, storage.ErrProjectNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("lock project row: %w", err)
+	}
+
+	effective, err := effectiveBackupIntent(projectID, status, recorded, deleteBackups)
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(`
+		UPDATE database_instances
+		SET status = $2, current_stage = $2, deletion_step = '', deletion_error = '',
+		    deletion_delete_backups = $3, updated_at = NOW()
+		WHERE project_id = $1`,
+		projectID, string(domain.StatusDeleting), effective); err != nil {
+		return false, fmt.Errorf("claim project for deletion: %w", err)
+	}
+	return effective, tx.Commit()
+}
+
+// effectiveBackupIntent resolves the backup decision now in force from what
+// the row records and what this caller asked for.
+func effectiveBackupIntent(projectID, status string, recorded bool, requested *bool) (bool, error) {
+	switch {
+	case requested == nil:
+		return recorded, nil
+	case *requested:
+		return true, nil
+	case recorded && domain.IsDeletionStatus(status):
+		return false, fmt.Errorf("%w: %s", storage.ErrBackupPurgeAlreadyConfirmed, projectID)
+	default:
+		return false, nil
+	}
+}
+
+// RecordDeletionFailure stores how far a teardown got. See
+// storage.InstanceStore.
+func (s *Store) RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error {
+	res, err := s.db.Exec(`
+		UPDATE database_instances
+		SET status = $2, current_stage = $2, deletion_step = $3, deletion_error = $4,
+		    failure_reason = CASE WHEN $2 = $5 THEN $4 ELSE failure_reason END,
+		    updated_at = NOW()
+		WHERE project_id = $1 AND status = ANY($6)`,
+		projectID, string(status), step, reason,
+		string(domain.StatusBackupsPendingDelete), pq.Array(deletionStatuses))
+	if err != nil {
+		return fmt.Errorf("record deletion failure: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: %s", storage.ErrProjectNotDeleting, projectID)
 	}
 	return nil
 }
@@ -151,7 +249,7 @@ const pgInstanceColumns = `
 	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
 	webhook_url, postgres_version, tags,
 	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
-	deletion_step, deletion_error,
+	deletion_step, deletion_error, deletion_delete_backups,
 	network_policy_enabled,
 	maintenance_window, maintenance_window_duration_min, auto_minor_version_upgrade,
 	backup_enabled, backup_schedule, backup_retention_days,
@@ -279,7 +377,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&delProt, &poolerEn, &inst.PoolerHost, &inst.SSLMode,
 		&inst.WebhookURL, &inst.PostgresVersion, &inst.Tags,
 		&inst.Status, &inst.CurrentStage, &inst.CurrentStep, &inst.FailureReason, &inst.FailureStage, &inst.FailureStep, &inst.RollbackLog,
-		&inst.DeletionStep, &inst.DeletionError,
+		&inst.DeletionStep, &inst.DeletionError, &inst.DeletionDeleteBackups,
 		&netPol,
 		&inst.MaintenanceWindow, &maintDur, &autoUpgrade,
 		&backupEn, &inst.BackupSchedule, &backupRet,

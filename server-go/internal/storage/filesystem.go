@@ -70,9 +70,45 @@ func (s *FileSystemStore) Update(inst *domain.DatabaseInstance) error {
 	if !ok {
 		return ErrProjectNotFound
 	}
+	if err := CheckUpdatable(existing); err != nil {
+		return err
+	}
 	updated := *inst
 	updated.OrgID = existing.OrgID
 	return s.write(&updated)
+}
+
+// BeginDeletion claims the project for teardown. See InstanceStore.
+func (s *FileSystemStore) BeginDeletion(projectID string, deleteBackups *bool) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, ok := s.cache[projectID]
+	if !ok {
+		return false, ErrProjectNotFound
+	}
+	claimed := *existing
+	effective, err := ApplyBeginDeletion(&claimed, deleteBackups)
+	if err != nil {
+		return false, err
+	}
+	return effective, s.write(&claimed)
+}
+
+// RecordDeletionFailure stores how far a teardown got. See InstanceStore.
+func (s *FileSystemStore) RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, ok := s.cache[projectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	failed := *existing
+	if err := ApplyDeletionFailure(&failed, status, step, reason); err != nil {
+		return err
+	}
+	return s.write(&failed)
 }
 
 // write persists the instance to disk and the cache. Callers hold s.mu.
@@ -126,7 +162,16 @@ func (s *FileSystemStore) FindByProjectID(projectID string) (*domain.DatabaseIns
 	if !ok {
 		return nil, nil
 	}
-	return inst, nil
+	return copyInstance(inst), nil
+}
+
+// copyInstance hands the caller its own struct. Readers must never receive
+// the cached pointer: a caller that mutates what it read would rewrite the
+// store's view without going through Update, and so slip past the checks
+// Update makes — the deletion door among them.
+func copyInstance(inst *domain.DatabaseInstance) *domain.DatabaseInstance {
+	copied := *inst
+	return &copied
 }
 
 func (s *FileSystemStore) FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error) {
@@ -136,7 +181,7 @@ func (s *FileSystemStore) FindByOwner(ownerID string) ([]*domain.DatabaseInstanc
 	result := make([]*domain.DatabaseInstance, 0)
 	for _, inst := range s.cache {
 		if inst.OwnerID == ownerID {
-			result = append(result, inst)
+			result = append(result, copyInstance(inst))
 		}
 	}
 	return result, nil
@@ -148,7 +193,7 @@ func (s *FileSystemStore) FindAll() ([]*domain.DatabaseInstance, error) {
 
 	result := make([]*domain.DatabaseInstance, 0, len(s.cache))
 	for _, inst := range s.cache {
-		result = append(result, inst)
+		result = append(result, copyInstance(inst))
 	}
 	return result, nil
 }

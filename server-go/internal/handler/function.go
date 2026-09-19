@@ -1072,6 +1072,9 @@ func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	fnID := chi.URLParam(r, "fnId")
 
+	if refuseWhileDeleting(w, h.instanceStore, projectID) {
+		return
+	}
 	if !h.allowProject(projectID) {
 		w.Header().Set("Retry-After", "1")
 		httpError(w, "rate limit exceeded", http.StatusTooManyRequests)
@@ -1538,6 +1541,9 @@ func (h *FunctionHandler) InternalInvoke(w http.ResponseWriter, r *http.Request)
 	if !h.authorizeRuntimeToken(w, r, projectID) {
 		return
 	}
+	if refuseWhileDeleting(w, h.instanceStore, projectID) {
+		return
+	}
 	fn, err := h.store.Get(projectID, fnID)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
@@ -1576,6 +1582,9 @@ func (h *FunctionHandler) PublicHttpInvoke(w http.ResponseWriter, r *http.Reques
 	projectID := chi.URLParam(r, "projectId")
 	if err := edgefn.ValidateProjectID(projectID); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	if refuseWhileDeleting(w, h.instanceStore, projectID) {
 		return
 	}
 	if !h.allowProject(projectID) {

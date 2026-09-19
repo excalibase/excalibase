@@ -762,3 +762,32 @@ func TestInviteServiceAccountIsRefused(t *testing.T) {
 		t.Fatalf("expected only the owner, got %d members", len(listed))
 	}
 }
+
+// A project being torn down takes its member rows with it, so membership
+// writes against it are refused; reading them still works.
+func TestProjectMember_WritesRefusedWhileProjectIsDeleting(t *testing.T) {
+	r, _, instances := setupOrgRouterWithInstances(t, true)
+
+	w := orgRequest(r, "POST", testOrgsPath, `{"name":"GoingOrg","slug":"going-org"}`, testAliceID)
+	var org domain.Org
+	json.NewDecoder(w.Body).Decode(&org)
+	instances.Create(&domain.DatabaseInstance{
+		ProjectID: "going-proj", OrgID: org.ID, Status: string(domain.StatusDeleting),
+	})
+
+	base := testOrgsSlash + org.ID + "/projects/going-proj/members"
+	for _, tc := range []struct{ method, path, body string }{
+		{"POST", base, `{"userId":"` + testBobID + `","role":"editor"}`},
+		{"PATCH", base + "/" + testBobID, `{"role":"viewer"}`},
+		{"DELETE", base + "/" + testBobID, ""},
+	} {
+		got := orgRequest(r, tc.method, tc.path, tc.body, testAliceID)
+		if got.Code != http.StatusConflict {
+			t.Errorf("%s %s: got %d, want 409 (body=%s)", tc.method, tc.path, got.Code, got.Body.String())
+		}
+	}
+
+	if got := orgRequest(r, "GET", base, "", testAliceID); got.Code != http.StatusOK {
+		t.Errorf("listing members of a deleting project: got %d, want 200", got.Code)
+	}
+}

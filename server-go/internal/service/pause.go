@@ -85,6 +85,12 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 	inst.PauseReason = reason
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
 	if err := s.instances.Update(inst); err != nil {
+		// A teardown that claimed the project between the read above and
+		// this write owns it now: stopping its workload here would race the
+		// teardown over resources it is already removing.
+		if errors.Is(err, storage.ErrProjectDeleting) {
+			return err
+		}
 		log.Printf("WARN: persist PAUSING for %s: %v", projectID, err)
 	}
 
@@ -124,7 +130,13 @@ func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 
 	inst.Status = string(domain.StatusResuming)
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-	_ = s.instances.Update(inst)
+	if err := s.instances.Update(inst); err != nil {
+		// Never start a workload back up for a project a teardown owns.
+		if errors.Is(err, storage.ErrProjectDeleting) {
+			return err
+		}
+		log.Printf("WARN: persist RESUMING for %s: %v", projectID, err)
+	}
 
 	if err := pauser.Resume(ctx, inst.Namespace, projectID); err != nil {
 		return fmt.Errorf("resume: provisioner start failed (status remains RESUMING): %w", err)

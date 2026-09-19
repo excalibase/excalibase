@@ -560,6 +560,14 @@ func buildProvisioningService(
 		provSvc.SetDefaultDeploymentMode(domain.ModeK8s)
 	}
 
+	// Several control-plane replicas share one platform database, so the
+	// teardown claim has to be visible to all of them: a per-project Postgres
+	// advisory lock, released automatically if the holder's connection dies.
+	if pg, ok := sqlStore.(*pgstore.Store); ok {
+		provSvc.SetDeletionClaimer(service.NewAdvisoryDeletionClaimer(
+			func(key int64) service.AdvisoryLocker { return pgstore.NewAdvisoryLock(pg.DB(), key) }))
+	}
+
 	provSvc.SetBackupDefaults(backupDefaultsFromEnv())
 	// Deprovision with confirmDeleteBackups resolves the store through
 	// provSvc.BackupStorage() — the same source backups are written with.
