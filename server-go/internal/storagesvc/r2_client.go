@@ -204,26 +204,41 @@ func (r *R2Client) PublicURL(projectID, bucketID, key string) (string, error) {
 	return fmt.Sprintf("%s/%s/%s", strings.TrimRight(r.cfg.Endpoint, "/"), url.PathEscape(r.cfg.Bucket), storeKey), nil
 }
 
-// DeleteObject removes a single key. Used on object delete and as part of
-// bucket-cascade-delete (caller iterates keys + calls this). An object that
-// is already absent counts as deleted, so a retried delete converges instead
-// of failing forever on the second attempt.
+// DeleteKey removes one whole store key. The key must fall under prefix: a
+// purge works from what a listing returned, and a listing that answered with
+// something outside the namespace it was asked about must not be turned into
+// a delete anywhere else. An object that is already gone counts as deleted,
+// so a retried delete converges instead of failing forever on the second
+// attempt.
+//
+// This is the one delete: every other delete on this client is a view of it
+// that builds the prefix and the key itself.
+func (r *R2Client) DeleteKey(ctx context.Context, prefix, key string) error {
+	if prefix == "" || !strings.HasPrefix(key, prefix) {
+		return fmt.Errorf("r2: key %q is not under prefix %q", key, prefix)
+	}
+	_, err := r.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(r.cfg.Bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil && !isNotFound(err) {
+		return fmt.Errorf("delete object: %w", err)
+	}
+	return nil
+}
+
+// DeleteObject removes a single object of a bucket. Used on object delete and
+// as part of bucket-cascade-delete (caller iterates keys + calls this).
 func (r *R2Client) DeleteObject(ctx context.Context, projectID, bucketID, key string) error {
+	prefix, err := bucketPrefix(projectID, bucketID)
+	if err != nil {
+		return err
+	}
 	storeKey, err := objectKey(projectID, bucketID, key)
 	if err != nil {
 		return err
 	}
-	_, err = r.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(r.cfg.Bucket),
-		Key:    aws.String(storeKey),
-	})
-	if err != nil {
-		if isNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("delete object: %w", err)
-	}
-	return nil
+	return r.DeleteKey(ctx, prefix, storeKey)
 }
 
 // StoredObject is one key as the object store holds it: the key relative to
@@ -238,12 +253,36 @@ type StoredObject struct {
 	LastModified time.Time
 }
 
-// ListObjects returns what the object store holds under one bucket's prefix.
-// Keys come back relative to the bucket, matching the catalogue's view.
-func (r *R2Client) ListObjects(ctx context.Context, projectID, bucketID string, limit int32) ([]StoredObject, error) {
-	prefix, err := bucketPrefix(projectID, bucketID)
+// ListKeysWithPrefix returns up to limit whole store keys under an arbitrary
+// prefix. This is the one listing: ListObjects and ListStagedUploads are
+// views of it that build the prefix themselves and shape what comes back.
+//
+// A project teardown needs the raw form, because by then there is no
+// catalogue left to enumerate the project's objects from — not its buckets,
+// not its rows, not even the uploads it never confirmed.
+func (r *R2Client) ListKeysWithPrefix(ctx context.Context, prefix string, limit int32) ([]string, error) {
+	listed, err := r.listUnderPrefix(ctx, prefix, limit)
 	if err != nil {
 		return nil, err
+	}
+	keys := make([]string, 0, len(listed))
+	for _, o := range listed {
+		keys = append(keys, o.key)
+	}
+	return keys, nil
+}
+
+// listedKey is one entry as the store reports it: the whole key, its size and
+// when it was written.
+type listedKey struct {
+	key          string
+	size         int64
+	lastModified time.Time
+}
+
+func (r *R2Client) listUnderPrefix(ctx context.Context, prefix string, limit int32) ([]listedKey, error) {
+	if prefix == "" {
+		return nil, fmt.Errorf("r2: prefix required")
 	}
 	if limit <= 0 {
 		limit = 1000
@@ -256,19 +295,41 @@ func (r *R2Client) ListObjects(ctx context.Context, projectID, bucketID string, 
 	if err != nil {
 		return nil, fmt.Errorf("list objects: %w", err)
 	}
-	objects := make([]StoredObject, 0, len(out.Contents))
+	listed := make([]listedKey, 0, len(out.Contents))
 	for _, o := range out.Contents {
 		if o.Key == nil {
 			continue
 		}
-		obj := StoredObject{Key: strings.TrimPrefix(*o.Key, prefix)}
+		entry := listedKey{key: *o.Key}
 		if o.Size != nil {
-			obj.Size = *o.Size
+			entry.size = *o.Size
 		}
 		if o.LastModified != nil {
-			obj.LastModified = *o.LastModified
+			entry.lastModified = *o.LastModified
 		}
-		objects = append(objects, obj)
+		listed = append(listed, entry)
+	}
+	return listed, nil
+}
+
+// ListObjects returns what the object store holds under one bucket's prefix.
+// Keys come back relative to the bucket, matching the catalogue's view.
+func (r *R2Client) ListObjects(ctx context.Context, projectID, bucketID string, limit int32) ([]StoredObject, error) {
+	prefix, err := bucketPrefix(projectID, bucketID)
+	if err != nil {
+		return nil, err
+	}
+	listed, err := r.listUnderPrefix(ctx, prefix, limit)
+	if err != nil {
+		return nil, err
+	}
+	objects := make([]StoredObject, 0, len(listed))
+	for _, o := range listed {
+		objects = append(objects, StoredObject{
+			Key:          strings.TrimPrefix(o.key, prefix),
+			Size:         o.size,
+			LastModified: o.lastModified,
+		})
 	}
 	return objects, nil
 }
@@ -278,10 +339,8 @@ func (r *R2Client) ListObjects(ctx context.Context, projectID, bucketID string, 
 // client does not implement — and does not need to, because the presigned
 // single PUT that stages an upload has the same 5 GiB ceiling, so nothing
 // larger can be staged in the first place. Resumable (tus) uploads can exceed
-// it; CopyObject refuses one rather than silently truncating it, and that
-// refusal is what would have to be lifted first.
-// MaxSingleCopyBytes is exported so the confirm path can refuse an upload it
-// would not be able to move onto its key.
+// it; the confirm path refuses one rather than silently truncating it, and
+// that refusal is what would have to be lifted first.
 const MaxSingleCopyBytes int64 = 5 * 1024 * 1024 * 1024
 
 // CopyObject copies an object onto another key inside the same logical
@@ -318,27 +377,16 @@ func (r *R2Client) ListStagedUploads(ctx context.Context, projectID, bucketID st
 		return nil, err
 	}
 	prefix := bucket + stagingPrefix
-	if limit <= 0 {
-		limit = 1000
-	}
-	out, err := r.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:  aws.String(r.cfg.Bucket),
-		Prefix:  aws.String(prefix),
-		MaxKeys: aws.Int32(limit),
-	})
+	listed, err := r.listUnderPrefix(ctx, prefix, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list staged uploads: %w", err)
 	}
-	staged := make([]StagedUpload, 0, len(out.Contents))
-	for _, o := range out.Contents {
-		if o.Key == nil {
-			continue
-		}
-		upload := StagedUpload{UploadID: strings.TrimPrefix(*o.Key, prefix)}
-		if o.LastModified != nil {
-			upload.LastModified = *o.LastModified
-		}
-		staged = append(staged, upload)
+	staged := make([]StagedUpload, 0, len(listed))
+	for _, o := range listed {
+		staged = append(staged, StagedUpload{
+			UploadID:     strings.TrimPrefix(o.key, prefix),
+			LastModified: o.lastModified,
+		})
 	}
 	return staged, nil
 }

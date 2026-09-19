@@ -44,6 +44,19 @@ type ObjectStore interface {
 	// DeleteStagingObject removes one staged upload by its id. The key is
 	// built from the id, so no caller can steer this at an object.
 	DeleteStagingObject(ctx context.Context, projectID, bucketID, uploadID string) error
+	// ListKeysWithPrefix returns up to limit whole store keys under an
+	// arbitrary prefix. It is the one listing primitive: the bucket-scoped
+	// views above are built on it. A project teardown needs it because by
+	// then there is no catalogue left to enumerate the project's objects —
+	// not its buckets, not its rows, not even the uploads it never
+	// confirmed.
+	ListKeysWithPrefix(ctx context.Context, prefix string, limit int32) ([]string, error)
+	// DeleteKey removes one whole store key, refusing any key that does not
+	// fall under prefix — the caller's own namespace — so a listing that
+	// returned something unexpected can never be turned into a delete
+	// somewhere else. It is the one delete primitive: DeleteObject and
+	// DeleteStagingObject are guarded views of it.
+	DeleteKey(ctx context.Context, prefix, key string) error
 }
 
 // ObjectStat is what the object store says about one stored object. It is

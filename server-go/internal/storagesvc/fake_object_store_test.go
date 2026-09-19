@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,9 @@ type fakeObjectStore struct {
 	headErr   error
 	signErr   error
 	copyErr   error
+	// ignoreDeletes models a store that accepts a delete and keeps the
+	// object anyway — a fault a purge must notice rather than spin on.
+	ignoreDeletes bool
 }
 
 // fakeStoredObject is what the fake plane holds for one key: enough for the
@@ -37,8 +41,11 @@ func newFakeObjectStore() *fakeObjectStore {
 	return &fakeObjectStore{objects: map[string]fakeStoredObject{}}
 }
 
+// fakeStoreKey mirrors the real key layout, so a prefix a test asserts on is
+// the prefix production code would build — including the project-wide one a
+// teardown works from.
 func fakeStoreKey(projectID, bucketID, key string) string {
-	return projectID + "/" + bucketID + "/" + key
+	return "projects/" + projectID + "/buckets/" + bucketID + "/" + key
 }
 
 // put makes the plane hold key with the given size and type, written now.
@@ -104,6 +111,45 @@ func (f *fakeObjectStore) PublicURL(projectID, bucketID, key string) (string, er
 	return "https://fake/" + fakeStoreKey(projectID, bucketID, key), nil
 }
 
+// ListKeysWithPrefix is the one listing the fake implements; the bucket- and
+// staging-scoped views below build their prefixes and call through it.
+func (f *fakeObjectStore) ListKeysWithPrefix(_ context.Context, prefix string, limit int32) ([]string, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []string{}
+	for k := range f.objects {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, k)
+			if limit > 0 && int32(len(out)) >= limit {
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// DeleteKey refuses a key outside the namespace the caller named, the way the
+// real client does.
+func (f *fakeObjectStore) DeleteKey(_ context.Context, prefix, key string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	if prefix == "" || !strings.HasPrefix(key, prefix) {
+		return errors.New("key outside the caller's prefix")
+	}
+	if f.ignoreDeletes {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.objects, key)
+	return nil
+}
+
 func (f *fakeObjectStore) DeleteObject(_ context.Context, projectID, bucketID, key string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
@@ -165,7 +211,7 @@ func (f *fakeObjectStore) ListObjects(_ context.Context, projectID, bucketID str
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	prefix := projectID + "/" + bucketID + "/"
+	prefix := fakeStoreKey(projectID, bucketID, "")
 	out := []StoredObject{}
 	for k, obj := range f.objects {
 		if len(k) > len(prefix) && k[:len(prefix)] == prefix {

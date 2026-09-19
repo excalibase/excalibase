@@ -291,3 +291,108 @@ func TestR2_DeleteStagingObject_DeletesTheStagedKey(t *testing.T) {
 		t.Errorf("delete hit %q", gotPath)
 	}
 }
+
+// A project teardown works from the prefix alone: by then the catalogue rows
+// are gone with the project's record.
+func TestR2_ListKeysWithPrefix_ReturnsWholeStoreKeys(t *testing.T) {
+	var gotPrefix string
+	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPrefix = r.URL.Query().Get("prefix")
+		_, _ = w.Write([]byte(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Contents><Key>projects/proj-abc/buckets/bkt_1/a.txt</Key></Contents>
+  <Contents><Key>projects/proj-abc/buckets/bkt_2/b.txt</Key></Contents>
+</ListBucketResult>`))
+	})
+
+	keys, err := c.ListKeysWithPrefix(context.Background(), "projects/proj-abc/", 10)
+	if err != nil {
+		t.Fatalf("ListKeysWithPrefix: %v", err)
+	}
+	if len(keys) != 2 || keys[0] != "projects/proj-abc/buckets/bkt_1/a.txt" {
+		t.Errorf("unexpected keys: %v", keys)
+	}
+	if gotPrefix != "projects/proj-abc/" {
+		t.Errorf("listing prefix: got %q", gotPrefix)
+	}
+}
+
+func TestR2_ListKeysWithPrefix_RequiresAPrefix(t *testing.T) {
+	c := newR2(t)
+	if _, err := c.ListKeysWithPrefix(context.Background(), "", 10); err == nil {
+		t.Error("an empty prefix would name the whole bucket and must be refused")
+	}
+}
+
+func TestR2_ListKeysWithPrefix_DefaultsLimit(t *testing.T) {
+	var gotMaxKeys string
+	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMaxKeys = r.URL.Query().Get("max-keys")
+		_, _ = w.Write([]byte(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListBucketResult>`))
+	})
+	if _, err := c.ListKeysWithPrefix(context.Background(), "projects/proj-abc/", 0); err != nil {
+		t.Fatalf("ListKeysWithPrefix: %v", err)
+	}
+	if gotMaxKeys == "" || gotMaxKeys == "0" {
+		t.Errorf("max-keys should default to a positive value, got %q", gotMaxKeys)
+	}
+}
+
+func TestR2_ListKeysWithPrefix_ReportsBackendError(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+	})
+	if _, err := c.ListKeysWithPrefix(context.Background(), "projects/proj-abc/", 5); err == nil {
+		t.Error("a refused listing must not read as an empty prefix")
+	}
+}
+
+// A delete works from what a listing returned, so a key outside the namespace
+// the caller asked about is refused before it reaches the store.
+func TestR2_DeleteKey_RefusesAKeyOutsideThePrefix(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a key outside the prefix must never reach the store")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	err := c.DeleteKey(context.Background(), "projects/proj-abc/", "projects/other/buckets/b/x.txt")
+	if err == nil {
+		t.Fatal("a key outside the prefix must be refused")
+	}
+	if err := c.DeleteKey(context.Background(), "", "anything"); err == nil {
+		t.Error("an empty prefix must be refused")
+	}
+}
+
+func TestR2_DeleteKey_DeletesAndToleratesAMissingKey(t *testing.T) {
+	var gotPath string
+	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	})
+	key := "projects/proj-abc/buckets/bkt_1/a.txt"
+	if err := c.DeleteKey(context.Background(), "projects/proj-abc/", key); err != nil {
+		t.Fatalf("DeleteKey: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, key) {
+		t.Errorf("delete hit %q, want the listed key", gotPath)
+	}
+
+	missing := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<Error><Code>NoSuchKey</Code></Error>`))
+	})
+	if err := missing.DeleteKey(context.Background(), "projects/proj-abc/", key); err != nil {
+		t.Errorf("an already-deleted key should count as deleted: %v", err)
+	}
+}
+
+func TestR2_DeleteKey_ReportsBackendError(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+	})
+	err := c.DeleteKey(context.Background(), "projects/proj-abc/", "projects/proj-abc/buckets/b/x.txt")
+	if err == nil || !strings.Contains(err.Error(), "delete object") {
+		t.Fatalf("a refused delete must surface, got %v", err)
+	}
+}
