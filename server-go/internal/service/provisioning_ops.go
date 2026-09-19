@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/schema"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -55,7 +57,7 @@ func (s *ProvisioningService) ScaleTier(ctx context.Context, projectID string, n
 	}
 
 	inst.Tier = newTier
-	return s.store.Save(inst)
+	return s.store.Update(inst)
 }
 
 // ResizeStorage patches the CNPG Cluster CRD storage size.
@@ -104,7 +106,15 @@ func (s *ProvisioningService) CloneDatabase(ctx context.Context, projectID strin
 		return nil, err
 	}
 
-	newNamespace := fmt.Sprintf("%s-%s", inst.OrgID, req.NewProjectName)
+	// The clone's id is generated exactly as a provision's is, so the caller
+	// cannot point a clone at an id another project already holds (EXC-415).
+	// req.NewProjectName stays what it says: a display name.
+	cloneRef, err := s.generateUniqueProjectRef()
+	if err != nil {
+		return nil, err
+	}
+
+	newNamespace := fmt.Sprintf("%s-%s", inst.OrgID, cloneRef)
 
 	if err := s.k8sClient.CreateNamespace(ctx, newNamespace); err != nil {
 		return nil, fmt.Errorf("create clone namespace: %w", err)
@@ -115,7 +125,7 @@ func (s *ProvisioningService) CloneDatabase(ctx context.Context, projectID strin
 			"apiVersion": "postgresql.cnpg.io/v1",
 			"kind":       "Cluster",
 			"metadata": map[string]interface{}{
-				"name":      req.NewProjectName + postgresSuffix,
+				"name":      cloneRef + postgresSuffix,
 				"namespace": newNamespace,
 			},
 			"spec": map[string]interface{}{
@@ -145,7 +155,8 @@ func (s *ProvisioningService) CloneDatabase(ctx context.Context, projectID strin
 
 	now := &domain.FlexTime{Time: time.Now()}
 	return &domain.ProvisioningResponse{
-		ProjectID:    req.NewProjectName,
+		ProjectID:    cloneRef,
+		ProjectName:  req.NewProjectName,
 		Status:       "CLONING",
 		CurrentStage: domain.StageWaitingForReady,
 		Namespace:    newNamespace,
@@ -242,7 +253,7 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 	}
 
 	inst.Password = newPassword
-	if err := s.store.Save(inst); err != nil {
+	if err := s.store.Update(inst); err != nil {
 		log.Printf("WARN: failed to persist instance state: %v", err)
 	}
 
@@ -258,7 +269,7 @@ func (s *ProvisioningService) SetMaintenanceWindow(projectID string, cfg domain.
 	inst.MaintenanceWindow = cfg.Window
 	inst.MaintenanceWindowDurationMinutes = &cfg.DurationMinutes
 	inst.AutoMinorVersionUpgrade = &cfg.AutoUpgrade
-	return s.store.Save(inst)
+	return s.store.Update(inst)
 }
 
 // GetMaintenanceWindow returns the maintenance window config.
@@ -360,7 +371,7 @@ func (s *ProvisioningService) EnablePooler(ctx context.Context, projectID string
 	enabled := true
 	inst.PoolerEnabled = &enabled
 	inst.PoolerHost = fmt.Sprintf("%s-postgres-pooler.%s.svc.cluster.local", projectID, inst.Namespace)
-	return s.store.Save(inst)
+	return s.store.Update(inst)
 }
 
 func generatePassword(length int) string {
@@ -413,6 +424,57 @@ func validateProvisioningRequest(req domain.ProvisioningRequest) error {
 		if req.Backup.Retention > 365 {
 			return fmt.Errorf("backup retention must be 365 days or fewer")
 		}
+	}
+	return nil
+}
+
+// allocateProjectID returns a fresh project id no registered project holds.
+// Every project id in the platform — provisioned, BYOC or restored — comes
+// from here, so no caller can name the project it is creating.
+func allocateProjectID(store storage.InstanceStore) (string, error) {
+	if store == nil {
+		return "", errors.New("allocate project id: instance store not configured")
+	}
+	for i := 0; i < projectRefAttempts; i++ {
+		ref := generateProjectRef()
+		existing, err := store.FindByProjectID(ref)
+		if err != nil {
+			return "", fmt.Errorf("check project id availability: %w", err)
+		}
+		if existing == nil {
+			return ref, nil
+		}
+	}
+	return "", fmt.Errorf("failed to generate unique project ref after %d attempts", projectRefAttempts)
+}
+
+// projectRefAttempts bounds the collision retry loop.
+const projectRefAttempts = 5
+
+// ErrProjectIDTaken is returned when an operation would build a new project
+// on an id another project already holds.
+var ErrProjectIDTaken = errors.New("target project id is already registered")
+
+// ErrTargetProjectIDMissing is returned when a restore reaches an adapter
+// without a platform-generated target id.
+var ErrTargetProjectIDMissing = errors.New("restore: target project id was not allocated")
+
+// assertProjectIDAvailable is the last gate before a restore creates
+// namespaces, containers or vault entries: the id must be allocated by the
+// platform and still free. Callers run it before any side effect (EXC-415).
+func assertProjectIDAvailable(store storage.InstanceStore, projectID string) error {
+	if projectID == "" {
+		return ErrTargetProjectIDMissing
+	}
+	if store == nil {
+		return errors.New("restore: instance store not configured")
+	}
+	existing, err := store.FindByProjectID(projectID)
+	if err != nil {
+		return fmt.Errorf("check target project id: %w", err)
+	}
+	if existing != nil {
+		return ErrProjectIDTaken
 	}
 	return nil
 }

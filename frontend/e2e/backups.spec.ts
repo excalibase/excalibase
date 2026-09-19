@@ -60,7 +60,7 @@ async function mockRestore(page: Page, opts: { fail?: boolean; capture?: { body?
       }
     }
     if (opts.fail) {
-      return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'newProjectId already exists' }) });
+      return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'restore request: newProjectName is required' }) });
     }
     return route.fulfill({
       status: 200,
@@ -157,7 +157,7 @@ test.describe('Backups page', () => {
     await expect(page.getByText('backup-001')).toBeVisible();
   });
 
-  test('restore tab disables submit until newProjectId is filled', async ({ page }) => {
+  test('restore tab disables submit until the new instance name is filled', async ({ page }) => {
     await mockBackupList(page, { backups: sampleBackups, backupEnabled: true, schedule: '', retentionDays: 0 });
     await mockRestore(page);
 
@@ -167,7 +167,7 @@ test.describe('Backups page', () => {
     const submit = page.getByRole('button', { name: /Restore Latest Backup/i });
     await expect(submit).toBeDisabled();
 
-    await page.getByLabel(/New Instance ID/i).fill('restored-db');
+    await page.getByLabel(/New Instance Name/i).fill('restored-db');
     await expect(submit).toBeEnabled();
   });
 
@@ -179,7 +179,7 @@ test.describe('Backups page', () => {
     await page.goto(BACKUPS_URL);
     await page.getByRole('button', { name: /Restore \/ PITR/i }).click();
 
-    await page.getByLabel(/New Instance ID/i).fill('restored-db');
+    await page.getByLabel(/New Instance Name/i).fill('restored-db');
     await page.getByLabel(/Target Time \(PITR\)/i).fill('2026-05-04T03:30');
 
     await expect(page.getByText('Point-in-Time Recovery mode enabled')).toBeVisible();
@@ -188,10 +188,11 @@ test.describe('Backups page', () => {
     await page.getByRole('button', { name: /Restore to Point in Time/i }).click();
     await expect(page.getByText('Restore initiated')).toBeVisible();
 
-    // The body the studio actually sends — pin that the new ProjectId
-    // and targetTime survive the form correctly.
-    const body = captured.body as { newProjectId?: string; targetTime?: string } | undefined;
-    expect(body?.newProjectId).toBe('restored-db');
+    // The body the studio actually sends — pin that the display name
+    // and targetTime survive the form correctly. The project id is
+    // generated server-side and only comes back on the response.
+    const body = captured.body as { newProjectName?: string; targetTime?: string } | undefined;
+    expect(body?.newProjectName).toBe('restored-db');
     expect(body?.targetTime).toBe('2026-05-04T03:30');
   });
 
@@ -203,14 +204,14 @@ test.describe('Backups page', () => {
     await page.goto(BACKUPS_URL);
     await page.getByRole('button', { name: /Restore \/ PITR/i }).click();
 
-    await page.getByLabel(/New Instance ID/i).fill('restored-db');
+    await page.getByLabel(/New Instance Name/i).fill('restored-db');
     await page.getByRole('button', { name: /Restore Latest Backup/i }).click();
 
     await expect(page.getByText('Restore initiated')).toBeVisible();
     await expect(page.getByText('restored-db')).toBeVisible();
 
-    const body = captured.body as { newProjectId?: string; targetTime?: unknown } | undefined;
-    expect(body?.newProjectId).toBe('restored-db');
+    const body = captured.body as { newProjectName?: string; targetTime?: unknown } | undefined;
+    expect(body?.newProjectName).toBe('restored-db');
     // targetTime must be undefined / empty so the backend dispatches
     // to "latest" — the studio strips empty strings before POST.
     expect(body?.targetTime ?? '').toBe('');
@@ -222,7 +223,7 @@ test.describe('Backups page', () => {
 
     await page.goto(BACKUPS_URL);
     await page.getByRole('button', { name: /Restore \/ PITR/i }).click();
-    await page.getByLabel(/New Instance ID/i).fill('restored-db');
+    await page.getByLabel(/New Instance Name/i).fill('restored-db');
     await page.getByRole('button', { name: /Restore Latest Backup/i }).click();
 
     // Axios surfaces "Request failed with status code 400" on its

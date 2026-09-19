@@ -19,7 +19,7 @@ func TestMetricsWhenPodExecFails(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "err-db", Namespace: "ns", Status: "ACTIVE", Tier: domain.Free,
 	})
 	mock.ExecError["ns/err-db-postgres-1"] = fmt.Errorf("connection refused")
@@ -42,7 +42,7 @@ func TestMetricsWhenMetricsServerUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "no-ms-db", Namespace: "ns", Status: "ACTIVE", Tier: domain.Free,
 	})
 	// CNPG metrics work
@@ -70,7 +70,7 @@ func TestMetricsWhenEmptyPrometheusOutput(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "empty-db", Namespace: "ns", Status: "ACTIVE", Tier: domain.Free,
 	})
 	mock.ExecOutput["ns/empty-db-postgres-1"] = "" // empty output
@@ -87,7 +87,7 @@ func TestPerformanceWhenPgStatStatementsNotEnabled(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "no-pgss", Namespace: "ns", Status: "ACTIVE",
 	})
 	// Return empty (no pg_stat_statements extension)
@@ -106,7 +106,7 @@ func TestPerformanceWhenPgStatStatementsNotEnabled(t *testing.T) {
 func TestMigrationWhenSQLFails(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "fail-sql", Namespace: "ns", Status: "ACTIVE",
 	})
 
@@ -139,7 +139,7 @@ func TestDeprovisionWhenK8sFails(t *testing.T) {
 	factory := provisioner.NewFactory(pgProv)
 	svc := NewProvisioningService(store, factory, mock)
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testK8SFailDB, Namespace: "ns", DBType: domain.PostgreSQL, Status: "ACTIVE",
 	})
 
@@ -160,7 +160,7 @@ func TestBackupTriggerWhenCRDFails(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "bk-fail", Namespace: "ns", Status: "ACTIVE",
 	})
 	// ApplyCRD always succeeds in mock, so this just tests the flow

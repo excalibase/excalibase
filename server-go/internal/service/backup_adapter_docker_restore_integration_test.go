@@ -88,7 +88,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 		DeploymentMode:  domain.ModeDocker,
 		Status:          "ACTIVE",
 	}
-	store.Save(src)
+	store.Create(src)
 
 	// --- Trigger backup ---------------------------------------------------
 	ref, err := adapter.TriggerManual(ctx, src)
@@ -101,7 +101,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 	t.Logf("backup completed: id=%s size=%d", ref.ID, ref.SizeBytes)
 
 	// --- Restore -----------------------------------------------------------
-	resp, err := adapter.Restore(ctx, src, domain.RestoreRequest{NewProjectID: "restored-001"})
+	resp, err := adapter.Restore(ctx, src, domain.RestoreRequest{NewProjectName: "restored-001", TargetProjectID: "restored-001"})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}

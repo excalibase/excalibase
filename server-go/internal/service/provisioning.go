@@ -207,16 +207,9 @@ func (s *ProvisioningService) CapacityHeadroom() int {
 // Validates connectivity, stores credentials in vault, creates instance record.
 func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOCRequest) (*domain.ProvisioningResponse, error) {
 	// Generate opaque project ref (display name stays as req.ProjectName)
-	var projectRef string
-	for i := 0; i < 5; i++ {
-		projectRef = generateProjectRef()
-		if existing, _ := s.store.FindByProjectID(projectRef); existing == nil {
-			break
-		}
-		projectRef = ""
-	}
-	if projectRef == "" {
-		return nil, fmt.Errorf("failed to generate unique project ref")
+	projectRef, err := s.generateUniqueProjectRef()
+	if err != nil {
+		return nil, err
 	}
 
 	// Store credentials in vault under the project ref. Vault paths are
@@ -256,8 +249,8 @@ func (s *ProvisioningService) ProvisionBYOC(ctx context.Context, req domain.BYOC
 		CurrentStage:   domain.StageCompleted,
 	}
 
-	if err := s.store.Save(inst); err != nil {
-		return nil, fmt.Errorf("save instance: %w", err)
+	if err := s.store.Create(inst); err != nil {
+		return nil, fmt.Errorf("create instance: %w", err)
 	}
 
 	log.Printf("BYOC project registered: %s (ref=%s, host=%s)", req.ProjectName, projectRef, req.Host)
@@ -290,21 +283,21 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	// The user's display name is preserved on inst.ProjectName.
 	req.ProjectName = inst.ProjectID
 
-	if err := s.store.Save(inst); err != nil {
-		log.Printf(warnPersistFmt, err)
+	if err := s.store.Create(inst); err != nil {
+		return nil, fmt.Errorf("create instance: %w", err)
 	}
 
 	pc := provisioner.NewProvisionContext(
 		func(stage domain.ProvisioningStage) {
 			inst.CurrentStage = stage
 			inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-			if err := s.store.Save(inst); err != nil {
+			if err := s.store.Update(inst); err != nil {
 				log.Printf(warnPersistFmt, err)
 			}
 		},
 		func(step string) {
 			inst.CurrentStep = step
-			if err := s.store.Save(inst); err != nil {
+			if err := s.store.Update(inst); err != nil {
 				log.Printf(warnPersistFmt, err)
 			}
 		},
@@ -401,15 +394,9 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 	return inst, prov, tier, nil
 }
 
-// generateUniqueProjectRef retries up to 5 times to find a collision-free project ref.
+// generateUniqueProjectRef returns a project id no registered project holds.
 func (s *ProvisioningService) generateUniqueProjectRef() (string, error) {
-	for i := 0; i < 5; i++ {
-		ref := generateProjectRef()
-		if existing, _ := s.store.FindByProjectID(ref); existing == nil {
-			return ref, nil
-		}
-	}
-	return "", fmt.Errorf("failed to generate unique project ref after 5 attempts")
+	return allocateProjectID(s.store)
 }
 
 // enforceOrgProjectLimit checks whether the org has capacity for another project under the given tier.
@@ -531,7 +518,7 @@ func (s *ProvisioningService) handleProvisionFailure(
 
 	inst.Status = "FAILED"
 	inst.CurrentStage = domain.StageFailed
-	if saveErr := s.store.Save(inst); saveErr != nil {
+	if saveErr := s.store.Update(inst); saveErr != nil {
 		log.Printf(warnPersistFmt, saveErr)
 	}
 
@@ -555,7 +542,7 @@ func (s *ProvisioningService) handleProvisionFailure(
 func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, pc *provisioner.ProvisionContext) (*domain.ProvisioningResponse, error) {
 	applyProvisioningResult(inst, req, result)
 
-	opts := RegistrationOptions{AppPassword: req.AppPassword, Context: pc}
+	opts := RegistrationOptions{AppPassword: req.AppPassword, Context: pc, RowAlreadyCreated: true}
 	if err := s.RegisterProject(ctx, inst, opts); err != nil {
 		return s.handleProvisionFailure(ctx, inst, req, err, pc), nil
 	}
@@ -697,7 +684,7 @@ func (s *ProvisioningService) markBackupsPendingDelete(inst *domain.DatabaseInst
 	inst.CurrentStage = domain.StatusBackupsPendingDelete
 	inst.FailureReason = "backup purge failed: " + cause.Error()
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-	if err := s.store.Save(inst); err != nil {
+	if err := s.store.Update(inst); err != nil {
 		log.Printf(warnPersistFmt, err)
 	}
 }
@@ -744,7 +731,13 @@ func vaultProjectPrefix(projectID string) string {
 // vaultCredentialPath builds the canonical credential path. role is e.g.
 // "admin", "excalibase_app", "auth_admin", "cdc_watcher", "jwt_keys/anon_token".
 func vaultCredentialPath(projectID, role string) string {
-	return fmt.Sprintf("projects/%s/credentials/%s", projectID, role)
+	return vaultCredentialPrefix(projectID) + role
+}
+
+// vaultCredentialPrefix is the path every one of a project's role credentials
+// is filed under.
+func vaultCredentialPrefix(projectID string) string {
+	return fmt.Sprintf("projects/%s/credentials/", projectID)
 }
 
 func (s *ProvisioningService) GetInstance(projectID string) (*domain.DatabaseInstance, error) {
@@ -799,7 +792,7 @@ func (s *ProvisioningService) SetDeletionProtection(projectID string, enabled bo
 		return err
 	}
 	inst.DeletionProtection = &enabled
-	return s.store.Save(inst)
+	return s.store.Update(inst)
 }
 
 // execRoleSQL executes a psql command in the appropriate container (Docker or K8s).

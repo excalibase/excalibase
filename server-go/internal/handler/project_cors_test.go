@@ -201,7 +201,7 @@ func setupCorsInfoRouter(t *testing.T) (*chi.Mux, *ProvisioningHandler, *memCors
 	if err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	if err := store.Save(&domain.DatabaseInstance{ProjectID: testCorsProject, ProjectName: "web", OrgID: "org-cors", Status: "ACTIVE"}); err != nil {
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: testCorsProject, ProjectName: "web", OrgID: "org-cors", Status: "ACTIVE"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	svc := service.NewProvisioningService(store, provisioner.NewFactory(), nil)

@@ -322,7 +322,7 @@ func saveRecoveredInstances(sqlStore *pgstore.Store, discovered []discoveredInst
 			CreatedAt:    flexNow,
 			UpdatedAt:    flexNow,
 		}
-		if err := sqlStore.Save(inst); err != nil {
+		if err := sqlStore.Create(inst); err != nil {
 			fmt.Printf("  ERROR saving %s: %v\n", d.ProjectID, err)
 		} else {
 			fmt.Printf("  Recovered: %s\n", d.ProjectID)

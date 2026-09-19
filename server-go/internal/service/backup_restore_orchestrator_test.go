@@ -97,7 +97,7 @@ func TestOrchestrator_RunsAllStepsThenCompletes(t *testing.T) {
 	})
 
 	job, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, domain.RestoreRequest{
-		NewProjectID: "dst",
+		NewProjectName: "dst", TargetProjectID: "dst",
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -144,7 +144,7 @@ func TestOrchestrator_FailsAtStep_StopsAndPersistsReason(t *testing.T) {
 	})
 
 	job, _ := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, domain.RestoreRequest{
-		NewProjectID: "dst",
+		NewProjectName: "dst", TargetProjectID: "dst",
 	})
 	final := waitForJobStatus(t, jobs, "src", job.ID, domain.RestoreStatusFailed)
 
@@ -170,10 +170,10 @@ func TestOrchestrator_TargetKindPersisted(t *testing.T) {
 		req  domain.RestoreRequest
 		kind string
 	}{
-		{"latest", domain.RestoreRequest{NewProjectID: "p"}, "latest"},
-		{"xid", domain.RestoreRequest{NewProjectID: "p", TargetXID: "12345"}, "xid"},
-		{"lsn", domain.RestoreRequest{NewProjectID: "p", TargetLSN: "0/1500000"}, "lsn"},
-		{"name", domain.RestoreRequest{NewProjectID: "p", TargetName: "before-bad-migration"}, "name"},
+		{"latest", domain.RestoreRequest{NewProjectName: "p", TargetProjectID: "p"}, "latest"},
+		{"xid", domain.RestoreRequest{NewProjectName: "p", TargetProjectID: "p", TargetXID: "12345"}, "xid"},
+		{"lsn", domain.RestoreRequest{NewProjectName: "p", TargetProjectID: "p", TargetLSN: "0/1500000"}, "lsn"},
+		{"name", domain.RestoreRequest{NewProjectName: "p", TargetProjectID: "p", TargetName: "before-bad-migration"}, "name"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -195,7 +195,7 @@ func TestOrchestrator_RejectsTwoTargets(t *testing.T) {
 	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
 	now := time.Now()
 	_, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, domain.RestoreRequest{
-		NewProjectID: "dst",
+		NewProjectName: "dst", TargetProjectID: "dst",
 		TargetTime:   &domain.FlexTime{Time: now},
 		TargetXID:    "12345",
 	})
@@ -244,7 +244,7 @@ func TestOrchestrator_Get_ReturnsRunning(t *testing.T) {
 	})
 
 	job, _ := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, domain.RestoreRequest{
-		NewProjectID: "dst",
+		NewProjectName: "dst", TargetProjectID: "dst",
 	})
 	// Tiny pause so the goroutine sets current_step before we read.
 	time.Sleep(50 * time.Millisecond)
@@ -254,5 +254,21 @@ func TestOrchestrator_Get_ReturnsRunning(t *testing.T) {
 	}
 	if got.CurrentStep != "blocker" {
 		t.Errorf("current step: got %q", got.CurrentStep)
+	}
+}
+
+// The orchestrator writes the job row that tells the client where its restore
+// landed, so it refuses to start one whose target id was never allocated.
+func TestOrchestrator_RefusesAnUnallocatedTargetID(t *testing.T) {
+	jobs := newFakeJobs()
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+
+	_, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"},
+		domain.RestoreRequest{NewProjectName: "dst"})
+	if !errors.Is(err, ErrTargetProjectIDMissing) {
+		t.Fatalf("err: got %v, want ErrTargetProjectIDMissing", err)
+	}
+	if running, _ := jobs.ListRunningRestoreJobs(context.Background()); len(running) != 0 {
+		t.Error("no job row may be written for a restore that cannot start")
 	}
 }

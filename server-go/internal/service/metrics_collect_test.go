@@ -17,7 +17,7 @@ func setupMetricsCollectTest(t *testing.T) (*MetricsService, *k8s.MockClient) {
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "m-db", Namespace: "org-m-db", Status: "ACTIVE",
 		DBType: domain.PostgreSQL, Tier: domain.Free,
 	})
@@ -68,7 +68,7 @@ func TestGetCurrentMetricsUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "fail-db", Namespace: "org-fail-db", Status: "ACTIVE",
 		Tier: domain.Free,
 	})
@@ -107,7 +107,7 @@ func TestMetricsHistoryPersistence(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testPersistM, Namespace: "org-persist-m", Status: "ACTIVE",
 		Tier: domain.Free,
 	})
@@ -128,7 +128,7 @@ func TestMetricsStandardTierSumsReplicas(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "std-m", Namespace: "org-std-m", Status: "ACTIVE",
 		DBType: domain.PostgreSQL, Tier: domain.Standard,
 	})

@@ -94,7 +94,7 @@ func setupScheduler(t *testing.T) (*BackupScheduler, *fakeScheduleStore, *storag
 
 func TestScheduler_RegisterAndRun(t *testing.T) {
 	scheduler, schedules, instances, adapter, _ := setupScheduler(t)
-	instances.Save(&domain.DatabaseInstance{
+	instances.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 
@@ -139,7 +139,7 @@ func TestScheduler_InvalidCronReturnsError(t *testing.T) {
 
 func TestScheduler_PersistsAcrossRestart(t *testing.T) {
 	scheduler1, schedules, instances, _, _ := setupScheduler(t)
-	instances.Save(&domain.DatabaseInstance{
+	instances.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 	scheduler1.Register(context.Background(), &domain.BackupSchedule{
@@ -165,7 +165,7 @@ func TestScheduler_PersistsAcrossRestart(t *testing.T) {
 
 func TestScheduler_DeleteRemovesJob(t *testing.T) {
 	scheduler, _, instances, _, _ := setupScheduler(t)
-	instances.Save(&domain.DatabaseInstance{
+	instances.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 	scheduler.Register(context.Background(), &domain.BackupSchedule{
@@ -189,7 +189,7 @@ func TestScheduler_NotLeader_DoesNotFire(t *testing.T) {
 	// Leader lock that always refuses: scheduler must register the
 	// schedule but never call adapter.TriggerManual.
 	scheduler, _, instances, adapter, _ := setupScheduler(t)
-	instances.Save(&domain.DatabaseInstance{
+	instances.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 	scheduler.lock = &refusingLock{}

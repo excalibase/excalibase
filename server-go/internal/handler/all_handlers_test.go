@@ -114,7 +114,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 
 func seedInstance(store *storage.FileSystemStore, mock *k8s.MockClient) {
 	port := 5432
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "test-db", OrgID: "org1", DBType: domain.PostgreSQL,
 		Tier: domain.Free, Namespace: "org1-test-db", Status: "ACTIVE",
 		Host: "h.local", Port: &port, DatabaseName: "app",
@@ -695,7 +695,7 @@ func TestBackupListWithConfig(t *testing.T) {
 	enabled := true
 	retentionDays := 7
 	port := 5432
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID:           "backup-db",
 		OrgID:               "org1",
 		DBType:              domain.PostgreSQL,

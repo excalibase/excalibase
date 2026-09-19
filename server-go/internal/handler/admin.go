@@ -140,7 +140,7 @@ func (h *AdminHandler) ForceDropProject(w http.ResponseWriter, r *http.Request) 
 	if inst.DeletionProtection != nil && *inst.DeletionProtection {
 		falseVal := false
 		inst.DeletionProtection = &falseVal
-		if err := h.store.Save(inst); err != nil {
+		if err := h.store.Update(inst); err != nil {
 			httpError(w, "clear deletion protection: "+safeError(err), http.StatusInternalServerError)
 			return
 		}
@@ -227,7 +227,7 @@ func (h *AdminHandler) deprovisionOrgProjects(ctx context.Context, orgID string)
 		if inst.DeletionProtection != nil && *inst.DeletionProtection {
 			falseVal := false
 			inst.DeletionProtection = &falseVal
-			if err := h.store.Save(inst); err != nil {
+			if err := h.store.Update(inst); err != nil {
 				failed = append(failed, inst.ProjectID+": save protection clear: "+err.Error())
 				continue
 			}

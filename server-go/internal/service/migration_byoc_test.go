@@ -14,7 +14,7 @@ func migrationDialFixture(t *testing.T, mode domain.DeploymentMode) *MigrationSe
 	t.Helper()
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "proj-dial", Namespace: "ns", Status: "ACTIVE", DeploymentMode: mode,
 	})
 	vault := newFakeVault()

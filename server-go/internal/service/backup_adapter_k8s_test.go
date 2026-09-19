@@ -52,7 +52,7 @@ func TestK8sRestoreResolvesStoreFromBackupConfig(t *testing.T) {
 	mock := k8s.NewMockClient()
 	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
 
-	resp, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst"})
+	resp, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestK8sRestoreUsesLocalstackOnlyWhenConfigured(t *testing.T) {
 	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
 	adapter.storage = StaticBackupStorage(cfg)
 
-	if _, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst"}); err != nil {
+	if _, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	if store := restoredBarmanStore(t, mock); store["endpointURL"] != testLocalstackEndpoint {
@@ -101,9 +101,10 @@ func TestK8sRestoreFailsWhenStorageNotConfigured(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mock := k8s.NewMockClient()
 			adapter := NewK8sBackupAdapter(mock, t.TempDir(), source)
+			adapter.SetInstanceStore(emptyInstanceStore(t))
 			adapter.SetProjectRegistrar(&fakeRegistrar{})
 
-			_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst"})
+			_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
 			if !errors.Is(err, ErrBackupStorageNotConfigured) {
 				t.Fatalf("err: got %v, want ErrBackupStorageNotConfigured", err)
 			}
@@ -118,7 +119,7 @@ func TestK8sRestoreCarriesPITRTarget(t *testing.T) {
 	mock := k8s.NewMockClient()
 	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
 
-	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetName: "before-drop"})
+	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst", TargetName: "before-drop"})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}

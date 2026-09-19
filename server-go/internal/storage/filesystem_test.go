@@ -40,7 +40,7 @@ func TestFileSystemStoreSaveAndLoad(t *testing.T) {
 		CreatedAt:    now,
 	}
 
-	if err := store.Save(inst); err != nil {
+	if err := store.Create(inst); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestFileSystemStoreReloadFromDisk(t *testing.T) {
 	store1, _ := NewFileSystemStore(dir)
 
 	port := 5432
-	store1.Save(&domain.DatabaseInstance{
+	store1.Create(&domain.DatabaseInstance{
 		ProjectID: testPersistDB,
 		OrgID:     "org1",
 		DBType:    domain.PostgreSQL,
@@ -97,7 +97,7 @@ func TestFileSystemStoreDelete(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewFileSystemStore(dir)
 
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testDelDB,
 		OrgID:     "org1",
 		Status:    "ACTIVE",
@@ -117,8 +117,8 @@ func TestFileSystemStoreFindAll(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewFileSystemStore(dir)
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "db1", Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "db2", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "db1", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "db2", Status: "ACTIVE"})
 
 	all, _ := store.FindAll()
 	if len(all) != 2 {
@@ -129,7 +129,7 @@ func TestFileSystemStoreFindAll(t *testing.T) {
 func TestFileSystemStore_LegacyRow_DefaultsToK8s(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewFileSystemStore(dir)
-	if err := store.Save(&domain.DatabaseInstance{
+	if err := store.Create(&domain.DatabaseInstance{
 		ProjectID: "legacy", OrgID: "org1", Status: "ACTIVE",
 	}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -154,7 +154,7 @@ func TestFileSystemStore_DeploymentMode_RoundTrips(t *testing.T) {
 	for _, mode := range cases {
 		t.Run(string(mode), func(t *testing.T) {
 			id := "mode-" + string(mode)
-			if err := store.Save(&domain.DatabaseInstance{
+			if err := store.Create(&domain.DatabaseInstance{
 				ProjectID: id, OrgID: "org1", Status: "ACTIVE",
 				DeploymentMode: mode,
 			}); err != nil {
@@ -196,9 +196,9 @@ func TestFileSystemStoreFindByOwner(t *testing.T) {
 		t.Fatalf("NewFileSystemStore: %v", err)
 	}
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "db-a", OwnerID: testOwner1, Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "db-b", OwnerID: testOwner1, Status: "ACTIVE"})
-	store.Save(&domain.DatabaseInstance{ProjectID: "db-c", OwnerID: "owner-2", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "db-a", OwnerID: testOwner1, Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "db-b", OwnerID: testOwner1, Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "db-c", OwnerID: "owner-2", Status: "ACTIVE"})
 
 	owned, err := store.FindByOwner(testOwner1)
 	if err != nil {
@@ -218,7 +218,7 @@ func TestFileSystemStoreFindByOwnerEmpty(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := NewFileSystemStore(dir)
 
-	store.Save(&domain.DatabaseInstance{ProjectID: "db-x", OwnerID: "other-owner", Status: "ACTIVE"})
+	store.Create(&domain.DatabaseInstance{ProjectID: "db-x", OwnerID: "other-owner", Status: "ACTIVE"})
 
 	result, err := store.FindByOwner("no-such-owner")
 	if err != nil {
@@ -233,8 +233,8 @@ func TestFileSystemStoreFindByOwnerPersistedAcrossReload(t *testing.T) {
 	dir := t.TempDir()
 	store1, _ := NewFileSystemStore(dir)
 
-	store1.Save(&domain.DatabaseInstance{ProjectID: "persist-a", OwnerID: "owner-x", Status: "ACTIVE"})
-	store1.Save(&domain.DatabaseInstance{ProjectID: "persist-b", OwnerID: "owner-y", Status: "ACTIVE"})
+	store1.Create(&domain.DatabaseInstance{ProjectID: "persist-a", OwnerID: "owner-x", Status: "ACTIVE"})
+	store1.Create(&domain.DatabaseInstance{ProjectID: "persist-b", OwnerID: "owner-y", Status: "ACTIVE"})
 
 	// Simulate restart
 	store2, err := NewFileSystemStore(dir)
@@ -251,5 +251,76 @@ func TestFileSystemStoreFindByOwnerPersistedAcrossReload(t *testing.T) {
 	}
 	if owned[0].ProjectID != "persist-a" {
 		t.Errorf("ProjectID: got %s, want persist-a", owned[0].ProjectID)
+	}
+}
+
+func storedProject(projectID, orgID string) *domain.DatabaseInstance {
+	return &domain.DatabaseInstance{
+		ProjectID: projectID, ProjectName: projectID, OrgID: orgID,
+		DBType: domain.PostgreSQL, Tier: domain.Free, Namespace: orgID + "-" + projectID,
+		Host: projectID + "-rw", DatabaseName: "app", Username: projectID + "_admin",
+		Password: testutil.FixturePassword("fs-" + projectID), Status: "ACTIVE",
+	}
+}
+
+// A project id is claimed by whoever registered it: a second Create is a
+// conflict, and the stored row is untouched (EXC-415).
+func TestFileSystemStoreCreateRejectsAnExistingProjectID(t *testing.T) {
+	store, err := NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileSystemStore: %v", err)
+	}
+	victim := storedProject("proj-victim01", "org-victim")
+	if err := store.Create(victim); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := store.Create(storedProject("proj-victim01", "org-attacker")); err != ErrProjectExists {
+		t.Fatalf("Create on a taken id: got %v, want ErrProjectExists", err)
+	}
+
+	got, _ := store.FindByProjectID("proj-victim01")
+	if got.OrgID != "org-victim" || got.Host != victim.Host {
+		t.Errorf("stored row was rewritten: org=%q host=%q", got.OrgID, got.Host)
+	}
+}
+
+// Update persists changes without ever moving the project to another org.
+func TestFileSystemStoreUpdateKeepsTheOwningOrg(t *testing.T) {
+	store, err := NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileSystemStore: %v", err)
+	}
+	if err := store.Create(storedProject("proj-victim02", "org-victim")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	moved := storedProject("proj-victim02", "org-attacker")
+	moved.Status = "PAUSED"
+	moved.Host = "moved-rw"
+	if err := store.Update(moved); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got, _ := store.FindByProjectID("proj-victim02")
+	if got.OrgID != "org-victim" {
+		t.Errorf("org changed by Update: got %q", got.OrgID)
+	}
+	if got.Status != "PAUSED" || got.Host != "moved-rw" {
+		t.Errorf("Update must persist mutable fields: status=%q host=%q", got.Status, got.Host)
+	}
+}
+
+// Update never inserts: an absent row means the caller holds a stale view.
+func TestFileSystemStoreUpdateMissingRowIsAnError(t *testing.T) {
+	store, err := NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileSystemStore: %v", err)
+	}
+	if err := store.Update(storedProject("proj-absent01", "org-x")); err != ErrProjectNotFound {
+		t.Fatalf("Update on a missing row: got %v, want ErrProjectNotFound", err)
+	}
+	if got, _ := store.FindByProjectID("proj-absent01"); got != nil {
+		t.Error("a failed Update must not create the row")
 	}
 }

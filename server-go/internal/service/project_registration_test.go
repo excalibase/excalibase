@@ -211,3 +211,41 @@ func TestRegisterProjectRejectsAnEmptyProject(t *testing.T) {
 		t.Error("instance without a project id must be rejected")
 	}
 }
+
+// Registering a project whose vault prefix already holds credentials must
+// fail: those entries belong to a project that already exists, and
+// overwriting them hands its clients a different database (EXC-415).
+func TestRegisterProjectRefusesToOverwriteExistingVaultCredentials(t *testing.T) {
+	h := newRegistrationHarness(t)
+	existingPath := vaultCredentialPath(testRegProject, roleApp)
+	h.vault.data[existingPath] = map[string]string{
+		"host": "victim-rw", "username": roleApp, "password": "victim-app-password",
+	}
+
+	err := h.svc.RegisterProject(context.Background(), restoredInstance(), RegistrationOptions{})
+	if !errors.Is(err, ErrProjectCredentialsExist) {
+		t.Fatalf("err: got %v, want ErrProjectCredentialsExist", err)
+	}
+	if got := h.vault.data[existingPath]["password"]; got != "victim-app-password" {
+		t.Errorf("existing credentials were overwritten: %q", got)
+	}
+	if saved, _ := h.store.FindByProjectID(testRegProject); saved != nil {
+		t.Error("no project row may be written when registration is refused")
+	}
+}
+
+// A vault that cannot be listed leaves the platform unable to prove the
+// project id is free of credentials, so registration fails rather than
+// writing over whatever is there.
+func TestRegisterProjectFailsWhenExistingCredentialsCannotBeChecked(t *testing.T) {
+	h := newRegistrationHarness(t)
+	h.svc.SetVault(&errVault{err: errors.New("vault outage")})
+
+	err := h.svc.RegisterProject(context.Background(), restoredInstance(), RegistrationOptions{})
+	if err == nil || !strings.Contains(err.Error(), "list existing credentials") {
+		t.Fatalf("err: got %v, want a failed credential pre-check", err)
+	}
+	if saved, _ := h.store.FindByProjectID(testRegProject); saved != nil {
+		t.Error("no project row may be written when the vault pre-check fails")
+	}
+}

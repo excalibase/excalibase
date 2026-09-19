@@ -22,7 +22,7 @@ import (
 // leaf that records whether the guarded handler was reached.
 func schemaMount(inst *domain.DatabaseInstance, member *domain.OrgMember, reached *bool) chi.Router {
 	instStore := fakestore.NewInstances()
-	instStore.Save(inst)
+	instStore.Create(inst)
 	orgStore := fakestore.NewOrgs()
 	if member != nil {
 		orgStore.AddMember(member.OrgID, member.UserID, member.Role)

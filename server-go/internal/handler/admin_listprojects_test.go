@@ -78,7 +78,8 @@ func TestAdmin_ListAllProjects_WithProm(t *testing.T) {
 // errInstanceStore implements InstanceStore but FindAll fails.
 type errInstanceStore struct{}
 
-func (errInstanceStore) Save(*domain.DatabaseInstance) error { return nil }
+func (errInstanceStore) Create(*domain.DatabaseInstance) error { return nil }
+func (errInstanceStore) Update(*domain.DatabaseInstance) error { return nil }
 func (errInstanceStore) FindByProjectID(string) (*domain.DatabaseInstance, error) {
 	return nil, nil
 }

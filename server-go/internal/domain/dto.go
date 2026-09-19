@@ -209,7 +209,10 @@ const (
 type RestoreJob struct {
 	ID              string `json:"id"`
 	SourceProjectID string `json:"sourceProjectId"`
-	NewProjectID    string `json:"newProjectId"`
+	// NewProjectID is the generated id of the project the restore creates.
+	// The client learns it here — it never supplies it.
+	NewProjectID   string `json:"newProjectId"`
+	NewProjectName string `json:"newProjectName,omitempty"`
 	Status          string `json:"status"` // RUNNING | COMPLETED | FAILED
 	CurrentStep     string `json:"currentStep,omitempty"`
 	TargetKind      string `json:"targetKind"` // latest | time | xid | lsn | name
@@ -240,20 +243,19 @@ func (r RestoreRequest) RestoreTargetKind() (kind, value string) {
 // may be set; absence of all four means "restore to latest". Validate()
 // enforces the single-target rule so handlers can fail fast.
 type RestoreRequest struct {
-	BackupID       string    `json:"backupId,omitempty"`
-	TargetTime     *FlexTime `json:"targetTime,omitempty"`
-	TargetXID      string    `json:"targetXid,omitempty"`
-	TargetLSN      string    `json:"targetLsn,omitempty"`
-	TargetName     string    `json:"targetName,omitempty"`
-	NewProjectName string    `json:"newProjectName,omitempty"`
-	NewProjectID   string    `json:"newProjectId,omitempty"`
-}
-
-func (r RestoreRequest) GetNewProject() string {
-	if r.NewProjectName != "" {
-		return r.NewProjectName
-	}
-	return r.NewProjectID
+	BackupID   string    `json:"backupId,omitempty"`
+	TargetTime *FlexTime `json:"targetTime,omitempty"`
+	TargetXID  string    `json:"targetXid,omitempty"`
+	TargetLSN  string    `json:"targetLsn,omitempty"`
+	TargetName string    `json:"targetName,omitempty"`
+	// NewProjectName is the display name for the restored project. It is
+	// the only naming the caller controls.
+	NewProjectName string `json:"newProjectName,omitempty"`
+	// TargetProjectID is the id the restored project is registered under.
+	// The platform generates it the same way a provision does and it is
+	// never read from the request body — a caller who could name it could
+	// repoint another tenant's project (EXC-415).
+	TargetProjectID string `json:"-"`
 }
 
 // Validate enforces the single-target invariant. Operationally the
@@ -278,8 +280,8 @@ func (r RestoreRequest) Validate() error {
 	if count > 1 {
 		return errors.New("restore request: at most one of targetTime, targetXid, targetLsn, targetName may be set")
 	}
-	if r.GetNewProject() == "" {
-		return errors.New("restore request: newProjectName or newProjectId is required")
+	if r.NewProjectName == "" {
+		return errors.New("restore request: newProjectName is required")
 	}
 	return nil
 }

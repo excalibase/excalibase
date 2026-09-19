@@ -114,7 +114,7 @@ describe('useProvisioning hooks', () => {
     vi.mocked(api.post).mockResolvedValueOnce({ data: {} } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useRestoreFromBackup('p1'), { wrapper: Wrapper });
-    result.current.mutate({ newProjectId: 'restored-p', backupId: 'backup-1' });
+    result.current.mutate({ newProjectName: 'restored-p', backupId: 'backup-1' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalled();
   });

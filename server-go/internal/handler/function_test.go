@@ -97,8 +97,21 @@ type inMemoryInstanceStore struct {
 	insts map[string]*domain.DatabaseInstance
 }
 
-func (s *inMemoryInstanceStore) Save(inst *domain.DatabaseInstance) error {
+func (s *inMemoryInstanceStore) Create(inst *domain.DatabaseInstance) error {
+	if _, taken := s.insts[inst.ProjectID]; taken {
+		return storage.ErrProjectExists
+	}
 	s.insts[inst.ProjectID] = inst
+	return nil
+}
+func (s *inMemoryInstanceStore) Update(inst *domain.DatabaseInstance) error {
+	existing, ok := s.insts[inst.ProjectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	updated := *inst
+	updated.OrgID = existing.OrgID
+	s.insts[inst.ProjectID] = &updated
 	return nil
 }
 func (s *inMemoryInstanceStore) FindByProjectID(id string) (*domain.DatabaseInstance, error) {

@@ -30,8 +30,8 @@ func setupTokenBindingRouter(t *testing.T) (chi.Router, *mockTokenStore, string)
 	us.users[user.ID] = user
 
 	instances := fakestore.NewInstances()
-	instances.Save(&domain.DatabaseInstance{ProjectID: bindingProjectA, OrgID: bindingOrgA})
-	instances.Save(&domain.DatabaseInstance{ProjectID: bindingProjectB, OrgID: bindingOrgB})
+	instances.Create(&domain.DatabaseInstance{ProjectID: bindingProjectA, OrgID: bindingOrgA})
+	instances.Create(&domain.DatabaseInstance{ProjectID: bindingProjectB, OrgID: bindingOrgB})
 	orgs := fakestore.NewOrgs()
 	orgs.AddMember(bindingOrgA, user.ID, domain.OrgRoleDeveloper)
 

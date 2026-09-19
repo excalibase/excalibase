@@ -17,7 +17,7 @@ func TestWalLag_DockerAdapterDerivesFromRecords(t *testing.T) {
 	adapter := NewDockerBackupAdapter(DockerBackupAdapterConfig{
 		Records: records,
 	})
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 
@@ -54,7 +54,7 @@ func TestWalLag_NoCompletedRecords_NegativeOne(t *testing.T) {
 	adapter := NewDockerBackupAdapter(DockerBackupAdapterConfig{
 		Records: &fakeBackupRecordStore{},
 	})
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 	svc := NewBackupServiceWithAdapters(store, map[domain.DeploymentMode]BackupAdapter{
@@ -73,7 +73,7 @@ func TestWalLag_NoCompletedRecords_NegativeOne(t *testing.T) {
 func TestWalLag_K8sAdapterReturnsUnsupported(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 	})
 	// K8s adapter doesn't implement WalLagAdvertiser.

@@ -76,7 +76,7 @@ func setupAdapterTest(t *testing.T) (*BackupService, *storage.FileSystemStore, *
 
 func TestBackupAdapter_DispatchesK8sToK8sAdapter(t *testing.T) {
 	svc, store, k8sFake, dockerFake := setupAdapterTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "k8s-1", OrgID: "org", Namespace: "org-k8s-1",
 		DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 	})
@@ -94,7 +94,7 @@ func TestBackupAdapter_DispatchesK8sToK8sAdapter(t *testing.T) {
 
 func TestBackupAdapter_DispatchesDockerToDockerAdapter(t *testing.T) {
 	svc, store, k8sFake, dockerFake := setupAdapterTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "dk-1", OrgID: "org", Namespace: "org-dk-1",
 		DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
@@ -114,7 +114,7 @@ func TestBackupAdapter_EmptyModeFallsBackToK8s(t *testing.T) {
 	// Pre-Phase-0 instances may exist with DeploymentMode="" before
 	// the migration backfilled them. Dispatch must treat empty as k8s.
 	svc, store, k8sFake, _ := setupAdapterTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "legacy", OrgID: "org", Namespace: "org-legacy",
 		Status: "ACTIVE", // DeploymentMode intentionally unset
 	})
@@ -129,7 +129,7 @@ func TestBackupAdapter_EmptyModeFallsBackToK8s(t *testing.T) {
 
 func TestBackupAdapter_UnsupportedModeReturnsError(t *testing.T) {
 	svc, store, _, _ := setupAdapterTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "byoc-1", OrgID: "org",
 		DeploymentMode: domain.ModeBYOC, Status: "ACTIVE",
 	})
@@ -153,7 +153,7 @@ func TestBackupAdapter_InstanceNotFound(t *testing.T) {
 
 func TestBackupAdapter_PropagatesAdapterError(t *testing.T) {
 	svc, store, k8sFake, _ := setupAdapterTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "err-1", OrgID: "org",
 		DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 	})
@@ -168,7 +168,7 @@ func TestBackupAdapter_PropagatesAdapterError(t *testing.T) {
 func TestBackupAdapter_ListDispatches(t *testing.T) {
 	svc, store, k8sFake, dockerFake := setupAdapterTest(t)
 	dockerFake.listResult = []BackupRef{{ID: "d1", ProjectID: "dk", Status: "COMPLETED"}}
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "dk", OrgID: "org",
 		DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
@@ -190,13 +190,13 @@ func TestBackupAdapter_ListDispatches(t *testing.T) {
 
 func TestBackupAdapter_RestoreDispatches(t *testing.T) {
 	svc, store, _, dockerFake := setupAdapterTest(t)
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: "src", OrgID: "org",
 		DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 
 	resp, err := svc.RestoreFromBackup(context.Background(), "src", domain.RestoreRequest{
-		NewProjectID: "dst",
+		NewProjectName: "dst", TargetProjectID: "dst",
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)

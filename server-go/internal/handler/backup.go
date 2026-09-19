@@ -91,6 +91,17 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	// The restored project's id is generated here, before anything is
+	// created, so a caller can never name an existing project as the target
+	// and have it repointed (EXC-415). The client learns the id from the
+	// restore job / response.
+	targetID, err := h.svc.AllocateProjectID()
+	if err != nil {
+		httpError(w, "could not allocate a project id for the restore", http.StatusServiceUnavailable)
+		return
+	}
+	req.TargetProjectID = targetID
+
 	if h.orchestrator != nil {
 		// Async path: orchestrator returns RUNNING immediately. The
 		// caller polls /restore/{jobId} for status.

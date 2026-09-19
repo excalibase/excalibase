@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"context"
 	"testing"
 
@@ -29,7 +30,7 @@ func setupOpsTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore,
 	svc := NewProvisioningService(store, factory, mock)
 
 	port := 5432
-	store.Save(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{
 		ProjectID: testOpsDB, OrgID: "org1", Namespace: testOpsDBNS,
 		DBType: domain.PostgreSQL, Tier: domain.Free, Status: "ACTIVE",
 		Host: "h.local", Port: &port, DatabaseName: "app",
@@ -299,17 +300,21 @@ func TestCloneDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CloneDatabase: %v", err)
 	}
-	if resp.ProjectID != "ops-db-clone" {
-		t.Errorf("projectId: got %s", resp.ProjectID)
+	// The clone id is generated; "ops-db-clone" is only its display name.
+	if !strings.HasPrefix(resp.ProjectID, "proj-") {
+		t.Errorf("projectId must be server-generated, got %s", resp.ProjectID)
+	}
+	if resp.ProjectName != "ops-db-clone" {
+		t.Errorf("projectName: got %s", resp.ProjectName)
 	}
 
 	// Verify namespace created
-	if !mock.Namespaces["org1-ops-db-clone"] {
+	if !mock.Namespaces["org1-"+resp.ProjectID] {
 		t.Error("clone namespace not created")
 	}
 
 	// Verify CRD applied with pg_basebackup bootstrap
-	crd, ok := mock.CRDs["org1-ops-db-clone/ops-db-clone-postgres"]
+	crd, ok := mock.CRDs["org1-"+resp.ProjectID+"/"+resp.ProjectID+"-postgres"]
 	if !ok {
 		t.Fatal("clone Cluster CRD not created")
 	}

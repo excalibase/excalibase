@@ -17,7 +17,7 @@ export function BackupsPage() {
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
   const restore = useRestoreFromBackup(projectId);
-  const [restoreForm, setRestoreForm] = useState<RestoreRequest>({ newProjectId: '', targetTime: '' });
+  const [restoreForm, setRestoreForm] = useState<RestoreRequest>({ newProjectName: '', targetTime: '' });
   const isPitr = !!restoreForm.targetTime?.trim();
 
   function showToast(msg: string, ok: boolean) {
@@ -128,12 +128,12 @@ export function BackupsPage() {
 
               <div className="space-y-4">
                 <div>
-                  <label htmlFor="restore-new-id" className="text-xs text-text-secondary block mb-1">New Instance ID *</label>
+                  <label htmlFor="restore-new-name" className="text-xs text-text-secondary block mb-1">New Instance Name *</label>
                   <input
-                    id="restore-new-id"
-                    value={restoreForm.newProjectId}
-                    onChange={(e) => setRestoreForm({ ...restoreForm, newProjectId: e.target.value })}
-                    placeholder="e.g. db-restored"
+                    id="restore-new-name"
+                    value={restoreForm.newProjectName}
+                    onChange={(e) => setRestoreForm({ ...restoreForm, newProjectName: e.target.value })}
+                    placeholder="e.g. orders restored"
                     className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent-primary"
                   />
                 </div>
@@ -168,7 +168,7 @@ export function BackupsPage() {
               )}
 
               <Button
-                disabled={!restoreForm.newProjectId.trim() || restore.isPending || !projectId}
+                disabled={!restoreForm.newProjectName.trim() || restore.isPending || !projectId}
                 onClick={() => restore.mutate(
                   { ...restoreForm, targetTime: restoreForm.targetTime?.trim() || undefined },
                   { onError: (e: unknown) => {
