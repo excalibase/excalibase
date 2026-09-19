@@ -100,9 +100,9 @@ func (o *RestoreOrchestrator) Start(ctx context.Context, source *domain.Database
 	return &snapshot, nil
 }
 
-// Get retrieves a restore job by id.
-func (o *RestoreOrchestrator) Get(ctx context.Context, id string) (*domain.RestoreJob, error) {
-	return o.jobs.FindRestoreJob(ctx, id)
+// Get retrieves a restore job by id, within the project polling for it.
+func (o *RestoreOrchestrator) Get(ctx context.Context, projectID, id string) (*domain.RestoreJob, error) {
+	return o.jobs.FindRestoreJob(ctx, projectID, id)
 }
 
 // SweepStale marks any RUNNING job older than staleAfter as FAILED.

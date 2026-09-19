@@ -31,10 +31,16 @@ func (r *RestoreJobsStore) UpsertRestoreJob(ctx context.Context, j *domain.Resto
 	return err
 }
 
-func (r *RestoreJobsStore) FindRestoreJob(ctx context.Context, id string) (*domain.RestoreJob, error) {
+// FindRestoreJob resolves a job within one project. The row names two
+// projects — the source that was dumped and the new project it was restored
+// into — and both are legitimate readers of their own restore, so either side
+// matches. Every other project gets no row at all: scoping here, in the query,
+// means no caller can reach a job by id alone (EXC-399).
+func (r *RestoreJobsStore) FindRestoreJob(ctx context.Context, projectID, id string) (*domain.RestoreJob, error) {
 	row := r.s.db.QueryRowContext(ctx, `
 		SELECT id, source_project_id, new_project_id, status, current_step, target_kind, target_value, failure_reason, created_at, updated_at
-		FROM restore_jobs WHERE id = $1`, id)
+		FROM restore_jobs
+		WHERE id = $1 AND ($2 IN (source_project_id, new_project_id))`, id, projectID)
 	return scanPgRestoreJob(row)
 }
 
