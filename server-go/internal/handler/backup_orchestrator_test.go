@@ -38,11 +38,11 @@ func (f *fakeRestoreJobStoreForHandler) UpsertRestoreJob(_ context.Context, j *d
 	return nil
 }
 
-func (f *fakeRestoreJobStoreForHandler) FindRestoreJob(_ context.Context, id string) (*domain.RestoreJob, error) {
+func (f *fakeRestoreJobStoreForHandler) FindRestoreJob(_ context.Context, projectID, id string) (*domain.RestoreJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	j, ok := f.jobs[id]
-	if !ok {
+	if !ok || (j.SourceProjectID != projectID && j.NewProjectID != projectID) {
 		return nil, nil
 	}
 	return &j, nil

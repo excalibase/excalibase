@@ -115,15 +115,18 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// GetRestoreJob polls a restore job by id. 404 when the job doesn't
-// exist. The orchestrator updates the row as it progresses.
+// GetRestoreJob polls a restore job by id, scoped to the project in the URL.
+// 404 both when the job doesn't exist and when it belongs to another project
+// — confirming existence would be the disclosure. The orchestrator updates
+// the row as it progresses.
 func (h *BackupHandler) GetRestoreJob(w http.ResponseWriter, r *http.Request) {
 	if h.orchestrator == nil {
 		httpError(w, "restore orchestrator not configured", http.StatusServiceUnavailable)
 		return
 	}
+	projectID := chi.URLParam(r, "projectId")
 	jobID := chi.URLParam(r, "jobId")
-	job, err := h.orchestrator.Get(r.Context(), jobID)
+	job, err := h.orchestrator.Get(r.Context(), projectID, jobID)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return

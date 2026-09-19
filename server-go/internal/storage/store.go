@@ -64,7 +64,9 @@ type BackupScheduleStore interface {
 // replay (or fail) jobs that were RUNNING.
 type RestoreJobStore interface {
 	UpsertRestoreJob(ctx context.Context, j *domain.RestoreJob) error
-	FindRestoreJob(ctx context.Context, id string) (*domain.RestoreJob, error)
+	// FindRestoreJob resolves a job only within projectID — the project the
+	// caller is already bound to. An id alone never resolves.
+	FindRestoreJob(ctx context.Context, projectID, id string) (*domain.RestoreJob, error)
 	ListRunningRestoreJobs(ctx context.Context) ([]domain.RestoreJob, error)
 }
 

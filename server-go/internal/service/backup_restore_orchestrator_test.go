@@ -34,11 +34,11 @@ func (f *fakeRestoreJobStore) UpsertRestoreJob(_ context.Context, j *domain.Rest
 	return nil
 }
 
-func (f *fakeRestoreJobStore) FindRestoreJob(_ context.Context, id string) (*domain.RestoreJob, error) {
+func (f *fakeRestoreJobStore) FindRestoreJob(_ context.Context, projectID, id string) (*domain.RestoreJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	j, ok := f.jobs[id]
-	if !ok {
+	if !ok || (j.SourceProjectID != projectID && j.NewProjectID != projectID) {
 		return nil, nil
 	}
 	return &j, nil
@@ -56,11 +56,11 @@ func (f *fakeRestoreJobStore) ListRunningRestoreJobs(_ context.Context) ([]domai
 	return out, nil
 }
 
-func waitForJobStatus(t *testing.T, jobs *fakeRestoreJobStore, id, target string) *domain.RestoreJob {
+func waitForJobStatus(t *testing.T, jobs *fakeRestoreJobStore, projectID, id, target string) *domain.RestoreJob {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		got, _ := jobs.FindRestoreJob(context.Background(), id)
+		got, _ := jobs.FindRestoreJob(context.Background(), projectID, id)
 		if got != nil && got.Status == target {
 			return got
 		}
@@ -106,7 +106,7 @@ func TestOrchestrator_RunsAllStepsThenCompletes(t *testing.T) {
 		t.Errorf("initial status: got %s", job.Status)
 	}
 
-	final := waitForJobStatus(t, jobs, job.ID, domain.RestoreStatusCompleted)
+	final := waitForJobStatus(t, jobs, "src", job.ID, domain.RestoreStatusCompleted)
 	if final.FailureReason != "" {
 		t.Errorf("FailureReason set on success: %q", final.FailureReason)
 	}
@@ -146,7 +146,7 @@ func TestOrchestrator_FailsAtStep_StopsAndPersistsReason(t *testing.T) {
 	job, _ := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, domain.RestoreRequest{
 		NewProjectID: "dst",
 	})
-	final := waitForJobStatus(t, jobs, job.ID, domain.RestoreStatusFailed)
+	final := waitForJobStatus(t, jobs, "src", job.ID, domain.RestoreStatusFailed)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -181,8 +181,8 @@ func TestOrchestrator_TargetKindPersisted(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Start: %v", err)
 			}
-			waitForJobStatus(t, jobs, job.ID, domain.RestoreStatusCompleted)
-			got, _ := jobs.FindRestoreJob(context.Background(), job.ID)
+			waitForJobStatus(t, jobs, "src", job.ID, domain.RestoreStatusCompleted)
+			got, _ := jobs.FindRestoreJob(context.Background(), "src", job.ID)
 			if got.TargetKind != c.kind {
 				t.Errorf("TargetKind: got %q, want %q", got.TargetKind, c.kind)
 			}
@@ -221,7 +221,7 @@ func TestOrchestrator_SweepStale_FailsOldRunning(t *testing.T) {
 	if err := orch.SweepStale(context.Background()); err != nil {
 		t.Fatalf("SweepStale: %v", err)
 	}
-	got, _ := jobs.FindRestoreJob(context.Background(), "old")
+	got, _ := jobs.FindRestoreJob(context.Background(), "s", "old")
 	if got.Status != domain.RestoreStatusFailed {
 		t.Errorf("stale job status: got %s", got.Status)
 	}
@@ -248,7 +248,7 @@ func TestOrchestrator_Get_ReturnsRunning(t *testing.T) {
 	})
 	// Tiny pause so the goroutine sets current_step before we read.
 	time.Sleep(50 * time.Millisecond)
-	got, _ := orch.Get(context.Background(), job.ID)
+	got, _ := orch.Get(context.Background(), "src", job.ID)
 	if got.Status != domain.RestoreStatusRunning {
 		t.Errorf("status: got %s", got.Status)
 	}

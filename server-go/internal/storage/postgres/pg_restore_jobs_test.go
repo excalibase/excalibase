@@ -21,7 +21,7 @@ func TestRestoreJobs_RoundTrip(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := rs.FindRestoreJob(ctx, "j1")
+	got, err := rs.FindRestoreJob(ctx, "src", "j1")
 	if err != nil || got == nil {
 		t.Fatalf("Find: %v", err)
 	}
