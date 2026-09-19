@@ -30,6 +30,8 @@ const (
 	capabilitySeparator = ":"
 	selectorWildcard    = "*"
 	pathSeparator       = "/"
+	currentSegment      = "."
+	parentSegment       = ".."
 	// SelfCapability is granted implicitly to every capability token so a
 	// service can validate its own credential against /api/auth/me.
 	selfResource = "self"
@@ -79,23 +81,33 @@ func validateName(name string) error {
 	return nil
 }
 
-// validateSelector accepts a literal subject, optionally ending in a single
-// '*' that stands for one path segment. Interior wildcards and parent
-// traversal are rejected so a stored permission can never be read as broader
-// than it looks.
+// validateSelector accepts a '/'-separated subject in which any segment may be
+// exactly '*', standing for one segment. Partial-segment wildcards, empty or
+// relative segments and an all-wildcard selector are rejected so a stored
+// permission can never be read as broader than it looks.
 func validateSelector(selector string) error {
 	if selector == "" {
 		return nil
 	}
-	if strings.Contains(selector, "..") {
+	if strings.Contains(selector, parentSegment) {
 		return errors.New("must not contain '..'")
 	}
-	stars := strings.Count(selector, selectorWildcard)
-	if stars == 0 {
-		return nil
+	segments := strings.Split(selector, pathSeparator)
+	wildcards := 0
+	for _, segment := range segments {
+		switch {
+		case segment == "":
+			return errors.New("must not contain an empty path segment")
+		case segment == currentSegment:
+			return errors.New("must not contain a '.' path segment")
+		case segment == selectorWildcard:
+			wildcards++
+		case strings.Contains(segment, selectorWildcard):
+			return errors.New("'*' is only allowed as a whole path segment")
+		}
 	}
-	if stars > 1 || !strings.HasSuffix(selector, selectorWildcard) {
-		return errors.New("'*' is only allowed as the final character")
+	if wildcards == len(segments) {
+		return errors.New("must name at least one literal path segment")
 	}
 	return nil
 }
@@ -111,21 +123,46 @@ func (c Capability) String() string {
 
 // Grants reports whether c (a granted capability) covers want (the capability
 // a handler demands). Resource and action must be equal; the selector matches
-// literally, or through a trailing '*' that stands for exactly one non-empty
-// path segment.
+// literally, or segment by segment where each '*' stands for exactly one
+// concrete path segment.
 func (c Capability) Grants(want Capability) bool {
 	if c.Resource != want.Resource || c.Action != want.Action {
 		return false
 	}
-	if !strings.HasSuffix(c.Selector, selectorWildcard) {
+	if !strings.Contains(c.Selector, selectorWildcard) {
 		return c.Selector == want.Selector
 	}
-	prefix := strings.TrimSuffix(c.Selector, selectorWildcard)
-	if !strings.HasPrefix(want.Selector, prefix) {
+	return selectorMatches(c.Selector, want.Selector)
+}
+
+// selectorMatches compares a wildcard selector to a wanted subject segment by
+// segment. The segment counts must be equal: a '*' stands for one segment, so
+// it can neither swallow a deeper path nor collapse on a shallower one.
+func selectorMatches(pattern, want string) bool {
+	patternSegments := strings.Split(pattern, pathSeparator)
+	wantSegments := strings.Split(want, pathSeparator)
+	if len(patternSegments) != len(wantSegments) {
 		return false
 	}
-	leaf := want.Selector[len(prefix):]
-	return leaf != "" && !strings.Contains(leaf, pathSeparator)
+	for i, segment := range patternSegments {
+		if segment == selectorWildcard {
+			if !isConcreteSegment(wantSegments[i]) {
+				return false
+			}
+			continue
+		}
+		if segment != wantSegments[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isConcreteSegment reports whether a wanted segment names something a '*' may
+// stand for. The wanted subject comes from a URL, so an empty or relative
+// segment is refused here too rather than trusted to have been normalized.
+func isConcreteSegment(segment string) bool {
+	return segment != "" && segment != currentSegment && segment != parentSegment
 }
 
 // NormalizeCapabilities validates a requested permission list and returns it

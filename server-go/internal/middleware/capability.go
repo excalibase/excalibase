@@ -101,6 +101,15 @@ func CapabilityGate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// This gate reads the decoded r.URL.Path, but chi routes on the
+		// escaped r.URL.RawPath and hands the vault handler the still-escaped
+		// wildcard — so an escaped path would be authorized as one secret and
+		// served as another. No path a service legitimately reads needs an
+		// escape, so refuse the whole class instead of picking a form.
+		if r.URL.RawPath != "" {
+			http.Error(w, errBodyCapability, http.StatusForbidden)
+			return
+		}
 		if normalizePath(r.URL.Path) == selfRoute {
 			next.ServeHTTP(w, r)
 			return

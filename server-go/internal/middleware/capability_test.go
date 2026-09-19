@@ -10,10 +10,25 @@ import (
 )
 
 // permsAuth is the permission list the auth service principal is minted with.
-var permsAuth = []string{"vault:read:pki/signing/*", "projects:info:read", "email:send"}
+var permsAuth = []string{
+	"vault:read:pki/signing/*",
+	"vault:read:projects/*/credentials/auth_admin",
+	"projects:info:read",
+	"email:send",
+}
 
 // permsGraphql is the permission list the graphql service principal is minted with.
-var permsGraphql = []string{"projects:info:read", "policies:read"}
+var permsGraphql = []string{
+	"vault:read:projects/*/credentials/excalibase_app",
+	"projects:info:read",
+	"policies:read",
+}
+
+// credentialPath is the vault route a service reads one project role's
+// connection details from.
+func credentialPath(projectID, role string) string {
+	return "/api/vault/secrets/projects/" + projectID + "/credentials/" + role
+}
 
 func TestRequiredCapability(t *testing.T) {
 	cases := []struct {
@@ -27,6 +42,8 @@ func TestRequiredCapability(t *testing.T) {
 			want: "vault:read:pki/signing/private", found: true},
 		{name: "nested vault secret read", method: http.MethodGet, path: "/api/vault/secrets/projects/p1/db",
 			want: "vault:read:projects/p1/db", found: true},
+		{name: "project role credential read", method: http.MethodGet, path: credentialPath("p1", "auth_admin"),
+			want: "vault:read:projects/p1/credentials/auth_admin", found: true},
 		{name: "project info", method: http.MethodGet, path: "/api/projects/proj-1/info", want: "projects:info:read", found: true},
 		{name: "project info trailing slash", method: http.MethodGet, path: "/api/projects/proj-1/info/", want: "projects:info:read", found: true},
 		{name: "rls policies list", method: http.MethodGet, path: "/api/provision/proj-1/rls-policies", want: "policies:read", found: true},
@@ -118,9 +135,15 @@ func TestCapabilityGateEnforcesGraphqlToken(t *testing.T) {
 			t.Fatalf("%s %s: code=%d reached=%v, want 200", c.method, c.path, code, reached)
 		}
 	}
+	if code, reached := serveWithToken(t, token, http.MethodGet, credentialPath("proj-1", "excalibase_app")); code != http.StatusOK || !reached {
+		t.Fatalf("engine credential read = %d reached=%v, want 200", code, reached)
+	}
 	denied := []struct{ method, path string }{
 		{http.MethodGet, "/api/vault/secrets/pki/signing/private"},
 		{http.MethodGet, "/api/vault/secrets/projects/proj-1/db"},
+		{http.MethodGet, credentialPath("proj-1", "auth_admin")},
+		{http.MethodGet, credentialPath("proj-1", "admin")},
+		{http.MethodGet, credentialPath("proj-1", "cdc_watcher")},
 		{http.MethodPost, "/api/provision/proj-1/rls-policies"},
 		{http.MethodDelete, "/api/provision/proj-1"},
 		{http.MethodGet, "/api/provision/proj-1/credentials"},
@@ -147,11 +170,24 @@ func TestCapabilityGateEnforcesAuthToken(t *testing.T) {
 	if code, _ := serveWithToken(t, token, http.MethodPost, "/internal/email/send"); code != http.StatusOK {
 		t.Fatalf("email relay = %d, want 200", code)
 	}
+	if code, reached := serveWithToken(t, token, http.MethodGet, credentialPath("proj-1", "auth_admin")); code != http.StatusOK || !reached {
+		t.Fatalf("auth credential read = %d reached=%v, want 200", code, reached)
+	}
+	if code, reached := serveWithToken(t, token, http.MethodGet, credentialPath("tenant-b", "auth_admin")); code != http.StatusOK || !reached {
+		t.Fatalf("auth credential read in another project = %d reached=%v, want 200", code, reached)
+	}
 	denied := []struct{ method, path string }{
 		{http.MethodGet, "/api/vault/secrets/pki/other"},
 		{http.MethodGet, "/api/vault/secrets/projects/proj-1/db"},
+		{http.MethodGet, credentialPath("proj-1", "excalibase_app")},
+		{http.MethodGet, credentialPath("proj-1", "admin")},
+		{http.MethodGet, credentialPath("proj-1", "cdc_watcher")},
+		{http.MethodGet, credentialPath("proj-1", "auth_admin") + "/password"},
+		{http.MethodGet, "/api/vault/secrets/projects/proj-1/credentials"},
 		{http.MethodGet, "/api/provision/proj-1/rls-policies"},
 		{http.MethodPut, "/api/vault/secrets/pki/signing/private"},
+		{http.MethodPut, credentialPath("proj-1", "auth_admin")},
+		{http.MethodDelete, credentialPath("proj-1", "auth_admin")},
 	}
 	for _, c := range denied {
 		code, reached := serveWithToken(t, token, c.method, c.path)
@@ -170,6 +206,31 @@ func TestCapabilityGateNormalizesThePath(t *testing.T) {
 	// A redundant segment that resolves back inside it is still the same read.
 	if code, _ := serveWithToken(t, token, http.MethodGet, "/api/vault/secrets/pki/./signing/private"); code != http.StatusOK {
 		t.Fatalf("normalized in-subtree read = %d, want 200", code)
+	}
+}
+
+// The gate reads r.URL.Path, which net/http has already percent-decoded, while
+// chi routes on r.URL.RawPath and hands the vault handler the still-encoded
+// wildcard — so for any path carrying an escape the two see different subjects.
+// This pins that divergence and the gate's answer to it: refuse the whole
+// class, since no vault path a service legitimately reads needs escaping.
+func TestCapabilityGateRefusesPercentEncodedPaths(t *testing.T) {
+	escaped := "/api/vault/secrets/projects/x%2Fcredentials%2Fadmin/credentials/auth_admin"
+	req := httptest.NewRequest(http.MethodGet, escaped, nil)
+	if req.URL.RawPath == "" || req.URL.RawPath == req.URL.Path {
+		t.Fatalf("net/http no longer splits raw from decoded: Path=%q RawPath=%q", req.URL.Path, req.URL.RawPath)
+	}
+
+	token := &domain.AccessToken{Name: "svc-auth", Permissions: permsAuth}
+	for _, path := range []string{
+		escaped,
+		// The escaped form of a path the token really is granted: still
+		// refused, because the handler would receive the literal escapes.
+		"/api/vault/secrets/projects/proj-1/credentials/auth%5Fadmin",
+	} {
+		if code, reached := serveWithToken(t, token, http.MethodGet, path); code != http.StatusForbidden || reached {
+			t.Fatalf("%s: code=%d reached=%v, want 403", path, code, reached)
+		}
 	}
 }
 
