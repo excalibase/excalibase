@@ -39,8 +39,12 @@ var (
 	// projectInfoRoute is GET /api/projects/{projectId}/info — the engine's
 	// per-project connection details and CORS origins.
 	projectInfoRoute = regexp.MustCompile(`^/api/projects/[^/]+/info$`)
-	// policyRoute is the RLS and column-policy read surface the engine polls.
-	policyRoute = regexp.MustCompile(`^/api/provision/[^/]+/(rls-policies|column-policies)(/[^/]+)?$`)
+	// policyRoute is the policy read surface the engine polls. table-grants
+	// (EXC-370) is part of it: the engine fetches the exposure list in the
+	// same round as the two policy sets and enforces them together, so a
+	// grant that covers one without the other leaves the engine with half a
+	// policy set and no way to answer a query.
+	policyRoute = regexp.MustCompile(`^/api/provision/[^/]+/(rls-policies|column-policies|table-grants)(/[^/]+)?$`)
 )
 
 // RequiredCapability returns the capability a request must be granted before a

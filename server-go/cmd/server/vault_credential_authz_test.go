@@ -71,11 +71,10 @@ func credentialRouter(t *testing.T) (http.Handler, callers) {
 		}
 		who[name] = raw
 	}
-	issue(credCallerAuthSvc, credAuthUserID, []string{
-		"vault:read:pki/signing/*", "vault:read:projects/*/credentials/auth_admin",
-		"projects:info:read", "email:send"})
-	issue(credCallerGraphqlSvc, credGraphqlUserID, []string{
-		"vault:read:projects/*/credentials/excalibase_app", "projects:info:read", "policies:read"})
+	// chartPermissions (service_token_contract_test.go) is the single copy of
+	// what the chart mints these principals with.
+	issue(credCallerAuthSvc, credAuthUserID, chartPermissions[svcAuth])
+	issue(credCallerGraphqlSvc, credGraphqlUserID, chartPermissions[svcGraphql])
 
 	deps := matrixDeps(t, instances)
 	deps.vaultHandler = handler.NewVaultHandler(localVault)
