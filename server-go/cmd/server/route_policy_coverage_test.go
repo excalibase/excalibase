@@ -235,6 +235,9 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 	deps.rlUnauth = custommw.RateLimit(custommw.PerIP, 1_000_000, time.Minute)
 	deps.rlAuthed = custommw.RateLimit(custommw.PerUser, 1_000_000, time.Minute)
 	deps.rlDataPlane = custommw.RateLimit(custommw.PerProjectAndUser, 1_000_000, time.Second)
+	// The mail budget is production's, because a test that raised it would
+	// stop asserting the one thing that route's limiter is for.
+	deps.rlMailSend = custommw.RateLimit(custommw.PerUser, 5, time.Hour)
 	return deps
 }
 
@@ -551,5 +554,36 @@ func TestSetupStatusIsRateLimited(t *testing.T) {
 	}
 	if codes[len(codes)-1] != http.StatusTooManyRequests {
 		t.Fatalf("four anonymous polls answered %v; the last must be refused", codes)
+	}
+}
+
+// EXC-418: the verification send used the general authenticated limiter, 600 a
+// minute — enough for one caller to mail themselves into a blocked sending
+// domain. It carries its own, far smaller budget.
+func TestVerificationSendHasItsOwnSmallBudget(t *testing.T) {
+	instances := fakestore.NewInstances()
+	platform := &fakePlatform{Orgs: fakestore.NewOrgs(), Tokens: fakestore.NewTokens()}
+	deps := policyDeps(t, instances, platform, edgefn.NewFunctionStore(t.TempDir()))
+	principals := policyPrincipals(platform)
+	router := buildRouter(config.AppConfig{DeploymentMode: "cloud"}, platform, instances, deps)
+	caller := principalNamed(t, principals, "orgDeveloper")
+
+	send := func() int {
+		req := httptest.NewRequest(http.MethodPost, "/api/email/verify/send", nil)
+		req.Header.Set("Authorization", "Bearer "+caller.token)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+	// The general authenticated limiter allows 600 a minute, so a budget that
+	// refuses well before that is the one under test.
+	refusedAt := 0
+	for i := 1; i <= 60 && refusedAt == 0; i++ {
+		if send() == http.StatusTooManyRequests {
+			refusedAt = i
+		}
+	}
+	if refusedAt == 0 {
+		t.Fatal("60 sends by one caller were all accepted")
 	}
 }

@@ -520,6 +520,10 @@ type handlerDeps struct {
 	rlUnauth           func(http.Handler) http.Handler
 	rlAuthed           func(http.Handler) http.Handler
 	rlDataPlane        func(http.Handler) http.Handler
+	// rlMailSend bounds the routes that make the platform send mail. It is far
+	// tighter than rlAuthed because the cost of overuse is not our CPU, it is
+	// the sending domain's reputation.
+	rlMailSend func(http.Handler) http.Handler
 	// activity marks a project as seen on every successful project-scoped
 	// call (EXC-279). Mounted after the access guards so rejected calls never
 	// count.
@@ -1063,6 +1067,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlUnauth:    custommw.RateLimit(custommw.PerIP, 30, time.Minute),
 		rlAuthed:    custommw.RateLimit(custommw.PerUser, 600, time.Minute),
 		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
+		rlMailSend:  custommw.RateLimit(custommw.PerUser, 5, time.Hour),
 		activity:    custommw.ProjectActivity(activityRecorder),
 		emailSender: emailSender,
 		storageSvc:  storageSvc,
@@ -1424,7 +1429,7 @@ func mountEmailRoutes(r *chi.Mux, d *handlerDeps) {
 	r.Route("/api/email", func(r chi.Router) {
 		// The send is keyed per user, not per project: it mails the caller's
 		// own address and names no project to key on.
-		d.emailTokensHandler.Routes(r, d.rlAuthed)
+		d.emailTokensHandler.Routes(r, d.rlMailSend)
 	})
 	if d.internalEmail == nil {
 		return
