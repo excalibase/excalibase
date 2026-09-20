@@ -74,6 +74,10 @@ func table(deps Deps) map[string][]Dependency {
 		},
 		// Checks the request path makes for itself — nothing to wire.
 		"JWT_REQUIRE_AUD": {},
+		// The exposure filter runs inside the engine on a list this service
+		// serves; turning it off changes what that list says, not what has
+		// to be wired here.
+		"EXCALIBASE_EXPOSURE_ENFORCED": {},
 		// Client and daemon settings, not subsystems.
 		"KUBE_INSECURE_SKIP_VERIFY": {},
 		"DOCKER_DB_PUBLIC":          {},

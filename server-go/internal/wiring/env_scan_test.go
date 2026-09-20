@@ -22,10 +22,11 @@ var envReadAllowList = map[string]string{
 	// Local-development address overrides for a tenant connection. They are
 	// pure tunables — nothing selects a provider or turns a subsystem on —
 	// and each caller reads the same three through projectdb.Overrides.
-	"internal/projectdb/opener.go":       "SCHEMA_DB_* development overrides",
-	"internal/handler/schema.go":         "SCHEMA_DB_* development overrides",
-	"internal/service/migration.go":      "SCHEMA_DB_* development overrides",
-	"internal/service/database_probe.go": "SCHEMA_DB_* development overrides",
+	"internal/projectdb/opener.go":            "SCHEMA_DB_* development overrides",
+	"internal/handler/schema.go":              "SCHEMA_DB_* development overrides",
+	"internal/service/migration.go":           "SCHEMA_DB_* development overrides",
+	"internal/service/database_probe.go":      "SCHEMA_DB_* development overrides",
+	"internal/service/credential_rotation.go": "SCHEMA_DB_* development overrides, read through the same projectdb.Overrides as the probe",
 
 	// Cluster and daemon discovery, which is the runtime's own environment
 	// rather than platform configuration.
