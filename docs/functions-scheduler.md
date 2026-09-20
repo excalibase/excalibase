@@ -43,6 +43,7 @@ the reserved `excalibase` schema. Nothing read from there is authority:
 | `attempts` | data, clamped | cannot widen the platform's retry budget |
 | `scheduled_for`, `status` | data | select rows only; a lying value costs the tenant its own slot |
 | cron `schedule` | data, clipped | cadences finer than the platform minimum are clipped up |
+| cron `module_name` | data, validated | as on the task half: must name a function the platform deployed for this project, or nothing is enqueued |
 | cron `name`, `args`, `schedule` | data, bounded | name is an identifier within the project only; lengths and payload sizes are bounded in SQL, so an out-of-bounds row is never walked |
 
 A row failing any check is closed with fixed platform text; tenant content
@@ -139,7 +140,9 @@ the least recently used being closed first. Worst case per replica:
 64 × 2 = **128 connections and file descriptors**. Per tenant database, the
 control plane takes at most 2 connections per replica — 6 across three
 replicas, against a default `max_connections` of 100. A project that stops
-being servable has its pool closed immediately (the deletion observer), and
+being reachable has its pool closed immediately — a teardown claim, and any
+pause, resume or restore transition that writes a status whose database is
+not running — and
 a project with no scheduler tables is re-checked only every 5 minutes, so
 its pool goes idle and drops its connection. Raise `MAX_POOLS` above the
 number of projects that actually use the scheduler to avoid churn.

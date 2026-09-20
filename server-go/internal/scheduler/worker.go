@@ -154,6 +154,15 @@ func (w *Worker) Tick(ctx context.Context) error {
 		go func(t pendingRow) {
 			defer wg.Done()
 			defer w.release()
+			// An invoker that panics would otherwise take the process down,
+			// and with it every other tenant's sweep. The deferred release
+			// above still runs, so the slots come back either way.
+			defer func() {
+				if p := recover(); p != nil {
+					w.logger.Printf("scheduler: dispatch %s panicked: %v", t.ID, p)
+					w.markRefused(ctx, t, rejectDispatchPanicked)
+				}
+			}()
 			w.dispatch(ctx, t)
 		}(r)
 	}

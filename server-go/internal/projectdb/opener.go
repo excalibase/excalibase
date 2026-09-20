@@ -250,6 +250,18 @@ func (o *Opener) ProjectDeleting(projectID string) {
 	o.Evict(projectID)
 }
 
+// ProjectStatusChanged is the lifecycle-observer hook. Teardown is not the
+// only way a database stops being reachable: a pause takes it down for as
+// long as the project stays paused, and holding the pool across that pins
+// connections on a database that is not running.
+func (o *Opener) ProjectStatusChanged(projectID, status string) {
+	if domain.IsNotServable(status) ||
+		status == string(domain.StatusPausing) ||
+		status == string(domain.StatusPaused) {
+		o.Evict(projectID)
+	}
+}
+
 // checkServable refuses a project that has no row or that the platform must
 // not serve.
 func (o *Opener) checkServable(projectID string) error {

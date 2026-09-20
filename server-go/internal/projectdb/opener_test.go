@@ -303,3 +303,41 @@ func TestOpen_PoolIsBounded(t *testing.T) {
 		t.Errorf("max open connections: got %d, want 3", got)
 	}
 }
+
+// A pause holds a project's database down for up to 30 minutes. Keeping the
+// pool open across it pins connections on a database that is not there, and
+// deletion was the only transition that evicted.
+func TestProjectStatusChanged_EvictsWhenAProjectStopsBeingReachable(t *testing.T) {
+	notReachable := []string{
+		string(domain.StatusPausing), string(domain.StatusPaused),
+		string(domain.StatusDeleting), string(domain.StatusRestoring),
+		string(domain.StatusBackupsPendingDelete),
+	}
+	for _, status := range notReachable {
+		t.Run(status, func(t *testing.T) {
+			o := NewOpener(testStore(t, &domain.DatabaseInstance{ProjectID: "proj_a", Status: "ACTIVE"}),
+				fakeVault{data: appCreds()}, Overrides{}, PoolLimits{})
+			defer o.Close()
+			if _, err := o.Open(context.Background(), "proj_a"); err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			o.ProjectStatusChanged("proj_a", status)
+			if o.CachedPools() != 0 {
+				t.Errorf("%s left the pool open", status)
+			}
+		})
+	}
+}
+
+func TestProjectStatusChanged_KeepsThePoolOfARunningProject(t *testing.T) {
+	o := NewOpener(testStore(t, &domain.DatabaseInstance{ProjectID: "proj_a", Status: "ACTIVE"}),
+		fakeVault{data: appCreds()}, Overrides{}, PoolLimits{})
+	defer o.Close()
+	if _, err := o.Open(context.Background(), "proj_a"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	o.ProjectStatusChanged("proj_a", string(domain.StatusActive))
+	if o.CachedPools() != 1 {
+		t.Error("an ACTIVE project's pool was closed")
+	}
+}

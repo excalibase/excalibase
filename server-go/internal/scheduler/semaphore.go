@@ -29,7 +29,12 @@ func (s *Semaphore) Acquire(ctx context.Context) error {
 }
 
 // Release returns a slot. Calling it without a matching Acquire is a
-// programming error and panics on the empty channel read below.
+// programming error: it panics rather than blocking on an empty channel,
+// because a blocked release is a goroutine that never reports the bug.
 func (s *Semaphore) Release() {
-	<-s.slots
+	select {
+	case <-s.slots:
+	default:
+		panic("scheduler: Semaphore.Release without a matching Acquire")
+	}
 }

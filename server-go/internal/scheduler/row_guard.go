@@ -14,12 +14,13 @@ import (
 // Reasons a row is closed without running. They are fixed platform text so
 // nothing a tenant wrote is ever echoed back into the row.
 const (
-	rejectForeignProject  = "refused: row names a project other than the one that owns this database"
-	rejectBadIdentifier   = "refused: module or export name is not a plain identifier"
-	rejectBadArgs         = "refused: args are not JSON within the size limit"
-	rejectUnknownFunction = "refused: no such function is deployed for this project"
-	rejectMalformedRow    = "refused: row columns are missing or of the wrong type"
-	rejectOversizedRow    = "refused: args, module, export or id exceed the platform's size limit"
+	rejectForeignProject   = "refused: row names a project other than the one that owns this database"
+	rejectBadIdentifier    = "refused: module or export name is not a plain identifier"
+	rejectBadArgs          = "refused: args are not JSON within the size limit"
+	rejectUnknownFunction  = "refused: no such function is deployed for this project"
+	rejectMalformedRow     = "refused: row columns are missing or of the wrong type"
+	rejectOversizedRow     = "refused: args, module, export or id exceed the platform's size limit"
+	rejectDispatchPanicked = "failed: the dispatch of this task did not complete"
 )
 
 // sizeBoundsSQL decides whether a row is within the platform's bounds. It is

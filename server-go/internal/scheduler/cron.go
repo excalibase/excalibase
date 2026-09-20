@@ -27,6 +27,10 @@ type CronRunnerConfig struct {
 	// MaxArgsBytes caps a registry row's args and schedule. Default matches
 	// the public invoke body limit.
 	MaxArgsBytes int
+	// Functions is the platform's registry of deployed functions. A registry
+	// row may only enqueue a module the platform itself deployed for this
+	// project; without it nothing is enqueued.
+	Functions FunctionRegistry
 	// Logger is optional; defaults to the std log package.
 	Logger *log.Logger
 	// IDGen overrides the scheduled-task id generator (tests use a
@@ -50,6 +54,7 @@ type CronRunner struct {
 	minInterval  time.Duration
 	maxJobs      int
 	maxArgsBytes int
+	functions    FunctionRegistry
 	logger       *log.Logger
 	idGen        func() string
 	parser       cron.Parser
@@ -82,6 +87,7 @@ func NewCronRunner(c CronRunnerConfig) *CronRunner {
 		minInterval:  minInterval,
 		maxJobs:      maxJobs,
 		maxArgsBytes: maxArgs,
+		functions:    c.Functions,
 		logger:       logger,
 		idGen:        idGen,
 		// Standard 5-field cron expression — matches what cronJobs.cron()
@@ -163,6 +169,13 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 			cr.logger.Printf("scheduler: cron %s refused: module or export is not an identifier", name)
 			continue
 		}
+		// Same rule as the task half: a registry row may only name a module
+		// the platform deployed for this project. Enqueueing anything else
+		// would fill the queue with rows the worker then has to refuse, at
+		// the tenant's chosen cadence.
+		if !cr.deployed(name, moduleName) {
+			continue
+		}
 		var schedule struct {
 			Kind       string `json:"kind"`
 			Expression string `json:"expression,omitempty"`
@@ -204,6 +217,21 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// deployed asks the platform registry whether this project has the module.
+// A registry that is absent or cannot answer means no, never a guess.
+func (cr *CronRunner) deployed(name, moduleName string) bool {
+	if cr.functions == nil {
+		cr.logger.Printf("scheduler: cron %s refused: no function registry wired", name)
+		return false
+	}
+	known, err := cr.functions.HasFunction(cr.projectID, moduleName)
+	if err != nil || !known {
+		cr.logger.Printf("scheduler: cron %s refused: no such function is deployed", name)
+		return false
+	}
+	return true
 }
 
 func (cr *CronRunner) enqueue(

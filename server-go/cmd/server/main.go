@@ -219,6 +219,9 @@ func runServer(cfg config.AppConfig) {
 			// only ever under one lifecycle operation at a time (EXC-403).
 			Claimer: lifecycleClaimer,
 		})
+		// A paused project's database is down for as long as it stays paused;
+		// its pool must not keep connections open against it.
+		pauseSvc.AddStatusObserver(projectDB)
 		deps.provHandler.SetPauseService(pauseSvc)
 		deps.provHandler.SetInstanceStore(store)
 	}

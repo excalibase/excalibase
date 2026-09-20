@@ -29,7 +29,7 @@ func TestCronRunner_EnqueuesNextDueForCronJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db)})
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}})
 	if err := cr.Tick(ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestCronRunner_IsIdempotentWithinPeriod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db)})
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}})
 	for i := 0; i < 3; i++ {
 		if err := cr.Tick(ctx); err != nil {
 			t.Fatalf("tick %d: %v", i, err)
@@ -109,7 +109,7 @@ func TestCronRunner_HandlesIntervalSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db)})
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}})
 	if err := cr.Tick(ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestCronRunner_HandlesDailySchedule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db)})
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}})
 	if err := cr.Tick(ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}

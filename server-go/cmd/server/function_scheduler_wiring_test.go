@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -50,5 +52,17 @@ func TestFunctionCronAdvisoryKeyIsDistinct(t *testing.T) {
 	}
 	if functionCronLockID <= 0 {
 		t.Errorf("advisory key must be positive, got %d", functionCronLockID)
+	}
+}
+
+// Pause is the transition that costs most: the database is down for as long
+// as the project stays paused, so the pool cache has to hear about it.
+func TestPauseServiceEvictsTheProjectPool(t *testing.T) {
+	body, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(body), "pauseSvc.AddStatusObserver(projectDB)") {
+		t.Error("a pause leaves the project's database pool open")
 	}
 }

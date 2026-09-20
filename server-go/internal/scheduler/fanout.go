@@ -276,6 +276,7 @@ func (f *Fanout) CronTick(ctx context.Context) error {
 			MinInterval:  f.limits.CronMinInterval,
 			MaxJobs:      f.limits.CronMaxJobs,
 			MaxArgsBytes: f.limits.MaxArgsBytes,
+			Functions:    f.functions,
 			Logger:       f.logger,
 		}).Tick(ctx)
 	})
