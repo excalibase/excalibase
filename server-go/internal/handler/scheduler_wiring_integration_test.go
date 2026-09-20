@@ -58,7 +58,11 @@ func startProjectPG(t *testing.T) (*sql.DB, map[string]string) {
 		"host": host, "port": port.Port(),
 		"username": "postgres", "password": "postgres", "database": "tenant",
 	}
-	db, err := sql.Open("postgres", projectdb.DSN(creds, projectdb.Overrides{SSLMode: "disable"}))
+	dsn, err := projectdb.DSNFor(creds, projectdb.Overrides{SSLMode: "disable"})
+	if err != nil {
+		t.Fatalf("dsn: %v", err)
+	}
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
