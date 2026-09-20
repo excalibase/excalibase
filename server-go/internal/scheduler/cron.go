@@ -24,6 +24,9 @@ type CronRunnerConfig struct {
 	MinInterval time.Duration
 	// MaxJobs caps how many registry rows one tick reads. Default 100.
 	MaxJobs int
+	// MaxArgsBytes caps a registry row's args and schedule. Default matches
+	// the public invoke body limit.
+	MaxArgsBytes int
 	// Logger is optional; defaults to the std log package.
 	Logger *log.Logger
 	// IDGen overrides the scheduled-task id generator (tests use a
@@ -42,13 +45,14 @@ const DefaultCronMaxJobs = 100
 // the per-row update to `last_enqueued_at` is the idempotency lock that
 // keeps concurrent runners from double-enqueuing.
 type CronRunner struct {
-	db          *sql.DB
-	projectID   string
-	minInterval time.Duration
-	maxJobs     int
-	logger      *log.Logger
-	idGen       func() string
-	parser      cron.Parser
+	db           *sql.DB
+	projectID    string
+	minInterval  time.Duration
+	maxJobs      int
+	maxArgsBytes int
+	logger       *log.Logger
+	idGen        func() string
+	parser       cron.Parser
 }
 
 func NewCronRunner(c CronRunnerConfig) *CronRunner {
@@ -68,13 +72,18 @@ func NewCronRunner(c CronRunnerConfig) *CronRunner {
 	if maxJobs <= 0 {
 		maxJobs = DefaultCronMaxJobs
 	}
+	maxArgs := c.MaxArgsBytes
+	if maxArgs <= 0 {
+		maxArgs = DefaultMaxArgsBytes
+	}
 	return &CronRunner{
-		db:          c.DB,
-		projectID:   c.ProjectID,
-		minInterval: minInterval,
-		maxJobs:     maxJobs,
-		logger:      logger,
-		idGen:       idGen,
+		db:           c.DB,
+		projectID:    c.ProjectID,
+		minInterval:  minInterval,
+		maxJobs:      maxJobs,
+		maxArgsBytes: maxArgs,
+		logger:       logger,
+		idGen:        idGen,
 		// Standard 5-field cron expression — matches what cronJobs.cron()
 		// validates on the lib side. Robfig/cron's default parser
 		// expects the optional seconds field; we strip the seconds slot
@@ -104,17 +113,32 @@ func (cr *CronRunner) Run(ctx context.Context) error {
 	}
 }
 
+// cronListSQL reads one project's registry. Every column it returns is
+// tenant-written, so the bounds are in the WHERE clause: a row that would
+// not pass the Go-side checks anyway is never read into memory, and neither
+// is an enormous args or schedule payload. The registry has no status
+// column, so an out-of-bounds row is simply not walked — the next deploy
+// rewrites it.
+const cronListSQL = `
+		SELECT name, project_id, module_name, export_name, args, schedule, last_enqueued_at
+		  FROM excalibase.excalibase_cron_jobs
+		 WHERE project_id = $1
+		   AND octet_length(args::text) <= $3
+		   AND octet_length(schedule::text) <= $3
+		   AND length(name) <= $4
+		   AND length(module_name) <= $5
+		   AND length(export_name) <= $6
+		 ORDER BY name
+		 LIMIT $2
+	`
+
 // Tick walks the registry and enqueues each job whose next due time has
 // arrived since `last_enqueued_at`. Exported so tests can drive a
 // deterministic cycle without waiting for the 60s ticker.
 func (cr *CronRunner) Tick(ctx context.Context) error {
-	rows, err := cr.db.QueryContext(ctx, `
-		SELECT name, project_id, module_name, export_name, args, schedule, last_enqueued_at
-		  FROM excalibase.excalibase_cron_jobs
-		 WHERE project_id = $1
-		 ORDER BY name
-		 LIMIT $2
-	`, cr.projectID, cr.maxJobs)
+	rows, err := cr.db.QueryContext(ctx, cronListSQL,
+		cr.projectID, cr.maxJobs,
+		cr.maxArgsBytes, maxCronNameLen, maxModuleNameLen, maxExportNameLen)
 	if err != nil {
 		return fmt.Errorf("list cron jobs: %w", err)
 	}

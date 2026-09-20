@@ -23,6 +23,7 @@ func (f funcInvoker) Invoke(ctx context.Context, projectID, moduleName, exportNa
 // single pending task.
 func expectOneDueRow(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
+	mock.ExpectExec("SET status = 'failed'").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("FROM excalibase.excalibase_scheduled_functions").
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"id", "project_id", "module_name", "export_name", "args", "attempts"}).

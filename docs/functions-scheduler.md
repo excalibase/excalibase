@@ -39,11 +39,11 @@ the reserved `excalibase` schema. Nothing read from there is authority:
 | `project_id` | checked, never trusted | the sweep's project is the authority; a row naming another project is closed as `failed` |
 | `module_name` | data, validated | must be a plain identifier AND a function the platform deployed for this project |
 | `export_name` | data, validated | must be a plain export identifier |
-| `args` | data, bounded | must be JSON within the invoke body limit |
+| `args` | data, bounded | must be JSON within the invoke body limit — bounded in SQL, so an oversized payload is failed without being read |
 | `attempts` | data, clamped | cannot widen the platform's retry budget |
 | `scheduled_for`, `status` | data | select rows only; a lying value costs the tenant its own slot |
 | cron `schedule` | data, clipped | cadences finer than the platform minimum are clipped up |
-| cron `name`, `args` | data | name is an identifier within the project only |
+| cron `name`, `args`, `schedule` | data, bounded | name is an identifier within the project only; lengths and payload sizes are bounded in SQL, so an out-of-bounds row is never walked |
 
 A row failing any check is closed with fixed platform text; tenant content
 is never echoed back into the row or into a log line as a format.

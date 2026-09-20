@@ -236,6 +236,35 @@ type pendingRow struct {
 	Invalid bool
 }
 
+// closeOversizedSQL fails the due rows that exceed the platform's bounds,
+// matching them on the columns' lengths alone. It never selects args, so a
+// tenant cannot make the sweep read a payload by writing an enormous one.
+const closeOversizedSQL = `
+		UPDATE excalibase.excalibase_scheduled_functions
+		   SET status = 'failed', last_error = $6
+		 WHERE ctid IN (
+		       SELECT ctid
+		         FROM excalibase.excalibase_scheduled_functions
+		        WHERE status = 'pending' AND scheduled_for <= now()
+		          AND NOT (` + sizeBoundsSQL + `)
+		        ORDER BY scheduled_for
+		        LIMIT $1
+		        FOR UPDATE SKIP LOCKED)
+	`
+
+// claimDueSQL selects the due rows that are within bounds. The size
+// predicate is here rather than in Go so an oversized row is refused by
+// Postgres before any of it crosses the wire.
+const claimDueSQL = `
+		SELECT id, project_id, module_name, export_name, args, attempts
+		  FROM excalibase.excalibase_scheduled_functions
+		 WHERE status = 'pending' AND scheduled_for <= now()
+		   AND ` + sizeBoundsSQL + `
+		 ORDER BY scheduled_for
+		 LIMIT $1
+		 FOR UPDATE SKIP LOCKED
+	`
+
 // claimDue atomically transitions up to `batch` pending rows whose
 // scheduled_for ≤ now() to status='running' and returns them. The
 // transaction holds row locks via FOR UPDATE SKIP LOCKED so concurrent
@@ -247,14 +276,12 @@ func (w *Worker) claimDue(ctx context.Context) ([]pendingRow, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rs, err := tx.QueryContext(ctx, `
-		SELECT id, project_id, module_name, export_name, args, attempts
-		  FROM excalibase.excalibase_scheduled_functions
-		 WHERE status = 'pending' AND scheduled_for <= now()
-		 ORDER BY scheduled_for
-		 LIMIT $1
-		 FOR UPDATE SKIP LOCKED
-	`, w.batch)
+	closeArgs := append([]any{w.batch}, w.sizeBoundArgs()...)
+	if _, err := tx.ExecContext(ctx, closeOversizedSQL, append(closeArgs, rejectOversizedRow)...); err != nil {
+		return nil, err
+	}
+
+	rs, err := tx.QueryContext(ctx, claimDueSQL, closeArgs...)
 	if err != nil {
 		return nil, err
 	}

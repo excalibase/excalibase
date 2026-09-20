@@ -38,7 +38,8 @@ func TestCronRunner_OnlyReadsTheSweptProjectsJobs(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectQuery("FROM excalibase.excalibase_cron_jobs").
-		WithArgs("proj_a", sqlmock.AnyArg()).
+		WithArgs("proj_a", sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(cronRegistryRows())
 
 	cr := NewCronRunner(sweptCron(CronRunnerConfig{DB: db}))
@@ -141,7 +142,8 @@ func TestCronRunner_CapsTheNumberOfJobsRead(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectQuery("FROM excalibase.excalibase_cron_jobs").
-		WithArgs("proj_a", 7).
+		WithArgs("proj_a", 7, sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(cronRegistryRows())
 
 	cr := NewCronRunner(sweptCron(CronRunnerConfig{DB: db, MaxJobs: 7}))

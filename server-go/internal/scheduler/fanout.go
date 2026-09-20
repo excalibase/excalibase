@@ -267,11 +267,12 @@ func (f *Fanout) CronTick(ctx context.Context) error {
 	}
 	return f.forEachProject(ctx, "cron", func(ctx context.Context, projectID string, db *sql.DB) error {
 		return NewCronRunner(CronRunnerConfig{
-			DB:          db,
-			ProjectID:   projectID,
-			MinInterval: f.limits.CronMinInterval,
-			MaxJobs:     f.limits.CronMaxJobs,
-			Logger:      f.logger,
+			DB:           db,
+			ProjectID:    projectID,
+			MinInterval:  f.limits.CronMinInterval,
+			MaxJobs:      f.limits.CronMaxJobs,
+			MaxArgsBytes: f.limits.MaxArgsBytes,
+			Logger:       f.logger,
 		}).Tick(ctx)
 	})
 }

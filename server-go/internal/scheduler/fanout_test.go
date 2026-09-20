@@ -308,6 +308,7 @@ func TestFanout_PresenceCheckIsAskedOncePerProject(t *testing.T) {
 	p.expectSchedulerTables(true)
 	for i := 0; i < 2; i++ {
 		p.mock.ExpectBegin()
+		p.mock.ExpectExec("SET status = 'failed'").WillReturnResult(sqlmock.NewResult(0, 0))
 		p.mock.ExpectQuery("FROM excalibase.excalibase_scheduled_functions").
 			WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "module_name", "export_name", "args", "attempts"}))
 		p.mock.ExpectCommit()
@@ -433,6 +434,7 @@ func TestFanout_NegativePresenceCheckIsRemembered(t *testing.T) {
 	// first scheduled function in the meantime.
 	p.expectSchedulerTables(true)
 	p.mock.ExpectBegin()
+	p.mock.ExpectExec("SET status = 'failed'").WillReturnResult(sqlmock.NewResult(0, 0))
 	p.mock.ExpectQuery("FROM excalibase.excalibase_scheduled_functions").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "module_name", "export_name", "args", "attempts"}))
 	p.mock.ExpectCommit()

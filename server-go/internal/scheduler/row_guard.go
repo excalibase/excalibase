@@ -19,7 +19,22 @@ const (
 	rejectBadArgs         = "refused: args are not JSON within the size limit"
 	rejectUnknownFunction = "refused: no such function is deployed for this project"
 	rejectMalformedRow    = "refused: row columns are missing or of the wrong type"
+	rejectOversizedRow    = "refused: args, module, export or id exceed the platform's size limit"
 )
+
+// sizeBoundsSQL decides whether a row is within the platform's bounds. It is
+// applied in the claim's WHERE clause so an oversized payload is never
+// materialised, and negated in the close so such a row is failed without
+// reading it. Both statements bind the same $2..$5 limits.
+const sizeBoundsSQL = `octet_length(args::text) <= $2
+		   AND length(id) <= $3
+		   AND length(module_name) <= $4
+		   AND length(export_name) <= $5`
+
+// sizeBoundArgs are the four limits sizeBoundsSQL binds, in order.
+func (w *Worker) sizeBoundArgs() []any {
+	return []any{w.maxArgsBytes, maxTaskIDLen, maxModuleNameLen, maxExportNameLen}
+}
 
 // DefaultMaxArgsBytes matches the public invoke body limit (1 MiB): a
 // scheduled call may not carry more than a direct one.
@@ -36,7 +51,16 @@ var modulePattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.\-]*(/[a-zA-Z0-
 // exportPattern is a plain JavaScript export identifier.
 var exportPattern = regexp.MustCompile(`^[a-zA-Z_$][a-zA-Z0-9_$]{0,63}$`)
 
-const maxModuleNameLen = 128
+// Lengths the SQL bounds refuse at, so a row over them is never read into
+// memory. They match the Go-side patterns above: a module id, a JavaScript
+// export identifier, the runtime's 30-character base32 task id with room to
+// spare, and a cron name, which is an identifier within one project.
+const (
+	maxModuleNameLen = 128
+	maxExportNameLen = 64
+	maxTaskIDLen     = 64
+	maxCronNameLen   = 128
+)
 
 func validModuleName(name string) bool {
 	if name == "" || len(name) > maxModuleNameLen {
