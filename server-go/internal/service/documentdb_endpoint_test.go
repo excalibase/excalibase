@@ -271,7 +271,15 @@ func TestADocumentDBProjectIsGivenMongoConnectionStrings(t *testing.T) {
 	if !strings.Contains(view.Connection.MongoAllowPlaintext, "tls=false") {
 		t.Errorf("plaintext string: %q", view.Connection.MongoAllowPlaintext)
 	}
-	if !strings.Contains(view.Connection.MongoRequireTLS, k8s.DocumentDBGatewayUsername) {
-		t.Errorf("the string does not name the Mongo user: %q", view.Connection.MongoRequireTLS)
+	// One credential, two strings: both name the project's own role, so a
+	// customer is not handed a second identity to keep in step.
+	if !strings.Contains(view.Connection.MongoRequireTLS, f.inst.Username) {
+		t.Errorf("the Mongo string does not name the project's credential: %q", view.Connection.MongoRequireTLS)
+	}
+	if !strings.Contains(view.Connection.RequireTLS, f.inst.Username) {
+		t.Errorf("the Postgres string does not name the project's credential: %q", view.Connection.RequireTLS)
+	}
+	if view.Username != f.inst.Username {
+		t.Errorf("the view advertises a different username: %q", view.Username)
 	}
 }

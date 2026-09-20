@@ -513,7 +513,7 @@ func (s *DBEndpointService) addMongoEndpoint(
 	}
 	view.Internal.MongoPort = config.DocumentDBGatewayPort
 	view.Internal.MongoConnectionString = domain.MongoConnectionString(
-		inst.Host, config.DocumentDBGatewayPort, k8s.DocumentDBGatewayUsername, true)
+		inst.Host, config.DocumentDBGatewayPort, inst.Username, true)
 
 	port, err := s.mongoPort(ctx, inst)
 	if err != nil {
@@ -523,7 +523,7 @@ func (s *DBEndpointService) addMongoEndpoint(
 		return nil
 	}
 	view.MongoPort = port
-	mongoStrings := domain.DBEndpointMongoConnectionStrings(host, port, k8s.DocumentDBGatewayUsername)
+	mongoStrings := domain.DBEndpointMongoConnectionStrings(host, port, inst.Username)
 	view.Connection.MongoRequireTLS = mongoStrings.RequireTLS
 	view.Connection.MongoAllowPlaintext = mongoStrings.AllowPlaintext
 

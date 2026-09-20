@@ -38,18 +38,26 @@ func provisionForCredential(t *testing.T, documentDB bool) (*k8s.MockClient, str
 	return mock, "org1-docproj/" + k8s.DocumentDBCredentialSecretName("docproj")
 }
 
-func TestDocumentDBProvisionWritesTheGatewaysCredentialSecret(t *testing.T) {
+// The Secret exists so the gateway container's env reference resolves, and
+// holds nothing. A DocumentDB project has one credential — its own
+// application role — and the gateway's entrypoint skips minting an admin user
+// of its own when USERNAME and PASSWORD are empty. Putting a real password
+// here would be a second identity, in a place nothing rotates.
+func TestDocumentDBProvisionWritesAnEmptyCredentialSecret(t *testing.T) {
 	mock, key := provisionForCredential(t, true)
 
 	secret, ok := mock.Secrets[key]
 	if !ok {
 		t.Fatalf("no credential Secret at %s: %v", key, mock.Secrets)
 	}
-	if got := string(secret["username"]); got != k8s.DocumentDBGatewayUsername {
-		t.Errorf("username: got %q, want %q", got, k8s.DocumentDBGatewayUsername)
-	}
-	if len(secret["password"]) < 24 {
-		t.Errorf("password is %d bytes; too short to be a credential", len(secret["password"]))
+	for _, field := range []string{"username", "password"} {
+		value, present := secret[field]
+		if !present {
+			t.Errorf("the Secret has no %s key at all; the gateway's env would not resolve", field)
+		}
+		if len(value) != 0 {
+			t.Errorf("%s is set to %q; the gateway would mint a second identity", field, value)
+		}
 	}
 }
 
@@ -77,17 +85,6 @@ func TestDocumentDBCredentialSecretIsWrittenBeforeTheCluster(t *testing.T) {
 	}
 	if secretAt > clusterAt {
 		t.Errorf("the Secret was written after the cluster: %v", mock.Calls)
-	}
-}
-
-// Two projects must not share a Mongo password, so it cannot be derived from
-// anything about the project.
-func TestDocumentDBCredentialPasswordDiffersBetweenProjects(t *testing.T) {
-	first, firstKey := provisionForCredential(t, true)
-	second, secondKey := provisionForCredential(t, true)
-
-	if string(first.Secrets[firstKey]["password"]) == string(second.Secrets[secondKey]["password"]) {
-		t.Error("two projects were given the same Mongo password")
 	}
 }
 

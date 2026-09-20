@@ -71,7 +71,6 @@ func TestEnableDocumentDBCreatesTheExtensionInTheProjectsDatabase(t *testing.T) 
 	kube := k8s.NewMockClient()
 	svc := documentDBService(t, kube)
 	inst := documentDBProject()
-	seedGatewayCredential(kube, inst, "a-generated-password")
 
 	if err := svc.enableDocumentDB(context.Background(), inst, idleContext()); err != nil {
 		t.Fatalf("enableDocumentDB: %v", err)
@@ -94,7 +93,6 @@ func TestEnableDocumentDBCreatesTheExtensionInTheProjectsDatabase(t *testing.T) 
 func TestEnableDocumentDBStopsOnTheFirstSQLError(t *testing.T) {
 	kube := k8s.NewMockClient()
 	svc := documentDBService(t, kube)
-	seedGatewayCredential(kube, documentDBProject(), "a-generated-password")
 
 	if err := svc.enableDocumentDB(context.Background(), documentDBProject(), idleContext()); err != nil {
 		t.Fatalf("enableDocumentDB: %v", err)
@@ -117,7 +115,6 @@ func TestEnableDocumentDBStopsOnTheFirstSQLError(t *testing.T) {
 func TestEnableDocumentDBConfirmsTheExtensionIsInstalled(t *testing.T) {
 	kube := k8s.NewMockClient()
 	svc := documentDBService(t, kube)
-	seedGatewayCredential(kube, documentDBProject(), "a-generated-password")
 
 	if err := svc.enableDocumentDB(context.Background(), documentDBProject(), idleContext()); err != nil {
 		t.Fatalf("enableDocumentDB: %v", err)
@@ -236,89 +233,84 @@ func TestRegisterProjectWithoutDocumentDBRunsNoExtensionSQL(t *testing.T) {
 	}
 }
 
-// The Mongo identity (EXC-409). It is a credential of its own, not one of the
-// project's Postgres roles: a Mongo login is created through
-// documentdb_api.create_user, and upstream's gateway skips that call when a
-// role of the name already exists — so reusing excalibase_app would leave the
-// Mongo side with no user at all. It is filed in the project's vault beside
-// the other role credentials rather than kept somewhere new.
+// One credential, two protocols (EXC-409).
+//
+// The gateway authenticates a Mongo client against the ordinary PostgreSQL
+// SCRAM verifier, so the project's own credential already authenticates over
+// both. What it lacks is authorisation, and that is one membership.
 
-// documentDBServiceWithVault wires a service that can both run SQL and file
-// credentials, and returns the fake vault.
-func documentDBServiceWithVault(t *testing.T, kube *k8s.MockClient) (*ProvisioningService, *fakeVault) {
-	t.Helper()
-	svc := NewProvisioningService(documentDBStore(t), provisioner.NewFactory(), kube)
-	vault := newFakeVault()
-	svc.SetVault(vault)
-	return svc, vault
-}
-
-// seedGatewayCredential puts the Secret the provisioner writes in place.
-func seedGatewayCredential(kube *k8s.MockClient, inst *domain.DatabaseInstance, password string) {
-	kube.Secrets[inst.Namespace+"/"+k8s.DocumentDBCredentialSecretName(inst.ProjectID)] = map[string][]byte{
-		"username": []byte(k8s.DocumentDBGatewayUsername),
-		"password": []byte(password),
-	}
-}
-
-// The user is created through DocumentDB's own API, with the credential the
-// gateway will actually present, so the two cannot drift.
-func TestEnableDocumentDBCreatesTheMongoUserFromTheGatewaysOwnSecret(t *testing.T) {
+func TestEnableDocumentDBGrantsTheProjectsOwnCredentialMongoAccess(t *testing.T) {
 	kube := k8s.NewMockClient()
-	svc, _ := documentDBServiceWithVault(t, kube)
+	svc := documentDBService(t, kube)
 	inst := documentDBProject()
-	seedGatewayCredential(kube, inst, "a-generated-password")
 
 	if err := svc.enableDocumentDB(context.Background(), inst, idleContext()); err != nil {
 		t.Fatalf("enableDocumentDB: %v", err)
 	}
 
-	created := execCommandsMentioning(kube, "create_user")
-	if len(created) != 1 {
-		t.Fatalf("create_user ran %d times: %v", len(created), kube.ExecCommands)
+	granted := execCommandsMentioning(kube, "GRANT")
+	if len(granted) != 1 {
+		t.Fatalf("GRANT ran %d times: %v", len(granted), kube.ExecCommands)
 	}
-	for _, want := range []string{k8s.DocumentDBGatewayUsername, "a-generated-password", "readWriteAnyDatabase"} {
-		if !strings.Contains(created[0], want) {
-			t.Errorf("create_user command is missing %q: %s", want, created[0])
+	for _, want := range []string{"documentdb_admin_role", inst.Username} {
+		if !strings.Contains(granted[0], want) {
+			t.Errorf("the grant is missing %q: %s", want, granted[0])
 		}
 	}
 }
 
-// The same credential is filed in vault, so a customer reads their Mongo
-// identity where they read every other credential for the project.
-func TestEnableDocumentDBFilesTheMongoCredentialInVault(t *testing.T) {
+// No second identity is created and none is filed anywhere: a DocumentDB
+// project has exactly the credentials every other project has.
+func TestEnableDocumentDBCreatesNoSecondIdentity(t *testing.T) {
 	kube := k8s.NewMockClient()
-	svc, vault := documentDBServiceWithVault(t, kube)
-	inst := documentDBProject()
-	seedGatewayCredential(kube, inst, "a-generated-password")
+	svc := documentDBService(t, kube)
 
-	if err := svc.enableDocumentDB(context.Background(), inst, idleContext()); err != nil {
+	if err := svc.enableDocumentDB(context.Background(), documentDBProject(), idleContext()); err != nil {
 		t.Fatalf("enableDocumentDB: %v", err)
 	}
 
-	stored, err := vault.Get(vaultCredentialPath(inst.ProjectID, roleDocumentDB))
-	if err != nil {
-		t.Fatalf("read the Mongo credential from vault: %v", err)
+	if len(execCommandsMentioning(kube, "create_user")) != 0 {
+		t.Errorf("a second Mongo identity was created: %v", kube.ExecCommands)
 	}
-	if stored["username"] != k8s.DocumentDBGatewayUsername {
-		t.Errorf("vault username: got %q", stored["username"])
-	}
-	if stored["password"] != "a-generated-password" {
-		t.Errorf("vault password does not match what the gateway presents: %q", stored["password"])
+	if len(execCommandsMentioning(kube, "documentdb_admin'")) != 0 {
+		t.Errorf("a documentdb_admin identity survives: %v", kube.ExecCommands)
 	}
 }
 
-// Without the Secret there is no identity to create and the gateway could not
-// start anyway. That is a failure, not something to invent a password for.
-func TestEnableDocumentDBRefusesWhenTheGatewayCredentialIsMissing(t *testing.T) {
-	kube := k8s.NewMockClient()
-	svc, _ := documentDBServiceWithVault(t, kube)
-
-	err := svc.enableDocumentDB(context.Background(), documentDBProject(), idleContext())
-	if !errors.Is(err, ErrDocumentDBCredentialMissing) {
-		t.Fatalf("got %v, want ErrDocumentDBCredentialMissing", err)
+// The role name is quoted, so a project whose owner was named something
+// awkward cannot turn the grant into another statement.
+func TestDocumentDBGrantQuotesTheRoleName(t *testing.T) {
+	sql := documentDBGrantSQL(`odd"name`)
+	if !strings.Contains(sql, `"odd""name"`) {
+		t.Errorf("the role name is not safely quoted: %s", sql)
 	}
-	if len(execCommandsMentioning(kube, "create_user")) != 0 {
-		t.Error("a Mongo user was created without a credential to create it with")
+}
+
+// Rotation needs no DocumentDB special case, and this test exists to keep it
+// that way. The gateway authenticates a Mongo client against the ordinary
+// PostgreSQL SCRAM verifier in pg_authid, so the ALTER USER the rotation path
+// already runs moves both protocols in one statement — proved against a live
+// gateway in internal/schema's two-protocol test. A future change that routed
+// DocumentDB rotation through DocumentDB's own API, or added a second
+// credential to rotate, would be the thing that could leave a project
+// reachable one way and not the other.
+func TestRotationNeedsNoDocumentDBSpecialCase(t *testing.T) {
+	kube := k8s.NewMockClient()
+	svc := NewProvisioningService(documentDBStore(t), provisioner.NewFactory(), kube)
+	inst := documentDBProject()
+
+	if err := svc.alterRolePassword(context.Background(), inst, inst.Username, "new-secret"); err != nil {
+		t.Fatalf("alterRolePassword: %v", err)
+	}
+
+	if len(kube.ExecStdin) != 1 {
+		t.Fatalf("rotation ran %d statements: %v", len(kube.ExecStdin), kube.ExecStdin)
+	}
+	statement := kube.ExecStdin[0]
+	if !strings.Contains(statement, "ALTER USER") {
+		t.Fatalf("rotation no longer uses ALTER USER, which is what carries the Mongo credential: %s", statement)
+	}
+	if strings.Contains(statement, "documentdb") {
+		t.Errorf("rotation has grown a DocumentDB special case: %s", statement)
 	}
 }

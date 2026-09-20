@@ -58,14 +58,14 @@ func documentDBView() service.DBEndpointView {
 		Connection: service.DBEndpointConnectionStrings{
 			RequireTLS:          "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=verify-full",
 			AllowPlaintext:      "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=prefer",
-			MongoRequireTLS:     "mongodb://documentdb_admin@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&tls=true",
-			MongoAllowPlaintext: "mongodb://documentdb_admin@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&tls=false",
+			MongoRequireTLS:     "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&tls=true",
+			MongoAllowPlaintext: "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&tls=false",
 		},
 		Internal: service.DBEndpointInternal{
 			Host: "proj-abc1234567-postgres-rw.ns.svc.cluster.local", Port: 5432,
 			ConnectionString:      "postgresql://appowner@proj-abc1234567-postgres-rw.ns.svc.cluster.local:5432/appdb?sslmode=prefer",
 			MongoPort:             10260,
-			MongoConnectionString: "mongodb://documentdb_admin@proj-abc1234567-postgres-rw.ns.svc.cluster.local:10260/?authMechanism=SCRAM-SHA-256&tls=true",
+			MongoConnectionString: "mongodb://appowner@proj-abc1234567-postgres-rw.ns.svc.cluster.local:10260/?authMechanism=SCRAM-SHA-256&tls=true",
 		},
 	}
 }

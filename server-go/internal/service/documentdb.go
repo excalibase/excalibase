@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
-
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
-	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/schema"
 )
 
 // Turning a DocumentDB project's database into one (EXC-409).
@@ -41,16 +38,12 @@ var ErrDocumentDBNotInstallable = errors.New("DocumentDB cannot be enabled: the 
 // file.
 var ErrDocumentDBNotAvailableOnMajor = errors.New("DocumentDB is not available on this project's postgres major")
 
-// ErrDocumentDBCredentialMissing is returned when the Secret the gateway
-// reads its identity from is absent. The gateway cannot start without it, so
-// there is nothing to be gained by inventing a password and carrying on.
-var ErrDocumentDBCredentialMissing = errors.New("the project's DocumentDB credential is missing")
-
 // documentDBStep names this step in a failed provision's recorded state.
 const documentDBStep = "enable documentdb extension"
 
-// documentDBUserStep names the step that creates the Mongo identity.
-const documentDBUserStep = "create documentdb user"
+// documentDBGrantStep names the step that lets the project's own credential
+// speak the MongoDB wire protocol.
+const documentDBGrantStep = "grant documentdb access"
 
 // enableDocumentDB creates the DocumentDB extension in the project's own
 // database and confirms it is installed. A project that was not created with
@@ -80,100 +73,45 @@ func (s *ProvisioningService) enableDocumentDB(ctx context.Context, inst *domain
 			return pc.Fail(fmt.Errorf("enable %s in %s: %w", config.DocumentDBExtension, inst.ProjectID, err))
 		}
 	}
-	return s.createDocumentDBUser(ctx, inst, primaryPod, pc)
+	return s.grantDocumentDBAccess(ctx, inst, primaryPod, pc)
 }
 
-// createDocumentDBUser registers the project's Mongo identity and files it in
-// vault.
+// grantDocumentDBAccess lets the project's own credential use the MongoDB
+// wire protocol.
 //
-// The credential comes from the Secret the gateway itself reads, rather than
-// being generated here: the gateway presents what is in that Secret, so
-// anything else written down would be a second value that has to be kept in
-// step with it. The user is created through documentdb_api.create_user, which
-// registers a Mongo login as well as the Postgres role behind it — a plain
-// CREATE ROLE would leave the Mongo side with nothing to authenticate.
+// A DocumentDB project has one credential, not two. The gateway authenticates
+// a Mongo client against the ordinary PostgreSQL SCRAM verifier in pg_authid,
+// so any LOGIN role already authenticates over both protocols and ALTER USER
+// rotates both at once. What a plain role lacks is authorisation: DocumentDB
+// answers "not authorized" until the role is a member of
+// documentdb_admin_role. That membership is the whole of what is needed, and
+// it is one GRANT.
 //
-// Creating it here rather than leaving it to the gateway is deliberate. The
-// gateway's own setup does the same call on start-up and skips it when the
-// role already exists, so doing it first makes the gateway's attempt a
-// no-op — and puts the failure, if there is one, in the provision that a
-// customer is watching instead of in a container log.
-func (s *ProvisioningService) createDocumentDBUser(
+// The role granted it is the one the endpoint API advertises, so the username
+// and password a customer is given work in psql and in a Mongo driver without
+// their having to know the two are related.
+//
+// Creating the role through documentdb_api.create_user would also work, but
+// it is strictly worse here: that call is not idempotent — it raises "role
+// already exists" rather than converging — and all it adds beyond a plain
+// CREATE ROLE is this same membership.
+func (s *ProvisioningService) grantDocumentDBAccess(
 	ctx context.Context, inst *domain.DatabaseInstance, primaryPod string, pc *provisioner.ProvisionContext,
 ) error {
-	pc.SetStep(documentDBUserStep)
-	username, password, err := s.documentDBCredential(ctx, inst)
-	if err != nil {
-		return pc.Fail(err)
-	}
-	cmd := documentDBPsql("postgres", documentDBCreateUserSQL(username, password))
+	pc.SetStep(documentDBGrantStep)
+	cmd := documentDBPsql(inst.DatabaseName, documentDBGrantSQL(inst.Username))
 	if err := s.execRoleSQL(ctx, inst.Namespace, primaryPod, cmd); err != nil {
-		return pc.Fail(fmt.Errorf("create the %s user for %s: %w", config.DocumentDBExtension, inst.ProjectID, err))
+		return pc.Fail(fmt.Errorf("grant %s access to %s in %s: %w",
+			config.DocumentDBExtension, inst.Username, inst.ProjectID, err))
 	}
-	return s.fileDocumentDBCredential(inst, username, password, pc)
+	return nil
 }
 
-// documentDBCredential reads the identity the gateway will present.
-func (s *ProvisioningService) documentDBCredential(ctx context.Context, inst *domain.DatabaseInstance) (string, string, error) {
-	if s.k8sClient == nil {
-		return "", "", fmt.Errorf("%w: project %s has no Kubernetes Secret to read it from",
-			ErrDocumentDBCredentialMissing, inst.ProjectID)
-	}
-	name := k8s.DocumentDBCredentialSecretName(inst.ProjectID)
-	secret, err := s.k8sClient.GetSecret(ctx, inst.Namespace, name)
-	if err != nil {
-		return "", "", fmt.Errorf("%w: read %s/%s: %v", ErrDocumentDBCredentialMissing, inst.Namespace, name, err)
-	}
-	username, password := string(secret["username"]), string(secret["password"])
-	if username == "" || password == "" {
-		return "", "", fmt.Errorf("%w: %s/%s holds no username and password",
-			ErrDocumentDBCredentialMissing, inst.Namespace, name)
-	}
-	return username, password, nil
-}
-
-// fileDocumentDBCredential stores the Mongo identity in the project's vault,
-// beside its Postgres role credentials. A platform with no vault files
-// nothing — the same condition under which no other credential is filed
-// either — and the gateway still works, because it reads the Secret.
-func (s *ProvisioningService) fileDocumentDBCredential(
-	inst *domain.DatabaseInstance, username, password string, pc *provisioner.ProvisionContext,
-) error {
-	if s.vault == nil || s.vault.Sealed() {
-		return nil
-	}
-	port := postgresPort
-	if inst.Port != nil {
-		port = *inst.Port
-	}
-	return s.putRoleCredentials(projectRoleSpec{
-		projectID:    inst.ProjectID,
-		namespace:    inst.Namespace,
-		host:         inst.Host,
-		port:         port,
-		databaseName: inst.DatabaseName,
-	}, roleDocumentDB, username, password, pc)
-}
-
-// documentDBCreateUserSQL registers a Mongo login through DocumentDB's own
-// API, with the roles upstream's setup grants an admin user. The call takes
-// one JSON document, so the values are JSON-quoted and then quoted again as a
-// SQL literal; both are generated values from a Secret this platform wrote,
-// never caller input.
-func documentDBCreateUserSQL(username, password string) string {
-	document := fmt.Sprintf(
-		`{"createUser":%s,"pwd":%s,"roles":[{"role":"readWriteAnyDatabase","db":"admin"},{"role":"clusterAdmin","db":"admin"}]}`,
-		strconv.Quote(username), strconv.Quote(password))
-	// DO ... IF NOT EXISTS, because a retried provision must converge rather
-	// than fail on a user it created itself a moment ago.
-	return "DO $exc$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " +
-		sqlLiteral(username) + ") THEN PERFORM " + config.DocumentDBExtension +
-		"_api.create_user(" + sqlLiteral(document) + "); END IF; END $exc$"
-}
-
-// sqlLiteral renders a single-quoted SQL string literal.
-func sqlLiteral(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+// documentDBGrantSQL makes the project's credential a DocumentDB user. GRANT
+// is idempotent, so a retried provision converges rather than failing on a
+// membership it added itself a moment ago.
+func documentDBGrantSQL(role string) string {
+	return "GRANT " + config.DocumentDBExtension + "_admin_role TO " + schema.QuoteIdent(role)
 }
 
 // documentDBPsql builds the psql invocation one statement runs under.

@@ -19,11 +19,6 @@ const (
 	roleAuthAdmin = "auth_admin"
 	roleApp       = "excalibase_app"
 	roleWatcher   = "cdc_watcher"
-	// roleDocumentDB is the Mongo identity a DocumentDB project is served
-	// under (EXC-409). It exists only for such projects, and is filed here
-	// with the others so a customer has one place to read every credential
-	// for their project rather than two credential systems to keep in step.
-	roleDocumentDB = "documentdb_admin"
 )
 
 // ErrProjectRegistrationInvalid is returned when a caller asks to register a

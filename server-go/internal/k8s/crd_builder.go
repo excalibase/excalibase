@@ -277,23 +277,14 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 	return postgresql, storage
 }
 
-// DocumentDBGatewayUsername is the Mongo identity a DocumentDB project is
-// served under.
-//
-// It is deliberately not one of the project's existing Postgres roles. A Mongo
-// user is created through documentdb_api.create_user, which registers the
-// login in DocumentDB's own catalogue as well as creating a Postgres role, and
-// upstream's setup skips the call entirely when a role of that name already
-// exists. Pointing this at excalibase_app would therefore create no Mongo user
-// at all and leave every Mongo login failing — so DocumentDB genuinely needs a
-// credential of its own. It is filed in the project's vault beside the other
-// role credentials rather than kept anywhere new.
-const DocumentDBGatewayUsername = "documentdb_admin"
-
 // DocumentDBCredentialSecretName is the Secret in the project's own namespace
-// holding the Mongo identity the gateway serves. It is scoped to the project
-// rather than taking the plugin's default name, which is unqualified and would
-// have every tenant's gateway reading a Secret of the same name.
+// that the gateway container's environment references. It is scoped to the
+// project rather than taking the plugin's default name, which is unqualified
+// and would have every tenant's gateway reading a Secret of the same name.
+//
+// Its values are deliberately empty: a DocumentDB project has one credential,
+// its own application role, and the gateway is told to mint nothing. See
+// internal/provisioner/documentdb_credential.go.
 func DocumentDBCredentialSecretName(projectID string) string {
 	return projectID + "-documentdb-credentials"
 }
