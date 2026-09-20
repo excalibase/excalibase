@@ -2,8 +2,10 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"log"
 	"os"
+	"os/exec"
 	"testing"
 )
 
@@ -41,6 +43,29 @@ func TestExposureEnforcedRefusesUnparseableValue(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("parseStrictBool(%q) = %v, %v; want %v, nil", raw, got, err, want)
 		}
+	}
+}
+
+// A mistyped kill switch must stop the process, not boot with a guess. That
+// path ends in log.Fatalf, so it can only be observed from outside: the test
+// re-runs itself as a child with the bad value set and checks the child died
+// saying which setting it choked on.
+func TestExposureEnforcedFatalsOnUnparseableValue(t *testing.T) {
+	if os.Getenv("EXPOSURE_FATAL_CHILD") == "1" {
+		Load()
+		return // unreachable while Load fatals, which is what the parent asserts
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestExposureEnforcedFatalsOnUnparseableValue")
+	cmd.Env = append(os.Environ(), "EXPOSURE_FATAL_CHILD=1", exposureEnvKey+"=maybe")
+	out, err := cmd.CombinedOutput()
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("boot must fail on %s=maybe, got err=%v output=%q", exposureEnvKey, err, out)
+	}
+	if !bytes.Contains(out, []byte(exposureEnvKey)) || !bytes.Contains(out, []byte("not a boolean")) {
+		t.Fatalf("the fatal message must name the setting and why it was refused, got: %q", out)
 	}
 }
 
