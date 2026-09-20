@@ -588,7 +588,9 @@ Those connections carry a server-side `EXCALIBASE_PROJECT_DB_STATEMENT_TIMEOUT_M
 and each project's sweep is bounded by
 `EXCALIBASE_SCHEDULER_PROJECT_TIMEOUT_MS` (default 30000), so a tenant
 database that will not answer costs the sweep one timeout and is then backed
-off rather than stalling every other tenant's tasks.
+off rather than stalling every other tenant's tasks. A claimed task that no
+replica finishes is taken back after `EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS`
+(default 300000), spending one attempt so a poison task ends `failed`.
 
 Taking a lease waits at most 2s for a pool connection. A burst of lifecycle
 calls therefore degrades into `409 project is busy` rather than parking every

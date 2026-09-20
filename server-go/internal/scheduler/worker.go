@@ -32,6 +32,10 @@ type WorkerConfig struct {
 	// MaxArgsBytes caps the size of a row's args. Default matches the public
 	// invoke body limit.
 	MaxArgsBytes int
+	// ClaimLease is how long a claimed row may stay 'running' before the
+	// sweep treats it as abandoned and puts it back. Must outlast one
+	// invocation; default DefaultClaimLease.
+	ClaimLease time.Duration
 	// MaxConcurrent caps in-flight invocations for this project (default 4);
 	// Global, when set, caps them platform-wide across every project.
 	MaxConcurrent int
@@ -52,6 +56,7 @@ type Worker struct {
 	batch        int
 	maxAttempts  int
 	maxArgsBytes int
+	claimLease   time.Duration
 	local        *Semaphore
 	global       *Semaphore
 	logger       *log.Logger
@@ -84,6 +89,10 @@ func NewWorker(c WorkerConfig) *Worker {
 	if concurrent <= 0 {
 		concurrent = DefaultProjectConcurrency
 	}
+	lease := c.ClaimLease
+	if lease <= 0 {
+		lease = DefaultClaimLease
+	}
 	return &Worker{
 		db:           c.DB,
 		projectID:    c.ProjectID,
@@ -93,6 +102,7 @@ func NewWorker(c WorkerConfig) *Worker {
 		batch:        batch,
 		maxAttempts:  maxAttempts,
 		maxArgsBytes: maxArgs,
+		claimLease:   lease,
 		local:        NewSemaphore(concurrent),
 		global:       c.Global,
 		logger:       logger,
@@ -135,9 +145,9 @@ func (w *Worker) Tick(ctx context.Context) error {
 			continue
 		}
 		if err := w.acquire(ctx); err != nil {
-			// Shutting down: leave the rest of the batch claimed; the
-			// reaper-free design means they are picked up again after the
-			// row's lock is released on restart.
+			// Shutting down: leave the rest of the batch claimed. They stay
+			// 'running' until their claim lease expires, at which point the
+			// next sweep reaps them back to 'pending'.
 			break
 		}
 		wg.Add(1)
@@ -236,6 +246,44 @@ type pendingRow struct {
 	Invalid bool
 }
 
+// DefaultClaimLease is how long a row may stay 'running' before the sweep
+// treats the claim as abandoned. Longer than one invocation (the runtime
+// stops a worker at 30s and the invoker gives up at 40s), so a lease only
+// expires on a replica that died or a runtime that never answered.
+const DefaultClaimLease = 5 * time.Minute
+
+// reapAbandonedSQL puts rows whose claim lease expired back into the queue.
+// Each reap spends an attempt, so a row that kills whatever picks it up ends
+// 'failed' instead of being re-claimed forever. A row with no claim time was
+// taken before the lease column existed and is abandoned by definition.
+const reapAbandonedSQL = `
+		UPDATE excalibase.excalibase_scheduled_functions
+		   SET status     = CASE WHEN attempts + 1 >= $2 THEN 'failed' ELSE 'pending' END,
+		       attempts   = attempts + 1,
+		       last_error = $3,
+		       claimed_at = NULL
+		 WHERE ctid IN (
+		       SELECT ctid
+		         FROM excalibase.excalibase_scheduled_functions
+		        WHERE status = 'running'
+		          AND (claimed_at IS NULL
+		               OR claimed_at < now() - ($4::int * interval '1 second'))
+		        LIMIT $1
+		        FOR UPDATE SKIP LOCKED)
+	`
+
+// reclaimLeaseExpired is the platform text left on a row the sweep took back.
+const reclaimLeaseExpired = "reclaimed: the worker that took this task did not finish within its claim lease"
+
+// markRunningSQL commits the claim. claimed_at is what makes the claim
+// recoverable: without it a row that is never finished stays 'running' and
+// no sweep ever looks at it again.
+const markRunningSQL = `
+		UPDATE excalibase.excalibase_scheduled_functions
+		   SET status = 'running', claimed_at = now()
+		 WHERE id = ANY($1::text[])
+	`
+
 // closeOversizedSQL fails the due rows that exceed the platform's bounds,
 // matching them on the columns' lengths alone. It never selects args, so a
 // tenant cannot make the sweep read a payload by writing an enormous one.
@@ -276,6 +324,12 @@ func (w *Worker) claimDue(ctx context.Context) ([]pendingRow, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if _, err := tx.ExecContext(ctx, reapAbandonedSQL,
+		w.batch, w.maxAttempts, reclaimLeaseExpired, int(w.claimLease.Seconds()),
+	); err != nil {
+		return nil, err
+	}
+
 	closeArgs := append([]any{w.batch}, w.sizeBoundArgs()...)
 	if _, err := tx.ExecContext(ctx, closeOversizedSQL, append(closeArgs, rejectOversizedRow)...); err != nil {
 		return nil, err
@@ -305,11 +359,7 @@ func (w *Worker) claimDue(ctx context.Context) ([]pendingRow, error) {
 	for _, r := range out {
 		ids = append(ids, r.ID)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE excalibase.excalibase_scheduled_functions
-		   SET status = 'running'
-		 WHERE id = ANY($1::text[])
-	`, asTextArray(ids)); err != nil {
+	if _, err := tx.ExecContext(ctx, markRunningSQL, asTextArray(ids)); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

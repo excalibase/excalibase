@@ -65,6 +65,9 @@ type Limits struct {
 	CronMaxJobs     int
 	// ProjectTimeout bounds one project's whole sweep.
 	ProjectTimeout time.Duration
+	// ClaimLease is how long a claimed task may stay 'running' before the
+	// sweep takes it back.
+	ClaimLease time.Duration
 }
 
 // DefaultGlobalConcurrency caps invocations in flight on one replica.
@@ -249,6 +252,7 @@ func (f *Fanout) TaskTick(ctx context.Context) error {
 			MaxAttempts:   f.limits.MaxAttempts,
 			MaxArgsBytes:  f.limits.MaxArgsBytes,
 			MaxConcurrent: f.limits.ProjectConcurrency,
+			ClaimLease:    f.limits.ClaimLease,
 			Global:        f.global,
 			Logger:        f.logger,
 		})

@@ -546,6 +546,7 @@ func schedulerLimits(cfg config.AppConfig) scheduler.Limits {
 		CronMinInterval:    cfg.CronMinInterval,
 		CronMaxJobs:        cfg.CronMaxJobsPerProject,
 		ProjectTimeout:     cfg.SchedulerProjectTimeout,
+		ClaimLease:         cfg.SchedulerClaimLease,
 	}
 }
 

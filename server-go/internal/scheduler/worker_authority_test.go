@@ -30,6 +30,7 @@ func (k knownFunctions) HasFunction(projectID, moduleName string) (bool, error) 
 // tenant-written content, which is exactly what these tests are about.
 func dueRow(mock sqlmock.Sqlmock, projectID, module, export string, args any, attempts int) {
 	mock.ExpectBegin()
+	mock.ExpectExec("status = 'running'").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("SET status = 'failed'").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("FROM excalibase.excalibase_scheduled_functions").
 		WillReturnRows(sqlmock.NewRows(

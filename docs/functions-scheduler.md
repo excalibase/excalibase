@@ -62,6 +62,7 @@ is never echoed back into the row or into a log line as a format.
 | `EXCALIBASE_SCHEDULER_PROJECT_TIMEOUT_MS` | 30000 | one project's whole sweep |
 | `EXCALIBASE_PROJECT_DB_STATEMENT_TIMEOUT_MS` | 30000 | any statement on a tenant connection (server-side) |
 | `EXCALIBASE_PROJECT_DB_LOCK_TIMEOUT_MS` | 5000 | waiting for a lock on a tenant connection (server-side) |
+| `EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS` | 300000 | how long a claimed task may stay `running` before it is taken back |
 
 Worst case per tenant per minute, at the defaults: 12 task ticks × 32 rows =
 **384 dispatch attempts**, never more than **4 at once**, each bounded by the
@@ -101,6 +102,22 @@ Row outcomes:
 | the function answered | `completed` |
 | the runtime failed | `pending` again with exponential backoff, up to 5 attempts, then `failed` |
 | the project may not be served | `skipped` — nothing was dispatched and no attempt is spent |
+| the replica died holding the claim | `pending` again once the claim lease expires, one attempt spent, `failed` when the budget runs out |
+
+### The claim lease
+
+A claim commits `status='running'` and stamps `claimed_at`. If the replica
+dies, or the runtime never answers, that row would otherwise stay `running`
+forever — the claim only ever re-reads `pending`. Each sweep first takes back
+any row whose `claimed_at` is older than
+`EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS` (default 5 minutes, comfortably past
+the 40s invocation timeout), spending one attempt on it, so a task that kills
+whatever picks it up ends `failed` instead of looping.
+
+A project database whose scheduler tables predate `claimed_at` makes every
+sweep statement fail on the unknown column. That is deliberate: the sweep
+logs it and backs the project off rather than guessing. Redeploying any
+function applies the column.
 
 ## Settings
 

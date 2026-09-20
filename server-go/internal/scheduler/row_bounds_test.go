@@ -19,6 +19,7 @@ func TestWorker_ClaimSelectsOnlyRowsWithinTheSizeBounds(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectBegin()
+	mock.ExpectExec("status = 'running'").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("SET status = 'failed'").WillReturnResult(sqlmock.NewResult(0, 0))
 	claim := mock.ExpectQuery("SELECT id, project_id")
 	claim.WillReturnRows(sqlmock.NewRows(

@@ -148,6 +148,10 @@ type AppConfig struct {
 	// its database and can make any statement there hang; this is what keeps
 	// that cost to the one tenant instead of the whole scheduler.
 	SchedulerProjectTimeout time.Duration
+	// SchedulerClaimLease is how long a claimed task may stay 'running'
+	// before the sweep treats the claim as abandoned and puts the row back.
+	// Must outlast one invocation.
+	SchedulerClaimLease time.Duration
 
 	// Project database pooling. Each cached tenant pool costs connections on
 	// that tenant's database and file descriptors here, so both the pool size
@@ -302,6 +306,7 @@ func Load() AppConfig {
 		CronMinInterval:             envMillis("EXCALIBASE_CRON_MIN_INTERVAL_MS", time.Minute),
 		CronMaxJobsPerProject:       envPositiveInt("EXCALIBASE_CRON_MAX_JOBS", 100),
 		SchedulerProjectTimeout:     envMillis("EXCALIBASE_SCHEDULER_PROJECT_TIMEOUT_MS", defaultSchedulerProjectTimeout),
+		SchedulerClaimLease:         envMillis("EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS", defaultSchedulerClaimLease),
 		ProjectDBMaxOpenConns:       envPositiveInt("EXCALIBASE_PROJECT_DB_MAX_CONNS", 2),
 		ProjectDBMaxPools:           envPositiveInt("EXCALIBASE_PROJECT_DB_MAX_POOLS", 64),
 		ProjectDBStatementTimeout:   envMillis("EXCALIBASE_PROJECT_DB_STATEMENT_TIMEOUT_MS", defaultProjectDBStatementTimeout),
@@ -346,6 +351,9 @@ const (
 	defaultSchedulerProjectTimeout   = 30 * time.Second
 	defaultProjectDBStatementTimeout = 30 * time.Second
 	defaultProjectDBLockTimeout      = 5 * time.Second
+	// Comfortably past the 40s invocation timeout, so a lease only expires
+	// on a replica that died or a runtime that never answered.
+	defaultSchedulerClaimLease = 5 * time.Minute
 )
 
 // parseMillis reads an interval given in milliseconds. An empty value means

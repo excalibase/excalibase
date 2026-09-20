@@ -40,3 +40,16 @@ func TestLoadDefaultsTheSweepAndConnectionTimeouts(t *testing.T) {
 		t.Errorf("ProjectDBLockTimeout: got %v, want %v", cfg.ProjectDBLockTimeout, defaultProjectDBLockTimeout)
 	}
 }
+
+// A claimed row is only recoverable if the lease that frees it is an
+// operator setting with a default longer than an invocation.
+func TestLoadReadsTheSchedulerClaimLease(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.excalibase.io")
+	if got := Load().SchedulerClaimLease; got != defaultSchedulerClaimLease {
+		t.Errorf("SchedulerClaimLease: got %v, want %v", got, defaultSchedulerClaimLease)
+	}
+	t.Setenv("EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS", "120000")
+	if got := Load().SchedulerClaimLease; got != 2*time.Minute {
+		t.Errorf("SchedulerClaimLease: got %v, want 2m", got)
+	}
+}

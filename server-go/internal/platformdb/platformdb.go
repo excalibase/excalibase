@@ -39,7 +39,11 @@ const (
 //     to move) and on an already-migrated one (destination occupied);
 //   - the tables and the due-task index are created if absent;
 //   - `excalibase_cron_jobs.function_id` is added if absent, upgrading
-//     databases created before deploy-scoped cron sync existed.
+//     databases created before deploy-scoped cron sync existed;
+//   - `excalibase_scheduled_functions.claimed_at` is added if absent. A
+//     database that has not had this applied makes every sweep statement
+//     fail on the unknown column, which is deliberate: the sweep says so and
+//     backs the project off rather than guessing a claim is fresh.
 //
 // Ordering matters: the move runs before the CREATE TABLE statements,
 // otherwise a fresh empty table would occupy the destination and strand
@@ -56,6 +60,7 @@ const (
 //	  attempts        int NOT NULL DEFAULT 0
 //	  last_error      text
 //	  created_at      timestamptz NOT NULL DEFAULT now()
+//	  claimed_at      timestamptz     -- when a worker took the row
 //
 //	excalibase.excalibase_cron_jobs
 //	  name             text NOT NULL
@@ -103,8 +108,11 @@ const schedulerDDL = `
 		status text NOT NULL DEFAULT 'pending',
 		attempts int NOT NULL DEFAULT 0,
 		last_error text,
-		created_at timestamptz NOT NULL DEFAULT now()
+		created_at timestamptz NOT NULL DEFAULT now(),
+		claimed_at timestamptz
 	);
+	ALTER TABLE excalibase.excalibase_scheduled_functions
+		ADD COLUMN IF NOT EXISTS claimed_at timestamptz;
 	CREATE INDEX IF NOT EXISTS excalibase_scheduled_functions_due_idx
 		ON excalibase.excalibase_scheduled_functions (status, scheduled_for)
 		WHERE status = 'pending';
