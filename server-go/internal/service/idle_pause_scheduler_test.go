@@ -44,6 +44,10 @@ func (f *fakeIdlePauser) Pause(_ context.Context, projectID, reason string) erro
 	inst, _ := f.instances.FindByProjectID(projectID)
 	inst.Status = string(domain.StatusPaused)
 	inst.PauseReason = reason
+	// PauseService clears the retry backoff once the project settles; the
+	// double has to do the same or the sweep's view of it would drift.
+	inst.PauseAttempts = 0
+	inst.PauseLastAttemptAt = nil
 	return f.instances.Update(inst)
 }
 

@@ -147,12 +147,6 @@ func stepClock() func() time.Time {
 	}
 }
 
-func instantAfter(time.Duration) <-chan time.Time {
-	ch := make(chan time.Time, 1)
-	ch <- time.Unix(0, 0)
-	return ch
-}
-
 func (f *observedPauseFixture) pause(t *testing.T) error {
 	t.Helper()
 	return f.svc.Pause(context.Background(), observedPauseProject, domain.PauseReasonManual)

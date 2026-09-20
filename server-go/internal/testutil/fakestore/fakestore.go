@@ -8,6 +8,7 @@ package fakestore
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -63,6 +64,21 @@ func (s *Instances) RecordRestoreInterrupted(projectID, step, reason string) err
 	}
 	s.Items[projectID] = marked
 	return nil
+}
+
+// RecordPauseAttempt counts a pause about to be tried, refusing a project
+// the platform may not serve.
+func (s *Instances) RecordPauseAttempt(projectID string, at time.Time) (int, error) {
+	existing, ok := s.Items[projectID]
+	if !ok {
+		return 0, storage.ErrProjectNotFound
+	}
+	counted := existing.Clone()
+	if err := storage.ApplyPauseAttempt(counted, at); err != nil {
+		return 0, err
+	}
+	s.Items[projectID] = counted
+	return counted.PauseAttempts, nil
 }
 
 func (s *Instances) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {

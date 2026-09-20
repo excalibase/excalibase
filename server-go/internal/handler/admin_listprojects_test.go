@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/go-chi/chi/v5"
@@ -91,6 +92,10 @@ func (errInstanceStore) Delete(string) error { return nil }
 func (errInstanceStore) BeginDeletion(string, *bool) (bool, error) {
 	return false, errors.New("db down")
 }
+func (errInstanceStore) RecordPauseAttempt(string, time.Time) (int, error) {
+	return 0, nil
+}
+
 func (errInstanceStore) RecordRestoreInterrupted(string, string, string) error {
 	return nil
 }

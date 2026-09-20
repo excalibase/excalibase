@@ -36,11 +36,11 @@ func (ft *FlexTime) UnmarshalJSON(b []byte) error {
 
 // DatabaseInstance is the core entity tracking a provisioned database.
 type DatabaseInstance struct {
-	ID          *int64 `json:"id,omitempty"`
-	ProjectID   string `json:"projectId"`
-	ProjectName string `json:"projectName,omitempty"` // display name, free-form, editable
-	OrgID       string `json:"orgId"`
-	OwnerID     string `json:"ownerId,omitempty"`
+	ID             *int64         `json:"id,omitempty"`
+	ProjectID      string         `json:"projectId"`
+	ProjectName    string         `json:"projectName,omitempty"` // display name, free-form, editable
+	OrgID          string         `json:"orgId"`
+	OwnerID        string         `json:"ownerId,omitempty"`
 	DBType         DatabaseType   `json:"databaseType"`
 	Tier           TierType       `json:"tier"`
 	DeploymentMode DeploymentMode `json:"deploymentMode,omitempty"`
@@ -66,7 +66,7 @@ type DatabaseInstance struct {
 	Tags               string `json:"tags,omitempty"` // JSON string
 
 	// Status
-	Status       string            `json:"status"`
+	Status        string            `json:"status"`
 	CurrentStage  ProvisioningStage `json:"currentStage,omitempty"`
 	CurrentStep   string            `json:"currentStep,omitempty"`
 	FailureReason string            `json:"failureReason,omitempty"`
@@ -110,9 +110,15 @@ type DatabaseInstance struct {
 	// Pause state. last_active_at is updated by the activity tracker (poll
 	// of pg_stat_database). PauseReason is empty for ACTIVE projects;
 	// idle_7d / manual / tier_limit when status is PAUSED.
-	LastActiveAt   *FlexTime `json:"lastActiveAt,omitempty"`
-	LastXactCount  int64     `json:"lastXactCount,omitempty"`
-	PauseReason    string    `json:"pauseReason,omitempty"`
+	LastActiveAt  *FlexTime `json:"lastActiveAt,omitempty"`
+	LastXactCount int64     `json:"lastXactCount,omitempty"`
+	PauseReason   string    `json:"pauseReason,omitempty"`
+	// PauseAttempts counts the pauses that have been tried and not
+	// completed since this project last settled, and PauseLastAttemptAt is
+	// when the last one was. Together they are the retry backoff, held on
+	// the row so it survives a restart and a leader change.
+	PauseAttempts      int       `json:"pauseAttempts,omitempty"`
+	PauseLastAttemptAt *FlexTime `json:"pauseLastAttemptAt,omitempty"`
 
 	// Timestamps
 	CreatedAt       *FlexTime `json:"createdAt,omitempty"`
@@ -164,6 +170,7 @@ func (inst *DatabaseInstance) Clone() *DatabaseInstance {
 	copied.CreatedAt = clonePtr(inst.CreatedAt)
 	copied.UpdatedAt = clonePtr(inst.UpdatedAt)
 	copied.LastHealthCheck = clonePtr(inst.LastHealthCheck)
+	copied.PauseLastAttemptAt = clonePtr(inst.PauseLastAttemptAt)
 	return &copied
 }
 

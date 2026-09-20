@@ -38,8 +38,9 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 			metrics_endpoint, grafana_dashboard_url,
 			restored_from_project_id, restored_from_backup_id,
 			last_active_at, last_xact_count, pause_reason,
+			pause_attempts, pause_last_attempt_at,
 			created_at, updated_at, last_health_check
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
@@ -53,6 +54,7 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 		inst.MetricsEndpoint, inst.GrafanaDashboardURL,
 		inst.RestoredFromProjectID, inst.RestoredFromBackupID,
 		flexTimePtr(inst.LastActiveAt), inst.LastXactCount, inst.PauseReason,
+		inst.PauseAttempts, flexTimePtr(inst.PauseLastAttemptAt),
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 	)
 	var pqErr *pq.Error
@@ -115,7 +117,9 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 			updated_at = $42,
 			last_health_check = $43,
 			deletion_step = $44,
-			deletion_error = $45
+			deletion_error = $45,
+			pause_attempts = $47,
+			pause_last_attempt_at = $48
 		WHERE project_id = $1 AND status <> ALL($46)`,
 		inst.ProjectID, inst.ProjectName, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
@@ -132,6 +136,7 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 		flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 		inst.DeletionStep, inst.DeletionError,
 		pq.Array(deletionStatuses),
+		inst.PauseAttempts, flexTimePtr(inst.PauseLastAttemptAt),
 	)
 	if err != nil {
 		return err
@@ -271,6 +276,33 @@ func (s *Store) RecordRestoreInterrupted(projectID, step, reason string) error {
 	return nil
 }
 
+// RecordPauseAttempt counts a pause that is about to be tried. The status
+// predicate is the one-way door: a project under teardown, or one whose
+// restore has not been confirmed, is never touched by a retry counter.
+func (s *Store) RecordPauseAttempt(projectID string, at time.Time) (int, error) {
+	var attempts int
+	err := s.db.QueryRow(`
+		UPDATE database_instances
+		SET pause_attempts = pause_attempts + 1, pause_last_attempt_at = $2, updated_at = $2
+		WHERE project_id = $1 AND NOT (status = ANY($3))
+		RETURNING pause_attempts`,
+		projectID, at, pq.Array(notServableStatuses)).Scan(&attempts)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("%w: %s", storage.ErrProjectNotPausable, projectID)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("record pause attempt: %w", err)
+	}
+	return attempts, nil
+}
+
+// notServableStatuses mirrors domain.IsNotServable for the SQL predicate.
+var notServableStatuses = []string{
+	string(domain.StatusDeleting),
+	string(domain.StatusBackupsPendingDelete),
+	string(domain.StatusRestoring),
+}
+
 const pgInstanceColumns = `
 	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 	deployment_mode,
@@ -285,6 +317,7 @@ const pgInstanceColumns = `
 	metrics_endpoint, grafana_dashboard_url,
 	restored_from_project_id, restored_from_backup_id,
 	last_active_at, last_xact_count, pause_reason,
+	pause_attempts, pause_last_attempt_at,
 	created_at, updated_at, last_health_check`
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
@@ -398,6 +431,8 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	var lastActiveAt sql.NullTime
 	var lastXactCount sql.NullInt64
 	var pauseReason sql.NullString
+	var pauseAttempts sql.NullInt64
+	var pauseLastAttemptAt sql.NullTime
 
 	err := s.Scan(
 		&inst.ProjectID, &inst.ProjectName, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
@@ -413,6 +448,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&inst.MetricsEndpoint, &inst.GrafanaDashboardURL,
 		&inst.RestoredFromProjectID, &inst.RestoredFromBackupID,
 		&lastActiveAt, &lastXactCount, &pauseReason,
+		&pauseAttempts, &pauseLastAttemptAt,
 		&createdAt, &updatedAt, &lastHealth,
 	)
 	if err != nil {
@@ -427,6 +463,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		createdAt: createdAt, updatedAt: updatedAt, lastHealth: lastHealth,
 		lastActiveAt: lastActiveAt, lastXactCount: lastXactCount,
 		pauseReason: pauseReason,
+		pauseAttempts: pauseAttempts, pauseLastAttemptAt: pauseLastAttemptAt,
 	}
 	applyNullableInstanceFields(&inst, nf)
 
@@ -447,6 +484,8 @@ type nullableInstanceFields struct {
 	lastActiveAt                     sql.NullTime
 	lastXactCount                    sql.NullInt64
 	pauseReason                      sql.NullString
+	pauseAttempts                    sql.NullInt64
+	pauseLastAttemptAt               sql.NullTime
 }
 
 // applyNullableInstanceFields copies the valid nullable columns onto inst,
@@ -471,6 +510,12 @@ func applyNullableInstanceFields(inst *domain.DatabaseInstance, nf nullableInsta
 	inst.LastActiveAt = nullFlexTime(nf.lastActiveAt)
 	if nf.lastXactCount.Valid {
 		inst.LastXactCount = nf.lastXactCount.Int64
+	}
+	if nf.pauseAttempts.Valid {
+		inst.PauseAttempts = int(nf.pauseAttempts.Int64)
+	}
+	if nf.pauseLastAttemptAt.Valid {
+		inst.PauseLastAttemptAt = &domain.FlexTime{Time: nf.pauseLastAttemptAt.Time}
 	}
 	if nf.pauseReason.Valid {
 		inst.PauseReason = nf.pauseReason.String

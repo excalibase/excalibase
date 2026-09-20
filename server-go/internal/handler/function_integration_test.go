@@ -33,7 +33,6 @@ const (
 	testE2EInvokePath       = "/api/projects/proj_e2e01/functions/echo-key/invoke"
 )
 
-
 // Full stack e2e: Go handler → RuntimeClient → real Deno runtime subprocess.
 // Tests the HTTP layer all the way from platform API to user code and back.
 //
@@ -151,6 +150,10 @@ func (s *e2eInstanceStore) BeginDeletion(projectID string, deleteBackups *bool) 
 		return false, storage.ErrProjectNotFound
 	}
 	return storage.ApplyBeginDeletion(inst, deleteBackups)
+}
+
+func (s *e2eInstanceStore) RecordPauseAttempt(string, time.Time) (int, error) {
+	return 0, nil
 }
 
 func (s *e2eInstanceStore) RecordRestoreInterrupted(string, string, string) error {

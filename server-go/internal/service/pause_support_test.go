@@ -419,3 +419,105 @@ func TestBackupSupportRefusesAModeWithNoAdapter(t *testing.T) {
 		t.Errorf("BackupStatus: got %v, want ErrUnsupportedBackupMode", err)
 	}
 }
+
+// main gates pause/resume on a RESTORING project centrally (409 through the
+// project-access middleware). The service must agree: a project whose
+// restore has not been confirmed is neither pausable nor resumable, so an
+// internal caller cannot do what the HTTP surface refuses.
+func TestLifecycleLeavesANotServableProjectAlone(t *testing.T) {
+	for name, status := range map[string]string{
+		"restoring": string(domain.StatusRestoring),
+		"deleting":  string(domain.StatusDeleting),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newObservedPause(t)
+			inst := f.reload(t)
+			inst.Status = status
+			if err := f.store.Update(inst); err != nil {
+				t.Fatalf("set %s: %v", status, err)
+			}
+			f.pauser.log = nil
+
+			pauseErr := f.pause(t)
+			if status == string(domain.StatusDeleting) && !errors.Is(pauseErr, storage.ErrProjectDeleting) {
+				t.Errorf("pause of a deleting project: got %v, want ErrProjectDeleting", pauseErr)
+			}
+			if status == string(domain.StatusRestoring) && pauseErr != nil {
+				t.Errorf("pause of a restoring project must be a no-op, got %v", pauseErr)
+			}
+			if err := f.svc.Resume(context.Background(), observedPauseProject); err != nil {
+				t.Errorf("resume must be a no-op, got %v", err)
+			}
+			if len(f.pauser.log) != 0 {
+				t.Errorf("a project the platform may not serve must not be touched: %v", f.pauser.log)
+			}
+		})
+	}
+}
+
+func TestPausableAndResumableAgreeWithTheServableRule(t *testing.T) {
+	for _, status := range []string{
+		string(domain.StatusRestoring), string(domain.StatusDeleting), string(domain.StatusBackupsPendingDelete),
+	} {
+		if pausable(status) {
+			t.Errorf("%s must not be pausable: the platform may not serve it", status)
+		}
+		if !domain.IsNotServable(status) {
+			t.Errorf("%s should be covered by IsNotServable", status)
+		}
+	}
+	if !pausable("ACTIVE") || !pausable(string(domain.StatusPausing)) {
+		t.Error("ACTIVE and PAUSING are the pausable states")
+	}
+}
+
+// The retry backoff is cleared once the project settles, so the next time it
+// needs pausing it does not inherit a backoff grown by an old failure.
+func TestASettledProjectForgetsItsPauseBackoff(t *testing.T) {
+	for name, settle := range map[string]func(*observedPauseFixture) error{
+		"pause succeeds": func(f *observedPauseFixture) error {
+			return f.svc.Pause(context.Background(), observedPauseProject, domain.PauseReasonManual)
+		},
+		"resume succeeds": func(f *observedPauseFixture) error {
+			if err := f.svc.Pause(context.Background(), observedPauseProject, domain.PauseReasonManual); err != nil {
+				return err
+			}
+			return f.svc.Resume(context.Background(), observedPauseProject)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newObservedPause(t)
+			inst := f.reload(t)
+			inst.PauseAttempts = 4
+			inst.PauseLastAttemptAt = &domain.FlexTime{Time: time.Unix(1, 0)}
+			if err := f.store.Update(inst); err != nil {
+				t.Fatalf("seed backoff: %v", err)
+			}
+
+			if err := settle(f); err != nil {
+				t.Fatalf("settle: %v", err)
+			}
+			got := f.reload(t)
+			if got.PauseAttempts != 0 || got.PauseLastAttemptAt != nil {
+				t.Errorf("backoff not cleared: attempts=%d last=%v", got.PauseAttempts, got.PauseLastAttemptAt)
+			}
+		})
+	}
+}
+
+// Counting an attempt must never touch a project the platform may not serve.
+func TestRecordPauseAttemptRespectsTheOneWayDoor(t *testing.T) {
+	f := newObservedPause(t)
+	inst := f.reload(t)
+	inst.Status = string(domain.StatusRestoring)
+	if err := f.store.Update(inst); err != nil {
+		t.Fatalf("set RESTORING: %v", err)
+	}
+
+	if _, err := f.store.RecordPauseAttempt(observedPauseProject, time.Now()); !errors.Is(err, storage.ErrProjectNotPausable) {
+		t.Fatalf("err: got %v, want ErrProjectNotPausable", err)
+	}
+	if _, err := f.store.RecordPauseAttempt("missing", time.Now()); !errors.Is(err, storage.ErrProjectNotFound) {
+		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
+	}
+}

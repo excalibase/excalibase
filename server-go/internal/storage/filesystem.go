@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/security"
@@ -125,6 +126,25 @@ func (s *FileSystemStore) RecordRestoreInterrupted(projectID, step, reason strin
 		return err
 	}
 	return s.write(marked)
+}
+
+// RecordPauseAttempt counts a pause attempt. See InstanceStore.
+func (s *FileSystemStore) RecordPauseAttempt(projectID string, at time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, ok := s.cache[projectID]
+	if !ok {
+		return 0, ErrProjectNotFound
+	}
+	counted := existing.Clone()
+	if err := ApplyPauseAttempt(counted, at); err != nil {
+		return 0, err
+	}
+	if err := s.write(counted); err != nil {
+		return 0, err
+	}
+	return counted.PauseAttempts, nil
 }
 
 // write persists the instance to disk and the cache. Callers hold s.mu.

@@ -310,7 +310,17 @@ func (s *PauseService) markPaused(inst *domain.DatabaseInstance) error {
 	inst.Status = string(domain.StatusPaused)
 	inst.CurrentStep = ""
 	inst.FailureReason = ""
+	clearPauseRetryBackoff(inst)
 	return s.persist(inst)
+}
+
+// clearPauseRetryBackoff forgets how many attempts it took. The project has
+// settled, so the next time it needs pausing it starts from a clean slate
+// rather than inheriting a backoff grown by an unrelated failure. It rides
+// the ordinary Update, which already refuses a row a teardown owns.
+func clearPauseRetryBackoff(inst *domain.DatabaseInstance) {
+	inst.PauseAttempts = 0
+	inst.PauseLastAttemptAt = nil
 }
 
 // Resume takes a PAUSED project back to ACTIVE: the workload starts and is
@@ -351,6 +361,7 @@ func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 	inst.PauseReason = ""
 	inst.CurrentStep = ""
 	inst.FailureReason = ""
+	clearPauseRetryBackoff(inst)
 	inst.LastActiveAt = &domain.FlexTime{Time: time.Now()}
 	return s.persist(inst)
 }
