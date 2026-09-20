@@ -70,6 +70,12 @@ type KubeClient interface {
 	// DeletePublicDBService removes the Service so the port stops
 	// answering. Deleting an absent one succeeds.
 	DeletePublicDBService(ctx context.Context, namespace, name string) error
+	// DocumentDBGatewayReady reports whether a DocumentDB project's gateway
+	// container is serving (EXC-409). Asked about the container, not the
+	// pod: there is a window in which Postgres answers and the gateway does
+	// not, and a Mongo endpoint reported up in that window refuses
+	// connections.
+	DocumentDBGatewayReady(ctx context.Context, namespace, pod string) (bool, error)
 
 	// GetClusterCapacity returns aggregate Allocatable + already-Requested
 	// CPU/memory across all schedulable nodes. Used by capacity-aware

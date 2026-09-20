@@ -106,7 +106,13 @@ const (
 // Postgres itself, so nothing between the customer and their database ever
 // holds their credentials.
 type DBEndpoint struct {
-	ProjectID     string
+	ProjectID string
+	// Role says which protocol this holding serves. A project always has a
+	// Postgres holding; a DocumentDB project has a Mongo one too, from the
+	// same allocator (EXC-409). PublicEnabled and RequireTLS are settings of
+	// the project rather than of a protocol and are read from the Postgres
+	// holding.
+	Role          DBEndpointRole
 	PublicEnabled bool
 	Port          int
 	RequireTLS    bool
@@ -115,7 +121,12 @@ type DBEndpoint struct {
 // DefaultDBEndpoint is what a project that has never touched the setting has:
 // no public port, and TLS required the moment it asks for one.
 func DefaultDBEndpoint(projectID string) DBEndpoint {
-	return DBEndpoint{ProjectID: projectID, PublicEnabled: false, Port: 0, RequireTLS: true}
+	return DefaultDBEndpointForRole(projectID, DBEndpointRolePostgres)
+}
+
+// DefaultDBEndpointForRole is the same for one protocol's holding.
+func DefaultDBEndpointForRole(projectID string, role DBEndpointRole) DBEndpoint {
+	return DBEndpoint{ProjectID: projectID, Role: role, PublicEnabled: false, Port: 0, RequireTLS: true}
 }
 
 // IsPublic reports whether the project should have a Service answering. Both

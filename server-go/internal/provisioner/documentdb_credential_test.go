@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -97,5 +98,34 @@ func TestAnOrdinaryProvisionWritesNoDocumentDBCredential(t *testing.T) {
 
 	if _, ok := mock.Secrets[key]; ok {
 		t.Errorf("an ordinary project was given a Mongo credential at %s", key)
+	}
+}
+
+// A cluster that will not take the Secret fails the provision. Carrying on
+// would apply a cluster whose pods cannot start, and the failure would surface
+// as an unexplained Postgres outage rather than as the provision that did not
+// finish.
+func TestDocumentDBProvisionFailsWhenTheCredentialCannotBeWritten(t *testing.T) {
+	mock := documentDBKube()
+	mock.CreateSecretError = errors.New("admission webhook denied the request")
+	majors := config.DocumentDBMajors()
+
+	_, err := NewPostgreSQLProvisioner(mock, "").Provision(context.Background(), domain.ProvisioningRequest{
+		ProjectName:     "docproj",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
+		PostgresVersion: majors[len(majors)-1],
+		DocumentDB:      true,
+	}, config.TierConfig{Instances: 1, StorageSize: "5Gi"}, func(domain.ProvisioningStage) {})
+
+	if err == nil {
+		t.Fatal("the provision succeeded with no Mongo credential written")
+	}
+	if !strings.Contains(err.Error(), "documentdb") {
+		t.Errorf("the failure does not say what could not be written: %v", err)
+	}
+	if _, applied := mock.CRDs["org1-docproj/docproj-postgres"]; applied {
+		t.Error("a cluster was applied whose pods could not have started")
 	}
 }

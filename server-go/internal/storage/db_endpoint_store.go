@@ -34,13 +34,19 @@ type DatabaseEndpointStore interface {
 	// answer to a caller.
 	GetDatabaseEndpoint(ctx context.Context, projectID string) (domain.DBEndpoint, error)
 
+	// GetDatabaseEndpointForRole returns one of the project's holdings. A
+	// DocumentDB project holds a port per protocol (EXC-409); everything
+	// else about the endpoint — whether it is public, whether TLS is
+	// required — is a setting of the project and lives on the Postgres row.
+	GetDatabaseEndpointForRole(ctx context.Context, projectID string, role domain.DBEndpointRole) (domain.DBEndpoint, error)
+
 	// AllocateDatabaseEndpointPort takes a port for the project and returns
 	// the endpoint holding it, still with PublicEnabled false: the setting
 	// is only flipped once the Service is observed to exist. A project that
 	// already holds a port keeps it, so the call is idempotent and a resume
 	// comes back on the same number. Returns ErrDBEndpointPortsExhausted
 	// when the window has nothing free.
-	AllocateDatabaseEndpointPort(ctx context.Context, projectID string, window domain.PortRange, quarantine time.Duration) (domain.DBEndpoint, error)
+	AllocateDatabaseEndpointPort(ctx context.Context, projectID string, role domain.DBEndpointRole, window domain.PortRange, quarantine time.Duration) (domain.DBEndpoint, error)
 
 	// SetDatabaseEndpointPublic records whether the project's Service
 	// exists. It is written after the Kubernetes object has been observed
@@ -55,10 +61,10 @@ type DatabaseEndpointStore interface {
 	// ReleaseDatabaseEndpointPort frees the project's port into quarantine
 	// and leaves the endpoint off. It is idempotent: a project holding no
 	// port is already released, which is what a retried teardown needs.
-	ReleaseDatabaseEndpointPort(ctx context.Context, projectID string, releasedAt time.Time) error
+	ReleaseDatabaseEndpointPort(ctx context.Context, projectID string, role domain.DBEndpointRole, releasedAt time.Time) error
 
-	// DeleteDatabaseEndpoint removes the project's row entirely, after its
-	// port has been released. Used by project teardown; the quarantine
+	// DeleteDatabaseEndpoint removes every one of the project's rows, after
+	// their ports have been released. Used by project teardown; the quarantine
 	// entry outlives the row it came from.
 	DeleteDatabaseEndpoint(ctx context.Context, projectID string) error
 }

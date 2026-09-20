@@ -26,7 +26,18 @@ const dbEndpointPortLockKey = 0
 // GetDatabaseEndpoint returns the project's public endpoint setting. See
 // storage.DatabaseEndpointStore.
 func (s *Store) GetDatabaseEndpoint(ctx context.Context, projectID string) (domain.DBEndpoint, error) {
-	return readDBEndpoint(ctx, s.db, projectID)
+	return readDBEndpoint(ctx, s.db, projectID, domain.DBEndpointRolePostgres)
+}
+
+// GetDatabaseEndpointForRole returns one of the project's holdings. See
+// storage.DatabaseEndpointStore.
+func (s *Store) GetDatabaseEndpointForRole(
+	ctx context.Context, projectID string, role domain.DBEndpointRole,
+) (domain.DBEndpoint, error) {
+	if !role.Valid() {
+		return domain.DBEndpoint{}, fmt.Errorf("read database endpoint: unknown endpoint role %q", role)
+	}
+	return readDBEndpoint(ctx, s.db, projectID, role)
 }
 
 // AllocateDatabaseEndpointPort takes a port for the project. See
@@ -44,7 +55,10 @@ func (s *Store) GetDatabaseEndpoint(ctx context.Context, projectID string) (doma
 // lowest available number: sequential ports would let anyone holding two of
 // them read off how many tenants the platform has and in what order they
 // signed up.
-func (s *Store) AllocateDatabaseEndpointPort(ctx context.Context, projectID string, window domain.PortRange, quarantine time.Duration) (domain.DBEndpoint, error) {
+func (s *Store) AllocateDatabaseEndpointPort(ctx context.Context, projectID string, role domain.DBEndpointRole, window domain.PortRange, quarantine time.Duration) (domain.DBEndpoint, error) {
+	if !role.Valid() {
+		return domain.DBEndpoint{}, fmt.Errorf("allocate database endpoint port: unknown endpoint role %q", role)
+	}
 	if err := window.Validate(); err != nil {
 		return domain.DBEndpoint{}, fmt.Errorf("allocate database endpoint port: %w", err)
 	}
@@ -57,12 +71,13 @@ func (s *Store) AllocateDatabaseEndpointPort(ctx context.Context, projectID stri
 	if err := lockDBEndpointPorts(ctx, tx); err != nil {
 		return domain.DBEndpoint{}, err
 	}
-	held, err := readDBEndpoint(ctx, tx, projectID)
+	held, err := readDBEndpoint(ctx, tx, projectID, role)
 	if err != nil {
 		return domain.DBEndpoint{}, err
 	}
-	// A project that already holds a port keeps it, so a retried enable and
-	// a resume both come back on the number its customers have saved.
+	// A project that already holds a port for this protocol keeps it, so a
+	// retried enable and a resume both come back on the number its customers
+	// have saved.
 	if held.Port > 0 {
 		if err := tx.Commit(); err != nil {
 			return domain.DBEndpoint{}, fmt.Errorf("commit database endpoint allocation: %w", err)
@@ -73,7 +88,7 @@ func (s *Store) AllocateDatabaseEndpointPort(ctx context.Context, projectID stri
 	if err != nil {
 		return domain.DBEndpoint{}, err
 	}
-	endpoint, err := writeDBEndpointPort(ctx, tx, projectID, port)
+	endpoint, err := writeDBEndpointPort(ctx, tx, projectID, role, port)
 	if err != nil {
 		return domain.DBEndpoint{}, err
 	}
@@ -99,16 +114,16 @@ func (s *Store) SetDatabaseEndpointRequireTLS(ctx context.Context, projectID str
 // column name would put an identifier into the statement text, which is the
 // shape an injection takes even when today's callers only pass constants.
 const setPublicSQL = `
-INSERT INTO database_endpoints (project_id, public, updated_at)
-VALUES ($1, $2, NOW())
-ON CONFLICT (project_id) DO UPDATE SET public = EXCLUDED.public, updated_at = NOW()
-RETURNING project_id, port, public, require_tls`
+INSERT INTO database_endpoints (project_id, role, public, updated_at)
+VALUES ($1, 'postgres', $2, NOW())
+ON CONFLICT (project_id, role) DO UPDATE SET public = EXCLUDED.public, updated_at = NOW()
+RETURNING project_id, role, port, public, require_tls`
 
 const setRequireTLSSQL = `
-INSERT INTO database_endpoints (project_id, require_tls, updated_at)
-VALUES ($1, $2, NOW())
-ON CONFLICT (project_id) DO UPDATE SET require_tls = EXCLUDED.require_tls, updated_at = NOW()
-RETURNING project_id, port, public, require_tls`
+INSERT INTO database_endpoints (project_id, role, require_tls, updated_at)
+VALUES ($1, 'postgres', $2, NOW())
+ON CONFLICT (project_id, role) DO UPDATE SET require_tls = EXCLUDED.require_tls, updated_at = NOW()
+RETURNING project_id, role, port, public, require_tls`
 
 // writeDBEndpointFlag runs one of the statements above, creating the row at
 // its defaults when the project has never touched the setting.
@@ -127,7 +142,10 @@ func (s *Store) writeDBEndpointFlag(ctx context.Context, projectID, query string
 // the project, so there is no instant in which it is neither held nor held
 // back. Releasing a project that holds no port is a no-op, which is what a
 // retried teardown needs.
-func (s *Store) ReleaseDatabaseEndpointPort(ctx context.Context, projectID string, releasedAt time.Time) error {
+func (s *Store) ReleaseDatabaseEndpointPort(ctx context.Context, projectID string, role domain.DBEndpointRole, releasedAt time.Time) error {
+	if !role.Valid() {
+		return fmt.Errorf("release database endpoint port: unknown endpoint role %q", role)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin database endpoint release: %w", err)
@@ -137,7 +155,7 @@ func (s *Store) ReleaseDatabaseEndpointPort(ctx context.Context, projectID strin
 	if err := lockDBEndpointPorts(ctx, tx); err != nil {
 		return err
 	}
-	held, err := readDBEndpoint(ctx, tx, projectID)
+	held, err := readDBEndpoint(ctx, tx, projectID, role)
 	if err != nil {
 		return err
 	}
@@ -154,7 +172,7 @@ ON CONFLICT (port) DO UPDATE SET
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE database_endpoints SET port = NULL, public = FALSE, updated_at = NOW()
-WHERE project_id = $1`, projectID); err != nil {
+WHERE project_id = $1 AND role = $2`, projectID, string(role)); err != nil {
 		return fmt.Errorf("clear database endpoint port: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -209,12 +227,12 @@ LIMIT 1`, window.Min, window.Max, quarantineCutoff).Scan(&port)
 // writeDBEndpointPort stamps the chosen port on the project, creating the row
 // at its defaults when the project has never touched the setting. The
 // endpoint stays unpublished: only an observed Service flips that.
-func writeDBEndpointPort(ctx context.Context, tx *sql.Tx, projectID string, port int) (domain.DBEndpoint, error) {
+func writeDBEndpointPort(ctx context.Context, tx *sql.Tx, projectID string, role domain.DBEndpointRole, port int) (domain.DBEndpoint, error) {
 	endpoint, err := scanDBEndpoint(tx.QueryRowContext(ctx, `
-INSERT INTO database_endpoints (project_id, port, updated_at)
-VALUES ($1, $2, NOW())
-ON CONFLICT (project_id) DO UPDATE SET port = EXCLUDED.port, updated_at = NOW()
-RETURNING project_id, port, public, require_tls`, projectID, port))
+INSERT INTO database_endpoints (project_id, role, port, updated_at)
+VALUES ($1, $2, $3, NOW())
+ON CONFLICT (project_id, role) DO UPDATE SET port = EXCLUDED.port, updated_at = NOW()
+RETURNING project_id, role, port, public, require_tls`, projectID, string(role), port))
 	if err != nil {
 		return domain.DBEndpoint{}, fmt.Errorf("write database endpoint port: %w", err)
 	}
@@ -229,11 +247,12 @@ type dbEndpointQuerier interface {
 
 // readDBEndpoint returns the project's row, or the default — off, no port,
 // TLS required — when it has none.
-func readDBEndpoint(ctx context.Context, q dbEndpointQuerier, projectID string) (domain.DBEndpoint, error) {
+func readDBEndpoint(ctx context.Context, q dbEndpointQuerier, projectID string, role domain.DBEndpointRole) (domain.DBEndpoint, error) {
 	endpoint, err := scanDBEndpoint(q.QueryRowContext(ctx,
-		`SELECT project_id, port, public, require_tls FROM database_endpoints WHERE project_id = $1`, projectID))
+		`SELECT project_id, role, port, public, require_tls FROM database_endpoints WHERE project_id = $1 AND role = $2`,
+		projectID, string(role)))
 	if errors.Is(err, sql.ErrNoRows) {
-		return domain.DefaultDBEndpoint(projectID), nil
+		return domain.DefaultDBEndpointForRole(projectID, role), nil
 	}
 	if err != nil {
 		return domain.DBEndpoint{}, fmt.Errorf("read database endpoint: %w", err)
@@ -248,7 +267,7 @@ func scanDBEndpoint(row *sql.Row) (domain.DBEndpoint, error) {
 		endpoint domain.DBEndpoint
 		port     sql.NullInt64
 	)
-	if err := row.Scan(&endpoint.ProjectID, &port, &endpoint.PublicEnabled, &endpoint.RequireTLS); err != nil {
+	if err := row.Scan(&endpoint.ProjectID, &endpoint.Role, &port, &endpoint.PublicEnabled, &endpoint.RequireTLS); err != nil {
 		return domain.DBEndpoint{}, err
 	}
 	if port.Valid {
