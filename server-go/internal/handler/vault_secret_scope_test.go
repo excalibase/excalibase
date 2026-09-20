@@ -324,3 +324,20 @@ func vaultProjectStores(h *VaultHandler, orgID string, members []string, project
 	h.SetInstanceStore(instances)
 	h.SetOrgStore(orgs)
 }
+
+func TestProjectIDForSecretPrefixTreatsABareProjectAsThatProject(t *testing.T) {
+	cases := map[string]string{
+		"projects/p1/credentials": "p1",
+		"projects/p1/":            "p1",
+		"projects/p1":             "p1",
+		"projects/":               "",
+		"projects":                "",
+		"pki/":                    "",
+		"":                        "",
+	}
+	for prefix, want := range cases {
+		if got := projectIDForSecretPrefix(prefix); got != want {
+			t.Errorf("%q: got %q, want %q", prefix, got, want)
+		}
+	}
+}

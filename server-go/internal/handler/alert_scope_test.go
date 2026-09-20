@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -34,6 +35,10 @@ func alertScopeHandler(t *testing.T) *AlertHandler {
 	// A second alert on the same project: the visibility of a project is
 	// resolved once and reused, so the list must not drop the repeat.
 	svc.AddAlert(domain.Alert{ID: "b2", ProjectID: alertProjectB, Severity: "WARNING", Message: "b2"})
+	// A platform-wide alert: it names no project, so it belongs to whoever
+	// reads the platform rather than to a tenant. Added last so the history
+	// limit would cut the caller's own alert first if scoping ran too late.
+	svc.AddAlert(domain.Alert{ID: "p", Severity: "WARNING", Message: "platform"})
 
 	instances := fakestore.NewInstances()
 	instances.Items[alertProjectA] = &domain.DatabaseInstance{ProjectID: alertProjectA, OrgID: alertOrgA, Status: "ACTIVE"}
@@ -103,8 +108,8 @@ func TestPlatformOperatorSeesEveryProjectsAlerts(t *testing.T) {
 	user := &domain.User{ID: "op", Role: "platform_operator", Active: true}
 
 	_, alerts := alertRequest(t, h.GetActive, user, &domain.AccessToken{})
-	if len(alerts) != 3 {
-		t.Fatalf("PermViewAny saw %v, want every project's alerts", alertProjectIDs(alerts))
+	if len(alerts) != 4 {
+		t.Fatalf("PermViewAny saw %v, want every alert the platform holds", alertProjectIDs(alerts))
 	}
 }
 
@@ -136,5 +141,75 @@ func TestAlertsRefuseWhenScopingIsNotWired(t *testing.T) {
 	code, _ := alertRequest(t, h.GetActive, &domain.User{ID: "u", Role: "user"}, &domain.AccessToken{})
 	if code != http.StatusServiceUnavailable {
 		t.Fatalf("got %d, want 503", code)
+	}
+}
+
+// EXC-418: an alert that names no project is a platform-wide one. Refusing
+// every project-less alert made those invisible to everybody, which is the
+// opposite of what an alert is for.
+func TestPlatformWideAlertsReachThePlatformReaders(t *testing.T) {
+	h := alertScopeHandler(t)
+
+	_, alerts := alertRequest(t, h.GetActive, operatorUser(), sessionToken())
+	platformWide := 0
+	for _, a := range alerts {
+		if a.ProjectID == "" {
+			platformWide++
+		}
+	}
+	if platformWide != 1 {
+		t.Fatalf("a platform operator saw %d platform-wide alerts, want 1", platformWide)
+	}
+}
+
+func TestPlatformWideAlertsStayHiddenFromTenants(t *testing.T) {
+	h := alertScopeHandler(t)
+	member := &domain.User{ID: alertMemberA, Role: "user", Active: true}
+
+	_, alerts := alertRequest(t, h.GetActive, member, &domain.AccessToken{})
+	for _, a := range alerts {
+		if a.ProjectID == "" {
+			t.Fatal("a tenant saw a platform-wide alert")
+		}
+	}
+}
+
+// The limit used to cut the history before the scoping did, so a tenant whose
+// alerts were older than the busiest tenant's got an empty page.
+func TestAlertHistoryLimitsAfterScopingNotBefore(t *testing.T) {
+	h := alertScopeHandler(t)
+	member := &domain.User{ID: alertMemberA, Role: "user", Active: true}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/alerts/history?limit=1", nil)
+	ctx := auth.SetUser(req.Context(), member)
+	ctx = auth.SetToken(ctx, &domain.AccessToken{})
+	w := httptest.NewRecorder()
+	h.GetHistory(w, req.WithContext(ctx))
+
+	var alerts []domain.Alert
+	if err := json.Unmarshal(w.Body.Bytes(), &alerts); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(alerts) != 1 || alerts[0].ProjectID != alertProjectA {
+		t.Fatalf("got %v, want the caller's own single alert", alertProjectIDs(alerts))
+	}
+}
+
+func TestMostRecentKeepsTheTailOfTheHistory(t *testing.T) {
+	history := []domain.Alert{{ID: "1"}, {ID: "2"}, {ID: "3"}}
+	cases := map[int][]string{
+		0:  {"1", "2", "3"},
+		-1: {"1", "2", "3"},
+		9:  {"1", "2", "3"},
+		2:  {"2", "3"},
+	}
+	for limit, want := range cases {
+		got := []string{}
+		for _, a := range mostRecent(history, limit) {
+			got = append(got, a.ID)
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("limit %d: got %v, want %v", limit, got, want)
+		}
 	}
 }
