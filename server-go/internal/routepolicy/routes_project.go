@@ -84,6 +84,8 @@ var projectRows = []Row{
 	{Methods: post, Pattern: "/api/projects/{projectId}/schema/apply", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: get, Pattern: "/api/projects/{projectId}/cors/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "the allowlist decides which web apps may call the data plane"},
 	{Methods: put, Pattern: "/api/projects/{projectId}/cors/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: get, Pattern: "/api/projects/{projectId}/db-endpoint/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "reports the host, port and cluster CA a client needs; never the password"},
+	{Methods: put, Pattern: "/api/projects/{projectId}/db-endpoint/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "opening the database to the internet is an admin decision"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/auth-settings/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: put, Pattern: "/api/projects/{projectId}/auth-settings/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 

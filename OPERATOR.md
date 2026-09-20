@@ -596,6 +596,62 @@ run yourself is not a project here. To put the API engine in front of it,
 run the open-source engine standalone — see
 [github.com/excalibase/excalibase-graphql](https://github.com/excalibase/excalibase-graphql).
 
+## 6.0. Public database endpoints
+
+A project reaches its own database **inside** the cluster with no public port
+at all — over the CNPG read-write Service, which is how an app this platform
+hosts beside the database should connect. Reaching it from outside is
+**opt-in and off by default**.
+
+When a customer opts in, the project gets one Kubernetes Service of type
+`LoadBalancer` carrying MetalLB's `metallb.universe.tf/allow-shared-ip`
+annotation and a TCP port of its own. Services that agree on the sharing key
+land on one public IPv4 address, so several projects sit behind one address
+and Kubernetes does the routing: there is no edge process of ours to
+configure, reload or keep alive. A wildcard DNS record points
+`*.<domain>` at that address, so the hostname carries no routing — it exists
+so a certificate can be verified against a name and so the address can change
+later. Turning the endpoint off deletes the Service and the port stops
+answering.
+
+TLS is **not** terminated at the edge. The session is encrypted all the way
+to Postgres, so nothing between the customer and their database ever holds
+their credentials. "Require TLS" is a per-project setting, **on by default**,
+enforced in Postgres through `pg_hba` (`hostssl` only when on).
+`GET /api/projects/{id}/db-endpoint` returns the cluster CA alongside both
+connection strings, so `sslmode=verify-full` works and a customer can see
+exactly what turning the setting off would cost them.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `EXCALIBASE_DB_ENDPOINT_DOMAIN` | *(empty)* | Suffix customers dial: `<projectId>.<domain>`. Empty means the platform offers no public endpoints and the API says so rather than inventing a name. A suffix that only resolves inside the cluster **stops the platform from starting**. |
+| `EXCALIBASE_DB_ENDPOINT_PORT_RANGE` | `30000-30999` | Inclusive window ports are allocated from. Anything present but unparseable, inverted or privileged **stops the platform from starting**. |
+| `EXCALIBASE_DB_ENDPOINT_PORT_QUARANTINE` | `720h` (30 days) | How long a freed port is held back before it can be reissued. |
+| `EXCALIBASE_DB_ENDPOINT_SHARED_IP_KEY` | `excalibase-db-edge` | MetalLB sharing key. Every project's Service carries it, which is what puts them on one address. |
+
+**Ports are allocated randomly inside the window**, never sequentially: two
+port numbers must not let anyone read off how many tenants the platform has
+or in what order they signed up. Allocation is atomic — an advisory lock on
+the port space plus a unique index — so two concurrent enables can never be
+handed the same port. Exhaustion is a clear refusal (`503`), never a
+wrap-around.
+
+**A freed port is not reusable immediately.** A customer's application, a
+saved connection in a GUI client or a forgotten cron job keeps dialling a
+port for weeks after the project behind it is gone; if that port has been
+handed to another tenant, those clients arrive at a stranger's database and
+present credentials to it. So a freed port sits in quarantine for the
+configured window, enforced in the allocator itself. Resource limits will
+exhaust the cluster long before a thousand ports run out, so a long
+quarantine costs nothing — leave it long.
+
+**Across the lifecycle.** A project that is paused, deleting, restoring or
+otherwise not servable has **no** Service, so its port refuses connections
+rather than pointing at nothing. A pause withdraws the Service once the
+database is observed stopped and **keeps the port**, so a resume comes back on
+the same number and saved connection strings still work. Deleting the project
+removes the Service first, then frees the port into quarantine.
+
 ## 6.1. Edge-function egress (outbound allowlist)
 
 Function workers have **no network by default**: `fetch()` from a function

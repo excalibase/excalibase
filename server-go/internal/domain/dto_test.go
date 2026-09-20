@@ -10,15 +10,14 @@ import (
 )
 
 const (
-	testDTODBName        = "test-db"
-	testDTOMarshalFmt    = "marshal: %v"
-	testDTOUnmarshalFmt  = "unmarshal: %v"
-	testDTORestoredName  = "my-restored-project"
-	testDTOProjID        = "proj-id-123"
-	testDTOGetNewFmt     = "GetNewProject: got %q, want %q"
-	testDTONameWins      = "name-wins"
+	testDTODBName       = "test-db"
+	testDTOMarshalFmt   = "marshal: %v"
+	testDTOUnmarshalFmt = "unmarshal: %v"
+	testDTORestoredName = "my-restored-project"
+	testDTOProjID       = "proj-id-123"
+	testDTOGetNewFmt    = "GetNewProject: got %q, want %q"
+	testDTONameWins     = "name-wins"
 )
-
 
 func TestProvisioningRequestRoundTrip(t *testing.T) {
 	req := ProvisioningRequest{
@@ -60,8 +59,8 @@ func TestProvisioningRequestRoundTrip(t *testing.T) {
 
 func TestDatabaseMetricsNullFields(t *testing.T) {
 	m := DatabaseMetrics{
-		ProjectID:        testDTODBName,
-		MetricsAvailable: false,
+		ProjectID:         testDTODBName,
+		MetricsAvailable:  false,
 		UnavailableReason: strPtr("Prometheus not reachable"),
 	}
 
@@ -192,13 +191,13 @@ func TestCredentialsResponseFields(t *testing.T) {
 	user := testutil.FixtureToken("user")
 	pass := testutil.FixturePassword("creds")
 	resp := CredentialsResponse{
-		ProjectID:    "p1",
-		Host:         "db.local",
-		Port:         5432,
-		DatabaseName: "app",
-		Username:     user,
-		Password:     pass,
-		SSLMode:      "require",
+		ProjectID:     "p1",
+		Host:          "db.local",
+		Port:          5432,
+		DatabaseName:  "app",
+		Username:      user,
+		Password:      pass,
+		SSLMode:       "require",
 		ConnectionURL: fmt.Sprintf("postgresql://%s:%s@db.local:5432/app?sslmode=require", user, pass),
 	}
 

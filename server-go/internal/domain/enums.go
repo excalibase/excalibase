@@ -129,6 +129,10 @@ func NotServableReason(status string) string {
 // The name of the step that failed is persisted on the row so a retry —
 // and an operator — can see exactly how far the teardown got.
 const (
+	// DeletionStepReleaseEndpoint stops the project's public database port
+	// answering and puts it in quarantine. It runs first so a teardown that
+	// stalls leaves nothing the outside world can still dial.
+	DeletionStepReleaseEndpoint = "RELEASE_PUBLIC_ENDPOINT"
 	DeletionStepRevokeNats      = "REVOKE_NATS_CREDENTIALS"
 	DeletionStepDeregisterPgDog = "DEREGISTER_PGDOG"
 	DeletionStepDeleteResources = "DELETE_DATABASE_RESOURCES"

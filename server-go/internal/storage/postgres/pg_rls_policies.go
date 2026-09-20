@@ -235,12 +235,12 @@ type rowScanner interface {
 
 func scanRls(r rowScanner) (*domain.Policy, error) {
 	var (
-		p          domain.Policy
-		effect     string
-		ruleLogic  string
-		ops        pq.StringArray
-		rules      []byte
-		assigns    []byte
+		p         domain.Policy
+		effect    string
+		ruleLogic string
+		ops       pq.StringArray
+		rules     []byte
+		assigns   []byte
 	)
 	if err := r.Scan(&p.ID, &p.ProjectID, &p.Name, &p.Resource, &effect, &ops,
 		&ruleLogic, &rules, &assigns, &p.Priority, &p.Enabled,
@@ -261,13 +261,13 @@ func scanRls(r rowScanner) (*domain.Policy, error) {
 
 func scanColumn(r rowScanner) (*domain.ColumnPolicy, error) {
 	var (
-		p           domain.ColumnPolicy
-		mode        string
-		ops         pq.StringArray
-		cols        pq.StringArray
-		partialRaw  sql.NullString
-		customKey   sql.NullString
-		assigns     []byte
+		p          domain.ColumnPolicy
+		mode       string
+		ops        pq.StringArray
+		cols       pq.StringArray
+		partialRaw sql.NullString
+		customKey  sql.NullString
+		assigns    []byte
 	)
 	if err := r.Scan(&p.ID, &p.ProjectID, &p.Name, &p.Resource, &cols, &ops,
 		&mode, &partialRaw, &customKey, &assigns, &p.Priority, &p.Enabled,

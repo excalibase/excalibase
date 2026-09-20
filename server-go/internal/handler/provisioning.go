@@ -44,6 +44,10 @@ type ProvisioningHandler struct {
 	// + siteUrl fields on /info; nil → /auth-settings returns 503 and /info
 	// reports the zero value.
 	authSettingsStore storage.ProjectAuthSettingsStore
+	// dbEndpoints backs /db-endpoint, the customer's public database
+	// endpoint; nil → the surface returns 503 rather than pretending a
+	// setting was saved.
+	dbEndpoints DBEndpointAPI
 }
 
 func NewProvisioningHandler(svc *service.ProvisioningService, orgStore storage.OrgStore) *ProvisioningHandler {

@@ -61,6 +61,14 @@ type MockClient struct {
 	DenoSpecs       map[string]DenoRuntimeSpec
 	EnsureDenoError error
 
+	// PublicDBServices — the spec of each project's public database
+	// endpoint Service, keyed "namespace/name". A missing key means no
+	// Service exists, which is a project refusing connections (EXC-410).
+	PublicDBServices           map[string]PublicDBServiceSpec
+	EnsurePublicDBError        error
+	DeletePublicDBError        error
+	PublicDBServiceExistsError error
+
 	// Capacity returned by GetClusterCapacity. Tests set this to simulate
 	// cluster headroom for capacity-aware provisioning checks.
 	Capacity      ClusterCapacity
@@ -83,7 +91,45 @@ func NewMockClient() *MockClient {
 		Metrics:         make(map[string][]PodResourceMetrics),
 		DenoRuntimes:    make(map[string]bool),
 		DenoSpecs:       make(map[string]DenoRuntimeSpec),
+
+		PublicDBServices: make(map[string]PublicDBServiceSpec),
 	}
+}
+
+// EnsurePublicDBService records the project's public endpoint Service.
+func (m *MockClient) EnsurePublicDBService(ctx context.Context, namespace string, spec PublicDBServiceSpec) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, fmt.Sprintf("EnsurePublicDBService:%s/%s:%d", namespace, spec.Name, spec.Port))
+	if m.EnsurePublicDBError != nil {
+		return m.EnsurePublicDBError
+	}
+	m.PublicDBServices[namespace+"/"+spec.Name] = spec
+	return nil
+}
+
+// PublicDBServiceExists answers truthfully from what Ensure/Delete recorded.
+func (m *MockClient) PublicDBServiceExists(ctx context.Context, namespace, name string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "PublicDBServiceExists:"+namespace+"/"+name)
+	if m.PublicDBServiceExistsError != nil {
+		return false, m.PublicDBServiceExistsError
+	}
+	_, ok := m.PublicDBServices[namespace+"/"+name]
+	return ok, nil
+}
+
+// DeletePublicDBService removes the Service; deleting an absent one succeeds.
+func (m *MockClient) DeletePublicDBService(ctx context.Context, namespace, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "DeletePublicDBService:"+namespace+"/"+name)
+	if m.DeletePublicDBError != nil {
+		return m.DeletePublicDBError
+	}
+	delete(m.PublicDBServices, namespace+"/"+name)
+	return nil
 }
 
 func (m *MockClient) CreateNamespace(ctx context.Context, name string) error {
