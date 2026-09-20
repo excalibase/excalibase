@@ -101,7 +101,7 @@ var vaultRows = []Row{
 	{Methods: post, Pattern: "/api/vault/unseal", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
 	{Methods: post, Pattern: "/api/vault/seal", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
 	{Methods: post, Pattern: "/api/vault/rekey", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
-	{Methods: get, Pattern: "/api/vault/secrets-list", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole},
+	{Methods: get, Pattern: "/api/vault/secrets-list", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true, Note: "a prefix spanning projects inventories every tenant; a prefix naming one is bound to it like any other project read"},
 	{Methods: del, Pattern: "/api/vault/secrets-list", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true, Note: "deletes an entire secret prefix"},
 	{Methods: get, Pattern: "/api/vault/secrets/*", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Capability: "vault:read:<secret path>", Note: "the capability's selector names the one secret the service may read; a human caller is additionally bound to the project the path names, and every read is audited"},
 	{Methods: put, Pattern: "/api/vault/secrets/*", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},

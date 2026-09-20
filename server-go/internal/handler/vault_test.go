@@ -49,6 +49,10 @@ func setupVaultRouter(t *testing.T) (chi.Router, *vault.Vault) {
 	}
 
 	h := NewVaultHandler(v)
+	// Project resolution is wired because the secret routes fail closed
+	// without it; the injected caller is a platform admin, who reaches every
+	// project the way they do on any other project-bound route.
+	vaultProjectStores(h, "org-vault", nil, "my-app", "app", "a", "b", "foo", "bar")
 	r := chi.NewRouter()
 	r.Use(fakeAuthMiddleware)
 	r.Route("/api/vault", h.Routes)

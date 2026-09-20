@@ -26,6 +26,10 @@ func setupVaultRouterAs(t *testing.T, role string) (chi.Router, *vault.Vault) {
 	}
 
 	h := NewVaultHandler(v)
+	// The secret read is bound to the project the path names, so the caller
+	// has to have access to tenant-b for this test to be about the permission
+	// gate rather than the binding.
+	vaultProjectStores(h, "org-b", []string{"u-" + role}, "tenant-b")
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
