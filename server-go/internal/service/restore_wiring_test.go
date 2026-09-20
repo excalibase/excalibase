@@ -18,7 +18,9 @@ func TestBackupServiceFansTheProbeAndTimeoutToEveryAdapter(t *testing.T) {
 	dockerAdapter := NewDockerBackupAdapter(DockerBackupAdapterConfig{Bucket: "b"})
 	svc.RegisterAdapter(domain.ModeDocker, dockerAdapter)
 
-	svc.SetDatabaseProbe(alwaysAnswers{})
+	if err := svc.SetDatabaseProbe(alwaysAnswers{}); err != nil {
+		t.Fatalf("SetDatabaseProbe: %v", err)
+	}
 	svc.SetRestoreReadyTimeout(3 * time.Minute)
 
 	k8sAdapter := svc.adapters[domain.ModeK8s].(*K8sBackupAdapter)

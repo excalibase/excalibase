@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -797,6 +798,23 @@ type handlerDepsArgs struct {
 // Docker adapter has nowhere to put bytes, so we keep it out and the
 // dispatch returns ErrUnsupportedBackupMode for docker projects until
 // the operator finishes wiring credentials.
+// wireRestoreVerification gives every backup adapter the probe that proves a
+// recovered database answers queries, and the budget its readiness wait runs
+// on. A restore is COMPLETED only once that probe has succeeded (EXC-401), so
+// an adapter that did not take a probe — or a vault the probe cannot read
+// through — is a startup failure, not something to discover on the first
+// restore a customer runs.
+func wireRestoreVerification(backupSvc *service.BackupService, vc vaultclient.VaultClient, readyTimeout time.Duration) error {
+	if vc == nil {
+		return errors.New("no vault client: the probe cannot read the credentials a restored project is registered with")
+	}
+	if err := backupSvc.SetDatabaseProbe(service.NewVaultDatabaseProbe(vc)); err != nil {
+		return err
+	}
+	backupSvc.SetRestoreReadyTimeout(readyTimeout)
+	return nil
+}
+
 func buildBackupService(
 	cfg config.AppConfig,
 	store storage.InstanceStore,
@@ -883,10 +901,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// recovered database to the provisioning service's registration path
 	// (EXC-366) instead of writing a half-project row themselves.
 	backupSvc.SetProjectRegistrar(provSvc)
-	// A restore is COMPLETED only once the recovered database has answered a
-	// query with the credentials registration filed for it (EXC-401).
-	backupSvc.SetDatabaseProbe(service.NewVaultDatabaseProbe(vc))
-	backupSvc.SetRestoreReadyTimeout(cfg.RestoreReadyTimeout)
+	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout); err != nil {
+		log.Fatalf("restore verification: %v", err)
+	}
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)

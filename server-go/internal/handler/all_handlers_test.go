@@ -55,7 +55,9 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	mock.WildcardPodReady = true
 	mock.AutoReconcileClusters = true
 	backupSvc.SetProjectRegistrar(provSvc)
-	backupSvc.SetDatabaseProbe(answeringProbe{})
+	if err := backupSvc.SetDatabaseProbe(answeringProbe{}); err != nil {
+		t.Fatalf("SetDatabaseProbe: %v", err)
+	}
 	perfSvc := service.NewPerformanceService(store, mock)
 	auditSvc := service.NewAuditService(store, mock)
 	snapshotSvc := service.NewSnapshotService(store, mock, dir)

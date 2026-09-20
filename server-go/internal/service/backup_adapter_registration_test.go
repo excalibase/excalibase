@@ -259,7 +259,7 @@ func TestDockerRestoreRefusesWithoutRegistrar(t *testing.T) {
 // from the platform: a database that answers, and a stand-in operator that
 // reconciles the recovered cluster on the first poll.
 func armRestore(svc *BackupService, mock *k8s.MockClient, store storage.InstanceStore) {
-	svc.SetDatabaseProbe(alwaysAnswers{})
+	_ = svc.SetDatabaseProbe(alwaysAnswers{})
 	for _, adapter := range svc.adapters {
 		if k8sAdapter, ok := adapter.(*K8sBackupAdapter); ok {
 			k8sAdapter.SetReadyPoller(reconcilingPoller(mock))

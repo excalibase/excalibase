@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -75,7 +76,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 	// --- LocalStack S3 + real docker adapter wiring -----------------------
 	bucket := "excalibase-restore-e2e"
 	uploader := newLocalStackUploader(ctx, t, bucket)
-	adapter, store, vault := newRestoreAdapter(ctx, t, uploader, bucket)
+	adapter, store, vault, probe := newRestoreAdapterWithProbe(ctx, t, uploader, bucket)
 
 	src := &domain.DatabaseInstance{
 		ProjectID:       "src-restore",
@@ -129,6 +130,11 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 	if registered.Status != "ACTIVE" || registered.RestoredFromProjectID != src.ProjectID {
 		t.Errorf("registered row: %+v", registered)
 	}
+	// The restore only reports success once the probe has connected to the
+	// restored database with the filed credentials and a query has answered.
+	if probe.calls != 1 {
+		t.Errorf("the restored database must be probed exactly once, got %d", probe.calls)
+	}
 	appCreds, err := vault.Get(vaultCredentialPath("restored-001", roleApp))
 	if err != nil {
 		t.Fatalf("excalibase_app credentials missing from vault: %v", err)
@@ -163,4 +169,89 @@ func dockerExecPSQLQuery(ctx context.Context, containerID, password, sql string)
 		return string(out), fmt.Errorf("psql query: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
+}
+
+// TestDockerBackupAdapter_RestoreRejectedCredentialsE2E is the other half of
+// EXC-401: the restored container comes up and serves, but the credentials
+// the platform filed for it are not ones that database accepts. Nothing about
+// the container or the CNPG-equivalent state says anything is wrong — only
+// the connection does. The restore must fail, take everything it created back
+// down, and leave no project behind.
+func TestDockerBackupAdapter_RestoreRejectedCredentialsE2E(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker CLI required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	pgPwd := testutil.FixturePassword("pg-restore-reject")
+	pgC, err := tcpg.Run(ctx, "postgres:16-alpine",
+		tcpg.WithDatabase("app"),
+		tcpg.WithUsername("postgres"),
+		tcpg.WithPassword(pgPwd),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).WithStartupTimeout(60*time.Second),
+		),
+	)
+	if err != nil {
+		t.Fatalf("start source postgres: %v", err)
+	}
+	t.Cleanup(func() { pgC.Terminate(ctx) })
+	srcID := pgC.GetContainerID()
+
+	if err := dockerExecPSQL(ctx, srcID, pgPwd, "CREATE TABLE smoke (n int); INSERT INTO smoke VALUES (4242);"); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	_ = dockerExecPSQL(ctx, srcID, pgPwd, "CHECKPOINT;")
+
+	bucket := "excalibase-restore-reject-e2e"
+	uploader := newLocalStackUploader(ctx, t, bucket)
+	adapter, store, vault, probe := newRestoreAdapterWithProbe(ctx, t, uploader, bucket)
+	probe.corrupt = true
+
+	src := &domain.DatabaseInstance{
+		ProjectID:       "src-reject",
+		OrgID:           "org",
+		Namespace:       srcID,
+		DatabaseName:    "app",
+		Username:        defaultPostgresSuperuser,
+		Password:        pgPwd,
+		PostgresVersion: "16-alpine",
+		DeploymentMode:  domain.ModeDocker,
+		Status:          "ACTIVE",
+	}
+	store.Create(src)
+
+	if _, err := adapter.TriggerManual(ctx, src); err != nil {
+		t.Fatalf("TriggerManual: %v", err)
+	}
+	target := "restored-reject"
+	t.Cleanup(func() { _ = cleanupContainer("excalibase-" + target + "-postgres") })
+
+	_, err = adapter.Restore(ctx, src, domain.RestoreRequest{NewProjectName: target, TargetProjectID: target})
+	if !errors.Is(err, ErrRestoreNotObserved) {
+		t.Fatalf("Restore: got %v, want ErrRestoreNotObserved", err)
+	}
+	if probe.calls != 1 {
+		t.Errorf("the probe must have run exactly once, got %d", probe.calls)
+	}
+
+	// The project must not be left registered at all — least of all ACTIVE.
+	registered, err := store.FindByProjectID(target)
+	if err != nil {
+		t.Fatalf("FindByProjectID: %v", err)
+	}
+	if registered != nil {
+		t.Errorf("a restore whose database refused the filed credentials left a project: %+v", registered)
+	}
+	// The registration's own compensations must have run too.
+	if _, err := vault.Get(vaultCredentialPath(target, roleApp)); err == nil {
+		t.Error("credentials for the abandoned target are still filed in vault")
+	}
+	// And the container it created must be gone.
+	if out, err := exec.CommandContext(ctx, "docker", "inspect",
+		"excalibase-"+target+"-postgres").CombinedOutput(); err == nil {
+		t.Errorf("the restored container was not removed: %s", strings.TrimSpace(string(out)))
+	}
 }
