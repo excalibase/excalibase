@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -61,8 +62,13 @@ func getVaultSecret(t *testing.T, h *VaultHandler, path string) *httptest.Respon
 	r := chi.NewRouter()
 	r.Get("/api/vault/secrets/*", h.GetSecret)
 	req := httptest.NewRequest(http.MethodGet, "/api/vault/secrets/"+path, nil)
+	// Production mounts this behind RequireAuth; a platform operator reaches
+	// every tenant, which leaves the servable-project gate as the only thing
+	// these cases turn on.
+	ctx := auth.SetUser(req.Context(), &domain.User{ID: "op", Role: "platform_operator", Active: true})
+	ctx = auth.SetToken(ctx, &domain.AccessToken{Scopes: auth.ScopeSession})
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, req.WithContext(ctx))
 	return w
 }
 

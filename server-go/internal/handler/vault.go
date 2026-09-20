@@ -1,28 +1,35 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 )
 
 const (
-	errVaultSealed = "vault is sealed"
+	errVaultSealed    = "vault is sealed"
+	errSecretNotFound = "secret not found"
 )
-
 
 type VaultHandler struct {
 	v *vault.Vault
 	// instances gates secrets filed under a project. Optional: without it
 	// project secrets are served as before, which is why main.go wires it.
 	instances storage.InstanceStore
+	// orgs resolves a human caller's membership of the project a secret path
+	// names. main.go wires it; a handler built without it refuses every
+	// project secret to a caller who is not a platform operator.
+	orgs storage.OrgStore
 }
 
 func NewVaultHandler(v *vault.Vault) *VaultHandler {
@@ -32,6 +39,10 @@ func NewVaultHandler(v *vault.Vault) *VaultHandler {
 // SetInstanceStore wires the project lookup the secret route consults before
 // handing out a project's credentials.
 func (h *VaultHandler) SetInstanceStore(s storage.InstanceStore) { h.instances = s }
+
+// SetOrgStore wires the membership lookup the project binding on secret reads
+// consults.
+func (h *VaultHandler) SetOrgStore(s storage.OrgStore) { h.orgs = s }
 
 // vaultProjectPrefix is the path every project's secrets are filed under.
 const vaultProjectPrefix = "projects/"
@@ -69,14 +80,61 @@ func (h *VaultHandler) refuseSecretOfUnservableProject(w http.ResponseWriter, pa
 	}
 	inst, err := h.instances.FindByProjectID(projectID)
 	if err != nil {
-		httpError(w, "secret not found", http.StatusNotFound)
+		httpError(w, errSecretNotFound, http.StatusNotFound)
 		return true
 	}
 	if inst == nil || domain.IsNotServable(inst.Status) {
-		httpError(w, "secret not found", http.StatusNotFound)
+		httpError(w, errSecretNotFound, http.StatusNotFound)
 		return true
 	}
 	return false
+}
+
+// authorizeSecretRead binds a human caller's read to the project the secret
+// path names and records that it happened. view_credentials answers what the
+// caller's ROLE is, not which tenant they have anything to do with, so on its
+// own it let any platform reader pull every tenant's database password
+// (EXC-418). Capability tokens are untouched: the gate above the route already
+// names the one secret their service may read, and narrowing them here would
+// break the principals that fetch tenant credentials for a living.
+func (h *VaultHandler) authorizeSecretRead(w http.ResponseWriter, r *http.Request, path string) bool {
+	ctx := r.Context()
+	token := auth.GetToken(ctx)
+	if auth.IsCapabilityToken(token) {
+		return true
+	}
+	user := auth.GetUser(ctx)
+	if user == nil {
+		httpError(w, "auth required", http.StatusUnauthorized)
+		return false
+	}
+	projectID := projectIDForSecret(path)
+	if projectID != "" && !h.callerMaySeeProject(ctx, user, token, projectID) {
+		httpError(w, errSecretNotFound, http.StatusNotFound)
+		return false
+	}
+	logSecretRead(user.ID, projectID, path)
+	return true
+}
+
+// callerMaySeeProject answers whether this caller reaches projectID. A
+// platform operator reaches every tenant, but a credential narrowed to one
+// project never leaves it — the role is wide, the credential is not.
+func (h *VaultHandler) callerMaySeeProject(ctx context.Context, user *domain.User, token *domain.AccessToken, projectID string) bool {
+	if !auth.TokenBoundToProject(token, projectID) {
+		return false
+	}
+	if auth.HasPermission(user.Role, auth.PermViewAny) {
+		return true
+	}
+	return custommw.ResolveProjectAccess(ctx, user, token, projectID, h.instances, h.orgs) != nil
+}
+
+// logSecretRead records who read which secret. The value is never logged —
+// the point of the line is attribution, and a log that carries the credential
+// is a second copy of it.
+func logSecretRead(callerID, projectID, path string) {
+	log.Printf("INFO: vault.secret.read caller=%s project=%s path=%s", callerID, projectID, path)
 }
 
 func (h *VaultHandler) Routes(r chi.Router) {
@@ -247,6 +305,9 @@ func (h *VaultHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 
 func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 	path := extractSecretPath(r)
+	if !h.authorizeSecretRead(w, r, path) {
+		return
+	}
 	if h.refuseSecretOfUnservableProject(w, path) {
 		return
 	}
@@ -257,7 +318,7 @@ func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, vault.ErrNotFound) {
-			httpError(w, "secret not found", http.StatusNotFound)
+			httpError(w, errSecretNotFound, http.StatusNotFound)
 			return
 		}
 		httpError(w, safeError(err), http.StatusInternalServerError)
