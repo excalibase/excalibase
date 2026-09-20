@@ -52,6 +52,20 @@ const (
 	// Secret is capped at 1 MiB, and the whole set has to fit inside one
 	// with room to spare.
 	MaxTotalEnvBytes = 64 * 1024
+	// ResolvedPointerWeight is what one reference or secret costs against
+	// MaxTotalEnvBytes. A pointer weighs a few dozen bytes in the app row and
+	// a whole value in the object the renderer builds, so charging it what it
+	// stores would let a hundred pointers — a hundred resolved values — past
+	// a cap that exists to keep the rendered object inside its own 1 MiB
+	// limit. Charging each one 4 KiB bounds the rendered set at roughly
+	// 64 KiB of literals plus 16 resolved values.
+	ResolvedPointerWeight = 4 * 1024
+	// envVarFramingBytes is the per-variable overhead the rendered object
+	// carries beyond the name and the value: the key framing and the kind.
+	envVarFramingBytes = 64
+	// MaxSecretPathLength caps a vault path. A real path is a handful of
+	// short segments; anything longer is a mistake or an attempt.
+	MaxSecretPathLength = 256
 	// MaxImageRefLength caps the stored reference.
 	MaxImageRefLength = 512
 	// MaxHealthCheckPathLength caps the probe path.
@@ -254,6 +268,11 @@ var (
 	// validSourceName — the name of a source within the project (a database
 	// name), as the platform recorded it.
 	validSourceName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	// validSecretPath — a vault path: plain path segments only. Percent signs
+	// are excluded deliberately: "..%2f.." is one segment to a splitter and
+	// two levels up to anything that decodes it, and the vault client builds
+	// a URL out of these segments.
+	validSecretPath = regexp.MustCompile(`^[A-Za-z0-9_./~@+-]+$`)
 	// validSecretKey — a field name inside a vault secret.
 	validSecretKey = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 	// validHealthPath — an absolute path with no query, fragment or space.
@@ -503,19 +522,17 @@ func validateVarPayload(projectID string, v EnvVar) error {
 	}
 }
 
-// envVarBytes is what one variable costs against the total cap: the name plus
-// whatever names its value.
+// envVarBytes is what one variable costs against the total cap: the name, the
+// framing around it, and what its value will weigh once resolved. A literal is
+// already its own value; a reference or a secret is charged the weight its
+// resolved value is expected to have, not the handful of bytes the pointer
+// occupies in the row.
 func envVarBytes(v EnvVar) int {
-	size := len(v.Name)
-	switch {
-	case v.Value != nil:
-		size += len(*v.Value)
-	case v.Reference != nil:
-		size += len(v.Reference.SourceKind) + len(v.Reference.SourceName) + len(v.Reference.Variable)
-	case v.Secret != nil:
-		size += len(v.Secret.Path) + len(v.Secret.Key)
+	size := len(v.Name) + len(v.Kind) + envVarFramingBytes
+	if v.Value != nil {
+		return size + len(*v.Value)
 	}
-	return size
+	return size + ResolvedPointerWeight
 }
 
 // validateReferenceTarget checks a reference's shape: a known source kind, a
@@ -548,6 +565,14 @@ var ErrUnresolvedReference = errors.New("unresolved reference")
 // connects to the source, reads it, or resolves an address from it.
 type SourceLookup interface {
 	HasSource(projectID string, kind SourceKind, name string) (bool, error)
+}
+
+// ProjectFacts is everything an app write has to ask about the project it is
+// written to. The tier is one of them: it sizes the app and it belongs to the
+// project, so it is read here rather than accepted from the caller.
+type ProjectFacts interface {
+	SourceLookup
+	Tier(projectID string) (domain.TierType, error)
 }
 
 // ValidateReferences refuses the app unless every reference it declares names
@@ -590,6 +615,12 @@ func (a *App) Resolutions() []ResolvedReference {
 // prefix. Without the prefix check, an app could name another tenant's secret
 // and have the deploy read it on its behalf.
 func validateSecretRef(projectID string, ref SecretRef) error {
+	if len(ref.Path) >= MaxSecretPathLength {
+		return fmt.Errorf("secret path must be shorter than %d characters", MaxSecretPathLength)
+	}
+	if !validSecretPath.MatchString(ref.Path) {
+		return fmt.Errorf("invalid secret path: %q", ref.Path)
+	}
 	prefix := "projects/" + projectID + "/"
 	if !strings.HasPrefix(ref.Path, prefix) {
 		return fmt.Errorf("secret path must start with %q", prefix)

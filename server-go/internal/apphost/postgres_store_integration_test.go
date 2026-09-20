@@ -210,7 +210,7 @@ func TestPGAppStore_UpdateEnvRemovesAndKeepsEmptyValues(t *testing.T) {
 
 	empty := ""
 	app.Env = []apphost.EnvVar{{Name: "KEEP", Kind: apphost.KindLiteral, Value: &empty}}
-	if err := s.Update(app); err != nil {
+	if err := s.Update(app, app.Version); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if app.Version != 2 {
@@ -289,7 +289,7 @@ func TestPGAppStore_StoresStoppedApp(t *testing.T) {
 func TestPGAppStore_UpdateMissingIsNotFound(t *testing.T) {
 	s := newPGAppStore(t)
 	app := sampleApp("proj_itest_upd", "app_absent", "absent")
-	if err := s.Update(app); !errors.Is(err, apphost.ErrAppNotFound) {
+	if err := s.Update(app, 1); !errors.Is(err, apphost.ErrAppNotFound) {
 		t.Fatalf("updating an absent app must report not found, got %v", err)
 	}
 }
@@ -352,5 +352,47 @@ func TestPGAppStore_RefusesInvalidApp(t *testing.T) {
 	app.Image = "nginx"
 	if err := s.Create(app); err == nil {
 		t.Fatal("an unparseable image reference must be refused by the store")
+	}
+}
+
+// Two developers patching the same app must not silently lose one of the
+// changes: an update states the version it read, and a write against a version
+// that has moved is refused.
+func TestPGAppStore_UpdateRefusesAStaleVersion(t *testing.T) {
+	s := newPGAppStore(t)
+	projectID := "proj_itest_stale"
+	app := sampleApp(projectID, "app_stale", "stale")
+	if err := s.Create(app); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	first, err := s.Get(projectID, "app_stale")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	second, err := s.Get(projectID, "app_stale")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	first.Image = "ghcr.io/acme/storefront:2.0.0"
+	if err := s.Update(first, first.Version); err != nil {
+		t.Fatalf("first update: %v", err)
+	}
+
+	second.Image = "ghcr.io/acme/storefront:3.0.0"
+	if err := s.Update(second, second.Version); !errors.Is(err, apphost.ErrAppVersionConflict) {
+		t.Fatalf("the second update must be refused as stale, got %v", err)
+	}
+
+	got, err := s.Get(projectID, "app_stale")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Image != "ghcr.io/acme/storefront:2.0.0" {
+		t.Errorf("the refused write must not have landed, got %q", got.Image)
+	}
+	if got.Version != 2 {
+		t.Errorf("version: got %d want 2", got.Version)
 	}
 }

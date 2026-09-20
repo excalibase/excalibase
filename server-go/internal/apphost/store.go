@@ -15,6 +15,10 @@ var (
 	// ErrAppNameTaken is returned when the project already holds an app of
 	// that name. Names are unique per project only.
 	ErrAppNameTaken = errors.New("app name already used in this project")
+	// ErrAppVersionConflict is returned when an update states a version the
+	// stored app has moved past. Two developers editing the same app then
+	// find out, instead of one of the two changes disappearing.
+	ErrAppVersionConflict = errors.New("app was changed by someone else")
 )
 
 // Store persists apps. Every method is scoped by project id: an app is only
@@ -28,9 +32,11 @@ type Store interface {
 	Get(projectID, id string) (*App, error)
 	// List returns the project's apps (empty slice, not nil, when none).
 	List(projectID string) ([]*App, error)
-	// Update replaces the stored record and bumps its version, reporting
-	// ErrAppNotFound when the project holds no such app.
-	Update(app *App) error
+	// Update replaces the stored record and bumps its version. expectedVersion
+	// is the version the caller read: the write applies only while the stored
+	// row still holds it, and otherwise reports ErrAppVersionConflict without
+	// writing. Reports ErrAppNotFound when the project holds no such app.
+	Update(app *App, expectedVersion int) error
 	// Delete removes the app, reporting ErrAppNotFound when absent.
 	Delete(projectID, id string) error
 }

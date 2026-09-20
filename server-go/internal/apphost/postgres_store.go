@@ -148,10 +148,15 @@ func (s *PostgresAppStore) List(projectID string) ([]*App, error) {
 	return out, rows.Err()
 }
 
-// Update replaces the stored record. The version and created_at the caller
-// sends are ignored: both are read back from the row inside the transaction,
-// so a stale copy of the record cannot rewrite the app's history.
-func (s *PostgresAppStore) Update(app *App) error {
+// Update replaces the stored record, but only while the row still holds the
+// version the caller read.
+//
+// The version is compared inside the transaction, under the row lock, so the
+// comparison and the write cannot be separated: two developers who read the
+// same app and both patch it do not silently lose one of the changes — the
+// second is told the app moved. created_at is read back from the row for the
+// same reason, so a stale copy cannot rewrite the app's history.
+func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 	if err := app.Validate(); err != nil {
 		return err
 	}
@@ -173,6 +178,9 @@ func (s *PostgresAppStore) Update(app *App) error {
 		return fmt.Errorf("read app for update: %w", err)
 	}
 
+	if version != expectedVersion {
+		return fmt.Errorf("%w: it is at version %d, not %d", ErrAppVersionConflict, version, expectedVersion)
+	}
 	app.Version = version + 1
 	app.CreatedAt = createdAt
 	app.UpdatedAt = time.Now().UTC()
@@ -194,7 +202,14 @@ WHERE project_id = $1 AND id = $2`
 	return tx.Commit()
 }
 
-// Delete removes the app and frees the project's app slot.
+// Delete removes the app row outright and frees the project's app slot.
+//
+// A hard delete is correct while nothing renders a workload: an app record is
+// the only thing that exists for it, so there is no container, no namespace
+// and no address to tear down, and a tombstone would track a teardown that
+// does not happen. The deploy lifecycle (EXC-386) is what introduces a
+// workload worth waiting for, and the deleting status and soft delete belong
+// with it — inventing them here would be a state machine no code could move.
 func (s *PostgresAppStore) Delete(projectID, id string) error {
 	if err := ValidateProjectID(projectID); err != nil {
 		return err

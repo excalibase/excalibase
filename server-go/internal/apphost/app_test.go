@@ -496,3 +496,64 @@ func TestValidateRefusesUnknownStatus(t *testing.T) {
 		t.Error("a status outside the vocabulary must be refused")
 	}
 }
+
+// A vault path is bounded in charset and length, not only in prefix. A path
+// that percent-encodes its traversal is one segment to a naive split and two
+// levels up to anything that decodes it — and the vault's own HTTP client
+// builds a URL out of these segments.
+func TestValidateSecretPathCharsetAndLength(t *testing.T) {
+	refused := []string{
+		"projects/proj_abc123/..%2f..%2fproj_other%2fcredentials",
+		"projects/proj_abc123/secrets%2e%2e",
+		"projects/proj_abc123/secrets\nX-Injected: 1",
+		"projects/proj_abc123/secrets\rmore",
+		"projects/proj_abc123/secrets\x00",
+		"projects/proj_abc123/secrets?x=1",
+		"projects/proj_abc123/secrets#f",
+		"projects/proj_abc123/sec rets",
+		"projects/proj_abc123/" + strings.Repeat("s", apphost.MaxSecretPathLength),
+	}
+	for _, path := range refused {
+		app := validApp()
+		app.Env = []apphost.EnvVar{{Name: "TOKEN", Kind: apphost.KindSecret,
+			Secret: &apphost.SecretRef{Path: path, Key: "token"}}}
+		if err := app.Validate(); err == nil {
+			t.Errorf("secret path %q must be refused", path)
+		}
+	}
+
+	app := validApp()
+	app.Env = []apphost.EnvVar{{Name: "TOKEN", Kind: apphost.KindSecret,
+		Secret: &apphost.SecretRef{Path: "projects/proj_abc123/apps/app_01/secrets", Key: "token"}}}
+	if err := app.Validate(); err != nil {
+		t.Errorf("an ordinary vault path must be accepted: %v", err)
+	}
+}
+
+// A secret or a reference weighs almost nothing in the row and a full value in
+// the rendered Secret. The cap charges each one what its resolved value is
+// expected to weigh, so a hundred pointers cannot slip past a byte count that
+// exists to keep the rendered object inside its own limit.
+func TestPointerVariablesAreChargedTheirResolvedWeight(t *testing.T) {
+	pointers := func(count int) []apphost.EnvVar {
+		out := make([]apphost.EnvVar, 0, count)
+		for i := 0; i < count; i++ {
+			out = append(out, apphost.EnvVar{
+				Name: fmt.Sprintf("S%d", i), Kind: apphost.KindSecret,
+				Secret: &apphost.SecretRef{Path: "projects/proj_abc123/apps/app_01/secrets", Key: "k"},
+			})
+		}
+		return out
+	}
+	fits := apphost.MaxTotalEnvBytes / apphost.ResolvedPointerWeight
+
+	app := validApp()
+	app.Env = pointers(fits - 1)
+	if err := app.Validate(); err != nil {
+		t.Fatalf("%d secret references must fit: %v", fits-1, err)
+	}
+	app.Env = pointers(fits + 1)
+	if err := app.Validate(); err == nil {
+		t.Fatalf("%d secret references must be refused: each one renders a value", fits+1)
+	}
+}
