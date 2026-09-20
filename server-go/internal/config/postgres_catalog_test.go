@@ -183,3 +183,98 @@ majors:
 		t.Fatal("claiming DocumentDB support with no pinned version must be fatal")
 	}
 }
+
+func TestPostgresCatalogEntriesIsACopy(t *testing.T) {
+	entries := PostgresCatalogEntries()
+	if len(entries) != len(PostgresMajors()) {
+		t.Fatalf("entries: got %d, want %d", len(entries), len(PostgresMajors()))
+	}
+	entries[0].Major = "mutated"
+	if PostgresCatalogEntries()[0].Major == "mutated" {
+		t.Fatal("PostgresCatalogEntries handed out the backing array")
+	}
+}
+
+func TestSupportedPostgresMajorsMessageListsEveryMajor(t *testing.T) {
+	message := SupportedPostgresMajorsMessage()
+	for _, major := range PostgresMajors() {
+		if !strings.Contains(message, major) {
+			t.Errorf("message %q omits major %s", message, major)
+		}
+	}
+}
+
+func TestDocumentDBMajorsMessageListsOnlyCapableMajors(t *testing.T) {
+	majors := DocumentDBMajors()
+	if len(majors) == 0 {
+		t.Fatal("no major offers DocumentDB")
+	}
+	for _, major := range majors {
+		if !DocumentDBSupported(major) {
+			t.Errorf("major %s listed but not supported", major)
+		}
+	}
+	message := DocumentDBMajorsMessage()
+	for _, major := range majors {
+		if !strings.Contains(message, major) {
+			t.Errorf("message %q omits major %s", message, major)
+		}
+	}
+	if strings.Contains(message, "14") || strings.Contains(message, "15") {
+		t.Errorf("message %q lists a major that cannot offer DocumentDB", message)
+	}
+}
+
+func TestDockerPostgresImageUsesTheUpstreamImageForEveryMajor(t *testing.T) {
+	for _, major := range PostgresMajors() {
+		image, err := DockerPostgresImage(major)
+		if err != nil {
+			t.Errorf("major %s: %v", major, err)
+			continue
+		}
+		if image != "postgres:"+major {
+			t.Errorf("major %s: got %q", major, image)
+		}
+	}
+}
+
+func TestDockerPostgresImageRefusesAnUnsupportedMajor(t *testing.T) {
+	for _, major := range []string{"", "13", "latest"} {
+		if _, err := DockerPostgresImage(major); err == nil {
+			t.Errorf("major %q: expected a refusal", major)
+		}
+	}
+}
+
+func TestPublishPostgresCatalogForTestPublishesAndRestores(t *testing.T) {
+	before := PostgresCatalogEntries()
+
+	restore := PublishPostgresCatalogForTest()
+	for _, entry := range PostgresCatalogEntries() {
+		image, err := PostgresImage(entry.Major)
+		if err != nil {
+			t.Errorf("major %s: %v", entry.Major, err)
+			continue
+		}
+		if !digestRef.MatchString(image) {
+			t.Errorf("major %s: published image %q is not digest-pinned", entry.Major, image)
+		}
+	}
+	restore()
+
+	after := PostgresCatalogEntries()
+	for i := range before {
+		if before[i] != after[i] {
+			t.Fatalf("catalogue not restored at %d: %+v vs %+v", i, before[i], after[i])
+		}
+	}
+}
+
+func TestMustAtoiMajorRejectsANonNumericMajor(t *testing.T) {
+	if got := mustAtoiMajor("17"); got != 17 {
+		t.Errorf("got %d, want 17", got)
+	}
+	if got := mustAtoiMajor("seventeen"); got != 0 {
+		t.Errorf("got %d, want 0", got)
+	}
+}

@@ -124,3 +124,40 @@ func TestRenderClusterImageCatalogRecordsDocumentDBMajors(t *testing.T) {
 		t.Errorf("%s: got %v", documentDBVersionAnnotation, annotations[documentDBVersionAnnotation])
 	}
 }
+
+func TestBuildMatrixCoversEveryMajorAndCarriesTheDocumentDBVersion(t *testing.T) {
+	raw, err := RenderBuildMatrix()
+	if err != nil {
+		t.Fatalf("RenderBuildMatrix: %v", err)
+	}
+	var rows []BuildMatrixEntry
+	if err := yaml.Unmarshal(raw, &rows); err != nil {
+		t.Fatalf("matrix is not valid JSON: %v", err)
+	}
+
+	entries := PostgresCatalogEntries()
+	if len(rows) != len(entries) {
+		t.Fatalf("matrix has %d rows, catalogue has %d majors", len(rows), len(entries))
+	}
+	for i, entry := range entries {
+		if rows[i].Major != entry.Major {
+			t.Errorf("row %d: major %q, want %q", i, rows[i].Major, entry.Major)
+		}
+		if rows[i].Base != entry.BaseImage {
+			t.Errorf("major %s: base %q, want %q", entry.Major, rows[i].Base, entry.BaseImage)
+		}
+		want := ""
+		if entry.DocumentDB {
+			want = DocumentDBVersion()
+		}
+		if rows[i].DocumentDB != want {
+			t.Errorf("major %s: documentdb %q, want %q", entry.Major, rows[i].DocumentDB, want)
+		}
+	}
+}
+
+func TestFormatMajorRendersTheBareNumber(t *testing.T) {
+	if got := formatMajor(17); got != "17" {
+		t.Errorf("got %q, want %q", got, "17")
+	}
+}

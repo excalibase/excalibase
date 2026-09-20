@@ -1,10 +1,13 @@
-// Command pgcatalog renders the CNPG ClusterImageCatalog for the supported
-// PostgreSQL majors onto stdout. The publish workflow runs it after pushing
-// the images so the Kubernetes object is always derived from the same
-// catalogue provisioning validates against.
+// Command pgcatalog renders artefacts derived from the PostgreSQL image
+// catalogue, so the build matrix and the Kubernetes object are both generated
+// from the same file provisioning validates against.
+//
+//	pgcatalog            renders the CNPG ClusterImageCatalog
+//	pgcatalog -matrix    renders the build matrix as JSON
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -12,7 +15,10 @@ import (
 )
 
 func main() {
-	out, err := config.RenderClusterImageCatalog()
+	matrix := flag.Bool("matrix", false, "render the image build matrix as JSON")
+	flag.Parse()
+
+	out, err := render(*matrix)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pgcatalog: %v\n", err)
 		os.Exit(1)
@@ -21,4 +27,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "pgcatalog: write: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func render(matrix bool) ([]byte, error) {
+	if matrix {
+		return config.RenderBuildMatrix()
+	}
+	return config.RenderClusterImageCatalog()
 }
