@@ -1,0 +1,41 @@
+# The catalogue of PostgreSQL majors this platform will provision.
+#
+# This file is the source of truth. Three things read it:
+#   * provisioning, which refuses any request naming a major that is not here;
+#   * the image build workflow (.github/workflows/postgres-image-publish.yml),
+#     which builds one image per entry from its baseImage;
+#   * k8s/postgres-image-catalog.yaml, the CNPG ClusterImageCatalog, which must
+#     agree entry-for-entry — TestClusterImageCatalogMatchesCatalog fails if it
+#     drifts.
+#
+# baseImage and image are both pinned by digest. A floating tag would let the
+# bits under a provisioned cluster change without anything in the platform
+# recording that it happened.
+#
+# An entry with no `image` has not been published yet. That is a real state,
+# not a default: provisioning refuses the major with an explicit error rather
+# than falling back to a tag or to another major. Publishing fills it in — the
+# workflow prints the digest it pushed and fails if it is not the one recorded
+# here, so the file cannot quietly fall behind the registry.
+#
+# documentdb records whether the image for that major carries the DocumentDB
+# extension. Upstream ships the Debian 12 packages for 16, 17 and 18 only, so
+# 14 and 15 cannot offer it and a request asking for it there is refused at the
+# API rather than failing at install time.
+documentDBVersion: "0.114-0"
+majors:
+  - major: "14"
+    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:5e16b178b239f3e6854ae86ce9190b151c0aa30f7f99014659ba24e1a6885084
+    documentdb: false
+  - major: "15"
+    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:6cca69b026405a5cc8593b6bf2a095010fad51ba338a368a3b5305c1c2c77cf6
+    documentdb: false
+  - major: "16"
+    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:da9f3d23790ccd052fb4f9620ab0c71eb1c3896c3a1189381c47e8b5f681768d
+    documentdb: true
+  - major: "17"
+    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:9f9286957d1030e0b5964804b557c635603a296d26c6212372f9d416ebb6f168
+    documentdb: true
+  - major: "18"
+    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:045f843b885679b7f1265c2961f3fa66c2d374e9ebe1dfcc4aa7fb3b8e58bd1f
+    documentdb: true

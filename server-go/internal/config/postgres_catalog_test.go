@@ -1,0 +1,185 @@
+package config
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestPostgresMajorsAreTheFiveSupportedOnes(t *testing.T) {
+	got := PostgresMajors()
+	want := []string{"14", "15", "16", "17", "18"}
+	if len(got) != len(want) {
+		t.Fatalf("majors: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("majors: got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestPostgresMajorsIsACopy(t *testing.T) {
+	first := PostgresMajors()
+	first[0] = "mutated"
+	if PostgresMajors()[0] != "14" {
+		t.Fatal("PostgresMajors handed out the backing array")
+	}
+}
+
+func TestLookupPostgresMajorRejectsUnknown(t *testing.T) {
+	for _, major := range []string{"13", "19", "17.2", "", "  ", "latest"} {
+		if _, ok := LookupPostgresMajor(major); ok {
+			t.Errorf("LookupPostgresMajor(%q) accepted an unsupported major", major)
+		}
+	}
+}
+
+func TestLookupPostgresMajorTrimsWhitespace(t *testing.T) {
+	entry, ok := LookupPostgresMajor(" 17 ")
+	if !ok {
+		t.Fatal("LookupPostgresMajor did not trim surrounding whitespace")
+	}
+	if entry.Major != "17" {
+		t.Fatalf("Major: got %q, want %q", entry.Major, "17")
+	}
+}
+
+func TestDocumentDBSupportedMatchesUpstreamPackaging(t *testing.T) {
+	// Upstream publishes the Debian 12 DocumentDB packages for 16, 17 and 18
+	// only. 14 and 15 must report false so a project asking for DocumentDB
+	// there is refused before anything is installed.
+	tests := map[string]bool{"14": false, "15": false, "16": true, "17": true, "18": true}
+	for major, want := range tests {
+		if got := DocumentDBSupported(major); got != want {
+			t.Errorf("DocumentDBSupported(%q): got %v, want %v", major, got, want)
+		}
+	}
+}
+
+func TestDocumentDBSupportedIsFalseForUnknownMajor(t *testing.T) {
+	if DocumentDBSupported("13") {
+		t.Fatal("an unsupported major must not report DocumentDB support")
+	}
+}
+
+func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
+	for _, entry := range postgresCatalog.Majors {
+		if !strings.Contains(entry.BaseImage, "@sha256:") {
+			t.Errorf("major %s: baseImage %q is not pinned by digest", entry.Major, entry.BaseImage)
+		}
+	}
+}
+
+func TestPostgresImageRefusesAnUnsupportedMajor(t *testing.T) {
+	_, err := PostgresImage("13")
+	if err == nil {
+		t.Fatal("PostgresImage accepted an unsupported major")
+	}
+	if !strings.Contains(err.Error(), "13") {
+		t.Errorf("error should name the rejected major, got %q", err)
+	}
+}
+
+// An unpublished major must fail loudly rather than resolving to a tag or to
+// some other major's image.
+func TestPostgresImageRefusesAnUnpublishedMajor(t *testing.T) {
+	entry, ok := LookupPostgresMajor("17")
+	if !ok {
+		t.Fatal("17 missing from the catalogue")
+	}
+	if entry.Image != "" {
+		t.Skip("17 has a published image; nothing to assert about the unpublished path")
+	}
+	if _, err := PostgresImage("17"); err == nil {
+		t.Fatal("PostgresImage returned an image for a major with no published digest")
+	}
+}
+
+func TestParseCatalogRejectsADuplicateMajor(t *testing.T) {
+	_, err := parsePostgresCatalog([]byte(`
+majors:
+  - major: "17"
+    baseImage: ghcr.io/x/y@sha256:aa
+  - major: "17"
+    baseImage: ghcr.io/x/y@sha256:bb
+`))
+	if err == nil {
+		t.Fatal("a duplicate major must be fatal")
+	}
+}
+
+func TestParseCatalogRejectsAFloatingBaseImage(t *testing.T) {
+	_, err := parsePostgresCatalog([]byte(`
+majors:
+  - major: "17"
+    baseImage: ghcr.io/cloudnative-pg/postgresql:17
+`))
+	if err == nil {
+		t.Fatal("a tag-referenced baseImage must be fatal")
+	}
+}
+
+func TestParseCatalogRejectsAFloatingImage(t *testing.T) {
+	_, err := parsePostgresCatalog([]byte(`
+majors:
+  - major: "17"
+    baseImage: ghcr.io/x/y@sha256:aa
+    image: ghcr.io/excalibase/postgresql:17
+`))
+	if err == nil {
+		t.Fatal("a tag-referenced image must be fatal")
+	}
+}
+
+func TestParseCatalogRejectsAnEmptyMajor(t *testing.T) {
+	_, err := parsePostgresCatalog([]byte(`
+majors:
+  - major: ""
+    baseImage: ghcr.io/x/y@sha256:aa
+`))
+	if err == nil {
+		t.Fatal("an empty major must be fatal")
+	}
+}
+
+func TestParseCatalogRejectsAnEmptyCatalog(t *testing.T) {
+	if _, err := parsePostgresCatalog([]byte("majors: []\n")); err == nil {
+		t.Fatal("a catalogue with no majors must be fatal")
+	}
+}
+
+func TestParseCatalogRejectsUnparseableYAML(t *testing.T) {
+	if _, err := parsePostgresCatalog([]byte("majors: [oops\n")); err == nil {
+		t.Fatal("unparseable YAML must be fatal")
+	}
+}
+
+func TestParseCatalogRejectsAnUnknownField(t *testing.T) {
+	_, err := parsePostgresCatalog([]byte(`
+majors:
+  - major: "17"
+    baseImage: ghcr.io/x/y@sha256:aa
+    dokumentdb: true
+`))
+	if err == nil {
+		t.Fatal("a misspelled field must be fatal, not silently ignored")
+	}
+}
+
+func TestDocumentDBVersionIsPinned(t *testing.T) {
+	if DocumentDBVersion() == "" {
+		t.Fatal("documentDBVersion must be pinned")
+	}
+}
+
+func TestParseCatalogRejectsAMissingDocumentDBVersionWhenAMajorNeedsIt(t *testing.T) {
+	_, err := parsePostgresCatalog([]byte(`
+majors:
+  - major: "17"
+    baseImage: ghcr.io/x/y@sha256:aa
+    documentdb: true
+`))
+	if err == nil {
+		t.Fatal("claiming DocumentDB support with no pinned version must be fatal")
+	}
+}
