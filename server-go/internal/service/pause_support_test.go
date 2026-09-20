@@ -22,6 +22,7 @@ func backupSupportService(t *testing.T, storageSource BackupStorageSource) (*Bac
 	if err := store.Create(&domain.DatabaseInstance{
 		ProjectID: "bk-p", OrgID: "org", Namespace: "org-bk-p",
 		DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
+		Tier: domain.Standard, BackupEnabled: boolPtr(true),
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
@@ -253,4 +254,111 @@ func TestRestartReplicationFailsWithoutWatcherCredentials(t *testing.T) {
 	if err := h.svc.RestartReplication(context.Background(), restoredInstance()); err == nil {
 		t.Fatal("a watcher cannot be started without its replication role")
 	}
+}
+
+// A project on a tier without backups (FREE: backupEnabled false, or a row
+// that never had it set) has no backup to take. Triggering one anyway files
+// a Backup CR that fails asynchronously, long after the pause believed it
+// succeeded — so the question has to be asked per project, not only of the
+// platform's object store (EXC-363).
+func TestBackupsConfiguredIsFalseForAProjectWithBackupsOff(t *testing.T) {
+	svc, store := backupSupportService(t, StaticBackupStorage(r2Storage()))
+
+	for name, enabled := range map[string]*bool{
+		"never set":      nil,
+		"explicitly off": boolPtr(false),
+	} {
+		t.Run(name, func(t *testing.T) {
+			inst, err := store.FindByProjectID("bk-p")
+			if err != nil || inst == nil {
+				t.Fatalf("load project: %v", err)
+			}
+			inst.BackupEnabled = enabled
+			if err := store.Update(inst); err != nil {
+				t.Fatalf("update project: %v", err)
+			}
+
+			got, err := svc.BackupsConfigured("bk-p")
+			if err != nil {
+				t.Fatalf("BackupsConfigured: %v", err)
+			}
+			if got {
+				t.Error("a project with backups off has nothing to back up, however the platform store is wired")
+			}
+		})
+	}
+}
+
+func TestBackupsConfiguredIsTrueOnlyWhenBothTheProjectAndTheStoreAgree(t *testing.T) {
+	svc, store := backupSupportService(t, StaticBackupStorage(r2Storage()))
+	inst, _ := store.FindByProjectID("bk-p")
+	inst.BackupEnabled = boolPtr(true)
+	if err := store.Update(inst); err != nil {
+		t.Fatalf("update project: %v", err)
+	}
+
+	got, err := svc.BackupsConfigured("bk-p")
+	if err != nil || !got {
+		t.Errorf("an enabled project with an object store must report configured: %v %v", got, err)
+	}
+
+	bare, bareStore := backupSupportService(t, nil)
+	enabled, _ := bareStore.FindByProjectID("bk-p")
+	enabled.BackupEnabled = boolPtr(true)
+	if err := bareStore.Update(enabled); err != nil {
+		t.Fatalf("update project: %v", err)
+	}
+	got, err = bare.BackupsConfigured("bk-p")
+	if err != nil || got {
+		t.Errorf("an enabled project with nowhere to write must report unconfigured: %v %v", got, err)
+	}
+}
+
+// A FREE project pauses without a pre-pause backup rather than filing one
+// that will fail after the project is already down.
+func TestPauseOfAFreeProjectTakesNoBackup(t *testing.T) {
+	f := newObservedPause(t)
+	inst := f.reload(t)
+	inst.Tier = domain.Free
+	inst.BackupEnabled = boolPtr(false)
+	if err := f.store.Update(inst); err != nil {
+		t.Fatalf("update project: %v", err)
+	}
+	f.svc.backups = &tierAwareBackups{store: f.store, log: &f.pauser.log}
+
+	if err := f.pause(t); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	for _, call := range f.pauser.log {
+		if call == "backup" {
+			t.Fatal("a FREE project must not file a pre-pause backup")
+		}
+	}
+	if got := f.reload(t).Status; got != string(domain.StatusPaused) {
+		t.Errorf("status: got %s, want PAUSED", got)
+	}
+}
+
+// tierAwareBackups answers BackupsConfigured from the project row, the way
+// BackupService does.
+type tierAwareBackups struct {
+	store storage.InstanceStore
+	log   *[]string
+}
+
+func (b *tierAwareBackups) BackupsConfigured(projectID string) (bool, error) {
+	inst, err := b.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return false, errors.New("project not found")
+	}
+	return inst.BackupEnabled != nil && *inst.BackupEnabled, nil
+}
+
+func (b *tierAwareBackups) TriggerManualBackup(context.Context, string) (map[string]interface{}, error) {
+	*b.log = append(*b.log, "backup")
+	return map[string]interface{}{"id": "bk-1"}, nil
+}
+
+func (b *tierAwareBackups) BackupStatus(context.Context, string, string) (string, error) {
+	return backupStatusCompleted, nil
 }

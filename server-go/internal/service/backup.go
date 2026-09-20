@@ -133,12 +133,22 @@ func (s *BackupService) ListBackups(projectID string) ([]map[string]interface{},
 	return result, nil
 }
 
-// BackupsConfigured answers, for one project, whether the platform has
-// anywhere to write its backups.
+// BackupsConfigured answers, for one project, whether a backup taken now
+// would be written anywhere. Two things have to hold: the project has backups
+// turned on, and the platform has an object store to put them in.
+//
+// The per-project half matters as much as the platform half. A project on a
+// tier without backups (FREE) that is asked for one anyway gets a Backup CR
+// the engine accepts and then fails asynchronously — long after whoever asked
+// believed it had a recovery point (EXC-363). A row whose flag was never set
+// is treated as off: nothing has claimed this project has backups.
 func (s *BackupService) BackupsConfigured(projectID string) (bool, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {
 		return false, fmt.Errorf("project not found: %s", projectID)
+	}
+	if inst.BackupEnabled == nil || !*inst.BackupEnabled {
+		return false, nil
 	}
 	adapter, err := resolveAdapter(s.adapters, inst)
 	if err != nil {
