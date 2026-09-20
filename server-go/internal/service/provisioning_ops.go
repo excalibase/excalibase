@@ -414,6 +414,18 @@ func validateProvisioningRequest(req domain.ProvisioningRequest) error {
 	return nil
 }
 
+// canonicalPostgresMajor returns the catalogue's spelling of the major a
+// validated request names. What is stored has to be the catalogue's exact
+// value, not whatever the caller typed, because every later resolution — the
+// restore image above all — is an exact lookup against the catalogue.
+func canonicalPostgresMajor(version string) (string, error) {
+	entry, ok := config.LookupPostgresMajor(version)
+	if !ok {
+		return "", fmt.Errorf("postgres version %q is not supported (supported: %s)", version, config.SupportedPostgresMajorsMessage())
+	}
+	return entry.Major, nil
+}
+
 // allocateProjectID returns a fresh project id no registered project holds.
 // Every project id in the platform — provisioned or restored — comes
 // from here, so no caller can name the project it is creating.

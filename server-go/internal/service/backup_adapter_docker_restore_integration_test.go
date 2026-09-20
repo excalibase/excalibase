@@ -86,7 +86,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 		DatabaseName:    "app",
 		Username:        defaultPostgresSuperuser,
 		Password:        pgPwd,
-		PostgresVersion: "16-alpine",
+		PostgresVersion: "16",
 		DeploymentMode:  domain.ModeDocker,
 		Status:          "ACTIVE",
 	}
@@ -219,7 +219,7 @@ func TestDockerBackupAdapter_RestoreRejectedCredentialsE2E(t *testing.T) {
 		DatabaseName:    "app",
 		Username:        defaultPostgresSuperuser,
 		Password:        pgPwd,
-		PostgresVersion: "16-alpine",
+		PostgresVersion: "16",
 		DeploymentMode:  domain.ModeDocker,
 		Status:          "ACTIVE",
 	}
