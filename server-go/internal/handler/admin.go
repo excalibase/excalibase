@@ -71,7 +71,11 @@ func NewAdminHandler(provSvc *service.ProvisioningService, store storage.Instanc
 func (h *AdminHandler) Routes(r chi.Router) {
 	r.With(auth.RequirePermission(auth.PermViewAny)).Get("/projects", h.ListAllProjects)
 	r.With(auth.RequirePermission(auth.PermViewAny)).Get("/logs", h.QueryLogs)
-	r.With(auth.RequirePermission(auth.PermDelete)).Delete("/projects/{projectId}", h.ForceDropProject)
+	// A force drop destroys a tenant this route never binds the caller to, so
+	// it refuses a narrowed PAT for the same reason the vault writes do: a
+	// credential scoped to one project must not reach platform-wide authority.
+	r.With(auth.RequirePermission(auth.PermDelete), auth.RequireUnrestrictedCredential).
+		Delete("/projects/{projectId}", h.ForceDropProject)
 	r.With(auth.RequirePermission(auth.PermManageOrgs)).Delete("/orgs/{orgId}", h.RevokeOrg)
 }
 
