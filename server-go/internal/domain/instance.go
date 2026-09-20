@@ -62,8 +62,14 @@ type DatabaseInstance struct {
 	PoolerHost         string `json:"poolerHost,omitempty"`
 	SSLMode            string `json:"sslMode,omitempty"`
 	WebhookURL         string `json:"webhookUrl,omitempty"`
-	PostgresVersion    string `json:"postgresVersion,omitempty"`
-	Tags               string `json:"tags,omitempty"` // JSON string
+	// PostgresVersion is the bare major the project's data lives on, in the
+	// catalogue's spelling ("16"), on every deployment mode. It is never an
+	// image reference: both paths derive their image from it
+	// (config.PostgresImage for CNPG, config.DockerPostgresImage for docker),
+	// so one recorded major cannot mean two different things. Restore reads it
+	// back to recover into the same major the backup was taken from.
+	PostgresVersion string `json:"postgresVersion,omitempty"`
+	Tags            string `json:"tags,omitempty"` // JSON string
 
 	// Status
 	Status        string            `json:"status"`

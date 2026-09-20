@@ -15,7 +15,8 @@ import (
 var ErrGrantNotFound = errors.New("table grant not found")
 
 // TableGrantStore wraps Store to implement storage.TableGrantStore over
-// table_grants + project_exposure_settings (EXC-370).
+// table_grants (EXC-370). Whether exposure is enforced is not stored here:
+// it is on for every project, switched only installation-wide (EXC-400).
 type TableGrantStore struct{ s *Store }
 
 func NewTableGrants(s *Store) *TableGrantStore { return &TableGrantStore{s: s} }
@@ -92,36 +93,6 @@ func (g *TableGrantStore) DeleteGrant(ctx context.Context, projectID, id string)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrGrantNotFound
-	}
-	return nil
-}
-
-// IsExposureEnforced reads the project's opt-in flag. No row means the project
-// never configured exposure, which must read as false so projects created
-// before EXC-370 keep their surface after an upgrade.
-func (g *TableGrantStore) IsExposureEnforced(ctx context.Context, projectID string) (bool, error) {
-	var enforced bool
-	err := g.s.db.QueryRowContext(ctx,
-		`SELECT enforced FROM project_exposure_settings WHERE project_id = $1`,
-		projectID).Scan(&enforced)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read exposure setting: %w", err)
-	}
-	return enforced, nil
-}
-
-func (g *TableGrantStore) SetExposureEnforced(ctx context.Context, projectID string, enforced bool) error {
-	_, err := g.s.db.ExecContext(ctx, `
-		INSERT INTO project_exposure_settings (project_id, enforced, updated_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (project_id) DO UPDATE SET
-			enforced   = EXCLUDED.enforced,
-			updated_at = NOW()`, projectID, enforced)
-	if err != nil {
-		return fmt.Errorf("write exposure setting: %w", err)
 	}
 	return nil
 }

@@ -352,6 +352,13 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, fmt.Errorf("unsupported database type: %s", req.DBType)
 	}
 
+	// Recorded, not recomputed later: the image a project runs is chosen from
+	// this major once, and restore has to land the data back on the same one.
+	major, err := canonicalPostgresMajor(req.PostgresVersion)
+	if err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+
 	now := &domain.FlexTime{Time: time.Now()}
 	namespace := fmt.Sprintf("%s-%s", req.OrgID, projectRef)
 	mode := s.defaultDeploymentMode
@@ -359,17 +366,18 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		mode = domain.ModeK8s
 	}
 	inst := &domain.DatabaseInstance{
-		ProjectID:      projectRef,
-		ProjectName:    req.ProjectName,
-		OrgID:          req.OrgID,
-		OwnerID:        req.OwnerID,
-		DBType:         req.DBType,
-		Tier:           req.Tier,
-		DeploymentMode: mode,
-		Namespace:      namespace,
-		Status:         "PROVISIONING",
-		CurrentStage:   domain.StageValidating,
-		CreatedAt:      now,
+		ProjectID:       projectRef,
+		ProjectName:     req.ProjectName,
+		OrgID:           req.OrgID,
+		OwnerID:         req.OwnerID,
+		DBType:          req.DBType,
+		Tier:            req.Tier,
+		DeploymentMode:  mode,
+		Namespace:       namespace,
+		PostgresVersion: major,
+		Status:          "PROVISIONING",
+		CurrentStage:    domain.StageValidating,
+		CreatedAt:       now,
 	}
 
 	if req.Backup != nil {

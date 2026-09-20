@@ -62,9 +62,9 @@ type RestoreOrchestratorConfig struct {
 	// Instances is where a swept job's target project is told its restore
 	// was interrupted. Optional: without it the job is still failed.
 	Instances storage.InstanceStore
-	Heartbeat  time.Duration
-	Stale      time.Duration
-	Now        func() time.Time
+	Heartbeat time.Duration
+	Stale     time.Duration
+	Now       func() time.Time
 	// After is the orchestrator's only sleep, used to space retries of a
 	// job write the store could not accept. Injected so tests never wait.
 	After func(time.Duration) <-chan time.Time

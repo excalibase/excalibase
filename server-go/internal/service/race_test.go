@@ -38,10 +38,11 @@ func TestConcurrentProvisionSameDisplayName(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-				ProjectName: "race-db",
-				OrgID:       "org1",
-				DBType:      domain.PostgreSQL,
-				Tier:        domain.Enterprise,
+				PostgresVersion: "17",
+				ProjectName:     "race-db",
+				OrgID:           "org1",
+				DBType:          domain.PostgreSQL,
+				Tier:            domain.Enterprise,
 			})
 			if err != nil {
 				results <- "error:" + err.Error()

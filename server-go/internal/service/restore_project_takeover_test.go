@@ -125,7 +125,8 @@ func TestProvisionCannotNameAnExistingProject(t *testing.T) {
 	}
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: victim.ProjectID, OrgID: "org-attacker",
+		PostgresVersion: "17",
+		ProjectName:     victim.ProjectID, OrgID: "org-attacker",
 		DBType: domain.PostgreSQL, Tier: domain.Free,
 	})
 	if err != nil {
@@ -233,7 +234,8 @@ func TestRestoreFromBackupRequiresAnAllocatedTargetID(t *testing.T) {
 // half-registered project.
 func TestProvisionFailsWhenTheProjectCannotBeRegistered(t *testing.T) {
 	req := domain.ProvisioningRequest{
-		ProjectName: "external", OrgID: "org-a",
+		PostgresVersion: "17",
+		ProjectName:     "external", OrgID: "org-a",
 		DBType: domain.PostgreSQL, Tier: domain.Free,
 	}
 

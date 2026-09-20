@@ -20,11 +20,11 @@ func TestCRDProducesValidYAML(t *testing.T) {
 			"shared_preload_libraries": "pg_stat_statements",
 			"pg_stat_statements.max":   "10000",
 		},
-		Tags:            map[string]string{"owner": "duke"},
-		PostgresVersion: "16",
-		DatabaseName:    "mydb",
-		MasterUsername:  "admin",
-		StorageClass:    "standard",
+		Tags:           map[string]string{"owner": "duke"},
+		ImageName:      "ghcr.io/excalibase/postgresql@sha256:abc123",
+		DatabaseName:   "mydb",
+		MasterUsername: "admin",
+		StorageClass:   "standard",
 	})
 
 	// Must serialize to valid JSON
@@ -60,7 +60,7 @@ func TestCRDProducesValidYAML(t *testing.T) {
 		"barmanObjectStore:",
 		"s3Credentials:",
 		"destinationPath: s3://postgres-backups/test-db",
-		"imageName: ghcr.io/cloudnative-pg/postgresql:16",
+		"imageName: ghcr.io/excalibase/postgresql@sha256:abc123",
 		"database: mydb",
 		"owner: admin",
 	}

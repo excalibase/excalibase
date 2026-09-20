@@ -69,7 +69,8 @@ func provisionAgainstDeletionWithProvisioner(t *testing.T, during func(*Provisio
 	svc.SetVault(newFakeVault())
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "race-db", OrgID: "org1", DBType: domain.PostgreSQL, Tier: domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "race-db", OrgID: "org1", DBType: domain.PostgreSQL, Tier: domain.Free,
 	})
 	return svc, store, resp, err, wrapped
 }

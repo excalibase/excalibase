@@ -7,10 +7,14 @@
 //
 // excalibase-graphql reads GET /table-grants/ alongside the RLS and column
 // policies it caches. The response always carries an explicit "enforced"
-// flag: an empty grants array on its own cannot distinguish a project that
-// never configured exposure (do not enforce) from one that is enforced with
-// nothing granted (deny everything), and guessing would take every existing
-// tenant offline on upgrade.
+// flag rather than letting the engine infer one from an empty array:
+// {"enforced":true,"grants":[]} means deny everything.
+//
+// Since EXC-400 that flag is true for every project. The per-project opt-in
+// is gone — it defaulted to off, provisioning never turned it on, so granting
+// a table changed nothing — and the only remaining switch is the
+// installation-wide config.AppConfig.ExposureEnforced, which this handler
+// reads at construction and no route can write.
 //
 // After any successful write the NATS publisher (injected via SetPublisher)
 // emits "policies.{projectId}.changed" — the same subject the policy writes
@@ -32,25 +36,28 @@ import (
 	"github.com/google/uuid"
 )
 
-const (
-	routeGrantID     = "/{grantId}"
-	routeEnforcement = "/enforcement"
-)
+const routeGrantID = "/{grantId}"
 
 // validGrantIdentifier matches one unquoted SQL identifier: letters, digits,
 // underscore, starting with a letter or underscore. Resources are validated
 // part-by-part against it so nothing but plain identifiers can be stored.
 var validGrantIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
 
-// TableGrantHandler exposes read + CRUD over the per-project exposure list
-// and the project's enforcement flag.
+// TableGrantHandler exposes read + CRUD over the project's exposure list.
+//
+// enforced is the platform-wide kill switch, copied in at construction. It is
+// a field and not a store lookup precisely so that nothing in the request path
+// can reach it: there is no code here that writes it, per project or at all.
 type TableGrantHandler struct {
 	store     storage.TableGrantStore
+	enforced  bool
 	publisher PolicyChangePublisher // optional
 }
 
-func NewTableGrantHandler(store storage.TableGrantStore) *TableGrantHandler {
-	return &TableGrantHandler{store: store}
+// NewTableGrantHandler builds the handler. enforced comes from
+// config.AppConfig.ExposureEnforced and applies to every project alike.
+func NewTableGrantHandler(store storage.TableGrantStore, enforced bool) *TableGrantHandler {
+	return &TableGrantHandler{store: store, enforced: enforced}
 }
 
 // SetPublisher wires the NATS publisher post-construction so handler
@@ -61,7 +68,6 @@ func (h *TableGrantHandler) SetPublisher(p PolicyChangePublisher) { h.publisher 
 func (h *TableGrantHandler) Routes(r chi.Router) {
 	r.Get("/", h.List)
 	r.Post("/", h.Create)
-	r.Put(routeEnforcement, h.SetEnforcement)
 	r.Patch(routeGrantID, h.Update)
 	r.Delete(routeGrantID, h.Delete)
 }
@@ -178,54 +184,12 @@ func (h *TableGrantHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// enforcementRequest is the toggle body. The pointer distinguishes "field
-// omitted" from an explicit false, so a malformed body can't silently
-// disable enforcement for a project.
-type enforcementRequest struct {
-	Enforced *bool `json:"enforced"`
-}
-
-// SetEnforcement turns exposure enforcement on or off for the project and
-// answers with the full grant set so Studio sees the resulting state.
-func (h *TableGrantHandler) SetEnforcement(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := projectIDFromPath(w, r)
-	if !ok {
-		return
-	}
-	var req enforcementRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, errInvalidJSON, http.StatusBadRequest)
-		return
-	}
-	if req.Enforced == nil {
-		httpError(w, "enforced is required (true or false)", http.StatusBadRequest)
-		return
-	}
-	if err := h.store.SetExposureEnforced(r.Context(), projectID, *req.Enforced); err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
-		return
-	}
-	h.publish(r.Context(), domain.PolicyChangeEvent{
-		ProjectID: projectID, Kind: domain.ExposureChangeKind, Op: "update",
-	})
-
-	set, err := h.grantSet(r.Context(), projectID)
-	if err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, set)
-}
-
 // -------------------- helpers --------------------
 
-// grantSet reads both halves of the exposure state. Grants is normalised to a
-// non-nil slice so the flag, not the array, carries the meaning.
+// grantSet reads the project's grants and pairs them with the platform's
+// enforcement decision. Grants is normalised to a non-nil slice so the flag,
+// not the array, carries the meaning.
 func (h *TableGrantHandler) grantSet(ctx context.Context, projectID string) (*domain.TableGrantSet, error) {
-	enforced, err := h.store.IsExposureEnforced(ctx, projectID)
-	if err != nil {
-		return nil, err
-	}
 	grants, err := h.store.ListGrants(ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -233,7 +197,7 @@ func (h *TableGrantHandler) grantSet(ctx context.Context, projectID string) (*do
 	if grants == nil {
 		grants = []domain.TableGrant{}
 	}
-	return &domain.TableGrantSet{ProjectID: projectID, Enforced: enforced, Grants: grants}, nil
+	return &domain.TableGrantSet{ProjectID: projectID, Enforced: h.enforced, Grants: grants}, nil
 }
 
 func (h *TableGrantHandler) publish(ctx context.Context, evt domain.PolicyChangeEvent) {
@@ -280,14 +244,19 @@ func validateGrantResource(resource string) error {
 	return nil
 }
 
-// validateGrantRole accepts "*" (every role) or one plain identifier.
+// errGrantRole names the only two roles an exposure grant may target and says
+// where anything else belongs, so an operator reaching for "admin" or a
+// tenant-specific role is pointed at RLS instead of at a wider grant.
+var errGrantRole = errors.New(`role must be "` + domain.GrantRoleAnon + `" or "` +
+	domain.GrantRoleAuthenticated + `"; exposure decides what end users can reach, ` +
+	`and any other role belongs in an RLS policy`)
+
+// validateGrantRole accepts exactly anon or authenticated. It is deliberately
+// an exact match: no trimming, no case folding, no "*". A grant the operator
+// cannot read literally off the row is a grant they cannot audit.
 func validateGrantRole(role string) error {
-	role = strings.TrimSpace(role)
-	if role == "" {
-		return errors.New("role required")
+	if role == domain.GrantRoleAnon || role == domain.GrantRoleAuthenticated {
+		return nil
 	}
-	if role != "*" && !validGrantIdentifier.MatchString(role) {
-		return errors.New("invalid role")
-	}
-	return nil
+	return errGrantRole
 }

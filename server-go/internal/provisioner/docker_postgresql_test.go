@@ -22,6 +22,7 @@ type mockDockerClient struct {
 	copyCalls  int        // counter for CopyToContainer calls
 	copyDst    string     // last CopyToContainer destination path
 	copyBytes  int64      // total bytes drained from CopyToContainer streams
+	lastImage  string     // image of the most recent CreateContainer call
 	// stopKeepsRunning models a container the daemon accepts a stop for but
 	// which is still running while postgres shuts down.
 	stopKeepsRunning bool
@@ -35,6 +36,7 @@ func (m *mockDockerClient) CreateContainer(_ context.Context, name, image string
 	if m.failOn == "create" {
 		return "", fmt.Errorf("create failed")
 	}
+	m.lastImage = image
 	id := "container-" + name
 	m.containers[id] = "created"
 	return id, nil
@@ -123,7 +125,7 @@ func TestDockerProvisioner_Provision(t *testing.T) {
 	var stages []domain.ProvisioningStage
 	cb := func(s domain.ProvisioningStage) { stages = append(stages, s) }
 
-	req := domain.ProvisioningRequest{ProjectName: "my-app", DBType: domain.PostgreSQL}
+	req := domain.ProvisioningRequest{ProjectName: "my-app", DBType: domain.PostgreSQL, PostgresVersion: "17"}
 	tier := config.TierConfig{}
 
 	result, err := p.Provision(context.Background(), req, tier, cb)
@@ -176,7 +178,7 @@ func TestDockerProvisioner_Deprovision(t *testing.T) {
 	p := NewDockerPostgreSQLProvisioner(docker)
 
 	// Provision first
-	req := domain.ProvisioningRequest{ProjectName: "to-delete", DBType: domain.PostgreSQL}
+	req := domain.ProvisioningRequest{ProjectName: "to-delete", DBType: domain.PostgreSQL, PostgresVersion: "17"}
 	result, _ := p.Provision(context.Background(), req, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	// Deprovision
@@ -196,7 +198,7 @@ func TestDockerProvisioner_GetStatus(t *testing.T) {
 	docker := newMockDocker()
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	req := domain.ProvisioningRequest{ProjectName: "status-test", DBType: domain.PostgreSQL}
+	req := domain.ProvisioningRequest{ProjectName: "status-test", DBType: domain.PostgreSQL, PostgresVersion: "17"}
 	result, _ := p.Provision(context.Background(), req, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	status, err := p.GetStatus(context.Background(), result.Namespace, "status-test")
@@ -216,7 +218,7 @@ func TestDockerProvisioner_CreateFails(t *testing.T) {
 	docker.failOn = "create"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "fail"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
+	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "fail", PostgresVersion: "17"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 	if err == nil {
 		t.Error("expected error when create fails")
 	}
@@ -227,7 +229,7 @@ func TestDockerProvisioner_HealthCheckFails(t *testing.T) {
 	docker.failOn = "health"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "unhealthy"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
+	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "unhealthy", PostgresVersion: "17"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 	if err == nil {
 		t.Error("expected error when health check fails")
 	}
@@ -245,7 +247,7 @@ func TestDockerProvisioner_PgReadyNeverSucceeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	_, err := p.Provision(ctx, domain.ProvisioningRequest{ProjectName: "stuck"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
+	_, err := p.Provision(ctx, domain.ProvisioningRequest{ProjectName: "stuck", PostgresVersion: "17"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 	if err == nil {
 		t.Error("expected error when pg_isready never returns 0")
 	}

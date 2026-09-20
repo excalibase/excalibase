@@ -1068,7 +1068,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		schemaHandler:      newSchemaHandler(vc, store),
 		realtimeHandler:    realtimeHandler,
 		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies()),
-		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants()),
+		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants(), cfg.ExposureEnforced),
 		appHandler:         handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()), handler.NewProjectSourceLookup(store)),
 		tierHandler:        tierHandler,
 		capDeps: &capacityDeps{
