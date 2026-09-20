@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -120,9 +121,13 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		alertHandler:     handler.NewAlertHandler(service.NewAlertingService(dir)),
 		setupHandler:     handler.NewSetupHandler(service.NewOperatorSetupService(mock)),
 		pgHandler:        handler.NewParameterGroupHandler(&fakeParameterGroups{groups: map[string]*domain.ParameterGroup{}}),
-		rlUnauth:         custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
-		rlAuthed:         custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
-		rlDataPlane:      custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
+		// The app store talks to a database that never connects: the matrix
+		// asserts authorization outcomes, and a failed query is a 500, which
+		// is not a gate refusal.
+		appHandler:  handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances)),
+		rlUnauth:    custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
+		rlAuthed:    custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),
@@ -285,7 +290,9 @@ func TestEveryProjectRouteIsGated(t *testing.T) {
 
 // fakeParameterGroups is an in-memory store so the parameter-group routes
 // answer for real instead of panicking on a nil dependency.
-type fakeParameterGroups struct{ groups map[string]*domain.ParameterGroup }
+type fakeParameterGroups struct {
+	groups map[string]*domain.ParameterGroup
+}
 
 func (f *fakeParameterGroups) Save(pg *domain.ParameterGroup) error {
 	f.groups[pg.Name] = pg
