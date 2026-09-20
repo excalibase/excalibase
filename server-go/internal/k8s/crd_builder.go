@@ -35,16 +35,19 @@ var (
 )
 
 type PostgreSQLClusterOpts struct {
-	ProjectID       string
-	Namespace       string
-	Tier            config.TierConfig
-	Backup          *BackupOpts
-	StorageClass    string
-	PostgresVersion string
-	DatabaseName    string
-	MasterUsername  string
-	Parameters      map[string]string
-	Tags            map[string]string
+	ProjectID    string
+	Namespace    string
+	Tier         config.TierConfig
+	Backup       *BackupOpts
+	StorageClass string
+	// ImageName is the digest-pinned image resolved from the catalogue by
+	// the caller. The builder never derives one from a version string: that
+	// would produce a floating tag.
+	ImageName      string
+	DatabaseName   string
+	MasterUsername string
+	Parameters     map[string]string
+	Tags           map[string]string
 }
 
 type BackupOpts struct {
@@ -173,8 +176,8 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 		spec["backup"] = buildBackupSpec(opts.ProjectID, opts.Backup)
 	}
 
-	if opts.PostgresVersion != "" {
-		spec["imageName"] = fmt.Sprintf("ghcr.io/cloudnative-pg/postgresql:%s", opts.PostgresVersion)
+	if opts.ImageName != "" {
+		spec["imageName"] = opts.ImageName
 	}
 
 	return spec

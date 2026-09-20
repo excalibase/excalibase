@@ -10,7 +10,6 @@ import (
 
 const testApplyLabels = "apply labels"
 
-
 func TestProvisionContext_StageTracking(t *testing.T) {
 	var stages []domain.ProvisioningStage
 	var steps []string

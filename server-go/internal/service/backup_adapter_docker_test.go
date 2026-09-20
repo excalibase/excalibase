@@ -171,13 +171,14 @@ func setupDockerAdapter(t *testing.T) (*DockerBackupAdapter, *storage.FileSystem
 	})
 	adapter.SetDatabaseProbe(alwaysAnswers{})
 	store.Create(&domain.DatabaseInstance{
-		ProjectID:      "dk-1",
-		OrgID:          "org",
-		Namespace:      "excalibase-dk-1-postgres",
-		DatabaseName:   "app",
-		Password:       "pw",
-		DeploymentMode: domain.ModeDocker,
-		Status:         "ACTIVE",
+		ProjectID:       "dk-1",
+		OrgID:           "org",
+		Namespace:       "excalibase-dk-1-postgres",
+		DatabaseName:    "app",
+		Password:        "pw",
+		DeploymentMode:  domain.ModeDocker,
+		Status:          "ACTIVE",
+		PostgresVersion: "17",
 	})
 	return adapter, store, runner, uploader, records
 }

@@ -118,16 +118,20 @@ func (p *PostgreSQLProvisioner) provisionNamespace(ctx context.Context, req doma
 }
 
 func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, projectID, namespace string) error {
+	image, err := config.PostgresImage(req.PostgresVersion)
+	if err != nil {
+		return fmt.Errorf("resolve postgres image: %w", err)
+	}
 	opts := k8s.PostgreSQLClusterOpts{
-		ProjectID:       projectID,
-		Namespace:       namespace,
-		Tier:            tier,
-		StorageClass:    req.StorageClass,
-		PostgresVersion: req.PostgresVersion,
-		DatabaseName:    req.DatabaseName,
-		MasterUsername:  req.MasterUsername,
-		Parameters:      req.Parameters,
-		Tags:            req.Tags,
+		ProjectID:      projectID,
+		Namespace:      namespace,
+		Tier:           tier,
+		StorageClass:   req.StorageClass,
+		ImageName:      image,
+		DatabaseName:   req.DatabaseName,
+		MasterUsername: req.MasterUsername,
+		Parameters:     req.Parameters,
+		Tags:           req.Tags,
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{
@@ -306,16 +310,20 @@ func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.P
 func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, projectID, namespace string, pc *ProvisionContext) error {
 	pc.SetStage(domain.StageCRDDeployment)
 	pc.SetStep("apply CNPG cluster")
+	image, err := config.PostgresImage(req.PostgresVersion)
+	if err != nil {
+		return pc.Fail(fmt.Errorf("resolve postgres image: %w", err))
+	}
 	opts := k8s.PostgreSQLClusterOpts{
-		ProjectID:       projectID,
-		Namespace:       namespace,
-		Tier:            tier,
-		StorageClass:    req.StorageClass,
-		PostgresVersion: req.PostgresVersion,
-		DatabaseName:    req.DatabaseName,
-		MasterUsername:  req.MasterUsername,
-		Parameters:      req.Parameters,
-		Tags:            req.Tags,
+		ProjectID:      projectID,
+		Namespace:      namespace,
+		Tier:           tier,
+		StorageClass:   req.StorageClass,
+		ImageName:      image,
+		DatabaseName:   req.DatabaseName,
+		MasterUsername: req.MasterUsername,
+		Parameters:     req.Parameters,
+		Tags:           req.Tags,
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{

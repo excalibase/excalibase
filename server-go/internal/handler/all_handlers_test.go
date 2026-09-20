@@ -798,7 +798,7 @@ func TestProvisionWithAuthUser(t *testing.T) {
 	r.Post(testProvisionPath, h.Provision)
 
 	req := httptest.NewRequest("POST", testProvisionPath,
-		strings.NewReader(`{"projectName":"owned-db","orgId":"org1","databaseType":"POSTGRESQL","tier":"FREE"}`))
+		strings.NewReader(`{"projectName":"owned-db","orgId":"org1","databaseType":"POSTGRESQL","tier":"FREE","postgresVersion":"17"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()

@@ -110,8 +110,8 @@ func TestDockerBackupAdapter_PITR_TargetName(t *testing.T) {
 	// --- Restore from the EMPTY backup with TargetName="mark" -----------
 	resp, err := adapter.Restore(ctx, src, domain.RestoreRequest{
 		NewProjectName: "pitr-restored", TargetProjectID: "pitr-restored",
-		BackupID:     ref.ID, // pin to the empty-state backup
-		TargetName:   "mark",
+		BackupID:   ref.ID, // pin to the empty-state backup
+		TargetName: "mark",
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)

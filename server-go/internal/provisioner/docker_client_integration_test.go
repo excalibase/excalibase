@@ -15,7 +15,6 @@ import (
 
 const testNonexistentContainer = "nonexistent-container-"
 
-
 // Real Docker daemon lifecycle test. Requires a reachable docker socket
 // (unix or DOCKER_HOST). Skipped if the daemon isn't available.
 //
@@ -84,8 +83,9 @@ func TestDockerRealClient_ProvisionPostgres(t *testing.T) {
 	defer cancel()
 
 	req := domain.ProvisioningRequest{
-		ProjectName: projectName,
-		DBType:      domain.PostgreSQL,
+		PostgresVersion: "17",
+		ProjectName:     projectName,
+		DBType:          domain.PostgreSQL,
 	}
 	result, err := p.Provision(ctx, req, config.TierConfig{}, cb)
 	if err != nil {
