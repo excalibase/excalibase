@@ -3,7 +3,9 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
-	"os"
+	"encoding/json"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,11 +15,10 @@ import (
 
 // stubRunner is a SchedulerRunner that records whether Run() was called
 // and exits when the context is cancelled. Tests use it to assert that
-// StartScheduler actually launches both runners (or doesn't, when
-// disabled) without spinning up real Postgres connections.
+// StartScheduler actually launches the sweep without touching Postgres.
 type stubRunner struct {
-	ran     atomic.Bool
-	exited  atomic.Bool
+	ran    atomic.Bool
+	exited atomic.Bool
 }
 
 func (s *stubRunner) Run(ctx context.Context) error {
@@ -27,190 +28,158 @@ func (s *stubRunner) Run(ctx context.Context) error {
 	return nil
 }
 
-// TestStartScheduler_EnabledLaunchesBothRunners — when cfg.Enabled is true
-// and a DB is wired, both Worker.Run and CronRunner.Run goroutines must
-// fire. The stubs let us assert this without touching Postgres.
-func TestStartScheduler_EnabledLaunchesBothRunners(t *testing.T) {
-	worker := &stubRunner{}
-	cron := &stubRunner{}
-	// non-nil sentinel DB so the boot guard doesn't bail. The stub
-	// runners never deref it.
-	db := &sql.DB{}
+type stubLeader struct{}
 
-	handles := StartScheduler(context.Background(), SchedulerBootConfig{
+func (stubLeader) IsLeader(context.Context) (bool, error) { return true, nil }
+
+// wiredConfig is a boot config with every collaborator present.
+func wiredConfig(runner SchedulerRunner) SchedulerBootConfig {
+	return SchedulerBootConfig{
 		Enabled:      true,
 		PollInterval: 100 * time.Millisecond,
-		DB:           db,
-		NewWorker: func(_ scheduler.WorkerConfig) SchedulerRunner {
-			return worker
-		},
-		NewCronRunner: func(_ scheduler.CronRunnerConfig) SchedulerRunner {
-			return cron
-		},
-	})
+		Invoker:      schedulerInvokerStub{},
+		Functions:    registryStub{},
+		Projects:     func(context.Context) ([]string, error) { return nil, nil },
+		ProjectDB:    func(context.Context, string) (*sql.DB, error) { return nil, nil },
+		CronLeader:   stubLeader{},
+		NewRunner:    func(scheduler.FanoutConfig) SchedulerRunner { return runner },
+	}
+}
 
+// registryStub stands in for the platform's function registry.
+type registryStub struct{}
+
+func (registryStub) HasFunction(string, string) (bool, error) { return true, nil }
+
+// schedulerInvokerStub satisfies scheduler.Invoker with the json.RawMessage
+// signature the seam declares.
+type schedulerInvokerStub struct{}
+
+func (schedulerInvokerStub) Invoke(context.Context, string, string, string, json.RawMessage) error {
+	return nil
+}
+
+func TestStartScheduler_EnabledLaunchesTheSweep(t *testing.T) {
+	runner := &stubRunner{}
+	handles, err := StartScheduler(context.Background(), wiredConfig(runner))
+	if err != nil {
+		t.Fatalf("StartScheduler: %v", err)
+	}
 	if !handles.Started() {
-		t.Fatal("Started() = false, want true when Enabled and DB are set")
+		t.Fatal("Started() = false, want true when enabled and fully wired")
 	}
-	// Give the goroutines a moment to call Run().
-	for i := 0; i < 50; i++ {
-		if worker.ran.Load() && cron.ran.Load() {
-			break
-		}
+	for i := 0; i < 50 && !runner.ran.Load(); i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !worker.ran.Load() {
-		t.Errorf("worker.Run was not invoked")
+	if !runner.ran.Load() {
+		t.Error("the sweep was never run")
 	}
-	if !cron.ran.Load() {
-		t.Errorf("cron.Run was not invoked")
-	}
-
-	// Stop must cancel the context and wait for both runners to exit.
 	handles.Stop()
-	if !worker.exited.Load() {
-		t.Errorf("worker did not observe ctx.Done on Stop")
-	}
-	if !cron.exited.Load() {
-		t.Errorf("cron did not observe ctx.Done on Stop")
+	if !runner.exited.Load() {
+		t.Error("the sweep did not observe ctx.Done on Stop")
 	}
 }
 
-// TestStartScheduler_DisabledDoesNotLaunch — EXCALIBASE_SCHEDULER_ENABLED=0
-// (modelled here as Enabled:false) must skip the goroutines entirely. Stop
-// is a no-op.
 func TestStartScheduler_DisabledDoesNotLaunch(t *testing.T) {
-	worker := &stubRunner{}
-	cron := &stubRunner{}
-	db := &sql.DB{}
+	runner := &stubRunner{}
+	cfg := wiredConfig(runner)
+	cfg.Enabled = false
 
-	handles := StartScheduler(context.Background(), SchedulerBootConfig{
-		Enabled: false,
-		DB:      db,
-		NewWorker: func(_ scheduler.WorkerConfig) SchedulerRunner {
-			return worker
-		},
-		NewCronRunner: func(_ scheduler.CronRunnerConfig) SchedulerRunner {
-			return cron
-		},
-	})
-
-	if handles.Started() {
-		t.Fatalf("Started() = true when Enabled=false, want false")
+	handles, err := StartScheduler(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("StartScheduler: %v", err)
 	}
-	// Stop() must be safe to call even when nothing was started.
+	if handles.Started() {
+		t.Fatal("Started() = true when disabled")
+	}
 	handles.Stop()
-
-	// Give the goroutines a hypothetical chance to run before asserting.
 	time.Sleep(50 * time.Millisecond)
-	if worker.ran.Load() {
-		t.Errorf("worker.Run unexpectedly invoked when Enabled=false")
-	}
-	if cron.ran.Load() {
-		t.Errorf("cron.Run unexpectedly invoked when Enabled=false")
+	if runner.ran.Load() {
+		t.Error("the sweep ran while the scheduler was disabled")
 	}
 }
 
-// TestStartScheduler_GracefulShutdown — the parent context being cancelled
-// must propagate through to the scheduler runners.
-func TestStartScheduler_GracefulShutdown(t *testing.T) {
-	worker := &stubRunner{}
-	cron := &stubRunner{}
-	db := &sql.DB{}
+// The finding: with the scheduler enabled and a collaborator missing, the
+// platform used to boot, log a line and run nothing. Startup now fails and
+// names what is missing.
+func TestStartScheduler_EnabledButUnwiredFailsToStart(t *testing.T) {
+	cases := map[string]func(*SchedulerBootConfig){
+		"invoker":           func(c *SchedulerBootConfig) { c.Invoker = nil },
+		"function registry": func(c *SchedulerBootConfig) { c.Functions = nil },
+		"projects":          func(c *SchedulerBootConfig) { c.Projects = nil },
+		"project db":        func(c *SchedulerBootConfig) { c.ProjectDB = nil },
+		"leader":            func(c *SchedulerBootConfig) { c.CronLeader = nil },
+	}
+	for missing, strip := range cases {
+		t.Run(missing, func(t *testing.T) {
+			runner := &stubRunner{}
+			cfg := wiredConfig(runner)
+			strip(&cfg)
 
-	parent, cancelParent := context.WithCancel(context.Background())
-	defer cancelParent()
-	handles := StartScheduler(parent, SchedulerBootConfig{
-		Enabled: true,
-		DB:      db,
-		NewWorker: func(_ scheduler.WorkerConfig) SchedulerRunner {
-			return worker
-		},
-		NewCronRunner: func(_ scheduler.CronRunnerConfig) SchedulerRunner {
-			return cron
-		},
-	})
-	// Wait for both runners to enter Run before cancelling.
-	for i := 0; i < 50 && (!worker.ran.Load() || !cron.ran.Load()); i++ {
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	cancelParent()
-	// Stop blocks until both goroutines return.
-	handles.Stop()
-	if !worker.exited.Load() || !cron.exited.Load() {
-		t.Fatalf("graceful shutdown failed: worker.exited=%v cron.exited=%v",
-			worker.exited.Load(), cron.exited.Load())
-	}
-}
-
-// TestStartScheduler_NoDBSkips — calling StartScheduler with cfg.Enabled=true
-// but a nil DB must not panic and must report Started()=false.
-func TestStartScheduler_NoDBSkips(t *testing.T) {
-	handles := StartScheduler(context.Background(), SchedulerBootConfig{
-		Enabled: true,
-	})
-	if handles.Started() {
-		t.Errorf("Started()=true with no DB; should skip boot")
-	}
-	handles.Stop()
-}
-
-// TestSchedulerConfigFromEnv_Defaults — with no env vars set, defaults
-// should be Enabled=true, PollInterval=5s, CronPollInterval=60s.
-func TestSchedulerConfigFromEnv_Defaults(t *testing.T) {
-	t.Setenv("EXCALIBASE_SCHEDULER_ENABLED", "")
-	t.Setenv("EXCALIBASE_SCHEDULER_POLL_MS", "")
-	t.Setenv("EXCALIBASE_CRON_POLL_MS", "")
-	c := SchedulerConfigFromEnv()
-	if !c.Enabled {
-		t.Errorf("Enabled default: got false, want true")
-	}
-	if c.PollInterval != 5*time.Second {
-		t.Errorf("PollInterval default: got %v, want 5s", c.PollInterval)
-	}
-	if c.CronPollInterval != 60*time.Second {
-		t.Errorf("CronPollInterval default: got %v, want 60s", c.CronPollInterval)
-	}
-}
-
-// TestSchedulerConfigFromEnv_DisabledByEnv — common falsey values for the
-// SCHEDULER_ENABLED flag must turn the scheduler off.
-func TestSchedulerConfigFromEnv_DisabledByEnv(t *testing.T) {
-	cases := []string{"0", "false", "FALSE", "no", "off"}
-	for _, v := range cases {
-		t.Run(v, func(t *testing.T) {
-			t.Setenv("EXCALIBASE_SCHEDULER_ENABLED", v)
-			c := SchedulerConfigFromEnv()
-			if c.Enabled {
-				t.Errorf("Enabled with env=%q: got true, want false", v)
+			handles, err := StartScheduler(context.Background(), cfg)
+			if !errors.Is(err, ErrSchedulerUnwired) {
+				t.Fatalf("err: got %v, want ErrSchedulerUnwired", err)
+			}
+			if !strings.Contains(err.Error(), missing) {
+				t.Errorf("err must name the missing collaborator %q: %v", missing, err)
+			}
+			if handles.Started() {
+				t.Error("a half-wired scheduler must not start")
+			}
+			time.Sleep(20 * time.Millisecond)
+			if runner.ran.Load() {
+				t.Error("a half-wired scheduler ran anyway")
 			}
 		})
 	}
 }
 
-// TestSchedulerConfigFromEnv_OverridesPoll — explicit ms values override
-// the defaults; non-numeric values are ignored.
-func TestSchedulerConfigFromEnv_OverridesPoll(t *testing.T) {
-	t.Setenv("EXCALIBASE_SCHEDULER_POLL_MS", "1500")
-	t.Setenv("EXCALIBASE_CRON_POLL_MS", "120000")
-	c := SchedulerConfigFromEnv()
-	if c.PollInterval != 1500*time.Millisecond {
-		t.Errorf("PollInterval: got %v, want 1.5s", c.PollInterval)
+// A disabled scheduler needs no collaborators — an operator who turned it
+// off must not be forced to wire it.
+func TestStartScheduler_DisabledAndUnwiredIsFine(t *testing.T) {
+	handles, err := StartScheduler(context.Background(), SchedulerBootConfig{Enabled: false})
+	if err != nil {
+		t.Fatalf("StartScheduler: %v", err)
 	}
-	if c.CronPollInterval != 120000*time.Millisecond {
-		t.Errorf("CronPollInterval: got %v, want 120s", c.CronPollInterval)
+	if handles.Started() {
+		t.Error("Started() = true when disabled")
 	}
-	// Bad values stay at defaults.
-	t.Setenv("EXCALIBASE_SCHEDULER_POLL_MS", "nope")
-	c = SchedulerConfigFromEnv()
-	if c.PollInterval != 5*time.Second {
-		t.Errorf("PollInterval bad-value fallback: got %v, want 5s", c.PollInterval)
+	handles.Stop()
+}
+
+func TestStartScheduler_GracefulShutdown(t *testing.T) {
+	runner := &stubRunner{}
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+
+	handles, err := StartScheduler(parent, wiredConfig(runner))
+	if err != nil {
+		t.Fatalf("StartScheduler: %v", err)
+	}
+	for i := 0; i < 50 && !runner.ran.Load(); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancelParent()
+	handles.Stop()
+	if !runner.exited.Load() {
+		t.Fatal("graceful shutdown failed: the sweep did not exit")
 	}
 }
 
-// silenceLogger keeps test output clean when the production path's
-// fallback to log.Default() would otherwise dump messages.
-func init() {
-	_ = os.Stdout
+// The production path builds the real sweep — nothing in main supplies a
+// factory, so the default one has to work.
+func TestStartScheduler_BuildsTheRealSweepByDefault(t *testing.T) {
+	cfg := wiredConfig(nil)
+	cfg.NewRunner = nil
+	cfg.PollInterval = time.Hour
+	cfg.CronPollInterval = time.Hour
+
+	handles, err := StartScheduler(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("StartScheduler: %v", err)
+	}
+	if !handles.Started() {
+		t.Fatal("the default sweep was not started")
+	}
+	handles.Stop()
 }

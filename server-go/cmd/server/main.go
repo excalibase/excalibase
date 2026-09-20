@@ -22,12 +22,15 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/metrics"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
+	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/scheduler"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
+	"github.com/excalibase/provisioning-poc/internal/wiring"
 	"github.com/excalibase/provisioning-poc/pkg/kmsseal"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
@@ -138,7 +141,15 @@ func runServer(cfg config.AppConfig) {
 	k8sClient := buildK8sClient(cfg)
 	factory, dockerClientRef := buildProvisionerFactory(cfg, k8sClient)
 
-	fnHandler := buildFunctionHandler(cfg, vc, store, sqlStore, k8sClient)
+	// One way to reach a tenant database, shared by the schema migrator,
+	// the cron sync and the scheduler sweep.
+	projectDB := projectdb.NewOpener(store, vc, projectdb.OverridesFromEnv(), projectdb.PoolLimits{
+		MaxOpenConns: cfg.ProjectDBMaxOpenConns,
+		MaxPools:     cfg.ProjectDBMaxPools,
+	})
+	defer projectDB.Close()
+
+	fnHandler := buildFunctionHandler(cfg, vc, store, sqlStore, k8sClient, projectDB)
 
 	provSvc, lifecycleClaimer, provCleanup := buildProvisioningService(cfg, store, sqlStore, factory, k8sClient, vc, dockerClientRef)
 	defer provCleanup()
@@ -146,6 +157,9 @@ func runServer(cfg config.AppConfig) {
 	// it does not read the platform database per request; this tells it the
 	// moment a project is claimed for teardown.
 	provSvc.AddDeletionObserver(fnHandler)
+	// A project claimed for teardown must not keep an open pool on a database
+	// that is going away.
+	provSvc.AddDeletionObserver(projectDB)
 
 	deps := buildHandlerDeps(handlerDepsArgs{
 		cfg:          cfg,
@@ -180,15 +194,10 @@ func runServer(cfg config.AppConfig) {
 		deps.backupHandler.SetScheduler(scheduler)
 	}
 
-	// Phase 8.5: deferred-execution scheduler — drains the Postgres-backed
-	// task queue + walks the cron registry. Enabled by default; disable
-	// via EXCALIBASE_SCHEDULER_ENABLED=false (operators running the worker
-	// out-of-process don't want the in-process replica to compete on the
-	// FOR UPDATE SKIP LOCKED claim path).
-	fnSchedHandles := startFunctionScheduler(sqlStore)
+	fnSchedHandles := startFunctionScheduler(cfg, sqlStore, fnHandler, projectDB)
 	defer fnSchedHandles.Stop()
 
-	stopReplayer := startFunctionReplayer(fnHandler)
+	stopReplayer := startFunctionReplayer(cfg, fnHandler)
 	defer stopReplayer()
 
 	// Wire pause/resume — backup must run before pause, so PauseService
@@ -222,9 +231,30 @@ func runServer(cfg config.AppConfig) {
 		defer stopRestoreSweeper()
 	}
 
+	checkFeatureWiring(cfg, wiring.Deps{
+		SchedulerInvoker:  fnHandler != nil,
+		SchedulerProjects: projectDB != nil,
+		ProjectDB:         projectDB != nil,
+		// functionCronLock always yields a claim: the platform advisory lock
+		// in cloud, a no-op one in a single-process deployment.
+		CronLeader:      true,
+		PauseService:    pauseSvc != nil,
+		FunctionRuntime: fnHandler != nil,
+	})
+
 	r := buildRouter(cfg, sqlStore, store, deps)
 
 	startServer(cfg, r)
+}
+
+// checkFeatureWiring stops the process when a switched-on feature is
+// missing a dependency it cannot work without. Run once, after everything
+// is built and before anything is served, so a half-wired deployment fails
+// at startup instead of answering requests that quietly do nothing.
+func checkFeatureWiring(cfg config.AppConfig, deps wiring.Deps) {
+	if err := wiring.Check(wiring.Features(cfg, deps)); err != nil {
+		log.Fatal(err)
+	}
 }
 
 // wireRestoreOrchestrator builds the restore orchestrator, registers the
@@ -456,35 +486,73 @@ func studioURL(cfg config.AppConfig) string {
 	return ""
 }
 
-// startFunctionScheduler boots Phase 8.5's deferred-execution worker +
-// cron runner. The runners poll the platform DB; tenants are responsible
-// for ensuring excalibase.excalibase_scheduled_functions +
-// excalibase.excalibase_cron_jobs exist on whichever DB the runners point
-// at (the reserved schema, never the tenant's public schema). Boot is best-effort —
-// when the platform DB isn't a real *sql.DB (e.g. SQLite self-hosted),
-// we skip the boot rather than panicking.
-func startFunctionScheduler(sqlStore storage.PlatformStore) *bootstrap.SchedulerHandles {
-	cfg := bootstrap.SchedulerConfigFromEnv()
-	if !cfg.Enabled {
-		log.Println("Function scheduler disabled via EXCALIBASE_SCHEDULER_ENABLED")
-		return bootstrap.StartScheduler(context.Background(), cfg)
+// functionCronLockID is the advisory lock the cron half of the function
+// scheduler leads on. Cron enqueues are decided from last_enqueued_at, not
+// claimed with a row lock, so two replicas walking the registry in the same
+// minute would both insert; the task half needs no lock (FOR UPDATE SKIP
+// LOCKED already keeps two workers off one row).
+const functionCronLockID int64 = 0x6168_0acb_5c7a_11e6
+
+// startFunctionScheduler boots the per-project sweep that drains deferred
+// tasks and enqueues due cron jobs. Both live in each tenant's own database
+// — the runtime writes them there — so the sweep walks every servable
+// project rather than a single pool. An enabled scheduler that cannot be
+// fully wired stops the process instead of running nothing.
+func startFunctionScheduler(
+	cfg config.AppConfig,
+	sqlStore storage.PlatformStore,
+	fnHandler *handler.FunctionHandler,
+	projectDB *projectdb.Opener,
+) *bootstrap.SchedulerHandles {
+	boot := bootstrap.SchedulerBootConfig{
+		Enabled:          cfg.SchedulerEnabled,
+		PollInterval:     cfg.SchedulerPollInterval,
+		CronPollInterval: cfg.SchedulerCronInterval,
+		CronLeader:       service.NewLeadership(functionCronLock(cfg, sqlStore)),
+		Limits:           schedulerLimits(cfg),
 	}
-	if sqlStore == nil {
-		return bootstrap.StartScheduler(context.Background(), cfg)
+	if fnHandler != nil {
+		boot.Invoker = fnHandler.SchedulerInvoker()
+		boot.Functions = fnHandler.SchedulerFunctions()
 	}
-	cfg.DB = sqlStore.DB()
-	if cfg.DB == nil {
-		log.Println("Function scheduler boot skipped: platform store has no *sql.DB handle")
-		// Disable to take the no-op path inside StartScheduler.
-		cfg.Enabled = false
-		return bootstrap.StartScheduler(context.Background(), cfg)
+	if projectDB != nil {
+		boot.Projects = projectDB.ServableProjectIDs
+		boot.ProjectDB = projectDB.Open
 	}
-	handles := bootstrap.StartScheduler(context.Background(), cfg)
+	handles, err := bootstrap.StartScheduler(context.Background(), boot)
+	if err != nil {
+		log.Fatalf("function scheduler: %v", err)
+	}
 	if handles.Started() {
 		log.Printf("Function scheduler started (poll=%v, cronPoll=%v)",
-			cfg.PollInterval, cfg.CronPollInterval)
+			cfg.SchedulerPollInterval, cfg.SchedulerCronInterval)
+	} else {
+		log.Println("Function scheduler disabled via EXCALIBASE_SCHEDULER_ENABLED")
 	}
 	return handles
+}
+
+// schedulerLimits carries the operator's bounds on tenant-written work into
+// the sweep.
+func schedulerLimits(cfg config.AppConfig) scheduler.Limits {
+	return scheduler.Limits{
+		Batch:              cfg.SchedulerBatch,
+		ProjectConcurrency: cfg.SchedulerProjectConcurrency,
+		GlobalConcurrency:  cfg.SchedulerGlobalConcurrency,
+		MaxArgsBytes:       cfg.SchedulerMaxArgsBytes,
+		MaxAttempts:        cfg.SchedulerMaxAttempts,
+		CronMinInterval:    cfg.CronMinInterval,
+		CronMaxJobs:        cfg.CronMaxJobsPerProject,
+	}
+}
+
+// functionCronLock is the platform advisory lock in cloud (several
+// replicas) and a no-op claim self-hosted (one process).
+func functionCronLock(cfg config.AppConfig, sqlStore storage.PlatformStore) storage.LeaderLock {
+	if cfg.IsCloud() && sqlStore != nil && sqlStore.DB() != nil {
+		return pgstore.NewAdvisoryLock(sqlStore.DB(), functionCronLockID)
+	}
+	return service.AlwaysLeader{}
 }
 
 // handlerDeps groups all wired handlers + middleware used during route mounting.
@@ -534,15 +602,15 @@ type handlerDeps struct {
 // the store whenever the runtime reports a new bootId (pod restart). Returns
 // a stop function that blocks until the loop has exited. Disable with
 // EXCALIBASE_FN_REPLAY_ENABLED=false; tune with EXCALIBASE_FN_REPLAY_POLL_MS.
-func startFunctionReplayer(fnHandler *handler.FunctionHandler) func() {
+func startFunctionReplayer(appCfg config.AppConfig, fnHandler *handler.FunctionHandler) func() {
 	noop := func() {
 		// nothing started, nothing to stop
 	}
-	enabled, cfg := edgefn.ReplayConfigFromEnv()
-	if !enabled {
+	if !appCfg.FnReplayEnabled {
 		log.Println("Function replay disabled via EXCALIBASE_FN_REPLAY_ENABLED")
 		return noop
 	}
+	cfg := edgefn.ReplayConfig{Interval: appCfg.FnReplayPollInterval}
 	replayer, err := fnHandler.NewReplayer(cfg)
 	if err != nil {
 		log.Printf("WARN: function replay disabled: %v", err)
@@ -578,7 +646,14 @@ func buildFunctionStore(cfg config.AppConfig, sqlStore storage.PlatformStore) ed
 }
 
 // buildFunctionHandler wires the edge-function handler with stores + runtime client.
-func buildFunctionHandler(cfg config.AppConfig, vc vaultclient.VaultClient, store storage.InstanceStore, sqlStore storage.PlatformStore, k8sClient k8s.KubeClient) *handler.FunctionHandler {
+func buildFunctionHandler(
+	cfg config.AppConfig,
+	vc vaultclient.VaultClient,
+	store storage.InstanceStore,
+	sqlStore storage.PlatformStore,
+	k8sClient k8s.KubeClient,
+	projectDB *projectdb.Opener,
+) *handler.FunctionHandler {
 	fnStore := buildFunctionStore(cfg, sqlStore)
 	fnSecrets := edgefn.NewSecretsStore(vc)
 	fnClient := edgefn.NewRuntimeClient(cfg.DenoRuntimeURL, cfg.DenoRuntimeSecret)
@@ -587,6 +662,13 @@ func buildFunctionHandler(cfg config.AppConfig, vc vaultclient.VaultClient, stor
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 	}
 	fnHandler.SetVault(vc)
+	// Without this resolver a deploy stores the declared schema and never
+	// applies it, and schema/apply answers 503 — the platform's own way of
+	// opening a project database is the one wired here.
+	if projectDB != nil {
+		fnHandler.SetProjectDBFn(projectDB.Open)
+	}
+	fnHandler.SetAutoMigrate(cfg.AutoMigrate)
 	// EXC-11: end-user tokens must name this project in their aud claim.
 	fnHandler.SetAudienceRequirement(cfg.JWTRequireAud, cfg.JWTAudPrefix)
 	wireFunctionEgress(cfg, sqlStore, fnHandler)
@@ -673,7 +755,7 @@ func buildProvisioningService(
 		provSvc.SetOperationClaimer(lifecycleClaimer)
 	}
 
-	provSvc.SetBackupDefaults(backupDefaultsFromEnv())
+	provSvc.SetBackupDefaults(backupDefaults(cfg))
 	// Deprovision with confirmDeleteBackups resolves the store through
 	// provSvc.BackupStorage() — the same source backups are written with.
 	provSvc.SetBackupPurger(service.NewBackupPurger(provSvc, dockerBackupKeyPrefix,
@@ -778,17 +860,17 @@ func backupUsePathStyle() bool {
 	return os.Getenv("BACKUP_S3_PATH_STYLE") != "0"
 }
 
-// backupDefaultsFromEnv is the single place the platform-wide backup object
-// store is read from the environment. Backup (provisioning + Docker
+// backupDefaults is the single place the platform-wide backup object
+// store is read from configuration. Backup (provisioning + Docker
 // uploader) and restore (K8s adapter via ProvisioningService.BackupStorage)
 // all derive from this one value — there is no separate restore default.
-func backupDefaultsFromEnv() *service.BackupDefaults {
+func backupDefaults(cfg config.AppConfig) *service.BackupDefaults {
 	return &service.BackupDefaults{
-		AccessKeyID:     envOr("BACKUP_DEFAULT_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID")),
-		SecretAccessKey: envOr("BACKUP_DEFAULT_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY")),
-		Endpoint:        envOr("BACKUP_DEFAULT_ENDPOINT", os.Getenv("R2_ENDPOINT")),
-		Bucket:          envOr("BACKUP_DEFAULT_BUCKET", "excalibase-backups"),
-		Region:          envOr("BACKUP_DEFAULT_REGION", "auto"),
+		AccessKeyID:     cfg.BackupAccessKeyID,
+		SecretAccessKey: cfg.BackupSecretAccessKey,
+		Endpoint:        cfg.BackupEndpoint,
+		Bucket:          cfg.BackupBucket,
+		Region:          cfg.BackupRegion,
 	}
 }
 
@@ -875,7 +957,7 @@ func buildBackupService(
 		})
 		if err == nil {
 			runner := service.NewDockerBackupRunner(dockerSDK.RawClient())
-			defaults := backupDefaultsFromEnv()
+			defaults := backupDefaults(cfg)
 			if defaults.AccessKeyID != "" && defaults.SecretAccessKey != "" && defaults.Endpoint != "" {
 				uploader, err := service.NewAWSS3Uploader(context.Background(), service.AWSS3UploaderConfig{
 					AccessKeyID:     defaults.AccessKeyID,
@@ -1598,9 +1680,9 @@ func envOr(key, fallback string) string {
 // Resend creds: RESEND_API_KEY (k8s secret resend-creds, or env directly)
 // Common: EMAIL_FROM_ADDRESS / EMAIL_FROM_NAME (or legacy SES_FROM_*)
 func buildEmailSender(cfg config.AppConfig) email.Sender {
-	provider := strings.ToLower(strings.TrimSpace(os.Getenv("EMAIL_PROVIDER")))
+	provider := cfg.EmailProvider
 	if provider == "" {
-		provider = "ses" // back-compat default
+		provider = "ses" // back-compat default when the operator named none
 	}
 	switch provider {
 	case "noop":
@@ -1617,9 +1699,9 @@ func buildEmailSender(cfg config.AppConfig) email.Sender {
 }
 
 func buildSESSender(cfg config.AppConfig) email.Sender {
-	keyID := os.Getenv("SES_ACCESS_KEY_ID")
-	secret := os.Getenv("SES_SECRET_ACCESS_KEY")
-	region := os.Getenv("SES_REGION")
+	keyID := cfg.SESAccessKeyID
+	secret := cfg.SESSecretAccessKey
+	region := cfg.SESRegion
 	if keyID == "" || secret == "" {
 		log.Printf("INFO: SES not configured, email features will return 503")
 		return email.NewNoopSender()
@@ -1635,7 +1717,7 @@ func buildSESSender(cfg config.AppConfig) email.Sender {
 		Region:           region,
 		DefaultFrom:      from,
 		DefaultFromName:  fromName,
-		ConfigurationSet: os.Getenv("SES_CONFIGURATION_SET"),
+		ConfigurationSet: cfg.SESConfigurationSet,
 		SendsPerSecond:   14,
 	})
 	if err != nil {
@@ -1647,7 +1729,7 @@ func buildSESSender(cfg config.AppConfig) email.Sender {
 }
 
 func buildResendSender(cfg config.AppConfig) email.Sender {
-	apiKey := os.Getenv("RESEND_API_KEY")
+	apiKey := cfg.ResendAPIKey
 	if apiKey == "" {
 		log.Printf("INFO: RESEND_API_KEY not set, email features will return 503")
 		return email.NewNoopSender()
@@ -1679,10 +1761,10 @@ func buildResendSender(cfg config.AppConfig) email.Sender {
 // return nil and main.go skips mounting the /storage routes. Quota
 // defaults match what's documented in OPERATOR.md / values-prod.yaml.
 func buildStorageService(cfg config.AppConfig, sqlStore storagesvc.BucketStore) *storagesvc.Service {
-	keyID := os.Getenv("R2_ACCESS_KEY_ID")
-	secret := os.Getenv("R2_SECRET_ACCESS_KEY")
-	endpoint := os.Getenv("R2_ENDPOINT")
-	bucket := os.Getenv("R2_BUCKET")
+	keyID := cfg.R2AccessKeyID
+	secret := cfg.R2SecretAccessKey
+	endpoint := cfg.R2Endpoint
+	bucket := cfg.R2Bucket
 	if keyID == "" || secret == "" || endpoint == "" || bucket == "" {
 		log.Printf("INFO: R2 not configured, storage feature disabled")
 		return nil
@@ -1691,7 +1773,7 @@ func buildStorageService(cfg config.AppConfig, sqlStore storagesvc.BucketStore) 
 		AccessKeyID:     keyID,
 		SecretAccessKey: secret,
 		Endpoint:        endpoint,
-		Region:          os.Getenv("R2_REGION"),
+		Region:          cfg.R2Region,
 		Bucket:          bucket,
 		PublicURL:       cfg.StoragePublicURL,
 	})
