@@ -11,14 +11,18 @@ export default defineConfig({
     exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'html', 'json-summary'],
+      // lcov is what Sonar reads (sonar.javascript.lcov.reportPaths). Without
+      // it every measured .ts/.tsx file reaches Sonar with no coverage data
+      // at all and is scored 0%, however many tests actually cover it.
+      reporter: ['text', 'html', 'json-summary', 'lcov'],
+      // A file absent from this list is absent from lcov, and Sonar reads an
+      // absent file as uncovered — so anything measured here must be listed.
       include: [
         'src/hooks/**/*.{ts,tsx}',
         'src/components/auth/**/*.{ts,tsx}',
         'src/pages/SetupPage.tsx',
         'src/pages/RealtimePage.tsx',
-        'src/realtime/**/*.{ts,tsx}',
-        'src/components/RealtimeIndicator.tsx',
+        'src/pages/TablesPage.tsx',
         'src/components/tables/ExposureToggle.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
