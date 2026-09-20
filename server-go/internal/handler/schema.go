@@ -359,11 +359,14 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	connStr := projectdb.DSN(creds, projectdb.Overrides{
+	connStr, err := projectdb.DSNFor(creds, projectdb.Overrides{
 		Host:    h.dbHostOverride,
 		Port:    h.dbPortOverride,
 		SSLMode: h.dbSSLModeOverride,
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {

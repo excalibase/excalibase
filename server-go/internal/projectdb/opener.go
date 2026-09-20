@@ -93,17 +93,6 @@ func DSNFor(creds map[string]string, o Overrides) (string, error) {
 	return strings.Join(fields, " "), nil
 }
 
-// DSN is DSNFor for the callers that have already established their
-// overrides are complete; an unstated mode yields an empty string rather
-// than a downgraded connection.
-func DSN(creds map[string]string, o Overrides) string {
-	dsn, err := DSNFor(creds, o)
-	if err != nil {
-		return ""
-	}
-	return dsn
-}
-
 // PoolLimits bound what the cache costs. A pool holds connections on the
 // tenant's database (whose own max_connections the platform does not own)
 // and file descriptors here, so both the size of a pool and the number of

@@ -10,7 +10,10 @@ func TestDSN_EscapesValuesThatWouldOtherwiseEndTheField(t *testing.T) {
 		"host": "db.internal", "port": "5432", "database": "tenant",
 		"username": "app", "password": `p a'ss\word`,
 	}
-	got := DSN(creds, Overrides{SSLMode: "require"})
+	got, err := DSNFor(creds, Overrides{SSLMode: "require"})
+	if err != nil {
+		t.Fatalf("DSNFor: %v", err)
+	}
 	want := `host='db.internal' port='5432' user='app' password='p a\'ss\\word' dbname='tenant' sslmode='require'`
 	if got != want {
 		t.Errorf("DSN:\n got %s\nwant %s", got, want)

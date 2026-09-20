@@ -131,9 +131,12 @@ func TestServableProjectIDs_SkipsProjectsThatMayNotBeServed(t *testing.T) {
 
 func TestDSN_UsesOverridesAndDefaults(t *testing.T) {
 	creds := appCreds()["projects/proj_a/credentials/excalibase_app"]
-	if got := DSN(creds, Overrides{}); !strings.Contains(got, "host='db.internal'") ||
-		!strings.Contains(got, "sslmode='require'") {
-		t.Errorf("default DSN: got %q", got)
+	def, err := DSNFor(creds, Overrides{})
+	if err != nil {
+		t.Fatalf("default DSN: %v", err)
+	}
+	if !strings.Contains(def, "host='db.internal'") || !strings.Contains(def, "sslmode='require'") {
+		t.Errorf("default DSN: got %q", def)
 	}
 	// A host override is a local port-forward, which usually has no TLS —
 	// but the mode is stated by the operator, never inferred here.
@@ -145,8 +148,12 @@ func TestDSN_UsesOverridesAndDefaults(t *testing.T) {
 		!strings.Contains(got, "sslmode='disable'") {
 		t.Errorf("override DSN: got %q", got)
 	}
-	if got := DSN(creds, Overrides{Host: "127.0.0.1", SSLMode: "verify-full"}); !strings.Contains(got, "sslmode='verify-full'") {
-		t.Errorf("explicit sslmode: got %q", got)
+	explicit, err := DSNFor(creds, Overrides{Host: "127.0.0.1", SSLMode: "verify-full"})
+	if err != nil {
+		t.Fatalf("explicit sslmode: %v", err)
+	}
+	if !strings.Contains(explicit, "sslmode='verify-full'") {
+		t.Errorf("explicit sslmode: got %q", explicit)
 	}
 }
 
