@@ -128,6 +128,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		rlUnauth:    custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
 		rlAuthed:    custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
+		rlMailSend:  custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),
@@ -337,7 +338,7 @@ var permissionRoutes = []permissionRoute{
 	{group: "tier config read", method: http.MethodGet, path: "/api/admin/tiers/"},
 	{group: "tier config update", method: http.MethodPut, path: "/api/admin/tiers/STANDARD"},
 	{group: "operator install", method: http.MethodPost, path: "/api/setup/install/postgres"},
-	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a"},
+	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a", unrestrictedOnly: true},
 }
 
 // refusedBy reports whether the caller must be refused on the route.

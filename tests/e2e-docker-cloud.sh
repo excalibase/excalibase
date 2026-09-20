@@ -136,28 +136,9 @@ grep -q "Cloud mode: using PostgreSQL vault store" "$DATA_DIR/server.log" \
   && pass "vault store = Postgres" \
   || fail "vault store" "expected Cloud mode log line"
 
-# --- Step 5: Vault init + unseal (mirrors studio /setup wizard) ---
-echo "5. Vault init + unseal"
-VAULT_INIT=$(curl -s -X POST "$API/api/vault/init" -H 'Content-Type: application/json' -d '{"shares":1,"threshold":1}')
-UNSEAL_KEY=$(echo "$VAULT_INIT" | jq -r '.shares[0]' 2>/dev/null)
-if [ -n "$UNSEAL_KEY" ] && [ "$UNSEAL_KEY" != "null" ]; then
-  pass "vault initialized (Postgres barrier)"
-  R=$(curl -s -X POST "$API/api/vault/unseal" -H 'Content-Type: application/json' -d "{\"share\":\"$UNSEAL_KEY\"}")
-  echo "$R" | jq -r '.sealed' 2>/dev/null | grep -q false && pass "vault unsealed" || fail "unseal" "$R"
-else
-  R=$(curl -s "$API/api/vault/status")
-  echo "$R" | jq -r '.sealed' 2>/dev/null | grep -q false && pass "vault already unsealed" || fail "vault" "$R"
-fi
-
-# Verify the barrier landed in the Postgres vault_barrier table.
-BARRIER_COUNT=$(docker exec "$PLATFORM_DB_CONTAINER" psql -U platform -d platform -tAc \
-  "SELECT count(*) FROM vault_barrier" 2>/dev/null || echo "0")
-[ "$BARRIER_COUNT" = "1" ] \
-  && pass "vault barrier persisted in platform-db" \
-  || fail "vault barrier" "expected 1 row in vault_barrier, got '$BARRIER_COUNT'"
-
-# --- Step 6: Register first admin (wizard step 4) ---
-echo "6. Register platform admin"
+# --- Step 5: Register first admin (wizard step 4) ---
+# Runs BEFORE the vault steps, which need an operator credential.
+echo "5. Register platform admin"
 ADMIN_PASS="E2eAdmin123!"
 REG_BODY=$(jq -n --arg p "$ADMIN_PASS" '{username:"admin", email:"admin@e2e.local", password:$p}')
 R=$(curl -s -X POST "$API/api/auth/register" -H 'Content-Type: application/json' -d "$REG_BODY")
@@ -169,6 +150,41 @@ else
   fail "auth" "register=$R"
   exit 1
 fi
+
+# --- Step 6: Vault init + unseal (mirrors studio /setup wizard) ---
+# /api/vault/init and /unseal require an operator credential (EXC-418). The
+# call used to go out unauthenticated, was refused, and the script read the
+# refusal as "already initialised" — so the vault step tested nothing.
+echo "6. Vault init + unseal"
+if curl -s "$API/api/vault/status" | jq -r '.initialized' 2>/dev/null | grep -q true; then
+  R=$(curl -s "$API/api/vault/status")
+  echo "$R" | jq -r '.sealed' 2>/dev/null | grep -q false && pass "vault already unsealed" || fail "vault" "$R"
+else
+  VAULT_INIT=$(curl -s -X POST "$API/api/vault/init" \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+    -d '{"shares":1,"threshold":1}')
+  UNSEAL_KEY=$(echo "$VAULT_INIT" | jq -r '.shares[0]' 2>/dev/null)
+  if [ -z "$UNSEAL_KEY" ] || [ "$UNSEAL_KEY" = "null" ]; then
+    fail "vault init" "$VAULT_INIT"
+    exit 1
+  fi
+  pass "vault initialized (Postgres barrier)"
+  R=$(curl -s -X POST "$API/api/vault/unseal" \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+    -d "{\"share\":\"$UNSEAL_KEY\"}")
+  if ! echo "$R" | jq -r '.sealed' 2>/dev/null | grep -q false; then
+    fail "unseal" "$R"
+    exit 1
+  fi
+  pass "vault unsealed"
+fi
+
+# Verify the barrier landed in the Postgres vault_barrier table.
+BARRIER_COUNT=$(docker exec "$PLATFORM_DB_CONTAINER" psql -U platform -d platform -tAc \
+  "SELECT count(*) FROM vault_barrier" 2>/dev/null || echo "0")
+[ "$BARRIER_COUNT" = "1" ] \
+  && pass "vault barrier persisted in platform-db" \
+  || fail "vault barrier" "expected 1 row in vault_barrier, got '$BARRIER_COUNT'"
 
 # --- Step 7: Cloud mode: orgs are not auto-bootstrapped ---
 # Cloud mode skips BootstrapDefaultOrg (orgs created on-demand via API).
