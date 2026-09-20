@@ -357,3 +357,49 @@ export default {
 		t.Errorf("bundle output missing metadata collector sentinel:\n%s", code)
 	}
 }
+
+// EXC-418: the runtime callback names its project in the body and its token
+// binds it to that project. A function id belonging to some other project must
+// not be reachable through it, and a token for another project must not
+// authenticate at all.
+func TestReceiveExportMetadata_RefusesAFunctionOfAnotherProject(t *testing.T) {
+	r, store, _ := setupMetadataHandler(t)
+	if err := store.Save(&edgefn.Function{
+		ProjectID: "proj_p2",
+		ID:        "elsewhere",
+		Name:      "elsewhere",
+		Files:     []edgefn.File{{Path: "index.ts", Content: "export default { kind: \"query\", args: { parse: (a) => a }, handler: async () => ({}) }"}},
+	}); err != nil {
+		t.Fatalf("seed other project: %v", err)
+	}
+
+	// proj_p1's runtime token, pointed at proj_p2's function.
+	req := httptest.NewRequest("POST", "/internal/runtime/functions/elsewhere/metadata",
+		bytes.NewBufferString(`{"projectId":"proj_p1","exports":[]}`))
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret("test-runtime-secret", "proj_p1"))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("got %d (%s), want 404", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+
+	other, err := store.Get("proj_p2", "elsewhere")
+	if err != nil || other == nil {
+		t.Fatalf("read back other project's function: %v", err)
+	}
+	if len(other.ExportMetadata) != 0 {
+		t.Fatalf("the other project's function was written: %s", other.ExportMetadata)
+	}
+}
+
+func TestReceiveExportMetadata_RefusesATokenMintedForAnotherProject(t *testing.T) {
+	r, _, _ := setupMetadataHandler(t)
+	req := httptest.NewRequest("POST", "/internal/runtime/functions/users/metadata",
+		bytes.NewBufferString(`{"projectId":"proj_p1","exports":[]}`))
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret("test-runtime-secret", "proj_p2"))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d (%s), want 401", w.Code, strings.TrimSpace(w.Body.String()))
+	}
+}
