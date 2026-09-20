@@ -43,7 +43,7 @@ const (
 	DefaultDBEndpointSharedIPKey = "excalibase-db-edge"
 )
 
-// parseDBEndpointPortRange reads "min-max". An empty value means "not set"
+// parseDBEndpointPortRange reads "lowest-highest". An empty value means "not set"
 // and yields the documented default; anything present is parsed strictly.
 func parseDBEndpointPortRange(raw string) (domain.PortRange, error) {
 	raw = strings.TrimSpace(raw)
@@ -54,15 +54,15 @@ func parseDBEndpointPortRange(raw string) (domain.PortRange, error) {
 	if len(parts) != 2 {
 		return domain.PortRange{}, fmt.Errorf("%q is not a port range (e.g. 30000-30999)", raw)
 	}
-	min, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	lowest, err := strconv.Atoi(strings.TrimSpace(parts[0]))
 	if err != nil {
 		return domain.PortRange{}, fmt.Errorf("%q: lower bound is not a number", raw)
 	}
-	max, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	highest, err := strconv.Atoi(strings.TrimSpace(parts[1]))
 	if err != nil {
 		return domain.PortRange{}, fmt.Errorf("%q: upper bound is not a number", raw)
 	}
-	return domain.NewPortRange(min, max)
+	return domain.NewPortRange(lowest, highest)
 }
 
 // envDBEndpointPortRange refuses to start on a window that cannot be

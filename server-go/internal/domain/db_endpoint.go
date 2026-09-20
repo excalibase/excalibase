@@ -51,17 +51,17 @@ type PortRange struct {
 // NewPortRange validates an allocation window. A window that is inverted,
 // privileged or off the end of the port space is refused rather than
 // silently clamped: an operator who wrote it down wrongly must be told.
-func NewPortRange(min, max int) (PortRange, error) {
-	if min < minAllocatablePort {
-		return PortRange{}, fmt.Errorf("%w: minimum %d is below %d", ErrInvalidPortRange, min, minAllocatablePort)
+func NewPortRange(lowest, highest int) (PortRange, error) {
+	if lowest < minAllocatablePort {
+		return PortRange{}, fmt.Errorf("%w: minimum %d is below %d", ErrInvalidPortRange, lowest, minAllocatablePort)
 	}
-	if max > maxAllocatablePort {
-		return PortRange{}, fmt.Errorf("%w: maximum %d is above %d", ErrInvalidPortRange, max, maxAllocatablePort)
+	if highest > maxAllocatablePort {
+		return PortRange{}, fmt.Errorf("%w: maximum %d is above %d", ErrInvalidPortRange, highest, maxAllocatablePort)
 	}
-	if max < min {
-		return PortRange{}, fmt.Errorf("%w: maximum %d is below minimum %d", ErrInvalidPortRange, max, min)
+	if highest < lowest {
+		return PortRange{}, fmt.Errorf("%w: maximum %d is below minimum %d", ErrInvalidPortRange, highest, lowest)
 	}
-	return PortRange{Min: min, Max: max}, nil
+	return PortRange{Min: lowest, Max: highest}, nil
 }
 
 // Size is how many ports the window holds.

@@ -123,8 +123,8 @@ type DatabaseInstance struct {
 	// filing another; a retry after a timed-out wait observes it rather than
 	// leaving it running and starting a second. Cleared when the project
 	// settles.
-	PauseBackupID string    `json:"pauseBackupId,omitempty"`
-	PauseBackupAt *FlexTime `json:"pauseBackupAt,omitempty"`
+	PauseBackupID      string    `json:"pauseBackupId,omitempty"`
+	PauseBackupAt      *FlexTime `json:"pauseBackupAt,omitempty"`
 	PauseLastAttemptAt *FlexTime `json:"pauseLastAttemptAt,omitempty"`
 
 	// Timestamps

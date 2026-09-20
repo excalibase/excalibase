@@ -15,9 +15,9 @@ import (
 
 const testQuarantine = 30 * 24 * time.Hour
 
-func testWindow(t *testing.T, min, max int) domain.PortRange {
+func testWindow(t *testing.T, lowest, highest int) domain.PortRange {
 	t.Helper()
-	window, err := domain.NewPortRange(min, max)
+	window, err := domain.NewPortRange(lowest, highest)
 	if err != nil {
 		t.Fatalf("NewPortRange: %v", err)
 	}

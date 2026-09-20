@@ -11,7 +11,6 @@ import (
 
 const errIterateRows = "iterate rows: %w"
 
-
 // --- MetricsStore ---
 
 func (s *Store) AppendMetrics(ctx context.Context, m *domain.DatabaseMetrics) error {

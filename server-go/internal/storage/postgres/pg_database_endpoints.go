@@ -23,9 +23,6 @@ const dbEndpointPortLockSpace = 410
 // it — so every allocation serializes on the same value.
 const dbEndpointPortLockKey = 0
 
-// dbEndpointColumns is the projection every read of the table uses.
-const dbEndpointColumns = `project_id, port, public, require_tls`
-
 // GetDatabaseEndpoint returns the project's public endpoint setting. See
 // storage.DatabaseEndpointStore.
 func (s *Store) GetDatabaseEndpoint(ctx context.Context, projectID string) (domain.DBEndpoint, error) {
@@ -89,27 +86,36 @@ func (s *Store) AllocateDatabaseEndpointPort(ctx context.Context, projectID stri
 // SetDatabaseEndpointPublic records whether the project's Service exists. See
 // storage.DatabaseEndpointStore.
 func (s *Store) SetDatabaseEndpointPublic(ctx context.Context, projectID string, public bool) (domain.DBEndpoint, error) {
-	return s.upsertDBEndpointFlag(ctx, projectID, "public", public)
+	return s.writeDBEndpointFlag(ctx, projectID, setPublicSQL, public, "public")
 }
 
 // SetDatabaseEndpointRequireTLS records the project's TLS choice. See
 // storage.DatabaseEndpointStore.
 func (s *Store) SetDatabaseEndpointRequireTLS(ctx context.Context, projectID string, requireTLS bool) (domain.DBEndpoint, error) {
-	return s.upsertDBEndpointFlag(ctx, projectID, "require_tls", requireTLS)
+	return s.writeDBEndpointFlag(ctx, projectID, setRequireTLSSQL, requireTLS, "require_tls")
 }
 
-// upsertDBEndpointFlag writes one boolean column, creating the row at its
-// defaults when the project has never touched the setting. The column name is
-// a compile-time constant from the two callers above, never caller input.
-func (s *Store) upsertDBEndpointFlag(ctx context.Context, projectID, column string, value bool) (domain.DBEndpoint, error) {
-	query := fmt.Sprintf(`
-INSERT INTO database_endpoints (project_id, %[1]s, updated_at)
+// Each settable column has its own statement. A single helper taking the
+// column name would put an identifier into the statement text, which is the
+// shape an injection takes even when today's callers only pass constants.
+const setPublicSQL = `
+INSERT INTO database_endpoints (project_id, public, updated_at)
 VALUES ($1, $2, NOW())
-ON CONFLICT (project_id) DO UPDATE SET %[1]s = EXCLUDED.%[1]s, updated_at = NOW()
-RETURNING %[2]s`, column, dbEndpointColumns)
+ON CONFLICT (project_id) DO UPDATE SET public = EXCLUDED.public, updated_at = NOW()
+RETURNING project_id, port, public, require_tls`
+
+const setRequireTLSSQL = `
+INSERT INTO database_endpoints (project_id, require_tls, updated_at)
+VALUES ($1, $2, NOW())
+ON CONFLICT (project_id) DO UPDATE SET require_tls = EXCLUDED.require_tls, updated_at = NOW()
+RETURNING project_id, port, public, require_tls`
+
+// writeDBEndpointFlag runs one of the statements above, creating the row at
+// its defaults when the project has never touched the setting.
+func (s *Store) writeDBEndpointFlag(ctx context.Context, projectID, query string, value bool, name string) (domain.DBEndpoint, error) {
 	endpoint, err := scanDBEndpoint(s.db.QueryRowContext(ctx, query, projectID, value))
 	if err != nil {
-		return domain.DBEndpoint{}, fmt.Errorf("write database endpoint %s: %w", column, err)
+		return domain.DBEndpoint{}, fmt.Errorf("write database endpoint %s: %w", name, err)
 	}
 	return endpoint, nil
 }
@@ -208,7 +214,7 @@ func writeDBEndpointPort(ctx context.Context, tx *sql.Tx, projectID string, port
 INSERT INTO database_endpoints (project_id, port, updated_at)
 VALUES ($1, $2, NOW())
 ON CONFLICT (project_id) DO UPDATE SET port = EXCLUDED.port, updated_at = NOW()
-RETURNING `+dbEndpointColumns, projectID, port))
+RETURNING project_id, port, public, require_tls`, projectID, port))
 	if err != nil {
 		return domain.DBEndpoint{}, fmt.Errorf("write database endpoint port: %w", err)
 	}
@@ -225,7 +231,7 @@ type dbEndpointQuerier interface {
 // TLS required — when it has none.
 func readDBEndpoint(ctx context.Context, q dbEndpointQuerier, projectID string) (domain.DBEndpoint, error) {
 	endpoint, err := scanDBEndpoint(q.QueryRowContext(ctx,
-		`SELECT `+dbEndpointColumns+` FROM database_endpoints WHERE project_id = $1`, projectID))
+		`SELECT project_id, port, public, require_tls FROM database_endpoints WHERE project_id = $1`, projectID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.DefaultDBEndpoint(projectID), nil
 	}

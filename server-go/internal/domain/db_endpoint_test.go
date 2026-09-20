@@ -7,19 +7,19 @@ import (
 
 func TestNewPortRangeRejectsUnusableWindows(t *testing.T) {
 	cases := []struct {
-		name     string
-		min, max int
+		name            string
+		lowest, highest int
 	}{
-		{"zero min", 0, 100},
-		{"negative min", -1, 100},
-		{"max below min", 200, 100},
-		{"max above 65535", 60000, 70000},
-		{"privileged min", 80, 1000},
+		{"zero lowest", 0, 100},
+		{"negative lowest", -1, 100},
+		{"highest below lowest", 200, 100},
+		{"highest above 65535", 60000, 70000},
+		{"privileged lowest", 80, 1000},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewPortRange(tc.min, tc.max); !errors.Is(err, ErrInvalidPortRange) {
-				t.Fatalf("NewPortRange(%d,%d) error = %v, want ErrInvalidPortRange", tc.min, tc.max, err)
+			if _, err := NewPortRange(tc.lowest, tc.highest); !errors.Is(err, ErrInvalidPortRange) {
+				t.Fatalf("NewPortRange(%d,%d) error = %v, want ErrInvalidPortRange", tc.lowest, tc.highest, err)
 			}
 		})
 	}
