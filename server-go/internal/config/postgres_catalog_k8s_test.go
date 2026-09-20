@@ -105,7 +105,7 @@ func TestRenderClusterImageCatalogEmitsIntegerMajors(t *testing.T) {
 
 func TestRenderClusterImageCatalogRecordsDocumentDBMajors(t *testing.T) {
 	raw, err := renderClusterImageCatalog(PostgresCatalog{
-		DocumentDBVersion: "0.114-0",
+		DocumentDBRef: "v0.117-0",
 		Majors: []PostgresMajorEntry{
 			{Major: "16", BaseImage: "ghcr.io/x/y@sha256:aa", Image: "ghcr.io/x/y@sha256:bb", DocumentDB: true},
 			{Major: "15", BaseImage: "ghcr.io/x/y@sha256:cc", Image: "ghcr.io/x/y@sha256:dd"},
@@ -120,12 +120,12 @@ func TestRenderClusterImageCatalogRecordsDocumentDBMajors(t *testing.T) {
 	if annotations[documentDBMajorsAnnotation] != "16" {
 		t.Errorf("%s: got %v, want %q", documentDBMajorsAnnotation, annotations[documentDBMajorsAnnotation], "16")
 	}
-	if annotations[documentDBVersionAnnotation] != "0.114-0" {
-		t.Errorf("%s: got %v", documentDBVersionAnnotation, annotations[documentDBVersionAnnotation])
+	if annotations[documentDBRefAnnotation] != "v0.117-0" {
+		t.Errorf("%s: got %v", documentDBRefAnnotation, annotations[documentDBRefAnnotation])
 	}
 }
 
-func TestBuildMatrixCoversEveryMajorAndCarriesTheDocumentDBVersion(t *testing.T) {
+func TestBuildMatrixCoversEveryMajorAndCarriesTheDocumentDBRef(t *testing.T) {
 	raw, err := RenderBuildMatrix()
 	if err != nil {
 		t.Fatalf("RenderBuildMatrix: %v", err)
@@ -148,10 +148,10 @@ func TestBuildMatrixCoversEveryMajorAndCarriesTheDocumentDBVersion(t *testing.T)
 		}
 		want := ""
 		if entry.DocumentDB {
-			want = DocumentDBVersion()
+			want = DocumentDBRef()
 		}
-		if rows[i].DocumentDB != want {
-			t.Errorf("major %s: documentdb %q, want %q", entry.Major, rows[i].DocumentDB, want)
+		if rows[i].DocumentDBRef != want {
+			t.Errorf("major %s: documentdbRef %q, want %q", entry.Major, rows[i].DocumentDBRef, want)
 		}
 	}
 }

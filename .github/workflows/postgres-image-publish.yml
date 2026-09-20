@@ -5,8 +5,8 @@ name: Publish Postgres images
 # k8s/postgres-image-catalog.yaml, so nothing here may publish a floating tag
 # that a running cluster could drift onto.
 #
-# The majors, their digest-pinned base images and the pinned DocumentDB release
-# all come from server-go/internal/config/postgres_catalog.yaml — the same file
+# The majors, their digest-pinned base images and the pinned DocumentDB tag all
+# come from server-go/internal/config/postgres_catalog.yaml — the same file
 # provisioning validates against — so the build matrix cannot disagree with
 # what the platform will accept.
 
@@ -50,6 +50,8 @@ jobs:
     strategy:
       # Serial: four Postgres images at once is a lot of registry traffic for
       # no gain, and a failure part-way is easier to read one major at a time.
+      # Each DocumentDB-carrying major also compiles the extension from source,
+      # which is not something to run four times in parallel on one runner.
       max-parallel: 1
       fail-fast: false
       matrix:
@@ -75,7 +77,7 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ matrix.entry.base }}
             PG_MAJOR=${{ matrix.entry.major }}
-            DOCUMENTDB_VERSION=${{ matrix.entry.documentdb }}
+            DOCUMENTDB_REF=${{ matrix.entry.documentdbRef }}
           tags: ghcr.io/excalibase/postgresql:${{ matrix.entry.major }}
           platforms: linux/amd64
 

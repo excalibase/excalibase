@@ -46,11 +46,13 @@ func TestLookupPostgresMajorTrimsWhitespace(t *testing.T) {
 	}
 }
 
-func TestDocumentDBSupportedMatchesUpstreamPackaging(t *testing.T) {
-	// Upstream publishes the Debian 12 DocumentDB packages for 16 and 17 only.
-	// 14 and 15 must report false so a project asking for DocumentDB there is
-	// refused before anything is installed.
-	tests := map[string]bool{"14": false, "15": false, "16": true, "17": true}
+func TestDocumentDBSupportedMatchesWhatTheImagesWereProvenToDo(t *testing.T) {
+	// We compile DocumentDB ourselves, so the supported set is the set whose
+	// image built and passed the collection/insert/read smoke test: 15, 16 and
+	// 17. 14 does not compile (MarkGUCPrefixReserved arrived in 15) and must
+	// report false so a project asking for DocumentDB there is refused before
+	// anything is provisioned.
+	tests := map[string]bool{"14": false, "15": true, "16": true, "17": true}
 	for major, want := range tests {
 		if got := DocumentDBSupported(major); got != want {
 			t.Errorf("DocumentDBSupported(%q): got %v, want %v", major, got, want)
@@ -168,13 +170,20 @@ majors:
 	}
 }
 
-func TestDocumentDBVersionIsPinned(t *testing.T) {
-	if DocumentDBVersion() == "" {
-		t.Fatal("documentDBVersion must be pinned")
+// We own which DocumentDB every project runs, so the tag has to be recorded
+// and has to be a tag — a branch or a bare commit would make the next rebuild
+// a different extension with nothing saying so.
+func TestDocumentDBRefIsAPinnedReleaseTag(t *testing.T) {
+	ref := DocumentDBRef()
+	if ref == "" {
+		t.Fatal("documentDBRef must be pinned")
+	}
+	if !strings.HasPrefix(ref, "v") {
+		t.Errorf("documentDBRef %q is not a release tag", ref)
 	}
 }
 
-func TestParseCatalogRejectsAMissingDocumentDBVersionWhenAMajorNeedsIt(t *testing.T) {
+func TestParseCatalogRejectsAMissingDocumentDBRefWhenAMajorNeedsIt(t *testing.T) {
 	_, err := parsePostgresCatalog([]byte(`
 majors:
   - major: "17"
@@ -182,7 +191,7 @@ majors:
     documentdb: true
 `))
 	if err == nil {
-		t.Fatal("claiming DocumentDB support with no pinned version must be fatal")
+		t.Fatal("claiming DocumentDB support with no pinned tag must be fatal")
 	}
 }
 
@@ -222,7 +231,7 @@ func TestDocumentDBMajorsMessageListsOnlyCapableMajors(t *testing.T) {
 			t.Errorf("message %q omits major %s", message, major)
 		}
 	}
-	if strings.Contains(message, "14") || strings.Contains(message, "15") {
+	if strings.Contains(message, "14") {
 		t.Errorf("message %q lists a major that cannot offer DocumentDB", message)
 	}
 }

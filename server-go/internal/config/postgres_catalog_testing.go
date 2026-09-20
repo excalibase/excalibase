@@ -14,7 +14,7 @@ import "fmt"
 func PublishPostgresCatalogForTest() (restore func()) {
 	previous := postgresCatalog
 
-	published := PostgresCatalog{DocumentDBVersion: previous.DocumentDBVersion}
+	published := PostgresCatalog{DocumentDBRef: previous.DocumentDBRef}
 	for _, entry := range previous.Majors {
 		if entry.Image == "" {
 			entry.Image = fmt.Sprintf("ghcr.io/excalibase/postgresql@sha256:%064d", mustAtoiMajor(entry.Major))

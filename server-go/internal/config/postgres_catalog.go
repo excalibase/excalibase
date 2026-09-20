@@ -30,10 +30,11 @@ type PostgresMajorEntry struct {
 
 // PostgresCatalog is the whole catalogue as it appears on disk.
 type PostgresCatalog struct {
-	// DocumentDBVersion is the upstream release the DocumentDB packages come
-	// from, e.g. "0.114-0".
-	DocumentDBVersion string               `json:"documentDBVersion,omitempty"`
-	Majors            []PostgresMajorEntry `json:"majors"`
+	// DocumentDBRef is the upstream git tag the DocumentDB extension is
+	// compiled from, e.g. "v0.117-0". We build it rather than take upstream's
+	// packages, so this is our choice to move, not theirs.
+	DocumentDBRef string               `json:"documentDBRef,omitempty"`
+	Majors        []PostgresMajorEntry `json:"majors"`
 }
 
 var postgresCatalog PostgresCatalog
@@ -78,8 +79,8 @@ func parsePostgresCatalog(raw []byte) (PostgresCatalog, error) {
 		if entry.Image != "" && !digestRef.MatchString(entry.Image) {
 			return PostgresCatalog{}, fmt.Errorf("major %s: image %q is not pinned by digest", entry.Major, entry.Image)
 		}
-		if entry.DocumentDB && catalog.DocumentDBVersion == "" {
-			return PostgresCatalog{}, fmt.Errorf("major %s claims DocumentDB support but documentDBVersion is not pinned", entry.Major)
+		if entry.DocumentDB && catalog.DocumentDBRef == "" {
+			return PostgresCatalog{}, fmt.Errorf("major %s claims DocumentDB support but documentDBRef is not pinned", entry.Major)
 		}
 	}
 	return catalog, nil
@@ -120,8 +121,8 @@ func DocumentDBSupported(major string) bool {
 	return ok && entry.DocumentDB
 }
 
-// DocumentDBVersion is the pinned upstream DocumentDB release.
-func DocumentDBVersion() string { return postgresCatalog.DocumentDBVersion }
+// DocumentDBRef is the pinned upstream DocumentDB tag the images compile.
+func DocumentDBRef() string { return postgresCatalog.DocumentDBRef }
 
 // PostgresImage returns the digest-pinned image for a major. It errors — never
 // falls back to a tag or to a neighbouring major — when the major is not in the

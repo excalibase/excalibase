@@ -7,35 +7,38 @@ import "errors"
 // --- Provisioning ---
 
 type ProvisioningRequest struct {
-	ProjectName     string            `json:"projectName"`
-	OrgID           string            `json:"orgId"`
-	OwnerID         string            `json:"ownerId,omitempty"` // set by handler from auth context
-	DBType          DatabaseType      `json:"databaseType"`
-	Tier            TierType          `json:"tier"`
-	Backup          *BackupSettings   `json:"backup,omitempty"`
-	Pooler          *PoolerSettings   `json:"pooler,omitempty"`
-	Network         *NetworkConfig    `json:"network,omitempty"`
+	ProjectName     string                   `json:"projectName"`
+	OrgID           string                   `json:"orgId"`
+	OwnerID         string                   `json:"ownerId,omitempty"` // set by handler from auth context
+	DBType          DatabaseType             `json:"databaseType"`
+	Tier            TierType                 `json:"tier"`
+	Backup          *BackupSettings          `json:"backup,omitempty"`
+	Pooler          *PoolerSettings          `json:"pooler,omitempty"`
+	Network         *NetworkConfig           `json:"network,omitempty"`
 	Maintenance     *MaintenanceWindowConfig `json:"maintenance,omitempty"`
-	Parameters      map[string]string `json:"parameters,omitempty"`
-	Tags            map[string]string `json:"tags,omitempty"`
-	WebhookURL      string            `json:"webhookUrl,omitempty"`
-	StorageClass    string            `json:"storageClassName,omitempty"`
-	PostgresVersion string            `json:"postgresVersion,omitempty"`
-	DatabaseName    string            `json:"databaseName,omitempty"`
-	MasterUsername  string            `json:"masterUsername,omitempty"`
-	ParameterGroup  string            `json:"parameterGroupName,omitempty"`
-	AppPassword     string            `json:"appPassword,omitempty"` // optional: password for excalibase_app role
+	Parameters      map[string]string        `json:"parameters,omitempty"`
+	Tags            map[string]string        `json:"tags,omitempty"`
+	WebhookURL      string                   `json:"webhookUrl,omitempty"`
+	StorageClass    string                   `json:"storageClassName,omitempty"`
+	PostgresVersion string                   `json:"postgresVersion,omitempty"`
+	DatabaseName    string                   `json:"databaseName,omitempty"`
+	MasterUsername  string                   `json:"masterUsername,omitempty"`
+	ParameterGroup  string                   `json:"parameterGroupName,omitempty"`
+	AppPassword     string                   `json:"appPassword,omitempty"` // optional: password for excalibase_app role
 	// DocumentDB asks for a project whose image carries the DocumentDB
-	// extension. Only majors the catalogue marks as DocumentDB-capable
-	// accept it; enabling the extension itself is EXC-409.
-	DocumentDB      bool              `json:"documentDb,omitempty"`
+	// extension. It is a create-time choice and only a create-time choice: the
+	// image a cluster runs is fixed when the cluster is provisioned, so a
+	// project cannot be turned into a DocumentDB project afterwards. Only
+	// majors the catalogue marks as DocumentDB-capable accept it; creating the
+	// extension in the database is EXC-409.
+	DocumentDB bool `json:"documentDb,omitempty"`
 }
 
 type BackupSettings struct {
-	Enabled   bool            `json:"enabled"`
-	Schedule  string          `json:"schedule,omitempty"`
-	Retention int             `json:"retention,omitempty"`
-	S3        *S3Credentials  `json:"s3,omitempty"`
+	Enabled   bool           `json:"enabled"`
+	Schedule  string         `json:"schedule,omitempty"`
+	Retention int            `json:"retention,omitempty"`
+	S3        *S3Credentials `json:"s3,omitempty"`
 }
 
 type S3Credentials struct {
@@ -53,9 +56,9 @@ type PoolerSettings struct {
 }
 
 type NetworkConfig struct {
-	AllowedCIDRs   []string `json:"allowedCidrs,omitempty"`
-	AllowedPorts   []int    `json:"allowedPorts,omitempty"`
-	PolicyEnabled  bool     `json:"policyEnabled"`
+	AllowedCIDRs  []string `json:"allowedCidrs,omitempty"`
+	AllowedPorts  []int    `json:"allowedPorts,omitempty"`
+	PolicyEnabled bool     `json:"policyEnabled"`
 }
 
 type MaintenanceWindowConfig struct {
@@ -65,32 +68,32 @@ type MaintenanceWindowConfig struct {
 }
 
 type ProvisioningResponse struct {
-	ProjectID    string            `json:"projectId"`
-	ProjectName  string            `json:"projectName,omitempty"`
-	Status       string            `json:"status"`
-	CurrentStage ProvisioningStage `json:"currentStage"`
-	Namespace    string            `json:"namespace"`
-	Host         string            `json:"host,omitempty"`
-	Port         *int              `json:"port,omitempty"`
-	DatabaseName string            `json:"databaseName,omitempty"`
-	FailureReason string           `json:"failureReason,omitempty"`
+	ProjectID     string            `json:"projectId"`
+	ProjectName   string            `json:"projectName,omitempty"`
+	Status        string            `json:"status"`
+	CurrentStage  ProvisioningStage `json:"currentStage"`
+	Namespace     string            `json:"namespace"`
+	Host          string            `json:"host,omitempty"`
+	Port          *int              `json:"port,omitempty"`
+	DatabaseName  string            `json:"databaseName,omitempty"`
+	FailureReason string            `json:"failureReason,omitempty"`
 	FailureStage  ProvisioningStage `json:"failureStage,omitempty"`
 	FailureStep   string            `json:"failureStep,omitempty"`
 	RollbackLog   string            `json:"rollbackLog,omitempty"`
-	CreatedAt    *FlexTime         `json:"createdAt,omitempty"`
+	CreatedAt     *FlexTime         `json:"createdAt,omitempty"`
 }
 
 // --- Credentials ---
 
 type CredentialsResponse struct {
-	ProjectID    string `json:"projectId"`
-	Host         string `json:"host"`
-	ReadOnlyHost string `json:"readOnlyHost,omitempty"`
-	Port         int    `json:"port"`
-	DatabaseName string `json:"databaseName"`
-	Username     string `json:"username"`
-	Password     string `json:"password"`
-	SSLMode      string `json:"sslMode"`
+	ProjectID     string `json:"projectId"`
+	Host          string `json:"host"`
+	ReadOnlyHost  string `json:"readOnlyHost,omitempty"`
+	Port          int    `json:"port"`
+	DatabaseName  string `json:"databaseName"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	SSLMode       string `json:"sslMode"`
 	ConnectionURL string `json:"connectionUrl"`
 }
 
@@ -107,12 +110,12 @@ type CredentialsData struct {
 // --- Metrics ---
 
 type DatabaseMetrics struct {
-	ProjectID          string    `json:"projectId"`
-	Timestamp          *FlexTime `json:"timestamp,omitempty"`
-	Status             string     `json:"status,omitempty"`
-	HealthStatus       string     `json:"healthStatus,omitempty"`
-	MetricsAvailable   bool       `json:"metricsAvailable"`
-	UnavailableReason  *string    `json:"unavailableReason"`
+	ProjectID         string    `json:"projectId"`
+	Timestamp         *FlexTime `json:"timestamp,omitempty"`
+	Status            string    `json:"status,omitempty"`
+	HealthStatus      string    `json:"healthStatus,omitempty"`
+	MetricsAvailable  bool      `json:"metricsAvailable"`
+	UnavailableReason *string   `json:"unavailableReason"`
 
 	// Resource usage (from metrics-server — null if unavailable)
 	CPUUsagePercent    *float64 `json:"cpuUsagePercent"`
@@ -123,23 +126,23 @@ type DatabaseMetrics struct {
 	DiskUsageGB        *int64   `json:"diskUsageGB"`
 
 	// Database metrics (from CNPG port 9187)
-	ActiveConnections   *int     `json:"activeConnections"`
-	IdleConnections     *int     `json:"idleConnections"`
-	MaxConnections      *int     `json:"maxConnections"`
-	QueriesPerSecond    *float64 `json:"queriesPerSecond"`
-	AvgQueryLatencyMs   *float64 `json:"averageQueryLatencyMs"`
-	SlowQueryCount      *int     `json:"slowQueryCount"`
-	DatabaseSizeGB      *int64   `json:"databaseSizeGB"`
+	ActiveConnections *int     `json:"activeConnections"`
+	IdleConnections   *int     `json:"idleConnections"`
+	MaxConnections    *int     `json:"maxConnections"`
+	QueriesPerSecond  *float64 `json:"queriesPerSecond"`
+	AvgQueryLatencyMs *float64 `json:"averageQueryLatencyMs"`
+	SlowQueryCount    *int     `json:"slowQueryCount"`
+	DatabaseSizeGB    *int64   `json:"databaseSizeGB"`
 
 	// Backup
 	LastBackupTime *FlexTime `json:"lastBackupTime"`
 	NextBackupTime *FlexTime `json:"nextBackupTime"`
 
 	// Resource limits (from tier config)
-	CPULimitCores    *float64 `json:"cpuLimitCores"`
-	MemoryLimitMB    *int64   `json:"memoryLimitMB"`
-	StorageLimit     *string  `json:"storageLimit"`
-	InstanceCount    *int     `json:"instanceCount"`
+	CPULimitCores *float64 `json:"cpuLimitCores"`
+	MemoryLimitMB *int64   `json:"memoryLimitMB"`
+	StorageLimit  *string  `json:"storageLimit"`
+	InstanceCount *int     `json:"instanceCount"`
 
 	// Per-pod breakdown (from metrics-server)
 	Pods []PodMetrics `json:"pods,omitempty"`
@@ -205,11 +208,11 @@ type RestoreJob struct {
 	// The client learns it here — it never supplies it.
 	NewProjectID   string `json:"newProjectId"`
 	NewProjectName string `json:"newProjectName,omitempty"`
-	Status          string `json:"status"` // RUNNING | COMPLETED | FAILED
-	CurrentStep     string `json:"currentStep,omitempty"`
-	TargetKind      string `json:"targetKind"` // latest | time | xid | lsn | name
-	TargetValue     string `json:"targetValue,omitempty"`
-	FailureReason   string `json:"failureReason,omitempty"`
+	Status         string `json:"status"` // RUNNING | COMPLETED | FAILED
+	CurrentStep    string `json:"currentStep,omitempty"`
+	TargetKind     string `json:"targetKind"` // latest | time | xid | lsn | name
+	TargetValue    string `json:"targetValue,omitempty"`
+	FailureReason  string `json:"failureReason,omitempty"`
 	// Owner names the platform process driving this job. Only that process
 	// may write progress onto it, so a replica restarting mid-deploy cannot
 	// fail a restore one of its peers is still running.
@@ -322,13 +325,13 @@ type PerformanceSummary struct {
 }
 
 type QueryStat struct {
-	Query          string  `json:"query"`
-	Calls          int64   `json:"calls"`
+	Query           string  `json:"query"`
+	Calls           int64   `json:"calls"`
 	TotalExecTimeMs float64 `json:"totalExecTimeMs"`
-	AvgExecTimeMs  float64 `json:"avgExecTimeMs"`
-	MinExecTimeMs  float64 `json:"minExecTimeMs"`
-	MaxExecTimeMs  float64 `json:"maxExecTimeMs"`
-	Rows           int64   `json:"rows"`
+	AvgExecTimeMs   float64 `json:"avgExecTimeMs"`
+	MinExecTimeMs   float64 `json:"minExecTimeMs"`
+	MaxExecTimeMs   float64 `json:"maxExecTimeMs"`
+	Rows            int64   `json:"rows"`
 }
 
 type WaitEvent struct {
@@ -340,40 +343,40 @@ type WaitEvent struct {
 // --- Alerts ---
 
 type Alert struct {
-	ID        string     `json:"id"`
-	ProjectID string     `json:"projectId"`
-	Severity  string     `json:"severity"` // WARNING, CRITICAL
-	Message   string     `json:"message"`
-	Metric    string     `json:"metric,omitempty"`
-	Value     *float64   `json:"value,omitempty"`
-	Threshold *float64   `json:"threshold,omitempty"`
+	ID        string    `json:"id"`
+	ProjectID string    `json:"projectId"`
+	Severity  string    `json:"severity"` // WARNING, CRITICAL
+	Message   string    `json:"message"`
+	Metric    string    `json:"metric,omitempty"`
+	Value     *float64  `json:"value,omitempty"`
+	Threshold *float64  `json:"threshold,omitempty"`
 	Timestamp *FlexTime `json:"timestamp"`
-	Resolved  bool       `json:"resolved"`
+	Resolved  bool      `json:"resolved"`
 }
 
 // --- Audit ---
 
 type AuditConfig struct {
-	Enabled    bool              `json:"enabled"`
-	LogLevel   string            `json:"logLevel,omitempty"`
-	Settings   map[string]string `json:"settings,omitempty"`
+	Enabled  bool              `json:"enabled"`
+	LogLevel string            `json:"logLevel,omitempty"`
+	Settings map[string]string `json:"settings,omitempty"`
 }
 
 // --- Snapshot ---
 
 type SnapshotInfo struct {
-	ID        string     `json:"id"`
-	ProjectID string     `json:"projectId"`
-	Format    string     `json:"format"`
-	Size      int64      `json:"size"`
+	ID        string    `json:"id"`
+	ProjectID string    `json:"projectId"`
+	Format    string    `json:"format"`
+	Size      int64     `json:"size"`
 	CreatedAt *FlexTime `json:"createdAt"`
-	FilePath  string     `json:"filePath,omitempty"`
+	FilePath  string    `json:"filePath,omitempty"`
 }
 
 type SnapshotExportRequest struct {
-	Format      string   `json:"format,omitempty"` // custom, plain, directory, tar
-	SchemaOnly  bool     `json:"schemaOnly"`
-	Tables      []string `json:"tables,omitempty"`
+	Format        string   `json:"format,omitempty"` // custom, plain, directory, tar
+	SchemaOnly    bool     `json:"schemaOnly"`
+	Tables        []string `json:"tables,omitempty"`
 	ExcludeTables []string `json:"excludeTables,omitempty"`
 }
 
@@ -426,8 +429,8 @@ type SetupStatusResponse struct {
 // --- Cost ---
 
 type CostEstimation struct {
-	Tier           TierType `json:"tier"`
-	MonthlyCostUSD float64  `json:"monthlyCostUsd"`
+	Tier           TierType           `json:"tier"`
+	MonthlyCostUSD float64            `json:"monthlyCostUsd"`
 	Breakdown      map[string]float64 `json:"breakdown"`
 }
 

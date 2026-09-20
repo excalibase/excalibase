@@ -5,10 +5,12 @@ package schema
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +44,12 @@ func dockerfileContext(t *testing.T) string {
 	return path
 }
 
+// DocumentDB refuses to load unless its libraries are preloaded, and its DDL
+// path needs pg_cron. Upstream's own scripts/preload_libraries.sh produces
+// exactly this list for a non-distributed build; carrying more would be
+// guessing, carrying less does not start.
+const documentDBPreloadLibraries = "pg_cron, pg_documentdb_core, pg_documentdb"
+
 func startImageForMajor(ctx context.Context, t *testing.T, entry config.PostgresMajorEntry) *sql.DB {
 	t.Helper()
 
@@ -49,11 +57,18 @@ func startImageForMajor(ctx context.Context, t *testing.T, entry config.Postgres
 		"BASE_IMAGE": &entry.BaseImage,
 		"PG_MAJOR":   &entry.Major,
 	}
-	documentDBVersion := ""
+	documentDBRef := ""
+	// Written into postgresql.conf rather than passed as pg_ctl options: the
+	// library list has to be quoted, and quoting it inside the entrypoint's
+	// own quoting is how this silently fails to start.
+	configureDocumentDB := ""
 	if entry.DocumentDB {
-		documentDBVersion = config.DocumentDBVersion()
+		documentDBRef = config.DocumentDBRef()
+		configureDocumentDB = fmt.Sprintf(
+			"printf \"shared_preload_libraries = '%s'\\ncron.database_name = 'postgres'\\n\" >> /tmp/pgdata/postgresql.conf && ",
+			documentDBPreloadLibraries)
 	}
-	buildArgs["DOCUMENTDB_VERSION"] = &documentDBVersion
+	buildArgs["DOCUMENTDB_REF"] = &documentDBRef
 
 	container, err := postgres.Run(ctx, "",
 		testcontainers.CustomizeRequest(testcontainers.GenericContainerRequest{
@@ -75,6 +90,9 @@ func startImageForMajor(ctx context.Context, t *testing.T, entry config.Postgres
 						// initdb only writes loopback host lines; the test connects
 						// over the docker bridge.
 						"echo 'host all all all trust' >> /tmp/pgdata/pg_hba.conf && " +
+						configureDocumentDB +
+						// listen_addresses covers localhost too: DocumentDB's DDL
+						// path opens a libpq connection back to the server.
 						"pg_ctl -D /tmp/pgdata -o '-c listen_addresses=* -p 5432' -w start && " +
 						"tail -f /dev/null"},
 				ExposedPorts: []string{"5432/tcp"},
@@ -143,12 +161,64 @@ func TestEveryAllowlistedExtensionInstallsOnEverySupportedMajor(t *testing.T) {
 	}
 }
 
-// DocumentDB's files have to be in the image before EXC-409 can enable it, and
-// only on the majors the catalogue says can offer it. A major marked capable
-// whose image lacks the files, or one marked incapable whose image has them,
-// means the catalogue is lying to the API that refuses on its word.
-func TestDocumentDBFilesMatchWhatTheCatalogueClaims(t *testing.T) {
+// A major is DocumentDB-capable only if the extension actually works there.
+// Proving the files are present proves nothing — an extension can ship and
+// still fail to create, load or store a document. So each capable major
+// creates the extension, creates a collection, inserts a document, reads it
+// back, and is asked what it has installed.
+func TestDocumentDBWorksOnEveryMajorThatClaimsIt(t *testing.T) {
 	for _, entry := range config.PostgresCatalogEntries() {
+		if !entry.DocumentDB {
+			continue
+		}
+		t.Run("postgres"+entry.Major, func(t *testing.T) {
+			ctx := context.Background()
+			db := startImageForMajor(ctx, t, entry)
+
+			if _, err := db.ExecContext(ctx, "CREATE EXTENSION documentdb CASCADE"); err != nil {
+				t.Fatalf("major %s: CREATE EXTENSION documentdb: %v", entry.Major, err)
+			}
+			if _, err := db.ExecContext(ctx, "SELECT documentdb_api.create_collection('smoke', 'docs')"); err != nil {
+				t.Fatalf("major %s: create_collection: %v", entry.Major, err)
+			}
+			if _, err := db.ExecContext(ctx,
+				`SELECT documentdb_api.insert_one('smoke', 'docs', '{"_id":1,"name":"excalibase"}')`); err != nil {
+				t.Fatalf("major %s: insert_one: %v", entry.Major, err)
+			}
+
+			var document string
+			err := db.QueryRowContext(ctx,
+				"SELECT document::text FROM documentdb_api.collection('smoke', 'docs')").Scan(&document)
+			if err != nil {
+				t.Fatalf("major %s: read the inserted document back: %v", entry.Major, err)
+			}
+			// The document comes back as BSON; the field value is there in the
+			// hex, which is enough to show it round-tripped rather than that a
+			// row merely exists.
+			if !strings.Contains(document, hex.EncodeToString([]byte("excalibase"))) {
+				t.Errorf("major %s: document read back as %q, which does not carry what was inserted", entry.Major, document)
+			}
+
+			var version string
+			if err := db.QueryRowContext(ctx,
+				"SELECT extversion FROM pg_extension WHERE extname = 'documentdb'").Scan(&version); err != nil {
+				t.Fatalf("major %s: documentdb does not report itself installed: %v", entry.Major, err)
+			}
+			if version == "" {
+				t.Errorf("major %s: documentdb reports an empty version", entry.Major)
+			}
+		})
+	}
+}
+
+// The other half of the claim: a major the catalogue says cannot offer
+// DocumentDB must not have it in its image either, or the catalogue is lying
+// to the API that refuses provisioning on its word.
+func TestDocumentDBIsAbsentFromEveryMajorThatDisclaimsIt(t *testing.T) {
+	for _, entry := range config.PostgresCatalogEntries() {
+		if entry.DocumentDB {
+			continue
+		}
 		t.Run("postgres"+entry.Major, func(t *testing.T) {
 			ctx := context.Background()
 			db := startImageForMajor(ctx, t, entry)
@@ -159,8 +229,8 @@ func TestDocumentDBFilesMatchWhatTheCatalogueClaims(t *testing.T) {
 			if err != nil {
 				t.Fatalf("major %s: query pg_available_extensions: %v", entry.Major, err)
 			}
-			if available != entry.DocumentDB {
-				t.Errorf("major %s: catalogue says documentdb=%v, image says %v", entry.Major, entry.DocumentDB, available)
+			if available {
+				t.Errorf("major %s: catalogue says documentdb=false, image carries it", entry.Major)
 			}
 		})
 	}

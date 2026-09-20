@@ -17,10 +17,11 @@ const (
 	clusterImageCatalogName    = "excalibase-postgresql"
 	documentDBMajorsAnnotation = "postgres.excalibase.io/documentdb-majors"
 	// The CNPG CRD has no field for this, so the majors that can offer
-	// DocumentDB travel as an annotation. Nothing reads it back — the Go
-	// catalogue stays authoritative — it is there so an operator reading the
-	// cluster can see what the images carry.
-	documentDBVersionAnnotation = "postgres.excalibase.io/documentdb-version"
+	// DocumentDB — and the upstream tag their images compile — travel as
+	// annotations. Nothing reads them back; the Go catalogue stays
+	// authoritative. They are there so an operator reading the cluster can see
+	// what the images carry and which DocumentDB it is.
+	documentDBRefAnnotation = "postgres.excalibase.io/documentdb-ref"
 )
 
 func formatMajor(major int) string { return strconv.Itoa(major) }
@@ -59,8 +60,8 @@ func renderClusterImageCatalog(catalog PostgresCatalog) ([]byte, error) {
 	annotations := map[string]string{
 		documentDBMajorsAnnotation: strings.Join(documentDBMajors, ","),
 	}
-	if catalog.DocumentDBVersion != "" {
-		annotations[documentDBVersionAnnotation] = catalog.DocumentDBVersion
+	if catalog.DocumentDBRef != "" {
+		annotations[documentDBRefAnnotation] = catalog.DocumentDBRef
 	}
 
 	object := map[string]interface{}{
@@ -86,10 +87,10 @@ func renderClusterImageCatalog(catalog PostgresCatalog) ([]byte, error) {
 type BuildMatrixEntry struct {
 	Major string `json:"major"`
 	Base  string `json:"base"`
-	// DocumentDB is the pinned upstream release for majors whose image carries
-	// DocumentDB, and empty for the rest. The Dockerfile reads it that way:
-	// empty means "skip the DocumentDB layer".
-	DocumentDB string `json:"documentdb"`
+	// DocumentDBRef is the upstream tag to compile for majors whose image
+	// carries DocumentDB, and empty for the rest. The Dockerfile reads it that
+	// way: empty means "skip the DocumentDB stage".
+	DocumentDBRef string `json:"documentdbRef"`
 }
 
 // RenderBuildMatrix renders the image publish workflow's matrix as JSON. The
@@ -100,7 +101,7 @@ func RenderBuildMatrix() ([]byte, error) {
 	for _, entry := range postgresCatalog.Majors {
 		row := BuildMatrixEntry{Major: entry.Major, Base: entry.BaseImage}
 		if entry.DocumentDB {
-			row.DocumentDB = postgresCatalog.DocumentDBVersion
+			row.DocumentDBRef = postgresCatalog.DocumentDBRef
 		}
 		entries = append(entries, row)
 	}
