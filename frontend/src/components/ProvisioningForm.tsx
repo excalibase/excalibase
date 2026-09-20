@@ -4,6 +4,8 @@ import { DatabaseType, TierType } from '../types';
 import { Button } from './Button';
 import { Card, CardTitle } from './Card';
 import { X } from 'lucide-react';
+import { usePostgresCatalog, findMajor } from '../api/postgresCatalog';
+import { PostgresVersionPicker } from './PostgresVersionPicker';
 
 interface ProvisioningFormProps {
   readonly onClose: () => void;
@@ -15,9 +17,23 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
     orgId: '',
     databaseType: DatabaseType.POSTGRESQL,
     tier: TierType.FREE,
+    // No default major: the API refuses a request that names none, and
+    // choosing one here would be choosing it for the customer.
+    postgresVersion: '',
+    documentDb: false,
   });
 
   const provision = useProvisionDatabase();
+  const catalog = usePostgresCatalog();
+
+  const chooseVersion = (postgresVersion: string) => {
+    const entry = findMajor(catalog.data, postgresVersion);
+    setFormData((previous) => ({
+      ...previous,
+      postgresVersion,
+      documentDb: entry?.documentDb ? previous.documentDb : false,
+    }));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,6 +110,16 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
             </select>
           </div>
 
+          <PostgresVersionPicker
+            catalog={catalog.data}
+            isLoading={catalog.isLoading}
+            error={catalog.error}
+            version={formData.postgresVersion}
+            onVersionChange={chooseVersion}
+            documentDb={formData.documentDb}
+            onDocumentDbChange={(documentDb) => setFormData((previous) => ({ ...previous, documentDb }))}
+          />
+
           <div>
             <p className="block text-sm font-medium text-text-primary mb-2">
               Tier
@@ -127,7 +153,7 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
             </Button>
             <Button
               type="submit"
-              disabled={provision.isPending}
+              disabled={provision.isPending || !formData.postgresVersion}
               className="flex-1"
             >
               {provision.isPending ? 'Provisioning...' : 'Provision Database'}

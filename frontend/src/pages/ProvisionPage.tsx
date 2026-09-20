@@ -6,6 +6,8 @@ import { Button } from '../components/Button';
 import { Database, Loader2, Server, Cloud } from 'lucide-react';
 import { listMyOrgs, type Org } from '../api/orgs';
 import { useTiers, sortTiers, type TierConfig } from '../api/tiers';
+import { usePostgresCatalog, findMajor, type PostgresMajor } from '../api/postgresCatalog';
+import { PostgresVersionPicker } from '../components/PostgresVersionPicker';
 
 type DeployMode = 'k8s' | 'docker';
 
@@ -59,6 +61,19 @@ export function ProvisionPage() {
   const [orgId, setOrgId] = useState('');
   const [dbType, setDbType] = useState<DatabaseType>(DatabaseType.POSTGRESQL);
   const [tier, setTier] = useState<TierType>(TierType.FREE);
+  // No default major, on purpose: see PostgresVersionPicker.
+  const [postgresVersion, setPostgresVersion] = useState('');
+  const [documentDb, setDocumentDb] = useState(false);
+
+  const catalog = usePostgresCatalog();
+
+  // A major that cannot carry DocumentDB clears the choice instead of leaving
+  // it set and invisible, so what the form shows is what it will send.
+  const chooseVersion = (version: string) => {
+    setPostgresVersion(version);
+    const entry: PostgresMajor | undefined = findMajor(catalog.data, version);
+    if (!entry?.documentDb) setDocumentDb(false);
+  };
 
   // Live tier specs (admin-editable, DB-backed). Falls back to a static list
   // while loading or if the endpoint is unreachable.
@@ -79,7 +94,14 @@ export function ProvisionPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const result = await provision.mutateAsync({ projectName, orgId, databaseType: dbType, tier });
+    const result = await provision.mutateAsync({
+      projectName,
+      orgId,
+      databaseType: dbType,
+      tier,
+      postgresVersion,
+      documentDb,
+    });
     navigate(`/project/${result.projectId}`);
   };
 
@@ -157,6 +179,16 @@ export function ProvisionPage() {
               </div>
             </div>
 
+            <PostgresVersionPicker
+              catalog={catalog.data}
+              isLoading={catalog.isLoading}
+              error={catalog.error}
+              version={postgresVersion}
+              onVersionChange={chooseVersion}
+              documentDb={documentDb}
+              onDocumentDbChange={setDocumentDb}
+            />
+
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
               <h2 className="font-semibold text-text-primary">Plan</h2>
               <div className="grid grid-cols-3 gap-3">
@@ -187,7 +219,12 @@ export function ProvisionPage() {
           <Button type="button" variant="secondary" className="flex-1" onClick={() => navigate('/instances')}>
             Cancel
           </Button>
-          <Button type="submit" className="flex-1" disabled={isPending || !orgId}>
+          <Button
+            type="submit"
+            className="flex-1"
+            data-testid="provision-submit"
+            disabled={isPending || !orgId || !postgresVersion}
+          >
             {isPending
               ? <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Provisioning...</>
               : <><Database className="w-4 h-4 mr-2 inline" /> Provision Database</>}

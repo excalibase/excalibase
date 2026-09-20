@@ -135,14 +135,14 @@ export function CredentialsViewer({ projectId }: CredentialsViewerProps) {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => copyToClipboard(credentials.connectionString, 'connectionString')}
+            onClick={() => copyToClipboard(credentials.connectionUrl, 'connectionString')}
           >
             <Copy className="w-4 h-4 mr-2" />
             {copied === 'connectionString' ? 'Copied!' : 'Copy'}
           </Button>
         </div>
         <code className="block text-xs text-text-primary bg-bg-primary px-3 py-2 rounded mt-2 break-all">
-          {credentials.connectionString}
+          {credentials.connectionUrl}
         </code>
       </div>
     </div>
