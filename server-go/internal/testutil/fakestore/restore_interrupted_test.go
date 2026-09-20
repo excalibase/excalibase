@@ -71,3 +71,24 @@ func TestInstancesRecordPauseAttempt(t *testing.T) {
 		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
 	}
 }
+
+func TestInstancesUpdateIfStatus(t *testing.T) {
+	instances := NewInstances()
+	instances.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
+
+	moving := &domain.DatabaseInstance{ProjectID: "p1", Status: string(domain.StatusPausing)}
+	if err := instances.UpdateIfStatus(moving, "ACTIVE"); err != nil {
+		t.Fatalf("UpdateIfStatus: %v", err)
+	}
+	got, _ := instances.FindByProjectID("p1")
+	if got.Status != string(domain.StatusPausing) || got.OrgID != "o" {
+		t.Errorf("stored: %+v", got)
+	}
+
+	if err := instances.UpdateIfStatus(moving, "ACTIVE"); !errors.Is(err, storage.ErrProjectStatusChanged) {
+		t.Errorf("a moved row: got %v, want ErrProjectStatusChanged", err)
+	}
+	if err := instances.UpdateIfStatus(&domain.DatabaseInstance{ProjectID: "missing"}, "ACTIVE"); !errors.Is(err, storage.ErrProjectNotFound) {
+		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
+	}
+}

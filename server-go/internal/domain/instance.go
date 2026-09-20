@@ -117,7 +117,14 @@ type DatabaseInstance struct {
 	// completed since this project last settled, and PauseLastAttemptAt is
 	// when the last one was. Together they are the retry backoff, held on
 	// the row so it survives a restart and a leader change.
-	PauseAttempts      int       `json:"pauseAttempts,omitempty"`
+	PauseAttempts int `json:"pauseAttempts,omitempty"`
+	// PauseBackupID and PauseBackupAt are the pre-pause backup taken for the
+	// pause episode currently in flight. A retry reuses it rather than
+	// filing another; a retry after a timed-out wait observes it rather than
+	// leaving it running and starting a second. Cleared when the project
+	// settles.
+	PauseBackupID string    `json:"pauseBackupId,omitempty"`
+	PauseBackupAt *FlexTime `json:"pauseBackupAt,omitempty"`
 	PauseLastAttemptAt *FlexTime `json:"pauseLastAttemptAt,omitempty"`
 
 	// Timestamps
@@ -171,6 +178,7 @@ func (inst *DatabaseInstance) Clone() *DatabaseInstance {
 	copied.UpdatedAt = clonePtr(inst.UpdatedAt)
 	copied.LastHealthCheck = clonePtr(inst.LastHealthCheck)
 	copied.PauseLastAttemptAt = clonePtr(inst.PauseLastAttemptAt)
+	copied.PauseBackupAt = clonePtr(inst.PauseBackupAt)
 	return &copied
 }
 

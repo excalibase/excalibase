@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"strings"
 	"errors"
 	"net/http"
 	"testing"
@@ -64,5 +65,21 @@ func TestPauseOfAnUnsupportedModeIsABadRequest(t *testing.T) {
 	w := doRequest(r, "POST", "/api/provision/byoc-db/pause", `{}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A project another lifecycle operation is already running on is busy, not
+// broken: 409, with a message that says to retry.
+func TestPauseOfABusyProjectAnswersConflict(t *testing.T) {
+	r, store, _, _ := setupPauseHandler(t)
+	seedPausableProject(t, store)
+	busyProjectClaim(t, store)
+
+	w := doRequest(r, "POST", "/api/provision/pause-db/pause", `{}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(w.Body.String()), "busy") {
+		t.Errorf("body must say the project is busy: %s", w.Body.String())
 	}
 }

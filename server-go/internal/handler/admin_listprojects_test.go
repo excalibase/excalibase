@@ -92,6 +92,10 @@ func (errInstanceStore) Delete(string) error { return nil }
 func (errInstanceStore) BeginDeletion(string, *bool) (bool, error) {
 	return false, errors.New("db down")
 }
+func (errInstanceStore) UpdateIfStatus(*domain.DatabaseInstance, string) error {
+	return nil
+}
+
 func (errInstanceStore) RecordPauseAttempt(string, time.Time) (int, error) {
 	return 0, nil
 }

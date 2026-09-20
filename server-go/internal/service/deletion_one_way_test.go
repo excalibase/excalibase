@@ -178,7 +178,7 @@ func TestPauseLosesToAnInFlightDeletion(t *testing.T) {
 // A claim that cannot be taken at all is reported, never assumed granted.
 func TestDeprovisionReportsAFailedClaim(t *testing.T) {
 	svc, store, _ := setupDeletionTest(t)
-	svc.SetDeletionClaimer(failingClaimer{err: errors.New("database unreachable")})
+	svc.SetOperationClaimer(failingClaimer{err: errors.New("database unreachable")})
 
 	if err := svc.Deprovision(context.Background(), testDeletingProj); err == nil {
 		t.Fatal(testWantErrNil)
@@ -190,7 +190,7 @@ func TestDeprovisionReportsAFailedClaim(t *testing.T) {
 
 type failingClaimer struct{ err error }
 
-func (c failingClaimer) Claim(context.Context, string) (func(), bool, error) {
+func (c failingClaimer) Claim(ctx context.Context, projectID string, op ProjectOperation) (func(), bool, error) {
 	return nil, false, c.err
 }
 

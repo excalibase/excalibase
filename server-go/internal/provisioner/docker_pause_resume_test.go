@@ -136,3 +136,20 @@ func TestDockerWorkloadStoppedReadsTheContainerState(t *testing.T) {
 		t.Error("a missing container id must be reported, not guessed")
 	}
 }
+
+func TestDockerPauseRefusesAMissingContainerID(t *testing.T) {
+	p := NewDockerPostgreSQLProvisioner(newMockDocker())
+	if err := p.Pause(context.Background(), "", "proj"); err == nil {
+		t.Error("a missing container id must be reported, not guessed")
+	}
+}
+
+func TestDockerWorkloadStoppedReportsADaemonItCannotAsk(t *testing.T) {
+	docker := newMockDocker()
+	docker.failOn = "status"
+	p := NewDockerPostgreSQLProvisioner(docker)
+
+	if _, err := p.WorkloadStopped(context.Background(), "c1", "proj"); err == nil {
+		t.Error("a daemon that cannot be asked must not be reported as stopped")
+	}
+}

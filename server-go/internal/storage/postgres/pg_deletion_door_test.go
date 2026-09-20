@@ -209,3 +209,44 @@ func TestInstances_RecordPauseAttemptPersistsAndRefusesNotServable(t *testing.T)
 		t.Errorf("deleting project: got %v, want ErrProjectNotPausable", err)
 	}
 }
+
+// UpdateIfStatus is one statement, not a read then a write: the predicate is
+// in the UPDATE, so a row that moves between the two cannot be written over.
+func TestInstances_UpdateIfStatusPinsTheWrite(t *testing.T) {
+	store := testStore(t)
+	inst := instanceRow("proj-cond0001", "org-door")
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	stored, _ := store.FindByProjectID(inst.ProjectID)
+
+	moving := stored.Clone()
+	moving.Status = string(domain.StatusPausing)
+	if err := store.UpdateIfStatus(moving, stored.Status); err != nil {
+		t.Fatalf("UpdateIfStatus from the expected status: %v", err)
+	}
+
+	stale := moving.Clone()
+	stale.Status = string(domain.StatusPaused)
+	if err := store.UpdateIfStatus(stale, stored.Status); !errors.Is(err, storage.ErrProjectStatusChanged) {
+		t.Errorf("a moved row: got %v, want ErrProjectStatusChanged", err)
+	}
+	if err := store.UpdateIfStatus(moving, ""); !errors.Is(err, storage.ErrProjectStatusChanged) {
+		t.Errorf("no expected status: got %v, want ErrProjectStatusChanged", err)
+	}
+	after, _ := store.FindByProjectID(inst.ProjectID)
+	if after.Status != string(domain.StatusPausing) {
+		t.Errorf("status: got %s, want PAUSING", after.Status)
+	}
+
+	// The episode's backup round-trips too.
+	after.PauseBackupID = "bk-episode"
+	after.PauseBackupAt = &domain.FlexTime{Time: time.Now().UTC().Truncate(time.Second)}
+	if err := store.Update(after); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	reloaded, _ := store.FindByProjectID(inst.ProjectID)
+	if reloaded.PauseBackupID != "bk-episode" || reloaded.PauseBackupAt == nil {
+		t.Errorf("episode backup not persisted: %+v", reloaded)
+	}
+}

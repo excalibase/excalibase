@@ -28,6 +28,11 @@ type lifecyclePauser struct {
 	workloadDown bool
 	// workloadErr models an apiserver that cannot be asked.
 	workloadErr error
+	// onPause runs at the moment the workload is being stopped — the window
+	// where another replica must not be able to act on the project.
+	onPause func()
+	// onResume runs at the moment the workload is being started.
+	onResume func()
 }
 
 func (p *lifecyclePauser) WorkloadStopped(context.Context, string, string) (bool, error) {
@@ -41,6 +46,9 @@ func (p *lifecyclePauser) StopReplication(context.Context, string, string) error
 
 func (p *lifecyclePauser) Pause(context.Context, string, string) error {
 	p.log = append(p.log, "pause")
+	if p.onPause != nil {
+		p.onPause()
+	}
 	if p.pauseErrOnce != nil {
 		err := p.pauseErrOnce
 		p.pauseErrOnce = nil
@@ -51,6 +59,9 @@ func (p *lifecyclePauser) Pause(context.Context, string, string) error {
 
 func (p *lifecyclePauser) Resume(context.Context, string, string) error {
 	p.log = append(p.log, "resume")
+	if p.onResume != nil {
+		p.onResume()
+	}
 	return p.resumeErr
 }
 
@@ -63,6 +74,10 @@ type scriptedBackups struct {
 	polls      int
 	// idless models an adapter that accepts a backup without naming it.
 	idless bool
+	// triggers counts the backups actually filed.
+	triggers int
+	// latestID is what List would report as the project's newest backup.
+	latestID string
 	log    *[]string
 }
 
@@ -72,6 +87,7 @@ func (b *scriptedBackups) TriggerManualBackup(context.Context, string) (map[stri
 	if b.log != nil {
 		*b.log = append(*b.log, "backup")
 	}
+	b.triggers++
 	if b.triggerErr != nil {
 		return nil, b.triggerErr
 	}
@@ -79,6 +95,13 @@ func (b *scriptedBackups) TriggerManualBackup(context.Context, string) (map[stri
 		return map[string]interface{}{"status": "IN_PROGRESS"}, nil
 	}
 	return map[string]interface{}{"id": "bk-1", "status": "IN_PROGRESS"}, nil
+}
+
+func (b *scriptedBackups) LatestBackupID(context.Context, string) (string, error) {
+	if b.latestID != "" {
+		return b.latestID, nil
+	}
+	return "bk-1", nil
 }
 
 func (b *scriptedBackups) BackupStatus(context.Context, string, string) (string, error) {
@@ -145,6 +168,20 @@ func stepClock() func() time.Time {
 		now = now.Add(time.Second)
 		return now
 	}
+}
+
+// newPauseServiceOver builds a second PauseService over the same stores and
+// the same claimer — a second control-plane replica.
+func newPauseServiceOver(f *observedPauseFixture) *PauseService {
+	svc := NewPauseService(PauseServiceConfig{
+		Instances:   f.store,
+		Pausers:     map[domain.DeploymentMode]provisioner.Pauser{domain.ModeK8s: f.pauser},
+		Backups:     f.backups,
+		Replication: &restartRecorder{log: &f.pauser.log},
+		Poller:      provisioner.Poller{Interval: time.Second, Timeout: 5 * time.Second, Now: stepClock(), After: instantAfter},
+	})
+	svc.claimer = f.svc.claimer
+	return svc
 }
 
 func (f *observedPauseFixture) pause(t *testing.T) error {

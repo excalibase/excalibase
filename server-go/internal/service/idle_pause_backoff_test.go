@@ -34,6 +34,7 @@ func (f *idleFixture) newScheduler() *IdlePauseScheduler {
 		Activity:  f.activity,
 		Tiers:     tierResolverForTest,
 		Pauser:    f.pauser,
+		Resumer:   f.resumer,
 		Notifier:  f.notifier,
 		Audit:     f.audit,
 		Lock:      &fakeLeaderLock{},
@@ -149,5 +150,62 @@ func TestIdleSweepSkipsProjectsThatAreNotServable(t *testing.T) {
 				t.Errorf("a project the platform may not serve must be skipped, attempts=%d", f.pauser.attempts())
 			}
 		})
+	}
+}
+
+// A project left in RESUMING has its database up and no CDC — a degraded
+// tenant nobody is told about. Only PAUSING was being retried, so it sat
+// there forever. It gets the same persisted backoff.
+func TestTheSweepRetriesAStuckResume(t *testing.T) {
+	f := newIdleFixture(t)
+	f.project(t, "stuck-resume", domain.Free, 8*day)
+	inst, _ := f.instances.FindByProjectID("stuck-resume")
+	inst.Status = string(domain.StatusResuming)
+	inst.CurrentStep = resumeStepReplication
+	if err := f.instances.Update(inst); err != nil {
+		t.Fatalf("stick in RESUMING: %v", err)
+	}
+
+	report := f.run(t)
+	if len(f.resumer.calls) != 1 || f.resumer.calls[0] != "stuck-resume" {
+		t.Fatalf("a stuck resume must be retried: %v", f.resumer.calls)
+	}
+	if len(report.Resumed) != 1 {
+		t.Errorf("the report must name what it resumed: %+v", report)
+	}
+
+	// A retry that works settles the project and clears the backoff with it.
+	after, _ := f.instances.FindByProjectID("stuck-resume")
+	if after.Status != "ACTIVE" || after.PauseAttempts != 0 {
+		t.Errorf("a converged resume must settle and clear the backoff: %+v", after)
+	}
+}
+
+func TestTheSweepBacksOffStuckResumesToo(t *testing.T) {
+	f := newIdleFixture(t)
+	f.project(t, "stuck-resume", domain.Free, 8*day)
+	inst, _ := f.instances.FindByProjectID("stuck-resume")
+	inst.Status = string(domain.StatusResuming)
+	inst.PauseAttempts = 1
+	inst.PauseLastAttemptAt = &domain.FlexTime{Time: f.clock.Now()}
+	if err := f.instances.Update(inst); err != nil {
+		t.Fatalf("seed backoff: %v", err)
+	}
+	f.resumer.err = errors.New("cluster still not ready")
+
+	f.run(t)
+	if len(f.resumer.calls) != 0 {
+		t.Fatalf("a resume inside its backoff must not be retried: %v", f.resumer.calls)
+	}
+
+	f.clock.Advance(pauseRetryBackoffFor(1))
+	f.run(t)
+	if len(f.resumer.calls) != 1 {
+		t.Fatalf("after the backoff it must retry: %v", f.resumer.calls)
+	}
+	// A retry that fails is counted, so the next one waits longer.
+	after, _ := f.instances.FindByProjectID("stuck-resume")
+	if after.PauseAttempts != 2 {
+		t.Errorf("attempts: got %d, want 2", after.PauseAttempts)
 	}
 }

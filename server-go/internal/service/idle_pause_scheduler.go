@@ -73,6 +73,14 @@ type IdlePauser interface {
 	Pause(ctx context.Context, projectID, reason string) error
 }
 
+// IdleResumer lets the sweep finish a resume that stopped part way. A project
+// left in RESUMING has its database up and its replication off: a degraded
+// tenant that nothing else will ever notice, because only the pause path was
+// being retried.
+type IdleResumer interface {
+	Resume(ctx context.Context, projectID string) error
+}
+
 // IdleWarnNotifier delivers the day-(N-1) warning to humans. Optional: the
 // warning is always written to the audit log and the project's activity row
 // regardless of delivery.
@@ -92,6 +100,7 @@ type IdlePauseSchedulerConfig struct {
 	Activity  storage.ProjectActivityStore
 	Tiers     TierResolver
 	Pauser    IdlePauser
+	Resumer   IdleResumer
 	Notifier  IdleWarnNotifier
 	Audit     AuditWriter
 	Lock      storage.LeaderLock
@@ -106,9 +115,10 @@ type IdlePauseSchedulerConfig struct {
 
 // IdlePauseReport lists what one sweep did, by project id.
 type IdlePauseReport struct {
-	Warned []string
-	Paused []string
-	Failed []string
+	Warned  []string
+	Paused  []string
+	Resumed []string
+	Failed  []string
 }
 
 // IdlePauseScheduler pauses idle projects. Every Interval it takes the
@@ -121,6 +131,7 @@ type IdlePauseScheduler struct {
 	activity    storage.ProjectActivityStore
 	tiers       TierResolver
 	pauser      IdlePauser
+	resumer     IdleResumer
 	notifier    IdleWarnNotifier
 	audit       AuditWriter
 	leadership  *Leadership
@@ -137,7 +148,7 @@ type IdlePauseScheduler struct {
 
 func NewIdlePauseScheduler(c IdlePauseSchedulerConfig) *IdlePauseScheduler {
 	s := &IdlePauseScheduler{
-		instances: c.Instances, activity: c.Activity, tiers: c.Tiers, pauser: c.Pauser,
+		instances: c.Instances, activity: c.Activity, tiers: c.Tiers, pauser: c.Pauser, resumer: c.Resumer,
 		notifier: c.Notifier, audit: c.Audit, leadership: NewLeadership(c.Lock),
 		now: c.Now, interval: c.Interval, resumeGrace: c.ResumeGrace, logger: c.Logger,
 	}
@@ -260,6 +271,10 @@ func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.Database
 		s.retryStuckPause(ctx, inst, now, report)
 		return
 	}
+	if inst.Status == string(domain.StatusResuming) {
+		s.retryStuckResume(ctx, inst, now, report)
+		return
+	}
 	if inst.Status != "ACTIVE" || s.resumedRecently(inst, now) {
 		return
 	}
@@ -301,6 +316,29 @@ func (s *IdlePauseScheduler) retryStuckPause(ctx context.Context, inst *domain.D
 	}
 	s.logAudit(ctx, AuditActionIdlePause, inst.ProjectID, "stuck pause retried to completion")
 	report.Paused = append(report.Paused, inst.ProjectID)
+}
+
+// retryStuckResume drives a project whose resume stopped part way back to
+// ACTIVE, on the same persisted backoff a stuck pause uses. Left alone it
+// would sit in RESUMING indefinitely with its database running and no CDC —
+// a degraded tenant nobody is told about.
+func (s *IdlePauseScheduler) retryStuckResume(ctx context.Context, inst *domain.DatabaseInstance, now time.Time, report *IdlePauseReport) {
+	if s.resumer == nil || !pauseRetryDue(inst, now) {
+		return
+	}
+	attempts, err := s.instances.RecordPauseAttempt(inst.ProjectID, now)
+	if err != nil {
+		s.logger.Printf("idle-pause: count resume retry for %s: %v", inst.ProjectID, err)
+		return
+	}
+	s.logger.Printf("idle-pause: retrying the stuck resume of %s (attempt %d; next in %v if it fails)",
+		inst.ProjectID, attempts, pauseRetryBackoffFor(attempts))
+	if err := s.resumer.Resume(ctx, inst.ProjectID); err != nil {
+		s.logger.Printf("idle-pause: resume retry of %s failed: %v", inst.ProjectID, err)
+		report.Failed = append(report.Failed, inst.ProjectID)
+		return
+	}
+	report.Resumed = append(report.Resumed, inst.ProjectID)
 }
 
 // autoPauseDays resolves the tier threshold; false when the tier is unknown

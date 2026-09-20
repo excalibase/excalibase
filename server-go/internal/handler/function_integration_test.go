@@ -152,6 +152,10 @@ func (s *e2eInstanceStore) BeginDeletion(projectID string, deleteBackups *bool) 
 	return storage.ApplyBeginDeletion(inst, deleteBackups)
 }
 
+func (s *e2eInstanceStore) UpdateIfStatus(*domain.DatabaseInstance, string) error {
+	return nil
+}
+
 func (s *e2eInstanceStore) RecordPauseAttempt(string, time.Time) (int, error) {
 	return 0, nil
 }

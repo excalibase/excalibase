@@ -95,3 +95,46 @@ func TestRecordPauseAttemptCountsAndRefusesNotServable(t *testing.T) {
 		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
 	}
 }
+
+// UpdateIfStatus is the backstop behind the lifecycle lease: it writes only
+// while the row still holds the status the operation last wrote.
+func TestUpdateIfStatusPinsTheWriteToTheExpectedStatus(t *testing.T) {
+	store, err := NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	live := restoringProject()
+	live.Status = "ACTIVE"
+	if err := store.Create(live); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	moving := live.Clone()
+	moving.Status = string(domain.StatusPausing)
+	if err := store.UpdateIfStatus(moving, "ACTIVE"); err != nil {
+		t.Fatalf("UpdateIfStatus from the expected status: %v", err)
+	}
+	stored, _ := store.FindByProjectID("target-x")
+	if stored.Status != string(domain.StatusPausing) {
+		t.Fatalf("status: got %s, want PAUSING", stored.Status)
+	}
+
+	stale := stored.Clone()
+	stale.Status = string(domain.StatusPaused)
+	if err := store.UpdateIfStatus(stale, "ACTIVE"); !errors.Is(err, ErrProjectStatusChanged) {
+		t.Errorf("a moved row: got %v, want ErrProjectStatusChanged", err)
+	}
+	if err := store.UpdateIfStatus(&domain.DatabaseInstance{ProjectID: "missing"}, "ACTIVE"); !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
+	}
+
+	// The one-way door still wins: a teardown's row is not writable at all.
+	if _, err := store.BeginDeletion("target-x", nil); err != nil {
+		t.Fatalf("BeginDeletion: %v", err)
+	}
+	deleting := stored.Clone()
+	deleting.Status = "ACTIVE"
+	if err := store.UpdateIfStatus(deleting, string(domain.StatusPausing)); !errors.Is(err, ErrProjectDeleting) {
+		t.Errorf("deleting row: got %v, want ErrProjectDeleting", err)
+	}
+}

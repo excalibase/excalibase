@@ -96,9 +96,13 @@ func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, project
 		return
 	}
 	status := http.StatusInternalServerError
+	// A busy project, an unsettled one, and a status that moved under the
+	// operation are all "come back in a moment", not server faults.
 	if errors.Is(err, service.ErrPauseNotObserved) ||
 		errors.Is(err, service.ErrPauseBackupNotCompleted) ||
-		errors.Is(err, service.ErrResumeNotObserved) {
+		errors.Is(err, service.ErrResumeNotObserved) ||
+		errors.Is(err, storage.ErrProjectBusy) ||
+		errors.Is(err, storage.ErrProjectStatusChanged) {
 		status = http.StatusConflict
 	}
 	body := map[string]interface{}{"error": safeError(err), "status": status}

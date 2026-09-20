@@ -157,6 +157,32 @@ func (s *BackupService) BackupsConfigured(projectID string) (bool, error) {
 	return adapter.BackupsConfigured(), nil
 }
 
+// LatestBackupID names the project's newest backup by start time, or "" when
+// it has none. A pause uses it to tell whether the backup it recorded for
+// this episode is still the recovery point a fresh one would produce.
+func (s *BackupService) LatestBackupID(ctx context.Context, projectID string) (string, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return "", fmt.Errorf("project not found: %s", projectID)
+	}
+	adapter, err := resolveAdapter(s.adapters, inst)
+	if err != nil {
+		return "", err
+	}
+	refs, err := adapter.List(ctx, inst)
+	if err != nil {
+		return "", err
+	}
+	latest := ""
+	newest := ""
+	for _, ref := range refs {
+		if ref.StartedAt > newest || latest == "" {
+			newest, latest = ref.StartedAt, ref.ID
+		}
+	}
+	return latest, nil
+}
+
 // BackupStatus reports one backup's current status. Listing is what syncs a
 // backup record with what the engine says about it, so this is also how a
 // caller watching a backup sees it finish.

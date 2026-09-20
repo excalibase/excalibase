@@ -132,6 +132,10 @@ func (unresolvableBackups) TriggerManualBackup(context.Context, string) (map[str
 	return nil, nil
 }
 
+func (unresolvableBackups) LatestBackupID(context.Context, string) (string, error) {
+	return "bk-1", nil
+}
+
 func (unresolvableBackups) BackupStatus(context.Context, string, string) (string, error) {
 	return "", nil
 }
@@ -143,6 +147,10 @@ func (unreadableBackups) BackupsConfigured(string) (bool, error) { return true, 
 
 func (unreadableBackups) TriggerManualBackup(context.Context, string) (map[string]interface{}, error) {
 	return map[string]interface{}{"id": "bk-1"}, nil
+}
+
+func (unreadableBackups) LatestBackupID(context.Context, string) (string, error) {
+	return "bk-1", nil
 }
 
 func (unreadableBackups) BackupStatus(context.Context, string, string) (string, error) {
@@ -359,6 +367,10 @@ func (b *tierAwareBackups) TriggerManualBackup(context.Context, string) (map[str
 	return map[string]interface{}{"id": "bk-1"}, nil
 }
 
+func (b *tierAwareBackups) LatestBackupID(context.Context, string) (string, error) {
+	return "bk-1", nil
+}
+
 func (b *tierAwareBackups) BackupStatus(context.Context, string, string) (string, error) {
 	return backupStatusCompleted, nil
 }
@@ -519,5 +531,99 @@ func TestRecordPauseAttemptRespectsTheOneWayDoor(t *testing.T) {
 	}
 	if _, err := f.store.RecordPauseAttempt("missing", time.Now()); !errors.Is(err, storage.ErrProjectNotFound) {
 		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
+	}
+}
+
+func TestLatestBackupIDNamesTheNewest(t *testing.T) {
+	svc, store := backupSupportService(t, StaticBackupStorage(r2Storage()))
+
+	if got, err := svc.LatestBackupID(context.Background(), "bk-p"); err != nil || got != "" {
+		t.Errorf("a project with no backups has none: got %q %v", got, err)
+	}
+	first, err := svc.TriggerManualBackup(context.Background(), "bk-p")
+	if err != nil {
+		t.Fatalf("TriggerManualBackup: %v", err)
+	}
+	got, err := svc.LatestBackupID(context.Background(), "bk-p")
+	if err != nil || got != first["id"] {
+		t.Errorf("latest: got %q %v, want %v", got, err, first["id"])
+	}
+
+	if _, err := svc.LatestBackupID(context.Background(), "nope"); err == nil {
+		t.Error("an unknown project must be reported, not answered")
+	}
+	inst, _ := store.FindByProjectID("bk-p")
+	inst.DeploymentMode = domain.DeploymentMode("operator")
+	if err := store.Update(inst); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if _, err := svc.LatestBackupID(context.Background(), "bk-p"); !errors.Is(err, ErrUnsupportedBackupMode) {
+		t.Errorf("unsupported mode: got %v", err)
+	}
+}
+
+func TestEpisodeBackupReportsALatestItCannotRead(t *testing.T) {
+	f := newObservedPause(t)
+	inst := f.reload(t)
+	inst.Status = string(domain.StatusPausing)
+	inst.PauseBackupID = "bk-1"
+	inst.PauseBackupAt = &domain.FlexTime{Time: time.Now()}
+	if err := f.store.Update(inst); err != nil {
+		t.Fatalf("seed episode: %v", err)
+	}
+	f.svc.backups = &latestlessBackups{}
+
+	if err := f.pause(t); !errors.Is(err, ErrPauseBackupNotCompleted) {
+		t.Fatalf("err: got %v, want ErrPauseBackupNotCompleted", err)
+	}
+}
+
+// latestlessBackups cannot say which backup is newest.
+type latestlessBackups struct{}
+
+func (latestlessBackups) BackupsConfigured(string) (bool, error) { return true, nil }
+
+func (latestlessBackups) TriggerManualBackup(context.Context, string) (map[string]interface{}, error) {
+	return map[string]interface{}{"id": "bk-2"}, nil
+}
+
+func (latestlessBackups) BackupStatus(context.Context, string, string) (string, error) {
+	return backupStatusCompleted, nil
+}
+
+func (latestlessBackups) LatestBackupID(context.Context, string) (string, error) {
+	return "", errors.New("platform db unavailable")
+}
+
+// The sweep must report, not swallow, a retry it could not count or run.
+func TestTheSweepReportsAResumeRetryItCannotRun(t *testing.T) {
+	f := newIdleFixture(t)
+	f.project(t, "stuck-resume", domain.Free, 8*day)
+	inst, _ := f.instances.FindByProjectID("stuck-resume")
+	inst.Status = string(domain.StatusResuming)
+	if err := f.instances.Update(inst); err != nil {
+		t.Fatalf("stick in RESUMING: %v", err)
+	}
+	f.resumer.err = errors.New("cluster still not ready")
+
+	report := f.run(t)
+	if len(report.Failed) != 1 || report.Failed[0] != "stuck-resume" {
+		t.Errorf("a failed resume retry must be reported: %+v", report)
+	}
+}
+
+func TestTheSweepSkipsAResumeWhenNoResumerIsWired(t *testing.T) {
+	f := newIdleFixture(t)
+	f.project(t, "stuck-resume", domain.Free, 8*day)
+	inst, _ := f.instances.FindByProjectID("stuck-resume")
+	inst.Status = string(domain.StatusResuming)
+	if err := f.instances.Update(inst); err != nil {
+		t.Fatalf("stick in RESUMING: %v", err)
+	}
+	f.scheduler.resumer = nil
+
+	f.run(t)
+	if len(f.resumer.calls) != 0 {
+		t.Errorf("without a resumer nothing may be retried: %v", f.resumer.calls)
 	}
 }

@@ -51,6 +51,10 @@ type PauseService struct {
 	backups     PrePauseBackup
 	replication ReplicationRestarter
 	poller      provisioner.Poller
+	// claimer serialises lifecycle operations per project across replicas.
+	// The process-local mutex below only orders the goroutines in THIS
+	// process; the lease is what stops two replicas interleaving.
+	claimer ProjectOperationClaimer
 
 	mu sync.Mutex
 }
@@ -65,7 +69,18 @@ type PrePauseBackup interface {
 	TriggerManualBackup(ctx context.Context, projectID string) (map[string]interface{}, error)
 	// BackupStatus reports one backup's current status.
 	BackupStatus(ctx context.Context, projectID, backupID string) (string, error)
+	// LatestBackupID names the project's newest backup, so a pause can tell
+	// whether the one it recorded is still the recovery point it would take
+	// now. Empty means the project has none.
+	LatestBackupID(ctx context.Context, projectID string) (string, error)
 }
+
+// pauseBackupReuseWindow is how long a pre-pause backup stays the recovery
+// point for the episode that took it. A day: long enough that a pause stuck
+// on a broken hibernation for hours does not re-dump the database on every
+// retry, short enough that a project which has been accepting writes all day
+// is not paused behind a stale backup.
+const pauseBackupReuseWindow = 24 * time.Hour
 
 // ReplicationRestarter brings the tenant's CDC watcher back after a resume.
 // Stopping it is part of the pause (its replication session holds the
@@ -83,6 +98,10 @@ type PauseServiceConfig struct {
 	Backups     PrePauseBackup
 	Replication ReplicationRestarter
 	Poller      provisioner.Poller
+	// Claimer must be the SAME claimer the provisioning service holds, or
+	// pause and deletion will not exclude one another. Defaults to an
+	// in-process claimer, which is correct for a single replica.
+	Claimer ProjectOperationClaimer
 }
 
 // NewPausePoller bounds a pause's observed waits on the wall clock, at the
@@ -96,7 +115,12 @@ func NewPauseService(c PauseServiceConfig) *PauseService {
 	if poller.Timeout == 0 {
 		poller = provisioner.NewPoller(defaultPausePoll, defaultPauseTimeout)
 	}
+	claimer := c.Claimer
+	if claimer == nil {
+		claimer = newInProcessOperationClaimer()
+	}
 	return &PauseService{
+		claimer:     claimer,
 		instances:   c.Instances,
 		pausers:     c.Pausers,
 		backups:     c.Backups,
@@ -124,6 +148,24 @@ var ErrPauseNotObserved = errors.New("pause did not complete: the project's data
 // a fully working project. The project stays in RESUMING and a retry
 // converges.
 var ErrResumeNotObserved = errors.New("resume did not complete: the project was not confirmed running; retry to continue")
+
+// hold takes the project's lifecycle lease for the length of one operation.
+// The returned release is safe to defer: it runs on every path out,
+// including a panic, so a crashed step cannot leave a project unusable.
+//
+// A project another operation holds is busy, not broken — the caller is told
+// to retry rather than being allowed to interleave with a shutdown that is
+// halfway done.
+func (s *PauseService) hold(ctx context.Context, projectID string, op ProjectOperation) (func(), error) {
+	release, claimed, err := s.claimer.Claim(ctx, projectID, op)
+	if err != nil {
+		return nil, fmt.Errorf("claim project for %s: %w", op, err)
+	}
+	if !claimed {
+		return nil, fmt.Errorf("%w: another lifecycle operation is running on %s", storage.ErrProjectBusy, projectID)
+	}
+	return release, nil
+}
 
 // pausable reports whether a pause has work to do. ACTIVE is the ordinary
 // case; PAUSING is a pause that failed part way, and running it again is how
@@ -163,6 +205,12 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	release, err := s.hold(ctx, projectID, OperationPause)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	inst, err := s.instances.FindByProjectID(projectID)
 	if err != nil || inst == nil {
 		return fmt.Errorf("project not found: %s", projectID)
@@ -200,7 +248,7 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 // backup, which is the step most likely to fail. Replication stops only once
 // there is a recovery point and the shutdown is the next thing to happen.
 func (s *PauseService) runPause(ctx context.Context, pauser provisioner.Pauser, inst *domain.DatabaseInstance) (string, error) {
-	if err := s.awaitPrePauseBackup(ctx, inst.ProjectID); err != nil {
+	if err := s.awaitPrePauseBackup(ctx, inst); err != nil {
 		return pauseStepBackup, err
 	}
 	if err := pauser.StopReplication(ctx, inst.Namespace, inst.ProjectID); err != nil {
@@ -235,10 +283,11 @@ func (s *PauseService) repairReplication(ctx context.Context, inst *domain.Datab
 // is observed COMPLETED. A project with no backup storage takes no backup:
 // there is nothing to write and nothing to wait for, which is an explicit
 // branch rather than a silently skipped step.
-func (s *PauseService) awaitPrePauseBackup(ctx context.Context, projectID string) error {
+func (s *PauseService) awaitPrePauseBackup(ctx context.Context, inst *domain.DatabaseInstance) error {
 	if s.backups == nil {
 		return nil
 	}
+	projectID := inst.ProjectID
 	configured, err := s.backups.BackupsConfigured(projectID)
 	if err != nil {
 		return fmt.Errorf("resolve backup storage: %w", err)
@@ -247,13 +296,25 @@ func (s *PauseService) awaitPrePauseBackup(ctx context.Context, projectID string
 		log.Printf("pause %s: no backup storage configured; pausing without a pre-pause backup", projectID)
 		return nil
 	}
-	started, err := s.backups.TriggerManualBackup(ctx, projectID)
+	backupID, err := s.episodeBackup(ctx, inst)
 	if err != nil {
-		return fmt.Errorf("trigger pre-pause backup: %w", err)
+		return err
 	}
-	backupID, _ := started["id"].(string)
 	if backupID == "" {
-		return errors.New("pre-pause backup was accepted without an id; it cannot be followed to completion")
+		started, err := s.backups.TriggerManualBackup(ctx, projectID)
+		if err != nil {
+			return fmt.Errorf("trigger pre-pause backup: %w", err)
+		}
+		backupID, _ = started["id"].(string)
+		if backupID == "" {
+			return errors.New("pre-pause backup was accepted without an id; it cannot be followed to completion")
+		}
+		// Record it before waiting. A wait that times out leaves the backup
+		// running, and the retry has to observe THAT one rather than file a
+		// second beside it.
+		if err := s.rememberEpisodeBackup(inst, backupID); err != nil {
+			return err
+		}
 	}
 	// The backup is "outstanding" until it reports COMPLETED; a FAILED one
 	// is not outstanding, it is over, so it ends the wait as an error.
@@ -271,6 +332,39 @@ func (s *PauseService) awaitPrePauseBackup(ctx context.Context, projectID string
 			return []string{status}, nil
 		}
 	})
+}
+
+// episodeBackup returns the backup already taken for the pause episode in
+// flight, or "" when a fresh one is needed. It is reused only while it is
+// still the project's newest backup and still inside the reuse window —
+// anything else is not the recovery point a pause now would produce.
+func (s *PauseService) episodeBackup(ctx context.Context, inst *domain.DatabaseInstance) (string, error) {
+	if inst.PauseBackupID == "" || inst.PauseBackupAt == nil {
+		return "", nil
+	}
+	if time.Since(inst.PauseBackupAt.Time) >= pauseBackupReuseWindow {
+		log.Printf("pause %s: the episode's backup %s is older than %s; taking a fresh one",
+			inst.ProjectID, inst.PauseBackupID, pauseBackupReuseWindow)
+		return "", nil
+	}
+	latest, err := s.backups.LatestBackupID(ctx, inst.ProjectID)
+	if err != nil {
+		return "", fmt.Errorf("read latest backup: %w", err)
+	}
+	if latest != inst.PauseBackupID {
+		log.Printf("pause %s: the episode's backup %s is no longer the newest; taking a fresh one",
+			inst.ProjectID, inst.PauseBackupID)
+		return "", nil
+	}
+	return inst.PauseBackupID, nil
+}
+
+// rememberEpisodeBackup records the backup this pause episode is waiting on,
+// pinned to PAUSING so it cannot land on a project something else moved.
+func (s *PauseService) rememberEpisodeBackup(inst *domain.DatabaseInstance, backupID string) error {
+	inst.PauseBackupID = backupID
+	inst.PauseBackupAt = &domain.FlexTime{Time: time.Now()}
+	return s.persistFrom(inst, string(domain.StatusPausing))
 }
 
 // enterPausing records the in-flight state. The one-way DELETING door is a
@@ -300,7 +394,7 @@ func (s *PauseService) failPause(inst *domain.DatabaseInstance, step string, cau
 	log.Printf("pause %s stopped at %s: %v", inst.ProjectID, step, cause)
 	inst.CurrentStep = step
 	inst.FailureReason = clientErr.Error()
-	if err := s.persist(inst); err != nil {
+	if err := s.persistFrom(inst, string(domain.StatusPausing)); err != nil {
 		return err
 	}
 	return clientErr
@@ -311,7 +405,7 @@ func (s *PauseService) markPaused(inst *domain.DatabaseInstance) error {
 	inst.CurrentStep = ""
 	inst.FailureReason = ""
 	clearPauseRetryBackoff(inst)
-	return s.persist(inst)
+	return s.persistFrom(inst, string(domain.StatusPausing))
 }
 
 // clearPauseRetryBackoff forgets how many attempts it took. The project has
@@ -321,6 +415,10 @@ func (s *PauseService) markPaused(inst *domain.DatabaseInstance) error {
 func clearPauseRetryBackoff(inst *domain.DatabaseInstance) {
 	inst.PauseAttempts = 0
 	inst.PauseLastAttemptAt = nil
+	// The pause episode is over too: the next one takes its own backup
+	// rather than leaning on a recovery point from an old attempt.
+	inst.PauseBackupID = ""
+	inst.PauseBackupAt = nil
 }
 
 // Resume takes a PAUSED project back to ACTIVE: the workload starts and is
@@ -329,6 +427,12 @@ func clearPauseRetryBackoff(inst *domain.DatabaseInstance) {
 func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	release, err := s.hold(ctx, projectID, OperationResume)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	inst, err := s.instances.FindByProjectID(projectID)
 	if err != nil || inst == nil {
@@ -363,7 +467,7 @@ func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 	inst.FailureReason = ""
 	clearPauseRetryBackoff(inst)
 	inst.LastActiveAt = &domain.FlexTime{Time: time.Now()}
-	return s.persist(inst)
+	return s.persistFrom(inst, string(domain.StatusResuming))
 }
 
 // runResume starts the workload and, once the provisioner reports a ready
@@ -389,18 +493,35 @@ func (s *PauseService) failResume(inst *domain.DatabaseInstance, step string, ca
 	log.Printf("resume %s stopped at %s: %v", inst.ProjectID, step, cause)
 	inst.CurrentStep = step
 	inst.FailureReason = ErrResumeNotObserved.Error()
-	if err := s.persist(inst); err != nil {
+	if err := s.persistFrom(inst, string(domain.StatusResuming)); err != nil {
 		return err
 	}
 	return ErrResumeNotObserved
 }
 
-// persist writes the row, treating the one-way DELETING door as a stop
-// signal for whatever the caller was in the middle of.
+// persist writes the row unconditionally. Used for the first write of an
+// operation, where the precondition was the status this operation just read.
 func (s *PauseService) persist(inst *domain.DatabaseInstance) error {
+	return s.persistFrom(inst, "")
+}
+
+// persistFrom writes the row, pinned to the status this operation last wrote
+// when one is given. The lease already stops two operations running at once;
+// this is the backstop that makes "PAUSED over a running database" impossible
+// even if the lease were bypassed — the write simply matches no row.
+//
+// The one-way DELETING door and a status that moved underneath are both stop
+// signals, returned as they are so the caller can tell them apart.
+func (s *PauseService) persistFrom(inst *domain.DatabaseInstance, expected string) error {
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
-	if err := s.instances.Update(inst); err != nil {
-		if errors.Is(err, storage.ErrProjectDeleting) {
+	var err error
+	if expected == "" {
+		err = s.instances.Update(inst)
+	} else {
+		err = s.instances.UpdateIfStatus(inst, expected)
+	}
+	if err != nil {
+		if errors.Is(err, storage.ErrProjectDeleting) || errors.Is(err, storage.ErrProjectStatusChanged) {
 			return err
 		}
 		return fmt.Errorf("persist %s state for %s: %w", inst.Status, inst.ProjectID, err)

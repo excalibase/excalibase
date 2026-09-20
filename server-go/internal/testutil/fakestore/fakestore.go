@@ -66,6 +66,24 @@ func (s *Instances) RecordRestoreInterrupted(projectID, step, reason string) err
 	return nil
 }
 
+// UpdateIfStatus persists only while the row still holds expected.
+func (s *Instances) UpdateIfStatus(inst *domain.DatabaseInstance, expected string) error {
+	existing, ok := s.Items[inst.ProjectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	if err := storage.CheckUpdatable(existing); err != nil {
+		return err
+	}
+	if existing.Status != expected {
+		return storage.ErrProjectStatusChanged
+	}
+	updated := inst.Clone()
+	updated.OrgID = existing.OrgID
+	s.Items[inst.ProjectID] = updated
+	return nil
+}
+
 // RecordPauseAttempt counts a pause about to be tried, refusing a project
 // the platform may not serve.
 func (s *Instances) RecordPauseAttempt(projectID string, at time.Time) (int, error) {

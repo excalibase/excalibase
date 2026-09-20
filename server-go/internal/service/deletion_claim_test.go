@@ -9,19 +9,19 @@ import (
 )
 
 func TestInProcessClaimerGrantsOneHolderAtATime(t *testing.T) {
-	claimer := newInProcessDeletionClaimer()
-	release, ok, err := claimer.Claim(context.Background(), "proj-1")
+	claimer := newInProcessOperationClaimer()
+	release, ok, err := claimer.Claim(context.Background(), "proj-1", OperationDeletion)
 	if err != nil || !ok {
 		t.Fatalf("first claim = %v, %v", ok, err)
 	}
-	if _, ok, _ := claimer.Claim(context.Background(), "proj-1"); ok {
+	if _, ok, _ := claimer.Claim(context.Background(), "proj-1", OperationDeletion); ok {
 		t.Error("a second claim on the same project must be refused")
 	}
-	if _, ok, _ := claimer.Claim(context.Background(), "proj-2"); !ok {
+	if _, ok, _ := claimer.Claim(context.Background(), "proj-2", OperationDeletion); !ok {
 		t.Error("another project must still be claimable")
 	}
 	release()
-	if _, ok, _ := claimer.Claim(context.Background(), "proj-1"); !ok {
+	if _, ok, _ := claimer.Claim(context.Background(), "proj-1", OperationDeletion); !ok {
 		t.Error("the project must be claimable again once released")
 	}
 }
@@ -49,9 +49,9 @@ func (le *countingLease) Valid(context.Context) bool    { return true }
 
 func TestAdvisoryClaimerHoldsAndReleasesTheLock(t *testing.T) {
 	lock := &fakeLock{got: true}
-	claimer := NewAdvisoryDeletionClaimer(func(int64) storage.LeaderLock { return lock })
+	claimer := NewAdvisoryOperationClaimer(func(int64) storage.LeaderLock { return lock })
 
-	release, ok, err := claimer.Claim(context.Background(), "proj-1")
+	release, ok, err := claimer.Claim(context.Background(), "proj-1", OperationDeletion)
 	if err != nil || !ok {
 		t.Fatalf("Claim = %v, %v", ok, err)
 	}
@@ -62,18 +62,18 @@ func TestAdvisoryClaimerHoldsAndReleasesTheLock(t *testing.T) {
 }
 
 func TestAdvisoryClaimerReportsARefusedLock(t *testing.T) {
-	claimer := NewAdvisoryDeletionClaimer(func(int64) storage.LeaderLock { return &fakeLock{} })
-	if _, ok, err := claimer.Claim(context.Background(), "proj-1"); ok || err != nil {
+	claimer := NewAdvisoryOperationClaimer(func(int64) storage.LeaderLock { return &fakeLock{} })
+	if _, ok, err := claimer.Claim(context.Background(), "proj-1", OperationDeletion); ok || err != nil {
 		t.Fatalf("Claim = %v, %v; want refused without error", ok, err)
 	}
 }
 
 func TestAdvisoryClaimerReportsLockErrors(t *testing.T) {
 	want := errors.New("database unreachable")
-	claimer := NewAdvisoryDeletionClaimer(func(int64) storage.LeaderLock {
+	claimer := NewAdvisoryOperationClaimer(func(int64) storage.LeaderLock {
 		return &fakeLock{acquerErr: want}
 	})
-	if _, ok, err := claimer.Claim(context.Background(), "proj-1"); ok || !errors.Is(err, want) {
+	if _, ok, err := claimer.Claim(context.Background(), "proj-1", OperationDeletion); ok || !errors.Is(err, want) {
 		t.Fatalf("Claim = %v, %v; want the lock error", ok, err)
 	}
 }
@@ -81,14 +81,29 @@ func TestAdvisoryClaimerReportsLockErrors(t *testing.T) {
 // The key is stable per project and distinct between projects, and always
 // positive so it cannot collide with the platform's singleton locks.
 func TestDeletionLockKeyIsStableAndPositive(t *testing.T) {
-	first := deletionLockKey("proj-1")
-	if first != deletionLockKey("proj-1") {
+	first := projectLifecycleLockKey("proj-1")
+	if first != projectLifecycleLockKey("proj-1") {
 		t.Error("the key must be stable for a project")
 	}
-	if first == deletionLockKey("proj-2") {
+	if first == projectLifecycleLockKey("proj-2") {
 		t.Error("different projects must not share a key")
 	}
 	if first < 0 {
 		t.Errorf("key = %d, want a positive key", first)
+	}
+}
+
+// Pause, resume and deletion must land on the SAME key, or they would not
+// exclude one another at all.
+func TestEveryLifecycleOperationTakesTheSameProjectKey(t *testing.T) {
+	first := projectLifecycleLockKey("proj-1")
+	if first != projectLifecycleLockKey("proj-1") {
+		t.Error("the key must be stable for a project")
+	}
+	if first == projectLifecycleLockKey("proj-2") {
+		t.Error("different projects must not share a key")
+	}
+	if first < 0 {
+		t.Errorf("advisory keys must be positive, got %d", first)
 	}
 }

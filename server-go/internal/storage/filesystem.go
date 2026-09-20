@@ -128,6 +128,28 @@ func (s *FileSystemStore) RecordRestoreInterrupted(projectID, step, reason strin
 	return s.write(marked)
 }
 
+// UpdateIfStatus persists only while the row still holds expected. See
+// InstanceStore.
+func (s *FileSystemStore) UpdateIfStatus(instance *domain.DatabaseInstance, expected string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.cache[instance.ProjectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	if err := CheckUpdatable(stored); err != nil {
+		return err
+	}
+	if stored.Status != expected {
+		return fmt.Errorf("%w: %s is %s, expected %s",
+			ErrProjectStatusChanged, instance.ProjectID, stored.Status, expected)
+	}
+	updated := instance.Clone()
+	updated.OrgID = stored.OrgID
+	return s.write(updated)
+}
+
 // RecordPauseAttempt counts a pause attempt. See InstanceStore.
 func (s *FileSystemStore) RecordPauseAttempt(projectID string, at time.Time) (int, error) {
 	s.mu.Lock()

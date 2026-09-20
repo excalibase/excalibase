@@ -66,6 +66,9 @@ func (m *mockDockerClient) RemoveContainer(_ context.Context, containerID string
 }
 
 func (m *mockDockerClient) ContainerStatus(_ context.Context, containerID string) (string, error) {
+	if m.failOn == "status" {
+		return "", fmt.Errorf("daemon unreachable")
+	}
 	status, ok := m.containers[containerID]
 	if !ok {
 		return "not_found", nil

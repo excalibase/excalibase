@@ -38,9 +38,9 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 			metrics_endpoint, grafana_dashboard_url,
 			restored_from_project_id, restored_from_backup_id,
 			last_active_at, last_xact_count, pause_reason,
-			pause_attempts, pause_last_attempt_at,
+			pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 			created_at, updated_at, last_health_check
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
@@ -55,6 +55,7 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 		inst.RestoredFromProjectID, inst.RestoredFromBackupID,
 		flexTimePtr(inst.LastActiveAt), inst.LastXactCount, inst.PauseReason,
 		inst.PauseAttempts, flexTimePtr(inst.PauseLastAttemptAt),
+		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 	)
 	var pqErr *pq.Error
@@ -68,6 +69,25 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 // absent from the SET list on purpose: a project's identity and its owning org
 // are fixed at creation, so no update path can move a tenant's database.
 func (s *Store) Update(inst *domain.DatabaseInstance) error {
+	return s.update(inst, "")
+}
+
+// UpdateIfStatus is Update with one more predicate in the same statement:
+// the row must still hold the status this operation last wrote. It is the
+// backstop behind the lifecycle lease — even a leasing bug cannot land
+// PAUSED on a project something else has moved, because the UPDATE itself
+// matches no row.
+func (s *Store) UpdateIfStatus(inst *domain.DatabaseInstance, expected string) error {
+	if expected == "" {
+		return fmt.Errorf("%w: no expected status given for %s",
+			storage.ErrProjectStatusChanged, inst.ProjectID)
+	}
+	return s.update(inst, expected)
+}
+
+// update writes the row. expectedStatus empty means "any status the door
+// allows"; a non-empty one additionally pins the write to that status.
+func (s *Store) update(inst *domain.DatabaseInstance, expectedStatus string) error {
 	mode := inst.DeploymentMode
 	if mode == "" {
 		mode = domain.ModeK8s
@@ -119,8 +139,11 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 			deletion_step = $44,
 			deletion_error = $45,
 			pause_attempts = $47,
-			pause_last_attempt_at = $48
-		WHERE project_id = $1 AND status <> ALL($46)`,
+			pause_last_attempt_at = $48,
+			pause_backup_id = $50,
+			pause_backup_at = $51
+		WHERE project_id = $1 AND status <> ALL($46)
+		  AND ($49 = '' OR status = $49)`,
 		inst.ProjectID, inst.ProjectName, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
@@ -137,6 +160,8 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 		inst.DeletionStep, inst.DeletionError,
 		pq.Array(deletionStatuses),
 		inst.PauseAttempts, flexTimePtr(inst.PauseLastAttemptAt),
+		expectedStatus,
+		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
 	)
 	if err != nil {
 		return err
@@ -146,7 +171,7 @@ func (s *Store) Update(inst *domain.DatabaseInstance) error {
 		return err
 	}
 	if affected == 0 {
-		return s.explainRefusedUpdate(inst.ProjectID)
+		return s.explainRefusedUpdate(inst.ProjectID, expectedStatus)
 	}
 	return nil
 }
@@ -158,7 +183,7 @@ var deletionStatuses = []string{string(domain.StatusDeleting), string(domain.Sta
 
 // explainRefusedUpdate turns "no rows matched" into the reason: either the row
 // is gone, or a teardown owns it.
-func (s *Store) explainRefusedUpdate(projectID string) error {
+func (s *Store) explainRefusedUpdate(projectID, expectedStatus string) error {
 	var status string
 	err := s.db.QueryRow(`SELECT status FROM database_instances WHERE project_id = $1`, projectID).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -169,6 +194,10 @@ func (s *Store) explainRefusedUpdate(projectID string) error {
 	}
 	if domain.IsDeletionStatus(status) {
 		return fmt.Errorf("%w: %s", storage.ErrProjectDeleting, projectID)
+	}
+	if expectedStatus != "" && status != expectedStatus {
+		return fmt.Errorf("%w: %s is %s, expected %s",
+			storage.ErrProjectStatusChanged, projectID, status, expectedStatus)
 	}
 	return storage.ErrProjectNotFound
 }
@@ -317,7 +346,7 @@ const pgInstanceColumns = `
 	metrics_endpoint, grafana_dashboard_url,
 	restored_from_project_id, restored_from_backup_id,
 	last_active_at, last_xact_count, pause_reason,
-	pause_attempts, pause_last_attempt_at,
+	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 	created_at, updated_at, last_health_check`
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
@@ -433,6 +462,8 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	var pauseReason sql.NullString
 	var pauseAttempts sql.NullInt64
 	var pauseLastAttemptAt sql.NullTime
+	var pauseBackupID sql.NullString
+	var pauseBackupAt sql.NullTime
 
 	err := s.Scan(
 		&inst.ProjectID, &inst.ProjectName, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
@@ -448,7 +479,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&inst.MetricsEndpoint, &inst.GrafanaDashboardURL,
 		&inst.RestoredFromProjectID, &inst.RestoredFromBackupID,
 		&lastActiveAt, &lastXactCount, &pauseReason,
-		&pauseAttempts, &pauseLastAttemptAt,
+		&pauseAttempts, &pauseLastAttemptAt, &pauseBackupID, &pauseBackupAt,
 		&createdAt, &updatedAt, &lastHealth,
 	)
 	if err != nil {
@@ -464,6 +495,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		lastActiveAt: lastActiveAt, lastXactCount: lastXactCount,
 		pauseReason: pauseReason,
 		pauseAttempts: pauseAttempts, pauseLastAttemptAt: pauseLastAttemptAt,
+		pauseBackupID: pauseBackupID, pauseBackupAt: pauseBackupAt,
 	}
 	applyNullableInstanceFields(&inst, nf)
 
@@ -486,6 +518,8 @@ type nullableInstanceFields struct {
 	pauseReason                      sql.NullString
 	pauseAttempts                    sql.NullInt64
 	pauseLastAttemptAt               sql.NullTime
+	pauseBackupID                    sql.NullString
+	pauseBackupAt                    sql.NullTime
 }
 
 // applyNullableInstanceFields copies the valid nullable columns onto inst,
@@ -516,6 +550,12 @@ func applyNullableInstanceFields(inst *domain.DatabaseInstance, nf nullableInsta
 	}
 	if nf.pauseLastAttemptAt.Valid {
 		inst.PauseLastAttemptAt = &domain.FlexTime{Time: nf.pauseLastAttemptAt.Time}
+	}
+	if nf.pauseBackupID.Valid {
+		inst.PauseBackupID = nf.pauseBackupID.String
+	}
+	if nf.pauseBackupAt.Valid {
+		inst.PauseBackupAt = &domain.FlexTime{Time: nf.pauseBackupAt.Time}
 	}
 	if nf.pauseReason.Valid {
 		inst.PauseReason = nf.pauseReason.String

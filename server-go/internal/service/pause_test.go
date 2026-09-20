@@ -49,6 +49,10 @@ type fakeBackupTrigger struct {
 
 func (f *fakeBackupTrigger) BackupsConfigured(string) (bool, error) { return true, nil }
 
+func (f *fakeBackupTrigger) LatestBackupID(context.Context, string) (string, error) {
+	return "bk-1", nil
+}
+
 func (f *fakeBackupTrigger) BackupStatus(_ context.Context, _, _ string) (string, error) {
 	return "COMPLETED", nil
 }
