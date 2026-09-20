@@ -11,13 +11,6 @@ vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn(), put: vi.fn() },
 }));
 
-// The CDC socket is not what these tests are about, and jsdom has no server
-// to dial. Note what it IS, though: this is the one Studio path that reaches
-// the engine, so it is the one subject to the exposure filter.
-vi.mock('../realtime/useGraphqlRealtime', () => ({
-  useGraphqlRealtime: () => ({ status: 'idle' }),
-}));
-
 const TABLES = [
   { name: 'orders', schema: 'public', type: 'BASE TABLE' },
   { name: 'customers', schema: 'public', type: 'BASE TABLE' },

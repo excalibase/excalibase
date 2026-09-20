@@ -49,12 +49,11 @@ The Vite dev server proxies API calls to `http://localhost:24005`. Override via 
 
 ### Environment variables
 
-| Variable                          | Purpose                                                                 | Default                                |
-|-----------------------------------|-------------------------------------------------------------------------|----------------------------------------|
-| `VITE_API_URL`                    | Go provisioning API base URL                                            | `http://localhost:24005/api`           |
-| `VITE_EXCALIBASE_GRAPHQL_WS_URL`  | excalibase-graphql realtime WebSocket — drives live data on TablesPage  | `ws://localhost:10000/api/v1/realtime` |
+| Variable       | Purpose                      | Default                      |
+|----------------|------------------------------|------------------------------|
+| `VITE_API_URL` | Go provisioning API base URL | `http://localhost:24005/api` |
 
-The studio's TablesPage subscribes to `VITE_EXCALIBASE_GRAPHQL_WS_URL` when a table is open so the data grid stays in sync without polling. The hook sends `connection_init` with the user's bearer JWT, subscribes to the selected collection, and re-runs the rows query on every CDC event. Auto-reconnect uses exponential backoff (1s → 30s with ±20% jitter).
+The studio talks only to the control plane. It opens no connection to excalibase-graphql: the tables page reads rows through the control plane's `/schema` routes, and the data grid is refreshed by the Refresh control in its toolbar (edits refresh it on their own).
 
 ## Backend
 
