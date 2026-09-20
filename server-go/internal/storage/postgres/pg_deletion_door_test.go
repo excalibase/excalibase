@@ -125,3 +125,41 @@ func TestInstances_DeletionStateRoundTrips(t *testing.T) {
 		t.Fatalf("round trip lost deletion state: %+v", got)
 	}
 }
+
+// The restore-interrupted marker is the only thing the sweep writes on a
+// target project, and the status predicate is its safety.
+func TestInstances_RecordRestoreInterrupted(t *testing.T) {
+	store := testStore(t)
+	inst := instanceRow("proj-restint01", "org-door")
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	inst.Status = string(domain.StatusRestoring)
+	if err := store.Update(inst); err != nil {
+		t.Fatalf("set RESTORING: %v", err)
+	}
+
+	if err := store.RecordRestoreInterrupted(inst.ProjectID, "RESTORE_INTERRUPTED", "delete and try again"); err != nil {
+		t.Fatalf("RecordRestoreInterrupted: %v", err)
+	}
+	got, _ := store.FindByProjectID(inst.ProjectID)
+	if got.Status != string(domain.StatusRestoring) {
+		t.Errorf("status: got %s, want RESTORING — the marker must not move it", got.Status)
+	}
+	if got.CurrentStep != "RESTORE_INTERRUPTED" || got.FailureReason != "delete and try again" {
+		t.Errorf("marker: %+v", got)
+	}
+}
+
+func TestInstances_RecordRestoreInterruptedRefusesANonRestoringProject(t *testing.T) {
+	store := testStore(t)
+	inst := instanceRow("proj-restint02", "org-door")
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	err := store.RecordRestoreInterrupted(inst.ProjectID, "S", "r")
+	if !errors.Is(err, storage.ErrProjectNotRestoring) {
+		t.Fatalf("err: got %v, want ErrProjectNotRestoring", err)
+	}
+}

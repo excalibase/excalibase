@@ -50,6 +50,21 @@ func (s *Instances) Update(inst *domain.DatabaseInstance) error {
 }
 
 // FindByProjectID returns the stored instance or nil.
+// RecordRestoreInterrupted stores why a restore stopped, only on a project
+// that is still being restored.
+func (s *Instances) RecordRestoreInterrupted(projectID, step, reason string) error {
+	existing, ok := s.Items[projectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	marked := existing.Clone()
+	if err := storage.ApplyRestoreInterrupted(marked, step, reason); err != nil {
+		return err
+	}
+	s.Items[projectID] = marked
+	return nil
+}
+
 func (s *Instances) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
 	if s.Err != nil {
 		return nil, s.Err

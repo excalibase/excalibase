@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 )
@@ -81,4 +83,41 @@ func TestRefuseWhileNotServableLetsALiveProjectThrough(t *testing.T) {
 	if refuseWhileNotServable(w, newRestoringOnlyStore(inst), "p-live") {
 		t.Error("a live project must not be refused")
 	}
+}
+
+// In shared-runtime (docker) mode runtimeClientFor handed back the shared
+// client before anything looked at the project, so a RESTORING or DELETING
+// project's functions kept running.
+func TestSharedRuntimeRefusesAProjectThatIsNotServable(t *testing.T) {
+	for name, status := range map[string]string{
+		"restoring": string(domain.StatusRestoring),
+		"deleting":  string(domain.StatusDeleting),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := sharedRuntimeHandler(&domain.DatabaseInstance{
+				ProjectID: "proj-f", OrgID: "o", Status: status, Namespace: "ns",
+			})
+
+			if _, err := h.runtimeClientFor(context.Background(), "proj-f"); err == nil {
+				t.Fatal("the shared runtime must not serve a project the platform may not serve")
+			}
+		})
+	}
+}
+
+func TestSharedRuntimeStillServesALiveProject(t *testing.T) {
+	h := sharedRuntimeHandler(&domain.DatabaseInstance{
+		ProjectID: "proj-f", OrgID: "o", Status: "ACTIVE", Namespace: "ns",
+	})
+
+	if _, err := h.runtimeClientFor(context.Background(), "proj-f"); err != nil {
+		t.Fatalf("a live project must still reach the shared runtime: %v", err)
+	}
+}
+
+// sharedRuntimeHandler is a function handler in shared-runtime (docker) mode
+// — one runtime client for every project, no per-project k8s provisioning.
+func sharedRuntimeHandler(inst *domain.DatabaseInstance) *FunctionHandler {
+	return NewFunctionHandler(nil, nil, edgefn.NewRuntimeClient("http://runtime.invalid", ""),
+		newRestoringOnlyStore(inst), nil, "")
 }

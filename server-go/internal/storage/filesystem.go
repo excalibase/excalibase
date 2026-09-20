@@ -111,6 +111,22 @@ func (s *FileSystemStore) RecordDeletionFailure(projectID string, status domain.
 	return s.write(failed)
 }
 
+// RecordRestoreInterrupted stores why a restore stopped. See InstanceStore.
+func (s *FileSystemStore) RecordRestoreInterrupted(projectID, step, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, ok := s.cache[projectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	marked := existing.Clone()
+	if err := ApplyRestoreInterrupted(marked, step, reason); err != nil {
+		return err
+	}
+	return s.write(marked)
+}
+
 // write persists the instance to disk and the cache. Callers hold s.mu.
 func (s *FileSystemStore) write(inst *domain.DatabaseInstance) error {
 	dir := s.projectDir(inst.ProjectID)

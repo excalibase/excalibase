@@ -120,6 +120,6 @@ func (failingJobStore) HeartbeatRestoreJob(context.Context, string, string) (boo
 	return false, nil
 }
 
-func (failingJobStore) FailAbandonedRestoreJobs(context.Context, string, time.Duration, string) ([]string, error) {
+func (failingJobStore) FailAbandonedRestoreJobs(context.Context, string, time.Duration, string) ([]domain.RestoreJob, error) {
 	return nil, context.DeadlineExceeded
 }

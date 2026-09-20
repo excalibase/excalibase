@@ -19,6 +19,11 @@ type fakeRestoreJobStore struct {
 	jobs map[string]domain.RestoreJob
 	// clock lets a test age a heartbeat without sleeping.
 	clock func() time.Time
+	// beats, when set, is signalled on every heartbeat so a test can wait
+	// for one rather than sleeping.
+	beats chan struct{}
+	// beatErrs makes the next N heartbeats fail with a store error.
+	beatErrs int
 }
 
 func newFakeJobs() *fakeRestoreJobStore {
@@ -50,20 +55,30 @@ func (f *fakeRestoreJobStore) UpdateRunningRestoreJob(_ context.Context, j *doma
 func (f *fakeRestoreJobStore) HeartbeatRestoreJob(_ context.Context, id, owner string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.beatErrs > 0 {
+		f.beatErrs--
+		return false, errors.New("platform db unreachable")
+	}
 	stored, ok := f.jobs[id]
 	if !ok || stored.Status != domain.RestoreStatusRunning || stored.Owner != owner {
 		return false, nil
 	}
 	stored.HeartbeatAt = f.now().UTC().Format(time.RFC3339)
 	f.jobs[id] = stored
+	if f.beats != nil {
+		select {
+		case f.beats <- struct{}{}:
+		default:
+		}
+	}
 	return true, nil
 }
 
-func (f *fakeRestoreJobStore) FailAbandonedRestoreJobs(_ context.Context, owner string, staleAfter time.Duration, reason string) ([]string, error) {
+func (f *fakeRestoreJobStore) FailAbandonedRestoreJobs(_ context.Context, owner string, staleAfter time.Duration, reason string) ([]domain.RestoreJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cutoff := f.now().Add(-staleAfter)
-	failed := []string{}
+	failed := []domain.RestoreJob{}
 	for id, j := range f.jobs {
 		if j.Status != domain.RestoreStatusRunning || j.Owner == owner {
 			continue
@@ -74,7 +89,7 @@ func (f *fakeRestoreJobStore) FailAbandonedRestoreJobs(_ context.Context, owner 
 		j.Status = domain.RestoreStatusFailed
 		j.FailureReason = reason
 		f.jobs[id] = j
-		failed = append(failed, id)
+		failed = append(failed, j)
 	}
 	return failed, nil
 }

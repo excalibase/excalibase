@@ -1326,6 +1326,19 @@ func (s *inMemoryInstanceStore) BeginDeletion(projectID string, deleteBackups *b
 }
 
 // RecordDeletionFailure stores how far a teardown got. See storage.InstanceStore.
+func (s *inMemoryInstanceStore) RecordRestoreInterrupted(projectID, step, reason string) error {
+	existing, ok := s.insts[projectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	marked := existing.Clone()
+	if err := storage.ApplyRestoreInterrupted(marked, step, reason); err != nil {
+		return err
+	}
+	s.insts[projectID] = marked
+	return nil
+}
+
 func (s *inMemoryInstanceStore) RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error {
 	existing, ok := s.insts[projectID]
 	if !ok {

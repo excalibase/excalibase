@@ -60,7 +60,7 @@ func (f *fakeRestoreJobStoreForHandler) HeartbeatRestoreJob(_ context.Context, i
 	return ok && stored.Status == domain.RestoreStatusRunning && stored.Owner == owner, nil
 }
 
-func (f *fakeRestoreJobStoreForHandler) FailAbandonedRestoreJobs(context.Context, string, time.Duration, string) ([]string, error) {
+func (f *fakeRestoreJobStoreForHandler) FailAbandonedRestoreJobs(context.Context, string, time.Duration, string) ([]domain.RestoreJob, error) {
 	return nil, nil
 }
 

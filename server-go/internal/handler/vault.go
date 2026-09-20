@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 )
@@ -18,10 +20,63 @@ const (
 
 type VaultHandler struct {
 	v *vault.Vault
+	// instances gates secrets filed under a project. Optional: without it
+	// project secrets are served as before, which is why main.go wires it.
+	instances storage.InstanceStore
 }
 
 func NewVaultHandler(v *vault.Vault) *VaultHandler {
 	return &VaultHandler{v: v}
+}
+
+// SetInstanceStore wires the project lookup the secret route consults before
+// handing out a project's credentials.
+func (h *VaultHandler) SetInstanceStore(s storage.InstanceStore) { h.instances = s }
+
+// vaultProjectPrefix is the path every project's secrets are filed under.
+const vaultProjectPrefix = "projects/"
+
+// projectIDForSecret returns the project a secret path belongs to, or "" for
+// a path that is not a project's (pki/…, backup/…).
+func projectIDForSecret(path string) string {
+	rest, ok := strings.CutPrefix(path, vaultProjectPrefix)
+	if !ok {
+		return ""
+	}
+	id, _, found := strings.Cut(rest, "/")
+	if !found {
+		return ""
+	}
+	return id
+}
+
+// refuseSecretOfUnservableProject answers 404 when the secret belongs to a
+// project the platform must not serve. 404 rather than 409 on purpose: the
+// callers here are services (svc-auth, svc-graphql) fetching tenant database
+// credentials, and the only correct reaction is to treat the project as
+// absent and stop serving it — not to retry.
+//
+// The lookup costs one indexed read by primary key, and these services hold
+// the result on a cache TTL rather than fetching per request, so this is not
+// on a per-request hot path.
+func (h *VaultHandler) refuseSecretOfUnservableProject(w http.ResponseWriter, path string) bool {
+	if h.instances == nil {
+		return false
+	}
+	projectID := projectIDForSecret(path)
+	if projectID == "" {
+		return false
+	}
+	inst, err := h.instances.FindByProjectID(projectID)
+	if err != nil {
+		httpError(w, "secret not found", http.StatusNotFound)
+		return true
+	}
+	if inst == nil || domain.IsNotServable(inst.Status) {
+		httpError(w, "secret not found", http.StatusNotFound)
+		return true
+	}
+	return false
 }
 
 func (h *VaultHandler) Routes(r chi.Router) {
@@ -192,6 +247,9 @@ func (h *VaultHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 
 func (h *VaultHandler) GetSecret(w http.ResponseWriter, r *http.Request) {
 	path := extractSecretPath(r)
+	if h.refuseSecretOfUnservableProject(w, path) {
+		return
+	}
 	data, err := h.v.Get(path)
 	if err != nil {
 		if errors.Is(err, vault.ErrSealed) {

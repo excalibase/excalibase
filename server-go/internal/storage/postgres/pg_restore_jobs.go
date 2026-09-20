@@ -73,25 +73,27 @@ func (r *RestoreJobsStore) HeartbeatRestoreJob(ctx context.Context, id, owner st
 // Jobs this process owns are excluded — it knows it is alive — and so is
 // every job whose heartbeat is still fresh, which is what keeps a rolling
 // deploy from failing the restores its peers are driving.
-func (r *RestoreJobsStore) FailAbandonedRestoreJobs(ctx context.Context, owner string, staleAfter time.Duration, reason string) ([]string, error) {
+func (r *RestoreJobsStore) FailAbandonedRestoreJobs(ctx context.Context, owner string, staleAfter time.Duration, reason string) ([]domain.RestoreJob, error) {
 	rows, err := r.s.db.QueryContext(ctx, `
 		UPDATE restore_jobs
 		SET status = 'FAILED', failure_reason = $1, updated_at = NOW()
 		WHERE status = 'RUNNING' AND owner <> $2 AND heartbeat_at < NOW() - $3::interval
-		RETURNING id`,
+		RETURNING id, new_project_id`,
 		reason, owner, fmt.Sprintf("%d milliseconds", staleAfter.Milliseconds()))
 	if err != nil {
 		return nil, fmt.Errorf("fail abandoned restore jobs: %w", err)
 	}
 	defer rows.Close()
 
-	failed := []string{}
+	failed := []domain.RestoreJob{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var j domain.RestoreJob
+		if err := rows.Scan(&j.ID, &j.NewProjectID); err != nil {
 			return nil, fmt.Errorf("fail abandoned restore jobs: %w", err)
 		}
-		failed = append(failed, id)
+		j.Status = domain.RestoreStatusFailed
+		j.FailureReason = reason
+		failed = append(failed, j)
 	}
 	return failed, rows.Err()
 }

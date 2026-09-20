@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,11 +17,25 @@ func newOwnedJobs(now func() time.Time) *fakeRestoreJobStore {
 	return jobs
 }
 
-// movableClock lets a test age a heartbeat without sleeping.
-type movableClock struct{ t time.Time }
+// movableClock lets a test age a heartbeat without sleeping. It is read by
+// the driving goroutine, the heartbeat goroutine and the test at once — the
+// same way the real clock is — so it is guarded.
+type movableClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
-func (c *movableClock) now() time.Time          { return c.t }
-func (c *movableClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *movableClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *movableClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
 
 func ownedOrchestrator(jobs *fakeRestoreJobStore, instance string, clock *movableClock) *RestoreOrchestrator {
 	return NewRestoreOrchestrator(RestoreOrchestratorConfig{
@@ -173,34 +188,37 @@ func TestInstanceIDsDifferBetweenProcesses(t *testing.T) {
 	}
 }
 
-// The heartbeat is what keeps a long recovery from looking abandoned.
+// The heartbeat is what keeps a long recovery from looking abandoned: the
+// job's marker is refreshed while the step runs, so a peer sweeping mid-step
+// sees a live owner however long the step takes.
 func TestADrivenJobKeepsBeatingWhileItRuns(t *testing.T) {
 	clock := &movableClock{t: time.Unix(5_000_000, 0)}
 	jobs := newOwnedJobs(clock.now)
+	jobs.beats = make(chan struct{}, 8)
 	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{
 		Jobs: jobs, InstanceID: "replica-a", Now: clock.now,
 		Heartbeat: time.Millisecond,
 	})
-	beats := make(chan struct{}, 1)
 	release := make(chan struct{})
+	started := make(chan struct{})
 	orch.SetSteps([]RestoreStep{{Name: "slow", Run: func(context.Context, *domain.RestoreJob) error {
-		// Let the clock move on while the step is held, then release once
-		// at least one heartbeat has refreshed the marker.
-		clock.advance(defaultRestoreHeartbeatStale)
-		select {
-		case beats <- struct{}{}:
-		default:
-		}
+		close(started)
 		<-release
 		return nil
 	}}})
 	job := startedJob(t, orch)
-	<-beats
-	time.Sleep(20 * time.Millisecond)
+	<-started
 
-	// A peer sweeping now must find the heartbeat fresh relative to the
-	// clock the driver is beating on.
-	clock.advance(time.Second)
+	// Age the clock past the staleness bound, then wait for a heartbeat that
+	// was taken after the move — no sleeping, just the store telling us.
+	clock.advance(2 * defaultRestoreHeartbeatStale)
+	drainBeats(jobs.beats)
+	select {
+	case <-jobs.beats:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the driver must keep beating while its step runs")
+	}
+
 	peer := ownedOrchestrator(jobs, "replica-b", clock)
 	if err := peer.SweepAbandoned(context.Background()); err != nil {
 		t.Fatalf("SweepAbandoned: %v", err)
@@ -210,6 +228,17 @@ func TestADrivenJobKeepsBeatingWhileItRuns(t *testing.T) {
 	}
 	close(release)
 	waitForJobStatus(t, jobs, "src", job.ID, domain.RestoreStatusCompleted)
+}
+
+// drainBeats discards heartbeats taken before the clock moved.
+func drainBeats(beats chan struct{}) {
+	for {
+		select {
+		case <-beats:
+		default:
+			return
+		}
+	}
 }
 
 func TestSweeperTickerStopsWhenCancelled(t *testing.T) {

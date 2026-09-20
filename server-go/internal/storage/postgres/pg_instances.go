@@ -248,6 +248,29 @@ func (s *Store) RecordDeletionFailure(projectID string, status domain.Provisioni
 	return nil
 }
 
+// RecordRestoreInterrupted leaves the reason a restore stopped on the target
+// project. The status predicate is the safety: only a row that is still
+// RESTORING is touched, so this can never revive a project, never disturb a
+// restore that finished, and never race a teardown.
+func (s *Store) RecordRestoreInterrupted(projectID, step, reason string) error {
+	res, err := s.db.Exec(`
+		UPDATE database_instances
+		SET current_step = $2, failure_reason = $3, updated_at = NOW()
+		WHERE project_id = $1 AND status = $4`,
+		projectID, step, reason, string(domain.StatusRestoring))
+	if err != nil {
+		return fmt.Errorf("record restore interruption: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: %s", storage.ErrProjectNotRestoring, projectID)
+	}
+	return nil
+}
+
 const pgInstanceColumns = `
 	project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 	deployment_mode,

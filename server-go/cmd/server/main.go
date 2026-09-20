@@ -227,6 +227,9 @@ func runServer(cfg config.AppConfig) {
 func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, deps *handlerDeps) func() {
 	orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
 		Jobs: sqlStore.RestoreJobs(),
+		// A swept job's target project is told its restore was interrupted,
+		// so the user reading the project sees why it is stuck.
+		Instances: store,
 	})
 	backupSvc := deps.backupHandler.Service()
 	// Wrap the existing synchronous adapter.Restore as a single
@@ -252,11 +255,14 @@ func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStor
 	// restart, and only one replica should be doing it.
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		// FNV-1a("excalibase-restore-sweeper").
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), 0x51c2_7d0e_9a41_3b77)
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), restoreSweepLockID)
 	}
 	return orchestrator.StartSweeper(context.Background(), service.NewLeadership(lock), restoreSweepInterval)
 }
+
+// restoreSweepLockID is the advisory lock the restore sweeper leads on. It
+// must stay distinct from every other advisory lock id the platform takes.
+const restoreSweepLockID int64 = 0x51c2_7d0e_9a41_3b77
 
 // restoreSweepInterval is how often the leader looks for restores whose
 // driver has gone silent. Two sweeps inside the staleness bound is enough:
@@ -967,6 +973,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	var vaultHandler *handler.VaultHandler
 	if localVault != nil {
 		vaultHandler = handler.NewVaultHandler(localVault)
+		// The engine and the auth service fetch tenant credentials here; a
+		// project the platform must not serve must not answer (EXC-401).
+		vaultHandler.SetInstanceStore(store)
 	}
 
 	realtimeHandler := handler.NewRealtimeHandler(sqlStore, sqlStore, vc)
@@ -1334,7 +1343,13 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 			r.Use(d.activity)
 			d.storageHandler.Routes(r)
 		})
-		d.storageHandler.PublicRoutes(r)
+		// The public object path is anonymous, so it sits outside the
+		// project-access gate and carries the rule itself: no downloads are
+		// signed for a project the platform must not serve (EXC-401).
+		r.Group(func(r chi.Router) {
+			r.Use(custommw.RequireServableProject(store))
+			d.storageHandler.PublicRoutes(r)
+		})
 		// Phase 10: ctx.storage runtime-to-provisioning routes. Auth via
 		// X-Excalibase-Runtime-Token shared secret — same secret the
 		// Deno runtime uses for /deploy and /internal/invoke. Mounted

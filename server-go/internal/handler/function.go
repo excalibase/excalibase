@@ -247,11 +247,20 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 		h.clientMu.Unlock()
 		return c, nil
 	}
-	if shared, ok := h.clients[sharedClientKey]; ok && h.k8sClient == nil {
-		h.clientMu.Unlock()
+	shared, hasShared := h.clients[sharedClientKey]
+	h.clientMu.Unlock()
+	if hasShared && h.k8sClient == nil {
+		// Shared-runtime (docker) mode. Nothing here had looked at the
+		// project, so a project the platform must not serve kept running its
+		// functions. The cost is one indexed read by primary key per call,
+		// and it lands where invoke volume is lowest: this branch is only
+		// taken in single-tenant docker deployments, while the per-project
+		// k8s branch below already reads the row.
+		if _, err := h.instanceFor(projectID); err != nil {
+			return nil, err
+		}
 		return shared, nil
 	}
-	h.clientMu.Unlock()
 
 	// Per-project path — need namespace and to ensure the runtime exists.
 	if h.k8sClient == nil {
