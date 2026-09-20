@@ -98,7 +98,7 @@ func (p *PostgreSQLProvisioner) SupportedType() domain.DatabaseType {
 	return domain.PostgreSQL
 }
 
-func (p *PostgreSQLProvisioner) provisionNamespace(ctx context.Context, req domain.ProvisioningRequest, namespace string) error {
+func (p *PostgreSQLProvisioner) provisionNamespace(ctx context.Context, req domain.ProvisioningRequest, projectID, namespace string) error {
 	labels := map[string]string{
 		"excalibase.io/type": "project",
 		"excalibase.io/org":  req.OrgID,
@@ -114,7 +114,9 @@ func (p *PostgreSQLProvisioner) provisionNamespace(ctx context.Context, req doma
 			return fmt.Errorf("create backup secret: %w", err)
 		}
 	}
-	return nil
+	// Before the cluster: the gateway container's env reads this Secret, and
+	// a pod whose env cannot be resolved does not start (EXC-409).
+	return ensureDocumentDBCredential(ctx, p.client, namespace, projectID, req.DocumentDB)
 }
 
 func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, projectID, namespace string) error {
@@ -132,6 +134,12 @@ func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.Pro
 		MasterUsername: req.MasterUsername,
 		Parameters:     req.Parameters,
 		Tags:           req.Tags,
+		// The extension's libraries must be preloaded by the cluster that is
+		// about to be created; there is no later opportunity (EXC-409). The
+		// gateway image travels with it so the cluster, not the plugin's
+		// default, decides what runs in this tenant's pod.
+		DocumentDB:             req.DocumentDB,
+		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{
@@ -184,7 +192,7 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 
 	// Stage 2: Namespace + optional backup secret
 	cb(domain.StageNamespaceCreation)
-	if err := p.provisionNamespace(ctx, req, namespace); err != nil {
+	if err := p.provisionNamespace(ctx, req, projectID, namespace); err != nil {
 		return nil, err
 	}
 
@@ -237,7 +245,7 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 	pc.SetStage(domain.StageValidating)
 
 	// Stage 2: Namespace + backup secret
-	if err := p.stageNamespace(ctx, req, namespace, pc); err != nil {
+	if err := p.stageNamespace(ctx, req, projectID, namespace, pc); err != nil {
 		return nil, err
 	}
 
@@ -282,7 +290,7 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 	return creds, nil
 }
 
-func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.ProvisioningRequest, namespace string, pc *ProvisionContext) error {
+func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.ProvisioningRequest, projectID, namespace string, pc *ProvisionContext) error {
 	pc.SetStage(domain.StageNamespaceCreation)
 	pc.SetStep("create namespace")
 	labels := map[string]string{
@@ -304,6 +312,12 @@ func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.P
 			return pc.Fail(fmt.Errorf("create backup secret: %w", err))
 		}
 	}
+	// Before the cluster: the gateway container's env reads this Secret, and
+	// a pod whose env cannot be resolved does not start (EXC-409).
+	pc.SetStep("create documentdb credential")
+	if err := ensureDocumentDBCredential(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
+		return pc.Fail(err)
+	}
 	return nil
 }
 
@@ -324,6 +338,12 @@ func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.Provisi
 		MasterUsername: req.MasterUsername,
 		Parameters:     req.Parameters,
 		Tags:           req.Tags,
+		// The extension's libraries must be preloaded by the cluster that is
+		// about to be created; there is no later opportunity (EXC-409). The
+		// gateway image travels with it so the cluster, not the plugin's
+		// default, decides what runs in this tenant's pod.
+		DocumentDB:             req.DocumentDB,
+		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{

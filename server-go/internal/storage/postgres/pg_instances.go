@@ -35,7 +35,7 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 			deployment_mode,
 			host, read_only_host, port, database_name, username, password,
 			deletion_protection, pooler_enabled, pooler_host, ssl_mode,
-			webhook_url, postgres_version, tags,
+			webhook_url, postgres_version, documentdb, tags,
 			status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
 			deletion_step, deletion_error, deletion_delete_backups,
 			network_policy_enabled,
@@ -46,12 +46,12 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 			last_active_at, last_xact_count, pause_reason,
 			pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 			created_at, updated_at, last_health_check
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
 		derefBool(inst.DeletionProtection), derefBool(inst.PoolerEnabled), inst.PoolerHost, inst.SSLMode,
-		inst.WebhookURL, inst.PostgresVersion, inst.Tags,
+		inst.WebhookURL, inst.PostgresVersion, inst.DocumentDB, inst.Tags,
 		inst.Status, inst.CurrentStage, inst.CurrentStep, inst.FailureReason, inst.FailureStage, inst.FailureStep, inst.RollbackLog,
 		inst.DeletionStep, inst.DeletionError, inst.DeletionDeleteBackups,
 		derefBool(inst.NetworkPolicyEnabled),
@@ -71,9 +71,12 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 	return err
 }
 
-// Update persists changes to an existing project. project_id and org_id are
-// absent from the SET list on purpose: a project's identity and its owning org
-// are fixed at creation, so no update path can move a tenant's database.
+// Update persists changes to an existing project. project_id, org_id and
+// documentdb are absent from the SET list on purpose: a project's identity,
+// its owning org and whether its database carries DocumentDB are all fixed at
+// creation. No update path can move a tenant's database, and none can claim a
+// project runs an extension its cluster never preloaded the libraries for
+// (EXC-409).
 func (s *Store) Update(inst *domain.DatabaseInstance) error {
 	return s.update(inst, "")
 }
@@ -343,7 +346,7 @@ const pgInstanceColumns = `
 	deployment_mode,
 	host, read_only_host, port, database_name, username, password,
 	deletion_protection, pooler_enabled, pooler_host, ssl_mode,
-	webhook_url, postgres_version, tags,
+	webhook_url, postgres_version, documentdb, tags,
 	status, current_stage, current_step, failure_reason, failure_stage, failure_step, rollback_log,
 	deletion_step, deletion_error, deletion_delete_backups,
 	network_policy_enabled,
@@ -475,7 +478,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&deployMode,
 		&inst.Host, &inst.ReadOnlyHost, &port, &inst.DatabaseName, &inst.Username, &inst.Password,
 		&delProt, &poolerEn, &inst.PoolerHost, &inst.SSLMode,
-		&inst.WebhookURL, &inst.PostgresVersion, &inst.Tags,
+		&inst.WebhookURL, &inst.PostgresVersion, &inst.DocumentDB, &inst.Tags,
 		&inst.Status, &inst.CurrentStage, &inst.CurrentStep, &inst.FailureReason, &inst.FailureStage, &inst.FailureStep, &inst.RollbackLog,
 		&inst.DeletionStep, &inst.DeletionError, &inst.DeletionDeleteBackups,
 		&netPol,

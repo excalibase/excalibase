@@ -40,7 +40,7 @@ func TestAllocateTakesAPortInsideTheWindowAndLeavesTheEndpointOff(t *testing.T) 
 	store := testStore(t)
 	window := testWindow(t, 31000, 31099)
 
-	ep, err := store.AllocateDatabaseEndpointPort(context.Background(), "proj-alloc", window, testQuarantine)
+	ep, err := store.AllocateDatabaseEndpointPort(context.Background(), "proj-alloc", domain.DBEndpointRolePostgres, window, testQuarantine)
 	if err != nil {
 		t.Fatalf("AllocateDatabaseEndpointPort: %v", err)
 	}
@@ -60,11 +60,11 @@ func TestAllocateIsIdempotentSoAResumeKeepsItsPort(t *testing.T) {
 	window := testWindow(t, 31100, 31199)
 	ctx := context.Background()
 
-	first, err := store.AllocateDatabaseEndpointPort(ctx, "proj-keep", window, testQuarantine)
+	first, err := store.AllocateDatabaseEndpointPort(ctx, "proj-keep", domain.DBEndpointRolePostgres, window, testQuarantine)
 	if err != nil {
 		t.Fatalf("first allocate: %v", err)
 	}
-	second, err := store.AllocateDatabaseEndpointPort(ctx, "proj-keep", window, testQuarantine)
+	second, err := store.AllocateDatabaseEndpointPort(ctx, "proj-keep", domain.DBEndpointRolePostgres, window, testQuarantine)
 	if err != nil {
 		t.Fatalf("second allocate: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestAllocateNeverHandsTheSamePortToTwoProjects(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			ep, err := store.AllocateDatabaseEndpointPort(ctx, projectRefFor(n), window, testQuarantine)
+			ep, err := store.AllocateDatabaseEndpointPort(ctx, projectRefFor(n), domain.DBEndpointRolePostgres, window, testQuarantine)
 			if err != nil {
 				t.Errorf("allocate %d: %v", n, err)
 				return
@@ -114,11 +114,11 @@ func TestAllocateRefusesWhenTheWindowIsFull(t *testing.T) {
 	ctx := context.Background()
 
 	for _, id := range []string{"proj-full-a", "proj-full-b"} {
-		if _, err := store.AllocateDatabaseEndpointPort(ctx, id, window, testQuarantine); err != nil {
+		if _, err := store.AllocateDatabaseEndpointPort(ctx, id, domain.DBEndpointRolePostgres, window, testQuarantine); err != nil {
 			t.Fatalf("allocate %s: %v", id, err)
 		}
 	}
-	_, err := store.AllocateDatabaseEndpointPort(ctx, "proj-full-c", window, testQuarantine)
+	_, err := store.AllocateDatabaseEndpointPort(ctx, "proj-full-c", domain.DBEndpointRolePostgres, window, testQuarantine)
 	if !errors.Is(err, storage.ErrDBEndpointPortsExhausted) {
 		t.Fatalf("error = %v, want ErrDBEndpointPortsExhausted", err)
 	}
@@ -129,21 +129,21 @@ func TestReleasedPortStaysInQuarantineForTheWholeWindow(t *testing.T) {
 	window := testWindow(t, 31400, 31400) // the one port there is
 	ctx := context.Background()
 
-	first, err := store.AllocateDatabaseEndpointPort(ctx, "proj-quar-a", window, testQuarantine)
+	first, err := store.AllocateDatabaseEndpointPort(ctx, "proj-quar-a", domain.DBEndpointRolePostgres, window, testQuarantine)
 	if err != nil {
 		t.Fatalf("allocate: %v", err)
 	}
-	if err := store.ReleaseDatabaseEndpointPort(ctx, "proj-quar-a", time.Now()); err != nil {
+	if err := store.ReleaseDatabaseEndpointPort(ctx, "proj-quar-a", domain.DBEndpointRolePostgres, time.Now()); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if _, err := store.AllocateDatabaseEndpointPort(ctx, "proj-quar-b", window, testQuarantine); !errors.Is(err, storage.ErrDBEndpointPortsExhausted) {
+	if _, err := store.AllocateDatabaseEndpointPort(ctx, "proj-quar-b", domain.DBEndpointRolePostgres, window, testQuarantine); !errors.Is(err, storage.ErrDBEndpointPortsExhausted) {
 		t.Fatalf("a freed port was reusable immediately: err = %v", err)
 	}
 	// Released long enough ago that the window has passed.
-	if err := store.ReleaseDatabaseEndpointPort(ctx, "proj-quar-a", time.Now()); err != nil {
+	if err := store.ReleaseDatabaseEndpointPort(ctx, "proj-quar-a", domain.DBEndpointRolePostgres, time.Now()); err != nil {
 		t.Fatalf("idempotent release: %v", err)
 	}
-	reissued, err := store.AllocateDatabaseEndpointPort(ctx, "proj-quar-b", window, time.Nanosecond)
+	reissued, err := store.AllocateDatabaseEndpointPort(ctx, "proj-quar-b", domain.DBEndpointRolePostgres, window, time.Nanosecond)
 	if err != nil {
 		t.Fatalf("allocate after the window passed: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestReleasedPortStaysInQuarantineForTheWholeWindow(t *testing.T) {
 
 func TestReleaseIsIdempotentForAProjectHoldingNoPort(t *testing.T) {
 	store := testStore(t)
-	if err := store.ReleaseDatabaseEndpointPort(context.Background(), "proj-nothing", time.Now()); err != nil {
+	if err := store.ReleaseDatabaseEndpointPort(context.Background(), "proj-nothing", domain.DBEndpointRolePostgres, time.Now()); err != nil {
 		t.Fatalf("ReleaseDatabaseEndpointPort: %v", err)
 	}
 }
@@ -164,7 +164,7 @@ func TestSetPublicAndRequireTLSSurviveEachOther(t *testing.T) {
 	window := testWindow(t, 31500, 31599)
 	ctx := context.Background()
 
-	if _, err := store.AllocateDatabaseEndpointPort(ctx, "proj-flags", window, testQuarantine); err != nil {
+	if _, err := store.AllocateDatabaseEndpointPort(ctx, "proj-flags", domain.DBEndpointRolePostgres, window, testQuarantine); err != nil {
 		t.Fatalf("allocate: %v", err)
 	}
 	ep, err := store.SetDatabaseEndpointRequireTLS(ctx, "proj-flags", false)
@@ -193,7 +193,7 @@ func TestTurningTheEndpointOffKeepsTheTLSChoice(t *testing.T) {
 	if _, err := store.SetDatabaseEndpointRequireTLS(ctx, "proj-tls-memory", false); err != nil {
 		t.Fatalf("SetDatabaseEndpointRequireTLS: %v", err)
 	}
-	if err := store.ReleaseDatabaseEndpointPort(ctx, "proj-tls-memory", time.Now()); err != nil {
+	if err := store.ReleaseDatabaseEndpointPort(ctx, "proj-tls-memory", domain.DBEndpointRolePostgres, time.Now()); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	ep, err := store.GetDatabaseEndpoint(ctx, "proj-tls-memory")
@@ -213,10 +213,10 @@ func TestDeleteRemovesTheRowButNotTheQuarantine(t *testing.T) {
 	window := testWindow(t, 31600, 31600)
 	ctx := context.Background()
 
-	if _, err := store.AllocateDatabaseEndpointPort(ctx, "proj-gone", window, testQuarantine); err != nil {
+	if _, err := store.AllocateDatabaseEndpointPort(ctx, "proj-gone", domain.DBEndpointRolePostgres, window, testQuarantine); err != nil {
 		t.Fatalf("allocate: %v", err)
 	}
-	if err := store.ReleaseDatabaseEndpointPort(ctx, "proj-gone", time.Now()); err != nil {
+	if err := store.ReleaseDatabaseEndpointPort(ctx, "proj-gone", domain.DBEndpointRolePostgres, time.Now()); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	if err := store.DeleteDatabaseEndpoint(ctx, "proj-gone"); err != nil {
@@ -225,7 +225,7 @@ func TestDeleteRemovesTheRowButNotTheQuarantine(t *testing.T) {
 	if err := store.DeleteDatabaseEndpoint(ctx, "proj-gone"); err != nil {
 		t.Fatalf("delete is not idempotent: %v", err)
 	}
-	if _, err := store.AllocateDatabaseEndpointPort(ctx, "proj-after", window, testQuarantine); !errors.Is(err, storage.ErrDBEndpointPortsExhausted) {
+	if _, err := store.AllocateDatabaseEndpointPort(ctx, "proj-after", domain.DBEndpointRolePostgres, window, testQuarantine); !errors.Is(err, storage.ErrDBEndpointPortsExhausted) {
 		t.Fatalf("deleting the project let its port out of quarantine: err = %v", err)
 	}
 }
@@ -241,7 +241,7 @@ func projectRefFor(n int) string {
 
 func TestAllocateRefusesAWindowWithNoPortsInIt(t *testing.T) {
 	store := testStore(t)
-	_, err := store.AllocateDatabaseEndpointPort(context.Background(), "proj-nowindow", domain.PortRange{}, testQuarantine)
+	_, err := store.AllocateDatabaseEndpointPort(context.Background(), "proj-nowindow", domain.DBEndpointRolePostgres, domain.PortRange{}, testQuarantine)
 	if !errors.Is(err, domain.ErrInvalidPortRange) {
 		t.Fatalf("error = %v, want ErrInvalidPortRange", err)
 	}
@@ -266,7 +266,7 @@ func TestDatabaseEndpointOperationsFailLoudlyWhenTheDatabaseIsGone(t *testing.T)
 			return err
 		},
 		"allocate": func() error {
-			_, err := store.AllocateDatabaseEndpointPort(ctx, "proj-gone-db", window, testQuarantine)
+			_, err := store.AllocateDatabaseEndpointPort(ctx, "proj-gone-db", domain.DBEndpointRolePostgres, window, testQuarantine)
 			return err
 		},
 		"set public": func() error {
@@ -277,8 +277,10 @@ func TestDatabaseEndpointOperationsFailLoudlyWhenTheDatabaseIsGone(t *testing.T)
 			_, err := store.SetDatabaseEndpointRequireTLS(ctx, "proj-gone-db", false)
 			return err
 		},
-		"release": func() error { return store.ReleaseDatabaseEndpointPort(ctx, "proj-gone-db", time.Now()) },
-		"delete":  func() error { return store.DeleteDatabaseEndpoint(ctx, "proj-gone-db") },
+		"release": func() error {
+			return store.ReleaseDatabaseEndpointPort(ctx, "proj-gone-db", domain.DBEndpointRolePostgres, time.Now())
+		},
+		"delete": func() error { return store.DeleteDatabaseEndpoint(ctx, "proj-gone-db") },
 	}
 	for name, call := range calls {
 		if err := call(); err == nil {

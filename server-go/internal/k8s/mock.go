@@ -69,6 +69,16 @@ type MockClient struct {
 	DeletePublicDBError        error
 	PublicDBServiceExistsError error
 
+	// GatewayReady is what DocumentDBGatewayReady reports, keyed
+	// "namespace/pod". A missing key means the gateway is not serving,
+	// which is what a project that has none looks like (EXC-409).
+	GatewayReady      map[string]bool
+	GatewayReadyError error
+
+	// CreateSecretError fails every secret write, so a test can assert what
+	// a provision does when the cluster refuses one.
+	CreateSecretError error
+
 	// Capacity returned by GetClusterCapacity. Tests set this to simulate
 	// cluster headroom for capacity-aware provisioning checks.
 	Capacity      ClusterCapacity
@@ -93,7 +103,19 @@ func NewMockClient() *MockClient {
 		DenoSpecs:       make(map[string]DenoRuntimeSpec),
 
 		PublicDBServices: make(map[string]PublicDBServiceSpec),
+		GatewayReady:     make(map[string]bool),
 	}
+}
+
+// DocumentDBGatewayReady answers from what the test put in GatewayReady.
+func (m *MockClient) DocumentDBGatewayReady(ctx context.Context, namespace, pod string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "DocumentDBGatewayReady:"+namespace+"/"+pod)
+	if m.GatewayReadyError != nil {
+		return false, m.GatewayReadyError
+	}
+	return m.GatewayReady[namespace+"/"+pod], nil
 }
 
 // EnsurePublicDBService records the project's public endpoint Service.
@@ -304,6 +326,9 @@ func (m *MockClient) CreateSecret(ctx context.Context, namespace, name string, d
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "CreateSecret:"+namespace+"/"+name)
+	if m.CreateSecretError != nil {
+		return m.CreateSecretError
+	}
 	m.Secrets[namespace+"/"+name] = data
 	return nil
 }

@@ -40,6 +40,14 @@ func (h *ProvisioningHandler) SetDBEndpointService(api DBEndpointAPI) {
 type dbEndpointConnectionStrings struct {
 	RequireTLS     string `json:"requireTls"`
 	AllowPlaintext string `json:"allowPlaintext"`
+	// The Mongo pair, present only for a DocumentDB project (EXC-409). TLS
+	// is spelled tls=true rather than sslmode=, because that is what a
+	// MongoDB driver takes; a client handed libpq's spelling rejects it.
+	// Absent, not empty, for every other project: a caller must be able to
+	// tell "there is no Mongo endpoint" from "there is one I was not told
+	// how to reach".
+	MongoRequireTLS     string `json:"mongoRequireTls,omitempty"`
+	MongoAllowPlaintext string `json:"mongoAllowPlaintext,omitempty"`
 }
 
 // dbEndpointInternal is the in-cluster endpoint, which exists for every
@@ -49,6 +57,12 @@ type dbEndpointInternal struct {
 	Host             string `json:"host"`
 	Port             int    `json:"port"`
 	ConnectionString string `json:"connectionString"`
+	// The gateway a DocumentDB project serves the MongoDB wire protocol
+	// from. It is reported whether or not the project publishes publicly:
+	// an app this platform hosts beside the database reaches it inside the
+	// cluster with no public port at all.
+	MongoPort             int    `json:"mongoPort,omitempty"`
+	MongoConnectionString string `json:"mongoConnectionString,omitempty"`
 }
 
 // dbEndpointResponse is the wire shape of GET/PUT
@@ -72,6 +86,13 @@ type dbEndpointResponse struct {
 	ConnectionStrings dbEndpointConnectionStrings `json:"connectionStrings"`
 	CACertificate     string                      `json:"caCertificate"`
 	Internal          dbEndpointInternal          `json:"internal"`
+	// mongoPort is the public port a MongoDB client dials and
+	// mongoAvailable whether the gateway behind it is serving right now —
+	// which it is not while the container is still starting, even though
+	// the Service exists and Postgres is already answering. Both are absent
+	// for a project that is not a published DocumentDB project.
+	MongoPort      int   `json:"mongoPort,omitempty"`
+	MongoAvailable *bool `json:"mongoAvailable,omitempty"`
 }
 
 // dbEndpointRequest is the PUT body. Both fields are optional: a body that
@@ -191,14 +212,32 @@ func dbEndpointResponseFor(view service.DBEndpointView) dbEndpointResponse {
 		Database:      view.Database,
 		Username:      view.Username,
 		ConnectionStrings: dbEndpointConnectionStrings{
-			RequireTLS:     view.Connection.RequireTLS,
-			AllowPlaintext: view.Connection.AllowPlaintext,
+			RequireTLS:          view.Connection.RequireTLS,
+			AllowPlaintext:      view.Connection.AllowPlaintext,
+			MongoRequireTLS:     view.Connection.MongoRequireTLS,
+			MongoAllowPlaintext: view.Connection.MongoAllowPlaintext,
 		},
 		CACertificate: view.CACertificate,
 		Internal: dbEndpointInternal{
-			Host:             view.Internal.Host,
-			Port:             view.Internal.Port,
-			ConnectionString: view.Internal.ConnectionString,
+			Host:                  view.Internal.Host,
+			Port:                  view.Internal.Port,
+			ConnectionString:      view.Internal.ConnectionString,
+			MongoPort:             view.Internal.MongoPort,
+			MongoConnectionString: view.Internal.MongoConnectionString,
 		},
+		MongoPort:      view.MongoPort,
+		MongoAvailable: mongoAvailable(view),
 	}
+}
+
+// mongoAvailable is a pointer so "false" and "there is no Mongo endpoint" are
+// different answers on the wire. A project with no Mongo port has neither
+// field; one with a port has both, and false there means the gateway is not
+// serving yet.
+func mongoAvailable(view service.DBEndpointView) *bool {
+	if view.MongoPort == 0 {
+		return nil
+	}
+	available := view.MongoAvailable
+	return &available
 }

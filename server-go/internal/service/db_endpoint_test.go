@@ -34,62 +34,84 @@ func newFakeEndpointStore() *fakeEndpointStore {
 	}
 }
 
-func (f *fakeEndpointStore) row(projectID string) domain.DBEndpoint {
-	if row, ok := f.rows[projectID]; ok {
+// key identifies one of a project's holdings. A DocumentDB project holds a
+// port per protocol (EXC-409), from this one allocator.
+func endpointKey(projectID string, role domain.DBEndpointRole) string {
+	return projectID + "/" + string(role)
+}
+
+func (f *fakeEndpointStore) row(projectID string, role domain.DBEndpointRole) domain.DBEndpoint {
+	if row, ok := f.rows[endpointKey(projectID, role)]; ok {
 		return row
 	}
-	return domain.DefaultDBEndpoint(projectID)
+	return domain.DefaultDBEndpointForRole(projectID, role)
+}
+
+// quarantined reports whether a released port is still being held back.
+func (f *fakeEndpointStore) quarantined(port int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, held := f.quarantine[port]
+	return held
 }
 
 func (f *fakeEndpointStore) GetDatabaseEndpoint(_ context.Context, projectID string) (domain.DBEndpoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.row(projectID), nil
+	return f.row(projectID, domain.DBEndpointRolePostgres), nil
 }
 
-func (f *fakeEndpointStore) AllocateDatabaseEndpointPort(_ context.Context, projectID string, _ domain.PortRange, _ time.Duration) (domain.DBEndpoint, error) {
+func (f *fakeEndpointStore) GetDatabaseEndpointForRole(
+	_ context.Context, projectID string, role domain.DBEndpointRole,
+) (domain.DBEndpoint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.row(projectID, role), nil
+}
+
+func (f *fakeEndpointStore) AllocateDatabaseEndpointPort(_ context.Context, projectID string, role domain.DBEndpointRole, _ domain.PortRange, _ time.Duration) (domain.DBEndpoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.allocErr != nil {
 		return domain.DBEndpoint{}, f.allocErr
 	}
-	row := f.row(projectID)
+	row := f.row(projectID, role)
 	if row.Port == 0 {
 		row.Port = f.next
 		f.next++
 	}
-	f.rows[projectID] = row
+	f.rows[endpointKey(projectID, role)] = row
 	return row, nil
 }
 
 func (f *fakeEndpointStore) SetDatabaseEndpointPublic(_ context.Context, projectID string, public bool) (domain.DBEndpoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	row := f.row(projectID)
+	row := f.row(projectID, domain.DBEndpointRolePostgres)
 	row.PublicEnabled = public
-	f.rows[projectID] = row
+	f.rows[endpointKey(projectID, domain.DBEndpointRolePostgres)] = row
 	return row, nil
 }
 
 func (f *fakeEndpointStore) SetDatabaseEndpointRequireTLS(_ context.Context, projectID string, requireTLS bool) (domain.DBEndpoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	row := f.row(projectID)
+	row := f.row(projectID, domain.DBEndpointRolePostgres)
 	row.RequireTLS = requireTLS
-	f.rows[projectID] = row
+	f.rows[endpointKey(projectID, domain.DBEndpointRolePostgres)] = row
 	return row, nil
 }
 
-func (f *fakeEndpointStore) ReleaseDatabaseEndpointPort(_ context.Context, projectID string, releasedAt time.Time) error {
+func (f *fakeEndpointStore) ReleaseDatabaseEndpointPort(_ context.Context, projectID string, role domain.DBEndpointRole, releasedAt time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	row := f.row(projectID)
+	row := f.row(projectID, role)
 	if row.Port > 0 {
 		f.quarantine[row.Port] = releasedAt
 	}
 	row.Port = 0
 	row.PublicEnabled = false
-	f.rows[projectID] = row
+	f.rows[endpointKey(projectID, role)] = row
 	f.releases = append(f.releases, projectID)
 	return nil
 }
@@ -97,7 +119,9 @@ func (f *fakeEndpointStore) ReleaseDatabaseEndpointPort(_ context.Context, proje
 func (f *fakeEndpointStore) DeleteDatabaseEndpoint(_ context.Context, projectID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.rows, projectID)
+	for _, role := range []domain.DBEndpointRole{domain.DBEndpointRolePostgres, domain.DBEndpointRoleMongo} {
+		delete(f.rows, endpointKey(projectID, role))
+	}
 	f.deletes = append(f.deletes, projectID)
 	return nil
 }

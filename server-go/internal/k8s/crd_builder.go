@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -48,6 +49,20 @@ type PostgreSQLClusterOpts struct {
 	MasterUsername string
 	Parameters     map[string]string
 	Tags           map[string]string
+	// DocumentDB configures the cluster so the DocumentDB extension can be
+	// created in its database: the libraries the extension needs preloaded,
+	// and pg_cron pointed at the database it will live in. It is a
+	// create-time choice — a cluster's preloaded libraries are decided when
+	// it is provisioned — and the caller has already checked the major can
+	// offer it (EXC-408).
+	DocumentDB bool
+	// DocumentDBGatewayImage is the digest-pinned gateway image the CNPG-I
+	// sidecar injector must use for this cluster. Named on the cluster rather
+	// than left to the plugin's own default so what a tenant runs is recorded
+	// on the object that runs it, and does not change when the plugin is
+	// upgraded. Empty means the platform has pinned no image, and the plugin
+	// is then not registered at all.
+	DocumentDBGatewayImage string
 }
 
 type BackupOpts struct {
@@ -118,13 +133,27 @@ func buildClusterMetadata(opts PostgreSQLClusterOpts) map[string]interface{} {
 	return metadata
 }
 
+// defaultClusterDatabase and defaultClusterUser are what CNPG bootstraps when
+// the request names neither. They are named here rather than repeated because
+// the DocumentDB configuration has to point pg_cron at the same database the
+// cluster actually creates.
+const (
+	defaultClusterDatabase = "app"
+	defaultClusterUser     = "app"
+)
+
+// clusterDatabaseName is the database CNPG bootstraps for this project.
+func clusterDatabaseName(opts PostgreSQLClusterOpts) string {
+	if opts.DatabaseName != "" {
+		return opts.DatabaseName
+	}
+	return defaultClusterDatabase
+}
+
 // buildClusterSpec builds the spec section of a CNPG Cluster CRD.
 func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
-	dbName := "app"
-	dbUser := "app"
-	if opts.DatabaseName != "" {
-		dbName = opts.DatabaseName
-	}
+	dbName := clusterDatabaseName(opts)
+	dbUser := defaultClusterUser
 	if opts.MasterUsername != "" {
 		dbUser = opts.MasterUsername
 	}
@@ -161,6 +190,13 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 				"cpu":    opts.Tier.CPU,
 			},
 		},
+	}
+
+	// The gateway sidecar is opt-in per cluster (EXC-409). A cluster that
+	// names no plugin is never handed to the injector, so an ordinary
+	// project's pods are untouched by any of this.
+	if plugins := buildDocumentDBPlugins(opts); len(plugins) > 0 {
+		spec["plugins"] = plugins
 	}
 
 	if dbName != "app" || dbUser != "app" {
@@ -205,6 +241,15 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 			params[k] = v
 		}
 	}
+	// DocumentDB's configuration is applied after the tenant's, and wins.
+	// Both settings are load-bearing: without the libraries the extension
+	// does not load, and with pg_cron pointed elsewhere its DDL path cannot
+	// run — either way the project would be recorded as DocumentDB while
+	// not actually being one.
+	if opts.DocumentDB {
+		sharedPreloadLibs = withDocumentDBLibraries(sharedPreloadLibs)
+		params[config.DocumentDBCronDatabaseSetting] = clusterDatabaseName(opts)
+	}
 
 	postgresql := map[string]interface{}{
 		"parameters": params,
@@ -230,6 +275,71 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 	}
 
 	return postgresql, storage
+}
+
+// DocumentDBCredentialSecretName is the Secret in the project's own namespace
+// that the gateway container's environment references. It is scoped to the
+// project rather than taking the plugin's default name, which is unqualified
+// and would have every tenant's gateway reading a Secret of the same name.
+//
+// Its values are deliberately empty: a DocumentDB project has one credential,
+// its own application role, and the gateway is told to mint nothing. See
+// internal/provisioner/documentdb_credential.go.
+func DocumentDBCredentialSecretName(projectID string) string {
+	return projectID + "-documentdb-credentials"
+}
+
+// buildDocumentDBPlugins registers the CNPG-I sidecar injector on a DocumentDB
+// project's cluster, and nothing at all on any other.
+//
+// Every parameter is given explicitly. The plugin has a default for each, and
+// each default is wrong here: its gateway image floats with the plugin's own
+// version, its credential Secret name is unqualified and shared, and with no
+// TLS secret the gateway generates a self-signed certificate no client can
+// verify. Naming the cluster's own serving certificate instead means a Mongo
+// client verifies against the same CA the endpoint API already hands out for
+// Postgres.
+//
+// An unpinned gateway image registers no plugin: falling through to the
+// plugin's default would put an image nobody chose inside a tenant's pod.
+func buildDocumentDBPlugins(opts PostgreSQLClusterOpts) []interface{} {
+	if !opts.DocumentDB || opts.DocumentDBGatewayImage == "" {
+		return nil
+	}
+	return []interface{}{
+		map[string]interface{}{
+			"name":    config.DocumentDBPluginName,
+			"enabled": true,
+			"parameters": map[string]interface{}{
+				"gatewayImage":               opts.DocumentDBGatewayImage,
+				"documentDbCredentialSecret": DocumentDBCredentialSecretName(opts.ProjectID),
+				"gatewayTLSSecret":           opts.ProjectID + postgresSuffix + "-server",
+			},
+		},
+	}
+}
+
+// withDocumentDBLibraries returns the cluster's preload list with DocumentDB's
+// own libraries present. The tenant's entries are kept — a project may well
+// want pg_stat_statements alongside DocumentDB — and an entry DocumentDB
+// already requires is not repeated, because Postgres reads the list as a set
+// and a duplicate only makes the parameter harder to read.
+func withDocumentDBLibraries(tenant []interface{}) []interface{} {
+	required := config.DocumentDBPreloadLibraries()
+	libraries := make([]interface{}, 0, len(required)+len(tenant))
+	for _, library := range required {
+		libraries = append(libraries, library)
+	}
+	for _, entry := range tenant {
+		name, ok := entry.(string)
+		if !ok {
+			continue
+		}
+		if !slices.Contains(required, name) {
+			libraries = append(libraries, name)
+		}
+	}
+	return libraries
 }
 
 // buildBackupSpec builds the backup section of the CNPG Cluster spec.

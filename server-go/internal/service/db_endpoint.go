@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -114,6 +115,12 @@ type DBEndpointInternal struct {
 	Host             string
 	Port             int
 	ConnectionString string
+	// MongoPort and MongoConnectionString are the same for a DocumentDB
+	// project's gateway, which serves the MongoDB wire protocol from a
+	// container beside Postgres in the same pod (EXC-409). They are zero and
+	// empty for every other project.
+	MongoPort             int
+	MongoConnectionString string
 }
 
 // DBEndpointView is everything a customer needs to decide about, and then
@@ -132,9 +139,29 @@ type DBEndpointView struct {
 	RequireTLS    bool
 	Database      string
 	Username      string
-	Connection    domain.DBEndpointConnectionStringSet
+	Connection    DBEndpointConnectionStrings
 	CACertificate string
 	Internal      DBEndpointInternal
+	// MongoPort is the public port a MongoDB client dials, and
+	// MongoAvailable whether the gateway behind it is serving right now.
+	// Both are zero and false unless the project is a DocumentDB project
+	// that has opted into public access (EXC-409).
+	MongoPort      int
+	MongoAvailable bool
+}
+
+// DBEndpointConnectionStrings is every string a client might need for this
+// project: the Postgres pair a libpq client takes, and — for a DocumentDB
+// project — the Mongo pair, which spells TLS differently and names an
+// identity of its own.
+type DBEndpointConnectionStrings struct {
+	RequireTLS     string
+	AllowPlaintext string
+	// MongoRequireTLS and MongoAllowPlaintext are empty for a project that
+	// is not a DocumentDB project: there is nothing for a Mongo client to
+	// dial, and a string that looked like there was would be a lie.
+	MongoRequireTLS     string
+	MongoAllowPlaintext string
 }
 
 // Describe reports the project's endpoint as it stands.
@@ -172,12 +199,25 @@ func (s *DBEndpointService) SetPublic(ctx context.Context, projectID string, pub
 	if domain.IsNotServable(inst.Status) {
 		return DBEndpointView{}, errors.New(domain.NotServableReason(inst.Status))
 	}
-	endpoint, err := s.endpoints.AllocateDatabaseEndpointPort(ctx, projectID, s.ports, s.quarantine)
+	endpoint, err := s.endpoints.AllocateDatabaseEndpointPort(
+		ctx, projectID, domain.DBEndpointRolePostgres, s.ports, s.quarantine)
 	if err != nil {
 		return DBEndpointView{}, err
 	}
+	// A DocumentDB project serves two protocols and needs a port for each.
+	// Both come from this one allocator, so neither can collide with the
+	// other or with another tenant's.
+	mongoPort := 0
+	if inst.DocumentDB {
+		mongo, err := s.endpoints.AllocateDatabaseEndpointPort(
+			ctx, projectID, domain.DBEndpointRoleMongo, s.ports, s.quarantine)
+		if err != nil {
+			return DBEndpointView{}, err
+		}
+		mongoPort = mongo.Port
+	}
 	if servableNow(inst.Status) {
-		if err := s.ensureObserved(ctx, inst, endpoint.Port); err != nil {
+		if err := s.ensureObserved(ctx, inst, endpoint.Port, mongoPort); err != nil {
 			return DBEndpointView{}, err
 		}
 	}
@@ -227,7 +267,24 @@ func (s *DBEndpointService) Publish(ctx context.Context, inst *domain.DatabaseIn
 	if !endpoint.IsPublic() {
 		return nil
 	}
-	return s.ensureObserved(ctx, inst, endpoint.Port)
+	mongoPort, err := s.mongoPort(ctx, inst)
+	if err != nil {
+		return err
+	}
+	return s.ensureObserved(ctx, inst, endpoint.Port, mongoPort)
+}
+
+// mongoPort is the port the project's gateway is published on, or zero for a
+// project that is not a DocumentDB project or holds none.
+func (s *DBEndpointService) mongoPort(ctx context.Context, inst *domain.DatabaseInstance) (int, error) {
+	if !inst.DocumentDB {
+		return 0, nil
+	}
+	mongo, err := s.endpoints.GetDatabaseEndpointForRole(ctx, inst.ProjectID, domain.DBEndpointRoleMongo)
+	if err != nil {
+		return 0, err
+	}
+	return mongo.Port, nil
 }
 
 // Release is the teardown step: the Service goes, the port goes into
@@ -240,7 +297,7 @@ func (s *DBEndpointService) Release(ctx context.Context, inst *domain.DatabaseIn
 	if err := s.deleteObserved(ctx, inst); err != nil {
 		return err
 	}
-	if err := s.endpoints.ReleaseDatabaseEndpointPort(ctx, inst.ProjectID, time.Now()); err != nil {
+	if err := s.releasePorts(ctx, inst); err != nil {
 		return err
 	}
 	return s.endpoints.DeleteDatabaseEndpoint(ctx, inst.ProjectID)
@@ -254,7 +311,7 @@ func (s *DBEndpointService) disable(ctx context.Context, inst *domain.DatabaseIn
 	if _, err := s.endpoints.SetDatabaseEndpointPublic(ctx, inst.ProjectID, false); err != nil {
 		return DBEndpointView{}, err
 	}
-	if err := s.endpoints.ReleaseDatabaseEndpointPort(ctx, inst.ProjectID, time.Now()); err != nil {
+	if err := s.releasePorts(ctx, inst); err != nil {
 		return DBEndpointView{}, err
 	}
 	endpoint, err := s.endpoints.GetDatabaseEndpoint(ctx, inst.ProjectID)
@@ -264,21 +321,59 @@ func (s *DBEndpointService) disable(ctx context.Context, inst *domain.DatabaseIn
 	return s.view(ctx, inst, endpoint)
 }
 
-// ensureObserved creates the Service and confirms it is there. A create that
-// was accepted but did not produce a Service is a failure, not a success.
-func (s *DBEndpointService) ensureObserved(ctx context.Context, inst *domain.DatabaseInstance, port int) error {
-	name := domain.DBEndpointServiceName(inst.ProjectID)
-	err := s.kube.EnsurePublicDBService(ctx, inst.Namespace, k8s.PublicDBServiceSpec{
-		Name:             name,
+// releasePorts frees every port the project holds into quarantine. A
+// DocumentDB project holds two; the quarantine applies to both for the same
+// reason it applies to either — a client still dialling a reissued port
+// arrives at a stranger's database whichever protocol it speaks.
+func (s *DBEndpointService) releasePorts(ctx context.Context, inst *domain.DatabaseInstance) error {
+	roles := []domain.DBEndpointRole{domain.DBEndpointRolePostgres}
+	if inst.DocumentDB {
+		roles = append(roles, domain.DBEndpointRoleMongo)
+	}
+	for _, role := range roles {
+		if err := s.endpoints.ReleaseDatabaseEndpointPort(ctx, inst.ProjectID, role, time.Now()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureObserved creates the project's Services and confirms they are there. A
+// create that was accepted but did not produce a Service is a failure, not a
+// success. A mongoPort of zero means the project has no Mongo endpoint, and
+// none is created.
+func (s *DBEndpointService) ensureObserved(ctx context.Context, inst *domain.DatabaseInstance, port, mongoPort int) error {
+	if err := s.ensureServiceObserved(ctx, inst, k8s.PublicDBServiceSpec{
+		Name:             domain.DBEndpointServiceName(inst.ProjectID),
 		Port:             port,
 		ReadWriteService: inst.ProjectID + "-postgres-rw",
 		SharedIPKey:      s.sharedIPKey,
 		ProjectID:        inst.ProjectID,
+	}); err != nil {
+		return err
+	}
+	if mongoPort == 0 {
+		return nil
+	}
+	// The gateway is a container in the very same pod, so this Service
+	// selects the same primary and differs only in the port it forwards to.
+	return s.ensureServiceObserved(ctx, inst, k8s.PublicDBServiceSpec{
+		Name:             domain.DBEndpointMongoServiceName(inst.ProjectID),
+		Port:             mongoPort,
+		TargetPort:       config.DocumentDBGatewayPort,
+		PortName:         "documentdb",
+		ReadWriteService: inst.ProjectID + "-postgres-rw",
+		SharedIPKey:      s.sharedIPKey,
+		ProjectID:        inst.ProjectID,
 	})
-	if err != nil {
+}
+
+// ensureServiceObserved creates one Service and confirms it exists.
+func (s *DBEndpointService) ensureServiceObserved(ctx context.Context, inst *domain.DatabaseInstance, spec k8s.PublicDBServiceSpec) error {
+	if err := s.kube.EnsurePublicDBService(ctx, inst.Namespace, spec); err != nil {
 		return fmt.Errorf("publish database endpoint: %w", err)
 	}
-	exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, name)
+	exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, spec.Name)
 	if err != nil {
 		return fmt.Errorf("confirm database endpoint: %w", err)
 	}
@@ -291,16 +386,24 @@ func (s *DBEndpointService) ensureObserved(ctx context.Context, inst *domain.Dat
 // deleteObserved removes the Service and confirms it is gone, so nothing is
 // recorded as unreachable while a port is still answering.
 func (s *DBEndpointService) deleteObserved(ctx context.Context, inst *domain.DatabaseInstance) error {
-	name := domain.DBEndpointServiceName(inst.ProjectID)
-	if err := s.kube.DeletePublicDBService(ctx, inst.Namespace, name); err != nil {
-		return fmt.Errorf("withdraw database endpoint: %w", err)
+	// Both Services go. A Mongo Service left behind would publish a port
+	// whose gateway is gone, and the port could not be safely reissued while
+	// it still answered.
+	names := []string{domain.DBEndpointServiceName(inst.ProjectID)}
+	if inst.DocumentDB {
+		names = append(names, domain.DBEndpointMongoServiceName(inst.ProjectID))
 	}
-	exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, name)
-	if err != nil {
-		return fmt.Errorf("confirm database endpoint withdrawal: %w", err)
-	}
-	if exists {
-		return ErrDBEndpointNotObserved
+	for _, name := range names {
+		if err := s.kube.DeletePublicDBService(ctx, inst.Namespace, name); err != nil {
+			return fmt.Errorf("withdraw database endpoint: %w", err)
+		}
+		exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, name)
+		if err != nil {
+			return fmt.Errorf("confirm database endpoint withdrawal: %w", err)
+		}
+		if exists {
+			return ErrDBEndpointNotObserved
+		}
 	}
 	return nil
 }
@@ -357,6 +460,7 @@ func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInsta
 			return DBEndpointView{}, fmt.Errorf("read database endpoint state: %w", err)
 		}
 	}
+	postgresStrings := domain.DBEndpointConnectionStrings(host, endpoint.Port, inst.Username, inst.DatabaseName)
 	view := DBEndpointView{
 		ProjectID:  inst.ProjectID,
 		Enabled:    endpoint.PublicEnabled,
@@ -366,13 +470,19 @@ func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInsta
 		RequireTLS: endpoint.RequireTLS,
 		Database:   inst.DatabaseName,
 		Username:   inst.Username,
-		Connection: domain.DBEndpointConnectionStrings(host, endpoint.Port, inst.Username, inst.DatabaseName),
+		Connection: DBEndpointConnectionStrings{
+			RequireTLS:     postgresStrings.RequireTLS,
+			AllowPlaintext: postgresStrings.AllowPlaintext,
+		},
 		Internal: DBEndpointInternal{
 			Host: inst.Host,
 			Port: postgresPort,
 			ConnectionString: domain.DBConnectionString(
 				inst.Host, postgresPort, inst.Username, inst.DatabaseName, domain.SSLModePrefer),
 		},
+	}
+	if err := s.addMongoEndpoint(ctx, inst, host, &view); err != nil {
+		return DBEndpointView{}, err
 	}
 	if available {
 		ca, err := s.clusterCA(ctx, inst)
@@ -382,6 +492,47 @@ func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInsta
 		view.CACertificate = ca
 	}
 	return view, nil
+}
+
+// addMongoEndpoint fills in the Mongo half for a DocumentDB project, and
+// leaves every Mongo field zero for any other.
+//
+// The internal address is reported whether or not the project publishes: an
+// app this platform hosts beside the database reaches the gateway inside the
+// cluster with no public port at all, and that is how it should connect.
+//
+// MongoAvailable is asked of the gateway container rather than inferred from
+// the Service. The gateway starts by waiting for Postgres and then creating
+// its Mongo user, so there is a real window in which the Service exists, the
+// port is open and a Mongo client is still refused.
+func (s *DBEndpointService) addMongoEndpoint(
+	ctx context.Context, inst *domain.DatabaseInstance, host string, view *DBEndpointView,
+) error {
+	if !inst.DocumentDB {
+		return nil
+	}
+	view.Internal.MongoPort = config.DocumentDBGatewayPort
+	view.Internal.MongoConnectionString = domain.MongoConnectionString(
+		inst.Host, config.DocumentDBGatewayPort, inst.Username, true)
+
+	port, err := s.mongoPort(ctx, inst)
+	if err != nil {
+		return err
+	}
+	if port == 0 || !view.Enabled {
+		return nil
+	}
+	view.MongoPort = port
+	mongoStrings := domain.DBEndpointMongoConnectionStrings(host, port, inst.Username)
+	view.Connection.MongoRequireTLS = mongoStrings.RequireTLS
+	view.Connection.MongoAllowPlaintext = mongoStrings.AllowPlaintext
+
+	ready, err := s.kube.DocumentDBGatewayReady(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix)
+	if err != nil {
+		return fmt.Errorf("read the DocumentDB gateway state for %s: %w", inst.ProjectID, err)
+	}
+	view.MongoAvailable = view.Available && ready
+	return nil
 }
 
 // clusterCA returns the PEM a client needs for sslmode=verify-full. It comes

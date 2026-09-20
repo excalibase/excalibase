@@ -375,9 +375,14 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		DeploymentMode:  mode,
 		Namespace:       namespace,
 		PostgresVersion: major,
-		Status:          "PROVISIONING",
-		CurrentStage:    domain.StageValidating,
-		CreatedAt:       now,
+		// Recorded here and nowhere else. The cluster's preloaded libraries
+		// are fixed when it is provisioned, so the choice cannot be revisited
+		// later and the store leaves the column out of every UPDATE to keep
+		// it that way (EXC-409). The major has already been checked capable.
+		DocumentDB:   req.DocumentDB,
+		Status:       "PROVISIONING",
+		CurrentStage: domain.StageValidating,
+		CreatedAt:    now,
 	}
 
 	if req.Backup != nil {

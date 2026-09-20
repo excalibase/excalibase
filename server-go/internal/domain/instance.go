@@ -69,7 +69,16 @@ type DatabaseInstance struct {
 	// so one recorded major cannot mean two different things. Restore reads it
 	// back to recover into the same major the backup was taken from.
 	PostgresVersion string `json:"postgresVersion,omitempty"`
-	Tags            string `json:"tags,omitempty"` // JSON string
+	// DocumentDB reports whether this project's database carries the
+	// DocumentDB extension. It is decided when the project is created and
+	// never afterwards — the cluster's preloaded libraries are fixed at
+	// provision time, so there is no route that turns it on later, and the
+	// storage layer leaves the column out of every UPDATE to keep it that
+	// way. Always serialised, never omitted: a caller deciding whether to
+	// offer a Mongo surface needs to be told "no", not left to infer it
+	// from an absent field.
+	DocumentDB bool   `json:"documentDb"`
+	Tags       string `json:"tags,omitempty"` // JSON string
 
 	// Status
 	Status        string            `json:"status"`

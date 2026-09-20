@@ -51,6 +51,14 @@ type PublicDBServiceSpec struct {
 	ReadWriteService string // the CNPG read-write Service to copy the selector from
 	SharedIPKey      string // MetalLB sharing key, common to every project
 	ProjectID        string
+	// TargetPort is the port inside the pod. Zero means Postgres, which is
+	// every project. A DocumentDB project has a second Service pointed at the
+	// gateway's port instead (EXC-409) — the same pod and therefore the same
+	// selector, because the gateway is a container beside Postgres rather
+	// than a workload of its own.
+	TargetPort int
+	// PortName names the port on the Service. Empty means "postgres".
+	PortName string
 }
 
 // EnsurePublicDBService creates the project's public LoadBalancer Service, or
@@ -131,6 +139,23 @@ func (c *Client) readWriteSelector(ctx context.Context, namespace, name string) 
 	return selector, nil
 }
 
+// serviceTargetPort is the port inside the pod this Service forwards to.
+func serviceTargetPort(spec PublicDBServiceSpec) int {
+	if spec.TargetPort > 0 {
+		return spec.TargetPort
+	}
+	return postgresPort
+}
+
+// servicePortName names the port, so an operator reading the Service can see
+// which protocol it carries.
+func servicePortName(spec PublicDBServiceSpec) string {
+	if spec.PortName != "" {
+		return spec.PortName
+	}
+	return "postgres"
+}
+
 func buildPublicDBService(namespace string, spec PublicDBServiceSpec, selector map[string]string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -148,9 +173,9 @@ func buildPublicDBService(namespace string, spec PublicDBServiceSpec, selector m
 			Type:     corev1.ServiceTypeLoadBalancer,
 			Selector: selector,
 			Ports: []corev1.ServicePort{{
-				Name:       "postgres",
+				Name:       servicePortName(spec),
 				Port:       int32(spec.Port),
-				TargetPort: intstr.FromInt(postgresPort),
+				TargetPort: intstr.FromInt(serviceTargetPort(spec)),
 				Protocol:   corev1.ProtocolTCP,
 			}},
 		},
