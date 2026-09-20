@@ -1,7 +1,9 @@
 name: Publish Postgres images
 
-# Builds one ghcr.io/excalibase/postgresql image per supported major and
-# publishes it by digest. CNPG clusters are pinned to those digests through
+# Builds one ghcr.io/excalibase/postgresql image per supported major, proves it
+# works, and only then publishes it by digest. The proof runs against the built
+# artefact before the push, so an image that cannot install the allowlist or
+# round-trip a DocumentDB document never reaches the registry. CNPG clusters are pinned to those digests through
 # k8s/postgres-image-catalog.yaml, so nothing here may publish a floating tag
 # that a running cluster could drift onto.
 #
@@ -61,6 +63,11 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: server-go/go.sum
+
       - name: GHCR login
         uses: docker/login-action@v3
         with:
@@ -68,7 +75,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push
+      # Built into the local daemon first, and not pushed. Nothing reaches the
+      # registry until the checks below have run against this exact image.
+      - name: Build the candidate image
+        uses: docker/build-push-action@v6
+        with:
+          context: charts/excalibase-postgres
+          push: false
+          load: true
+          build-args: |
+            BASE_IMAGE=${{ matrix.entry.base }}
+            PG_MAJOR=${{ matrix.entry.major }}
+            DOCUMENTDB_REF=${{ matrix.entry.documentdbRef }}
+          tags: excalibase-postgresql-candidate:${{ matrix.entry.major }}
+          platforms: linux/amd64
+
+      # The same tests a developer runs locally, pointed at the candidate
+      # rather than building their own copy: every allowlisted extension
+      # installs, and on a DocumentDB major a document round-trips through it.
+      # They are opt-in (EXCALIBASE_POSTGRES_IMAGE_TESTS) so the ordinary
+      # integration job never builds images; here the image already exists.
+      - name: Verify the candidate before publishing it
+        working-directory: server-go
+        env:
+          EXCALIBASE_POSTGRES_IMAGE_TESTS: '1'
+          EXCALIBASE_POSTGRES_IMAGE_MAJOR: ${{ matrix.entry.major }}
+          EXCALIBASE_POSTGRES_IMAGE_REF: excalibase-postgresql-candidate:${{ matrix.entry.major }}
+        run: go test -tags integration -count=1 -p 1 -timeout 30m ./internal/schema/
+
+      # Same context, same build args: buildx serves this from the cache of the
+      # build just verified, so what is pushed is the artefact the tests ran
+      # against.
+      - name: Publish the verified image
         id: build
         uses: docker/build-push-action@v6
         with:

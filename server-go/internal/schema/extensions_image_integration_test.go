@@ -24,12 +24,75 @@ import (
 
 // EXC-407. CREATE EXTENSION only works if the extension's files are in the
 // image, so the only convincing test is the one that actually runs it: for
-// every major the catalogue supports, build that major's image from the
-// repository Dockerfile and install every extension on the tenant allowlist.
+// every major the catalogue supports, install every extension on the tenant
+// allowlist into that major's image, and round-trip a document through
+// DocumentDB on the majors that claim it.
 //
-// It builds rather than pulls on purpose. Pulling would test whatever is in
-// the registry today; building tests the Dockerfile in this commit, which is
-// the thing a change can break.
+// These tests are opt-in. Building four images — three of which compile
+// DocumentDB from source — takes minutes and does not belong in the ordinary
+// integration run, which must stay fast and must not build container images.
+// They are gated rather than deleted because they are the only proof the
+// images work; the gate is explicit so it cannot quietly rot.
+//
+// Two ways to run them:
+//
+//   * Locally, building each image from the repository Dockerfile — this is
+//     what proves the Dockerfile in this commit still works:
+//
+//       EXCALIBASE_POSTGRES_IMAGE_TESTS=1 go test -tags integration ./internal/schema/
+//
+//   * In the publish workflow, against one already-built image, so the thing
+//     verified is the exact artefact about to be published rather than a
+//     rebuild of it:
+//
+//       EXCALIBASE_POSTGRES_IMAGE_TESTS=1 \
+//       EXCALIBASE_POSTGRES_IMAGE_MAJOR=17 \
+//       EXCALIBASE_POSTGRES_IMAGE_REF=ghcr.io/excalibase/postgresql:17 \
+//       go test -tags integration ./internal/schema/
+
+const (
+	// imageTestsEnv opts in. Without it every test in this file skips.
+	imageTestsEnv = "EXCALIBASE_POSTGRES_IMAGE_TESTS"
+	// imageMajorEnv and imageRefEnv name one already-built image to test
+	// instead of building the whole catalogue. Both or neither.
+	imageMajorEnv = "EXCALIBASE_POSTGRES_IMAGE_MAJOR"
+	imageRefEnv   = "EXCALIBASE_POSTGRES_IMAGE_REF"
+)
+
+// requireImageTests skips unless the caller asked for these explicitly, and
+// says exactly how to ask.
+func requireImageTests(t *testing.T) {
+	t.Helper()
+	if os.Getenv(imageTestsEnv) != "" {
+		return
+	}
+	t.Skipf("builds container images; run it with %s=1 go test -tags integration -run %s ./internal/schema/",
+		imageTestsEnv, t.Name())
+}
+
+// majorsUnderTest is the whole catalogue normally, or the single major named
+// by imageMajorEnv when the workflow is verifying one built image.
+func majorsUnderTest(t *testing.T) []config.PostgresMajorEntry {
+	t.Helper()
+	entries := config.PostgresCatalogEntries()
+	pinned := strings.TrimSpace(os.Getenv(imageMajorEnv))
+	if pinned == "" {
+		if strings.TrimSpace(os.Getenv(imageRefEnv)) != "" {
+			t.Fatalf("%s is set without %s: an image reference says nothing about which major it is", imageRefEnv, imageMajorEnv)
+		}
+		return entries
+	}
+	if strings.TrimSpace(os.Getenv(imageRefEnv)) == "" {
+		t.Fatalf("%s is set without %s: nothing says which image to test", imageMajorEnv, imageRefEnv)
+	}
+	for _, entry := range entries {
+		if entry.Major == pinned {
+			return []config.PostgresMajorEntry{entry}
+		}
+	}
+	t.Fatalf("%s=%s is not a major in the catalogue (%s)", imageMajorEnv, pinned, config.SupportedPostgresMajorsMessage())
+	return nil
+}
 
 func dockerfileContext(t *testing.T) string {
 	t.Helper()
@@ -70,15 +133,24 @@ func startImageForMajor(ctx context.Context, t *testing.T, entry config.Postgres
 	}
 	buildArgs["DOCUMENTDB_REF"] = &documentDBRef
 
-	container, err := postgres.Run(ctx, "",
+	// An already-built image wins: the publish workflow points this at the
+	// artefact it is about to push, so what gets verified is that image and
+	// not a rebuild that merely shares a Dockerfile with it.
+	prebuilt := strings.TrimSpace(os.Getenv(imageRefEnv))
+	fromDockerfile := testcontainers.FromDockerfile{
+		Context:       dockerfileContext(t),
+		BuildArgs:     buildArgs,
+		KeepImage:     true,
+		PrintBuildLog: false,
+	}
+	if prebuilt != "" {
+		fromDockerfile = testcontainers.FromDockerfile{}
+	}
+
+	container, err := postgres.Run(ctx, prebuilt,
 		testcontainers.CustomizeRequest(testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
-				FromDockerfile: testcontainers.FromDockerfile{
-					Context:       dockerfileContext(t),
-					BuildArgs:     buildArgs,
-					KeepImage:     true,
-					PrintBuildLog: false,
-				},
+				FromDockerfile: fromDockerfile,
 				// The CNPG images carry no docker-entrypoint, so the postgres
 				// module's own bootstrap does not apply: initdb and start the
 				// server directly, exactly as the extension check needs.
@@ -136,9 +208,10 @@ func startImageForMajor(ctx context.Context, t *testing.T, entry config.Postgres
 }
 
 func TestEveryAllowlistedExtensionInstallsOnEverySupportedMajor(t *testing.T) {
+	requireImageTests(t)
 	introspector := &Introspector{}
 
-	for _, entry := range config.PostgresCatalogEntries() {
+	for _, entry := range majorsUnderTest(t) {
 		t.Run("postgres"+entry.Major, func(t *testing.T) {
 			ctx := context.Background()
 			db := startImageForMajor(ctx, t, entry)
@@ -167,7 +240,8 @@ func TestEveryAllowlistedExtensionInstallsOnEverySupportedMajor(t *testing.T) {
 // creates the extension, creates a collection, inserts a document, reads it
 // back, and is asked what it has installed.
 func TestDocumentDBWorksOnEveryMajorThatClaimsIt(t *testing.T) {
-	for _, entry := range config.PostgresCatalogEntries() {
+	requireImageTests(t)
+	for _, entry := range majorsUnderTest(t) {
 		if !entry.DocumentDB {
 			continue
 		}
@@ -215,7 +289,8 @@ func TestDocumentDBWorksOnEveryMajorThatClaimsIt(t *testing.T) {
 // DocumentDB must not have it in its image either, or the catalogue is lying
 // to the API that refuses provisioning on its word.
 func TestDocumentDBIsAbsentFromEveryMajorThatDisclaimsIt(t *testing.T) {
-	for _, entry := range config.PostgresCatalogEntries() {
+	requireImageTests(t)
+	for _, entry := range majorsUnderTest(t) {
 		if entry.DocumentDB {
 			continue
 		}
@@ -242,8 +317,9 @@ func TestPgCronIsInTheImageButNotOnTheAllowlist(t *testing.T) {
 	if IsExtensionAllowed("pg_cron") {
 		t.Fatal("pg_cron must not be tenant-installable")
 	}
+	requireImageTests(t)
 
-	for _, entry := range config.PostgresCatalogEntries() {
+	for _, entry := range majorsUnderTest(t) {
 		t.Run("postgres"+entry.Major, func(t *testing.T) {
 			ctx := context.Background()
 			db := startImageForMajor(ctx, t, entry)
