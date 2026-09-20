@@ -381,6 +381,17 @@ func (p *PostgreSQLProvisioner) Pause(ctx context.Context, namespace, projectID 
 		func(ctx context.Context) ([]string, error) { return p.runningDatabasePods(ctx, namespace) })
 }
 
+// WorkloadStopped reports whether the namespace still runs a database pod.
+// A Terminating pod counts as running: it still holds its resource requests
+// and the database may still be shutting down.
+func (p *PostgreSQLProvisioner) WorkloadStopped(ctx context.Context, namespace, _ string) (bool, error) {
+	pods, err := p.runningDatabasePods(ctx, namespace)
+	if err != nil {
+		return false, err
+	}
+	return len(pods) == 0, nil
+}
+
 // runningDatabasePods lists the database pods the namespace still carries.
 // A pod in Terminating is returned like any other: it exists, so it still
 // holds its resource requests.

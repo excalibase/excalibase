@@ -22,11 +22,20 @@ type fakeIdlePauser struct {
 	calls     []string
 	reasons   []string
 	err       error
+	// tried counts every attempt, including the ones that failed.
+	tried int
+}
+
+func (f *fakeIdlePauser) attempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tried
 }
 
 func (f *fakeIdlePauser) Pause(_ context.Context, projectID, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.tried++
 	if f.err != nil {
 		return f.err
 	}

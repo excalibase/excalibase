@@ -38,6 +38,11 @@ type Pauser interface {
 	// Resume starts the workload and returns only once the database is
 	// serving again.
 	Resume(ctx context.Context, namespace, projectID string) error
+	// WorkloadStopped reports whether the project's database is observed
+	// not running. A pause that failed after the database went down leaves
+	// a row saying PAUSING; only this can tell that apart from a pause that
+	// failed before the database went anywhere.
+	WorkloadStopped(ctx context.Context, namespace, projectID string) (bool, error)
 }
 
 // RollbackAware is an optional interface a provisioner can implement to

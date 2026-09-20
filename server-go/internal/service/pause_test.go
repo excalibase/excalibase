@@ -21,6 +21,10 @@ type fakePauser struct {
 	resumeErr   error
 }
 
+func (f *fakePauser) WorkloadStopped(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+
 func (f *fakePauser) StopReplication(_ context.Context, _, _ string) error { return nil }
 
 func (f *fakePauser) Pause(_ context.Context, _, _ string) error {

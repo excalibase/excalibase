@@ -23,6 +23,15 @@ type lifecyclePauser struct {
 	resumeErr          error
 	// pauseErrOnce fails only the first Pause, so a retry can converge.
 	pauseErrOnce error
+	// workloadDown is what WorkloadStopped reports: whether the project's
+	// database is observed not running.
+	workloadDown bool
+	// workloadErr models an apiserver that cannot be asked.
+	workloadErr error
+}
+
+func (p *lifecyclePauser) WorkloadStopped(context.Context, string, string) (bool, error) {
+	return p.workloadDown, p.workloadErr
 }
 
 func (p *lifecyclePauser) StopReplication(context.Context, string, string) error {
@@ -149,6 +158,22 @@ func (f *observedPauseFixture) pause(t *testing.T) error {
 	return f.svc.Pause(context.Background(), observedPauseProject, domain.PauseReasonManual)
 }
 
+// replicationRunning reports whether the watcher is up at the end of the
+// recorded sequence: it starts up, and every stop must be matched by a
+// later restart.
+func (f *observedPauseFixture) replicationRunning() bool {
+	running := true
+	for _, call := range f.pauser.log {
+		switch call {
+		case "stop-replication":
+			running = false
+		case "restart-replication":
+			running = true
+		}
+	}
+	return running
+}
+
 func (f *observedPauseFixture) reload(t *testing.T) *domain.DatabaseInstance {
 	t.Helper()
 	inst, err := f.store.FindByProjectID(observedPauseProject)
@@ -158,14 +183,14 @@ func (f *observedPauseFixture) reload(t *testing.T) *domain.DatabaseInstance {
 	return inst
 }
 
-func TestPauseOrdersReplicationStopBeforeTheBackup(t *testing.T) {
+func TestPauseStopsReplicationBeforeTheShutdown(t *testing.T) {
 	f := newObservedPause(t)
 
 	if err := f.pause(t); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
 
-	want := []string{"stop-replication", "backup", "pause"}
+	want := []string{"backup", "stop-replication", "pause"}
 	if strings.Join(f.pauser.log, ",") != strings.Join(want, ",") {
 		t.Errorf("order: got %v, want %v", f.pauser.log, want)
 	}
@@ -371,11 +396,6 @@ func TestPauseFailsWhenReplicationCannotBeStopped(t *testing.T) {
 	if inst.CurrentStep != pauseStepStopReplication {
 		t.Errorf("step: got %q, want %q", inst.CurrentStep, pauseStepStopReplication)
 	}
-	for _, call := range f.pauser.log {
-		if call == "backup" {
-			t.Error("the backup must not start while replication is still open")
-		}
-	}
 }
 
 func TestPauseRefusesABackupItCannotFollow(t *testing.T) {
@@ -384,5 +404,170 @@ func TestPauseRefusesABackupItCannotFollow(t *testing.T) {
 
 	if err := f.pause(t); !errors.Is(err, ErrPauseBackupNotCompleted) {
 		t.Fatalf("err: got %v, want ErrPauseBackupNotCompleted", err)
+	}
+}
+
+// EXC-403 review: a pause that gives up must never leave a running project
+// with its replication stopped. The watcher's slot would retain WAL with no
+// consumer, and realtime would be silently off on a project reported ACTIVE.
+func TestAFailedPauseLeavesReplicationRunning(t *testing.T) {
+	cases := map[string]func(*observedPauseFixture){
+		"backup fails": func(f *observedPauseFixture) {
+			f.backups.statuses = []string{"FAILED"}
+		},
+		"hibernate is refused": func(f *observedPauseFixture) {
+			f.pauser.pauseErr = errors.New("cluster rejected the annotation")
+		},
+	}
+	for name, break_ := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newObservedPause(t)
+			break_(f)
+
+			if err := f.pause(t); err == nil {
+				t.Fatal("the pause must fail")
+			}
+			if !f.replicationRunning() {
+				t.Errorf("replication must be back on a project that is still running: %v", f.pauser.log)
+			}
+		})
+	}
+}
+
+// If replication cannot be put back, the project must not claim to be a
+// plain healthy ACTIVE project — the failure has to stay visible.
+func TestAFailedPauseThatCannotRestoreReplicationSaysSo(t *testing.T) {
+	f := newObservedPause(t)
+	// The backup completes, replication stops, and then the shutdown is
+	// refused — so there IS a watcher to put back, and it cannot be.
+	f.pauser.pauseErr = errors.New("cluster rejected the annotation")
+	f.svc.replication = &restartRecorder{log: &f.pauser.log, err: errors.New("vault sealed")}
+
+	if err := f.pause(t); err == nil {
+		t.Fatal("the pause must fail")
+	}
+	inst := f.reload(t)
+	if inst.CurrentStep != pauseStepRestoreReplication {
+		t.Errorf("step: got %q, want %q", inst.CurrentStep, pauseStepRestoreReplication)
+	}
+	if inst.FailureReason == "" {
+		t.Error("a project whose replication could not be restarted must say so")
+	}
+	if inst.Status == "ACTIVE" {
+		t.Error("a project running without replication must not read as a plain healthy project")
+	}
+}
+
+// Taking the backup before the watcher is stopped shrinks the window where
+// the project is running without replication to nothing for the commonest
+// failure — a backup that does not complete.
+func TestPauseBacksUpBeforeStoppingReplication(t *testing.T) {
+	f := newObservedPause(t)
+
+	if err := f.pause(t); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	want := []string{"backup", "stop-replication", "pause"}
+	if strings.Join(f.pauser.log, ",") != strings.Join(want, ",") {
+		t.Errorf("order: got %v, want %v", f.pauser.log, want)
+	}
+}
+
+// A backup that never starts is the same story: nothing was stopped, so
+// there is nothing to put back.
+func TestAFailedBackupNeverStopsReplicationAtAll(t *testing.T) {
+	f := newObservedPause(t)
+	f.backups.triggerErr = errors.New("r2 unreachable")
+
+	if err := f.pause(t); !errors.Is(err, ErrPauseBackupNotCompleted) {
+		t.Fatalf("err: got %v, want ErrPauseBackupNotCompleted", err)
+	}
+	for _, call := range f.pauser.log {
+		if call == "stop-replication" || call == "restart-replication" {
+			t.Errorf("replication must never have been touched: %v", f.pauser.log)
+		}
+	}
+}
+
+// The error text promises a retry converges. That is only true if a project
+// left in an intermediate state can be driven out of it through the same
+// call — otherwise a failed resume strands the project forever.
+func TestResumeRetryConvergesFromResuming(t *testing.T) {
+	f := newObservedPause(t)
+	if err := f.pause(t); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	f.pauser.resumeErr = errors.New("cluster never became ready")
+	if err := f.svc.Resume(context.Background(), observedPauseProject); !errors.Is(err, ErrResumeNotObserved) {
+		t.Fatalf("first attempt: got %v", err)
+	}
+	if got := f.reload(t).Status; got != string(domain.StatusResuming) {
+		t.Fatalf("status: got %s, want RESUMING", got)
+	}
+
+	f.pauser.resumeErr = nil
+	if err := f.svc.Resume(context.Background(), observedPauseProject); err != nil {
+		t.Fatalf("retry must converge: %v", err)
+	}
+	if got := f.reload(t).Status; got != "ACTIVE" {
+		t.Errorf("status: got %s, want ACTIVE", got)
+	}
+}
+
+// A pause that failed after the database was already stopped leaves PAUSING.
+// Resuming such a project has to work — the label says PAUSING but the
+// workload is down, and only observation can tell.
+func TestResumeAcceptsAPausingProjectWhoseWorkloadIsDown(t *testing.T) {
+	f := newObservedPause(t)
+	f.pauser.pauseErr = errors.New("recorded after the pods went away")
+	if err := f.pause(t); !errors.Is(err, ErrPauseNotObserved) {
+		t.Fatalf("pause: got %v", err)
+	}
+	if got := f.reload(t).Status; got != string(domain.StatusPausing) {
+		t.Fatalf("status: got %s, want PAUSING", got)
+	}
+	f.pauser.pauseErr = nil
+	f.pauser.workloadDown = true
+
+	if err := f.svc.Resume(context.Background(), observedPauseProject); err != nil {
+		t.Fatalf("a stuck PAUSING project with a stopped database must be resumable: %v", err)
+	}
+	if got := f.reload(t).Status; got != "ACTIVE" {
+		t.Errorf("status: got %s, want ACTIVE", got)
+	}
+}
+
+// ...but a PAUSING project whose database is still up has nothing to resume:
+// starting a running workload is not something to guess at.
+func TestResumeLeavesAPausingProjectWhoseWorkloadIsStillUp(t *testing.T) {
+	f := newObservedPause(t)
+	f.pauser.pauseErr = errors.New("hibernate refused")
+	if err := f.pause(t); err == nil {
+		t.Fatal("pause must fail")
+	}
+	f.pauser.log = nil
+	f.pauser.workloadDown = false
+
+	if err := f.svc.Resume(context.Background(), observedPauseProject); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	for _, call := range f.pauser.log {
+		if call == "resume" {
+			t.Error("a running workload must not be started again")
+		}
+	}
+}
+
+func TestPauseAcceptsAProjectLeftInPausing(t *testing.T) {
+	f := newObservedPause(t)
+	f.pauser.pauseErrOnce = errors.New("transient")
+	if err := f.pause(t); !errors.Is(err, ErrPauseNotObserved) {
+		t.Fatalf("first attempt: got %v", err)
+	}
+	if err := f.pause(t); err != nil {
+		t.Fatalf("retry from PAUSING must converge: %v", err)
+	}
+	if got := f.reload(t).Status; got != string(domain.StatusPaused) {
+		t.Errorf("status: got %s, want PAUSED", got)
 	}
 }

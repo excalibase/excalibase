@@ -186,6 +186,20 @@ func (p *DockerPostgreSQLProvisioner) Pause(ctx context.Context, namespace, _ st
 		})
 }
 
+// WorkloadStopped reports whether the container has left the running state.
+// A container the daemon no longer knows about is stopped as far as the
+// project is concerned.
+func (p *DockerPostgreSQLProvisioner) WorkloadStopped(ctx context.Context, namespace, _ string) (bool, error) {
+	if namespace == "" {
+		return false, fmt.Errorf("docker workload state: container id missing on instance.Namespace")
+	}
+	status, err := p.docker.ContainerStatus(ctx, namespace)
+	if err != nil {
+		return false, fmt.Errorf("container status: %w", err)
+	}
+	return status != containerRunning, nil
+}
+
 // SetPausePoller overrides how long a pause waits for the container to stop.
 func (p *DockerPostgreSQLProvisioner) SetPausePoller(poller Poller) {
 	p.pausePoller = poller

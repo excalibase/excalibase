@@ -362,3 +362,60 @@ func (b *tierAwareBackups) TriggerManualBackup(context.Context, string) (map[str
 func (b *tierAwareBackups) BackupStatus(context.Context, string, string) (string, error) {
 	return backupStatusCompleted, nil
 }
+
+func TestResumeReportsAWorkloadStateItCannotRead(t *testing.T) {
+	f := newObservedPause(t)
+	f.pauser.pauseErr = errors.New("hibernate refused")
+	if err := f.pause(t); err == nil {
+		t.Fatal("pause must fail")
+	}
+	f.pauser.workloadErr = errors.New("apiserver unreachable")
+
+	if err := f.svc.Resume(context.Background(), observedPauseProject); err == nil {
+		t.Fatal("a resume that cannot see the workload must not guess")
+	}
+}
+
+func TestPauseRefusesAProjectBeingDeletedOutright(t *testing.T) {
+	f := newObservedPause(t)
+	if _, err := f.store.BeginDeletion(observedPauseProject, nil); err != nil {
+		t.Fatalf("BeginDeletion: %v", err)
+	}
+
+	if err := f.pause(t); !errors.Is(err, storage.ErrProjectDeleting) {
+		t.Fatalf("err: got %v, want ErrProjectDeleting", err)
+	}
+}
+
+func TestPauseLeavesStatesItDoesNotOwn(t *testing.T) {
+	f := newObservedPause(t)
+	inst := f.reload(t)
+	inst.Status = string(domain.StatusResuming)
+	if err := f.store.Update(inst); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if err := f.pause(t); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	if len(f.pauser.log) != 0 {
+		t.Errorf("a resuming project is not a pause's to touch: %v", f.pauser.log)
+	}
+}
+
+func TestBackupSupportRefusesAModeWithNoAdapter(t *testing.T) {
+	svc, store := backupSupportService(t, StaticBackupStorage(r2Storage()))
+	inst, _ := store.FindByProjectID("bk-p")
+	inst.DeploymentMode = domain.DeploymentMode("operator")
+	inst.BackupEnabled = boolPtr(true)
+	if err := store.Update(inst); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if _, err := svc.BackupsConfigured("bk-p"); !errors.Is(err, ErrUnsupportedBackupMode) {
+		t.Errorf("BackupsConfigured: got %v, want ErrUnsupportedBackupMode", err)
+	}
+	if _, err := svc.BackupStatus(context.Background(), "bk-p", "bk-1"); !errors.Is(err, ErrUnsupportedBackupMode) {
+		t.Errorf("BackupStatus: got %v, want ErrUnsupportedBackupMode", err)
+	}
+}

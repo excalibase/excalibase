@@ -26,6 +26,19 @@ const (
 	DefaultResumeGrace  = 24 * time.Hour
 	idlePauseTickBudget = 30 * time.Minute
 	idleDay             = 24 * time.Hour
+
+	// A pause that fails leaves the project in PAUSING, and only another
+	// pause can move it. The sweep retries those, but a pause that fails
+	// every time — invalid backup credentials, say — would otherwise file a
+	// Backup CR on every tick, so retries are spaced and capped.
+	//
+	// The cap is per project per calendar day and is held in the scheduler
+	// rather than on the row: the sweep is leader-elected, so one process
+	// owns the count, and a restart losing it costs at most one extra
+	// attempt. Spacing comes from the row's updated_at, which a failed
+	// pause stamps, so it survives a restart.
+	idlePauseRetryBackoff = 2 * time.Hour
+	idlePauseRetryCap     = 3
 )
 
 // TierResolver returns the effective tier spec (store row or built-in
@@ -97,6 +110,9 @@ type IdlePauseScheduler struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	running bool
+	// retries is each project's retry allowance for the current day, for
+	// pauses that failed part way and are being driven to completion.
+	retries map[string]retryBudget
 }
 
 func NewIdlePauseScheduler(c IdlePauseSchedulerConfig) *IdlePauseScheduler {
@@ -212,7 +228,14 @@ func (s *IdlePauseScheduler) RunOnce(ctx context.Context) (IdlePauseReport, erro
 // sweepOne applies the pause / warn / skip decision to a single project.
 func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.DatabaseInstance, row domain.ProjectActivity, seen bool, now time.Time, report *IdlePauseReport) {
 	pauseAfterDays, ok := s.autoPauseDays(ctx, inst)
-	if !ok || inst.Status != "ACTIVE" || s.resumedRecently(inst, now) {
+	if !ok {
+		return
+	}
+	if inst.Status == string(domain.StatusPausing) {
+		s.retryStuckPause(ctx, inst, now, report)
+		return
+	}
+	if inst.Status != "ACTIVE" || s.resumedRecently(inst, now) {
 		return
 	}
 	lastSeen, ok := effectiveLastSeen(inst, row, seen)
@@ -226,6 +249,59 @@ func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.Database
 	case idle >= time.Duration(pauseAfterDays-1)*idleDay && warningDue(row, seen, lastSeen):
 		s.warn(ctx, inst, lastSeen, lastSeen.Add(time.Duration(pauseAfterDays)*idleDay), now, report)
 	}
+}
+
+// retryStuckPause drives a project whose pause failed part way back towards
+// PAUSED. Left alone it would sit in PAUSING forever: the sweep's ordinary
+// path only looks at ACTIVE projects, and nothing else calls pause for it.
+func (s *IdlePauseScheduler) retryStuckPause(ctx context.Context, inst *domain.DatabaseInstance, now time.Time, report *IdlePauseReport) {
+	if inst.UpdatedAt != nil && now.Sub(inst.UpdatedAt.Time) < idlePauseRetryBackoff {
+		return
+	}
+	if !s.claimRetry(inst.ProjectID, now) {
+		s.logger.Printf("idle-pause: %s has used its %d retries today; leaving it in PAUSING", inst.ProjectID, idlePauseRetryCap)
+		return
+	}
+	reason := inst.PauseReason
+	if reason == "" {
+		reason = domain.PauseReasonIdle
+	}
+	if err := s.pauser.Pause(ctx, inst.ProjectID, reason); err != nil {
+		s.logger.Printf("idle-pause: retry of %s failed: %v", inst.ProjectID, err)
+		report.Failed = append(report.Failed, inst.ProjectID)
+		return
+	}
+	s.logAudit(ctx, AuditActionIdlePause, inst.ProjectID, "stuck pause retried to completion")
+	report.Paused = append(report.Paused, inst.ProjectID)
+}
+
+// claimRetry reports whether the project has a retry left today, counting
+// the one it hands out. The count resets on the calendar day so a project
+// that is stuck for a long time still gets attempts, just not endlessly.
+func (s *IdlePauseScheduler) claimRetry(projectID string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.retries == nil {
+		s.retries = map[string]retryBudget{}
+	}
+	day := now.UTC().Truncate(idleDay)
+	budget := s.retries[projectID]
+	if !budget.day.Equal(day) {
+		budget = retryBudget{day: day}
+	}
+	if budget.used >= idlePauseRetryCap {
+		s.retries[projectID] = budget
+		return false
+	}
+	budget.used++
+	s.retries[projectID] = budget
+	return true
+}
+
+// retryBudget is one project's retry allowance for one day.
+type retryBudget struct {
+	day  time.Time
+	used int
 }
 
 // autoPauseDays resolves the tier threshold; false when the tier is unknown

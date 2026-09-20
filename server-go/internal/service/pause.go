@@ -19,8 +19,11 @@ const (
 	pauseStepStopReplication = "STOP_REPLICATION"
 	pauseStepBackup          = "PRE_PAUSE_BACKUP"
 	pauseStepStopWorkload    = "STOP_WORKLOAD"
-	resumeStepStartWorkload  = "START_WORKLOAD"
-	resumeStepReplication    = "RESTART_REPLICATION"
+	// pauseStepRestoreReplication is the repair a failed pause runs when it
+	// had already stopped the watcher on a database that is still up.
+	pauseStepRestoreReplication = "RESTORE_REPLICATION"
+	resumeStepStartWorkload     = "START_WORKLOAD"
+	resumeStepReplication       = "RESTART_REPLICATION"
 )
 
 // Backup statuses the adapters report. IN_PROGRESS is neither, so the wait
@@ -122,6 +125,36 @@ var ErrPauseNotObserved = errors.New("pause did not complete: the project's data
 // converges.
 var ErrResumeNotObserved = errors.New("resume did not complete: the project was not confirmed running; retry to continue")
 
+// pausable reports whether a pause has work to do. ACTIVE is the ordinary
+// case; PAUSING is a pause that failed part way, and running it again is how
+// it converges. Everything else — PAUSED, RESUMING, a teardown, a build — is
+// either already there or not a pause's to touch.
+func pausable(status string) bool {
+	return status == "ACTIVE" || status == string(domain.StatusPausing)
+}
+
+// resumable decides whether a resume has work to do, from observation rather
+// than from the label. PAUSED and RESUMING are plainly resumable. PAUSING is
+// the interesting one: a pause that failed after the database was already
+// down leaves that label on a project whose workload is stopped, and without
+// asking the provisioner there is no way to tell it from a pause that failed
+// before anything was stopped — which must not be "resumed" into starting a
+// database that never went away.
+func (s *PauseService) resumable(ctx context.Context, pauser provisioner.Pauser, inst *domain.DatabaseInstance) (bool, error) {
+	switch inst.Status {
+	case string(domain.StatusPaused), string(domain.StatusResuming):
+		return true, nil
+	case string(domain.StatusPausing):
+		stopped, err := pauser.WorkloadStopped(ctx, inst.Namespace, inst.ProjectID)
+		if err != nil {
+			return false, fmt.Errorf("read workload state for %s: %w", inst.ProjectID, err)
+		}
+		return stopped, nil
+	default:
+		return false, nil
+	}
+}
+
 // Pause takes the project to PAUSED through observed stages: replication
 // stops, the pre-pause backup completes, the workload stops, and only then
 // is PAUSED recorded. Idempotent for an already-PAUSED project; a project
@@ -134,12 +167,19 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 	if err != nil || inst == nil {
 		return fmt.Errorf("project not found: %s", projectID)
 	}
-	if inst.Status == string(domain.StatusPaused) {
-		return nil
-	}
 	pauser, ok := s.pausers[inst.DeploymentMode]
 	if !ok {
 		return ErrPauseUnsupported
+	}
+	if domain.IsDeletionStatus(inst.Status) {
+		// The one-way door: a teardown owns the project's resources now, so
+		// the caller is told rather than quietly ignored.
+		return storage.ErrProjectDeleting
+	}
+	if !pausable(inst.Status) {
+		// PAUSED is already there; anything else is a state a pause has no
+		// business rewriting.
+		return nil
 	}
 	if err := s.enterPausing(inst, reason); err != nil {
 		return err
@@ -153,17 +193,42 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 }
 
 // runPause performs the ordered stages, returning the step that failed.
+//
+// The backup goes first. The watcher does not hold up a backup — only the
+// smart shutdown — so stopping replication earlier would buy nothing and
+// would leave a running project without CDC for the whole length of a
+// backup, which is the step most likely to fail. Replication stops only once
+// there is a recovery point and the shutdown is the next thing to happen.
 func (s *PauseService) runPause(ctx context.Context, pauser provisioner.Pauser, inst *domain.DatabaseInstance) (string, error) {
-	if err := pauser.StopReplication(ctx, inst.Namespace, inst.ProjectID); err != nil {
-		return pauseStepStopReplication, err
-	}
 	if err := s.awaitPrePauseBackup(ctx, inst.ProjectID); err != nil {
 		return pauseStepBackup, err
 	}
+	if err := pauser.StopReplication(ctx, inst.Namespace, inst.ProjectID); err != nil {
+		return pauseStepStopReplication, err
+	}
 	if err := pauser.Pause(ctx, inst.Namespace, inst.ProjectID); err != nil {
-		return pauseStepStopWorkload, err
+		// The database is still up and its watcher is gone: put replication
+		// back before reporting, or the project runs on with its slot
+		// retaining WAL that nothing consumes.
+		return s.repairReplication(ctx, inst, pauseStepStopWorkload, err)
 	}
 	return "", nil
+}
+
+// repairReplication restarts the watcher a failed pause had already stopped,
+// and reports which failure the caller should be told about. The original
+// cause wins when the repair succeeds; a repair that itself fails is the
+// more serious of the two, because it leaves a running project with
+// replication off and that has to be visible and retryable.
+func (s *PauseService) repairReplication(ctx context.Context, inst *domain.DatabaseInstance, step string, cause error) (string, error) {
+	if s.replication == nil {
+		return step, cause
+	}
+	if err := s.replication.RestartReplication(ctx, inst); err != nil {
+		log.Printf("pause %s: %v; restarting replication also failed: %v", inst.ProjectID, cause, err)
+		return pauseStepRestoreReplication, err
+	}
+	return step, cause
 }
 
 // awaitPrePauseBackup starts the pre-pause backup and returns only once it
@@ -259,12 +324,16 @@ func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 	if err != nil || inst == nil {
 		return fmt.Errorf("project not found: %s", projectID)
 	}
-	if inst.Status != string(domain.StatusPaused) {
-		return nil
-	}
 	pauser, ok := s.pausers[inst.DeploymentMode]
 	if !ok {
 		return ErrPauseUnsupported
+	}
+	resumable, err := s.resumable(ctx, pauser, inst)
+	if err != nil {
+		return err
+	}
+	if !resumable {
+		return nil
 	}
 
 	inst.Status = string(domain.StatusResuming)

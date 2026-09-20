@@ -108,3 +108,31 @@ func TestDockerPauseReportsAStopTheDaemonRefused(t *testing.T) {
 		t.Fatal("a stop the daemon refused must not be reported as a pause")
 	}
 }
+
+func TestDockerWorkloadStoppedReadsTheContainerState(t *testing.T) {
+	docker := newMockDocker()
+	docker.containers["c1"] = "running"
+	p := NewDockerPostgreSQLProvisioner(docker)
+
+	stopped, err := p.WorkloadStopped(context.Background(), "c1", "proj")
+	if err != nil || stopped {
+		t.Errorf("a running container is not stopped: %v %v", stopped, err)
+	}
+
+	docker.containers["c1"] = "exited"
+	stopped, err = p.WorkloadStopped(context.Background(), "c1", "proj")
+	if err != nil || !stopped {
+		t.Errorf("an exited container is stopped: %v %v", stopped, err)
+	}
+
+	// A container the daemon no longer knows about is stopped too.
+	delete(docker.containers, "c1")
+	stopped, err = p.WorkloadStopped(context.Background(), "c1", "proj")
+	if err != nil || !stopped {
+		t.Errorf("a missing container is stopped: %v %v", stopped, err)
+	}
+
+	if _, err := p.WorkloadStopped(context.Background(), "", "proj"); err == nil {
+		t.Error("a missing container id must be reported, not guessed")
+	}
+}

@@ -105,3 +105,34 @@ func TestStopReplicationReportsAFailedUninstall(t *testing.T) {
 		t.Fatal("a watcher that could not be stopped must fail the pause, not be ignored")
 	}
 }
+
+// A pause that failed part way leaves a row saying PAUSING. Only the
+// workload's observed state tells a project whose database is already down
+// from one that never stopped.
+func TestWorkloadStoppedReportsWhetherDatabasePodsRemain(t *testing.T) {
+	mock, prov := setupHibernationTest(t)
+
+	mock.Pods[pauseTestNS] = []corev1.Pod{databasePod(pauseTestCluster+"-1", true)}
+	stopped, err := prov.WorkloadStopped(context.Background(), pauseTestNS, pauseTestProject)
+	if err != nil {
+		t.Fatalf("WorkloadStopped: %v", err)
+	}
+	if stopped {
+		t.Error("a Terminating pod means the workload has not stopped")
+	}
+
+	mock.Pods[pauseTestNS] = nil
+	stopped, err = prov.WorkloadStopped(context.Background(), pauseTestNS, pauseTestProject)
+	if err != nil || !stopped {
+		t.Errorf("an empty namespace means the workload is stopped: %v %v", stopped, err)
+	}
+}
+
+func TestWorkloadStoppedReportsAListingItCannotRead(t *testing.T) {
+	mock, prov := setupHibernationTest(t)
+	mock.GetPodsError = errors.New("apiserver unreachable")
+
+	if _, err := prov.WorkloadStopped(context.Background(), pauseTestNS, pauseTestProject); err == nil {
+		t.Fatal("an unreadable pod list must not be reported as stopped")
+	}
+}
