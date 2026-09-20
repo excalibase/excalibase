@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/bootstrap"
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -513,6 +514,7 @@ type handlerDeps struct {
 	fnHandler          *handler.FunctionHandler
 	rlsPolicyHandler   *handler.RlsPolicyHandler
 	tableGrantHandler  *handler.TableGrantHandler
+	appHandler         *handler.AppHandler
 	tierHandler        *handler.TierHandler
 	capDeps            *capacityDeps
 	rlUnauth           func(http.Handler) http.Handler
@@ -1034,6 +1036,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:    realtimeHandler,
 		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies()),
 		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants()),
+		appHandler:         handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()), handler.NewProjectSourceLookup(store)),
 		tierHandler:        tierHandler,
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
@@ -1296,6 +1299,25 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 			r.With(dev).Delete("/", d.fnHandler.Delete)
 			r.With(dev).Post("/invoke", d.fnHandler.Invoke)
 			r.Get("/logs", d.fnHandler.Logs)
+		})
+	})
+	// Customer applications (EXC-378). Apps and databases are independent
+	// services under one project, so this mount asks nothing of the project's
+	// database — only that the caller may see the project. Reads = any
+	// member; creating and changing an app = Developer+, the same rung as the
+	// other data-plane authoring surfaces.
+	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(d.activity)
+		dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
+		r.Get("/", d.appHandler.List)
+		r.With(dev).Post("/", d.appHandler.Create)
+		r.Route("/{appId}", func(r chi.Router) {
+			r.Get("/", d.appHandler.Get)
+			r.With(dev).Patch("/", d.appHandler.Update)
+			r.With(dev).Delete("/", d.appHandler.Delete)
 		})
 	})
 	r.Route("/api/projects/{projectId}/schema", func(r chi.Router) {
