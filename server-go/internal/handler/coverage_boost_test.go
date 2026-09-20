@@ -15,6 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
@@ -71,6 +72,7 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 	snapshotH := NewSnapshotHandler(snapshotSvc)
 	migrationH := NewMigrationHandler(migrationSvc)
 	alertH := NewAlertHandler(alertSvc)
+	alertH.SetScope(store, fakestore.NewOrgs())
 	setupH := NewSetupHandler(setupSvc)
 	pgH := NewParameterGroupHandler(pgStore)
 
