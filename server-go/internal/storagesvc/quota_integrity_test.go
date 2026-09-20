@@ -29,10 +29,9 @@ func confirmableService(t *testing.T, quota map[string]int64) (*Service, *memSto
 func TestService_ConfirmUpload_RepeatedConfirmChargesOnce(t *testing.T) {
 	svc, store, blobs, bucket := confirmableService(t, nil)
 	ctx := context.Background()
-	blobs.put(testProjX, bucket.ID, "a.txt", 500, "text/plain")
-
 	for i := 0; i < 3; i++ {
-		if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"}); err != nil {
+		blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("a.txt")), 500, "text/plain")
+		if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt", UploadID: testUploadID("a.txt")}); err != nil {
 			t.Fatalf("confirm %d: %v", i, err)
 		}
 	}
@@ -50,19 +49,19 @@ func TestService_ConfirmUpload_OverwriteChargesTheDelta(t *testing.T) {
 	svc, store, blobs, bucket := confirmableService(t, nil)
 	ctx := context.Background()
 
-	blobs.put(testProjX, bucket.ID, "a.txt", 500, "text/plain")
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"}); err != nil {
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("a.txt")), 500, "text/plain")
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt", UploadID: testUploadID("a.txt")}); err != nil {
 		t.Fatalf("first confirm: %v", err)
 	}
-	blobs.put(testProjX, bucket.ID, "a.txt", 900, "text/plain")
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"}); err != nil {
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("a.txt")), 900, "text/plain")
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt", UploadID: testUploadID("a.txt")}); err != nil {
 		t.Fatalf("grow: %v", err)
 	}
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 900 {
 		t.Fatalf("after growing to 900 bytes the usage is %d, want 900", used)
 	}
-	blobs.put(testProjX, bucket.ID, "a.txt", 100, "text/plain")
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"}); err != nil {
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("a.txt")), 100, "text/plain")
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt", UploadID: testUploadID("a.txt")}); err != nil {
 		t.Fatalf("shrink: %v", err)
 	}
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 100 {
@@ -76,13 +75,13 @@ func TestService_ConfirmUpload_OverwriteChargesTheDelta(t *testing.T) {
 func TestService_ConfirmUpload_ChargeIsConditionalOnTheCap(t *testing.T) {
 	svc, store, blobs, bucket := confirmableService(t, map[string]int64{"free": 1000})
 	ctx := context.Background()
-	blobs.put(testProjX, bucket.ID, "a.bin", 600, "application/octet-stream")
-	blobs.put(testProjX, bucket.ID, "b.bin", 600, "application/octet-stream")
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("a.bin")), 600, "application/octet-stream")
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("b.bin")), 600, "application/octet-stream")
 
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.bin"}); err != nil {
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.bin", UploadID: testUploadID("a.bin")}); err != nil {
 		t.Fatalf("first confirm: %v", err)
 	}
-	_, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "b.bin"})
+	_, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "b.bin", UploadID: testUploadID("b.bin")})
 	if err == nil {
 		t.Fatal("the second confirm must not be charged past the cap")
 	}
@@ -103,8 +102,8 @@ func TestService_ConfirmUpload_RefusesAnExpiredUpload(t *testing.T) {
 	now := time.Now().UTC()
 	svc.now = func() time.Time { return now }
 
-	blobs.putAt(testProjX, bucket.ID, "stale.bin", 10, "text/plain", now.Add(-DefaultUnconfirmedGrace))
-	_, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "stale.bin"})
+	blobs.putAt(testProjX, bucket.ID, stagingObjectKey(testUploadID("stale.bin")), 10, "text/plain", now.Add(-DefaultUnconfirmedGrace))
+	_, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "stale.bin", UploadID: testUploadID("stale.bin")})
 	if err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("confirming an upload older than the reaper's grace must be refused, got %v", err)
 	}
@@ -118,8 +117,8 @@ func TestService_ConfirmUpload_RefusesAnExpiredUpload(t *testing.T) {
 
 	// Just inside the window the confirm still works, so the two windows do
 	// not overlap and no object is ever in both.
-	blobs.putAt(testProjX, bucket.ID, "fresh.bin", 10, "text/plain", now.Add(-confirmWindow(DefaultUnconfirmedGrace)+time.Second))
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "fresh.bin"}); err != nil {
+	blobs.putAt(testProjX, bucket.ID, stagingObjectKey(testUploadID("fresh.bin")), 10, "text/plain", now.Add(-confirmWindow(DefaultUnconfirmedGrace)+time.Second))
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "fresh.bin", UploadID: testUploadID("fresh.bin")}); err != nil {
 		t.Fatalf("an upload inside the confirm window must still be accepted: %v", err)
 	}
 }
@@ -134,7 +133,7 @@ func TestService_ReapAndConfirmWindowsDoNotOverlap(t *testing.T) {
 
 	// Written after the confirm window closed but before the reaper's grace.
 	written := now.Add(-DefaultUnconfirmedGrace + time.Minute)
-	blobs.putAt(testProjX, bucket.ID, "limbo.bin", 10, "text/plain", written)
+	blobs.putAt(testProjX, bucket.ID, stagingObjectKey(testUploadID("limbo.bin")), 10, "text/plain", written)
 
 	report, err := svc.ReapUnconfirmedUploads(ctx, DefaultUnconfirmedGrace, now)
 	if err != nil {
@@ -143,7 +142,7 @@ func TestService_ReapAndConfirmWindowsDoNotOverlap(t *testing.T) {
 	if len(report.Deleted) != 0 {
 		t.Errorf("the reaper must not take an object the grace still covers: %v", report.Deleted)
 	}
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "limbo.bin"}); err == nil {
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "limbo.bin", UploadID: testUploadID("limbo.bin")}); err == nil {
 		t.Error("an object past the confirm window must not be confirmable")
 	}
 }
@@ -174,8 +173,8 @@ func TestService_Reaper_SkipsBucketsBeingDeleted(t *testing.T) {
 func TestService_DeleteBucket_PurgesUncataloguedObjects(t *testing.T) {
 	svc, store, blobs, bucket := confirmableService(t, nil)
 	ctx := context.Background()
-	blobs.put(testProjX, bucket.ID, "recorded.txt", 10, "text/plain")
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "recorded.txt"}); err != nil {
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("recorded.txt")), 10, "text/plain")
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "recorded.txt", UploadID: testUploadID("recorded.txt")}); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
 	blobs.put(testProjX, bucket.ID, "never-confirmed.bin", 999, "application/octet-stream")
@@ -259,12 +258,12 @@ func TestService_PrivateBucket_AllowsRenderableTypes(t *testing.T) {
 func TestService_SignDownloadURL_NeutralisesRenderableTypes(t *testing.T) {
 	svc, _, blobs, bucket := confirmableService(t, nil)
 	ctx := context.Background()
-	blobs.put(testProjX, bucket.ID, "page.html", 10, "text/html")
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "page.html"}); err != nil {
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("page.html")), 10, "text/html")
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "page.html", UploadID: testUploadID("page.html")}); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
-	blobs.put(testProjX, bucket.ID, "logo.png", 10, "image/png")
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "logo.png"}); err != nil {
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("logo.png")), 10, "image/png")
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "logo.png", UploadID: testUploadID("logo.png")}); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
 
@@ -284,27 +283,27 @@ func TestService_SignDownloadURL_NeutralisesRenderableTypes(t *testing.T) {
 	}
 }
 
-// The reaper reports what it could not do rather than stopping: a catalogue
-// read that fails, or bytes it cannot delete, mark that bucket failed.
-func TestService_Reaper_ReportsPerObjectFailures(t *testing.T) {
-	store := newErrStore()
+// The reaper reports what it could not do rather than stopping: a staging
+// listing that fails, or bytes it cannot delete, mark that bucket failed.
+func TestService_Reaper_ReportsPerBucketFailures(t *testing.T) {
+	store := newMemStore()
 	blobs := newFakeObjectStore()
 	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	bucket, _ := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	now := time.Now().UTC()
-	blobs.putAt(testProjX, bucket.ID, "old.bin", 10, "text/plain", now.Add(-3*time.Hour))
+	blobs.putAt(testProjX, bucket.ID, stagingObjectKey("upl_old"), 10, "text/plain", now.Add(-3*time.Hour))
 
-	store.getObjectErr = errors.New("platform db unavailable")
+	blobs.listErr = errors.New("object store unreachable")
 	report, err := svc.ReapUnconfirmedUploads(ctx, time.Hour, now)
 	if err != nil {
 		t.Fatalf("ReapUnconfirmedUploads: %v", err)
 	}
 	if len(report.Failed) != 1 || len(report.Deleted) != 0 {
-		t.Fatalf("a failed row lookup must be reported, not swallowed: %+v", report)
+		t.Fatalf("a failed listing must be reported, not swallowed: %+v", report)
 	}
 
-	store.getObjectErr = nil
+	blobs.listErr = nil
 	blobs.deleteErr = errors.New("object store refuses deletes")
 	report, err = svc.ReapUnconfirmedUploads(ctx, time.Hour, now)
 	if err != nil {
@@ -358,8 +357,8 @@ func TestService_DeleteBucket_ReportsStrayPurgeFailure(t *testing.T) {
 func TestService_SignDownloadURL_UnusableRecordedTypeIsDownloaded(t *testing.T) {
 	svc, store, blobs, bucket := confirmableService(t, nil)
 	ctx := context.Background()
-	blobs.put(testProjX, bucket.ID, "odd.bin", 10, "text/plain")
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "odd.bin"}); err != nil {
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("odd.bin")), 10, "text/plain")
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "odd.bin", UploadID: testUploadID("odd.bin")}); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
 	// Rewrite the recorded type to something no parser accepts.

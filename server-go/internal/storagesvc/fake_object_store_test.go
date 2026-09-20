@@ -22,6 +22,7 @@ type fakeObjectStore struct {
 	listErr   error
 	headErr   error
 	signErr   error
+	copyErr   error
 }
 
 // fakeStoredObject is what the fake plane holds for one key: enough for the
@@ -111,6 +112,48 @@ func (f *fakeObjectStore) DeleteObject(_ context.Context, projectID, bucketID, k
 	defer f.mu.Unlock()
 	delete(f.objects, fakeStoreKey(projectID, bucketID, key))
 	return nil
+}
+
+func (f *fakeObjectStore) CopyObject(_ context.Context, projectID, bucketID, sourceKey, destinationKey string) error {
+	if f.copyErr != nil {
+		return f.copyErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	source, ok := f.objects[fakeStoreKey(projectID, bucketID, sourceKey)]
+	if !ok {
+		return fmt.Errorf("copy %q: %w", sourceKey, ErrObjectNotFound)
+	}
+	f.objects[fakeStoreKey(projectID, bucketID, destinationKey)] = source
+	return nil
+}
+
+// ListStagedUploads sees the staging namespace and nothing else, the way the
+// real client's fixed prefix does.
+func (f *fakeObjectStore) ListStagedUploads(_ context.Context, projectID, bucketID string, limit int32) ([]StagedUpload, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	prefix := fakeStoreKey(projectID, bucketID, stagingPrefix)
+	out := []StagedUpload{}
+	for k, obj := range f.objects {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, StagedUpload{
+				UploadID:     strings.TrimPrefix(k, prefix),
+				LastModified: obj.lastModified,
+			})
+			if limit > 0 && int32(len(out)) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeObjectStore) DeleteStagingObject(ctx context.Context, projectID, bucketID, uploadID string) error {
+	return f.DeleteObject(ctx, projectID, bucketID, stagingObjectKey(uploadID))
 }
 
 // ListObjects reproduces the prefix semantics the real client must have:

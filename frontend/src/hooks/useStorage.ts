@@ -34,6 +34,9 @@ export interface ListObjectsResponse {
 }
 
 export interface UploadURLResponse {
+  // Names the staged upload this URL authorises. The bytes land in a staging
+  // area, not on the object's key, so this is what confirm accepts.
+  uploadId: string;
   url: string;
   method: 'PUT';
   headers: Record<string, string>;
@@ -106,13 +109,11 @@ export const useUploadFile = (projectId: string, bucket: string) => {
         transformRequest: [(data) => data],
       });
 
+      // Confirm names the staged upload. Size and content type are read back
+      // from the object store, so sending them here would achieve nothing.
       const confirm = await api.post<StorageObject>(
         `/projects/${projectId}/storage/buckets/${bucket}/confirm-upload`,
-        {
-          key,
-          size: file.size,
-          mimeType: file.type || 'application/octet-stream',
-        },
+        { key, uploadId: sign.data.uploadId },
       );
       return confirm.data;
     },

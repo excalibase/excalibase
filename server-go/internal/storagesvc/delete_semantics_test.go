@@ -113,8 +113,8 @@ func seedBucket(t *testing.T, svc *Service, blobs *fakeObjectStore, name, key st
 	if err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
-	blobs.put(testProjX, bucket.ID, key, size, "text/plain")
-	if _, err := svc.ConfirmUpload(ctx, testProjX, name, "FREE", "u", ConfirmUploadRequest{Key: key}); err != nil {
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID(key)), size, "text/plain")
+	if _, err := svc.ConfirmUpload(ctx, testProjX, name, "FREE", "u", ConfirmUploadRequest{Key: key, UploadID: testUploadID(key)}); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
 	return bucket
@@ -127,8 +127,8 @@ func TestService_DeleteBucket_MarksDeletingBeforeRemovingBytes(t *testing.T) {
 	store := newErrStore()
 	blobs := newFakeObjectStore()
 	svc := NewServiceWithObjectStore(store, blobs, nil)
-	blobs.deleteErr = errors.New("object store refuses deletes")
 	seedBucket(t, svc, blobs, "assets", "a.txt", 10)
+	blobs.deleteErr = errors.New("object store refuses deletes")
 
 	if err := svc.DeleteBucket(context.Background(), testProjX, "assets"); err == nil {
 		t.Fatal("expected the delete to fail")
@@ -148,8 +148,8 @@ func TestService_DeleteBucket_RetryCompletesAfterFailure(t *testing.T) {
 	store := newErrStore()
 	blobs := newFakeObjectStore()
 	svc := NewServiceWithObjectStore(store, blobs, nil)
-	blobs.deleteErr = errors.New("object store refuses deletes")
 	seedBucket(t, svc, blobs, "assets", "a.txt", 10)
+	blobs.deleteErr = errors.New("object store refuses deletes")
 	ctx := context.Background()
 	_ = svc.DeleteBucket(ctx, testProjX, "assets")
 
@@ -197,10 +197,10 @@ func TestService_Uploads_RejectedWhileBucketIsDeleting(t *testing.T) {
 	if _, err := svc.SignUploadURL(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "x", Size: 1}); !errors.Is(err, ErrBucketDeleting) {
 		t.Errorf("SignUploadURL: want ErrBucketDeleting, got %v", err)
 	}
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "x"}); !errors.Is(err, ErrBucketDeleting) {
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "x", UploadID: testUploadID("x")}); !errors.Is(err, ErrBucketDeleting) {
 		t.Errorf("ConfirmUpload: want ErrBucketDeleting, got %v", err)
 	}
-	if _, err := svc.StartResumableUpload(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "x", Size: 1}); !errors.Is(err, ErrBucketDeleting) {
+	if _, _, err := svc.StartResumableUpload(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "x", Size: 1}); !errors.Is(err, ErrBucketDeleting) {
 		t.Errorf("StartResumableUpload: want ErrBucketDeleting, got %v", err)
 	}
 }
@@ -282,8 +282,8 @@ func TestService_ConfirmUpload_ReportsWriteFailure(t *testing.T) {
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
 	store.recordObjectErr = errors.New("platform db unavailable")
 
-	blobs.put(testProjX, bucketOf(t, store, "assets"), "a.txt", 10, "text/plain")
-	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"})
+	blobs.put(testProjX, bucketOf(t, store, "assets"), stagingObjectKey(testUploadID("a.txt")), 10, "text/plain")
+	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "a.txt", UploadID: testUploadID("a.txt")})
 	if err == nil || !strings.Contains(err.Error(), "record object") {
 		t.Fatalf("an unrecorded upload must not report success, got %v", err)
 	}
@@ -347,7 +347,7 @@ func TestService_ReportsBucketLookupFailure(t *testing.T) {
 		"DeleteBucket":    func() error { return svc.DeleteBucket(ctx, testProjX, "assets") },
 		"DeleteObject":    func() error { return svc.DeleteObject(ctx, testProjX, "assets", "k") },
 		"SignUploadURL":   func() error { _, e := svc.SignUploadURL(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k"}); return e },
-		"ConfirmUpload":   func() error { _, e := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k"}); return e },
+		"ConfirmUpload":   func() error { _, e := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k", UploadID: testUploadID("k")}); return e },
 		"SignDownloadURL": func() error { _, e := svc.SignDownloadURL(ctx, testProjX, "assets", "k"); return e },
 		"ListObjects":     func() error { _, e := svc.ListObjects(ctx, testProjX, "assets", ListObjectsRequest{}); return e },
 	}
@@ -367,8 +367,8 @@ func TestService_ConfirmUpload_ReportsRecordFailure(t *testing.T) {
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "assets"})
 	store.recordObjectErr = errors.New("platform db unavailable")
 
-	blobs.put(testProjX, bucketOf(t, store, "assets"), "k", 1, "text/plain")
-	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k"})
+	blobs.put(testProjX, bucketOf(t, store, "assets"), stagingObjectKey(testUploadID("k")), 1, "text/plain")
+	_, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k", UploadID: testUploadID("k")})
 	if err == nil || !strings.Contains(err.Error(), "record object") {
 		t.Fatalf("want a record-object failure, got %v", err)
 	}
@@ -471,14 +471,14 @@ func TestService_RejectsNegativeSizes(t *testing.T) {
 	if _, err := svc.SignUploadURL(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k", Size: -1}); err == nil {
 		t.Error("SignUploadURL must refuse a negative size")
 	}
-	blobs.putAt(testProjX, bucketOf(t, store, "assets"), "k", -100, "text/plain", time.Now().UTC())
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k"}); err == nil {
+	blobs.putAt(testProjX, bucketOf(t, store, "assets"), stagingObjectKey(testUploadID("k")), -100, "text/plain", time.Now().UTC())
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k", UploadID: testUploadID("k")}); err == nil {
 		t.Error("ConfirmUpload must refuse an object the store reports with a negative size")
 	}
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 0 {
 		t.Errorf("a negative size must never credit the quota, got %d", used)
 	}
-	if _, err := svc.StartResumableUpload(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k", Size: -1}); err == nil {
+	if _, _, err := svc.StartResumableUpload(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k", Size: -1}); err == nil {
 		t.Error("StartResumableUpload must refuse a negative size")
 	}
 }

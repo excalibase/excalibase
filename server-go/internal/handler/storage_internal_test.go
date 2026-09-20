@@ -302,6 +302,7 @@ func TestInternalStorage_UploadURL_AutoProvisionsBucket(t *testing.T) {
 	}
 	var resp struct {
 		StorageID string `json:"storageId"`
+		UploadID  string `json:"uploadId"`
 		URL       string `json:"url"`
 		Method    string `json:"method"`
 	}
@@ -314,8 +315,11 @@ func TestInternalStorage_UploadURL_AutoProvisionsBucket(t *testing.T) {
 	if resp.Method != "PUT" {
 		t.Errorf("method: want PUT, got %q", resp.Method)
 	}
-	if !strings.Contains(resp.URL, resp.StorageID) {
-		t.Errorf("signed URL should address the minted storage id: %q", resp.URL)
+	if resp.UploadID == "" {
+		t.Error("the response must name the staged upload")
+	}
+	if !strings.Contains(resp.URL, resp.UploadID) {
+		t.Errorf("signed URL should address the staged upload: %q", resp.URL)
 	}
 	if !strings.Contains(resp.URL, "content-length") {
 		t.Errorf("signed PUT must bind the content length: %q", resp.URL)
@@ -351,17 +355,20 @@ func TestInternalStorage_DownloadURL_RoundTrip(t *testing.T) {
 	// 1. upload-url → get storageId
 	mint := mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/upload-url",
 		`{"contentType":"text/plain","size":4}`)
-	var minted struct{ StorageID string `json:"storageId"` }
+	var minted struct {
+		StorageID string `json:"storageId"`
+		UploadID  string `json:"uploadId"`
+	}
 	if err := json.Unmarshal(mint, &minted); err != nil {
 		t.Fatalf("mint decode: %v", err)
 	}
 	if minted.StorageID == "" {
 		t.Fatalf("no storage id minted")
 	}
-	backend.put(minted.StorageID, 4, "text/plain")
+	backend.put(stagingKeyPrefix+minted.UploadID, 4, "text/plain")
 
 	// 2. confirm-upload (records the metadata row)
-	confirmBody := `{"storageId":"` + minted.StorageID + `","contentType":"text/plain","size":4,"sha256":"deadbeef"}`
+	confirmBody := `{"storageId":"` + minted.StorageID + `","uploadId":"` + minted.UploadID + `","sha256":"deadbeef"}`
 	mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/confirm-upload", confirmBody)
 
 	// 3. download-url → returns signed URL
@@ -401,11 +408,14 @@ func TestInternalStorage_Metadata_ReturnsRow(t *testing.T) {
 	r, _, backend := newStorageInternalRouterWithBackend(t, "the-secret")
 	mint := mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/upload-url",
 		`{"contentType":"image/jpeg","size":1024}`)
-	var minted struct{ StorageID string `json:"storageId"` }
+	var minted struct {
+		StorageID string `json:"storageId"`
+		UploadID  string `json:"uploadId"`
+	}
 	_ = json.Unmarshal(mint, &minted)
-	backend.put(minted.StorageID, 1024, "image/jpeg")
+	backend.put(stagingKeyPrefix+minted.UploadID, 1024, "image/jpeg")
 
-	confirmBody := `{"storageId":"` + minted.StorageID + `","contentType":"image/jpeg","size":1024,"sha256":"abc123"}`
+	confirmBody := `{"storageId":"` + minted.StorageID + `","uploadId":"` + minted.UploadID + `","sha256":"abc123"}`
 	mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/confirm-upload", confirmBody)
 
 	req := httptest.NewRequest("GET",
@@ -459,11 +469,14 @@ func TestInternalStorage_Delete_RemovesObject(t *testing.T) {
 	r, _, backend := newStorageInternalRouterWithBackend(t, "the-secret")
 	mint := mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/upload-url",
 		`{"contentType":"text/plain","size":4}`)
-	var minted struct{ StorageID string `json:"storageId"` }
+	var minted struct {
+		StorageID string `json:"storageId"`
+		UploadID  string `json:"uploadId"`
+	}
 	_ = json.Unmarshal(mint, &minted)
-	backend.put(minted.StorageID, 4, "text/plain")
+	backend.put(stagingKeyPrefix+minted.UploadID, 4, "text/plain")
 	mustPost(t, r, "/internal/storage/"+testStorageProjectID+"/confirm-upload",
-		`{"storageId":"`+minted.StorageID+`","contentType":"text/plain","size":4,"sha256":"d"}`)
+		`{"storageId":"`+minted.StorageID+`","uploadId":"`+minted.UploadID+`","sha256":"d"}`)
 
 	// First delete.
 	req := httptest.NewRequest("DELETE",

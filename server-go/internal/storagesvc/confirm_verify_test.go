@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"fmt"
 	"strconv"
 	"strings"
@@ -68,6 +69,12 @@ func (b *stubbedObjectBackend) handler() http.HandlerFunc {
 			b.writeListing(w, r.URL.Query().Get("prefix"))
 			return
 		}
+		if source := r.Header.Get("X-Amz-Copy-Source"); source != "" {
+			b.copy(source, r.URL.Path)
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<CopyObjectResult><ETag>"real-etag"</ETag></CopyObjectResult>`))
+			return
+		}
 		switch r.Method {
 		case http.MethodHead:
 			obj, ok := b.lookup(r.URL.Path)
@@ -91,25 +98,55 @@ func (b *stubbedObjectBackend) handler() http.HandlerFunc {
 	}
 }
 
-// writeListing answers ListObjectsV2 for the keys under prefix. Keys are
-// stored relative to their bucket, so the prefix is prepended here the way a
-// real store holds them.
+// writeListing answers ListObjectsV2. The stub holds bucket-relative keys
+// while the request's prefix is a whole store key, so only the part of the
+// prefix that reaches inside the bucket is matched against them.
 func (b *stubbedObjectBackend) writeListing(w http.ResponseWriter, prefix string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	relative := ""
+	if _, after, found := strings.Cut(prefix, "/buckets/"); found {
+		_, relative, _ = strings.Cut(after, "/")
+	}
+	base := strings.TrimSuffix(prefix, relative)
 	var body strings.Builder
 	body.WriteString(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
 	for key, obj := range b.objects {
-		full := prefix + key
-		if prefix != "" && !strings.HasPrefix(full, prefix) {
+		if !strings.HasPrefix(key, relative) {
 			continue
 		}
 		fmt.Fprintf(&body, "<Contents><Key>%s</Key><Size>%d</Size><LastModified>%s</LastModified></Contents>",
-			full, obj.size, obj.lastModified.UTC().Format(time.RFC3339))
+			base+key, obj.size, obj.lastModified.UTC().Format(time.RFC3339))
 	}
 	body.WriteString(`</ListBucketResult>`)
 	w.Header().Set("Content-Type", "application/xml")
 	_, _ = w.Write([]byte(body.String()))
+}
+
+// copy mirrors the store's server-side copy: the destination ends up holding
+// what the source held.
+func (b *stubbedObjectBackend) copy(source, destinationPath string) {
+	decoded, err := url.PathUnescape(source)
+	if err != nil {
+		decoded = source
+	}
+	obj, ok := b.lookup(decoded)
+	if !ok {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	// The stub holds keys relative to their bucket, so the destination is
+	// whatever follows "/buckets/<bucketId>/" in the request path.
+	_, after, found := strings.Cut(destinationPath, "/buckets/")
+	if !found {
+		return
+	}
+	_, key, found := strings.Cut(after, "/")
+	if !found || key == "" {
+		return
+	}
+	b.objects[key] = obj
 }
 
 // deleteKey removes an object from the stub, mirroring what the real store
@@ -157,13 +194,13 @@ func newStubbedService(t *testing.T, backend *stubbedObjectBackend, quota map[st
 // object removed.
 func TestService_ConfirmUpload_EnforcesRealSize(t *testing.T) {
 	backend := newStubBackend()
-	backend.put("payload", 5*1024*1024, "image/png")
+	backend.put(stagingObjectKey(testUploadID("payload")), 5*1024*1024, "image/png")
 	svc, store := newStubbedService(t, backend, map[string]int64{"free": 1024})
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "images"})
 
 	_, err := svc.ConfirmUpload(ctx, testProjX, "images", "FREE", "u", ConfirmUploadRequest{
-		Key: "payload", Size: 0, MimeType: "image/png",
+		Key: "payload", UploadID: testUploadID("payload"),
 	})
 	if err == nil {
 		t.Fatal("a 5 MiB object on a 1 KiB quota must be refused whatever the caller claims")
@@ -180,7 +217,7 @@ func TestService_ConfirmUpload_EnforcesRealSize(t *testing.T) {
 // the caller claims an allowed type.
 func TestService_ConfirmUpload_EnforcesRealContentType(t *testing.T) {
 	backend := newStubBackend()
-	backend.put("payload.png", 10, "application/x-msdownload")
+	backend.put(stagingObjectKey(testUploadID("payload.png")), 10, "application/x-msdownload")
 	svc, store := newStubbedService(t, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{
@@ -188,7 +225,7 @@ func TestService_ConfirmUpload_EnforcesRealContentType(t *testing.T) {
 	})
 
 	_, err := svc.ConfirmUpload(ctx, testProjX, "images", "FREE", "u", ConfirmUploadRequest{
-		Key: "payload.png", Size: 10, MimeType: "image/png",
+		Key: "payload.png", UploadID: testUploadID("payload.png"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("the stored content type must decide, got %v", err)
@@ -208,13 +245,13 @@ func TestService_ConfirmUpload_EnforcesRealContentType(t *testing.T) {
 // Quota accounting uses the verified size, never the caller's.
 func TestService_ConfirmUpload_ChargesVerifiedSize(t *testing.T) {
 	backend := newStubBackend()
-	backend.put("a.txt", 4096, "text/plain")
+	backend.put(stagingObjectKey(testUploadID("a.txt")), 4096, "text/plain")
 	svc, store := newStubbedService(t, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 
 	obj, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{
-		Key: "a.txt", Size: 1, MimeType: "text/plain",
+		Key: "a.txt", UploadID: testUploadID("a.txt"),
 	})
 	if err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
@@ -235,7 +272,7 @@ func TestService_ConfirmUpload_RejectsMissingObject(t *testing.T) {
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 
 	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{
-		Key: "ghost.txt", Size: 10, MimeType: "text/plain",
+		Key: "ghost.txt", UploadID: testUploadID("ghost.txt"),
 	}); err == nil {
 		t.Fatal("confirming an object the store does not have must fail")
 	}

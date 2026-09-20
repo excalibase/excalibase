@@ -50,6 +50,31 @@ The Convex direct-upload pattern keeps user blob bytes off the function
 runtime. Bandwidth and CPU stay on the client → R2 path; provisioning
 only mints signed URLs and records metadata.
 
+The bytes do not land on the object's own key. They land on a staging key of
+the upload's own, and are copied across only once the platform has read them
+back and accepted their size and type. An upload that turns out to break the
+bucket's limits is refused without touching whatever is already stored under
+that key. The upload URL therefore comes with an `uploadId`, and the
+confirmation names it:
+
+```
+POST .../storage/buckets/{bucket}/upload-url
+  {"key": "avatars/1.png", "mimeType": "image/png", "size": 12345}
+  → {"uploadId": "upl_…", "url": "https://…/.staging/upl_…", "method": "PUT",
+     "headers": {"Content-Type": "image/png", "Content-Length": "12345"},
+     "expiresAt": "…"}
+
+PUT <url>  (exactly those headers, exactly that many bytes)
+
+POST .../storage/buckets/{bucket}/confirm-upload
+  {"key": "avatars/1.png", "uploadId": "upl_…"}
+```
+
+`size` and `mimeType` are required when the URL is minted — both are bound
+into the signature — and are **not** accepted on confirm: what is recorded and
+charged is what the object store reports. A confirmation that names an upload
+nobody staged, or one whose bytes have already been collected, answers `404`.
+
 ### 1. Server: mint the signed PUT URL inside a mutation
 
 ```ts

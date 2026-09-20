@@ -384,3 +384,65 @@ func TestPgStorage_RecordObjectConditionalOnCapUnderConcurrency(t *testing.T) {
 	}
 	_ = s.DeleteBucket(ctx, project, "files")
 }
+
+// EXC-405 follow-up, finding 3 — a confirm and a delete of the same key take
+// the same two rows. Taking them in opposite orders is a deadlock waiting for
+// concurrent traffic: Postgres aborts one side with 40P01 and the caller sees
+// a failure that has nothing to do with what it asked for. Both paths take
+// the project's quota row first.
+func TestPgStorage_ConcurrentConfirmAndDeleteDoNotDeadlock(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	const project = "proj-deadlock"
+	const rounds = 40
+	now := time.Now().UTC()
+	if err := s.CreateBucket(ctx, &storagesvc.Bucket{
+		ID: "bkt_deadlock", ProjectID: project, Name: "files", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+
+	errs := make(chan error, 2*rounds)
+	var wg sync.WaitGroup
+	for i := 0; i < rounds; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, err := s.RecordObjectWithinQuota(ctx, project, &storagesvc.Object{
+				ID: "obj_deadlock", BucketID: "bkt_deadlock", Key: "a.bin", Size: 100,
+				MimeType: "application/octet-stream", CreatedAt: now, UpdatedAt: now,
+			}, 0)
+			errs <- err
+		}()
+		go func() {
+			defer wg.Done()
+			_, err := s.DeleteObjectAndReleaseQuota(ctx, project, "bkt_deadlock", "a.bin")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent confirm and delete must not fail: %v", err)
+		}
+	}
+
+	// Whatever the interleaving, the usage matches what is actually stored.
+	row, err := s.GetObject(ctx, "bkt_deadlock", "a.bin")
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	used, err := s.GetQuotaBytes(ctx, project)
+	if err != nil {
+		t.Fatalf("GetQuotaBytes: %v", err)
+	}
+	want := int64(0)
+	if row != nil {
+		want = row.Size
+	}
+	if used != want {
+		t.Errorf("quota %d does not match what is stored (%d)", used, want)
+	}
+	_ = s.DeleteBucket(ctx, project, "files")
+}

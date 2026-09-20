@@ -273,6 +273,85 @@ func (r *R2Client) ListObjects(ctx context.Context, projectID, bucketID string, 
 	return objects, nil
 }
 
+// MaxSingleCopyBytes is the ceiling on a single-request server-side copy in
+// S3 and R2: 5 GiB. An object above it needs a multipart copy, which this
+// client does not implement — and does not need to, because the presigned
+// single PUT that stages an upload has the same 5 GiB ceiling, so nothing
+// larger can be staged in the first place. Resumable (tus) uploads can exceed
+// it; CopyObject refuses one rather than silently truncating it, and that
+// refusal is what would have to be lifted first.
+// MaxSingleCopyBytes is exported so the confirm path can refuse an upload it
+// would not be able to move onto its key.
+const MaxSingleCopyBytes int64 = 5 * 1024 * 1024 * 1024
+
+// CopyObject copies an object onto another key inside the same logical
+// bucket, server-side: no bytes travel through the control plane.
+func (r *R2Client) CopyObject(ctx context.Context, projectID, bucketID, sourceKey, destinationKey string) error {
+	source, err := objectKey(projectID, bucketID, sourceKey)
+	if err != nil {
+		return err
+	}
+	destination, err := objectKey(projectID, bucketID, destinationKey)
+	if err != nil {
+		return err
+	}
+	_, err = r.s3.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(r.cfg.Bucket),
+		Key:        aws.String(destination),
+		CopySource: aws.String(url.PathEscape(r.cfg.Bucket + "/" + source)),
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return fmt.Errorf("copy object %q: %w", sourceKey, ErrObjectNotFound)
+		}
+		return fmt.Errorf("copy object: %w", err)
+	}
+	return nil
+}
+
+// ListStagedUploads lists the bucket's staging namespace and nothing else.
+// The prefix is built here, from the bucket id and a fixed segment, so the
+// reaper has no way to ask about a live key.
+func (r *R2Client) ListStagedUploads(ctx context.Context, projectID, bucketID string, limit int32) ([]StagedUpload, error) {
+	bucket, err := bucketPrefix(projectID, bucketID)
+	if err != nil {
+		return nil, err
+	}
+	prefix := bucket + stagingPrefix
+	if limit <= 0 {
+		limit = 1000
+	}
+	out, err := r.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(r.cfg.Bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list staged uploads: %w", err)
+	}
+	staged := make([]StagedUpload, 0, len(out.Contents))
+	for _, o := range out.Contents {
+		if o.Key == nil {
+			continue
+		}
+		upload := StagedUpload{UploadID: strings.TrimPrefix(*o.Key, prefix)}
+		if o.LastModified != nil {
+			upload.LastModified = *o.LastModified
+		}
+		staged = append(staged, upload)
+	}
+	return staged, nil
+}
+
+// DeleteStagingObject removes one staged upload. Its key is built from the
+// upload id, so this cannot be steered at an object.
+func (r *R2Client) DeleteStagingObject(ctx context.Context, projectID, bucketID, uploadID string) error {
+	if uploadID == "" || strings.ContainsAny(uploadID, "/\\") {
+		return fmt.Errorf("r2: invalid upload id %q", uploadID)
+	}
+	return r.DeleteObject(ctx, projectID, bucketID, stagingObjectKey(uploadID))
+}
+
 // isNotFound reports whether an S3 error means "the key isn't there". R2
 // answers a delete of a missing key with 204, but other S3-compatible
 // backends return NoSuchKey — both mean the same thing. The modelled error

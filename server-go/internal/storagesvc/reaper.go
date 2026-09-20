@@ -77,32 +77,25 @@ func (s *Service) ReapUnconfirmedUploads(ctx context.Context, grace time.Duratio
 	return report, nil
 }
 
-// reapBucket removes every object of one bucket that is older than cutoff and
-// has no catalogue row.
+// reapBucket removes the bucket's staged uploads that are older than cutoff.
+//
+// It looks in the staging namespace and nowhere else, and deletes by upload
+// id rather than by key: there is no code path here that can name — let alone
+// remove — an object on a live key. Bytes on a live key that no row names are
+// a bucket or project purge's business, not this sweep's.
 func (s *Service) reapBucket(ctx context.Context, bucket Bucket, cutoff time.Time, report *ReapReport) error {
-	stored, err := s.objects.ListObjects(ctx, bucket.ProjectID, bucket.ID, reaperPageSize)
+	staged, err := s.objects.ListStagedUploads(ctx, bucket.ProjectID, bucket.ID, reaperPageSize)
 	if err != nil {
 		return err
 	}
-	for _, obj := range stored {
-		if !obj.LastModified.Before(cutoff) {
+	for _, upload := range staged {
+		if !upload.LastModified.Before(cutoff) {
 			continue
 		}
-		// Re-read the row immediately before deleting. A confirmation cannot
-		// land in this gap — it is refused once an object is older than the
-		// confirm window, which closes before this cutoff — but reading late
-		// keeps the gap as small as it can be.
-		row, err := s.store.GetObject(ctx, bucket.ID, obj.Key)
-		if err != nil {
-			return fmt.Errorf("look up object %q: %w", obj.Key, err)
+		if err := s.objects.DeleteStagingObject(ctx, bucket.ProjectID, bucket.ID, upload.UploadID); err != nil {
+			return fmt.Errorf("delete abandoned upload %q: %w", upload.UploadID, err)
 		}
-		if row != nil {
-			continue
-		}
-		if err := s.objects.DeleteObject(ctx, bucket.ProjectID, bucket.ID, obj.Key); err != nil {
-			return fmt.Errorf("delete abandoned object %q: %w", obj.Key, err)
-		}
-		report.Deleted = append(report.Deleted, bucket.Name+"/"+obj.Key)
+		report.Deleted = append(report.Deleted, bucket.Name+"/"+stagingObjectKey(upload.UploadID))
 	}
 	return nil
 }

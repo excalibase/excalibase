@@ -29,6 +29,9 @@ type fakeStoredObjectForTest struct {
 	written  time.Time
 }
 
+// stagingKeyPrefix mirrors the namespace the service stages uploads in.
+const stagingKeyPrefix = ".staging/"
+
 func newFakeObjectStoreForTest() *fakeObjectStoreForTest {
 	return &fakeObjectStoreForTest{objects: map[string]fakeStoredObjectForTest{}}
 }
@@ -82,6 +85,40 @@ func (f *fakeObjectStoreForTest) DeleteObject(_ context.Context, projectID, buck
 	defer f.mu.Unlock()
 	delete(f.objects, fakeBlobKey(projectID, bucket, key))
 	return nil
+}
+
+func (f *fakeObjectStoreForTest) CopyObject(_ context.Context, projectID, bucketID, sourceKey, destinationKey string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	source, ok := f.objects[fakeBlobKey(projectID, bucketID, sourceKey)]
+	if !ok {
+		return fmt.Errorf("copy %q: %w", sourceKey, storagesvc.ErrObjectNotFound)
+	}
+	f.objects[fakeBlobKey(projectID, bucketID, destinationKey)] = source
+	return nil
+}
+
+func (f *fakeObjectStoreForTest) ListStagedUploads(_ context.Context, projectID, bucketID string, limit int32) ([]storagesvc.StagedUpload, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	prefix := fakeBlobKey(projectID, bucketID, stagingKeyPrefix)
+	out := []storagesvc.StagedUpload{}
+	for k, obj := range f.objects {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, storagesvc.StagedUpload{
+				UploadID:     strings.TrimPrefix(k, prefix),
+				LastModified: obj.written,
+			})
+			if limit > 0 && int32(len(out)) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeObjectStoreForTest) DeleteStagingObject(ctx context.Context, projectID, bucketID, uploadID string) error {
+	return f.DeleteObject(ctx, projectID, bucketID, stagingKeyPrefix+uploadID)
 }
 
 func (f *fakeObjectStoreForTest) ListObjects(_ context.Context, projectID, bucketID string, limit int32) ([]storagesvc.StoredObject, error) {

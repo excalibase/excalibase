@@ -114,7 +114,11 @@ func TestTus_PrepareUpload_BuildsKeyAndKeepsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareTusUpload: %v", err)
 	}
-	want := "projects/proj1/buckets/b1/clips/a.mp4"
+	uploadID := changes.MetaData[tusUploadIDKey]
+	if uploadID == "" {
+		t.Fatal("the create callback must record the staged upload id")
+	}
+	want := "projects/proj1/buckets/b1/.staging/" + uploadID
 	if changes.ID != want {
 		t.Errorf("upload id = %q, want %q", changes.ID, want)
 	}
@@ -126,7 +130,7 @@ func TestTus_PrepareUpload_BuildsKeyAndKeepsMetadata(t *testing.T) {
 func TestTus_RecordUpload_WritesMetadata(t *testing.T) {
 	_, h, store, backend := newTusStorageRouterWithBackend(t)
 	_ = store.CreateBucket(context.Background(), &storagesvc.Bucket{ID: "b1", ProjectID: "proj1", Name: "media"})
-	backend.put("clips/a.mp4", 4096, "video/mp4")
+	backend.put(stagingKeyPrefix+"upl_tus", 4096, "video/mp4")
 
 	ctx := context.WithValue(context.Background(), tusProjectCtxKey, "proj1")
 	event := tusd.HookEvent{
@@ -134,7 +138,7 @@ func TestTus_RecordUpload_WritesMetadata(t *testing.T) {
 		Upload: tusd.FileInfo{
 			ID:       "projects/proj1/buckets/media/clips/a.mp4+mpid",
 			Size:     4096,
-			MetaData: tusd.MetaData{"bucket": "media", "key": "clips/a.mp4", "filetype": "video/mp4"},
+			MetaData: tusd.MetaData{"bucket": "media", "key": "clips/a.mp4", "filetype": "video/mp4", tusUploadIDKey: "upl_tus"},
 		},
 	}
 	if _, err := h.recordTusUpload(event); err != nil {

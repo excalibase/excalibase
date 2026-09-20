@@ -30,13 +30,13 @@ func TestService_SignUploadURL_ReportsQuotaReadFailure(t *testing.T) {
 func TestService_ConfirmUpload_ReportsQuotaChargeFailure(t *testing.T) {
 	store := newErrStore()
 	backend := newStubBackend()
-	backend.put("a.txt", 10, "text/plain")
+	backend.put(stagingObjectKey(testUploadID("a.txt")), 10, "text/plain")
 	svc := serviceOverStub(t, store, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	store.recordObjectErr = errors.New("platform db unavailable")
 
-	_, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"})
+	_, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt", UploadID: testUploadID("a.txt")})
 	if err == nil || !strings.Contains(err.Error(), "record object") {
 		t.Fatalf("want a record failure, got %v", err)
 	}
@@ -46,12 +46,12 @@ func TestService_ConfirmUpload_ReportsQuotaChargeFailure(t *testing.T) {
 // allow-list, so it is removed rather than admitted.
 func TestService_ConfirmUpload_RejectsUnusableStoredType(t *testing.T) {
 	backend := newStubBackend()
-	backend.put("a.bin", 10, "not a media type")
+	backend.put(stagingObjectKey(testUploadID("a.bin")), 10, "not a media type")
 	svc, _ := newStubbedService(t, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.bin"}); err == nil {
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.bin", UploadID: testUploadID("a.bin")}); err == nil {
 		t.Fatal("an object with no usable content type must not be recorded")
 	}
 	if len(backend.deletedKeys()) == 0 {
@@ -77,7 +77,7 @@ func TestService_ConfirmUpload_ReportsInspectFailure(t *testing.T) {
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 
-	_, confirmErr := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt"})
+	_, confirmErr := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "a.txt", UploadID: testUploadID("a.txt")})
 	if confirmErr == nil || !strings.Contains(confirmErr.Error(), "inspect uploaded object") {
 		t.Fatalf("want an inspect failure, got %v", confirmErr)
 	}
@@ -91,7 +91,7 @@ func TestService_ConfirmUpload_ReportsInspectFailure(t *testing.T) {
 // upload was refused and the cleanup failure is reported alongside it.
 func TestService_ConfirmUpload_ReportsCleanupFailureWithReason(t *testing.T) {
 	backend := &deleteRefusingBackend{stubbedObjectBackend: newStubBackend()}
-	backend.put("payload", 5*1024*1024, "image/png")
+	backend.put(stagingObjectKey(testUploadID("payload")), 5*1024*1024, "image/png")
 	srv := httptest.NewServer(backend.handler())
 	t.Cleanup(srv.Close)
 	r2, err := NewR2Client(R2Config{
@@ -106,7 +106,7 @@ func TestService_ConfirmUpload_ReportsCleanupFailureWithReason(t *testing.T) {
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "images"})
 
 	confirmErr := func() error {
-		_, e := svc.ConfirmUpload(ctx, testProjX, "images", "FREE", "u", ConfirmUploadRequest{Key: "payload"})
+		_, e := svc.ConfirmUpload(ctx, testProjX, "images", "FREE", "u", ConfirmUploadRequest{Key: "payload", UploadID: testUploadID("payload")})
 		return e
 	}()
 	if confirmErr == nil {
@@ -115,7 +115,7 @@ func TestService_ConfirmUpload_ReportsCleanupFailureWithReason(t *testing.T) {
 	if !strings.Contains(confirmErr.Error(), "quota exceeded") {
 		t.Errorf("the reason must survive the failed cleanup: %v", confirmErr)
 	}
-	if !strings.Contains(confirmErr.Error(), "delete rejected object") {
+	if !strings.Contains(confirmErr.Error(), "delete staged upload") {
 		t.Errorf("the failed cleanup must be reported: %v", confirmErr)
 	}
 }

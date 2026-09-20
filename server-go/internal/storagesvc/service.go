@@ -239,13 +239,20 @@ func (s *Service) purgeObject(ctx context.Context, projectID, bucketID, key stri
 	return nil
 }
 
-// SignUploadURL mints a presigned PUT URL after enforcing per-bucket and
-// per-project quotas. The actual byte transfer goes client→R2 directly,
-// bypassing Excalibase. The client MUST call ConfirmUpload after the PUT
-// to record the object metadata.
+// SignUploadURL mints a presigned PUT URL. The bytes go client→object store
+// directly, and they land on a staging key of the upload's own — never on the
+// object's key. The key only receives bytes that have been read back and
+// accepted, so an upload that turns out to break the bucket's limits cannot
+// take the previous version of that object with it when it is refused.
+//
+// The returned upload id is what the client hands back to ConfirmUpload: the
+// bytes are not on the key yet, so nothing else identifies them.
 func (s *Service) SignUploadURL(ctx context.Context, projectID, bucketName, tier string, req UploadURLRequest) (*UploadURLResponse, error) {
 	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateObjectKey(req.Key); err != nil {
 		return nil, err
 	}
 	if err := s.validateUploadRequest(ctx, projectID, tier, bucket, req); err != nil {
@@ -256,7 +263,12 @@ func (s *Service) SignUploadURL(ctx context.Context, projectID, bucketName, tier
 	if err != nil {
 		return nil, err
 	}
-	url, expires, err := s.objects.SignedPutURL(ctx, projectID, bucket.ID, req.Key, mediaType, req.Size, uploadURLTTL)
+	uploadID, err := randomID("upl")
+	if err != nil {
+		return nil, err
+	}
+	url, expires, err := s.objects.SignedPutURL(ctx, projectID, bucket.ID,
+		stagingObjectKey(uploadID), mediaType, req.Size, uploadURLTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -267,6 +279,7 @@ func (s *Service) SignUploadURL(ctx context.Context, projectID, bucketName, tier
 		"Content-Length": strconv.FormatInt(req.Size, 10),
 	}
 	return &UploadURLResponse{
+		UploadID:  uploadID,
 		URL:       url,
 		Method:    "PUT",
 		Headers:   headers,
@@ -351,48 +364,71 @@ func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, tier
 	if err != nil {
 		return nil, err
 	}
-	if req.Size < 0 {
-		return nil, invalidf("size must not be negative")
+	if err := validateObjectKey(req.Key); err != nil {
+		return nil, err
 	}
-	stat, err := s.objects.HeadObject(ctx, projectID, bucket.ID, req.Key)
+	if req.UploadID == "" {
+		return nil, invalidf("uploadId is required")
+	}
+	staged := stagingObjectKey(req.UploadID)
+
+	stat, err := s.objects.HeadObject(ctx, projectID, bucket.ID, staged)
 	if err != nil {
+		// An id nobody staged, or one whose bytes have already been
+		// collected, names no upload to accept.
 		if errors.Is(err, ErrObjectNotFound) {
-			return nil, invalidf("no object stored at key %q", req.Key)
+			return nil, fmt.Errorf("upload %q: %w", req.UploadID, ErrObjectNotFound)
 		}
 		return nil, fmt.Errorf("inspect uploaded object: %w", err)
 	}
-	// The reaper deletes anything past the grace with no row. Refusing a
-	// confirm before that point keeps the two windows apart, so a confirm can
-	// never record a row for bytes the reaper is about to remove.
+	// The reaper deletes staged bytes past the grace. Refusing a confirm
+	// before that point keeps the two windows apart, so a confirm can never
+	// accept bytes the reaper is about to remove.
 	if !stat.LastModified.IsZero() &&
 		s.now().Sub(stat.LastModified) >= confirmWindow(DefaultUnconfirmedGrace) {
 		return nil, invalidf("upload expired, request a new URL")
 	}
-	size, contentType, etag := stat.Size, stat.ContentType, stat.ETag
-	mediaType, err := normaliseMIME(contentType)
+
+	mediaType, err := normaliseMIME(stat.ContentType)
 	if err != nil {
 		// The store holds something with no usable type; it cannot be
 		// checked against the bucket's allow-list, so it does not stay.
-		return nil, s.rejectStoredObject(ctx, projectID, bucket.ID, req.Key, err)
+		return nil, s.rejectStagedUpload(ctx, projectID, bucket.ID, req.UploadID, err)
 	}
-	if err := s.enforceObjectLimits(ctx, projectID, tier, bucket, size, mediaType); err != nil {
-		return nil, s.rejectStoredObject(ctx, projectID, bucket.ID, req.Key, err)
+	if err := s.enforceObjectLimits(ctx, projectID, tier, bucket, stat.Size, mediaType); err != nil {
+		return nil, s.rejectStagedUpload(ctx, projectID, bucket.ID, req.UploadID, err)
+	}
+	if stat.Size > MaxSingleCopyBytes {
+		// It could be staged but not moved onto its key in one copy, and a
+		// multipart copy is not implemented. Refusing is honest; silently
+		// leaving it staged would not be.
+		return nil, s.rejectStagedUpload(ctx, projectID, bucket.ID, req.UploadID,
+			invalidf("object exceeds the %d byte limit for a single upload", MaxSingleCopyBytes))
+	}
+
+	// Only now do the object's own bytes change. Copy, then record, then drop
+	// the staging copy: the staged bytes outlive a failed record, so the same
+	// confirmation run again finishes the job. A crash in between leaves the
+	// new bytes on the key with the previous row still describing them —
+	// visible, and resolved by the retry — rather than a key with no bytes.
+	if err := s.objects.CopyObject(ctx, projectID, bucket.ID, staged, req.Key); err != nil {
+		return nil, fmt.Errorf("store uploaded object: %w", err)
 	}
 
 	id, err := randomID("obj")
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	obj := &Object{
 		ID:       id,
 		BucketID: bucket.ID,
 		Key:      req.Key,
-		Size:     size,
+		Size:     stat.Size,
 		MimeType: mediaType,
 		// The caller may carry its own digest (the runtime records a sha256
 		// here); absent that, the store's ETag is what we have.
-		ETag:      firstNonEmpty(req.ETag, etag),
+		ETag:      firstNonEmpty(req.ETag, stat.ETag),
 		OwnerID:   ownerID,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -405,19 +441,23 @@ func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, tier
 		return nil, fmt.Errorf("record object: %w", err)
 	}
 	if !recorded {
-		return nil, s.rejectStoredObject(ctx, projectID, bucket.ID, req.Key,
+		return nil, s.rejectStagedUpload(ctx, projectID, bucket.ID, req.UploadID,
 			invalidf("project storage quota exceeded"))
+	}
+	if err := s.objects.DeleteStagingObject(ctx, projectID, bucket.ID, req.UploadID); err != nil {
+		return nil, fmt.Errorf("clear staged upload: %w", err)
 	}
 	return obj, nil
 }
 
-// rejectStoredObject removes an object that must not be kept and returns the
-// reason it was rejected. A failed cleanup is reported alongside it rather
-// than hidden — the caller still sees the violation, and the reaper will
-// collect what is left.
-func (s *Service) rejectStoredObject(ctx context.Context, projectID, bucketID, key string, reason error) error {
-	if err := s.objects.DeleteObject(ctx, projectID, bucketID, key); err != nil {
-		return errors.Join(reason, fmt.Errorf("delete rejected object: %w", err))
+// rejectStagedUpload removes the staged bytes and returns the reason they
+// were refused. Only the staging copy is touched: the object's own key, and
+// whatever version of it is already stored, is none of a refusal's business.
+// A failed cleanup is reported alongside the reason rather than hidden — the
+// caller still learns why, and the reaper collects what is left.
+func (s *Service) rejectStagedUpload(ctx context.Context, projectID, bucketID, uploadID string, reason error) error {
+	if err := s.objects.DeleteStagingObject(ctx, projectID, bucketID, uploadID); err != nil {
+		return errors.Join(reason, fmt.Errorf("delete staged upload: %w", err))
 	}
 	return reason
 }
@@ -436,6 +476,9 @@ func firstNonEmpty(values ...string) string {
 func (s *Service) SignDownloadURL(ctx context.Context, projectID, bucketName, key string) (*DownloadURLResponse, error) {
 	if s.objects == nil {
 		return nil, errObjectStoreUnset
+	}
+	if err := validateObjectKey(key); err != nil {
+		return nil, err
 	}
 	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
 	if err != nil {
@@ -494,6 +537,9 @@ func (s *Service) ListObjects(ctx context.Context, projectID, bucketName string,
 	if bucket == nil {
 		return nil, ErrBucketNotFound
 	}
+	if err := validateKeyPrefix(req.Prefix); err != nil {
+		return nil, err
+	}
 	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 100
 	}
@@ -513,6 +559,9 @@ func (s *Service) ListObjects(ctx context.Context, projectID, bucketName string,
 func (s *Service) DeleteObject(ctx context.Context, projectID, bucketName, key string) error {
 	if s.objects == nil {
 		return errObjectStoreUnset
+	}
+	if err := validateObjectKey(key); err != nil {
+		return err
 	}
 	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
 	if err != nil {

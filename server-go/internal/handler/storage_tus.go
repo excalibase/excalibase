@@ -28,6 +28,10 @@ import (
 //   - recordTusUpload (pre-finish) records the object metadata in pg_storage
 //     the same way ConfirmUpload does, so tus objects appear in list/download.
 
+// tusUploadIDKey carries the staged upload's id from the create callback to
+// the completion callback through the upload's own metadata.
+const tusUploadIDKey = "excalibaseUploadId"
+
 type tusCtxKey string
 
 // tusProjectCtxKey carries the path-derived projectId into the tusd callbacks,
@@ -92,7 +96,7 @@ func (h *StorageHandler) prepareTusUpload(event tusd.HookEvent) (tusd.HTTPRespon
 		return tusd.HTTPResponse{}, tusd.FileInfoChanges{},
 			tusd.NewError("ERR_TUS_TIER", errStorageFailed, http.StatusInternalServerError)
 	}
-	storeKey, err := h.svc.StartResumableUpload(ctx, projectID, bucket, tier, storagesvc.UploadURLRequest{
+	storeKey, uploadID, err := h.svc.StartResumableUpload(ctx, projectID, bucket, tier, storagesvc.UploadURLRequest{
 		Key:      key,
 		MimeType: event.Upload.MetaData["filetype"],
 		Size:     event.Upload.Size,
@@ -101,8 +105,16 @@ func (h *StorageHandler) prepareTusUpload(event tusd.HookEvent) (tusd.HTTPRespon
 		return tusd.HTTPResponse{}, tusd.FileInfoChanges{},
 			tusd.NewError("ERR_TUS_UPLOAD", safeError(err), http.StatusBadRequest)
 	}
+	// The upload id travels in the tus metadata, which is the only state that
+	// survives from creation to completion; the completion callback confirms
+	// with it, exactly as a presigned client would.
+	metadata := tusd.MetaData{}
+	for k, v := range event.Upload.MetaData {
+		metadata[k] = v
+	}
+	metadata[tusUploadIDKey] = uploadID
 	// Setting ID makes the S3 object key equal storeKey (ObjectPrefix is empty).
-	return tusd.HTTPResponse{}, tusd.FileInfoChanges{ID: storeKey, MetaData: event.Upload.MetaData}, nil
+	return tusd.HTTPResponse{}, tusd.FileInfoChanges{ID: storeKey, MetaData: metadata}, nil
 }
 
 // recordTusUpload (tusd PreFinishResponseCallback) records the completed
@@ -128,7 +140,8 @@ func (h *StorageHandler) recordTusUpload(event tusd.HookEvent) (tusd.HTTPRespons
 		return tusd.HTTPResponse{}, tusd.NewError("ERR_TUS_TIER", errStorageFailed, http.StatusInternalServerError)
 	}
 	if _, err := h.svc.ConfirmUpload(ctx, projectID, bucket, tier, ownerID, storagesvc.ConfirmUploadRequest{
-		Key: key,
+		Key:      key,
+		UploadID: event.Upload.MetaData[tusUploadIDKey],
 	}); err != nil {
 		return tusd.HTTPResponse{}, err
 	}

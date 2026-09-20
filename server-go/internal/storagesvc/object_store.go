@@ -29,9 +29,21 @@ type ObjectStore interface {
 	HeadObject(ctx context.Context, projectID, bucketID, key string) (ObjectStat, error)
 	// ListObjects returns up to limit objects stored under the bucket's own
 	// prefix, keyed relative to the bucket. Used to verify emptiness before a
-	// bucket's metadata is dropped and to find uploads that were never
-	// confirmed, so it must never see a neighbouring bucket's keys.
+	// bucket's metadata is dropped, so it must never see a neighbouring
+	// bucket's keys.
 	ListObjects(ctx context.Context, projectID, bucketID string, limit int32) ([]StoredObject, error)
+	// CopyObject moves an object's bytes onto another key within the same
+	// bucket, server-side. An upload becomes the object this way, so the
+	// key's previous contents are replaced only once the new bytes have been
+	// read back and accepted.
+	CopyObject(ctx context.Context, projectID, bucketID, sourceKey, destinationKey string) error
+	// ListStagedUploads returns up to limit uploads that are staged but not
+	// yet accepted, youngest first is not required. It is the reaper's only
+	// listing: an interface that cannot name a live key cannot collect one.
+	ListStagedUploads(ctx context.Context, projectID, bucketID string, limit int32) ([]StagedUpload, error)
+	// DeleteStagingObject removes one staged upload by its id. The key is
+	// built from the id, so no caller can steer this at an object.
+	DeleteStagingObject(ctx context.Context, projectID, bucketID, uploadID string) error
 }
 
 // ObjectStat is what the object store says about one stored object. It is
@@ -42,5 +54,13 @@ type ObjectStat struct {
 	Size         int64
 	ContentType  string
 	ETag         string
+	LastModified time.Time
+}
+
+// StagedUpload is one upload waiting to be accepted: the id it was issued
+// under and when its bytes were written. The reaper collects the ones nobody
+// came back for.
+type StagedUpload struct {
+	UploadID     string
 	LastModified time.Time
 }

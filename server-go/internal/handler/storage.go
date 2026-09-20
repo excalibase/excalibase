@@ -415,7 +415,9 @@ type internalUploadURLRequest struct {
 // id is minted server-side and carried verbatim through the client →
 // runtime → provisioning chain on the eventual confirm-upload call.
 type internalUploadURLResponse struct {
-	StorageID string            `json:"storageId"`
+	StorageID string `json:"storageId"`
+	// UploadID names the staged bytes; the runtime hands it back on confirm.
+	UploadID  string            `json:"uploadId"`
 	URL       string            `json:"url"`
 	Method    string            `json:"method"`
 	Headers   map[string]string `json:"headers,omitempty"`
@@ -464,6 +466,7 @@ func (h *StorageHandler) InternalSignUploadURL(w http.ResponseWriter, r *http.Re
 	}
 	writeJSON(w, internalUploadURLResponse{
 		StorageID: storageID,
+		UploadID:  out.UploadID,
 		URL:       out.URL,
 		Method:    out.Method,
 		Headers:   out.Headers,
@@ -475,7 +478,10 @@ func (h *StorageHandler) InternalSignUploadURL(w http.ResponseWriter, r *http.Re
 // longer believed: the object store is read back for both. Sha256 is the
 // runtime's own digest and is kept as the catalogue ETag.
 type internalConfirmUploadRequest struct {
-	StorageID   string `json:"storageId"`
+	StorageID string `json:"storageId"`
+	// UploadID is the id the upload URL was issued under; it names the bytes
+	// being accepted, which are not on the storage id's key yet.
+	UploadID    string `json:"uploadId"`
 	ContentType string `json:"contentType,omitempty"`
 	Size        int64  `json:"size"`
 	Sha256      string `json:"sha256,omitempty"`
@@ -521,8 +527,9 @@ func (h *StorageHandler) InternalConfirmUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 	_, err = h.svc.ConfirmUpload(r.Context(), projectID, ctxStorageBucket, tier, "" /* ownerID */, storagesvc.ConfirmUploadRequest{
-		Key:  req.StorageID,
-		ETag: etagForCatalogue,
+		Key:      req.StorageID,
+		UploadID: req.UploadID,
+		ETag:     etagForCatalogue,
 	})
 	if err != nil {
 		storageError(w, "confirm upload", err)

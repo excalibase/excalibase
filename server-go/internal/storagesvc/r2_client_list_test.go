@@ -170,3 +170,124 @@ func TestR2_HeadObject_MissingKeyIsSentinel(t *testing.T) {
 		t.Fatalf("want ErrObjectNotFound, got %v", err)
 	}
 }
+
+// An upload becomes an object by being copied onto its key, server-side.
+func TestR2_CopyObject_CopiesWithinTheBucket(t *testing.T) {
+	var gotSource, gotPath string
+	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
+		gotSource = r.Header.Get("X-Amz-Copy-Source")
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`<CopyObjectResult><ETag>"e"</ETag></CopyObjectResult>`))
+	})
+	if err := c.CopyObject(context.Background(), testProjABC, "bkt_1", ".staging/upl_1", "a.txt"); err != nil {
+		t.Fatalf("CopyObject: %v", err)
+	}
+	if !strings.Contains(gotSource, "upl_1") {
+		t.Errorf("copy source: %q", gotSource)
+	}
+	if !strings.HasSuffix(gotPath, "/buckets/bkt_1/a.txt") {
+		t.Errorf("copy destination: %q", gotPath)
+	}
+}
+
+func TestR2_CopyObject_RejectsBadKeys(t *testing.T) {
+	c := newR2(t)
+	if err := c.CopyObject(context.Background(), testProjABC, "bkt_1", "..", "a.txt"); err == nil {
+		t.Error("a traversal source must be refused")
+	}
+	if err := c.CopyObject(context.Background(), testProjABC, "bkt_1", "a.txt", ".."); err == nil {
+		t.Error("a traversal destination must be refused")
+	}
+}
+
+// A source that is not there is the sentinel the confirm path acts on.
+func TestR2_CopyObject_MissingSourceIsSentinel(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<Error><Code>NoSuchKey</Code></Error>`))
+	})
+	err := c.CopyObject(context.Background(), testProjABC, "bkt_1", ".staging/upl_1", "a.txt")
+	if !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("want ErrObjectNotFound, got %v", err)
+	}
+}
+
+func TestR2_CopyObject_ReportsBackendError(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+	})
+	err := c.CopyObject(context.Background(), testProjABC, "bkt_1", ".staging/upl_1", "a.txt")
+	if err == nil || !strings.Contains(err.Error(), "copy object") {
+		t.Fatalf("a refused copy must surface, got %v", err)
+	}
+}
+
+// The reaper's listing sees the staging namespace and nothing else, and the
+// ids it returns are bare — a live key could not be expressed as one.
+func TestR2_ListStagedUploads_ListsOnlyTheStagingNamespace(t *testing.T) {
+	var gotPrefix string
+	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPrefix = r.URL.Query().Get("prefix")
+		_, _ = w.Write([]byte(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Contents><Key>projects/proj-abc/buckets/bkt_1/.staging/upl_1</Key><LastModified>2026-09-20T03:00:00Z</LastModified></Contents>
+</ListBucketResult>`))
+	})
+	staged, err := c.ListStagedUploads(context.Background(), testProjABC, "bkt_1", 0)
+	if err != nil {
+		t.Fatalf("ListStagedUploads: %v", err)
+	}
+	if want := "projects/proj-abc/buckets/bkt_1/.staging/"; gotPrefix != want {
+		t.Errorf("listing prefix: got %q, want %q", gotPrefix, want)
+	}
+	if len(staged) != 1 || staged[0].UploadID != "upl_1" {
+		t.Fatalf("unexpected staged uploads: %+v", staged)
+	}
+	if staged[0].LastModified.IsZero() {
+		t.Error("the write time decides whether an upload is abandoned")
+	}
+}
+
+func TestR2_ListStagedUploads_RejectsMissingBucket(t *testing.T) {
+	c := newR2(t)
+	if _, err := c.ListStagedUploads(context.Background(), testProjABC, "", 10); err == nil {
+		t.Error("listing without a bucket must fail before any network call")
+	}
+}
+
+func TestR2_ListStagedUploads_ReportsBackendError(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+	})
+	if _, err := c.ListStagedUploads(context.Background(), testProjABC, "bkt_1", 5); err == nil {
+		t.Error("a refused listing must not read as an empty staging area")
+	}
+}
+
+// The key is built from the id, so an id that could carry a path is refused.
+func TestR2_DeleteStagingObject_RefusesAnIDThatCouldCarryAPath(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a suspect upload id must never reach the store")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	for _, id := range []string{"", "../a", "a/b", `a\b`} {
+		if err := c.DeleteStagingObject(context.Background(), testProjABC, "bkt_1", id); err == nil {
+			t.Errorf("upload id %q must be refused", id)
+		}
+	}
+}
+
+func TestR2_DeleteStagingObject_DeletesTheStagedKey(t *testing.T) {
+	var gotPath string
+	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.DeleteStagingObject(context.Background(), testProjABC, "bkt_1", "upl_1"); err != nil {
+		t.Fatalf("DeleteStagingObject: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, "/buckets/bkt_1/.staging/upl_1") {
+		t.Errorf("delete hit %q", gotPath)
+	}
+}

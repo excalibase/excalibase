@@ -105,10 +105,10 @@ func TestStorageRoutes_UploadURL_ReturnsBoundHeaders(t *testing.T) {
 // from what the caller claims, and the object does not survive.
 func TestStorageRoutes_ConfirmUpload_RejectsOversizedObject(t *testing.T) {
 	r, backend, _ := newQuotaLimitedRouter(t)
-	backend.put("payload", 5*1024*1024, "image/png")
+	backend.put(stagingKeyPrefix+"upl_payload", 5*1024*1024, "image/png")
 
 	w := doStorage(t, r, "POST", "/api/projects/proj-s/storage/buckets/images/confirm-upload",
-		map[string]any{"key": "payload", "size": 0, "mimeType": "image/png"})
+		map[string]any{"key": "payload", "uploadId": "upl_payload"})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("confirm of an over-quota object: want 400, got %d (body=%s)", w.Code, w.Body.String())
 	}
@@ -177,14 +177,14 @@ func TestTus_Create_RequiresDeclaredLength(t *testing.T) {
 func TestTus_RecordUpload_UsesStoredSizeAndType(t *testing.T) {
 	_, h, store, backend := newTusStorageRouterWithBackend(t)
 	_ = store.CreateBucket(context.Background(), &storagesvc.Bucket{ID: "b1", ProjectID: "proj1", Name: "media"})
-	backend.put("clips/a.mp4", 9999, "video/mp4")
+	backend.put(stagingKeyPrefix+"upl_tus2", 9999, "video/mp4")
 
 	ctx := context.WithValue(context.Background(), tusProjectCtxKey, "proj1")
 	if _, err := h.recordTusUpload(tusd.HookEvent{
 		Context: ctx,
 		Upload: tusd.FileInfo{
 			Size:     1, // the claim
-			MetaData: tusd.MetaData{"bucket": "media", "key": "clips/a.mp4", "filetype": "text/plain"},
+			MetaData: tusd.MetaData{"bucket": "media", "key": "clips/a.mp4", "filetype": "text/plain", tusUploadIDKey: "upl_tus2"},
 		},
 	}); err != nil {
 		t.Fatalf("recordTusUpload: %v", err)
@@ -214,16 +214,16 @@ func TestStorageRoutes_UploadURL_UnknownBucketIs404(t *testing.T) {
 func TestStorageRoutes_ConfirmUpload_MissingObjectIs400(t *testing.T) {
 	r, _, _ := newQuotaLimitedRouter(t)
 	w := doStorage(t, r, "POST", "/api/projects/proj-s/storage/buckets/images/confirm-upload",
-		map[string]any{"key": "never-uploaded.png", "size": 10, "mimeType": "image/png"})
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("confirm of a missing object: want 400, got %d (body=%s)", w.Code, w.Body.String())
+		map[string]any{"key": "never-uploaded.png", "uploadId": "upl_never"})
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("confirm of a missing upload: want 404, got %d (body=%s)", w.Code, w.Body.String())
 	}
 }
 
 func TestInternalStorage_ConfirmUpload_MissingObjectIsNot204(t *testing.T) {
 	r, _, _ := newQuotaLimitedRouter(t)
 	req := httptest.NewRequest("POST", "/internal/storage/"+testStorageProjectID+"/confirm-upload",
-		strings.NewReader(`{"storageId":"kg2_never","size":10,"contentType":"image/png"}`))
+		strings.NewReader(`{"storageId":"kg2_never","uploadId":"upl_never"}`))
 	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -241,10 +241,10 @@ func TestStorageRoutes_ConfirmUpload_InternalFailureIsOpaque(t *testing.T) {
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/storage", func(r chi.Router) { h.Routes(r) })
 	_ = doStorage(t, r, "POST", "/api/projects/proj-s/storage/buckets", map[string]any{"name": "files"})
-	backend.put("a.txt", 10, "text/plain")
+	backend.put(stagingKeyPrefix+"upl_a", 10, "text/plain")
 
 	w := doStorage(t, r, "POST", "/api/projects/proj-s/storage/buckets/files/confirm-upload",
-		map[string]any{"key": "a.txt"})
+		map[string]any{"key": "a.txt", "uploadId": "upl_a"})
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d (body=%s)", w.Code, w.Body.String())
 	}
@@ -286,16 +286,16 @@ func TestStorageRoutes_ConfirmUpload_FailsOnTierLookupFailure(t *testing.T) {
 	r.Route("/api/projects/{projectId}/storage", func(r chi.Router) { h.Routes(r) })
 	h.InternalRoutes(r)
 	_ = doStorage(t, r, "POST", "/api/projects/proj-s/storage/buckets", map[string]any{"name": "files"})
-	backend.put("a.txt", 10, "text/plain")
+	backend.put(stagingKeyPrefix+"upl_a", 10, "text/plain")
 
 	w := doStorage(t, r, "POST", "/api/projects/proj-s/storage/buckets/files/confirm-upload",
-		map[string]any{"key": "a.txt"})
+		map[string]any{"key": "a.txt", "uploadId": "upl_a"})
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("tier lookup failure on confirm: want 500, got %d (body=%s)", w.Code, w.Body.String())
 	}
 
 	req := httptest.NewRequest("POST", "/internal/storage/"+testStorageProjectID+"/confirm-upload",
-		strings.NewReader(`{"storageId":"kg2_a"}`))
+		strings.NewReader(`{"storageId":"kg2_a","uploadId":"upl_a"}`))
 	req.Header.Set(runtimeTokenHeader, testStorageRuntimeToken)
 	iw := httptest.NewRecorder()
 	r.ServeHTTP(iw, req)

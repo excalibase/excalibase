@@ -46,13 +46,13 @@ func TestService_ListBuckets(t *testing.T) {
 func TestService_ConfirmUpload_RecordsObjectAndQuota(t *testing.T) {
 	store := newMemStore()
 	backend := newStubBackend()
-	backend.put("a.txt", 500, "text/plain")
+	backend.put(stagingObjectKey(testUploadID("a.txt")), 500, "text/plain")
 	svc := serviceOverStub(t, store, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 
 	obj, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "user-1", ConfirmUploadRequest{
-		Key: "a.txt", ETag: "etag-1",
+		Key: "a.txt", UploadID: testUploadID("a.txt"), ETag: "etag-1",
 	})
 	if err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
@@ -71,7 +71,7 @@ func TestService_ConfirmUpload_RecordsObjectAndQuota(t *testing.T) {
 
 func TestService_ConfirmUpload_MissingBucket(t *testing.T) {
 	svc := NewService(newMemStore(), newTestR2(t), nil)
-	_, err := svc.ConfirmUpload(context.Background(), testProjX, "nope", "FREE", "u", ConfirmUploadRequest{Key: "x"})
+	_, err := svc.ConfirmUpload(context.Background(), testProjX, "nope", "FREE", "u", ConfirmUploadRequest{Key: "x", UploadID: testUploadID("x")})
 	if err == nil || !errors.Is(err, ErrBucketNotFound) {
 		t.Errorf("expected bucket-not-found, got %v", err)
 	}
@@ -84,8 +84,8 @@ func TestService_ListObjects(t *testing.T) {
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	for _, k := range []string{"img/1.png", "img/2.png", "doc/a.txt"} {
-		backend.put(k, 1, "text/plain")
-		if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: k}); err != nil {
+		backend.put(stagingObjectKey(testUploadID(k)), 1, "text/plain")
+		if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: k, UploadID: testUploadID(k)}); err != nil {
 			t.Fatalf("ConfirmUpload %q: %v", k, err)
 		}
 	}
@@ -110,11 +110,11 @@ func TestService_ListObjects(t *testing.T) {
 func TestService_ListObjects_ClampsLimit(t *testing.T) {
 	store := newMemStore()
 	backend := newStubBackend()
-	backend.put("k", 1, "text/plain")
+	backend.put(stagingObjectKey(testUploadID("k")), 1, "text/plain")
 	svc := serviceOverStub(t, store, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
-	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "k"})
+	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "k", UploadID: testUploadID("k")})
 
 	// Out-of-range limits get clamped to the 100 default — just assert no error.
 	if _, err := svc.ListObjects(ctx, testProjX, "files", ListObjectsRequest{Limit: -5}); err != nil {
@@ -204,8 +204,8 @@ func TestService_DeleteBucket_CascadesObjects(t *testing.T) {
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	bucket, _ := store.GetBucket(ctx, testProjX, "files")
 	for _, k := range []string{"a", "b", "c"} {
-		blobs.put(testProjX, bucket.ID, k, 100, "text/plain")
-		_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: k})
+		blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID(k)), 100, "text/plain")
+		_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: k, UploadID: testUploadID(k)})
 	}
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 300 {
 		t.Fatalf("pre-delete quota: got %d, want 300", used)
@@ -236,8 +236,8 @@ func TestService_DeleteObject_DecrementsQuota(t *testing.T) {
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	bucket, _ := store.GetBucket(ctx, testProjX, "files")
-	blobs.put(testProjX, bucket.ID, "k", 200, "text/plain")
-	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "k"})
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("k")), 200, "text/plain")
+	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "k", UploadID: testUploadID("k")})
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 200 {
 		t.Fatalf("pre-delete quota: got %d, want 200", used)
 	}

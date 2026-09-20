@@ -117,17 +117,19 @@ func newTestService(t *testing.T, store BucketStore, tierQuotas map[string]int64
 	return NewService(store, r2, tierQuotas)
 }
 
-func TestStartResumableUpload_BuildsCanonicalKey(t *testing.T) {
+// A resumable upload lands in the bucket's staging namespace, under the id it
+// was started with — never on the object's own key.
+func TestStartResumableUpload_BuildsStagingKey(t *testing.T) {
 	store := newMemBucketStore()
 	_ = store.CreateBucket(context.Background(), &Bucket{ID: "b1", ProjectID: "proj1", Name: "media"})
 	svc := newTestService(t, store, nil)
 
-	key, err := svc.StartResumableUpload(context.Background(), "proj1", "media", "free",
+	key, uploadID, err := svc.StartResumableUpload(context.Background(), "proj1", "media", "free",
 		UploadURLRequest{Key: "videos/clip.mp4", MimeType: "video/mp4", Size: 1000})
 	if err != nil {
 		t.Fatalf("StartResumableUpload: %v", err)
 	}
-	want := "projects/proj1/buckets/b1/videos/clip.mp4"
+	want := "projects/proj1/buckets/b1/" + stagingObjectKey(uploadID)
 	if key != want {
 		t.Errorf("key = %q, want %q", key, want)
 	}
@@ -135,7 +137,7 @@ func TestStartResumableUpload_BuildsCanonicalKey(t *testing.T) {
 
 func TestStartResumableUpload_UnknownBucket(t *testing.T) {
 	svc := newTestService(t, newMemBucketStore(), nil)
-	_, err := svc.StartResumableUpload(context.Background(), "proj1", "ghost", "free",
+	_, _, err := svc.StartResumableUpload(context.Background(), "proj1", "ghost", "free",
 		UploadURLRequest{Key: "x.bin", Size: 1})
 	if err == nil {
 		t.Fatal("expected error for unknown bucket")
@@ -148,7 +150,7 @@ func TestStartResumableUpload_MimeNotAllowed(t *testing.T) {
 		ID: "b1", ProjectID: "proj1", Name: "images", AllowedTypes: []string{"image/png"},
 	})
 	svc := newTestService(t, store, nil)
-	_, err := svc.StartResumableUpload(context.Background(), "proj1", "images", "free",
+	_, _, err := svc.StartResumableUpload(context.Background(), "proj1", "images", "free",
 		UploadURLRequest{Key: "a.exe", MimeType: "application/octet-stream", Size: 1})
 	if err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("expected mime-not-allowed error, got %v", err)
@@ -159,7 +161,7 @@ func TestStartResumableUpload_QuotaExceeded(t *testing.T) {
 	store := newMemBucketStore()
 	_ = store.CreateBucket(context.Background(), &Bucket{ID: "b1", ProjectID: "proj1", Name: "media"})
 	svc := newTestService(t, store, map[string]int64{"free": 100})
-	_, err := svc.StartResumableUpload(context.Background(), "proj1", "media", "free",
+	_, _, err := svc.StartResumableUpload(context.Background(), "proj1", "media", "free",
 		UploadURLRequest{Key: "big.bin", MimeType: "application/octet-stream", Size: 200})
 	if err == nil || !strings.Contains(err.Error(), "quota") {
 		t.Fatalf("expected quota error, got %v", err)

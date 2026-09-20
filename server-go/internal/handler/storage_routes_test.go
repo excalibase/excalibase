@@ -106,7 +106,6 @@ func TestStorageRoutes_CreateBucket_InvalidName(t *testing.T) {
 
 func TestStorageRoutes_ObjectLifecycle(t *testing.T) {
 	r, _, backend := newStorageRouterWithBackend(t)
-	backend.put("a.txt", 10, "text/plain")
 	base := "/api/projects/proj-s/storage"
 	_ = doStorage(t, r, "POST", base+"/buckets", map[string]any{"name": "files"})
 
@@ -118,9 +117,16 @@ func TestStorageRoutes_ObjectLifecycle(t *testing.T) {
 		t.Fatalf("sign upload: %d body=%s", w.Code, w.Body.String())
 	}
 
-	// Confirm the upload (records metadata).
+	// Confirm the upload (records metadata) by the id it was staged under.
+	var signed struct {
+		UploadID string `json:"uploadId"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &signed); err != nil {
+		t.Fatalf("decode upload url: %v", err)
+	}
+	backend.put(stagingKeyPrefix+signed.UploadID, 10, "text/plain")
 	w = doStorage(t, r, "POST", base+"/buckets/files/confirm-upload", map[string]any{
-		"key": "a.txt", "size": 10, "mimeType": "text/plain", "etag": "e1",
+		"key": "a.txt", "uploadId": signed.UploadID, "etag": "e1",
 	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("confirm: %d body=%s", w.Code, w.Body.String())

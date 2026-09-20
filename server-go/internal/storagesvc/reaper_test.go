@@ -18,21 +18,21 @@ func TestService_ReapUnconfirmedUploads_DeletesAbandonedObjects(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Confirmed: has a row, must survive.
-	backend.putAt("kept.txt", 10, "text/plain", now.Add(-3*time.Hour))
-	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "kept.txt"}); err != nil {
+	backend.putAt(stagingObjectKey(testUploadID("kept.txt")), 10, "text/plain", now.Add(-3*time.Hour))
+	if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "kept.txt", UploadID: testUploadID("kept.txt")}); err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
 	}
-	// Abandoned and old enough: must go.
-	backend.putAt("abandoned.bin", 5_000_000, "application/octet-stream", now.Add(-3*time.Hour))
-	// Abandoned but still within the grace period: may be in flight.
-	backend.putAt("in-flight.bin", 100, "application/octet-stream", now.Add(-time.Minute))
+	// Staged and old enough: nobody came back for it, so it goes.
+	backend.putAt(stagingObjectKey("upl_abandoned"), 5_000_000, "application/octet-stream", now.Add(-3*time.Hour))
+	// Staged but still within the grace period: may be in flight.
+	backend.putAt(stagingObjectKey("upl_inflight"), 100, "application/octet-stream", now.Add(-time.Minute))
 
 	report, err := svc.ReapUnconfirmedUploads(ctx, time.Hour, now)
 	if err != nil {
 		t.Fatalf("ReapUnconfirmedUploads: %v", err)
 	}
-	if len(report.Deleted) != 1 || report.Deleted[0] != "files/abandoned.bin" {
-		t.Fatalf("expected only the abandoned object to be reaped, got %v", report.Deleted)
+	if len(report.Deleted) != 1 || report.Deleted[0] != "files/"+stagingObjectKey("upl_abandoned") {
+		t.Fatalf("expected only the abandoned upload to be reaped, got %v", report.Deleted)
 	}
 	if len(report.Failed) != 0 {
 		t.Errorf("unexpected failures: %v", report.Failed)
@@ -40,11 +40,11 @@ func TestService_ReapUnconfirmedUploads_DeletesAbandonedObjects(t *testing.T) {
 	if _, ok := backend.lookup("/files/kept.txt"); !ok {
 		t.Error("a confirmed object must not be reaped")
 	}
-	if _, ok := backend.lookup("/files/in-flight.bin"); !ok {
-		t.Error("an object inside the grace period must not be reaped")
+	if _, ok := backend.lookup("/" + stagingObjectKey("upl_inflight")); !ok {
+		t.Error("an upload inside the grace period must not be reaped")
 	}
-	if _, ok := backend.lookup("/files/abandoned.bin"); ok {
-		t.Error("the abandoned object is still in the store")
+	if _, ok := backend.lookup("/" + stagingObjectKey("upl_abandoned")); ok {
+		t.Error("the abandoned upload is still in the store")
 	}
 	// The reaper never touches quota: unconfirmed bytes were never charged.
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 10 {
@@ -60,7 +60,7 @@ func TestService_ReapUnconfirmedUploads_DefaultsGrace(t *testing.T) {
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	now := time.Now().UTC()
-	backend.putAt("fresh.bin", 1, "application/octet-stream", now)
+	backend.putAt(stagingObjectKey("upl_fresh"), 1, "application/octet-stream", now)
 
 	report, err := svc.ReapUnconfirmedUploads(ctx, 0, now)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestService_ReapUnconfirmedUploads_ReportsPerBucketFailure(t *testing.T) {
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	_, _ = svc.CreateBucket(ctx, "other-project", CreateBucketRequest{Name: "files"})
 	now := time.Now().UTC()
-	backend.putAt("abandoned.bin", 1, "application/octet-stream", now.Add(-2*time.Hour))
+	backend.putAt(stagingObjectKey("upl_abandoned"), 1, "application/octet-stream", now.Add(-2*time.Hour))
 
 	report, err := svc.ReapUnconfirmedUploads(ctx, time.Hour, now)
 	if err != nil {
