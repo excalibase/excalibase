@@ -45,6 +45,16 @@ type AppConfig struct {
 	PublicBaseURL         string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
 	RegistrationMode      string // "open" (default) or "invite" — invite closes open studio signup
 
+	// ExposureEnforced is the installation-wide kill switch for the table
+	// exposure filter (EXC-400). Enforcement is ON for every project and
+	// there is no per-project opt-in: a project's end users reach exactly
+	// the tables its grant list names, and nothing when it names none.
+	//
+	// This setting exists so the product decision can be reversed without
+	// reverting code. It is platform-wide, never per project, and no HTTP
+	// route can write it — only EXCALIBASE_EXPOSURE_ENFORCED at boot.
+	ExposureEnforced bool
+
 	// JWTRequireAud gates the end-user JWT audience check (EXC-11). On by
 	// default; set JWT_REQUIRE_AUD=false only for a phased rollout where
 	// older tokens without an aud claim are still in circulation.
@@ -173,6 +183,7 @@ func Load() AppConfig {
 		NatsCalloutPassword:     os.Getenv("NATS_AUTH_CALLOUT_PASSWORD"),
 		NatsCalloutIssuerSeed:   os.Getenv("NATS_AUTH_CALLOUT_ISSUER_SEED"),
 		RegistrationMode:        envOr("REGISTRATION_MODE", "open"),
+		ExposureEnforced:        exposureEnforced(),
 		JWTRequireAud:           envBool("JWT_REQUIRE_AUD", true),
 		JWTAudPrefix:            envOr("AUTH_AUD_PREFIX", "excalibase:"),
 		CORSOrigins:             parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
@@ -327,6 +338,43 @@ func envBool(key string, fallback bool) bool {
 		return false
 	}
 	return fallback
+}
+
+// exposureEnvKey names the one platform-wide exposure kill switch (EXC-400).
+const exposureEnvKey = "EXCALIBASE_EXPOSURE_ENFORCED"
+
+// exposureEnforced reads the kill switch. Unset means ON. A value that is not
+// a boolean stops the server rather than being guessed at: an operator who
+// mistypes it must not discover the state of their exposure filter in
+// production.
+func exposureEnforced() bool {
+	raw := os.Getenv(exposureEnvKey)
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	enforced, err := parseStrictBool(raw)
+	if err != nil {
+		log.Fatalf("%s: %v", exposureEnvKey, err)
+	}
+	if !enforced {
+		log.Printf("!!! EXPOSURE ENFORCEMENT IS OFF for this entire installation (%s=%s): "+
+			"every project's tables and functions are served to end users unfiltered, "+
+			"whatever its grant list says. Unset %s to restore enforcement.",
+			exposureEnvKey, raw, exposureEnvKey)
+	}
+	return enforced
+}
+
+// parseStrictBool accepts the same spellings as envBool but refuses anything
+// else, including the empty string, instead of substituting a default.
+func parseStrictBool(raw string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	}
+	return false, fmt.Errorf("%q is not a boolean (use true/false, 1/0, yes/no, on/off)", raw)
 }
 
 func envInt(key string, fallback int) int {

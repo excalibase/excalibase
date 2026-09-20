@@ -100,7 +100,6 @@ var forbiddenCalls = []serviceCall{
 	{svcGraphql, http.MethodPost, "/api/provision/proj-a/table-grants/", "", "granting itself exposure"},
 	{svcGraphql, http.MethodPatch, "/api/provision/proj-a/table-grants/g-1", "", "editing a grant"},
 	{svcGraphql, http.MethodDelete, "/api/provision/proj-a/table-grants/g-1", "", "deleting a grant"},
-	{svcGraphql, http.MethodPut, "/api/provision/proj-a/table-grants/enforcement", "", "turning exposure enforcement off"},
 	{svcGraphql, http.MethodPost, "/api/provision/proj-a/rls-policies/", "", "writing a row policy"},
 	{svcGraphql, http.MethodPost, "/internal/email/send", "", "sending platform mail"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/credentials", "", "the project's own credentials"},
@@ -115,13 +114,12 @@ var forbiddenCalls = []serviceCall{
 // memoryGrantStore is an in-memory storage.TableGrantStore so the exposure
 // routes answer for real instead of panicking on a nil dependency.
 type memoryGrantStore struct {
-	mu       sync.Mutex
-	grants   map[string]domain.TableGrant
-	enforced map[string]bool
+	mu     sync.Mutex
+	grants map[string]domain.TableGrant
 }
 
 func newMemoryGrantStore() *memoryGrantStore {
-	return &memoryGrantStore{grants: map[string]domain.TableGrant{}, enforced: map[string]bool{}}
+	return &memoryGrantStore{grants: map[string]domain.TableGrant{}}
 }
 
 func (m *memoryGrantStore) ListGrants(_ context.Context, projectID string) ([]domain.TableGrant, error) {
@@ -162,19 +160,6 @@ func (m *memoryGrantStore) DeleteGrant(_ context.Context, projectID, id string) 
 		return pgstore.ErrGrantNotFound
 	}
 	delete(m.grants, id)
-	return nil
-}
-
-func (m *memoryGrantStore) IsExposureEnforced(_ context.Context, projectID string) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.enforced[projectID], nil
-}
-
-func (m *memoryGrantStore) SetExposureEnforced(_ context.Context, projectID string, enforced bool) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.enforced[projectID] = enforced
 	return nil
 }
 
@@ -249,7 +234,7 @@ func contractRouterWithProjectStatus(t *testing.T, status string) (http.Handler,
 	deps := matrixDeps(t, instances)
 	deps.vaultHandler = handler.NewVaultHandler(localVault)
 	deps.vaultHandler.SetInstanceStore(instances)
-	deps.tableGrantHandler = handler.NewTableGrantHandler(grants)
+	deps.tableGrantHandler = handler.NewTableGrantHandler(grants, true)
 	deps.rlsPolicyHandler = handler.NewRlsPolicyHandler(emptyPolicyStore{})
 	deps.internalEmail = handler.NewInternalEmailHandler(&countingSender{})
 	cfg := config.AppConfig{DeploymentMode: "selfhosted"}
@@ -293,7 +278,6 @@ func TestPlatformServicesAreRefusedEverythingElse(t *testing.T) {
 		})
 	}
 }
-
 
 // A project the platform must not serve must not have its credentials handed
 // to the engine or the auth service either — that is the door they actually
