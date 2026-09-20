@@ -11,12 +11,11 @@ import (
 )
 
 const (
-	testExpectedErr  = "expected error"
-	testStageErrFmt  = "expected StageError, got %T: %v"
-	testBKTest       = "bk-test"
-	testDelDBNS      = "org1-del-db"
+	testExpectedErr = "expected error"
+	testStageErrFmt = "expected StageError, got %T: %v"
+	testBKTest      = "bk-test"
+	testDelDBNS     = "org1-del-db"
 )
-
 
 func TestPostgreSQLProvisionerFree(t *testing.T) {
 	mock := k8s.NewMockClient()

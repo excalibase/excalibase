@@ -47,10 +47,10 @@ type StorageReaperConfig struct {
 type StorageReaper struct {
 	storage    UploadReaper
 	leadership *Leadership
-	grace    time.Duration
-	interval time.Duration
-	now      func() time.Time
-	logger   *log.Logger
+	grace      time.Duration
+	interval   time.Duration
+	now        func() time.Time
+	logger     *log.Logger
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc

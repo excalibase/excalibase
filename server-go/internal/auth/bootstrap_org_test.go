@@ -10,7 +10,6 @@ import (
 
 const testAdminUserID = "admin-user-id"
 
-
 // mockOrgStore implements the subset of OrgStore needed for bootstrap
 type mockOrgStore struct {
 	orgs  []*domain.Org

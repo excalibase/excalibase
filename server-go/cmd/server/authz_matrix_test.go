@@ -285,7 +285,9 @@ func TestEveryProjectRouteIsGated(t *testing.T) {
 
 // fakeParameterGroups is an in-memory store so the parameter-group routes
 // answer for real instead of panicking on a nil dependency.
-type fakeParameterGroups struct{ groups map[string]*domain.ParameterGroup }
+type fakeParameterGroups struct {
+	groups map[string]*domain.ParameterGroup
+}
 
 func (f *fakeParameterGroups) Save(pg *domain.ParameterGroup) error {
 	f.groups[pg.Name] = pg

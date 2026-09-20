@@ -20,6 +20,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 
+	// lib/pq registers the "postgres" driver used by every pool this package
+	// opens; nothing here references the package directly.
 	_ "github.com/lib/pq"
 )
 

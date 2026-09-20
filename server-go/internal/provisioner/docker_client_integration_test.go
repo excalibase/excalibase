@@ -15,7 +15,6 @@ import (
 
 const testNonexistentContainer = "nonexistent-container-"
 
-
 // Real Docker daemon lifecycle test. Requires a reachable docker socket
 // (unix or DOCKER_HOST). Skipped if the daemon isn't available.
 //

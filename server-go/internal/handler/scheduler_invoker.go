@@ -106,6 +106,6 @@ func (r storeRegistry) HasFunction(projectID, moduleName string) (bool, error) {
 // SchedulerFunctions returns the registry the sweep checks a claimed row's
 // module name against. Rows are tenant-written; only a module the platform
 // deployed for that project may run.
-func (h *FunctionHandler) SchedulerFunctions() scheduler.FunctionRegistry {
+func (h *FunctionHandler) SchedulerFunctions() scheduler.FunctionChecker {
 	return storeRegistry{store: h.store}
 }

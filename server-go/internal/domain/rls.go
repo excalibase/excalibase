@@ -58,18 +58,18 @@ const (
 type RuleOperator string
 
 const (
-	OpEQ         RuleOperator = "EQ"
-	OpNEQ        RuleOperator = "NEQ"
-	OpGT         RuleOperator = "GT"
-	OpGTE        RuleOperator = "GTE"
-	OpLT         RuleOperator = "LT"
-	OpLTE        RuleOperator = "LTE"
-	OpIN         RuleOperator = "IN"
-	OpNOTIN      RuleOperator = "NOT_IN"
-	OpLIKE       RuleOperator = "LIKE"
-	OpNOTLIKE    RuleOperator = "NOT_LIKE"
-	OpISNULL     RuleOperator = "IS_NULL"
-	OpISNOTNULL  RuleOperator = "IS_NOT_NULL"
+	OpEQ        RuleOperator = "EQ"
+	OpNEQ       RuleOperator = "NEQ"
+	OpGT        RuleOperator = "GT"
+	OpGTE       RuleOperator = "GTE"
+	OpLT        RuleOperator = "LT"
+	OpLTE       RuleOperator = "LTE"
+	OpIN        RuleOperator = "IN"
+	OpNOTIN     RuleOperator = "NOT_IN"
+	OpLIKE      RuleOperator = "LIKE"
+	OpNOTLIKE   RuleOperator = "NOT_LIKE"
+	OpISNULL    RuleOperator = "IS_NULL"
+	OpISNOTNULL RuleOperator = "IS_NOT_NULL"
 )
 
 // TargetType mirrors io.github.excalibase.rls.TargetType.
@@ -143,18 +143,18 @@ type Policy struct {
 
 // ColumnPolicy mirrors io.github.excalibase.rls.ColumnPolicy.
 type ColumnPolicy struct {
-	ID               string           `json:"id"`
-	ProjectID        string           `json:"projectId"`
-	Name             string           `json:"name"`
-	Resource         string           `json:"resource"`
-	Columns          []string         `json:"columns"`
-	Operations       []Operation      `json:"operations"`
-	Mode             MaskMode         `json:"mode"`
-	PartialSpec      *PartialMaskSpec `json:"partialSpec,omitempty"`
-	CustomMaskerKey  string           `json:"customMaskerKey,omitempty"`
-	Priority         int              `json:"priority"`
-	Enabled          bool             `json:"enabled"`
-	Assignments      []Assignment     `json:"assignments"`
-	CreatedAt        *time.Time       `json:"createdAt,omitempty"`
-	UpdatedAt        *time.Time       `json:"updatedAt,omitempty"`
+	ID              string           `json:"id"`
+	ProjectID       string           `json:"projectId"`
+	Name            string           `json:"name"`
+	Resource        string           `json:"resource"`
+	Columns         []string         `json:"columns"`
+	Operations      []Operation      `json:"operations"`
+	Mode            MaskMode         `json:"mode"`
+	PartialSpec     *PartialMaskSpec `json:"partialSpec,omitempty"`
+	CustomMaskerKey string           `json:"customMaskerKey,omitempty"`
+	Priority        int              `json:"priority"`
+	Enabled         bool             `json:"enabled"`
+	Assignments     []Assignment     `json:"assignments"`
+	CreatedAt       *time.Time       `json:"createdAt,omitempty"`
+	UpdatedAt       *time.Time       `json:"updatedAt,omitempty"`
 }

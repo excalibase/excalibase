@@ -13,7 +13,6 @@ import (
 
 const testOrg1Proj = "org1-proj"
 
-
 // TestGetStatusPodNotReady covers GetStatus when the pod exists but is not
 // ready, which should return Phase "Pending" with Ready=false.
 func TestGetStatusPodNotReady(t *testing.T) {

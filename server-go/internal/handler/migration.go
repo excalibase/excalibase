@@ -11,7 +11,9 @@ import (
 
 type MigrationHandler struct{ svc *service.MigrationService }
 
-func NewMigrationHandler(svc *service.MigrationService) *MigrationHandler { return &MigrationHandler{svc: svc} }
+func NewMigrationHandler(svc *service.MigrationService) *MigrationHandler {
+	return &MigrationHandler{svc: svc}
+}
 
 func (h *MigrationHandler) Routes(r chi.Router) {
 	r.Get("/", h.List)
@@ -29,6 +31,9 @@ func (h *MigrationHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	var req domain.MigrationRequest
 	json.NewDecoder(r.Body).Decode(&req)
 	rec, err := h.svc.ApplyMigration(r.Context(), projectID, req)
-	if err != nil { httpError(w, safeError(err), http.StatusInternalServerError); return }
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, rec)
 }

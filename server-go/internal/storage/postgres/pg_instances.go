@@ -499,7 +499,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		maintDur: maintDur, backupRet: backupRet,
 		createdAt: createdAt, updatedAt: updatedAt, lastHealth: lastHealth,
 		lastActiveAt: lastActiveAt, lastXactCount: lastXactCount,
-		pauseReason: pauseReason,
+		pauseReason:   pauseReason,
 		pauseAttempts: pauseAttempts, pauseLastAttemptAt: pauseLastAttemptAt,
 		pauseBackupID: pauseBackupID, pauseBackupAt: pauseBackupAt,
 	}

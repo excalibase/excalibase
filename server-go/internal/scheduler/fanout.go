@@ -34,7 +34,7 @@ type FanoutConfig struct {
 	CronLeader Leader
 	// Functions is the platform's registry of deployed functions; a claimed
 	// row may only name a module it knows for that project.
-	Functions FunctionRegistry
+	Functions FunctionChecker
 	// Limits bound what one tenant's rows can cost the platform.
 	Limits Limits
 	// PollInterval is the task-queue cadence (default 5s); CronInterval the
@@ -88,7 +88,7 @@ type Fanout struct {
 	db         ProjectDBFn
 	invoker    Invoker
 	cronLeader Leader
-	functions  FunctionRegistry
+	functions  FunctionChecker
 	limits     Limits
 	global     *Semaphore
 	poll       time.Duration

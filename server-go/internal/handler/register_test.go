@@ -22,7 +22,6 @@ const (
 	testNewGuyEmail  = "newguy@test.com"
 )
 
-
 func setupRegisterRouter(t *testing.T) (chi.Router, *pgstore.Store) {
 	t.Helper()
 	store := pgtest.New(t)

@@ -23,16 +23,9 @@ const (
 	rejectDispatchPanicked = "failed: the dispatch of this task did not complete"
 )
 
-// sizeBoundsSQL decides whether a row is within the platform's bounds. It is
-// applied in the claim's WHERE clause so an oversized payload is never
-// materialised, and negated in the close so such a row is failed without
-// reading it. Both statements bind the same $2..$5 limits.
-const sizeBoundsSQL = `octet_length(args::text) <= $2
-		   AND length(id) <= $3
-		   AND length(module_name) <= $4
-		   AND length(export_name) <= $5`
-
-// sizeBoundArgs are the four limits sizeBoundsSQL binds, in order.
+// sizeBoundArgs are the four limits the size predicate binds, in order.
+// closeOversizedSQL and claimDueSQL spell that predicate out; these are the
+// values both of them bind.
 func (w *Worker) sizeBoundArgs() []any {
 	return []any{w.maxArgsBytes, maxTaskIDLen, maxModuleNameLen, maxExportNameLen}
 }
@@ -92,10 +85,10 @@ func splitPath(name string) []string {
 	return append(out, name[start:])
 }
 
-// FunctionRegistry is the platform's record of what it deployed. The sweep
+// FunctionChecker is the platform's record of what it deployed. The sweep
 // asks it before running anything: a row may only name a module the platform
 // itself put in the project's runtime.
-type FunctionRegistry interface {
+type FunctionChecker interface {
 	HasFunction(projectID, moduleName string) (bool, error)
 }
 

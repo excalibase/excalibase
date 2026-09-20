@@ -12,7 +12,6 @@ const (
 	sqlAlterColumn = " ALTER COLUMN "
 )
 
-
 // AddColumn adds a new column to an existing table.
 func (i *Introspector) AddColumn(ctx context.Context, db *sql.DB, schema, table string, req AddColumnRequest) error {
 	var b strings.Builder

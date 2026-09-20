@@ -19,7 +19,9 @@ const errSnapshotNotFound = "snapshot not found"
 
 type SnapshotHandler struct{ svc *service.SnapshotService }
 
-func NewSnapshotHandler(svc *service.SnapshotService) *SnapshotHandler { return &SnapshotHandler{svc: svc} }
+func NewSnapshotHandler(svc *service.SnapshotService) *SnapshotHandler {
+	return &SnapshotHandler{svc: svc}
+}
 
 func (h *SnapshotHandler) Routes(r chi.Router) {
 	r.Post("/export", h.Export)
@@ -33,7 +35,10 @@ func (h *SnapshotHandler) Export(w http.ResponseWriter, r *http.Request) {
 	var req domain.SnapshotExportRequest
 	json.NewDecoder(r.Body).Decode(&req)
 	info, err := h.svc.ExportSnapshot(r.Context(), projectID, req)
-	if err != nil { httpError(w, safeError(err), http.StatusInternalServerError); return }
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, info)
 }
 

@@ -12,7 +12,6 @@ import (
 
 const testLocalhost = "127.0.0.1"
 
-
 // setupRealtimeRouter wires a RealtimeHandler with an in-memory instance
 // store and a fake vault. Routes are mounted under /api/projects/{projectId}/realtime
 // to match the production wiring; the handler reads `projectId` from the URL.

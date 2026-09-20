@@ -7,7 +7,6 @@ import (
 
 const testProjABC123 = "proj-abc123"
 
-
 // TestBuildLogQL_KnownServices pins the LogQL selectors the admin /logs
 // endpoint emits. If you change a service's app= label or namespace shape,
 // update both the chart and this test.
@@ -97,8 +96,8 @@ func TestBuildLogQL_RejectsBroadSearch(t *testing.T) {
 func TestEscapeLokiValue(t *testing.T) {
 	cases := map[string]string{
 		testProjABC123:         testProjABC123,
-		`proj"or"injection`:   "projorinjection",
-		"proj-abc.123":        testProjABC123,
+		`proj"or"injection`:    "projorinjection",
+		"proj-abc.123":         testProjABC123,
 		"proj_with_underscore": "proj_with_underscore",
 	}
 	for in, want := range cases {

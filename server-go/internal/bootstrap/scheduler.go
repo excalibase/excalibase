@@ -42,7 +42,7 @@ type SchedulerBootConfig struct {
 	Invoker scheduler.Invoker
 	// Functions is the platform's registry of deployed functions: a claimed
 	// row may only name a module the platform itself deployed.
-	Functions scheduler.FunctionRegistry
+	Functions scheduler.FunctionChecker
 	// Limits bound what one tenant's rows can cost the platform.
 	Limits scheduler.Limits
 	// Projects lists the projects whose databases may be swept; ProjectDB

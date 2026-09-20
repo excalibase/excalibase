@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-
-
 // CreateTable creates a new table with optional columns and comment.
 func (i *Introspector) CreateTable(ctx context.Context, db *sql.DB, req CreateTableRequest) error {
 	schema := req.Schema

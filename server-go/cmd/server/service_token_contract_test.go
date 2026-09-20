@@ -294,7 +294,6 @@ func TestPlatformServicesAreRefusedEverythingElse(t *testing.T) {
 	}
 }
 
-
 // A project the platform must not serve must not have its credentials handed
 // to the engine or the auth service either — that is the door they actually
 // use. 404, so a service treats the project as absent and stops serving it.

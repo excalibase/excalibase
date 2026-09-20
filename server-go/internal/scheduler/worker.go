@@ -22,7 +22,7 @@ type WorkerConfig struct {
 	Invoker   Invoker
 	// Functions is the platform's registry of deployed functions. A row may
 	// only run a module the platform itself deployed for this project.
-	Functions    FunctionRegistry
+	Functions    FunctionChecker
 	PollInterval time.Duration
 	// Batch caps the number of rows pulled per tick. Default 32.
 	Batch int
@@ -51,7 +51,7 @@ type Worker struct {
 	db           *sql.DB
 	projectID    string
 	invoker      Invoker
-	functions    FunctionRegistry
+	functions    FunctionChecker
 	poll         time.Duration
 	batch        int
 	maxAttempts  int
@@ -296,6 +296,9 @@ const markRunningSQL = `
 // closeOversizedSQL fails the due rows that exceed the platform's bounds,
 // matching them on the columns' lengths alone. It never selects args, so a
 // tenant cannot make the sweep read a payload by writing an enormous one.
+// The bounds are spelled out here and in claimDueSQL rather than shared
+// through a fragment: the two must stay in step, and sizeBoundArgs binds
+// the same four limits to both.
 const closeOversizedSQL = `
 		UPDATE excalibase.excalibase_scheduled_functions
 		   SET status = 'failed', last_error = $6
@@ -303,7 +306,10 @@ const closeOversizedSQL = `
 		       SELECT ctid
 		         FROM excalibase.excalibase_scheduled_functions
 		        WHERE status = 'pending' AND scheduled_for <= now()
-		          AND NOT (` + sizeBoundsSQL + `)
+		          AND NOT (octet_length(args::text) <= $2
+		                   AND length(id) <= $3
+		                   AND length(module_name) <= $4
+		                   AND length(export_name) <= $5)
 		        ORDER BY scheduled_for
 		        LIMIT $1
 		        FOR UPDATE SKIP LOCKED)
@@ -316,7 +322,10 @@ const claimDueSQL = `
 		SELECT id, project_id, module_name, export_name, args, attempts
 		  FROM excalibase.excalibase_scheduled_functions
 		 WHERE status = 'pending' AND scheduled_for <= now()
-		   AND ` + sizeBoundsSQL + `
+		   AND octet_length(args::text) <= $2
+		   AND length(id) <= $3
+		   AND length(module_name) <= $4
+		   AND length(export_name) <= $5
 		 ORDER BY scheduled_for
 		 LIMIT $1
 		 FOR UPDATE SKIP LOCKED

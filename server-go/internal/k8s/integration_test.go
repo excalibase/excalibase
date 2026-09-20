@@ -19,7 +19,6 @@ const (
 	testIntegDBPod      = "integ-db-postgres-1"
 )
 
-
 // Run with: go test ./internal/k8s/ -tags=integration -run TestIntegration -v -timeout 10m
 // Requires: minikube running, CNPG operator installed, metrics-server installed
 

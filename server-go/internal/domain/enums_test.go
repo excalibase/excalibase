@@ -7,7 +7,6 @@ import (
 
 const testGotWantFmt = "got %s, want %s"
 
-
 func TestDatabaseTypeSerialization(t *testing.T) {
 	tests := []struct {
 		dt   DatabaseType

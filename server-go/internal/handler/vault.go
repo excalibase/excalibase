@@ -17,7 +17,6 @@ const (
 	errVaultSealed = "vault is sealed"
 )
 
-
 type VaultHandler struct {
 	v *vault.Vault
 	// instances gates secrets filed under a project. Optional: without it

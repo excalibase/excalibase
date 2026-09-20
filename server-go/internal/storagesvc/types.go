@@ -29,15 +29,15 @@ const (
 )
 
 type Bucket struct {
-	ID         string    `json:"id"`
-	ProjectID  string    `json:"projectId"`
-	Name       string    `json:"name"`
-	Public     bool      `json:"public"`
-	Status     string    `json:"status,omitempty"`
-	FileSize   int64     `json:"fileSizeLimit,omitempty"`   // optional per-bucket cap (bytes)
-	AllowedTypes []string `json:"allowedMimeTypes,omitempty"` // optional MIME allowlist
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID           string    `json:"id"`
+	ProjectID    string    `json:"projectId"`
+	Name         string    `json:"name"`
+	Public       bool      `json:"public"`
+	Status       string    `json:"status,omitempty"`
+	FileSize     int64     `json:"fileSizeLimit,omitempty"`    // optional per-bucket cap (bytes)
+	AllowedTypes []string  `json:"allowedMimeTypes,omitempty"` // optional MIME allowlist
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // Object is a single file. ETag is whatever the underlying store returned
@@ -46,7 +46,7 @@ type Bucket struct {
 type Object struct {
 	ID        string    `json:"id"`
 	BucketID  string    `json:"bucketId"`
-	Key       string    `json:"key"`        // path within the bucket, e.g. avatars/123.png
+	Key       string    `json:"key"` // path within the bucket, e.g. avatars/123.png
 	Size      int64     `json:"size"`
 	MimeType  string    `json:"mimeType"`
 	ETag      string    `json:"etag,omitempty"`

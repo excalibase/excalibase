@@ -30,7 +30,7 @@ type CronRunnerConfig struct {
 	// Functions is the platform's registry of deployed functions. A registry
 	// row may only enqueue a module the platform itself deployed for this
 	// project; without it nothing is enqueued.
-	Functions FunctionRegistry
+	Functions FunctionChecker
 	// Logger is optional; defaults to the std log package.
 	Logger *log.Logger
 	// IDGen overrides the scheduled-task id generator (tests use a
@@ -54,7 +54,7 @@ type CronRunner struct {
 	minInterval  time.Duration
 	maxJobs      int
 	maxArgsBytes int
-	functions    FunctionRegistry
+	functions    FunctionChecker
 	logger       *log.Logger
 	idGen        func() (string, error)
 	parser       cron.Parser

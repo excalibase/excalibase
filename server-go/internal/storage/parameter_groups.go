@@ -13,7 +13,6 @@ import (
 
 const paramGroupsKey = "parameter-groups"
 
-
 type FileSystemParameterGroupStore struct {
 	basePath string
 	mu       sync.RWMutex

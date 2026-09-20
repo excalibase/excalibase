@@ -153,4 +153,3 @@ func (h *RealtimeHandler) dial(r *http.Request) (*service.RealtimeService, *sql.
 	}
 	return service.NewRealtimeServiceWithName(db, h.publicationName), db, nil
 }
-

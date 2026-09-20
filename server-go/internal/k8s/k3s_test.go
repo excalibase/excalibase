@@ -18,10 +18,9 @@ import (
 )
 
 const (
-	testK3SNS        = "test-ns"
+	testK3SNS         = "test-ns"
 	testK3SDBPostgres = "k3s-db-postgres"
 )
-
 
 // Run with: go test ./internal/k8s/ -tags=integration -run TestK3s -v -timeout 5m
 // Requires: Docker running. k3s starts in ~30s, auto-destroyed after test.

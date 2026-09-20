@@ -61,7 +61,7 @@ func TestCronRunner_WithoutARegistryEnqueuesNothing(t *testing.T) {
 
 // The sweep is what holds the registry, so the cron half has to be handed it
 // the same way the task half is.
-func TestFanout_CronTickPassesTheFunctionRegistry(t *testing.T) {
+func TestFanout_CronTickPassesTheFunctionChecker(t *testing.T) {
 	p := newProjectMock(t)
 	p.expectSchedulerTables(true)
 	cronRow(p.mock, "not-deployed", "sweep")

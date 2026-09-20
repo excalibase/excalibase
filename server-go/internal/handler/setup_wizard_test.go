@@ -20,7 +20,6 @@ const (
 	testSetupStatusPath = "/api/auth/setup-status"
 )
 
-
 // wireSetupStatus mounts /api/auth/setup-status on the given base router,
 // sharing the store the register router was wired with so status reflects
 // users created via /api/auth/register or directly.

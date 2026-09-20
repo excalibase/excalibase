@@ -7,10 +7,9 @@ import (
 )
 
 const (
-	testPingDaemon  = "ping docker daemon"
-	testPingErrFmt  = "expected ping error, got: %v"
+	testPingDaemon = "ping docker daemon"
+	testPingErrFmt = "expected ping error, got: %v"
 )
-
 
 // TestNewRealDockerClient_NoHostAvailable exercises the connect failure
 // path without needing a real daemon. We point at an unreachable unix

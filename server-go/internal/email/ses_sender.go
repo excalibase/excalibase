@@ -15,16 +15,15 @@ import (
 
 const errWrapFmt = "%w: %s"
 
-
 // SESSender sends transactional email via Amazon SES. We use the SES v2 API
 // (sesv2) because the v1 SendEmail is deprecated and v2 has cleaner content
 // types, configuration set support, and clearer error codes.
 type SESSender struct {
-	client     *sesv2.Client
-	defaultFrom string
+	client          *sesv2.Client
+	defaultFrom     string
 	defaultFromName string
-	configSet  string // optional SES configuration set for tracking
-	rl         *rateLimiter
+	configSet       string // optional SES configuration set for tracking
+	rl              *rateLimiter
 }
 
 // SESConfig holds everything SESSender needs. AccessKeyID + SecretAccessKey
@@ -32,11 +31,11 @@ type SESSender struct {
 // fields are deployment-level defaults — caller can still override per-Send
 // by setting Message.From / Message.FromName.
 type SESConfig struct {
-	AccessKeyID     string
-	SecretAccessKey string
-	Region          string
-	DefaultFrom     string
-	DefaultFromName string
+	AccessKeyID      string
+	SecretAccessKey  string
+	Region           string
+	DefaultFrom      string
+	DefaultFromName  string
 	ConfigurationSet string
 	// SendsPerSecond rate-limits us locally to stay under the SES quota.
 	// Default 14 (fresh SES accounts; production tier raises this).

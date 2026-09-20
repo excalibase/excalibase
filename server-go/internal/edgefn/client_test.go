@@ -17,7 +17,6 @@ const (
 	testFnID        = "test-fn"
 )
 
-
 // mockDenoServer stands in for the Deno runtime. Speaks the new protocol:
 //   - POST /deploy      { id, code, secrets } → 201
 //   - POST /invoke/{id} InvokeRequest → InvokeResponse

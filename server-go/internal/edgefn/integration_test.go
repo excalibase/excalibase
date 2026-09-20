@@ -19,12 +19,11 @@ import (
 
 const (
 	testDeployFmt = "deploy: %v"
-	testAPIBase    = "https://api.test/"
-	testInvokeFmt  = "invoke: %v"
-	testValueA     = "value-A"
-	testValueB     = "value-B"
+	testAPIBase   = "https://api.test/"
+	testInvokeFmt = "invoke: %v"
+	testValueA    = "value-A"
+	testValueB    = "value-B"
 )
-
 
 // Tests in this file spin up the real Deno runtime as a subprocess and talk to
 // it over HTTP via the Go RuntimeClient. Run with:

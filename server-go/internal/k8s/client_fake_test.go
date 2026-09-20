@@ -14,13 +14,12 @@ import (
 )
 
 const (
-	testNS        = "test-ns"
-	testDelNS     = "del-ns"
-	testSecNS     = "sec-ns"
-	testGroup     = "test.io"
+	testNS         = "test-ns"
+	testDelNS      = "del-ns"
+	testSecNS      = "sec-ns"
+	testGroup      = "test.io"
 	testAPIVersion = "test.io/v1"
 )
-
 
 // newFakeClient builds a Client backed by in-memory fakes (no real K8s needed).
 func newFakeClient(objects ...runtime.Object) *Client {

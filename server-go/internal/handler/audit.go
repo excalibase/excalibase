@@ -35,7 +35,9 @@ func (h *AuditHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	lines := 100
 	if l := r.URL.Query().Get("lines"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil { lines = v }
+		if v, err := strconv.Atoi(l); err == nil {
+			lines = v
+		}
 	}
 	logs, err := h.svc.GetAuditLogs(r.Context(), projectID, lines)
 	if err != nil {

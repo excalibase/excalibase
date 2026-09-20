@@ -22,7 +22,6 @@ const (
 	testUser1           = "user-1"
 )
 
-
 func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 	t.Helper()
 	dir := t.TempDir()
@@ -239,14 +238,14 @@ func TestGetCredentialsForCDS(t *testing.T) {
 	}
 
 	var creds struct {
-		ProjectID    string `json:"projectId"`
-		Host         string `json:"host"`
-		ReadOnlyHost string `json:"readOnlyHost"`
-		Port         int    `json:"port"`
-		DatabaseName string `json:"databaseName"`
-		Username     string `json:"username"`
-		Password     string `json:"password"`
-		SSLMode      string `json:"sslMode"`
+		ProjectID     string `json:"projectId"`
+		Host          string `json:"host"`
+		ReadOnlyHost  string `json:"readOnlyHost"`
+		Port          int    `json:"port"`
+		DatabaseName  string `json:"databaseName"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		SSLMode       string `json:"sslMode"`
 		ConnectionURL string `json:"connectionUrl"`
 	}
 	json.NewDecoder(w.Body).Decode(&creds)

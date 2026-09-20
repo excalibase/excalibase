@@ -13,7 +13,6 @@ const (
 	hdrContentType = "Content-Type"
 )
 
-
 // --- Roles ---
 
 func (h *SchemaHandler) GetRoles(w http.ResponseWriter, r *http.Request) {

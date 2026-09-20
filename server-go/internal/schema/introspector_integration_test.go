@@ -178,9 +178,9 @@ func TestIntegration_GetRelationships_AsNonSuperuser(t *testing.T) {
 	}
 
 	expected := map[string]string{
-		"orders.user_id":          "users.id",
-		"order_items.order_id":    "orders.id",
-		"order_items.product_id":  "products.id",
+		"orders.user_id":         "users.id",
+		"order_items.order_id":   "orders.id",
+		"order_items.product_id": "products.id",
 	}
 	for src, tgt := range expected {
 		if fkMap[src] != tgt {

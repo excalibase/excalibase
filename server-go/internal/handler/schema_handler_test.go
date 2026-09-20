@@ -24,16 +24,15 @@ import (
 )
 
 const (
-	testUnsealFmt   = "unseal: %v"
-	testSchemaBase  = "/api/schema"
-	testTablesPath  = "/api/schema/test-proj/tables"
-	testColumnsPath = "/api/schema/test-proj/tables/users/columns"
-	testQueryPath   = "/api/schema/test-proj/query"
-	testRolesPath   = "/api/schema/test-proj/roles"
-	testPoliciesPath = "/api/schema/test-proj/policies"
+	testUnsealFmt     = "unseal: %v"
+	testSchemaBase    = "/api/schema"
+	testTablesPath    = "/api/schema/test-proj/tables"
+	testColumnsPath   = "/api/schema/test-proj/tables/users/columns"
+	testQueryPath     = "/api/schema/test-proj/query"
+	testRolesPath     = "/api/schema/test-proj/roles"
+	testPoliciesPath  = "/api/schema/test-proj/policies"
 	testFunctionsPath = "/api/schema/test-proj/functions"
 )
-
 
 // setupSchemaRouter creates a chi router with SchemaHandler wired to a real
 // PostgreSQL via testcontainers, vault unsealed with credentials stored.

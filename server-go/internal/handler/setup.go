@@ -13,7 +13,6 @@ import (
 
 const routeNameParam = "/{name}"
 
-
 type SetupHandler struct{ svc *service.OperatorSetupService }
 
 func NewSetupHandler(svc *service.OperatorSetupService) *SetupHandler { return &SetupHandler{svc: svc} }
@@ -38,12 +37,14 @@ func (h *SetupHandler) Install(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "installed", "type": string(dbType)})
 }
 
-type ParameterGroupHandler struct{ store interface {
-	Save(pg *domain.ParameterGroup) error
-	FindByName(name string) (*domain.ParameterGroup, error)
-	FindAll() ([]*domain.ParameterGroup, error)
-	Delete(name string) error
-}}
+type ParameterGroupHandler struct {
+	store interface {
+		Save(pg *domain.ParameterGroup) error
+		FindByName(name string) (*domain.ParameterGroup, error)
+		FindAll() ([]*domain.ParameterGroup, error)
+		Delete(name string) error
+	}
+}
 
 func NewParameterGroupHandler(store interface {
 	Save(pg *domain.ParameterGroup) error

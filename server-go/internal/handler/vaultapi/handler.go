@@ -17,7 +17,6 @@ const (
 	errInternal    = "internal error"
 )
 
-
 type VaultHandler struct {
 	v *vault.Vault
 }

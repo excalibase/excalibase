@@ -10,12 +10,11 @@ import (
 
 const testEmailAddr = "u@example.com"
 
-
 // fakeSender records the last call so handler tests can assert what was
 // dispatched without needing a live SES account. Lives in the package so
 // it can use unexported helpers if needed later.
 type fakeSender struct {
-	last     Message
+	last      Message
 	callCount int
 	returnErr error
 }

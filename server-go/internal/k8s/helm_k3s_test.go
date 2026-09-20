@@ -19,13 +19,12 @@ import (
 )
 
 const (
-	testK3SStartMsg    = "Starting k3s container..."
-	testK3SImage       = "rancher/k3s:v1.31.6-k3s1"
-	testK3SStartFmt    = "k3s start: %v"
-	testKubeconfigFmt  = "get kubeconfig: %v"
-	testHelmE2E        = "helm-e2e"
+	testK3SStartMsg   = "Starting k3s container..."
+	testK3SImage      = "rancher/k3s:v1.31.6-k3s1"
+	testK3SStartFmt   = "k3s start: %v"
+	testKubeconfigFmt = "get kubeconfig: %v"
+	testHelmE2E       = "helm-e2e"
 )
-
 
 // Run with: go test ./internal/k8s/ -run TestK3sHelmInstallUninstall -v -timeout 5m
 // Requires: Docker running.

@@ -34,10 +34,10 @@ func TestQuoteIdent(t *testing.T) {
 
 func TestQuoteLiteral(t *testing.T) {
 	cases := map[string]string{
-		"hello":     `'hello'`,
-		"o'reilly":  `'o''reilly'`,
-		"":          `''`,
-		"a'b'c":     `'a''b''c'`,
+		"hello":    `'hello'`,
+		"o'reilly": `'o''reilly'`,
+		"":         `''`,
+		"a'b'c":    `'a''b''c'`,
 	}
 	for in, want := range cases {
 		if got := quoteLiteral(in); got != want {

@@ -13,7 +13,6 @@ import (
 
 const testStreamPath = "/stream"
 
-
 func TestSSEMetricsStream(t *testing.T) {
 	r := chi.NewRouter()
 	h := &SSEHandler{interval: 100 * time.Millisecond}

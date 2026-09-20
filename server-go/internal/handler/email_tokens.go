@@ -34,12 +34,12 @@ import (
 // existing per-IP middleware covers it) and no captcha. Both can be
 // added in v1.2 once we see abuse signals.
 type EmailTokensHandler struct {
-	db          *sql.DB        // platform-db, already used by sqlite/postgres stores
-	sender      email.Sender   // SES, SMTP, or noop in dev
+	db          *sql.DB               // platform-db, already used by sqlite/postgres stores
+	sender      email.Sender          // SES, SMTP, or noop in dev
 	store       storage.PlatformStore // user lookup for verify/reset
-	publicBase  string         // for building click URLs (e.g. https://app.excalibase.io)
+	publicBase  string                // for building click URLs (e.g. https://app.excalibase.io)
 	productName string
-	pg          bool           // true if backing db is Postgres (uses $1 placeholders)
+	pg          bool // true if backing db is Postgres (uses $1 placeholders)
 }
 
 // rebind converts SQLite-style `?` placeholders to Postgres-style `$1, $2, ...`
@@ -145,7 +145,9 @@ func (h *EmailTokensHandler) SendVerify(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *EmailTokensHandler) ConfirmVerify(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Token string `json:"token"` }
+	var body struct {
+		Token string `json:"token"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Token == "" {
 		httpError(w, "token required", http.StatusBadRequest)
 		return
@@ -183,7 +185,9 @@ func (h *EmailTokensHandler) ConfirmVerify(w http.ResponseWriter, r *http.Reques
 // --- password reset ---
 
 func (h *EmailTokensHandler) SendReset(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Email string `json:"email"` }
+	var body struct {
+		Email string `json:"email"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Email == "" {
 		httpError(w, "email required", http.StatusBadRequest)
 		return

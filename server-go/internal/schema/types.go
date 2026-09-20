@@ -221,8 +221,8 @@ type PgTypeInfo struct {
 // AdvisorFinding represents a single lint finding from performance or security advisors.
 type AdvisorFinding struct {
 	RuleID      string `json:"ruleId"`
-	Severity    string `json:"severity"`    // critical, high, medium, low
-	Category    string `json:"category"`    // performance, security
+	Severity    string `json:"severity"` // critical, high, medium, low
+	Category    string `json:"category"` // performance, security
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Table       string `json:"table,omitempty"`
