@@ -72,7 +72,7 @@ type ProvisioningService struct {
 	// deletionClaimer grants one teardown at a time per project. Lazily set
 	// to the in-process claimer; multi-replica deployments wire the
 	// advisory-lock one so the claim holds across them.
-	deletionClaimer DeletionClaimer
+	deletionClaimer ProjectOperationClaimer
 	claimerOnce     sync.Once
 	// deletionObservers are told the moment a project is claimed for
 	// teardown, so in-process caches of "is this project still live" stop
@@ -574,11 +574,6 @@ var (
 	// confirmed. Its row carries credentials, but nothing has proved the
 	// recovered database answers, so they must not be handed out.
 	ErrProjectRestoring = errors.New("project is being restored")
-	// ErrDeletionInProgress is returned when a teardown of the same project
-	// is already running. The synchronous DELETE can outlive an edge proxy's
-	// timeout and be retried while the first run is still working; refusing
-	// the second is what keeps the two from tearing down in parallel.
-	ErrDeletionInProgress = errors.New("a deletion of this project is already running")
 )
 
 // isProjectGone reports whether an error means the project stopped being the
@@ -653,12 +648,21 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 		return ErrBackupPurgeNotConfigured
 	}
 
-	release, claimed, err := s.claimer().Claim(ctx, projectID)
+	// DELETE takes the same per-project lease as pause and resume. A delete
+	// that arrives mid-pause is told the project is busy and retried, which
+	// is what DELETE already does against a PROVISIONING project — and far
+	// better than preempting a shutdown halfway through. The lease cannot
+	// hold it off indefinitely: every lifecycle operation is bounded by its
+	// own timeout and releases on every path, including a panic.
+	release, claimed, err := s.claimer().Claim(ctx, projectID, OperationDeletion)
 	if err != nil {
 		return fmt.Errorf("claim project for deletion: %w", err)
 	}
 	if !claimed {
-		return fmt.Errorf("%w: %s", ErrDeletionInProgress, projectID)
+		// The holder may be a pause or a resume, and for an advisory lease
+		// we cannot tell which. Saying "a deletion is already running" was a
+		// guess, and usually a wrong one.
+		return fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
 	defer release()
 
@@ -696,14 +700,16 @@ func (s *ProvisioningService) AddDeletionObserver(o DeletionObserver) {
 	s.deletionObservers = append(s.deletionObservers, o)
 }
 
-// SetDeletionClaimer replaces the default in-process teardown claim. Wire the
-// advisory-lock claimer when several control-plane replicas share a database.
-func (s *ProvisioningService) SetDeletionClaimer(c DeletionClaimer) { s.deletionClaimer = c }
+// SetOperationClaimer replaces the default in-process lifecycle lease. Wire
+// the advisory-lock claimer when several control-plane replicas share a
+// database; the same claimer must be given to the pause service, or the two
+// will not exclude one another.
+func (s *ProvisioningService) SetOperationClaimer(c ProjectOperationClaimer) { s.deletionClaimer = c }
 
-func (s *ProvisioningService) claimer() DeletionClaimer {
+func (s *ProvisioningService) claimer() ProjectOperationClaimer {
 	s.claimerOnce.Do(func() {
 		if s.deletionClaimer == nil {
-			s.deletionClaimer = newInProcessDeletionClaimer()
+			s.deletionClaimer = newInProcessOperationClaimer()
 		}
 	})
 	return s.deletionClaimer

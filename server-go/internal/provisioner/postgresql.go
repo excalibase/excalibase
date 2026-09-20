@@ -38,6 +38,10 @@ const (
 	// bounded so a wedged namespace surfaces as a failure, not a hang.
 	defaultDeletionTimeout = 5 * time.Minute
 	defaultDeletionPoll    = 2 * time.Second
+	// cnpgPodSelector matches the pods CNPG runs for a cluster. Scoping the
+	// pause wait to them leaves unrelated workloads in the namespace — the
+	// tenant's Deno runtime, for instance — out of the question.
+	cnpgPodSelector = "cnpg.io/podRole=instance"
 )
 
 // PostgreSQLProvisioner provisions PostgreSQL via CloudNativePG operator.
@@ -47,6 +51,10 @@ type PostgreSQLProvisioner struct {
 	resumeTimeout    time.Duration
 	resumePoll       time.Duration
 	deletionPoller   Poller
+	// pausePoller bounds the wait for the hibernated cluster's pods to go
+	// away. CNPG shuts postgres down cleanly, so this is a wait on a real
+	// shutdown, not on an API call.
+	pausePoller Poller
 }
 
 func NewPostgreSQLProvisioner(client k8s.KubeClient, watcherChartPath string) *PostgreSQLProvisioner {
@@ -56,6 +64,7 @@ func NewPostgreSQLProvisioner(client k8s.KubeClient, watcherChartPath string) *P
 		resumeTimeout:    defaultResumeTimeout,
 		resumePoll:       defaultResumePoll,
 		deletionPoller:   NewPoller(defaultDeletionPoll, defaultDeletionTimeout),
+		pausePoller:      NewPoller(defaultDeletionPoll, defaultDeletionTimeout),
 	}
 }
 
@@ -63,6 +72,25 @@ func NewPostgreSQLProvisioner(client k8s.KubeClient, watcherChartPath string) *P
 // the namespace to actually disappear.
 func (p *PostgreSQLProvisioner) SetDeletionPoller(poller Poller) {
 	p.deletionPoller = poller
+}
+
+// SetPausePoller overrides how long a pause waits for the hibernated
+// cluster's pods to stop running.
+func (p *PostgreSQLProvisioner) SetPausePoller(poller Poller) {
+	p.pausePoller = poller
+}
+
+// StopReplication removes the tenant watcher. Its logical-replication
+// session keeps a connection open on the primary, and CNPG's smart shutdown
+// waits for open connections to close before it stops postgres — so a
+// hibernation requested with the watcher still streaming takes minutes to
+// take effect (EXC-363). The watcher is reinstalled on resume, by the
+// control plane, which holds its credentials.
+func (p *PostgreSQLProvisioner) StopReplication(ctx context.Context, namespace, _ string) error {
+	if err := p.client.UninstallHelmChart(ctx, namespace, watcherReleaseName); err != nil {
+		return fmt.Errorf("stop tenant watcher: %w", err)
+	}
+	return nil
 }
 
 func (p *PostgreSQLProvisioner) SupportedType() domain.DatabaseType {
@@ -341,8 +369,42 @@ func (p *PostgreSQLProvisioner) stageBackup(ctx context.Context, req domain.Prov
 // deletes the pods and keeps the PVCs, so spec.instances (and the
 // excalibase.io/tier-instances annotation) stay untouched and the
 // cluster comes back at its tier size on Resume.
+// Pause requests hibernation and then waits until the namespace holds no
+// running database pod. Setting the annotation only asks the operator to
+// shut down; a project recorded PAUSED while its pods are still Terminating
+// is still consuming the CPU capacity admission plans against.
 func (p *PostgreSQLProvisioner) Pause(ctx context.Context, namespace, projectID string) error {
-	return p.setHibernation(ctx, namespace, projectID, hibernationOn)
+	if err := p.setHibernation(ctx, namespace, projectID, hibernationOn); err != nil {
+		return err
+	}
+	return p.pausePoller.WaitUntilClear(ctx, "database pods in "+namespace,
+		func(ctx context.Context) ([]string, error) { return p.runningDatabasePods(ctx, namespace) })
+}
+
+// WorkloadStopped reports whether the namespace still runs a database pod.
+// A Terminating pod counts as running: it still holds its resource requests
+// and the database may still be shutting down.
+func (p *PostgreSQLProvisioner) WorkloadStopped(ctx context.Context, namespace, _ string) (bool, error) {
+	pods, err := p.runningDatabasePods(ctx, namespace)
+	if err != nil {
+		return false, err
+	}
+	return len(pods) == 0, nil
+}
+
+// runningDatabasePods lists the database pods the namespace still carries.
+// A pod in Terminating is returned like any other: it exists, so it still
+// holds its resource requests.
+func (p *PostgreSQLProvisioner) runningDatabasePods(ctx context.Context, namespace string) ([]string, error) {
+	pods, err := p.client.GetPods(ctx, namespace, cnpgPodSelector)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(pods))
+	for _, pod := range pods {
+		names = append(names, pod.Name)
+	}
+	return names, nil
 }
 
 // Resume clears the hibernation annotation and blocks until the

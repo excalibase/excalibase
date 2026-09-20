@@ -22,11 +22,20 @@ type fakeIdlePauser struct {
 	calls     []string
 	reasons   []string
 	err       error
+	// tried counts every attempt, including the ones that failed.
+	tried int
+}
+
+func (f *fakeIdlePauser) attempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tried
 }
 
 func (f *fakeIdlePauser) Pause(_ context.Context, projectID, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.tried++
 	if f.err != nil {
 		return f.err
 	}
@@ -35,6 +44,10 @@ func (f *fakeIdlePauser) Pause(_ context.Context, projectID, reason string) erro
 	inst, _ := f.instances.FindByProjectID(projectID)
 	inst.Status = string(domain.StatusPaused)
 	inst.PauseReason = reason
+	// PauseService clears the retry backoff once the project settles; the
+	// double has to do the same or the sweep's view of it would drift.
+	inst.PauseAttempts = 0
+	inst.PauseLastAttemptAt = nil
 	return f.instances.Update(inst)
 }
 
@@ -79,8 +92,31 @@ func (f *fakeAuditWriter) actions() []string {
 	return out
 }
 
+// fakeIdleResumer records the sweep's retries of a stuck resume.
+type fakeIdleResumer struct {
+	mu        sync.Mutex
+	instances storage.InstanceStore
+	calls     []string
+	err       error
+}
+
+func (f *fakeIdleResumer) Resume(_ context.Context, projectID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, projectID)
+	if f.err != nil {
+		return f.err
+	}
+	inst, _ := f.instances.FindByProjectID(projectID)
+	inst.Status = "ACTIVE"
+	inst.PauseAttempts = 0
+	inst.PauseLastAttemptAt = nil
+	return f.instances.Update(inst)
+}
+
 type idleFixture struct {
 	scheduler *IdlePauseScheduler
+	resumer   *fakeIdleResumer
 	instances *storage.FileSystemStore
 	activity  *fakeActivityStore
 	pauser    *fakeIdlePauser
@@ -106,6 +142,7 @@ func newIdleFixture(t *testing.T) *idleFixture {
 		instances: instances,
 		activity:  &fakeActivityStore{},
 		pauser:    &fakeIdlePauser{instances: instances},
+		resumer:   &fakeIdleResumer{instances: instances},
 		notifier:  &fakeIdleNotifier{},
 		audit:     &fakeAuditWriter{},
 		clock:     &fakeClock{now: time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)},
@@ -115,6 +152,7 @@ func newIdleFixture(t *testing.T) *idleFixture {
 		Activity:  f.activity,
 		Tiers:     tierResolverForTest,
 		Pauser:    f.pauser,
+		Resumer:   f.resumer,
 		Notifier:  f.notifier,
 		Audit:     f.audit,
 		Lock:      &fakeLeaderLock{},

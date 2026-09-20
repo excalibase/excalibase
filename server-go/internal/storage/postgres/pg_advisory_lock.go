@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -35,7 +36,12 @@ func NewAdvisoryLock(db *sql.DB, key int64) *AdvisoryLock {
 // holding the key returns its connection to the pool, so a caller that keeps
 // losing a contested lock cannot drain it.
 func (l *AdvisoryLock) Acquire(ctx context.Context) (storage.LeaderLease, bool, error) {
-	conn, err := l.db.Conn(ctx)
+	// Bound the wait for a pool connection. A burst of lifecycle operations
+	// must degrade into "busy, retry" rather than parking every caller on an
+	// exhausted pool and taking the control plane's query traffic with it.
+	connCtx, cancel := context.WithTimeout(ctx, acquireConnTimeout)
+	defer cancel()
+	conn, err := l.db.Conn(connCtx)
 	if err != nil {
 		return nil, false, fmt.Errorf("acquire conn: %w", err)
 	}
@@ -50,6 +56,11 @@ func (l *AdvisoryLock) Acquire(ctx context.Context) (storage.LeaderLease, bool, 
 	}
 	return &AdvisoryLease{key: l.key, conn: conn}, true, nil
 }
+
+// acquireConnTimeout bounds how long taking a lease waits for a pool
+// connection. Short on purpose: the caller can be told the project is busy,
+// but it cannot be left holding an HTTP request open on a drained pool.
+const acquireConnTimeout = 2 * time.Second
 
 // AdvisoryLease is one caller's hold on an advisory lock. It owns the
 // session that took the lock, so only its holder can release it and

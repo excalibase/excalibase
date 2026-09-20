@@ -27,8 +27,22 @@ type DatabaseProvisioner interface {
 // that lack pause just don't implement this interface and
 // the pauseService returns ErrPauseUnsupported.
 type Pauser interface {
+	// StopReplication ends the tenant watcher's replication session.
+	// CNPG's smart shutdown waits on open replication connections, so a
+	// watcher still streaming holds the primary up for minutes (EXC-363).
+	StopReplication(ctx context.Context, namespace, projectID string) error
+	// Pause stops the workload and returns only once no database pod is
+	// running. A Terminating pod still counts as running: it still holds
+	// the CPU request cluster capacity admission plans against.
 	Pause(ctx context.Context, namespace, projectID string) error
+	// Resume starts the workload and returns only once the database is
+	// serving again.
 	Resume(ctx context.Context, namespace, projectID string) error
+	// WorkloadStopped reports whether the project's database is observed
+	// not running. A pause that failed after the database went down leaves
+	// a row saying PAUSING; only this can tell that apart from a pause that
+	// failed before the database went anywhere.
+	WorkloadStopped(ctx context.Context, namespace, projectID string) (bool, error)
 }
 
 // RollbackAware is an optional interface a provisioner can implement to

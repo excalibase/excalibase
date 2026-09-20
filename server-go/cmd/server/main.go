@@ -140,7 +140,7 @@ func runServer(cfg config.AppConfig) {
 
 	fnHandler := buildFunctionHandler(cfg, vc, store, sqlStore, k8sClient)
 
-	provSvc, provCleanup := buildProvisioningService(cfg, store, sqlStore, factory, k8sClient, vc, dockerClientRef)
+	provSvc, lifecycleClaimer, provCleanup := buildProvisioningService(cfg, store, sqlStore, factory, k8sClient, vc, dockerClientRef)
 	defer provCleanup()
 	// Function invocation caches "is this project live" for a few seconds so
 	// it does not read the platform database per request; this tells it the
@@ -200,6 +200,13 @@ func runServer(cfg config.AppConfig) {
 			Instances: store,
 			Pausers:   pausers,
 			Backups:   deps.backupHandler.Service(),
+			// A resume puts the CDC watcher back only after the primary is
+			// serving; the control plane holds its credentials (EXC-363).
+			Replication: provSvc,
+			Poller:      service.NewPausePoller(cfg.PauseTimeout),
+			// The same per-project lease deletion takes, so one project is
+			// only ever under one lifecycle operation at a time (EXC-403).
+			Claimer: lifecycleClaimer,
 		})
 		deps.provHandler.SetPauseService(pauseSvc)
 		deps.provHandler.SetInstanceStore(store)
@@ -370,8 +377,11 @@ func startIdlePauseScheduler(
 		Activity:  sqlStore,
 		Tiers:     provSvc.TierConfig,
 		Pauser:    pauseSvc,
-		Audit:     sqlStore,
-		Lock:      lock,
+		// A project left in RESUMING has its database up and no CDC, and
+		// nothing else would ever notice (EXC-403).
+		Resumer: pauseSvc,
+		Audit:   sqlStore,
+		Lock:    lock,
 		Notifier: service.NewIdleWarnEmail(service.IdleWarnEmailConfig{
 			Users:        sqlStore,
 			Sender:       sender,
@@ -638,7 +648,8 @@ func buildProvisioningService(
 	k8sClient k8s.KubeClient,
 	vc vaultclient.VaultClient,
 	dockerClientRef provisioner.DockerClient,
-) (*service.ProvisioningService, func()) {
+) (*service.ProvisioningService, service.ProjectOperationClaimer, func()) {
+	var lifecycleClaimer service.ProjectOperationClaimer
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
 	provSvc.SetVault(vc)
 	provSvc.SetOrgStore(sqlStore)
@@ -652,11 +663,14 @@ func buildProvisioningService(
 	}
 
 	// Several control-plane replicas share one platform database, so the
-	// teardown claim has to be visible to all of them: a per-project Postgres
-	// advisory lock, released automatically if the holder's connection dies.
+	// lifecycle lease has to be visible to all of them: a per-project
+	// Postgres advisory lock, released automatically if the holder's
+	// connection dies. Deletion, pause and resume all take it, so one
+	// project can only be under one lifecycle operation at a time.
 	if pg, ok := sqlStore.(*pgstore.Store); ok {
-		provSvc.SetDeletionClaimer(service.NewAdvisoryDeletionClaimer(
-			func(key int64) storage.LeaderLock { return pgstore.NewAdvisoryLock(pg.DB(), key) }))
+		lifecycleClaimer = service.NewAdvisoryOperationClaimer(
+			func(key int64) storage.LeaderLock { return pgstore.NewAdvisoryLock(pg.DB(), key) })
+		provSvc.SetOperationClaimer(lifecycleClaimer)
 	}
 
 	provSvc.SetBackupDefaults(backupDefaultsFromEnv())
@@ -675,7 +689,7 @@ func buildProvisioningService(
 	wireNatsCredentialMinter(sqlStore, provSvc)
 
 	cleanup := wirePgDogNotifier(cfg, sqlStore, provSvc)
-	return provSvc, cleanup
+	return provSvc, lifecycleClaimer, cleanup
 }
 
 // wireNatsCredentialMinter lets provisioning issue project-scoped bus
@@ -1399,7 +1413,7 @@ func buildPlatformStore(cfg config.AppConfig) storage.PlatformStore {
 	if cfg.PlatformDBURL == "" {
 		log.Fatal("PLATFORM_DB_URL (PostgreSQL connection string) is required")
 	}
-	pgStore, err := pgstore.New(cfg.PlatformDBURL)
+	pgStore, err := pgstore.NewWithMaxConns(cfg.PlatformDBURL, cfg.PlatformDBMaxConns)
 	if err != nil {
 		log.Fatalf("Failed to init Postgres platform store: %v", err)
 	}

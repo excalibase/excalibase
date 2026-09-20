@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/golang-migrate/migrate/v4"
 	migpg "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -27,14 +28,28 @@ type scanner interface {
 	Scan(dest ...interface{}) error
 }
 
+// New opens the platform store with the default pool size. Callers that read
+// configuration use NewWithMaxConns.
 func New(databaseURL string) (*Store, error) {
+	return NewWithMaxConns(databaseURL, config.DefaultPlatformDBMaxConns)
+}
+
+// NewWithMaxConns opens the platform store with an explicit pool size. The
+// value is validated where it is read (internal/config), so an unusable one
+// never reaches here.
+func NewWithMaxConns(databaseURL string, maxOpen int) (*Store, error) {
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
+	// Pool arithmetic. Standing leadership claims pin one connection each
+	// (backup scheduler, idle pause, storage reap, restore sweep = 4), and
+	// every in-flight lifecycle operation pins one more for its duration —
+	// a pause can run for minutes. Sized by PLATFORM_DB_MAX_CONNS; see
+	// config.MinPlatformDBMaxConns and OPERATOR.md.
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxOpen / 2)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	if err := db.Ping(); err != nil {
@@ -118,7 +133,6 @@ func toFlexTime(t *time.Time) *domain.FlexTime {
 	}
 	return &domain.FlexTime{Time: *t}
 }
-
 
 func ptrStr(s *string) *string {
 	return s

@@ -89,6 +89,12 @@ func TestResumeLosesToAnInFlightDeletion(t *testing.T) {
 // the final one — the window the review's interleaving needs.
 type orderedPauser struct{ before func() }
 
+func (p *orderedPauser) WorkloadStopped(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+
+func (p *orderedPauser) StopReplication(context.Context, string, string) error { return nil }
+
 func (p *orderedPauser) Pause(context.Context, string, string) error { return nil }
 func (p *orderedPauser) Resume(context.Context, string, string) error {
 	p.before()
@@ -121,8 +127,10 @@ func TestConcurrentDeletionIsRefusedWhileOneIsRunning(t *testing.T) {
 	if err := svc.Deprovision(context.Background(), testDeletingProj); err != nil {
 		t.Fatalf("first teardown: %v", err)
 	}
-	if !errors.Is(second, ErrDeletionInProgress) {
-		t.Fatalf("second DELETE = %v, want ErrDeletionInProgress", second)
+	// The lease names no operation: for an advisory lease the holder cannot
+	// be identified, so every refusal says the same true thing.
+	if !errors.Is(second, ErrProjectOperationRunning) {
+		t.Fatalf("second DELETE = %v, want ErrProjectOperationRunning", second)
 	}
 	_ = store
 }
@@ -172,7 +180,7 @@ func TestPauseLosesToAnInFlightDeletion(t *testing.T) {
 // A claim that cannot be taken at all is reported, never assumed granted.
 func TestDeprovisionReportsAFailedClaim(t *testing.T) {
 	svc, store, _ := setupDeletionTest(t)
-	svc.SetDeletionClaimer(failingClaimer{err: errors.New("database unreachable")})
+	svc.SetOperationClaimer(failingClaimer{err: errors.New("database unreachable")})
 
 	if err := svc.Deprovision(context.Background(), testDeletingProj); err == nil {
 		t.Fatal(testWantErrNil)
@@ -184,7 +192,7 @@ func TestDeprovisionReportsAFailedClaim(t *testing.T) {
 
 type failingClaimer struct{ err error }
 
-func (c failingClaimer) Claim(context.Context, string) (func(), bool, error) {
+func (c failingClaimer) Claim(ctx context.Context, projectID string, op ProjectOperation) (func(), bool, error) {
 	return nil, false, c.err
 }
 

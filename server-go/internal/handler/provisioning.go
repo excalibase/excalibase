@@ -78,6 +78,47 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 	})
 }
 
+// writeLifecycleError answers a pause or resume that did not complete.
+//
+// Pause and resume are observed operations and can take minutes; the request
+// stays open for a bounded budget (EXCALIBASE_PAUSE_TIMEOUT). A caller that
+// gives up first — or one told the operation did not complete — reads the
+// project's state from GET /api/provision/{projectId}, which carries the
+// same status, step and reason. That is why no separate job resource was
+// introduced: the project row already is the progress record.
+//
+// An unobserved pause or resume is 409, not 500: the request was well formed
+// and nothing failed on the server's side of the contract; the project is in
+// a state that has not settled yet, and the same call repeated converges.
+func (h *ProvisioningHandler) writeLifecycleError(w http.ResponseWriter, projectID string, err error) {
+	if errors.Is(err, service.ErrPauseUnsupported) {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	status := http.StatusInternalServerError
+	// A busy project, an unsettled one, and a status that moved under the
+	// operation are all "come back in a moment", not server faults.
+	if errors.Is(err, service.ErrPauseNotObserved) ||
+		errors.Is(err, service.ErrPauseBackupNotCompleted) ||
+		errors.Is(err, service.ErrResumeNotObserved) ||
+		errors.Is(err, storage.ErrProjectBusy) ||
+		errors.Is(err, storage.ErrProjectStatusChanged) {
+		status = http.StatusConflict
+	}
+	body := map[string]interface{}{"error": safeError(err), "status": status}
+	if h.instances != nil {
+		if inst, _ := h.instances.FindByProjectID(projectID); inst != nil {
+			body["projectId"] = inst.ProjectID
+			body["status"] = inst.Status
+			body["currentStep"] = inst.CurrentStep
+			body["failureReason"] = inst.FailureReason
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
 // Pause stops the project workload after taking a backup. Body:
 //
 //	{"reason": "manual"}     // optional; defaults to manual
@@ -104,11 +145,7 @@ func (h *ProvisioningHandler) Pause(w http.ResponseWriter, r *http.Request) {
 		body.Reason = domain.PauseReasonManual
 	}
 	if err := h.pauseSvc.Pause(r.Context(), projectID, body.Reason); err != nil {
-		if errors.Is(err, service.ErrPauseUnsupported) {
-			httpError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		h.writeLifecycleError(w, projectID, err)
 		return
 	}
 	if h.instances != nil {
@@ -136,11 +173,7 @@ func (h *ProvisioningHandler) Resume(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.pauseSvc.Resume(r.Context(), projectID); err != nil {
-		if errors.Is(err, service.ErrPauseUnsupported) {
-			httpError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		h.writeLifecycleError(w, projectID, err)
 		return
 	}
 	if h.instances != nil {
@@ -327,8 +360,8 @@ func writeDeprovisionError(w http.ResponseWriter, err error) {
 		httpError(w, safeError(err), http.StatusBadRequest)
 	case errors.Is(err, service.ErrDeletionProtected):
 		httpError(w, safeError(err), http.StatusBadRequest)
-	case errors.Is(err, service.ErrDeletionInProgress):
-		httpError(w, "a deletion of this project is already running; wait for it to finish", http.StatusConflict)
+	case errors.Is(err, service.ErrProjectOperationRunning):
+		httpError(w, safeError(err), http.StatusConflict)
 	case errors.Is(err, storage.ErrProjectBusy):
 		httpError(w, "project is busy: "+busyState(err)+"; retry when it settles", http.StatusConflict)
 	case errors.Is(err, storage.ErrBackupPurgeAlreadyConfirmed):

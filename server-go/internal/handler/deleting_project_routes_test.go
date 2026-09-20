@@ -152,7 +152,7 @@ func TestWriteDeprovisionErrorStatuses(t *testing.T) {
 		{"unknown project", fmt.Errorf("%w: p", service.ErrProjectNotFound), http.StatusNotFound},
 		{"no purger wired", service.ErrBackupPurgeNotConfigured, http.StatusBadRequest},
 		{"deletion protection", fmt.Errorf("%w for p", service.ErrDeletionProtected), http.StatusBadRequest},
-		{"already running", fmt.Errorf("%w: p", service.ErrDeletionInProgress), http.StatusConflict},
+		{"already running", fmt.Errorf("%w: p", service.ErrProjectOperationRunning), http.StatusConflict},
 		{"purge already confirmed", fmt.Errorf("%w: p", storage.ErrBackupPurgeAlreadyConfirmed), http.StatusConflict},
 		{"teardown stopped", errors.New("delete namespace: forbidden"), http.StatusInternalServerError},
 	}

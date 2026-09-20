@@ -421,3 +421,60 @@ func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRol
 	}
 	return nil
 }
+
+// ErrReplicationRestartUnavailable is returned when the platform cannot put
+// a resumed project's CDC watcher back. There is no partial answer: a resume
+// that silently leaves realtime off is a project that looks healthy and
+// publishes nothing.
+var ErrReplicationRestartUnavailable = errors.New("replication restart: watcher dependencies not configured")
+
+// RestartReplication reinstalls a project's CDC watcher. A pause removes it
+// so its replication session stops holding the database's shutdown open
+// (EXC-363); a resume puts it back, and only after the primary is serving —
+// the pause service calls this once the provisioner reports the workload up.
+func (s *ProvisioningService) RestartReplication(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if inst == nil {
+		return ErrProjectRegistrationInvalid
+	}
+	pg, err := s.postgresProvisioner()
+	if err != nil {
+		return err
+	}
+	if s.vault == nil || s.natsCreds == nil {
+		return ErrReplicationRestartUnavailable
+	}
+	creds, err := s.vault.Get(fmt.Sprintf("projects/%s/credentials/%s", inst.ProjectID, roleWatcher))
+	if err != nil {
+		return fmt.Errorf("read %s credentials: %w", roleWatcher, err)
+	}
+	natsUser, natsPass, err := s.natsCreds.MintTenantWatcher(ctx, inst.ProjectID)
+	if err != nil {
+		return fmt.Errorf("mint watcher nats credential: %w", err)
+	}
+	return pg.DeployWatcher(ctx, provisioner.WatcherSpec{
+		Namespace:    inst.Namespace,
+		ProjectID:    inst.ProjectID,
+		DBName:       inst.DatabaseName,
+		Username:     roleWatcher,
+		Password:     creds["password"],
+		NatsUser:     natsUser,
+		NatsPassword: natsPass,
+	})
+}
+
+// postgresProvisioner resolves the CNPG provisioner the watcher chart is
+// installed through.
+func (s *ProvisioningService) postgresProvisioner() (*provisioner.PostgreSQLProvisioner, error) {
+	if s.factory == nil {
+		return nil, ErrReplicationRestartUnavailable
+	}
+	prov, ok := s.factory.Get(domain.PostgreSQL)
+	if !ok {
+		return nil, ErrReplicationRestartUnavailable
+	}
+	pg, ok := prov.(*provisioner.PostgreSQLProvisioner)
+	if !ok {
+		return nil, ErrReplicationRestartUnavailable
+	}
+	return pg, nil
+}

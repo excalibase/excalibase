@@ -114,6 +114,13 @@ func (a *K8sBackupAdapter) TriggerManual(ctx context.Context, inst *domain.Datab
 	return ref, nil
 }
 
+// BackupsConfigured reports whether an object store is wired. Without one
+// CNPG has nowhere to put a backup.
+func (a *K8sBackupAdapter) BackupsConfigured() bool {
+	_, ok := a.backupStorage()
+	return ok
+}
+
 func (a *K8sBackupAdapter) List(ctx context.Context, inst *domain.DatabaseInstance) ([]BackupRef, error) {
 	a.syncBackupStatus(ctx, inst.Namespace, inst.ProjectID)
 

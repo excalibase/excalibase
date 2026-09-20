@@ -49,14 +49,24 @@ const defaultPostgresSuperuser = "postgres"
 // does not know about — the state teardown waits for.
 const containerNotFound = "not_found"
 
+// containerRunning is the ContainerStatus value for a live container.
+const containerRunning = "running"
+
 // DockerPostgreSQLProvisioner provisions PostgreSQL via Docker containers.
 type DockerPostgreSQLProvisioner struct {
 	docker         DockerClient
 	deletionPoller Poller
+	// pausePoller bounds the wait for a stopped container to actually
+	// leave the running state.
+	pausePoller Poller
 }
 
 func NewDockerPostgreSQLProvisioner(docker DockerClient) *DockerPostgreSQLProvisioner {
-	return &DockerPostgreSQLProvisioner{docker: docker, deletionPoller: NewPoller(defaultDeletionPoll, defaultDeletionTimeout)}
+	return &DockerPostgreSQLProvisioner{
+		docker:         docker,
+		deletionPoller: NewPoller(defaultDeletionPoll, defaultDeletionTimeout),
+		pausePoller:    NewPoller(defaultDeletionPoll, defaultDeletionTimeout),
+	}
 }
 
 // SetDeletionPoller overrides how long teardown waits for the project's
@@ -146,11 +156,53 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 // Pause stops the project's postgres container without removing it.
 // Volumes persist so Resume reopens the same data dir. Idempotent —
 // stopping an already-stopped container is fine.
+// StopReplication is a no-op in Docker mode: the single-tenant deployment
+// runs no per-project CDC watcher, so nothing holds a replication session
+// open against the container.
+func (p *DockerPostgreSQLProvisioner) StopReplication(context.Context, string, string) error {
+	return nil
+}
+
+// Pause stops the container and returns only once the daemon reports it out
+// of the running state. StopContainer returning is not proof the process is
+// down — postgres gets a shutdown grace period.
 func (p *DockerPostgreSQLProvisioner) Pause(ctx context.Context, namespace, _ string) error {
 	if namespace == "" {
 		return fmt.Errorf("docker pause: container id missing on instance.Namespace")
 	}
-	return p.docker.StopContainer(ctx, namespace)
+	if err := p.docker.StopContainer(ctx, namespace); err != nil {
+		return fmt.Errorf("stop container: %w", err)
+	}
+	return p.pausePoller.WaitUntilClear(ctx, "running container "+namespace,
+		func(ctx context.Context) ([]string, error) {
+			status, err := p.docker.ContainerStatus(ctx, namespace)
+			if err != nil {
+				return nil, err
+			}
+			if status == containerRunning {
+				return []string{namespace + " (" + status + ")"}, nil
+			}
+			return nil, nil
+		})
+}
+
+// WorkloadStopped reports whether the container has left the running state.
+// A container the daemon no longer knows about is stopped as far as the
+// project is concerned.
+func (p *DockerPostgreSQLProvisioner) WorkloadStopped(ctx context.Context, namespace, _ string) (bool, error) {
+	if namespace == "" {
+		return false, fmt.Errorf("docker workload state: container id missing on instance.Namespace")
+	}
+	status, err := p.docker.ContainerStatus(ctx, namespace)
+	if err != nil {
+		return false, fmt.Errorf("container status: %w", err)
+	}
+	return status != containerRunning, nil
+}
+
+// SetPausePoller overrides how long a pause waits for the container to stop.
+func (p *DockerPostgreSQLProvisioner) SetPausePoller(poller Poller) {
+	p.pausePoller = poller
 }
 
 // Resume starts a previously-paused container and waits for postgres
@@ -203,7 +255,7 @@ func (p *DockerPostgreSQLProvisioner) GetStatus(ctx context.Context, namespace, 
 	}
 	return &ProvisioningStatus{
 		Phase:   status,
-		Ready:   status == "running",
+		Ready:   status == containerRunning,
 		Message: status,
 	}, nil
 }
@@ -221,10 +273,10 @@ func (p *DockerPostgreSQLProvisioner) ConfigureBackup(ctx context.Context, names
 //
 // Order:
 //
-//	1. ALTER SYSTEM SET wal_level = 'replica'    (safe to reload)
-//	2. ALTER SYSTEM SET archive_mode = 'on'      (needs restart)
-//	3. ALTER SYSTEM SET archive_command = '...'  (safe to reload)
-//	4. Stop + start container
+//  1. ALTER SYSTEM SET wal_level = 'replica'    (safe to reload)
+//  2. ALTER SYSTEM SET archive_mode = 'on'      (needs restart)
+//  3. ALTER SYSTEM SET archive_command = '...'  (safe to reload)
+//  4. Stop + start container
 //
 // After the restart, pg picks up archive_mode=on and starts shipping
 // WAL segments via archive_command. The platform's WAL-G sidecar

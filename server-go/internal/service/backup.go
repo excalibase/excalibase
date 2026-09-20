@@ -133,6 +133,80 @@ func (s *BackupService) ListBackups(projectID string) ([]map[string]interface{},
 	return result, nil
 }
 
+// BackupsConfigured answers, for one project, whether a backup taken now
+// would be written anywhere. Two things have to hold: the project has backups
+// turned on, and the platform has an object store to put them in.
+//
+// The per-project half matters as much as the platform half. A project on a
+// tier without backups (FREE) that is asked for one anyway gets a Backup CR
+// the engine accepts and then fails asynchronously — long after whoever asked
+// believed it had a recovery point (EXC-363). A row whose flag was never set
+// is treated as off: nothing has claimed this project has backups.
+func (s *BackupService) BackupsConfigured(projectID string) (bool, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return false, fmt.Errorf("project not found: %s", projectID)
+	}
+	if inst.BackupEnabled == nil || !*inst.BackupEnabled {
+		return false, nil
+	}
+	adapter, err := resolveAdapter(s.adapters, inst)
+	if err != nil {
+		return false, err
+	}
+	return adapter.BackupsConfigured(), nil
+}
+
+// LatestBackupID names the project's newest backup by start time, or "" when
+// it has none. A pause uses it to tell whether the backup it recorded for
+// this episode is still the recovery point a fresh one would produce.
+func (s *BackupService) LatestBackupID(ctx context.Context, projectID string) (string, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return "", fmt.Errorf("project not found: %s", projectID)
+	}
+	adapter, err := resolveAdapter(s.adapters, inst)
+	if err != nil {
+		return "", err
+	}
+	refs, err := adapter.List(ctx, inst)
+	if err != nil {
+		return "", err
+	}
+	latest := ""
+	newest := ""
+	for _, ref := range refs {
+		if ref.StartedAt > newest || latest == "" {
+			newest, latest = ref.StartedAt, ref.ID
+		}
+	}
+	return latest, nil
+}
+
+// BackupStatus reports one backup's current status. Listing is what syncs a
+// backup record with what the engine says about it, so this is also how a
+// caller watching a backup sees it finish.
+func (s *BackupService) BackupStatus(ctx context.Context, projectID, backupID string) (string, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return "", fmt.Errorf("project not found: %s", projectID)
+	}
+	adapter, err := resolveAdapter(s.adapters, inst)
+	if err != nil {
+		return "", err
+	}
+	refs, err := adapter.List(ctx, inst)
+	if err != nil {
+		return "", err
+	}
+	for _, ref := range refs {
+		if ref.ID == backupID {
+			return ref.Status, nil
+		}
+	}
+	return "", fmt.Errorf("backup %s not found for project %s", backupID, projectID)
+}
+
 func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
 	inst, err := s.store.FindByProjectID(projectID)
 	if err != nil || inst == nil {

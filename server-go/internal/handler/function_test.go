@@ -25,21 +25,20 @@ import (
 )
 
 const (
-	testInvokePath       = "/invoke/"
-	testDeletePath       = "/delete/"
-	testAPIBase          = "https://api.test.io"
-	testFunctionsRoute   = "/api/projects/{projectId}/functions"
-	testIndexTS          = "index.ts"
-	testProj1FnPath      = "/api/projects/proj_p1/functions/"
-	testProj1HelloPath   = "/api/projects/proj_p1/functions/hello"
-	testProj1SecretsPath = "/api/projects/proj_p1/functions/secrets"
-	testDefaultHandler   = "export default () => new Response('ok')"
-	testLazyProjNS       = "default-proj_lazy01"
-	testDenoImage        = "excalibase/deno-runtime:test"
+	testInvokePath        = "/invoke/"
+	testDeletePath        = "/delete/"
+	testAPIBase           = "https://api.test.io"
+	testFunctionsRoute    = "/api/projects/{projectId}/functions"
+	testIndexTS           = "index.ts"
+	testProj1FnPath       = "/api/projects/proj_p1/functions/"
+	testProj1HelloPath    = "/api/projects/proj_p1/functions/hello"
+	testProj1SecretsPath  = "/api/projects/proj_p1/functions/secrets"
+	testDefaultHandler    = "export default () => new Response('ok')"
+	testLazyProjNS        = "default-proj_lazy01"
+	testDenoImage         = "excalibase/deno-runtime:test"
 	testPublicInvokeRoute = "/functions/v1/{projectId}/{fnId}"
-	testSecureFnPath     = "/functions/v1/proj_p1/secure"
+	testSecureFnPath      = "/functions/v1/proj_p1/secure"
 )
-
 
 // mockFnRuntime returns an httptest server that stands in for the Deno runtime
 // with the new deploy/invoke protocol.
@@ -1326,6 +1325,14 @@ func (s *inMemoryInstanceStore) BeginDeletion(projectID string, deleteBackups *b
 }
 
 // RecordDeletionFailure stores how far a teardown got. See storage.InstanceStore.
+func (s *inMemoryInstanceStore) UpdateIfStatus(*domain.DatabaseInstance, string) error {
+	return nil
+}
+
+func (s *inMemoryInstanceStore) RecordPauseAttempt(string, time.Time) (int, error) {
+	return 0, nil
+}
+
 func (s *inMemoryInstanceStore) RecordRestoreInterrupted(projectID, step, reason string) error {
 	existing, ok := s.insts[projectID]
 	if !ok {

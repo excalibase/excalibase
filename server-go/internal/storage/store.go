@@ -127,6 +127,17 @@ type InstanceStore interface {
 	// is not RESTORING, so it can never revive a project or disturb one
 	// whose restore finished.
 	RecordRestoreInterrupted(projectID, step, reason string) error
+	// UpdateIfStatus persists changes only while the stored row still holds
+	// expected. It returns ErrProjectStatusChanged when it does not, so an
+	// operation whose precondition has gone stops rather than writing over
+	// whatever moved the project. Like Update, it refuses a row a teardown
+	// owns.
+	UpdateIfStatus(instance *domain.DatabaseInstance, expected string) error
+	// RecordPauseAttempt counts a pause that is about to be tried and stamps
+	// when, returning the new count. It refuses any project the platform may
+	// not serve, so a retry counter can never revive or disturb a row a
+	// teardown or a restore owns.
+	RecordPauseAttempt(projectID string, at time.Time) (int, error)
 	FindByProjectID(projectID string) (*domain.DatabaseInstance, error)
 	FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error)
 	FindAll() ([]*domain.DatabaseInstance, error)
@@ -197,6 +208,28 @@ func ApplyRestoreInterrupted(inst *domain.DatabaseInstance, step, reason string)
 	inst.CurrentStep = step
 	inst.FailureReason = reason
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
+	return nil
+}
+
+// ErrProjectStatusChanged is returned when a conditional write finds the
+// project no longer in the status the operation last wrote. Something else
+// moved it, so this operation's next step is no longer safe.
+var ErrProjectStatusChanged = errors.New("project status changed under this operation")
+
+// ErrProjectNotPausable is returned when a pause attempt is counted against
+// a project the platform may not serve.
+var ErrProjectNotPausable = errors.New("project cannot be paused in its current state")
+
+// ApplyPauseAttempt counts an attempt on the row. The status check is the
+// one-way door: a project under teardown, or one whose restore has not been
+// confirmed, is not something a retry counter may touch.
+func ApplyPauseAttempt(inst *domain.DatabaseInstance, at time.Time) error {
+	if domain.IsNotServable(inst.Status) {
+		return fmt.Errorf("%w: %s is %s", ErrProjectNotPausable, inst.ProjectID, inst.Status)
+	}
+	inst.PauseAttempts++
+	inst.PauseLastAttemptAt = &domain.FlexTime{Time: at}
+	inst.UpdatedAt = &domain.FlexTime{Time: at}
 	return nil
 }
 

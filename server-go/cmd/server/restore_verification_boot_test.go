@@ -41,6 +41,8 @@ func (unverifiableAdapter) List(context.Context, *domain.DatabaseInstance) ([]se
 	return nil, nil
 }
 
+func (unverifiableAdapter) BackupsConfigured() bool { return true }
+
 func (unverifiableAdapter) Restore(context.Context, *domain.DatabaseInstance, domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
 	return nil, nil
 }

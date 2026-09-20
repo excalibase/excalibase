@@ -113,6 +113,14 @@ type AppConfig struct {
 	// database to be observed ready before it gives up and compensates.
 	RestoreReadyTimeout time.Duration
 
+	// PauseTimeout bounds each observed wait inside a pause: the pre-pause
+	// backup finishing and the project's database stopping.
+	PauseTimeout time.Duration
+
+	// PlatformDBMaxConns is the platform database pool size. See the
+	// arithmetic on MinPlatformDBMaxConns and in OPERATOR.md.
+	PlatformDBMaxConns int
+
 	// AutoPauseEnabled runs the hourly idle-pause sweep (EXC-280): projects on
 	// tiers with autoPauseAfterDays > 0 are warned at N-1 idle days and paused
 	// at N. EXCALIBASE_AUTOPAUSE_ENABLED overrides; defaults on in cloud mode,
@@ -198,6 +206,8 @@ func Load() AppConfig {
 		DockerCertPath:          envOr("DOCKER_CERT_PATH", ""),
 		DockerTLSVerify:         envOr("DOCKER_TLS_VERIFY", "") != "",
 		RestoreReadyTimeout:     envDuration("EXCALIBASE_RESTORE_READY_TIMEOUT", defaultRestoreReadyTimeout),
+		PauseTimeout:            envDuration("EXCALIBASE_PAUSE_TIMEOUT", defaultPauseTimeout),
+		PlatformDBMaxConns:      envPlatformDBMaxConns(),
 	}
 }
 
@@ -226,9 +236,55 @@ func parseCORSOrigins(raw string) []string {
 // observed ready. Restores replay WAL, so the budget is generous.
 const defaultRestoreReadyTimeout = 15 * time.Minute
 
+// defaultPauseTimeout bounds each observed wait inside a pause. Stopping a
+// busy database takes minutes: the pre-pause backup has to finish and
+// postgres has to shut down cleanly.
+const defaultPauseTimeout = 10 * time.Minute
+
+// DefaultPlatformDBMaxConns is the platform database pool size. It leaves
+// room for roughly a dozen concurrent lifecycle operations alongside ordinary
+// query traffic.
+const DefaultPlatformDBMaxConns = 20
+
+// MinPlatformDBMaxConns is the smallest pool that can do any work at all:
+// four standing leadership claims (backup scheduler, idle pause, storage
+// reap, restore sweep) pin one connection each, plus one for a lifecycle
+// operation in flight and one for a query.
+const MinPlatformDBMaxConns = 6
+
+// parsePlatformDBMaxConns reads the pool size, treating an empty value as
+// "not set". A value that is present but unusable is an error rather than a
+// silent fallback: an operator who set it deliberately must not be left with
+// a pool they did not choose and no way to notice.
+func parsePlatformDBMaxConns(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultPlatformDBMaxConns, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a number", raw)
+	}
+	if n < MinPlatformDBMaxConns {
+		return 0, fmt.Errorf(
+			"%d is below the minimum of %d: the control plane holds 4 standing leadership claims, plus one connection per lifecycle operation in flight and one for a query",
+			n, MinPlatformDBMaxConns)
+	}
+	return n, nil
+}
+
+// envPlatformDBMaxConns refuses to start on a pool that cannot work.
+func envPlatformDBMaxConns() int {
+	n, err := parsePlatformDBMaxConns(os.Getenv("PLATFORM_DB_MAX_CONNS"))
+	if err != nil {
+		log.Fatalf("PLATFORM_DB_MAX_CONNS: %v", err)
+	}
+	return n
+}
+
 // parseDuration reads a Go duration, treating an empty value as "not set".
 // A value that is present but unreadable is an error: silently falling back
-// would run a restore on a budget the operator did not choose.
+// would run the platform on a budget the operator did not choose.
 func parseDuration(raw string, fallback time.Duration) (time.Duration, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

@@ -3,6 +3,7 @@ package fakestore
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -36,6 +37,58 @@ func TestInstancesRecordRestoreInterruptedRefusesOtherStates(t *testing.T) {
 		t.Errorf("live project: got %v, want ErrProjectNotRestoring", err)
 	}
 	if err := instances.RecordRestoreInterrupted("missing", "S", "r"); !errors.Is(err, storage.ErrProjectNotFound) {
+		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
+	}
+}
+
+// The fake counts pause attempts the same way the real stores do, including
+// the one-way door — the sweep's backoff is only honest if the double is.
+func TestInstancesRecordPauseAttempt(t *testing.T) {
+	instances := NewInstances()
+	instances.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
+	at := time.Unix(1_700_000_000, 0)
+
+	for want := 1; want <= 2; want++ {
+		got, err := instances.RecordPauseAttempt("p1", at)
+		if err != nil {
+			t.Fatalf("RecordPauseAttempt: %v", err)
+		}
+		if got != want {
+			t.Errorf("attempts: got %d, want %d", got, want)
+		}
+	}
+	inst, _ := instances.FindByProjectID("p1")
+	if inst.PauseAttempts != 2 || inst.PauseLastAttemptAt == nil {
+		t.Errorf("counter not stored: %+v", inst)
+	}
+
+	inst.Status = string(domain.StatusDeleting)
+	instances.Items["p1"] = inst
+	if _, err := instances.RecordPauseAttempt("p1", at); !errors.Is(err, storage.ErrProjectNotPausable) {
+		t.Errorf("deleting project: got %v, want ErrProjectNotPausable", err)
+	}
+	if _, err := instances.RecordPauseAttempt("missing", at); !errors.Is(err, storage.ErrProjectNotFound) {
+		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
+	}
+}
+
+func TestInstancesUpdateIfStatus(t *testing.T) {
+	instances := NewInstances()
+	instances.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", Status: "ACTIVE"})
+
+	moving := &domain.DatabaseInstance{ProjectID: "p1", Status: string(domain.StatusPausing)}
+	if err := instances.UpdateIfStatus(moving, "ACTIVE"); err != nil {
+		t.Fatalf("UpdateIfStatus: %v", err)
+	}
+	got, _ := instances.FindByProjectID("p1")
+	if got.Status != string(domain.StatusPausing) || got.OrgID != "o" {
+		t.Errorf("stored: %+v", got)
+	}
+
+	if err := instances.UpdateIfStatus(moving, "ACTIVE"); !errors.Is(err, storage.ErrProjectStatusChanged) {
+		t.Errorf("a moved row: got %v, want ErrProjectStatusChanged", err)
+	}
+	if err := instances.UpdateIfStatus(&domain.DatabaseInstance{ProjectID: "missing"}, "ACTIVE"); !errors.Is(err, storage.ErrProjectNotFound) {
 		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
 	}
 }

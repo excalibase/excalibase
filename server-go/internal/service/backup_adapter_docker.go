@@ -374,6 +374,12 @@ func (a *DockerBackupAdapter) uploadOneWAL(ctx context.Context, tr io.Reader, pr
 // any incoming request data. This is the IDOR mitigation pinned in
 // DOCKER_BACKUP_IMPL.md §8.1: a malicious request cannot list
 // another tenant's backups by passing a different projectId.
+// BackupsConfigured reports whether the S3 target a Docker backup streams
+// into is wired.
+func (a *DockerBackupAdapter) BackupsConfigured() bool {
+	return a.uploader != nil && a.bucket != ""
+}
+
 func (a *DockerBackupAdapter) List(ctx context.Context, inst *domain.DatabaseInstance) ([]BackupRef, error) {
 	records, err := a.records.ListByProject(ctx, inst.ProjectID)
 	if err != nil {
