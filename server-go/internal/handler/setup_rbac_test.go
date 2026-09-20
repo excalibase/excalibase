@@ -27,7 +27,7 @@ func TestSetup_InstallRequiresManageSetup(t *testing.T) {
 				next.ServeHTTP(w, req.WithContext(ctx))
 			})
 		})
-		r.Route("/api/setup", h.Routes)
+		r.Route("/api/setup", func(r chi.Router) { h.Routes(r) })
 		return r
 	}
 

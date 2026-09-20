@@ -532,3 +532,24 @@ func principalNamed(t *testing.T, principals []principal, name string) principal
 	t.Fatalf("principal %q is not in the matrix", name)
 	return principal{}
 }
+
+// EXC-418: /api/setup/status takes no credential, so the only thing standing
+// between it and an unbounded request loop is the per-IP limiter. It is
+// mounted here because the route is anonymous, not despite it.
+func TestSetupStatusIsRateLimited(t *testing.T) {
+	instances := fakestore.NewInstances()
+	platform := &fakePlatform{Orgs: fakestore.NewOrgs(), Tokens: fakestore.NewTokens()}
+	deps := policyDeps(t, instances, platform, edgefn.NewFunctionStore(t.TempDir()))
+	deps.rlUnauth = custommw.RateLimit(custommw.PerIP, 2, time.Minute)
+	router := buildRouter(config.AppConfig{DeploymentMode: "cloud"}, platform, instances, deps)
+
+	codes := make([]int, 0, 4)
+	for i := 0; i < 4; i++ {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/setup/status", nil))
+		codes = append(codes, w.Code)
+	}
+	if codes[len(codes)-1] != http.StatusTooManyRequests {
+		t.Fatalf("four anonymous polls answered %v; the last must be refused", codes)
+	}
+}

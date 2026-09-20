@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
@@ -612,4 +613,45 @@ func TestOperatorSetup_SetupComplete(t *testing.T) {
 	if !NewOperatorSetupService(mock).SetupComplete(context.Background()) {
 		t.Error("the Postgres operator is installed under the mock, so setup is complete")
 	}
+}
+
+// EXC-418: GET /api/setup/status is unauthenticated, so a loop on it used to
+// be a loop on the Kubernetes apiserver. The answer is cached.
+func TestOperatorSetup_SetupCompleteDoesNotAskTheClusterEveryTime(t *testing.T) {
+	mock := k8s.NewMockClient()
+	svc := NewOperatorSetupService(mock)
+
+	for i := 0; i < 20; i++ {
+		svc.SetupComplete(context.Background())
+	}
+	if n := countMockCalls(mock, "GetDeployment"); n != 1 {
+		t.Fatalf("asked the cluster %d times, want 1", n)
+	}
+}
+
+// Installing an operator is exactly the event the cached answer must not
+// outlive, so it drops the cache.
+func TestOperatorSetup_InstallRefreshesTheCachedAnswer(t *testing.T) {
+	mock := k8s.NewMockClient()
+	svc := NewOperatorSetupService(mock)
+
+	svc.SetupComplete(context.Background())
+	before := countMockCalls(mock, "GetDeployment")
+	if err := svc.InstallOperator(context.Background(), domain.PostgreSQL); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	svc.SetupComplete(context.Background())
+	if countMockCalls(mock, "GetDeployment") <= before {
+		t.Fatal("the cached answer survived an install")
+	}
+}
+
+func countMockCalls(mock *k8s.MockClient, prefix string) int {
+	n := 0
+	for _, call := range mock.Calls {
+		if strings.HasPrefix(call, prefix) {
+			n++
+		}
+	}
+	return n
 }

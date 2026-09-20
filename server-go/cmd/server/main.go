@@ -1216,9 +1216,9 @@ func mountSimpleAuthRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 	})
 	// /status is unauthenticated (the installer polls it before any credential
 	// exists), so RequireAuth sits on the install route inside Routes instead
-	// of on the whole subtree.
+	// of on the whole subtree, and the per-IP limiter carries the poll.
 	r.Route("/api/setup", func(r chi.Router) {
-		d.setupHandler.Routes(r)
+		d.setupHandler.Routes(r, d.rlUnauth)
 	})
 	r.Route("/api/parameter-groups", func(r chi.Router) {
 		r.Use(auth.RequireAuth)

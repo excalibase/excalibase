@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -11,6 +12,11 @@ import (
 
 type OperatorSetupService struct {
 	k8sClient k8s.KubeClient
+	// complete caches the answer GET /api/setup/status serves, because that
+	// route takes no credential and must not reach the cluster per request.
+	completeMu    sync.RWMutex
+	complete      bool
+	completeUntil time.Time
 }
 
 func NewOperatorSetupService(k8sClient k8s.KubeClient) *OperatorSetupService {
@@ -41,6 +47,7 @@ func (s *OperatorSetupService) InstallOperator(ctx context.Context, dbType domai
 	if err := s.k8sClient.ApplyManifestURL(ctx, url); err != nil {
 		return fmt.Errorf("install operator: %w", err)
 	}
+	s.forgetSetupComplete()
 
 	return s.waitForOperator(ctx, dbType, 2*time.Minute)
 }
@@ -66,11 +73,39 @@ func (s *OperatorSetupService) GetStatus(ctx context.Context) domain.OperatorSta
 	}
 }
 
+// setupCompleteTTL bounds how stale the cached answer may be. The state it
+// reports changes once per cluster lifetime, and an install refreshes it
+// immediately, so a minute of staleness costs nothing.
+const setupCompleteTTL = time.Minute
+
 // SetupComplete reports whether the platform can provision. Postgres is the
 // engine it provisions, so its operator being up is the whole condition —
 // the other operators are optional add-ons, not part of "installed".
+//
+// The answer is cached: GET /api/setup/status is unauthenticated, so without
+// a cache anyone could turn a loop on it into a loop on the apiserver.
 func (s *OperatorSetupService) SetupComplete(ctx context.Context) bool {
-	return s.IsOperatorInstalled(ctx, domain.PostgreSQL)
+	s.completeMu.RLock()
+	if time.Now().Before(s.completeUntil) {
+		complete := s.complete
+		s.completeMu.RUnlock()
+		return complete
+	}
+	s.completeMu.RUnlock()
+
+	complete := s.IsOperatorInstalled(ctx, domain.PostgreSQL)
+	s.completeMu.Lock()
+	s.complete, s.completeUntil = complete, time.Now().Add(setupCompleteTTL)
+	s.completeMu.Unlock()
+	return complete
+}
+
+// forgetSetupComplete drops the cached answer, so the next read asks the
+// cluster. Installing an operator is the one event that changes it.
+func (s *OperatorSetupService) forgetSetupComplete() {
+	s.completeMu.Lock()
+	s.completeUntil = time.Time{}
+	s.completeMu.Unlock()
 }
 
 func (s *OperatorSetupService) waitForOperator(ctx context.Context, dbType domain.DatabaseType, timeout time.Duration) error {
