@@ -19,11 +19,17 @@ const uniqueViolation = "23505"
 // conflict, never an overwrite: the row belongs to whoever registered it and
 // repointing it would move a live tenant's database to another org.
 func (s *Store) Create(inst *domain.DatabaseInstance) error {
+	return insertInstance(s.db, inst)
+}
+
+// insertInstance writes the row through the given executor, so the same INSERT
+// serves a plain Create and the org-limit transaction in pg_instances_limit.go.
+func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 	mode := inst.DeploymentMode
 	if mode == "" {
 		mode = domain.ModeK8s
 	}
-	_, err := s.db.Exec(`
+	_, err := q.Exec(`
 		INSERT INTO database_instances (
 			project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 			deployment_mode,

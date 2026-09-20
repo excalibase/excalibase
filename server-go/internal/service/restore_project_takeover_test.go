@@ -102,11 +102,11 @@ func TestRegisterProjectRefusesAnExistingProjectID(t *testing.T) {
 
 	svc := NewProvisioningService(store, provisioner.NewFactory(), nil)
 	err = svc.RegisterProject(context.Background(), &domain.DatabaseInstance{
-		ProjectID: victim.ProjectID, OrgID: "org-attacker",
+		ProjectID: victim.ProjectID, OrgID: "org-attacker", Tier: domain.Free,
 		Host: "attacker-rw", Username: "attacker", Password: "attacker-password",
 	}, RegistrationOptions{})
-	if err == nil {
-		t.Error("registering an already-registered project id must fail")
+	if !errors.Is(err, storage.ErrProjectExists) {
+		t.Errorf("registering an already-registered project id: got %v, want ErrProjectExists", err)
 	}
 
 	got, _ := store.FindByProjectID(victim.ProjectID)

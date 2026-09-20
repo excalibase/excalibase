@@ -113,6 +113,16 @@ func (s *e2eInstanceStore) Create(inst *domain.DatabaseInstance) error {
 	s.insts[inst.ProjectID] = inst
 	return nil
 }
+func (s *e2eInstanceStore) CreateWithinOrgLimit(inst *domain.DatabaseInstance, maxProjects int) error {
+	if err := storage.AdmitOrgProject(s.insts, inst, maxProjects); err != nil {
+		return err
+	}
+	s.insts[inst.ProjectID] = inst
+	return nil
+}
+func (s *e2eInstanceStore) CountOrgProjects(orgID string) (int, error) {
+	return storage.CountOrgProjectSlots(s.insts, orgID), nil
+}
 func (s *e2eInstanceStore) Update(inst *domain.DatabaseInstance) error {
 	existing, ok := s.insts[inst.ProjectID]
 	if !ok {

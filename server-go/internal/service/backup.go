@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,7 +24,16 @@ const (
 type BackupService struct {
 	store    storage.InstanceStore
 	adapters map[domain.DeploymentMode]BackupAdapter
+	// capacity meters a restore against the source organisation's tier
+	// limit. A restore creates a project, so it is admitted on the same
+	// terms as a provision.
+	capacity OrgProjectCapacity
 }
+
+// ErrOrgCapacityNotConfigured is returned when a restore cannot be metered
+// against the organisation's project limit. There is no unmetered path: an
+// unanswerable limit fails the restore rather than granting a free project.
+var ErrOrgCapacityNotConfigured = errors.New("restore: organisation project limit is not configured")
 
 // NewBackupService keeps the single-K8s wiring used by tests. Internally
 // it builds a one-entry adapter map so dispatch still works. backupStorage
@@ -222,7 +232,26 @@ func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string,
 	if req.TargetProjectID == "" {
 		return nil, ErrTargetProjectIDMissing
 	}
+	if err := s.EnsureOrgProjectCapacity(ctx, inst); err != nil {
+		return nil, err
+	}
 	return adapter.Restore(ctx, inst, req)
+}
+
+// SetOrgProjectCapacity wires the organisation project limit a restore is
+// admitted against. *ProvisioningService supplies it.
+func (s *BackupService) SetOrgProjectCapacity(c OrgProjectCapacity) { s.capacity = c }
+
+// EnsureOrgProjectCapacity refuses a restore whose new project would take the
+// source project's organisation past its tier limit — before the restore
+// creates a namespace, a container, or a single vault entry. The handler
+// calls it too, so a caller polling an async restore is told at submission
+// rather than by a failed job.
+func (s *BackupService) EnsureOrgProjectCapacity(ctx context.Context, source *domain.DatabaseInstance) error {
+	if s.capacity == nil {
+		return ErrOrgCapacityNotConfigured
+	}
+	return s.capacity.EnsureOrgProjectCapacity(ctx, source.OrgID, source.Tier)
 }
 
 // AllocateProjectID reserves the id a restore will register its new project

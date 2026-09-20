@@ -937,6 +937,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// recovered database to the provisioning service's registration path
 	// (EXC-366) instead of writing a half-project row themselves.
 	backupSvc.SetProjectRegistrar(provSvc)
+	// A restore creates a project, so it is metered against the organisation's
+	// tier limit exactly as a provision is (EXC-421).
+	backupSvc.SetOrgProjectCapacity(provSvc)
 	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout); err != nil {
 		log.Fatalf("restore verification: %v", err)
 	}

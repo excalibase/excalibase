@@ -2,12 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -98,6 +100,26 @@ func safeError(err error) string {
 		msg = msg[:200]
 	}
 	return msg
+}
+
+// writeProjectCreationError answers the two refusals every path that creates a
+// project shares, and reports whether it wrote the response. A full
+// organisation conflicts with the caller's current state (409) and is told the
+// fixed refusal; a platform database that could not answer is ours to own
+// (500) and the caller learns nothing more than that. Anything else is left to
+// the caller's own mapping.
+func writeProjectCreationError(w http.ResponseWriter, err error) bool {
+	var limitErr *service.OrgProjectLimitError
+	switch {
+	case errors.As(err, &limitErr):
+		httpError(w, limitErr.Error(), http.StatusConflict)
+	case errors.Is(err, service.ErrProjectStoreUnavailable):
+		log.Printf("project creation refused: %v", err)
+		httpError(w, service.ErrProjectStoreUnavailable.Error(), http.StatusInternalServerError)
+	default:
+		return false
+	}
+	return true
 }
 
 // schemaError logs the full error server-side and returns a sanitized message.

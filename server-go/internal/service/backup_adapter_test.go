@@ -73,6 +73,7 @@ func setupAdapterTest(t *testing.T) (*BackupService, *storage.FileSystemStore, *
 		domain.ModeDocker: dockerFake,
 	}
 	svc := NewBackupServiceWithAdapters(store, adapters, dir)
+	svc.SetOrgProjectCapacity(unlimitedCapacity{})
 	return svc, store, k8sFake, dockerFake
 }
 

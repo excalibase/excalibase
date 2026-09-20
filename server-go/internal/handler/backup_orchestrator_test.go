@@ -106,6 +106,7 @@ func buildBackupHandlerHarness(t *testing.T) (*chi.Mux, *service.RestoreOrchestr
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
+	backupSvc.SetOrgProjectCapacity(unlimitedCapacity{})
 
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
@@ -234,6 +235,7 @@ func TestBackupHandler_Restore_OrchestratorDelegatesToAdapter(t *testing.T) {
 	backupSvc := service.NewBackupServiceWithAdapters(store, map[domain.DeploymentMode]service.BackupAdapter{
 		domain.ModeK8s: rec,
 	}, dir)
+	backupSvc.SetOrgProjectCapacity(unlimitedCapacity{})
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 	})

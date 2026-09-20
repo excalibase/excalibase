@@ -61,6 +61,27 @@ func (s *FileSystemStore) Create(inst *domain.DatabaseInstance) error {
 	return s.write(inst)
 }
 
+// CreateWithinOrgLimit registers a new project only while its organisation has
+// a free slot. The store's own lock makes the count and the write one step, so
+// two concurrent creates cannot both read the same free slot.
+func (s *FileSystemStore) CreateWithinOrgLimit(inst *domain.DatabaseInstance, maxProjects int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := AdmitOrgProject(s.cache, inst, maxProjects); err != nil {
+		return err
+	}
+	return s.write(inst)
+}
+
+// CountOrgProjects reports how many of the organisation's projects hold a slot.
+func (s *FileSystemStore) CountOrgProjects(orgID string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return CountOrgProjectSlots(s.cache, orgID), nil
+}
+
 // Update persists changes to an existing project, keeping the org it was
 // created in whatever the caller put on the struct.
 func (s *FileSystemStore) Update(inst *domain.DatabaseInstance) error {

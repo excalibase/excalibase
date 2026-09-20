@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -91,6 +92,26 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	inst, err := h.svc.GetInstance(projectID)
+	if err != nil {
+		// A store that cannot be read is not an answer about the project.
+		log.Printf("restore: read source project: %v", err)
+		httpError(w, "could not read the project", http.StatusServiceUnavailable)
+		return
+	}
+	if inst == nil {
+		httpError(w, "project not found", http.StatusNotFound)
+		return
+	}
+	// A restore creates a project, so the organisation must have a slot for
+	// it. Asked here as well as in the service so an async restore is refused
+	// at submission rather than by a job that fails minutes later.
+	if err := h.svc.EnsureOrgProjectCapacity(r.Context(), inst); err != nil {
+		if !writeProjectCreationError(w, err) {
+			httpError(w, safeError(err), http.StatusInternalServerError)
+		}
+		return
+	}
 	// The restored project's id is generated here, before anything is
 	// created, so a caller can never name an existing project as the target
 	// and have it repointed (EXC-415). The client learns the id from the
@@ -105,11 +126,6 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if h.orchestrator != nil {
 		// Async path: orchestrator returns RUNNING immediately. The
 		// caller polls /restore/{jobId} for status.
-		inst, err := h.svc.GetInstance(projectID)
-		if err != nil || inst == nil {
-			httpError(w, "project not found", http.StatusNotFound)
-			return
-		}
 		job, err := h.orchestrator.Start(r.Context(), inst, req)
 		if err != nil {
 			httpError(w, safeError(err), http.StatusBadRequest)
@@ -120,7 +136,9 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.svc.RestoreFromBackup(r.Context(), projectID, req)
 	if err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		if !writeProjectCreationError(w, err) {
+			httpError(w, safeError(err), http.StatusInternalServerError)
+		}
 		return
 	}
 	writeJSON(w, resp)

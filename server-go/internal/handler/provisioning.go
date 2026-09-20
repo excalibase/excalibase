@@ -266,7 +266,9 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 
 	resp, err := h.svc.Provision(r.Context(), req)
 	if err != nil {
-		httpError(w, safeError(err), http.StatusBadRequest)
+		if !writeProjectCreationError(w, err) {
+			httpError(w, safeError(err), http.StatusBadRequest)
+		}
 		return
 	}
 

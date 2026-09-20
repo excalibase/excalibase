@@ -35,6 +35,27 @@ func (s *Instances) Create(inst *domain.DatabaseInstance) error {
 	return nil
 }
 
+// CreateWithinOrgLimit registers the instance only while its org has a free
+// slot, through the same rule the real stores apply.
+func (s *Instances) CreateWithinOrgLimit(inst *domain.DatabaseInstance, maxProjects int) error {
+	if s.Err != nil {
+		return s.Err
+	}
+	if err := storage.AdmitOrgProject(s.Items, inst, maxProjects); err != nil {
+		return err
+	}
+	s.Items[inst.ProjectID] = inst
+	return nil
+}
+
+// CountOrgProjects reports how many of the org's projects hold a slot.
+func (s *Instances) CountOrgProjects(orgID string) (int, error) {
+	if s.Err != nil {
+		return 0, s.Err
+	}
+	return storage.CountOrgProjectSlots(s.Items, orgID), nil
+}
+
 // Update persists changes to an existing instance, keeping its org.
 func (s *Instances) Update(inst *domain.DatabaseInstance) error {
 	existing, ok := s.Items[inst.ProjectID]

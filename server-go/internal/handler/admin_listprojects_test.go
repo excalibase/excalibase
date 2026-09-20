@@ -81,6 +81,12 @@ type errInstanceStore struct{}
 
 func (errInstanceStore) Create(*domain.DatabaseInstance) error { return nil }
 func (errInstanceStore) Update(*domain.DatabaseInstance) error { return nil }
+func (errInstanceStore) CreateWithinOrgLimit(*domain.DatabaseInstance, int) error {
+	return nil
+}
+func (errInstanceStore) CountOrgProjects(string) (int, error) {
+	return 0, errors.New("db down")
+}
 func (errInstanceStore) FindByProjectID(string) (*domain.DatabaseInstance, error) {
 	return nil, nil
 }
