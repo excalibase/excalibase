@@ -19,6 +19,10 @@ import (
 
 func setupUpgradeHandler(t *testing.T) (*chi.Mux, *storage.FileSystemStore, *k8s.MockClient) {
 	t.Helper()
+	// These tests are about which major an upgrade stays on, not about which
+	// majors happen to have a published image today. The catalogue's refusal
+	// of an unpublished major is real and tested where it lives.
+	t.Cleanup(config.PublishPostgresCatalogForTest())
 	store, _ := storage.NewFileSystemStore(t.TempDir())
 	mock := k8s.NewMockClient()
 	h := NewProvisioningHandler(service.NewProvisioningService(store, provisioner.NewFactory(), mock), nil)
