@@ -61,6 +61,10 @@ type ProvisioningService struct {
 	// deprovision time. nil means confirmDeleteBackups is refused.
 	backupPurger *BackupPurger
 
+	// endpoints frees the project's public database endpoint. Nil when the
+	// platform offers none, and the teardown then carries no such step.
+	endpoints PublicEndpointReconciler
+
 	// activity seeds the last-seen marker for a newly registered project so
 	// it is not a candidate for idle-pause the moment it exists. Optional.
 	activity *ActivityRecorder
@@ -599,6 +603,12 @@ type ProjectObjectPurger interface {
 // when no object store is configured.
 func (s *ProvisioningService) SetObjectPurger(p ProjectObjectPurger) { s.objectPurger = p }
 
+// SetPublicEndpointReconciler wires the public database endpoint into the
+// teardown. Leave it unset when the platform offers no public endpoints.
+func (s *ProvisioningService) SetPublicEndpointReconciler(r PublicEndpointReconciler) {
+	s.endpoints = r
+}
+
 // SetBackupPurger wires the object-store purge used when a deprovision asks
 // for its backups to be deleted.
 func (s *ProvisioningService) SetBackupPurger(p *BackupPurger) { s.backupPurger = p }
@@ -742,11 +752,19 @@ func (s *ProvisioningService) backupKeyPrefix() (string, bool) {
 // once those resources are gone; the credentials that reach them are removed
 // last, and the row itself only after all of it.
 func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
-	steps := []deletionStep{
-		{domain.DeletionStepRevokeNats, s.revokeNatsCredentials},
-		{domain.DeletionStepDeregisterPgDog, s.deregisterPgDog},
-		{domain.DeletionStepDeleteResources, s.deleteDatabaseResources},
+	steps := []deletionStep{}
+	// The public port stops answering before anything else is touched: a
+	// teardown that then stalls must not leave an address the outside
+	// world can still dial into a half-removed project. The port goes into
+	// quarantine here, not back into the pool.
+	if s.endpoints != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepReleaseEndpoint, s.releasePublicEndpoint})
 	}
+	steps = append(steps,
+		deletionStep{domain.DeletionStepRevokeNats, s.revokeNatsCredentials},
+		deletionStep{domain.DeletionStepDeregisterPgDog, s.deregisterPgDog},
+		deletionStep{domain.DeletionStepDeleteResources, s.deleteDatabaseResources},
+	)
 	if deleteBackups {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteBackups, s.purgeBackups})
 	}
@@ -778,6 +796,13 @@ func (s *ProvisioningService) recordDeletionFailure(inst *domain.DatabaseInstanc
 		log.Printf(warnPersistFmt, err)
 	}
 	return fmt.Errorf("deletion step %s: %w", step, cause)
+}
+
+// releasePublicEndpoint removes the project's public database Service, frees
+// its port into quarantine and drops the endpoint record. Idempotent, so a
+// teardown retried from the top runs it again harmlessly.
+func (s *ProvisioningService) releasePublicEndpoint(ctx context.Context, inst *domain.DatabaseInstance) error {
+	return s.endpoints.Release(ctx, inst)
 }
 
 // revokeNatsCredentials drops the project's bus identity so a surviving
