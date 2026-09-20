@@ -13,6 +13,8 @@ import { DataGrid } from '../components/tables/DataGrid';
 import { CreateTablePanel } from '../components/tables/CreateTablePanel';
 import { ColumnSchemaView } from '../components/tables/ColumnSchemaView';
 import { RealtimeIndicator } from '../components/RealtimeIndicator';
+import { ExposureToggle } from '../components/tables/ExposureToggle';
+import { useTableGrants, useSetTableExposed, isTableExposed } from '../hooks/useTableGrants';
 import { useGraphqlRealtime } from '../realtime/useGraphqlRealtime';
 import { graphqlRealtimeWsUrl } from '../config/env';
 
@@ -41,6 +43,11 @@ export function TablesPage() {
   const insertRow = useInsertRow(pid);
   const updateRow = useUpdateRow(pid);
   const deleteRow = useDeleteRow(pid);
+  // Which tables the project's end users can reach. Developers are not
+  // filtered: this page reads the tenant database through the control plane's
+  // own /schema routes, which never consult a grant.
+  const { data: grantSet } = useTableGrants(pid);
+  const setExposed = useSetTableExposed(pid);
   const qc = useQueryClient();
 
   // Subscribe to graphql's CDC stream for the currently-selected table so the
@@ -176,16 +183,36 @@ export function TablesPage() {
           </button>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {tables.map(t => (
-            <button
-              key={t.name}
-              onClick={() => { setSelectedTable(t.name); setPage(0); setSortCol(''); }}
-              className={`w-full flex items-center gap-2 px-4 py-2.5 text-sm text-left transition-colors ${selectedTable === t.name ? 'bg-purple-500/10 text-purple-400' : 'text-text-secondary hover:bg-surface-hover'}`}
-              data-testid={`table-item-${t.name}`}
-            >
-              <Table2 className="w-4 h-4 flex-shrink-0" />{t.name}
-            </button>
-          ))}
+          {tables.map(t => {
+            const exposed = isTableExposed(grantSet, t.schema || 'public', t.name);
+            return (
+              <div
+                key={t.name}
+                className={`group w-full flex items-center transition-colors ${selectedTable === t.name ? 'bg-purple-500/10' : 'hover:bg-surface-hover'}`}
+              >
+                <button
+                  onClick={() => { setSelectedTable(t.name); setPage(0); setSortCol(''); }}
+                  aria-current={selectedTable === t.name}
+                  className={`flex-1 min-w-0 flex items-center gap-2 pl-4 py-2.5 text-sm text-left ${selectedTable === t.name ? 'text-purple-400' : 'text-text-secondary'}`}
+                  data-testid={`table-item-${t.name}`}
+                >
+                  <Table2 className="w-4 h-4 flex-shrink-0" />
+                  <span className="truncate">{t.name}</span>
+                </button>
+                <ExposureToggle
+                  table={t.name}
+                  schema={t.schema || 'public'}
+                  exposed={exposed}
+                  pending={setExposed.isPending && setExposed.variables?.table === t.name}
+                  onToggle={() => setExposed.mutate({
+                    schema: t.schema || 'public',
+                    table: t.name,
+                    exposed: !exposed,
+                  })}
+                />
+              </div>
+            );
+          })}
           {tables.length === 0 && <p className="px-4 py-8 text-sm text-text-tertiary text-center">No tables yet</p>}
         </div>
       </div>

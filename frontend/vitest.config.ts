@@ -19,6 +19,7 @@ export default defineConfig({
         'src/pages/RealtimePage.tsx',
         'src/realtime/**/*.{ts,tsx}',
         'src/components/RealtimeIndicator.tsx',
+        'src/components/tables/ExposureToggle.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {
