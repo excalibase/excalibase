@@ -89,8 +89,15 @@ func NewEmailTokensHandler(db *sql.DB, sender email.Sender, store storage.Platfo
 	}
 }
 
-func (h *EmailTokensHandler) Routes(r chi.Router) {
-	r.Post("/verify/send", h.SendVerify)
+// Routes mounts the click-link flows. The three public ones are reached by
+// someone who cannot log in (or whose credential is the emailed token itself);
+// /verify/send is not — it is a send triggered by a logged-in caller, so it
+// sits behind RequireAuth and the token's scopes apply, which is what stops a
+// read-only credential from sending mail (EXC-418). Extra middleware — the
+// per-user rate limit — is passed in by the mount.
+func (h *EmailTokensHandler) Routes(r chi.Router, sendLimits ...func(http.Handler) http.Handler) {
+	r.With(append([]func(http.Handler) http.Handler{auth.RequireAuth}, sendLimits...)...).
+		Post("/verify/send", h.SendVerify)
 	r.Post("/verify/confirm", h.ConfirmVerify)
 	r.Post("/reset/send", h.SendReset)
 	r.Post("/reset/confirm", h.ConfirmReset)
