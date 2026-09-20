@@ -24,6 +24,11 @@ export default defineConfig({
         'src/pages/RealtimePage.tsx',
         'src/pages/TablesPage.tsx',
         'src/components/tables/ExposureToggle.tsx',
+        'src/api/postgresCatalog.ts',
+        'src/api/projectEndpoint.ts',
+        'src/components/ConnectionStrings.tsx',
+        'src/components/PostgresVersionPicker.tsx',
+        'src/components/MinorUpgradeCard.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

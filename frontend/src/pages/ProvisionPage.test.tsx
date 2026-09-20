@@ -143,6 +143,15 @@ describe('ProvisionPage — DocumentDB', () => {
     expect(vi.mocked(api.post).mock.calls[0][1]).toMatchObject({ postgresVersion: '14', documentDb: false });
   });
 
+  // A project that did not ask for DocumentDB at creation cannot be given it
+  // afterwards — the image a cluster runs is fixed when it is provisioned.
+  // The form has to say so before the choice is made, not after.
+  test('says plainly that the choice is made once and cannot be added later', async () => {
+    renderPage();
+    await screen.findByTestId('pg-version-15');
+    expect(screen.getByTestId('documentdb-permanence')).toHaveTextContent(/cannot be added later/i);
+  });
+
   test('cannot be chosen before a version is', async () => {
     renderPage();
     await screen.findByTestId('pg-version-14');

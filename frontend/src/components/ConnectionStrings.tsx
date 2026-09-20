@@ -7,52 +7,66 @@ import type { CredentialsResponse } from '../types';
 interface ConnectionStringsProps {
   readonly projectId: string;
   // Whether this project's image carries DocumentDB, so Mongo clients have
-  // something to connect to.
+  // something to talk to. A project without it gets no Mongo section at all.
   readonly documentDb: boolean;
-  // The public endpoint, once EXC-410 supplies one. See api/projectEndpoint.
+  // The project's database endpoint, as the control plane reports it.
   readonly endpoint?: ProjectEndpoint;
 }
 
-// target is where the customer actually connects. With no external endpoint
-// published it is the in-cluster service, and it is labelled as such — a page
-// that printed a public-looking host nobody had allocated would be worse than
-// one that admits what it knows.
-interface Target {
-  host: string;
-  port: number;
-  sslMode: string;
-  mongoPort?: number;
-  scope: 'public' | 'in-cluster';
-}
-
-function resolveTarget(credentials: CredentialsResponse, endpoint?: ProjectEndpoint): Target {
-  if (endpoint) {
-    return {
-      host: endpoint.host,
-      port: endpoint.port,
-      sslMode: endpoint.sslMode ?? credentials.sslMode ?? 'require',
-      mongoPort: endpoint.mongoPort,
-      scope: 'public',
-    };
-  }
-  return {
-    host: credentials.host,
-    port: credentials.port,
-    sslMode: credentials.sslMode ?? 'require',
-    scope: 'in-cluster',
-  };
-}
+// A DocumentDB project is one database, one credential, two protocols. The
+// username and password below work with psql and with a Mongo driver alike,
+// so they are shown once and every string on this card is built from them.
 
 const MASKED = '••••••••';
 
-function postgresUri(credentials: CredentialsResponse, target: Target, password: string): string {
-  return `postgresql://${credentials.username}:${password}@${target.host}:${target.port}/${credentials.databaseName}?sslmode=${target.sslMode}`;
+// A target is one address a client can dial. Every project has an internal
+// one; a public one exists only when the customer opened a port and it is
+// answering.
+interface Target {
+  host: string;
+  port: number;
+}
+
+function postgresUri(credentials: CredentialsResponse, target: Target, password: string, sslMode: string): string {
+  return `postgresql://${credentials.username}:${password}@${target.host}:${target.port}/${credentials.databaseName}?sslmode=${sslMode}`;
 }
 
 // A Mongo client authenticates against the database it connects to, so the
-// database name carries both the path and authSource.
-function mongoUri(credentials: CredentialsResponse, target: Target, password: string, port: number): string {
-  return `mongodb://${credentials.username}:${password}@${target.host}:${port}/${credentials.databaseName}?authSource=${credentials.databaseName}&tls=true`;
+// database name carries both the path and authSource. TLS is spelled the way
+// a driver reads it — `tls`, never libpq's `sslmode`, which a driver rejects.
+function mongoUri(credentials: CredentialsResponse, target: Target, password: string, tls: boolean): string {
+  return `mongodb://${credentials.username}:${password}@${target.host}:${target.port}/${credentials.databaseName}?authSource=${credentials.databaseName}&tls=${tls}`;
+}
+
+// internalTarget is where a workload inside the cluster connects. It is shown
+// whether or not the project publishes publicly: an app hosted beside the
+// database should use it and needs no public port.
+function internalTarget(credentials: CredentialsResponse, endpoint?: ProjectEndpoint): Target {
+  if (endpoint) return { host: endpoint.internal.host, port: endpoint.internal.port };
+  return { host: credentials.host, port: credentials.port };
+}
+
+// publicTarget is the port a client outside the cluster dials, or null when
+// the project publishes none or it is not answering yet.
+function publicTarget(endpoint?: ProjectEndpoint): Target | null {
+  if (!endpoint?.publicEnabled || !endpoint.available || endpoint.port <= 0) return null;
+  return { host: endpoint.host, port: endpoint.port };
+}
+
+// mongoPublicTarget is the public Mongo port. The gateway waits for the
+// database and creates its user before it answers, so this stays null — and
+// the page says so — while Postgres is already usable.
+function mongoPublicTarget(endpoint?: ProjectEndpoint): Target | null {
+  const external = publicTarget(endpoint);
+  const mongo = endpoint?.mongo;
+  if (!external || !mongo?.available || !mongo.port) return null;
+  return { host: external.host, port: mongo.port };
+}
+
+function mongoInternalTarget(endpoint?: ProjectEndpoint): Target | null {
+  const mongo = endpoint?.mongo;
+  if (!mongo?.available || !mongo.internal) return null;
+  return { host: mongo.internal.host, port: mongo.internal.port };
 }
 
 interface StringRowProps {
@@ -74,7 +88,7 @@ function StringRow({ testId, label, shown, copied }: StringRowProps) {
   };
   return (
     <div>
-      <div className="text-xs text-text-tertiary mb-1">{label}</div>
+      <div className="text-xs text-text-tertiary mb-1" data-testid={`${testId}-label`}>{label}</div>
       <div className="flex items-center gap-2">
         <code
           data-testid={testId}
@@ -96,16 +110,26 @@ function StringRow({ testId, label, shown, copied }: StringRowProps) {
   );
 }
 
-function CertificateAuthority({ projectId, endpoint }: { readonly projectId: string; readonly endpoint?: ProjectEndpoint }) {
-  if (!endpoint?.caCertPem) {
-    return (
-      <p className="text-xs text-text-tertiary" data-testid="conn-ca-pending">
-        Full certificate verification (sslmode=verify-full) needs the platform certificate authority. It is published
-        with the project&apos;s external endpoint.
-      </p>
-    );
-  }
-  const href = `data:application/x-pem-file;base64,${btoa(endpoint.caCertPem)}`;
+function CredentialField({ testId, label, value }: { readonly testId: string; readonly label: string; readonly value: string }) {
+  return (
+    <div>
+      <div className="text-xs text-text-tertiary mb-1">{label}</div>
+      <code
+        data-testid={testId}
+        className="block bg-bg-tertiary border border-border-primary rounded px-3 py-2 text-xs font-mono text-text-primary break-all"
+      >
+        {value}
+      </code>
+    </div>
+  );
+}
+
+// Full verification needs the certificate authority as a file on the client,
+// not a value inside the URI — which is why it sits beside the Mongo string
+// as well as the Postgres one.
+function CertificateAuthority({ projectId, pem }: { readonly projectId: string; readonly pem: string }) {
+  if (!pem) return null;
+  const href = `data:application/x-pem-file;base64,${btoa(pem)}`;
   return (
     <a
       href={href}
@@ -118,8 +142,80 @@ function CertificateAuthority({ projectId, endpoint }: { readonly projectId: str
   );
 }
 
-// ConnectionStrings shows what a customer has to paste into a client, for
-// Postgres and — on a DocumentDB project — for Mongo.
+interface SectionProps {
+  readonly projectId: string;
+  readonly credentials: CredentialsResponse;
+  readonly endpoint?: ProjectEndpoint;
+  readonly shownPassword: string;
+}
+
+function PostgresSection({ projectId, credentials, endpoint, shownPassword }: SectionProps) {
+  const internal = internalTarget(credentials, endpoint);
+  const external = publicTarget(endpoint);
+  const internalMode = endpoint ? 'prefer' : (credentials.sslMode ?? 'require');
+  const publicMode = endpoint?.requireTls ? 'verify-full' : 'prefer';
+  const row = (target: Target, mode: string) => ({
+    shown: postgresUri(credentials, target, shownPassword, mode),
+    copied: postgresUri(credentials, target, credentials.password, mode),
+  });
+
+  return (
+    <div className="space-y-2" data-testid="conn-postgres-section">
+      <h5 className="text-sm font-medium text-text-primary">PostgreSQL</h5>
+      <StringRow testId="conn-postgres-internal" label="Internal — from inside the cluster" {...row(internal, internalMode)} />
+      {external ? (
+        <>
+          <StringRow testId="conn-postgres-public" label="Public — from outside the cluster" {...row(external, publicMode)} />
+          <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />
+        </>
+      ) : (
+        <p className="text-xs text-text-tertiary" data-testid="conn-postgres-public-absent">
+          This project publishes no public port. Use the internal address, or open a port in the database endpoint
+          settings.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MongoSection({ projectId, credentials, endpoint, shownPassword }: SectionProps) {
+  const internal = mongoInternalTarget(endpoint);
+  const external = mongoPublicTarget(endpoint);
+  const row = (target: Target, tls: boolean) => ({
+    shown: mongoUri(credentials, target, shownPassword, tls),
+    copied: mongoUri(credentials, target, credentials.password, tls),
+  });
+
+  return (
+    <div className="border-t border-border-primary pt-4 space-y-2" data-testid="conn-mongo-section">
+      <h5 className="text-sm font-medium text-text-primary">MongoDB (DocumentDB)</h5>
+      {internal && (
+        <StringRow testId="conn-mongo-internal" label="Internal — from inside the cluster" {...row(internal, false)} />
+      )}
+      {external && (
+        <>
+          <StringRow
+            testId="conn-mongo-public"
+            label="Public — from outside the cluster"
+            {...row(external, endpoint?.requireTls ?? true)}
+          />
+          <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />
+        </>
+      )}
+      {!internal && !external && (
+        <p className="text-xs text-text-tertiary" data-testid="conn-mongo-unavailable">
+          This project carries DocumentDB, but its MongoDB endpoint is not answering yet — it starts after the database
+          and creates its user first. The PostgreSQL endpoint above already works, and both speak to the same database
+          with the same credential.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ConnectionStrings shows the project's one credential and, beside it, the
+// strings a client pastes: PostgreSQL always, MongoDB only on a project whose
+// image carries DocumentDB.
 export function ConnectionStrings({ projectId, documentDb, endpoint }: ConnectionStringsProps) {
   const { data: credentials, isLoading, error } = useCredentials(projectId);
   const [revealed, setRevealed] = useState(false);
@@ -139,20 +235,16 @@ export function ConnectionStrings({ projectId, documentDb, endpoint }: Connectio
     );
   }
 
-  const target = resolveTarget(credentials, endpoint);
   const shownPassword = revealed ? credentials.password : MASKED;
-  const shownUri = postgresUri(credentials, target, shownPassword);
-  const realUri = postgresUri(credentials, target, credentials.password);
+  const sectionProps = { projectId, credentials, endpoint, shownPassword };
 
   return (
     <div className="rounded-lg border border-border-primary bg-surface-card p-4 space-y-4" data-testid="connection-strings">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h4 className="text-sm font-medium text-text-primary">Connect</h4>
-          <p className="text-xs text-text-tertiary mt-1" data-testid="conn-scope">
-            {target.scope === 'public'
-              ? 'Public endpoint — reachable from outside the cluster.'
-              : 'In-cluster endpoint — reachable from workloads in the cluster. No public endpoint is published for this project yet.'}
+          <p className="text-xs text-text-tertiary mt-1">
+            One database, one credential. {documentDb ? 'The same username and password works with psql and with a Mongo driver.' : ''}
           </p>
         </div>
         <button
@@ -166,31 +258,13 @@ export function ConnectionStrings({ projectId, documentDb, endpoint }: Connectio
         </button>
       </div>
 
-      <StringRow testId="conn-postgres-uri" label="PostgreSQL connection URI" shown={shownUri} copied={realUri} />
-      <StringRow testId="conn-psql" label="psql" shown={`psql "${shownUri}"`} copied={`psql "${realUri}"`} />
-
-      {documentDb && (
-        <div className="border-t border-border-primary pt-4 space-y-2" data-testid="conn-mongo-section">
-          <h5 className="text-sm font-medium text-text-primary">Mongo clients (DocumentDB)</h5>
-          {target.mongoPort ? (
-            <StringRow
-              testId="conn-mongo-uri"
-              label="MongoDB connection URI"
-              shown={mongoUri(credentials, target, shownPassword, target.mongoPort)}
-              copied={mongoUri(credentials, target, credentials.password, target.mongoPort)}
-            />
-          ) : (
-            <p className="text-xs text-text-tertiary" data-testid="conn-mongo-pending">
-              This project carries DocumentDB, but no Mongo port is published for it yet. The Mongo connection string
-              appears here once the project&apos;s external endpoint exposes one.
-            </p>
-          )}
-        </div>
-      )}
-
-      <div className="border-t border-border-primary pt-4">
-        <CertificateAuthority projectId={projectId} endpoint={endpoint} />
+      <div className="grid grid-cols-2 gap-3">
+        <CredentialField testId="conn-username" label="Username" value={credentials.username} />
+        <CredentialField testId="conn-password" label="Password" value={shownPassword} />
       </div>
+
+      <PostgresSection {...sectionProps} />
+      {documentDb && <MongoSection {...sectionProps} />}
     </div>
   );
 }

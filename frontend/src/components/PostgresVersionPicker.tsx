@@ -99,7 +99,11 @@ export function PostgresVersionPicker({
           <span>
             <span className="block text-sm font-medium text-text-primary">DocumentDB (MongoDB-compatible API)</span>
             <span className="block text-xs text-text-tertiary mt-0.5">
-              Adds the DocumentDB extension so Mongo clients can talk to this project. Available at creation only.
+              Adds the DocumentDB extension, so Mongo clients reach this project&apos;s database as well as Postgres
+              clients do — one database, one credential, two protocols.
+            </span>
+            <span className="block text-xs text-text-tertiary mt-0.5" data-testid="documentdb-permanence">
+              Chosen once, here: a project created without DocumentDB cannot be added later.
             </span>
           </span>
         </label>

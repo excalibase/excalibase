@@ -8,6 +8,7 @@ import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { ConnectionStrings } from '../components/ConnectionStrings';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
 import { usePostgresCatalog, findMajor } from '../api/postgresCatalog';
+import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 
 interface RollbackResult {
@@ -55,6 +56,10 @@ export function SettingsPage() {
   const pauseProject = usePauseProject();
   const resumeProject = useResumeProject();
   const catalog = usePostgresCatalog();
+  // The public host, port, TLS posture and cluster CA all come from the
+  // control plane. A failed read leaves this undefined, and the connection
+  // card falls back to the in-cluster details rather than guessing.
+  const endpoint = useProjectEndpoint(projectId);
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', projectId],
@@ -117,7 +122,7 @@ const excalibase = createClient({
       </div>
 
       <div className="mb-8">
-        <ConnectionStrings projectId={project.projectId} documentDb={documentDb} />
+        <ConnectionStrings projectId={project.projectId} documentDb={documentDb} endpoint={endpoint.data} />
       </div>
 
       <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden mb-8">
