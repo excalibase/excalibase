@@ -106,6 +106,13 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 	if err != nil {
 		return rollbackIfOwned(ctx, pc, owned, err)
 	}
+	// A DocumentDB project's extension is created before the project is
+	// recorded as anything a caller may use. A failure here fails the whole
+	// registration, so a project is never reported ACTIVE with DocumentDB on
+	// a database that does not have it (EXC-409).
+	if err := s.enableDocumentDB(ctx, inst, pc); err != nil {
+		return rollbackIfOwned(ctx, pc, owned, err)
+	}
 	if opts.Unverified {
 		markProjectRestoring(inst)
 	} else {
