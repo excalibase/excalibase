@@ -5,6 +5,10 @@ import { useState } from 'react';
 import { api } from '../api/client';
 import { useDeprovisionDatabase, usePauseProject, useResumeProject } from '../hooks/useProvisioning';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
+import { ConnectionStrings } from '../components/ConnectionStrings';
+import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
+import { usePostgresCatalog, findMajor } from '../api/postgresCatalog';
+import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 
 interface RollbackResult {
@@ -51,6 +55,11 @@ export function SettingsPage() {
   const deprovision = useDeprovisionDatabase();
   const pauseProject = usePauseProject();
   const resumeProject = useResumeProject();
+  const catalog = usePostgresCatalog();
+  // The public host, port, TLS posture and cluster CA all come from the
+  // control plane. A failed read leaves this undefined, and the connection
+  // card falls back to the in-cluster details rather than guessing.
+  const endpoint = useProjectEndpoint(projectId);
 
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', projectId],
@@ -65,10 +74,15 @@ export function SettingsPage() {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
   }
 
+  // Whether Mongo clients have anything to talk to is a property of the image
+  // this project's major carries, and the catalogue is what knows that.
+  const documentDb = findMajor(catalog.data, project.postgresVersion ?? '')?.documentDb ?? false;
+
   const info = [
     { icon: Server, label: 'Display Name', value: project.projectName || '-' },
     { icon: Database, label: 'Database Type', value: project.databaseType },
     { icon: Shield, label: 'Tier', value: project.tier },
+    { icon: Database, label: 'PostgreSQL Version', value: project.postgresVersion || '-' },
     { icon: Server, label: 'Namespace', value: project.namespace },
     { icon: Server, label: 'Host', value: project.host || '-' },
     { icon: Server, label: 'Port', value: project.port || '-' },
@@ -107,6 +121,10 @@ const excalibase = createClient({
         </div>
       </div>
 
+      <div className="mb-8">
+        <ConnectionStrings projectId={project.projectId} documentDb={documentDb} endpoint={endpoint.data} />
+      </div>
+
       <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden mb-8">
         {info.map(({ icon: Icon, label, value }) => (
           <div key={label} className="flex items-center gap-3 px-4 py-3 border-b border-border-primary last:border-0">
@@ -133,6 +151,10 @@ const excalibase = createClient({
             <span className="text-text-primary">{project.backupRetentionDays ? `${project.backupRetentionDays} days` : '-'}</span>
           </div>
         </div>
+      </div>
+
+      <div className="mb-8">
+        <MinorUpgradeCard project={project} />
       </div>
 
       {/* Pause / Resume — pre-pause backup runs automatically (see backend). */}

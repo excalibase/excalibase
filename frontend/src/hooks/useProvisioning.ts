@@ -134,6 +134,34 @@ export const useResumeProject = () => {
   });
 };
 
+// UpgradeResponse is the project as the control plane holds it after the
+// patch, not an outcome Studio assumed. The rolling restart it triggers is
+// asynchronous, so `status` is what has actually been observed so far.
+export interface UpgradeResponse {
+  projectId: string;
+  status: string;
+  currentStage?: string;
+  postgresVersion: string;
+}
+
+// useUpgradeMinorVersion moves a project onto the newest patch of the major it
+// already runs. The major is not sent: the control plane reads it off the
+// project, so no call from here can move a project between majors.
+export const useUpgradeMinorVersion = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (projectId: string) => {
+      const response = await api.post<UpgradeResponse>(`/provision/${projectId}/upgrade`);
+      return response.data;
+    },
+    onSuccess: (_, projectId) => {
+      queryClient.invalidateQueries({ queryKey: ['instances'] });
+      queryClient.invalidateQueries({ queryKey: ['instance', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+    },
+  });
+};
+
 export const useConfigureBackup = () => {
   const queryClient = useQueryClient();
 

@@ -36,6 +36,12 @@ export interface ProvisioningRequest {
   orgId: string;
   databaseType: DatabaseType;
   tier: TierType;
+  // The PostgreSQL major, in the catalogue's spelling. Required: the API has
+  // no default and refuses a request that names none.
+  postgresVersion: string;
+  // Asks for an image carrying the DocumentDB extension. Create-time only —
+  // the image a cluster runs is fixed when it is provisioned.
+  documentDb?: boolean;
 }
 
 export interface DatabaseInstance {
@@ -45,6 +51,9 @@ export interface DatabaseInstance {
   orgId: string;
   databaseType: DatabaseType;
   tier: TierType;
+  // The PostgreSQL major this project's data lives on, in the catalogue's
+  // spelling. Absent on projects created before the major was recorded.
+  postgresVersion?: string;
   namespace: string;
   host: string;
   port: number;
@@ -79,11 +88,15 @@ export interface DatabaseInstance {
 export interface CredentialsResponse {
   projectId: string;
   host: string;
+  readOnlyHost?: string;
   port: number;
   databaseName: string;
   username: string;
   password: string;
-  connectionString: string;
+  sslMode?: string;
+  // The control plane serves this as `connectionUrl`; `connectionString` was
+  // never a field it sent.
+  connectionUrl: string;
 }
 
 export interface BackupConfig {

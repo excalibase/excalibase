@@ -60,7 +60,7 @@ describe('useProvisioning hooks', () => {
     vi.mocked(api.post).mockResolvedValueOnce({ data: { projectId: 'proj-1' } } as never);
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useProvisionDatabase(), { wrapper: Wrapper });
-    result.current.mutate({ projectName: 'p', orgId: 'o', databaseType: 'POSTGRESQL', tier: 'FREE' });
+    result.current.mutate({ projectName: 'p', orgId: 'o', databaseType: 'POSTGRESQL', tier: 'FREE', postgresVersion: '16' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalledWith('/provision', expect.objectContaining({ projectName: 'p' }));
   });
