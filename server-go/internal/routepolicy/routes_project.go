@@ -20,6 +20,7 @@ var provisionRows = []Row{
 	{Methods: post, Pattern: "/api/provision/{projectId}/backups/purge", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
 	{Methods: post, Pattern: "/api/provision/{projectId}/pause", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
 	{Methods: post, Pattern: "/api/provision/{projectId}/resume", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
+	{Methods: post, Pattern: "/api/provision/{projectId}/upgrade", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "restarts the tenant database onto the newest patch of its own major"},
 
 	{Methods: get, Pattern: "/api/provision/{projectId}/metrics/current", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
 	{Methods: get, Pattern: "/api/provision/{projectId}/metrics/history", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},

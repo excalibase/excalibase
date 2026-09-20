@@ -79,6 +79,7 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 		r.Post("/backups/purge", h.PurgeBackups)
 		r.Post("/pause", h.Pause)
 		r.Post("/resume", h.Resume)
+		r.Post("/upgrade", h.UpgradeMinorVersion)
 	})
 }
 

@@ -531,6 +531,7 @@ type handlerDeps struct {
 	tableGrantHandler  *handler.TableGrantHandler
 	appHandler         *handler.AppHandler
 	tierHandler        *handler.TierHandler
+	pgCatalogHandler   *handler.PostgresCatalogHandler
 	capDeps            *capacityDeps
 	rlUnauth           func(http.Handler) http.Handler
 	rlAuthed           func(http.Handler) http.Handler
@@ -1071,6 +1072,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants(), cfg.ExposureEnforced),
 		appHandler:         handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()), handler.NewProjectSourceLookup(store)),
 		tierHandler:        tierHandler,
+		pgCatalogHandler:   handler.NewPostgresCatalogHandler(),
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
 			store:           store,
@@ -1189,6 +1191,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			r.With(admin).Post("/backups/purge", d.provHandler.PurgeBackups)
 			r.With(admin).Post("/pause", d.provHandler.Pause)
 			r.With(admin).Post("/resume", d.provHandler.Resume)
+			r.With(admin).Post("/upgrade", d.provHandler.UpgradeMinorVersion)
 
 			// Read-only subtrees — any member.
 			r.Route("/metrics", func(r chi.Router) { d.metricsHandler.Routes(r) })
@@ -1222,6 +1225,14 @@ func mountSimpleAuthRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 	r.Route("/api/tiers", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.Get("/", d.tierHandler.List)
+	})
+	// The PostgreSQL image catalogue, read-only, for the create-project form's
+	// version picker and its DocumentDB option. It is served rather than
+	// duplicated in the client because both the supported set and the
+	// DocumentDB rule move when the catalogue moves.
+	r.Route("/api/postgres", func(r chi.Router) {
+		r.Use(auth.RequireAuth)
+		d.pgCatalogHandler.Routes(r)
 	})
 	r.Route("/api/alerts", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
