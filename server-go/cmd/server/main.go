@@ -176,6 +176,18 @@ func runServer(cfg config.AppConfig) {
 		dockerClient: dockerClientRef,
 	})
 	deps.fnHandler = fnHandler
+
+	// How a customer reaches their database from outside the cluster
+	// (EXC-410). Nil when the platform offers no public endpoints, and
+	// every caller then carries no endpoint step at all.
+	dbEndpointSvc := buildDBEndpointService(cfg, sqlStore, store, k8sClient)
+	var dbEndpoints service.PublicEndpointReconciler
+	if dbEndpointSvc != nil {
+		dbEndpoints = dbEndpointSvc
+		deps.provHandler.SetDBEndpointService(dbEndpointSvc)
+		provSvc.SetPublicEndpointReconciler(dbEndpointSvc)
+	}
+
 	stopCallout := startNatsAuthCallout(cfg, sqlStore)
 	defer stopCallout()
 
@@ -219,6 +231,9 @@ func runServer(cfg config.AppConfig) {
 			// The same per-project lease deletion takes, so one project is
 			// only ever under one lifecycle operation at a time (EXC-403).
 			Claimer: lifecycleClaimer,
+			// A paused project has no public Service and refuses
+			// connections; a resume brings it back on the same port.
+			Endpoints: dbEndpoints,
 		})
 		// A paused project's database is down for as long as it stays paused;
 		// its pool must not keep connections open against it.
@@ -1456,6 +1471,20 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 		r.Get("/", d.provHandler.GetCors)
 		r.Put("/", d.provHandler.PutCors)
 	})
+	// Public database endpoint (EXC-410): reads report the host, port and
+	// cluster CA a client needs to connect and verify, so Developer+ can
+	// see them; opening the database to the internet is an admin decision,
+	// so writes carry the Admin gate.
+	r.Route("/api/projects/{projectId}/db-endpoint", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
+		r.Use(d.activity)
+		r.Get("/", d.provHandler.GetDBEndpoint)
+		r.Put("/", d.provHandler.PutDBEndpoint)
+	})
 	// Auth settings (EXC-367): requireEmailVerification + siteUrl feed the
 	// auth service's signup/redirect behavior, so reads and writes carry the
 	// same Developer+ gate as the other data-plane authoring surfaces.
@@ -1626,6 +1655,34 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 		log.Fatalf("Failed to init K8s client: %v", err)
 	}
 	return k8sClient
+}
+
+// buildDBEndpointService wires a project's public database endpoint (EXC-410):
+// the port allocator in the platform database and the per-project
+// LoadBalancer Service that publishes it.
+//
+// It returns nil when the platform offers no public endpoints — no endpoint
+// domain configured, a provisioner with no Kubernetes behind it, or a
+// platform store that cannot hold the allocator. Callers then carry no
+// endpoint step at all, rather than one that is present and fails.
+func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore, instances storage.InstanceStore, k8sClient k8s.KubeClient) *service.DBEndpointService {
+	if cfg.DBEndpointDomain == "" || cfg.ProvisionerMode != "k8s" {
+		return nil
+	}
+	endpoints, ok := sqlStore.(storage.DatabaseEndpointStore)
+	if !ok {
+		log.Print("WARN: public database endpoints disabled: the platform store does not hold the port allocator")
+		return nil
+	}
+	return service.NewDBEndpointService(service.DBEndpointServiceConfig{
+		Endpoints:    endpoints,
+		Instances:    instances,
+		Kube:         k8sClient,
+		DomainSuffix: cfg.DBEndpointDomain,
+		Ports:        cfg.DBEndpointPorts,
+		Quarantine:   cfg.DBEndpointPortQuarantine,
+		SharedIPKey:  cfg.DBEndpointSharedIPKey,
+	})
 }
 
 // buildProvisionerFactory selects the K8s (CNPG) or Docker provisioner based

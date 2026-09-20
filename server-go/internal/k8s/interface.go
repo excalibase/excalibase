@@ -58,6 +58,19 @@ type KubeClient interface {
 	// after the pod becomes ready (caller polls IsPodReady or sleeps).
 	EnsureDenoRuntime(ctx context.Context, namespace string, spec DenoRuntimeSpec) error
 
+	// EnsurePublicDBService creates (or re-renders onto the held port) the
+	// project's public database endpoint: one LoadBalancer Service carrying
+	// MetalLB's shared-IP annotation, so every exposed project sits behind
+	// one address at a port of its own (EXC-410).
+	EnsurePublicDBService(ctx context.Context, namespace string, spec PublicDBServiceSpec) error
+	// PublicDBServiceExists reports whether that Service is present. A
+	// project with none refuses connections rather than pointing at
+	// nothing, which is what a paused or deleting project must do.
+	PublicDBServiceExists(ctx context.Context, namespace, name string) (bool, error)
+	// DeletePublicDBService removes the Service so the port stops
+	// answering. Deleting an absent one succeeds.
+	DeletePublicDBService(ctx context.Context, namespace, name string) error
+
 	// GetClusterCapacity returns aggregate Allocatable + already-Requested
 	// CPU/memory across all schedulable nodes. Used by capacity-aware
 	// provisioning to refuse projects that wouldn't fit.

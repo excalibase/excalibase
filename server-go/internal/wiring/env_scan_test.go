@@ -16,8 +16,10 @@ import (
 // The allow-list is per file. Adding an entry is a deliberate act; the
 // reason each is here is written next to it.
 var envReadAllowList = map[string]string{
-	// The configuration package is where the environment is read.
-	"internal/config/config.go": "the one place settings are loaded",
+	// The configuration package is where the environment is read. The whole
+	// package is allowed, not one file: settings are grouped by subject as
+	// they grow, and a new file there is the intended shape, not an escape.
+	"internal/config/": "the one place settings are loaded",
 
 	// Local-development address overrides for a tenant connection. They are
 	// pure tunables — nothing selects a provider or turns a subsystem on —
@@ -69,7 +71,14 @@ func TestEnvironmentIsReadInConfig(t *testing.T) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if _, allowed := envReadAllowList[rel]; !allowed {
+		allowed := false
+		for entry := range envReadAllowList {
+			if rel == entry || (strings.HasSuffix(entry, "/") && strings.HasPrefix(rel, entry)) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
 			t.Errorf("%s reads the environment directly; move the setting into internal/config "+
 				"so the startup wiring check can see it, or add it to the allow-list with a reason", rel)
 		}
@@ -85,6 +94,12 @@ func TestEnvironmentIsReadInConfig(t *testing.T) {
 func TestEnvReadAllowListHasNoStaleEntries(t *testing.T) {
 	root := filepath.Join("..", "..")
 	for rel := range envReadAllowList {
+		if strings.HasSuffix(rel, "/") {
+			if !dirReadsEnvironment(t, filepath.Join(root, filepath.FromSlash(rel))) {
+				t.Errorf("%s no longer reads the environment; drop its allow-list entry", rel)
+			}
+			continue
+		}
 		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
 			t.Errorf("%s is allow-listed but missing: %v", rel, err)
@@ -94,4 +109,28 @@ func TestEnvReadAllowListHasNoStaleEntries(t *testing.T) {
 			t.Errorf("%s no longer reads the environment; drop its allow-list entry", rel)
 		}
 	}
+}
+
+// dirReadsEnvironment reports whether any Go file directly in dir reads the
+// environment, so an allow-listed package is still earning its entry.
+func dirReadsEnvironment(t *testing.T, dir string) bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Errorf("%s is allow-listed but missing: %v", dir, err)
+		return true
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if envReadPattern.Match(body) {
+			return true
+		}
+	}
+	return false
 }

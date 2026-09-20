@@ -22,8 +22,16 @@ const (
 	// pauseStepRestoreReplication is the repair a failed pause runs when it
 	// had already stopped the watcher on a database that is still up.
 	pauseStepRestoreReplication = "RESTORE_REPLICATION"
-	resumeStepStartWorkload     = "START_WORKLOAD"
-	resumeStepReplication       = "RESTART_REPLICATION"
+	// pauseStepWithdrawEndpoint removes the project's public database
+	// endpoint. A paused project must refuse connections rather than
+	// publish a port that points at a database which is not running.
+	pauseStepWithdrawEndpoint = "WITHDRAW_PUBLIC_ENDPOINT"
+	resumeStepStartWorkload   = "START_WORKLOAD"
+	resumeStepReplication     = "RESTART_REPLICATION"
+	// resumeStepPublishEndpoint brings the endpoint back on the port the
+	// project still holds, so a customer's saved connection string works
+	// again unchanged.
+	resumeStepPublishEndpoint = "PUBLISH_PUBLIC_ENDPOINT"
 )
 
 // Backup statuses the adapters report. IN_PROGRESS is neither, so the wait
@@ -58,6 +66,9 @@ type PauseService struct {
 	// statusObservers are told every status this service writes, so caches
 	// keyed on "is this project's database running" can drop their entries.
 	statusObservers []StatusObserver
+	// endpoints withdraws and republishes the project's public database
+	// endpoint. Nil when the platform offers none.
+	endpoints PublicEndpointReconciler
 
 	mu sync.Mutex
 }
@@ -105,6 +116,9 @@ type PauseServiceConfig struct {
 	// pause and deletion will not exclude one another. Defaults to an
 	// in-process claimer, which is correct for a single replica.
 	Claimer ProjectOperationClaimer
+	// Endpoints reconciles the project's public database endpoint across
+	// the pause. Optional: a platform with no public endpoints wires none.
+	Endpoints PublicEndpointReconciler
 }
 
 // NewPausePoller bounds a pause's observed waits on the wall clock, at the
@@ -129,6 +143,7 @@ func NewPauseService(c PauseServiceConfig) *PauseService {
 		backups:     c.Backups,
 		replication: c.Replication,
 		poller:      poller,
+		endpoints:   c.Endpoints,
 	}
 }
 
@@ -262,6 +277,14 @@ func (s *PauseService) runPause(ctx context.Context, pauser provisioner.Pauser, 
 		// back before reporting, or the project runs on with its slot
 		// retaining WAL that nothing consumes.
 		return s.repairReplication(ctx, inst, pauseStepStopWorkload, err)
+	}
+	// The database is observed stopped, so the endpoint now fronts nothing.
+	// It goes last: a pause that failed earlier leaves a running project
+	// still reachable on the port its customers have saved.
+	if s.endpoints != nil {
+		if err := s.endpoints.Withdraw(ctx, inst); err != nil {
+			return pauseStepWithdrawEndpoint, err
+		}
 	}
 	return "", nil
 }
@@ -480,11 +503,16 @@ func (s *PauseService) runResume(ctx context.Context, pauser provisioner.Pauser,
 	if err := pauser.Resume(ctx, inst.Namespace, inst.ProjectID); err != nil {
 		return resumeStepStartWorkload, err
 	}
-	if s.replication == nil {
-		return "", nil
+	if s.replication != nil {
+		if err := s.replication.RestartReplication(ctx, inst); err != nil {
+			return resumeStepReplication, err
+		}
 	}
-	if err := s.replication.RestartReplication(ctx, inst); err != nil {
-		return resumeStepReplication, err
+	// The primary is ready, so the endpoint has something to front again.
+	if s.endpoints != nil {
+		if err := s.endpoints.Publish(ctx, inst); err != nil {
+			return resumeStepPublishEndpoint, err
+		}
 	}
 	return "", nil
 }

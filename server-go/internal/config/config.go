@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 )
 
@@ -216,6 +217,19 @@ type AppConfig struct {
 	// checked.
 	FnReplayEnabled      bool
 	FnReplayPollInterval time.Duration
+	// Public database endpoints (EXC-410). DBEndpointDomain is the suffix a
+	// customer's endpoint name hangs off — they dial
+	// <projectId>.<DBEndpointDomain>:<port> — and empty means the platform
+	// offers no public endpoints at all, so the API refuses to enable one
+	// rather than handing out a name nothing resolves. DBEndpointPorts is
+	// the window ports are allocated randomly from,
+	// DBEndpointPortQuarantine how long a freed one is held back before it
+	// can be reissued, and DBEndpointSharedIPKey the MetalLB sharing key
+	// that puts every project's Service on the one public address.
+	DBEndpointDomain         string
+	DBEndpointPorts          domain.PortRange
+	DBEndpointPortQuarantine time.Duration
+	DBEndpointSharedIPKey    string
 
 	// AutoPauseEnabled runs the hourly idle-pause sweep (EXC-280): projects on
 	// tiers with autoPauseAfterDays > 0 are warned at N-1 idle days and paused
@@ -253,23 +267,28 @@ func (c AppConfig) Validate() error {
 func Load() AppConfig {
 	deploymentMode := envOr("DEPLOYMENT_MODE", "selfhosted")
 	return AppConfig{
-		AutoPauseEnabled:            envBool("EXCALIBASE_AUTOPAUSE_ENABLED", deploymentMode == "cloud"),
-		Port:                        envOr("PORT", "24005"),
-		StoragePath:                 envOr("STORAGE_PATH", "../provisioning-data"),
-		LogLevel:                    envOr("LOG_LEVEL", "debug"),
-		PlatformDBURL:               envOr("PLATFORM_DB_URL", ""),
-		NatsURL:                     envOr("NATS_URL", ""),
-		NatsUser:                    envOr("NATS_USER", natsauth.PrincipalProvisioning),
-		NatsPassword:                os.Getenv("NATS_PASSWORD"),
-		NatsGraphQLPassword:         os.Getenv("NATS_GRAPHQL_PASSWORD"),
-		NatsPgDogPassword:           os.Getenv("NATS_PGDOG_PASSWORD"),
-		NatsCDCStream:               envOr("NATS_CDC_STREAM", "CDC"),
-		NatsCalloutAccount:          envOr("NATS_AUTH_CALLOUT_ACCOUNT", "APP"),
-		NatsCalloutUser:             envOr("NATS_AUTH_CALLOUT_USER", "auth-callout"),
-		NatsCalloutPassword:         os.Getenv("NATS_AUTH_CALLOUT_PASSWORD"),
-		NatsCalloutIssuerSeed:       os.Getenv("NATS_AUTH_CALLOUT_ISSUER_SEED"),
-		RegistrationMode:            envOr("REGISTRATION_MODE", "open"),
-		ExposureEnforced:            exposureEnforced(),
+		AutoPauseEnabled:         envBool("EXCALIBASE_AUTOPAUSE_ENABLED", deploymentMode == "cloud"),
+		Port:                     envOr("PORT", "24005"),
+		StoragePath:              envOr("STORAGE_PATH", "../provisioning-data"),
+		LogLevel:                 envOr("LOG_LEVEL", "debug"),
+		PlatformDBURL:            envOr("PLATFORM_DB_URL", ""),
+		NatsURL:                  envOr("NATS_URL", ""),
+		NatsUser:                 envOr("NATS_USER", natsauth.PrincipalProvisioning),
+		NatsPassword:             os.Getenv("NATS_PASSWORD"),
+		NatsGraphQLPassword:      os.Getenv("NATS_GRAPHQL_PASSWORD"),
+		NatsPgDogPassword:        os.Getenv("NATS_PGDOG_PASSWORD"),
+		NatsCDCStream:            envOr("NATS_CDC_STREAM", "CDC"),
+		NatsCalloutAccount:       envOr("NATS_AUTH_CALLOUT_ACCOUNT", "APP"),
+		NatsCalloutUser:          envOr("NATS_AUTH_CALLOUT_USER", "auth-callout"),
+		NatsCalloutPassword:      os.Getenv("NATS_AUTH_CALLOUT_PASSWORD"),
+		NatsCalloutIssuerSeed:    os.Getenv("NATS_AUTH_CALLOUT_ISSUER_SEED"),
+		RegistrationMode:         envOr("REGISTRATION_MODE", "open"),
+		ExposureEnforced:         exposureEnforced(),
+		DBEndpointDomain:         envDBEndpointDomain("EXCALIBASE_DB_ENDPOINT_DOMAIN"),
+		DBEndpointPorts:          envDBEndpointPortRange("EXCALIBASE_DB_ENDPOINT_PORT_RANGE"),
+		DBEndpointPortQuarantine: envDuration("EXCALIBASE_DB_ENDPOINT_PORT_QUARANTINE", DefaultDBEndpointPortQuarantine),
+		DBEndpointSharedIPKey:    envOr("EXCALIBASE_DB_ENDPOINT_SHARED_IP_KEY", DefaultDBEndpointSharedIPKey),
+
 		JWTRequireAud:               envBool("JWT_REQUIRE_AUD", true),
 		JWTAudPrefix:                envOr("AUTH_AUD_PREFIX", "excalibase:"),
 		CORSOrigins:                 parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
