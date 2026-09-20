@@ -606,3 +606,10 @@ func TestRealtimeService_BulkOps_PropagateListError(t *testing.T) {
 		t.Error("DisableAll should propagate ListTables error")
 	}
 }
+
+func TestOperatorSetup_SetupComplete(t *testing.T) {
+	mock := k8s.NewMockClient()
+	if !NewOperatorSetupService(mock).SetupComplete(context.Background()) {
+		t.Error("the Postgres operator is installed under the mock, so setup is complete")
+	}
+}

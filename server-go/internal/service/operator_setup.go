@@ -58,12 +58,19 @@ func (s *OperatorSetupService) IsOperatorInstalled(ctx context.Context, dbType d
 	return found
 }
 
-func (s *OperatorSetupService) GetStatus(ctx context.Context) domain.SetupStatusResponse {
-	return domain.SetupStatusResponse{
+func (s *OperatorSetupService) GetStatus(ctx context.Context) domain.OperatorStatus {
+	return domain.OperatorStatus{
 		PostgreSQL: s.IsOperatorInstalled(ctx, domain.PostgreSQL),
 		MySQL:      s.IsOperatorInstalled(ctx, domain.MySQL),
 		MongoDB:    s.IsOperatorInstalled(ctx, domain.MongoDB),
 	}
+}
+
+// SetupComplete reports whether the platform can provision. Postgres is the
+// engine it provisions, so its operator being up is the whole condition —
+// the other operators are optional add-ons, not part of "installed".
+func (s *OperatorSetupService) SetupComplete(ctx context.Context) bool {
+	return s.IsOperatorInstalled(ctx, domain.PostgreSQL)
 }
 
 func (s *OperatorSetupService) waitForOperator(ctx context.Context, dbType domain.DatabaseType, timeout time.Duration) error {
