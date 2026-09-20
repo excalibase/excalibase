@@ -87,6 +87,12 @@ type PoolLimits struct {
 	// a project nobody touches stops holding a server-side session.
 	ConnMaxIdleTime time.Duration
 	ConnMaxLifetime time.Duration
+	// StatementTimeout and LockTimeout bound every statement this pool runs,
+	// server-side. A client-side deadline only abandons the statement — the
+	// tenant's server keeps running it and keeps the connection — so the
+	// bound the tenant cannot outlast has to be set on the session.
+	StatementTimeout time.Duration
+	LockTimeout      time.Duration
 }
 
 // Defaults chosen so one replica's worst case stays small: 64 pools x 2
@@ -98,6 +104,10 @@ const (
 	defaultMaxPools        = 64
 	defaultConnMaxIdleTime = 5 * time.Minute
 	defaultConnMaxLifetime = 30 * time.Minute
+	// A sweep statement that has not answered in 30s is a tenant holding the
+	// platform, not a query; a lock not granted in 5s is one being held.
+	defaultStatementTimeout = 30 * time.Second
+	defaultLockTimeout      = 5 * time.Second
 )
 
 func (l PoolLimits) withDefaults() PoolLimits {
@@ -113,7 +123,20 @@ func (l PoolLimits) withDefaults() PoolLimits {
 	if l.ConnMaxLifetime <= 0 {
 		l.ConnMaxLifetime = defaultConnMaxLifetime
 	}
+	if l.StatementTimeout <= 0 {
+		l.StatementTimeout = defaultStatementTimeout
+	}
+	if l.LockTimeout <= 0 {
+		l.LockTimeout = defaultLockTimeout
+	}
 	return l
+}
+
+// poolDSN composes the connection string a cached pool is opened with: the
+// vault address plus the session bounds every statement on it runs under.
+func poolDSN(creds map[string]string, o Overrides, l PoolLimits) string {
+	return fmt.Sprintf("%s options='-c statement_timeout=%d -c lock_timeout=%d'",
+		DSN(creds, o), l.StatementTimeout.Milliseconds(), l.LockTimeout.Milliseconds())
 }
 
 // Opener hands out a pool per managed project, keeping one pool per project
@@ -169,7 +192,7 @@ func (o *Opener) Open(_ context.Context, projectID string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s credentials for %s: %w", appRole, projectID, err)
 	}
-	db, err := sql.Open("postgres", DSN(creds, o.overrides))
+	db, err := sql.Open("postgres", poolDSN(creds, o.overrides, o.limits))
 	if err != nil {
 		return nil, fmt.Errorf("open database for %s: %w", projectID, err)
 	}

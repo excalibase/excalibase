@@ -144,8 +144,10 @@ func runServer(cfg config.AppConfig) {
 	// One way to reach a tenant database, shared by the schema migrator,
 	// the cron sync and the scheduler sweep.
 	projectDB := projectdb.NewOpener(store, vc, projectdb.OverridesFromEnv(), projectdb.PoolLimits{
-		MaxOpenConns: cfg.ProjectDBMaxOpenConns,
-		MaxPools:     cfg.ProjectDBMaxPools,
+		MaxOpenConns:     cfg.ProjectDBMaxOpenConns,
+		MaxPools:         cfg.ProjectDBMaxPools,
+		StatementTimeout: cfg.ProjectDBStatementTimeout,
+		LockTimeout:      cfg.ProjectDBLockTimeout,
 	})
 	defer projectDB.Close()
 
@@ -543,6 +545,7 @@ func schedulerLimits(cfg config.AppConfig) scheduler.Limits {
 		MaxAttempts:        cfg.SchedulerMaxAttempts,
 		CronMinInterval:    cfg.CronMinInterval,
 		CronMaxJobs:        cfg.CronMaxJobsPerProject,
+		ProjectTimeout:     cfg.SchedulerProjectTimeout,
 	}
 }
 

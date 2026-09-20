@@ -144,12 +144,22 @@ type AppConfig struct {
 	SchedulerMaxAttempts        int
 	CronMinInterval             time.Duration
 	CronMaxJobsPerProject       int
+	// SchedulerProjectTimeout bounds one project's whole sweep. A tenant owns
+	// its database and can make any statement there hang; this is what keeps
+	// that cost to the one tenant instead of the whole scheduler.
+	SchedulerProjectTimeout time.Duration
 
 	// Project database pooling. Each cached tenant pool costs connections on
 	// that tenant's database and file descriptors here, so both the pool size
 	// and the number of cached pools are bounded.
 	ProjectDBMaxOpenConns int
 	ProjectDBMaxPools     int
+	// ProjectDBStatementTimeout and ProjectDBLockTimeout are the server-side
+	// bounds set on every tenant connection the platform opens. Abandoning a
+	// statement client-side leaves it running on the tenant's server; these
+	// are the bounds the tenant cannot outlast.
+	ProjectDBStatementTimeout time.Duration
+	ProjectDBLockTimeout      time.Duration
 
 	// AutoMigrate applies a bundle's declared schema to the project database
 	// at deploy time. EXCALIBASE_AUTO_MIGRATE=false defers it to an explicit
@@ -291,8 +301,11 @@ func Load() AppConfig {
 		SchedulerMaxAttempts:        envPositiveInt("EXCALIBASE_SCHEDULER_MAX_ATTEMPTS", 5),
 		CronMinInterval:             envMillis("EXCALIBASE_CRON_MIN_INTERVAL_MS", time.Minute),
 		CronMaxJobsPerProject:       envPositiveInt("EXCALIBASE_CRON_MAX_JOBS", 100),
+		SchedulerProjectTimeout:     envMillis("EXCALIBASE_SCHEDULER_PROJECT_TIMEOUT_MS", defaultSchedulerProjectTimeout),
 		ProjectDBMaxOpenConns:       envPositiveInt("EXCALIBASE_PROJECT_DB_MAX_CONNS", 2),
 		ProjectDBMaxPools:           envPositiveInt("EXCALIBASE_PROJECT_DB_MAX_POOLS", 64),
+		ProjectDBStatementTimeout:   envMillis("EXCALIBASE_PROJECT_DB_STATEMENT_TIMEOUT_MS", defaultProjectDBStatementTimeout),
+		ProjectDBLockTimeout:        envMillis("EXCALIBASE_PROJECT_DB_LOCK_TIMEOUT_MS", defaultProjectDBLockTimeout),
 		EmailProvider:               strings.ToLower(strings.TrimSpace(os.Getenv("EMAIL_PROVIDER"))),
 		SESAccessKeyID:              os.Getenv("SES_ACCESS_KEY_ID"),
 		SESSecretAccessKey:          os.Getenv("SES_SECRET_ACCESS_KEY"),
@@ -324,6 +337,15 @@ const defaultReplayPoll = 15 * time.Second
 const (
 	defaultSchedulerPoll     = 5 * time.Second
 	defaultSchedulerCronPoll = 60 * time.Second
+)
+
+// Bounds on a tenant database that will not answer. 30s is long enough for a
+// batch of claims on a healthy project and short enough that a hostile one
+// costs the sweep a single tick; a lock not granted in 5s is one being held.
+const (
+	defaultSchedulerProjectTimeout   = 30 * time.Second
+	defaultProjectDBStatementTimeout = 30 * time.Second
+	defaultProjectDBLockTimeout      = 5 * time.Second
 )
 
 // parseMillis reads an interval given in milliseconds. An empty value means

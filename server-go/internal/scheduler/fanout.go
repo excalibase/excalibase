@@ -63,10 +63,18 @@ type Limits struct {
 	// CronMaxJobs caps registry rows read per project per cron tick.
 	CronMinInterval time.Duration
 	CronMaxJobs     int
+	// ProjectTimeout bounds one project's whole sweep.
+	ProjectTimeout time.Duration
 }
 
 // DefaultGlobalConcurrency caps invocations in flight on one replica.
 const DefaultGlobalConcurrency = 32
+
+// DefaultProjectTimeout bounds one project's sweep. A tenant owns its
+// database and can make any statement there hang — a view over the scheduler
+// table calling pg_sleep, a lock held open — and without a deadline that one
+// tenant stops every other tenant's tasks for good.
+const DefaultProjectTimeout = 30 * time.Second
 
 // Fanout sweeps the task queue and the cron registry of every servable
 // project. Task claims are safe on every replica — FOR UPDATE SKIP LOCKED
@@ -82,7 +90,10 @@ type Fanout struct {
 	global     *Semaphore
 	poll       time.Duration
 	cronPoll   time.Duration
-	logger     *log.Logger
+	// projectTimeout is how long one project's sweep may take before the
+	// sweep abandons it and moves on to the next tenant.
+	projectTimeout time.Duration
+	logger         *log.Logger
 
 	now func() time.Time
 
@@ -142,20 +153,24 @@ func NewFanout(c FanoutConfig) *Fanout {
 	if limits.GlobalConcurrency <= 0 {
 		limits.GlobalConcurrency = DefaultGlobalConcurrency
 	}
+	if limits.ProjectTimeout <= 0 {
+		limits.ProjectTimeout = DefaultProjectTimeout
+	}
 	return &Fanout{
-		projects:   c.Projects,
-		db:         c.DB,
-		invoker:    c.Invoker,
-		cronLeader: c.CronLeader,
-		functions:  c.Functions,
-		limits:     limits,
-		global:     NewSemaphore(limits.GlobalConcurrency),
-		poll:       poll,
-		cronPoll:   cronPoll,
-		logger:     logger,
-		now:        nowOr(c.Now),
-		ready:      make(map[string]readyState),
-		quiet:      make(map[string]backoffState),
+		projects:       c.Projects,
+		db:             c.DB,
+		invoker:        c.Invoker,
+		cronLeader:     c.CronLeader,
+		functions:      c.Functions,
+		limits:         limits,
+		global:         NewSemaphore(limits.GlobalConcurrency),
+		poll:           poll,
+		cronPoll:       cronPoll,
+		projectTimeout: limits.ProjectTimeout,
+		logger:         logger,
+		now:            nowOr(c.Now),
+		ready:          make(map[string]readyState),
+		quiet:          make(map[string]backoffState),
 	}
 }
 
@@ -223,7 +238,7 @@ func (f *Fanout) Run(ctx context.Context) error {
 // TaskTick drains each project's due tasks once. Exported so tests and
 // operators can drive a deterministic cycle.
 func (f *Fanout) TaskTick(ctx context.Context) error {
-	return f.forEachProject(ctx, "task", func(projectID string, db *sql.DB) error {
+	return f.forEachProject(ctx, "task", func(ctx context.Context, projectID string, db *sql.DB) error {
 		worker := NewWorker(WorkerConfig{
 			DB:            db,
 			ProjectID:     projectID,
@@ -250,7 +265,7 @@ func (f *Fanout) CronTick(ctx context.Context) error {
 	if !leader {
 		return nil
 	}
-	return f.forEachProject(ctx, "cron", func(projectID string, db *sql.DB) error {
+	return f.forEachProject(ctx, "cron", func(ctx context.Context, projectID string, db *sql.DB) error {
 		return NewCronRunner(CronRunnerConfig{
 			DB:          db,
 			ProjectID:   projectID,
@@ -265,7 +280,7 @@ func (f *Fanout) CronTick(ctx context.Context) error {
 // against the ones that carry the scheduler tables. Per-project failures are
 // logged and the sweep continues; only an unreadable project list is fatal
 // to the tick, because then the sweep covered nothing and must say so.
-func (f *Fanout) forEachProject(ctx context.Context, kind string, sweep func(string, *sql.DB) error) error {
+func (f *Fanout) forEachProject(ctx context.Context, kind string, sweep sweepFn) error {
 	projects, err := f.projects(ctx)
 	if err != nil {
 		return fmt.Errorf("list projects: %w", err)
@@ -274,27 +289,46 @@ func (f *Fanout) forEachProject(ctx context.Context, kind string, sweep func(str
 		if f.backedOff(projectID) {
 			continue
 		}
-		db, err := f.db(ctx, projectID)
-		if err != nil {
-			f.logger.Printf("scheduler: %s sweep skipped %s: %v", kind, projectID, err)
-			f.backOff(projectID)
-			continue
-		}
-		ready, err := f.hasSchedulerTables(ctx, projectID, db)
-		if err != nil {
-			f.logger.Printf("scheduler: %s sweep skipped %s: %v", kind, projectID, err)
+		if err := f.sweepProject(ctx, projectID, sweep); err != nil {
+			f.logger.Printf("scheduler: %s sweep %s: %v", kind, projectID, err)
 			f.backOff(projectID)
 			continue
 		}
 		f.clearBackoff(projectID)
-		if !ready {
-			continue
-		}
-		if err := sweep(projectID, db); err != nil {
-			f.logger.Printf("scheduler: %s sweep %s: %v", kind, projectID, err)
-		}
 	}
 	return nil
+}
+
+// sweepFn is one project's work for a tick, run under that project's own
+// deadline rather than the process context.
+type sweepFn func(context.Context, string, *sql.DB) error
+
+// sweepProject runs one project's sweep under its own deadline, so a tenant
+// whose database will not answer costs the platform one timeout instead of
+// the sweep. The deadline alone is enough here: the sweep is sequential, so
+// the worst a hostile project adds to every other project is that one wait,
+// and a second one puts it into the existing backoff.
+//
+// A deadline that expires is returned as an error precisely so the backoff
+// fires — a tenant that simply answers slowly never errors otherwise.
+func (f *Fanout) sweepProject(ctx context.Context, projectID string, sweep sweepFn) error {
+	ctx, cancel := context.WithTimeout(ctx, f.projectTimeout)
+	defer cancel()
+	db, err := f.db(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	ready, err := f.hasSchedulerTables(ctx, projectID, db)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return nil
+	}
+	if err := sweep(ctx, projectID, db); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 // hasSchedulerTables reports whether the project's database carries the

@@ -59,6 +59,9 @@ is never echoed back into the row or into a log line as a format.
 | `EXCALIBASE_SCHEDULER_MAX_ATTEMPTS` | 5 | retries before a task is failed |
 | `EXCALIBASE_CRON_MIN_INTERVAL_MS` | 60000 | finest cron cadence honoured |
 | `EXCALIBASE_CRON_MAX_JOBS` | 100 | cron rows read per project per tick |
+| `EXCALIBASE_SCHEDULER_PROJECT_TIMEOUT_MS` | 30000 | one project's whole sweep |
+| `EXCALIBASE_PROJECT_DB_STATEMENT_TIMEOUT_MS` | 30000 | any statement on a tenant connection (server-side) |
+| `EXCALIBASE_PROJECT_DB_LOCK_TIMEOUT_MS` | 5000 | waiting for a lock on a tenant connection (server-side) |
 
 Worst case per tenant per minute, at the defaults: 12 task ticks × 32 rows =
 **384 dispatch attempts**, never more than **4 at once**, each bounded by the
@@ -67,6 +70,18 @@ enqueue at most 100 tasks that then pass through the same task limits. Per
 replica, no more than **32 invocations are ever in flight** across all
 tenants. Database load per tenant is one claim transaction per tick, one
 cached presence check, and one cron query per minute on the leader.
+
+### A tenant that will not answer
+
+The scheduler tables live in the tenant's own database, so a project can
+replace one with a view that calls `pg_sleep`, or simply hold a lock on it.
+Three bounds keep that cost to the one tenant. Each project's sweep runs
+under its own deadline, after which the sweep moves on to the next project;
+every tenant connection carries a server-side `statement_timeout` and
+`lock_timeout`, so abandoning the client side does not leave the statement
+running there; and a sweep that hits its deadline counts as a failure, which
+puts the project into the existing per-project backoff (5s doubling to 5
+minutes) instead of costing a full timeout on every tick.
 
 ## Dispatch
 

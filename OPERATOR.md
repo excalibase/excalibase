@@ -583,6 +583,12 @@ opens a small pool per project (`EXCALIBASE_PROJECT_DB_MAX_CONNS`, default 2,
 at most `EXCALIBASE_PROJECT_DB_MAX_POOLS` cached — see
 `docs/functions-scheduler.md`), which costs connections on the tenant's own
 database and file descriptors here, never platform-database connections.
+Those connections carry a server-side `EXCALIBASE_PROJECT_DB_STATEMENT_TIMEOUT_MS`
+(default 30000) and `EXCALIBASE_PROJECT_DB_LOCK_TIMEOUT_MS` (default 5000),
+and each project's sweep is bounded by
+`EXCALIBASE_SCHEDULER_PROJECT_TIMEOUT_MS` (default 30000), so a tenant
+database that will not answer costs the sweep one timeout and is then backed
+off rather than stalling every other tenant's tasks.
 
 Taking a lease waits at most 2s for a pool connection. A burst of lifecycle
 calls therefore degrades into `409 project is busy` rather than parking every
