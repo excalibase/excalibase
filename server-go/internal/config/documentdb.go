@@ -1,0 +1,46 @@
+package config
+
+// What a DocumentDB project's database needs beyond the image carrying the
+// files (EXC-409). The catalogue next door records which majors can offer
+// DocumentDB at all; this file records what has to be true of a cluster and a
+// database before `CREATE EXTENSION documentdb` will work in it.
+//
+// Everything here is upstream's, at the tag DocumentDBRef pins, and is stated
+// once so the cluster spec and the SQL that runs on the new database cannot
+// disagree about it.
+
+// DocumentDBExtension is the extension created in a DocumentDB project's
+// application database. It is created with CASCADE, which brings in what it
+// depends on — pg_documentdb_core, pg_cron and the contrib extensions the
+// image carries — rather than making the platform name them one by one.
+const DocumentDBExtension = "documentdb"
+
+// DocumentDBCronDatabaseSetting is pg_cron's "which database does the
+// background worker connect to" parameter. pg_cron serves exactly one
+// database per cluster and DocumentDB's DDL path goes through it, so this
+// must name the database the extension lives in — the project's own
+// application database. Pointing it anywhere else leaves DocumentDB
+// installed and its DDL silently unable to run.
+const DocumentDBCronDatabaseSetting = "cron.database_name"
+
+// documentDBPreloadLibraries is the shared_preload_libraries list DocumentDB
+// needs. It is upstream's own, produced by scripts/preload_libraries.sh for a
+// non-distributed build (no citus, no extended rum) at the pinned tag:
+//
+//	echo "pg_cron, $clusterPreloadLibraries"
+//
+// The extension does not load without it, so a cluster that omits an entry
+// does not start DocumentDB rather than starting it degraded. EXC-407's image
+// test ran exactly this list against every DocumentDB-capable major and
+// round-tripped a document through it.
+var documentDBPreloadLibraries = []string{"pg_cron", "pg_documentdb_core", "pg_documentdb"}
+
+// DocumentDBPreloadLibraries returns the libraries a DocumentDB cluster must
+// preload, in upstream's order. The caller gets a copy: the list is read while
+// a cluster spec is being built, and a caller that appended to a shared slice
+// would change what every later cluster preloads.
+func DocumentDBPreloadLibraries() []string {
+	libraries := make([]string, len(documentDBPreloadLibraries))
+	copy(libraries, documentDBPreloadLibraries)
+	return libraries
+}
