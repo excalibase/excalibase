@@ -65,13 +65,17 @@ documentDBGatewayImageTag: "0.117.0"
 majors:
   - major: "14"
     baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:5e16b178b239f3e6854ae86ce9190b151c0aa30f7f99014659ba24e1a6885084
+    image: ghcr.io/excalibase/postgresql@sha256:73bc767ecfc41e9d9b5d675c15e4e157623734e9cee2eb8c2e5903a982fe20a4
     documentdb: false
   - major: "15"
     baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:6cca69b026405a5cc8593b6bf2a095010fad51ba338a368a3b5305c1c2c77cf6
+    image: ghcr.io/excalibase/postgresql@sha256:ab2df024b13e1bcd44077cb1f2dc71b382d7fc2a92a47266e717a8df60610b40
     documentdb: true
   - major: "16"
     baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:da9f3d23790ccd052fb4f9620ab0c71eb1c3896c3a1189381c47e8b5f681768d
+    image: ghcr.io/excalibase/postgresql@sha256:1d5f8268dabb1884ef6264381e4f81cf9f7bccf6b7aa6529628846636b7f1f1b
     documentdb: true
   - major: "17"
     baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:9f9286957d1030e0b5964804b557c635603a296d26c6212372f9d416ebb6f168
+    image: ghcr.io/excalibase/postgresql@sha256:3902020744e0ac870648894115bc957d933478730ceb68d5e425f10eb99dc375
     documentdb: true
