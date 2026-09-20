@@ -25,6 +25,10 @@ type ProvisioningRequest struct {
 	MasterUsername  string            `json:"masterUsername,omitempty"`
 	ParameterGroup  string            `json:"parameterGroupName,omitempty"`
 	AppPassword     string            `json:"appPassword,omitempty"` // optional: password for excalibase_app role
+	// DocumentDB asks for a project whose image carries the DocumentDB
+	// extension. Only majors the catalogue marks as DocumentDB-capable
+	// accept it; enabling the extension itself is EXC-409.
+	DocumentDB      bool              `json:"documentDb,omitempty"`
 }
 
 type BackupSettings struct {

@@ -11,12 +11,11 @@ import (
 )
 
 const (
-	testExpectedErr  = "expected error"
-	testStageErrFmt  = "expected StageError, got %T: %v"
-	testBKTest       = "bk-test"
-	testDelDBNS      = "org1-del-db"
+	testExpectedErr = "expected error"
+	testStageErrFmt = "expected StageError, got %T: %v"
+	testBKTest      = "bk-test"
+	testDelDBNS     = "org1-del-db"
 )
-
 
 func TestPostgreSQLProvisionerFree(t *testing.T) {
 	mock := k8s.NewMockClient()
@@ -28,10 +27,11 @@ func TestPostgreSQLProvisionerFree(t *testing.T) {
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	result, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "test-db",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "test-db",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 	}, tier, cb)
 
 	if err != nil {
@@ -94,10 +94,11 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: testBKTest,
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     testBKTest,
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 		Backup: &domain.BackupSettings{
 			Enabled:   true,
 			Schedule:  "0 2 * * *",
@@ -138,10 +139,11 @@ func TestPostgreSQLProvisionerStandard(t *testing.T) {
 
 	tier, _ := config.GetTierConfig(domain.Standard)
 	result, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "std-db",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Standard,
+		PostgresVersion: "17",
+		ProjectName:     "std-db",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Standard,
 	}, tier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	if err != nil {
@@ -213,10 +215,11 @@ func TestPostgreSQL_ProvisionWithRollback_Success(t *testing.T) {
 	pc := NewProvisionContext(nil, nil)
 	tier, _ := config.GetTierConfig(domain.Free)
 	result, err := prov.ProvisionWithRollback(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "ok-db",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "ok-db",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 	}, tier, pc)
 
 	if err != nil {
@@ -242,10 +245,11 @@ func TestPostgreSQL_ProvisionWithRollback_NamespaceFailsNoCleanups(t *testing.T)
 	pc := NewProvisionContext(nil, nil)
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.ProvisionWithRollback(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "ns-fail",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "ns-fail",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 	}, tier, pc)
 
 	if err == nil {
@@ -272,10 +276,11 @@ func TestPostgreSQL_ProvisionWithRollback_CRDFailRollsBackNamespace(t *testing.T
 	pc := NewProvisionContext(nil, nil)
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.ProvisionWithRollback(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "crd-fail",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "crd-fail",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 	}, tier, pc)
 
 	if err == nil {
@@ -315,10 +320,11 @@ func TestPostgreSQL_ProvisionWithRollback_WaitFailRollsBackNamespace(t *testing.
 	pc := NewProvisionContext(nil, nil)
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.ProvisionWithRollback(ctx, domain.ProvisioningRequest{
-		ProjectName: "wait-fail",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "wait-fail",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 	}, tier, pc)
 
 	if err == nil {
@@ -358,10 +364,11 @@ func TestPostgreSQL_ProvisionWithRollback_ReplicaStepCaptured(t *testing.T) {
 	tier := config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2", BackupEnabled: true}
 
 	_, err := prov.ProvisionWithRollback(ctx, domain.ProvisioningRequest{
-		ProjectName: "rep-fail",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Standard,
+		PostgresVersion: "17",
+		ProjectName:     "rep-fail",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Standard,
 	}, tier, pc)
 
 	if err == nil {

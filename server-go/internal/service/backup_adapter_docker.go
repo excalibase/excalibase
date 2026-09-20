@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -472,11 +473,15 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	}
 	containerName := fmt.Sprintf("excalibase-%s-postgres", newProject)
 	newPassword := generateRestorePassword()
+	image, err := restoreImage(inst.PostgresVersion)
+	if err != nil {
+		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
+	}
 	containerID, err := a.createAndSeedRestoreContainer(ctx, dc, restoreContainerSpec{
 		containerName:   containerName,
 		dbName:          dbName,
 		newPassword:     newPassword,
-		image:           restoreImage(inst.PostgresVersion),
+		image:           image,
 		newProject:      newProject,
 		sourceProjectID: inst.ProjectID,
 		body:            body,
@@ -634,13 +639,12 @@ func (a *DockerBackupAdapter) resolveSourceBackup(ctx context.Context, sourcePro
 	return nil, fmt.Errorf("backup %q not found or not COMPLETED", backupID)
 }
 
-// restoreImage returns the postgres image tag for the restored container,
-// defaulting to postgres:17 when the source version is unknown.
-func restoreImage(postgresVersion string) string {
-	if postgresVersion != "" {
-		return "postgres:" + postgresVersion
-	}
-	return "postgres:17"
+// restoreImage returns the postgres image for the restored container. A
+// restore runs on the major the backup was taken from; if that major is
+// unknown or unsupported the restore fails rather than silently landing the
+// data on a different one.
+func restoreImage(postgresVersion string) (string, error) {
+	return config.DockerPostgresImage(postgresVersion)
 }
 
 // restoreContainerSpec bundles the inputs to createAndSeedRestoreContainer so

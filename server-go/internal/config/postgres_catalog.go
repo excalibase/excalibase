@@ -141,3 +141,33 @@ func PostgresImage(major string) (string, error) {
 func SupportedPostgresMajorsMessage() string {
 	return strings.Join(PostgresMajors(), ", ")
 }
+
+// DocumentDBMajors returns the majors whose image carries DocumentDB.
+func DocumentDBMajors() []string {
+	majors := make([]string, 0, len(postgresCatalog.Majors))
+	for _, entry := range postgresCatalog.Majors {
+		if entry.DocumentDB {
+			majors = append(majors, entry.Major)
+		}
+	}
+	return majors
+}
+
+// DocumentDBMajorsMessage renders the DocumentDB-capable majors for error
+// messages.
+func DocumentDBMajorsMessage() string {
+	return strings.Join(DocumentDBMajors(), ", ")
+}
+
+// DockerPostgresImage returns the image the Docker deployment path runs for a
+// major. Docker mode uses the official upstream image rather than the CNPG one
+// — the CNPG images carry no entrypoint and only start under the operator —
+// but it is still driven by the catalogue, so the two paths support exactly
+// the same set of majors.
+func DockerPostgresImage(major string) (string, error) {
+	entry, ok := LookupPostgresMajor(major)
+	if !ok {
+		return "", fmt.Errorf("postgres version %q is not supported (supported: %s)", major, SupportedPostgresMajorsMessage())
+	}
+	return "postgres:" + entry.Major, nil
+}

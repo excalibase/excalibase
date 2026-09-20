@@ -72,7 +72,7 @@ func TestProvision_OrgAtItsLimitAnswers409(t *testing.T) {
 	r := provisionRouter(t, store)
 
 	w := doRequest(r, "POST", testProvisionPath,
-		`{"projectName":"second","orgId":"org-secret","databaseType":"POSTGRESQL","tier":"FREE"}`)
+		`{"projectName":"second","orgId":"org-secret","databaseType":"POSTGRESQL","tier":"FREE","postgresVersion":"17"}`)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status: got %d, want 409; body %s", w.Code, w.Body.String())
 	}
@@ -109,7 +109,7 @@ func TestProvision_OrgAtItsLimitAnswers409EvenOnAFullCluster(t *testing.T) {
 	r := provisionRouterOn(t, store, mock)
 
 	w := doRequest(r, "POST", testProvisionPath,
-		`{"projectName":"second","orgId":"org-full","databaseType":"POSTGRESQL","tier":"FREE"}`)
+		`{"projectName":"second","orgId":"org-full","databaseType":"POSTGRESQL","tier":"FREE","postgresVersion":"17"}`)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status: got %d, want 409; body %s", w.Code, w.Body.String())
 	}
@@ -133,7 +133,7 @@ func TestProvision_StoreFailureAnswers500WithoutInternals(t *testing.T) {
 	r := provisionRouter(t, store)
 
 	w := doRequest(r, "POST", testProvisionPath,
-		`{"projectName":"unlucky","orgId":"org1","databaseType":"POSTGRESQL","tier":"FREE"}`)
+		`{"projectName":"unlucky","orgId":"org1","databaseType":"POSTGRESQL","tier":"FREE","postgresVersion":"17"}`)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status: got %d, want 500; body %s", w.Code, w.Body.String())
 	}

@@ -41,7 +41,8 @@ func TestProvision_DeletingProjectDoesNotHoldTheSlot(t *testing.T) {
 			}
 
 			if _, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-				ProjectName: "replacement", OrgID: "org1",
+				PostgresVersion: "17",
+				ProjectName:     "replacement", OrgID: "org1",
 				DBType: domain.PostgreSQL, Tier: domain.Free,
 			}); err != nil {
 				t.Fatalf("a project under teardown must not block a new one: %v", err)
@@ -61,7 +62,8 @@ func TestProvision_AtTheLimitReturnsTheFixedRefusal(t *testing.T) {
 	}
 
 	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "second", OrgID: "org-secret",
+		PostgresVersion: "17",
+		ProjectName:     "second", OrgID: "org-secret",
 		DBType: domain.PostgreSQL, Tier: domain.Free,
 	})
 	var limitErr *OrgProjectLimitError
@@ -87,7 +89,8 @@ func TestProvision_StoreFailureRefusesAndCreatesNothing(t *testing.T) {
 	svc := NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
 
 	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "unlucky", OrgID: "org1",
+		PostgresVersion: "17",
+		ProjectName:     "unlucky", OrgID: "org1",
 		DBType: domain.PostgreSQL, Tier: domain.Free,
 	})
 	if !errors.Is(err, ErrProjectStoreUnavailable) {
@@ -112,7 +115,8 @@ func TestProvision_UnlimitedTierIsUnaffected(t *testing.T) {
 	}
 
 	if _, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "another", OrgID: "org1",
+		PostgresVersion: "17",
+		ProjectName:     "another", OrgID: "org1",
 		DBType: domain.PostgreSQL, Tier: domain.Enterprise,
 	}); err != nil {
 		t.Fatalf("an unlimited tier must admit the project: %v", err)
@@ -130,7 +134,8 @@ func TestProvision_SelfHostedModeIsUnlimited(t *testing.T) {
 	}
 
 	if _, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "second", OrgID: "org1",
+		PostgresVersion: "17",
+		ProjectName:     "second", OrgID: "org1",
 		DBType: domain.PostgreSQL, Tier: domain.Free,
 	}); err != nil {
 		t.Fatalf("self-hosted mode must stay unlimited: %v", err)

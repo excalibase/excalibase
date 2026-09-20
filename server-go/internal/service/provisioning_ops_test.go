@@ -257,10 +257,16 @@ func TestUpgradeVersion(t *testing.T) {
 		t.Fatalf("UpgradeVersion: %v", err)
 	}
 
+	// The upgrade resolves the catalogue's digest-pinned image for the major,
+	// never a tag built from the version string.
+	want, err := config.PostgresImage("17")
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
 	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
 	spec := got.Object["spec"].(map[string]interface{})
-	if spec["imageName"] != "ghcr.io/cloudnative-pg/postgresql:17" {
-		t.Errorf("imageName: got %v", spec["imageName"])
+	if spec["imageName"] != want {
+		t.Errorf("imageName: got %v, want %v", spec["imageName"], want)
 	}
 }
 
