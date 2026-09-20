@@ -1,8 +1,8 @@
 package service
 
 import (
-	"strings"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -112,27 +112,8 @@ func TestGetLogsNotFound(t *testing.T) {
 	}
 }
 
-func TestRotateCredentials(t *testing.T) {
-	svc, store, mock := setupOpsTest(t)
-	mock.ExecOutput["org1-ops-db/ops-db-postgres-1"] = "ALTER ROLE"
-
-	creds, err := svc.RotateCredentials(context.Background(), testOpsDB)
-	if err != nil {
-		t.Fatalf("RotateCredentials: %v", err)
-	}
-	if creds.Password == testutil.FixturePassword(testOpsDB) {
-		t.Error("password should have changed")
-	}
-	if creds.Password == "" {
-		t.Error("new password should not be empty")
-	}
-
-	// Verify stored
-	inst, _ := store.FindByProjectID(testOpsDB)
-	if inst.Password == testutil.FixturePassword(testOpsDB) {
-		t.Error("stored password should be updated")
-	}
-}
+// The rotation sequence itself is covered in credential_rotation_test.go,
+// which drives it with the vault, verifier and change publisher it needs.
 
 func TestRotateCredentialsNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)

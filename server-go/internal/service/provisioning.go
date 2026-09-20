@@ -69,6 +69,11 @@ type ProvisioningService struct {
 	// Optional; nil means no announcement is published.
 	projectEvents ProjectEventPublisher
 
+	// credVerifier proves a rotated password opens the project's database.
+	// Credential rotation refuses to run without it: an unverified password
+	// is not evidence of anything.
+	credVerifier RoleCredentialVerifier
+
 	// deletionClaimer grants one teardown at a time per project. Lazily set
 	// to the in-process claimer; multi-replica deployments wire the
 	// advisory-lock one so the claim holds across them.
