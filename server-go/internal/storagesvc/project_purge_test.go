@@ -195,3 +195,57 @@ func TestService_PurgeProjectObjects_StopsWhenDeletesDoNothing(t *testing.T) {
 		t.Fatalf("want a non-convergence failure, got %v", err)
 	}
 }
+
+// The purge works from the project's prefix, so everything under it goes —
+// including the staging namespace, where an upload nobody confirmed sits. It
+// is not a separate case in the code, and this is what says so.
+func TestService_PurgeProjectObjects_ClearsTheStagingNamespaceToo(t *testing.T) {
+	svc, _, blobs := purgeableService(t)
+	ctx := context.Background()
+	bucket, _ := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
+	other, _ := svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "media"})
+	blobs.put(testProjX, bucket.ID, "live.bin", 10, "text/plain")
+	blobs.put(testProjX, bucket.ID, stagingObjectKey("upl_1"), 10, "text/plain")
+	blobs.put(testProjX, other.ID, stagingObjectKey("upl_2"), 10, "text/plain")
+
+	deleted, err := svc.PurgeProjectObjects(ctx, testProjX)
+	if err != nil {
+		t.Fatalf("PurgeProjectObjects: %v", err)
+	}
+	if deleted != 3 {
+		t.Errorf("deleted %d, want all three across both buckets", deleted)
+	}
+	for _, left := range []struct {
+		bucketID, key string
+	}{
+		{bucket.ID, "live.bin"},
+		{bucket.ID, stagingObjectKey("upl_1")},
+		{other.ID, stagingObjectKey("upl_2")},
+	} {
+		if blobs.has(testProjX, left.bucketID, left.key) {
+			t.Errorf("%q survived the project purge", left.key)
+		}
+	}
+	remaining, _ := blobs.ListKeysWithPrefix(ctx, "projects/"+testProjX+"/", 10)
+	if len(remaining) != 0 {
+		t.Errorf("objects left under the project prefix: %v", remaining)
+	}
+}
+
+// The delete the purge uses refuses a key outside the prefix it was given, so
+// a listing that answered with something unexpected cannot become a delete
+// somewhere else.
+func TestService_PurgeProjectObjects_DeleteIsGuardedByThePrefix(t *testing.T) {
+	blobs := newFakeObjectStore()
+	ctx := context.Background()
+	blobs.put("other-project", "bkt_9", "theirs.bin", 10, "text/plain")
+
+	err := blobs.DeleteKey(ctx, "projects/"+testProjX+"/",
+		fakeStoreKey("other-project", "bkt_9", "theirs.bin"))
+	if err == nil {
+		t.Fatal("a key outside the named prefix must be refused")
+	}
+	if !blobs.has("other-project", "bkt_9", "theirs.bin") {
+		t.Error("the refused delete must not have happened")
+	}
+}

@@ -47,11 +47,11 @@ func (m *memoryBlobPlane) storeKey(projectID, bucketID, key string) string {
 	return "projects/" + projectID + "/buckets/" + bucketID + "/" + key
 }
 
-func (m *memoryBlobPlane) SignedPutURL(_ context.Context, projectID, bucketID, key, _ string, ttl time.Duration) (string, time.Time, error) {
+func (m *memoryBlobPlane) SignedPutURL(_ context.Context, projectID, bucketID, key, _ string, _ int64, ttl time.Duration) (string, time.Time, error) {
 	return "https://blob/" + m.storeKey(projectID, bucketID, key), time.Now().Add(ttl), nil
 }
 
-func (m *memoryBlobPlane) SignedGetURL(_ context.Context, projectID, bucketID, key string, ttl time.Duration) (string, time.Time, error) {
+func (m *memoryBlobPlane) SignedGetURL(_ context.Context, projectID, bucketID, key string, _ bool, ttl time.Duration) (string, time.Time, error) {
 	return "https://blob/" + m.storeKey(projectID, bucketID, key), time.Now().Add(ttl), nil
 }
 
@@ -63,8 +63,45 @@ func (m *memoryBlobPlane) DeleteObject(ctx context.Context, projectID, bucketID,
 	return m.DeleteKey(ctx, "projects/", m.storeKey(projectID, bucketID, key))
 }
 
-func (m *memoryBlobPlane) ListObjectKeys(_ context.Context, projectID, bucketID string, limit int32) ([]string, error) {
-	return m.keysUnder("projects/" + projectID + "/buckets/" + bucketID + "/"), nil
+func (m *memoryBlobPlane) ListObjects(_ context.Context, projectID, bucketID string, limit int32) ([]storagesvc.StoredObject, error) {
+	prefix := "projects/" + projectID + "/buckets/" + bucketID + "/"
+	out := []storagesvc.StoredObject{}
+	for _, k := range m.keysUnder(prefix) {
+		out = append(out, storagesvc.StoredObject{Key: strings.TrimPrefix(k, prefix)})
+	}
+	return out, nil
+}
+
+func (m *memoryBlobPlane) ListStagedUploads(_ context.Context, projectID, bucketID string, limit int32) ([]storagesvc.StagedUpload, error) {
+	prefix := "projects/" + projectID + "/buckets/" + bucketID + "/.staging/"
+	out := []storagesvc.StagedUpload{}
+	for _, k := range m.keysUnder(prefix) {
+		out = append(out, storagesvc.StagedUpload{UploadID: strings.TrimPrefix(k, prefix)})
+	}
+	return out, nil
+}
+
+func (m *memoryBlobPlane) DeleteStagingObject(ctx context.Context, projectID, bucketID, uploadID string) error {
+	return m.DeleteObject(ctx, projectID, bucketID, ".staging/"+uploadID)
+}
+
+func (m *memoryBlobPlane) CopyObject(_ context.Context, projectID, bucketID, sourceKey, destinationKey string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.keys[m.storeKey(projectID, bucketID, sourceKey)] {
+		return errors.New("copy source is not there")
+	}
+	m.keys[m.storeKey(projectID, bucketID, destinationKey)] = true
+	return nil
+}
+
+func (m *memoryBlobPlane) HeadObject(_ context.Context, projectID, bucketID, key string) (storagesvc.ObjectStat, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.keys[m.storeKey(projectID, bucketID, key)] {
+		return storagesvc.ObjectStat{}, storagesvc.ErrObjectNotFound
+	}
+	return storagesvc.ObjectStat{Size: 1, ContentType: "application/octet-stream", LastModified: time.Now().UTC()}, nil
 }
 
 func (m *memoryBlobPlane) ListKeysWithPrefix(_ context.Context, prefix string, limit int32) ([]string, error) {

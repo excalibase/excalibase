@@ -140,3 +140,34 @@ func TestDeprovision_NoObjectPurgerMeansNoStep(t *testing.T) {
 		t.Error("record should be gone")
 	}
 }
+
+// The order is load-bearing: backups first when they were confirmed, then the
+// project's own files, and only then the credentials that reach them and the
+// record that names the prefix.
+func TestDeprovision_StepOrderIsBackupsThenObjectsThenVaultThenRecord(t *testing.T) {
+	svc, _, _ := setupDeletionTest(t)
+	svc.SetObjectPurger(&fakeObjectPurger{})
+	svc.SetBackupPurger(NewBackupPurger(svc, "backups/", nil))
+
+	var order []string
+	for _, step := range svc.deletionSteps(true) {
+		order = append(order, step.name)
+	}
+	want := []string{
+		domain.DeletionStepRevokeNats,
+		domain.DeletionStepDeregisterPgDog,
+		domain.DeletionStepDeleteResources,
+		domain.DeletionStepDeleteBackups,
+		domain.DeletionStepDeleteObjects,
+		domain.DeletionStepDeleteVault,
+		domain.DeletionStepDeleteRecord,
+	}
+	if len(order) != len(want) {
+		t.Fatalf("teardown steps: got %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("teardown steps: got %v, want %v", order, want)
+		}
+	}
+}

@@ -396,3 +396,15 @@ func TestR2_DeleteKey_ReportsBackendError(t *testing.T) {
 		t.Fatalf("a refused delete must surface, got %v", err)
 	}
 }
+
+// DeleteObject builds its own prefix from the bucket, so a bucket it cannot
+// name is refused before anything reaches the store.
+func TestR2_DeleteObject_RejectsAnUnnameableBucket(t *testing.T) {
+	c := newR2(t)
+	if err := c.DeleteObject(context.Background(), testProjABC, "", "a.txt"); err == nil {
+		t.Error("a delete with no bucket must be refused")
+	}
+	if err := c.DeleteObject(context.Background(), "", "bkt_1", "a.txt"); err == nil {
+		t.Error("a delete with no project must be refused")
+	}
+}
