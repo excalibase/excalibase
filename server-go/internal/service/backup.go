@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -52,6 +53,39 @@ func (s *BackupService) SetProjectRegistrar(r ProjectRegistrar) {
 	for _, adapter := range s.adapters {
 		if setter, ok := adapter.(interface{ SetProjectRegistrar(ProjectRegistrar) }); ok {
 			setter.SetProjectRegistrar(r)
+		}
+	}
+}
+
+// SetDatabaseProbe hands every adapter the check that proves a recovered
+// database serves queries before its project is activated.
+//
+// It reports an error instead of wiring nothing: a platform whose adapters
+// cannot verify a restore has no business starting, and finding that out
+// from a customer's first restore is finding it out too late.
+func (s *BackupService) SetDatabaseProbe(p DatabaseProbe) error {
+	if p == nil {
+		return fmt.Errorf("%w: no probe was supplied", ErrDatabaseProbeNotConfigured)
+	}
+	if len(s.adapters) == 0 {
+		return fmt.Errorf("%w: no backup adapters are registered", ErrDatabaseProbeNotConfigured)
+	}
+	for mode, adapter := range s.adapters {
+		setter, ok := adapter.(interface{ SetDatabaseProbe(DatabaseProbe) })
+		if !ok {
+			return fmt.Errorf("%w: the %s adapter cannot verify a restore", ErrDatabaseProbeNotConfigured, mode)
+		}
+		setter.SetDatabaseProbe(p)
+	}
+	return nil
+}
+
+// SetRestoreReadyTimeout bounds how long every adapter waits for a recovered
+// database to be observed ready.
+func (s *BackupService) SetRestoreReadyTimeout(d time.Duration) {
+	for _, adapter := range s.adapters {
+		if setter, ok := adapter.(interface{ SetRestoreReadyTimeout(time.Duration) }); ok {
+			setter.SetRestoreReadyTimeout(d)
 		}
 	}
 }

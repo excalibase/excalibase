@@ -374,7 +374,7 @@ func busyState(err error) string {
 func (h *ProvisioningHandler) GetCredentials(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	creds, err := h.svc.GetCredentials(projectID)
-	if errors.Is(err, service.ErrProjectDeleting) {
+	if errors.Is(err, service.ErrProjectDeleting) || errors.Is(err, service.ErrProjectRestoring) {
 		httpError(w, safeError(err), http.StatusConflict)
 		return
 	}
@@ -490,9 +490,9 @@ func (h *ProvisioningHandler) GetProjectInfo(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	// The data plane mints JWTs and routes traffic from this payload. A
-	// project under teardown is no longer a project it may serve, and it is
-	// about to stop existing, so it reads the same as an unknown one.
-	if inst.Status == string(domain.StatusDeleting) {
+	// project it may not serve — under teardown, or restored but not yet
+	// confirmed — reads the same as an unknown one.
+	if domain.IsNotServable(inst.Status) {
 		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}

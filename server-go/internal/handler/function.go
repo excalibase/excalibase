@@ -247,11 +247,20 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 		h.clientMu.Unlock()
 		return c, nil
 	}
-	if shared, ok := h.clients[sharedClientKey]; ok && h.k8sClient == nil {
-		h.clientMu.Unlock()
+	shared, hasShared := h.clients[sharedClientKey]
+	h.clientMu.Unlock()
+	if hasShared && h.k8sClient == nil {
+		// Shared-runtime (docker) mode. Nothing here had looked at the
+		// project, so a project the platform must not serve kept running its
+		// functions. The cost is one indexed read by primary key per call,
+		// and it lands where invoke volume is lowest: this branch is only
+		// taken in single-tenant docker deployments, while the per-project
+		// k8s branch below already reads the row.
+		if _, err := h.instanceFor(projectID); err != nil {
+			return nil, err
+		}
 		return shared, nil
 	}
-	h.clientMu.Unlock()
 
 	// Per-project path — need namespace and to ensure the runtime exists.
 	if h.k8sClient == nil {
@@ -372,6 +381,19 @@ func (h *FunctionHandler) tierFor(projectID string) string {
 // so there is nothing left to serve from.
 var ErrProjectDeleting = errors.New("project is being deleted")
 
+// ErrProjectRestoring is returned when a function would be deployed into or
+// invoked against a project whose restore has not been confirmed.
+var ErrProjectRestoring = errors.New("project is being restored")
+
+// notServableErr picks the sentinel matching why the project may not be
+// served, so a caller can tell a teardown from an unconfirmed restore.
+func notServableErr(status string) error {
+	if status == string(domain.StatusRestoring) {
+		return ErrProjectRestoring
+	}
+	return ErrProjectDeleting
+}
+
 // instanceFor reads the project's row on the paths that already need it —
 // resolving a runtime, sizing it, deploying into it — and refuses a project
 // a teardown owns. Placing the check here keeps it off the public invoke
@@ -389,8 +411,8 @@ func (h *FunctionHandler) instanceFor(projectID string) (*domain.DatabaseInstanc
 	if inst == nil {
 		return nil, fmt.Errorf("unknown project %s", projectID)
 	}
-	if domain.IsDeletionStatus(inst.Status) {
-		return nil, fmt.Errorf("%w: %s", ErrProjectDeleting, projectID)
+	if domain.IsNotServable(inst.Status) {
+		return nil, fmt.Errorf("%w: %s", notServableErr(inst.Status), projectID)
 	}
 	return inst, nil
 }

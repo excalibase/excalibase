@@ -436,7 +436,7 @@ func (h *OrgHandler) ListProjectMembers(w http.ResponseWriter, r *http.Request) 
 // torn down: its member rows go with it, so a write here would either be lost
 // or outlive the project it names.
 func (h *OrgHandler) projectMemberWriteAllowed(w http.ResponseWriter, projectID string) bool {
-	return !refuseWhileDeleting(w, h.instanceStore, projectID)
+	return !refuseWhileNotServable(w, h.instanceStore, projectID)
 }
 
 func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {

@@ -142,7 +142,21 @@ func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, b
 	registrar.SetDockerClient(realDocker)
 	registrar.SetVault(vault)
 	adapter.SetProjectRegistrar(registrar)
+	// A restore completes only once the recovered database has answered a
+	// query with the credentials registration filed (EXC-401). This is the
+	// production probe against the live restored container.
+	adapter.SetDatabaseProbe(&liveDatabaseProbe{t: t, vault: vault})
 	return adapter, store, vault
+}
+
+// newRestoreAdapterWithProbe is newRestoreAdapter for tests that need to
+// steer the probe — a restore whose database refuses the filed credentials.
+func newRestoreAdapterWithProbe(ctx context.Context, t *testing.T, uploader S3Uploader, bucket string) (*DockerBackupAdapter, *storage.FileSystemStore, *fakeVault, *liveDatabaseProbe) {
+	t.Helper()
+	adapter, store, vault := newRestoreAdapter(ctx, t, uploader, bucket)
+	probe := &liveDatabaseProbe{t: t, vault: vault}
+	adapter.SetDatabaseProbe(probe)
+	return adapter, store, vault, probe
 }
 
 // waitForSmokeRows polls the restored container until `SELECT id FROM smoke

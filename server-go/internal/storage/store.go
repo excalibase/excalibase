@@ -122,6 +122,11 @@ type InstanceStore interface {
 	// marker. It refuses rows that are not being deleted, so it can never be
 	// used to push a live project into a deletion state.
 	RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error
+	// RecordRestoreInterrupted leaves the reason a restore stopped on the
+	// target project, without changing its status. It refuses any row that
+	// is not RESTORING, so it can never revive a project or disturb one
+	// whose restore finished.
+	RecordRestoreInterrupted(projectID, step, reason string) error
 	FindByProjectID(projectID string) (*domain.DatabaseInstance, error)
 	FindByOwner(ownerID string) ([]*domain.DatabaseInstance, error)
 	FindAll() ([]*domain.DatabaseInstance, error)
@@ -174,6 +179,23 @@ func ApplyDeletionFailure(inst *domain.DatabaseInstance, status domain.Provision
 		// the purge-retry endpoint and the project view already read it.
 		inst.FailureReason = reason
 	}
+	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
+	return nil
+}
+
+// ErrProjectNotRestoring is returned when a restore-interrupted marker is
+// asked for on a project that is not being restored.
+var ErrProjectNotRestoring = errors.New("project is not being restored")
+
+// ApplyRestoreInterrupted stamps the reason a restore stopped onto a target
+// project. The status is deliberately untouched: RESTORING is what keeps the
+// project from being served, and it is also what makes it deletable.
+func ApplyRestoreInterrupted(inst *domain.DatabaseInstance, step, reason string) error {
+	if inst.Status != string(domain.StatusRestoring) {
+		return fmt.Errorf("%w: %s is %s", ErrProjectNotRestoring, inst.ProjectID, inst.Status)
+	}
+	inst.CurrentStep = step
+	inst.FailureReason = reason
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
 	return nil
 }
@@ -238,6 +260,20 @@ type RestoreJobStore interface {
 	// caller is already bound to. An id alone never resolves.
 	FindRestoreJob(ctx context.Context, projectID, id string) (*domain.RestoreJob, error)
 	ListRunningRestoreJobs(ctx context.Context) ([]domain.RestoreJob, error)
+	// UpdateRunningRestoreJob writes progress or a terminal outcome, but only
+	// while the job is still RUNNING and still owned by owner. It reports
+	// whether the write landed: false means the job was taken (its owner was
+	// judged dead and the job failed) or is already terminal, and the caller
+	// must stop driving it rather than write over the recorded outcome.
+	UpdateRunningRestoreJob(ctx context.Context, j *domain.RestoreJob, owner string) (bool, error)
+	// HeartbeatRestoreJob refreshes the liveness marker of a job this process
+	// owns, reporting whether the job is still ours and still running.
+	HeartbeatRestoreJob(ctx context.Context, id, owner string) (bool, error)
+	// FailAbandonedRestoreJobs fails every RUNNING job that is not owned by
+	// owner and whose heartbeat is older than staleAfter, returning the jobs
+	// it failed so the caller can also mark their target projects. Jobs a
+	// live replica is driving are left alone.
+	FailAbandonedRestoreJobs(ctx context.Context, owner string, staleAfter time.Duration, reason string) ([]domain.RestoreJob, error)
 }
 
 // UserStore persists users for auth.

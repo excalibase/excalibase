@@ -153,6 +153,10 @@ func (s *e2eInstanceStore) BeginDeletion(projectID string, deleteBackups *bool) 
 	return storage.ApplyBeginDeletion(inst, deleteBackups)
 }
 
+func (s *e2eInstanceStore) RecordRestoreInterrupted(string, string, string) error {
+	return nil
+}
+
 func (s *e2eInstanceStore) RecordDeletionFailure(projectID string, status domain.ProvisioningStage, step, reason string) error {
 	inst, ok := s.insts[projectID]
 	if !ok {

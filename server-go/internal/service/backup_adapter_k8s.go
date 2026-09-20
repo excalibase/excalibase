@@ -8,10 +8,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/security"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -33,10 +35,13 @@ type K8sBackupAdapter struct {
 	// instance row, PgDog, events. Restore refuses to run without it —
 	// a restored project nobody registered is invisible to the API.
 	registrar ProjectRegistrar
-	// readyTimeout / readyPoll bound the wait for the restored primary.
-	// A restore replays WAL, so the default is generous.
-	readyTimeout time.Duration
-	readyPoll    time.Duration
+	// probe proves the recovered database answers a query before the
+	// restored project is allowed to become ACTIVE.
+	probe DatabaseProbe
+	// poller bounds the wait for the recovered cluster. A restore replays
+	// WAL, so the default budget is generous; the clock is injected so
+	// tests observe the wait without sleeping.
+	poller provisioner.Poller
 }
 
 // ErrProjectRegistrarNotConfigured is returned when a restore would produce a
@@ -46,6 +51,9 @@ var ErrProjectRegistrarNotConfigured = errors.New("restore: project registrar no
 const (
 	defaultRestoreReadyTimeout = 15 * time.Minute
 	defaultRestoreReadyPoll    = 5 * time.Second
+	// postgresClusterSuffix matches the CNPG Cluster name the CRD builder
+	// stamps onto a project.
+	postgresClusterSuffix = "-postgres"
 )
 
 // NewK8sBackupAdapter wires the CNPG adapter. storage must be the same
@@ -53,12 +61,24 @@ const (
 // implements it); nil means restores fail with ErrBackupStorageNotConfigured.
 func NewK8sBackupAdapter(client k8s.KubeClient, storagePath string, storage BackupStorageSource) *K8sBackupAdapter {
 	return &K8sBackupAdapter{
-		k8sClient:    client,
-		storagePath:  storagePath,
-		storage:      storage,
-		readyTimeout: defaultRestoreReadyTimeout,
-		readyPoll:    defaultRestoreReadyPoll,
+		k8sClient:   client,
+		storagePath: storagePath,
+		storage:     storage,
+		poller:      provisioner.NewPoller(defaultRestoreReadyPoll, defaultRestoreReadyTimeout),
 	}
+}
+
+// SetDatabaseProbe wires the check that proves a recovered database serves
+// queries. Without it a restore refuses to run.
+func (a *K8sBackupAdapter) SetDatabaseProbe(p DatabaseProbe) { a.probe = p }
+
+// SetReadyPoller replaces the bounded wait for the recovered cluster.
+func (a *K8sBackupAdapter) SetReadyPoller(p provisioner.Poller) { a.poller = p }
+
+// SetRestoreReadyTimeout bounds the wait for the recovered cluster on the
+// wall clock.
+func (a *K8sBackupAdapter) SetRestoreReadyTimeout(d time.Duration) {
+	a.poller = provisioner.NewPoller(defaultRestoreReadyPoll, d)
 }
 
 // SetProjectRegistrar wires the shared registration path. Called from main.go
@@ -129,10 +149,12 @@ func (a *K8sBackupAdapter) List(ctx context.Context, inst *domain.DatabaseInstan
 // comes from the same BackupStorageSource the backup-write path uses; there is
 // no fallback.
 //
-// Failure semantics once the Cluster exists: the namespace is deliberately
-// left in place for inspection and no instance row is written, so the operator
-// sees a FAILED restore job naming the step plus a live namespace to debug —
-// never a half-registered project the API would serve.
+// Failure semantics once the Cluster exists: everything the restore created
+// is compensated away in LIFO order — the Cluster CR, the namespace (which
+// takes the object-store secret with it) and every vault credential, NATS
+// identity and watcher registration the project registration filed. The
+// caller is told only that the restore was not confirmed; the step that gave
+// up and what it saw go to the log.
 func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
 	store, ok := a.backupStorage()
 	if !ok {
@@ -141,24 +163,20 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if a.registrar == nil {
 		return nil, ErrProjectRegistrarNotConfigured
 	}
+	if a.probe == nil {
+		return nil, ErrDatabaseProbeNotConfigured
+	}
 	newProject := req.TargetProjectID
 	if err := assertProjectIDAvailable(a.instances, newProject); err != nil {
 		return nil, err
 	}
 	newNamespace := fmt.Sprintf("%s-%s", inst.OrgID, newProject)
+	pc := provisioner.NewProvisionContext(nil, nil)
 
-	if err := a.createRestoreCluster(ctx, inst, req, store, newNamespace); err != nil {
-		return nil, err
+	restored, err := a.runRestore(ctx, pc, inst, req, store, newProject, newNamespace)
+	if err != nil {
+		return nil, failRestore(ctx, pc, newProject, err)
 	}
-	if err := a.waitForRestoredPrimary(ctx, newNamespace, newProject); err != nil {
-		return nil, err
-	}
-
-	restored := a.restoredInstance(ctx, inst, req, newProject, newNamespace)
-	if err := a.registrar.RegisterProject(ctx, restored, RegistrationOptions{ResetRolePasswords: true}); err != nil {
-		return nil, fmt.Errorf("register restored project: %w", err)
-	}
-
 	return &domain.ProvisioningResponse{
 		ProjectID:    restored.ProjectID,
 		ProjectName:  restored.ProjectName,
@@ -172,12 +190,41 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	}, nil
 }
 
+// runRestore drives the recovery to a project that has been proved usable.
+// Every failure is returned so Restore can compensate through pc.
+func (a *K8sBackupAdapter) runRestore(
+	ctx context.Context,
+	pc *provisioner.ProvisionContext,
+	inst *domain.DatabaseInstance,
+	req domain.RestoreRequest,
+	store *domain.S3Credentials,
+	newProject, newNamespace string,
+) (*domain.DatabaseInstance, error) {
+	if err := a.createRestoreCluster(ctx, pc, inst, req, store, newNamespace); err != nil {
+		return nil, err
+	}
+	if err := a.waitForRecoveredCluster(ctx, newNamespace, newProject); err != nil {
+		return nil, err
+	}
+	restored := a.restoredInstance(ctx, inst, req, newProject, newNamespace)
+	if err := registerVerifiedProject(ctx, pc, a.registrar, a.instances, a.probe, restored,
+		RegistrationOptions{ResetRolePasswords: true}); err != nil {
+		return nil, err
+	}
+	return restored, nil
+}
+
 // createRestoreCluster creates the target namespace, the object-store secret
 // and the recovery-bootstrapped CNPG Cluster.
-func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest, store *domain.S3Credentials, newNamespace string) error {
+func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisioner.ProvisionContext, inst *domain.DatabaseInstance, req domain.RestoreRequest, store *domain.S3Credentials, newNamespace string) error {
 	if err := a.k8sClient.CreateNamespace(ctx, newNamespace); err != nil {
 		return fmt.Errorf("create restore namespace: %w", err)
 	}
+	// Deleting the namespace removes the object-store secret with it, so the
+	// secret needs no compensation of its own.
+	pc.RegisterCleanup("delete restore namespace", func(ctx context.Context) error {
+		return a.k8sClient.DeleteNamespace(ctx, newNamespace)
+	})
 	if err := a.k8sClient.CreateSecret(ctx, newNamespace, s3CredsKey, map[string][]byte{
 		"ACCESS_KEY_ID":     []byte(store.AccessKeyID),
 		"ACCESS_SECRET_KEY": []byte(store.SecretAccessKey),
@@ -191,29 +238,56 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, inst *domai
 		Store:           k8s.ObjectStoreOpts{EndpointURL: store.Endpoint, Bucket: store.Bucket, SecretName: s3CredsKey},
 		RecoveryTarget:  req.RecoveryTarget(),
 	})
+	clusterName := req.TargetProjectID + postgresClusterSuffix
 	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, newNamespace, restoreObj); err != nil {
 		return fmt.Errorf("apply restore CRD: %w", err)
 	}
+	pc.RegisterCleanup("delete restore cluster", func(ctx context.Context) error {
+		return a.k8sClient.DeleteCRD(ctx, k8s.CNPGClusterGVR, newNamespace, clusterName)
+	})
 	return nil
 }
 
-// waitForRestoredPrimary blocks until CNPG reports the recovered primary pod
-// Ready — which it only does once WAL replay has finished and postgres is
-// accepting connections, so role SQL can run straight after.
-func (a *K8sBackupAdapter) waitForRestoredPrimary(ctx context.Context, namespace, projectID string) error {
-	pod := projectID + primaryPodSuffix
-	deadline := time.Now().Add(a.readyTimeout)
-	for time.Now().Before(deadline) {
-		if ready, err := a.k8sClient.IsPodReady(ctx, namespace, pod); err == nil && ready {
-			return nil
+// waitForRecoveredCluster blocks until CNPG reports the recovered Cluster
+// healthy with a ready primary. Nothing but the operator writes that status,
+// so an operator that never reconciles — or never installed — can only end
+// in the wait's timeout, never in a completed restore.
+func (a *K8sBackupAdapter) waitForRecoveredCluster(ctx context.Context, namespace, projectID string) error {
+	cluster := projectID + postgresClusterSuffix
+	return a.poller.WaitUntilReady(ctx, "recovered cluster "+cluster, func(ctx context.Context) (bool, error) {
+		obj, err := a.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster)
+		if err != nil {
+			// The Cluster may not be visible yet, or the apiserver may be
+			// briefly unreachable. Neither proves recovery impossible, so
+			// the budget decides — but the reason is never silent.
+			log.Printf("restore %s: read cluster status: %v", projectID, err)
+			return false, nil
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(a.readyPoll):
+		phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
+		if isUnrecoverableClusterPhase(phase) {
+			return false, fmt.Errorf("cluster reports phase %q", phase)
 		}
-	}
-	return fmt.Errorf("restored primary %s did not become ready within %v (namespace kept for inspection)", pod, a.readyTimeout)
+		primary, _, _ := unstructured.NestedString(obj.Object, "status", "currentPrimary")
+		ready, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyInstances")
+		if primary == "" || ready < 1 {
+			return false, nil
+		}
+		podReady, err := a.k8sClient.IsPodReady(ctx, namespace, primary)
+		if err != nil {
+			log.Printf("restore %s: read primary %s readiness: %v", projectID, primary, err)
+			return false, nil
+		}
+		return podReady, nil
+	})
+}
+
+// isUnrecoverableClusterPhase reports whether CNPG has given up on the
+// Cluster. CNPG's status.phase is a human-readable sentence rather than an
+// enum ("Cluster is in an unrecoverable state, needs manual intervention"),
+// so the check is on the words it uses for a terminal state.
+func isUnrecoverableClusterPhase(phase string) bool {
+	lower := strings.ToLower(phase)
+	return strings.Contains(lower, "unrecoverable") || strings.Contains(lower, "failed")
 }
 
 // restoredInstance builds the project row for the restored cluster. It

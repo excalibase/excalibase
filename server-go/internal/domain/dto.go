@@ -206,8 +206,15 @@ type RestoreJob struct {
 	TargetKind      string `json:"targetKind"` // latest | time | xid | lsn | name
 	TargetValue     string `json:"targetValue,omitempty"`
 	FailureReason   string `json:"failureReason,omitempty"`
-	CreatedAt       string `json:"createdAt"`
-	UpdatedAt       string `json:"updatedAt"`
+	// Owner names the platform process driving this job. Only that process
+	// may write progress onto it, so a replica restarting mid-deploy cannot
+	// fail a restore one of its peers is still running.
+	Owner string `json:"-"`
+	// HeartbeatAt is when the owner last proved it was alive. A job whose
+	// heartbeat has gone stale is abandoned and may be failed by any replica.
+	HeartbeatAt string `json:"-"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 // RestoreTargetKind extracts the canonical target kind from a

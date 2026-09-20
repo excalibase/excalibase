@@ -40,8 +40,8 @@ func TestRefuseWhileDeleting(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			if got := refuseWhileDeleting(w, instances, tc.projectID); got != tc.refused {
-				t.Fatalf("refuseWhileDeleting = %v, want %v", got, tc.refused)
+			if got := refuseWhileNotServable(w, instances, tc.projectID); got != tc.refused {
+				t.Fatalf("refuseWhileNotServable = %v, want %v", got, tc.refused)
 			}
 			if tc.refused && w.Code != http.StatusConflict {
 				t.Errorf("status = %d, want 409", w.Code)
@@ -53,7 +53,7 @@ func TestRefuseWhileDeleting(t *testing.T) {
 // Without an instance store the check cannot answer, and must not invent one.
 func TestRefuseWhileDeletingWithoutAStore(t *testing.T) {
 	w := httptest.NewRecorder()
-	if refuseWhileDeleting(w, nil, "gone") {
+	if refuseWhileNotServable(w, nil, "gone") {
 		t.Error("an unwired store must not refuse the request")
 	}
 }
@@ -64,7 +64,7 @@ func TestRefuseWhileDeletingWhenTheStoreFails(t *testing.T) {
 	instances := fakestore.NewInstances()
 	instances.Err = errStoreDown
 	w := httptest.NewRecorder()
-	if refuseWhileDeleting(w, instances, "gone") {
+	if refuseWhileNotServable(w, instances, "gone") {
 		t.Error("a failed lookup must fall through to the caller")
 	}
 }

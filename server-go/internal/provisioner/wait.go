@@ -10,7 +10,7 @@ import (
 // ErrWaitTimeout is returned when a resource is still present after the
 // poller's budget is spent. Callers match on it to report a teardown as
 // incomplete rather than failed outright.
-var ErrWaitTimeout = errors.New("timed out waiting for resource removal")
+var ErrWaitTimeout = errors.New("timed out waiting for resource")
 
 // Poller bounds a wait: how often to re-check a resource and how long to
 // keep trying. Now and After are the only clock access, so tests drive the
@@ -39,6 +39,33 @@ func (p Poller) after(d time.Duration) <-chan time.Time {
 		return p.After(d)
 	}
 	return time.After(d)
+}
+
+// WaitUntilReady polls ready until it reports true. what names the thing
+// being waited on and appears in the timeout error. An error from ready is
+// fatal and stops the wait immediately: it means the resource has told us it
+// will never become ready, so spending the rest of the budget is pointless.
+// Transient "cannot tell yet" conditions belong in the false return, not the
+// error.
+func (p Poller) WaitUntilReady(ctx context.Context, what string, ready func(context.Context) (bool, error)) error {
+	deadline := p.now().Add(p.Timeout)
+	for {
+		ok, err := ready(ctx)
+		if err != nil {
+			return fmt.Errorf("wait for %s: %w", what, err)
+		}
+		if ok {
+			return nil
+		}
+		if !p.now().Before(deadline) {
+			return fmt.Errorf("%w: %s not ready after %s", ErrWaitTimeout, what, p.Timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for %s: %w", what, ctx.Err())
+		case <-p.after(p.Interval):
+		}
+	}
 }
 
 // WaitUntilClear polls remaining until it reports nothing left. what names

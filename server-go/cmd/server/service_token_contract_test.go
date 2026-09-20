@@ -206,6 +206,12 @@ func (emptyPolicyStore) DeleteColumn(context.Context, string, string) error     
 // inventory touches wired — vault seeded, exposure store, mail relay — and
 // returns the raw bearer token of each service principal.
 func contractRouter(t *testing.T) (http.Handler, callers, *memoryGrantStore) {
+	return contractRouterWithProjectStatus(t, "ACTIVE")
+}
+
+// contractRouterWithProjectStatus is contractRouter with the contract
+// project in a chosen lifecycle state.
+func contractRouterWithProjectStatus(t *testing.T, status string) (http.Handler, callers, *memoryGrantStore) {
 	t.Helper()
 	localVault, err := newLocalVault(vault.NewMemoryStore(), true, filepath.Join(t.TempDir(), "unseal.key"), "")
 	if err != nil {
@@ -224,7 +230,7 @@ func contractRouter(t *testing.T) (http.Handler, callers, *memoryGrantStore) {
 	}
 
 	instances := fakestore.NewInstances()
-	instances.Create(&domain.DatabaseInstance{ProjectID: contractProject, OrgID: matrixOrgA, Status: "ACTIVE"})
+	instances.Create(&domain.DatabaseInstance{ProjectID: contractProject, OrgID: matrixOrgA, Status: status})
 
 	platform := &fakePlatform{Orgs: fakestore.NewOrgs(), Tokens: fakestore.NewTokens()}
 	platform.Users[svcAuthUserID] = &domain.User{ID: svcAuthUserID, Role: "platform_admin", Active: true, Kind: domain.UserKindService}
@@ -242,6 +248,7 @@ func contractRouter(t *testing.T) (http.Handler, callers, *memoryGrantStore) {
 	grants := newMemoryGrantStore()
 	deps := matrixDeps(t, instances)
 	deps.vaultHandler = handler.NewVaultHandler(localVault)
+	deps.vaultHandler.SetInstanceStore(instances)
 	deps.tableGrantHandler = handler.NewTableGrantHandler(grants)
 	deps.rlsPolicyHandler = handler.NewRlsPolicyHandler(emptyPolicyStore{})
 	deps.internalEmail = handler.NewInternalEmailHandler(&countingSender{})
@@ -282,6 +289,30 @@ func TestPlatformServicesAreRefusedEverythingElse(t *testing.T) {
 			w := contractRequest(router, call, who[call.caller])
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("%s (%s) got %d, want 403: %s", call.path, call.source, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+
+// A project the platform must not serve must not have its credentials handed
+// to the engine or the auth service either — that is the door they actually
+// use. 404, so a service treats the project as absent and stops serving it.
+func TestServicesGetNoCredentialsForAProjectThatIsNotServable(t *testing.T) {
+	for name, status := range map[string]string{
+		"restoring": string(domain.StatusRestoring),
+		"deleting":  string(domain.StatusDeleting),
+	} {
+		t.Run(name, func(t *testing.T) {
+			router, who, _ := contractRouterWithProjectStatus(t, status)
+			for _, call := range []serviceCall{
+				{svcGraphql, http.MethodGet, "/api/vault/secrets/projects/" + contractProject + "/credentials/excalibase_app", "", ""},
+				{svcAuth, http.MethodGet, "/api/vault/secrets/projects/" + contractProject + "/credentials/auth_admin", "", ""},
+			} {
+				w := contractRequest(router, call, who[call.caller])
+				if w.Code != http.StatusNotFound {
+					t.Errorf("%s %s: got %d, want 404; body=%s", call.caller, call.path, w.Code, w.Body.String())
+				}
 			}
 		})
 	}

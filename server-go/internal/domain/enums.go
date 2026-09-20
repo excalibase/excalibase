@@ -65,6 +65,11 @@ const (
 	// or timed-out teardown keeps the record needed to retry it. A project
 	// in this state is no longer usable and must not be served as active.
 	StatusDeleting ProvisioningStage = "DELETING"
+	// StatusRestoring marks a project whose database has been recovered but
+	// not yet proved usable. A restore registers its target in this state and
+	// only flips it to ACTIVE once a query has answered, so a recovery that
+	// never happened is never served as a working project.
+	StatusRestoring ProvisioningStage = "RESTORING"
 )
 
 // StatusProvisioning is the status a project holds while its provisioning
@@ -93,6 +98,31 @@ func IsBuildingStatus(status string) bool {
 // gone and only the backup purge is outstanding.
 func IsDeletionStatus(status string) bool {
 	return status == string(StatusDeleting) || status == string(StatusBackupsPendingDelete)
+}
+
+// IsNotServable reports whether a project must not be served: no data-plane
+// traffic routed to it, no JWT minted for it, no credentials handed out, no
+// function deployed or invoked against it, no membership rewritten.
+//
+// Two reasons qualify. A project under teardown is about to stop existing.
+// A project in RESTORING carries working-looking credentials for a database
+// nothing has confirmed yet — the recovered cluster may never have come up,
+// and if the process driving the restore dies, the row stays that way. In
+// both cases the row exists, which is exactly why every read has to ask.
+//
+// The list lives here so the gate, the handlers and the data plane cannot
+// drift apart.
+func IsNotServable(status string) bool {
+	return IsDeletionStatus(status) || status == string(StatusRestoring)
+}
+
+// NotServableReason is the fixed sentence a caller is given for a project
+// that is not servable. It names what is happening and nothing else.
+func NotServableReason(status string) string {
+	if status == string(StatusRestoring) {
+		return "project is being restored"
+	}
+	return "project is being deleted"
 }
 
 // DeletionSteps are the teardown steps, in the order Deprovision runs them.

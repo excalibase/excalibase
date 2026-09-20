@@ -3,12 +3,15 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // fakeRegistrar stands in for the shared registration path so adapter tests
@@ -17,6 +20,9 @@ type fakeRegistrar struct {
 	calls []*domain.DatabaseInstance
 	opts  []RegistrationOptions
 	err   error
+	// store, when set, persists the row so the caller's verify-then-activate
+	// flip has something to update.
+	store storage.InstanceStore
 }
 
 func (f *fakeRegistrar) RegisterProject(_ context.Context, inst *domain.DatabaseInstance, opts RegistrationOptions) error {
@@ -25,21 +31,67 @@ func (f *fakeRegistrar) RegisterProject(_ context.Context, inst *domain.Database
 	if f.err != nil {
 		return f.err
 	}
-	markProjectActive(inst)
+	if opts.Unverified {
+		markProjectRestoring(inst)
+	} else {
+		markProjectActive(inst)
+	}
+	if f.store != nil {
+		return f.store.Create(inst)
+	}
 	return nil
 }
 
-// newRestoreReadyAdapter builds a K8s adapter whose restored primary is
-// immediately Ready, so tests exercise the register step rather than polling.
+// newRestoreReadyAdapter builds a K8s adapter whose recovered cluster reports
+// itself healthy on the first poll, so tests exercise the register step
+// rather than the wait. The clock is fake: nothing sleeps.
 func newRestoreReadyAdapter(t *testing.T, mock *k8s.MockClient, reg ProjectRegistrar) *K8sBackupAdapter {
 	t.Helper()
 	mock.WildcardPodReady = true
+	store := emptyInstanceStore(t)
+	if f, ok := reg.(*fakeRegistrar); ok && f.store == nil {
+		f.store = store
+	}
 	adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(r2Storage()))
-	adapter.SetInstanceStore(emptyInstanceStore(t))
+	adapter.SetInstanceStore(store)
 	adapter.SetProjectRegistrar(reg)
-	adapter.readyPoll = time.Millisecond
-	adapter.readyTimeout = 200 * time.Millisecond
+	adapter.SetDatabaseProbe(alwaysAnswers{})
+	adapter.SetReadyPoller(reconcilingPoller(mock))
 	return adapter
+}
+
+// alwaysAnswers is a DatabaseProbe for tests whose subject is not the probe.
+type alwaysAnswers struct{}
+
+func (alwaysAnswers) Probe(context.Context, string) error { return nil }
+
+// reconcilingPoller stands in for the CNPG operator: each tick stamps the
+// healthy status onto every Cluster the restore has applied, so the adapter's
+// observation succeeds on the next look without any real waiting.
+func reconcilingPoller(mock *k8s.MockClient) provisioner.Poller {
+	now := time.Unix(0, 0)
+	return provisioner.Poller{
+		Interval: time.Second,
+		Timeout:  time.Minute,
+		Now:      func() time.Time { return now },
+		After: func(d time.Duration) <-chan time.Time {
+			now = now.Add(d)
+			for key, obj := range mock.CRDs {
+				if !strings.HasSuffix(key, postgresClusterSuffix) {
+					continue
+				}
+				name := key[strings.Index(key, "/")+1:]
+				_ = unstructured.SetNestedMap(obj.Object, map[string]interface{}{
+					"phase":          "Cluster in healthy state",
+					"currentPrimary": name + "-1",
+					"readyInstances": int64(1),
+				}, "status")
+			}
+			ch := make(chan time.Time, 1)
+			ch <- now
+			return ch
+		},
+	}
 }
 
 func TestK8sRestoreRegistersTheRestoredProject(t *testing.T) {
@@ -101,11 +153,11 @@ func TestK8sRestoreFailsWhenRegistrationFails(t *testing.T) {
 	adapter := newRestoreReadyAdapter(t, mock, reg)
 
 	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
-	if err == nil {
-		t.Fatal("registration failure must fail the restore so the job is marked FAILED")
+	if !errors.Is(err, ErrRestoreNotObserved) {
+		t.Fatalf("err: got %v, want ErrRestoreNotObserved", err)
 	}
-	if _, ok := mock.Namespaces["org-dst"]; !ok {
-		t.Error("the namespace must be kept for inspection after a failed registration")
+	if mock.Namespaces["org-dst"] {
+		t.Error("a restore that could not be registered must compensate its namespace away")
 	}
 }
 
@@ -151,7 +203,7 @@ func newDockerRestoreHarness(t *testing.T) *dockerRestoreHarness {
 
 func TestDockerRestoreRegistersInsteadOfSavingTheRowItself(t *testing.T) {
 	h := newDockerRestoreHarness(t)
-	reg := &fakeRegistrar{}
+	reg := &fakeRegistrar{store: h.instances}
 	h.adapter.SetProjectRegistrar(reg)
 
 	resp, err := h.adapter.Restore(context.Background(), h.source, domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
@@ -171,8 +223,11 @@ func TestDockerRestoreRegistersInsteadOfSavingTheRowItself(t *testing.T) {
 	if !reg.opts[0].ResetRolePasswords || !reg.opts[0].ResetAdminPassword {
 		t.Errorf("a seeded data directory keeps the source passwords; both resets are required: %+v", reg.opts[0])
 	}
-	if saved, _ := h.instances.FindByProjectID("dst"); saved != nil {
-		t.Error("the adapter must not persist the row itself — registration owns that")
+	// The only row that exists is the one registration wrote, flipped to
+	// ACTIVE after the probe — the adapter never persists one itself.
+	saved, _ := h.instances.FindByProjectID("dst")
+	if saved == nil || saved.Status != "ACTIVE" {
+		t.Errorf("registered row: %+v", saved)
 	}
 	if resp.Status != "ACTIVE" {
 		t.Errorf("response status: %q", resp.Status)
@@ -197,5 +252,18 @@ func TestDockerRestoreRefusesWithoutRegistrar(t *testing.T) {
 	_, err := h.adapter.Restore(context.Background(), h.source, domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
 	if !errors.Is(err, ErrProjectRegistrarNotConfigured) {
 		t.Fatalf("err: got %v, want ErrProjectRegistrarNotConfigured", err)
+	}
+}
+
+// armRestore wires onto a BackupService everything a verified restore needs
+// from the platform: a database that answers, and a stand-in operator that
+// reconciles the recovered cluster on the first poll.
+func armRestore(svc *BackupService, mock *k8s.MockClient, store storage.InstanceStore) {
+	_ = svc.SetDatabaseProbe(alwaysAnswers{})
+	for _, adapter := range svc.adapters {
+		if k8sAdapter, ok := adapter.(*K8sBackupAdapter); ok {
+			k8sAdapter.SetReadyPoller(reconcilingPoller(mock))
+			k8sAdapter.SetInstanceStore(store)
+		}
 	}
 }

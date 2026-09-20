@@ -106,17 +106,18 @@ func schemaError(w http.ResponseWriter, err error, code int) {
 	httpError(w, safeError(err), code)
 }
 
-// refuseWhileDeleting writes 409 and reports true when the project is being
-// torn down. Routes that carry a project id but sit outside
-// RequireProjectAccess call it themselves — the gate cannot see them.
-func refuseWhileDeleting(w http.ResponseWriter, instances storage.InstanceStore, projectID string) bool {
+// refuseWhileNotServable writes 409 and reports true when the project must
+// not be served — under teardown, or restored but not yet confirmed. Routes
+// that carry a project id but sit outside RequireProjectAccess call it
+// themselves: the gate cannot see them.
+func refuseWhileNotServable(w http.ResponseWriter, instances storage.InstanceStore, projectID string) bool {
 	if instances == nil {
 		return false
 	}
 	inst, err := instances.FindByProjectID(projectID)
-	if err != nil || inst == nil || !domain.IsDeletionStatus(inst.Status) {
+	if err != nil || inst == nil || !domain.IsNotServable(inst.Status) {
 		return false
 	}
-	httpError(w, "project is being deleted", http.StatusConflict)
+	httpError(w, domain.NotServableReason(inst.Status), http.StatusConflict)
 	return true
 }

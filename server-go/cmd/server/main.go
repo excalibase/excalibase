@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -210,7 +211,8 @@ func runServer(cfg config.AppConfig) {
 	defer stopStorageReap()
 
 	if sqlStore != nil {
-		wireRestoreOrchestrator(sqlStore, store, deps)
+		stopRestoreSweeper := wireRestoreOrchestrator(cfg, sqlStore, store, deps)
+		defer stopRestoreSweeper()
 	}
 
 	r := buildRouter(cfg, sqlStore, store, deps)
@@ -219,12 +221,15 @@ func runServer(cfg config.AppConfig) {
 }
 
 // wireRestoreOrchestrator builds the restore orchestrator, registers the
-// single delegate-to-adapter step, sweeps stale jobs, and wires it into the
-// backup handler. Extracted from runServer to keep that function's branching
-// shallow.
-func wireRestoreOrchestrator(sqlStore storage.PlatformStore, store storage.InstanceStore, deps *handlerDeps) {
+// single delegate-to-adapter step, sweeps abandoned jobs, starts the periodic
+// sweeper, and wires it into the backup handler. Extracted from runServer to
+// keep that function's branching shallow. Returns the sweeper's stop.
+func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, deps *handlerDeps) func() {
 	orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
 		Jobs: sqlStore.RestoreJobs(),
+		// A swept job's target project is told its restore was interrupted,
+		// so the user reading the project sees why it is stuck.
+		Instances: store,
 	})
 	backupSvc := deps.backupHandler.Service()
 	// Wrap the existing synchronous adapter.Restore as a single
@@ -242,9 +247,27 @@ func wireRestoreOrchestrator(sqlStore storage.PlatformStore, store storage.Insta
 			},
 		},
 	})
-	_ = orchestrator.SweepStale(context.Background())
+	if err := orchestrator.SweepStale(context.Background()); err != nil {
+		log.Printf("WARN: restore boot sweep: %v", err)
+	}
 	deps.backupHandler.SetRestoreOrchestrator(orchestrator)
+	// Failing a job whose replica crashed must not wait for the next
+	// restart, and only one replica should be doing it.
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), restoreSweepLockID)
+	}
+	return orchestrator.StartSweeper(context.Background(), service.NewLeadership(lock), restoreSweepInterval)
 }
+
+// restoreSweepLockID is the advisory lock the restore sweeper leads on. It
+// must stay distinct from every other advisory lock id the platform takes.
+const restoreSweepLockID int64 = 0x51c2_7d0e_9a41_3b77
+
+// restoreSweepInterval is how often the leader looks for restores whose
+// driver has gone silent. Two sweeps inside the staleness bound is enough:
+// the bound, not this, decides how long a job may go unheard.
+const restoreSweepInterval = 30 * time.Second
 
 // runRestoreStep resolves the source instance and dispatches the restore to
 // the backup service, translating the job's target kind into a RestoreRequest.
@@ -797,6 +820,23 @@ type handlerDepsArgs struct {
 // Docker adapter has nowhere to put bytes, so we keep it out and the
 // dispatch returns ErrUnsupportedBackupMode for docker projects until
 // the operator finishes wiring credentials.
+// wireRestoreVerification gives every backup adapter the probe that proves a
+// recovered database answers queries, and the budget its readiness wait runs
+// on. A restore is COMPLETED only once that probe has succeeded (EXC-401), so
+// an adapter that did not take a probe — or a vault the probe cannot read
+// through — is a startup failure, not something to discover on the first
+// restore a customer runs.
+func wireRestoreVerification(backupSvc *service.BackupService, vc vaultclient.VaultClient, readyTimeout time.Duration) error {
+	if vc == nil {
+		return errors.New("no vault client: the probe cannot read the credentials a restored project is registered with")
+	}
+	if err := backupSvc.SetDatabaseProbe(service.NewVaultDatabaseProbe(vc)); err != nil {
+		return err
+	}
+	backupSvc.SetRestoreReadyTimeout(readyTimeout)
+	return nil
+}
+
 func buildBackupService(
 	cfg config.AppConfig,
 	store storage.InstanceStore,
@@ -883,6 +923,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// recovered database to the provisioning service's registration path
 	// (EXC-366) instead of writing a half-project row themselves.
 	backupSvc.SetProjectRegistrar(provSvc)
+	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout); err != nil {
+		log.Fatalf("restore verification: %v", err)
+	}
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
 	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)
@@ -930,6 +973,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	var vaultHandler *handler.VaultHandler
 	if localVault != nil {
 		vaultHandler = handler.NewVaultHandler(localVault)
+		// The engine and the auth service fetch tenant credentials here; a
+		// project the platform must not serve must not answer (EXC-401).
+		vaultHandler.SetInstanceStore(store)
 	}
 
 	realtimeHandler := handler.NewRealtimeHandler(sqlStore, sqlStore, vc)
@@ -1297,7 +1343,13 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 			r.Use(d.activity)
 			d.storageHandler.Routes(r)
 		})
-		d.storageHandler.PublicRoutes(r)
+		// The public object path is anonymous, so it sits outside the
+		// project-access gate and carries the rule itself: no downloads are
+		// signed for a project the platform must not serve (EXC-401).
+		r.Group(func(r chi.Router) {
+			r.Use(custommw.RequireServableProject(store))
+			d.storageHandler.PublicRoutes(r)
+		})
 		// Phase 10: ctx.storage runtime-to-provisioning routes. Auth via
 		// X-Excalibase-Runtime-Token shared secret — same secret the
 		// Deno runtime uses for /deploy and /internal/invoke. Mounted

@@ -66,6 +66,11 @@ type RegistrationOptions struct {
 	// already registered is refused instead of repointing its owner's
 	// project (EXC-415).
 	RowAlreadyCreated bool
+	// Unverified persists the project as RESTORING instead of ACTIVE. The
+	// caller flips it once it has proved the database answers a query with
+	// the credentials this registration filed, so a restore that recovered
+	// nothing never surfaces as a usable project (EXC-401).
+	Unverified bool
 }
 
 // SetActivityRecorder wires the last-seen writer. Optional: without it a newly
@@ -101,7 +106,11 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 	if err != nil {
 		return rollbackIfOwned(ctx, pc, owned, err)
 	}
-	markProjectActive(inst)
+	if opts.Unverified {
+		markProjectRestoring(inst)
+	} else {
+		markProjectActive(inst)
+	}
 	if err := s.persistProjectRow(inst, opts); err != nil {
 		return rollbackIfOwned(ctx, pc, owned, fmt.Errorf("persist project row: %w", err))
 	}
@@ -128,6 +137,15 @@ func rollbackIfOwned(ctx context.Context, pc *provisioner.ProvisionContext, owne
 		pc.Rollback(ctx)
 	}
 	return err
+}
+
+// markProjectRestoring stamps the not-yet-proved state a restore registers
+// its target in. The row exists (so DELETE and the busy checks can see it)
+// but no caller may treat it as a working project.
+func markProjectRestoring(inst *domain.DatabaseInstance) {
+	markProjectActive(inst)
+	inst.Status = string(domain.StatusRestoring)
+	inst.CurrentStage = domain.StatusRestoring
 }
 
 // markProjectActive stamps the terminal provisioning state onto the row.
