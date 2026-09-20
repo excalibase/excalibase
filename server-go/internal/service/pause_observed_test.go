@@ -602,3 +602,31 @@ func TestPauseAcceptsAProjectLeftInPausing(t *testing.T) {
 		t.Errorf("status: got %s, want PAUSED", got)
 	}
 }
+
+// poolObserver stands in for the project-database pool cache.
+type poolObserver struct{ seen []string }
+
+func (p *poolObserver) ProjectStatusChanged(projectID, status string) {
+	p.seen = append(p.seen, projectID+"="+status)
+}
+
+// Nothing else tells the platform a project stopped being reachable: a pause
+// writes PAUSING then PAUSED and the pool cache never hears about it.
+func TestPauseTellsStatusObserversAboutEveryTransition(t *testing.T) {
+	f := newObservedPause(t)
+	obs := &poolObserver{}
+	f.svc.AddStatusObserver(obs)
+
+	if err := f.pause(t); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	var sawPaused bool
+	for _, seen := range obs.seen {
+		if seen == observedPauseProject+"="+string(domain.StatusPaused) {
+			sawPaused = true
+		}
+	}
+	if !sawPaused {
+		t.Errorf("observers were not told the project is PAUSED: %v", obs.seen)
+	}
+}

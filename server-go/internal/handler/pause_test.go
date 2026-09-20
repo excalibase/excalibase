@@ -20,11 +20,11 @@ import (
 
 // fakePauserForHandler — minimal Pauser satisfying the interface.
 type fakePauserForHandler struct {
-	mu          sync.Mutex
-	paused      bool
-	resumed     bool
-	pauseErr    error
-	resumeErr   error
+	mu        sync.Mutex
+	paused    bool
+	resumed   bool
+	pauseErr  error
+	resumeErr error
 }
 
 func (f *fakePauserForHandler) WorkloadStopped(context.Context, string, string) (bool, error) {

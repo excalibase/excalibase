@@ -15,7 +15,6 @@ const (
 	testRowsPath     = "/api/schema/test-proj/tables/users/rows"
 )
 
-
 // These tests extend schema_handler_test.go to cover triggers, indexes, data
 // operations, types, and advisors — all 0% or very low coverage before this file.
 

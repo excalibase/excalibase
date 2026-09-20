@@ -48,7 +48,11 @@ func (p *VaultDatabaseProbe) Probe(ctx context.Context, projectID string) error 
 	if err != nil {
 		return fmt.Errorf("read %s credentials: %w", roleApp, err)
 	}
-	db, err := sql.Open("postgres", buildTenantDSN(creds, p.overrides))
+	dsn, err := buildTenantDSN(creds, p.overrides)
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return fmt.Errorf("open restored database: %w", err)
 	}

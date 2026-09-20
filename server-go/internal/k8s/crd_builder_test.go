@@ -12,7 +12,6 @@ const (
 	testPGStatParam  = "pg_stat_statements.max"
 )
 
-
 func TestBuildPostgreSQLClusterFree(t *testing.T) {
 	obj := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
 		ProjectID: "test-db",
@@ -45,7 +44,7 @@ func TestBuildPostgreSQLClusterStandard(t *testing.T) {
 		Backup:    &BackupOpts{Schedule: testCronSchedule, RetentionDays: 30},
 		Parameters: map[string]string{
 			"shared_preload_libraries": "pg_stat_statements",
-			testPGStatParam:   "10000",
+			testPGStatParam:            "10000",
 			"pg_stat_statements.track": "all",
 		},
 		Tags: map[string]string{"owner": "duke", "env": "demo"},

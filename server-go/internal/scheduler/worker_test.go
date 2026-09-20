@@ -101,6 +101,12 @@ func (s *stubInvoker) Calls() []invokeCall {
 	return out
 }
 
+// allModules stands in for the platform registry in the integration tests:
+// every module the fixtures seed was deployed by the platform.
+type allModules struct{}
+
+func (allModules) HasFunction(string, string) (bool, error) { return true, nil }
+
 // TestWorker_PicksUpAndCompletes seeds a pending task, runs one poll tick,
 // and asserts the task is marked completed after a successful invocation.
 func TestWorker_PicksUpAndCompletes(t *testing.T) {
@@ -120,7 +126,7 @@ func TestWorker_PicksUpAndCompletes(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	w := NewWorker(WorkerConfig{DB: db, Invoker: inv, PollInterval: 100 * time.Millisecond})
+	w := NewWorker(WorkerConfig{DB: db, ProjectID: "proj_a", Functions: allModules{}, Invoker: inv, PollInterval: 100 * time.Millisecond})
 	if err := w.Tick(ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -166,7 +172,7 @@ func TestWorker_DoesNotPickFutureTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	w := NewWorker(WorkerConfig{DB: db, Invoker: inv, PollInterval: 100 * time.Millisecond})
+	w := NewWorker(WorkerConfig{DB: db, ProjectID: "proj_a", Functions: allModules{}, Invoker: inv, PollInterval: 100 * time.Millisecond})
 	if err := w.Tick(ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -201,7 +207,7 @@ func TestWorker_RetriesOnFailureUpToMaxAttempts(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	w := NewWorker(WorkerConfig{DB: db, Invoker: inv, PollInterval: 100 * time.Millisecond})
+	w := NewWorker(WorkerConfig{DB: db, ProjectID: "proj_a", Functions: allModules{}, Invoker: inv, PollInterval: 100 * time.Millisecond})
 	// Five ticks — backoff each time. We rewind scheduled_for between ticks
 	// so the worker treats it as due again (avoids waiting for real backoff).
 	for i := 0; i < 5; i++ {
@@ -254,8 +260,8 @@ func TestWorker_SkipsLockedRows(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	w1 := NewWorker(WorkerConfig{DB: db, Invoker: inv, PollInterval: 100 * time.Millisecond})
-	w2 := NewWorker(WorkerConfig{DB: db, Invoker: inv, PollInterval: 100 * time.Millisecond})
+	w1 := NewWorker(WorkerConfig{DB: db, ProjectID: "proj_a", Functions: allModules{}, Invoker: inv, PollInterval: 100 * time.Millisecond})
+	w2 := NewWorker(WorkerConfig{DB: db, ProjectID: "proj_a", Functions: allModules{}, Invoker: inv, PollInterval: 100 * time.Millisecond})
 	var wg sync.WaitGroup
 	wg.Add(2)
 	var err1, err2 error
@@ -293,7 +299,7 @@ func TestCancel_BlocksDispatchOfPending(t *testing.T) {
 	if err := Cancel(ctx, db, "cancel001"); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	w := NewWorker(WorkerConfig{DB: db, Invoker: inv, PollInterval: 100 * time.Millisecond})
+	w := NewWorker(WorkerConfig{DB: db, ProjectID: "proj_a", Functions: allModules{}, Invoker: inv, PollInterval: 100 * time.Millisecond})
 	if err := w.Tick(ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}

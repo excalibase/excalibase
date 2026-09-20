@@ -10,7 +10,6 @@ import (
 
 const sqlWhere = " WHERE "
 
-
 // allowedOperators is the allowlist of valid filter operators.
 var allowedOperators = map[string]string{
 	"=":           "=",

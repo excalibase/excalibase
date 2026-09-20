@@ -63,6 +63,9 @@ type PauseService struct {
 	// The process-local mutex below only orders the goroutines in THIS
 	// process; the lease is what stops two replicas interleaving.
 	claimer ProjectOperationClaimer
+	// statusObservers are told every status this service writes, so caches
+	// keyed on "is this project's database running" can drop their entries.
+	statusObservers []StatusObserver
 	// endpoints withdraws and republishes the project's public database
 	// endpoint. Nil when the platform offers none.
 	endpoints PublicEndpointReconciler
@@ -540,6 +543,18 @@ func (s *PauseService) persist(inst *domain.DatabaseInstance) error {
 //
 // The one-way DELETING door and a status that moved underneath are both stop
 // signals, returned as they are so the caller can tell them apart.
+// StatusObserver is told each time a pause or resume writes a project's
+// status. The project-database pool cache uses it to stop holding
+// connections on a database the project no longer has running.
+type StatusObserver interface {
+	ProjectStatusChanged(projectID, status string)
+}
+
+// AddStatusObserver registers an observer of lifecycle status writes.
+func (s *PauseService) AddStatusObserver(o StatusObserver) {
+	s.statusObservers = append(s.statusObservers, o)
+}
+
 func (s *PauseService) persistFrom(inst *domain.DatabaseInstance, expected string) error {
 	inst.UpdatedAt = &domain.FlexTime{Time: time.Now()}
 	var err error
@@ -553,6 +568,9 @@ func (s *PauseService) persistFrom(inst *domain.DatabaseInstance, expected strin
 			return err
 		}
 		return fmt.Errorf("persist %s state for %s: %w", inst.Status, inst.ProjectID, err)
+	}
+	for _, observer := range s.statusObservers {
+		observer.ProjectStatusChanged(inst.ProjectID, inst.Status)
 	}
 	return nil
 }

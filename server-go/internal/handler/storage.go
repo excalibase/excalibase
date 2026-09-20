@@ -417,10 +417,10 @@ type internalUploadURLRequest struct {
 type internalUploadURLResponse struct {
 	StorageID string `json:"storageId"`
 	// UploadID names the staged bytes; the runtime hands it back on confirm.
-	UploadID  string            `json:"uploadId"`
-	URL       string            `json:"url"`
-	Method    string            `json:"method"`
-	Headers   map[string]string `json:"headers,omitempty"`
+	UploadID string            `json:"uploadId"`
+	URL      string            `json:"url"`
+	Method   string            `json:"method"`
+	Headers  map[string]string `json:"headers,omitempty"`
 }
 
 // InternalSignUploadURL mints a signed PUT URL the client will upload to

@@ -100,6 +100,20 @@ func IsDeletionStatus(status string) bool {
 	return status == string(StatusDeleting) || status == string(StatusBackupsPendingDelete)
 }
 
+// StatusActive is the one status a fully provisioned, running project
+// holds. It is the allow-list background work checks against: a sweep that
+// asks "is this not one of the bad states?" also reaches PAUSED, PAUSING,
+// RESUMING and PROVISIONING projects, whose databases are hibernated or not
+// there yet, and retries against them forever.
+const StatusActive ProvisioningStage = "ACTIVE"
+
+// IsActive reports whether a project is running right now. Background work
+// that opens a project's database uses this rather than !IsNotServable: the
+// allow-list has one member and cannot silently grow.
+func IsActive(status string) bool {
+	return status == string(StatusActive)
+}
+
 // IsNotServable reports whether a project must not be served: no data-plane
 // traffic routed to it, no JWT minted for it, no credentials handed out, no
 // function deployed or invoked against it, no membership rewritten.

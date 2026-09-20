@@ -6,13 +6,12 @@ import (
 )
 
 const (
-	testIndexTS       = "index.ts"
-	testBundleFmt     = "Bundle: %v"
-	testUtilsTS       = "utils.ts"
-	testHoistMissing  = "default handler hoist missing"
+	testIndexTS        = "index.ts"
+	testBundleFmt      = "Bundle: %v"
+	testUtilsTS        = "utils.ts"
+	testHoistMissing   = "default handler hoist missing"
 	testDefaultHandler = "export default () => new Response('ok')"
 )
-
 
 // --- Function.Validate ---
 

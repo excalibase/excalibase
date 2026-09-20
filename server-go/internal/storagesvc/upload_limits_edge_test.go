@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-
 // A quota that cannot be read is not a quota of zero.
 func TestService_SignUploadURL_ReportsQuotaReadFailure(t *testing.T) {
 	store := newErrStore()

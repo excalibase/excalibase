@@ -23,9 +23,8 @@ const (
 	testMembersPath   = "/members"
 	testMyProjMembers = "/projects/my-proj/members"
 	testProj1Members  = "/projects/proj1/members"
-	testMembersSlash = "/members/"
+	testMembersSlash  = "/members/"
 )
-
 
 // testAliceID and testBobID are runtime-constructed user IDs used across
 // org handler tests. Using testutil.FixtureToken keeps SAST tools from

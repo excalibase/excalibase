@@ -61,6 +61,29 @@ If you need a destructive change, perform it manually in the project
 database via the Studio or `psql`. A future phase will surface schema-diff
 warnings and a guarded path for ALTER-style migrations.
 
+## What a bundle may declare
+
+The migrator is additive and bounded, and it is the platform that composes
+every statement:
+
+- DDL runs as `excalibase_app`, the project's non-superuser role — the same
+  role the schema browser and manual migrations use;
+- everything lands in the tenant's own `nosql` schema (`CREATE SCHEMA IF NOT
+  EXISTS`, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`,
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, and a `COMMENT ON TABLE`
+  holding the validator JSON);
+- table, index and field names must match `^[a-z_][a-z0-9_]{0,62}$` and are
+  double-quoted; vector dimensions must be 1–16000;
+- a bundle cannot declare types, functions, triggers, extensions, roles or
+  raw SQL, and nothing is ever dropped. A vector index needs `pgvector` to
+  be installed already — the migrator issues no `CREATE EXTENSION`, so the
+  tenant extension allowlist is not bypassed.
+
+The deploy also creates the reserved `excalibase` schema in the tenant
+database for the scheduler tables. The tenant owns that database and can
+edit those tables, which is why the scheduler treats every row in them as
+input — see `docs/functions-scheduler.md`.
+
 ## When the migration runs
 
 By default (`EXCALIBASE_AUTO_MIGRATE=true`), the migration runs inline with

@@ -6,13 +6,12 @@ import (
 )
 
 const (
-	testGenUUID   = "gen_random_uuid()"
-	testUUIDGen   = "uuid_generate_v4()"
-	testClockTS   = "clock_timestamp()"
-	testStmtTS    = "statement_timestamp()"
-	testTxnTS     = "transaction_timestamp()"
+	testGenUUID = "gen_random_uuid()"
+	testUUIDGen = "uuid_generate_v4()"
+	testClockTS = "clock_timestamp()"
+	testStmtTS  = "statement_timestamp()"
+	testTxnTS   = "transaction_timestamp()"
 )
-
 
 func TestQuoteIdent(t *testing.T) {
 	tests := []struct {

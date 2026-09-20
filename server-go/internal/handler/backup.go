@@ -12,8 +12,8 @@ import (
 )
 
 type BackupHandler struct {
-	svc        *service.BackupService
-	scheduler  *service.BackupScheduler     // optional; nil disables /schedule routes
+	svc          *service.BackupService
+	scheduler    *service.BackupScheduler     // optional; nil disables /schedule routes
 	orchestrator *service.RestoreOrchestrator // optional; nil → restore is synchronous
 }
 
@@ -186,7 +186,7 @@ func (h *BackupHandler) GetWalLag(w http.ResponseWriter, r *http.Request) {
 // UpsertSchedule writes a backup_schedules row + replays it into
 // the running cron. Body:
 //
-//   { "cron": "0 2 * * *", "retentionDays": 7, "enabled": true }
+//	{ "cron": "0 2 * * *", "retentionDays": 7, "enabled": true }
 func (h *BackupHandler) UpsertSchedule(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	var body struct {

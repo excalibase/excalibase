@@ -365,7 +365,11 @@ func (v *TenantRoleVerifier) VerifyRole(ctx context.Context, inst *domain.Databa
 	if overrides.sslmode == "" && overrides.host == "" && inst.SSLMode != "" {
 		overrides.sslmode = inst.SSLMode
 	}
-	db, err := sql.Open("postgres", buildTenantDSN(roleCredentialRecord(inst, username, password), overrides))
+	dsn, err := buildTenantDSN(roleCredentialRecord(inst, username, password), overrides)
+	if err != nil {
+		return fmt.Errorf("open project database as %s: connection could not be established", username)
+	}
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return fmt.Errorf("open project database as %s: connection could not be established", username)
 	}

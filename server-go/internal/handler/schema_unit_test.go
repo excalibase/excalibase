@@ -35,12 +35,12 @@ func TestSchemaParam(t *testing.T) {
 		query    string
 		expected string
 	}{
-		{"", "public"},                      // empty → default
-		{"schema=public", "public"},         // valid
-		{"schema=my_schema", "my_schema"},   // valid underscore
+		{"", "public"},                           // empty → default
+		{"schema=public", "public"},              // valid
+		{"schema=my_schema", "my_schema"},        // valid underscore
 		{"schema=%27%3B+DROP+TABLE--", "public"}, // injection → default
 		{"schema=1digit", "public"},              // starts with digit → default
-		{"schema=has%20space", "public"},          // space → default
+		{"schema=has%20space", "public"},         // space → default
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {

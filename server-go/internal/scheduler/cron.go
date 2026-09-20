@@ -15,22 +15,49 @@ import (
 // CronRunnerConfig wires the cron runner's collaborators.
 type CronRunnerConfig struct {
 	DB *sql.DB
+	// ProjectID is the project whose database the sweep opened. The registry
+	// is tenant-written, so this — not a row's project_id — is the identity
+	// every enqueued task carries.
+	ProjectID string
+	// MinInterval is the finest cadence the platform honours. A schedule
+	// asking for less is clipped up to it. Default 1 minute.
+	MinInterval time.Duration
+	// MaxJobs caps how many registry rows one tick reads. Default 100.
+	MaxJobs int
+	// MaxArgsBytes caps a registry row's args and schedule. Default matches
+	// the public invoke body limit.
+	MaxArgsBytes int
+	// Functions is the platform's registry of deployed functions. A registry
+	// row may only enqueue a module the platform itself deployed for this
+	// project; without it nothing is enqueued.
+	Functions FunctionChecker
 	// Logger is optional; defaults to the std log package.
 	Logger *log.Logger
 	// IDGen overrides the scheduled-task id generator (tests use a
 	// deterministic stub; production uses base32Rand).
-	IDGen func() string
+	IDGen func() (string, error)
 }
+
+// DefaultCronMinInterval is the finest cron cadence the platform runs.
+const DefaultCronMinInterval = time.Minute
+
+// DefaultCronMaxJobs caps the registry rows read per project per tick.
+const DefaultCronMaxJobs = 100
 
 // CronRunner walks the cron registry and enqueues the next due
 // excalibase.excalibase_scheduled_functions row per job. One CronRunner per replica;
 // the per-row update to `last_enqueued_at` is the idempotency lock that
 // keeps concurrent runners from double-enqueuing.
 type CronRunner struct {
-	db     *sql.DB
-	logger *log.Logger
-	idGen  func() string
-	parser cron.Parser
+	db           *sql.DB
+	projectID    string
+	minInterval  time.Duration
+	maxJobs      int
+	maxArgsBytes int
+	functions    FunctionChecker
+	logger       *log.Logger
+	idGen        func() (string, error)
+	parser       cron.Parser
 }
 
 func NewCronRunner(c CronRunnerConfig) *CronRunner {
@@ -42,10 +69,27 @@ func NewCronRunner(c CronRunnerConfig) *CronRunner {
 	if idGen == nil {
 		idGen = base32RandID
 	}
+	minInterval := c.MinInterval
+	if minInterval <= 0 {
+		minInterval = DefaultCronMinInterval
+	}
+	maxJobs := c.MaxJobs
+	if maxJobs <= 0 {
+		maxJobs = DefaultCronMaxJobs
+	}
+	maxArgs := c.MaxArgsBytes
+	if maxArgs <= 0 {
+		maxArgs = DefaultMaxArgsBytes
+	}
 	return &CronRunner{
-		db:     c.DB,
-		logger: logger,
-		idGen:  idGen,
+		db:           c.DB,
+		projectID:    c.ProjectID,
+		minInterval:  minInterval,
+		maxJobs:      maxJobs,
+		maxArgsBytes: maxArgs,
+		functions:    c.Functions,
+		logger:       logger,
+		idGen:        idGen,
 		// Standard 5-field cron expression — matches what cronJobs.cron()
 		// validates on the lib side. Robfig/cron's default parser
 		// expects the optional seconds field; we strip the seconds slot
@@ -75,15 +119,32 @@ func (cr *CronRunner) Run(ctx context.Context) error {
 	}
 }
 
+// cronListSQL reads one project's registry. Every column it returns is
+// tenant-written, so the bounds are in the WHERE clause: a row that would
+// not pass the Go-side checks anyway is never read into memory, and neither
+// is an enormous args or schedule payload. The registry has no status
+// column, so an out-of-bounds row is simply not walked — the next deploy
+// rewrites it.
+const cronListSQL = `
+		SELECT name, project_id, module_name, export_name, args, schedule, last_enqueued_at
+		  FROM excalibase.excalibase_cron_jobs
+		 WHERE project_id = $1
+		   AND octet_length(args::text) <= $3
+		   AND octet_length(schedule::text) <= $3
+		   AND length(name) <= $4
+		   AND length(module_name) <= $5
+		   AND length(export_name) <= $6
+		 ORDER BY name
+		 LIMIT $2
+	`
+
 // Tick walks the registry and enqueues each job whose next due time has
 // arrived since `last_enqueued_at`. Exported so tests can drive a
 // deterministic cycle without waiting for the 60s ticker.
 func (cr *CronRunner) Tick(ctx context.Context) error {
-	rows, err := cr.db.QueryContext(ctx, `
-		SELECT name, project_id, module_name, export_name, args, schedule, last_enqueued_at
-		  FROM excalibase.excalibase_cron_jobs
-		 ORDER BY project_id, name
-	`)
+	rows, err := cr.db.QueryContext(ctx, cronListSQL,
+		cr.projectID, cr.maxJobs,
+		cr.maxArgsBytes, maxCronNameLen, maxModuleNameLen, maxExportNameLen)
 	if err != nil {
 		return fmt.Errorf("list cron jobs: %w", err)
 	}
@@ -98,14 +159,31 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 		if err := rows.Scan(&name, &projectID, &moduleName, &exportName, &args, &scheduleRaw, &lastEnqueued); err != nil {
 			return fmt.Errorf("scan cron row: %w", err)
 		}
+		// Tenant-written columns: the row may only speak for the project
+		// whose database this is, and only through plain identifiers.
+		if projectID != cr.projectID {
+			cr.logger.Printf("scheduler: cron %s refused: names another project", name)
+			continue
+		}
+		if !validModuleName(moduleName) || !validExportName(exportName) {
+			cr.logger.Printf("scheduler: cron %s refused: module or export is not an identifier", name)
+			continue
+		}
+		// Same rule as the task half: a registry row may only name a module
+		// the platform deployed for this project. Enqueueing anything else
+		// would fill the queue with rows the worker then has to refuse, at
+		// the tenant's chosen cadence.
+		if !cr.deployed(name, moduleName) {
+			continue
+		}
 		var schedule struct {
-			Kind        string `json:"kind"`
-			Expression  string `json:"expression,omitempty"`
-			Hours       int    `json:"hours,omitempty"`
-			Minutes     int    `json:"minutes,omitempty"`
-			Seconds     int    `json:"seconds,omitempty"`
-			HourUTC     int    `json:"hourUTC,omitempty"`
-			MinuteUTC   int    `json:"minuteUTC,omitempty"`
+			Kind       string `json:"kind"`
+			Expression string `json:"expression,omitempty"`
+			Hours      int    `json:"hours,omitempty"`
+			Minutes    int    `json:"minutes,omitempty"`
+			Seconds    int    `json:"seconds,omitempty"`
+			HourUTC    int    `json:"hourUTC,omitempty"`
+			MinuteUTC  int    `json:"minuteUTC,omitempty"`
 		}
 		if err := json.Unmarshal(scheduleRaw, &schedule); err != nil {
 			cr.logger.Printf("scheduler: cron %s/%s bad schedule: %v", projectID, name, err)
@@ -116,6 +194,11 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 			cr.logger.Printf("scheduler: cron %s/%s unsupported schedule kind=%q", projectID, name, schedule.Kind)
 			continue
 		}
+		// A schedule finer than the platform minimum is clipped: the cadence
+		// a tenant asks for cannot set the platform's load.
+		if earliest := now.Add(cr.minInterval); nextDue.Before(earliest) {
+			nextDue = earliest
+		}
 		// Skip when we've already enqueued the upcoming due time. The
 		// runner tick interval is 60s, so this guards against the
 		// 1-minute window where the same nextDue would otherwise be
@@ -125,7 +208,7 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 		}
 		// Insert the row and bump last_enqueued_at in a single transaction
 		// so the enqueue + bookkeeping advance together.
-		if err := cr.enqueue(ctx, projectID, name, moduleName, exportName, args, nextDue); err != nil {
+		if err := cr.enqueue(ctx, cr.projectID, name, moduleName, exportName, args, nextDue); err != nil {
 			cr.logger.Printf("scheduler: cron %s/%s enqueue: %v", projectID, name, err)
 			continue
 		}
@@ -134,6 +217,21 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// deployed asks the platform registry whether this project has the module.
+// A registry that is absent or cannot answer means no, never a guess.
+func (cr *CronRunner) deployed(name, moduleName string) bool {
+	if cr.functions == nil {
+		cr.logger.Printf("scheduler: cron %s refused: no function registry wired", name)
+		return false
+	}
+	known, err := cr.functions.HasFunction(cr.projectID, moduleName)
+	if err != nil || !known {
+		cr.logger.Printf("scheduler: cron %s refused: no such function is deployed", name)
+		return false
+	}
+	return true
 }
 
 func (cr *CronRunner) enqueue(
@@ -147,7 +245,10 @@ func (cr *CronRunner) enqueue(
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	id := cr.idGen()
+	id, err := cr.idGen()
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO excalibase.excalibase_scheduled_functions
 		  (id, project_id, module_name, export_name, args, scheduled_for, status)
@@ -171,10 +272,10 @@ func (cr *CronRunner) enqueue(
 //
 // The 4 supported kinds mirror the lib's `cronJobs()` registry:
 //
-//   * cron       — 5-field expression, parsed by robfig/cron;
-//   * interval   — fixed period in (hours, minutes, seconds);
-//   * daily      — fires once a day at (hourUTC, minuteUTC);
-//   * hourly     — fires every hour at (minuteUTC).
+//   - cron       — 5-field expression, parsed by robfig/cron;
+//   - interval   — fixed period in (hours, minutes, seconds);
+//   - daily      — fires once a day at (hourUTC, minuteUTC);
+//   - hourly     — fires every hour at (minuteUTC).
 //
 // All times are UTC.
 func nextDueAt(s struct {
@@ -238,23 +339,18 @@ func nextHourlyUTC(now time.Time, minuteUTC int) time.Time {
 // runtime/ids.ts shape exactly).
 const base32Alphabet = "abcdefghijklmnopqrstuvwxyz234567"
 
-func base32RandID() string {
+// randRead is the entropy source, replaceable in tests.
+var randRead = rand.Read
+
+func base32RandID() (string, error) {
 	var buf [30]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		// crypto/rand failing is fatal in practice; fall back to a
-		// time-derived token so we don't crash the runner.
-		ns := time.Now().UnixNano()
-		for i := range buf {
-			buf[i] = base32Alphabet[ns&31]
-			ns >>= 5
-			if ns == 0 {
-				ns = time.Now().UnixNano()
-			}
-		}
-		return string(buf[:])
+	if _, err := randRead(buf[:]); err != nil {
+		// A guessable task id is worse than no task: refuse rather than
+		// fall back to anything derived from the clock.
+		return "", fmt.Errorf("generate task id: %w", err)
 	}
 	for i, b := range buf {
 		buf[i] = base32Alphabet[int(b)&31]
 	}
-	return string(buf[:])
+	return string(buf[:]), nil
 }

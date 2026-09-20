@@ -8,7 +8,6 @@ import (
 
 const testHighPerf = "high-perf"
 
-
 func TestParameterGroupStoreCRUD(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewFileSystemParameterGroupStore(dir)

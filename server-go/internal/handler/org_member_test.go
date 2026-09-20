@@ -10,8 +10,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
-
-
 // TestUpdateOrgMemberRole_HappyPath: alice (owner) promotes bob from
 // developer to admin. Owner has manage-members perm, so the patch lands.
 func TestUpdateOrgMemberRole_HappyPath(t *testing.T) {

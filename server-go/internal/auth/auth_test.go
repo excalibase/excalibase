@@ -296,8 +296,8 @@ func TestGenerateIDHexCharsOnly(t *testing.T) {
 // --- Bootstrap ---
 
 type mockUserStore struct {
-	users  []*domain.User
-	errOn  string // method name to return error on
+	users []*domain.User
+	errOn string // method name to return error on
 }
 
 func (m *mockUserStore) FindAllUsers(ctx context.Context) ([]*domain.User, error) {

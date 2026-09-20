@@ -558,23 +558,39 @@ holder (Postgres `pg_try_advisory_lock`).
 Every control-plane replica opens one pool against the platform database.
 Two kinds of work pin a connection for longer than a query:
 
-- **Standing leadership claims — 4 per replica.** The backup scheduler, the
-  idle-pause sweep, the storage reaper and the restore sweeper each hold one
-  advisory lock, and an advisory lock pins the session that took it.
+- **Standing leadership claims — 5 per replica.** The backup scheduler, the
+  idle-pause sweep, the storage reaper, the restore sweeper and the function
+  scheduler's cron half each hold one advisory lock, and an advisory lock
+  pins the session that took it. (`EXCALIBASE_SCHEDULER_ENABLED=false` drops
+  the last one.)
 - **In-flight lifecycle operations — 1 each, for their whole duration.**
   Pause, resume and delete take a per-project lease so two replicas cannot
   act on one project at once. A pause waits for a backup to complete and for
   the database to shut down, so it can hold its connection for minutes.
 
-So a replica needs `4 + (concurrent lifecycle operations) + (headroom for
+So a replica needs `5 + (concurrent lifecycle operations) + (headroom for
 ordinary query traffic)`. The default pool is **20**, which leaves room for
 roughly a dozen concurrent pauses alongside normal traffic. Raise it with
-`PLATFORM_DB_MAX_CONNS` (minimum 6 — four claims plus one operation plus one
+`PLATFORM_DB_MAX_CONNS` (minimum 7 — five claims plus one operation plus one
 query) on a control plane that pauses many projects at once. A value that is
 not a number, or below the minimum, **stops the platform from starting**: a
 pool that cannot do the work is a misconfiguration to fix, not something to
 paper over with a default the operator did not choose, and make sure Postgres' own `max_connections`
 covers `PLATFORM_DB_MAX_CONNS x replicas` plus your own sessions.
+
+Tenant databases are not reached through this pool. The function scheduler
+opens a small pool per project (`EXCALIBASE_PROJECT_DB_MAX_CONNS`, default 2,
+at most `EXCALIBASE_PROJECT_DB_MAX_POOLS` cached — see
+`docs/functions-scheduler.md`), which costs connections on the tenant's own
+database and file descriptors here, never platform-database connections.
+Those connections carry a server-side `EXCALIBASE_PROJECT_DB_STATEMENT_TIMEOUT_MS`
+(default 30000) and `EXCALIBASE_PROJECT_DB_LOCK_TIMEOUT_MS` (default 5000),
+and each project's sweep is bounded by
+`EXCALIBASE_SCHEDULER_PROJECT_TIMEOUT_MS` (default 30000), so a tenant
+database that will not answer costs the sweep one timeout and is then backed
+off rather than stalling every other tenant's tasks. A claimed task that no
+replica finishes is taken back after `EXCALIBASE_SCHEDULER_CLAIM_LEASE_MS`
+(default 300000), spending one attempt so a poison task ends `failed`.
 
 Taking a lease waits at most 2s for a pool connection. A burst of lifecycle
 calls therefore degrades into `409 project is busy` rather than parking every

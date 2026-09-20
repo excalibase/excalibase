@@ -15,7 +15,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -190,9 +189,10 @@ func NewFunctionHandler(
 		limiters:      make(map[string]*tokenBucket),
 		rateBurst:     100,
 		ratePerSecond: 100,
-		// Auto-migrate defaults to true so deploys are atomic.
-		// EXCALIBASE_AUTO_MIGRATE=false defers schema application.
-		autoMigrate: !strings.EqualFold(os.Getenv("EXCALIBASE_AUTO_MIGRATE"), "false"),
+		// Auto-migrate defaults to true so deploys are atomic. The operator
+		// switch lives in the configuration; main passes it with
+		// SetAutoMigrate.
+		autoMigrate: true,
 	}
 	// Backwards-compat: if a single shared client is supplied, use it for all
 	// projects until k8sClient is set.
@@ -223,6 +223,19 @@ func (h *FunctionHandler) SetVault(v vaultclient.VaultClient) {
 // deploy time. nil disables migration entirely.
 func (h *FunctionHandler) SetProjectDBFn(fn func(ctx context.Context, projectID string) (*sql.DB, error)) {
 	h.projectDBFn = fn
+}
+
+// HasProjectDB reports whether a project-database resolver is wired. Boot
+// checks it: with none, deploy-time schema application and cron sync are
+// silently skipped and schema/apply answers 503.
+func (h *FunctionHandler) HasProjectDB() bool {
+	return h.projectDBFn != nil
+}
+
+// AutoMigrates reports whether a deploy applies the bundle's declared
+// schema to the project database.
+func (h *FunctionHandler) AutoMigrates() bool {
+	return h.autoMigrate
 }
 
 // SetAutoMigrate toggles schema-application-on-deploy. Default true.

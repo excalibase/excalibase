@@ -6,12 +6,12 @@ import "github.com/excalibase/provisioning-poc/internal/domain"
 type OrgPermission string
 
 const (
-	OrgPermManageMembers  OrgPermission = "manage_members"
-	OrgPermCreateProject  OrgPermission = "create_project"
-	OrgPermDeleteProject  OrgPermission = "delete_project"
-	OrgPermUpdateOrg      OrgPermission = "update_org"
-	OrgPermDeleteOrg      OrgPermission = "delete_org"
-	OrgPermViewProjects   OrgPermission = "view_projects"
+	OrgPermManageMembers OrgPermission = "manage_members"
+	OrgPermCreateProject OrgPermission = "create_project"
+	OrgPermDeleteProject OrgPermission = "delete_project"
+	OrgPermUpdateOrg     OrgPermission = "update_org"
+	OrgPermDeleteOrg     OrgPermission = "delete_org"
+	OrgPermViewProjects  OrgPermission = "view_projects"
 )
 
 var orgRolePermissions = map[string]map[OrgPermission]bool{
@@ -71,10 +71,10 @@ func OrgRoleAtLeast(have, want string) bool {
 type ProjectPermission string
 
 const (
-	ProjectPermDDL    ProjectPermission = "ddl"     // CREATE/ALTER/DROP tables
-	ProjectPermDML    ProjectPermission = "dml"     // INSERT/UPDATE/DELETE
-	ProjectPermRead   ProjectPermission = "read"    // SELECT
-	ProjectPermManage ProjectPermission = "manage"  // manage project members
+	ProjectPermDDL    ProjectPermission = "ddl"    // CREATE/ALTER/DROP tables
+	ProjectPermDML    ProjectPermission = "dml"    // INSERT/UPDATE/DELETE
+	ProjectPermRead   ProjectPermission = "read"   // SELECT
+	ProjectPermManage ProjectPermission = "manage" // manage project members
 )
 
 var projectRolePermissions = map[string]map[ProjectPermission]bool{

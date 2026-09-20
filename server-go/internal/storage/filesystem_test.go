@@ -14,7 +14,6 @@ const (
 	testOwner1    = "owner-1"
 )
 
-
 func TestFileSystemStoreSaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewFileSystemStore(dir)

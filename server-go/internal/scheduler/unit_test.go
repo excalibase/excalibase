@@ -139,18 +139,6 @@ func TestNextDueAt_CronBadExpr(t *testing.T) {
 	}
 }
 
-func TestBase32RandID_Shape(t *testing.T) {
-	id := base32RandID()
-	if len(id) != 30 {
-		t.Errorf("base32RandID length: got %d, want 30", len(id))
-	}
-	for i, c := range id {
-		if !strings.ContainsRune(base32Alphabet, c) {
-			t.Errorf("base32RandID[%d]=%q not in alphabet", i, c)
-		}
-	}
-}
-
 func TestNewWorker_AppliesDefaults(t *testing.T) {
 	w := NewWorker(WorkerConfig{})
 	if w.poll <= 0 {

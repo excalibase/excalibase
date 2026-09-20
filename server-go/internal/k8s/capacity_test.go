@@ -7,10 +7,10 @@ import "testing"
 // (kubelet does that); HeadroomPercent is our extra cushion on top.
 func TestClusterCapacity_HeadroomMath(t *testing.T) {
 	cases := []struct {
-		name        string
-		c           ClusterCapacity
-		wantUsable  [2]int64 // cpu milli, mem bytes
-		wantFree    [2]int64 // cpu milli, mem bytes
+		name       string
+		c          ClusterCapacity
+		wantUsable [2]int64 // cpu milli, mem bytes
+		wantFree   [2]int64 // cpu milli, mem bytes
 	}{
 		{
 			name: "zero headroom: usable == allocatable",

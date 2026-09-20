@@ -2,10 +2,10 @@ package storagesvc
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"

@@ -13,7 +13,6 @@ const (
 	testSecAdvisorFmt  = "RunSecurityAdvisor: %v"
 )
 
-
 func TestIntegration_AdvisorPerformance_UnindexedFK(t *testing.T) {
 	superDB, _, cleanup := setupPG(t)
 	defer cleanup()

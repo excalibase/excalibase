@@ -619,4 +619,3 @@ func randomID(prefix string) (string, error) {
 	}
 	return prefix + "_" + hex.EncodeToString(b), nil
 }
-

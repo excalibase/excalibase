@@ -165,7 +165,7 @@ var errForbiddenNamespace = errors.New(`namespaces "org1-del-state-1" is forbidd
 // delete the org while a project it owns could not be torn down.
 func TestRevokeOrgKeepsOrgWhenAProjectTeardownFails(t *testing.T) {
 	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
-		"proj-ok":   {ProjectID: "proj-ok", OrgID: "org-9", DBType: domain.PostgreSQL, Namespace: "org-9-ok", Status: "ACTIVE"},
+		"proj-ok":    {ProjectID: "proj-ok", OrgID: "org-9", DBType: domain.PostgreSQL, Namespace: "org-9-ok", Status: "ACTIVE"},
 		"proj-stuck": {ProjectID: "proj-stuck", OrgID: "org-9", DBType: domain.PostgreSQL, Namespace: "org-9-stuck", Status: "ACTIVE"},
 	}}
 	mock := k8s.NewMockClient()

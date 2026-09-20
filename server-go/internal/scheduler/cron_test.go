@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 )
@@ -28,7 +29,7 @@ func TestCronRunner_EnqueuesNextDueForCronJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cr := NewCronRunner(CronRunnerConfig{DB: db})
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}})
 	if err := cr.Tick(ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestCronRunner_IsIdempotentWithinPeriod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cr := NewCronRunner(CronRunnerConfig{DB: db})
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}})
 	for i := 0; i < 3; i++ {
 		if err := cr.Tick(ctx); err != nil {
 			t.Fatalf("tick %d: %v", i, err)
@@ -108,7 +109,7 @@ func TestCronRunner_HandlesIntervalSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cr := NewCronRunner(CronRunnerConfig{DB: db})
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}})
 	if err := cr.Tick(ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestCronRunner_HandlesDailySchedule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cr := NewCronRunner(CronRunnerConfig{DB: db})
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}})
 	if err := cr.Tick(ctx); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -154,4 +155,16 @@ func TestCronRunner_HandlesDailySchedule(t *testing.T) {
 	if count != 1 {
 		t.Errorf("scheduled rows for daily job: got %d, want 1", count)
 	}
+}
+
+// cronProject reads the project the fixture seeded, so each test drives the
+// runner as the sweep would: with the project whose database this is.
+func cronProject(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	var projectID string
+	if err := db.QueryRow(
+		`SELECT project_id FROM excalibase.excalibase_cron_jobs LIMIT 1`).Scan(&projectID); err != nil {
+		t.Fatalf("read seeded project: %v", err)
+	}
+	return projectID
 }

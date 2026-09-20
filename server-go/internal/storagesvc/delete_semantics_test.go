@@ -344,10 +344,16 @@ func TestService_ReportsBucketLookupFailure(t *testing.T) {
 	store.getBucketErr = errors.New("platform db unavailable")
 
 	calls := map[string]func() error{
-		"DeleteBucket":    func() error { return svc.DeleteBucket(ctx, testProjX, "assets") },
-		"DeleteObject":    func() error { return svc.DeleteObject(ctx, testProjX, "assets", "k") },
-		"SignUploadURL":   func() error { _, e := svc.SignUploadURL(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k"}); return e },
-		"ConfirmUpload":   func() error { _, e := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k", UploadID: testUploadID("k")}); return e },
+		"DeleteBucket": func() error { return svc.DeleteBucket(ctx, testProjX, "assets") },
+		"DeleteObject": func() error { return svc.DeleteObject(ctx, testProjX, "assets", "k") },
+		"SignUploadURL": func() error {
+			_, e := svc.SignUploadURL(ctx, testProjX, "assets", "FREE", UploadURLRequest{Key: "k"})
+			return e
+		},
+		"ConfirmUpload": func() error {
+			_, e := svc.ConfirmUpload(ctx, testProjX, "assets", "FREE", "u", ConfirmUploadRequest{Key: "k", UploadID: testUploadID("k")})
+			return e
+		},
 		"SignDownloadURL": func() error { _, e := svc.SignDownloadURL(ctx, testProjX, "assets", "k"); return e },
 		"ListObjects":     func() error { _, e := svc.ListObjects(ctx, testProjX, "assets", ListObjectsRequest{}); return e },
 	}

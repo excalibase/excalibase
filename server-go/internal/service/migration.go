@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/security"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -48,22 +49,8 @@ func NewMigrationService(store storage.InstanceStore, vault vaultclient.VaultCli
 // buildTenantDSN composes a lib/pq connection string from vault credentials.
 // An explicit host override (local dev port-forward) flips sslmode to disable
 // unless a mode is given.
-func buildTenantDSN(creds map[string]string, o dsnOverrides) string {
-	host, port := creds["host"], creds["port"]
-	if o.host != "" {
-		host = o.host
-	}
-	if o.port != "" {
-		port = o.port
-	}
-	sslmode := "require"
-	if o.sslmode != "" {
-		sslmode = o.sslmode
-	} else if o.host != "" {
-		sslmode = "disable"
-	}
-	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		host, port, creds["username"], creds["password"], creds["database"], sslmode)
+func buildTenantDSN(creds map[string]string, o dsnOverrides) (string, error) {
+	return projectdb.DSNFor(creds, projectdb.Overrides{Host: o.host, Port: o.port, SSLMode: o.sslmode})
 }
 
 // openTenantDB opens a connection to the project's database as the non-superuser
@@ -76,7 +63,11 @@ func (s *MigrationService) openTenantDB(projectID string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read excalibase_app credentials: %w", err)
 	}
-	db, err := sql.Open("postgres", buildTenantDSN(creds, s.overrides))
+	dsn, err := buildTenantDSN(creds, s.overrides)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open tenant connection: %w", err)
 	}
