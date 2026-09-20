@@ -16,7 +16,9 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -28,14 +30,19 @@ import (
 
 const routeAppID = "/{appId}"
 
+// maxAppBodyBytes bounds a create or update body before it is decoded. The
+// variables alone may weigh 64 KiB, so the limit is twice that and no more:
+// past it the request is refused rather than allocated.
+const maxAppBodyBytes = 128 * 1024
+
 // AppHandler exposes CRUD over a project's apps.
 type AppHandler struct {
 	store   apphost.Store
-	sources apphost.SourceLookup
+	project apphost.ProjectFacts
 }
 
-func NewAppHandler(store apphost.Store, sources apphost.SourceLookup) *AppHandler {
-	return &AppHandler{store: store, sources: sources}
+func NewAppHandler(store apphost.Store, project apphost.ProjectFacts) *AppHandler {
+	return &AppHandler{store: store, project: project}
 }
 
 // projectSources answers what a project exposes to a reference variable. The
@@ -50,10 +57,26 @@ type projectSources struct {
 	instances storage.InstanceStore
 }
 
-// NewProjectSourceLookup resolves reference targets against the project's
-// provisioned database.
-func NewProjectSourceLookup(instances storage.InstanceStore) apphost.SourceLookup {
+// NewProjectSourceLookup answers both questions an app write asks about the
+// project it is being written to: which tier it is on, and whether it exposes
+// the source a reference names.
+func NewProjectSourceLookup(instances storage.InstanceStore) apphost.ProjectFacts {
 	return projectSources{instances: instances}
+}
+
+// Tier reports the tier the project is on. It is the project's tier that
+// sizes an app, exactly as it sizes the project's function runtime and its
+// storage quota — a caller never names one. A project with no tier recorded
+// is a broken row and is reported as an error, not sized as free.
+func (p projectSources) Tier(projectID string) (domain.TierType, error) {
+	inst, err := p.instances.FindByProjectID(projectID)
+	if err != nil {
+		return "", fmt.Errorf("look up project tier: %w", err)
+	}
+	if inst == nil || inst.Tier == "" {
+		return "", fmt.Errorf("project %s has no tier recorded", projectID)
+	}
+	return inst.Tier, nil
 }
 
 func (p projectSources) HasSource(projectID string, kind apphost.SourceKind, name string) (bool, error) {
@@ -64,7 +87,11 @@ func (p projectSources) HasSource(projectID string, kind apphost.SourceKind, nam
 	if err != nil {
 		return false, err
 	}
-	if inst == nil || inst.DatabaseName == "" || domain.IsNotServable(inst.Status) {
+	// A database still being built is not a source yet: its address exists
+	// only once provisioning has finished, so a reference to it now would be
+	// a reference to nothing.
+	if inst == nil || inst.DatabaseName == "" ||
+		domain.IsNotServable(inst.Status) || domain.IsBuildingStatus(inst.Status) {
 		return false, nil
 	}
 	return inst.DatabaseName == name, nil
@@ -93,7 +120,6 @@ type appCreateRequest struct {
 	Port            *int             `json:"port"`
 	HealthCheckPath string           `json:"healthCheckPath"`
 	Replicas        *int             `json:"replicas"`
-	Tier            domain.TierType  `json:"tier"`
 }
 
 // appUpdateRequest is the partial-update body. Every field is a pointer so an
@@ -106,7 +132,6 @@ type appUpdateRequest struct {
 	Port            *int              `json:"port"`
 	HealthCheckPath *string           `json:"healthCheckPath"`
 	Replicas        *int              `json:"replicas"`
-	Tier            *domain.TierType  `json:"tier"`
 }
 
 func (h *AppHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +164,7 @@ func (h *AppHandler) Get(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errNotFound, http.StatusNotFound)
 		return
 	}
-	writeJSON(w, app)
+	writeAppJSON(w, app)
 }
 
 // Create stores a new app. The id is assigned here rather than taken from the
@@ -151,6 +176,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req appCreateRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxAppBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
@@ -164,6 +190,12 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tier, err := h.project.Tier(projectID)
+	if err != nil {
+		httpError(w, "could not read the project's tier", http.StatusInternalServerError)
+		return
+	}
+
 	app := &apphost.App{
 		ID:              uuid.NewString(),
 		ProjectID:       projectID,
@@ -173,7 +205,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Port:            *req.Port,
 		HealthCheckPath: req.HealthCheckPath,
 		Replicas:        *req.Replicas,
-		Tier:            req.Tier,
+		Tier:            tier,
 		Status:          apphost.StatusFor(*req.Replicas),
 	}
 	if err := app.Validate(); err != nil {
@@ -182,7 +214,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	// A reference to a source the project does not have is fatal: it is never
 	// created as an empty variable to be discovered at deploy time.
-	if err := apphost.ValidateReferences(app, h.sources); err != nil {
+	if err := apphost.ValidateReferences(app, h.project); err != nil {
 		h.writeReferenceError(w, err)
 		return
 	}
@@ -190,6 +222,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, err)
 		return
 	}
+	w.Header().Set("ETag", strconv.Itoa(app.Version))
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, app)
 }
@@ -204,6 +237,10 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	expectedVersion, ok := appVersionPrecondition(w, r)
+	if !ok {
+		return
+	}
 	existing, err := h.store.Get(projectID, appID)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
@@ -213,26 +250,39 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errNotFound, http.StatusNotFound)
 		return
 	}
+	if existing.Version != expectedVersion {
+		httpError(w, appStaleMessage(existing.Version), http.StatusPreconditionFailed)
+		return
+	}
 
 	var req appUpdateRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxAppBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
 	applyAppUpdate(existing, req)
+	// The tier follows the project, so an app never keeps an envelope the
+	// project has moved off.
+	tier, err := h.project.Tier(projectID)
+	if err != nil {
+		httpError(w, "could not read the project's tier", http.StatusInternalServerError)
+		return
+	}
+	existing.Tier = tier
 	if err := existing.Validate(); err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := apphost.ValidateReferences(existing, h.sources); err != nil {
+	if err := apphost.ValidateReferences(existing, h.project); err != nil {
 		h.writeReferenceError(w, err)
 		return
 	}
-	if err := h.store.Update(existing); err != nil {
+	if err := h.store.Update(existing, expectedVersion); err != nil {
 		h.writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, existing)
+	writeAppJSON(w, existing)
 }
 
 func (h *AppHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -271,9 +321,6 @@ func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 	if req.HealthCheckPath != nil {
 		app.HealthCheckPath = *req.HealthCheckPath
 	}
-	if req.Tier != nil {
-		app.Tier = *req.Tier
-	}
 	if req.Replicas != nil {
 		app.Replicas = *req.Replicas
 		app.Status = apphost.StatusFor(*req.Replicas)
@@ -303,6 +350,35 @@ func (h *AppHandler) appPath(w http.ResponseWriter, r *http.Request) (string, st
 	return projectID, appID, true
 }
 
+// writeAppJSON answers with the app and the version to send back with the
+// next write, so a client never has to invent one.
+func writeAppJSON(w http.ResponseWriter, app *apphost.App) {
+	w.Header().Set("ETag", strconv.Itoa(app.Version))
+	writeJSON(w, app)
+}
+
+// appVersionPrecondition reads the version the caller claims to have read,
+// from If-Match. An update without one is refused: the server cannot tell an
+// informed write from one about to overwrite a change the caller never saw.
+func appVersionPrecondition(w http.ResponseWriter, r *http.Request) (int, bool) {
+	raw := strings.Trim(strings.TrimSpace(r.Header.Get("If-Match")), `"`)
+	if raw == "" {
+		httpError(w, "If-Match is required: send the version the app was read at",
+			http.StatusPreconditionRequired)
+		return 0, false
+	}
+	version, err := strconv.Atoi(raw)
+	if err != nil || version < 1 {
+		httpError(w, "If-Match must be the version the app was read at", http.StatusBadRequest)
+		return 0, false
+	}
+	return version, true
+}
+
+func appStaleMessage(current int) string {
+	return "the app was changed by someone else; it is now at version " + strconv.Itoa(current)
+}
+
 // writeReferenceError answers an unresolvable reference with the refusal that
 // names it, and a failed lookup as an internal error — the two are different
 // facts and must not read as one.
@@ -325,6 +401,8 @@ func (h *AppHandler) writeStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, apphost.ErrAppNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)
+	case errors.Is(err, apphost.ErrAppVersionConflict):
+		httpError(w, err.Error(), http.StatusPreconditionFailed)
 	case errors.Is(err, apphost.ErrAppLimitReached), errors.Is(err, apphost.ErrAppNameTaken):
 		httpError(w, err.Error(), http.StatusConflict)
 	default:

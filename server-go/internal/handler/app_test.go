@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -98,7 +99,7 @@ func (f *fakeAppStore) List(projectID string) ([]*apphost.App, error) {
 	return out, nil
 }
 
-func (f *fakeAppStore) Update(app *apphost.App) error {
+func (f *fakeAppStore) Update(app *apphost.App, expectedVersion int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failWith != nil {
@@ -110,6 +111,9 @@ func (f *fakeAppStore) Update(app *apphost.App) error {
 	existing, ok := f.apps[appKey(app.ProjectID, app.ID)]
 	if !ok {
 		return apphost.ErrAppNotFound
+	}
+	if existing.Version != expectedVersion {
+		return apphost.ErrAppVersionConflict
 	}
 	app.Version = existing.Version + 1
 	f.apps[appKey(app.ProjectID, app.ID)] = *app
@@ -132,8 +136,10 @@ func (f *fakeAppStore) Delete(projectID, id string) error {
 // fakeSources is an apphost.SourceLookup over a known set of sources, so the
 // handler tests exercise the real refusal path without a database.
 type fakeSources struct {
-	names map[string]bool
-	err   error
+	names   map[string]bool
+	tier    domain.TierType
+	tierErr error
+	err     error
 }
 
 func newFakeSources(names ...string) *fakeSources {
@@ -141,7 +147,14 @@ func newFakeSources(names ...string) *fakeSources {
 	for _, n := range names {
 		set[n] = true
 	}
-	return &fakeSources{names: set}
+	return &fakeSources{names: set, tier: domain.Standard}
+}
+
+func (f *fakeSources) Tier(string) (domain.TierType, error) {
+	if f.tierErr != nil {
+		return "", f.tierErr
+	}
+	return f.tier, nil
 }
 
 func (f *fakeSources) HasSource(_ string, kind apphost.SourceKind, name string) (bool, error) {
@@ -167,6 +180,13 @@ func setupAppRouterWithSources(t *testing.T, sources *fakeSources) (chi.Router, 
 
 func doAppRequest(t *testing.T, r chi.Router, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
+	return doAppRequestWithVersion(t, r, method, path, body, 1)
+}
+
+// doAppRequestWithVersion sends a request stating the version it read, which
+// every update has to do.
+func doAppRequestWithVersion(t *testing.T, r chi.Router, method, path string, body any, version int) *httptest.ResponseRecorder {
+	t.Helper()
 	var req *http.Request
 	if body == nil {
 		req = httptest.NewRequest(method, path, nil)
@@ -177,6 +197,9 @@ func doAppRequest(t *testing.T, r chi.Router, method, path string, body any) *ht
 		}
 		req = httptest.NewRequest(method, path, bytes.NewReader(raw))
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if method == http.MethodPatch && version > 0 {
+		req.Header.Set("If-Match", strconv.Itoa(version))
 	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -189,7 +212,6 @@ func validAppBody() map[string]any {
 		"image":           "ghcr.io/acme/storefront:1.4.2",
 		"port":            8080,
 		"replicas":        1,
-		"tier":            string(domain.Standard),
 		"healthCheckPath": "/healthz",
 		"env": []map[string]any{
 			{"name": "MODE", "kind": "literal", "value": "production"},
@@ -293,8 +315,6 @@ func TestAppCreateRejectsBadRequests(t *testing.T) {
 		"port out of range":   func(b map[string]any) { b["port"] = 70000 },
 		"missing replicas":    func(b map[string]any) { delete(b, "replicas") },
 		"replicas too many":   func(b map[string]any) { b["replicas"] = 9 },
-		"missing tier":        func(b map[string]any) { delete(b, "tier") },
-		"unknown tier":        func(b map[string]any) { b["tier"] = "PLATINUM" },
 		"relative health":     func(b map[string]any) { b["healthCheckPath"] = "healthz" },
 		"bad env name":        func(b map[string]any) { b["env"] = []map[string]any{{"name": "a b", "kind": "literal", "value": "x"}} },
 		"env with no kind":    func(b map[string]any) { b["env"] = []map[string]any{{"name": "TOKEN", "value": "x"}} },
@@ -598,8 +618,8 @@ func TestAppUpdateReplacesTheEnvSet(t *testing.T) {
 		t.Errorf("an emptied value must survive as empty, got %v", got.Env[0].Value)
 	}
 
-	w = doAppRequest(t, r, http.MethodPatch, "/api/projects/"+appTestProject+"/apps/"+created.ID+"/",
-		map[string]any{"env": []map[string]any{}})
+	w = doAppRequestWithVersion(t, r, http.MethodPatch, "/api/projects/"+appTestProject+"/apps/"+created.ID+"/",
+		map[string]any{"env": []map[string]any{}}, created.Version+1)
 	if w.Code != http.StatusOK {
 		t.Fatalf("update: got %d, body=%s", w.Code, w.Body.String())
 	}
@@ -646,7 +666,7 @@ func TestAppUpdateReplicasMovesTheStatus(t *testing.T) {
 		t.Errorf("zero replicas must stop the app, got %q", got.Status)
 	}
 
-	w = doAppRequest(t, r, http.MethodPatch, path, map[string]any{"replicas": 2})
+	w = doAppRequestWithVersion(t, r, http.MethodPatch, path, map[string]any{"replicas": 2}, created.Version+1)
 	if w.Code != http.StatusOK {
 		t.Fatalf("update: got %d, body=%s", w.Code, w.Body.String())
 	}
@@ -660,7 +680,6 @@ func TestAppUpdateRejectsBadValues(t *testing.T) {
 		{"image": "nginx"},
 		{"port": 0},
 		{"replicas": 4},
-		{"tier": "PLATINUM"},
 		{"name": "Bad Name"},
 		{"healthCheckPath": "healthz"},
 		{"env": []map[string]any{{"name": "TOKEN", "kind": "literal"}}},
@@ -772,5 +791,108 @@ func TestProjectSourceLookupPropagatesFailure(t *testing.T) {
 	if _, err := NewProjectSourceLookup(instances).
 		HasSource("proj_live", apphost.SourceDatabase, "storefront_db"); err == nil {
 		t.Fatal("a failed read must be reported, not read as an absent source")
+	}
+}
+
+// The tier is the project's, never the caller's: a developer on a free
+// project cannot ask for an enterprise envelope by naming one in the body.
+func TestAppCreateTakesTheTierFromTheProject(t *testing.T) {
+	sources := newFakeSources("storefront_db")
+	sources.tier = domain.Free
+	r, _, _ := setupAppRouterWithSources(t, sources)
+
+	body := validAppBody()
+	body["tier"] = string(domain.Enterprise)
+	body["replicas"] = 1
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: got %d, body=%s", w.Code, w.Body.String())
+	}
+	if got := decodeApp(t, w); got.Tier != domain.Free {
+		t.Errorf("the tier must come from the project, got %q", got.Tier)
+	}
+}
+
+// Nor may an update move the app onto another tier.
+func TestAppUpdateKeepsTheProjectTier(t *testing.T) {
+	sources := newFakeSources("storefront_db")
+	sources.tier = domain.Free
+	r, _, _ := setupAppRouterWithSources(t, sources)
+	created := createAppForTest(t, r)
+
+	w := doAppRequestWithVersion(t, r, http.MethodPatch,
+		"/api/projects/"+appTestProject+"/apps/"+created.ID+"/",
+		map[string]any{"tier": string(domain.Enterprise)}, created.Version)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update: got %d, body=%s", w.Code, w.Body.String())
+	}
+	if got := decodeApp(t, w); got.Tier != domain.Free {
+		t.Errorf("the tier must stay the project's, got %q", got.Tier)
+	}
+}
+
+// A project whose tier cannot be read is an internal error, not a guess at the
+// smallest envelope.
+func TestAppCreateRefusesWhenTheTierCannotBeRead(t *testing.T) {
+	sources := newFakeSources("storefront_db")
+	sources.tierErr = errPersisted
+	r, _, _ := setupAppRouterWithSources(t, sources)
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", validAppBody())
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("got %d, want 500, body=%s", w.Code, w.Body.String())
+	}
+}
+
+// The body is bounded before it is decoded: an oversized request is refused
+// rather than allocated.
+func TestAppCreateRefusesAnOversizedBody(t *testing.T) {
+	r, store := setupAppRouter(t)
+	body := validAppBody()
+	body["healthCheckPath"] = "/" + strings.Repeat("p", maxAppBodyBytes+1)
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", w.Code)
+	}
+	if len(store.apps) != 0 {
+		t.Error("nothing may be stored from an oversized body")
+	}
+}
+
+// An update states the version it read. Without one the server cannot tell an
+// informed write from one about to overwrite a change it never saw.
+func TestAppUpdateRequiresTheVersionItRead(t *testing.T) {
+	r, _ := setupAppRouter(t)
+	created := createAppForTest(t, r)
+	path := "/api/projects/" + appTestProject + "/apps/" + created.ID + "/"
+
+	w := doAppRequestWithVersion(t, r, http.MethodPatch, path, map[string]any{"replicas": 2}, 0)
+	if w.Code != http.StatusPreconditionRequired {
+		t.Fatalf("a patch with no version must be refused, got %d %s", w.Code, w.Body.String())
+	}
+
+	w = doAppRequestWithVersion(t, r, http.MethodPatch, path, map[string]any{"replicas": 2}, created.Version+7)
+	if w.Code != http.StatusPreconditionFailed {
+		t.Fatalf("a stale version must be refused, got %d %s", w.Code, w.Body.String())
+	}
+
+	w = doAppRequestWithVersion(t, r, http.MethodPatch, path, map[string]any{"replicas": 2}, created.Version)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the version that was read must be accepted, got %d %s", w.Code, w.Body.String())
+	}
+	if got := decodeApp(t, w); got.Version != created.Version+1 {
+		t.Errorf("version must advance, got %d", got.Version)
+	}
+	if etag := w.Header().Get("ETag"); etag != strconv.Itoa(created.Version+1) {
+		t.Errorf("the response must carry the new version as its ETag, got %q", etag)
+	}
+}
+
+// A read hands back the version to send with the next write.
+func TestAppGetCarriesItsVersionAsAnETag(t *testing.T) {
+	r, _ := setupAppRouter(t)
+	created := createAppForTest(t, r)
+	w := doAppRequest(t, r, http.MethodGet, "/api/projects/"+appTestProject+"/apps/"+created.ID+"/", nil)
+	if got := w.Header().Get("ETag"); got != strconv.Itoa(created.Version) {
+		t.Errorf("ETag: got %q want %q", got, strconv.Itoa(created.Version))
 	}
 }
