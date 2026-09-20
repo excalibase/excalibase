@@ -654,6 +654,9 @@ func buildProvisioningService(
 	var lifecycleClaimer service.ProjectOperationClaimer
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
 	provSvc.SetVault(vc)
+	// A rotated password is only good if the database accepts it, and the
+	// database is the only thing that can say so.
+	provSvc.SetCredentialVerifier(service.NewTenantRoleVerifier())
 	provSvc.SetOrgStore(sqlStore)
 	provSvc.SetTierStore(sqlStore)
 	provSvc.SetSelfHostedMode(!cfg.IsCloud())

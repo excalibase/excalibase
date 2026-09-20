@@ -38,6 +38,12 @@ type KubeClient interface {
 	GetSecret(ctx context.Context, namespace, name string) (map[string][]byte, error)
 	CreateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
 	ExecInPod(ctx context.Context, namespace, pod, container string, cmd []string) (string, error)
+	// ExecInPodStdin runs a command inside a pod with stdin attached and
+	// returns stdout. Every element of cmd becomes a query parameter on the
+	// exec request URL and is recorded in the API server's audit log, so any
+	// input carrying a secret — a password in a SQL statement, for one — must
+	// travel through stdin instead of argv.
+	ExecInPodStdin(ctx context.Context, namespace, pod, container string, cmd []string, stdin string) (string, error)
 	GetPodMetrics(ctx context.Context, namespace string) ([]PodResourceMetrics, error)
 	ListNamespaces(ctx context.Context, prefix string) ([]string, error)
 	ListCRDs(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)

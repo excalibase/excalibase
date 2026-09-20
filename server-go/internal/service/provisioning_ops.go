@@ -15,7 +15,6 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
-	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -232,35 +231,6 @@ func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, namespace, pr
 
 func urlEscape(s string) string {
 	return url.QueryEscape(s)
-}
-
-// RotateCredentials generates a new password and updates the database.
-func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
-	inst, err := s.GetInstance(projectID)
-	if err != nil {
-		return nil, err
-	}
-
-	newPassword := generatePassword(48)
-	pod := projectID + "-postgres-1"
-	sql := fmt.Sprintf("ALTER USER %s PASSWORD %s", schema.QuoteIdent(inst.Username), schema.QuoteLiteral(newPassword))
-
-	_, err = s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
-		[]string{"psql", "-U", "postgres", "-c", sql})
-	if err != nil {
-		return nil, fmt.Errorf("rotate password: %w", err)
-	}
-
-	// The database already has the new password. Failing to store it leaves
-	// the platform holding a credential that no longer opens the database,
-	// so the caller has to hear about it — and a refusal means a teardown
-	// owns the project and this rotation touched a database on its way out.
-	inst.Password = newPassword
-	if err := s.store.Update(inst); err != nil {
-		return nil, fmt.Errorf("persist rotated credentials: %w", err)
-	}
-
-	return s.GetCredentials(projectID)
 }
 
 // SetMaintenanceWindow sets the maintenance window config.

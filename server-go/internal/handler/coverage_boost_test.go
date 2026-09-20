@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -49,6 +50,10 @@ func fullRouterWithOpsRoutes(t *testing.T) (chi.Router, *storage.FileSystemStore
 
 	factory := provisioner.NewFactory()
 	provSvc := service.NewProvisioningService(store, factory, mock)
+	// Credential rotation refuses to run without somewhere durable to record
+	// the new password and a way to prove it opens the database.
+	provSvc.SetVault(newFakeVault())
+	provSvc.SetCredentialVerifier(acceptingRoleVerifier{})
 	metricsSvc := service.NewMetricsService(store, mock, dir)
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
 	perfSvc := service.NewPerformanceService(store, mock)
@@ -149,6 +154,14 @@ func TestGetLogs_NotFound_Returns500(t *testing.T) {
 	if w.Code != 500 {
 		t.Errorf("GetLogs not found: got %d, want 500", w.Code)
 	}
+}
+
+// acceptingRoleVerifier stands in for the connection that proves a rotated
+// password opens the project's database.
+type acceptingRoleVerifier struct{}
+
+func (acceptingRoleVerifier) VerifyRole(context.Context, *domain.DatabaseInstance, string, string) error {
+	return nil
 }
 
 // --- ProvisioningHandler.RotateCredentials ---

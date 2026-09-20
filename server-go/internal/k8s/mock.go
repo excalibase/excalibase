@@ -34,6 +34,7 @@ type MockClient struct {
 	HelmReleases         map[string]map[string]interface{} // key: "namespace/release" → values
 	Calls                []string                          // track method calls
 	ExecCommands         []string                          // every argv ExecInPod was called with, joined by " "
+	ExecStdin            []string                          // every non-empty stdin payload ExecInPodStdin was given
 	HelmError            error                             // if non-nil, InstallHelmChart returns this error
 	NamespaceError       error                             // if non-nil, CreateNamespace returns this error
 	DeleteNamespaceError error                             // if non-nil, DeleteNamespace returns this error
@@ -262,10 +263,24 @@ func (m *MockClient) CreateSecret(ctx context.Context, namespace, name string, d
 }
 
 func (m *MockClient) ExecInPod(ctx context.Context, namespace, pod, container string, cmd []string) (string, error) {
+	return m.exec(namespace, pod, cmd, "")
+}
+
+// ExecInPodStdin records the argv and the stdin payload separately, mirroring
+// the real client: argv becomes URL query parameters the API server audits,
+// stdin stays in the request body.
+func (m *MockClient) ExecInPodStdin(ctx context.Context, namespace, pod, container string, cmd []string, stdin string) (string, error) {
+	return m.exec(namespace, pod, cmd, stdin)
+}
+
+func (m *MockClient) exec(namespace, pod string, cmd []string, stdin string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "ExecInPod:"+namespace+"/"+pod)
 	m.ExecCommands = append(m.ExecCommands, strings.Join(cmd, " "))
+	if stdin != "" {
+		m.ExecStdin = append(m.ExecStdin, stdin)
+	}
 	key := namespace + "/" + pod
 	if err, ok := m.ExecError[key]; ok && err != nil {
 		return "", err

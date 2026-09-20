@@ -8,11 +8,28 @@ import "time"
 // (consumer of the type) can reference it without an import cycle.
 type PolicyChangeEvent struct {
 	ProjectID string `json:"projectId"`
-	Kind      string `json:"kind"`     // "rls" | "column"
-	Resource  string `json:"resource"` // table the policy targets
+	Kind      string `json:"kind"`     // "rls" | "column" | "grant" | "exposure" | "project" | "credential"
+	Resource  string `json:"resource"` // what the change targets: a table, or a role for a credential change
 	PolicyID  string `json:"policyId"`
-	Op        string `json:"op"` // "create" | "update" | "delete"
+	Op        string `json:"op"` // OpChangeCreate | OpChangeUpdate | OpChangeDelete
 }
+
+// The operations a PolicyChangeEvent carries. Consumers switch on these, so
+// the set is closed: a change that replaces something that already exists —
+// a rotated credential included — is an update, not a verb of its own.
+const (
+	OpChangeCreate = "create"
+	OpChangeUpdate = "update"
+	OpChangeDelete = "delete"
+)
+
+// CredentialChangeKind is the Kind carried on PolicyChangeEvent when a
+// project's role passwords are rotated. The engine and the auth service cache
+// the credentials they read from vault with a TTL, so without this event they
+// keep a password the database has already stopped accepting until that TTL
+// runs out. It travels on the same "policies.{projectId}.changed" subject as
+// every other cache-invalidating change.
+const CredentialChangeKind = "credential"
 
 // Operation mirrors io.github.excalibase.rls.Operation in the engine.
 type Operation string
@@ -58,18 +75,18 @@ const (
 type RuleOperator string
 
 const (
-	OpEQ         RuleOperator = "EQ"
-	OpNEQ        RuleOperator = "NEQ"
-	OpGT         RuleOperator = "GT"
-	OpGTE        RuleOperator = "GTE"
-	OpLT         RuleOperator = "LT"
-	OpLTE        RuleOperator = "LTE"
-	OpIN         RuleOperator = "IN"
-	OpNOTIN      RuleOperator = "NOT_IN"
-	OpLIKE       RuleOperator = "LIKE"
-	OpNOTLIKE    RuleOperator = "NOT_LIKE"
-	OpISNULL     RuleOperator = "IS_NULL"
-	OpISNOTNULL  RuleOperator = "IS_NOT_NULL"
+	OpEQ        RuleOperator = "EQ"
+	OpNEQ       RuleOperator = "NEQ"
+	OpGT        RuleOperator = "GT"
+	OpGTE       RuleOperator = "GTE"
+	OpLT        RuleOperator = "LT"
+	OpLTE       RuleOperator = "LTE"
+	OpIN        RuleOperator = "IN"
+	OpNOTIN     RuleOperator = "NOT_IN"
+	OpLIKE      RuleOperator = "LIKE"
+	OpNOTLIKE   RuleOperator = "NOT_LIKE"
+	OpISNULL    RuleOperator = "IS_NULL"
+	OpISNOTNULL RuleOperator = "IS_NOT_NULL"
 )
 
 // TargetType mirrors io.github.excalibase.rls.TargetType.
@@ -143,18 +160,18 @@ type Policy struct {
 
 // ColumnPolicy mirrors io.github.excalibase.rls.ColumnPolicy.
 type ColumnPolicy struct {
-	ID               string           `json:"id"`
-	ProjectID        string           `json:"projectId"`
-	Name             string           `json:"name"`
-	Resource         string           `json:"resource"`
-	Columns          []string         `json:"columns"`
-	Operations       []Operation      `json:"operations"`
-	Mode             MaskMode         `json:"mode"`
-	PartialSpec      *PartialMaskSpec `json:"partialSpec,omitempty"`
-	CustomMaskerKey  string           `json:"customMaskerKey,omitempty"`
-	Priority         int              `json:"priority"`
-	Enabled          bool             `json:"enabled"`
-	Assignments      []Assignment     `json:"assignments"`
-	CreatedAt        *time.Time       `json:"createdAt,omitempty"`
-	UpdatedAt        *time.Time       `json:"updatedAt,omitempty"`
+	ID              string           `json:"id"`
+	ProjectID       string           `json:"projectId"`
+	Name            string           `json:"name"`
+	Resource        string           `json:"resource"`
+	Columns         []string         `json:"columns"`
+	Operations      []Operation      `json:"operations"`
+	Mode            MaskMode         `json:"mode"`
+	PartialSpec     *PartialMaskSpec `json:"partialSpec,omitempty"`
+	CustomMaskerKey string           `json:"customMaskerKey,omitempty"`
+	Priority        int              `json:"priority"`
+	Enabled         bool             `json:"enabled"`
+	Assignments     []Assignment     `json:"assignments"`
+	CreatedAt       *time.Time       `json:"createdAt,omitempty"`
+	UpdatedAt       *time.Time       `json:"updatedAt,omitempty"`
 }

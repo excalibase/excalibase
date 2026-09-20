@@ -238,6 +238,11 @@ func (h *AdminHandler) deprovisionOrgProjects(ctx context.Context, orgID string)
 	}
 	dropped := 0
 	var failed []string
+	// One teardown at a time, deliberately: each holds a platform-database
+	// connection for its whole lifecycle lease (up to DELETION_WAIT_TIMEOUT),
+	// so a parallel cascade would scale that hold with the org's project
+	// count and starve the pool the rest of the control plane queries
+	// through. Sequential costs the cascade wall-clock time and nothing else.
 	for _, inst := range instances {
 		if inst.OrgID != orgID {
 			continue
