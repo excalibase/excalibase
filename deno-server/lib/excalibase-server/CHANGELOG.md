@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.0
+
+**Breaking** (`ctx.storage`, direct-upload flow): an upload now stages before
+it becomes an object, so an upload that breaks the bucket's limits can be
+refused without touching whatever is already stored under that key.
+
+- `generateUploadUrl()` → `generateUploadUrl({ contentType, size })`, and it
+  returns `{ url, storageId, uploadId }` instead of a bare URL string. Both
+  declared fields are bound into the signature, so the client must PUT with
+  exactly that `Content-Type` and `Content-Length`.
+- New `completeUpload({ storageId, uploadId })`. A direct upload is staged
+  bytes until it is confirmed; an upload nobody confirms is collected after
+  the platform's grace period. Call it from the follow-up mutation that
+  attaches the `storageId` to a row.
+- `store(blob)` is unchanged: it declares the blob's size and type, sends
+  them, and confirms on the caller's behalf.
+
 ## 0.11.0
 
 **Breaking**: removed the document-store data plane. The lib now exposes

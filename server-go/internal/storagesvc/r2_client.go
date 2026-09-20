@@ -121,25 +121,32 @@ func objectKey(projectID, bucketID, userKey string) (string, error) {
 // directly. Excalibase never streams the file content. ttl bounds how
 // long the URL is valid; default 5 min if ttl == 0.
 //
-// Content-Type is encoded into the signed URL — the client MUST PUT with
-// that exact header or R2 rejects the request. This binds the URL to a
-// specific MIME type, preventing image-bucket → executable-upload tricks.
-func (r *R2Client) SignedPutURL(ctx context.Context, projectID, bucketID, key, mimeType string, ttl time.Duration) (string, time.Time, error) {
+// Both Content-Type and Content-Length are part of the signature (they
+// appear in X-Amz-SignedHeaders), so the URL authorises one object of one
+// type at one exact length: a client that sends different headers, or a
+// different number of bytes, gets a signature mismatch from the object store
+// rather than an upload. Size must be positive — an unbound length is the
+// bypass this closes.
+func (r *R2Client) SignedPutURL(ctx context.Context, projectID, bucketID, key, mimeType string, size int64, ttl time.Duration) (string, time.Time, error) {
 	if ttl == 0 {
 		ttl = 5 * time.Minute
+	}
+	if mimeType == "" {
+		return "", time.Time{}, fmt.Errorf("r2: content type required to sign an upload")
+	}
+	if size <= 0 {
+		return "", time.Time{}, fmt.Errorf("r2: content length required to sign an upload")
 	}
 	storeKey, err := objectKey(projectID, bucketID, key)
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	in := &s3.PutObjectInput{
-		Bucket: aws.String(r.cfg.Bucket),
-		Key:    aws.String(storeKey),
-	}
-	if mimeType != "" {
-		in.ContentType = aws.String(mimeType)
-	}
-	signed, err := r.presign.PresignPutObject(ctx, in, s3.WithPresignExpires(ttl))
+	signed, err := r.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(r.cfg.Bucket),
+		Key:           aws.String(storeKey),
+		ContentType:   aws.String(mimeType),
+		ContentLength: aws.Int64(size),
+	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("presign put: %w", err)
 	}
@@ -148,7 +155,15 @@ func (r *R2Client) SignedPutURL(ctx context.Context, projectID, bucketID, key, m
 
 // SignedGetURL returns a presigned URL the client can GET bytes from.
 // Used for private buckets; public buckets return PublicURL() instead.
-func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucketID, key string, ttl time.Duration) (string, time.Time, error) {
+//
+// With download set, the signed request also carries
+// response-content-disposition and response-content-type, which S3/R2 apply
+// to the response it serves. That turns an object the browser would execute
+// — markup, SVG, script — into a download of an inert type, on the one path
+// where the platform still has a say. (A public bucket's URL is not signed at
+// all, so nothing can be pinned there; those types are refused at upload
+// instead.)
+func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucketID, key string, download bool, ttl time.Duration) (string, time.Time, error) {
 	if ttl == 0 {
 		ttl = 5 * time.Minute
 	}
@@ -156,10 +171,15 @@ func (r *R2Client) SignedGetURL(ctx context.Context, projectID, bucketID, key st
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	signed, err := r.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+	in := &s3.GetObjectInput{
 		Bucket: aws.String(r.cfg.Bucket),
 		Key:    aws.String(storeKey),
-	}, s3.WithPresignExpires(ttl))
+	}
+	if download {
+		in.ResponseContentDisposition = aws.String("attachment")
+		in.ResponseContentType = aws.String("application/octet-stream")
+	}
+	signed, err := r.presign.PresignGetObject(ctx, in, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("presign get: %w", err)
 	}
@@ -206,11 +226,21 @@ func (r *R2Client) DeleteObject(ctx context.Context, projectID, bucketID, key st
 	return nil
 }
 
-// ListObjectKeys returns up to limit keys stored under the bucket's prefix.
-// A bucket delete uses it to prove the blob plane really is empty before the
-// catalogue is dropped — the catalogue alone cannot prove it, since an
-// upload that was never confirmed leaves bytes with no row.
-func (r *R2Client) ListObjectKeys(ctx context.Context, projectID, bucketID string, limit int32) ([]string, error) {
+// StoredObject is one key as the object store holds it: the key relative to
+// its bucket, plus its size and when it was last written. The reaper compares
+// the write time against the catalogue to find uploads that were never
+// confirmed; a bucket delete uses the same listing to prove the blob plane is
+// really empty before the catalogue is dropped, which the catalogue alone
+// cannot prove.
+type StoredObject struct {
+	Key          string
+	Size         int64
+	LastModified time.Time
+}
+
+// ListObjects returns what the object store holds under one bucket's prefix.
+// Keys come back relative to the bucket, matching the catalogue's view.
+func (r *R2Client) ListObjects(ctx context.Context, projectID, bucketID string, limit int32) ([]StoredObject, error) {
 	prefix, err := bucketPrefix(projectID, bucketID)
 	if err != nil {
 		return nil, err
@@ -226,19 +256,106 @@ func (r *R2Client) ListObjectKeys(ctx context.Context, projectID, bucketID strin
 	if err != nil {
 		return nil, fmt.Errorf("list objects: %w", err)
 	}
-	keys := make([]string, 0, len(out.Contents))
+	objects := make([]StoredObject, 0, len(out.Contents))
 	for _, o := range out.Contents {
-		if o.Key != nil {
-			keys = append(keys, *o.Key)
+		if o.Key == nil {
+			continue
 		}
+		obj := StoredObject{Key: strings.TrimPrefix(*o.Key, prefix)}
+		if o.Size != nil {
+			obj.Size = *o.Size
+		}
+		if o.LastModified != nil {
+			obj.LastModified = *o.LastModified
+		}
+		objects = append(objects, obj)
 	}
-	return keys, nil
+	return objects, nil
 }
 
-// isNotFound reports whether an S3 error means "the key isn't there".
-// R2 answers a delete of a missing key with 204, but other S3-compatible
-// backends return NoSuchKey — both mean the same thing. DeleteObject has no
-// modelled error shape for it, so the wire code is what identifies it.
+// MaxSingleCopyBytes is the ceiling on a single-request server-side copy in
+// S3 and R2: 5 GiB. An object above it needs a multipart copy, which this
+// client does not implement — and does not need to, because the presigned
+// single PUT that stages an upload has the same 5 GiB ceiling, so nothing
+// larger can be staged in the first place. Resumable (tus) uploads can exceed
+// it; CopyObject refuses one rather than silently truncating it, and that
+// refusal is what would have to be lifted first.
+// MaxSingleCopyBytes is exported so the confirm path can refuse an upload it
+// would not be able to move onto its key.
+const MaxSingleCopyBytes int64 = 5 * 1024 * 1024 * 1024
+
+// CopyObject copies an object onto another key inside the same logical
+// bucket, server-side: no bytes travel through the control plane.
+func (r *R2Client) CopyObject(ctx context.Context, projectID, bucketID, sourceKey, destinationKey string) error {
+	source, err := objectKey(projectID, bucketID, sourceKey)
+	if err != nil {
+		return err
+	}
+	destination, err := objectKey(projectID, bucketID, destinationKey)
+	if err != nil {
+		return err
+	}
+	_, err = r.s3.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(r.cfg.Bucket),
+		Key:        aws.String(destination),
+		CopySource: aws.String(url.PathEscape(r.cfg.Bucket + "/" + source)),
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return fmt.Errorf("copy object %q: %w", sourceKey, ErrObjectNotFound)
+		}
+		return fmt.Errorf("copy object: %w", err)
+	}
+	return nil
+}
+
+// ListStagedUploads lists the bucket's staging namespace and nothing else.
+// The prefix is built here, from the bucket id and a fixed segment, so the
+// reaper has no way to ask about a live key.
+func (r *R2Client) ListStagedUploads(ctx context.Context, projectID, bucketID string, limit int32) ([]StagedUpload, error) {
+	bucket, err := bucketPrefix(projectID, bucketID)
+	if err != nil {
+		return nil, err
+	}
+	prefix := bucket + stagingPrefix
+	if limit <= 0 {
+		limit = 1000
+	}
+	out, err := r.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(r.cfg.Bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list staged uploads: %w", err)
+	}
+	staged := make([]StagedUpload, 0, len(out.Contents))
+	for _, o := range out.Contents {
+		if o.Key == nil {
+			continue
+		}
+		upload := StagedUpload{UploadID: strings.TrimPrefix(*o.Key, prefix)}
+		if o.LastModified != nil {
+			upload.LastModified = *o.LastModified
+		}
+		staged = append(staged, upload)
+	}
+	return staged, nil
+}
+
+// DeleteStagingObject removes one staged upload. Its key is built from the
+// upload id, so this cannot be steered at an object.
+func (r *R2Client) DeleteStagingObject(ctx context.Context, projectID, bucketID, uploadID string) error {
+	if uploadID == "" || strings.ContainsAny(uploadID, "/\\") {
+		return fmt.Errorf("r2: invalid upload id %q", uploadID)
+	}
+	return r.DeleteObject(ctx, projectID, bucketID, stagingObjectKey(uploadID))
+}
+
+// isNotFound reports whether an S3 error means "the key isn't there". R2
+// answers a delete of a missing key with 204, but other S3-compatible
+// backends return NoSuchKey — both mean the same thing. The modelled error
+// shapes differ per operation, so the wire code is what identifies it.
 func isNotFound(err error) bool {
 	var apiErr smithy.APIError
 	if !errors.As(err, &apiErr) {
@@ -254,26 +371,35 @@ func isNotFound(err error) bool {
 // HeadObject queries R2 for the size + content-type of an existing object.
 // Used after the client confirms upload, to validate what they claimed
 // matches what's actually in R2.
-func (r *R2Client) HeadObject(ctx context.Context, projectID, bucketID, key string) (size int64, contentType, etag string, err error) {
+func (r *R2Client) HeadObject(ctx context.Context, projectID, bucketID, key string) (ObjectStat, error) {
 	storeKey, err := objectKey(projectID, bucketID, key)
 	if err != nil {
-		return 0, "", "", err
+		return ObjectStat{}, err
 	}
 	out, err := r.s3.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(r.cfg.Bucket),
 		Key:    aws.String(storeKey),
 	})
 	if err != nil {
-		return 0, "", "", fmt.Errorf("head object: %w", err)
+		// "there is nothing at this key" is a sentinel the service acts on;
+		// anything else is a real failure to reach the store.
+		if isNotFound(err) {
+			return ObjectStat{}, fmt.Errorf("head object %q: %w", key, ErrObjectNotFound)
+		}
+		return ObjectStat{}, fmt.Errorf("head object: %w", err)
 	}
+	stat := ObjectStat{}
 	if out.ContentLength != nil {
-		size = *out.ContentLength
+		stat.Size = *out.ContentLength
 	}
 	if out.ContentType != nil {
-		contentType = *out.ContentType
+		stat.ContentType = *out.ContentType
 	}
 	if out.ETag != nil {
-		etag = strings.Trim(*out.ETag, "\"")
+		stat.ETag = strings.Trim(*out.ETag, "\"")
 	}
-	return size, contentType, etag, nil
+	if out.LastModified != nil {
+		stat.LastModified = *out.LastModified
+	}
+	return stat, nil
 }

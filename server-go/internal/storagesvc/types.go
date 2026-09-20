@@ -69,8 +69,8 @@ type CreateBucketRequest struct {
 // to R2 with the URL we return, saving a streaming round-trip.
 type UploadURLRequest struct {
 	Key      string `json:"key"`
-	MimeType string `json:"mimeType,omitempty"` // pre-set Content-Type on the signed URL
-	Size     int64  `json:"size,omitempty"`     // hint for quota check; not enforced on the URL itself
+	MimeType string `json:"mimeType"` // required: bound into the signature
+	Size     int64  `json:"size"`     // required: bound into the signature
 }
 
 // UploadURLResponse is what the frontend uses to PUT the bytes directly
@@ -78,6 +78,10 @@ type UploadURLRequest struct {
 // can record the object metadata; absent that confirmation the file is
 // orphaned in R2 and a daily janitor reaps it.
 type UploadURLResponse struct {
+	// UploadID names the staged upload this URL authorises. The client hands
+	// it back on confirm; it is the only thing that identifies which bytes
+	// are being accepted, because they are not on the object's key yet.
+	UploadID  string            `json:"uploadId"`
 	URL       string            `json:"url"`
 	Method    string            `json:"method"` // always "PUT" for now
 	Headers   map[string]string `json:"headers"`
@@ -113,8 +117,12 @@ type ListObjectsResponse struct {
 // trusts the values for now and we'll add a HEAD-back-to-R2 check in
 // v1.2 once we see traffic shape.
 type ConfirmUploadRequest struct {
-	Key      string `json:"key"`
-	Size     int64  `json:"size"`
-	MimeType string `json:"mimeType"`
-	ETag     string `json:"etag,omitempty"`
+	Key string `json:"key"`
+	// UploadID is the id the upload URL was issued under. Required: it says
+	// which staged bytes to accept.
+	UploadID string `json:"uploadId"`
+	// ETag is the caller's own digest, kept for catalogue parity. Size and
+	// content type are not accepted here at all — they are read back from
+	// the object store.
+	ETag string `json:"etag,omitempty"`
 }

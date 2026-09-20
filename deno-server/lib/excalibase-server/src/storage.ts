@@ -10,7 +10,8 @@
  *   StorageReader.getMetadata(id)   — sha256 / size / contentType
  *
  *   StorageWriter extends StorageReader and adds:
- *   StorageWriter.generateUploadUrl() — signed PUT URL for client direct upload
+ *   StorageWriter.generateUploadUrl(decl) — signed PUT URL for a direct upload
+ *   StorageWriter.completeUpload(c)  — accept a staged direct upload
  *   StorageWriter.store(blob, opts?)  — server-side upload, returns Id<"_storage">
  *   StorageWriter.delete(id)          — remove the object + metadata row
  *
@@ -43,6 +44,35 @@ export interface StorageFileMetadata {
   readonly sha256: string;
   readonly size: number;
   readonly contentType?: string;
+}
+
+/**
+ * What a direct upload must declare before a URL can be signed for it. Both
+ * fields are bound into the signature: the client has to send exactly this
+ * content type and exactly this many bytes.
+ */
+export interface UploadDeclaration {
+  readonly contentType: string;
+  readonly size: number;
+}
+
+/**
+ * What `generateUploadUrl` hands back. `url` is where the bytes go,
+ * `storageId` is what the object will be called once it is confirmed, and
+ * `uploadId` names the staged bytes — the URL alone does not identify them.
+ */
+export interface MintedUpload {
+  readonly url: string;
+  readonly storageId: string;
+  readonly uploadId: string;
+}
+
+/**
+ * Which staged upload to accept. Both ids come from `generateUploadUrl`.
+ */
+export interface UploadCompletion {
+  readonly storageId: string;
+  readonly uploadId: string;
 }
 
 /**
@@ -106,15 +136,39 @@ export interface StorageReader {
  */
 export interface StorageWriter extends StorageReader {
   /**
-   * Mint a signed PUT URL the client can upload to directly. Flow:
-   *   1. Client invokes a mutation that calls `ctx.storage.generateUploadUrl()`.
-   *   2. The mutation returns the URL to the client.
-   *   3. The client PUTs the blob to that URL (no function-runtime
-   *      bandwidth consumed).
-   *   4. The upload response carries the new `storageId`, which the
-   *      client passes to a follow-up mutation to attach to a row.
+   * Mint a signed PUT URL the client can upload to directly.
+   *
+   * The bytes land in a staging area, not on the object's key, and become
+   * the object only when `completeUpload` accepts them. An upload nobody
+   * confirms is collected after the platform's grace period, so the
+   * confirmation is part of the flow, not an optimisation.
+   *
+   * Flow:
+   *   1. Client invokes a mutation that calls
+   *      `ctx.storage.generateUploadUrl({ contentType, size })` with the
+   *      type and byte length of the file it is about to send.
+   *   2. The mutation returns `{ url, storageId, uploadId }` to the client.
+   *   3. The client PUTs the blob to that URL with exactly that
+   *      `Content-Type` and `Content-Length` — both are covered by the
+   *      signature, so anything else is refused by the object store. No
+   *      function-runtime bandwidth is consumed.
+   *   4. The client calls a follow-up mutation with `storageId` and
+   *      `uploadId`; that mutation calls `ctx.storage.completeUpload(...)`
+   *      and attaches the `storageId` to a row.
    */
-  generateUploadUrl(): Promise<string>;
+  generateUploadUrl(declaration: UploadDeclaration): Promise<MintedUpload>;
+
+  /**
+   * Accept a staged direct upload, making it the object its `storageId`
+   * names. The platform reads the stored bytes back to check them against
+   * the project's quota and the bucket's allowed types, so a confirmation
+   * can be refused — and an upload that is refused, or never confirmed,
+   * never becomes an object.
+   *
+   * Idempotent for the same upload: confirming twice records one object and
+   * charges the quota once.
+   */
+  completeUpload(completion: UploadCompletion): Promise<Id<"_storage">>;
 
   /**
    * Stream a `Blob` to storage from the function runtime, returning the

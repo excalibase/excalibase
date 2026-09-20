@@ -89,6 +89,7 @@ Deno.test({
           JSON.stringify({
             url: "https://r2.test/PUT/abc?sig=zzz",
             storageId: "kg2_minted",
+            uploadId: "upl_a",
             method: "PUT",
           }),
           { headers: { "content-type": "application/json" } },
@@ -105,8 +106,8 @@ Deno.test({
           kind: "mutation",
           args: { parse: (a) => a },
           handler: async (ctx, _args) => {
-            const url = await ctx.storage.generateUploadUrl();
-            return { url };
+            const minted = await ctx.storage.generateUploadUrl({ contentType: "image/png", size: 10 });
+            return { url: minted.url };
           },
         };`;
         await rt.deploy("proj_storeA__caller", handlerCode);
@@ -297,6 +298,148 @@ Deno.test({
         };
         assertEquals(parsed.data.hasDelete, false);
         assertEquals(parsed.data.hasGetUrl, true);
+      } finally {
+        await rt.stop();
+      }
+    } finally {
+      await mock.stop();
+    }
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+// The upload protocol stages bytes before they become an object, so both the
+// mint and the confirmation carry fields the runtime has to send. These pin
+// the exact JSON the runtime puts on the wire against provisioning's internal
+// routes: change either side and this test says so.
+Deno.test({
+  name: "ctx.storage.store declares its size and type, PUTs exactly them, and confirms by upload id",
+  async fn() {
+    const putHeaders: Record<string, string> = {};
+    let putURL = "";
+    const mock = await startMockProvisioning({
+      "POST /internal/storage/proj_storeD/upload-url": () =>
+        new Response(
+          JSON.stringify({
+            url: putURL,
+            storageId: "kg2_stored",
+            uploadId: "upl_staged",
+            method: "PUT",
+            headers: { "Content-Type": "text/plain", "Content-Length": "5" },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      "PUT /staged": (req) => {
+        req.headers.forEach((v, k) => { putHeaders[k] = v; });
+        return new Response(null, { status: 200 });
+      },
+      "POST /internal/storage/proj_storeD/confirm-upload": () =>
+        new Response(null, { status: 204 }),
+    });
+
+    putURL = `${mock.url}/staged`;
+    try {
+      const rt = await startRuntime({ v2Enabled: true, provisioningUrl: mock.url });
+      try {
+        const handlerCode = `globalThis.__excalibase_default = {
+          kind: "action",
+          args: { parse: (a) => a },
+          handler: async (ctx, _args) => {
+            const blob = new Blob(["hello"], { type: "text/plain" });
+            return { id: await ctx.storage.store(blob) };
+          },
+        };`;
+        await rt.deploy("proj_storeD__caller", handlerCode);
+        const res = await rt.invoke("proj_storeD__caller", { args: {} });
+        assertEquals(res.status, 200);
+        const parsed = JSON.parse(res.body) as { data: { id: string } };
+        assertEquals(parsed.data.id, "kg2_stored");
+
+        const mint = mock.requests.find((c) => c.path.endsWith("/upload-url"));
+        if (!mint) throw new Error("no upload-url call was made");
+        const mintBody = JSON.parse(mint.body) as { contentType: string; size: number };
+        // Both are bound into the signature, so both must be declared.
+        assertEquals(mintBody.contentType, "text/plain");
+        assertEquals(mintBody.size, 5);
+
+        const confirm = mock.requests.find((c) => c.path.endsWith("/confirm-upload"));
+        if (!confirm) throw new Error("no confirm-upload call was made");
+        const confirmBody = JSON.parse(confirm.body) as Record<string, unknown>;
+        // The confirmation names the staged upload. Size and content type are
+        // read back from the object store, so sending them would be ignored.
+        assertEquals(confirmBody.storageId, "kg2_stored");
+        assertEquals(confirmBody.uploadId, "upl_staged");
+        assertEquals(confirmBody.size, undefined);
+        assertEquals(confirmBody.contentType, undefined);
+
+        // The PUT carried exactly what was declared; anything else is a 403
+        // from the object store, because the signature covers both headers.
+        assertEquals(putHeaders["content-type"], "text/plain");
+        assertEquals(putHeaders["content-length"], "5");
+      } finally {
+        await rt.stop();
+      }
+    } finally {
+      await mock.stop();
+    }
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+// The direct-upload flow hands the browser a URL and the two ids it will need
+// to turn the upload into an object.
+Deno.test({
+  name: "ctx.storage.generateUploadUrl declares the upload and returns url, storageId and uploadId",
+  async fn() {
+    const mock = await startMockProvisioning({
+      "POST /internal/storage/proj_storeE/upload-url": () =>
+        new Response(
+          JSON.stringify({
+            url: "https://r2.test/.staging/upl_1?sig=zzz",
+            storageId: "kg2_minted",
+            uploadId: "upl_1",
+            method: "PUT",
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      "POST /internal/storage/proj_storeE/confirm-upload": () =>
+        new Response(null, { status: 204 }),
+    });
+
+    try {
+      const rt = await startRuntime({ v2Enabled: true, provisioningUrl: mock.url });
+      try {
+        const handlerCode = `globalThis.__excalibase_default = {
+          kind: "mutation",
+          args: { parse: (a) => a },
+          handler: async (ctx, _args) => {
+            const minted = await ctx.storage.generateUploadUrl({ contentType: "image/png", size: 99 });
+            const confirmed = await ctx.storage.completeUpload({
+              storageId: minted.storageId, uploadId: minted.uploadId,
+            });
+            return { ...minted, confirmed };
+          },
+        };`;
+        await rt.deploy("proj_storeE__caller", handlerCode);
+        const res = await rt.invoke("proj_storeE__caller", { args: {} });
+        assertEquals(res.status, 200);
+        const parsed = JSON.parse(res.body) as {
+          data: { url: string; storageId: string; uploadId: string; confirmed: string };
+        };
+        assertEquals(parsed.data.url, "https://r2.test/.staging/upl_1?sig=zzz");
+        assertEquals(parsed.data.storageId, "kg2_minted");
+        assertEquals(parsed.data.uploadId, "upl_1");
+        assertEquals(parsed.data.confirmed, "kg2_minted");
+
+        const mint = mock.requests.find((c) => c.path.endsWith("/upload-url"));
+        if (!mint) throw new Error("no upload-url call was made");
+        assertEquals(JSON.parse(mint.body), { contentType: "image/png", size: 99 });
+
+        const confirm = mock.requests.find((c) => c.path.endsWith("/confirm-upload"));
+        if (!confirm) throw new Error("no confirm-upload call was made");
+        assertEquals(JSON.parse(confirm.body), { storageId: "kg2_minted", uploadId: "upl_1" });
       } finally {
         await rt.stop();
       }

@@ -66,6 +66,16 @@ func (m *memStore) ListBuckets(_ context.Context, projectID string) ([]Bucket, e
 	return out, nil
 }
 
+func (m *memStore) ListAllBuckets(_ context.Context) ([]Bucket, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Bucket{}
+	for _, b := range m.buckets {
+		out = append(out, *b)
+	}
+	return out, nil
+}
+
 func (m *memStore) DeleteBucket(_ context.Context, projectID, name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -99,6 +109,32 @@ func (m *memStore) CreateObject(_ context.Context, o *Object) error {
 	}
 	m.objects[o.BucketID][o.Key] = o
 	return nil
+}
+
+// RecordObjectWithinQuota mirrors the SQL contract: the row and the charge
+// move together, by the difference from what the row held before, and the cap
+// is decided by the same write.
+func (m *memStore) RecordObjectWithinQuota(_ context.Context, projectID string, o *Object, capBytes int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.objects[o.BucketID]; !ok {
+		m.objects[o.BucketID] = map[string]*Object{}
+	}
+	var previous int64
+	if existing, ok := m.objects[o.BucketID][o.Key]; ok {
+		previous = existing.Size
+	}
+	delta := o.Size - previous
+	if capBytes > 0 && m.quotas[projectID]+delta > capBytes {
+		return false, nil
+	}
+	copied := *o
+	m.objects[o.BucketID][o.Key] = &copied
+	m.quotas[projectID] += delta
+	if m.quotas[projectID] < 0 {
+		m.quotas[projectID] = 0
+	}
+	return true, nil
 }
 
 func (m *memStore) GetObject(_ context.Context, bucketID, key string) (*Object, error) {
@@ -239,7 +275,7 @@ func TestService_QuotaEnforcement(t *testing.T) {
 
 	// 200-byte upload would push over → reject.
 	_, err := svc.SignUploadURL(ctx, testProjX, "files", "FREE", UploadURLRequest{
-		Key: "big.txt", Size: 200,
+		Key: "big.txt", MimeType: "text/plain", Size: 200,
 	})
 	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
 		t.Errorf("expected quota error, got %v", err)
@@ -247,7 +283,7 @@ func TestService_QuotaEnforcement(t *testing.T) {
 
 	// 50-byte upload fits → ok.
 	_, err = svc.SignUploadURL(ctx, testProjX, "files", "FREE", UploadURLRequest{
-		Key: "small.txt", Size: 50,
+		Key: "small.txt", MimeType: "text/plain", Size: 50,
 	})
 	if err != nil {
 		t.Errorf("under-quota upload rejected: %v", err)
@@ -272,7 +308,7 @@ func TestService_BucketSizeLimit(t *testing.T) {
 	})
 
 	_, err := svc.SignUploadURL(ctx, testProjX, "avatars", "FREE", UploadURLRequest{
-		Key: "big.png", Size: 5 * 1024 * 1024,
+		Key: "big.png", MimeType: "image/png", Size: 5 * 1024 * 1024,
 	})
 	if err == nil || !strings.Contains(err.Error(), "size limit") {
 		t.Errorf("expected size-limit error, got %v", err)

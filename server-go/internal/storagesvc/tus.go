@@ -33,13 +33,27 @@ func (s *Service) TusComposer() *tusd.StoreComposer {
 // (existence, MIME allowlist, per-project quota) and returns the S3 object key
 // the bytes must land at. It mirrors SignUploadURL minus the presign step, so a
 // tus upload is subject to the same guardrails as a single-PUT upload.
-func (s *Service) StartResumableUpload(ctx context.Context, projectID, bucketName, tier string, req UploadURLRequest) (string, error) {
+// The upload lands on a staging key of its own, exactly as a presigned PUT
+// does, and becomes the object only when it is confirmed. Returns the store
+// key the bytes must land at and the upload id that names them.
+func (s *Service) StartResumableUpload(ctx context.Context, projectID, bucketName, tier string, req UploadURLRequest) (string, string, error) {
 	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
 	if err != nil {
-		return "", err
+		return "", "", err
+	}
+	if err := validateObjectKey(req.Key); err != nil {
+		return "", "", err
 	}
 	if err := s.validateUploadRequest(ctx, projectID, tier, bucket, req); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return objectKey(projectID, bucket.ID, req.Key)
+	uploadID, err := randomID("upl")
+	if err != nil {
+		return "", "", err
+	}
+	storeKey, err := objectKey(projectID, bucket.ID, stagingObjectKey(uploadID))
+	if err != nil {
+		return "", "", err
+	}
+	return storeKey, uploadID, nil
 }

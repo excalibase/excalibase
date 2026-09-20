@@ -16,13 +16,51 @@ import (
 // outstanding presigned URL from addressing a later bucket's objects. Names
 // are resolved to ids at the API boundary.
 type ObjectStore interface {
-	SignedPutURL(ctx context.Context, projectID, bucketID, key, mimeType string, ttl time.Duration) (string, time.Time, error)
-	SignedGetURL(ctx context.Context, projectID, bucketID, key string, ttl time.Duration) (string, time.Time, error)
+	SignedPutURL(ctx context.Context, projectID, bucketID, key, mimeType string, size int64, ttl time.Duration) (string, time.Time, error)
+	// SignedGetURL mints a read URL. When download is set, the signature also
+	// pins the response's Content-Disposition and Content-Type, so the object
+	// is handed to the browser as a file instead of being rendered.
+	SignedGetURL(ctx context.Context, projectID, bucketID, key string, download bool, ttl time.Duration) (string, time.Time, error)
 	PublicURL(projectID, bucketID, key string) (string, error)
 	// DeleteObject is idempotent: an object that is already gone is success.
 	DeleteObject(ctx context.Context, projectID, bucketID, key string) error
-	// ListObjectKeys returns up to limit keys stored under the bucket's own
-	// prefix. Used to verify emptiness, so it must never see a neighbouring
+	// HeadObject reports what the store actually holds for a key. Returns
+	// ErrObjectNotFound when there is nothing there.
+	HeadObject(ctx context.Context, projectID, bucketID, key string) (ObjectStat, error)
+	// ListObjects returns up to limit objects stored under the bucket's own
+	// prefix, keyed relative to the bucket. Used to verify emptiness before a
+	// bucket's metadata is dropped, so it must never see a neighbouring
 	// bucket's keys.
-	ListObjectKeys(ctx context.Context, projectID, bucketID string, limit int32) ([]string, error)
+	ListObjects(ctx context.Context, projectID, bucketID string, limit int32) ([]StoredObject, error)
+	// CopyObject moves an object's bytes onto another key within the same
+	// bucket, server-side. An upload becomes the object this way, so the
+	// key's previous contents are replaced only once the new bytes have been
+	// read back and accepted.
+	CopyObject(ctx context.Context, projectID, bucketID, sourceKey, destinationKey string) error
+	// ListStagedUploads returns up to limit uploads that are staged but not
+	// yet accepted, youngest first is not required. It is the reaper's only
+	// listing: an interface that cannot name a live key cannot collect one.
+	ListStagedUploads(ctx context.Context, projectID, bucketID string, limit int32) ([]StagedUpload, error)
+	// DeleteStagingObject removes one staged upload by its id. The key is
+	// built from the id, so no caller can steer this at an object.
+	DeleteStagingObject(ctx context.Context, projectID, bucketID, uploadID string) error
+}
+
+// ObjectStat is what the object store says about one stored object. It is
+// the only account of an upload the platform trusts: the caller's claims
+// about size and type are not evidence, and the write time decides whether a
+// confirmation is still in time.
+type ObjectStat struct {
+	Size         int64
+	ContentType  string
+	ETag         string
+	LastModified time.Time
+}
+
+// StagedUpload is one upload waiting to be accepted: the id it was issued
+// under and when its bytes were written. The reaper collects the ones nobody
+// came back for.
+type StagedUpload struct {
+	UploadID     string
+	LastModified time.Time
 }

@@ -1,6 +1,6 @@
 {
   "name": "@excalibase/server",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Server-side types and tagged wrappers for Excalibase Functions, consumed by the Excalibase Deno runtime",
   "keywords": ["excalibase", "functions", "server", "types", "zod"],
   "license": "MIT",

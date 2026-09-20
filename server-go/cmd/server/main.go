@@ -206,6 +206,9 @@ func runServer(cfg config.AppConfig) {
 	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender)
 	defer stopIdlePause()
 
+	_, stopStorageReap := startStorageReaper(cfg, sqlStore, deps.storageSvc)
+	defer stopStorageReap()
+
 	if sqlStore != nil {
 		wireRestoreOrchestrator(sqlStore, store, deps)
 	}
@@ -270,6 +273,17 @@ func runRestoreStep(ctx context.Context, store storage.InstanceStore, backupSvc 
 	return err
 }
 
+// Advisory-lock keys, one per scheduled sweep. Each is FNV-1a of the
+// scheduler's name, and they must stay distinct: two sweeps sharing a key
+// would mean whichever replica claimed it first silently stops the other from
+// ever running. Positive so the value survives any signed/unsigned handling
+// on the way to pg_try_advisory_lock.
+const (
+	backupSchedulerLockID int64 = 0x6168_0acb_4233_4b21
+	idlePauseLockID       int64 = 0x6168_0acb_1d1e_9a05
+	storageReapLockID     int64 = 0x6168_0acb_7c41_35d3
+)
+
 // startBackupScheduler launches the cron runtime and replays the
 // persistent schedule. Returns the scheduler (so the handler can be
 // wired post-construction) and a stop function for graceful shutdown.
@@ -284,9 +298,7 @@ func startBackupScheduler(cfg config.AppConfig, sqlStore storage.PlatformStore, 
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		// FNV-1a("excalibase-backup-scheduler") — distinct from any
-		// other advisory lock the platform might use.
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), 0x6168_0acb_4233_4b21)
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), backupSchedulerLockID)
 	}
 	scheduler := service.NewBackupScheduler(service.BackupSchedulerConfig{
 		Schedules: sqlStore.BackupSchedules(),
@@ -328,8 +340,7 @@ func startIdlePauseScheduler(
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
 	if cfg.IsCloud() {
-		// FNV-1a("excalibase-idle-pause") — distinct from the backup scheduler's key.
-		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), 0x6168_0acb_1d1e_9a05)
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), idlePauseLockID)
 	}
 	scheduler := service.NewIdlePauseScheduler(service.IdlePauseSchedulerConfig{
 		Instances: store,
@@ -348,6 +359,56 @@ func startIdlePauseScheduler(
 	scheduler.Start(context.Background())
 	log.Printf("Idle auto-pause sweep started (every %s; warning at N-1 days, pause at N per tier)", service.DefaultIdlePauseInterval)
 	return scheduler.Stop
+}
+
+// storageReapGrace is how long an object with no catalogue row is left alone
+// before the sweep treats it as an abandoned upload. It must outlast a signed
+// URL plus the round trip a client needs to confirm; STORAGE_REAP_GRACE (a Go
+// duration, e.g. "6h") raises it for operators whose clients take longer. An
+// unparseable value is fatal rather than silently replaced — an operator who
+// set it meant it.
+func storageReapGrace() time.Duration {
+	raw := os.Getenv("STORAGE_REAP_GRACE")
+	if raw == "" {
+		return storagesvc.DefaultUnconfirmedGrace
+	}
+	grace, err := time.ParseDuration(raw)
+	if err != nil || grace <= 0 {
+		log.Fatalf("STORAGE_REAP_GRACE must be a positive Go duration, got %q", raw)
+	}
+	return grace
+}
+
+// startStorageReaper boots the sweep that deletes objects which reached the
+// blob plane but were never confirmed. They carry no catalogue row, so quota
+// accounting cannot see them and no other path can even name them: without
+// this sweep a caller could take an upload URL, PUT to it, never confirm, and
+// repeat, without ever meeting a limit.
+//
+// Returns nil when storage is not configured — there is no blob plane to
+// sweep, so the sweep does not exist rather than running and failing. Cloud
+// replicas elect a leader on their own advisory key so only one sweeps.
+func startStorageReaper(cfg config.AppConfig, sqlStore storage.PlatformStore, storageSvc *storagesvc.Service) (*service.StorageReaper, func()) {
+	noop := func() {
+		// nothing started, nothing to stop
+	}
+	if storageSvc == nil {
+		return nil, noop
+	}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() && sqlStore != nil {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), storageReapLockID)
+	}
+	grace := storageReapGrace()
+	reaper := service.NewStorageReaper(service.StorageReaperConfig{
+		Storage: storageSvc,
+		Lock:    lock,
+		Grace:   grace,
+	})
+	reaper.Start(context.Background())
+	log.Printf("Storage reaper started (every %s; unconfirmed uploads collected after %s)",
+		service.DefaultStorageReapInterval, grace)
+	return reaper, reaper.Stop
 }
 
 // studioURL is the first concrete CORS origin — the Studio the operator
@@ -430,6 +491,9 @@ type handlerDeps struct {
 	activity func(http.Handler) http.Handler
 	// emailSender is shared with post-construction wiring (idle-pause warnings).
 	emailSender email.Sender
+	// storageSvc is nil when R2 is not configured; the reaper is started
+	// from it after the handlers are built.
+	storageSvc *storagesvc.Service
 }
 
 // startFunctionReplayer boots the EXC-337 cold-start replay loop: it polls
@@ -917,6 +981,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
 		activity:    custommw.ProjectActivity(activityRecorder),
 		emailSender: emailSender,
+		storageSvc:  storageSvc,
 		// EXC-11: server-to-server mail relay for excalibase-auth. Its
 		// authorization is the capability gate, wired at the mount below.
 		internalEmail: handler.NewInternalEmailHandler(emailSender),

@@ -2,9 +2,14 @@ package storagesvc
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aws/smithy-go"
 )
 
 func newR2(t *testing.T) *R2Client {
@@ -22,7 +27,7 @@ func newR2(t *testing.T) *R2Client {
 
 func TestR2_SignedPutURL(t *testing.T) {
 	c := newR2(t)
-	url, expires, err := c.SignedPutURL(context.Background(), testProjABC, "files", "a.txt", "text/plain", 0)
+	url, expires, err := c.SignedPutURL(context.Background(), testProjABC, "files", "a.txt", "text/plain", 10, 0)
 	if err != nil {
 		t.Fatalf("SignedPutURL: %v", err)
 	}
@@ -36,14 +41,14 @@ func TestR2_SignedPutURL(t *testing.T) {
 
 func TestR2_SignedPutURL_RejectsBadKey(t *testing.T) {
 	c := newR2(t)
-	if _, _, err := c.SignedPutURL(context.Background(), testProjABC, "files", "../escape", "", 0); err == nil {
+	if _, _, err := c.SignedPutURL(context.Background(), testProjABC, "files", "../escape", "text/plain", 10, 0); err == nil {
 		t.Error("traversal key should fail")
 	}
 }
 
 func TestR2_SignedGetURL(t *testing.T) {
 	c := newR2(t)
-	url, expires, err := c.SignedGetURL(context.Background(), testProjABC, "files", "b.txt", time.Minute)
+	url, expires, err := c.SignedGetURL(context.Background(), testProjABC, "files", "b.txt", false, time.Minute)
 	if err != nil {
 		t.Fatalf("SignedGetURL: %v", err)
 	}
@@ -57,7 +62,7 @@ func TestR2_SignedGetURL(t *testing.T) {
 
 func TestR2_SignedGetURL_RejectsBadKey(t *testing.T) {
 	c := newR2(t)
-	if _, _, err := c.SignedGetURL(context.Background(), testProjABC, "files", "..", 0); err == nil {
+	if _, _, err := c.SignedGetURL(context.Background(), testProjABC, "files", "..", false, 0); err == nil {
 		t.Error("bad key should fail")
 	}
 }
@@ -80,33 +85,33 @@ func TestR2_DeleteObject_BadKey(t *testing.T) {
 
 func TestR2_HeadObject_BadKey(t *testing.T) {
 	c := newR2(t)
-	if _, _, _, err := c.HeadObject(context.Background(), testProjABC, "files", ".."); err == nil {
+	if _, err := c.HeadObject(context.Background(), testProjABC, "files", ".."); err == nil {
 		t.Error("bad key head should fail")
 	}
 }
 
 // TestBucketPrefix_TrailingSlashIsolatesBuckets — the emptiness check that
 // gates a bucket delete lists by this prefix. Without the trailing slash,
-// "assets" would match every key of "assets2": one bucket's delete could be
+// id "bkt_1" would match every key of "bkt_12": one bucket's delete could be
 // blocked by, or could delete, a neighbour's objects.
 func TestBucketPrefix_TrailingSlashIsolatesBuckets(t *testing.T) {
-	assets, err := bucketPrefix(testProjABC, "assets")
+	own, err := bucketPrefix(testProjABC, "bkt_1")
 	if err != nil {
 		t.Fatalf("bucketPrefix: %v", err)
 	}
-	if want := "projects/proj-abc/buckets/assets/"; assets != want {
-		t.Fatalf("bucketPrefix: got %q, want %q", assets, want)
+	if want := "projects/proj-abc/buckets/bkt_1/"; own != want {
+		t.Fatalf("bucketPrefix: got %q, want %q", own, want)
 	}
-	neighbour, err := objectKey(testProjABC, "assets2", "keep.bin")
+	neighbour, err := objectKey(testProjABC, "bkt_12", "keep.bin")
 	if err != nil {
 		t.Fatalf("objectKey: %v", err)
 	}
-	if strings.HasPrefix(neighbour, assets) {
-		t.Errorf("%q must not fall under the %q prefix", neighbour, assets)
+	if strings.HasPrefix(neighbour, own) {
+		t.Errorf("%q must not fall under the %q prefix", neighbour, own)
 	}
-	own, _ := objectKey(testProjABC, "assets", "keep.bin")
-	if !strings.HasPrefix(own, assets) {
-		t.Errorf("%q must fall under the %q prefix", own, assets)
+	mine, _ := objectKey(testProjABC, "bkt_1", "keep.bin")
+	if !strings.HasPrefix(mine, own) {
+		t.Errorf("%q must fall under the %q prefix", mine, own)
 	}
 }
 
@@ -119,9 +124,56 @@ func TestBucketPrefix_RequiresProjectAndBucket(t *testing.T) {
 	}
 }
 
-func TestR2_ListObjectKeys_RejectsBadBucket(t *testing.T) {
+func TestR2_ListObjects_RejectsBadBucket(t *testing.T) {
 	c := newR2(t)
-	if _, err := c.ListObjectKeys(context.Background(), testProjABC, "", 10); err == nil {
+	if _, err := c.ListObjects(context.Background(), testProjABC, "", 10); err == nil {
 		t.Error("missing bucket should fail before any network call")
+	}
+}
+
+// A signed PUT is only meaningful if it binds what may be uploaded, so the
+// client refuses to sign one without both a type and a length.
+func TestR2_SignedPutURL_RequiresTypeAndLength(t *testing.T) {
+	c := newR2(t)
+	if _, _, err := c.SignedPutURL(context.Background(), testProjABC, "files", "a.txt", "", 10, 0); err == nil {
+		t.Error("signing without a content type should fail")
+	}
+	if _, _, err := c.SignedPutURL(context.Background(), testProjABC, "files", "a.txt", "text/plain", 0, 0); err == nil {
+		t.Error("signing without a content length should fail")
+	}
+}
+
+func TestR2_ListObjects_ReportsBackendError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+	}))
+	defer srv.Close()
+	c, err := NewR2Client(R2Config{
+		AccessKeyID: "k", SecretAccessKey: "s",
+		Endpoint: srv.URL, Bucket: testPlatformBucket,
+	})
+	if err != nil {
+		t.Fatalf("NewR2Client: %v", err)
+	}
+	if _, err := c.ListObjects(context.Background(), testProjABC, "files", 0); err == nil {
+		t.Error("a refused listing must not read as an empty bucket")
+	}
+}
+
+// isNotFound only says yes for the object store's own "it isn't there"
+// codes; a transport error or any other API error is a real failure.
+func TestIsNotFound(t *testing.T) {
+	if isNotFound(errors.New("connection refused")) {
+		t.Error("a transport error is not a missing key")
+	}
+	if isNotFound(&smithy.GenericAPIError{Code: "AccessDenied"}) {
+		t.Error("AccessDenied is not a missing key")
+	}
+	if !isNotFound(&smithy.GenericAPIError{Code: "NoSuchKey"}) {
+		t.Error("NoSuchKey is a missing key")
+	}
+	if !isNotFound(&smithy.GenericAPIError{Code: "NotFound"}) {
+		t.Error("NotFound is a missing key")
 	}
 }

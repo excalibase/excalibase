@@ -4,13 +4,20 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // deleteBucketPageSize bounds one page of the cascade walk.
 const deleteBucketPageSize = 100
+
+// uploadURLTTL bounds how long a signed PUT stays usable. It is also the
+// floor for how long an unconfirmed object is left alone before the reaper
+// may collect it.
+const uploadURLTTL = 5 * time.Minute
 
 // Service is the platform-db-aware storage layer. It owns the metadata
 // (buckets, objects, quotas) and delegates to an ObjectStore for the actual
@@ -26,6 +33,9 @@ type Service struct {
 	// Per-tier byte quotas. Looked up by project tier; missing keys fall
 	// back to free-tier limit. Zero = unlimited.
 	tierQuotaBytes map[string]int64
+	// now is the clock the confirm window is measured against; injectable
+	// so the boundary can be tested without waiting an hour.
+	now func() time.Time
 }
 
 // BucketStore is the persistence shape Service depends on. Implemented by
@@ -35,6 +45,9 @@ type BucketStore interface {
 	CreateBucket(ctx context.Context, b *Bucket) error
 	GetBucket(ctx context.Context, projectID, name string) (*Bucket, error)
 	ListBuckets(ctx context.Context, projectID string) ([]Bucket, error)
+	// ListAllBuckets spans every project. Only the reaper uses it: finding
+	// abandoned uploads means walking the whole blob plane, not one tenant.
+	ListAllBuckets(ctx context.Context) ([]Bucket, error)
 	DeleteBucket(ctx context.Context, projectID, name string) error
 	// SetBucketStatus records where a bucket is in its lifecycle. Used to
 	// mark a bucket deleting before its bytes go, so a crash mid-cascade is
@@ -42,6 +55,13 @@ type BucketStore interface {
 	SetBucketStatus(ctx context.Context, projectID, name, status string) error
 
 	CreateObject(ctx context.Context, o *Object) error
+	// RecordObjectWithinQuota writes (or replaces) an object row and moves
+	// the project's usage by the difference between the new size and the row
+	// it replaced, in one transaction that refuses to cross capBytes (0 =
+	// unlimited). Returns false when the charge would exceed the cap and
+	// nothing was written — the check and the spend are the same write, so
+	// concurrent confirms cannot each pass a read that was already stale.
+	RecordObjectWithinQuota(ctx context.Context, projectID string, o *Object, capBytes int64) (recorded bool, err error)
 	GetObject(ctx context.Context, bucketID, key string) (*Object, error)
 	ListObjects(ctx context.Context, bucketID, prefix string, limit int, cursor string) ([]Object, string, error)
 	// DeleteObjectAndReleaseQuota removes an object's row and releases the
@@ -58,7 +78,7 @@ type BucketStore interface {
 // per-project byte caps. Pass nil to disable quota enforcement
 // (everyone gets unlimited; useful for self-hosted single-tenant).
 func NewService(store BucketStore, r2 *R2Client, tierQuotas map[string]int64) *Service {
-	s := &Service{store: store, tusR2: r2, tierQuotaBytes: tierQuotas}
+	s := &Service{store: store, tusR2: r2, tierQuotaBytes: tierQuotas, now: time.Now}
 	if r2 != nil {
 		s.objects = r2
 	}
@@ -68,7 +88,7 @@ func NewService(store BucketStore, r2 *R2Client, tierQuotas map[string]int64) *S
 // NewServiceWithObjectStore wires an arbitrary blob plane. Resumable (tus)
 // uploads stay disabled: the composer needs the concrete S3 client.
 func NewServiceWithObjectStore(store BucketStore, objects ObjectStore, tierQuotas map[string]int64) *Service {
-	return &Service{store: store, objects: objects, tierQuotaBytes: tierQuotas}
+	return &Service{store: store, objects: objects, tierQuotaBytes: tierQuotas, now: time.Now}
 }
 
 // CreateBucket validates name shape + uniqueness and persists.
@@ -142,7 +162,14 @@ func (s *Service) DeleteBucket(ctx context.Context, projectID, name string) erro
 	if err := s.purgeBucketObjects(ctx, projectID, bucket.ID); err != nil {
 		return err
 	}
-	remaining, err := s.objects.ListObjectKeys(ctx, projectID, bucket.ID, 1)
+	// Whatever is left under the prefix belongs to this bucket and to nothing
+	// else — ids are never reused — so the delete clears it rather than
+	// refusing until something else does. These are uploads that were never
+	// confirmed: bytes with no row, which no other path can even name.
+	if err := s.purgeUncataloguedObjects(ctx, projectID, bucket.ID); err != nil {
+		return err
+	}
+	remaining, err := s.objects.ListObjects(ctx, projectID, bucket.ID, 1)
 	if err != nil {
 		return fmt.Errorf("verify bucket empty: %w", err)
 	}
@@ -174,6 +201,29 @@ func (s *Service) purgeBucketObjects(ctx context.Context, projectID, bucketID st
 	}
 }
 
+// purgeUncataloguedObjects deletes the bytes left under a bucket's prefix
+// that no catalogue row names. They were never charged to the quota, so
+// nothing is released for them.
+func (s *Service) purgeUncataloguedObjects(ctx context.Context, projectID, bucketID string) error {
+	for {
+		stored, err := s.objects.ListObjects(ctx, projectID, bucketID, deleteBucketPageSize)
+		if err != nil {
+			return fmt.Errorf("list stored objects: %w", err)
+		}
+		if len(stored) == 0 {
+			return nil
+		}
+		for _, obj := range stored {
+			if err := s.objects.DeleteObject(ctx, projectID, bucketID, obj.Key); err != nil {
+				return fmt.Errorf("delete stray object bytes: %w", err)
+			}
+		}
+		if len(stored) < deleteBucketPageSize {
+			return nil
+		}
+	}
+}
+
 // purgeObject removes one object's bytes, then its row and quota charge
 // together. Both steps report their own failure: a caller that saw success
 // can rely on the bytes being gone and the project no longer paying for them.
@@ -189,28 +239,47 @@ func (s *Service) purgeObject(ctx context.Context, projectID, bucketID, key stri
 	return nil
 }
 
-// SignUploadURL mints a presigned PUT URL after enforcing per-bucket and
-// per-project quotas. The actual byte transfer goes client→R2 directly,
-// bypassing Excalibase. The client MUST call ConfirmUpload after the PUT
-// to record the object metadata.
+// SignUploadURL mints a presigned PUT URL. The bytes go client→object store
+// directly, and they land on a staging key of the upload's own — never on the
+// object's key. The key only receives bytes that have been read back and
+// accepted, so an upload that turns out to break the bucket's limits cannot
+// take the previous version of that object with it when it is refused.
+//
+// The returned upload id is what the client hands back to ConfirmUpload: the
+// bytes are not on the key yet, so nothing else identifies them.
 func (s *Service) SignUploadURL(ctx context.Context, projectID, bucketName, tier string, req UploadURLRequest) (*UploadURLResponse, error) {
 	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateObjectKey(req.Key); err != nil {
 		return nil, err
 	}
 	if err := s.validateUploadRequest(ctx, projectID, tier, bucket, req); err != nil {
 		return nil, err
 	}
 
-	url, expires, err := s.objects.SignedPutURL(ctx, projectID, bucket.ID, req.Key, req.MimeType, 5*time.Minute)
+	mediaType, err := normaliseMIME(req.MimeType)
 	if err != nil {
 		return nil, err
 	}
-	headers := map[string]string{}
-	if req.MimeType != "" {
-		headers["Content-Type"] = req.MimeType
+	uploadID, err := randomID("upl")
+	if err != nil {
+		return nil, err
+	}
+	url, expires, err := s.objects.SignedPutURL(ctx, projectID, bucket.ID,
+		stagingObjectKey(uploadID), mediaType, req.Size, uploadURLTTL)
+	if err != nil {
+		return nil, err
+	}
+	// The signature covers both headers, so the client must send exactly
+	// these values or the PUT is rejected by the object store itself.
+	headers := map[string]string{
+		"Content-Type":   mediaType,
+		"Content-Length": strconv.FormatInt(req.Size, 10),
 	}
 	return &UploadURLResponse{
+		UploadID:  uploadID,
 		URL:       url,
 		Method:    "PUT",
 		Headers:   headers,
@@ -240,83 +309,169 @@ func (s *Service) uploadTarget(ctx context.Context, projectID, bucketName string
 
 // validateUploadRequest enforces per-bucket size limits, MIME allowlists,
 // and per-project storage quotas before a presigned PUT URL is issued.
+// Size and content type are required, not hints: a limit that is only
+// checked when the caller volunteers the metadata is not a limit.
 func (s *Service) validateUploadRequest(ctx context.Context, projectID, tier string, bucket *Bucket, req UploadURLRequest) error {
-	// A negative size would credit the project's quota instead of spending it.
-	if req.Size < 0 {
-		return invalidf("size must not be negative")
+	if req.Size <= 0 {
+		return invalidf("size is required and must be greater than zero")
 	}
-	// Per-bucket file size limit (0 = no limit).
-	if bucket.FileSize > 0 && req.Size > bucket.FileSize {
-		return invalidf("file exceeds bucket size limit %d bytes", bucket.FileSize)
-	}
-	// MIME allowlist (empty = any).
-	if err := s.checkMIMEAllowlist(bucket.AllowedTypes, req.MimeType); err != nil {
+	mediaType, err := normaliseMIME(req.MimeType)
+	if err != nil {
 		return err
 	}
-	// Per-project quota — only block when we have an actual limit AND a size hint.
-	if cap := s.quotaForTier(tier); cap > 0 && req.Size > 0 {
-		used, err := s.store.GetQuotaBytes(ctx, projectID)
-		if err != nil {
-			return fmt.Errorf("read quota: %w", err)
-		}
-		if used+req.Size > cap {
-			return invalidf("project storage quota exceeded (%d / %d bytes)", used, cap)
-		}
+	return s.enforceObjectLimits(ctx, projectID, tier, bucket, req.Size, mediaType)
+}
+
+// enforceObjectLimits applies the per-bucket size cap, the MIME allow-list
+// and the per-project quota to one object. It runs twice per upload: against
+// the declared metadata before a URL is issued, and against what the object
+// store actually holds when the upload is confirmed.
+func (s *Service) enforceObjectLimits(ctx context.Context, projectID, tier string, bucket *Bucket, size int64, mediaType string) error {
+	if size <= 0 {
+		return invalidf("object size must be greater than zero")
+	}
+	if bucket.FileSize > 0 && size > bucket.FileSize {
+		return invalidf("file exceeds bucket size limit %d bytes", bucket.FileSize)
+	}
+	if err := checkMIMEAllowlist(bucket.AllowedTypes, mediaType); err != nil {
+		return err
+	}
+	if err := checkPublicBucketType(bucket, mediaType); err != nil {
+		return err
+	}
+	cap := s.quotaForTier(tier)
+	if cap <= 0 {
+		return nil
+	}
+	used, err := s.store.GetQuotaBytes(ctx, projectID)
+	if err != nil {
+		return fmt.Errorf("read quota: %w", err)
+	}
+	if used+size > cap {
+		return invalidf("project storage quota exceeded (%d / %d bytes)", used, cap)
 	}
 	return nil
 }
 
-// checkMIMEAllowlist returns an error if mimeType is not in the allowlist.
-// An empty allowlist permits any type; a "*/*" entry acts as a wildcard.
-func (s *Service) checkMIMEAllowlist(allowed []string, mimeType string) error {
-	if len(allowed) == 0 || mimeType == "" {
-		return nil
+// ConfirmUpload records that a previously-signed upload completed. What the
+// caller says it uploaded is not evidence: the size and content type are read
+// back from the object store and the bucket's limits are applied to those.
+// An object that breaks them is deleted and the confirmation refused, so a
+// PUT that dodged the signed URL's constraints cannot become a stored object.
+// Quota is charged the verified size.
+func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, tier, ownerID string, req ConfirmUploadRequest) (*Object, error) {
+	// The caller's own arguments are checked before anything is looked up:
+	// a confirmation that names no upload is a bad request whatever state
+	// the bucket is in.
+	if err := validateObjectKey(req.Key); err != nil {
+		return nil, err
 	}
-	for _, a := range allowed {
-		if a == mimeType || a == "*/*" {
-			return nil
-		}
+	if req.UploadID == "" {
+		return nil, invalidf("uploadId is required")
 	}
-	return invalidf("mime type %q not allowed in bucket", mimeType)
-}
-
-// ConfirmUpload records that a previously-signed upload completed. We
-// trust the size+mime the client reports for now; in v1.2 we'll add a
-// HEAD-back-to-R2 reconciliation in a daily janitor that catches any
-// drift.
-func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, ownerID string, req ConfirmUploadRequest) (*Object, error) {
 	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	if req.Size < 0 {
-		return nil, invalidf("size must not be negative")
+	staged := stagingObjectKey(req.UploadID)
+
+	stat, err := s.objects.HeadObject(ctx, projectID, bucket.ID, staged)
+	if err != nil {
+		// An id nobody staged, or one whose bytes have already been
+		// collected, names no upload to accept.
+		if errors.Is(err, ErrObjectNotFound) {
+			return nil, fmt.Errorf("upload %q: %w", req.UploadID, ErrObjectNotFound)
+		}
+		return nil, fmt.Errorf("inspect uploaded object: %w", err)
 	}
+	// The reaper deletes staged bytes past the grace. Refusing a confirm
+	// before that point keeps the two windows apart, so a confirm can never
+	// accept bytes the reaper is about to remove.
+	if !stat.LastModified.IsZero() &&
+		s.now().Sub(stat.LastModified) >= confirmWindow(DefaultUnconfirmedGrace) {
+		return nil, invalidf("upload expired, request a new URL")
+	}
+
+	mediaType, err := normaliseMIME(stat.ContentType)
+	if err != nil {
+		// The store holds something with no usable type; it cannot be
+		// checked against the bucket's allow-list, so it does not stay.
+		return nil, s.rejectStagedUpload(ctx, projectID, bucket.ID, req.UploadID, err)
+	}
+	if err := s.enforceObjectLimits(ctx, projectID, tier, bucket, stat.Size, mediaType); err != nil {
+		return nil, s.rejectStagedUpload(ctx, projectID, bucket.ID, req.UploadID, err)
+	}
+	if stat.Size > MaxSingleCopyBytes {
+		// It could be staged but not moved onto its key in one copy, and a
+		// multipart copy is not implemented. Refusing is honest; silently
+		// leaving it staged would not be.
+		return nil, s.rejectStagedUpload(ctx, projectID, bucket.ID, req.UploadID,
+			invalidf("object exceeds the %d byte limit for a single upload", MaxSingleCopyBytes))
+	}
+
+	// Only now do the object's own bytes change. Copy, then record, then drop
+	// the staging copy: the staged bytes outlive a failed record, so the same
+	// confirmation run again finishes the job. A crash in between leaves the
+	// new bytes on the key with the previous row still describing them —
+	// visible, and resolved by the retry — rather than a key with no bytes.
+	if err := s.objects.CopyObject(ctx, projectID, bucket.ID, staged, req.Key); err != nil {
+		return nil, fmt.Errorf("store uploaded object: %w", err)
+	}
+
 	id, err := randomID("obj")
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	obj := &Object{
-		ID:        id,
-		BucketID:  bucket.ID,
-		Key:       req.Key,
-		Size:      req.Size,
-		MimeType:  req.MimeType,
-		ETag:      req.ETag,
+		ID:       id,
+		BucketID: bucket.ID,
+		Key:      req.Key,
+		Size:     stat.Size,
+		MimeType: mediaType,
+		// The caller may carry its own digest (the runtime records a sha256
+		// here); absent that, the store's ETag is what we have.
+		ETag:      firstNonEmpty(req.ETag, stat.ETag),
 		OwnerID:   ownerID,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.store.CreateObject(ctx, obj); err != nil {
+	// The row and the charge are one write: a repeat of the same confirm is
+	// a no-op on the usage, an overwrite moves it by the difference, and the
+	// cap is decided by the write that spends against it.
+	recorded, err := s.store.RecordObjectWithinQuota(ctx, projectID, obj, s.quotaForTier(tier))
+	if err != nil {
 		return nil, fmt.Errorf("record object: %w", err)
 	}
-	// Quota is what the platform bills and enforces on; a confirm that
-	// recorded the object but not its bytes would under-count forever.
-	if err := s.store.AddQuotaBytes(ctx, projectID, req.Size); err != nil {
-		return nil, fmt.Errorf("charge quota: %w", err)
+	if !recorded {
+		return nil, s.rejectStagedUpload(ctx, projectID, bucket.ID, req.UploadID,
+			invalidf("project storage quota exceeded"))
+	}
+	if err := s.objects.DeleteStagingObject(ctx, projectID, bucket.ID, req.UploadID); err != nil {
+		return nil, fmt.Errorf("clear staged upload: %w", err)
 	}
 	return obj, nil
+}
+
+// rejectStagedUpload removes the staged bytes and returns the reason they
+// were refused. Only the staging copy is touched: the object's own key, and
+// whatever version of it is already stored, is none of a refusal's business.
+// A failed cleanup is reported alongside the reason rather than hidden — the
+// caller still learns why, and the reaper collects what is left.
+func (s *Service) rejectStagedUpload(ctx context.Context, projectID, bucketID, uploadID string, reason error) error {
+	if err := s.objects.DeleteStagingObject(ctx, projectID, bucketID, uploadID); err != nil {
+		return errors.Join(reason, fmt.Errorf("delete staged upload: %w", err))
+	}
+	return reason
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // SignDownloadURL returns either a signed GET URL (private buckets) or
@@ -324,6 +479,9 @@ func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, owne
 func (s *Service) SignDownloadURL(ctx context.Context, projectID, bucketName, key string) (*DownloadURLResponse, error) {
 	if s.objects == nil {
 		return nil, errObjectStoreUnset
+	}
+	if err := validateObjectKey(key); err != nil {
+		return nil, err
 	}
 	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
 	if err != nil {
@@ -339,11 +497,37 @@ func (s *Service) SignDownloadURL(ctx context.Context, projectID, bucketName, ke
 		}
 		return &DownloadURLResponse{URL: url, Public: true}, nil
 	}
-	url, expires, err := s.objects.SignedGetURL(ctx, projectID, bucket.ID, key, 5*time.Minute)
+	// A private object of a type the browser would execute is handed over as
+	// a download: the catalogue knows what was stored, so the signature can
+	// say how it must be served.
+	download, err := s.servesAsDownload(ctx, bucket.ID, key)
+	if err != nil {
+		return nil, err
+	}
+	url, expires, err := s.objects.SignedGetURL(ctx, projectID, bucket.ID, key, download, 5*time.Minute)
 	if err != nil {
 		return nil, err
 	}
 	return &DownloadURLResponse{URL: url, ExpiresAt: expires, Public: false}, nil
+}
+
+// servesAsDownload reports whether an object's recorded type is one a browser
+// would render. An object with no row yet is served as-is: there is nothing
+// to go on, and the signed URL only reaches someone already authorised.
+func (s *Service) servesAsDownload(ctx context.Context, bucketID, key string) (bool, error) {
+	obj, err := s.store.GetObject(ctx, bucketID, key)
+	if err != nil {
+		return false, fmt.Errorf("load object: %w", err)
+	}
+	if obj == nil {
+		return false, nil
+	}
+	mediaType, err := normaliseMIME(obj.MimeType)
+	if err != nil {
+		// An unusable recorded type is exactly the case not to render.
+		return true, nil
+	}
+	return renderableTypes[mediaType], nil
 }
 
 // ListObjects pages through metadata. Doesn't hit R2 — the catalogue is
@@ -355,6 +539,9 @@ func (s *Service) ListObjects(ctx context.Context, projectID, bucketName string,
 	}
 	if bucket == nil {
 		return nil, ErrBucketNotFound
+	}
+	if err := validateKeyPrefix(req.Prefix); err != nil {
+		return nil, err
 	}
 	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 100
@@ -375,6 +562,9 @@ func (s *Service) ListObjects(ctx context.Context, projectID, bucketName string,
 func (s *Service) DeleteObject(ctx context.Context, projectID, bucketName, key string) error {
 	if s.objects == nil {
 		return errObjectStoreUnset
+	}
+	if err := validateObjectKey(key); err != nil {
+		return err
 	}
 	bucket, err := s.store.GetBucket(ctx, projectID, bucketName)
 	if err != nil {

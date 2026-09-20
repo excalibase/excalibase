@@ -226,6 +226,33 @@ aws s3 rm --recursive "s3://$BUCKET/backups/proj-abc123/" --endpoint-url "$R2_EN
 Whether the platform should instead keep a tombstone so an owner can find and
 purge their own retained backups is an open product question — today it cannot.
 
+### Incomplete multipart uploads (operator requirement)
+
+A multipart upload that was started and never completed is **not an object**.
+It does not appear in any listing, no API returns it, and nothing the platform
+runs can find it — but the parts already uploaded are stored and billed. That
+is true of every sweep the platform has: the unconfirmed-upload reaper, a
+bucket delete and a project delete all work from listings, so none of them can
+see one.
+
+Set a lifecycle rule on the storage bucket so the object store expires them
+itself:
+
+```bash
+cat > /tmp/lifecycle.json <<'JSON'
+{"Rules":[{"ID":"abort-incomplete-multipart-uploads","Status":"Enabled",
+  "Filter":{"Prefix":""},
+  "AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}
+JSON
+aws s3api put-bucket-lifecycle-configuration --bucket "$R2_BUCKET" \
+  --lifecycle-configuration file:///tmp/lifecycle.json --endpoint-url "$R2_ENDPOINT"
+```
+
+One day is generous: a resumable upload that has not progressed in 24 hours is
+not coming back. Without this rule, abandoned multipart uploads accumulate
+indefinitely and the only way to find them is
+`aws s3api list-multipart-uploads --bucket "$R2_BUCKET"`.
+
 ## 4. Revoke an org (cascade-drop all its projects)
 
 ```bash

@@ -45,12 +45,14 @@ func TestService_ListBuckets(t *testing.T) {
 
 func TestService_ConfirmUpload_RecordsObjectAndQuota(t *testing.T) {
 	store := newMemStore()
-	svc := NewService(store, newTestR2(t), nil)
+	backend := newStubBackend()
+	backend.put(stagingObjectKey(testUploadID("a.txt")), 500, "text/plain")
+	svc := serviceOverStub(t, store, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 
-	obj, err := svc.ConfirmUpload(ctx, testProjX, "files", "user-1", ConfirmUploadRequest{
-		Key: "a.txt", Size: 500, MimeType: "text/plain", ETag: "etag-1",
+	obj, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "user-1", ConfirmUploadRequest{
+		Key: "a.txt", UploadID: testUploadID("a.txt"), ETag: "etag-1",
 	})
 	if err != nil {
 		t.Fatalf("ConfirmUpload: %v", err)
@@ -69,7 +71,7 @@ func TestService_ConfirmUpload_RecordsObjectAndQuota(t *testing.T) {
 
 func TestService_ConfirmUpload_MissingBucket(t *testing.T) {
 	svc := NewService(newMemStore(), newTestR2(t), nil)
-	_, err := svc.ConfirmUpload(context.Background(), testProjX, "nope", "u", ConfirmUploadRequest{Key: "x"})
+	_, err := svc.ConfirmUpload(context.Background(), testProjX, "nope", "FREE", "u", ConfirmUploadRequest{Key: "x", UploadID: testUploadID("x")})
 	if err == nil || !errors.Is(err, ErrBucketNotFound) {
 		t.Errorf("expected bucket-not-found, got %v", err)
 	}
@@ -77,11 +79,15 @@ func TestService_ConfirmUpload_MissingBucket(t *testing.T) {
 
 func TestService_ListObjects(t *testing.T) {
 	store := newMemStore()
-	svc := NewService(store, newTestR2(t), nil)
+	backend := newStubBackend()
+	svc := serviceOverStub(t, store, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	for _, k := range []string{"img/1.png", "img/2.png", "doc/a.txt"} {
-		_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "u", ConfirmUploadRequest{Key: k, Size: 1})
+		backend.put(stagingObjectKey(testUploadID(k)), 1, "text/plain")
+		if _, err := svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: k, UploadID: testUploadID(k)}); err != nil {
+			t.Fatalf("ConfirmUpload %q: %v", k, err)
+		}
 	}
 
 	all, err := svc.ListObjects(ctx, testProjX, "files", ListObjectsRequest{})
@@ -103,10 +109,12 @@ func TestService_ListObjects(t *testing.T) {
 
 func TestService_ListObjects_ClampsLimit(t *testing.T) {
 	store := newMemStore()
-	svc := NewService(store, newTestR2(t), nil)
+	backend := newStubBackend()
+	backend.put(stagingObjectKey(testUploadID("k")), 1, "text/plain")
+	svc := serviceOverStub(t, store, backend, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
-	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "u", ConfirmUploadRequest{Key: "k", Size: 1})
+	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "k", UploadID: testUploadID("k")})
 
 	// Out-of-range limits get clamped to the 100 default — just assert no error.
 	if _, err := svc.ListObjects(ctx, testProjX, "files", ListObjectsRequest{Limit: -5}); err != nil {
@@ -196,13 +204,14 @@ func TestService_DeleteBucket_CascadesObjects(t *testing.T) {
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
 	bucket, _ := store.GetBucket(ctx, testProjX, "files")
 	for _, k := range []string{"a", "b", "c"} {
-		_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "u", ConfirmUploadRequest{Key: k, Size: 100})
-		blobs.put(testProjX, bucket.ID, k)
+		blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID(k)), 100, "text/plain")
+		_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: k, UploadID: testUploadID(k)})
 	}
 	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 300 {
 		t.Fatalf("pre-delete quota: got %d, want 300", used)
 	}
 
+	// DeleteBucket walks objects, decrements quota, drops the bucket row.
 	if err := svc.DeleteBucket(ctx, testProjX, "files"); err != nil {
 		t.Fatalf("DeleteBucket: %v", err)
 	}
@@ -226,9 +235,12 @@ func TestService_DeleteObject_DecrementsQuota(t *testing.T) {
 	svc := NewServiceWithObjectStore(store, blobs, nil)
 	ctx := context.Background()
 	_, _ = svc.CreateBucket(ctx, testProjX, CreateBucketRequest{Name: "files"})
-	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "u", ConfirmUploadRequest{Key: "k", Size: 200})
 	bucket, _ := store.GetBucket(ctx, testProjX, "files")
-	blobs.put(testProjX, bucket.ID, "k")
+	blobs.put(testProjX, bucket.ID, stagingObjectKey(testUploadID("k")), 200, "text/plain")
+	_, _ = svc.ConfirmUpload(ctx, testProjX, "files", "FREE", "u", ConfirmUploadRequest{Key: "k", UploadID: testUploadID("k")})
+	if used, _ := store.GetQuotaBytes(ctx, testProjX); used != 200 {
+		t.Fatalf("pre-delete quota: got %d, want 200", used)
+	}
 
 	if err := svc.DeleteObject(ctx, testProjX, "files", "k"); err != nil {
 		t.Fatalf("DeleteObject: %v", err)
@@ -261,11 +273,10 @@ func TestService_QuotaForTier(t *testing.T) {
 }
 
 func TestService_CheckMIMEAllowlist_Wildcard(t *testing.T) {
-	svc := NewService(newMemStore(), nil, nil)
-	if err := svc.checkMIMEAllowlist([]string{"*/*"}, "application/octet-stream"); err != nil {
+	if err := checkMIMEAllowlist([]string{"*/*"}, "application/octet-stream"); err != nil {
 		t.Errorf("wildcard should allow any mime: %v", err)
 	}
-	if err := svc.checkMIMEAllowlist(nil, "anything"); err != nil {
+	if err := checkMIMEAllowlist(nil, "text/plain"); err != nil {
 		t.Errorf("empty allowlist should allow any mime: %v", err)
 	}
 }

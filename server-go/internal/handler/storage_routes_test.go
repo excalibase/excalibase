@@ -15,14 +15,22 @@ import (
 // an in-memory bucket store + offline R2 client, under the real
 // /api/projects/{projectId}/storage path shape.
 func newStorageRouter(t *testing.T) (chi.Router, *inMemoryBucketStoreForTest) {
+	r, store, _ := newStorageRouterWithBackend(t)
+	return r, store
+}
+
+// newStorageRouterWithBackend also hands back the blob plane the service
+// reads objects back from.
+func newStorageRouterWithBackend(t *testing.T) (chi.Router, *inMemoryBucketStoreForTest, *storageBackendStub) {
 	t.Helper()
 	store := newInMemoryBucketStoreForTest()
-	h := NewStorageHandler(storagesvc.NewServiceWithObjectStore(store, newFakeObjectStoreForTest(), nil), nil)
+	backend := newStorageBackendStub()
+	h := NewStorageHandler(newStubbedStorageService(t, store, backend, nil), nil)
 
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/storage", func(r chi.Router) { h.Routes(r) })
 	r.Group(func(r chi.Router) { h.PublicRoutes(r) })
-	return r, store
+	return r, store, backend
 }
 
 func storageJSON(t *testing.T, v any) *bytes.Reader {
@@ -97,7 +105,7 @@ func TestStorageRoutes_CreateBucket_InvalidName(t *testing.T) {
 }
 
 func TestStorageRoutes_ObjectLifecycle(t *testing.T) {
-	r, _ := newStorageRouter(t)
+	r, _, backend := newStorageRouterWithBackend(t)
 	base := "/api/projects/proj-s/storage"
 	_ = doStorage(t, r, "POST", base+"/buckets", map[string]any{"name": "files"})
 
@@ -109,9 +117,16 @@ func TestStorageRoutes_ObjectLifecycle(t *testing.T) {
 		t.Fatalf("sign upload: %d body=%s", w.Code, w.Body.String())
 	}
 
-	// Confirm the upload (records metadata).
+	// Confirm the upload (records metadata) by the id it was staged under.
+	var signed struct {
+		UploadID string `json:"uploadId"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &signed); err != nil {
+		t.Fatalf("decode upload url: %v", err)
+	}
+	backend.put(stagingKeyPrefix+signed.UploadID, 10, "text/plain")
 	w = doStorage(t, r, "POST", base+"/buckets/files/confirm-upload", map[string]any{
-		"key": "a.txt", "size": 10, "mimeType": "text/plain", "etag": "e1",
+		"key": "a.txt", "uploadId": signed.UploadID, "etag": "e1",
 	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("confirm: %d body=%s", w.Code, w.Body.String())

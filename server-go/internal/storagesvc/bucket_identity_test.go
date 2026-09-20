@@ -108,7 +108,7 @@ func TestService_AllBlobPathsUseBucketIdentity(t *testing.T) {
 		t.Errorf("public URL must not be namespaced by the bucket name: %s", download.URL)
 	}
 
-	storeKey, err := svc.StartResumableUpload(ctx, testProjX, "assets", "FREE", UploadURLRequest{
+	storeKey, _, err := svc.StartResumableUpload(ctx, testProjX, "assets", "FREE", UploadURLRequest{
 		Key: "clip.mp4", MimeType: "video/mp4", Size: 10,
 	})
 	if err != nil {

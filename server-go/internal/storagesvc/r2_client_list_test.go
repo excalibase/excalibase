@@ -2,10 +2,12 @@ package storagesvc
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // An S3 stub is the only way to exercise the request/response halves of the
@@ -25,7 +27,7 @@ func newStubbedR2(t *testing.T, handler http.HandlerFunc) *R2Client {
 	return c
 }
 
-func TestR2_ListObjectKeys_ReturnsKeysUnderBucketPrefix(t *testing.T) {
+func TestR2_ListObjects_ReturnsKeysUnderBucketPrefix(t *testing.T) {
 	var gotPrefix string
 	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPrefix = r.URL.Query().Get("prefix")
@@ -38,12 +40,16 @@ func TestR2_ListObjectKeys_ReturnsKeysUnderBucketPrefix(t *testing.T) {
 </ListBucketResult>`))
 	})
 
-	keys, err := c.ListObjectKeys(context.Background(), testProjABC, "assets", 10)
+	objects, err := c.ListObjects(context.Background(), testProjABC, "assets", 10)
 	if err != nil {
 		t.Fatalf("ListObjectKeys: %v", err)
 	}
-	if len(keys) != 2 || keys[0] != "projects/proj-abc/buckets/assets/a.txt" {
-		t.Errorf("unexpected keys: %v", keys)
+	if len(objects) != 2 {
+		t.Fatalf("unexpected objects: %v", objects)
+	}
+	// Keys come back relative to the bucket, matching the catalogue's view.
+	if objects[0].Key != "a.txt" && objects[1].Key != "a.txt" {
+		t.Errorf("unexpected keys: %v", objects)
 	}
 	if want := "projects/proj-abc/buckets/assets/"; gotPrefix != want {
 		t.Errorf("listing prefix: got %q, want %q", gotPrefix, want)
@@ -52,31 +58,31 @@ func TestR2_ListObjectKeys_ReturnsKeysUnderBucketPrefix(t *testing.T) {
 
 // limit 0 means "as many as the backend will give"; the request must still
 // carry a valid max-keys rather than asking for zero.
-func TestR2_ListObjectKeys_DefaultsLimit(t *testing.T) {
+func TestR2_ListObjects_DefaultsLimit(t *testing.T) {
 	var gotMaxKeys string
 	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
 		gotMaxKeys = r.URL.Query().Get("max-keys")
 		_, _ = w.Write([]byte(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ListBucketResult>`))
 	})
 
-	keys, err := c.ListObjectKeys(context.Background(), testProjABC, "assets", 0)
+	objects, err := c.ListObjects(context.Background(), testProjABC, "assets", 0)
 	if err != nil {
 		t.Fatalf("ListObjectKeys: %v", err)
 	}
-	if len(keys) != 0 {
-		t.Errorf("empty listing should yield no keys, got %v", keys)
+	if len(objects) != 0 {
+		t.Errorf("empty listing should yield no keys, got %v", objects)
 	}
 	if gotMaxKeys == "" || gotMaxKeys == "0" {
 		t.Errorf("max-keys should default to a positive value, got %q", gotMaxKeys)
 	}
 }
 
-func TestR2_ListObjectKeys_ReportsBackendError(t *testing.T) {
+func TestR2_ListObjectsStub_ReportsBackendError(t *testing.T) {
 	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
 	})
-	if _, err := c.ListObjectKeys(context.Background(), testProjABC, "assets", 5); err == nil {
+	if _, err := c.ListObjects(context.Background(), testProjABC, "assets", 5); err == nil {
 		t.Fatal("a refused listing must not read as an empty bucket")
 	}
 }
@@ -125,11 +131,163 @@ func TestR2_HeadObject_ReturnsSizeAndType(t *testing.T) {
 		w.Header().Set("ETag", `"abc123"`)
 		w.WriteHeader(http.StatusOK)
 	})
-	size, contentType, etag, err := c.HeadObject(context.Background(), testProjABC, "assets", "a.png")
+	stat, err := c.HeadObject(context.Background(), testProjABC, "assets", "a.png")
 	if err != nil {
 		t.Fatalf("HeadObject: %v", err)
 	}
-	if size != 42 || contentType != "image/png" || etag != "abc123" {
-		t.Errorf("head: got size=%d type=%q etag=%q", size, contentType, etag)
+	if stat.Size != 42 || stat.ContentType != "image/png" || stat.ETag != "abc123" {
+		t.Errorf("head: got %+v", stat)
+	}
+}
+
+// The write time comes back too: it decides whether a confirmation is still
+// in time, and whether the reaper may take the object.
+func TestR2_HeadObject_ReturnsLastModified(t *testing.T) {
+	written := time.Date(2026, 9, 20, 3, 0, 0, 0, time.UTC)
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "10")
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Last-Modified", written.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusOK)
+	})
+	stat, err := c.HeadObject(context.Background(), testProjABC, "assets", "a.txt")
+	if err != nil {
+		t.Fatalf("HeadObject: %v", err)
+	}
+	if !stat.LastModified.Equal(written) {
+		t.Errorf("last modified: got %v, want %v", stat.LastModified, written)
+	}
+}
+
+// A key that is not there is a sentinel the confirm path acts on, not an
+// unexplained failure.
+func TestR2_HeadObject_MissingKeyIsSentinel(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	_, err := c.HeadObject(context.Background(), testProjABC, "assets", "ghost.txt")
+	if !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("want ErrObjectNotFound, got %v", err)
+	}
+}
+
+// An upload becomes an object by being copied onto its key, server-side.
+func TestR2_CopyObject_CopiesWithinTheBucket(t *testing.T) {
+	var gotSource, gotPath string
+	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
+		gotSource = r.Header.Get("X-Amz-Copy-Source")
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`<CopyObjectResult><ETag>"e"</ETag></CopyObjectResult>`))
+	})
+	if err := c.CopyObject(context.Background(), testProjABC, "bkt_1", ".staging/upl_1", "a.txt"); err != nil {
+		t.Fatalf("CopyObject: %v", err)
+	}
+	if !strings.Contains(gotSource, "upl_1") {
+		t.Errorf("copy source: %q", gotSource)
+	}
+	if !strings.HasSuffix(gotPath, "/buckets/bkt_1/a.txt") {
+		t.Errorf("copy destination: %q", gotPath)
+	}
+}
+
+func TestR2_CopyObject_RejectsBadKeys(t *testing.T) {
+	c := newR2(t)
+	if err := c.CopyObject(context.Background(), testProjABC, "bkt_1", "..", "a.txt"); err == nil {
+		t.Error("a traversal source must be refused")
+	}
+	if err := c.CopyObject(context.Background(), testProjABC, "bkt_1", "a.txt", ".."); err == nil {
+		t.Error("a traversal destination must be refused")
+	}
+}
+
+// A source that is not there is the sentinel the confirm path acts on.
+func TestR2_CopyObject_MissingSourceIsSentinel(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<Error><Code>NoSuchKey</Code></Error>`))
+	})
+	err := c.CopyObject(context.Background(), testProjABC, "bkt_1", ".staging/upl_1", "a.txt")
+	if !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("want ErrObjectNotFound, got %v", err)
+	}
+}
+
+func TestR2_CopyObject_ReportsBackendError(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+	})
+	err := c.CopyObject(context.Background(), testProjABC, "bkt_1", ".staging/upl_1", "a.txt")
+	if err == nil || !strings.Contains(err.Error(), "copy object") {
+		t.Fatalf("a refused copy must surface, got %v", err)
+	}
+}
+
+// The reaper's listing sees the staging namespace and nothing else, and the
+// ids it returns are bare — a live key could not be expressed as one.
+func TestR2_ListStagedUploads_ListsOnlyTheStagingNamespace(t *testing.T) {
+	var gotPrefix string
+	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPrefix = r.URL.Query().Get("prefix")
+		_, _ = w.Write([]byte(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Contents><Key>projects/proj-abc/buckets/bkt_1/.staging/upl_1</Key><LastModified>2026-09-20T03:00:00Z</LastModified></Contents>
+</ListBucketResult>`))
+	})
+	staged, err := c.ListStagedUploads(context.Background(), testProjABC, "bkt_1", 0)
+	if err != nil {
+		t.Fatalf("ListStagedUploads: %v", err)
+	}
+	if want := "projects/proj-abc/buckets/bkt_1/.staging/"; gotPrefix != want {
+		t.Errorf("listing prefix: got %q, want %q", gotPrefix, want)
+	}
+	if len(staged) != 1 || staged[0].UploadID != "upl_1" {
+		t.Fatalf("unexpected staged uploads: %+v", staged)
+	}
+	if staged[0].LastModified.IsZero() {
+		t.Error("the write time decides whether an upload is abandoned")
+	}
+}
+
+func TestR2_ListStagedUploads_RejectsMissingBucket(t *testing.T) {
+	c := newR2(t)
+	if _, err := c.ListStagedUploads(context.Background(), testProjABC, "", 10); err == nil {
+		t.Error("listing without a bucket must fail before any network call")
+	}
+}
+
+func TestR2_ListStagedUploads_ReportsBackendError(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code></Error>`))
+	})
+	if _, err := c.ListStagedUploads(context.Background(), testProjABC, "bkt_1", 5); err == nil {
+		t.Error("a refused listing must not read as an empty staging area")
+	}
+}
+
+// The key is built from the id, so an id that could carry a path is refused.
+func TestR2_DeleteStagingObject_RefusesAnIDThatCouldCarryAPath(t *testing.T) {
+	c := newStubbedR2(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a suspect upload id must never reach the store")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	for _, id := range []string{"", "../a", "a/b", `a\b`} {
+		if err := c.DeleteStagingObject(context.Background(), testProjABC, "bkt_1", id); err == nil {
+			t.Errorf("upload id %q must be refused", id)
+		}
+	}
+}
+
+func TestR2_DeleteStagingObject_DeletesTheStagedKey(t *testing.T) {
+	var gotPath string
+	c := newStubbedR2(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.DeleteStagingObject(context.Background(), testProjABC, "bkt_1", "upl_1"); err != nil {
+		t.Fatalf("DeleteStagingObject: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, "/buckets/bkt_1/.staging/upl_1") {
+		t.Errorf("delete hit %q", gotPath)
 	}
 }
