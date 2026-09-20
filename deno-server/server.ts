@@ -1221,12 +1221,46 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     function __makeStorageWriter() {
       const reader = __makeStorageReader();
       return Object.assign({}, reader, {
-        async generateUploadUrl() {
-          const reply = await __storageCall('generateUploadUrl', {});
+        async generateUploadUrl(declaration) {
+          // The signed PUT binds the type and the length, so the client must
+          // send exactly what is declared here; neither can be guessed later.
+          const contentType = (declaration && declaration.contentType) || '';
+          const size = (declaration && declaration.size) || 0;
+          if (typeof contentType !== 'string' || contentType === '') {
+            throw new Error("ctx.storage.generateUploadUrl: contentType is required");
+          }
+          if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) {
+            throw new Error("ctx.storage.generateUploadUrl: size is required and must be greater than zero");
+          }
+          const reply = await __storageCall('generateUploadUrl', { contentType, size });
           if (!reply || typeof reply.url !== 'string') {
             throw new Error("ctx.storage.generateUploadUrl: unexpected RPC reply");
           }
-          return reply.url;
+          if (typeof reply.storageId !== 'string' || reply.storageId === '') {
+            throw new Error("ctx.storage.generateUploadUrl: reply carried no storageId");
+          }
+          if (typeof reply.uploadId !== 'string' || reply.uploadId === '') {
+            throw new Error("ctx.storage.generateUploadUrl: reply carried no uploadId");
+          }
+          return { url: reply.url, storageId: reply.storageId, uploadId: reply.uploadId };
+        },
+        async completeUpload(completion) {
+          // A direct upload sits in a staging area until something accepts
+          // it. The browser cannot reach the internal route, so a function
+          // does — and an upload nobody confirms is collected after the grace.
+          const storageId = (completion && completion.storageId) || '';
+          const uploadId = (completion && completion.uploadId) || '';
+          if (typeof storageId !== 'string' || storageId === '') {
+            throw new Error("ctx.storage.completeUpload: storageId is required");
+          }
+          if (typeof uploadId !== 'string' || uploadId === '') {
+            throw new Error("ctx.storage.completeUpload: uploadId is required");
+          }
+          const reply = await __storageCall('completeUpload', { storageId, uploadId });
+          if (typeof reply !== 'string' || reply.length === 0) {
+            throw new Error("ctx.storage.completeUpload: RPC did not return a storage id");
+          }
+          return reply;
         },
         async store(blob, opts) {
           if (!blob || typeof blob.arrayBuffer !== 'function') {
@@ -2670,7 +2704,15 @@ async function forwardMetadataToProvisioning(runtimeID: string, exports: unknown
  * worker template):
  *
  *   "generateUploadUrl" — POST /internal/storage/{p}/upload-url
- *      Returns: { url, storageId }
+ *      Payload: { contentType: string, size: number }  (both required: the
+ *      signed PUT binds them, so a mismatch is refused by the object store)
+ *      Returns: { url, storageId, uploadId }
+ *
+ *   "completeUpload"    — POST /internal/storage/{p}/confirm-upload
+ *      Accepts a direct upload the client PUT to the staging URL. Without
+ *      it the bytes are never recorded and the reaper collects them.
+ *      Payload: { storageId, uploadId }
+ *      Returns: string (the confirmed storageId)
  *
  *   "store"             — generates a signed URL via upload-url, PUTs the
  *      bytes carried in the payload, posts confirm-upload, returns the
@@ -2678,6 +2720,8 @@ async function forwardMetadataToProvisioning(runtimeID: string, exports: unknown
  *      but server-side.
  *      Payload: { bytes: Uint8Array, contentType: string, sha256?: string }
  *      Returns: string (storageId)
+ *      The PUT must carry exactly the Content-Type and Content-Length the
+ *      URL was signed for; anything else is a 403 from the object store.
  *
  *   "getUrl"            — POST /internal/storage/{p}/download-url
  *      Payload: { storageId }
@@ -2697,7 +2741,17 @@ async function forwardMetadataToProvisioning(runtimeID: string, exports: unknown
  */
 async function dispatchStorage(
   projectId: string,
-  msg: { op: string; payload?: { storageId?: string; bytes?: Uint8Array; contentType?: string; sha256?: string } },
+  msg: {
+    op: string;
+    payload?: {
+      storageId?: string;
+      uploadId?: string;
+      bytes?: Uint8Array;
+      contentType?: string;
+      size?: number;
+      sha256?: string;
+    };
+  },
 ): Promise<unknown> {
   if (PROVISIONING_URL === "") {
     throw new Error("ctx.storage: EXCALIBASE_PROVISIONING_URL is not configured");
@@ -2718,16 +2772,41 @@ async function dispatchStorage(
 
   switch (msg.op) {
     case "generateUploadUrl": {
+      const contentType = payload.contentType || "";
+      const size = payload.size || 0;
+      if (contentType === "" || size <= 0) {
+        throw new Error("generateUploadUrl: contentType and size are required");
+      }
       const res = await fetch(`${base}/upload-url`, {
         method: "POST",
         headers: jsonHeaders,
-        body: JSON.stringify({}),
+        body: JSON.stringify({ contentType, size }),
       });
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`generateUploadUrl HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
       return await res.json();
+    }
+    case "completeUpload": {
+      const uploadId = payload.uploadId;
+      if (typeof storageId !== "string" || storageId.length === 0) {
+        throw new Error("completeUpload: storageId required");
+      }
+      if (typeof uploadId !== "string" || uploadId.length === 0) {
+        throw new Error("completeUpload: uploadId required");
+      }
+      const res = await fetch(`${base}/confirm-upload`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ storageId, uploadId }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`completeUpload HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }
+      await res.body?.cancel();
+      return storageId;
     }
     case "getUrl": {
       const res = await fetch(`${base}/download-url`, {
@@ -2796,11 +2875,19 @@ async function dispatchStorage(
         const text = await mint.text();
         throw new Error(`store/upload-url HTTP ${mint.status}: ${text.slice(0, 200)}`);
       }
-      const mintBody = await mint.json() as { url: string; storageId: string };
-      // 2. PUT the bytes to the signed URL.
+      const mintBody = await mint.json() as { url: string; storageId: string; uploadId: string };
+      if (!mintBody.uploadId) {
+        throw new Error("store/upload-url: reply carried no uploadId");
+      }
+      // 2. PUT the bytes to the signed URL. The signature covers both
+      //    headers, so they must be exactly what was declared at mint time —
+      //    the same type, and the same number of bytes.
       const put = await fetch(mintBody.url, {
         method: "PUT",
-        headers: { "Content-Type": contentType },
+        headers: {
+          "Content-Type": contentType,
+          "Content-Length": String(bytes.byteLength),
+        },
         body: bytes,
       });
       if (!put.ok) {
@@ -2814,8 +2901,7 @@ async function dispatchStorage(
         headers: jsonHeaders,
         body: JSON.stringify({
           storageId: mintBody.storageId,
-          contentType,
-          size: bytes.byteLength,
+          uploadId: mintBody.uploadId,
           sha256: payload.sha256 || "",
         }),
       });

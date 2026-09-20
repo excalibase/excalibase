@@ -222,7 +222,7 @@ func TestStorageRoutes_BucketLookupFailuresAre5xx(t *testing.T) {
 	}{
 		{"list buckets", "GET", base + "/buckets", nil},
 		{"list objects", "GET", base + "/buckets/files/objects", nil},
-		{"confirm upload", "POST", base + "/buckets/files/confirm-upload", map[string]any{"key": "a.txt", "size": 1}},
+		{"confirm upload", "POST", base + "/buckets/files/confirm-upload", map[string]any{"key": "a.txt", "uploadId": "upl_1"}},
 		{"download url", "GET", base + "/buckets/files/download-url/a.txt", nil},
 		{"object metadata", "GET", base + "/buckets/files/objects/a.txt", nil},
 		{"public object", "GET", "/storage/v1/object/public/proj-s/files/a.txt", nil},
@@ -243,7 +243,7 @@ func TestInternalStorage_BucketLookupFailuresAre5xx(t *testing.T) {
 	}
 	cases := []call{
 		{"upload url", "POST", "/internal/storage/" + testStorageProjectID + "/upload-url", `{"contentType":"text/plain","size":4}`},
-		{"confirm upload", "POST", "/internal/storage/" + testStorageProjectID + "/confirm-upload", `{"storageId":"kg2_a","size":4}`},
+		{"confirm upload", "POST", "/internal/storage/" + testStorageProjectID + "/confirm-upload", `{"storageId":"kg2_a","uploadId":"upl_1"}`},
 		{"download url", "POST", "/internal/storage/" + testStorageProjectID + "/download-url", `{"storageId":"kg2_a"}`},
 		{"metadata", "GET", "/internal/storage/" + testStorageProjectID + "/metadata/kg2_a", ""},
 	}

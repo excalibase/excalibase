@@ -22,7 +22,8 @@
  *   getUrl           → string | null
  *   getMetadata      → StorageFileMetadata | null
  *   get              → { bytes: Uint8Array; contentType: string } | null
- *   generateUploadUrl → { url: string; storageId: string }
+ *   generateUploadUrl → { url: string; storageId: string; uploadId: string }
+ *   completeUpload   → string (the confirmed storageId)
  *   store            → string (the minted storageId)
  *   delete           → null  (200/204)
  *
@@ -44,8 +45,31 @@ export interface StorageReader {
   getMetadata(storageId: string): Promise<StorageFileMetadata | null>;
 }
 
+/** What the caller must declare before a URL can be signed for it. */
+export interface UploadDeclaration {
+  contentType: string;
+  size: number;
+}
+
+/** What a minted upload URL comes with. */
+export interface MintedUpload {
+  /** The signed PUT URL. It addresses a staging key, not the object's own. */
+  url: string;
+  /** The id the object will have once the upload is confirmed. */
+  storageId: string;
+  /** Names the staged bytes; `completeUpload` accepts them by this id. */
+  uploadId: string;
+}
+
+/** Which staged upload to accept. */
+export interface UploadCompletion {
+  storageId: string;
+  uploadId: string;
+}
+
 export interface StorageWriter extends StorageReader {
-  generateUploadUrl(): Promise<string>;
+  generateUploadUrl(declaration: UploadDeclaration): Promise<MintedUpload>;
+  completeUpload(completion: UploadCompletion): Promise<string>;
   store(blob: Blob, opts?: { sha256?: string }): Promise<string>;
   delete(storageId: string): Promise<void>;
 }
@@ -113,16 +137,48 @@ export function createStorageWriter(rpc: StorageRpc): StorageWriter {
   const reader = createStorageReader(rpc);
   return {
     ...reader,
-    async generateUploadUrl() {
-      const reply = await rpc("generateUploadUrl", {});
-      if (
-        typeof reply !== "object" ||
-        reply === null ||
-        typeof (reply as { url?: unknown }).url !== "string"
-      ) {
+    async generateUploadUrl(declaration) {
+      // The signature over the PUT binds both headers, so the client must
+      // send exactly this type and this many bytes. Neither can be guessed
+      // later, which is why they are required here.
+      const contentType = declaration?.contentType ?? "";
+      const size = declaration?.size ?? 0;
+      if (typeof contentType !== "string" || contentType === "") {
+        throw new Error("ctx.storage.generateUploadUrl: contentType is required");
+      }
+      if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) {
+        throw new Error("ctx.storage.generateUploadUrl: size is required and must be greater than zero");
+      }
+      const reply = await rpc("generateUploadUrl", { contentType, size });
+      const minted = reply as Partial<MintedUpload> | null;
+      if (typeof minted !== "object" || minted === null || typeof minted.url !== "string") {
         throw new Error("ctx.storage.generateUploadUrl: unexpected RPC reply shape");
       }
-      return (reply as { url: string }).url;
+      if (typeof minted.storageId !== "string" || minted.storageId === "") {
+        throw new Error("ctx.storage.generateUploadUrl: reply carried no storageId");
+      }
+      if (typeof minted.uploadId !== "string" || minted.uploadId === "") {
+        throw new Error("ctx.storage.generateUploadUrl: reply carried no uploadId");
+      }
+      return { url: minted.url, storageId: minted.storageId, uploadId: minted.uploadId };
+    },
+    async completeUpload(completion) {
+      // A direct upload is bytes in a staging area until something accepts
+      // them. The browser cannot reach the internal route, so a function
+      // does it — and after the grace an unconfirmed upload is collected.
+      const storageId = completion?.storageId ?? "";
+      const uploadId = completion?.uploadId ?? "";
+      if (typeof storageId !== "string" || storageId === "") {
+        throw new Error("ctx.storage.completeUpload: storageId is required");
+      }
+      if (typeof uploadId !== "string" || uploadId === "") {
+        throw new Error("ctx.storage.completeUpload: uploadId is required");
+      }
+      const reply = await rpc("completeUpload", { storageId, uploadId });
+      if (typeof reply !== "string" || reply.length === 0) {
+        throw new Error("ctx.storage.completeUpload: RPC did not return a storage id");
+      }
+      return reply;
     },
     async store(blob, opts) {
       if (!blob || typeof (blob as Blob).arrayBuffer !== "function") {

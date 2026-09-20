@@ -107,13 +107,14 @@ Deno.test("StorageReader.get hands back a Blob when bytes come over the RPC", as
   assertEquals(text, "Hi");
 });
 
-Deno.test("StorageWriter.generateUploadUrl resolves to the signed PUT URL", async () => {
+Deno.test("StorageWriter.generateUploadUrl resolves to the staged upload", async () => {
   const { rpc, calls } = makeFakeRpc([
-    { url: "https://r2.test/upload?sig=y", storageId: "kg2_new" },
+    { url: "https://r2.test/upload?sig=y", storageId: "kg2_new", uploadId: "upl_1" },
   ]);
   const writer = createStorageWriter(rpc);
-  const url = await writer.generateUploadUrl();
-  assertEquals(url, "https://r2.test/upload?sig=y");
+  const minted = await writer.generateUploadUrl({ contentType: "text/plain", size: 3 });
+  assertEquals(minted.url, "https://r2.test/upload?sig=y");
+  assertEquals(minted.uploadId, "upl_1");
   assertEquals(calls[0].op, "generateUploadUrl");
 });
 
@@ -209,10 +210,11 @@ Deno.test("get rejects when the RPC reply lacks a 'bytes' field", async () => {
 });
 
 Deno.test("generateUploadUrl rejects on malformed reply", async () => {
+  // A declaration is present; the reply is the problem.
   const { rpc } = makeFakeRpc([{ noUrl: "yikes" }]);
   const writer = createStorageWriter(rpc);
   await assertRejects(
-    () => writer.generateUploadUrl(),
+    () => writer.generateUploadUrl({ contentType: "text/plain", size: 1 }),
     Error,
     "unexpected RPC reply shape",
   );

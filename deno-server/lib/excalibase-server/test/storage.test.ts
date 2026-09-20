@@ -64,17 +64,29 @@ describe("ctx.storage", () => {
     expect(await reader.getMetadata(id)).toBeNull();
   });
 
-  it("StorageWriter extends StorageReader with generateUploadUrl / store / delete", async () => {
+  it("StorageWriter extends StorageReader with generateUploadUrl / completeUpload / store / delete", async () => {
     const writer: StorageWriter = {
       getUrl: async () => null,
       get: async () => null,
       getMetadata: async () => null,
-      generateUploadUrl: async () => "https://r2.example/upload?sig=x",
+      generateUploadUrl: async (decl) => ({
+        url: `https://r2.example/upload?sig=x&len=${decl.size}`,
+        storageId: "kg2_new",
+        uploadId: "upl_1",
+      }),
+      completeUpload: async (c) => asStorageId(c.storageId),
       store: async (_blob, _opts) => asStorageId("kg2_new"),
       delete: async () => undefined,
     };
-    const url = await writer.generateUploadUrl();
-    expect(url).toBe("https://r2.example/upload?sig=x");
+    // A direct upload declares what it is about to send, and comes back with
+    // the id that names the staged bytes.
+    const minted = await writer.generateUploadUrl({ contentType: "text/plain", size: 4 });
+    expect(minted.url).toBe("https://r2.example/upload?sig=x&len=4");
+    expect(minted.storageId).toBe("kg2_new");
+    expect(minted.uploadId).toBe("upl_1");
+    // It is only an object once something accepts it.
+    expect(await writer.completeUpload({ storageId: minted.storageId, uploadId: minted.uploadId }))
+      .toBe("kg2_new");
     const blob: BlobLike = { size: 4, type: "text/plain" };
     const newId = await writer.store(blob as never);
     expect(newId).toBe("kg2_new");
@@ -87,7 +99,8 @@ describe("ctx.storage", () => {
       getUrl: async () => null,
       get: async () => null,
       getMetadata: async () => null,
-      generateUploadUrl: async () => "",
+      generateUploadUrl: async () => ({ url: "", storageId: "", uploadId: "" }),
+      completeUpload: async () => asStorageId("kg2_x"),
       store: async (_blob, opts) => {
         calls.push({ sha: opts?.sha256 });
         return asStorageId("kg2_x");
@@ -145,13 +158,16 @@ describe("ctx.storage", () => {
         getUrl: async () => "https://r2/get",
         get: async () => null,
         getMetadata: async () => null,
-        generateUploadUrl: async () => "https://r2/up",
+        generateUploadUrl: async () => ({ url: "https://r2/up", storageId: "kg2_m", uploadId: "upl_m" }),
+        completeUpload: async () => asStorageId("kg2_m"),
         store: async () => asStorageId("kg2_m"),
         delete: async () => undefined,
       },
     };
 
-    expect(await mctx.storage.generateUploadUrl()).toBe("https://r2/up");
+    const minted = await mctx.storage.generateUploadUrl({ contentType: "text/plain", size: 1 });
+    expect(minted.url).toBe("https://r2/up");
+    expect(minted.uploadId).toBe("upl_m");
     const newId = await mctx.storage.store({ size: 1, type: "" } as never);
     expect(newId).toBe("kg2_m");
     await mctx.storage.delete(newId);
@@ -176,13 +192,15 @@ describe("ctx.storage", () => {
         getUrl: async () => null,
         get: async () => null,
         getMetadata: async () => null,
-        generateUploadUrl: async () => "https://r2/up-a",
+        generateUploadUrl: async () => ({ url: "https://r2/up-a", storageId: "kg2_a", uploadId: "upl_a" }),
+        completeUpload: async () => asStorageId("kg2_a"),
         store: async () => asStorageId("kg2_a"),
         delete: async () => undefined,
       },
     };
 
-    expect(await actx.storage.generateUploadUrl()).toBe("https://r2/up-a");
+    expect((await actx.storage.generateUploadUrl({ contentType: "text/plain", size: 1 })).url)
+      .toBe("https://r2/up-a");
     const id = await actx.storage.store({ size: 0, type: "" } as never);
     expect(id).toBe("kg2_a");
   });

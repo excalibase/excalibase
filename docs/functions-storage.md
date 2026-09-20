@@ -20,7 +20,9 @@ interface StorageReader {
 }
 
 interface StorageWriter extends StorageReader {
-  generateUploadUrl(): Promise<string>;
+  generateUploadUrl(d: { contentType: string; size: number }):
+    Promise<{ url: string; storageId: string; uploadId: string }>;
+  completeUpload(c: { storageId: string; uploadId: string }): Promise<Id<"_storage">>;
   store(blob: Blob, opts?: { sha256?: string }): Promise<Id<"_storage">>;
   delete(storageId: Id<"_storage">): Promise<void>;
 }
@@ -36,8 +38,8 @@ interface StorageFileMetadata {
 | Ctx kind     | Surface         | Methods                                                 |
 |--------------|-----------------|---------------------------------------------------------|
 | `QueryCtx`   | `StorageReader` | `getUrl`, `get`, `getMetadata`                          |
-| `MutationCtx`| `StorageWriter` | + `generateUploadUrl`, `store`, `delete`                |
-| `ActionCtx`  | `StorageWriter` | + `generateUploadUrl`, `store`, `delete`                |
+| `MutationCtx`| `StorageWriter` | + `generateUploadUrl`, `completeUpload`, `store`, `delete` |
+| `ActionCtx`  | `StorageWriter` | + `generateUploadUrl`, `completeUpload`, `store`, `delete` |
 
 Calling `ctx.storage.delete(...)` inside a query is a compile-time
 error (the typed `StorageReader` does not expose it) and a clear
@@ -81,12 +83,26 @@ nobody staged, or one whose bytes have already been collected, answers `404`.
 import { mutation, v } from "@excalibase/server";
 
 export const generateUploadUrl = mutation({
-  args: v.object({}),
-  handler: async (ctx) => {
-    // ctx.storage.generateUploadUrl() returns a short-lived signed PUT
-    // URL the client uploads to directly. Provisioning auto-creates
-    // the per-project ctx-storage bucket on first call.
-    return ctx.storage.generateUploadUrl();
+  // The client says what it is about to send: both are bound into the
+  // signature, so neither can be decided later.
+  args: v.object({ contentType: v.string(), size: v.number() }),
+  handler: async (ctx, { contentType, size }) => {
+    // Returns { url, storageId, uploadId }. The bytes land on a staging
+    // key; the object appears when completeUpload accepts them.
+    // Provisioning auto-creates the per-project ctx-storage bucket on
+    // first call.
+    return ctx.storage.generateUploadUrl({ contentType, size });
+  },
+});
+
+// The follow-up mutation accepts the upload and attaches the id to a row.
+// Without it the bytes are never recorded, and the platform collects them
+// after its grace period.
+export const attachUpload = mutation({
+  args: v.object({ storageId: v.string(), uploadId: v.string() }),
+  handler: async (ctx, { storageId, uploadId }) => {
+    await ctx.storage.completeUpload({ storageId, uploadId });
+    return storageId;
   },
 });
 ```
@@ -116,20 +132,42 @@ export const sendImage = mutation({
 import { db } from "./excalibase";
 
 async function uploadAndAttach(blob: Blob, author: string) {
-  // db.storage.uploadFile internally:
-  //   a) calls api.<module>.generateUploadUrl to get the signed PUT URL,
-  //   b) PUTs the blob bytes to that URL,
-  //   c) reads the upload response and returns the minted storageId.
-  const { storageId } = await db.storage.uploadFile(blob);
+  // The upload is three steps, because the bytes are staged before they
+  // become an object:
+  //   a) call the mutation that mints the URL, declaring the blob's type
+  //      and size — both are bound into the signature;
+  //   b) PUT the blob with exactly that Content-Type and Content-Length;
+  //   c) call the mutation that accepts the upload by its uploadId.
+  const { data: minted } = await db.functions.system.generateUploadUrl({
+    contentType: blob.type || "application/octet-stream",
+    size: blob.size,
+  });
+  await fetch(minted.url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": blob.type || "application/octet-stream",
+      "Content-Length": String(blob.size),
+    },
+    body: blob,
+  });
+  await db.functions.system.attachUpload({
+    storageId: minted.storageId,
+    uploadId: minted.uploadId,
+  });
 
   // Pass the id to whatever mutation persists it on a row.
-  await db.functions.messages.sendImage({ storageId, author });
+  await db.functions.messages.sendImage({ storageId: minted.storageId, author });
 }
 ```
 
-The two mutations are decoupled on purpose: a single deployment can
-ship many upload-attaching mutations that all reuse the same
-`generateUploadUrl` helper.
+The mutations are decoupled on purpose: a single deployment can ship many
+upload-attaching mutations that all reuse the same `generateUploadUrl`
+helper. An upload that is never accepted is collected after the platform's
+grace period, so step (c) is part of the flow, not an optimisation.
+
+`db.storage.uploadFile(blob)` in `excalibase-sdk-js` still speaks the older
+two-step shape and needs the same change before it works against this
+protocol.
 
 ## Server-side upload (actions)
 
@@ -219,7 +257,8 @@ unchanged.
 ## Limits
 
 * Per-project quotas are enforced via the existing storage tier table
-  (FREE / PRO / ENTERPRISE) on `upload-url`.
+  (FREE / PRO / ENTERPRISE) on `upload-url`, and again on confirm against
+  what the object store actually holds.
 * Per-bucket file-size caps are not exposed through `ctx.storage`
   (the auto-provisioned `ctx-storage` bucket has no per-file cap).
 * Streaming/multipart uploads of very large files (`> 100 MB`) land

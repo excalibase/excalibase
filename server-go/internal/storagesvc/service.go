@@ -360,15 +360,18 @@ func (s *Service) enforceObjectLimits(ctx context.Context, projectID, tier strin
 // PUT that dodged the signed URL's constraints cannot become a stored object.
 // Quota is charged the verified size.
 func (s *Service) ConfirmUpload(ctx context.Context, projectID, bucketName, tier, ownerID string, req ConfirmUploadRequest) (*Object, error) {
-	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
-	if err != nil {
-		return nil, err
-	}
+	// The caller's own arguments are checked before anything is looked up:
+	// a confirmation that names no upload is a bad request whatever state
+	// the bucket is in.
 	if err := validateObjectKey(req.Key); err != nil {
 		return nil, err
 	}
 	if req.UploadID == "" {
 		return nil, invalidf("uploadId is required")
+	}
+	bucket, err := s.uploadTarget(ctx, projectID, bucketName)
+	if err != nil {
+		return nil, err
 	}
 	staged := stagingObjectKey(req.UploadID)
 

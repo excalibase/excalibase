@@ -475,17 +475,23 @@ if echo "$CREATE_RESP" | jq -e '.id' > /dev/null 2>&1; then
     -d '{"key":"hello.txt","mimeType":"text/plain","size":11}' \
     "$API_PROV/api/projects/$PROJECT_ID/storage/buckets/$BKT_NAME/upload-url")
   PUT_URL=$(echo "$SIGN_RESP" | jq -r '.url')
-  if [ -n "$PUT_URL" ] && [ "$PUT_URL" != "null" ]; then
+  # The upload lands on a staging key and becomes the object only when the
+  # confirmation names this id.
+  UPLOAD_ID=$(echo "$SIGN_RESP" | jq -r '.uploadId')
+  if [ -n "$PUT_URL" ] && [ "$PUT_URL" != "null" ] && [ "$UPLOAD_ID" != "null" ]; then
     pass "signed PUT URL minted"
 
-    # PUT bytes directly to R2
+    # PUT bytes directly to R2. Both headers are covered by the signature,
+    # so they must match what was declared above exactly.
     PUT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
-      -H 'Content-Type: text/plain' --data 'hello world' "$PUT_URL")
+      -H 'Content-Type: text/plain' -H 'Content-Length: 11' \
+      --data 'hello world' "$PUT_URL")
     [ "$PUT_CODE" = "200" ] && pass "PUT to R2 (200)" || fail "PUT to R2" "got $PUT_CODE"
 
-    # Confirm upload
+    # Confirm upload by the id it was staged under. Size and type are read
+    # back from the object store, so they are not sent here.
     CONFIRM=$(curl -s -X POST -H "$PAT_HDR" -H 'Content-Type: application/json' \
-      -d '{"key":"hello.txt","size":11,"mimeType":"text/plain"}' \
+      -d "{\"key\":\"hello.txt\",\"uploadId\":\"$UPLOAD_ID\"}" \
       "$API_PROV/api/projects/$PROJECT_ID/storage/buckets/$BKT_NAME/confirm-upload")
     echo "$CONFIRM" | jq -e '.id' > /dev/null 2>&1 \
       && pass "confirm-upload recorded object" || fail "confirm" "$CONFIRM"
