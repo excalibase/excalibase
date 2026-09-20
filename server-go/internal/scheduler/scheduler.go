@@ -1,18 +1,39 @@
 // Package scheduler implements Phase 8 deferred-execution primitives for
 // Excalibase Functions:
 //
-//   * a Postgres-backed task queue
+//   - a Postgres-backed task queue
 //     (`excalibase.excalibase_scheduled_functions`) populated by the
 //     runtime's `ctx.scheduler.runAfter/runAt/cancel` RPCs and drained by
 //     `Worker` via FOR UPDATE SKIP LOCKED polling;
 //
-//   * a Postgres-backed cron registry (`excalibase.excalibase_cron_jobs`)
+//   - a Postgres-backed cron registry (`excalibase.excalibase_cron_jobs`)
 //     populated by the bundler at deploy time and walked by `CronRunner`
 //     to enqueue the next due task row per job.
 //
 // Both tables live in the reserved `excalibase` schema, never in the
 // tenant's `public` schema, which is user space exposed through the
 // generated APIs and Studio.
+//
+// # The tenant owns these tables
+//
+// Both tables live in the tenant's own database, and the tenant holds that
+// database's credentials. The platform creates the reserved `excalibase`
+// schema there, but it cannot protect it: a project can insert, update and
+// delete any row in it. So nothing read out of these tables is authority —
+// it is input.
+//
+//   - the project a task runs as comes from the sweep (the project whose
+//     pool produced the row), never from the row's own project_id;
+//   - a module name may only name a function the platform itself deployed
+//     for that project, and must be a plain identifier;
+//   - args must be JSON within the platform's size limit;
+//   - attempt counts cannot widen the platform's retry budget;
+//   - cron cadences are clipped to the platform minimum and the number of
+//     jobs read per tick is capped.
+//
+// A row that fails any of these is closed with fixed platform text and
+// never dispatched. See row_guard.go, which is where tenant content stops
+// being input.
 //
 // The package is decoupled from any specific invoker shape — the `Invoker`
 // interface is the only seam, satisfied at production-time by the
@@ -24,6 +45,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 
 	"github.com/excalibase/provisioning-poc/internal/platformdb"
 )
@@ -38,6 +60,12 @@ import (
 type Invoker interface {
 	Invoke(ctx context.Context, projectID, moduleName, exportName string, args json.RawMessage) error
 }
+
+// ErrNotServable is what an Invoker returns (wrapped) when the task's
+// project must not be served — a teardown or an unconfirmed restore owns
+// it. The worker closes such a task as skipped rather than retrying: the
+// project is not coming back on this task's retry budget.
+var ErrNotServable = errors.New("project is not servable")
 
 // EnsureTables creates the scheduler bookkeeping tables in the reserved
 // `excalibase` schema and moves any legacy copies out of `public`. Called

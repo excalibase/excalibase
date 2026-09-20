@@ -15,6 +15,15 @@ import (
 // CronRunnerConfig wires the cron runner's collaborators.
 type CronRunnerConfig struct {
 	DB *sql.DB
+	// ProjectID is the project whose database the sweep opened. The registry
+	// is tenant-written, so this — not a row's project_id — is the identity
+	// every enqueued task carries.
+	ProjectID string
+	// MinInterval is the finest cadence the platform honours. A schedule
+	// asking for less is clipped up to it. Default 1 minute.
+	MinInterval time.Duration
+	// MaxJobs caps how many registry rows one tick reads. Default 100.
+	MaxJobs int
 	// Logger is optional; defaults to the std log package.
 	Logger *log.Logger
 	// IDGen overrides the scheduled-task id generator (tests use a
@@ -22,15 +31,24 @@ type CronRunnerConfig struct {
 	IDGen func() string
 }
 
+// DefaultCronMinInterval is the finest cron cadence the platform runs.
+const DefaultCronMinInterval = time.Minute
+
+// DefaultCronMaxJobs caps the registry rows read per project per tick.
+const DefaultCronMaxJobs = 100
+
 // CronRunner walks the cron registry and enqueues the next due
 // excalibase.excalibase_scheduled_functions row per job. One CronRunner per replica;
 // the per-row update to `last_enqueued_at` is the idempotency lock that
 // keeps concurrent runners from double-enqueuing.
 type CronRunner struct {
-	db     *sql.DB
-	logger *log.Logger
-	idGen  func() string
-	parser cron.Parser
+	db          *sql.DB
+	projectID   string
+	minInterval time.Duration
+	maxJobs     int
+	logger      *log.Logger
+	idGen       func() string
+	parser      cron.Parser
 }
 
 func NewCronRunner(c CronRunnerConfig) *CronRunner {
@@ -42,10 +60,21 @@ func NewCronRunner(c CronRunnerConfig) *CronRunner {
 	if idGen == nil {
 		idGen = base32RandID
 	}
+	minInterval := c.MinInterval
+	if minInterval <= 0 {
+		minInterval = DefaultCronMinInterval
+	}
+	maxJobs := c.MaxJobs
+	if maxJobs <= 0 {
+		maxJobs = DefaultCronMaxJobs
+	}
 	return &CronRunner{
-		db:     c.DB,
-		logger: logger,
-		idGen:  idGen,
+		db:          c.DB,
+		projectID:   c.ProjectID,
+		minInterval: minInterval,
+		maxJobs:     maxJobs,
+		logger:      logger,
+		idGen:       idGen,
 		// Standard 5-field cron expression — matches what cronJobs.cron()
 		// validates on the lib side. Robfig/cron's default parser
 		// expects the optional seconds field; we strip the seconds slot
@@ -82,8 +111,10 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 	rows, err := cr.db.QueryContext(ctx, `
 		SELECT name, project_id, module_name, export_name, args, schedule, last_enqueued_at
 		  FROM excalibase.excalibase_cron_jobs
-		 ORDER BY project_id, name
-	`)
+		 WHERE project_id = $1
+		 ORDER BY name
+		 LIMIT $2
+	`, cr.projectID, cr.maxJobs)
 	if err != nil {
 		return fmt.Errorf("list cron jobs: %w", err)
 	}
@@ -98,14 +129,24 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 		if err := rows.Scan(&name, &projectID, &moduleName, &exportName, &args, &scheduleRaw, &lastEnqueued); err != nil {
 			return fmt.Errorf("scan cron row: %w", err)
 		}
+		// Tenant-written columns: the row may only speak for the project
+		// whose database this is, and only through plain identifiers.
+		if projectID != cr.projectID {
+			cr.logger.Printf("scheduler: cron %s refused: names another project", name)
+			continue
+		}
+		if !validModuleName(moduleName) || !validExportName(exportName) {
+			cr.logger.Printf("scheduler: cron %s refused: module or export is not an identifier", name)
+			continue
+		}
 		var schedule struct {
-			Kind        string `json:"kind"`
-			Expression  string `json:"expression,omitempty"`
-			Hours       int    `json:"hours,omitempty"`
-			Minutes     int    `json:"minutes,omitempty"`
-			Seconds     int    `json:"seconds,omitempty"`
-			HourUTC     int    `json:"hourUTC,omitempty"`
-			MinuteUTC   int    `json:"minuteUTC,omitempty"`
+			Kind       string `json:"kind"`
+			Expression string `json:"expression,omitempty"`
+			Hours      int    `json:"hours,omitempty"`
+			Minutes    int    `json:"minutes,omitempty"`
+			Seconds    int    `json:"seconds,omitempty"`
+			HourUTC    int    `json:"hourUTC,omitempty"`
+			MinuteUTC  int    `json:"minuteUTC,omitempty"`
 		}
 		if err := json.Unmarshal(scheduleRaw, &schedule); err != nil {
 			cr.logger.Printf("scheduler: cron %s/%s bad schedule: %v", projectID, name, err)
@@ -116,6 +157,11 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 			cr.logger.Printf("scheduler: cron %s/%s unsupported schedule kind=%q", projectID, name, schedule.Kind)
 			continue
 		}
+		// A schedule finer than the platform minimum is clipped: the cadence
+		// a tenant asks for cannot set the platform's load.
+		if earliest := now.Add(cr.minInterval); nextDue.Before(earliest) {
+			nextDue = earliest
+		}
 		// Skip when we've already enqueued the upcoming due time. The
 		// runner tick interval is 60s, so this guards against the
 		// 1-minute window where the same nextDue would otherwise be
@@ -125,7 +171,7 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 		}
 		// Insert the row and bump last_enqueued_at in a single transaction
 		// so the enqueue + bookkeeping advance together.
-		if err := cr.enqueue(ctx, projectID, name, moduleName, exportName, args, nextDue); err != nil {
+		if err := cr.enqueue(ctx, cr.projectID, name, moduleName, exportName, args, nextDue); err != nil {
 			cr.logger.Printf("scheduler: cron %s/%s enqueue: %v", projectID, name, err)
 			continue
 		}
@@ -171,10 +217,10 @@ func (cr *CronRunner) enqueue(
 //
 // The 4 supported kinds mirror the lib's `cronJobs()` registry:
 //
-//   * cron       — 5-field expression, parsed by robfig/cron;
-//   * interval   — fixed period in (hours, minutes, seconds);
-//   * daily      — fires once a day at (hourUTC, minuteUTC);
-//   * hourly     — fires every hour at (minuteUTC).
+//   - cron       — 5-field expression, parsed by robfig/cron;
+//   - interval   — fixed period in (hours, minutes, seconds);
+//   - daily      — fires once a day at (hourUTC, minuteUTC);
+//   - hourly     — fires every hour at (minuteUTC).
 //
 // All times are UTC.
 func nextDueAt(s struct {

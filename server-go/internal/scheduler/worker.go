@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -13,14 +14,28 @@ import (
 
 // WorkerConfig wires the worker's collaborators.
 type WorkerConfig struct {
-	DB           *sql.DB
-	Invoker      Invoker
+	DB *sql.DB
+	// ProjectID is the project whose database this worker was handed by the
+	// sweep. It is the ONLY source of project identity: the tenant owns the
+	// rows, so a row's own project_id is data to be checked, never authority.
+	ProjectID string
+	Invoker   Invoker
+	// Functions is the platform's registry of deployed functions. A row may
+	// only run a module the platform itself deployed for this project.
+	Functions    FunctionRegistry
 	PollInterval time.Duration
 	// Batch caps the number of rows pulled per tick. Default 32.
 	Batch int
 	// MaxAttempts caps the number of times the worker re-runs a failing
 	// task before giving up and marking it `failed`. Default 5.
 	MaxAttempts int
+	// MaxArgsBytes caps the size of a row's args. Default matches the public
+	// invoke body limit.
+	MaxArgsBytes int
+	// MaxConcurrent caps in-flight invocations for this project (default 4);
+	// Global, when set, caps them platform-wide across every project.
+	MaxConcurrent int
+	Global        *Semaphore
 	// Logger is optional; defaults to the std log package.
 	Logger *log.Logger
 }
@@ -29,12 +44,17 @@ type WorkerConfig struct {
 // worker per replica; FOR UPDATE SKIP LOCKED keeps concurrent workers
 // from double-firing a row.
 type Worker struct {
-	db          *sql.DB
-	invoker     Invoker
-	poll        time.Duration
-	batch       int
-	maxAttempts int
-	logger      *log.Logger
+	db           *sql.DB
+	projectID    string
+	invoker      Invoker
+	functions    FunctionRegistry
+	poll         time.Duration
+	batch        int
+	maxAttempts  int
+	maxArgsBytes int
+	local        *Semaphore
+	global       *Semaphore
+	logger       *log.Logger
 }
 
 // NewWorker constructs a Worker. Sensible defaults apply if WorkerConfig
@@ -56,13 +76,26 @@ func NewWorker(c WorkerConfig) *Worker {
 	if maxAttempts <= 0 {
 		maxAttempts = 5
 	}
+	maxArgs := c.MaxArgsBytes
+	if maxArgs <= 0 {
+		maxArgs = DefaultMaxArgsBytes
+	}
+	concurrent := c.MaxConcurrent
+	if concurrent <= 0 {
+		concurrent = DefaultProjectConcurrency
+	}
 	return &Worker{
-		db:          c.DB,
-		invoker:     c.Invoker,
-		poll:        poll,
-		batch:       batch,
-		maxAttempts: maxAttempts,
-		logger:      logger,
+		db:           c.DB,
+		projectID:    c.ProjectID,
+		invoker:      c.Invoker,
+		functions:    c.Functions,
+		poll:         poll,
+		batch:        batch,
+		maxAttempts:  maxAttempts,
+		maxArgsBytes: maxArgs,
+		local:        NewSemaphore(concurrent),
+		global:       c.Global,
+		logger:       logger,
 	}
 }
 
@@ -97,14 +130,95 @@ func (w *Worker) Tick(ctx context.Context) error {
 	}
 	var wg sync.WaitGroup
 	for _, r := range rows {
+		if reason := w.reject(r); reason != "" {
+			w.markRefused(ctx, r, reason)
+			continue
+		}
+		if err := w.acquire(ctx); err != nil {
+			// Shutting down: leave the rest of the batch claimed; the
+			// reaper-free design means they are picked up again after the
+			// row's lock is released on restart.
+			break
+		}
 		wg.Add(1)
 		go func(t pendingRow) {
 			defer wg.Done()
+			defer w.release()
 			w.dispatch(ctx, t)
 		}(r)
 	}
 	wg.Wait()
 	return nil
+}
+
+// acquire takes a slot in the per-project pool and, when one is wired, the
+// platform-wide pool. Releasing happens in the reverse order.
+func (w *Worker) acquire(ctx context.Context) error {
+	if w.global != nil {
+		if err := w.global.Acquire(ctx); err != nil {
+			return err
+		}
+	}
+	if err := w.local.Acquire(ctx); err != nil {
+		if w.global != nil {
+			w.global.Release()
+		}
+		return err
+	}
+	return nil
+}
+
+func (w *Worker) release() {
+	w.local.Release()
+	if w.global != nil {
+		w.global.Release()
+	}
+}
+
+// reject decides whether a claimed row may run at all. Everything it looks
+// at was written by the tenant, so each check answers "is this row allowed
+// to select a security context?" rather than "is this row well-formed":
+//
+//   - project_id must be the project the sweep opened this database for;
+//   - module/export must be plain identifiers, and the module must name a
+//     function the platform deployed for THIS project;
+//   - args must be valid JSON within the platform's size limit.
+//
+// A non-empty return value is the platform's own reason text; the row is
+// closed with it and never dispatched.
+func (w *Worker) reject(r pendingRow) string {
+	if r.Invalid {
+		return rejectMalformedRow
+	}
+	if w.projectID == "" || r.ProjectID != w.projectID {
+		return rejectForeignProject
+	}
+	if !validModuleName(r.ModuleName) || !validExportName(r.ExportName) {
+		return rejectBadIdentifier
+	}
+	if len(r.Args) > w.maxArgsBytes || !json.Valid(r.Args) {
+		return rejectBadArgs
+	}
+	if w.functions == nil {
+		return rejectUnknownFunction
+	}
+	known, err := w.functions.HasFunction(w.projectID, r.ModuleName)
+	if err != nil || !known {
+		return rejectUnknownFunction
+	}
+	return ""
+}
+
+// markRefused closes a row the platform will not run. The recorded reason
+// is fixed platform text — tenant content is never echoed back.
+func (w *Worker) markRefused(ctx context.Context, r pendingRow, reason string) {
+	if _, err := w.db.ExecContext(ctx, `
+		UPDATE excalibase.excalibase_scheduled_functions
+		   SET status = 'failed', last_error = $2
+		 WHERE id = $1
+	`, r.ID, reason); err != nil {
+		w.logger.Printf("scheduler: refuse task in %s: %v", w.projectID, err)
+	}
 }
 
 // pendingRow mirrors the columns claimDue selects out of
@@ -116,6 +230,10 @@ type pendingRow struct {
 	ExportName string
 	Args       json.RawMessage
 	Attempts   int
+	// Invalid marks a row whose columns could not be read as the schema
+	// promises — a NULL or wrongly-typed value the tenant put there. Such a
+	// row is closed, and the sweep carries on with the rest of the batch.
+	Invalid bool
 }
 
 // claimDue atomically transitions up to `batch` pending rows whose
@@ -144,8 +262,8 @@ func (w *Worker) claimDue(ctx context.Context) ([]pendingRow, error) {
 
 	var out []pendingRow
 	for rs.Next() {
-		var r pendingRow
-		if err := rs.Scan(&r.ID, &r.ProjectID, &r.ModuleName, &r.ExportName, &r.Args, &r.Attempts); err != nil {
+		r, err := scanPendingRow(rs)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -178,7 +296,8 @@ func (w *Worker) claimDue(ctx context.Context) ([]pendingRow, error) {
 // either bumps `attempts` + reschedules with exponential backoff, or is
 // marked `failed` when MaxAttempts is reached.
 func (w *Worker) dispatch(ctx context.Context, r pendingRow) {
-	err := w.invoker.Invoke(ctx, r.ProjectID, r.ModuleName, r.ExportName, r.Args)
+	// The project id comes from the sweep, never from the row.
+	err := w.invoker.Invoke(ctx, w.projectID, r.ModuleName, r.ExportName, r.Args)
 	if err == nil {
 		if _, dbErr := w.db.ExecContext(ctx, `
 			UPDATE excalibase.excalibase_scheduled_functions
@@ -189,7 +308,11 @@ func (w *Worker) dispatch(ctx context.Context, r pendingRow) {
 		}
 		return
 	}
-	nextAttempts := r.Attempts + 1
+	if errors.Is(err, ErrNotServable) {
+		w.markSkipped(ctx, r, err)
+		return
+	}
+	nextAttempts := clampAttempts(r.Attempts, w.maxAttempts) + 1
 	if nextAttempts >= w.maxAttempts {
 		if _, dbErr := w.db.ExecContext(ctx, `
 			UPDATE excalibase.excalibase_scheduled_functions
@@ -210,6 +333,19 @@ func (w *Worker) dispatch(ctx context.Context, r pendingRow) {
 		 WHERE id = $1
 	`, r.ID, nextAttempts, err.Error(), int(backoff.Seconds())); dbErr != nil {
 		w.logger.Printf("scheduler: reschedule %s: %v", r.ID, dbErr)
+	}
+}
+
+// markSkipped closes a task whose project may not be served. The attempt
+// is not counted: nothing was dispatched, and the reason is recorded so an
+// operator reading the row sees why it never ran.
+func (w *Worker) markSkipped(ctx context.Context, r pendingRow, cause error) {
+	if _, dbErr := w.db.ExecContext(ctx, `
+		UPDATE excalibase.excalibase_scheduled_functions
+		   SET status = 'skipped', last_error = $2
+		 WHERE id = $1
+	`, r.ID, cause.Error()); dbErr != nil {
+		w.logger.Printf("scheduler: mark skipped %s: %v", r.ID, dbErr)
 	}
 }
 
