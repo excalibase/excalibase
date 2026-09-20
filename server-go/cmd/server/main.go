@@ -923,6 +923,14 @@ func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceSto
 	return h
 }
 
+// newAlertHandler wires the stores the platform-wide alert reads scope their
+// results with; without them the handler refuses rather than answer unscoped.
+func newAlertHandler(svc *service.AlertingService, instances storage.InstanceStore, orgs storage.OrgStore) *handler.AlertHandler {
+	h := handler.NewAlertHandler(svc)
+	h.SetScope(instances, orgs)
+	return h
+}
+
 // newSchemaHandler wires the instance store so the schema browser can
 // resolve a project's instance row.
 func newSchemaHandler(vc vaultclient.VaultClient, instances storage.InstanceStore) *handler.SchemaHandler {
@@ -1002,6 +1010,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		// The engine and the auth service fetch tenant credentials here; a
 		// project the platform must not serve must not answer (EXC-401).
 		vaultHandler.SetInstanceStore(store)
+		// A human caller's read is bound to the project the path names, which
+		// needs the membership lookup as well as the project row (EXC-418).
+		vaultHandler.SetOrgStore(sqlStore)
 	}
 
 	realtimeHandler := handler.NewRealtimeHandler(sqlStore, sqlStore, vc)
@@ -1025,7 +1036,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		auditHandler:       handler.NewAuditHandler(auditSvc),
 		snapshotHandler:    handler.NewSnapshotHandler(snapshotSvc),
 		migrationHandler:   handler.NewMigrationHandler(migrationSvc),
-		alertHandler:       handler.NewAlertHandler(alertSvc),
+		alertHandler:       newAlertHandler(alertSvc, store, sqlStore),
 		setupHandler:       handler.NewSetupHandler(setupSvc),
 		pgHandler:          handler.NewParameterGroupHandler(pgStore),
 		emailTokensHandler: emailTokensHandler,
@@ -1203,8 +1214,10 @@ func mountSimpleAuthRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 			d.alertHandler.ProjectRoutes(r)
 		})
 	})
+	// /status is unauthenticated (the installer polls it before any credential
+	// exists), so RequireAuth sits on the install route inside Routes instead
+	// of on the whole subtree.
 	r.Route("/api/setup", func(r chi.Router) {
-		r.Use(auth.RequireAuth)
 		d.setupHandler.Routes(r)
 	})
 	r.Route("/api/parameter-groups", func(r chi.Router) {
@@ -1409,7 +1422,9 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 // /internal/email/send relay used by excalibase-auth.
 func mountEmailRoutes(r *chi.Mux, d *handlerDeps) {
 	r.Route("/api/email", func(r chi.Router) {
-		d.emailTokensHandler.Routes(r)
+		// The send is keyed per user, not per project: it mails the caller's
+		// own address and names no project to key on.
+		d.emailTokensHandler.Routes(r, d.rlAuthed)
 	})
 	if d.internalEmail == nil {
 		return

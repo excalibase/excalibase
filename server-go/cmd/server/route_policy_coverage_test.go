@@ -2,7 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -21,6 +27,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/routepolicy"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 	"github.com/tus/tusd/v2/pkg/filestore"
@@ -75,10 +82,26 @@ var gateRefusalBodies = map[string]bool{
 	`{"error":"unauthorized","status":401}`:                  true,
 	`{"error":"auth required","status":401}`:                 true,
 	`{"error":"internal route not configured","status":503}`: true,
+	// The end-user function gate: no studio credential is an end-user JWT.
+	`{"error":"missing or invalid Authorization header","status":401}`: true,
 }
 
+// gateRefusalPrefixes are the refusals whose text names why the presented
+// credential was rejected. Only enforceJWT writes this prefix, and it writes
+// nothing else — the reason varies with the token, the refusal does not.
+var gateRefusalPrefixes = []string{`{"error":"invalid jwt: `}
+
 func isGateRefusal(body string) bool {
-	return gateRefusalBodies[strings.TrimSpace(body)]
+	body = strings.TrimSpace(body)
+	if gateRefusalBodies[body] {
+		return true
+	}
+	for _, prefix := range gateRefusalPrefixes {
+		if strings.HasPrefix(body, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // policyRouter builds the production router in cloud mode with every optional
@@ -101,13 +124,17 @@ func policyRouter(t *testing.T) (*policyHarness, []principal) {
 	platform.AddMember(matrixOrgA, policyBoundID, domain.OrgRoleAdmin)
 	platform.AddMember(matrixOrgB, policyOtherOrgID, domain.OrgRoleDeveloper)
 
+	functions := edgefn.NewFunctionStore(t.TempDir())
+	seedPolicyFunction(t, functions)
+
 	cfg := config.AppConfig{DeploymentMode: "cloud"}
-	deps := policyDeps(t, instances, platform)
+	deps := policyDeps(t, instances, platform, functions)
 	router := buildRouter(cfg, platform, instances, deps)
 	principals := policyPrincipals(platform)
 	reseed := func() {
 		policyPrincipals(platform)
 		seedProjects()
+		seedPolicyFunction(t, functions)
 	}
 	return &policyHarness{router: router, reseed: reseed}, principals
 }
@@ -185,7 +212,7 @@ func addCapability(platform *fakePlatform, out *[]principal, name, userID string
 // the storage, vault, resumable-upload, edge-function and mail-relay routes a
 // fully configured deployment mounts. Handlers whose internals the matrix does
 // not exercise stay on the shared matrixDeps wiring.
-func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlatform) *handlerDeps {
+func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlatform, functions *edgefn.FunctionStore) *handlerDeps {
 	t.Helper()
 	deps := matrixDeps(t, instances)
 	users, tokens := fakestore.NewUsers(), &policyTokenStore{Tokens: platform.Tokens}
@@ -196,7 +223,7 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 	deps.authHandler = handler.NewAuthHandler(users, tokens)
 	deps.svcAcctHandler = handler.NewServiceAccountHandler(users, tokens, nil)
 	deps.realtimeHandler = handler.NewRealtimeHandler(instances, platform.Orgs, nil)
-	deps.fnHandler = policyFunctionHandler(t, instances)
+	deps.fnHandler = policyFunctionHandler(t, instances, functions)
 	deps.storageHandler = policyStorageHandler(t, instances)
 	deps.vaultHandler = policyVaultHandler(t)
 	deps.internalEmail = handler.NewInternalEmailHandler(&countingSender{})
@@ -231,14 +258,74 @@ func offlineDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func policyFunctionHandler(t *testing.T, instances *fakestore.Instances) *handler.FunctionHandler {
+// seedPolicyFunction deploys the function the /functions/v1 rows are driven
+// against. concreteRequestPath renders {fnId} and the /http/* wildcard as "x",
+// so an httpAction called "x" is what makes those routes reach their JWT gate
+// instead of answering "function not found" — an empty store would never run
+// the gate the row asserts. It is re-seeded before every request because
+// DELETE /api/projects/{projectId}/functions/{fnId} is itself part of the
+// surface under test and removes it.
+func seedPolicyFunction(t *testing.T, store *edgefn.FunctionStore) {
 	t.Helper()
-	h := handler.NewFunctionHandler(edgefn.NewFunctionStore(t.TempDir()), nil, nil, instances, nil, "")
+	if err := store.Save(&edgefn.Function{
+		ProjectID: matrixProjectA,
+		ID:        "x",
+		Name:      "x",
+		// Kind is stamped from the bundle, not from this field, so the source
+		// has to declare it for the /http/* route to match.
+		Files:  []edgefn.File{{Path: "index.ts", Content: `export default { kind: "httpAction", handler: async () => new Response("ok") }`}},
+		Active: true,
+	}); err != nil {
+		t.Fatalf("seed function: %v", err)
+	}
+}
+
+func policyFunctionHandler(t *testing.T, instances *fakestore.Instances, store *edgefn.FunctionStore) *handler.FunctionHandler {
+	t.Helper()
+	h := handler.NewFunctionHandler(store, nil, nil, instances, nil, "")
+	// Without a signing key the JWT gate cannot tell a bad token from a broken
+	// deployment and answers 503; with one, every credential this matrix holds
+	// is rejected as what it is — not an end-user JWT.
+	h.SetVault(policySigningVault(t))
+	// The matrix fires every method of every principal at the two public
+	// function routes; the production per-project burst would answer 429.
+	h.SetRateLimit(1_000_000, 1_000_000)
 	// Mounting the runtime secret is what makes the /internal routes answer
 	// 401 to a caller without it rather than "not configured".
 	h.SetK8sClient(k8s.NewMockClient(), "runtime:test", "policy-runtime-secret")
 	return h
 }
+
+// policySigningVault serves one secret: the EC public key the function JWT
+// gate verifies end-user tokens against.
+func policySigningVault(t *testing.T) vaultclient.VaultClient {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal signing key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	return &signingKeyVault{pem: string(pemBytes)}
+}
+
+// signingKeyVault answers the one path the JWT gate reads and refuses the rest.
+type signingKeyVault struct {
+	vaultclient.VaultClient
+	pem string
+}
+
+func (v *signingKeyVault) Get(path string) (map[string]string, error) {
+	if path != "pki/signing/public" {
+		return nil, errors.New("secret not found")
+	}
+	return map[string]string{"key": v.pem}, nil
+}
+
+func (v *signingKeyVault) Sealed() bool { return false }
 
 func policyStorageHandler(t *testing.T, instances *fakestore.Instances) *handler.StorageHandler {
 	t.Helper()

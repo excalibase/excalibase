@@ -65,7 +65,11 @@ func Expect(row Row, method string, p Principal) Expectation {
 	case AuthPublic:
 		return Allow
 	case AuthFunctionJWT:
-		return Unasserted
+		// An end-user JWT is minted by the project's auth service, not by the
+		// platform: no studio session, PAT or service token is one. The route
+		// must refuse every principal this matrix holds, whatever authority
+		// that principal has over the project in the control plane.
+		return Deny401
 	case AuthRuntimeToken:
 		// None of these principals holds the project's derived runtime
 		// secret, so every one of them is refused as unauthenticated.
