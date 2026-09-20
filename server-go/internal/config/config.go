@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 )
 
@@ -121,6 +122,20 @@ type AppConfig struct {
 	// arithmetic on MinPlatformDBMaxConns and in OPERATOR.md.
 	PlatformDBMaxConns int
 
+	// Public database endpoints (EXC-410). DBEndpointDomain is the suffix a
+	// customer's endpoint name hangs off — they dial
+	// <projectId>.<DBEndpointDomain>:<port> — and empty means the platform
+	// offers no public endpoints at all, so the API refuses to enable one
+	// rather than handing out a name nothing resolves. DBEndpointPorts is
+	// the window ports are allocated randomly from,
+	// DBEndpointPortQuarantine how long a freed one is held back before it
+	// can be reissued, and DBEndpointSharedIPKey the MetalLB sharing key
+	// that puts every project's Service on the one public address.
+	DBEndpointDomain         string
+	DBEndpointPorts          domain.PortRange
+	DBEndpointPortQuarantine time.Duration
+	DBEndpointSharedIPKey    string
+
 	// AutoPauseEnabled runs the hourly idle-pause sweep (EXC-280): projects on
 	// tiers with autoPauseAfterDays > 0 are warned at N-1 idle days and paused
 	// at N. EXCALIBASE_AUTOPAUSE_ENABLED overrides; defaults on in cloud mode,
@@ -208,6 +223,11 @@ func Load() AppConfig {
 		RestoreReadyTimeout:     envDuration("EXCALIBASE_RESTORE_READY_TIMEOUT", defaultRestoreReadyTimeout),
 		PauseTimeout:            envDuration("EXCALIBASE_PAUSE_TIMEOUT", defaultPauseTimeout),
 		PlatformDBMaxConns:      envPlatformDBMaxConns(),
+
+		DBEndpointDomain:         envDBEndpointDomain("EXCALIBASE_DB_ENDPOINT_DOMAIN"),
+		DBEndpointPorts:          envDBEndpointPortRange("EXCALIBASE_DB_ENDPOINT_PORT_RANGE"),
+		DBEndpointPortQuarantine: envDuration("EXCALIBASE_DB_ENDPOINT_PORT_QUARANTINE", DefaultDBEndpointPortQuarantine),
+		DBEndpointSharedIPKey:    envOr("EXCALIBASE_DB_ENDPOINT_SHARED_IP_KEY", DefaultDBEndpointSharedIPKey),
 	}
 }
 
