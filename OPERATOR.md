@@ -852,13 +852,23 @@ replace `projects/{id}/credentials/<role>` (and the project row, for the
 owner). The pending entry is deleted last. So a pending entry you find in
 vault is an interrupted rotation, not corruption: **re-run the rotate call**
 and it finishes from wherever it stopped, reusing the recorded password
-rather than minting another. A rotation whose `ALTER USER` never landed
-rolls its own pending entry back, leaving the old password live.
+rather than minting another.
 
-On success the platform publishes a `credential` change on
-`policies.{projectId}.changed` so the engine and the auth service drop the
-credentials they cache instead of holding a dead password until their TTL
-expires.
+A pending entry is removed only on proof that the rotation changed nothing:
+the credential currently on file still opens the database. A failed
+`ALTER USER` is not that proof — a restarting pod, a paused project and a
+rejected statement are indistinguishable from here — so if neither password
+can be proved, the pending entry stays and the call reports it.
+
+Rotation takes the project's lifecycle lease, so it is refused with
+`409 project is busy` while a pause, resume, restore or teardown holds the
+project, and two rotations cannot run at once.
+
+As each role is promoted the platform publishes a `credential` change on
+`policies.{projectId}.changed`, naming the role in `resource`. That is the
+signal consumers need to drop a cached credential rather than wait out their
+TTL; wiring it up on the engine and the auth service is tracked separately,
+so for now assume those caches still converge on their own TTL.
 
 ## 7. Image upgrade
 
