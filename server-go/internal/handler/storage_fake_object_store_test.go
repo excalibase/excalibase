@@ -36,8 +36,10 @@ func newFakeObjectStoreForTest() *fakeObjectStoreForTest {
 	return &fakeObjectStoreForTest{objects: map[string]fakeStoredObjectForTest{}}
 }
 
-func fakeBlobKey(projectID, bucket, key string) string {
-	return projectID + "/" + bucket + "/" + key
+// fakeBlobKey mirrors the real key layout, so a prefix a test asserts on is
+// the prefix production code would build.
+func fakeBlobKey(projectID, bucketID, key string) string {
+	return "projects/" + projectID + "/buckets/" + bucketID + "/" + key
 }
 
 func (f *fakeObjectStoreForTest) put(projectID, bucketID, key string, size int64, mimeType string) {
@@ -121,10 +123,38 @@ func (f *fakeObjectStoreForTest) DeleteStagingObject(ctx context.Context, projec
 	return f.DeleteObject(ctx, projectID, bucketID, stagingKeyPrefix+uploadID)
 }
 
+// ListKeysWithPrefix is the one listing; the bucket- and staging-scoped
+// views build their prefixes and call through it.
+func (f *fakeObjectStoreForTest) ListKeysWithPrefix(_ context.Context, prefix string, limit int32) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []string{}
+	for k := range f.objects {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, k)
+			if limit > 0 && int32(len(out)) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// DeleteKey refuses a key outside the namespace the caller named.
+func (f *fakeObjectStoreForTest) DeleteKey(_ context.Context, prefix, key string) error {
+	if prefix == "" || !strings.HasPrefix(key, prefix) {
+		return errors.New("key outside the caller's prefix")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.objects, key)
+	return nil
+}
+
 func (f *fakeObjectStoreForTest) ListObjects(_ context.Context, projectID, bucketID string, limit int32) ([]storagesvc.StoredObject, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	prefix := projectID + "/" + bucketID + "/"
+	prefix := fakeBlobKey(projectID, bucketID, "")
 	out := []storagesvc.StoredObject{}
 	for k, obj := range f.objects {
 		if len(k) > len(prefix) && k[:len(prefix)] == prefix {

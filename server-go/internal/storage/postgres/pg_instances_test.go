@@ -3,11 +3,14 @@
 package postgres
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/storagesvc"
 )
 
 func instanceRow(projectID, orgID string) *domain.DatabaseInstance {
@@ -173,6 +176,54 @@ func seedProjectOwnedRows(t *testing.T, store *Store, projectID string) {
 	for _, stmt := range statements {
 		if _, err := store.DB().Exec(stmt, projectID); err != nil {
 			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+}
+
+// EXC-419 — the storage rows go with the project's record, in the same
+// transaction. Any left behind would name a project that no longer exists and
+// keep counting bytes nobody can reach, so this pins the cleanup rather than
+// trusting the table list to stay complete.
+func TestInstances_DeleteRemovesEveryStorageRow(t *testing.T) {
+	store := testStore(t)
+	const projectID = "proj-storagegone"
+	if err := store.Create(instanceRow(projectID, "org-storagegone")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := store.CreateBucket(context.Background(), &storagesvc.Bucket{
+		ID: "bkt_gone", ProjectID: projectID, Name: "files", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if err := store.CreateObject(context.Background(), &storagesvc.Object{
+		ID: "obj_gone", BucketID: "bkt_gone", Key: "a.bin", Size: 10, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateObject: %v", err)
+	}
+	if err := store.AddQuotaBytes(context.Background(), projectID, 10); err != nil {
+		t.Fatalf("AddQuotaBytes: %v", err)
+	}
+
+	if err := store.Delete(projectID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	counts := map[string]string{
+		"storage_buckets": `SELECT COUNT(*) FROM storage_buckets WHERE project_id = $1`,
+		"storage_quota":   `SELECT COUNT(*) FROM storage_quota WHERE project_id = $1`,
+		// Objects cascade from their bucket, so they are counted by it.
+		"storage_objects": `SELECT COUNT(*) FROM storage_objects
+		                    WHERE bucket_id IN (SELECT id FROM storage_buckets WHERE project_id = $1)
+		                       OR bucket_id = 'bkt_gone'`,
+	}
+	for table, query := range counts {
+		var left int
+		if err := store.DB().QueryRow(query, projectID).Scan(&left); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if left != 0 {
+			t.Errorf("%d %s row(s) survived the project's deletion", left, table)
 		}
 	}
 }

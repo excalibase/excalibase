@@ -937,6 +937,10 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	storageSvc := buildStorageService(cfg, sqlStore)
 	var storageHandler *handler.StorageHandler
 	if storageSvc != nil {
+		// A deleted project's files are cleared by the teardown itself:
+		// afterwards no row, bucket or endpoint names them. Left unwired when
+		// R2 is not configured, so the teardown carries no purge step.
+		provSvc.SetObjectPurger(storageSvc)
 		storageHandler = handler.NewStorageHandler(storageSvc, store)
 		// Phase 10: ctx.storage internal routes share the Deno runtime
 		// secret. Empty value disables the routes (all calls 401).

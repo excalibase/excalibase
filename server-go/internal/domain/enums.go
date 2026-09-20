@@ -133,6 +133,7 @@ const (
 	DeletionStepDeregisterPgDog = "DEREGISTER_PGDOG"
 	DeletionStepDeleteResources = "DELETE_DATABASE_RESOURCES"
 	DeletionStepDeleteBackups   = "DELETE_BACKUPS"
+	DeletionStepDeleteObjects   = "DELETE_PROJECT_OBJECTS"
 	DeletionStepDeleteVault     = "DELETE_VAULT_CREDENTIALS"
 	DeletionStepDeleteRecord    = "DELETE_PROJECT_RECORD"
 )

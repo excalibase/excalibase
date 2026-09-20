@@ -53,6 +53,10 @@ type ProvisioningService struct {
 	// Cloudflare R2 instead of the legacy floci/localstack mock.
 	backupDefaults *BackupDefaults
 
+	// objectPurger clears the project's own object-store prefix. Nil when
+	// storage is not configured: there is then no blob plane to clear, and
+	// the teardown carries no purge step at all.
+	objectPurger ProjectObjectPurger
 	// backupPurger deletes a project's backup objects on request at
 	// deprovision time. nil means confirmDeleteBackups is refused.
 	backupPurger *BackupPurger
@@ -597,6 +601,16 @@ type DeprovisionOptions struct {
 // DeleteBackupsOption builds the explicit form of the option.
 func DeleteBackupsOption(delete bool) *bool { return &delete }
 
+// ProjectObjectPurger clears everything a project stored in the object store.
+// storagesvc.Service implements it.
+type ProjectObjectPurger interface {
+	PurgeProjectObjects(ctx context.Context, projectID string) (int, error)
+}
+
+// SetObjectPurger wires the purge of a project's stored files. Leave it unset
+// when no object store is configured.
+func (s *ProvisioningService) SetObjectPurger(p ProjectObjectPurger) { s.objectPurger = p }
+
 // SetBackupPurger wires the object-store purge used when a deprovision asks
 // for its backups to be deleted.
 func (s *ProvisioningService) SetBackupPurger(p *BackupPurger) { s.backupPurger = p }
@@ -737,6 +751,13 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	if deleteBackups {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteBackups, s.purgeBackups})
 	}
+	// The project's stored files go whatever the caller decided about
+	// backups: keeping backups is a choice about backups. With no object
+	// store wired there is nothing to clear, so the step is absent rather
+	// than present and failing.
+	if s.objectPurger != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepDeleteObjects, s.purgeProjectObjects})
+	}
 	return append(steps,
 		deletionStep{domain.DeletionStepDeleteVault, s.deleteVaultCredentials},
 		deletionStep{domain.DeletionStepDeleteRecord, s.deleteProjectRecord},
@@ -798,6 +819,20 @@ func (s *ProvisioningService) purgeBackups(ctx context.Context, inst *domain.Dat
 		return err
 	}
 	log.Printf("backup purge for %s deleted %d objects", inst.ProjectID, deleted)
+	return nil
+}
+
+// purgeProjectObjects clears everything the project stored, before the
+// credentials and the record go. Afterwards nothing names those bytes: the
+// catalogue rows are deleted with the record, and no endpoint lists a project
+// the platform has no record of. Idempotent — a prefix that is already clear
+// purges nothing and succeeds, so a retried teardown resumes here.
+func (s *ProvisioningService) purgeProjectObjects(ctx context.Context, inst *domain.DatabaseInstance) error {
+	deleted, err := s.objectPurger.PurgeProjectObjects(ctx, inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	log.Printf("object purge for %s deleted %d objects", inst.ProjectID, deleted)
 	return nil
 }
 
