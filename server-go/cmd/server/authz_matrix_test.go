@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -120,9 +121,14 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		alertHandler:     handler.NewAlertHandler(service.NewAlertingService(dir)),
 		setupHandler:     handler.NewSetupHandler(service.NewOperatorSetupService(mock)),
 		pgHandler:        handler.NewParameterGroupHandler(&fakeParameterGroups{groups: map[string]*domain.ParameterGroup{}}),
-		rlUnauth:         custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
-		rlAuthed:         custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
-		rlDataPlane:      custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
+		// The app store talks to a database that never connects: the matrix
+		// asserts authorization outcomes, and a failed query is a 500, which
+		// is not a gate refusal.
+		appHandler:  handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances)),
+		rlUnauth:    custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
+		rlAuthed:    custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
+		rlMailSend:  custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),
@@ -332,7 +338,7 @@ var permissionRoutes = []permissionRoute{
 	{group: "tier config read", method: http.MethodGet, path: "/api/admin/tiers/"},
 	{group: "tier config update", method: http.MethodPut, path: "/api/admin/tiers/STANDARD"},
 	{group: "operator install", method: http.MethodPost, path: "/api/setup/install/postgres"},
-	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a"},
+	{group: "admin force drop", method: http.MethodDelete, path: "/api/admin/projects/proj-a", unrestrictedOnly: true},
 }
 
 // refusedBy reports whether the caller must be refused on the route.

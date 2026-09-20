@@ -57,7 +57,7 @@ func TestTableGrants_ListIsProjectScopedAndNeverNil(t *testing.T) {
 	store := NewTableGrants(testStore(t))
 	ctx := context.Background()
 
-	if err := store.UpsertGrant(ctx, fixtureGrant("g1", "proj-a", "public.orders", "*")); err != nil {
+	if err := store.UpsertGrant(ctx, fixtureGrant("g1", "proj-a", "public.orders", domain.GrantRoleAnon)); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -84,10 +84,10 @@ func TestTableGrants_UpsertCannotStealAnotherProjectsGrant(t *testing.T) {
 	store := NewTableGrants(testStore(t))
 	ctx := context.Background()
 
-	if err := store.UpsertGrant(ctx, fixtureGrant("g1", "proj-a", "public.orders", "*")); err != nil {
+	if err := store.UpsertGrant(ctx, fixtureGrant("g1", "proj-a", "public.orders", domain.GrantRoleAnon)); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	err := store.UpsertGrant(ctx, fixtureGrant("g1", "proj-evil", "public.secrets", "*"))
+	err := store.UpsertGrant(ctx, fixtureGrant("g1", "proj-evil", "public.secrets", domain.GrantRoleAnon))
 	if err == nil {
 		t.Fatal("expected cross-project upsert to be rejected")
 	}
@@ -105,7 +105,7 @@ func TestTableGrants_Delete(t *testing.T) {
 	store := NewTableGrants(testStore(t))
 	ctx := context.Background()
 
-	if err := store.UpsertGrant(ctx, fixtureGrant("g1", "proj-a", "public.orders", "*")); err != nil {
+	if err := store.UpsertGrant(ctx, fixtureGrant("g1", "proj-a", "public.orders", domain.GrantRoleAnon)); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	if err := store.DeleteGrant(ctx, "proj-a", "g1"); err != nil {
@@ -116,42 +116,40 @@ func TestTableGrants_Delete(t *testing.T) {
 	}
 }
 
-// A project that never opted in must read as unenforced — this is what keeps
-// tenants provisioned before EXC-370 working after the migration lands.
-func TestTableGrants_EnforcementDefaultsOffForExistingProjects(t *testing.T) {
+// EXC-400: the per-project opt-in table is gone. Its absence is the point —
+// while it existed, a project with no row was served unfiltered, so granting
+// one table changed nothing. Nothing may recreate it and no store method may
+// read it back.
+func TestTableGrants_PerProjectExposureSettingIsGone(t *testing.T) {
 	store := NewTableGrants(testStore(t))
-	enforced, err := store.IsExposureEnforced(context.Background(), "proj-never-touched")
+
+	var exists bool
+	err := store.s.db.QueryRowContext(context.Background(),
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
+		                WHERE table_name = 'project_exposure_settings')`).Scan(&exists)
 	if err != nil {
-		t.Fatalf("read enforcement: %v", err)
+		t.Fatalf("probe for the dropped table: %v", err)
 	}
-	if enforced {
-		t.Fatal("project with no exposure setting must read as NOT enforced")
+	if exists {
+		t.Fatal("project_exposure_settings still exists; the per-project exposure hole is still open")
 	}
 }
 
-func TestTableGrants_SetExposureEnforcedRoundTrips(t *testing.T) {
+// The schema itself refuses a role outside the end-user vocabulary, so a grant
+// naming 'admin' or '*' cannot reach storage even past the API validator.
+func TestTableGrants_StorageRefusesARoleOutsideTheEndUserRoles(t *testing.T) {
 	store := NewTableGrants(testStore(t))
 	ctx := context.Background()
 
-	if err := store.SetExposureEnforced(ctx, "proj-a", true); err != nil {
-		t.Fatalf("enable: %v", err)
+	for _, role := range []string{"*", "user", "admin", "service_role"} {
+		err := store.UpsertGrant(ctx, fixtureGrant("g-"+role, "proj-a", "public.orders", role))
+		if err == nil {
+			t.Errorf("role %q was stored; the schema must refuse it", role)
+		}
 	}
-	on, err := store.IsExposureEnforced(ctx, "proj-a")
-	if err != nil || !on {
-		t.Fatalf("want enforced=true, got %v err=%v", on, err)
-	}
-
-	if err := store.SetExposureEnforced(ctx, "proj-a", false); err != nil {
-		t.Fatalf("disable: %v", err)
-	}
-	off, err := store.IsExposureEnforced(ctx, "proj-a")
-	if err != nil || off {
-		t.Fatalf("want enforced=false, got %v err=%v", off, err)
-	}
-
-	// Enforcement is per project: toggling one must not touch another.
-	otherEnforced, err := store.IsExposureEnforced(ctx, "proj-b")
-	if err != nil || otherEnforced {
-		t.Fatalf("enforcement leaked to another project: %v err=%v", otherEnforced, err)
+	for _, role := range []string{domain.GrantRoleAnon, domain.GrantRoleAuthenticated} {
+		if err := store.UpsertGrant(ctx, fixtureGrant("ok-"+role, "proj-a", "public.orders", role)); err != nil {
+			t.Errorf("role %q must be storable: %v", role, err)
+		}
 	}
 }

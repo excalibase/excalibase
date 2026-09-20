@@ -17,15 +17,23 @@ type SetupHandler struct{ svc *service.OperatorSetupService }
 
 func NewSetupHandler(svc *service.OperatorSetupService) *SetupHandler { return &SetupHandler{svc: svc} }
 
-func (h *SetupHandler) Routes(r chi.Router) {
-	r.Get("/status", h.GetStatus)
+// Routes mounts the setup surface. statusLimits is the per-IP limiter the
+// anonymous status poll carries — the mount supplies it, because a route that
+// takes no credential has nothing else bounding how often it is called.
+func (h *SetupHandler) Routes(r chi.Router, statusLimits ...func(http.Handler) http.Handler) {
+	// The installer polls the status before any credential exists, so it takes
+	// no credential — and answers a single boolean: which operators are
+	// installed, and in what version, is cluster topology an anonymous caller
+	// has no business learning (EXC-418).
+	r.With(statusLimits...).Get("/status", h.GetStatus)
 	// Installing a DB operator applies a remote YAML cluster-wide — restrict to
 	// platform_admin (manage_setup), not any authenticated user (SEC-H5).
-	r.With(auth.RequirePermission(auth.PermManageSetup)).Post("/install/{databaseType}", h.Install)
+	r.With(auth.RequireAuth, auth.RequirePermission(auth.PermManageSetup)).
+		Post("/install/{databaseType}", h.Install)
 }
 
 func (h *SetupHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, h.svc.GetStatus(r.Context()))
+	writeJSON(w, domain.SetupStatusResponse{Complete: h.svc.SetupComplete(r.Context())})
 }
 
 func (h *SetupHandler) Install(w http.ResponseWriter, r *http.Request) {

@@ -118,7 +118,8 @@ func TestExpect(t *testing.T) {
 	}{
 		{"preflight is answered above routing", projectWrite, http.MethodOptions, anonymous, Unasserted},
 		{"public needs nothing", Row{Auth: AuthPublic}, http.MethodGet, anonymous, Allow},
-		{"end-user JWT is not minted here", Row{Auth: AuthFunctionJWT}, http.MethodPost, viewer, Unasserted},
+		{"no studio credential is an end-user JWT", Row{Auth: AuthFunctionJWT}, http.MethodPost, viewer, Deny401},
+		{"an anonymous caller holds no end-user JWT either", Row{Auth: AuthFunctionJWT}, http.MethodGet, anonymous, Deny401},
 		{"runtime secret is not held by any studio caller", Row{Auth: AuthRuntimeToken}, http.MethodPost, platformer, Deny401},
 		{"capability token is default-deny", projectWrite, http.MethodGet, capability, Deny403},
 		{"named capability is left to the service contract", withCapability, http.MethodGet, capability, Unasserted},

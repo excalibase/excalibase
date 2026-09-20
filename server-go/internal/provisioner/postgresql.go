@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -117,16 +118,20 @@ func (p *PostgreSQLProvisioner) provisionNamespace(ctx context.Context, req doma
 }
 
 func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, projectID, namespace string) error {
+	image, err := config.PostgresImage(req.PostgresVersion)
+	if err != nil {
+		return fmt.Errorf("resolve postgres image: %w", err)
+	}
 	opts := k8s.PostgreSQLClusterOpts{
-		ProjectID:       projectID,
-		Namespace:       namespace,
-		Tier:            tier,
-		StorageClass:    req.StorageClass,
-		PostgresVersion: req.PostgresVersion,
-		DatabaseName:    req.DatabaseName,
-		MasterUsername:  req.MasterUsername,
-		Parameters:      req.Parameters,
-		Tags:            req.Tags,
+		ProjectID:      projectID,
+		Namespace:      namespace,
+		Tier:           tier,
+		StorageClass:   req.StorageClass,
+		ImageName:      image,
+		DatabaseName:   req.DatabaseName,
+		MasterUsername: req.MasterUsername,
+		Parameters:     req.Parameters,
+		Tags:           req.Tags,
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{
@@ -305,16 +310,20 @@ func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.P
 func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, projectID, namespace string, pc *ProvisionContext) error {
 	pc.SetStage(domain.StageCRDDeployment)
 	pc.SetStep("apply CNPG cluster")
+	image, err := config.PostgresImage(req.PostgresVersion)
+	if err != nil {
+		return pc.Fail(fmt.Errorf("resolve postgres image: %w", err))
+	}
 	opts := k8s.PostgreSQLClusterOpts{
-		ProjectID:       projectID,
-		Namespace:       namespace,
-		Tier:            tier,
-		StorageClass:    req.StorageClass,
-		PostgresVersion: req.PostgresVersion,
-		DatabaseName:    req.DatabaseName,
-		MasterUsername:  req.MasterUsername,
-		Parameters:      req.Parameters,
-		Tags:            req.Tags,
+		ProjectID:      projectID,
+		Namespace:      namespace,
+		Tier:           tier,
+		StorageClass:   req.StorageClass,
+		ImageName:      image,
+		DatabaseName:   req.DatabaseName,
+		MasterUsername: req.MasterUsername,
+		Parameters:     req.Parameters,
+		Tags:           req.Tags,
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{
@@ -419,8 +428,34 @@ func (p *PostgreSQLProvisioner) Resume(ctx context.Context, namespace, projectID
 	return p.waitForClusterReady(ctx, namespace, projectID+clusterNameSuffix)
 }
 
+// setHibernation flips the hibernation annotation, re-reading the Cluster and
+// trying again when the API server refuses the write on a stale
+// resourceVersion. The operator writes the same object throughout a pause and
+// a resume, so losing that race is ordinary rather than exceptional — a
+// conflict says nothing about the cluster, only that our copy was old. A
+// conflict that never clears is still a failure: the annotation was not set,
+// so neither a pause nor a resume may be reported as started.
 func (p *PostgreSQLProvisioner) setHibernation(ctx context.Context, namespace, projectID, value string) error {
 	clusterName := projectID + clusterNameSuffix
+	var err error
+	for attempt := 0; attempt < hibernationFlipAttempts; attempt++ {
+		if err = p.flipHibernation(ctx, namespace, clusterName, value); err == nil {
+			return nil
+		}
+		if !apierrors.IsConflict(err) {
+			return err
+		}
+	}
+	return err
+}
+
+// hibernationFlipAttempts bounds the read-modify-write retries. Each attempt
+// reads the object afresh, so the only way to keep conflicting is an operator
+// writing faster than we can submit; a handful of tries separates that from
+// the ordinary single lost race.
+const hibernationFlipAttempts = 5
+
+func (p *PostgreSQLProvisioner) flipHibernation(ctx context.Context, namespace, clusterName, value string) error {
 	cluster, err := p.client.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, clusterName)
 	if err != nil {
 		return fmt.Errorf("get cluster for hibernation=%s: %w", value, err)

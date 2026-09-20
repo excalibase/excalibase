@@ -19,6 +19,7 @@ const (
 	OperationDeletion ProjectOperation = "deletion"
 	OperationPause    ProjectOperation = "pause"
 	OperationResume   ProjectOperation = "resume"
+	OperationRotation ProjectOperation = "rotation"
 )
 
 // ErrProjectOperationRunning is what every caller refused the project's

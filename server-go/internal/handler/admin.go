@@ -71,7 +71,11 @@ func NewAdminHandler(provSvc *service.ProvisioningService, store storage.Instanc
 func (h *AdminHandler) Routes(r chi.Router) {
 	r.With(auth.RequirePermission(auth.PermViewAny)).Get("/projects", h.ListAllProjects)
 	r.With(auth.RequirePermission(auth.PermViewAny)).Get("/logs", h.QueryLogs)
-	r.With(auth.RequirePermission(auth.PermDelete)).Delete("/projects/{projectId}", h.ForceDropProject)
+	// A force drop destroys a tenant this route never binds the caller to, so
+	// it refuses a narrowed PAT for the same reason the vault writes do: a
+	// credential scoped to one project must not reach platform-wide authority.
+	r.With(auth.RequirePermission(auth.PermDelete), auth.RequireUnrestrictedCredential).
+		Delete("/projects/{projectId}", h.ForceDropProject)
 	r.With(auth.RequirePermission(auth.PermManageOrgs)).Delete("/orgs/{orgId}", h.RevokeOrg)
 }
 
@@ -238,6 +242,11 @@ func (h *AdminHandler) deprovisionOrgProjects(ctx context.Context, orgID string)
 	}
 	dropped := 0
 	var failed []string
+	// One teardown at a time, deliberately: each holds a platform-database
+	// connection for its whole lifecycle lease (up to DELETION_WAIT_TIMEOUT),
+	// so a parallel cascade would scale that hold with the org's project
+	// count and starve the pool the rest of the control plane queries
+	// through. Sequential costs the cascade wall-clock time and nothing else.
 	for _, inst := range instances {
 		if inst.OrgID != orgID {
 			continue

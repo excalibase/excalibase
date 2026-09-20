@@ -19,12 +19,10 @@ const grantsPath = "/api/provision/" + contractProject + "/table-grants/"
 
 func TestEngineTokenReadsTableGrants(t *testing.T) {
 	router, who, grants := contractRouter(t)
-	if err := grants.SetExposureEnforced(context.Background(), contractProject, true); err != nil {
-		t.Fatalf("SetExposureEnforced: %v", err)
-	}
 	seeded := domain.TableGrant{
 		ID: "g-1", ProjectID: contractProject, Resource: "public.customer",
-		Operations: []domain.Operation{domain.OpSelect}, Role: "*", Enabled: true,
+		Operations: []domain.Operation{domain.OpSelect},
+		Role:       domain.GrantRoleAuthenticated, Enabled: true,
 	}
 	if err := grants.UpsertGrant(context.Background(), &seeded); err != nil {
 		t.Fatalf("UpsertGrant: %v", err)
@@ -40,7 +38,7 @@ func TestEngineTokenReadsTableGrants(t *testing.T) {
 		t.Fatalf("decode grant set: %v (body %s)", err, w.Body.String())
 	}
 	if !set.Enforced {
-		t.Fatal("enforced flag lost on the wire; the engine cannot tell unconfigured from deny-all")
+		t.Fatal("enforced flag lost on the wire; the engine cannot tell deny-all from unfiltered")
 	}
 	if len(set.Grants) != 1 || set.Grants[0].Resource != seeded.Resource {
 		t.Fatalf("grants = %+v, want the seeded %s", set.Grants, seeded.Resource)
@@ -67,7 +65,6 @@ func TestEngineTokenCannotWriteTableGrants(t *testing.T) {
 		{http.MethodPost, grantsPath},
 		{http.MethodPatch, grantsPath + "g-1"},
 		{http.MethodDelete, grantsPath + "g-1"},
-		{http.MethodPut, grantsPath + "enforcement"},
 	}
 	for _, write := range writes {
 		t.Run(write.method, func(t *testing.T) {

@@ -1,0 +1,61 @@
+# The catalogue of PostgreSQL majors this platform will provision.
+#
+# This file is the source of truth. Three things read it:
+#   * provisioning, which refuses any request naming a major that is not here;
+#   * the image build workflow (.github/workflows/postgres-image-publish.yml),
+#     which builds one image per entry from its baseImage;
+#   * `go run ./cmd/pgcatalog`, which renders the CNPG ClusterImageCatalog the
+#     clusters are pinned through, so that object cannot drift from this file.
+#
+# PostgreSQL 18 is deliberately absent. It is too new to put under a tenant's
+# data; adding it is a decision, not a version bump, and until it is made a
+# request naming 18 is refused exactly like a request naming 13.
+#
+# baseImage and image are both pinned by digest. A floating tag would let the
+# bits under a provisioned cluster change without anything in the platform
+# recording that it happened.
+#
+# An entry with no `image` has not been published yet. That is a real state,
+# not a default: provisioning refuses the major with an explicit error rather
+# than falling back to a tag or to another major. Publishing fills it in — the
+# workflow prints the digest it pushed and fails if it is not the one recorded
+# here, so the file cannot quietly fall behind the registry.
+#
+# documentdb records whether the image for that major carries the DocumentDB
+# extension, and every `true` here was proven, not assumed: the image was
+# built, started, and made to create a collection, insert a document and read
+# it back (TestDocumentDBWorksOnEveryMajorThatClaimsIt).
+#
+# We compile DocumentDB from source rather than install upstream's .debs —
+# upstream publishes deb12 packages only for the majors Microsoft chose to
+# package, and that is their packaging decision, not a limit of the extension.
+# Compiling lets 15 and 16 carry it too.
+#
+# 14 cannot. The extension calls MarkGUCPrefixReserved(), which PostgreSQL only
+# grew in 15, so pg_documentdb_core.c does not compile against the 14 headers:
+#
+#   src/pg_documentdb_core.c:61:9: error: implicit declaration of function
+#   'MarkGUCPrefixReserved' [-Werror=implicit-function-declaration]
+#
+# Making 14 work would mean carrying a patch against upstream, which we do not
+# do. 14 stays DocumentDB-less and provisioning refuses the combination.
+#
+# documentDBRef is the upstream git tag we compile. Because we own this choice
+# now, moving it is deliberate: a new tag changes the extension version every
+# DocumentDB project runs, so it is bumped with a rebuild and a re-proof, not
+# picked up automatically. v0.117-0 is the newest release at the time of
+# writing and installs extension version 0.117-0.
+documentDBRef: "v0.117-0"
+majors:
+  - major: "14"
+    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:5e16b178b239f3e6854ae86ce9190b151c0aa30f7f99014659ba24e1a6885084
+    documentdb: false
+  - major: "15"
+    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:6cca69b026405a5cc8593b6bf2a095010fad51ba338a368a3b5305c1c2c77cf6
+    documentdb: true
+  - major: "16"
+    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:da9f3d23790ccd052fb4f9620ab0c71eb1c3896c3a1189381c47e8b5f681768d
+    documentdb: true
+  - major: "17"
+    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:9f9286957d1030e0b5964804b557c635603a296d26c6212372f9d416ebb6f168
+    documentdb: true

@@ -69,6 +69,11 @@ type ProvisioningService struct {
 	// Optional; nil means no announcement is published.
 	projectEvents ProjectEventPublisher
 
+	// credVerifier proves a rotated password opens the project's database.
+	// Credential rotation refuses to run without it: an unverified password
+	// is not evidence of anything.
+	credVerifier RoleCredentialVerifier
+
 	// deletionClaimer grants one teardown at a time per project. Lazily set
 	// to the in-process claimer; multi-replica deployments wire the
 	// advisory-lock one so the claim holds across them.
@@ -318,6 +323,14 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, err
 	}
 
+	// The organisation's limit is answered before anything about the cluster
+	// is looked at, so a caller who has used up their projects is told that
+	// rather than about capacity they are not asking for. The slot is still
+	// taken atomically at insert time; this only fixes which refusal wins.
+	if err := s.EnsureOrgProjectCapacity(ctx, req.OrgID, req.Tier); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+
 	s.applyBackupDefaults(req, tier)
 
 	if err := s.enforceBackupTierPolicy(req, tier); err != nil {
@@ -335,6 +348,13 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, fmt.Errorf("unsupported database type: %s", req.DBType)
 	}
 
+	// Recorded, not recomputed later: the image a project runs is chosen from
+	// this major once, and restore has to land the data back on the same one.
+	major, err := canonicalPostgresMajor(req.PostgresVersion)
+	if err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+
 	now := &domain.FlexTime{Time: time.Now()}
 	namespace := fmt.Sprintf("%s-%s", req.OrgID, projectRef)
 	mode := s.defaultDeploymentMode
@@ -342,17 +362,18 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		mode = domain.ModeK8s
 	}
 	inst := &domain.DatabaseInstance{
-		ProjectID:      projectRef,
-		ProjectName:    req.ProjectName,
-		OrgID:          req.OrgID,
-		OwnerID:        req.OwnerID,
-		DBType:         req.DBType,
-		Tier:           req.Tier,
-		DeploymentMode: mode,
-		Namespace:      namespace,
-		Status:         "PROVISIONING",
-		CurrentStage:   domain.StageValidating,
-		CreatedAt:      now,
+		ProjectID:       projectRef,
+		ProjectName:     req.ProjectName,
+		OrgID:           req.OrgID,
+		OwnerID:         req.OwnerID,
+		DBType:          req.DBType,
+		Tier:            req.Tier,
+		DeploymentMode:  mode,
+		Namespace:       namespace,
+		PostgresVersion: major,
+		Status:          "PROVISIONING",
+		CurrentStage:    domain.StageValidating,
+		CreatedAt:       now,
 	}
 
 	if req.Backup != nil {

@@ -25,6 +25,13 @@ type ProvisioningRequest struct {
 	MasterUsername  string                   `json:"masterUsername,omitempty"`
 	ParameterGroup  string                   `json:"parameterGroupName,omitempty"`
 	AppPassword     string                   `json:"appPassword,omitempty"` // optional: password for excalibase_app role
+	// DocumentDB asks for a project whose image carries the DocumentDB
+	// extension. It is a create-time choice and only a create-time choice: the
+	// image a cluster runs is fixed when the cluster is provisioned, so a
+	// project cannot be turned into a DocumentDB project afterwards. Only
+	// majors the catalogue marks as DocumentDB-capable accept it; creating the
+	// extension in the database is EXC-409.
+	DocumentDB bool `json:"documentDb,omitempty"`
 }
 
 type BackupSettings struct {
@@ -403,10 +410,20 @@ type OperatorInstallRequest struct {
 	DBType DatabaseType `json:"databaseType"`
 }
 
-type SetupStatusResponse struct {
+// OperatorStatus is the control plane's internal view of which database
+// operators the cluster runs. It never leaves the process: the wire shape is
+// SetupStatusResponse.
+type OperatorStatus struct {
 	PostgreSQL bool `json:"postgresql"`
 	MySQL      bool `json:"mysql"`
 	MongoDB    bool `json:"mongodb"`
+}
+
+// SetupStatusResponse is what the unauthenticated GET /api/setup/status
+// answers: one bit, because the installer polls it before any credential
+// exists and an anonymous caller must learn nothing else about the cluster.
+type SetupStatusResponse struct {
+	Complete bool `json:"complete"`
 }
 
 // --- Cost ---

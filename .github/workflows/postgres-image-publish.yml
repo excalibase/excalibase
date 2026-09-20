@@ -1,0 +1,178 @@
+name: Publish Postgres images
+
+# Builds one ghcr.io/excalibase/postgresql image per supported major, proves it
+# works, and only then publishes it by digest. The proof runs against the built
+# artefact before the push, so an image that cannot install the allowlist or
+# round-trip a DocumentDB document never reaches the registry. CNPG clusters are pinned to those digests through
+# k8s/postgres-image-catalog.yaml, so nothing here may publish a floating tag
+# that a running cluster could drift onto.
+#
+# The majors, their digest-pinned base images and the pinned DocumentDB tag all
+# come from server-go/internal/config/postgres_catalog.yaml — the same file
+# provisioning validates against — so the build matrix cannot disagree with
+# what the platform will accept.
+
+on:
+  push:
+    tags:
+      - 'postgres-image-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  matrix:
+    name: Read catalogue
+    runs-on: ubuntu-latest
+    outputs:
+      majors: ${{ steps.read.outputs.majors }}
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: server-go/go.sum
+
+      # Rendered by the same package provisioning validates against, so the
+      # build matrix cannot list a major the platform would refuse, or miss one
+      # it accepts.
+      - name: Build the matrix from the catalogue
+        id: read
+        run: echo "majors=$(go run ./cmd/pgcatalog -matrix)" >> "$GITHUB_OUTPUT"
+
+  build-push:
+    name: Postgres ${{ matrix.entry.major }}
+    runs-on: ubuntu-latest
+    needs: [matrix]
+    strategy:
+      # Serial: four Postgres images at once is a lot of registry traffic for
+      # no gain, and a failure part-way is easier to read one major at a time.
+      # Each DocumentDB-carrying major also compiles the extension from source,
+      # which is not something to run four times in parallel on one runner.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJSON(needs.matrix.outputs.majors) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: server-go/go.sum
+
+      - name: GHCR login
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Built into the local daemon first, and not pushed. Nothing reaches the
+      # registry until the checks below have run against this exact image.
+      - name: Build the candidate image
+        uses: docker/build-push-action@v6
+        with:
+          context: charts/excalibase-postgres
+          push: false
+          load: true
+          build-args: |
+            BASE_IMAGE=${{ matrix.entry.base }}
+            PG_MAJOR=${{ matrix.entry.major }}
+            DOCUMENTDB_REF=${{ matrix.entry.documentdbRef }}
+          tags: excalibase-postgresql-candidate:${{ matrix.entry.major }}
+          platforms: linux/amd64
+
+      # The same tests a developer runs locally, pointed at the candidate
+      # rather than building their own copy: every allowlisted extension
+      # installs, and on a DocumentDB major a document round-trips through it.
+      # They are opt-in (EXCALIBASE_POSTGRES_IMAGE_TESTS) so the ordinary
+      # integration job never builds images; here the image already exists.
+      - name: Verify the candidate before publishing it
+        working-directory: server-go
+        env:
+          EXCALIBASE_POSTGRES_IMAGE_TESTS: '1'
+          EXCALIBASE_POSTGRES_IMAGE_MAJOR: ${{ matrix.entry.major }}
+          EXCALIBASE_POSTGRES_IMAGE_REF: excalibase-postgresql-candidate:${{ matrix.entry.major }}
+        run: go test -tags integration -count=1 -p 1 -timeout 30m ./internal/schema/
+
+      # Same context, same build args: buildx serves this from the cache of the
+      # build just verified, so what is pushed is the artefact the tests ran
+      # against.
+      - name: Publish the verified image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: charts/excalibase-postgres
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ matrix.entry.base }}
+            PG_MAJOR=${{ matrix.entry.major }}
+            DOCUMENTDB_REF=${{ matrix.entry.documentdbRef }}
+          tags: ghcr.io/excalibase/postgresql:${{ matrix.entry.major }}
+          platforms: linux/amd64
+
+      - name: Record the digest to pin
+        run: |
+          {
+            echo "### Postgres ${{ matrix.entry.major }}"
+            echo ''
+            echo 'Pin this in server-go/internal/config/postgres_catalog.yaml:'
+            echo ''
+            echo '```yaml'
+            echo '    image: ghcr.io/excalibase/postgresql@${{ steps.build.outputs.digest }}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if the catalogue does not already pin this digest
+        run: |
+          # The tag above exists so a human can find the image; nothing
+          # deploys from it. If the catalogue does not carry the digest that
+          # was just pushed, the platform and the registry disagree and that
+          # must be loud, not silent.
+          pinned='image: ghcr.io/excalibase/postgresql@${{ steps.build.outputs.digest }}'
+          if ! grep -qF "$pinned" server-go/internal/config/postgres_catalog.yaml; then
+            echo "::error::postgres_catalog.yaml does not pin the digest just pushed for major ${{ matrix.entry.major }}."
+            echo "::error::Add the line from the job summary to the major ${{ matrix.entry.major }} entry and re-run."
+            exit 1
+          fi
+
+      - name: Snyk container scan
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: ghcr.io/excalibase/postgresql@${{ steps.build.outputs.digest }}
+          args: --severity-threshold=high
+        continue-on-error: false
+
+  cluster-image-catalog:
+    name: Render ClusterImageCatalog
+    runs-on: ubuntu-latest
+    needs: [build-push]
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: server-go/go.sum
+
+      # Generated from the catalogue rather than committed beside it, so the
+      # CNPG object and the Go code cannot drift apart.
+      - name: Render
+        run: go run ./cmd/pgcatalog > postgres-image-catalog.yaml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: postgres-image-catalog
+          path: server-go/postgres-image-catalog.yaml

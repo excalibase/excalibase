@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
-	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -81,6 +81,13 @@ func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, newS
 
 // UpgradeVersion patches the CNPG Cluster CRD imageName to trigger a rolling restart.
 func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, newVersion string) error {
+	// Resolve before touching the cluster: an unsupported major must fail
+	// without having patched anything.
+	image, err := config.PostgresImage(newVersion)
+	if err != nil {
+		return err
+	}
+
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return err
@@ -93,7 +100,7 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 	}
 
 	spec := existing.Object["spec"].(map[string]interface{})
-	spec["imageName"] = fmt.Sprintf("ghcr.io/cloudnative-pg/postgresql:%s", newVersion)
+	spec["imageName"] = image
 
 	return s.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, existing)
 }
@@ -234,35 +241,6 @@ func urlEscape(s string) string {
 	return url.QueryEscape(s)
 }
 
-// RotateCredentials generates a new password and updates the database.
-func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
-	inst, err := s.GetInstance(projectID)
-	if err != nil {
-		return nil, err
-	}
-
-	newPassword := generatePassword(48)
-	pod := projectID + "-postgres-1"
-	sql := fmt.Sprintf("ALTER USER %s PASSWORD %s", schema.QuoteIdent(inst.Username), schema.QuoteLiteral(newPassword))
-
-	_, err = s.k8sClient.ExecInPod(ctx, inst.Namespace, pod, "postgres",
-		[]string{"psql", "-U", "postgres", "-c", sql})
-	if err != nil {
-		return nil, fmt.Errorf("rotate password: %w", err)
-	}
-
-	// The database already has the new password. Failing to store it leaves
-	// the platform holding a credential that no longer opens the database,
-	// so the caller has to hear about it — and a refusal means a teardown
-	// owns the project and this rotation touched a database on its way out.
-	inst.Password = newPassword
-	if err := s.store.Update(inst); err != nil {
-		return nil, fmt.Errorf("persist rotated credentials: %w", err)
-	}
-
-	return s.GetCredentials(projectID)
-}
-
 // SetMaintenanceWindow sets the maintenance window config.
 func (s *ProvisioningService) SetMaintenanceWindow(projectID string, cfg domain.MaintenanceWindowConfig) error {
 	inst, err := s.GetInstance(projectID)
@@ -387,12 +365,6 @@ func generatePassword(length int) string {
 // both DNS-style slugs and UUIDs (which include hyphens) pass through.
 var orgIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
-// supportedPostgresVersions lists versions CNPG will accept. Keeping this explicit
-// catches typos early (e.g. "9.2", "15.4") before we spend time on K8s operations.
-var supportedPostgresVersions = map[string]bool{
-	"14": true, "15": true, "16": true, "17": true,
-}
-
 // validateProvisioningRequest performs cheap preflight checks that catch bad input
 // before any side effect. Fails return plain errors (not StageError) because no
 // project record exists yet — callers surface them as 400 Bad Request.
@@ -416,8 +388,19 @@ func validateProvisioningRequest(req domain.ProvisioningRequest) error {
 		return fmt.Errorf("org id must contain only lowercase letters, digits, hyphen, or underscore")
 	}
 
-	if req.PostgresVersion != "" && !supportedPostgresVersions[req.PostgresVersion] {
-		return fmt.Errorf("postgres version %q is not supported (allowed: 14, 15, 16, 17)", req.PostgresVersion)
+	// EXC-408: the major is required and is checked against the image
+	// catalogue. There is deliberately no default: silently provisioning on a
+	// major the caller did not ask for is how a project ends up on bits nobody
+	// chose.
+	version := strings.TrimSpace(req.PostgresVersion)
+	if version == "" {
+		return fmt.Errorf("postgres version is required (supported: %s)", config.SupportedPostgresMajorsMessage())
+	}
+	if _, ok := config.LookupPostgresMajor(version); !ok {
+		return fmt.Errorf("postgres version %q is not supported (supported: %s)", version, config.SupportedPostgresMajorsMessage())
+	}
+	if req.DocumentDB && !config.DocumentDBSupported(version) {
+		return fmt.Errorf("DocumentDB is not available on postgres %s (available on: %s)", version, config.DocumentDBMajorsMessage())
 	}
 
 	if req.Backup != nil && req.Backup.Enabled {
@@ -429,6 +412,18 @@ func validateProvisioningRequest(req domain.ProvisioningRequest) error {
 		}
 	}
 	return nil
+}
+
+// canonicalPostgresMajor returns the catalogue's spelling of the major a
+// validated request names. What is stored has to be the catalogue's exact
+// value, not whatever the caller typed, because every later resolution — the
+// restore image above all — is an exact lookup against the catalogue.
+func canonicalPostgresMajor(version string) (string, error) {
+	entry, ok := config.LookupPostgresMajor(version)
+	if !ok {
+		return "", fmt.Errorf("postgres version %q is not supported (supported: %s)", version, config.SupportedPostgresMajorsMessage())
+	}
+	return entry.Major, nil
 }
 
 // allocateProjectID returns a fresh project id no registered project holds.

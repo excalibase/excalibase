@@ -372,6 +372,17 @@ func (c *Client) CreateSecret(ctx context.Context, namespace, name string, data 
 
 // ExecInPod runs a command inside a pod and returns stdout.
 func (c *Client) ExecInPod(ctx context.Context, namespace, pod, container string, cmd []string) (string, error) {
+	return c.exec(ctx, namespace, pod, container, cmd, "")
+}
+
+// ExecInPodStdin runs a command inside a pod with stdin attached. Input given
+// here stays in the request body; anything passed in cmd becomes a URL query
+// parameter and is recorded in the API server's audit log.
+func (c *Client) ExecInPodStdin(ctx context.Context, namespace, pod, container string, cmd []string, stdin string) (string, error) {
+	return c.exec(ctx, namespace, pod, container, cmd, stdin)
+}
+
+func (c *Client) exec(ctx context.Context, namespace, pod, container string, cmd []string, stdin string) (string, error) {
 	req := c.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(pod).
@@ -380,6 +391,9 @@ func (c *Client) ExecInPod(ctx context.Context, namespace, pod, container string
 		Param("container", container).
 		Param("stdout", "true").
 		Param("stderr", "true")
+	if stdin != "" {
+		req = req.Param("stdin", "true")
+	}
 
 	for _, c := range cmd {
 		req = req.Param("command", c)
@@ -391,10 +405,14 @@ func (c *Client) ExecInPod(ctx context.Context, namespace, pod, container string
 	}
 
 	var stdout, stderr bytes.Buffer
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	opts := remotecommand.StreamOptions{
 		Stdout: &stdout,
 		Stderr: &stderr,
-	})
+	}
+	if stdin != "" {
+		opts.Stdin = strings.NewReader(stdin)
+	}
+	err = exec.StreamWithContext(ctx, opts)
 	if err != nil {
 		return "", fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
 	}

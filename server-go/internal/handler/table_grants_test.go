@@ -23,12 +23,11 @@ import (
 type fakeGrantStore struct {
 	mu       sync.Mutex
 	grants   map[string]domain.TableGrant // keyed by id
-	enforced map[string]bool
 	failWith error
 }
 
 func newFakeGrantStore() *fakeGrantStore {
-	return &fakeGrantStore{grants: map[string]domain.TableGrant{}, enforced: map[string]bool{}}
+	return &fakeGrantStore{grants: map[string]domain.TableGrant{}}
 }
 
 func (f *fakeGrantStore) ListGrants(_ context.Context, projectID string) ([]domain.TableGrant, error) {
@@ -87,25 +86,6 @@ func (f *fakeGrantStore) DeleteGrant(_ context.Context, projectID, id string) er
 	return nil
 }
 
-func (f *fakeGrantStore) IsExposureEnforced(_ context.Context, projectID string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failWith != nil {
-		return false, f.failWith
-	}
-	return f.enforced[projectID], nil
-}
-
-func (f *fakeGrantStore) SetExposureEnforced(_ context.Context, projectID string, enforced bool) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failWith != nil {
-		return f.failWith
-	}
-	f.enforced[projectID] = enforced
-	return nil
-}
-
 // grantBus records published change events without dialing NATS.
 type grantBus struct {
 	mu     sync.Mutex
@@ -128,9 +108,16 @@ func (b *grantBus) snapshot() []domain.PolicyChangeEvent {
 
 func setupGrantRouter(t *testing.T) (chi.Router, *fakeGrantStore, *grantBus) {
 	t.Helper()
+	return setupGrantRouterEnforcing(t, true)
+}
+
+// setupGrantRouterEnforcing builds the router with the platform-wide exposure
+// kill switch in a chosen position. Nothing in the HTTP surface can change it.
+func setupGrantRouterEnforcing(t *testing.T, enforced bool) (chi.Router, *fakeGrantStore, *grantBus) {
+	t.Helper()
 	store := newFakeGrantStore()
 	bus := &grantBus{}
-	h := NewTableGrantHandler(store)
+	h := NewTableGrantHandler(store, enforced)
 	h.SetPublisher(bus)
 
 	r := chi.NewRouter()
@@ -179,47 +166,126 @@ func decodeGrantSet(t *testing.T, w *httptest.ResponseRecorder) domain.TableGran
 	return set
 }
 
-// The reason this feature carries an explicit flag: a client MUST be able to
-// tell an unconfigured project (do not enforce) from a configured project with
-// nothing granted (deny everything). Both have zero grants on the wire.
-func TestTableGrants_NotEnforcedIsDistinguishableFromEnforcedWithZeroGrants(t *testing.T) {
-	r, store, _ := setupGrantRouter(t)
+// EXC-400: enforcement is ON for every project. There is no per-project
+// opt-in and no row whose absence means "serve everything" — a project the
+// operator has never touched is served enforced with zero grants, which means
+// deny everything. The flag stays on the wire and is never inferred from the
+// grant list, so the engine reads a decision rather than guessing at one.
+func TestTableGrants_EveryProjectIsEnforcedWithoutOptIn(t *testing.T) {
+	r, _, _ := setupGrantRouter(t)
 
-	// State 1 — exposure never configured for this project.
 	w := doGrantRequest(t, r, "GET", "/api/provision/proj-untouched/table-grants/", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
 	}
-	unconfigured := decodeGrantSet(t, w)
-	if unconfigured.Enforced {
-		t.Error("project with no exposure setting must report enforced=false")
+	set := decodeGrantSet(t, w)
+	if !set.Enforced {
+		t.Error("a project with no exposure configuration must still be enforced")
 	}
-	if len(unconfigured.Grants) != 0 {
-		t.Errorf("expected zero grants, got %+v", unconfigured.Grants)
+	if len(set.Grants) != 0 {
+		t.Errorf("expected zero grants, got %+v", set.Grants)
 	}
-	if !strings.Contains(w.Body.String(), `"enforced":false`) {
-		t.Errorf("response must carry an explicit enforced flag: %s", w.Body.String())
+	if !strings.Contains(w.Body.String(), `"enforced":true`) {
+		t.Errorf("response must carry the enforced flag explicitly: %s", w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), `"grants":null`) {
 		t.Errorf("grants must serialize as [], never null: %s", w.Body.String())
 	}
+}
 
-	// State 2 — exposure enforced, nothing granted: deny everything.
-	if err := store.SetExposureEnforced(context.Background(), "proj-locked", true); err != nil {
-		t.Fatalf("seed enforcement: %v", err)
+// The one way to turn exposure off is the platform-wide setting, and it turns
+// it off for every project at once.
+func TestTableGrants_PlatformKillSwitchOffReportsNotEnforced(t *testing.T) {
+	r, _, _ := setupGrantRouterEnforcing(t, false)
+
+	w := doGrantRequest(t, r, "GET", "/api/provision/proj-a/table-grants/", nil)
+	set := decodeGrantSet(t, w)
+	if set.Enforced {
+		t.Error("with the platform kill switch off, no project may report enforced=true")
 	}
-	w2 := doGrantRequest(t, r, "GET", "/api/provision/proj-locked/table-grants/", nil)
-	locked := decodeGrantSet(t, w2)
-	if !locked.Enforced {
-		t.Error("enforced project must report enforced=true")
+	if !strings.Contains(w.Body.String(), `"enforced":false`) {
+		t.Errorf("response must carry the enforced flag explicitly: %s", w.Body.String())
 	}
-	if len(locked.Grants) != 0 {
-		t.Errorf("expected zero grants, got %+v", locked.Grants)
+}
+
+// The kill switch is platform-wide and belongs to the operator's environment.
+// No HTTP route may reach it — a route would put the whole installation's
+// exposure filter behind one authenticated call.
+func TestTableGrants_NoHTTPRouteCanSetEnforcement(t *testing.T) {
+	r, _, bus := setupGrantRouter(t)
+
+	for _, method := range []string{"PUT", "POST", "PATCH", "DELETE"} {
+		w := doGrantRequest(t, r, method, "/api/provision/proj-a/table-grants/enforcement",
+			map[string]any{"enforced": false})
+		if w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /enforcement = %d, want the route to be gone: %s",
+				method, w.Code, w.Body.String())
+		}
+	}
+	if len(bus.snapshot()) != 0 {
+		t.Error("a refused enforcement call must publish nothing")
+	}
+	// And after all that, enforcement is exactly where it started.
+	if !decodeGrantSet(t, doGrantRequest(t, r, "GET", "/api/provision/proj-a/table-grants/", nil)).Enforced {
+		t.Fatal("enforcement was reachable over HTTP")
+	}
+}
+
+// Grants name end users: anon (not signed in) and authenticated (signed in).
+// Any other role is refused with a message that says where it belongs —
+// arbitrary roles are an RLS policy concern, not an exposure one.
+func TestTableGrants_Create_RefusesAnyRoleButAnonAndAuthenticated(t *testing.T) {
+	r, store, bus := setupGrantRouter(t)
+
+	for _, role := range []string{"user", "*", "admin", "service_role", "Anon ", "", "postgres"} {
+		body := validGrant()
+		body["role"] = role
+		w := doGrantRequest(t, r, "POST", "/api/provision/proj-a/table-grants/", body)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("role %q = %d, want 400: %s", role, w.Code, w.Body.String())
+			continue
+		}
+		if !strings.Contains(w.Body.String(), "anon") || !strings.Contains(w.Body.String(), "authenticated") {
+			t.Errorf("role %q: message must name the two accepted roles, got %s", role, w.Body.String())
+		}
+	}
+	if len(store.grants) != 0 {
+		t.Errorf("a refused grant must not be stored: %+v", store.grants)
+	}
+	if len(bus.snapshot()) != 0 {
+		t.Error("a refused grant must publish nothing")
+	}
+}
+
+func TestTableGrants_Create_AcceptsTheTwoEndUserRoles(t *testing.T) {
+	r, _, _ := setupGrantRouter(t)
+
+	for _, role := range []string{domain.GrantRoleAnon, domain.GrantRoleAuthenticated} {
+		body := validGrant()
+		body["role"] = role
+		if w := doGrantRequest(t, r, "POST", "/api/provision/proj-a/table-grants/", body); w.Code != http.StatusCreated {
+			t.Errorf("role %q = %d, want 201: %s", role, w.Code, w.Body.String())
+		}
+	}
+}
+
+// A PATCH must not be a way round the role rule the POST enforces.
+func TestTableGrants_Update_RefusesARoleOutsideTheEndUserRoles(t *testing.T) {
+	r, store, _ := setupGrantRouter(t)
+
+	created := doGrantRequest(t, r, "POST", "/api/provision/proj-a/table-grants/", validGrant())
+	var grant domain.TableGrant
+	if err := json.Unmarshal(created.Body.Bytes(), &grant); err != nil {
+		t.Fatalf("decode created grant: %v", err)
 	}
 
-	// The two states must not be byte-identical — that ambiguity is the bug.
-	if w.Body.String() == w2.Body.String() {
-		t.Fatalf("not-enforced and enforced-with-zero-grants are indistinguishable: %s", w.Body.String())
+	w := doGrantRequest(t, r, "PATCH", "/api/provision/proj-a/table-grants/"+grant.ID,
+		map[string]any{"role": "service_role"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("patching the role to service_role = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if store.grants[grant.ID].Role != domain.GrantRoleAuthenticated {
+		t.Fatalf("stored role changed to %q despite the refusal", store.grants[grant.ID].Role)
 	}
 }
 
@@ -393,48 +459,6 @@ func TestTableGrants_CrossProjectGrantIsNotReachable(t *testing.T) {
 	}
 }
 
-func TestTableGrants_ToggleEnforcementPersistsAndEmitsEvent(t *testing.T) {
-	r, _, bus := setupGrantRouter(t)
-
-	w := doGrantRequest(t, r, "PUT", "/api/provision/proj-a/table-grants/enforcement",
-		map[string]any{"enforced": true})
-	if w.Code != http.StatusOK {
-		t.Fatalf("toggle: %d %s", w.Code, w.Body.String())
-	}
-	set := decodeGrantSet(t, w)
-	if !set.Enforced {
-		t.Error("toggle response should report the new state")
-	}
-
-	after := decodeGrantSet(t, doGrantRequest(t, r, "GET", "/api/provision/proj-a/table-grants/", nil))
-	if !after.Enforced {
-		t.Error("enforcement did not persist")
-	}
-
-	events := bus.snapshot()
-	if len(events) != 1 || events[0].Kind != domain.ExposureChangeKind || events[0].Op != "update" {
-		t.Fatalf("expected one exposure event, got %+v", events)
-	}
-
-	off := doGrantRequest(t, r, "PUT", "/api/provision/proj-a/table-grants/enforcement",
-		map[string]any{"enforced": false})
-	if off.Code != http.StatusOK || decodeGrantSet(t, off).Enforced {
-		t.Fatalf("disable: %d %s", off.Code, off.Body.String())
-	}
-}
-
-func TestTableGrants_ToggleEnforcementRejectsMissingField(t *testing.T) {
-	r, _, bus := setupGrantRouter(t)
-	w := doGrantRequest(t, r, "PUT", "/api/provision/proj-a/table-grants/enforcement",
-		map[string]any{})
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400 when enforced is omitted, got %d body=%s", w.Code, w.Body.String())
-	}
-	if len(bus.snapshot()) != 0 {
-		t.Error("rejected toggle must not publish")
-	}
-}
-
 func TestTableGrants_StoreFailureIsSanitized(t *testing.T) {
 	r, store, _ := setupGrantRouter(t)
 	store.failWith = errors.New("pq: relation \"table_grants\" does not exist\nDETAIL: secret internals")
@@ -451,7 +475,7 @@ func TestTableGrants_StoreFailureIsSanitized(t *testing.T) {
 func TestTableGrants_PublisherIsOptional(t *testing.T) {
 	// Handlers constructed without a publisher (unit tests, NATS-less dev)
 	// must still serve writes rather than panicking.
-	h := NewTableGrantHandler(newFakeGrantStore())
+	h := NewTableGrantHandler(newFakeGrantStore(), true)
 	r := chi.NewRouter()
 	r.Route("/api/provision/{projectId}/table-grants", func(r chi.Router) { h.Routes(r) })
 

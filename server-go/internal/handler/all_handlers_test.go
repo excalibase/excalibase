@@ -16,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -82,6 +83,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	snapshotH := NewSnapshotHandler(snapshotSvc)
 	migrationH := NewMigrationHandler(migrationSvc)
 	alertH := NewAlertHandler(alertSvc)
+	alertH.SetScope(store, fakestore.NewOrgs())
 	setupH := NewSetupHandler(setupSvc)
 	pgH := NewParameterGroupHandler(pgStore)
 
@@ -504,11 +506,18 @@ func TestSetupStatusHandler(t *testing.T) {
 	if w.Code != 200 {
 		t.Errorf("setup status: %d, body: %s", w.Code, w.Body.String())
 	}
-	var status domain.SetupStatusResponse
-	json.NewDecoder(w.Body).Decode(&status)
-	// PostgreSQL might be true or false depending on whether CNPG is installed
-	// Just verify the response is valid JSON with the expected fields
-	t.Logf("Setup status: pg=%v mysql=%v mongo=%v", status.PostgreSQL, status.MySQL, status.MongoDB)
+	// The route answers one bit and nothing else: which operators are up, in
+	// what version, is not an anonymous caller's business (EXC-418).
+	var fields map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&fields); err != nil {
+		t.Fatalf("decode setup status: %v", err)
+	}
+	if len(fields) != 1 {
+		t.Fatalf("setup status carries %v, want only the completion flag", fields)
+	}
+	if _, ok := fields["complete"].(bool); !ok {
+		t.Fatalf("setup status has no boolean 'complete': %v", fields)
+	}
 }
 
 func TestSetupInstallHandler(t *testing.T) {
@@ -789,7 +798,7 @@ func TestProvisionWithAuthUser(t *testing.T) {
 	r.Post(testProvisionPath, h.Provision)
 
 	req := httptest.NewRequest("POST", testProvisionPath,
-		strings.NewReader(`{"projectName":"owned-db","orgId":"org1","databaseType":"POSTGRESQL","tier":"FREE"}`))
+		strings.NewReader(`{"projectName":"owned-db","orgId":"org1","databaseType":"POSTGRESQL","tier":"FREE","postgresVersion":"17"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()

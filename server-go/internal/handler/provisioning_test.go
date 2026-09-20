@@ -138,7 +138,7 @@ func TestGetStatus(t *testing.T) {
 func TestProvisionNoK8s(t *testing.T) {
 	r, _ := setupTestRouter(t)
 
-	body := `{"projectName":"test","orgId":"org","databaseType":"POSTGRESQL","tier":"FREE"}`
+	body := `{"projectName":"test","orgId":"org","databaseType":"POSTGRESQL","tier":"FREE","postgresVersion":"17"}`
 	req := httptest.NewRequest("POST", testProvisionPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	// Authenticated platform_admin bypasses the create_project org check, so the

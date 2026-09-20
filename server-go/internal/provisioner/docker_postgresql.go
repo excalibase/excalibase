@@ -82,6 +82,14 @@ func (p *DockerPostgreSQLProvisioner) SupportedType() domain.DatabaseType {
 func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error) {
 	cb(domain.StageValidating)
 
+	// EXC-408: the major comes from the request. No implicit default — a
+	// request that names none, or one the catalogue does not list, is refused
+	// before any container exists.
+	image, err := config.DockerPostgresImage(req.PostgresVersion)
+	if err != nil {
+		return nil, err
+	}
+
 	dbName := req.DatabaseName
 	if dbName == "" {
 		dbName = "app"
@@ -102,7 +110,7 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	}
 	ports := map[string]string{"5432": ""}
 
-	containerID, err := p.docker.CreateContainer(ctx, containerName, "postgres:17", env, ports)
+	containerID, err := p.docker.CreateContainer(ctx, containerName, image, env, ports)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}

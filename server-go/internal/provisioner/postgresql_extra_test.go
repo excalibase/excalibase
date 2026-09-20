@@ -162,10 +162,11 @@ func TestProvisionNamespaceCreationFailure(t *testing.T) {
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "fail-proj",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "fail-proj",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
 
 	if err == nil {
@@ -182,10 +183,11 @@ func TestProvisionCRDDeploymentFailure(t *testing.T) {
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "crd-fail",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "crd-fail",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
 
 	if err == nil {
@@ -202,11 +204,12 @@ func TestProvisionWithBackupDefaultSchedule(t *testing.T) {
 
 	tier, _ := config.GetTierConfig(domain.Free)
 	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "sched-test",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
-		Backup:      &domain.BackupSettings{Enabled: true, Schedule: "", Retention: 7},
+		PostgresVersion: "17",
+		ProjectName:     "sched-test",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
+		Backup:          &domain.BackupSettings{Enabled: true, Schedule: "", Retention: 7},
 	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
 
 	if err != nil {

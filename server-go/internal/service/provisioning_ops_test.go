@@ -112,27 +112,8 @@ func TestGetLogsNotFound(t *testing.T) {
 	}
 }
 
-func TestRotateCredentials(t *testing.T) {
-	svc, store, mock := setupOpsTest(t)
-	mock.ExecOutput["org1-ops-db/ops-db-postgres-1"] = "ALTER ROLE"
-
-	creds, err := svc.RotateCredentials(context.Background(), testOpsDB)
-	if err != nil {
-		t.Fatalf("RotateCredentials: %v", err)
-	}
-	if creds.Password == testutil.FixturePassword(testOpsDB) {
-		t.Error("password should have changed")
-	}
-	if creds.Password == "" {
-		t.Error("new password should not be empty")
-	}
-
-	// Verify stored
-	inst, _ := store.FindByProjectID(testOpsDB)
-	if inst.Password == testutil.FixturePassword(testOpsDB) {
-		t.Error("stored password should be updated")
-	}
-}
+// The rotation sequence itself is covered in credential_rotation_test.go,
+// which drives it with the vault, verifier and change publisher it needs.
 
 func TestRotateCredentialsNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
@@ -276,10 +257,16 @@ func TestUpgradeVersion(t *testing.T) {
 		t.Fatalf("UpgradeVersion: %v", err)
 	}
 
+	// The upgrade resolves the catalogue's digest-pinned image for the major,
+	// never a tag built from the version string.
+	want, err := config.PostgresImage("17")
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
 	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
 	spec := got.Object["spec"].(map[string]interface{})
-	if spec["imageName"] != "ghcr.io/cloudnative-pg/postgresql:17" {
-		t.Errorf("imageName: got %v", spec["imageName"])
+	if spec["imageName"] != want {
+		t.Errorf("imageName: got %v, want %v", spec["imageName"], want)
 	}
 }
 

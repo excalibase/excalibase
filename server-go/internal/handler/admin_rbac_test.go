@@ -27,10 +27,17 @@ func newAdminHForRBAC(t *testing.T) *AdminHandler {
 // authenticated user with the given platform role, so RequirePermission runs
 // against a real role.
 func adminRouterAs(role string, h *AdminHandler) http.Handler {
+	return adminRouterWith(role, &domain.AccessToken{Scopes: auth.ScopeSession}, h)
+}
+
+// adminRouterWith is adminRouterAs with an explicit credential, so a test can
+// separate "what this role may do" from "what this credential may do".
+func adminRouterWith(role string, token *domain.AccessToken, h *AdminHandler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			ctx := auth.SetUser(req.Context(), &domain.User{ID: "u1", Role: role, Active: true})
+			ctx = auth.SetToken(ctx, token)
 			next.ServeHTTP(w, req.WithContext(ctx))
 		})
 	})
@@ -70,6 +77,30 @@ func TestAdmin_DestructiveRoutesRBAC(t *testing.T) {
 			}
 			if !tc.wantForbidden && w.Code == http.StatusForbidden {
 				t.Errorf("got 403, %s should pass the permission gate", tc.role)
+			}
+		})
+	}
+}
+
+// EXC-418: the force drop is the one admin route that destroys a tenant it
+// never binds the caller to. A credential narrowed to one project must not
+// reach it — the role is wide, the credential is not.
+func TestAdmin_ForceDropRefusesANarrowedCredential(t *testing.T) {
+	narrowed := []struct {
+		name  string
+		token *domain.AccessToken
+	}{
+		{"project-bound PAT", &domain.AccessToken{ProjectID: "proj-other"}},
+		{"scope-limited PAT", &domain.AccessToken{Scopes: auth.ScopeWrite}},
+		{"no credential at all", nil},
+	}
+	for _, tc := range narrowed {
+		t.Run(tc.name, func(t *testing.T) {
+			r := adminRouterWith("platform_admin", tc.token, newAdminHForRBAC(t))
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/admin/projects/proj-x", nil))
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("got %d, want 403", w.Code)
 			}
 		})
 	}

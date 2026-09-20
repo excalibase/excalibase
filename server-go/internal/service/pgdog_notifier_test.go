@@ -116,10 +116,11 @@ func TestProvision_RegistersEngineRolesWithPgDog(t *testing.T) {
 	svc.SetPgDogNotifier(n)
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "pgdog-roles",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "pgdog-roles",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testUnexpErrFmt, err)
@@ -168,10 +169,11 @@ func TestProvision_WithoutEngineRoles_RegistersNothingWithPgDog(t *testing.T) {
 	svc.SetPgDogNotifier(n)
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
-		ProjectName: "pgdog-novault",
-		OrgID:       "org1",
-		DBType:      domain.PostgreSQL,
-		Tier:        domain.Free,
+		PostgresVersion: "17",
+		ProjectName:     "pgdog-novault",
+		OrgID:           "org1",
+		DBType:          domain.PostgreSQL,
+		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testUnexpErrFmt, err)
