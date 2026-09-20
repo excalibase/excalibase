@@ -132,6 +132,9 @@ func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.Pro
 		MasterUsername: req.MasterUsername,
 		Parameters:     req.Parameters,
 		Tags:           req.Tags,
+		// The extension's libraries must be preloaded by the cluster that is
+		// about to be created; there is no later opportunity (EXC-409).
+		DocumentDB: req.DocumentDB,
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{
@@ -324,6 +327,9 @@ func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.Provisi
 		MasterUsername: req.MasterUsername,
 		Parameters:     req.Parameters,
 		Tags:           req.Tags,
+		// The extension's libraries must be preloaded by the cluster that is
+		// about to be created; there is no later opportunity (EXC-409).
+		DocumentDB: req.DocumentDB,
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{
