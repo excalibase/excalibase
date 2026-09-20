@@ -3,56 +3,62 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
-// A restore runs in a goroutine owned by the process that started it. When
-// that process goes away, nothing is driving the job any more — however
-// recently it was updated. The boot sweep must say so rather than leave a
-// RUNNING row that no clock will ever move.
-func TestOrchestratorSweepFailsEveryRunningJobAtBoot(t *testing.T) {
+// A restore is driven by a goroutine in one process. When that process dies,
+// nothing refreshes the job's heartbeat, and the next sweep — from any
+// replica — records the truth instead of leaving a row that no clock will
+// ever move.
+func TestSweepFailsAJobAbandonedByADeadProcess(t *testing.T) {
 	jobs := newFakeJobs()
+	clock := &movableClock{t: time.Unix(2_000_000, 0)}
+	jobs.clock = clock.now
 	ctx := context.Background()
-	fresh := &domain.RestoreJob{
-		ID: "fresh", SourceProjectID: "s", NewProjectID: "d",
+	if err := jobs.UpsertRestoreJob(ctx, &domain.RestoreJob{
+		ID: "abandoned", SourceProjectID: "s", NewProjectID: "d",
 		Status: domain.RestoreStatusRunning, CurrentStep: "wait-for-cluster",
-	}
-	if err := jobs.UpsertRestoreJob(ctx, fresh); err != nil {
+		Owner: "dead-replica",
+	}); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
+	clock.advance(2 * defaultRestoreHeartbeatStale)
 
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
-	if err := orch.SweepStale(ctx); err != nil {
-		t.Fatalf("SweepStale: %v", err)
+	orch := ownedOrchestrator(jobs, "live-replica", clock)
+	if err := orch.SweepAbandoned(ctx); err != nil {
+		t.Fatalf("SweepAbandoned: %v", err)
 	}
 
-	got, err := jobs.FindRestoreJob(ctx, "s", "fresh")
+	got, err := jobs.FindRestoreJob(ctx, "s", "abandoned")
 	if err != nil {
 		t.Fatalf("FindRestoreJob: %v", err)
 	}
 	if got.Status != domain.RestoreStatusFailed {
-		t.Errorf("status: got %s, want FAILED — no process is driving this job", got.Status)
+		t.Errorf("status: got %s, want FAILED — nothing is driving this job", got.Status)
 	}
 	if got.FailureReason == "" {
 		t.Error("an abandoned job must say why it failed")
 	}
 }
 
-func TestOrchestratorSweepLeavesFinishedJobsAlone(t *testing.T) {
+func TestSweepLeavesFinishedJobsAlone(t *testing.T) {
 	jobs := newFakeJobs()
+	clock := &movableClock{t: time.Unix(2_000_000, 0)}
+	jobs.clock = clock.now
 	ctx := context.Background()
-	done := &domain.RestoreJob{
+	if err := jobs.UpsertRestoreJob(ctx, &domain.RestoreJob{
 		ID: "done", SourceProjectID: "s", NewProjectID: "d",
-		Status: domain.RestoreStatusCompleted,
-	}
-	if err := jobs.UpsertRestoreJob(ctx, done); err != nil {
+		Status: domain.RestoreStatusCompleted, Owner: "dead-replica",
+	}); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
+	clock.advance(2 * defaultRestoreHeartbeatStale)
 
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
-	if err := orch.SweepStale(ctx); err != nil {
-		t.Fatalf("SweepStale: %v", err)
+	orch := ownedOrchestrator(jobs, "live-replica", clock)
+	if err := orch.SweepAbandoned(ctx); err != nil {
+		t.Fatalf("SweepAbandoned: %v", err)
 	}
 
 	got, _ := jobs.FindRestoreJob(ctx, "s", "done")
@@ -61,14 +67,39 @@ func TestOrchestratorSweepLeavesFinishedJobsAlone(t *testing.T) {
 	}
 }
 
-func TestOrchestratorSweepReportsStoreFailure(t *testing.T) {
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: failingJobStore{}})
-	if err := orch.SweepStale(context.Background()); err == nil {
-		t.Fatal("a store that cannot be listed must be reported, not swallowed")
+// SweepStale is what boot calls; it must be the same sweep, so a restarting
+// replica cannot fail the restores its peers are driving.
+func TestBootSweepIsTheOwnershipSweep(t *testing.T) {
+	jobs := newFakeJobs()
+	clock := &movableClock{t: time.Unix(2_000_000, 0)}
+	jobs.clock = clock.now
+	ctx := context.Background()
+	if err := jobs.UpsertRestoreJob(ctx, &domain.RestoreJob{
+		ID: "peer-job", SourceProjectID: "s", NewProjectID: "d",
+		Status: domain.RestoreStatusRunning, Owner: "peer-replica",
+	}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	orch := ownedOrchestrator(jobs, "booting-replica", clock)
+	if err := orch.SweepStale(ctx); err != nil {
+		t.Fatalf("SweepStale: %v", err)
+	}
+
+	got, _ := jobs.FindRestoreJob(ctx, "s", "peer-job")
+	if got.Status != domain.RestoreStatusRunning {
+		t.Errorf("a peer's live job must survive a boot sweep, got %s", got.Status)
 	}
 }
 
-// failingJobStore refuses every read so the sweep's error path is exercised.
+func TestSweepReportsStoreFailure(t *testing.T) {
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: failingJobStore{}})
+	if err := orch.SweepAbandoned(context.Background()); err == nil {
+		t.Fatal("a store that cannot be swept must be reported, not swallowed")
+	}
+}
+
+// failingJobStore refuses the sweep so its error path is exercised.
 type failingJobStore struct{}
 
 func (failingJobStore) UpsertRestoreJob(context.Context, *domain.RestoreJob) error { return nil }
@@ -78,5 +109,17 @@ func (failingJobStore) FindRestoreJob(context.Context, string, string) (*domain.
 }
 
 func (failingJobStore) ListRunningRestoreJobs(context.Context) ([]domain.RestoreJob, error) {
+	return nil, nil
+}
+
+func (failingJobStore) UpdateRunningRestoreJob(context.Context, *domain.RestoreJob, string) (bool, error) {
+	return false, nil
+}
+
+func (failingJobStore) HeartbeatRestoreJob(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (failingJobStore) FailAbandonedRestoreJobs(context.Context, string, time.Duration, string) ([]string, error) {
 	return nil, context.DeadlineExceeded
 }

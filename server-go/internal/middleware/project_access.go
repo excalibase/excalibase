@@ -17,21 +17,26 @@ const (
 	errBodyProjectNotFound = `{"error":"project not found"}`
 	errBodyScope           = `{"error":"token lacks required scope: write"}`
 	errBodyRole            = `{"error":"insufficient project role"}`
-	errBodyDeleting        = `{"error":"project is being deleted"}`
 )
 
-// deletionAllows reports whether a request may proceed against the resolved
-// project. Once a teardown owns a project every other operation would act on
-// resources that are going away — a rotated credential on a database about to
-// vanish, a function deployed into a namespace being removed, a policy row
-// that outlives the project it names. Only the teardown's own surface stays
-// open: reading the project's status, retrying the DELETE, and retrying the
-// backup purge that a deletion left outstanding.
+// servingAllows reports whether a request may proceed against the resolved
+// project. A project the platform must not serve keeps only the surface that
+// lets its owner see what is wrong and get rid of it: reading the status,
+// retrying the DELETE, and retrying an outstanding backup purge.
+//
+// Two states qualify (domain.IsNotServable). Under teardown, every other
+// operation would act on resources that are going away — a rotated credential
+// on a database about to vanish, a function deployed into a namespace being
+// removed, a policy row that outlives the project it names. In RESTORING, the
+// row exists with working-looking credentials for a database no probe has
+// confirmed; serving it would route traffic and mint tokens for a recovery
+// that may never have happened. DELETE stays open in both, which is what
+// makes a restore abandoned by a dead process recoverable at all.
 //
 // The rule lives here, in the one place that already resolves the project, so
 // no handler can be added later that forgets it.
-func deletionAllows(r *http.Request, inst *domain.DatabaseInstance) bool {
-	if inst == nil || !domain.IsDeletionStatus(inst.Status) {
+func servingAllows(r *http.Request, inst *domain.DatabaseInstance) bool {
+	if inst == nil || !domain.IsNotServable(inst.Status) {
 		return true
 	}
 	id := inst.ProjectID
@@ -41,13 +46,19 @@ func deletionAllows(r *http.Request, inst *domain.DatabaseInstance) bool {
 	case "/api/provision/" + id + "/backups/purge":
 		return r.Method == http.MethodPost
 	case "/api/projects/" + id + "/info", "/api/projects/" + id + "/info/":
-		// The data plane's read. Its handler answers 404 for a project under
-		// teardown — stricter than this gate, and unambiguous for a caller
-		// that must stop serving the project rather than retry.
+		// The data plane's read. Its handler answers 404 for a project it
+		// must not serve — stricter than this gate, and unambiguous for a
+		// caller that must stop serving the project rather than retry.
 		return r.Method == http.MethodGet
 	default:
 		return false
 	}
+}
+
+// notServableBody renders the refusal as the JSON shape every other gate
+// error uses.
+func notServableBody(status string) string {
+	return `{"error":"` + domain.NotServableReason(status) + `"}`
 }
 
 // instanceOrLookup returns the resolved project row, fetching it for platform
@@ -99,9 +110,10 @@ func ProjectAccessFromContext(ctx context.Context) *ProjectAccess {
 // project. Platform admins (PermManageUsers) skip the membership lookup but
 // never escape a token binding.
 //
-// A project in DELETING is deliberately still resolved: its owner has to be
-// able to read the stalled teardown and retry the DELETE. The data plane is
-// where a project under teardown stops being served — see GetProjectInfo.
+// A project in DELETING or RESTORING is deliberately still resolved: its
+// owner has to be able to read the stalled operation and retry the DELETE.
+// The data plane is where such a project stops being served — see
+// GetProjectInfo.
 func ResolveProjectAccess(ctx context.Context, user *domain.User, token *domain.AccessToken, projectID string, instStore storage.InstanceStore, orgStore storage.OrgStore) *ProjectAccess {
 	if user == nil || !auth.TokenBoundToProject(token, projectID) {
 		return nil
@@ -140,8 +152,8 @@ func RequireProjectAccess(instStore storage.InstanceStore, orgStore storage.OrgS
 			if !ok {
 				return
 			}
-			if !deletionAllows(r, access.instanceOrLookup(instStore)) {
-				http.Error(w, errBodyDeleting, http.StatusConflict)
+			if inst := access.instanceOrLookup(instStore); !servingAllows(r, inst) {
+				http.Error(w, notServableBody(inst.Status), http.StatusConflict)
 				return
 			}
 			if !auth.TokenAllowsMethod(auth.GetToken(r.Context()), r.Method) {

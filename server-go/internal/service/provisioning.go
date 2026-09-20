@@ -565,6 +565,11 @@ var (
 	// ErrProjectDeleting is returned when a project under teardown is asked
 	// to serve as a live project.
 	ErrProjectDeleting = errors.New("project is being deleted")
+
+	// ErrProjectRestoring is returned when a project's restore has not been
+	// confirmed. Its row carries credentials, but nothing has proved the
+	// recovered database answers, so they must not be handed out.
+	ErrProjectRestoring = errors.New("project is being restored")
 	// ErrDeletionInProgress is returned when a teardown of the same project
 	// is already running. The synchronous DELETE can outlive an edge proxy's
 	// timeout and be retried while the first run is still working; refusing
@@ -892,15 +897,27 @@ func (s *ProvisioningService) GetInstancesByOwner(ownerID string) ([]*domain.Dat
 	return s.store.FindByOwner(ownerID)
 }
 
+// notServableErr picks the sentinel that matches why the project may not be
+// served, so a caller can tell a teardown from an unconfirmed restore.
+func notServableErr(status string) error {
+	if status == string(domain.StatusRestoring) {
+		return ErrProjectRestoring
+	}
+	return ErrProjectDeleting
+}
+
 func (s *ProvisioningService) GetCredentials(projectID string) (*domain.CredentialsResponse, error) {
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return nil, err
 	}
 	// Credentials of a project being torn down open a database that is
-	// disappearing, and the roles behind them are about to be revoked.
-	if inst.Status == string(domain.StatusDeleting) {
-		return nil, fmt.Errorf("%w: %s", ErrProjectDeleting, projectID)
+	// disappearing, and the roles behind them are about to be revoked. A
+	// project still being restored has credentials nothing has proved work
+	// — handing them out publishes a connection string for a database that
+	// may never have recovered.
+	if domain.IsNotServable(inst.Status) {
+		return nil, fmt.Errorf("%w: %s", notServableErr(inst.Status), projectID)
 	}
 
 	port := 5432

@@ -238,6 +238,19 @@ type RestoreJobStore interface {
 	// caller is already bound to. An id alone never resolves.
 	FindRestoreJob(ctx context.Context, projectID, id string) (*domain.RestoreJob, error)
 	ListRunningRestoreJobs(ctx context.Context) ([]domain.RestoreJob, error)
+	// UpdateRunningRestoreJob writes progress or a terminal outcome, but only
+	// while the job is still RUNNING and still owned by owner. It reports
+	// whether the write landed: false means the job was taken (its owner was
+	// judged dead and the job failed) or is already terminal, and the caller
+	// must stop driving it rather than write over the recorded outcome.
+	UpdateRunningRestoreJob(ctx context.Context, j *domain.RestoreJob, owner string) (bool, error)
+	// HeartbeatRestoreJob refreshes the liveness marker of a job this process
+	// owns, reporting whether the job is still ours and still running.
+	HeartbeatRestoreJob(ctx context.Context, id, owner string) (bool, error)
+	// FailAbandonedRestoreJobs fails every RUNNING job that is not owned by
+	// owner and whose heartbeat is older than staleAfter, returning the ids
+	// it failed. Jobs a live replica is driving are left alone.
+	FailAbandonedRestoreJobs(ctx context.Context, owner string, staleAfter time.Duration, reason string) ([]string, error)
 }
 
 // UserStore persists users for auth.

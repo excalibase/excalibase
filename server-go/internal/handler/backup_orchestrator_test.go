@@ -38,6 +38,32 @@ func (f *fakeRestoreJobStoreForHandler) UpsertRestoreJob(_ context.Context, j *d
 	return nil
 }
 
+// UpdateRunningRestoreJob carries the conditional-write semantics the real
+// table enforces: only the owner of a still-running job may write it.
+func (f *fakeRestoreJobStoreForHandler) UpdateRunningRestoreJob(_ context.Context, j *domain.RestoreJob, owner string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.jobs[j.ID]
+	if !ok || stored.Status != domain.RestoreStatusRunning || stored.Owner != owner {
+		return false, nil
+	}
+	j.Owner = owner
+	j.CreatedAt = stored.CreatedAt
+	f.jobs[j.ID] = *j
+	return true, nil
+}
+
+func (f *fakeRestoreJobStoreForHandler) HeartbeatRestoreJob(_ context.Context, id, owner string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.jobs[id]
+	return ok && stored.Status == domain.RestoreStatusRunning && stored.Owner == owner, nil
+}
+
+func (f *fakeRestoreJobStoreForHandler) FailAbandonedRestoreJobs(context.Context, string, time.Duration, string) ([]string, error) {
+	return nil, nil
+}
+
 func (f *fakeRestoreJobStoreForHandler) FindRestoreJob(_ context.Context, projectID, id string) (*domain.RestoreJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

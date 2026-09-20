@@ -211,7 +211,8 @@ func runServer(cfg config.AppConfig) {
 	defer stopStorageReap()
 
 	if sqlStore != nil {
-		wireRestoreOrchestrator(sqlStore, store, deps)
+		stopRestoreSweeper := wireRestoreOrchestrator(cfg, sqlStore, store, deps)
+		defer stopRestoreSweeper()
 	}
 
 	r := buildRouter(cfg, sqlStore, store, deps)
@@ -220,10 +221,10 @@ func runServer(cfg config.AppConfig) {
 }
 
 // wireRestoreOrchestrator builds the restore orchestrator, registers the
-// single delegate-to-adapter step, sweeps stale jobs, and wires it into the
-// backup handler. Extracted from runServer to keep that function's branching
-// shallow.
-func wireRestoreOrchestrator(sqlStore storage.PlatformStore, store storage.InstanceStore, deps *handlerDeps) {
+// single delegate-to-adapter step, sweeps abandoned jobs, starts the periodic
+// sweeper, and wires it into the backup handler. Extracted from runServer to
+// keep that function's branching shallow. Returns the sweeper's stop.
+func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, deps *handlerDeps) func() {
 	orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
 		Jobs: sqlStore.RestoreJobs(),
 	})
@@ -243,9 +244,24 @@ func wireRestoreOrchestrator(sqlStore storage.PlatformStore, store storage.Insta
 			},
 		},
 	})
-	_ = orchestrator.SweepStale(context.Background())
+	if err := orchestrator.SweepStale(context.Background()); err != nil {
+		log.Printf("WARN: restore boot sweep: %v", err)
+	}
 	deps.backupHandler.SetRestoreOrchestrator(orchestrator)
+	// Failing a job whose replica crashed must not wait for the next
+	// restart, and only one replica should be doing it.
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() {
+		// FNV-1a("excalibase-restore-sweeper").
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), 0x51c2_7d0e_9a41_3b77)
+	}
+	return orchestrator.StartSweeper(context.Background(), service.NewLeadership(lock), restoreSweepInterval)
 }
+
+// restoreSweepInterval is how often the leader looks for restores whose
+// driver has gone silent. Two sweeps inside the staleness bound is enough:
+// the bound, not this, decides how long a job may go unheard.
+const restoreSweepInterval = 30 * time.Second
 
 // runRestoreStep resolves the source instance and dispatches the restore to
 // the backup service, translating the job's target kind into a RestoreRequest.

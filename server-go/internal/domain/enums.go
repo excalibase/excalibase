@@ -100,6 +100,31 @@ func IsDeletionStatus(status string) bool {
 	return status == string(StatusDeleting) || status == string(StatusBackupsPendingDelete)
 }
 
+// IsNotServable reports whether a project must not be served: no data-plane
+// traffic routed to it, no JWT minted for it, no credentials handed out, no
+// function deployed or invoked against it, no membership rewritten.
+//
+// Two reasons qualify. A project under teardown is about to stop existing.
+// A project in RESTORING carries working-looking credentials for a database
+// nothing has confirmed yet — the recovered cluster may never have come up,
+// and if the process driving the restore dies, the row stays that way. In
+// both cases the row exists, which is exactly why every read has to ask.
+//
+// The list lives here so the gate, the handlers and the data plane cannot
+// drift apart.
+func IsNotServable(status string) bool {
+	return IsDeletionStatus(status) || status == string(StatusRestoring)
+}
+
+// NotServableReason is the fixed sentence a caller is given for a project
+// that is not servable. It names what is happening and nothing else.
+func NotServableReason(status string) string {
+	if status == string(StatusRestoring) {
+		return "project is being restored"
+	}
+	return "project is being deleted"
+}
+
 // DeletionSteps are the teardown steps, in the order Deprovision runs them.
 // The name of the step that failed is persisted on the row so a retry —
 // and an operator — can see exactly how far the teardown got.

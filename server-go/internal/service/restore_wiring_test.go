@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -153,26 +156,53 @@ func TestDockerRestoreGivesUpWhenRecoveryNeverFinishes(t *testing.T) {
 	}
 }
 
-func TestOrchestratorSweepLogsAJobItCannotMark(t *testing.T) {
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: unwritableJobStore{}})
-	if err := orch.SweepStale(context.Background()); err != nil {
-		t.Fatalf("a job that cannot be marked must not abort the sweep: %v", err)
+// The periodic sweeper only acts while this replica is the leader — one
+// replica failing other replicas' jobs is enough.
+func TestSweeperOnlyRunsForTheLeader(t *testing.T) {
+	jobs := newFakeJobs()
+	clock := &movableClock{t: time.Unix(3_000_000, 0)}
+	jobs.clock = clock.now
+	ctx := context.Background()
+	if err := jobs.UpsertRestoreJob(ctx, &domain.RestoreJob{
+		ID: "orphan", SourceProjectID: "s", NewProjectID: "d",
+		Status: domain.RestoreStatusRunning, Owner: "dead",
+	}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	clock.advance(2 * defaultRestoreHeartbeatStale)
+	orch := ownedOrchestrator(jobs, "me", clock)
+
+	orch.sweepIfLeader(ctx, followerLeadership{})
+	if jobs.status("orphan") != domain.RestoreStatusRunning {
+		t.Error("a follower must not sweep")
+	}
+
+	orch.sweepIfLeader(ctx, leaderLeadership{})
+	if jobs.status("orphan") != domain.RestoreStatusFailed {
+		t.Error("the leader must sweep")
 	}
 }
 
-// unwritableJobStore lists an abandoned job but refuses to update it.
-type unwritableJobStore struct{}
-
-func (unwritableJobStore) UpsertRestoreJob(context.Context, *domain.RestoreJob) error {
-	return errors.New("platform db unavailable")
+func TestSweeperStandsDownWhenLeadershipCannotBeChecked(t *testing.T) {
+	jobs := newFakeJobs()
+	orch := ownedOrchestrator(jobs, "me", &movableClock{t: time.Unix(3_000_000, 0)})
+	// No panic, no sweep: an unknown leadership state is not a licence to
+	// fail other replicas' jobs.
+	orch.sweepIfLeader(context.Background(), brokenLeadership{})
 }
 
-func (unwritableJobStore) FindRestoreJob(context.Context, string, string) (*domain.RestoreJob, error) {
-	return nil, ErrRestoreJobNotFound
-}
+type followerLeadership struct{}
 
-func (unwritableJobStore) ListRunningRestoreJobs(context.Context) ([]domain.RestoreJob, error) {
-	return []domain.RestoreJob{{ID: "j1", Status: domain.RestoreStatusRunning}}, nil
+func (followerLeadership) IsLeader(context.Context) (bool, error) { return false, nil }
+
+type leaderLeadership struct{}
+
+func (leaderLeadership) IsLeader(context.Context) (bool, error) { return true, nil }
+
+type brokenLeadership struct{}
+
+func (brokenLeadership) IsLeader(context.Context) (bool, error) {
+	return false, errors.New("advisory lock unavailable")
 }
 
 func TestRegisterProjectHoldsAnUnverifiedRestoreInRestoring(t *testing.T) {
@@ -203,4 +233,64 @@ func restoreClusterObject() *unstructured.Unstructured {
 		Namespace:       restoreTargetNS,
 		Store:           k8s.ObjectStoreOpts{Bucket: "b"},
 	})
+}
+
+func TestSetDatabaseProbeRefusesAnUnverifiableWiring(t *testing.T) {
+	store := emptyInstanceStore(t)
+	svc := NewBackupService(store, k8s.NewMockClient(), t.TempDir(), StaticBackupStorage(r2Storage()))
+
+	if err := svc.SetDatabaseProbe(nil); !errors.Is(err, ErrDatabaseProbeNotConfigured) {
+		t.Errorf("nil probe: got %v, want ErrDatabaseProbeNotConfigured", err)
+	}
+
+	bare := NewBackupServiceWithAdapters(store, map[domain.DeploymentMode]BackupAdapter{}, t.TempDir())
+	if err := bare.SetDatabaseProbe(alwaysAnswers{}); !errors.Is(err, ErrDatabaseProbeNotConfigured) {
+		t.Errorf("no adapters: got %v, want ErrDatabaseProbeNotConfigured", err)
+	}
+
+	legacy := NewBackupServiceWithAdapters(store, map[domain.DeploymentMode]BackupAdapter{
+		domain.DeploymentMode("legacy"): &fakeAdapter{},
+	}, t.TempDir())
+	err := legacy.SetDatabaseProbe(alwaysAnswers{})
+	if !errors.Is(err, ErrDatabaseProbeNotConfigured) {
+		t.Fatalf("adapter without a probe setter: got %v", err)
+	}
+	if !strings.Contains(err.Error(), "legacy") {
+		t.Errorf("the error must name the adapter, got %v", err)
+	}
+}
+
+func TestRegisterVerifiedProjectRefusesWithoutAProbe(t *testing.T) {
+	pc := provisioner.NewProvisionContext(nil, nil)
+	err := registerVerifiedProject(context.Background(), pc, &fakeRegistrar{}, emptyInstanceStore(t), nil,
+		&domain.DatabaseInstance{ProjectID: "p"}, RegistrationOptions{})
+	if !errors.Is(err, ErrDatabaseProbeNotConfigured) {
+		t.Fatalf("err: got %v, want ErrDatabaseProbeNotConfigured", err)
+	}
+}
+
+// A project that vanishes between registration and the activating write is a
+// real error, not a deletion — it must be reported, not silently swallowed.
+func TestRestoreReportsAnActivationWriteItCannotMake(t *testing.T) {
+	store := emptyInstanceStore(t)
+	pc := provisioner.NewProvisionContext(nil, nil)
+	reg := &vanishingRegistrar{store: store}
+	inst := &domain.DatabaseInstance{ProjectID: "gone", OrgID: "org"}
+
+	err := registerVerifiedProject(context.Background(), pc, reg, store, alwaysAnswers{}, inst, RegistrationOptions{})
+	if err == nil || errors.Is(err, ErrRestoreTargetDeleting) {
+		t.Fatalf("err: got %v, want the activation failure reported", err)
+	}
+}
+
+// vanishingRegistrar registers the project and then removes the row, so the
+// caller's activating update has nothing to write.
+type vanishingRegistrar struct{ store storage.InstanceStore }
+
+func (r *vanishingRegistrar) RegisterProject(_ context.Context, inst *domain.DatabaseInstance, opts RegistrationOptions) error {
+	markProjectRestoring(inst)
+	if err := r.store.Create(inst); err != nil {
+		return err
+	}
+	return r.store.Delete(inst.ProjectID)
 }

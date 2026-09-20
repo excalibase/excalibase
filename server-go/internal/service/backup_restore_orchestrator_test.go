@@ -10,20 +10,86 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
-// fakeRestoreJobStore is an in-memory RestoreJobStore.
+// fakeRestoreJobStore is an in-memory RestoreJobStore carrying the same
+// conditional-write semantics the real table enforces: a running job may
+// only be written by the process that owns it, and a terminal job may not be
+// written at all.
 type fakeRestoreJobStore struct {
 	mu   sync.Mutex
 	jobs map[string]domain.RestoreJob
+	// clock lets a test age a heartbeat without sleeping.
+	clock func() time.Time
 }
 
 func newFakeJobs() *fakeRestoreJobStore {
-	return &fakeRestoreJobStore{jobs: map[string]domain.RestoreJob{}}
+	return &fakeRestoreJobStore{jobs: map[string]domain.RestoreJob{}, clock: time.Now}
+}
+
+func (f *fakeRestoreJobStore) now() time.Time {
+	if f.clock != nil {
+		return f.clock()
+	}
+	return time.Now()
+}
+
+func (f *fakeRestoreJobStore) UpdateRunningRestoreJob(_ context.Context, j *domain.RestoreJob, owner string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.jobs[j.ID]
+	if !ok || stored.Status != domain.RestoreStatusRunning || stored.Owner != owner {
+		return false, nil
+	}
+	j.Owner = owner
+	j.CreatedAt = stored.CreatedAt
+	j.HeartbeatAt = f.now().UTC().Format(time.RFC3339)
+	j.UpdatedAt = j.HeartbeatAt
+	f.jobs[j.ID] = *j
+	return true, nil
+}
+
+func (f *fakeRestoreJobStore) HeartbeatRestoreJob(_ context.Context, id, owner string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.jobs[id]
+	if !ok || stored.Status != domain.RestoreStatusRunning || stored.Owner != owner {
+		return false, nil
+	}
+	stored.HeartbeatAt = f.now().UTC().Format(time.RFC3339)
+	f.jobs[id] = stored
+	return true, nil
+}
+
+func (f *fakeRestoreJobStore) FailAbandonedRestoreJobs(_ context.Context, owner string, staleAfter time.Duration, reason string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cutoff := f.now().Add(-staleAfter)
+	failed := []string{}
+	for id, j := range f.jobs {
+		if j.Status != domain.RestoreStatusRunning || j.Owner == owner {
+			continue
+		}
+		if beat, err := time.Parse(time.RFC3339, j.HeartbeatAt); err == nil && beat.After(cutoff) {
+			continue
+		}
+		j.Status = domain.RestoreStatusFailed
+		j.FailureReason = reason
+		f.jobs[id] = j
+		failed = append(failed, id)
+	}
+	return failed, nil
+}
+
+func (f *fakeRestoreJobStore) status(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.jobs[id].Status
 }
 
 func (f *fakeRestoreJobStore) UpsertRestoreJob(_ context.Context, j *domain.RestoreJob) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	j.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	j.UpdatedAt = f.now().UTC().Format(time.RFC3339)
+	j.HeartbeatAt = j.UpdatedAt
 	if existing, ok := f.jobs[j.ID]; !ok {
 		j.CreatedAt = j.UpdatedAt
 		f.jobs[j.ID] = *j
@@ -204,26 +270,23 @@ func TestOrchestrator_RejectsTwoTargets(t *testing.T) {
 	}
 }
 
-func TestOrchestrator_SweepStale_FailsOldRunning(t *testing.T) {
-	jobs := newFakeJobs()
-	// Inject a stale running job by hand — predates "now" by an hour.
+func TestOrchestrator_SweepStale_FailsAbandonedRunning(t *testing.T) {
+	clock := &movableClock{t: time.Unix(4_000_000, 0)}
+	jobs := newOwnedJobs(clock.now)
+	// A job another process was driving, whose heartbeat has long stopped.
 	jobs.UpsertRestoreJob(context.Background(), &domain.RestoreJob{
-		ID: "old", SourceProjectID: "s", NewProjectID: "d", Status: domain.RestoreStatusRunning,
+		ID: "old", SourceProjectID: "s", NewProjectID: "d",
+		Status: domain.RestoreStatusRunning, Owner: "gone-replica",
 	})
-	// Force the UpdatedAt back in time. Direct map write to bypass UpsertRestoreJob's stamp.
-	jobs.mu.Lock()
-	old := jobs.jobs["old"]
-	old.UpdatedAt = time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339)
-	jobs.jobs["old"] = old
-	jobs.mu.Unlock()
+	clock.advance(2 * defaultRestoreHeartbeatStale)
 
-	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	orch := ownedOrchestrator(jobs, "this-replica", clock)
 	if err := orch.SweepStale(context.Background()); err != nil {
 		t.Fatalf("SweepStale: %v", err)
 	}
 	got, _ := jobs.FindRestoreJob(context.Background(), "s", "old")
 	if got.Status != domain.RestoreStatusFailed {
-		t.Errorf("stale job status: got %s", got.Status)
+		t.Errorf("abandoned job status: got %s", got.Status)
 	}
 	if got.FailureReason == "" {
 		t.Errorf("FailureReason should be set on swept job")
