@@ -4,12 +4,9 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
-	"log"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/golang-migrate/migrate/v4"
 	migpg "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -31,31 +28,16 @@ type scanner interface {
 	Scan(dest ...interface{}) error
 }
 
-// defaultPlatformDBMaxConns is the platform database pool size. See the
-// arithmetic in New and OPERATOR.md.
-const defaultPlatformDBMaxConns = 20
-
-// platformDBMaxConns reads the pool size, refusing a value that is too small
-// to hold the standing leadership claims plus any work at all.
-func platformDBMaxConns() int {
-	raw := strings.TrimSpace(os.Getenv("PLATFORM_DB_MAX_CONNS"))
-	if raw == "" {
-		return defaultPlatformDBMaxConns
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < minPlatformDBMaxConns {
-		log.Printf("WARN: PLATFORM_DB_MAX_CONNS=%q is not a usable pool size (minimum %d); using %d",
-			raw, minPlatformDBMaxConns, defaultPlatformDBMaxConns)
-		return defaultPlatformDBMaxConns
-	}
-	return n
+// New opens the platform store with the default pool size. Callers that read
+// configuration use NewWithMaxConns.
+func New(databaseURL string) (*Store, error) {
+	return NewWithMaxConns(databaseURL, config.DefaultPlatformDBMaxConns)
 }
 
-// minPlatformDBMaxConns is the four standing leadership claims plus room for
-// one lifecycle operation and one query.
-const minPlatformDBMaxConns = 6
-
-func New(databaseURL string) (*Store, error) {
+// NewWithMaxConns opens the platform store with an explicit pool size. The
+// value is validated where it is read (internal/config), so an unusable one
+// never reaches here.
+func NewWithMaxConns(databaseURL string, maxOpen int) (*Store, error) {
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
@@ -64,10 +46,8 @@ func New(databaseURL string) (*Store, error) {
 	// Pool arithmetic. Standing leadership claims pin one connection each
 	// (backup scheduler, idle pause, storage reap, restore sweep = 4), and
 	// every in-flight lifecycle operation pins one more for its duration —
-	// a pause can run for minutes. The default leaves room for a handful of
-	// concurrent lifecycle operations plus ordinary query traffic; raise it
-	// with PLATFORM_DB_MAX_CONNS on a control plane that runs more.
-	maxOpen := platformDBMaxConns()
+	// a pause can run for minutes. Sized by PLATFORM_DB_MAX_CONNS; see
+	// config.MinPlatformDBMaxConns and OPERATOR.md.
 	db.SetMaxOpenConns(maxOpen)
 	db.SetMaxIdleConns(maxOpen / 2)
 	db.SetConnMaxLifetime(5 * time.Minute)
@@ -153,7 +133,6 @@ func toFlexTime(t *time.Time) *domain.FlexTime {
 	}
 	return &domain.FlexTime{Time: *t}
 }
-
 
 func ptrStr(s *string) *string {
 	return s

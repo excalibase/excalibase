@@ -130,8 +130,8 @@ func TestTheIdleSweepRetryTakesTheLease(t *testing.T) {
 // which would otherwise leave the project unusable until the process dies.
 func TestTheLeaseIsReleasedOnEveryPath(t *testing.T) {
 	cases := map[string]func(*observedPauseFixture){
-		"success":       func(*observedPauseFixture) {},
-		"backup fails":  func(f *observedPauseFixture) { f.backups.statuses = []string{"FAILED"} },
+		"success":      func(*observedPauseFixture) {},
+		"backup fails": func(f *observedPauseFixture) { f.backups.statuses = []string{"FAILED"} },
 		"workload fails": func(f *observedPauseFixture) {
 			f.pauser.pauseErr = errors.New("hibernate refused")
 		},

@@ -127,8 +127,10 @@ func TestConcurrentDeletionIsRefusedWhileOneIsRunning(t *testing.T) {
 	if err := svc.Deprovision(context.Background(), testDeletingProj); err != nil {
 		t.Fatalf("first teardown: %v", err)
 	}
-	if !errors.Is(second, ErrDeletionInProgress) {
-		t.Fatalf("second DELETE = %v, want ErrDeletionInProgress", second)
+	// The lease names no operation: for an advisory lease the holder cannot
+	// be identified, so every refusal says the same true thing.
+	if !errors.Is(second, ErrProjectOperationRunning) {
+		t.Fatalf("second DELETE = %v, want ErrProjectOperationRunning", second)
 	}
 	_ = store
 }

@@ -1413,7 +1413,7 @@ func buildPlatformStore(cfg config.AppConfig) storage.PlatformStore {
 	if cfg.PlatformDBURL == "" {
 		log.Fatal("PLATFORM_DB_URL (PostgreSQL connection string) is required")
 	}
-	pgStore, err := pgstore.New(cfg.PlatformDBURL)
+	pgStore, err := pgstore.NewWithMaxConns(cfg.PlatformDBURL, cfg.PlatformDBMaxConns)
 	if err != nil {
 		log.Fatalf("Failed to init Postgres platform store: %v", err)
 	}

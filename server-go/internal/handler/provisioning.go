@@ -360,8 +360,8 @@ func writeDeprovisionError(w http.ResponseWriter, err error) {
 		httpError(w, safeError(err), http.StatusBadRequest)
 	case errors.Is(err, service.ErrDeletionProtected):
 		httpError(w, safeError(err), http.StatusBadRequest)
-	case errors.Is(err, service.ErrDeletionInProgress):
-		httpError(w, "a deletion of this project is already running; wait for it to finish", http.StatusConflict)
+	case errors.Is(err, service.ErrProjectOperationRunning):
+		httpError(w, safeError(err), http.StatusConflict)
 	case errors.Is(err, storage.ErrProjectBusy):
 		httpError(w, "project is busy: "+busyState(err)+"; retry when it settles", http.StatusConflict)
 	case errors.Is(err, storage.ErrBackupPurgeAlreadyConfirmed):

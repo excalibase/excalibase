@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 	"sync"
 
@@ -19,6 +20,15 @@ const (
 	OperationPause    ProjectOperation = "pause"
 	OperationResume   ProjectOperation = "resume"
 )
+
+// ErrProjectOperationRunning is what every caller refused the project's
+// lifecycle lease is told. It names no operation on purpose: for an advisory
+// lease the holder's identity is not knowable, and guessing produced the
+// worst kind of message — a DELETE blocked by a pause was told to wait for a
+// deletion that did not exist. It wraps storage.ErrProjectBusy so the gate
+// and the handlers keep answering 409 for it.
+var ErrProjectOperationRunning = fmt.Errorf(
+	"%w: another operation on this project is running; retry when it finishes", storage.ErrProjectBusy)
 
 // ProjectOperationClaimer grants one mutating lifecycle operation at a time
 // per project, across every control-plane replica.

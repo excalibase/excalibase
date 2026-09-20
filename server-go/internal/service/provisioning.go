@@ -574,11 +574,6 @@ var (
 	// confirmed. Its row carries credentials, but nothing has proved the
 	// recovered database answers, so they must not be handed out.
 	ErrProjectRestoring = errors.New("project is being restored")
-	// ErrDeletionInProgress is returned when a teardown of the same project
-	// is already running. The synchronous DELETE can outlive an edge proxy's
-	// timeout and be retried while the first run is still working; refusing
-	// the second is what keeps the two from tearing down in parallel.
-	ErrDeletionInProgress = errors.New("a deletion of this project is already running")
 )
 
 // isProjectGone reports whether an error means the project stopped being the
@@ -664,7 +659,10 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 		return fmt.Errorf("claim project for deletion: %w", err)
 	}
 	if !claimed {
-		return fmt.Errorf("%w: %s", ErrDeletionInProgress, projectID)
+		// The holder may be a pause or a resume, and for an advisory lease
+		// we cannot tell which. Saying "a deletion is already running" was a
+		// guess, and usually a wrong one.
+		return fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
 	defer release()
 

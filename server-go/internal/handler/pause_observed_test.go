@@ -2,9 +2,9 @@ package handler
 
 import (
 	"encoding/json"
-	"strings"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -79,7 +79,31 @@ func TestPauseOfABusyProjectAnswersConflict(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status: got %d, want 409; body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(strings.ToLower(w.Body.String()), "busy") {
-		t.Errorf("body must say the project is busy: %s", w.Body.String())
+	if !strings.Contains(strings.ToLower(w.Body.String()), "another operation") {
+		t.Errorf("body must say another operation is running: %s", w.Body.String())
+	}
+}
+
+// Pause, resume and delete all answer the same neutral 409 when the project's
+// lease is held, so a caller gets one contract whichever it asked for.
+func TestEveryLifecycleRouteReportsABusyProjectTheSameWay(t *testing.T) {
+	for _, path := range []string{"/pause", "/resume"} {
+		t.Run(path, func(t *testing.T) {
+			r, store, _, _ := setupPauseHandler(t)
+			seedPausableProject(t, store)
+			busyProjectClaim(t, store)
+
+			w := doRequest(r, "POST", "/api/provision/pause-db"+path, `{}`)
+			if w.Code != http.StatusConflict {
+				t.Errorf("got %d, want 409; body=%s", w.Code, w.Body.String())
+			}
+			body := strings.ToLower(w.Body.String())
+			if !strings.Contains(body, "another operation") {
+				t.Errorf("body must say another operation is running: %s", w.Body.String())
+			}
+			if strings.Contains(body, "deletion") {
+				t.Errorf("body must not name an operation it cannot know: %s", w.Body.String())
+			}
+		})
 	}
 }

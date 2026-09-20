@@ -162,7 +162,7 @@ func (s *PauseService) hold(ctx context.Context, projectID string, op ProjectOpe
 		return nil, fmt.Errorf("claim project for %s: %w", op, err)
 	}
 	if !claimed {
-		return nil, fmt.Errorf("%w: another lifecycle operation is running on %s", storage.ErrProjectBusy, projectID)
+		return nil, fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
 	return release, nil
 }

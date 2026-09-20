@@ -570,8 +570,10 @@ So a replica needs `4 + (concurrent lifecycle operations) + (headroom for
 ordinary query traffic)`. The default pool is **20**, which leaves room for
 roughly a dozen concurrent pauses alongside normal traffic. Raise it with
 `PLATFORM_DB_MAX_CONNS` (minimum 6 — four claims plus one operation plus one
-query; anything lower is ignored with a warning) on a control plane that
-pauses many projects at once, and make sure Postgres' own `max_connections`
+query) on a control plane that pauses many projects at once. A value that is
+not a number, or below the minimum, **stops the platform from starting**: a
+pool that cannot do the work is a misconfiguration to fix, not something to
+paper over with a default the operator did not choose, and make sure Postgres' own `max_connections`
 covers `PLATFORM_DB_MAX_CONNS x replicas` plus your own sessions.
 
 Taking a lease waits at most 2s for a pool connection. A burst of lifecycle

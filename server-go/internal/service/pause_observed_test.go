@@ -78,7 +78,7 @@ type scriptedBackups struct {
 	triggers int
 	// latestID is what List would report as the project's newest backup.
 	latestID string
-	log    *[]string
+	log      *[]string
 }
 
 func (b *scriptedBackups) BackupsConfigured(string) (bool, error) { return b.configured, nil }
