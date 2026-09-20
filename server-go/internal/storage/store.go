@@ -103,6 +103,17 @@ type InstanceStore interface {
 	// Create registers a new project. Returns ErrProjectExists when the
 	// project id is taken.
 	Create(instance *domain.DatabaseInstance) error
+	// CreateWithinOrgLimit registers a new project only while its
+	// organisation holds fewer than maxProjects slot-holding projects (see
+	// HoldsOrgProjectSlot). The count and the insert are one atomic step, so
+	// concurrent creates can never both take the last slot. maxProjects of
+	// zero or less means unlimited. Returns ErrOrgProjectLimitReached when
+	// the organisation is full, and ErrProjectExists for a taken id.
+	CreateWithinOrgLimit(instance *domain.DatabaseInstance, maxProjects int) error
+	// CountOrgProjects reports how many of the organisation's projects hold
+	// one of its tier slots. It answers from the organisation's rows alone,
+	// never by loading every instance on the platform.
+	CountOrgProjects(orgID string) (int, error)
 	// Update persists changes to an existing project. It never changes the
 	// project's id or its owning org, returns ErrProjectNotFound when the
 	// row is absent, and ErrProjectDeleting when the stored row is already

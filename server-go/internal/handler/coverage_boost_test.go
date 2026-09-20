@@ -797,11 +797,13 @@ func TestBackupListNonExistentProject_Returns200(t *testing.T) {
 
 // --- Backup handler: Restore not-found instance ---
 
-func TestBackupRestoreNotFound_Returns500(t *testing.T) {
+// The source project is resolved before anything else a restore does, so a
+// project that does not exist is a 404 rather than a failure further in.
+func TestBackupRestoreNotFound_Returns404(t *testing.T) {
 	r, _, _ := fullRouter(t)
 	w := doRequest(r, "POST", "/api/provision/nonexistent/backup/restore", `{"newProjectName":"x"}`)
-	if w.Code != 500 {
-		t.Errorf("backup restore not found: got %d, want 500", w.Code)
+	if w.Code != 404 {
+		t.Errorf("backup restore not found: got %d, want 404", w.Code)
 	}
 }
 

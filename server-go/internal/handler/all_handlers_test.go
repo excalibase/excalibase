@@ -55,6 +55,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	mock.WildcardPodReady = true
 	mock.AutoReconcileClusters = true
 	backupSvc.SetProjectRegistrar(provSvc)
+	backupSvc.SetOrgProjectCapacity(provSvc)
 	if err := backupSvc.SetDatabaseProbe(answeringProbe{}); err != nil {
 		t.Fatalf("SetDatabaseProbe: %v", err)
 	}
@@ -124,7 +125,9 @@ func seedInstance(store *storage.FileSystemStore, mock *k8s.MockClient) {
 	port := 5432
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "test-db", OrgID: "org1", DBType: domain.PostgreSQL,
-		Tier: domain.Free, Namespace: "org1-test-db", Status: "ACTIVE",
+		// STANDARD, so the restore tests below have a free project slot to
+		// restore into; FREE allows the one project this seeds.
+		Tier: domain.Standard, Namespace: "org1-test-db", Status: "ACTIVE",
 		Host: "h.local", Port: &port, DatabaseName: "app",
 		Username: "user", Password: testutil.FixturePassword(testPGCreds), SSLMode: "require",
 	})

@@ -202,8 +202,8 @@ func TestProvisionExceedsFreeTierLimit(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for exceeding FREE tier project limit")
 	}
-	if err != nil && !strings.Contains(err.Error(), "maximum") {
-		t.Errorf("expected max projects error, got: %v", err)
+	if err != nil && !errors.Is(err, storage.ErrOrgProjectLimitReached) {
+		t.Errorf("expected the org project limit refusal, got: %v", err)
 	}
 }
 

@@ -234,8 +234,10 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	// The user's display name is preserved on inst.ProjectName.
 	req.ProjectName = inst.ProjectID
 
-	if err := s.store.Create(inst); err != nil {
-		return nil, fmt.Errorf("create instance: %w", err)
+	// The row is the project's slot: creating it is what admits the project
+	// to the organisation, and it happens before any cluster resource exists.
+	if err := s.createProjectRow(ctx, inst, req.Tier); err != nil {
+		return nil, err
 	}
 
 	// A teardown that claims the project mid-build owns it from that moment.
@@ -316,10 +318,6 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, err
 	}
 
-	if err := s.enforceOrgProjectLimit(req.OrgID, tier, req.Tier); err != nil {
-		return nil, nil, config.TierConfig{}, err
-	}
-
 	s.applyBackupDefaults(req, tier)
 
 	if err := s.enforceBackupTierPolicy(req, tier); err != nil {
@@ -369,24 +367,6 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 // generateUniqueProjectRef returns a project id no registered project holds.
 func (s *ProvisioningService) generateUniqueProjectRef() (string, error) {
 	return allocateProjectID(s.store)
-}
-
-// enforceOrgProjectLimit checks whether the org has capacity for another project under the given tier.
-func (s *ProvisioningService) enforceOrgProjectLimit(orgID string, tier config.TierConfig, tierType domain.TierType) error {
-	if tier.MaxProjects <= 0 || s.selfHostedMode {
-		return nil
-	}
-	allInstances, _ := s.store.FindAll()
-	orgCount := 0
-	for _, inst := range allInstances {
-		if inst.OrgID == orgID {
-			orgCount++
-		}
-	}
-	if orgCount >= tier.MaxProjects {
-		return fmt.Errorf("org %s has reached the maximum of %d projects for %s tier", orgID, tier.MaxProjects, tierType)
-	}
-	return nil
 }
 
 // applyBackupDefaults injects platform-wide backup defaults when the request has no backup config.

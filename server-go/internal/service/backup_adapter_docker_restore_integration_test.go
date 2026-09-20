@@ -81,6 +81,7 @@ func TestDockerBackupAdapter_RestoreE2E(t *testing.T) {
 	src := &domain.DatabaseInstance{
 		ProjectID:       "src-restore",
 		OrgID:           "org",
+		Tier:            domain.Standard,
 		Namespace:       srcID,
 		DatabaseName:    "app",
 		Username:        defaultPostgresSuperuser,
@@ -213,6 +214,7 @@ func TestDockerBackupAdapter_RestoreRejectedCredentialsE2E(t *testing.T) {
 	src := &domain.DatabaseInstance{
 		ProjectID:       "src-reject",
 		OrgID:           "org",
+		Tier:            domain.Standard,
 		Namespace:       srcID,
 		DatabaseName:    "app",
 		Username:        defaultPostgresSuperuser,

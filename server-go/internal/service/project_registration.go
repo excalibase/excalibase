@@ -111,7 +111,7 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 	} else {
 		markProjectActive(inst)
 	}
-	if err := s.persistProjectRow(inst, opts); err != nil {
+	if err := s.persistProjectRow(ctx, inst, opts); err != nil {
 		return rollbackIfOwned(ctx, pc, owned, fmt.Errorf("persist project row: %w", err))
 	}
 	s.registerWithPgDog(ctx, inst, engineRoles)
@@ -122,11 +122,16 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 // persistProjectRow writes the registered project. Creating is the default so
 // an id that is already registered is a conflict; only an operation that
 // created the row itself earlier may update it.
-func (s *ProvisioningService) persistProjectRow(inst *domain.DatabaseInstance, opts RegistrationOptions) error {
+//
+// A create here is a new project taking one of its organisation's slots — a
+// restore is a creation as much as a provision is — so it goes through the
+// same limited insert. An update does not: the slot was taken when the
+// provision pipeline inserted the row.
+func (s *ProvisioningService) persistProjectRow(ctx context.Context, inst *domain.DatabaseInstance, opts RegistrationOptions) error {
 	if opts.RowAlreadyCreated {
 		return s.store.Update(inst)
 	}
-	return s.store.Create(inst)
+	return s.createProjectRow(ctx, inst, inst.Tier)
 }
 
 // rollbackIfOwned runs the compensations RegisterProject registered itself.

@@ -106,6 +106,16 @@ func (s *inMemoryInstanceStore) Create(inst *domain.DatabaseInstance) error {
 	s.insts[inst.ProjectID] = inst
 	return nil
 }
+func (s *inMemoryInstanceStore) CreateWithinOrgLimit(inst *domain.DatabaseInstance, maxProjects int) error {
+	if err := storage.AdmitOrgProject(s.insts, inst, maxProjects); err != nil {
+		return err
+	}
+	s.insts[inst.ProjectID] = inst
+	return nil
+}
+func (s *inMemoryInstanceStore) CountOrgProjects(orgID string) (int, error) {
+	return storage.CountOrgProjectSlots(s.insts, orgID), nil
+}
 func (s *inMemoryInstanceStore) Update(inst *domain.DatabaseInstance) error {
 	existing, ok := s.insts[inst.ProjectID]
 	if !ok {
