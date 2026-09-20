@@ -71,6 +71,7 @@ func TestEnableDocumentDBCreatesTheExtensionInTheProjectsDatabase(t *testing.T) 
 	kube := k8s.NewMockClient()
 	svc := documentDBService(t, kube)
 	inst := documentDBProject()
+	seedGatewayCredential(kube, inst, "a-generated-password")
 
 	if err := svc.enableDocumentDB(context.Background(), inst, idleContext()); err != nil {
 		t.Fatalf("enableDocumentDB: %v", err)
@@ -93,6 +94,7 @@ func TestEnableDocumentDBCreatesTheExtensionInTheProjectsDatabase(t *testing.T) 
 func TestEnableDocumentDBStopsOnTheFirstSQLError(t *testing.T) {
 	kube := k8s.NewMockClient()
 	svc := documentDBService(t, kube)
+	seedGatewayCredential(kube, documentDBProject(), "a-generated-password")
 
 	if err := svc.enableDocumentDB(context.Background(), documentDBProject(), idleContext()); err != nil {
 		t.Fatalf("enableDocumentDB: %v", err)
@@ -115,6 +117,7 @@ func TestEnableDocumentDBStopsOnTheFirstSQLError(t *testing.T) {
 func TestEnableDocumentDBConfirmsTheExtensionIsInstalled(t *testing.T) {
 	kube := k8s.NewMockClient()
 	svc := documentDBService(t, kube)
+	seedGatewayCredential(kube, documentDBProject(), "a-generated-password")
 
 	if err := svc.enableDocumentDB(context.Background(), documentDBProject(), idleContext()); err != nil {
 		t.Fatalf("enableDocumentDB: %v", err)
@@ -230,5 +233,92 @@ func TestRegisterProjectWithoutDocumentDBRunsNoExtensionSQL(t *testing.T) {
 	}
 	if inst.Status != "ACTIVE" {
 		t.Errorf("status: got %q, want ACTIVE", inst.Status)
+	}
+}
+
+// The Mongo identity (EXC-409). It is a credential of its own, not one of the
+// project's Postgres roles: a Mongo login is created through
+// documentdb_api.create_user, and upstream's gateway skips that call when a
+// role of the name already exists — so reusing excalibase_app would leave the
+// Mongo side with no user at all. It is filed in the project's vault beside
+// the other role credentials rather than kept somewhere new.
+
+// documentDBServiceWithVault wires a service that can both run SQL and file
+// credentials, and returns the fake vault.
+func documentDBServiceWithVault(t *testing.T, kube *k8s.MockClient) (*ProvisioningService, *fakeVault) {
+	t.Helper()
+	svc := NewProvisioningService(documentDBStore(t), provisioner.NewFactory(), kube)
+	vault := newFakeVault()
+	svc.SetVault(vault)
+	return svc, vault
+}
+
+// seedGatewayCredential puts the Secret the provisioner writes in place.
+func seedGatewayCredential(kube *k8s.MockClient, inst *domain.DatabaseInstance, password string) {
+	kube.Secrets[inst.Namespace+"/"+k8s.DocumentDBCredentialSecretName(inst.ProjectID)] = map[string][]byte{
+		"username": []byte(k8s.DocumentDBGatewayUsername),
+		"password": []byte(password),
+	}
+}
+
+// The user is created through DocumentDB's own API, with the credential the
+// gateway will actually present, so the two cannot drift.
+func TestEnableDocumentDBCreatesTheMongoUserFromTheGatewaysOwnSecret(t *testing.T) {
+	kube := k8s.NewMockClient()
+	svc, _ := documentDBServiceWithVault(t, kube)
+	inst := documentDBProject()
+	seedGatewayCredential(kube, inst, "a-generated-password")
+
+	if err := svc.enableDocumentDB(context.Background(), inst, idleContext()); err != nil {
+		t.Fatalf("enableDocumentDB: %v", err)
+	}
+
+	created := execCommandsMentioning(kube, "create_user")
+	if len(created) != 1 {
+		t.Fatalf("create_user ran %d times: %v", len(created), kube.ExecCommands)
+	}
+	for _, want := range []string{k8s.DocumentDBGatewayUsername, "a-generated-password", "readWriteAnyDatabase"} {
+		if !strings.Contains(created[0], want) {
+			t.Errorf("create_user command is missing %q: %s", want, created[0])
+		}
+	}
+}
+
+// The same credential is filed in vault, so a customer reads their Mongo
+// identity where they read every other credential for the project.
+func TestEnableDocumentDBFilesTheMongoCredentialInVault(t *testing.T) {
+	kube := k8s.NewMockClient()
+	svc, vault := documentDBServiceWithVault(t, kube)
+	inst := documentDBProject()
+	seedGatewayCredential(kube, inst, "a-generated-password")
+
+	if err := svc.enableDocumentDB(context.Background(), inst, idleContext()); err != nil {
+		t.Fatalf("enableDocumentDB: %v", err)
+	}
+
+	stored, err := vault.Get(vaultCredentialPath(inst.ProjectID, roleDocumentDB))
+	if err != nil {
+		t.Fatalf("read the Mongo credential from vault: %v", err)
+	}
+	if stored["username"] != k8s.DocumentDBGatewayUsername {
+		t.Errorf("vault username: got %q", stored["username"])
+	}
+	if stored["password"] != "a-generated-password" {
+		t.Errorf("vault password does not match what the gateway presents: %q", stored["password"])
+	}
+}
+
+// Without the Secret there is no identity to create and the gateway could not
+// start anyway. That is a failure, not something to invent a password for.
+func TestEnableDocumentDBRefusesWhenTheGatewayCredentialIsMissing(t *testing.T) {
+	kube := k8s.NewMockClient()
+	svc, _ := documentDBServiceWithVault(t, kube)
+
+	err := svc.enableDocumentDB(context.Background(), documentDBProject(), idleContext())
+	if !errors.Is(err, ErrDocumentDBCredentialMissing) {
+		t.Fatalf("got %v, want ErrDocumentDBCredentialMissing", err)
+	}
+	if len(execCommandsMentioning(kube, "create_user")) != 0 {
+		t.Error("a Mongo user was created without a credential to create it with")
 	}
 }
