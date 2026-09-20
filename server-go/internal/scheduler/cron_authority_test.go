@@ -25,7 +25,7 @@ func cronRegistryRows() *sqlmock.Rows {
 func sweptCron(cfg CronRunnerConfig) CronRunnerConfig {
 	cfg.ProjectID = "proj_a"
 	cfg.Logger = log.New(io.Discard, "", 0)
-	cfg.IDGen = func() string { return "generated" }
+	cfg.IDGen = func() (string, error) { return "generated", nil }
 	cfg.Functions = knownFunctions{modules: map[string]bool{"proj_a/jobs": true}}
 	return cfg
 }

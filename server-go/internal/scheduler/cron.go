@@ -35,7 +35,7 @@ type CronRunnerConfig struct {
 	Logger *log.Logger
 	// IDGen overrides the scheduled-task id generator (tests use a
 	// deterministic stub; production uses base32Rand).
-	IDGen func() string
+	IDGen func() (string, error)
 }
 
 // DefaultCronMinInterval is the finest cron cadence the platform runs.
@@ -56,7 +56,7 @@ type CronRunner struct {
 	maxArgsBytes int
 	functions    FunctionRegistry
 	logger       *log.Logger
-	idGen        func() string
+	idGen        func() (string, error)
 	parser       cron.Parser
 }
 
@@ -245,7 +245,10 @@ func (cr *CronRunner) enqueue(
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	id := cr.idGen()
+	id, err := cr.idGen()
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO excalibase.excalibase_scheduled_functions
 		  (id, project_id, module_name, export_name, args, scheduled_for, status)
@@ -336,23 +339,18 @@ func nextHourlyUTC(now time.Time, minuteUTC int) time.Time {
 // runtime/ids.ts shape exactly).
 const base32Alphabet = "abcdefghijklmnopqrstuvwxyz234567"
 
-func base32RandID() string {
+// randRead is the entropy source, replaceable in tests.
+var randRead = rand.Read
+
+func base32RandID() (string, error) {
 	var buf [30]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		// crypto/rand failing is fatal in practice; fall back to a
-		// time-derived token so we don't crash the runner.
-		ns := time.Now().UnixNano()
-		for i := range buf {
-			buf[i] = base32Alphabet[ns&31]
-			ns >>= 5
-			if ns == 0 {
-				ns = time.Now().UnixNano()
-			}
-		}
-		return string(buf[:])
+	if _, err := randRead(buf[:]); err != nil {
+		// A guessable task id is worse than no task: refuse rather than
+		// fall back to anything derived from the clock.
+		return "", fmt.Errorf("generate task id: %w", err)
 	}
 	for i, b := range buf {
 		buf[i] = base32Alphabet[int(b)&31]
 	}
-	return string(buf[:])
+	return string(buf[:]), nil
 }
