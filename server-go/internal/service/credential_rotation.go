@@ -72,26 +72,43 @@ type credentialRotationTarget struct {
 // and proved. cdc_watcher is deliberately not rotated: its password is baked
 // into the deployed watcher workload's configuration, so changing it without
 // redeploying that workload stops the project's replication.
+// Rotation takes the project's lifecycle lease. Two rotations running at once
+// would each mint a password over the other's pending record and then write
+// the owner's row last-writer-wins, which can leave the database requiring a
+// value recorded nowhere. The lease is one key per project, so a rotation also
+// excludes — and is excluded by — pause, resume, restore and teardown.
 func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
+	if s.vault == nil || s.credVerifier == nil {
+		return nil, ErrCredentialRotationUnavailable
+	}
+	release, claimed, err := s.claimer().Claim(ctx, projectID, OperationRotation)
+	if err != nil {
+		return nil, fmt.Errorf("claim project for rotation: %w", err)
+	}
+	if !claimed {
+		return nil, fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
+	}
+	defer release()
+
+	// Work from the claimed row: whatever held the project before this
+	// rotation may have changed its status or its owner credential.
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return nil, err
 	}
-	if s.vault == nil || s.credVerifier == nil {
-		return nil, ErrCredentialRotationUnavailable
+	if domain.IsNotServable(inst.Status) {
+		return nil, fmt.Errorf("%w: %s", notServableErr(inst.Status), projectID)
 	}
 
-	targets, err := s.rotationTargets(inst)
+	filed, err := s.filedCredentialPaths(projectID)
 	if err != nil {
 		return nil, err
 	}
-	for _, target := range targets {
-		if err := s.rotateRoleCredential(ctx, inst, target); err != nil {
+	for _, target := range rotationTargets(inst, filed) {
+		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
 			return nil, fmt.Errorf("rotate %s credential: %w", target.role, err)
 		}
 	}
-
-	s.announceCredentialRotation(ctx, inst.ProjectID)
 	return s.GetCredentials(projectID)
 }
 
@@ -99,37 +116,32 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 // A platform role with no credential filed in vault is skipped: the platform
 // never created it, nothing caches it, and ALTER USER on a role the database
 // does not have would fail the whole rotation.
-func (s *ProvisioningService) rotationTargets(inst *domain.DatabaseInstance) ([]credentialRotationTarget, error) {
+func rotationTargets(inst *domain.DatabaseInstance, filed map[string]bool) []credentialRotationTarget {
 	targets := make([]credentialRotationTarget, 0, 3)
 	for _, role := range []string{roleAuthAdmin, roleApp} {
-		filed, err := s.credentialIsFiled(inst.ProjectID, role)
-		if err != nil {
-			return nil, err
-		}
-		if filed {
+		if filed[vaultCredentialPath(inst.ProjectID, role)] {
 			targets = append(targets, credentialRotationTarget{role: role, username: role})
 		}
 	}
 	return append(targets, credentialRotationTarget{
 		role: roleAdmin, username: inst.Username, owner: true,
-	}), nil
+	})
 }
 
-// credentialIsFiled reports whether the project has a current credential for
-// the role. It asks List rather than Get so a missing entry is not confused
-// with a vault that cannot be read — the latter must fail the rotation.
-func (s *ProvisioningService) credentialIsFiled(projectID, role string) (bool, error) {
+// filedCredentialPaths is every credential path the project holds, read once
+// per rotation. Presence is decided by List rather than by a failed Get, so a
+// vault that cannot be read fails the rotation instead of reading as a project
+// with nothing recorded.
+func (s *ProvisioningService) filedCredentialPaths(projectID string) (map[string]bool, error) {
 	paths, err := s.vault.List(vaultCredentialPrefix(projectID))
 	if err != nil {
-		return false, fmt.Errorf("list project credentials: %w", err)
+		return nil, fmt.Errorf("list project credentials: %w", err)
 	}
-	want := vaultCredentialPath(projectID, role)
+	filed := make(map[string]bool, len(paths))
 	for _, p := range paths {
-		if p == want {
-			return true, nil
-		}
+		filed[p] = true
 	}
-	return false, nil
+	return filed, nil
 }
 
 // rotateRoleCredential runs one role through the rotation sequence. It is
@@ -137,10 +149,15 @@ func (s *ProvisioningService) credentialIsFiled(projectID, role string) (bool, e
 // attempt adopts that password instead of minting a new one, so repeated
 // retries converge on a single value rather than chasing the database with
 // a fresh password each time.
-func (s *ProvisioningService) rotateRoleCredential(ctx context.Context, inst *domain.DatabaseInstance, target credentialRotationTarget) error {
+func (s *ProvisioningService) rotateRoleCredential(ctx context.Context, inst *domain.DatabaseInstance,
+	target credentialRotationTarget, filed map[string]bool) error {
+
 	pendingPath := vaultPendingCredentialPath(inst.ProjectID, target.role)
-	password, resumed := s.resumePendingPassword(pendingPath)
-	if !resumed {
+	password, err := s.resumePendingPassword(pendingPath, filed[pendingPath])
+	if err != nil {
+		return err
+	}
+	if password == "" {
 		password = generatePassword(rotatedPasswordLength)
 		record := roleCredentialRecord(inst, target.username, password)
 		record["state"] = pendingCredentialState
@@ -152,20 +169,20 @@ func (s *ProvisioningService) rotateRoleCredential(ctx context.Context, inst *do
 	if err := s.applyAndVerify(ctx, inst, target, password, pendingPath); err != nil {
 		return err
 	}
-	return s.promoteCredential(inst, target, password, pendingPath)
+	return s.promoteCredential(ctx, inst, target, password, pendingPath)
 }
 
 // applyAndVerify runs the ALTER and then asks the database whether the new
-// password opens it. The two answers together decide what happens to the
-// pending record:
+// password opens it. When it does, the rotation continues whatever the
+// statement reported.
 //
-//   - verified: the rotation continues, whatever the statement reported.
-//   - not verified, statement failed: positive evidence that nothing changed
-//     and the old password is still live, so the pending record is a residue
-//     and is rolled back.
-//   - not verified, statement succeeded: the password may well be live and
-//     only the check failed. The pending record stays so a retry can finish
-//     the rotation, and the caller is told the credential is unproven.
+// When it does not, the pending record may still be the only value that opens
+// the database — an earlier attempt's ALTER may have landed before this one
+// ever ran. A failed statement proves nothing about that: a restarting pod, a
+// paused project, an exec timeout and a genuinely rejected statement all look
+// the same from here. The one sound piece of evidence that nothing changed is
+// the CURRENTLY recorded credential still opening the database, so that is
+// what is asked, and only that answer allows the pending record to go.
 func (s *ProvisioningService) applyAndVerify(ctx context.Context, inst *domain.DatabaseInstance,
 	target credentialRotationTarget, password, pendingPath string) error {
 
@@ -174,13 +191,29 @@ func (s *ProvisioningService) applyAndVerify(ctx context.Context, inst *domain.D
 	if verifyErr == nil {
 		return nil
 	}
-	if alterErr == nil {
-		return fmt.Errorf("verify rotated credential: %w", verifyErr)
+	if !s.recordedCredentialStillOpensTheDatabase(ctx, inst, target) {
+		return fmt.Errorf("rotated %s credential could not be proved and neither could the recorded one, "+
+			"so the pending credential is kept for a retry: %w", target.role, errors.Join(alterErr, verifyErr))
 	}
 	if err := s.vault.Delete(pendingPath); err != nil {
-		return fmt.Errorf("alter password: %v; pending credential left in place: %w", alterErr, err)
+		return fmt.Errorf("roll back pending credential: %w", err)
 	}
-	return fmt.Errorf("alter password: %w", alterErr)
+	return fmt.Errorf("rotate %s password: %w", target.role, errors.Join(alterErr, verifyErr))
+}
+
+// recordedCredentialStillOpensTheDatabase reports whether the credential the
+// platform currently has on file for the role still works. True is the proof
+// that this attempt's ALTER did not take effect. Anything that leaves the
+// answer unknown — an unreadable record, a record with no password, a failed
+// connection — is not proof, and reads as false.
+func (s *ProvisioningService) recordedCredentialStillOpensTheDatabase(ctx context.Context,
+	inst *domain.DatabaseInstance, target credentialRotationTarget) bool {
+
+	record, err := s.vault.Get(vaultCredentialPath(inst.ProjectID, target.role))
+	if err != nil || record["password"] == "" {
+		return false
+	}
+	return s.credVerifier.VerifyRole(ctx, inst, target.username, record["password"]) == nil
 }
 
 // promoteCredential makes the proved password the current one: the vault copy
@@ -188,7 +221,7 @@ func (s *ProvisioningService) applyAndVerify(ctx context.Context, inst *domain.D
 // pending record is removed only once everything that reads the credential has
 // the new value, so an interruption anywhere in here leaves a retry something
 // to finish from.
-func (s *ProvisioningService) promoteCredential(inst *domain.DatabaseInstance,
+func (s *ProvisioningService) promoteCredential(ctx context.Context, inst *domain.DatabaseInstance,
 	target credentialRotationTarget, password, pendingPath string) error {
 
 	if err := s.vault.Put(vaultCredentialPath(inst.ProjectID, target.role),
@@ -204,20 +237,32 @@ func (s *ProvisioningService) promoteCredential(inst *domain.DatabaseInstance,
 	if err := s.vault.Delete(pendingPath); err != nil {
 		return fmt.Errorf("clear pending credential: %w", err)
 	}
+	// Announced per role, as each one lands. Holding the announcement until
+	// the whole rotation finishes would leave a consumer of an already
+	// replaced role serving a dead password for the rest of its TTL whenever
+	// a later role fails.
+	s.announceCredentialRotation(ctx, inst.ProjectID, target.role)
 	return nil
 }
 
 // resumePendingPassword returns the password an interrupted rotation already
-// recorded, if there is one. A vault read that fails is treated as "nothing
-// pending": the caller then writes a fresh pending record, and a vault that
-// cannot be written fails the rotation before the database is touched.
-func (s *ProvisioningService) resumePendingPassword(pendingPath string) (string, bool) {
+// recorded. filed says whether the project's credential listing contains the
+// pending path, so an absent record is told apart from a vault that cannot be
+// read: the first means there is nothing to resume, the second fails the
+// rotation rather than minting a second password over the first.
+func (s *ProvisioningService) resumePendingPassword(pendingPath string, filed bool) (string, error) {
+	if !filed {
+		return "", nil
+	}
 	record, err := s.vault.Get(pendingPath)
-	if err != nil || record == nil {
-		return "", false
+	if err != nil {
+		return "", fmt.Errorf("read pending credential: %w", err)
 	}
 	password := record["password"]
-	return password, password != ""
+	if password == "" {
+		return "", errors.New("pending credential record carries no password")
+	}
+	return password, nil
 }
 
 // alterRolePassword sets one role's password in the project's database.
@@ -227,11 +272,14 @@ func (s *ProvisioningService) resumePendingPassword(pendingPath string) (string,
 // The statement carries the password and a failing psql echoes the statement
 // it could not run, so the error is scrubbed of the value before it can reach
 // a log line or an API response.
+// The statement is streamed on stdin, never passed as an exec argument: the
+// client puts every argument into the exec request's URL, where the API
+// server records it in its audit log.
 func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domain.DatabaseInstance, username, password string) error {
-	sqlText := fmt.Sprintf("ALTER USER %s PASSWORD %s",
+	sqlText := fmt.Sprintf("ALTER USER %s PASSWORD %s;\n",
 		schema.QuoteIdent(username), schema.QuoteLiteral(password))
-	_, err := s.k8sClient.ExecInPod(ctx, inst.Namespace, inst.ProjectID+"-postgres-1", "postgres",
-		[]string{"psql", "-U", "postgres", "-c", sqlText})
+	_, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, inst.ProjectID+"-postgres-1", "postgres",
+		[]string{"psql", "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}, sqlText)
 	if err != nil {
 		return errors.New(redactSecret(err.Error(), password))
 	}
@@ -252,14 +300,15 @@ func redactSecret(text, secret string) string {
 // announceCredentialRotation tells the data plane to drop the credentials it
 // caches for the project. It reuses the policy-change subject every other
 // cache-invalidating change travels on, so consumers need one subscription.
-func (s *ProvisioningService) announceCredentialRotation(ctx context.Context, projectID string) {
+func (s *ProvisioningService) announceCredentialRotation(ctx context.Context, projectID, role string) {
 	if s.projectEvents == nil {
 		return
 	}
 	s.projectEvents.PublishPolicyChange(ctx, domain.PolicyChangeEvent{
 		ProjectID: projectID,
 		Kind:      domain.CredentialChangeKind,
-		Op:        "rotate",
+		Resource:  role,
+		Op:        domain.OpChangeUpdate,
 	})
 }
 

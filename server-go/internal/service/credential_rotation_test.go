@@ -63,7 +63,7 @@ func newRotationHarness(t *testing.T) *rotationHarness {
 		ProjectID: rotProject, OrgID: "org1", Namespace: rotNamespace,
 		DBType: domain.PostgreSQL, Tier: domain.Free, Status: "ACTIVE",
 		Host: "h.local", Port: &port, DatabaseName: "app",
-		Username: rotOwner, Password: testutil.FixturePassword(rotProject), SSLMode: "require",
+		Username: rotOwner, Password: testutil.FixturePassword(rotOwner), SSLMode: "require",
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
@@ -110,6 +110,22 @@ func (h *rotationHarness) pendingPaths(t *testing.T) []string {
 		}
 	}
 	return pending
+}
+
+// onlyTheSeededPasswordsWork models a database whose roles still hold the
+// passwords the harness seeded — nothing this rotation minted opens it.
+func (h *rotationHarness) onlyTheSeededPasswordsWork() func(string, string) error {
+	live := map[string]string{
+		rotOwner:      testutil.FixturePassword(rotOwner),
+		roleAuthAdmin: testutil.FixturePassword(roleAuthAdmin),
+		roleApp:       testutil.FixturePassword(roleApp),
+	}
+	return func(username, password string) error {
+		if live[username] == password && password != "" {
+			return nil
+		}
+		return errors.New("authentication failed")
+	}
 }
 
 func (h *rotationHarness) storedPassword(t *testing.T) string {
@@ -162,12 +178,12 @@ func TestRotateCredentialsLeavesPendingRecoverableWhenPersistFails(t *testing.T)
 }
 
 // When the statement never reached the database, the old password is still
-// the live one. Keeping a pending value there would tell a later recovery to
-// promote a password nothing accepts.
+// the live one — and the proof of that is the old password itself opening the
+// database. Only then is the pending value a residue to clear.
 func TestRotateCredentialsRollsBackPendingWhenAlterFails(t *testing.T) {
 	h := newRotationHarness(t)
 	h.kube.WildcardExecError = errors.New("exec refused")
-	h.verifier.accept = func(string, string) error { return errors.New("authentication failed") }
+	h.verifier.accept = h.onlyTheSeededPasswordsWork()
 
 	before := h.storedPassword(t)
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
@@ -181,6 +197,174 @@ func TestRotateCredentialsRollsBackPendingWhenAlterFails(t *testing.T) {
 	}
 	if left := h.pendingPaths(t); len(left) != 0 {
 		t.Errorf("a failed statement leaves no pending residue, got %v", left)
+	}
+}
+
+// The dangerous case the rollback rule must not get wrong: an earlier
+// attempt's ALTER did land, so the database already requires the pending
+// password. On the retry the pod is restarting, so the statement errors and
+// nothing verifies — including the recorded credential. A failed statement is
+// not evidence that THIS attempt is the one that changed nothing, so the
+// pending value is the only thing that still opens the database and it must
+// survive.
+func TestRotateCredentialsKeepsPendingWhenNeitherCredentialCanBeProved(t *testing.T) {
+	h := newRotationHarness(t)
+	h.failing.updateErr = errors.New("platform database unavailable")
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
+		t.Fatal("the first attempt must report the failed persist")
+	}
+	recorded := h.vault.data[rotAdminPending]["password"]
+	if recorded == "" {
+		t.Fatal("the first attempt recorded no pending credential")
+	}
+
+	// The retry finds a database it cannot reach at all. The roles before the
+	// owner already finished, so the owner is the rotation that gets there.
+	h.failing.updateErr = nil
+	delete(h.vault.data, rotAuthCurrent)
+	delete(h.vault.data, rotAppCurrent)
+	h.kube.WildcardExecError = errors.New("pod is restarting")
+	h.verifier.accept = func(string, string) error { return errors.New("connection refused") }
+
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
+		t.Fatal("a rotation that proved nothing must report it")
+	}
+	if got := h.vault.data[rotAdminPending]["password"]; got != recorded {
+		t.Fatal("the pending credential was discarded while it was the only one that opens the database")
+	}
+}
+
+// Rotation is a lifecycle operation. It takes the project's lease so it
+// cannot interleave with a pause, a resume, a restore or a teardown, and so
+// two rotations cannot mint a password over each other's pending record.
+func TestRotateCredentialsTakesAndReleasesTheProjectLease(t *testing.T) {
+	h := newRotationHarness(t)
+	claimer := &countingClaimer{}
+	h.svc.SetOperationClaimer(claimer)
+
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+	if claimer.claims != 1 || claimer.releases != 1 {
+		t.Fatalf("lease claims=%d releases=%d, want 1 and 1", claimer.claims, claimer.releases)
+	}
+	if len(claimer.heldNames) != 1 || claimer.heldNames[0] != OperationRotation {
+		t.Errorf("lease held as %v, want %s", claimer.heldNames, OperationRotation)
+	}
+}
+
+// A project another operation already holds is busy. Rotating underneath a
+// pause or a teardown would change a password on a database being shut down
+// or removed.
+func TestRotateCredentialsRefusedWhileAnotherOperationHoldsTheProject(t *testing.T) {
+	h := newRotationHarness(t)
+	h.svc.SetOperationClaimer(&heldClaimer{})
+
+	_, err := h.svc.RotateCredentials(context.Background(), rotProject)
+	if !errors.Is(err, ErrProjectOperationRunning) {
+		t.Fatalf("err = %v, want the project-busy refusal", err)
+	}
+	if len(h.kube.ExecCommands) != 0 {
+		t.Error("a refused rotation must not touch the database")
+	}
+	if left := h.pendingPaths(t); len(left) != 0 {
+		t.Errorf("a refused rotation must record nothing, got %v", left)
+	}
+}
+
+// A lease that cannot be taken at all is not permission to proceed.
+func TestRotateCredentialsRefusedWhenTheLeaseCannotBeTaken(t *testing.T) {
+	h := newRotationHarness(t)
+	h.svc.SetOperationClaimer(&countingClaimer{claimErr: errors.New("platform database unavailable")})
+
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
+		t.Fatal(testExpectedErr)
+	}
+	if len(h.kube.ExecCommands) != 0 {
+		t.Error("a rotation with no lease must not touch the database")
+	}
+}
+
+// A project on its way out is not one to rotate: the roles behind the
+// credential are about to be revoked and the database removed.
+func TestRotateCredentialsRefusesAProjectBeingTornDown(t *testing.T) {
+	h := newRotationHarness(t)
+	if _, err := h.store.BeginDeletion(rotProject, nil); err != nil {
+		t.Fatalf("begin deletion: %v", err)
+	}
+
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
+		t.Fatal(testExpectedErr)
+	}
+	if len(h.kube.ExecCommands) != 0 {
+		t.Error("a project being torn down must not have its password changed")
+	}
+}
+
+// A vault read that fails is not "nothing pending". Treating it as such mints
+// a second password over the first and leaves whichever one the database took
+// recorded nowhere.
+func TestRotateCredentialsFailsWhenThePendingRecordCannotBeRead(t *testing.T) {
+	h := newRotationHarness(t)
+	h.failing.updateErr = errors.New("platform database unavailable")
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
+		t.Fatal("the first attempt must report the failed persist")
+	}
+	recorded := h.vault.data[rotAdminPending]["password"]
+
+	h.failing.updateErr = nil
+	h.svc.SetVault(&getRefusingVault{fakeVault: h.vault, path: rotAdminPending, refuse: errors.New("vault unreachable")})
+
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
+		t.Fatal("a pending record that cannot be read must fail the rotation")
+	}
+	if got := h.vault.data[rotAdminPending]["password"]; got != recorded {
+		t.Error("the unreadable pending record must be left exactly as it was")
+	}
+}
+
+// getRefusingVault refuses to read one path, the transient vault outage that
+// must never read as an absent record.
+type getRefusingVault struct {
+	*fakeVault
+	path   string
+	refuse error
+}
+
+func (v *getRefusingVault) Get(p string) (map[string]string, error) {
+	if p == v.path {
+		return nil, v.refuse
+	}
+	return v.fakeVault.Get(p)
+}
+
+// Each role is announced as it is promoted. Waiting for the whole rotation
+// would leave the auth service serving a password the database stopped
+// accepting the moment auth_admin was replaced.
+func TestRotateCredentialsAnnouncesEachRoleAsItIsPromoted(t *testing.T) {
+	h := newRotationHarness(t)
+	// The owner is rotated last, and its persist fails — so the roles before
+	// it are promoted and the rotation as a whole does not finish.
+	h.failing.updateErr = errors.New("platform database unavailable")
+
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
+		t.Fatal(testExpectedErr)
+	}
+
+	announced := map[string]bool{}
+	for _, evt := range h.events.events {
+		if evt.Kind != domain.CredentialChangeKind || evt.ProjectID != rotProject {
+			t.Fatalf("unexpected event: %+v", evt)
+		}
+		announced[evt.Resource] = true
+	}
+	for _, role := range []string{roleAuthAdmin, roleApp} {
+		if !announced[role] {
+			t.Errorf("%s was replaced but consumers were not told", role)
+		}
+	}
+	if announced[roleAdmin] {
+		t.Error("the owner was not promoted, so nothing may be announced for it")
 	}
 }
 
@@ -234,12 +418,19 @@ func TestRotateCredentialsPublishesCredentialChange(t *testing.T) {
 		t.Fatalf("RotateCredentials: %v", err)
 	}
 
-	if len(h.events.events) != 1 {
-		t.Fatalf("expected one change event, got %d", len(h.events.events))
+	if len(h.events.events) != 3 {
+		t.Fatalf("expected one change event per rotated role, got %d", len(h.events.events))
 	}
-	evt := h.events.events[0]
-	if evt.ProjectID != rotProject || evt.Kind != domain.CredentialChangeKind || evt.Op != "rotate" {
-		t.Errorf("unexpected event: project=%s kind=%s op=%s", evt.ProjectID, evt.Kind, evt.Op)
+	for _, evt := range h.events.events {
+		if evt.ProjectID != rotProject || evt.Kind != domain.CredentialChangeKind {
+			t.Errorf("unexpected event: project=%s kind=%s", evt.ProjectID, evt.Kind)
+		}
+		if evt.Op != domain.OpChangeUpdate {
+			t.Errorf("op = %q, want one of the documented operations", evt.Op)
+		}
+		if evt.Resource == "" {
+			t.Error("the event must name the role whose credential changed")
+		}
 	}
 }
 
@@ -284,7 +475,7 @@ func TestRotateCredentialsReplacesEveryFiledRoleOwnerLast(t *testing.T) {
 		t.Error("the owner's vault copy and the project row must agree")
 	}
 
-	order := rotatedRoleOrder(t, h.kube.ExecCommands)
+	order := rotatedRoleOrder(t, h.kube.ExecStdin)
 	want := []string{roleAuthAdmin, roleApp, rotOwner}
 	if len(order) != len(want) {
 		t.Fatalf("expected %d roles altered, got %v", len(want), order)
@@ -299,15 +490,15 @@ func TestRotateCredentialsReplacesEveryFiledRoleOwnerLast(t *testing.T) {
 // rotatedRoleOrder extracts the role each ALTER named, in call order. It
 // reads only the quoted identifier — never the rest of the statement, which
 // carries the password.
-func rotatedRoleOrder(t *testing.T, commands []string) []string {
+func rotatedRoleOrder(t *testing.T, statements []string) []string {
 	t.Helper()
 	var roles []string
-	for _, cmd := range commands {
-		i := strings.Index(cmd, "ALTER USER \"")
+	for _, stmt := range statements {
+		i := strings.Index(stmt, "ALTER USER \"")
 		if i < 0 {
 			continue
 		}
-		rest := cmd[i+len("ALTER USER \""):]
+		rest := stmt[i+len("ALTER USER \""):]
 		end := strings.Index(rest, "\"")
 		if end < 0 {
 			t.Fatalf("malformed ALTER statement in call %d", len(roles))
@@ -315,6 +506,34 @@ func rotatedRoleOrder(t *testing.T, commands []string) []string {
 		roles = append(roles, rest[:end])
 	}
 	return roles
+}
+
+// The Kubernetes API server records every exec command parameter in its audit
+// log, and the client puts each one in the request URL. The statement carries
+// the password, so it travels on stdin and never as an argument.
+func TestRotateCredentialsNeverPutsThePasswordInAnExecArgument(t *testing.T) {
+	h := newRotationHarness(t)
+
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+
+	if len(h.kube.ExecStdin) != 3 {
+		t.Fatalf("expected one statement per role on stdin, got %d", len(h.kube.ExecStdin))
+	}
+	for _, argv := range h.kube.ExecCommands {
+		if strings.Contains(argv, "ALTER USER") || strings.Contains(argv, "PASSWORD") {
+			t.Errorf("the statement reached the exec arguments: %s", argv)
+		}
+	}
+	for _, path := range []string{rotAdminCurrent, rotAuthCurrent, rotAppCurrent} {
+		password := h.vault.data[path]["password"]
+		for _, argv := range h.kube.ExecCommands {
+			if password != "" && strings.Contains(argv, password) {
+				t.Error("a rotated password reached the exec arguments")
+			}
+		}
+	}
 }
 
 // A role the platform never filed has no credential to rotate and no
@@ -327,7 +546,7 @@ func TestRotateCredentialsSkipsRolesWithNoFiledCredential(t *testing.T) {
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err != nil {
 		t.Fatalf("RotateCredentials: %v", err)
 	}
-	if order := rotatedRoleOrder(t, h.kube.ExecCommands); len(order) != 2 {
+	if order := rotatedRoleOrder(t, h.kube.ExecStdin); len(order) != 2 {
 		t.Errorf("only filed roles are rotated, got %v", order)
 	}
 	if _, ok := h.vault.data[rotAppCurrent]; ok {
@@ -346,7 +565,7 @@ func TestRotateCredentialsRefusesWithoutAVerifier(t *testing.T) {
 	if !errors.Is(err, ErrCredentialRotationUnavailable) {
 		t.Fatalf("err = %v, want ErrCredentialRotationUnavailable", err)
 	}
-	if order := rotatedRoleOrder(t, h.kube.ExecCommands); len(order) != 0 {
+	if order := rotatedRoleOrder(t, h.kube.ExecStdin); len(order) != 0 {
 		t.Errorf("nothing may be altered without a verifier, got %v", order)
 	}
 }
@@ -381,7 +600,7 @@ func TestRotateCredentialsKeepsPendingWhenVerificationFailsAfterASuccessfulAlter
 	if left := h.pendingPaths(t); len(left) != 1 || left[0] != rotAdminPending {
 		t.Fatalf("the unverified credential must stay recoverable, got %v", left)
 	}
-	if h.storedPassword(t) != testutil.FixturePassword(rotProject) {
+	if h.storedPassword(t) != testutil.FixturePassword(rotOwner) {
 		t.Error("an unverified credential must not be promoted onto the row")
 	}
 }
@@ -405,7 +624,7 @@ func TestRotateCredentialsRefusesWhenTheVaultCannotBeListed(t *testing.T) {
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
 		t.Fatal(testExpectedErr)
 	}
-	if order := rotatedRoleOrder(t, h.kube.ExecCommands); len(order) != 0 {
+	if order := rotatedRoleOrder(t, h.kube.ExecStdin); len(order) != 0 {
 		t.Errorf("nothing may be altered against an unreadable vault, got %v", order)
 	}
 }
@@ -419,7 +638,7 @@ func TestRotateCredentialsRefusesWhenThePendingRecordCannotBeWritten(t *testing.
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
 		t.Fatal(testExpectedErr)
 	}
-	if order := rotatedRoleOrder(t, h.kube.ExecCommands); len(order) != 0 {
+	if order := rotatedRoleOrder(t, h.kube.ExecStdin); len(order) != 0 {
 		t.Errorf("nothing may be altered before the password is recorded, got %v", order)
 	}
 }
