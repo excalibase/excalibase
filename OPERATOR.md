@@ -580,6 +580,11 @@ Taking a lease waits at most 2s for a pool connection. A burst of lifecycle
 calls therefore degrades into `409 project is busy` rather than parking every
 request on a drained pool.
 
+An org cascade (`DELETE /api/admin/orgs/{orgId}?cascade=true`) deprovisions
+the org's projects one at a time, so it holds one lifecycle lease however
+many projects the org has. The arithmetic above does not scale with cascade
+size; the cascade takes longer instead.
+
 Studio + REST API surface is identical to K8s mode — the platform
 dispatches to a `BackupAdapter` based on the project's `DeploymentMode`
 so the user-visible behaviour is uniform.
@@ -831,6 +836,29 @@ Secret. If it still fails, check provisioning's log for
 `NATS auth callout disabled` (the issuer seed is missing, so *every*
 connection is being refused) and confirm the `platform-nats` Secret was
 seeded by the bootstrap Job.
+
+## 6.6. Project database credential rotation
+
+`POST /api/provision/{id}/credentials/rotate` replaces the passwords of every
+platform role filed under `projects/{id}/credentials/` — `auth_admin`, then
+`excalibase_app`, then the project owner, which is the credential the call
+returns. `cdc_watcher` is not rotated: its password is baked into the deployed
+watcher's configuration, so changing it would stop the project's replication.
+
+Each role is rotated in one order: the new password is written to
+`projects/{id}/credentials/pending/<role>`, `ALTER USER` is applied, the
+password is proved by opening the database with it, and only then does it
+replace `projects/{id}/credentials/<role>` (and the project row, for the
+owner). The pending entry is deleted last. So a pending entry you find in
+vault is an interrupted rotation, not corruption: **re-run the rotate call**
+and it finishes from wherever it stopped, reusing the recorded password
+rather than minting another. A rotation whose `ALTER USER` never landed
+rolls its own pending entry back, leaving the old password live.
+
+On success the platform publishes a `credential` change on
+`policies.{projectId}.changed` so the engine and the auth service drop the
+credentials they cache instead of holding a dead password until their TTL
+expires.
 
 ## 7. Image upgrade
 
