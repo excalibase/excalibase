@@ -43,6 +43,11 @@ func provisionRouter(t *testing.T, store storage.InstanceStore) chi.Router {
 	t.Helper()
 	mock := k8s.NewMockClient()
 	mock.WildcardPodReady = true
+	return provisionRouterOn(t, store, mock)
+}
+
+func provisionRouterOn(t *testing.T, store storage.InstanceStore, mock *k8s.MockClient) chi.Router {
+	t.Helper()
 	svc := service.NewProvisioningService(store,
 		provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
 	h := NewProvisioningHandler(svc, nil)
@@ -82,6 +87,40 @@ func TestProvision_OrgAtItsLimitAnswers409(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), "org-secret") {
 		t.Fatalf("the response must not echo the organisation id: %s", w.Body.String())
+	}
+}
+
+// The organisation's limit is what the caller can act on, so it is the answer
+// they get — a full cluster must not turn their 409 into a 400 about capacity
+// they are not asking for. The limit is therefore resolved before anything
+// about the cluster is looked at.
+func TestProvision_OrgAtItsLimitAnswers409EvenOnAFullCluster(t *testing.T) {
+	mock := k8s.NewMockClient()
+	mock.WildcardPodReady = true
+	// Every milli of the cluster is already requested: a provision that got
+	// as far as the capacity check would be refused 400.
+	mock.Capacity = k8s.ClusterCapacity{
+		AllocatableCPUMilli: 2000, AllocatableMemBytes: 4 << 30,
+		RequestedCPUMilli: 2000, RequestedMemBytes: 4 << 30,
+	}
+	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj-held00002": {ProjectID: "proj-held00002", OrgID: "org-full", Tier: domain.Free, Status: "ACTIVE"},
+	}}
+	r := provisionRouterOn(t, store, mock)
+
+	w := doRequest(r, "POST", testProvisionPath,
+		`{"projectName":"second","orgId":"org-full","databaseType":"POSTGRESQL","tier":"FREE"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409; body %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error != orgLimitRefusal {
+		t.Fatalf("body: got %q, want %q", body.Error, orgLimitRefusal)
 	}
 }
 

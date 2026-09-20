@@ -318,6 +318,14 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, err
 	}
 
+	// The organisation's limit is answered before anything about the cluster
+	// is looked at, so a caller who has used up their projects is told that
+	// rather than about capacity they are not asking for. The slot is still
+	// taken atomically at insert time; this only fixes which refusal wins.
+	if err := s.EnsureOrgProjectCapacity(ctx, req.OrgID, req.Tier); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+
 	s.applyBackupDefaults(req, tier)
 
 	if err := s.enforceBackupTierPolicy(req, tier); err != nil {
