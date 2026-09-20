@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestPostgresMajorsAreTheFiveSupportedOnes(t *testing.T) {
+func TestPostgresMajorsAreTheFourSupportedOnes(t *testing.T) {
 	got := PostgresMajors()
-	want := []string{"14", "15", "16", "17", "18"}
+	want := []string{"14", "15", "16", "17"}
 	if len(got) != len(want) {
 		t.Fatalf("majors: got %v, want %v", got, want)
 	}
@@ -27,7 +27,9 @@ func TestPostgresMajorsIsACopy(t *testing.T) {
 }
 
 func TestLookupPostgresMajorRejectsUnknown(t *testing.T) {
-	for _, major := range []string{"13", "19", "17.2", "", "  ", "latest"} {
+	// 18 is refused exactly like 13: it is not in the catalogue, so nothing
+	// downstream can be asked to provision it.
+	for _, major := range []string{"13", "18", "19", "17.2", "", "  ", "latest"} {
 		if _, ok := LookupPostgresMajor(major); ok {
 			t.Errorf("LookupPostgresMajor(%q) accepted an unsupported major", major)
 		}
@@ -45,10 +47,10 @@ func TestLookupPostgresMajorTrimsWhitespace(t *testing.T) {
 }
 
 func TestDocumentDBSupportedMatchesUpstreamPackaging(t *testing.T) {
-	// Upstream publishes the Debian 12 DocumentDB packages for 16, 17 and 18
-	// only. 14 and 15 must report false so a project asking for DocumentDB
-	// there is refused before anything is installed.
-	tests := map[string]bool{"14": false, "15": false, "16": true, "17": true, "18": true}
+	// Upstream publishes the Debian 12 DocumentDB packages for 16 and 17 only.
+	// 14 and 15 must report false so a project asking for DocumentDB there is
+	// refused before anything is installed.
+	tests := map[string]bool{"14": false, "15": false, "16": true, "17": true}
 	for major, want := range tests {
 		if got := DocumentDBSupported(major); got != want {
 			t.Errorf("DocumentDBSupported(%q): got %v, want %v", major, got, want)

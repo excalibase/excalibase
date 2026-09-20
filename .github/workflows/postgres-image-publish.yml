@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [matrix]
     strategy:
-      # Serial: five Postgres images at once is a lot of registry traffic for
+      # Serial: four Postgres images at once is a lot of registry traffic for
       # no gain, and a failure part-way is easier to read one major at a time.
       max-parallel: 1
       fail-fast: false

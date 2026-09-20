@@ -8,6 +8,10 @@
 #     agree entry-for-entry — TestClusterImageCatalogMatchesCatalog fails if it
 #     drifts.
 #
+# PostgreSQL 18 is deliberately absent. It is too new to put under a tenant's
+# data; adding it is a decision, not a version bump, and until it is made a
+# request naming 18 is refused exactly like a request naming 13.
+#
 # baseImage and image are both pinned by digest. A floating tag would let the
 # bits under a provisioned cluster change without anything in the platform
 # recording that it happened.
@@ -19,7 +23,7 @@
 # here, so the file cannot quietly fall behind the registry.
 #
 # documentdb records whether the image for that major carries the DocumentDB
-# extension. Upstream ships the Debian 12 packages for 16, 17 and 18 only, so
+# extension. Upstream ships the Debian 12 packages for 16 and 17 only, so
 # 14 and 15 cannot offer it and a request asking for it there is refused at the
 # API rather than failing at install time.
 documentDBVersion: "0.114-0"
@@ -35,7 +39,4 @@ majors:
     documentdb: true
   - major: "17"
     baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:9f9286957d1030e0b5964804b557c635603a296d26c6212372f9d416ebb6f168
-    documentdb: true
-  - major: "18"
-    baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:045f843b885679b7f1265c2961f3fa66c2d374e9ebe1dfcc4aa7fb3b8e58bd1f
     documentdb: true
