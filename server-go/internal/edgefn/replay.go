@@ -3,9 +3,6 @@ package edgefn
 import (
 	"context"
 	"log"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -259,22 +256,4 @@ func (r *Replayer) stateFor(projectID string) *replayState {
 		r.state[projectID] = state
 	}
 	return state
-}
-
-// ReplayConfigFromEnv reads EXCALIBASE_FN_REPLAY_ENABLED (default true) and
-// EXCALIBASE_FN_REPLAY_POLL_MS (default 15000). Collaborators are the
-// caller's to wire.
-func ReplayConfigFromEnv() (bool, ReplayConfig) {
-	cfg := ReplayConfig{Interval: DefaultReplayInterval}
-	enabled := true
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("EXCALIBASE_FN_REPLAY_ENABLED"))) {
-	case "0", "false", "no", "off":
-		enabled = false
-	}
-	if v := os.Getenv("EXCALIBASE_FN_REPLAY_POLL_MS"); v != "" {
-		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
-			cfg.Interval = time.Duration(ms) * time.Millisecond
-		}
-	}
-	return enabled, cfg
 }

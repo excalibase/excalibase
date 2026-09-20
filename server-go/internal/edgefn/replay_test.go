@@ -334,24 +334,6 @@ func TestReplayConfig_Defaults(t *testing.T) {
 	}
 }
 
-func TestReplayConfigFromEnv(t *testing.T) {
-	t.Setenv("EXCALIBASE_FN_REPLAY_ENABLED", "false")
-	t.Setenv("EXCALIBASE_FN_REPLAY_POLL_MS", "2500")
-	enabled, cfg := ReplayConfigFromEnv()
-	if enabled {
-		t.Fatal("expected replay disabled")
-	}
-	if cfg.Interval != 2500*time.Millisecond {
-		t.Fatalf("interval: got %v", cfg.Interval)
-	}
-	t.Setenv("EXCALIBASE_FN_REPLAY_ENABLED", "")
-	t.Setenv("EXCALIBASE_FN_REPLAY_POLL_MS", "garbage")
-	enabled, cfg = ReplayConfigFromEnv()
-	if !enabled || cfg.Interval != DefaultReplayInterval {
-		t.Fatalf("expected enabled with default interval, got %v %v", enabled, cfg.Interval)
-	}
-}
-
 // --- RuntimeClient.Status ---
 
 func TestRuntimeClient_Status_ReadsBootIDAndScripts(t *testing.T) {

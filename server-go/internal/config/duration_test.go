@@ -76,14 +76,27 @@ func TestParsePlatformDBMaxConnsFallsBackOnlyWhenUnset(t *testing.T) {
 // plus one query cannot work, so it is refused rather than silently replaced
 // — the operator would otherwise never learn their setting was ignored.
 func TestParsePlatformDBMaxConnsRefusesUnusableSizes(t *testing.T) {
-	for _, raw := range []string{"ten", "0", "-5", "1", "5"} {
+	for _, raw := range []string{"ten", "0", "-5", "1", "5", "6"} {
 		if _, err := parsePlatformDBMaxConns(raw); err == nil {
 			t.Errorf("%q must be refused, not silently replaced by the default", raw)
 		}
 	}
 	_, err := parsePlatformDBMaxConns("3")
-	if err == nil || !strings.Contains(err.Error(), "6") {
+	if err == nil || !strings.Contains(err.Error(), "7") {
 		t.Errorf("the error must state the minimum, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "5 standing") {
+		t.Errorf("the error must explain the standing claims, got %v", err)
+	}
+}
+
+// The function scheduler's cron half leads on the platform database too, so
+// it is a fifth standing claim and the minimum pool has to account for it.
+func TestMinPlatformDBMaxConnsCountsTheCronLeadershipClaim(t *testing.T) {
+	const standingClaims = 5 // backup, idle pause, storage reap, restore sweep, function cron
+	if MinPlatformDBMaxConns != standingClaims+2 {
+		t.Errorf("minimum pool: got %d, want %d (%d standing claims + one operation + one query)",
+			MinPlatformDBMaxConns, standingClaims+2, standingClaims)
 	}
 }
 
