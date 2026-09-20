@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,10 +52,22 @@ func OverridesFromEnv() Overrides {
 	}
 }
 
-// DSN composes a lib/pq connection string from vault credentials. An
-// explicit host override is a port-forward, which has no TLS, so it flips
-// sslmode to disable unless a mode is named.
-func DSN(creds map[string]string, o Overrides) string {
+// dsnField is one key=value pair of a lib/pq connection string. The value is
+// always quoted and escaped, so a credential carrying a space or a quote is
+// carried as data rather than ending the field it sits in.
+func dsnField(key, value string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value)
+	return key + "='" + escaped + "'"
+}
+
+// ErrTransportSecurityUnstated is returned when a host override names no
+// transport security mode. An override is a port-forward and usually has no
+// TLS, but inferring that would silently downgrade a connection carrying a
+// tenant's credentials, so the mode has to be stated.
+var ErrTransportSecurityUnstated = errors.New("a host override must state its ssl mode")
+
+// DSNFor composes a lib/pq connection string from vault credentials.
+func DSNFor(creds map[string]string, o Overrides) (string, error) {
 	host, port := creds["host"], creds["port"]
 	if o.Host != "" {
 		host = o.Host
@@ -62,14 +75,33 @@ func DSN(creds map[string]string, o Overrides) string {
 	if o.Port != "" {
 		port = o.Port
 	}
-	sslmode := "require"
-	if o.SSLMode != "" {
-		sslmode = o.SSLMode
-	} else if o.Host != "" {
-		sslmode = "disable"
+	sslmode := o.SSLMode
+	if sslmode == "" {
+		if o.Host != "" {
+			return "", ErrTransportSecurityUnstated
+		}
+		sslmode = "require"
 	}
-	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		host, port, creds["username"], creds["password"], creds["database"], sslmode)
+	fields := []string{
+		dsnField("host", host),
+		dsnField("port", port),
+		dsnField("user", creds["username"]),
+		dsnField("password", creds["password"]),
+		dsnField("dbname", creds["database"]),
+		dsnField("sslmode", sslmode),
+	}
+	return strings.Join(fields, " "), nil
+}
+
+// DSN is DSNFor for the callers that have already established their
+// overrides are complete; an unstated mode yields an empty string rather
+// than a downgraded connection.
+func DSN(creds map[string]string, o Overrides) string {
+	dsn, err := DSNFor(creds, o)
+	if err != nil {
+		return ""
+	}
+	return dsn
 }
 
 // PoolLimits bound what the cache costs. A pool holds connections on the
@@ -134,9 +166,14 @@ func (l PoolLimits) withDefaults() PoolLimits {
 
 // poolDSN composes the connection string a cached pool is opened with: the
 // vault address plus the session bounds every statement on it runs under.
-func poolDSN(creds map[string]string, o Overrides, l PoolLimits) string {
-	return fmt.Sprintf("%s options='-c statement_timeout=%d -c lock_timeout=%d'",
-		DSN(creds, o), l.StatementTimeout.Milliseconds(), l.LockTimeout.Milliseconds())
+func poolDSN(creds map[string]string, o Overrides, l PoolLimits) (string, error) {
+	base, err := DSNFor(creds, o)
+	if err != nil {
+		return "", err
+	}
+	options := fmt.Sprintf("-c statement_timeout=%d -c lock_timeout=%d",
+		l.StatementTimeout.Milliseconds(), l.LockTimeout.Milliseconds())
+	return base + " " + dsnField("options", options), nil
 }
 
 // Opener hands out a pool per managed project, keeping one pool per project
@@ -192,7 +229,11 @@ func (o *Opener) Open(_ context.Context, projectID string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s credentials for %s: %w", appRole, projectID, err)
 	}
-	db, err := sql.Open("postgres", poolDSN(creds, o.overrides, o.limits))
+	dsn, err := poolDSN(creds, o.overrides, o.limits)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database for %s: %w", projectID, err)
 	}

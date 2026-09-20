@@ -12,8 +12,11 @@ import (
 // the client side is not enough — the server keeps running the statement and
 // holding the connection — so every pooled connection carries its own bound.
 func TestPoolDSN_CarriesStatementAndLockTimeouts(t *testing.T) {
-	dsn := poolDSN(appCreds()["projects/proj_a/credentials/excalibase_app"], Overrides{},
+	dsn, err := poolDSN(appCreds()["projects/proj_a/credentials/excalibase_app"], Overrides{},
 		PoolLimits{StatementTimeout: 30 * time.Second, LockTimeout: 5 * time.Second}.withDefaults())
+	if err != nil {
+		t.Fatalf("poolDSN: %v", err)
+	}
 
 	for _, want := range []string{"statement_timeout=30000", "lock_timeout=5000"} {
 		if !strings.Contains(dsn, want) {
