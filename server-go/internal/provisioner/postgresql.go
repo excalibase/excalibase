@@ -133,8 +133,11 @@ func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.Pro
 		Parameters:     req.Parameters,
 		Tags:           req.Tags,
 		// The extension's libraries must be preloaded by the cluster that is
-		// about to be created; there is no later opportunity (EXC-409).
-		DocumentDB: req.DocumentDB,
+		// about to be created; there is no later opportunity (EXC-409). The
+		// gateway image travels with it so the cluster, not the plugin's
+		// default, decides what runs in this tenant's pod.
+		DocumentDB:             req.DocumentDB,
+		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{
@@ -328,8 +331,11 @@ func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.Provisi
 		Parameters:     req.Parameters,
 		Tags:           req.Tags,
 		// The extension's libraries must be preloaded by the cluster that is
-		// about to be created; there is no later opportunity (EXC-409).
-		DocumentDB: req.DocumentDB,
+		// about to be created; there is no later opportunity (EXC-409). The
+		// gateway image travels with it so the cluster, not the plugin's
+		// default, decides what runs in this tenant's pod.
+		DocumentDB:             req.DocumentDB,
+		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{

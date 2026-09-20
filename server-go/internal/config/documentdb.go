@@ -9,6 +9,22 @@ package config
 // once so the cluster spec and the SQL that runs on the new database cannot
 // disagree about it.
 
+// DocumentDBPluginName is the CNPG-I plugin that adds the gateway container
+// to a DocumentDB project's Postgres pods. It is upstream's identity, not a
+// name this platform chooses: the plugin answers to it, CloudNativePG
+// discovers the plugin's Service by it, and a cluster asks for the sidecar by
+// naming it in spec.plugins. A cluster that names it nowhere is never passed
+// to the plugin at all, which is how a project without DocumentDB is left
+// exactly as it was.
+const DocumentDBPluginName = "cnpg-i-sidecar-injector.documentdb.io"
+
+// DocumentDBGatewayPort is the port the gateway listens on for the MongoDB
+// wire protocol inside the pod. Upstream's default, and deliberately not
+// 27017: the gateway shares a pod with Postgres and the number is only ever
+// dialled through a Service, so there is nothing to gain by taking the port a
+// reader would expect a real mongod on.
+const DocumentDBGatewayPort = 10260
+
 // DocumentDBExtension is the extension created in a DocumentDB project's
 // application database. It is created with CASCADE, which brings in what it
 // depends on — pg_documentdb_core, pg_cron and the contrib extensions the

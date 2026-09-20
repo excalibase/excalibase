@@ -74,3 +74,63 @@ func TestDocumentDBMajorsAreAllSupportedMajors(t *testing.T) {
 		}
 	}
 }
+
+// The gateway and the extension are two halves of one upstream release, so
+// the catalogue that pins the extension's tag pins the gateway image too, by
+// digest, beside it. A floating tag would change what runs inside a tenant's
+// database pod with nothing recording that it had.
+func TestDocumentDBGatewayImageIsPinnedByDigest(t *testing.T) {
+	image := DocumentDBGatewayImage()
+	if image == "" {
+		t.Fatal("the catalogue pins no DocumentDB gateway image")
+	}
+	if !strings.Contains(image, "@sha256:") {
+		t.Errorf("gateway image %q is not pinned by digest", image)
+	}
+}
+
+// The image's tag and the extension's tag must name the same release. The
+// gateway speaks to the extension's own SQL API and the two are not supported
+// apart, so a catalogue that pinned v0.117-0 of one and 0.116.0 of the other
+// would be a configuration nobody tested.
+func TestDocumentDBGatewayImageMatchesThePinnedExtensionRelease(t *testing.T) {
+	ref := strings.TrimPrefix(DocumentDBRef(), "v")
+	// The extension tag is spelled 0.117-0 and the image tag 0.117.0; compare
+	// the release they both name rather than the punctuation.
+	release := strings.ReplaceAll(ref, "-", ".")
+	if !strings.Contains(DocumentDBGatewayImageTag(), release) {
+		t.Errorf("gateway image tag %q does not name the pinned extension release %q",
+			DocumentDBGatewayImageTag(), release)
+	}
+}
+
+// The test catalogue exists to fill in unpublished image digests and must
+// change nothing else. It used to rebuild the catalogue field by field, which
+// silently dropped every field added afterwards — a suite would then run
+// against a catalogue that pinned no gateway image and quietly test the wrong
+// thing. It now carries the catalogue forward whole.
+func TestPublishPostgresCatalogForTestKeepsEveryOtherField(t *testing.T) {
+	realRef, realImage, realTag := DocumentDBRef(), DocumentDBGatewayImage(), DocumentDBGatewayImageTag()
+
+	restore := PublishPostgresCatalogForTest()
+	if got := DocumentDBRef(); got != realRef {
+		t.Errorf("documentDBRef: got %q, want %q", got, realRef)
+	}
+	if got := DocumentDBGatewayImage(); got != realImage {
+		t.Errorf("gateway image: got %q, want %q", got, realImage)
+	}
+	if got := DocumentDBGatewayImageTag(); got != realTag {
+		t.Errorf("gateway image tag: got %q, want %q", got, realTag)
+	}
+	// Every major still resolves to an image, which is what the helper is for.
+	for _, major := range PostgresMajors() {
+		if _, err := PostgresImage(major); err != nil {
+			t.Errorf("major %s: %v", major, err)
+		}
+	}
+	restore()
+
+	if got := DocumentDBGatewayImage(); got != realImage {
+		t.Errorf("after restore, gateway image: got %q, want %q", got, realImage)
+	}
+}

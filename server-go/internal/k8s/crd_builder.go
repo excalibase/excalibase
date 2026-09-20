@@ -56,6 +56,13 @@ type PostgreSQLClusterOpts struct {
 	// it is provisioned — and the caller has already checked the major can
 	// offer it (EXC-408).
 	DocumentDB bool
+	// DocumentDBGatewayImage is the digest-pinned gateway image the CNPG-I
+	// sidecar injector must use for this cluster. Named on the cluster rather
+	// than left to the plugin's own default so what a tenant runs is recorded
+	// on the object that runs it, and does not change when the plugin is
+	// upgraded. Empty means the platform has pinned no image, and the plugin
+	// is then not registered at all.
+	DocumentDBGatewayImage string
 }
 
 type BackupOpts struct {
@@ -185,6 +192,13 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 		},
 	}
 
+	// The gateway sidecar is opt-in per cluster (EXC-409). A cluster that
+	// names no plugin is never handed to the injector, so an ordinary
+	// project's pods are untouched by any of this.
+	if plugins := buildDocumentDBPlugins(opts); len(plugins) > 0 {
+		spec["plugins"] = plugins
+	}
+
 	if dbName != "app" || dbUser != "app" {
 		spec["bootstrap"] = map[string]interface{}{
 			"initdb": map[string]interface{}{
@@ -261,6 +275,44 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 	}
 
 	return postgresql, storage
+}
+
+// DocumentDBCredentialSecretName is the Secret in the project's own namespace
+// holding the Mongo identity the gateway serves. It is scoped to the project
+// rather than taking the plugin's default name, which is unqualified and would
+// have every tenant's gateway reading a Secret of the same name.
+func DocumentDBCredentialSecretName(projectID string) string {
+	return projectID + "-documentdb-credentials"
+}
+
+// buildDocumentDBPlugins registers the CNPG-I sidecar injector on a DocumentDB
+// project's cluster, and nothing at all on any other.
+//
+// Every parameter is given explicitly. The plugin has a default for each, and
+// each default is wrong here: its gateway image floats with the plugin's own
+// version, its credential Secret name is unqualified and shared, and with no
+// TLS secret the gateway generates a self-signed certificate no client can
+// verify. Naming the cluster's own serving certificate instead means a Mongo
+// client verifies against the same CA the endpoint API already hands out for
+// Postgres.
+//
+// An unpinned gateway image registers no plugin: falling through to the
+// plugin's default would put an image nobody chose inside a tenant's pod.
+func buildDocumentDBPlugins(opts PostgreSQLClusterOpts) []interface{} {
+	if !opts.DocumentDB || opts.DocumentDBGatewayImage == "" {
+		return nil
+	}
+	return []interface{}{
+		map[string]interface{}{
+			"name":    config.DocumentDBPluginName,
+			"enabled": true,
+			"parameters": map[string]interface{}{
+				"gatewayImage":               opts.DocumentDBGatewayImage,
+				"documentDbCredentialSecret": DocumentDBCredentialSecretName(opts.ProjectID),
+				"gatewayTLSSecret":           opts.ProjectID + postgresSuffix + "-server",
+			},
+		},
+	}
 }
 
 // withDocumentDBLibraries returns the cluster's preload list with DocumentDB's

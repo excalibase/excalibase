@@ -33,8 +33,14 @@ type PostgresCatalog struct {
 	// DocumentDBRef is the upstream git tag the DocumentDB extension is
 	// compiled from, e.g. "v0.117-0". We build it rather than take upstream's
 	// packages, so this is our choice to move, not theirs.
-	DocumentDBRef string               `json:"documentDBRef,omitempty"`
-	Majors        []PostgresMajorEntry `json:"majors"`
+	DocumentDBRef string `json:"documentDBRef,omitempty"`
+	// DocumentDBGatewayImage is the digest-pinned gateway image the sidecar
+	// injector puts in a DocumentDB project's pod, and
+	// DocumentDBGatewayImageTag the tag it was resolved from — kept so the
+	// release the digest stands for can be read without a registry lookup.
+	DocumentDBGatewayImage    string               `json:"documentDBGatewayImage,omitempty"`
+	DocumentDBGatewayImageTag string               `json:"documentDBGatewayImageTag,omitempty"`
+	Majors                    []PostgresMajorEntry `json:"majors"`
 }
 
 var postgresCatalog PostgresCatalog
@@ -82,6 +88,14 @@ func parsePostgresCatalog(raw []byte) (PostgresCatalog, error) {
 		if entry.DocumentDB && catalog.DocumentDBRef == "" {
 			return PostgresCatalog{}, fmt.Errorf("major %s claims DocumentDB support but documentDBRef is not pinned", entry.Major)
 		}
+		// A DocumentDB project is only usable through the gateway, so a
+		// catalogue that offers the extension without pinning the gateway
+		// offers half a feature. Refuse at parse time rather than at the
+		// provision that discovers it.
+		if entry.DocumentDB && !digestRef.MatchString(catalog.DocumentDBGatewayImage) {
+			return PostgresCatalog{}, fmt.Errorf("major %s claims DocumentDB support but documentDBGatewayImage %q is not pinned by digest",
+				entry.Major, catalog.DocumentDBGatewayImage)
+		}
 	}
 	return catalog, nil
 }
@@ -123,6 +137,14 @@ func DocumentDBSupported(major string) bool {
 
 // DocumentDBRef is the pinned upstream DocumentDB tag the images compile.
 func DocumentDBRef() string { return postgresCatalog.DocumentDBRef }
+
+// DocumentDBGatewayImage is the digest-pinned gateway image a DocumentDB
+// project's cluster tells the sidecar injector to run.
+func DocumentDBGatewayImage() string { return postgresCatalog.DocumentDBGatewayImage }
+
+// DocumentDBGatewayImageTag is the tag that digest was resolved from. It is
+// documentation, never used to pull: the digest is what runs.
+func DocumentDBGatewayImageTag() string { return postgresCatalog.DocumentDBGatewayImageTag }
 
 // PostgresImage returns the digest-pinned image for a major. It errors — never
 // falls back to a tag or to a neighbouring major — when the major is not in the

@@ -14,7 +14,12 @@ import "fmt"
 func PublishPostgresCatalogForTest() (restore func()) {
 	previous := postgresCatalog
 
-	published := PostgresCatalog{DocumentDBRef: previous.DocumentDBRef}
+	// The whole catalogue is carried forward and only the majors are
+	// replaced. Rebuilding it field by field silently dropped every field
+	// added to the catalogue afterwards, so a suite would run against a
+	// catalogue that pinned less than the real one and test the wrong thing.
+	published := previous
+	published.Majors = nil
 	for _, entry := range previous.Majors {
 		if entry.Image == "" {
 			entry.Image = fmt.Sprintf("ghcr.io/excalibase/postgresql@sha256:%064d", mustAtoiMajor(entry.Major))
