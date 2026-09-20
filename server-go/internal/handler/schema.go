@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -43,7 +44,7 @@ type SchemaHandler struct {
 	dbHostOverride    string // if set, overrides vault host (for local dev with port-forward)
 	dbPortOverride    string // if set, overrides vault port
 	dbSSLModeOverride string // if set, overrides sslmode (for testing)
-	instances storage.InstanceStore
+	instances         storage.InstanceStore
 }
 
 // SetInstanceStore lets the handler resolve a project's instance row.
@@ -358,23 +359,11 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	host := creds["host"]
-	port := creds["port"]
-	if h.dbHostOverride != "" {
-		host = h.dbHostOverride
-	}
-	if h.dbPortOverride != "" {
-		port = h.dbPortOverride
-	}
-
-	sslmode := "require"
-	if h.dbSSLModeOverride != "" {
-		sslmode = h.dbSSLModeOverride
-	} else if h.dbHostOverride != "" {
-		sslmode = "disable" // local dev with port-forward
-	}
-	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		host, port, creds["username"], creds["password"], creds["database"], sslmode)
+	connStr := projectdb.DSN(creds, projectdb.Overrides{
+		Host:    h.dbHostOverride,
+		Port:    h.dbPortOverride,
+		SSLMode: h.dbSSLModeOverride,
+	})
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
