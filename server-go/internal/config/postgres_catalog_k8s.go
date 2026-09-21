@@ -91,17 +91,28 @@ type BuildMatrixEntry struct {
 	// carries DocumentDB, and empty for the rest. The Dockerfile reads it that
 	// way: empty means "skip the DocumentDB stage".
 	DocumentDBRef string `json:"documentdbRef"`
+	// Image is the reference the catalogue already pins for this major, and
+	// empty when it has not been published. The workflow reads it to decide
+	// whether there is anything to build: rebuilding a published major
+	// pushes a new digest, because the build is not reproducible, and the
+	// pinning gate then fails against the digest that was just replaced
+	// (EXC-433).
+	Image string `json:"image,omitempty"`
 }
 
 // RenderBuildMatrix renders the image publish workflow's matrix as JSON. The
 // workflow builds one image per entry, so a major that is not in the catalogue
 // is never built and a major that is cannot be forgotten.
 func RenderBuildMatrix() ([]byte, error) {
-	entries := make([]BuildMatrixEntry, 0, len(postgresCatalog.Majors))
-	for _, entry := range postgresCatalog.Majors {
-		row := BuildMatrixEntry{Major: entry.Major, Base: entry.BaseImage}
+	return renderBuildMatrix(postgresCatalog)
+}
+
+func renderBuildMatrix(catalog PostgresCatalog) ([]byte, error) {
+	entries := make([]BuildMatrixEntry, 0, len(catalog.Majors))
+	for _, entry := range catalog.Majors {
+		row := BuildMatrixEntry{Major: entry.Major, Base: entry.BaseImage, Image: entry.Image}
 		if entry.DocumentDB {
-			row.DocumentDBRef = postgresCatalog.DocumentDBRef
+			row.DocumentDBRef = catalog.DocumentDBRef
 		}
 		entries = append(entries, row)
 	}
