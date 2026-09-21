@@ -21,6 +21,13 @@
 >   `backup_adapter_docker_r2_test.go`) added gated on `R2_ACCESS_KEY_ID`
 >   — verifies path-style URLs + R2 multipart quirks LocalStack can't.
 
+
+> **The walg-sidecar image is gone (EXC-432, September 2026).** The chart
+> directory and its publish workflow were deleted: nothing in the platform
+> ever deployed that image — the backup path does not use it and restore
+> runs the catalogue's Postgres image — so it published an artefact no
+> code consumed. References to `charts/walg-sidecar` below are history.
+
 ---
 
 Companion to `DOCKER_BACKUP_PLAN.md`. That doc is the *what*; this is
