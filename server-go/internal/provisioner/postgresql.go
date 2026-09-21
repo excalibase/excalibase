@@ -22,6 +22,10 @@ const clusterNameSuffix = "-postgres"
 // watcherReleaseName is the Helm release of the per-project CDC watcher.
 const watcherReleaseName = "excalibase-watcher"
 
+// watcherImageRepository must stay equal to the chart's own default, which is
+// what a chart installed outside this code gets (EXC-432).
+const watcherImageRepository = "excalibase/excalibase-watcher-go"
+
 // CNPG declarative hibernation (operator >= 1.20): the annotation drives
 // a clean shutdown that deletes the pods but keeps the PVCs; the
 // condition is what the operator reports back while hibernated.
@@ -674,7 +678,7 @@ func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, spec WatcherS
 			"requests": map[string]interface{}{"cpu": "50m", "memory": "128Mi"},
 		},
 		"image": map[string]interface{}{
-			"repository": "excalibase/excalibase-watcher-go",
+			"repository": watcherImageRepository,
 			"tag":        "latest",
 			"pullPolicy": "IfNotPresent",
 		},

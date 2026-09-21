@@ -3,7 +3,11 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/excalibase/watcher
+  # The repository provisioning installs this chart with. It was
+  # ghcr.io/excalibase/watcher, which does not exist — the registry answers
+  # 404 — so anyone installing the chart without provisioning's values got a
+  # pod that could never pull (EXC-432).
+  repository: excalibase/excalibase-watcher-go
   pullPolicy: IfNotPresent
   # Pin to a specific tag in production. Empty = falls back to .Chart.AppVersion,
   # which is what release-pipeline-built charts ship with.

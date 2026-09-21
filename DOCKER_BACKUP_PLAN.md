@@ -8,6 +8,13 @@
 > **DOCKER_BACKUP_IMPL.md**.
 
 ## Status quo (at time of writing — May 2026, pre-implementation)
+
+> **The walg-sidecar image is gone (EXC-432, September 2026).** The chart
+> directory and its publish workflow were deleted: nothing in the platform
+> ever deployed that image — the backup path does not use it and restore
+> runs the catalogue's Postgres image — so it published an artefact no
+> code consumed. References to `charts/walg-sidecar` below are history.
+
 - K8s mode: full feature parity via CNPG `ScheduledBackup` + Barman → R2. Tested.
 - Docker mode: `ConfigureBackup` is a `return nil` stub. `BackupService.NewBackupService(...)` only takes a `*k8s.KubeClient`. Calling `POST /api/projects/{id}/backup/trigger` against a Docker-mode project silently no-ops.
 - BYOC: explicitly out of scope (operator brings their own backups).
