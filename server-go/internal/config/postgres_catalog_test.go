@@ -99,6 +99,65 @@ func TestPostgresImageRefusesAnUnpublishedMajor(t *testing.T) {
 	}
 }
 
+// CNPG's Cluster webhook refuses a spec.imageName with no tag — "Can't use
+// just the image sha as we can't detect upgrades" — so every reference the
+// platform hands it must name the major as a tag as well as the digest. The
+// digest is still what gets pulled; the tag is there for the operator.
+func TestPostgresImageCarriesTheMajorAsATagBesideTheDigest(t *testing.T) {
+	for _, entry := range postgresCatalog.Majors {
+		if entry.Image == "" {
+			continue
+		}
+		image, err := PostgresImage(entry.Major)
+		if err != nil {
+			t.Errorf("major %s: %v", entry.Major, err)
+			continue
+		}
+		repository, digest, found := strings.Cut(entry.Image, "@")
+		if !found {
+			t.Fatalf("major %s: catalogue image %q is not digest-pinned", entry.Major, entry.Image)
+		}
+		want := repository + ":" + entry.Major + "@" + digest
+		if image != want {
+			t.Errorf("major %s: got %q, want %q", entry.Major, image, want)
+		}
+	}
+}
+
+// parsePostgresCatalog refuses an image that is not digest-pinned, so nothing
+// reaches this with a bare tag. If something ever did, the entry is handed
+// back untouched rather than assembled out of half a value — a reference
+// stitched together from a repository and a major with no digest behind it is
+// exactly the floating tag this file exists to prevent.
+func TestTaggedImageReferenceLeavesAnUnpinnedImageAlone(t *testing.T) {
+	entry := PostgresMajorEntry{Major: "17", Image: "excalibase/postgresql:17"}
+
+	if got := taggedImageReference(entry); got != entry.Image {
+		t.Errorf("got %q, want the entry unchanged (%q)", got, entry.Image)
+	}
+}
+
+// The same reference goes into the ClusterImageCatalog, so the two objects
+// cannot disagree about what a major runs.
+func TestClusterImageCatalogCarriesTheTaggedReference(t *testing.T) {
+	rendered, err := RenderClusterImageCatalog()
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, entry := range postgresCatalog.Majors {
+		if entry.Image == "" {
+			continue
+		}
+		image, err := PostgresImage(entry.Major)
+		if err != nil {
+			t.Fatalf("major %s: %v", entry.Major, err)
+		}
+		if !strings.Contains(string(rendered), image) {
+			t.Errorf("major %s: catalogue does not carry %q:\n%s", entry.Major, image, rendered)
+		}
+	}
+}
+
 func TestParseCatalogRejectsADuplicateMajor(t *testing.T) {
 	_, err := parsePostgresCatalog([]byte(`
 majors:

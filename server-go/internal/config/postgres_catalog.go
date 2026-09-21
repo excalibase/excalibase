@@ -157,7 +157,25 @@ func PostgresImage(major string) (string, error) {
 	if entry.Image == "" {
 		return "", fmt.Errorf("postgres major %s has no published image; run the postgres-image-publish workflow and record the digest in postgres_catalog.yaml", entry.Major)
 	}
-	return entry.Image, nil
+	return taggedImageReference(entry), nil
+}
+
+// taggedImageReference names the major as a tag alongside the digest the
+// catalogue pins. CNPG refuses a spec.imageName that carries only a digest —
+// "Can't use just the image sha as we can't detect upgrades" — so a
+// digest-only reference fails every provision at the admission webhook. A
+// reference carrying both is still pulled by digest, so nothing about the
+// pinning changes; the tag exists so the operator can reason about upgrades.
+// The tag is real: the publish workflow pushes <repository>:<major>.
+func taggedImageReference(entry PostgresMajorEntry) string {
+	repository, digest, found := strings.Cut(entry.Image, "@")
+	if !found {
+		// parsePostgresCatalog refuses an image that is not digest-pinned, so
+		// this is unreachable; returning the entry unchanged keeps it honest
+		// rather than assembling a reference out of half a value.
+		return entry.Image
+	}
+	return repository + ":" + entry.Major + "@" + digest
 }
 
 // SupportedPostgresMajorsMessage renders the supported set for error messages.

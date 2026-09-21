@@ -58,8 +58,15 @@ func TestClusterImageCatalogListsEveryPublishedMajorAndNothingElse(t *testing.T)
 			}
 			continue
 		}
-		if rendered[entry.Major] != entry.Image {
-			t.Errorf("major %s: rendered %q, catalogue has %q", entry.Major, rendered[entry.Major], entry.Image)
+		// The rendered reference is the one provisioning resolves, tag and
+		// digest together — not the bare digest the file records.
+		want, err := PostgresImage(entry.Major)
+		if err != nil {
+			t.Errorf("major %s: %v", entry.Major, err)
+			continue
+		}
+		if rendered[entry.Major] != want {
+			t.Errorf("major %s: rendered %q, want %q", entry.Major, rendered[entry.Major], want)
 		}
 		delete(rendered, entry.Major)
 	}
