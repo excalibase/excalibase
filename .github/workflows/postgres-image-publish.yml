@@ -77,15 +77,10 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # A major the catalogue already pins and the registry still serves is
-      # published: there is nothing to do. Rebuilding it would push a fresh
-      # digest — the build is not reproducible, two runs of the same commit
-      # gave two digests for major 14 — and the gate below would then fail
-      # against the digest it had just replaced, so no run could ever be
-      # green (EXC-433).
-      #
-      # The check is deliberately anonymous: what matters is that a tenant's
-      # node, which holds no credential, can pull what the catalogue names.
+      # Already pinned and still served by the registry means published.
+      # Rebuilding pushes a new digest — the build is not reproducible — and
+      # the gate below then fails against it (EXC-433). Checked anonymously,
+      # because a tenant node holds no credential either.
       - name: Is this major already published?
         id: published
         run: |

@@ -5,15 +5,9 @@ import (
 	"testing"
 )
 
-// EXC-433: the publish workflow has to know whether a major is already
-// published before it decides to build anything. Rebuilding an entry the
-// catalogue already pins pushes a fresh digest — the build is not
-// reproducible — and the workflow's own pinning gate then fails against the
-// digest it just replaced. Two runs of the same commit produced two digests
-// for major 14, which is how this was found.
-//
-// The matrix carries the pinned reference so the decision is made from the
-// catalogue, the same source of truth the gate checks against.
+// EXC-433: the workflow decides whether to build from what the catalogue
+// pins, so the matrix carries it. Two runs of one commit gave two digests
+// for major 14.
 func TestBuildMatrixCarriesThePinnedImage(t *testing.T) {
 	raw, err := RenderBuildMatrix()
 	if err != nil {

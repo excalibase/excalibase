@@ -63,12 +63,10 @@ func NewSchemaHandler(v vaultclient.VaultClient) *SchemaHandler {
 	return h
 }
 
-// ProjectDeleting is the teardown hook (service.DeletionObserver): the moment
-// a project is claimed for deletion, let go of the connection we hold to it.
-// A session left open keeps the tenant's Postgres from shutting down, so the
-// pod stays and the namespace cannot terminate — the teardown then gives up
-// waiting after five minutes and the project strands in DELETING (EXC-431).
-// The TTL eviction is no help: it is ten minutes.
+// ProjectDeleting is the teardown hook (service.DeletionObserver). An open
+// session stops the tenant's Postgres shutting down, so its namespace never
+// terminates and the teardown times out; the TTL eviction is far too late at
+// ten minutes (EXC-431).
 func (h *SchemaHandler) ProjectDeleting(projectID string) {
 	if err := h.CloseProject(projectID); err != nil {
 		log.Printf("WARN: closing the cached connection for %s: %v", projectID, err)

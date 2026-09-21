@@ -160,19 +160,13 @@ func PostgresImage(major string) (string, error) {
 	return taggedImageReference(entry), nil
 }
 
-// taggedImageReference names the major as a tag alongside the digest the
-// catalogue pins. CNPG refuses a spec.imageName that carries only a digest —
-// "Can't use just the image sha as we can't detect upgrades" — so a
-// digest-only reference fails every provision at the admission webhook. A
-// reference carrying both is still pulled by digest, so nothing about the
-// pinning changes; the tag exists so the operator can reason about upgrades.
-// The tag is real: the publish workflow pushes <repository>:<major>.
+// taggedImageReference names the major as a tag beside the pinned digest.
+// CNPG refuses a digest-only spec.imageName ("Can't use just the image sha as
+// we can't detect upgrades"); the digest still decides what is pulled.
 func taggedImageReference(entry PostgresMajorEntry) string {
 	repository, digest, found := strings.Cut(entry.Image, "@")
 	if !found {
-		// parsePostgresCatalog refuses an image that is not digest-pinned, so
-		// this is unreachable; returning the entry unchanged keeps it honest
-		// rather than assembling a reference out of half a value.
+		// Unreachable: parsePostgresCatalog refuses an unpinned image.
 		return entry.Image
 	}
 	return repository + ":" + entry.Major + "@" + digest

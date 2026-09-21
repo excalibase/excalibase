@@ -91,12 +91,9 @@ type BuildMatrixEntry struct {
 	// carries DocumentDB, and empty for the rest. The Dockerfile reads it that
 	// way: empty means "skip the DocumentDB stage".
 	DocumentDBRef string `json:"documentdbRef"`
-	// Image is the reference the catalogue already pins for this major, and
-	// empty when it has not been published. The workflow reads it to decide
-	// whether there is anything to build: rebuilding a published major
-	// pushes a new digest, because the build is not reproducible, and the
-	// pinning gate then fails against the digest that was just replaced
-	// (EXC-433).
+	// Image is what the catalogue pins, empty when unpublished. The workflow
+	// skips a published major: rebuilding pushes a new digest and its own
+	// pinning gate then fails (EXC-433).
 	Image string `json:"image,omitempty"`
 }
 

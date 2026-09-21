@@ -99,10 +99,7 @@ func TestPostgresImageRefusesAnUnpublishedMajor(t *testing.T) {
 	}
 }
 
-// CNPG's Cluster webhook refuses a spec.imageName with no tag — "Can't use
-// just the image sha as we can't detect upgrades" — so every reference the
-// platform hands it must name the major as a tag as well as the digest. The
-// digest is still what gets pulled; the tag is there for the operator.
+// CNPG refuses a tagless spec.imageName, so every reference carries both.
 func TestPostgresImageCarriesTheMajorAsATagBesideTheDigest(t *testing.T) {
 	for _, entry := range postgresCatalog.Majors {
 		if entry.Image == "" {
@@ -124,11 +121,8 @@ func TestPostgresImageCarriesTheMajorAsATagBesideTheDigest(t *testing.T) {
 	}
 }
 
-// parsePostgresCatalog refuses an image that is not digest-pinned, so nothing
-// reaches this with a bare tag. If something ever did, the entry is handed
-// back untouched rather than assembled out of half a value — a reference
-// stitched together from a repository and a major with no digest behind it is
-// exactly the floating tag this file exists to prevent.
+// Nothing unpinned reaches this; if it did, a stitched-together reference
+// would be the floating tag the catalogue exists to prevent.
 func TestTaggedImageReferenceLeavesAnUnpinnedImageAlone(t *testing.T) {
 	entry := PostgresMajorEntry{Major: "17", Image: "excalibase/postgresql:17"}
 
@@ -137,8 +131,7 @@ func TestTaggedImageReferenceLeavesAnUnpinnedImageAlone(t *testing.T) {
 	}
 }
 
-// The same reference goes into the ClusterImageCatalog, so the two objects
-// cannot disagree about what a major runs.
+// The ClusterImageCatalog carries the same reference.
 func TestClusterImageCatalogCarriesTheTaggedReference(t *testing.T) {
 	rendered, err := RenderClusterImageCatalog()
 	if err != nil {
