@@ -6,10 +6,7 @@ import (
 	"time"
 )
 
-// EXC-431: the handler keeps one connection per project for ten minutes, and
-// until this existed a teardown had no way to ask for it back — so the session
-// outlived the request, Postgres would not shut down, and the namespace could
-// not terminate.
+// EXC-431: the teardown had no way to ask for the cached connection back.
 func TestCloseProjectReleasesTheCachedConnection(t *testing.T) {
 	db, err := sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable")
 	if err != nil {
@@ -30,8 +27,7 @@ func TestCloseProjectReleasesTheCachedConnection(t *testing.T) {
 	}
 }
 
-// A project nobody has queried holds nothing, and a teardown must not fail
-// over that.
+// A project nobody queried holds nothing.
 func TestCloseProjectIsQuietWhenNothingIsHeld(t *testing.T) {
 	h := &SchemaHandler{connCache: map[string]*connEntry{}}
 
@@ -40,10 +36,7 @@ func TestCloseProjectIsQuietWhenNothingIsHeld(t *testing.T) {
 	}
 }
 
-// The teardown reaches this through the DeletionObserver hook it already
-// tells the function handler and the pool opener about, so the close happens
-// the moment the project is claimed — before anything asks its Postgres to
-// stop.
+// The teardown reaches this through the DeletionObserver hook.
 func TestProjectDeletingClosesTheCachedConnection(t *testing.T) {
 	db, _ := sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable")
 	h := &SchemaHandler{connCache: map[string]*connEntry{

@@ -15,10 +15,8 @@ const publishWorkflow = "../../../.github/workflows/postgres-image-publish.yml"
 // studio and the rest there, and the AIO chart pulls them from there.
 const postgresImageRepository = "excalibase/postgresql"
 
-// EXC-430: the catalogue pinned ghcr.io/excalibase/postgresql, a registry
-// nothing else in the platform uses. The package is private, so every tenant
-// pod met ImagePullBackOff and no project could be created on Kubernetes —
-// on a runner as much as locally, since CI holds no GHCR credential either.
+// EXC-430: images pinned to GHCR, which nothing pulls from, so every tenant
+// pod met ImagePullBackOff.
 func TestEveryPublishedImageIsOnTheRegistryWePublishTo(t *testing.T) {
 	for _, entry := range postgresCatalog.Majors {
 		if entry.Image == "" {
@@ -31,9 +29,7 @@ func TestEveryPublishedImageIsOnTheRegistryWePublishTo(t *testing.T) {
 	}
 }
 
-// The workflow pushes what the catalogue pins. Pointing one at a registry
-// without the other is how this broke: the images went somewhere the platform
-// never looks, and nothing failed until an install tried to start a pod.
+// The workflow must push where the catalogue points.
 func TestThePublishWorkflowPushesWhereTheCataloguePoints(t *testing.T) {
 	body, err := os.ReadFile(publishWorkflow)
 	if err != nil {
@@ -49,10 +45,8 @@ func TestThePublishWorkflowPushesWhereTheCataloguePoints(t *testing.T) {
 	}
 }
 
-// The bases are upstream images — CloudNativePG's, and the DocumentDB
-// project's gateway — and both are public on ghcr.io. They are pinned from
-// there on purpose; this test exists so a later sweep of "remove ghcr" does
-// not move them somewhere we would then have to maintain.
+// The upstream bases are public on ghcr.io and stay there; a "remove ghcr"
+// sweep must not move them.
 func TestUpstreamBasesStayOnTheirOwnRegistry(t *testing.T) {
 	for _, entry := range postgresCatalog.Majors {
 		if !strings.HasPrefix(entry.BaseImage, "ghcr.io/cloudnative-pg/postgresql@") {

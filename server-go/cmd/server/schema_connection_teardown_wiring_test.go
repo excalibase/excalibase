@@ -6,15 +6,8 @@ import (
 	"testing"
 )
 
-// EXC-431: the schema browser caches one connection per project for ten
-// minutes. Every other holder of a tenant connection is registered as a
-// deletion observer — the function handler and the pool opener both are — but
-// this one was not, so a project that had answered a single query kept our
-// session open, its Postgres would not shut down, and the teardown gave up
-// after five minutes waiting for the namespace.
-//
-// Measured before the fix: 11s to delete a project nothing had queried, 301s
-// and a failure for one that had.
+// EXC-431: every other holder of a tenant connection is a deletion observer;
+// this one was not, and a queried project then took 301s to delete and failed.
 func TestSchemaHandlerIsRegisteredAsADeletionObserver(t *testing.T) {
 	body, err := os.ReadFile("main.go")
 	if err != nil {
