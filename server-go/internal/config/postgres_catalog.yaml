@@ -15,11 +15,11 @@
 # bits under a provisioned cluster change without anything in the platform
 # recording that it happened.
 #
-# Every entry is currently unpublished: the images were pushed to GHCR, which
-# the platform does not pull from (EXC-430), and no digest on Docker Hub can be
-# recorded before the publish workflow has pushed one. The digests that were
-# here are deliberately not carried over — a digest names bits in a registry,
-# and claiming one Docker Hub has never seen is how this failed the first time.
+# The digests below were pushed to Docker Hub by run 35622826849 and each one
+# was confirmed to pull anonymously. Images used to go to GHCR, which the
+# platform does not pull from, so every tenant pod met ImagePullBackOff
+# (EXC-430); a digest names bits in a registry, which is why the old GHCR ones
+# were not carried across.
 #
 # An entry with no `image` has not been published yet. That is a real state,
 # not a default: provisioning refuses the major with an explicit error rather
@@ -71,13 +71,17 @@ documentDBGatewayImageTag: "0.117.0"
 majors:
   - major: "14"
     baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:5e16b178b239f3e6854ae86ce9190b151c0aa30f7f99014659ba24e1a6885084
+    image: excalibase/postgresql@sha256:09178c11b8ad8cf4e4eb4011d1475459a6d472fb3163c5ed8ac7debc71f5745b
     documentdb: false
   - major: "15"
     baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:6cca69b026405a5cc8593b6bf2a095010fad51ba338a368a3b5305c1c2c77cf6
+    image: excalibase/postgresql@sha256:36f03348d67fddc50692e8bb308a4572eafca62bd90bfaeab60bc1e8c4549ed1
     documentdb: true
   - major: "16"
     baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:da9f3d23790ccd052fb4f9620ab0c71eb1c3896c3a1189381c47e8b5f681768d
+    image: excalibase/postgresql@sha256:dcac3cad1a0950104f6cad9bcba2a55b135c4511b9329ab1b880096d8b9211fa
     documentdb: true
   - major: "17"
     baseImage: ghcr.io/cloudnative-pg/postgresql@sha256:9f9286957d1030e0b5964804b557c635603a296d26c6212372f9d416ebb6f168
+    image: excalibase/postgresql@sha256:78ed31b7fbf9a07375ff22aee8da3e12c072cd72c5f5464cd0df2c390b1bb664
     documentdb: true
