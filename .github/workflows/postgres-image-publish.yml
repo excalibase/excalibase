@@ -1,6 +1,6 @@
 name: Publish Postgres images
 
-# Builds one ghcr.io/excalibase/postgresql image per supported major, proves it
+# Builds one excalibase/postgresql image per supported major, proves it
 # works, and only then publishes it by digest. The proof runs against the built
 # artefact before the push, so an image that cannot install the allowlist or
 # round-trip a DocumentDB document never reaches the registry. CNPG clusters are pinned to those digests through
@@ -68,12 +68,14 @@ jobs:
           go-version: '1.24'
           cache-dependency-path: server-go/go.sum
 
-      - name: GHCR login
+      # Docker Hub, the same registry and the same credentials cd.yml uses
+      # for provisioning, studio and the rest. An image the platform pulls
+      # has to live where the platform already pulls from.
+      - name: Docker Hub login
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Built into the local daemon first, and not pushed. Nothing reaches the
       # registry until the checks below have run against this exact image.
@@ -116,7 +118,7 @@ jobs:
             BASE_IMAGE=${{ matrix.entry.base }}
             PG_MAJOR=${{ matrix.entry.major }}
             DOCUMENTDB_REF=${{ matrix.entry.documentdbRef }}
-          tags: ghcr.io/excalibase/postgresql:${{ matrix.entry.major }}
+          tags: excalibase/postgresql:${{ matrix.entry.major }}
           platforms: linux/amd64
 
       - name: Record the digest to pin
@@ -127,7 +129,7 @@ jobs:
             echo 'Pin this in server-go/internal/config/postgres_catalog.yaml:'
             echo ''
             echo '```yaml'
-            echo '    image: ghcr.io/excalibase/postgresql@${{ steps.build.outputs.digest }}'
+            echo '    image: excalibase/postgresql@${{ steps.build.outputs.digest }}'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -137,7 +139,7 @@ jobs:
           # deploys from it. If the catalogue does not carry the digest that
           # was just pushed, the platform and the registry disagree and that
           # must be loud, not silent.
-          pinned='image: ghcr.io/excalibase/postgresql@${{ steps.build.outputs.digest }}'
+          pinned='image: excalibase/postgresql@${{ steps.build.outputs.digest }}'
           if ! grep -qF "$pinned" server-go/internal/config/postgres_catalog.yaml; then
             echo "::error::postgres_catalog.yaml does not pin the digest just pushed for major ${{ matrix.entry.major }}."
             echo "::error::Add the line from the job summary to the major ${{ matrix.entry.major }} entry and re-run."
@@ -149,7 +151,7 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          image: ghcr.io/excalibase/postgresql@${{ steps.build.outputs.digest }}
+          image: excalibase/postgresql@${{ steps.build.outputs.digest }}
           args: --severity-threshold=high
         continue-on-error: false
 

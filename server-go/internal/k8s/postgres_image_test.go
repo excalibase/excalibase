@@ -10,7 +10,7 @@ import (
 // resolved to a digest by the caller. The builder never assembles an image
 // reference from a version string, because that would produce a floating tag.
 func TestClusterUsesTheSuppliedDigestPinnedImage(t *testing.T) {
-	image := "ghcr.io/excalibase/postgresql@sha256:" +
+	image := "excalibase/postgresql:17@sha256:" +
 		"1111111111111111111111111111111111111111111111111111111111111111"
 	obj := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
 		ProjectID: "proj-1",
