@@ -124,6 +124,19 @@ func TestPostgresImageCarriesTheMajorAsATagBesideTheDigest(t *testing.T) {
 	}
 }
 
+// parsePostgresCatalog refuses an image that is not digest-pinned, so nothing
+// reaches this with a bare tag. If something ever did, the entry is handed
+// back untouched rather than assembled out of half a value — a reference
+// stitched together from a repository and a major with no digest behind it is
+// exactly the floating tag this file exists to prevent.
+func TestTaggedImageReferenceLeavesAnUnpinnedImageAlone(t *testing.T) {
+	entry := PostgresMajorEntry{Major: "17", Image: "excalibase/postgresql:17"}
+
+	if got := taggedImageReference(entry); got != entry.Image {
+		t.Errorf("got %q, want the entry unchanged (%q)", got, entry.Image)
+	}
+}
+
 // The same reference goes into the ClusterImageCatalog, so the two objects
 // cannot disagree about what a major runs.
 func TestClusterImageCatalogCarriesTheTaggedReference(t *testing.T) {
