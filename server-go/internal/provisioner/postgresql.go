@@ -22,10 +22,8 @@ const clusterNameSuffix = "-postgres"
 // watcherReleaseName is the Helm release of the per-project CDC watcher.
 const watcherReleaseName = "excalibase-watcher"
 
-// watcherImageRepository is the image every per-tenant watcher runs. It must
-// stay equal to the chart's own default: a chart installed without these
-// values — by hand, or by anything that is not this code — has to reach a
-// registry a tenant node can actually pull from (EXC-432).
+// watcherImageRepository must stay equal to the chart's own default, which is
+// what a chart installed outside this code gets (EXC-432).
 const watcherImageRepository = "excalibase/excalibase-watcher-go"
 
 // CNPG declarative hibernation (operator >= 1.20): the annotation drives
