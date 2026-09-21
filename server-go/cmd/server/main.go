@@ -176,6 +176,11 @@ func runServer(cfg config.AppConfig) {
 		dockerClient: dockerClientRef,
 	})
 	deps.fnHandler = fnHandler
+	// The schema browser holds one connection per project for ten minutes.
+	// An open session stops the tenant's Postgres shutting down, so the pod
+	// survives, the namespace will not terminate, and the teardown times out
+	// waiting for it (EXC-431).
+	provSvc.AddDeletionObserver(deps.schemaHandler)
 
 	// How a customer reaches their database from outside the cluster
 	// (EXC-410). Nil when the platform offers no public endpoints, and
