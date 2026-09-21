@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -45,6 +46,54 @@ type SchemaHandler struct {
 	dbPortOverride    string // if set, overrides vault port
 	dbSSLModeOverride string // if set, overrides sslmode (for testing)
 	instances         storage.InstanceStore
+	publisher         PolicyChangePublisher // optional
+}
+
+// SetPublisher wires the bus this handler announces schema changes on. Leave
+// it unset and nothing is announced.
+func (h *SchemaHandler) SetPublisher(p PolicyChangePublisher) { h.publisher = p }
+
+// AnnounceSchemaChange publishes policies.{projectId}.changed after a request
+// that reshaped the schema. The engine caches a project's schema for thirty
+// minutes and evicts it on that subject, so without this a table created here
+// is invisible until the TTL runs out (EXC-437).
+//
+// It sits on the route group rather than in each handler: this surface has
+// twenty-odd mutating endpoints and the next one added would have been missed
+// the same way the first twenty were.
+func (h *SchemaHandler) AnnounceSchemaChange(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || h.publisher == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		if recorder.status >= http.StatusMultipleChoices {
+			return
+		}
+		h.publisher.PublishPolicyChange(r.Context(), domain.PolicyChangeEvent{
+			ProjectID: chi.URLParam(r, "projectId"),
+			Kind:      domain.SchemaChangeKind,
+			Op:        domain.OpChangeUpdate,
+		})
+	})
+}
+
+// statusRecorder remembers the status so the announcement is made only for a
+// write the database accepted.
+type statusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if !s.wroteHeader {
+		s.status = code
+		s.wroteHeader = true
+	}
+	s.ResponseWriter.WriteHeader(code)
 }
 
 // SetInstanceStore lets the handler resolve a project's instance row.

@@ -31,6 +31,12 @@ const (
 // every other cache-invalidating change.
 const CredentialChangeKind = "credential"
 
+// SchemaChangeKind is the Kind carried when DDL reshapes a project's tables.
+// The engine caches a project's schema for thirty minutes and evicts it on
+// this subject, so without the event a new table stays invisible until the
+// TTL runs out (EXC-437).
+const SchemaChangeKind = "schema"
+
 // Operation mirrors io.github.excalibase.rls.Operation in the engine.
 type Operation string
 

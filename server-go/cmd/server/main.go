@@ -205,6 +205,9 @@ func runServer(cfg config.AppConfig) {
 		// Grant + enforcement writes ride the same subject so the engine
 		// evicts cached policies and grants together (EXC-370).
 		deps.tableGrantHandler.SetPublisher(policyPub)
+		// DDL reshapes the schema the engine caches for thirty minutes, so it
+		// rides the same subject (EXC-437).
+		deps.schemaHandler.SetPublisher(policyPub)
 		provSvc.SetProjectEventPublisher(policyPub)
 	}
 
@@ -1406,6 +1409,7 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 		// Viewers may browse (GET); DDL / /query / row writes require Developer+ (RBAC gate).
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(d.activity)
+		r.Use(d.schemaHandler.AnnounceSchemaChange)
 		d.schemaHandler.RoutesInner(r)
 	})
 }
