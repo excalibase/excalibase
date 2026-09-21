@@ -47,7 +47,7 @@ import (
 //
 //       EXCALIBASE_POSTGRES_IMAGE_TESTS=1 \
 //       EXCALIBASE_POSTGRES_IMAGE_MAJOR=17 \
-//       EXCALIBASE_POSTGRES_IMAGE_REF=ghcr.io/excalibase/postgresql:17 \
+//       EXCALIBASE_POSTGRES_IMAGE_REF=excalibase/postgresql:17 \
 //       go test -tags integration ./internal/schema/
 
 const (

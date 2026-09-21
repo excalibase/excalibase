@@ -22,7 +22,7 @@ func PublishPostgresCatalogForTest() (restore func()) {
 	published.Majors = nil
 	for _, entry := range previous.Majors {
 		if entry.Image == "" {
-			entry.Image = fmt.Sprintf("ghcr.io/excalibase/postgresql@sha256:%064d", mustAtoiMajor(entry.Major))
+			entry.Image = fmt.Sprintf("excalibase/postgresql@sha256:%064d", mustAtoiMajor(entry.Major))
 		}
 		published.Majors = append(published.Majors, entry)
 	}

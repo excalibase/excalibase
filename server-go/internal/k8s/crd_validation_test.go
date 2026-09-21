@@ -21,7 +21,7 @@ func TestCRDProducesValidYAML(t *testing.T) {
 			"pg_stat_statements.max":   "10000",
 		},
 		Tags:           map[string]string{"owner": "duke"},
-		ImageName:      "ghcr.io/excalibase/postgresql@sha256:abc123",
+		ImageName:      "excalibase/postgresql:17@sha256:abc123",
 		DatabaseName:   "mydb",
 		MasterUsername: "admin",
 		StorageClass:   "standard",
@@ -60,7 +60,7 @@ func TestCRDProducesValidYAML(t *testing.T) {
 		"barmanObjectStore:",
 		"s3Credentials:",
 		"destinationPath: s3://postgres-backups/test-db",
-		"imageName: ghcr.io/excalibase/postgresql@sha256:abc123",
+		"imageName: excalibase/postgresql:17@sha256:abc123",
 		"database: mydb",
 		"owner: admin",
 	}
