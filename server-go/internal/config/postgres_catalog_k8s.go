@@ -47,7 +47,7 @@ func renderClusterImageCatalog(catalog PostgresCatalog) ([]byte, error) {
 			// pulled, which fails later and less clearly.
 			continue
 		}
-		images = append(images, map[string]interface{}{"major": major, "image": entry.Image})
+		images = append(images, map[string]interface{}{"major": major, "image": taggedImageReference(entry)})
 		if entry.DocumentDB {
 			documentDBMajors = append(documentDBMajors, entry.Major)
 		}
