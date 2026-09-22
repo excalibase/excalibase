@@ -22,7 +22,7 @@ spec:
   template:
     metadata:
       annotations:
-        excalibase.io/app-config-hash: 1746203de85893c0
+        excalibase.io/app-config-hash: 613dfae42707e0a3
       labels:
         app.kubernetes.io/component: app
         app.kubernetes.io/managed-by: excalibase-provisioning
@@ -48,6 +48,24 @@ spec:
           requests:
             cpu: 50m
             memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - emptyDir:
+          sizeLimit: 64Mi
+        name: tmp
 status: {}
 ---
 apiVersion: networking.k8s.io/v1
