@@ -38,6 +38,8 @@ const (
 	maxLabelValueLength = 63
 	dnsPortNumber       = 53
 	postgresPortNumber  = 5432
+	// tmpVolumeName backs the one writable path a read-only root filesystem gets.
+	tmpVolumeName = "tmp"
 )
 
 // namespacePattern is the DNS-1123 label a project namespace must be; an
@@ -315,11 +317,49 @@ func buildAppDeployment(
 					// Unsandboxed customer code that escapes must not find a
 					// cluster API token mounted beside it.
 					AutomountServiceAccountToken: &automount,
+					SecurityContext:              podSecurityContext(),
 					Containers:                   []corev1.Container{container},
+					Volumes:                      []corev1.Volume{tmpVolume()},
 				},
 			},
 		},
 	}, nil
+}
+
+// podSecurityContext keeps the customer's image off host root: no forced uid,
+// since many images declare their own non-root user, but root is refused outright.
+func podSecurityContext() *corev1.PodSecurityContext {
+	nonRoot := true
+	return &corev1.PodSecurityContext{
+		RunAsNonRoot:   &nonRoot,
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+}
+
+// containerSecurityContext closes off escalation and persistence: no new
+// privileges, no capabilities, and a filesystem the app cannot write to.
+func containerSecurityContext() *corev1.SecurityContext {
+	nonRoot := true
+	noEscalation := false
+	readOnlyRoot := true
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &noEscalation,
+		ReadOnlyRootFilesystem:   &readOnlyRoot,
+		RunAsNonRoot:             &nonRoot,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
+// tmpVolume is the one writable exception a read-only root filesystem gets,
+// bounded so a runaway process cannot exhaust node disk.
+func tmpVolume() corev1.Volume {
+	sizeLimit := resource.MustParse("64Mi")
+	return corev1.Volume{
+		Name: tmpVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &sizeLimit},
+		},
+	}
 }
 
 func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.ResourceRequirements) corev1.Container {
@@ -333,9 +373,11 @@ func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.R
 			ContainerPort: int32(app.Port),
 			Protocol:      corev1.ProtocolTCP,
 		}},
-		Env:            env,
-		Resources:      resources,
-		ReadinessProbe: appReadinessProbe(app),
+		Env:             env,
+		Resources:       resources,
+		ReadinessProbe:  appReadinessProbe(app),
+		SecurityContext: containerSecurityContext(),
+		VolumeMounts:    []corev1.VolumeMount{{Name: tmpVolumeName, MountPath: "/tmp"}},
 	}
 }
 

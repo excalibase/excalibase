@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
@@ -375,6 +376,92 @@ func TestRenderAppWorkloadMountsNoServiceAccountToken(t *testing.T) {
 	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
 	if spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
 		t.Error("the service account token must be explicitly not mounted")
+	}
+}
+
+// Customer code is untrusted; the pod must not be allowed to run as root or
+// escape its seccomp profile.
+func TestRenderAppWorkloadPodSecurityContext(t *testing.T) {
+	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
+	security := spec.SecurityContext
+	if security == nil {
+		t.Fatal("pod security context must be set")
+	}
+	if security.RunAsNonRoot == nil || !*security.RunAsNonRoot {
+		t.Error("pod must require RunAsNonRoot")
+	}
+	if security.SeccompProfile == nil || security.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("pod seccomp profile = %+v, want RuntimeDefault", security.SeccompProfile)
+	}
+	if security.RunAsUser != nil {
+		t.Error("must not force a uid; many images declare their own non-root user")
+	}
+}
+
+// Isolation must not depend on host namespaces even accidentally: these are
+// zero-valued by default, and asserted so a future change cannot flip them silently.
+func TestRenderAppWorkloadNoHostNamespaces(t *testing.T) {
+	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
+	if spec.HostNetwork {
+		t.Error("hostNetwork must be false")
+	}
+	if spec.HostPID {
+		t.Error("hostPID must be false")
+	}
+	if spec.HostIPC {
+		t.Error("hostIPC must be false")
+	}
+}
+
+// A privilege escalation path or a writable image filesystem gives the
+// customer's own untrusted code a way to persist or extend its foothold.
+func TestRenderAppWorkloadContainerSecurityContext(t *testing.T) {
+	container := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec.Containers[0]
+	security := container.SecurityContext
+	if security == nil {
+		t.Fatal("container security context must be set")
+	}
+	if security.AllowPrivilegeEscalation == nil || *security.AllowPrivilegeEscalation {
+		t.Error("container must set AllowPrivilegeEscalation false")
+	}
+	if security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem {
+		t.Error("container must set ReadOnlyRootFilesystem true")
+	}
+	if security.RunAsNonRoot == nil || !*security.RunAsNonRoot {
+		t.Error("container must require RunAsNonRoot")
+	}
+	if security.Capabilities == nil || len(security.Capabilities.Drop) != 1 || security.Capabilities.Drop[0] != "ALL" {
+		t.Errorf("container capabilities = %+v, want Drop [ALL]", security.Capabilities)
+	}
+}
+
+// A read-only root filesystem still needs one narrow, explicit place to
+// write: /tmp, sized so a runaway process cannot exhaust node disk.
+func TestRenderAppWorkloadTmpVolumeMount(t *testing.T) {
+	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
+	container := spec.Containers[0]
+
+	if len(container.VolumeMounts) != 1 {
+		t.Fatalf("container volume mounts = %+v, want exactly one (/tmp)", container.VolumeMounts)
+	}
+	mount := container.VolumeMounts[0]
+	if mount.MountPath != "/tmp" {
+		t.Errorf("mount path = %q, want /tmp", mount.MountPath)
+	}
+
+	if len(spec.Volumes) != 1 {
+		t.Fatalf("pod volumes = %+v, want exactly one", spec.Volumes)
+	}
+	volume := spec.Volumes[0]
+	if volume.Name != mount.Name {
+		t.Errorf("volume name %q does not match mount name %q", volume.Name, mount.Name)
+	}
+	if volume.EmptyDir == nil {
+		t.Fatal("the /tmp volume must be an emptyDir")
+	}
+	wantSize := resource.MustParse("64Mi")
+	if volume.EmptyDir.SizeLimit == nil || volume.EmptyDir.SizeLimit.Cmp(wantSize) != 0 {
+		t.Errorf("emptyDir size limit = %v, want %v", volume.EmptyDir.SizeLimit, wantSize)
 	}
 }
 
