@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -53,13 +54,35 @@ const (
 type PostgreSQLProvisioner struct {
 	client           k8s.KubeClient
 	watcherChartPath string
-	resumeTimeout    time.Duration
-	resumePoll       time.Duration
-	deletionPoller   Poller
+	// watcherImage is the full reference every tenant's watcher runs, pinned
+	// by the install (WATCHER_IMAGE). Empty refuses to deploy (EXC-346).
+	watcherImage   string
+	resumeTimeout  time.Duration
+	resumePoll     time.Duration
+	deletionPoller Poller
 	// pausePoller bounds the wait for the hibernated cluster's pods to go
 	// away. CNPG shuts postgres down cleanly, so this is a wait on a real
 	// shutdown, not on an API call.
 	pausePoller Poller
+}
+
+// SetWatcherImage pins the image every tenant's watcher runs.
+func (p *PostgreSQLProvisioner) SetWatcherImage(reference string) { p.watcherImage = reference }
+
+// splitImageReference splits "repo:tag[@digest]" into the chart's repository
+// and tag values; the chart renders them back as "repository:tag".
+func splitImageReference(reference string) (repository, tag string, err error) {
+	name, digest, hasDigest := strings.Cut(reference, "@")
+	slash := strings.LastIndex(name, "/")
+	colon := strings.LastIndex(name, ":")
+	if colon <= slash {
+		return "", "", fmt.Errorf("image %q has no tag", reference)
+	}
+	repository, tag = name[:colon], name[colon+1:]
+	if hasDigest {
+		tag += "@" + digest
+	}
+	return repository, tag, nil
 }
 
 func NewPostgreSQLProvisioner(client k8s.KubeClient, watcherChartPath string) *PostgreSQLProvisioner {
@@ -645,6 +668,13 @@ func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, spec WatcherS
 	if p.watcherChartPath == "" {
 		return nil
 	}
+	if p.watcherImage == "" {
+		return fmt.Errorf("WATCHER_IMAGE is not set; refusing to run a tenant watcher on an unpinned image")
+	}
+	repository, tag, err := splitImageReference(p.watcherImage)
+	if err != nil {
+		return fmt.Errorf("WATCHER_IMAGE: %w", err)
+	}
 	namespace, projectID, dbName := spec.Namespace, spec.ProjectID, spec.DBName
 	username, password := spec.Username, spec.Password
 	values := map[string]interface{}{
@@ -678,8 +708,8 @@ func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, spec WatcherS
 			"requests": map[string]interface{}{"cpu": "50m", "memory": "128Mi"},
 		},
 		"image": map[string]interface{}{
-			"repository": watcherImageRepository,
-			"tag":        "latest",
+			"repository": repository,
+			"tag":        tag,
 			"pullPolicy": "IfNotPresent",
 		},
 	}

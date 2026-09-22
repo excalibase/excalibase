@@ -36,15 +36,18 @@ type AppConfig struct {
 	NatsCalloutIssuerSeed string
 	CORSOrigins           []string
 	WatcherChartPath      string
-	DenoRuntimeURL        string
-	DenoRuntimeSecret     string
-	DenoNamespace         string
-	DenoRuntimeImage      string
-	VaultURL              string
-	VaultPAT              string
-	DeploymentMode        string // "selfhosted" (default) or "cloud"
-	PublicBaseURL         string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
-	RegistrationMode      string // "open" (default) or "invite" — invite closes open studio signup
+	// WatcherImage is the pinned reference every tenant watcher runs,
+	// e.g. excalibase/excalibase-watcher-go:1.0.0@sha256:… (EXC-346).
+	WatcherImage      string
+	DenoRuntimeURL    string
+	DenoRuntimeSecret string
+	DenoNamespace     string
+	DenoRuntimeImage  string
+	VaultURL          string
+	VaultPAT          string
+	DeploymentMode    string // "selfhosted" (default) or "cloud"
+	PublicBaseURL     string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
+	RegistrationMode  string // "open" (default) or "invite" — invite closes open studio signup
 
 	// ExposureEnforced is the installation-wide kill switch for the table
 	// exposure filter (EXC-400). Enforcement is ON for every project and
@@ -293,6 +296,7 @@ func Load() AppConfig {
 		JWTAudPrefix:                envOr("AUTH_AUD_PREFIX", "excalibase:"),
 		CORSOrigins:                 parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
 		WatcherChartPath:            envOr("WATCHER_CHART_PATH", "/charts/excalibase-watcher"),
+		WatcherImage:                os.Getenv("WATCHER_IMAGE"),
 		DenoRuntimeURL:              envOr("DENO_RUNTIME_URL", "http://deno-runtime.serverless.svc.cluster.local:8000"),
 		DenoRuntimeSecret:           envOr("DENO_RUNTIME_SECRET", ""),
 		DenoNamespace:               envOr("DENO_NAMESPACE", "serverless"),

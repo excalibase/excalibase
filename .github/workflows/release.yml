@@ -59,6 +59,11 @@ jobs:
           summary=""
           for service in $(printf '%s' '${{ inputs.services }}' | tr ',' ' '); do
             repository="excalibase/$service"
+            # A released version never moves: the chart pins it by tag alone.
+            if docker buildx imagetools inspect "$repository:${{ inputs.version }}" >/dev/null 2>&1; then
+              echo "::error::$repository:${{ inputs.version }} already exists; cut a new version instead"
+              exit 1
+            fi
             # `inspect` prints "Digest: sha256:…". Parsed rather than asked
             # for as a Go template: Actions evaluates that brace syntax first,
             # even inside a shell comment, and fails to parse the workflow.

@@ -1736,6 +1736,7 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 	}
 	log.Println("Provisioner mode: k8s (CNPG)")
 	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
+	pgProvisioner.SetWatcherImage(cfg.WatcherImage)
 	pgProvisioner.SetDeletionPoller(deletionPoller())
 	return provisioner.NewFactory(pgProvisioner), nil
 }
