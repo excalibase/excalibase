@@ -239,6 +239,12 @@ type AppConfig struct {
 	// at N. EXCALIBASE_AUTOPAUSE_ENABLED overrides; defaults on in cloud mode,
 	// off self-hosted (a single operator owns their own projects).
 	AutoPauseEnabled bool
+
+	// AppHostingEnabled mounts the customer-application routes (EXC-377).
+	// App hosting is built incrementally on main and must stay unreachable in
+	// any install until the epic is finished, so it defaults off; only the
+	// exact value "true" turns it on.
+	AppHostingEnabled bool
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -363,6 +369,7 @@ func Load() AppConfig {
 		BackupRegion:                envOr("BACKUP_DEFAULT_REGION", "auto"),
 		FnReplayEnabled:             envBool("EXCALIBASE_FN_REPLAY_ENABLED", true),
 		FnReplayPollInterval:        envMillis("EXCALIBASE_FN_REPLAY_POLL_MS", defaultReplayPoll),
+		AppHostingEnabled:           envOr("APP_HOSTING_ENABLED", "") == "true",
 	}
 }
 
@@ -440,6 +447,7 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "DOCKER_DB_PUBLIC", Field: "DockerDBPublic", Enabled: c.DockerDBPublic},
 		{Env: "DOCKER_TLS_VERIFY", Field: "DockerTLSVerify", Enabled: c.DockerTLSVerify},
 		{Env: exposureEnvKey, Field: "ExposureEnforced", Enabled: c.ExposureEnforced},
+		{Env: "APP_HOSTING_ENABLED", Field: "AppHostingEnabled", Enabled: c.AppHostingEnabled},
 	}
 }
 

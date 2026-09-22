@@ -183,6 +183,25 @@ func TestLoadJWTRequireAud(t *testing.T) {
 	}
 }
 
+func TestLoadAppHostingEnabled(t *testing.T) {
+	os.Unsetenv("APP_HOSTING_ENABLED")
+	if Load().AppHostingEnabled {
+		t.Error("AppHostingEnabled must default to false")
+	}
+	t.Setenv("APP_HOSTING_ENABLED", "true")
+	if !Load().AppHostingEnabled {
+		t.Error("APP_HOSTING_ENABLED=true must enable app hosting")
+	}
+	t.Setenv("APP_HOSTING_ENABLED", "1")
+	if Load().AppHostingEnabled {
+		t.Error("only the exact value \"true\" may enable app hosting")
+	}
+	t.Setenv("APP_HOSTING_ENABLED", "TRUE")
+	if Load().AppHostingEnabled {
+		t.Error("only the exact value \"true\" may enable app hosting")
+	}
+}
+
 func TestLoadJWTAudPrefix(t *testing.T) {
 	os.Unsetenv("AUTH_AUD_PREFIX")
 	if got := Load().JWTAudPrefix; got != "excalibase:" {

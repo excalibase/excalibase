@@ -1231,7 +1231,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	mountAuthRoutes(r, d)
 	mountOrgAndAdminRoutes(r, cfg, d)
 	mountVaultAndSchemaRoutes(r, sqlStore, store, d)
-	mountProjectScopedRoutes(r, sqlStore, store, d)
+	mountProjectScopedRoutes(r, cfg, sqlStore, store, d)
 	mountEmailRoutes(r, d)
 
 	// Phase 7: /http/* dispatch is mounted BEFORE the bare /{fnId} route so
@@ -1415,7 +1415,7 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 }
 
 // mountProjectScopedRoutes mounts every /api/projects/{projectId}/* subtree.
-func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
+func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
@@ -1446,25 +1446,24 @@ func mountProjectScopedRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stora
 			r.Get("/logs", d.fnHandler.Logs)
 		})
 	})
-	// Customer applications (EXC-378). Apps and databases are independent
-	// services under one project, so this mount asks nothing of the project's
-	// database — only that the caller may see the project. Reads = any
-	// member; creating and changing an app = Developer+, the same rung as the
-	// other data-plane authoring surfaces.
-	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) {
-		r.Use(custommw.TenantContext)
-		r.Use(auth.RequireAuth)
-		r.Use(custommw.RequireProjectAccess(store, sqlStore))
-		r.Use(d.activity)
-		dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
-		r.Get("/", d.appHandler.List)
-		r.With(dev).Post("/", d.appHandler.Create)
-		r.Route("/{appId}", func(r chi.Router) {
-			r.Get("/", d.appHandler.Get)
-			r.With(dev).Patch("/", d.appHandler.Update)
-			r.With(dev).Delete("/", d.appHandler.Delete)
+	// Customer applications (EXC-378): unmounted, so 404, until the hosting
+	// epic (EXC-377) is done. Reads = any member; writes = Developer+.
+	if cfg.AppHostingEnabled {
+		r.Route("/api/projects/{projectId}/apps", func(r chi.Router) {
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(d.activity)
+			dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
+			r.Get("/", d.appHandler.List)
+			r.With(dev).Post("/", d.appHandler.Create)
+			r.Route("/{appId}", func(r chi.Router) {
+				r.Get("/", d.appHandler.Get)
+				r.With(dev).Patch("/", d.appHandler.Update)
+				r.With(dev).Delete("/", d.appHandler.Delete)
+			})
 		})
-	})
+	}
 	r.Route("/api/projects/{projectId}/schema", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)

@@ -82,6 +82,9 @@ func table(deps Deps) map[string][]Dependency {
 		"KUBE_INSECURE_SKIP_VERIFY": {},
 		"DOCKER_DB_PUBLIC":          {},
 		"DOCKER_TLS_VERIFY":         {},
+		// The app handler is always constructed; the flag only decides
+		// whether its routes are mounted.
+		"APP_HOSTING_ENABLED": {},
 	}
 }
 
