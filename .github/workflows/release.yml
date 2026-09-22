@@ -59,8 +59,10 @@ jobs:
           summary=""
           for service in $(printf '%s' '${{ inputs.services }}' | tr ',' ' '); do
             repository="excalibase/$service"
+            # `inspect` prints "Digest: sha256:…"; parsing that avoids a Go
+            # template, which the workflow's own ${{ }} syntax mangles.
             digest=$(docker buildx imagetools inspect "$repository:${{ inputs.source_tag }}" \
-              --format '{{ "{{json .Manifest}}" }}' | jq -r .digest)
+              | awk '/^Digest:/ { print $2; exit }')
             test -n "$digest" && test "$digest" != "null"
 
             refs=""
