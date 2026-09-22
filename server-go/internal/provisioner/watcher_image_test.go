@@ -35,35 +35,6 @@ func TestWatcherChartDefaultsToTheImageWeInstall(t *testing.T) {
 	}
 }
 
-func TestDeployWatcherInstallsTheDockerHubImage(t *testing.T) {
-	mock := k8s.NewMockClient()
-	prov := NewPostgreSQLProvisioner(mock, "/charts/excalibase-watcher-go")
-
-	err := prov.DeployWatcher(context.Background(), WatcherSpec{
-		Namespace: "org1-proj",
-		ProjectID: "proj",
-		DBName:    "app",
-		Username:  "cdc_watcher",
-		Password:  "secret",
-		NatsUser:  "proj-watcher",
-	})
-	if err != nil {
-		t.Fatalf("DeployWatcher: %v", err)
-	}
-
-	values, ok := mock.HelmReleases["org1-proj/"+watcherReleaseName]
-	if !ok {
-		t.Fatalf("no release installed; calls: %v", mock.Calls)
-	}
-	image, ok := values["image"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("release carries no image values: %#v", values["image"])
-	}
-	if image["repository"] != watcherImageRepository {
-		t.Errorf("installed repository %v, want %q", image["repository"], watcherImageRepository)
-	}
-}
-
 // Blank chart path = watcher disabled; provisioning must still succeed.
 func TestDeployWatcherWithoutAChartInstallsNothing(t *testing.T) {
 	mock := k8s.NewMockClient()

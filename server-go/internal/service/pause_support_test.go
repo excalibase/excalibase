@@ -238,7 +238,9 @@ func TestRestartReplicationNeedsItsDependencies(t *testing.T) {
 
 func TestRestartReplicationRedeploysTheWatcher(t *testing.T) {
 	h := newRegistrationHarness(t)
-	h.svc.factory = provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(h.kube, "/charts/excalibase-watcher"))
+	pg := provisioner.NewPostgreSQLProvisioner(h.kube, "/charts/excalibase-watcher")
+	pg.SetWatcherImage("excalibase/excalibase-watcher-go:1.0.0")
+	h.svc.factory = provisioner.NewFactory(pg)
 	h.svc.SetNatsCredentialMinter(NewNatsCredentialMinter(newFakeNatsCredStore()))
 	inst := restoredInstance()
 	if err := h.vault.Put("projects/"+inst.ProjectID+"/credentials/"+roleWatcher,
@@ -256,7 +258,9 @@ func TestRestartReplicationRedeploysTheWatcher(t *testing.T) {
 
 func TestRestartReplicationFailsWithoutWatcherCredentials(t *testing.T) {
 	h := newRegistrationHarness(t)
-	h.svc.factory = provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(h.kube, "/charts/excalibase-watcher"))
+	pg := provisioner.NewPostgreSQLProvisioner(h.kube, "/charts/excalibase-watcher")
+	pg.SetWatcherImage("excalibase/excalibase-watcher-go:1.0.0")
+	h.svc.factory = provisioner.NewFactory(pg)
 	h.svc.SetNatsCredentialMinter(NewNatsCredentialMinter(newFakeNatsCredStore()))
 
 	if err := h.svc.RestartReplication(context.Background(), restoredInstance()); err == nil {
