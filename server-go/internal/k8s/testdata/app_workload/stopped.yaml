@@ -1,0 +1,111 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: web
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: standard
+  name: app-web
+  namespace: org1-proj-abc
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      excalibase.io/app: app-01H
+      excalibase.io/component: app
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        excalibase.io/app-config-hash: 6d126aca04dbd58e
+      labels:
+        app.kubernetes.io/component: app
+        app.kubernetes.io/managed-by: excalibase-provisioning
+        app.kubernetes.io/name: web
+        excalibase.io/app: app-01H
+        excalibase.io/component: app
+        excalibase.io/project: proj-abc
+        excalibase.io/tier: standard
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - env:
+        - name: LOG_LEVEL
+          value: debug
+        - name: EMPTY
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              key: DATABASE_URL
+              name: proj-abc-app-credentials
+        - name: PGHOST
+          value: proj-abc-postgres-rw.org1-proj-abc.svc.cluster.local
+        - name: STRIPE_KEY
+          valueFrom:
+            secretKeyRef:
+              key: api_key
+              name: proj-abc-app-secrets
+        image: ghcr.io/acme/web:1.4.2
+        imagePullPolicy: Always
+        name: web
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+        resources:
+          limits:
+            cpu: "1"
+            memory: 1Gi
+          requests:
+            cpu: 250m
+            memory: 512Mi
+status: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: web
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: standard
+  name: app-web-egress
+  namespace: org1-proj-abc
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+  - ports:
+    - port: 5432
+      protocol: TCP
+    to:
+    - podSelector: {}
+  podSelector:
+    matchLabels:
+      excalibase.io/app: app-01H
+      excalibase.io/component: app
+  policyTypes:
+  - Egress

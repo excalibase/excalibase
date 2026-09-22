@@ -1,0 +1,82 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: web
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: free
+  name: app-web
+  namespace: org1-proj-abc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      excalibase.io/app: app-01H
+      excalibase.io/component: app
+  strategy: {}
+  template:
+    metadata:
+      annotations:
+        excalibase.io/app-config-hash: 1746203de85893c0
+      labels:
+        app.kubernetes.io/component: app
+        app.kubernetes.io/managed-by: excalibase-provisioning
+        app.kubernetes.io/name: web
+        excalibase.io/app: app-01H
+        excalibase.io/component: app
+        excalibase.io/project: proj-abc
+        excalibase.io/tier: free
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - image: ghcr.io/acme/web:1.4.2
+        imagePullPolicy: Always
+        name: web
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 250m
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+status: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: web
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: free
+  name: app-web-egress
+  namespace: org1-proj-abc
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+  podSelector:
+    matchLabels:
+      excalibase.io/app: app-01H
+      excalibase.io/component: app
+  policyTypes:
+  - Egress
