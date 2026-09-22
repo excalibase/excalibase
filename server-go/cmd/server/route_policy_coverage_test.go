@@ -127,7 +127,7 @@ func policyRouter(t *testing.T) (*policyHarness, []principal) {
 	functions := edgefn.NewFunctionStore(t.TempDir())
 	seedPolicyFunction(t, functions)
 
-	cfg := config.AppConfig{DeploymentMode: "cloud"}
+	cfg := config.AppConfig{DeploymentMode: "cloud", AppHostingEnabled: true}
 	deps := policyDeps(t, instances, platform, functions)
 	router := buildRouter(cfg, platform, instances, deps)
 	principals := policyPrincipals(platform)
