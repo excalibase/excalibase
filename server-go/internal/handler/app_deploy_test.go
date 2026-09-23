@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -160,5 +162,91 @@ func TestAppDeployHandler_ListDeploys_InvalidLimit(t *testing.T) {
 	rec := doDeployRequest(t, r, http.MethodGet, "/api/projects/"+deployHandlerProject+"/apps/app-1/deploys?limit=0")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAppDeployHandler_ListDeploys_InternalError(t *testing.T) {
+	deployer := newFakeAppDeployer()
+	deployer.listErr = errors.New("pq: connection refused")
+	r := setupAppDeployRouter(t, deployer)
+
+	rec := doDeployRequest(t, r, http.MethodGet, "/api/projects/"+deployHandlerProject+"/apps/app-1/deploys")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d want 500, body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "pq: ") {
+		t.Errorf("the pq: prefix must be stripped: %s", rec.Body.String())
+	}
+}
+
+func TestAppDeployHandler_Deploy_InternalError(t *testing.T) {
+	deployer := newFakeAppDeployer()
+	deployer.deployErr = errors.New("pq: connection refused")
+	r := setupAppDeployRouter(t, deployer)
+
+	rec := doDeployRequest(t, r, http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/app-1/deploy")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d want 500, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAppDeployHandler_Deploy_InvalidAppID(t *testing.T) {
+	deployer := newFakeAppDeployer()
+	r := setupAppDeployRouter(t, deployer)
+
+	rec := doDeployRequest(t, r, http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/bad!id/deploy")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAppDeployHandler_ListDeploys_InvalidAppID(t *testing.T) {
+	deployer := newFakeAppDeployer()
+	r := setupAppDeployRouter(t, deployer)
+
+	rec := doDeployRequest(t, r, http.MethodGet, "/api/projects/"+deployHandlerProject+"/apps/bad!id/deploys")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAppDeployHandler_ListDeploys_ValidLimit(t *testing.T) {
+	deployer := newFakeAppDeployer()
+	deployer.listDeploys = []*apphost.Deploy{{ID: "dep-1"}}
+	r := setupAppDeployRouter(t, deployer)
+
+	rec := doDeployRequest(t, r, http.MethodGet, "/api/projects/"+deployHandlerProject+"/apps/app-1/deploys?limit=5")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if deployer.lastLimit != 5 {
+		t.Errorf("limit: got %d want 5", deployer.lastLimit)
+	}
+}
+
+func TestAppDeployHandler_Deploy_InvalidProjectID(t *testing.T) {
+	deployer := newFakeAppDeployer()
+	r := setupAppDeployRouter(t, deployer)
+
+	rec := doDeployRequest(t, r, http.MethodPost, "/api/projects/bad!project/apps/app-1/deploy")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAppDeployHandler_Deploy_ActorFallsBackToUnknown(t *testing.T) {
+	deployer := newFakeAppDeployer()
+	deployer.deployApp[deployHandlerProject+"/app-1"] = &apphost.Deploy{ID: "dep-1", ProjectID: deployHandlerProject, AppID: "app-1"}
+	r := setupAppDeployRouter(t, deployer)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/app-1/deploy", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status: got %d want 202, body=%s", rec.Code, rec.Body.String())
+	}
+	if deployer.lastActor != "unknown" {
+		t.Errorf("actor: got %q want unknown", deployer.lastActor)
 	}
 }

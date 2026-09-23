@@ -24,8 +24,9 @@ const (
 )
 
 type fakeAppStoreForDeploy struct {
-	mu   sync.Mutex
-	apps map[string]*apphost.App
+	mu     sync.Mutex
+	apps   map[string]*apphost.App
+	getErr error
 }
 
 func newFakeAppStoreForDeploy(app *apphost.App) *fakeAppStoreForDeploy {
@@ -37,6 +38,9 @@ func (f *fakeAppStoreForDeploy) Create(*apphost.App) error { return errors.New("
 func (f *fakeAppStoreForDeploy) Get(projectID, id string) (*apphost.App, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	app, ok := f.apps[projectID+"/"+id]
 	if !ok {
 		return nil, nil
@@ -50,8 +54,11 @@ func (f *fakeAppStoreForDeploy) Update(*apphost.App, int) error      { return er
 func (f *fakeAppStoreForDeploy) Delete(string, string) error         { return errors.New("not used") }
 
 type fakeDeployStore struct {
-	mu      sync.Mutex
-	deploys []*apphost.Deploy
+	mu        sync.Mutex
+	deploys   []*apphost.Deploy
+	createErr error
+	listErr   error
+	updateErr error
 }
 
 func newFakeDeployStore() *fakeDeployStore { return &fakeDeployStore{} }
@@ -59,6 +66,9 @@ func newFakeDeployStore() *fakeDeployStore { return &fakeDeployStore{} }
 func (f *fakeDeployStore) Create(deploy *apphost.Deploy) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.createErr != nil {
+		return f.createErr
+	}
 	revision := 0
 	for _, d := range f.deploys {
 		if d.AppID != deploy.AppID {
@@ -80,6 +90,9 @@ func (f *fakeDeployStore) Create(deploy *apphost.Deploy) error {
 func (f *fakeDeployStore) UpdateStatus(id, status, failureReason string, finishedAt *time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.updateErr != nil {
+		return f.updateErr
+	}
 	for _, d := range f.deploys {
 		if d.ID != id {
 			continue
@@ -98,6 +111,9 @@ func (f *fakeDeployStore) UpdateStatus(id, status, failureReason string, finishe
 func (f *fakeDeployStore) ListByApp(projectID, appID string, limit int) ([]*apphost.Deploy, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	out := make([]*apphost.Deploy, 0)
 	for i := len(f.deploys) - 1; i >= 0; i-- {
 		d := f.deploys[i]
@@ -368,5 +384,158 @@ func TestListDeploys_CrossProjectIsNotFound(t *testing.T) {
 	}
 	if len(deploys) != 1 {
 		t.Fatalf("expected 1 deploy, got %d", len(deploys))
+	}
+}
+
+func TestNewAppDeployService_Defaults(t *testing.T) {
+	app := sampleDeployApp()
+	appStore := newFakeAppStoreForDeploy(app)
+	deployStore := newFakeDeployStore()
+	kube := k8s.NewMockClient()
+	instances := fakestore.NewInstances()
+
+	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil)
+
+	if svc.timeout != defaultAppRolloutTimeout {
+		t.Errorf("timeout: got %s want %s", svc.timeout, defaultAppRolloutTimeout)
+	}
+	if svc.active == nil {
+		t.Error("active map must be initialized")
+	}
+	if svc.async == nil {
+		t.Fatal("async must be initialized")
+	}
+	done := make(chan struct{})
+	svc.async(func() { close(done) })
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("the default async runner did not run the function in a goroutine")
+	}
+}
+
+func TestDeployApp_AppLookupError(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+	svc.apps.(*fakeAppStoreForDeploy).getErr = errors.New("db down")
+
+	_, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err == nil || !strings.Contains(err.Error(), "look up app") {
+		t.Fatalf("expected a wrapped lookup error, got %v", err)
+	}
+}
+
+func TestDeployApp_InvalidTier(t *testing.T) {
+	app := sampleDeployApp()
+	app.Tier = "not-a-real-tier"
+	svc, _, _ := newDeployTestService(t, app)
+
+	_, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err == nil || !strings.Contains(err.Error(), "resolve app tier") {
+		t.Fatalf("expected a wrapped tier error, got %v", err)
+	}
+}
+
+func TestDeployApp_CreateError(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deployStore, _ := newDeployTestService(t, app)
+	deployStore.createErr = errors.New("db down")
+
+	_, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err == nil || !strings.Contains(err.Error(), "db down") {
+		t.Fatalf("expected the store's error, got %v", err)
+	}
+}
+
+func TestDeployApp_NamespaceMissingMarksDeployFailed(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+	instances := fakestore.NewInstances() // holds no instance for app.ProjectID
+	svc.instances = instances
+
+	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	if deploy.Status != apphost.DeployStatusFailed {
+		t.Fatalf("status: got %q want failed", deploy.Status)
+	}
+	if !strings.Contains(deploy.FailureReason, "namespace") {
+		t.Errorf("failure reason should name it: %q", deploy.FailureReason)
+	}
+}
+
+func TestDeployApp_ApplyWorkloadErrorMarksDeployFailed(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+	kube.ApplyAppWorkloadErr = errors.New("apply refused")
+
+	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	if deploy.Status != apphost.DeployStatusFailed {
+		t.Fatalf("status: got %q want failed", deploy.Status)
+	}
+	if !strings.Contains(deploy.FailureReason, "apply refused") {
+		t.Errorf("failure reason should name it: %q", deploy.FailureReason)
+	}
+}
+
+func TestListDeploys_AppLookupError(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+	svc.apps.(*fakeAppStoreForDeploy).getErr = errors.New("db down")
+
+	_, err := svc.ListDeploys(app.ProjectID, app.ID, 0)
+	if err == nil || !strings.Contains(err.Error(), "look up app") {
+		t.Fatalf("expected a wrapped lookup error, got %v", err)
+	}
+}
+
+func TestListDeploys_StoreError(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deployStore, _ := newDeployTestService(t, app)
+	deployStore.listErr = errors.New("db down")
+
+	_, err := svc.ListDeploys(app.ProjectID, app.ID, 0)
+	if err == nil || !strings.Contains(err.Error(), "db down") {
+		t.Fatalf("expected the store's error, got %v", err)
+	}
+}
+
+func TestNamespaceFor_InstanceLookupError(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+	instances := fakestore.NewInstances()
+	instances.Err = errors.New("db down")
+	svc.instances = instances
+
+	_, err := svc.namespaceFor(app.ProjectID)
+	if err == nil || !strings.Contains(err.Error(), "look up project namespace") {
+		t.Fatalf("expected a wrapped lookup error, got %v", err)
+	}
+}
+
+func TestNamespaceFor_NoInstanceIsAnError(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+	svc.instances = fakestore.NewInstances()
+
+	_, err := svc.namespaceFor(app.ProjectID)
+	if err == nil {
+		t.Fatal("expected an error for a project with no instance")
+	}
+}
+
+func TestSetStatus_LogsStoreErrorWithoutPanicking(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deployStore, _ := newDeployTestService(t, app)
+	deployStore.updateErr = errors.New("db down")
+
+	deploy := &apphost.Deploy{ID: "dep-1"}
+	svc.setStatus(deploy, apphost.DeployStatusSucceeded, "", nil)
+	if deploy.Status != apphost.DeployStatusSucceeded {
+		t.Errorf("in-memory status: got %q", deploy.Status)
 	}
 }

@@ -3,8 +3,12 @@
 package apphost_test
 
 import (
+	"database/sql"
+	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/lib/pq"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 )
@@ -117,6 +121,76 @@ func TestPGDeployStore_CreateSupersedesEarlierPendingOrRolling(t *testing.T) {
 	}
 	if stillSuperseded[1].Status != apphost.DeployStatusSuperseded {
 		t.Errorf("first deploy after its late write: got %q, want it to stay superseded", stillSuperseded[1].Status)
+	}
+}
+
+func TestPGDeployStore_GetLatest_NoDeploysIsNil(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+
+	app := sampleApp("proj_deploy_empty", "app_deploy_empty", "storefront")
+	if err := appStore.Create(app); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	latest, err := deployStore.GetLatest(app.ProjectID, app.ID)
+	if err != nil {
+		t.Fatalf("get latest: %v", err)
+	}
+	if latest != nil {
+		t.Fatalf("expected nil for an app with no deploys, got %+v", latest)
+	}
+}
+
+func TestPGDeployStore_GetLatest_InvalidIDsError(t *testing.T) {
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	if _, err := deployStore.GetLatest("bad id", "app1"); err == nil {
+		t.Fatal("expected an error for an invalid project id")
+	}
+	if _, err := deployStore.GetLatest("proj1", "bad id"); err == nil {
+		t.Fatal("expected an error for an invalid app id")
+	}
+}
+
+func TestPGDeployStore_UpdateStatus_UnknownIDIsNoop(t *testing.T) {
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	if err := deployStore.UpdateStatus("does-not-exist", apphost.DeployStatusSucceeded, "", timePtr(time.Now())); err != nil {
+		t.Fatalf("update status on an unknown id must not error, got %v", err)
+	}
+}
+
+func TestPGDeployStore_Create_RejectsNonPendingStatus(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+
+	app := sampleApp("proj_deploy_badstatus", "app_deploy_badstatus", "storefront")
+	if err := appStore.Create(app); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	deploy := sampleDeploy(app.ProjectID, app.ID, "dev-1")
+	deploy.Status = apphost.DeployStatusRolling
+	if err := deployStore.Create(deploy); err == nil {
+		t.Fatal("expected an error creating a deploy that is not pending")
+	}
+}
+
+func TestPGDeployStore_ClosedDBErrors(t *testing.T) {
+	db, err := sql.Open("postgres", "postgres://x:x@127.0.0.1:1/x?sslmode=disable")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	db.Close()
+	deployStore := apphost.NewPostgresDeployStore(db)
+
+	if err := deployStore.Create(sampleDeploy("proj1", "app1", "dev-1")); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Errorf("Create on a closed db: got %v", err)
+	}
+	if err := deployStore.UpdateStatus("dep1", apphost.DeployStatusSucceeded, "", nil); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Errorf("UpdateStatus on a closed db: got %v", err)
+	}
+	if _, err := deployStore.ListByApp("proj1", "app1", 0); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Errorf("ListByApp on a closed db: got %v", err)
 	}
 }
 
