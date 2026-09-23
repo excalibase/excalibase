@@ -1467,6 +1467,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.With(dev).Delete("/", d.appHandler.Delete)
 				r.With(dev).Post("/deploy", d.appDeployHandler.Deploy)
 				r.Get("/deploys", d.appDeployHandler.ListDeploys)
+				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 			})
 		})
 	}

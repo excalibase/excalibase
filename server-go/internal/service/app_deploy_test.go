@@ -59,6 +59,7 @@ type fakeDeployStore struct {
 	createErr error
 	listErr   error
 	updateErr error
+	getErr    error
 }
 
 func newFakeDeployStore() *fakeDeployStore { return &fakeDeployStore{} }
@@ -134,6 +135,21 @@ func (f *fakeDeployStore) GetLatest(projectID, appID string) (*apphost.Deploy, e
 		return nil, err
 	}
 	return deploys[0], nil
+}
+
+func (f *fakeDeployStore) Get(projectID, appID, id string) (*apphost.Deploy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	for _, d := range f.deploys {
+		if d.ID == id && d.AppID == appID && d.ProjectID == projectID {
+			copied := *d
+			return &copied, nil
+		}
+	}
+	return nil, nil
 }
 
 func (f *fakeDeployStore) getByID(id string) *apphost.Deploy {
@@ -281,8 +297,8 @@ func TestDeployApp_EnvValuesNeverStoredInSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeployApp: %v", err)
 	}
-	if len(deploy.Spec.EnvNames) != 1 || deploy.Spec.EnvNames[0] != "API_KEY" {
-		t.Fatalf("env names: got %+v", deploy.Spec.EnvNames)
+	if len(deploy.Spec.Env) != 1 || deploy.Spec.Env[0].Name != "API_KEY" || deploy.Spec.Env[0].Kind != apphost.KindLiteral {
+		t.Fatalf("env: got %+v", deploy.Spec.Env)
 	}
 	blob, err := json.Marshal(deploy)
 	if err != nil {
@@ -525,6 +541,175 @@ func TestNamespaceFor_NoInstanceIsAnError(t *testing.T) {
 	_, err := svc.namespaceFor(app.ProjectID)
 	if err == nil {
 		t.Fatal("expected an error for a project with no instance")
+	}
+}
+
+func TestRedeployApp_UsesFrozenConfigNotCurrentApp(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+
+	first, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	frozenImage := first.Image
+	if frozenImage != app.Image {
+		t.Fatalf("first deploy image: got %q want %q", frozenImage, app.Image)
+	}
+
+	// The app record changes after the deploy; a redeploy must ignore this.
+	appStore := svc.apps.(*fakeAppStoreForDeploy)
+	appStore.mu.Lock()
+	appStore.apps[app.ProjectID+"/"+app.ID].Image = "ghcr.io/acme/storefront:9.9.9"
+	appStore.apps[app.ProjectID+"/"+app.ID].Env = nil
+	appStore.mu.Unlock()
+
+	redeploy, err := svc.RedeployApp(context.Background(), app.ProjectID, app.ID, first.ID, "dev-2")
+	if err != nil {
+		t.Fatalf("RedeployApp: %v", err)
+	}
+	if redeploy.Image != frozenImage {
+		t.Errorf("redeploy image: got %q want the frozen %q, not the app's new image", redeploy.Image, frozenImage)
+	}
+	if len(redeploy.Spec.Env) != 1 || redeploy.Spec.Env[0].Name != "API_KEY" {
+		t.Errorf("redeploy env: got %+v, want the frozen env", redeploy.Spec.Env)
+	}
+	if redeploy.RedeployOf != first.ID {
+		t.Errorf("redeployOf: got %q want %q", redeploy.RedeployOf, first.ID)
+	}
+	if redeploy.Revision != first.Revision+1 {
+		t.Errorf("revision: got %d want %d", redeploy.Revision, first.Revision+1)
+	}
+
+	// The app record itself must stay untouched by the redeploy.
+	current, err := appStore.Get(app.ProjectID, app.ID)
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if current.Image != "ghcr.io/acme/storefront:9.9.9" {
+		t.Fatalf("RedeployApp must not write back to the app record: got %q", current.Image)
+	}
+}
+
+func TestRedeployApp_UnknownDeployIsNotFound(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+
+	_, err := svc.RedeployApp(context.Background(), app.ProjectID, app.ID, "does-not-exist", "dev-1")
+	if !errors.Is(err, apphost.ErrDeployNotFound) {
+		t.Fatalf("expected ErrDeployNotFound, got %v", err)
+	}
+}
+
+func TestRedeployApp_CrossAppDeployIsNotFound(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	otherApp := sampleDeployApp()
+	otherApp.ID = "other-app"
+	appStore := svc.apps.(*fakeAppStoreForDeploy)
+	appStore.mu.Lock()
+	appStore.apps[otherApp.ProjectID+"/"+otherApp.ID] = otherApp
+	appStore.mu.Unlock()
+
+	_, err = svc.RedeployApp(context.Background(), app.ProjectID, otherApp.ID, deploy.ID, "dev-1")
+	if !errors.Is(err, apphost.ErrDeployNotFound) {
+		t.Fatalf("expected ErrDeployNotFound for a deploy of a different app, got %v", err)
+	}
+}
+
+func TestRedeployApp_CrossProjectDeployIsNotFound(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+
+	_, err = svc.RedeployApp(context.Background(), "some-other-project", app.ID, deploy.ID, "dev-1")
+	if !errors.Is(err, apphost.ErrAppNotFound) {
+		t.Fatalf("expected ErrAppNotFound for a project that holds no such app, got %v", err)
+	}
+}
+
+func TestRedeployApp_AppNotFound(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+
+	_, err := svc.RedeployApp(context.Background(), app.ProjectID, "does-not-exist", "dep-1", "dev-1")
+	if !errors.Is(err, apphost.ErrAppNotFound) {
+		t.Fatalf("expected ErrAppNotFound, got %v", err)
+	}
+}
+
+func TestRedeployApp_DeployLookupError(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deployStore, _ := newDeployTestService(t, app)
+	deployStore.getErr = errors.New("db down")
+
+	_, err := svc.RedeployApp(context.Background(), app.ProjectID, app.ID, "dep-1", "dev-1")
+	if err == nil || !strings.Contains(err.Error(), "look up deploy") {
+		t.Fatalf("expected a wrapped lookup error, got %v", err)
+	}
+}
+
+func TestRedeployApp_SupersedesARollingDeploy(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deployStore, kube := newDeployTestService(t, app)
+	svc.async = func(f func()) { go f() }
+
+	var calls int32
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	kube.AppRolloutFunc = func(ctx context.Context, ns, name string, timeout time.Duration) error {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			return nil
+		}
+		return nil
+	}
+
+	first, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatalf("first DeployApp: %v", err)
+	}
+	<-firstStarted
+
+	redeploy, err := svc.RedeployApp(context.Background(), app.ProjectID, app.ID, first.ID, "dev-2")
+	if err != nil {
+		t.Fatalf("RedeployApp: %v", err)
+	}
+	close(releaseFirst)
+	waitForDeployStatus(t, deployStore, redeploy.ID, apphost.DeployStatusSucceeded)
+
+	stillSuperseded := deployStore.getByID(first.ID)
+	if stillSuperseded == nil || stillSuperseded.Status != apphost.DeployStatusSuperseded {
+		t.Fatalf("first deploy after being redeployed: got %+v, want it to stay superseded", stillSuperseded)
+	}
+}
+
+func TestRedeployApp_FailedApplyMarksDeployFailed(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+	source, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	kube.ApplyAppWorkloadErr = errors.New("apply refused")
+
+	redeploy, err := svc.RedeployApp(context.Background(), app.ProjectID, app.ID, source.ID, "dev-2")
+	if err != nil {
+		t.Fatalf("RedeployApp: %v", err)
+	}
+	if redeploy.Status != apphost.DeployStatusFailed {
+		t.Fatalf("status: got %q want failed", redeploy.Status)
+	}
+	if !strings.Contains(redeploy.FailureReason, "apply refused") {
+		t.Errorf("failure reason should name it: %q", redeploy.FailureReason)
 	}
 }
 

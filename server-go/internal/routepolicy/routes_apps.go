@@ -19,4 +19,5 @@ var appRows = []Row{
 
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/deploy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
+	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys/{deployId}/redeploy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "rolls an earlier deploy's frozen config out again as a new deploy; never edits the app"},
 }
