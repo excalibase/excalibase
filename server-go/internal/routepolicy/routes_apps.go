@@ -16,4 +16,7 @@ var appRows = []Row{
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: patch, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "changes the image, env, port and replicas the next deploy would run"},
 	{Methods: del, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+
+	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/deploy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
 }

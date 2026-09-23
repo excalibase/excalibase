@@ -613,6 +613,7 @@ type handlerDeps struct {
 	rlsPolicyHandler   *handler.RlsPolicyHandler
 	tableGrantHandler  *handler.TableGrantHandler
 	appHandler         *handler.AppHandler
+	appDeployHandler   *handler.AppDeployHandler
 	tierHandler        *handler.TierHandler
 	pgCatalogHandler   *handler.PostgresCatalogHandler
 	capDeps            *capacityDeps
@@ -1168,8 +1169,11 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies()),
 		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants(), cfg.ExposureEnforced),
 		appHandler:         handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()), handler.NewProjectSourceLookup(store)),
-		tierHandler:        tierHandler,
-		pgCatalogHandler:   handler.NewPostgresCatalogHandler(),
+		appDeployHandler: handler.NewAppDeployHandler(service.NewAppDeployService(
+			apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
+			k8sClient, store, nil)),
+		tierHandler:      tierHandler,
+		pgCatalogHandler: handler.NewPostgresCatalogHandler(),
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
 			store:           store,
@@ -1461,6 +1465,8 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.Get("/", d.appHandler.Get)
 				r.With(dev).Patch("/", d.appHandler.Update)
 				r.With(dev).Delete("/", d.appHandler.Delete)
+				r.With(dev).Post("/deploy", d.appDeployHandler.Deploy)
+				r.Get("/deploys", d.appDeployHandler.ListDeploys)
 			})
 		})
 	}
