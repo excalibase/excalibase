@@ -3,6 +3,7 @@ package apphost
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -51,14 +52,27 @@ func (s *PostgresDeployStore) Create(deploy *Deploy) error {
 	if err != nil {
 		return fmt.Errorf("marshal deploy spec: %w", err)
 	}
+	config, err := json.Marshal(deploy.Config)
+	if err != nil {
+		return fmt.Errorf("marshal deploy config: %w", err)
+	}
 	const q = `
-INSERT INTO app_deploys (id, app_id, project_id, revision, image, spec, status, created_by, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+INSERT INTO app_deploys (id, app_id, project_id, revision, image, spec, config, redeploy_of, status, created_by, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 	if _, err := tx.Exec(q, deploy.ID, deploy.AppID, deploy.ProjectID, deploy.Revision,
-		deploy.Image, spec, deploy.Status, deploy.CreatedBy, deploy.CreatedAt); err != nil {
+		deploy.Image, spec, config, nullIfEmpty(deploy.RedeployOf), deploy.Status, deploy.CreatedBy, deploy.CreatedAt); err != nil {
 		return fmt.Errorf("create deploy: %w", err)
 	}
 	return tx.Commit()
+}
+
+// nullIfEmpty lets an empty RedeployOf insert NULL rather than a value the
+// foreign key to app_deploys(id) would reject.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // Applies only from pending/rolling, so a late write is a silent no-op.
@@ -80,7 +94,7 @@ func (s *PostgresDeployStore) ListByApp(projectID, appID string, limit int) ([]*
 	if err := ValidateID(appID); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, app_id, project_id, revision, image, spec, status, failure_reason, created_by, created_at, finished_at
+	q := `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at
 	      FROM app_deploys WHERE project_id = $1 AND app_id = $2 ORDER BY revision DESC`
 	args := []any{projectID, appID}
 	if limit > 0 {
@@ -115,22 +129,49 @@ func (s *PostgresDeployStore) GetLatest(projectID, appID string) (*Deploy, error
 	return deploys[0], nil
 }
 
+// Get returns nil, not an error, when id belongs to another app or project or
+// does not exist — the caller cannot tell those apart from the row alone, and
+// should not need to.
+func (s *PostgresDeployStore) Get(projectID, appID, id string) (*Deploy, error) {
+	if err := ValidateProjectID(projectID); err != nil {
+		return nil, err
+	}
+	if err := ValidateID(appID); err != nil {
+		return nil, err
+	}
+	row := s.db.QueryRow(
+		`SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at
+		 FROM app_deploys WHERE id = $1 AND app_id = $2 AND project_id = $3`, id, appID, projectID)
+	deploy, err := scanDeploy(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return deploy, nil
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
 
 func scanDeploy(row rowScanner) (*Deploy, error) {
 	var d Deploy
-	var spec []byte
-	var failureReason sql.NullString
+	var spec, config []byte
+	var failureReason, redeployOf sql.NullString
 	var finishedAt sql.NullTime
-	if err := row.Scan(&d.ID, &d.AppID, &d.ProjectID, &d.Revision, &d.Image, &spec,
+	if err := row.Scan(&d.ID, &d.AppID, &d.ProjectID, &d.Revision, &d.Image, &spec, &config, &redeployOf,
 		&d.Status, &failureReason, &d.CreatedBy, &d.CreatedAt, &finishedAt); err != nil {
 		return nil, fmt.Errorf("scan deploy: %w", err)
 	}
 	if err := json.Unmarshal(spec, &d.Spec); err != nil {
 		return nil, fmt.Errorf("unmarshal deploy spec: %w", err)
 	}
+	if err := json.Unmarshal(config, &d.Config); err != nil {
+		return nil, fmt.Errorf("unmarshal deploy config: %w", err)
+	}
+	d.RedeployOf = redeployOf.String
 	d.FailureReason = failureReason.String
 	if finishedAt.Valid {
 		d.FinishedAt = &finishedAt.Time

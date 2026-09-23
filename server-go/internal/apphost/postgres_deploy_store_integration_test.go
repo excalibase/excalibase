@@ -11,22 +11,28 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 func sampleDeploy(projectID, appID, createdBy string) *apphost.Deploy {
+	value := "production"
 	return &apphost.Deploy{
 		ID:        appID + "-deploy-" + createdBy,
 		AppID:     appID,
 		ProjectID: projectID,
 		Image:     "ghcr.io/acme/storefront:1.4.2",
 		Spec: apphost.DeploySpec{
-			Image:    "ghcr.io/acme/storefront:1.4.2",
-			EnvNames: []string{"MODE"},
-			Port:     8080,
-			Replicas: 1,
+			Image: "ghcr.io/acme/storefront:1.4.2",
+			Env:   []apphost.EnvSummary{{Name: "MODE", Kind: apphost.KindLiteral}},
+			Port:  8080, Replicas: 1,
 			Resources: apphost.DeployResources{
 				CPURequest: "250m", CPULimit: "1", MemoryRequest: "512Mi", MemoryLimit: "1Gi",
 			},
+		},
+		Config: apphost.DeployConfig{
+			Image: "ghcr.io/acme/storefront:1.4.2",
+			Env:   []apphost.EnvVar{{Name: "MODE", Kind: apphost.KindLiteral, Value: &value}},
+			Port:  8080, Replicas: 1, Tier: domain.Standard,
 		},
 		Status:    apphost.DeployStatusPending,
 		CreatedBy: createdBy,
@@ -175,6 +181,91 @@ func TestPGDeployStore_Create_RejectsNonPendingStatus(t *testing.T) {
 	}
 }
 
+func TestPGDeployStore_ConfigAndRedeployOfRoundTrip(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+
+	app := sampleApp("proj_deploy_config", "app_deploy_config", "storefront")
+	if err := appStore.Create(app); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	source := sampleDeploy(app.ProjectID, app.ID, "dev-1")
+	if err := deployStore.Create(source); err != nil {
+		t.Fatalf("create source deploy: %v", err)
+	}
+
+	redeploy := sampleDeploy(app.ProjectID, app.ID, "dev-2")
+	redeploy.RedeployOf = source.ID
+	if err := deployStore.Create(redeploy); err != nil {
+		t.Fatalf("create redeploy: %v", err)
+	}
+
+	got, err := deployStore.Get(app.ProjectID, app.ID, redeploy.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected the redeploy row")
+	}
+	if got.RedeployOf != source.ID {
+		t.Errorf("redeployOf: got %q want %q", got.RedeployOf, source.ID)
+	}
+	if len(got.Config.Env) != 1 || got.Config.Env[0].Value == nil || *got.Config.Env[0].Value != "production" {
+		t.Errorf("config env did not round-trip: got %+v", got.Config.Env)
+	}
+	if got.Config.Tier != domain.Standard {
+		t.Errorf("config tier: got %q want %q", got.Config.Tier, domain.Standard)
+	}
+
+	sourceGot, err := deployStore.Get(app.ProjectID, app.ID, source.ID)
+	if err != nil {
+		t.Fatalf("get source: %v", err)
+	}
+	if sourceGot == nil || sourceGot.RedeployOf != "" {
+		t.Fatalf("a plain deploy must have no redeployOf: got %+v", sourceGot)
+	}
+}
+
+func TestPGDeployStore_Get_CrossAppAndCrossProjectAreNotFound(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+
+	appA := sampleApp("proj_deploy_get_a", "app_deploy_get_a", "storefront")
+	if err := appStore.Create(appA); err != nil {
+		t.Fatalf("create app a: %v", err)
+	}
+	appB := sampleApp("proj_deploy_get_b", "app_deploy_get_b", "storefront")
+	if err := appStore.Create(appB); err != nil {
+		t.Fatalf("create app b: %v", err)
+	}
+
+	deploy := sampleDeploy(appA.ProjectID, appA.ID, "dev-1")
+	if err := deployStore.Create(deploy); err != nil {
+		t.Fatalf("create deploy: %v", err)
+	}
+
+	if got, err := deployStore.Get(appB.ProjectID, appA.ID, deploy.ID); err != nil || got != nil {
+		t.Errorf("cross-project get: got %+v, %v", got, err)
+	}
+	if got, err := deployStore.Get(appA.ProjectID, appB.ID, deploy.ID); err != nil || got != nil {
+		t.Errorf("cross-app get: got %+v, %v", got, err)
+	}
+	if got, err := deployStore.Get(appA.ProjectID, appA.ID, "does-not-exist"); err != nil || got != nil {
+		t.Errorf("unknown id get: got %+v, %v", got, err)
+	}
+}
+
+func TestPGDeployStore_Get_InvalidIDsError(t *testing.T) {
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	if _, err := deployStore.Get("bad id", "app1", "dep1"); err == nil {
+		t.Fatal("expected an error for an invalid project id")
+	}
+	if _, err := deployStore.Get("proj1", "bad id", "dep1"); err == nil {
+		t.Fatal("expected an error for an invalid app id")
+	}
+}
+
 func TestPGDeployStore_ClosedDBErrors(t *testing.T) {
 	db, err := sql.Open("postgres", "postgres://x:x@127.0.0.1:1/x?sslmode=disable")
 	if err != nil {
@@ -191,6 +282,9 @@ func TestPGDeployStore_ClosedDBErrors(t *testing.T) {
 	}
 	if _, err := deployStore.ListByApp("proj1", "app1", 0); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Errorf("ListByApp on a closed db: got %v", err)
+	}
+	if _, err := deployStore.Get("proj1", "app1", "dep1"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Errorf("Get on a closed db: got %v", err)
 	}
 }
 

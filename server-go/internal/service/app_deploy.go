@@ -60,7 +60,36 @@ func (s *AppDeployService) DeployApp(ctx context.Context, projectID, appID, acto
 	if app == nil {
 		return nil, apphost.ErrAppNotFound
 	}
-	tier, err := config.GetAppTierConfig(app.Tier)
+	return s.rollout(ctx, app, apphost.ConfigFromApp(app), actor, "")
+}
+
+// RedeployApp rolls a deploy's frozen config out again as a new deploy. It
+// never touches the app record — the source deploy's config is what runs,
+// even if the app has since been edited.
+func (s *AppDeployService) RedeployApp(ctx context.Context, projectID, appID, deployID, actor string) (*apphost.Deploy, error) {
+	app, err := s.apps.Get(projectID, appID)
+	if err != nil {
+		return nil, fmt.Errorf("look up app: %w", err)
+	}
+	if app == nil {
+		return nil, apphost.ErrAppNotFound
+	}
+	source, err := s.deploys.Get(projectID, appID, deployID)
+	if err != nil {
+		return nil, fmt.Errorf("look up deploy: %w", err)
+	}
+	if source == nil {
+		return nil, apphost.ErrDeployNotFound
+	}
+	return s.rollout(ctx, app, source.Config, actor, source.ID)
+}
+
+// rollout is the deploy engine DeployApp and RedeployApp both drive: create
+// the record, apply the workload, and watch the rollout. cfg is what actually
+// runs; redeployOf names the deploy it was frozen from, or "" for a plain
+// deploy.
+func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, actor, redeployOf string) (*apphost.Deploy, error) {
+	tier, err := config.GetAppTierConfig(cfg.Tier)
 	if err != nil {
 		return nil, fmt.Errorf("resolve app tier: %w", err)
 	}
@@ -68,33 +97,35 @@ func (s *AppDeployService) DeployApp(ctx context.Context, projectID, appID, acto
 	deploy := &apphost.Deploy{
 		ID:        uuid.NewString(),
 		AppID:     app.ID,
-		ProjectID: projectID,
-		Image:     app.Image,
+		ProjectID: app.ProjectID,
+		Image:     cfg.Image,
 		Spec: apphost.DeploySpec{
-			Image:    app.Image,
-			EnvNames: apphost.EnvNames(app.Env),
-			Port:     app.Port,
-			Replicas: app.Replicas,
+			Image:    cfg.Image,
+			Env:      apphost.EnvSummaries(cfg.Env),
+			Port:     cfg.Port,
+			Replicas: cfg.Replicas,
 			Resources: apphost.DeployResources{
 				CPURequest: tier.CPURequest, CPULimit: tier.CPULimit,
 				MemoryRequest: tier.MemoryRequest, MemoryLimit: tier.MemoryLimit,
 			},
 		},
-		Status:    apphost.DeployStatusPending,
-		CreatedBy: actor,
-		CreatedAt: time.Now().UTC(),
+		Config:     cfg,
+		RedeployOf: redeployOf,
+		Status:     apphost.DeployStatusPending,
+		CreatedBy:  actor,
+		CreatedAt:  time.Now().UTC(),
 	}
 	if err := s.deploys.Create(deploy); err != nil {
 		return nil, err
 	}
 	s.cancelActive(app.ID)
 
-	namespace, err := s.namespaceFor(projectID)
+	namespace, err := s.namespaceFor(app.ProjectID)
 	if err != nil {
 		s.fail(deploy, err)
 		return deploy, nil
 	}
-	workload, err := k8s.RenderAppWorkload(namespace, app, s.resolver)
+	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver)
 	if err != nil {
 		s.fail(deploy, err)
 		return deploy, nil

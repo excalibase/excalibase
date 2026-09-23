@@ -13,6 +13,7 @@ import (
 
 type AppDeployer interface {
 	DeployApp(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, error)
+	RedeployApp(ctx context.Context, projectID, appID, deployID, actor string) (*apphost.Deploy, error)
 	ListDeploys(projectID, appID string, limit int) ([]*apphost.Deploy, error)
 }
 
@@ -31,6 +32,26 @@ func (h *AppDeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := actorID(r)
 	deploy, err := h.deploys.DeployApp(r.Context(), projectID, appID, actor)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, deploy)
+}
+
+func (h *AppDeployHandler) Redeploy(w http.ResponseWriter, r *http.Request) {
+	projectID, appID, ok := h.appPath(w, r)
+	if !ok {
+		return
+	}
+	deployID := chi.URLParam(r, "deployId")
+	if err := apphost.ValidateID(deployID); err != nil {
+		httpError(w, "invalid deployId", http.StatusBadRequest)
+		return
+	}
+	actor := actorID(r)
+	deploy, err := h.deploys.RedeployApp(r.Context(), projectID, appID, deployID, actor)
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -86,7 +107,7 @@ func (h *AppDeployHandler) appPath(w http.ResponseWriter, r *http.Request) (stri
 
 func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, apphost.ErrAppNotFound):
+	case errors.Is(err, apphost.ErrAppNotFound), errors.Is(err, apphost.ErrDeployNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)
