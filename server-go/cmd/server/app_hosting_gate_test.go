@@ -42,3 +42,27 @@ func TestAppHostingEnabled_AppsRouteIsMounted(t *testing.T) {
 		t.Fatalf("hosting enabled: got 404, the route must be mounted")
 	}
 }
+
+func TestAppHostingDisabled_DeployRoutesAnswer404(t *testing.T) {
+	router := appHostingRouter(t, false)
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/api/projects/"+matrixProjectA+"/apps/app-1/deploy", nil),
+		httptest.NewRequest(http.MethodGet, "/api/projects/"+matrixProjectA+"/apps/app-1/deploys", nil),
+	} {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s %s: hosting disabled: got %d, want 404", req.Method, req.URL.Path, w.Code)
+		}
+	}
+}
+
+func TestAppHostingEnabled_DeployRoutesAreMounted(t *testing.T) {
+	router := appHostingRouter(t, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+matrixProjectA+"/apps/app-1/deploys", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code == http.StatusNotFound {
+		t.Fatalf("hosting enabled: got 404, the deploys route must be mounted")
+	}
+}

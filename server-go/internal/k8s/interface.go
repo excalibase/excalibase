@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -81,6 +82,9 @@ type KubeClient interface {
 	// CPU/memory across all schedulable nodes. Used by capacity-aware
 	// provisioning to refuse projects that wouldn't fit.
 	GetClusterCapacity(ctx context.Context) (ClusterCapacity, error)
+
+	ApplyAppWorkload(ctx context.Context, namespace string, workload *AppWorkload) error
+	WaitForAppRollout(ctx context.Context, namespace, name string, timeout time.Duration) error
 }
 
 // ClusterCapacity holds aggregate cluster resource state. All values are in

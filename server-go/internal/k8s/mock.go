@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,6 +84,12 @@ type MockClient struct {
 	// cluster headroom for capacity-aware provisioning checks.
 	Capacity      ClusterCapacity
 	CapacityError error
+
+	AppWorkloads        map[string]*AppWorkload // keyed "namespace/deploymentName"
+	ApplyAppWorkloadErr error
+
+	AppRolloutFunc func(ctx context.Context, namespace, name string, timeout time.Duration) error
+	AppRolloutErr  map[string]error // keyed "namespace/name"
 }
 
 func NewMockClient() *MockClient {
@@ -104,6 +111,9 @@ func NewMockClient() *MockClient {
 
 		PublicDBServices: make(map[string]PublicDBServiceSpec),
 		GatewayReady:     make(map[string]bool),
+
+		AppWorkloads:  make(map[string]*AppWorkload),
+		AppRolloutErr: make(map[string]error),
 	}
 }
 
@@ -493,6 +503,33 @@ func (m *MockClient) GetClusterCapacity(ctx context.Context) (ClusterCapacity, e
 		return ClusterCapacity{}, m.CapacityError
 	}
 	return m.Capacity, nil
+}
+
+func (m *MockClient) ApplyAppWorkload(ctx context.Context, namespace string, workload *AppWorkload) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	name := ""
+	if workload != nil && workload.Deployment != nil {
+		name = workload.Deployment.Name
+	}
+	m.Calls = append(m.Calls, "ApplyAppWorkload:"+namespace+"/"+name)
+	if m.ApplyAppWorkloadErr != nil {
+		return m.ApplyAppWorkloadErr
+	}
+	m.AppWorkloads[namespace+"/"+name] = workload
+	return nil
+}
+
+func (m *MockClient) WaitForAppRollout(ctx context.Context, namespace, name string, timeout time.Duration) error {
+	m.mu.Lock()
+	m.Calls = append(m.Calls, "WaitForAppRollout:"+namespace+"/"+name)
+	fn := m.AppRolloutFunc
+	err := m.AppRolloutErr[namespace+"/"+name]
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, namespace, name, timeout)
+	}
+	return err
 }
 
 func (m *MockClient) UninstallHelmChart(ctx context.Context, namespace, releaseName string) error {
