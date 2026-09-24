@@ -90,8 +90,8 @@ func AppObjectName(appName string) string { return appObjectPrefix + appName }
 func AppEgressPolicyName(appName string) string { return appObjectPrefix + appName + "-egress" }
 
 // RenderAppWorkload renders the app into the project's namespace. Every input
-// is checked and nothing is defaulted; the output is a pure function of the app and the resolver.
-func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver) (*AppWorkload, error) {
+// is checked and nothing is defaulted; extraDenyCIDRs are validated by config.
+func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, extraDenyCIDRs ...string) (*AppWorkload, error) {
 	if app == nil {
 		return nil, fmt.Errorf("%w: no app", ErrRenderApp)
 	}
@@ -127,7 +127,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver) (*
 	}
 	return &AppWorkload{
 		Deployment:    deployment,
-		NetworkPolicy: buildAppEgressPolicy(namespace, app),
+		NetworkPolicy: buildAppEgressPolicy(namespace, app, extraDenyCIDRs),
 	}, nil
 }
 
@@ -431,15 +431,14 @@ func referencesDatabase(app *apphost.App) bool {
 	return false
 }
 
-// buildAppEgressPolicy fences the app's outbound traffic.
-//
-// Deno's egress minus the control-plane and internet rules: a customer image
-// has no callback to make and no allowlist yet (EXC-383). Needs a policy-enforcing CNI.
-func buildAppEgressPolicy(namespace string, app *apphost.App) *networkingv1.NetworkPolicy {
+// buildAppEgressPolicy fences the app's outbound traffic: internet by
+// default, nothing private. Needs a policy-enforcing CNI.
+func buildAppEgressPolicy(namespace string, app *apphost.App, extraDenyCIDRs []string) *networkingv1.NetworkPolicy {
 	rules := []networkingv1.NetworkPolicyEgressRule{appDNSRule()}
 	if referencesDatabase(app) {
 		rules = append(rules, appOwnDatabaseRule())
 	}
+	rules = append(rules, appInternetRule(extraDenyCIDRs))
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      AppEgressPolicyName(app.Name),
@@ -477,4 +476,37 @@ func appOwnDatabaseRule() networkingv1.NetworkPolicyEgressRule {
 		To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
 		Ports: []networkingv1.NetworkPolicyPort{tcpPort(postgresPortNumber)},
 	}
+}
+
+// Excluded from the internet rule; link-local covers cloud metadata.
+var appPrivateRanges = []string{
+	"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+	"100.64.0.0/10", "169.254.0.0/16", "127.0.0.0/8",
+	"0.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4",
+}
+
+// The selector rules above stay: an ipBlock does not reliably match in-cluster
+// pod IPs, so they are what keep DNS and the DB reachable.
+func appInternetRule(extraDenyCIDRs []string) networkingv1.NetworkPolicyEgressRule {
+	except := make([]string, 0, len(appPrivateRanges)+len(extraDenyCIDRs))
+	except = append(except, appPrivateRanges...)
+	except = append(except, extraDenyCIDRs...)
+	return networkingv1.NetworkPolicyEgressRule{
+		To: []networkingv1.NetworkPolicyPeer{{
+			IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: except},
+		}},
+		// Every port but TCP 25, so one tenant cannot get the platform's IP blacklisted for spam.
+		Ports: []networkingv1.NetworkPolicyPort{
+			portRange(corev1.ProtocolTCP, 1, smtpPortNumber-1),
+			portRange(corev1.ProtocolTCP, smtpPortNumber+1, 65535),
+			portRange(corev1.ProtocolUDP, 1, 65535),
+		},
+	}
+}
+
+const smtpPortNumber = 25
+
+func portRange(protocol corev1.Protocol, start, end int32) networkingv1.NetworkPolicyPort {
+	port := intstr.FromInt32(start)
+	return networkingv1.NetworkPolicyPort{Protocol: &protocol, Port: &port, EndPort: &end}
 }

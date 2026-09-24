@@ -203,7 +203,7 @@ func newDeployTestService(t *testing.T, app *apphost.App) (*AppDeployService, *f
 	instances.Items[app.ProjectID] = &domain.DatabaseInstance{
 		ProjectID: app.ProjectID, Namespace: testDeployNamespace,
 	}
-	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil)
+	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, nil)
 	svc.async = func(f func()) { f() }
 	return svc, deployStore, kube
 }
@@ -410,7 +410,7 @@ func TestNewAppDeployService_Defaults(t *testing.T) {
 	kube := k8s.NewMockClient()
 	instances := fakestore.NewInstances()
 
-	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil)
+	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, nil)
 
 	if svc.timeout != defaultAppRolloutTimeout {
 		t.Errorf("timeout: got %s want %s", svc.timeout, defaultAppRolloutTimeout)

@@ -92,6 +92,29 @@ spec:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
+  - ports:
+    - endPort: 24
+      port: 1
+      protocol: TCP
+    - endPort: 65535
+      port: 26
+      protocol: TCP
+    - endPort: 65535
+      port: 1
+      protocol: UDP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+        - 127.0.0.0/8
+        - 0.0.0.0/8
+        - 224.0.0.0/4
+        - 240.0.0.0/4
   podSelector:
     matchLabels:
       excalibase.io/app: app-01H

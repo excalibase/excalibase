@@ -245,6 +245,12 @@ type AppConfig struct {
 	// any install until the epic is finished, so it defaults off; only the
 	// exact value "true" turns it on.
 	AppHostingEnabled bool
+
+	// AppEgressExtraDenyCIDRs are appended to the app egress policy's
+	// internet-rule except list: ranges the fixed private list cannot know
+	// about, such as a node's own public IP or a cluster whose pod/service
+	// CIDR falls outside RFC-1918. Empty by default.
+	AppEgressExtraDenyCIDRs []string
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -370,6 +376,7 @@ func Load() AppConfig {
 		FnReplayEnabled:             envBool("EXCALIBASE_FN_REPLAY_ENABLED", true),
 		FnReplayPollInterval:        envMillis("EXCALIBASE_FN_REPLAY_POLL_MS", defaultReplayPoll),
 		AppHostingEnabled:           envOr("APP_HOSTING_ENABLED", "") == "true",
+		AppEgressExtraDenyCIDRs:     envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -500,25 +501,31 @@ func TestRenderAppWorkloadEgressPolicy(t *testing.T) {
 	if len(policy.Spec.PolicyTypes) != 1 || policy.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
 		t.Fatalf("the policy must be egress-only, got %v", policy.Spec.PolicyTypes)
 	}
-	if len(policy.Spec.Egress) != 2 {
-		t.Fatalf("expected a DNS rule and a database rule, got %d", len(policy.Spec.Egress))
+	if len(policy.Spec.Egress) != 3 {
+		t.Fatalf("expected a DNS rule, a database rule and an internet rule, got %d", len(policy.Spec.Egress))
 	}
-	for _, rule := range policy.Spec.Egress {
+	assertSelectorRulesStayInBounds(t, policy.Spec.Egress[:2])
+	assertDatabaseRuleIsLocal(t, policy.Spec.Egress[1])
+	assertInternetRuleExcludesPrivate(t, policy.Spec.Egress[2])
+}
+
+func assertSelectorRulesStayInBounds(t *testing.T, rules []networkingv1.NetworkPolicyEgressRule) {
+	t.Helper()
+	for _, rule := range rules {
 		for _, peer := range rule.To {
 			if peer.IPBlock != nil {
-				t.Errorf("no rule may open an address range to customer code: %v", peer.IPBlock)
+				t.Errorf("only the internet rule may open an address range: %v", peer.IPBlock)
 			}
-			if peer.NamespaceSelector == nil {
-				continue
-			}
-			name := peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]
-			if name != "kube-system" {
-				t.Errorf("customer code may not reach namespace %q", name)
+			if peer.NamespaceSelector != nil && peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "kube-system" {
+				t.Errorf("customer code may not reach namespace %v", peer.NamespaceSelector.MatchLabels)
 			}
 		}
 	}
-	// A pod selector with no namespace selector cannot cross into another tenant.
-	dbRule := policy.Spec.Egress[1]
+}
+
+// A pod selector with no namespace selector cannot cross into another tenant.
+func assertDatabaseRuleIsLocal(t *testing.T, dbRule networkingv1.NetworkPolicyEgressRule) {
+	t.Helper()
 	if dbRule.To[0].NamespaceSelector != nil || dbRule.To[0].PodSelector == nil {
 		t.Errorf("the database rule must be confined to this namespace, got %+v", dbRule.To[0])
 	}
@@ -527,10 +534,59 @@ func TestRenderAppWorkloadEgressPolicy(t *testing.T) {
 	}
 }
 
+func assertInternetRuleExcludesPrivate(t *testing.T, internetRule networkingv1.NetworkPolicyEgressRule) {
+	t.Helper()
+	assertEveryPortButSMTP(t, internetRule.Ports)
+	if len(internetRule.To) != 1 || internetRule.To[0].IPBlock == nil {
+		t.Fatalf("the internet rule must be an ipBlock, got %+v", internetRule.To)
+	}
+	block := internetRule.To[0].IPBlock
+	if block.CIDR != "0.0.0.0/0" {
+		t.Errorf("the internet rule must cover all of IPv4, got %q", block.CIDR)
+	}
+	want := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16",
+		"127.0.0.0/8", "0.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4"}
+	if !slices.Equal(block.Except, want) {
+		t.Errorf("excluded ranges = %v, want %v", block.Except, want)
+	}
+}
+
+func TestRenderAppWorkloadEgressPolicyExtraDenyCIDRs(t *testing.T) {
+	workload, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), "203.0.113.9/32", "198.51.100.0/24")
+	if err != nil {
+		t.Fatalf("RenderAppWorkload: %v", err)
+	}
+	internetRule := workload.NetworkPolicy.Spec.Egress[len(workload.NetworkPolicy.Spec.Egress)-1]
+	except := internetRule.To[0].IPBlock.Except
+	for _, want := range []string{"203.0.113.9/32", "198.51.100.0/24"} {
+		found := false
+		for _, got := range except {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("except = %v, want it to include %q", except, want)
+		}
+	}
+	// The fixed private ranges are still there; extras are additional, not a replacement.
+	if len(except) != len(appPrivateRanges)+2 {
+		t.Errorf("except has %d entries, want %d fixed + 2 extra", len(except), len(appPrivateRanges))
+	}
+}
+
 func TestRenderAppWorkloadEgressPolicyWithoutDatabase(t *testing.T) {
 	policy := mustRender(t, minimalApp(), newResolver()).NetworkPolicy
-	if len(policy.Spec.Egress) != 1 {
-		t.Fatalf("an app with no reference needs DNS only, got %d rules", len(policy.Spec.Egress))
+	if len(policy.Spec.Egress) != 2 {
+		t.Fatalf("an app with no reference needs DNS and internet only, got %d rules", len(policy.Spec.Egress))
+	}
+	for _, rule := range policy.Spec.Egress {
+		for _, peer := range rule.To {
+			if peer.PodSelector != nil && peer.NamespaceSelector == nil {
+				t.Errorf("an app with no database reference must not reach the database rule's pod selector: %+v", rule)
+			}
+		}
 	}
 }
 
@@ -539,7 +595,7 @@ func TestRenderAppWorkloadEgressPolicyWithoutDatabase(t *testing.T) {
 func TestRenderAppWorkloadIsDeterministic(t *testing.T) {
 	first := renderYAML(t, fullApp())
 	for i := 0; i < 20; i++ {
-		if got := renderYAML(t, fullApp()); got != first {
+		if renderYAML(t, fullApp()) != first {
 			t.Fatalf("render %d differs from the first", i)
 		}
 	}
@@ -555,7 +611,7 @@ func TestRenderAppWorkloadConfigHashTracksTheApp(t *testing.T) {
 	}
 	changed := fullApp()
 	changed.Image = "ghcr.io/acme/web:1.4.3"
-	if got := mustRender(t, changed, newResolver()).Deployment.Spec.Template.Annotations[appConfigHashAnnotation]; got == hash {
+	if mustRender(t, changed, newResolver()).Deployment.Spec.Template.Annotations[appConfigHashAnnotation] == hash {
 		t.Error("a changed image must change the config hash")
 	}
 }
@@ -701,5 +757,26 @@ func TestAppResourceRequirementsRefusesUnparseableCatalogue(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("an unparseable quantity must be refused")
+	}
+}
+
+// Port 25 stays closed so one tenant cannot get the platform's IP blacklisted.
+func assertEveryPortButSMTP(t *testing.T, ports []networkingv1.NetworkPolicyPort) {
+	t.Helper()
+	type span struct {
+		protocol   corev1.Protocol
+		start, end int32
+	}
+	var got []span
+	for _, port := range ports {
+		end := port.Port.IntVal
+		if port.EndPort != nil {
+			end = *port.EndPort
+		}
+		got = append(got, span{*port.Protocol, port.Port.IntVal, end})
+	}
+	want := []span{{corev1.ProtocolTCP, 1, 24}, {corev1.ProtocolTCP, 26, 65535}, {corev1.ProtocolUDP, 1, 65535}}
+	if !slices.Equal(got, want) {
+		t.Errorf("internet rule ports = %v, want every port but TCP 25 (%v)", got, want)
 	}
 }

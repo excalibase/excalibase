@@ -30,6 +30,10 @@ type AppDeployService struct {
 	instances storage.InstanceStore
 	resolver  k8s.Resolver
 	timeout   time.Duration
+	// egressExtraDenyCIDRs is APP_EGRESS_EXTRA_DENY_CIDRS: ranges the fixed
+	// private list in internal/k8s cannot know about (a public node IP, a
+	// non-RFC1918 cluster CIDR), appended to every app's egress policy.
+	egressExtraDenyCIDRs []string
 	// async lets tests run the rollout wait inline instead of in a goroutine.
 	async func(func())
 
@@ -43,12 +47,14 @@ func NewAppDeployService(
 	kube k8s.KubeClient,
 	instances storage.InstanceStore,
 	resolver k8s.Resolver,
+	egressExtraDenyCIDRs []string,
 ) *AppDeployService {
 	return &AppDeployService{
 		apps: apps, deploys: deploys, kube: kube, instances: instances, resolver: resolver,
-		timeout: defaultAppRolloutTimeout,
-		async:   func(f func()) { go f() },
-		active:  make(map[string]*activeRollout),
+		timeout:              defaultAppRolloutTimeout,
+		egressExtraDenyCIDRs: egressExtraDenyCIDRs,
+		async:                func(f func()) { go f() },
+		active:               make(map[string]*activeRollout),
 	}
 }
 
@@ -125,7 +131,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		s.fail(deploy, err)
 		return deploy, nil
 	}
-	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver)
+	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver, s.egressExtraDenyCIDRs...)
 	if err != nil {
 		s.fail(deploy, err)
 		return deploy, nil
