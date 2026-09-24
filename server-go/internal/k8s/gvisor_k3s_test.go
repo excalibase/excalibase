@@ -24,7 +24,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -86,6 +89,7 @@ func startGVisorK3s(t *testing.T, platform string) *gvisorCluster {
 	cluster.node = cluster.waitForNode(t)
 	cluster.setGVisorLabel(t, true)
 	cluster.createRuntimeClass(t)
+	cluster.installCiliumPolicyKind(t)
 	return cluster
 }
 
@@ -103,8 +107,49 @@ func (g *gvisorCluster) connect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clientset: %v", err)
 	}
+	dyn, err := dynamic.NewForConfig(restCfg)
+	if err != nil {
+		t.Fatalf("dynamic client: %v", err)
+	}
 	g.clientset = clientset
-	g.client = &Client{clientset: clientset, restConfig: restCfg}
+	g.client = &Client{clientset: clientset, dynamicClient: dyn, restConfig: restCfg}
+}
+
+// installCiliumPolicyKind registers the CiliumNetworkPolicy kind only, so the deploy path applies its
+// fence; enforcement is TestK3sCiliumAppEgress's job.
+func (g *gvisorCluster) installCiliumPolicyKind(t *testing.T) {
+	t.Helper()
+	crds := g.client.dynamicClient.Resource(schema.GroupVersionResource{
+		Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"})
+	crd := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "apiextensions.k8s.io/v1",
+		"kind":       "CustomResourceDefinition",
+		"metadata":   map[string]interface{}{"name": "ciliumnetworkpolicies.cilium.io"},
+		"spec": map[string]interface{}{
+			"group": "cilium.io",
+			"scope": "Namespaced",
+			"names": map[string]interface{}{
+				"kind": "CiliumNetworkPolicy", "plural": "ciliumnetworkpolicies", "singular": "ciliumnetworkpolicy"},
+			"versions": []interface{}{map[string]interface{}{
+				"name": "v2", "served": true, "storage": true,
+				"schema": map[string]interface{}{"openAPIV3Schema": map[string]interface{}{
+					"type": "object", "x-kubernetes-preserve-unknown-fields": true}},
+			}},
+		},
+	}}
+	ctx := context.Background()
+	if _, err := crds.Create(ctx, crd, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create CiliumNetworkPolicy CRD: %v", err)
+	}
+	deadline := time.Now().Add(time.Minute)
+	for time.Now().Before(deadline) {
+		if _, err := g.client.dynamicClient.Resource(CiliumNetworkPolicyGVR).Namespace("default").
+			List(ctx, metav1.ListOptions{}); err == nil {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("the CiliumNetworkPolicy kind was never served")
 }
 
 func (g *gvisorCluster) waitForNode(t *testing.T) string {
@@ -181,7 +226,7 @@ func liveApp(name, image string, port int) *apphost.App {
 // deployApp drives the production path: render, apply, wait.
 func (g *gvisorCluster) deployApp(t *testing.T, namespace string, app *apphost.App, timeout time.Duration) error {
 	t.Helper()
-	workload, err := RenderAppWorkload(namespace, app, nil, gvisorRuntimeClass)
+	workload, err := RenderAppWorkload(namespace, app, nil, AppRenderOptions{RuntimeClass: gvisorRuntimeClass})
 	if err != nil {
 		t.Fatalf("render %s: %v", app.Name, err)
 	}

@@ -3,6 +3,7 @@ package k8s
 import (
 	"errors"
 	"flag"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,8 +13,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -121,11 +123,13 @@ const (
 	testRuntimeClass = "gvisor"
 )
 
+var testRenderOptions = AppRenderOptions{RuntimeClass: testRuntimeClass}
+
 func newResolver() *fakeResolver { return &fakeResolver{namespace: testNamespace} }
 
 func mustRender(t *testing.T, app *apphost.App, resolver Resolver) *AppWorkload {
 	t.Helper()
-	workload, err := RenderAppWorkload(testNamespace, app, resolver, testRuntimeClass)
+	workload, err := RenderAppWorkload(testNamespace, app, resolver, testRenderOptions)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -136,8 +140,8 @@ func TestRenderAppWorkloadUsesProjectNamespaceAndOwnershipLabels(t *testing.T) {
 	workload := mustRender(t, fullApp(), newResolver())
 
 	for name, got := range map[string]string{
-		"deployment":     workload.Deployment.Namespace,
-		"network policy": workload.NetworkPolicy.Namespace,
+		"deployment":    workload.Deployment.Namespace,
+		"egress policy": workload.EgressPolicy.GetNamespace(),
 	} {
 		if got != testNamespace {
 			t.Errorf("%s namespace = %q, want %q", name, got, testNamespace)
@@ -155,7 +159,7 @@ func TestRenderAppWorkloadUsesProjectNamespaceAndOwnershipLabels(t *testing.T) {
 			t.Errorf("deployment label %s = %q, want %q", want.key, got, want.value)
 		}
 	}
-	if got := workload.NetworkPolicy.Labels["excalibase.io/app"]; got != "app-01H" {
+	if got := workload.EgressPolicy.GetLabels()["excalibase.io/app"]; got != "app-01H" {
 		t.Errorf("policy must carry the app label, got %q", got)
 	}
 }
@@ -216,7 +220,7 @@ func TestRenderAppWorkloadRefusesUnknownTier(t *testing.T) {
 	for _, tier := range []domain.TierType{"", "PLATINUM", "free"} {
 		app := minimalApp()
 		app.Tier = tier
-		if _, err := RenderAppWorkload(testNamespace, app, newResolver(), testRuntimeClass); err == nil {
+		if _, err := RenderAppWorkload(testNamespace, app, newResolver(), testRenderOptions); err == nil {
 			t.Errorf("tier %q must be refused", tier)
 		}
 	}
@@ -291,10 +295,10 @@ func TestRenderAppWorkloadReferenceResolvesInternally(t *testing.T) {
 func TestRenderAppWorkloadRefusesUnresolvableReference(t *testing.T) {
 	resolver := newResolver()
 	resolver.refErr = errUnexpectedReference
-	if _, err := RenderAppWorkload(testNamespace, fullApp(), resolver, testRuntimeClass); err == nil {
+	if _, err := RenderAppWorkload(testNamespace, fullApp(), resolver, testRenderOptions); err == nil {
 		t.Fatal("an unresolvable reference must be refused")
 	}
-	if _, err := RenderAppWorkload(testNamespace, fullApp(), nil, testRuntimeClass); err == nil {
+	if _, err := RenderAppWorkload(testNamespace, fullApp(), nil, testRenderOptions); err == nil {
 		t.Fatal("an app with references and no resolver must be refused")
 	}
 }
@@ -313,7 +317,7 @@ func TestRenderAppWorkloadRefusesCredentialInTheClear(t *testing.T) {
 		}}
 		resolver := newResolver()
 		resolver.literalFor = map[string]string{variable: "postgres://u:p@h/db"}
-		if _, err := RenderAppWorkload(testNamespace, app, resolver, testRuntimeClass); err == nil {
+		if _, err := RenderAppWorkload(testNamespace, app, resolver, testRenderOptions); err == nil {
 			t.Errorf("%s handed over as a literal must be refused", variable)
 		}
 	}
@@ -410,12 +414,12 @@ func TestRenderAppWorkloadPodSecurityContext(t *testing.T) {
 func TestRenderAppWorkloadRunsUnderTheSandboxRuntime(t *testing.T) {
 	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
 	if spec.RuntimeClassName == nil || *spec.RuntimeClassName != testRuntimeClass {
-		t.Fatalf("runtimeClassName = %v, want %q", spec.RuntimeClassName, testRuntimeClass)
+		t.Fatalf("runtimeClassName = %v, want %q", spec.RuntimeClassName, testRenderOptions)
 	}
 }
 
 func TestRenderAppWorkloadRefusesNoRuntimeClass(t *testing.T) {
-	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), ""); !errors.Is(err, ErrRenderApp) {
+	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{}); !errors.Is(err, ErrRenderApp) {
 		t.Fatalf("an app with no sandbox runtime must be refused, got %v", err)
 	}
 }
@@ -488,57 +492,151 @@ func TestRenderAppWorkloadRefusesInvalidInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			app := minimalApp()
 			mutate(app)
-			if _, err := RenderAppWorkload(testNamespace, app, newResolver(), testRuntimeClass); err == nil {
+			if _, err := RenderAppWorkload(testNamespace, app, newResolver(), testRenderOptions); err == nil {
 				t.Error("must be refused")
 			}
 		})
 	}
-	if _, err := RenderAppWorkload("", minimalApp(), newResolver(), testRuntimeClass); err == nil {
+	if _, err := RenderAppWorkload("", minimalApp(), newResolver(), testRenderOptions); err == nil {
 		t.Error("an empty namespace must be refused")
 	}
-	if _, err := RenderAppWorkload(testNamespace, nil, newResolver(), testRuntimeClass); err == nil {
+	if _, err := RenderAppWorkload(testNamespace, nil, newResolver(), testRenderOptions); err == nil {
 		t.Error("a nil app must be refused")
 	}
 }
 
-func TestRenderAppWorkloadEgressPolicy(t *testing.T) {
-	policy := mustRender(t, fullApp(), newResolver()).NetworkPolicy
+// egressSpec reads the rendered policy back through the same types the renderer wrote.
+func egressSpec(t *testing.T, workload *AppWorkload) ciliumPolicySpec {
+	t.Helper()
+	var spec ciliumPolicySpec
+	content, _, err := unstructured.NestedMap(workload.EgressPolicy.Object, "spec")
+	if err != nil {
+		t.Fatalf("policy spec: %v", err)
+	}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(content, &spec); err != nil {
+		t.Fatalf("decode policy spec: %v", err)
+	}
+	return spec
+}
 
-	if len(policy.Spec.PolicyTypes) != 1 || policy.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
-		t.Fatalf("the policy must be egress-only, got %v", policy.Spec.PolicyTypes)
+func TestRenderAppWorkloadEgressPolicyIsCilium(t *testing.T) {
+	workload := mustRender(t, fullApp(), newResolver())
+	policy := workload.EgressPolicy
+	if policy.GetAPIVersion() != "cilium.io/v2" || policy.GetKind() != "CiliumNetworkPolicy" {
+		t.Fatalf("policy is %s %s, want cilium.io/v2 CiliumNetworkPolicy", policy.GetAPIVersion(), policy.GetKind())
 	}
-	if len(policy.Spec.Egress) != 2 {
-		t.Fatalf("expected a DNS rule and a database rule, got %d", len(policy.Spec.Egress))
+	if policy.GetName() != AppEgressPolicyName("web") {
+		t.Errorf("policy name = %q", policy.GetName())
 	}
-	for _, rule := range policy.Spec.Egress {
-		assertPeersStayInBounds(t, rule.To)
-	}
-	// A pod selector with no namespace selector cannot cross into another tenant.
-	dbRule := policy.Spec.Egress[1]
-	if dbRule.To[0].NamespaceSelector != nil || dbRule.To[0].PodSelector == nil {
-		t.Errorf("the database rule must be confined to this namespace, got %+v", dbRule.To[0])
-	}
-	if dbRule.Ports[0].Port.IntValue() != 5432 {
-		t.Errorf("the database rule must open 5432 only, got %v", dbRule.Ports[0].Port)
+	selector := egressSpec(t, workload).EndpointSelector.MatchLabels
+	if !maps.Equal(selector, workload.Deployment.Spec.Selector.MatchLabels) {
+		t.Errorf("endpoint selector %v must select exactly the app's pods %v", selector, workload.Deployment.Spec.Selector.MatchLabels)
 	}
 }
 
-func assertPeersStayInBounds(t *testing.T, peers []networkingv1.NetworkPolicyPeer) {
-	t.Helper()
-	for _, peer := range peers {
-		if peer.IPBlock != nil {
-			t.Errorf("no rule may open an address range to customer code: %v", peer.IPBlock)
-		}
-		if peer.NamespaceSelector != nil && peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "kube-system" {
-			t.Errorf("customer code may not reach namespace %v", peer.NamespaceSelector.MatchLabels)
-		}
+func TestRenderAppWorkloadEgressPolicy(t *testing.T) {
+	spec := egressSpec(t, mustRender(t, fullApp(), newResolver()))
+
+	if len(spec.Egress) != 3 {
+		t.Fatalf("expected a DNS rule, a database rule and an internet rule, got %d", len(spec.Egress))
 	}
+	assertDNSRule(t, spec.Egress[0])
+	assertDatabaseRuleIsLocal(t, spec.Egress[1])
+	assertInternetRuleIsWorldOnly(t, spec.Egress[2])
+	assertDenyRules(t, spec.EgressDeny, wantDeniedRanges)
+}
+
+// Spelled out rather than read from the renderer, so dropping a range fails here.
+var wantDeniedRanges = []string{"169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
+	"127.0.0.0/8", "0.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4"}
+
+func assertDNSRule(t *testing.T, rule ciliumEgressRule) {
+	t.Helper()
+	if len(rule.ToEndpoints) != 1 || !maps.Equal(rule.ToEndpoints[0].MatchLabels,
+		map[string]string{"k8s:io.kubernetes.pod.namespace": "kube-system", "k8s:k8s-app": "kube-dns"}) {
+		t.Errorf("the DNS rule must select kube-dns in kube-system only, got %+v", rule.ToEndpoints)
+	}
+	assertPorts(t, "DNS", rule.ToPorts, ciliumPort{Port: "53", Protocol: "UDP"}, ciliumPort{Port: "53", Protocol: "TCP"})
+	assertNoAddressPeers(t, rule)
+}
+
+// An empty selector with no namespace label stays in the policy's namespace, so no other tenant.
+func assertDatabaseRuleIsLocal(t *testing.T, rule ciliumEgressRule) {
+	t.Helper()
+	if len(rule.ToEndpoints) != 1 || len(rule.ToEndpoints[0].MatchLabels) != 0 || len(rule.ToEndpoints[0].MatchExpressions) != 0 {
+		t.Errorf("the database rule must be confined to this namespace, got %+v", rule.ToEndpoints)
+	}
+	assertPorts(t, "database", rule.ToPorts, ciliumPort{Port: "5432", Protocol: "TCP"})
+	assertNoAddressPeers(t, rule)
+}
+
+func assertNoAddressPeers(t *testing.T, rule ciliumEgressRule) {
+	t.Helper()
+	if len(rule.ToEntities) != 0 || len(rule.ToCIDRSet) != 0 {
+		t.Errorf("only the internet rule may open entities or ranges: %+v", rule)
+	}
+}
+
+// world is the only entity: cluster, host, remote-node and kube-apiserver stay closed by identity.
+func assertInternetRuleIsWorldOnly(t *testing.T, rule ciliumEgressRule) {
+	t.Helper()
+	if !slices.Equal(rule.ToEntities, []string{"world"}) {
+		t.Errorf("the internet rule must be the world entity only, got %v", rule.ToEntities)
+	}
+	if len(rule.ToEndpoints) != 0 || len(rule.ToCIDRSet) != 0 || len(rule.ToPorts) != 0 {
+		t.Errorf("the internet rule must be every port to world and nothing else, got %+v", rule)
+	}
+}
+
+func assertDenyRules(t *testing.T, deny []ciliumEgressRule, wantCIDRs []string) {
+	t.Helper()
+	if len(deny) != 2 {
+		t.Fatalf("expected a range deny and an SMTP deny, got %d", len(deny))
+	}
+	var got []string
+	for _, cidr := range deny[0].ToCIDRSet {
+		got = append(got, cidr.CIDR)
+	}
+	if !slices.Equal(got, wantCIDRs) {
+		t.Errorf("denied ranges = %v, want %v", got, wantCIDRs)
+	}
+	smtp := deny[1]
+	if !slices.Equal(smtp.ToEntities, []string{"world"}) {
+		t.Errorf("SMTP deny must target world, got %v", smtp.ToEntities)
+	}
+	assertPorts(t, "SMTP deny", smtp.ToPorts, ciliumPort{Port: "25", Protocol: "TCP"})
+}
+
+func assertPorts(t *testing.T, rule string, got []ciliumPortRule, want ...ciliumPort) {
+	t.Helper()
+	if !reflect.DeepEqual(got, []ciliumPortRule{{Ports: want}}) {
+		t.Errorf("%s ports = %+v, want exactly %+v", rule, got, want)
+	}
+}
+
+// Extras are additional to the fixed ranges, never a replacement.
+func TestRenderAppWorkloadEgressPolicyExtraDenyCIDRs(t *testing.T) {
+	workload, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{
+		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32", "198.51.100.0/24"},
+	})
+	if err != nil {
+		t.Fatalf("RenderAppWorkload: %v", err)
+	}
+	want := append(slices.Clone(wantDeniedRanges), "203.0.113.9/32", "198.51.100.0/24")
+	assertDenyRules(t, egressSpec(t, workload).EgressDeny, want)
 }
 
 func TestRenderAppWorkloadEgressPolicyWithoutDatabase(t *testing.T) {
-	policy := mustRender(t, minimalApp(), newResolver()).NetworkPolicy
-	if len(policy.Spec.Egress) != 1 {
-		t.Fatalf("an app with no reference needs DNS only, got %d rules", len(policy.Spec.Egress))
+	spec := egressSpec(t, mustRender(t, minimalApp(), newResolver()))
+	if len(spec.Egress) != 2 {
+		t.Fatalf("an app with no reference needs DNS and internet only, got %d rules", len(spec.Egress))
+	}
+	for _, rule := range spec.Egress {
+		for _, selector := range rule.ToEndpoints {
+			if selector.MatchLabels["k8s:io.kubernetes.pod.namespace"] != "kube-system" {
+				t.Errorf("an app with no database reference must not reach its own namespace: %+v", rule)
+			}
+		}
 	}
 }
 
@@ -573,11 +671,9 @@ func renderYAML(t *testing.T, app *apphost.App) string {
 	workload := mustRender(t, app, newResolver())
 	deployment := workload.Deployment.DeepCopy()
 	deployment.TypeMeta = metav1.TypeMeta{APIVersion: appsv1.SchemeGroupVersion.String(), Kind: "Deployment"}
-	policy := workload.NetworkPolicy.DeepCopy()
-	policy.TypeMeta = metav1.TypeMeta{APIVersion: networkingv1.SchemeGroupVersion.String(), Kind: "NetworkPolicy"}
 
 	var out strings.Builder
-	for _, obj := range []interface{}{deployment, policy} {
+	for _, obj := range []interface{}{deployment, workload.EgressPolicy.Object} {
 		encoded, err := yaml.Marshal(obj)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -609,12 +705,7 @@ func TestAppWorkloadGoldenManifests(t *testing.T) {
 			got := renderYAML(t, app)
 			path := filepath.Join("testdata", "app_workload", name+".yaml")
 			if *updateGolden {
-				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-					t.Fatalf("create golden dir: %v", err)
-				}
-				if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
-					t.Fatalf("write golden: %v", err)
-				}
+				writeGolden(t, path, got)
 				return
 			}
 			want, err := os.ReadFile(path)
@@ -625,6 +716,16 @@ func TestAppWorkloadGoldenManifests(t *testing.T) {
 				t.Errorf("rendered manifests differ from %s\n--- got ---\n%s", path, got)
 			}
 		})
+	}
+}
+
+func writeGolden(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create golden dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write golden: %v", err)
 	}
 }
 

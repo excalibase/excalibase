@@ -1,7 +1,7 @@
 package k8s
 
 // It renders an app (apphost.App) into a Deployment plus an egress
-// NetworkPolicy in the project's namespace. Pod hardening is EXC-380;
+// CiliumNetworkPolicy in the project's namespace. Pod hardening is EXC-380;
 // applying the result to a cluster is EXC-386.
 
 import (
@@ -16,9 +16,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -71,8 +71,8 @@ type Resolver interface {
 
 // AppWorkload is one app's rendered manifests; a value, applied by nothing here.
 type AppWorkload struct {
-	Deployment    *appsv1.Deployment
-	NetworkPolicy *networkingv1.NetworkPolicy
+	Deployment   *appsv1.Deployment
+	EgressPolicy *unstructured.Unstructured
 }
 
 // credentialBearingVariables must never resolve to a plain value: a
@@ -80,6 +80,14 @@ type AppWorkload struct {
 var credentialBearingVariables = map[string]bool{
 	"PGPASSWORD":   true,
 	"DATABASE_URL": true,
+}
+
+// AppRenderOptions are the operator settings every app workload is rendered with.
+type AppRenderOptions struct {
+	// RuntimeClass is the sandbox RuntimeClass every app pod runs under.
+	RuntimeClass string
+	// ExtraDenyCIDRs are APP_EGRESS_EXTRA_DENY_CIDRS, already validated by config.
+	ExtraDenyCIDRs []string
 }
 
 // AppObjectName is the name the app's Deployment holds in the project namespace.
@@ -90,11 +98,11 @@ func AppEgressPolicyName(appName string) string { return appObjectPrefix + appNa
 
 // RenderAppWorkload renders the app into the project's namespace. Every input
 // is checked and nothing is defaulted; the output is a pure function of its arguments.
-func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, runtimeClass string) (*AppWorkload, error) {
+func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, opts AppRenderOptions) (*AppWorkload, error) {
 	if app == nil {
 		return nil, fmt.Errorf("%w: no app", ErrRenderApp)
 	}
-	if runtimeClass == "" {
+	if opts.RuntimeClass == "" {
 		return nil, fmt.Errorf("%w: no sandbox runtime class", ErrRenderApp)
 	}
 	if !namespacePattern.MatchString(namespace) {
@@ -123,14 +131,15 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, ru
 		return nil, err
 	}
 
-	deployment, err := buildAppDeployment(namespace, app, env, resources, runtimeClass)
+	deployment, err := buildAppDeployment(namespace, app, env, resources, opts.RuntimeClass)
 	if err != nil {
 		return nil, err
 	}
-	return &AppWorkload{
-		Deployment:    deployment,
-		NetworkPolicy: buildAppEgressPolicy(namespace, app),
-	}, nil
+	policy, err := buildAppEgressPolicy(namespace, app, opts.ExtraDenyCIDRs)
+	if err != nil {
+		return nil, err
+	}
+	return &AppWorkload{Deployment: deployment, EgressPolicy: policy}, nil
 }
 
 // appLabels identify and clean up everything one app owns; app id is the stable key.
@@ -392,7 +401,7 @@ func appReadinessProbe(app *apphost.App) *corev1.Probe {
 		handler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: app.HealthCheckPath, Port: intstr.FromInt(app.Port)}}
 	}
 	return &corev1.Probe{
-		ProbeHandler: handler,
+		ProbeHandler:        handler,
 		InitialDelaySeconds: 5,
 		PeriodSeconds:       10,
 		TimeoutSeconds:      3,
@@ -419,52 +428,4 @@ func referencesDatabase(app *apphost.App) bool {
 		}
 	}
 	return false
-}
-
-// buildAppEgressPolicy fences the app's outbound traffic.
-//
-// Deno's egress minus the control-plane and internet rules: a customer image
-// has no callback to make and no allowlist yet (EXC-383). Needs a policy-enforcing CNI.
-func buildAppEgressPolicy(namespace string, app *apphost.App) *networkingv1.NetworkPolicy {
-	rules := []networkingv1.NetworkPolicyEgressRule{appDNSRule()}
-	if referencesDatabase(app) {
-		rules = append(rules, appOwnDatabaseRule())
-	}
-	return &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      AppEgressPolicyName(app.Name),
-			Namespace: namespace,
-			Labels:    appLabels(app),
-		},
-		Spec: networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{MatchLabels: appSelectorLabels(app)},
-			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
-			Egress:      rules,
-		},
-	}
-}
-
-// appDNSRule allows kube-dns/CoreDNS only, on port 53.
-func appDNSRule() networkingv1.NetworkPolicyEgressRule {
-	udp := corev1.ProtocolUDP
-	port := intstr.FromInt(dnsPortNumber)
-	return networkingv1.NetworkPolicyEgressRule{
-		To: []networkingv1.NetworkPolicyPeer{{
-			NamespaceSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"},
-			},
-		}},
-		Ports: []networkingv1.NetworkPolicyPort{
-			{Protocol: &udp, Port: &port},
-			tcpPort(dnsPortNumber),
-		},
-	}
-}
-
-// appOwnDatabaseRule allows Postgres inside this project's namespace only.
-func appOwnDatabaseRule() networkingv1.NetworkPolicyEgressRule {
-	return networkingv1.NetworkPolicyEgressRule{
-		To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
-		Ports: []networkingv1.NetworkPolicyPort{tcpPort(postgresPortNumber)},
-	}
 }

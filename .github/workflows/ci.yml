@@ -278,7 +278,7 @@ jobs:
     name: Live cluster tests (hosting)
     runs-on: ubuntu-latest
     needs: [changes, go-lint]
-    # Real k3s clusters (gVisor, deploy rollouts); ~10-15 min, so only when hosting code changes.
+    # Real k3s clusters (gVisor, deploy rollouts, Cilium egress); only when hosting code changes.
     if: needs.changes.outputs.hosting == 'true'
     defaults:
       run:
@@ -289,7 +289,7 @@ jobs:
         with:
           go-version: '1.24'
       - name: Run live cluster tests
-        run: go test -tags=live ./internal/k8s/ -run 'TestK3s' -v -timeout 30m
+        run: go test -tags=live ./internal/k8s/ -run 'TestK3s' -v -timeout 40m
 
   sonarcloud:
     name: SonarCloud Scan

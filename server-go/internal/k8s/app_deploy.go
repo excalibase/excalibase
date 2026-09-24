@@ -8,10 +8,11 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
@@ -25,13 +26,13 @@ const (
 var ErrAppRollout = fmt.Errorf("app rollout")
 
 func (c *Client) ApplyAppWorkload(ctx context.Context, namespace string, workload *AppWorkload) error {
-	if workload == nil || workload.Deployment == nil || workload.NetworkPolicy == nil {
+	if workload == nil || workload.Deployment == nil || workload.EgressPolicy == nil {
 		return fmt.Errorf("apply app workload: nothing rendered")
 	}
 	if err := c.applyAppDeployment(ctx, namespace, workload.Deployment); err != nil {
 		return err
 	}
-	return c.applyAppEgressPolicy(ctx, namespace, workload.NetworkPolicy)
+	return c.applyAppEgressPolicy(ctx, namespace, workload.EgressPolicy)
 }
 
 func (c *Client) applyAppDeployment(ctx context.Context, namespace string, desired *appsv1.Deployment) error {
@@ -55,9 +56,10 @@ func (c *Client) applyAppDeployment(ctx context.Context, namespace string, desir
 	return nil
 }
 
-func (c *Client) applyAppEgressPolicy(ctx context.Context, namespace string, desired *networkingv1.NetworkPolicy) error {
-	policies := c.clientset.NetworkingV1().NetworkPolicies(namespace)
-	existing, err := policies.Get(ctx, desired.Name, metav1.GetOptions{})
+// A cluster without Cilium has no such kind, so the apply fails instead of leaving the app unfenced.
+func (c *Client) applyAppEgressPolicy(ctx context.Context, namespace string, desired *unstructured.Unstructured) error {
+	policies := c.dynamicClient.Resource(CiliumNetworkPolicyGVR).Namespace(namespace)
+	existing, err := policies.Get(ctx, desired.GetName(), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		if _, err := policies.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("create app egress policy: %w", err)
@@ -68,8 +70,8 @@ func (c *Client) applyAppEgressPolicy(ctx context.Context, namespace string, des
 		return fmt.Errorf("read app egress policy: %w", err)
 	}
 	updated := existing.DeepCopy()
-	updated.Labels = desired.Labels
-	updated.Spec = desired.Spec
+	updated.SetLabels(desired.GetLabels())
+	updated.Object["spec"] = runtime.DeepCopyJSONValue(desired.Object["spec"])
 	if _, err := policies.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update app egress policy: %w", err)
 	}

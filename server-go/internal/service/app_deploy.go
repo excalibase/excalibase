@@ -29,9 +29,9 @@ type AppDeployService struct {
 	kube      k8s.KubeClient
 	instances storage.InstanceStore
 	resolver  k8s.Resolver
-	// runtimeClass is the sandbox every app pod runs under.
-	runtimeClass string
-	timeout      time.Duration
+	// render carries the sandbox runtime class and extra egress deny ranges.
+	render  k8s.AppRenderOptions
+	timeout time.Duration
 	// async lets tests run the rollout wait inline instead of in a goroutine.
 	async func(func())
 
@@ -45,14 +45,14 @@ func NewAppDeployService(
 	kube k8s.KubeClient,
 	instances storage.InstanceStore,
 	resolver k8s.Resolver,
-	runtimeClass string,
+	render k8s.AppRenderOptions,
 ) *AppDeployService {
 	return &AppDeployService{
 		apps: apps, deploys: deploys, kube: kube, instances: instances, resolver: resolver,
-		runtimeClass: runtimeClass,
-		timeout:      defaultAppRolloutTimeout,
-		async:        func(f func()) { go f() },
-		active:       make(map[string]*activeRollout),
+		render:  render,
+		timeout: defaultAppRolloutTimeout,
+		async:   func(f func()) { go f() },
+		active:  make(map[string]*activeRollout),
 	}
 }
 
@@ -129,7 +129,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		s.fail(deploy, err)
 		return deploy, nil
 	}
-	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver, s.runtimeClass)
+	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver, s.render)
 	if err != nil {
 		s.fail(deploy, err)
 		return deploy, nil

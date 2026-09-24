@@ -247,6 +247,9 @@ type AppConfig struct {
 	AppHostingEnabled bool
 	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
 	AppRuntimeClass string
+
+	// AppEgressExtraDenyCIDRs are off-cluster ranges denied to apps beyond the fixed private list.
+	AppEgressExtraDenyCIDRs []string
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -373,6 +376,7 @@ func Load() AppConfig {
 		FnReplayPollInterval:        envMillis("EXCALIBASE_FN_REPLAY_POLL_MS", defaultReplayPoll),
 		AppHostingEnabled:           envOr("APP_HOSTING_ENABLED", "") == "true",
 		AppRuntimeClass:             envOr("APP_RUNTIME_CLASS", "gvisor"),
+		AppEgressExtraDenyCIDRs:     envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),
 	}
 }
 

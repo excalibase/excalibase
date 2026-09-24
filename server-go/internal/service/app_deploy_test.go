@@ -203,7 +203,7 @@ func newDeployTestService(t *testing.T, app *apphost.App) (*AppDeployService, *f
 	instances.Items[app.ProjectID] = &domain.DatabaseInstance{
 		ProjectID: app.ProjectID, Namespace: testDeployNamespace,
 	}
-	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, "gvisor")
+	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, k8s.AppRenderOptions{RuntimeClass: "gvisor"})
 	svc.async = func(f func()) { f() }
 	return svc, deployStore, kube
 }
@@ -248,6 +248,23 @@ func TestDeployApp_RunsUnderTheConfiguredRuntimeClass(t *testing.T) {
 	}
 	if got := workload.Deployment.Spec.Template.Spec.RuntimeClassName; got == nil || *got != "gvisor" {
 		t.Fatalf("runtimeClassName = %v, want gvisor", got)
+	}
+}
+
+func TestDeployApp_AppliesTheConfiguredExtraDenyRanges(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+	svc.render.ExtraDenyCIDRs = []string{"203.0.113.9/32"}
+
+	if _, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1"); err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	workload := kube.AppWorkloads[rolloutKey(app, testDeployNamespace)]
+	if workload == nil || workload.EgressPolicy == nil {
+		t.Fatal("the workload and its egress policy should have been applied")
+	}
+	if !strings.Contains(fmt.Sprint(workload.EgressPolicy.Object["spec"]), "203.0.113.9/32") {
+		t.Errorf("APP_EGRESS_EXTRA_DENY_CIDRS must reach the egress policy, got %v", workload.EgressPolicy.Object["spec"])
 	}
 }
 
@@ -426,7 +443,7 @@ func TestNewAppDeployService_Defaults(t *testing.T) {
 	kube := k8s.NewMockClient()
 	instances := fakestore.NewInstances()
 
-	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, "gvisor")
+	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, k8s.AppRenderOptions{RuntimeClass: "gvisor"})
 
 	if svc.timeout != defaultAppRolloutTimeout {
 		t.Errorf("timeout: got %s want %s", svc.timeout, defaultAppRolloutTimeout)
