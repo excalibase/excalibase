@@ -90,6 +90,9 @@ type MockClient struct {
 
 	AppRolloutFunc func(ctx context.Context, namespace, name string, timeout time.Duration) error
 	AppRolloutErr  map[string]error // keyed "namespace/name"
+
+	RuntimeClasses    map[string]bool
+	RuntimeClassError error
 }
 
 func NewMockClient() *MockClient {
@@ -114,6 +117,8 @@ func NewMockClient() *MockClient {
 
 		AppWorkloads:  make(map[string]*AppWorkload),
 		AppRolloutErr: make(map[string]error),
+
+		RuntimeClasses: make(map[string]bool),
 	}
 }
 
@@ -530,6 +535,16 @@ func (m *MockClient) WaitForAppRollout(ctx context.Context, namespace, name stri
 		return fn(ctx, namespace, name, timeout)
 	}
 	return err
+}
+
+func (m *MockClient) RuntimeClassExists(ctx context.Context, name string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "RuntimeClassExists:"+name)
+	if m.RuntimeClassError != nil {
+		return false, m.RuntimeClassError
+	}
+	return m.RuntimeClasses[name], nil
 }
 
 func (m *MockClient) UninstallHelmChart(ctx context.Context, namespace, releaseName string) error {

@@ -19,6 +19,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       deno: ${{ steps.filter.outputs.deno }}
       ci: ${{ steps.filter.outputs.ci }}
+      hosting: ${{ steps.filter.outputs.hosting }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -34,6 +35,12 @@ jobs:
               - 'deno-server/**'
             ci:
               - '.github/workflows/**'
+            hosting:
+              - 'server-go/internal/k8s/app_*'
+              - 'server-go/internal/k8s/*_k3s_test.go'
+              - 'server-go/internal/k8s/testdata/app_workload/**'
+              - 'server-go/internal/apphost/**'
+              - 'server-go/internal/service/app_deploy*'
 
   go-lint:
     name: Go Lint
@@ -266,6 +273,23 @@ jobs:
         with:
           name: go-coverage
           path: server-go/coverage.out
+
+  live-cluster:
+    name: Live cluster tests (hosting)
+    runs-on: ubuntu-latest
+    needs: [changes, go-lint]
+    # Real k3s clusters (gVisor, deploy rollouts); ~10-15 min, so only when hosting code changes.
+    if: needs.changes.outputs.hosting == 'true'
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: Run live cluster tests
+        run: go test -tags=live ./internal/k8s/ -run 'TestK3s' -v -timeout 30m
 
   sonarcloud:
     name: SonarCloud Scan

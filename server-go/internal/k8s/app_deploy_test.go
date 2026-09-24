@@ -132,24 +132,89 @@ func seedCurrentReplicaSet(t *testing.T, c *Client, dep *appsv1.Deployment, revi
 }
 
 func TestWaitForAppRollout_FailsFastOnStuckContainer(t *testing.T) {
-	for _, reason := range []string{"ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff", "CreateContainerConfigError", "InvalidImageName"} {
-		t.Run(reason, func(t *testing.T) { assertFailsFastOn(t, reason) })
+	for _, reason := range []string{"ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "InvalidImageName"} {
+		t.Run(reason, func(t *testing.T) {
+			c := seedRollingPod(t, waitingStatus(reason, 0))
+			assertRolloutFails(t, c, reason)
+		})
 	}
 }
 
-func assertFailsFastOn(t *testing.T, reason string) {
+func TestWaitForAppRollout_ToleratesEarlyCrashLoops(t *testing.T) {
+	c := seedRollingPod(t, waitingStatus("CrashLoopBackOff", crashLoopRestartLimit-1))
+	err := c.WaitForAppRollout(context.Background(), testNamespace, "app-web", 300*time.Millisecond)
+	if err == nil || strings.Contains(err.Error(), "CrashLoopBackOff") {
+		t.Fatalf("want a timeout while restarts are below the limit, got %v", err)
+	}
+}
+
+func TestWaitForAppRollout_FailsOnRepeatedCrashLoop(t *testing.T) {
+	c := seedRollingPod(t, waitingStatus("CrashLoopBackOff", crashLoopRestartLimit))
+	assertRolloutFails(t, c, "CrashLoopBackOff")
+}
+
+func TestWaitForAppRollout_FailsOnPersistentlyUnschedulablePod(t *testing.T) {
+	c := seedRollingPod(t, unschedulableStatus(time.Now().Add(-unschedulableGrace-time.Second)))
+	err := assertRolloutFails(t, c, "Unschedulable")
+	if !strings.Contains(err.Error(), `"`+testRuntimeClass+`"`) {
+		t.Errorf("error must name the runtime class: %v", err)
+	}
+}
+
+func TestWaitForAppRollout_ToleratesBriefSchedulingDelay(t *testing.T) {
+	c := seedRollingPod(t, unschedulableStatus(time.Now()))
+	err := c.WaitForAppRollout(context.Background(), testNamespace, "app-web", 300*time.Millisecond)
+	if err == nil || strings.Contains(err.Error(), "Unschedulable") {
+		t.Fatalf("want a timeout, not an unschedulable failure, got %v", err)
+	}
+}
+
+func waitingStatus(reason string, restarts int32) corev1.PodStatus {
+	return corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+		Name:         "web",
+		RestartCount: restarts,
+		State:        corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason, Message: "stuck"}},
+	}}}
+}
+
+func unschedulableStatus(since time.Time) corev1.PodStatus {
+	return corev1.PodStatus{Conditions: []corev1.PodCondition{{
+		Type:               corev1.PodScheduled,
+		Status:             corev1.ConditionFalse,
+		Reason:             corev1.PodReasonUnschedulable,
+		Message:            "0/1 nodes are available: 1 node(s) didn't match Pod's node affinity/selector.",
+		LastTransitionTime: metav1.NewTime(since),
+	}}}
+}
+
+func assertRolloutFails(t *testing.T, c *Client, reason string) error {
+	t.Helper()
+	err := c.WaitForAppRollout(context.Background(), testNamespace, "app-web", 5*time.Second)
+	if !errors.Is(err, ErrAppRollout) {
+		t.Fatalf("expected an ErrAppRollout, got %v", err)
+	}
+	if !strings.Contains(err.Error(), reason) {
+		t.Errorf("error should name %s: %v", reason, err)
+	}
+	return err
+}
+
+// seedRollingPod seeds a deployment mid-rollout whose one current pod has the given status.
+func seedRollingPod(t *testing.T, status corev1.PodStatus) *Client {
+	t.Helper()
 	c := newFakeClient()
 	ctx := context.Background()
-	name := "app-web"
 	one := int32(1)
+	runtimeClass := testRuntimeClass
 	selector := map[string]string{"excalibase.io/app": "app-01H"}
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Generation: 1, UID: "dep-1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "app-web", Namespace: testNamespace, Generation: 1, UID: "dep-1"},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &one,
 			Selector: &metav1.LabelSelector{MatchLabels: selector},
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{RuntimeClassName: &runtimeClass}},
 		},
-		Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 0, AvailableReplicas: 0},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 1},
 	}
 	rsUID := seedCurrentReplicaSet(t, c, dep, "1")
 	if _, err := c.clientset.AppsV1().Deployments(testNamespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
@@ -160,26 +225,12 @@ func assertFailsFastOn(t *testing.T, reason string) {
 			Name: "app-web-abc", Namespace: testNamespace, Labels: selector,
 			OwnerReferences: []metav1.OwnerReference{{UID: rsUID}},
 		},
-		Status: corev1.PodStatus{
-			ContainerStatuses: []corev1.ContainerStatus{{
-				Name: "web",
-				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
-					Reason: reason, Message: "stuck",
-				}},
-			}},
-		},
+		Status: status,
 	}
 	if _, err := c.clientset.CoreV1().Pods(testNamespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("seed pod: %v", err)
 	}
-
-	err := c.WaitForAppRollout(ctx, testNamespace, name, 5*time.Second)
-	if err == nil || !errors.Is(err, ErrAppRollout) {
-		t.Fatalf("expected an ErrAppRollout, got %v", err)
-	}
-	if !strings.Contains(err.Error(), reason) {
-		t.Errorf("error should name the reason: %v", err)
-	}
+	return c
 }
 
 func TestBadPod_IgnoresPreviousReplicaSetPods(t *testing.T) {

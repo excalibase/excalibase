@@ -1,16 +1,18 @@
 package k8s
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
@@ -114,13 +116,16 @@ func fullApp() *apphost.App {
 	return app
 }
 
-const testNamespace = "org1-proj-abc"
+const (
+	testNamespace    = "org1-proj-abc"
+	testRuntimeClass = "gvisor"
+)
 
 func newResolver() *fakeResolver { return &fakeResolver{namespace: testNamespace} }
 
 func mustRender(t *testing.T, app *apphost.App, resolver Resolver) *AppWorkload {
 	t.Helper()
-	workload, err := RenderAppWorkload(testNamespace, app, resolver)
+	workload, err := RenderAppWorkload(testNamespace, app, resolver, testRuntimeClass)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -211,7 +216,7 @@ func TestRenderAppWorkloadRefusesUnknownTier(t *testing.T) {
 	for _, tier := range []domain.TierType{"", "PLATINUM", "free"} {
 		app := minimalApp()
 		app.Tier = tier
-		if _, err := RenderAppWorkload(testNamespace, app, newResolver()); err == nil {
+		if _, err := RenderAppWorkload(testNamespace, app, newResolver(), testRuntimeClass); err == nil {
 			t.Errorf("tier %q must be refused", tier)
 		}
 	}
@@ -286,10 +291,10 @@ func TestRenderAppWorkloadReferenceResolvesInternally(t *testing.T) {
 func TestRenderAppWorkloadRefusesUnresolvableReference(t *testing.T) {
 	resolver := newResolver()
 	resolver.refErr = errUnexpectedReference
-	if _, err := RenderAppWorkload(testNamespace, fullApp(), resolver); err == nil {
+	if _, err := RenderAppWorkload(testNamespace, fullApp(), resolver, testRuntimeClass); err == nil {
 		t.Fatal("an unresolvable reference must be refused")
 	}
-	if _, err := RenderAppWorkload(testNamespace, fullApp(), nil); err == nil {
+	if _, err := RenderAppWorkload(testNamespace, fullApp(), nil, testRuntimeClass); err == nil {
 		t.Fatal("an app with references and no resolver must be refused")
 	}
 }
@@ -308,7 +313,7 @@ func TestRenderAppWorkloadRefusesCredentialInTheClear(t *testing.T) {
 		}}
 		resolver := newResolver()
 		resolver.literalFor = map[string]string{variable: "postgres://u:p@h/db"}
-		if _, err := RenderAppWorkload(testNamespace, app, resolver); err == nil {
+		if _, err := RenderAppWorkload(testNamespace, app, resolver, testRuntimeClass); err == nil {
 			t.Errorf("%s handed over as a literal must be refused", variable)
 		}
 	}
@@ -344,9 +349,14 @@ func TestRenderAppWorkloadPortAndProbe(t *testing.T) {
 		t.Errorf("probe = %+v, want /healthz on 8080", probe.HTTPGet)
 	}
 
-	noProbe := mustRender(t, minimalApp(), newResolver())
-	if noProbe.Deployment.Spec.Template.Spec.Containers[0].ReadinessProbe != nil {
-		t.Error("an app with no health check must render no readiness probe")
+	// Without a health path the app must still prove it listens, or a crashing app reads as deployed.
+	tcp := mustRender(t, minimalApp(), newResolver()).Deployment
+	tcpProbe := tcp.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if tcpProbe == nil || tcpProbe.TCPSocket == nil || tcpProbe.TCPSocket.Port.IntValue() != 8080 {
+		t.Fatalf("an app with no health check must get a TCP probe on its port, got %+v", tcpProbe)
+	}
+	if tcp.Spec.MinReadySeconds != appMinReadySeconds {
+		t.Errorf("minReadySeconds = %d, want %d", tcp.Spec.MinReadySeconds, appMinReadySeconds)
 	}
 }
 
@@ -379,22 +389,34 @@ func TestRenderAppWorkloadMountsNoServiceAccountToken(t *testing.T) {
 	}
 }
 
-// Customer code is untrusted; the pod must not be allowed to run as root or
-// escape its seccomp profile.
+// Root is allowed only because the sandbox, not the uid, is the boundary.
 func TestRenderAppWorkloadPodSecurityContext(t *testing.T) {
 	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
 	security := spec.SecurityContext
 	if security == nil {
 		t.Fatal("pod security context must be set")
 	}
-	if security.RunAsNonRoot == nil || !*security.RunAsNonRoot {
-		t.Error("pod must require RunAsNonRoot")
+	if security.RunAsNonRoot != nil {
+		t.Error("root images run under the sandbox; RunAsNonRoot must be unset")
 	}
 	if security.SeccompProfile == nil || security.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
 		t.Errorf("pod seccomp profile = %+v, want RuntimeDefault", security.SeccompProfile)
 	}
 	if security.RunAsUser != nil {
-		t.Error("must not force a uid; many images declare their own non-root user")
+		t.Error("must not force a uid")
+	}
+}
+
+func TestRenderAppWorkloadRunsUnderTheSandboxRuntime(t *testing.T) {
+	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
+	if spec.RuntimeClassName == nil || *spec.RuntimeClassName != testRuntimeClass {
+		t.Fatalf("runtimeClassName = %v, want %q", spec.RuntimeClassName, testRuntimeClass)
+	}
+}
+
+func TestRenderAppWorkloadRefusesNoRuntimeClass(t *testing.T) {
+	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), ""); !errors.Is(err, ErrRenderApp) {
+		t.Fatalf("an app with no sandbox runtime must be refused, got %v", err)
 	}
 }
 
@@ -413,8 +435,6 @@ func TestRenderAppWorkloadNoHostNamespaces(t *testing.T) {
 	}
 }
 
-// A privilege escalation path or a writable image filesystem gives the
-// customer's own untrusted code a way to persist or extend its foothold.
 func TestRenderAppWorkloadContainerSecurityContext(t *testing.T) {
 	container := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec.Containers[0]
 	security := container.SecurityContext
@@ -424,44 +444,31 @@ func TestRenderAppWorkloadContainerSecurityContext(t *testing.T) {
 	if security.AllowPrivilegeEscalation == nil || *security.AllowPrivilegeEscalation {
 		t.Error("container must set AllowPrivilegeEscalation false")
 	}
-	if security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem {
-		t.Error("container must set ReadOnlyRootFilesystem true")
+	if security.ReadOnlyRootFilesystem == nil || *security.ReadOnlyRootFilesystem {
+		t.Error("container root filesystem must be explicitly writable")
 	}
-	if security.RunAsNonRoot == nil || !*security.RunAsNonRoot {
-		t.Error("container must require RunAsNonRoot")
+	if security.RunAsNonRoot != nil {
+		t.Error("container must not require RunAsNonRoot")
 	}
-	if security.Capabilities == nil || len(security.Capabilities.Drop) != 1 || security.Capabilities.Drop[0] != "ALL" {
-		t.Errorf("container capabilities = %+v, want Drop [ALL]", security.Capabilities)
+	want := corev1.Capabilities{
+		Drop: []corev1.Capability{"ALL"},
+		Add: []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETUID", "SETGID",
+			"SETPCAP", "SETFCAP", "KILL", "NET_BIND_SERVICE", "SYS_CHROOT", "MKNOD", "AUDIT_WRITE"},
+	}
+	if security.Capabilities == nil || !reflect.DeepEqual(*security.Capabilities, want) {
+		t.Fatalf("container capabilities = %+v, want %+v", security.Capabilities, want)
+	}
+	for _, forbidden := range []corev1.Capability{"NET_RAW", "SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE"} {
+		if slices.Contains(security.Capabilities.Add, forbidden) {
+			t.Errorf("container must not be granted %s", forbidden)
+		}
 	}
 }
 
-// A read-only root filesystem still needs one narrow, explicit place to
-// write: /tmp, sized so a runaway process cannot exhaust node disk.
-func TestRenderAppWorkloadTmpVolumeMount(t *testing.T) {
+func TestRenderAppWorkloadMountsNoVolumes(t *testing.T) {
 	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
-	container := spec.Containers[0]
-
-	if len(container.VolumeMounts) != 1 {
-		t.Fatalf("container volume mounts = %+v, want exactly one (/tmp)", container.VolumeMounts)
-	}
-	mount := container.VolumeMounts[0]
-	if mount.MountPath != "/tmp" {
-		t.Errorf("mount path = %q, want /tmp", mount.MountPath)
-	}
-
-	if len(spec.Volumes) != 1 {
-		t.Fatalf("pod volumes = %+v, want exactly one", spec.Volumes)
-	}
-	volume := spec.Volumes[0]
-	if volume.Name != mount.Name {
-		t.Errorf("volume name %q does not match mount name %q", volume.Name, mount.Name)
-	}
-	if volume.EmptyDir == nil {
-		t.Fatal("the /tmp volume must be an emptyDir")
-	}
-	wantSize := resource.MustParse("64Mi")
-	if volume.EmptyDir.SizeLimit == nil || volume.EmptyDir.SizeLimit.Cmp(wantSize) != 0 {
-		t.Errorf("emptyDir size limit = %v, want %v", volume.EmptyDir.SizeLimit, wantSize)
+	if len(spec.Volumes) != 0 || len(spec.Containers[0].VolumeMounts) != 0 {
+		t.Fatalf("volumes = %+v, mounts = %+v, want none", spec.Volumes, spec.Containers[0].VolumeMounts)
 	}
 }
 
@@ -481,15 +488,15 @@ func TestRenderAppWorkloadRefusesInvalidInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			app := minimalApp()
 			mutate(app)
-			if _, err := RenderAppWorkload(testNamespace, app, newResolver()); err == nil {
+			if _, err := RenderAppWorkload(testNamespace, app, newResolver(), testRuntimeClass); err == nil {
 				t.Error("must be refused")
 			}
 		})
 	}
-	if _, err := RenderAppWorkload("", minimalApp(), newResolver()); err == nil {
+	if _, err := RenderAppWorkload("", minimalApp(), newResolver(), testRuntimeClass); err == nil {
 		t.Error("an empty namespace must be refused")
 	}
-	if _, err := RenderAppWorkload(testNamespace, nil, newResolver()); err == nil {
+	if _, err := RenderAppWorkload(testNamespace, nil, newResolver(), testRuntimeClass); err == nil {
 		t.Error("a nil app must be refused")
 	}
 }
@@ -504,18 +511,7 @@ func TestRenderAppWorkloadEgressPolicy(t *testing.T) {
 		t.Fatalf("expected a DNS rule and a database rule, got %d", len(policy.Spec.Egress))
 	}
 	for _, rule := range policy.Spec.Egress {
-		for _, peer := range rule.To {
-			if peer.IPBlock != nil {
-				t.Errorf("no rule may open an address range to customer code: %v", peer.IPBlock)
-			}
-			if peer.NamespaceSelector == nil {
-				continue
-			}
-			name := peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]
-			if name != "kube-system" {
-				t.Errorf("customer code may not reach namespace %q", name)
-			}
-		}
+		assertPeersStayInBounds(t, rule.To)
 	}
 	// A pod selector with no namespace selector cannot cross into another tenant.
 	dbRule := policy.Spec.Egress[1]
@@ -524,6 +520,18 @@ func TestRenderAppWorkloadEgressPolicy(t *testing.T) {
 	}
 	if dbRule.Ports[0].Port.IntValue() != 5432 {
 		t.Errorf("the database rule must open 5432 only, got %v", dbRule.Ports[0].Port)
+	}
+}
+
+func assertPeersStayInBounds(t *testing.T, peers []networkingv1.NetworkPolicyPeer) {
+	t.Helper()
+	for _, peer := range peers {
+		if peer.IPBlock != nil {
+			t.Errorf("no rule may open an address range to customer code: %v", peer.IPBlock)
+		}
+		if peer.NamespaceSelector != nil && peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "kube-system" {
+			t.Errorf("customer code may not reach namespace %v", peer.NamespaceSelector.MatchLabels)
+		}
 	}
 }
 
@@ -539,7 +547,7 @@ func TestRenderAppWorkloadEgressPolicyWithoutDatabase(t *testing.T) {
 func TestRenderAppWorkloadIsDeterministic(t *testing.T) {
 	first := renderYAML(t, fullApp())
 	for i := 0; i < 20; i++ {
-		if got := renderYAML(t, fullApp()); got != first {
+		if renderYAML(t, fullApp()) != first {
 			t.Fatalf("render %d differs from the first", i)
 		}
 	}
@@ -555,7 +563,7 @@ func TestRenderAppWorkloadConfigHashTracksTheApp(t *testing.T) {
 	}
 	changed := fullApp()
 	changed.Image = "ghcr.io/acme/web:1.4.3"
-	if got := mustRender(t, changed, newResolver()).Deployment.Spec.Template.Annotations[appConfigHashAnnotation]; got == hash {
+	if mustRender(t, changed, newResolver()).Deployment.Spec.Template.Annotations[appConfigHashAnnotation] == hash {
 		t.Error("a changed image must change the config hash")
 	}
 }

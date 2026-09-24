@@ -203,7 +203,7 @@ func newDeployTestService(t *testing.T, app *apphost.App) (*AppDeployService, *f
 	instances.Items[app.ProjectID] = &domain.DatabaseInstance{
 		ProjectID: app.ProjectID, Namespace: testDeployNamespace,
 	}
-	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil)
+	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, "gvisor")
 	svc.async = func(f func()) { f() }
 	return svc, deployStore, kube
 }
@@ -232,6 +232,22 @@ func TestDeployApp_Success(t *testing.T) {
 	}
 	if _, ok := kube.AppWorkloads[rolloutKey(app, namespace)]; !ok {
 		t.Error("the workload should have been applied")
+	}
+}
+
+func TestDeployApp_RunsUnderTheConfiguredRuntimeClass(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+
+	if _, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1"); err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	workload := kube.AppWorkloads[rolloutKey(app, testDeployNamespace)]
+	if workload == nil {
+		t.Fatal("the workload should have been applied")
+	}
+	if got := workload.Deployment.Spec.Template.Spec.RuntimeClassName; got == nil || *got != "gvisor" {
+		t.Fatalf("runtimeClassName = %v, want gvisor", got)
 	}
 }
 
@@ -410,7 +426,7 @@ func TestNewAppDeployService_Defaults(t *testing.T) {
 	kube := k8s.NewMockClient()
 	instances := fakestore.NewInstances()
 
-	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil)
+	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, "gvisor")
 
 	if svc.timeout != defaultAppRolloutTimeout {
 		t.Errorf("timeout: got %s want %s", svc.timeout, defaultAppRolloutTimeout)

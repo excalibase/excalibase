@@ -245,6 +245,8 @@ type AppConfig struct {
 	// any install until the epic is finished, so it defaults off; only the
 	// exact value "true" turns it on.
 	AppHostingEnabled bool
+	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
+	AppRuntimeClass string
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -370,6 +372,7 @@ func Load() AppConfig {
 		FnReplayEnabled:             envBool("EXCALIBASE_FN_REPLAY_ENABLED", true),
 		FnReplayPollInterval:        envMillis("EXCALIBASE_FN_REPLAY_POLL_MS", defaultReplayPoll),
 		AppHostingEnabled:           envOr("APP_HOSTING_ENABLED", "") == "true",
+		AppRuntimeClass:             envOr("APP_RUNTIME_CLASS", "gvisor"),
 	}
 }
 

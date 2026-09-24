@@ -212,3 +212,14 @@ func TestLoadJWTAudPrefix(t *testing.T) {
 		t.Errorf("JWTAudPrefix from env: got %q, want %q", got, "acme:")
 	}
 }
+
+func TestLoadAppRuntimeClass(t *testing.T) {
+	t.Setenv("APP_RUNTIME_CLASS", "")
+	if got := Load().AppRuntimeClass; got != "gvisor" {
+		t.Errorf("AppRuntimeClass default = %q, want gvisor", got)
+	}
+	t.Setenv("APP_RUNTIME_CLASS", "gvisor-kvm")
+	if got := Load().AppRuntimeClass; got != "gvisor-kvm" {
+		t.Errorf("AppRuntimeClass = %q, want gvisor-kvm", got)
+	}
+}

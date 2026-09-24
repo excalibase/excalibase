@@ -16,7 +16,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-const appRolloutPollInterval = 2 * time.Second
+const (
+	appRolloutPollInterval = 2 * time.Second
+	crashLoopRestartLimit  = 3
+	unschedulableGrace     = 30 * time.Second
+)
 
 var ErrAppRollout = fmt.Errorf("app rollout")
 
@@ -73,12 +77,10 @@ func (c *Client) applyAppEgressPolicy(ctx context.Context, namespace string, des
 }
 
 // These reasons never resolve on their own, so they fail the wait immediately
-// instead of waiting out the full timeout. CreateContainerConfigError is how
-// a root image is refused under runAsNonRoot.
+// instead of waiting out the full timeout.
 var badImageReasons = map[string]bool{
 	"ImagePullBackOff":           true,
 	"ErrImagePull":               true,
-	"CrashLoopBackOff":           true,
 	"CreateContainerConfigError": true,
 	"InvalidImageName":           true,
 }
@@ -143,17 +145,46 @@ func (c *Client) badPod(ctx context.Context, namespace string, dep *appsv1.Deplo
 	if err != nil {
 		return "", "", false
 	}
+	runtimeClass := ""
+	if dep.Spec.Template.Spec.RuntimeClassName != nil {
+		runtimeClass = *dep.Spec.Template.Spec.RuntimeClassName
+	}
+	now := time.Now()
 	for _, pod := range pods.Items {
 		if !hasOwner(pod.OwnerReferences, rs.UID) {
 			continue
 		}
-		for _, status := range pod.Status.ContainerStatuses {
-			if r, ok := waitingReason(status); ok {
-				return r, status.State.Waiting.Message, true
-			}
+		if reason, message, bad := podProblem(pod, runtimeClass, now); bad {
+			return reason, message, true
 		}
 	}
 	return "", "", false
+}
+
+func podProblem(pod corev1.Pod, runtimeClass string, now time.Time) (reason, message string, bad bool) {
+	if detail, stuck := unschedulable(pod, now); stuck {
+		return corev1.PodReasonUnschedulable,
+			fmt.Sprintf("no node can run runtime class %q: %s", runtimeClass, detail), true
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if r, ok := waitingReason(status); ok {
+			return r, status.State.Waiting.Message, true
+		}
+	}
+	return "", "", false
+}
+
+// unschedulable waits out a grace period so an ordinary scheduling delay is not a failure.
+func unschedulable(pod corev1.Pod, now time.Time) (string, bool) {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodScheduled &&
+			condition.Status == corev1.ConditionFalse &&
+			condition.Reason == corev1.PodReasonUnschedulable &&
+			now.Sub(condition.LastTransitionTime.Time) >= unschedulableGrace {
+			return condition.Message, true
+		}
+	}
+	return "", false
 }
 
 func (c *Client) currentReplicaSet(ctx context.Context, namespace string, dep *appsv1.Deployment) *appsv1.ReplicaSet {
@@ -184,11 +215,13 @@ func hasOwner(refs []metav1.OwnerReference, uid types.UID) bool {
 }
 
 func waitingReason(status corev1.ContainerStatus) (string, bool) {
-	if status.State.Waiting == nil {
+	waiting := status.State.Waiting
+	if waiting == nil {
 		return "", false
 	}
-	if badImageReasons[status.State.Waiting.Reason] {
-		return status.State.Waiting.Reason, true
+	if badImageReasons[waiting.Reason] ||
+		(waiting.Reason == "CrashLoopBackOff" && status.RestartCount >= crashLoopRestartLimit) {
+		return waiting.Reason, true
 	}
 	return "", false
 }

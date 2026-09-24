@@ -13,6 +13,7 @@ metadata:
   name: app-web
   namespace: org1-proj-abc
 spec:
+  minReadySeconds: 10
   replicas: 3
   selector:
     matchLabels:
@@ -22,7 +23,7 @@ spec:
   template:
     metadata:
       annotations:
-        excalibase.io/app-config-hash: 243cc09129c5106b
+        excalibase.io/app-config-hash: ae3cf71b01fe98ae
       labels:
         app.kubernetes.io/component: app
         app.kubernetes.io/managed-by: excalibase-provisioning
@@ -75,21 +76,27 @@ spec:
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
+            add:
+            - CHOWN
+            - DAC_OVERRIDE
+            - FOWNER
+            - FSETID
+            - SETUID
+            - SETGID
+            - SETPCAP
+            - SETFCAP
+            - KILL
+            - NET_BIND_SERVICE
+            - SYS_CHROOT
+            - MKNOD
+            - AUDIT_WRITE
             drop:
             - ALL
-          readOnlyRootFilesystem: true
-          runAsNonRoot: true
-        volumeMounts:
-        - mountPath: /tmp
-          name: tmp
+          readOnlyRootFilesystem: false
+      runtimeClassName: gvisor
       securityContext:
-        runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
-      volumes:
-      - emptyDir:
-          sizeLimit: 64Mi
-        name: tmp
 status: {}
 ---
 apiVersion: networking.k8s.io/v1
