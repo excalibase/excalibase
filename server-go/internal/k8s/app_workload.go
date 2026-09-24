@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -38,8 +39,6 @@ const (
 	maxLabelValueLength = 63
 	dnsPortNumber       = 53
 	postgresPortNumber  = 5432
-	// tmpVolumeName backs the one writable path a read-only root filesystem gets.
-	tmpVolumeName = "tmp"
 )
 
 // namespacePattern is the DNS-1123 label a project namespace must be; an
@@ -90,10 +89,13 @@ func AppObjectName(appName string) string { return appObjectPrefix + appName }
 func AppEgressPolicyName(appName string) string { return appObjectPrefix + appName + "-egress" }
 
 // RenderAppWorkload renders the app into the project's namespace. Every input
-// is checked and nothing is defaulted; the output is a pure function of the app and the resolver.
-func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver) (*AppWorkload, error) {
+// is checked and nothing is defaulted; the output is a pure function of its arguments.
+func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, runtimeClass string) (*AppWorkload, error) {
 	if app == nil {
 		return nil, fmt.Errorf("%w: no app", ErrRenderApp)
+	}
+	if runtimeClass == "" {
+		return nil, fmt.Errorf("%w: no sandbox runtime class", ErrRenderApp)
 	}
 	if !namespacePattern.MatchString(namespace) {
 		return nil, fmt.Errorf("%w: %q is not a project namespace", ErrRenderApp, namespace)
@@ -121,7 +123,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver) (*
 		return nil, err
 	}
 
-	deployment, err := buildAppDeployment(namespace, app, env, resources)
+	deployment, err := buildAppDeployment(namespace, app, env, resources, runtimeClass)
 	if err != nil {
 		return nil, err
 	}
@@ -290,6 +292,7 @@ func buildAppDeployment(
 	app *apphost.App,
 	env []corev1.EnvVar,
 	resources corev1.ResourceRequirements,
+	runtimeClass string,
 ) (*appsv1.Deployment, error) {
 	container := buildAppContainer(app, env, resources)
 	hash, err := appConfigHash(container)
@@ -306,58 +309,47 @@ func buildAppDeployment(
 			Labels:    appLabels(app),
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{MatchLabels: appSelectorLabels(app)},
+			Replicas:        &replicas,
+			MinReadySeconds: appMinReadySeconds,
+			Selector:        &metav1.LabelSelector{MatchLabels: appSelectorLabels(app)},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      appLabels(app),
 					Annotations: map[string]string{appConfigHashAnnotation: hash},
 				},
 				Spec: corev1.PodSpec{
-					// Unsandboxed customer code that escapes must not find a
-					// cluster API token mounted beside it.
+					RuntimeClassName: &runtimeClass,
+					// Customer code that escapes must not find a cluster API token beside it.
 					AutomountServiceAccountToken: &automount,
 					SecurityContext:              podSecurityContext(),
 					Containers:                   []corev1.Container{container},
-					Volumes:                      []corev1.Volume{tmpVolume()},
 				},
 			},
 		},
 	}, nil
 }
 
-// podSecurityContext keeps the customer's image off host root: no forced uid,
-// since many images declare their own non-root user, but root is refused outright.
+// podSecurityContext leaves the uid to the image: the sandbox runtime, not the uid, is the boundary.
 func podSecurityContext() *corev1.PodSecurityContext {
-	nonRoot := true
 	return &corev1.PodSecurityContext{
-		RunAsNonRoot:   &nonRoot,
 		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
 }
 
-// containerSecurityContext closes off escalation and persistence: no new
-// privileges, no capabilities, and a filesystem the app cannot write to.
+// appCapabilities is the standard container set minus NET_RAW, so ordinary root images run unchanged.
+var appCapabilities = []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETUID", "SETGID",
+	"SETPCAP", "SETFCAP", "KILL", "NET_BIND_SERVICE", "SYS_CHROOT", "MKNOD", "AUDIT_WRITE"}
+
+// containerSecurityContext keeps a writable, ephemeral root filesystem.
 func containerSecurityContext() *corev1.SecurityContext {
-	nonRoot := true
 	noEscalation := false
-	readOnlyRoot := true
+	readOnlyRoot := false
 	return &corev1.SecurityContext{
 		AllowPrivilegeEscalation: &noEscalation,
 		ReadOnlyRootFilesystem:   &readOnlyRoot,
-		RunAsNonRoot:             &nonRoot,
-		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-	}
-}
-
-// tmpVolume is the one writable exception a read-only root filesystem gets,
-// bounded so a runaway process cannot exhaust node disk.
-func tmpVolume() corev1.Volume {
-	sizeLimit := resource.MustParse("64Mi")
-	return corev1.Volume{
-		Name: tmpVolumeName,
-		VolumeSource: corev1.VolumeSource{
-			EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: &sizeLimit},
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+			Add:  slices.Clone(appCapabilities),
 		},
 	}
 }
@@ -377,7 +369,6 @@ func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.R
 		Resources:       resources,
 		ReadinessProbe:  appReadinessProbe(app),
 		SecurityContext: containerSecurityContext(),
-		VolumeMounts:    []corev1.VolumeMount{{Name: tmpVolumeName, MountPath: "/tmp"}},
 	}
 }
 
@@ -390,19 +381,18 @@ func imagePullPolicyFor(image string) corev1.PullPolicy {
 	return corev1.PullAlways
 }
 
-// appReadinessProbe: no declared health check means no probe, not an invented
-// path that would mark a healthy app unready.
+// appMinReadySeconds: a pod must stay ready this long to count, so an app that
+// crashes right after opening its port does not read as deployed.
+const appMinReadySeconds = 10
+
+// appReadinessProbe checks the declared port when no health path is given, never an invented path.
 func appReadinessProbe(app *apphost.App) *corev1.Probe {
-	if app.HealthCheckPath == "" {
-		return nil
+	handler := corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(app.Port)}}
+	if app.HealthCheckPath != "" {
+		handler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: app.HealthCheckPath, Port: intstr.FromInt(app.Port)}}
 	}
 	return &corev1.Probe{
-		ProbeHandler: corev1.ProbeHandler{
-			HTTPGet: &corev1.HTTPGetAction{
-				Path: app.HealthCheckPath,
-				Port: intstr.FromInt(app.Port),
-			},
-		},
+		ProbeHandler: handler,
 		InitialDelaySeconds: 5,
 		PeriodSeconds:       10,
 		TimeoutSeconds:      3,

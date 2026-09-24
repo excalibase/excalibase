@@ -261,6 +261,18 @@ func (c *Client) NamespaceExists(ctx context.Context, name string) (bool, error)
 	return true, nil
 }
 
+// RuntimeClassExists reports whether the cluster offers the named RuntimeClass.
+func (c *Client) RuntimeClassExists(ctx context.Context, name string) (bool, error) {
+	_, err := c.clientset.NodeV1().RuntimeClasses().Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get runtime class %s: %w", name, err)
+	}
+	return true, nil
+}
+
 // ListPVCs returns the names of the PersistentVolumeClaims in a namespace. A
 // namespace that is already gone holds no claims.
 func (c *Client) ListPVCs(ctx context.Context, namespace string) ([]string, error) {

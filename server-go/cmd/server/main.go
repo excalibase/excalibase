@@ -140,6 +140,9 @@ func runServer(cfg config.AppConfig) {
 	bootstrapDefaultOrgIfNeeded(cfg, sqlStore)
 
 	k8sClient := buildK8sClient(cfg)
+	if err := verifyAppRuntime(context.Background(), cfg, k8sClient); err != nil {
+		log.Fatalf("app hosting: %v", err)
+	}
 	factory, dockerClientRef := buildProvisionerFactory(cfg, k8sClient)
 
 	// One way to reach a tenant database, shared by the schema migrator,
@@ -1171,7 +1174,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appHandler:         handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()), handler.NewProjectSourceLookup(store)),
 		appDeployHandler: handler.NewAppDeployHandler(service.NewAppDeployService(
 			apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
-			k8sClient, store, nil)),
+			k8sClient, store, nil, cfg.AppRuntimeClass)),
 		tierHandler:      tierHandler,
 		pgCatalogHandler: handler.NewPostgresCatalogHandler(),
 		capDeps: &capacityDeps{

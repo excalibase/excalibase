@@ -85,6 +85,7 @@ type KubeClient interface {
 
 	ApplyAppWorkload(ctx context.Context, namespace string, workload *AppWorkload) error
 	WaitForAppRollout(ctx context.Context, namespace, name string, timeout time.Duration) error
+	RuntimeClassExists(ctx context.Context, name string) (bool, error)
 }
 
 // ClusterCapacity holds aggregate cluster resource state. All values are in
