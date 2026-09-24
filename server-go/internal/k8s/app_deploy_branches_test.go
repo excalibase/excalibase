@@ -9,8 +9,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -46,14 +48,21 @@ func TestApplyAppDeployment_UpdateErrorPropagates(t *testing.T) {
 	}
 }
 
-func TestApplyAppEgressPolicy_GetErrorPropagates(t *testing.T) {
-	c := newFakeClient()
-	workload := mustRender(t, minimalApp(), newResolver())
-	c.clientset.(*fake.Clientset).PrependReactor("get", "networkpolicies", failReactor("boom"))
+func TestApplyAppEgressPolicy_ErrorsPropagate(t *testing.T) {
+	for verb, want := range map[string]string{
+		"get":    "read app egress policy",
+		"create": "create app egress policy",
+	} {
+		t.Run(verb, func(t *testing.T) {
+			c := newFakeClient()
+			workload := mustRender(t, minimalApp(), newResolver())
+			c.dynamicClient.(*dynamicfake.FakeDynamicClient).PrependReactor(verb, "ciliumnetworkpolicies", failReactor("boom"))
 
-	err := c.ApplyAppWorkload(context.Background(), testNamespace, workload)
-	if err == nil || !strings.Contains(err.Error(), "read app egress policy") {
-		t.Fatalf("expected a wrapped read error, got %v", err)
+			err := c.ApplyAppWorkload(context.Background(), testNamespace, workload)
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("expected %q, got %v", want, err)
+			}
+		})
 	}
 }
 
@@ -63,11 +72,34 @@ func TestApplyAppEgressPolicy_UpdateErrorPropagates(t *testing.T) {
 	if err := c.ApplyAppWorkload(context.Background(), testNamespace, workload); err != nil {
 		t.Fatalf("seed apply: %v", err)
 	}
-	c.clientset.(*fake.Clientset).PrependReactor("update", "networkpolicies", failReactor("boom"))
+	c.dynamicClient.(*dynamicfake.FakeDynamicClient).PrependReactor("update", "ciliumnetworkpolicies", failReactor("boom"))
 
 	err := c.ApplyAppWorkload(context.Background(), testNamespace, workload)
 	if err == nil || !strings.Contains(err.Error(), "update app egress policy") {
 		t.Fatalf("expected a wrapped update error, got %v", err)
+	}
+}
+
+// A concurrent writer creating the policy first is the state that was asked for.
+func TestApplyAppEgressPolicy_AlreadyExistsOnCreateIsSuccess(t *testing.T) {
+	c := newFakeClient()
+	workload := mustRender(t, minimalApp(), newResolver())
+	c.dynamicClient.(*dynamicfake.FakeDynamicClient).PrependReactor("create", "ciliumnetworkpolicies",
+		func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewAlreadyExists(CiliumNetworkPolicyGVR.GroupResource(), workload.EgressPolicy.GetName())
+		})
+
+	if err := c.ApplyAppWorkload(context.Background(), testNamespace, workload); err != nil {
+		t.Fatalf("an already-existing policy must not fail the apply: %v", err)
+	}
+}
+
+func TestApplyAppWorkload_RefusesMissingEgressPolicy(t *testing.T) {
+	c := newFakeClient()
+	workload := mustRender(t, minimalApp(), newResolver())
+	workload.EgressPolicy = nil
+	if err := c.ApplyAppWorkload(context.Background(), testNamespace, workload); err == nil {
+		t.Fatal("an app must never be applied without its egress fence")
 	}
 }
 

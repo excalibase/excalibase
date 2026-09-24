@@ -82,8 +82,8 @@ spec:
           type: RuntimeDefault
 status: {}
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
 metadata:
   labels:
     app.kubernetes.io/component: app
@@ -97,18 +97,36 @@ metadata:
   namespace: org1-proj-abc
 spec:
   egress:
-  - ports:
-    - port: 53
-      protocol: UDP
-    - port: 53
-      protocol: TCP
-    to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-  podSelector:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: UDP
+      - port: "53"
+        protocol: TCP
+  - toEntities:
+    - world
+  egressDeny:
+  - toCIDRSet:
+    - cidr: 169.254.0.0/16
+    - cidr: 10.0.0.0/8
+    - cidr: 172.16.0.0/12
+    - cidr: 192.168.0.0/16
+    - cidr: 100.64.0.0/10
+    - cidr: 127.0.0.0/8
+    - cidr: 0.0.0.0/8
+    - cidr: 224.0.0.0/4
+    - cidr: 240.0.0.0/4
+  - toEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: "25"
+        protocol: TCP
+  endpointSelector:
     matchLabels:
       excalibase.io/app: app-01H
       excalibase.io/component: app
-  policyTypes:
-  - Egress

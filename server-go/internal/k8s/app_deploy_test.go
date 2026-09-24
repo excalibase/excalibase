@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,12 +30,17 @@ func TestApplyAppWorkload_CreatesThenUpdates(t *testing.T) {
 	if *dep.Spec.Replicas != int32(app.Replicas) {
 		t.Errorf("replicas: got %d want %d", *dep.Spec.Replicas, app.Replicas)
 	}
-	if _, err := c.clientset.NetworkingV1().NetworkPolicies(testNamespace).Get(ctx, AppEgressPolicyName(app.Name), metav1.GetOptions{}); err != nil {
-		t.Fatalf("network policy should exist: %v", err)
+	if _, err := c.GetCRD(ctx, CiliumNetworkPolicyGVR, testNamespace, AppEgressPolicyName(app.Name)); err != nil {
+		t.Fatalf("egress policy should exist: %v", err)
 	}
 
 	app.Replicas = 2
-	updated := mustRender(t, app, newResolver())
+	updated, err := RenderAppWorkload(testNamespace, app, newResolver(), AppRenderOptions{
+		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32"},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
 	if err := c.ApplyAppWorkload(ctx, testNamespace, updated); err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
@@ -44,6 +50,14 @@ func TestApplyAppWorkload_CreatesThenUpdates(t *testing.T) {
 	}
 	if *dep.Spec.Replicas != 2 {
 		t.Errorf("replicas after update: got %d want 2", *dep.Spec.Replicas)
+	}
+	policy, err := c.GetCRD(ctx, CiliumNetworkPolicyGVR, testNamespace, AppEgressPolicyName(app.Name))
+	if err != nil {
+		t.Fatalf("egress policy should still exist: %v", err)
+	}
+	stored := egressSpec(t, &AppWorkload{EgressPolicy: policy})
+	if !reflect.DeepEqual(stored, egressSpec(t, updated)) {
+		t.Errorf("egress policy was not updated to the new spec: %+v", stored)
 	}
 }
 
