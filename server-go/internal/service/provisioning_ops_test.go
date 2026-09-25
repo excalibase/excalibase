@@ -44,7 +44,7 @@ func setupOpsTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore,
 func TestSetMaintenanceWindow(t *testing.T) {
 	svc, store, _ := setupOpsTest(t)
 
-	err := svc.SetMaintenanceWindow(testOpsDB, domain.MaintenanceWindowConfig{
+	err := svc.SetMaintenanceWindow(context.Background(), testOpsDB, domain.MaintenanceWindowConfig{
 		Window:          "0 3 * * 0",
 		DurationMinutes: 60,
 		AutoUpgrade:     true,
@@ -68,7 +68,7 @@ func TestSetMaintenanceWindow(t *testing.T) {
 func TestGetMaintenanceWindow(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 
-	svc.SetMaintenanceWindow(testOpsDB, domain.MaintenanceWindowConfig{
+	svc.SetMaintenanceWindow(context.Background(), testOpsDB, domain.MaintenanceWindowConfig{
 		Window: "0 4 * * 1", DurationMinutes: 30, AutoUpgrade: false,
 	})
 
@@ -123,82 +123,6 @@ func TestRotateCredentialsNotFound(t *testing.T) {
 	}
 }
 
-func TestUpdateParametersLegacy(t *testing.T) {
-	// Covered by TestUpdateParametersPatchesCRD
-	t.Skip("replaced by TestUpdateParametersPatchesCRD")
-}
-
-func TestUpdateParametersPatchesCRD(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
-
-	// Seed CRD
-	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
-		ProjectID: testOpsDB, Namespace: testOpsDBNS,
-		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
-	})
-	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
-
-	err := svc.UpdateParameters(context.Background(), testOpsDB, map[string]string{
-		"max_connections": "200",
-		"work_mem":        "64MB",
-	})
-	if err != nil {
-		t.Fatalf("UpdateParameters: %v", err)
-	}
-
-	// Verify CRD was patched
-	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
-	spec := got.Object["spec"].(map[string]interface{})
-	pg := spec["postgresql"].(map[string]interface{})
-	params := pg["parameters"].(map[string]interface{})
-	if params["max_connections"] != "200" {
-		t.Errorf("max_connections: got %v", params["max_connections"])
-	}
-	if params["work_mem"] != "64MB" {
-		t.Errorf("work_mem: got %v", params["work_mem"])
-	}
-}
-
-func TestUpdateParametersNotFound(t *testing.T) {
-	svc, _, _ := setupOpsTest(t)
-	err := svc.UpdateParameters(context.Background(), "nope", map[string]string{"k": "v"})
-	if err == nil {
-		t.Error(testExpectedErr)
-	}
-}
-
-func TestEnablePooler(t *testing.T) {
-	svc, store, mock := setupOpsTest(t)
-
-	err := svc.EnablePooler(context.Background(), testOpsDB, domain.PoolerSettings{
-		Enabled:  true,
-		PoolMode: "transaction",
-		PoolSize: 20,
-	})
-	if err != nil {
-		t.Fatalf("EnablePooler: %v", err)
-	}
-
-	// Verify Pooler CRD was created
-	if _, ok := mock.CRDs["org1-ops-db/ops-db-postgres-pooler"]; !ok {
-		t.Error("Pooler CRD not created")
-	}
-
-	// Verify instance updated
-	inst, _ := store.FindByProjectID(testOpsDB)
-	if inst.PoolerEnabled == nil || !*inst.PoolerEnabled {
-		t.Error("poolerEnabled should be true")
-	}
-}
-
-func TestEnablePoolerNotFound(t *testing.T) {
-	svc, _, _ := setupOpsTest(t)
-	err := svc.EnablePooler(context.Background(), "nope", domain.PoolerSettings{Enabled: true})
-	if err == nil {
-		t.Error(testExpectedErr)
-	}
-}
-
 func TestGeneratePassword(t *testing.T) {
 	p1 := generatePassword(32)
 	p2 := generatePassword(32)
@@ -208,38 +132,6 @@ func TestGeneratePassword(t *testing.T) {
 	}
 	if p1 == p2 {
 		t.Error("passwords should be unique")
-	}
-}
-
-func TestResizeStorage(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
-
-	// Seed CRD
-	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
-		ProjectID: testOpsDB, Namespace: testOpsDBNS,
-		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
-	})
-	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
-
-	err := svc.ResizeStorage(context.Background(), testOpsDB, "20Gi")
-	if err != nil {
-		t.Fatalf("ResizeStorage: %v", err)
-	}
-
-	// Verify CRD was patched with new storage size
-	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
-	spec := got.Object["spec"].(map[string]interface{})
-	storage := spec["storage"].(map[string]interface{})
-	if storage["size"] != "20Gi" {
-		t.Errorf("storage size: got %v, want 20Gi", storage["size"])
-	}
-}
-
-func TestResizeStorageNotFound(t *testing.T) {
-	svc, _, _ := setupOpsTest(t)
-	err := svc.ResizeStorage(context.Background(), "nope", "20Gi")
-	if err == nil {
-		t.Error("expected error for nonexistent project")
 	}
 }
 
@@ -319,41 +211,5 @@ func TestCloneDatabaseNotFound(t *testing.T) {
 	})
 	if err == nil {
 		t.Error(testExpectedErr)
-	}
-}
-
-func TestScaleTier(t *testing.T) {
-	svc, store, mock := setupOpsTest(t)
-
-	// Seed a CRD so GetCRD succeeds
-	mock.SetupPostgreSQLMock(testOpsDB, testOpsDBNS, 1)
-	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
-		ProjectID: testOpsDB, Namespace: testOpsDBNS,
-		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
-	})
-	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
-
-	err := svc.ScaleTier(context.Background(), testOpsDB, domain.Standard)
-	if err != nil {
-		t.Fatalf("ScaleTier: %v", err)
-	}
-
-	// Verify store updated
-	inst, _ := store.FindByProjectID(testOpsDB)
-	if inst.Tier != domain.Standard {
-		t.Errorf("tier: got %s, want STANDARD", inst.Tier)
-	}
-
-	// Verify CRD was patched with new instances/resources. Tiers are
-	// single-instance (no HA) for the alpha, so scaling tunes CPU/RAM only.
-	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
-	spec := got.Object["spec"].(map[string]interface{})
-	if spec["instances"] != int64(1) {
-		t.Errorf("CRD instances: got %v, want 1", spec["instances"])
-	}
-	resources := spec["resources"].(map[string]interface{})
-	requests := resources["requests"].(map[string]interface{})
-	if requests["memory"] != "4Gi" {
-		t.Errorf("CRD memory: got %v, want 4Gi", requests["memory"])
 	}
 }

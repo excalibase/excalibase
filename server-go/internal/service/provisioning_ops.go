@@ -25,60 +25,6 @@ const (
 	errGetCRDFmt   = "get cluster CRD: %w"
 )
 
-// ScaleTier changes the instance count and resources by patching the CNPG Cluster CRD.
-func (s *ProvisioningService) ScaleTier(ctx context.Context, projectID string, newTier domain.TierType) error {
-	inst, err := s.GetInstance(projectID)
-	if err != nil {
-		return err
-	}
-
-	tc, err := s.tierConfig(ctx, newTier)
-	if err != nil {
-		return err
-	}
-
-	// Get existing cluster CRD and update spec
-	clusterName := projectID + postgresSuffix
-	existing, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, clusterName)
-	if err != nil {
-		return fmt.Errorf(errGetCRDFmt, err)
-	}
-
-	spec := existing.Object["spec"].(map[string]interface{})
-	spec["instances"] = int64(tc.Instances)
-	spec["resources"] = map[string]interface{}{
-		"requests": map[string]interface{}{"memory": tc.Memory, "cpu": tc.CPU},
-		"limits":   map[string]interface{}{"memory": tc.Memory, "cpu": tc.CPU},
-	}
-
-	if err := s.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, existing); err != nil {
-		return fmt.Errorf("patch cluster CRD: %w", err)
-	}
-
-	inst.Tier = newTier
-	return s.store.Update(inst)
-}
-
-// ResizeStorage patches the CNPG Cluster CRD storage size.
-func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, newSize string) error {
-	inst, err := s.GetInstance(projectID)
-	if err != nil {
-		return err
-	}
-
-	clusterName := projectID + postgresSuffix
-	existing, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, clusterName)
-	if err != nil {
-		return fmt.Errorf(errGetCRDFmt, err)
-	}
-
-	spec := existing.Object["spec"].(map[string]interface{})
-	storage := spec["storage"].(map[string]interface{})
-	storage["size"] = newSize
-
-	return s.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, existing)
-}
-
 // UpgradeVersion re-pins the CNPG Cluster onto the catalogue's image for the
 // project's own major, which triggers a rolling restart onto the newest patch.
 func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, newVersion string) error {
@@ -89,10 +35,11 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 		return err
 	}
 
-	inst, err := s.GetInstance(projectID)
+	inst, release, err := s.holdProject(ctx, projectID, OperationUpgrade, requireActive)
 	if err != nil {
 		return err
 	}
+	defer release()
 	// A major change needs pg_upgrade, which is not verified for our operator.
 	if inst.PostgresVersion != newVersion {
 		return fmt.Errorf("project %s runs postgres %q; moving it to major %q is a major upgrade, which is not supported", projectID, inst.PostgresVersion, newVersion)
@@ -247,15 +194,16 @@ func urlEscape(s string) string {
 }
 
 // SetMaintenanceWindow sets the maintenance window config.
-func (s *ProvisioningService) SetMaintenanceWindow(projectID string, cfg domain.MaintenanceWindowConfig) error {
-	inst, err := s.GetInstance(projectID)
+func (s *ProvisioningService) SetMaintenanceWindow(ctx context.Context, projectID string, cfg domain.MaintenanceWindowConfig) error {
+	inst, release, err := s.holdProject(ctx, projectID, OperationMaintenance, anyStatus)
 	if err != nil {
 		return err
 	}
+	defer release()
 	inst.MaintenanceWindow = cfg.Window
 	inst.MaintenanceWindowDurationMinutes = &cfg.DurationMinutes
 	inst.AutoMinorVersionUpgrade = &cfg.AutoUpgrade
-	return s.store.Update(inst)
+	return s.store.UpdateIfStatus(inst, inst.Status)
 }
 
 // GetMaintenanceWindow returns the maintenance window config.
@@ -279,85 +227,55 @@ func (s *ProvisioningService) GetMaintenanceWindow(projectID string) (*domain.Ma
 	}, nil
 }
 
-// UpdateParameters patches PostgreSQL parameters on the CNPG Cluster CRD (triggers rolling restart).
-func (s *ProvisioningService) UpdateParameters(ctx context.Context, projectID string, params map[string]string) error {
-	inst, err := s.GetInstance(projectID)
-	if err != nil {
-		return err
-	}
+// ErrProjectNotActive refuses a cluster change on a project that is not
+// running: paused, failed, being built, deleted or restored.
+var ErrProjectNotActive = errors.New("this change needs an active project")
 
-	clusterName := projectID + postgresSuffix
-	existing, err := s.k8sClient.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, clusterName)
-	if err != nil {
-		return fmt.Errorf(errGetCRDFmt, err)
-	}
+// statusAdmission decides, under the lease, whether an operation may act on
+// a project in the given status.
+type statusAdmission func(projectID, status string) error
 
-	spec := existing.Object["spec"].(map[string]interface{})
-	pg := spec["postgresql"].(map[string]interface{})
-	pgParams, ok := pg["parameters"].(map[string]interface{})
-	if !ok {
-		pgParams = make(map[string]interface{})
-		pg["parameters"] = pgParams
-	}
+// anyStatus admits every status; the store still refuses a row a teardown owns.
+func anyStatus(string, string) error { return nil }
 
-	for k, v := range params {
-		pgParams[k] = v
+// requireServable refuses a project being deleted or restored.
+func requireServable(projectID, status string) error {
+	if domain.IsNotServable(status) {
+		return fmt.Errorf("%w: %s", notServableErr(status), projectID)
 	}
-
-	return s.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, existing)
+	return nil
 }
 
-// EnablePooler creates a CNPG Pooler CRD (PgBouncer) for connection pooling.
-func (s *ProvisioningService) EnablePooler(ctx context.Context, projectID string, settings domain.PoolerSettings) error {
-	inst, err := s.GetInstance(projectID)
+// requireActive admits only a settled, running project.
+func requireActive(projectID, status string) error {
+	if status != string(domain.StatusActive) {
+		return fmt.Errorf("project %s is %s; %w", projectID, status, ErrProjectNotActive)
+	}
+	return nil
+}
+
+// holdProject takes the project's lifecycle lease and reads the row under it,
+// so the operation acts on the project as it is now rather than as a caller
+// saw it. The row's status is what the operation's write is then pinned to.
+func (s *ProvisioningService) holdProject(ctx context.Context, projectID string,
+	op ProjectOperation, admit statusAdmission) (*domain.DatabaseInstance, func(), error) {
+
+	release, claimed, err := s.claimer().Claim(ctx, projectID, op)
 	if err != nil {
-		return err
+		return nil, nil, fmt.Errorf("claim project for %s: %w", op, err)
 	}
-
-	poolMode := "transaction"
-	if settings.PoolMode != "" {
-		poolMode = settings.PoolMode
+	if !claimed {
+		return nil, nil, fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
-	poolSize := int64(20)
-	if settings.PoolSize > 0 {
-		poolSize = int64(settings.PoolSize)
+	inst, err := s.GetInstance(projectID)
+	if err == nil {
+		err = admit(projectID, inst.Status)
 	}
-
-	poolerObj := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "postgresql.cnpg.io/v1",
-			"kind":       "Pooler",
-			"metadata": map[string]interface{}{
-				"name":      projectID + "-postgres-pooler",
-				"namespace": inst.Namespace,
-			},
-			"spec": map[string]interface{}{
-				"cluster": map[string]interface{}{
-					"name": projectID + postgresSuffix,
-				},
-				"instances": int64(1),
-				"type":      "rw",
-				"pgbouncer": map[string]interface{}{
-					"poolMode": poolMode,
-					"parameters": map[string]interface{}{
-						"default_pool_size": fmt.Sprintf("%d", poolSize),
-					},
-				},
-			},
-		},
+	if err != nil {
+		release()
+		return nil, nil, err
 	}
-
-	poolerGVR := k8s.CNPGClusterGVR // same group, different resource
-	poolerGVR.Resource = "poolers"
-
-	if err := s.k8sClient.ApplyCRD(ctx, poolerGVR, inst.Namespace, poolerObj); err != nil {
-		return fmt.Errorf("apply pooler CRD: %w", err)
-	}
-
-	enabled := true
-	inst.PoolerEnabled = &enabled
-	inst.PoolerHost = fmt.Sprintf("%s-postgres-pooler.%s.svc.cluster.local", projectID, inst.Namespace)
-	return s.store.Update(inst)
+	return inst, release, nil
 }
 
 func generatePassword(length int) string {
