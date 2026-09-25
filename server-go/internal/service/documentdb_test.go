@@ -288,7 +288,7 @@ func TestDocumentDBGrantQuotesTheRoleName(t *testing.T) {
 
 // Rotation needs no DocumentDB special case, and this test exists to keep it
 // that way. The gateway authenticates a Mongo client against the ordinary
-// PostgreSQL SCRAM verifier in pg_authid, so the ALTER USER the rotation path
+// PostgreSQL SCRAM verifier in pg_authid, so the ALTER ROLE the rotation path
 // already runs moves both protocols in one statement — proved against a live
 // gateway in internal/schema's two-protocol test. A future change that routed
 // DocumentDB rotation through DocumentDB's own API, or added a second
@@ -307,8 +307,8 @@ func TestRotationNeedsNoDocumentDBSpecialCase(t *testing.T) {
 		t.Fatalf("rotation ran %d statements: %v", len(kube.ExecStdin), kube.ExecStdin)
 	}
 	statement := kube.ExecStdin[0]
-	if !strings.Contains(statement, "ALTER USER") {
-		t.Fatalf("rotation no longer uses ALTER USER, which is what carries the Mongo credential: %s", statement)
+	if !strings.Contains(statement, "ALTER ROLE") {
+		t.Fatalf("rotation no longer uses ALTER ROLE, which is what carries the Mongo credential: %s", statement)
 	}
 	if strings.Contains(statement, "documentdb") {
 		t.Errorf("rotation has grown a DocumentDB special case: %s", statement)

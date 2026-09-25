@@ -540,7 +540,7 @@ func (s *ProvisioningService) handleProvisionFailure(
 func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, pc *provisioner.ProvisionContext) (*domain.ProvisioningResponse, error) {
 	applyProvisioningResult(inst, req, result)
 
-	opts := RegistrationOptions{AppPassword: req.AppPassword, Context: pc, RowAlreadyCreated: true}
+	opts := RegistrationOptions{Context: pc, RowAlreadyCreated: true}
 	if err := s.RegisterProject(ctx, inst, opts); err != nil {
 		return s.handleProvisionFailure(ctx, inst, req, err, pc), nil
 	}

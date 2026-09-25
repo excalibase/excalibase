@@ -94,10 +94,7 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	if dbName == "" {
 		dbName = "app"
 	}
-	password := req.AppPassword
-	if password == "" {
-		password = generatePassword()
-	}
+	password := generatePassword()
 
 	// Stage: Container creation
 	cb(domain.StageContainerCreation)

@@ -24,7 +24,6 @@ type ProvisioningRequest struct {
 	DatabaseName    string                   `json:"databaseName,omitempty"`
 	MasterUsername  string                   `json:"masterUsername,omitempty"`
 	ParameterGroup  string                   `json:"parameterGroupName,omitempty"`
-	AppPassword     string                   `json:"appPassword,omitempty"` // optional: password for excalibase_app role
 	// DocumentDB asks for a project whose image carries the DocumentDB
 	// extension. It is a create-time choice and only a create-time choice: the
 	// image a cluster runs is fixed when the cluster is provisioned, so a

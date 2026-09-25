@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -488,24 +489,43 @@ func TestRotateCredentialsReplacesEveryFiledRoleOwnerLast(t *testing.T) {
 }
 
 // rotatedRoleOrder extracts the role each ALTER named, in call order. It
-// reads only the quoted identifier — never the rest of the statement, which
-// carries the password.
+// decodes only the first encoded argument — never the second, which carries
+// the password.
 func rotatedRoleOrder(t *testing.T, statements []string) []string {
 	t.Helper()
+	const marker = "ALTER ROLE %I WITH LOGIN PASSWORD %L', convert_from(decode('"
 	var roles []string
 	for _, stmt := range statements {
-		i := strings.Index(stmt, "ALTER USER \"")
+		i := strings.Index(stmt, marker)
 		if i < 0 {
 			continue
 		}
-		rest := stmt[i+len("ALTER USER \""):]
-		end := strings.Index(rest, "\"")
-		if end < 0 {
+		rest := stmt[i+len(marker):]
+		end := strings.Index(rest, "'")
+		role, err := hex.DecodeString(rest[:max(end, 0)])
+		if end < 0 || err != nil {
 			t.Fatalf("malformed ALTER statement in call %d", len(roles))
 		}
-		roles = append(roles, rest[:end])
+		roles = append(roles, string(role))
 	}
 	return roles
+}
+
+func TestRotateCredentialsNeverWritesThePasswordIntoTheStatement(t *testing.T) {
+	h := newRotationHarness(t)
+
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+
+	for _, path := range []string{rotAdminCurrent, rotAuthCurrent, rotAppCurrent} {
+		password := h.vault.data[path]["password"]
+		for _, stmt := range h.kube.ExecStdin {
+			if strings.Contains(stmt, password) {
+				t.Errorf("%s password appears verbatim in the SQL sent to psql", path)
+			}
+		}
+	}
 }
 
 // The Kubernetes API server records every exec command parameter in its audit
@@ -522,7 +542,7 @@ func TestRotateCredentialsNeverPutsThePasswordInAnExecArgument(t *testing.T) {
 		t.Fatalf("expected one statement per role on stdin, got %d", len(h.kube.ExecStdin))
 	}
 	for _, argv := range h.kube.ExecCommands {
-		if strings.Contains(argv, "ALTER USER") || strings.Contains(argv, "PASSWORD") {
+		if strings.Contains(argv, "ALTER ") || strings.Contains(argv, "PASSWORD") {
 			t.Errorf("the statement reached the exec arguments: %s", argv)
 		}
 	}
