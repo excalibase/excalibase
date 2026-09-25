@@ -29,6 +29,13 @@ export default defineConfig({
         'src/components/ConnectionStrings.tsx',
         'src/components/PostgresVersionPicker.tsx',
         'src/components/MinorUpgradeCard.tsx',
+        'src/components/documents/**/*.{ts,tsx}',
+        'src/pages/DocumentsPage.tsx',
+        'src/api/documents.ts',
+        'src/utils/mongoQuery.ts',
+        'src/utils/extendedJson.ts',
+        'src/components/layout/SubNav.tsx',
+        'src/components/layout/navigation.ts',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

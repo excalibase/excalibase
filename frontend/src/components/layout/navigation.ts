@@ -24,6 +24,7 @@ import {
   AlertTriangle,
   FileText,
   FolderOpen,
+  FileJson,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -31,6 +32,8 @@ export interface NavItem {
   label: string;
   icon: LucideIcon;
   to: string;
+  // Shown only for projects created with DocumentDB.
+  documentDbOnly?: boolean;
 }
 
 export interface NavSection {
@@ -59,6 +62,7 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Indexes', icon: List, to: 'database/indexes' },
       { label: 'Types', icon: Hash, to: 'database/types' },
       { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors' },
+      { label: 'Documents', icon: FileJson, to: 'database/documents', documentDbOnly: true },
     ],
   },
   {
@@ -99,3 +103,7 @@ export const PROJECT_NAV: NavSection[] = [
   { key: 'vault', label: 'Vault', icon: KeyRound, to: 'vault' },
   { key: 'settings', label: 'Settings', icon: Settings, to: 'settings' },
 ];
+
+export function visibleNavItems(items: readonly NavItem[], documentDb: boolean): NavItem[] {
+  return items.filter((item) => !item.documentDbOnly || documentDb);
+}

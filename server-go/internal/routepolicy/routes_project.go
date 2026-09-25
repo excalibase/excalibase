@@ -64,6 +64,15 @@ var provisionRows = []Row{
 }
 
 // projectRows cover the /api/projects/{projectId}/* data-plane subtrees.
+// Studio's DocumentDB document browser.
+const (
+	databasesRoute   = "/api/projects/{projectId}/documentdb/databases"
+	collectionsRoute = databasesRoute + "/{database}/collections"
+	collectionRoute  = collectionsRoute + "/{collection}"
+	documentsRoute   = collectionRoute + "/documents"
+	indexesRoute     = collectionRoute + "/indexes"
+)
+
 var projectRows = []Row{
 	{Methods: get, Pattern: "/api/projects/{projectId}/info/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Capability: "projects:info:read"},
 	{Methods: get, Pattern: "/api/alerts/project/{projectId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
@@ -95,6 +104,21 @@ var projectRows = []Row{
 	{Methods: del, Pattern: "/api/projects/{projectId}/realtime/tables/{schema}/{table}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: post, Pattern: "/api/projects/{projectId}/realtime/enable-all", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: post, Pattern: "/api/projects/{projectId}/realtime/disable-all", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+
+	{Methods: get, Pattern: databasesRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
+	{Methods: get, Pattern: collectionsRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
+	{Methods: post, Pattern: collectionsRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: del, Pattern: collectionRoute + "/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "drops the collection and every document in it"},
+	{Methods: get, Pattern: documentsRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
+	{Methods: post, Pattern: documentsRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: put, Pattern: documentsRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: patch, Pattern: documentsRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: del, Pattern: documentsRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: get, Pattern: collectionRoute + "/count", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
+	{Methods: get, Pattern: collectionRoute + "/sample", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
+	{Methods: get, Pattern: indexesRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
+	{Methods: post, Pattern: indexesRoute, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: del, Pattern: collectionRoute + "/indexes/{index}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 
 	{Methods: get, Pattern: "/api/projects/{projectId}/storage/buckets", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
 	{Methods: get, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/objects", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},

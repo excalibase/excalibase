@@ -2,11 +2,13 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 // DocumentDBGatewayContainer is the name the CNPG-I sidecar injector gives the
@@ -36,13 +38,43 @@ func (c *Client) DocumentDBGatewayReady(ctx context.Context, namespace, pod stri
 	if err != nil {
 		return false, fmt.Errorf("read pod %s/%s: %w", namespace, pod, err)
 	}
-	if p.Status.Phase != corev1.PodRunning {
-		return false, nil
+	return gatewayServing(p), nil
+}
+
+// ErrDocumentDBGatewayNotReady is returned when no primary pod has a serving
+// gateway to dial.
+var ErrDocumentDBGatewayNotReady = errors.New("the DocumentDB gateway is not serving")
+
+// DocumentDBGatewayAddress returns the pod IP of the primary whose gateway is
+// serving. The read-write Service forwards only Postgres's port, so the
+// gateway is reached on the pod the Service selects, which follows failover.
+func (c *Client) DocumentDBGatewayAddress(ctx context.Context, namespace, readWriteService string) (string, error) {
+	selector, err := c.readWriteSelector(ctx, namespace, readWriteService)
+	if err != nil {
+		return "", err
 	}
-	for _, status := range p.Status.ContainerStatuses {
-		if status.Name == DocumentDBGatewayContainer {
-			return status.Ready, nil
+	pods, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.SelectorFromSet(selector).String(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("list primary pods in %s: %w", namespace, err)
+	}
+	for i := range pods.Items {
+		if pod := &pods.Items[i]; pod.Status.PodIP != "" && gatewayServing(pod) {
+			return pod.Status.PodIP, nil
 		}
 	}
-	return false, nil
+	return "", ErrDocumentDBGatewayNotReady
+}
+
+func gatewayServing(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == DocumentDBGatewayContainer {
+			return status.Ready
+		}
+	}
+	return false
 }
