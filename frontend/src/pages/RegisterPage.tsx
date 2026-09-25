@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuthStore, type AuthUser } from '../stores/auth-store';
@@ -8,6 +8,8 @@ import { Button } from '../components/Button';
 export function RegisterPage() {
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
+  const [searchParams] = useSearchParams();
+  const inviteToken = searchParams.get('invite') ?? '';
 
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -30,6 +32,7 @@ export function RegisterPage() {
         username: username.trim(),
         email: email.trim(),
         password,
+        ...(inviteToken ? { inviteToken } : {}),
       });
       setAuth(response.data.user, { legacyToken: response.data.token });
       navigate('/orgs', { replace: true });
@@ -51,6 +54,12 @@ export function RegisterPage() {
         <h2 className="text-lg font-semibold text-text-primary mb-1">Create Account</h2>
         <p className="text-sm text-text-secondary">Sign up to get started with Excalibase</p>
       </div>
+
+      {inviteToken && (
+        <div data-testid="invite-banner" className="px-4 py-3 rounded-lg bg-purple-500/10 border border-purple-500/30 text-purple-300 text-sm">
+          You have been invited to an organization. Create an account to join it, or sign in if you already have one.
+        </div>
+      )}
 
       {error && (
         <div className="px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
@@ -86,7 +95,7 @@ export function RegisterPage() {
 
       <p className="text-center text-sm text-text-secondary">
         Already have an account?{' '}
-        <Link to="/login" className="text-purple-400 hover:text-purple-300 transition-colors">Sign in</Link>
+        <Link to={inviteToken ? `/login?invite=${encodeURIComponent(inviteToken)}` : '/login'} className="text-purple-400 hover:text-purple-300 transition-colors">Sign in</Link>
       </p>
     </form>
   );

@@ -39,6 +39,8 @@ type PendingInvite struct {
 	Email     string    `json:"email"`
 	Role      string    `json:"role"`
 	InvitedBy string    `json:"invitedBy"`
+	TokenHash string    `json:"-"`
+	ExpiresAt *FlexTime `json:"expiresAt,omitempty"`
 	CreatedAt *FlexTime `json:"createdAt,omitempty"`
 }
 

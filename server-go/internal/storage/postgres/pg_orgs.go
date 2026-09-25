@@ -3,10 +3,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 func (s *Store) CreateOrg(ctx context.Context, org *domain.Org) error {
@@ -211,34 +213,77 @@ func (s *Store) GetProjectMember(ctx context.Context, projectID, userID string) 
 
 // --- Pending Invites ---
 
+// CreatePendingInvite files the invite, replacing any earlier one for the same
+// address in the org: re-inviting issues a new link and the old one stops working.
 func (s *Store) CreatePendingInvite(ctx context.Context, invite *domain.PendingInvite) error {
+	if invite.TokenHash == "" || invite.ExpiresAt == nil {
+		return errors.New("pending invite needs a token hash and an expiry")
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO pending_invites (org_id, email, role, invited_by) VALUES ($1, $2, $3, $4)`,
-		invite.OrgID, invite.Email, invite.Role, invite.InvitedBy)
+		`INSERT INTO pending_invites (org_id, email, role, invited_by, token_hash, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (org_id, email) DO UPDATE SET
+		   role = EXCLUDED.role, invited_by = EXCLUDED.invited_by,
+		   token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at,
+		   created_at = NOW()`,
+		invite.OrgID, invite.Email, invite.Role, invite.InvitedBy, invite.TokenHash, invite.ExpiresAt.Time)
 	return err
 }
 
-func (s *Store) FindPendingInvitesByEmail(ctx context.Context, email string) ([]*domain.PendingInvite, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, org_id, email, role, invited_by, created_at FROM pending_invites WHERE email = $1`, email)
+const pendingInviteColumns = `id, org_id, email, role, invited_by, expires_at, created_at`
+
+func scanPendingInvite(row rowScanner) (*domain.PendingInvite, error) {
+	inv := &domain.PendingInvite{}
+	var expiresAt, createdAt sql.NullTime
+	if err := row.Scan(&inv.ID, &inv.OrgID, &inv.Email, &inv.Role, &inv.InvitedBy, &expiresAt, &createdAt); err != nil {
+		return nil, err
+	}
+	if expiresAt.Valid {
+		inv.ExpiresAt = &domain.FlexTime{Time: expiresAt.Time}
+	}
+	if createdAt.Valid {
+		inv.CreatedAt = &domain.FlexTime{Time: createdAt.Time}
+	}
+	return inv, nil
+}
+
+func (s *Store) FindPendingInviteByToken(ctx context.Context, tokenHash string, now time.Time) (*domain.PendingInvite, error) {
+	inv, err := scanPendingInvite(s.db.QueryRowContext(ctx,
+		`SELECT `+pendingInviteColumns+` FROM pending_invites WHERE token_hash = $1 AND expires_at > $2`,
+		tokenHash, now))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, storage.ErrInviteInvalid
+	}
+	return inv, err
+}
+
+func (s *Store) AcceptPendingInvite(ctx context.Context, tokenHash, userID string, now time.Time) (*domain.PendingInvite, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = tx.Rollback() }()
 
-	var invites []*domain.PendingInvite
-	for rows.Next() {
-		inv := &domain.PendingInvite{}
-		var createdAt sql.NullTime
-		if err := rows.Scan(&inv.ID, &inv.OrgID, &inv.Email, &inv.Role, &inv.InvitedBy, &createdAt); err != nil {
-			return nil, err
-		}
-		if createdAt.Valid {
-			inv.CreatedAt = &domain.FlexTime{Time: createdAt.Time}
-		}
-		invites = append(invites, inv)
+	inv, err := scanPendingInvite(tx.QueryRowContext(ctx,
+		`DELETE FROM pending_invites WHERE token_hash = $1 AND expires_at > $2 RETURNING `+pendingInviteColumns,
+		tokenHash, now))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, storage.ErrInviteInvalid
 	}
-	return invites, nil
+	if err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO org_members (org_id, user_id, role, created_at) VALUES ($1, $2, $3, $4)
+		 ON CONFLICT DO NOTHING`,
+		inv.OrgID, userID, inv.Role, now.UTC())
+	if err != nil {
+		return nil, err
+	}
+	if added, err := res.RowsAffected(); err != nil || added == 0 {
+		return nil, errors.Join(storage.ErrAlreadyOrgMember, err)
+	}
+	return inv, tx.Commit()
 }
 
 func (s *Store) DeletePendingInvite(ctx context.Context, id int64) error {
@@ -248,7 +293,7 @@ func (s *Store) DeletePendingInvite(ctx context.Context, id int64) error {
 
 func (s *Store) ListPendingInvites(ctx context.Context, orgID string) ([]*domain.PendingInvite, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, org_id, email, role, invited_by, created_at FROM pending_invites WHERE org_id = $1`, orgID)
+		`SELECT `+pendingInviteColumns+` FROM pending_invites WHERE org_id = $1`, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -256,17 +301,13 @@ func (s *Store) ListPendingInvites(ctx context.Context, orgID string) ([]*domain
 
 	var invites []*domain.PendingInvite
 	for rows.Next() {
-		inv := &domain.PendingInvite{}
-		var createdAt sql.NullTime
-		if err := rows.Scan(&inv.ID, &inv.OrgID, &inv.Email, &inv.Role, &inv.InvitedBy, &createdAt); err != nil {
+		inv, err := scanPendingInvite(rows)
+		if err != nil {
 			return nil, err
-		}
-		if createdAt.Valid {
-			inv.CreatedAt = &domain.FlexTime{Time: createdAt.Time}
 		}
 		invites = append(invites, inv)
 	}
-	return invites, nil
+	return invites, rows.Err()
 }
 
 // --- Scan helpers ---

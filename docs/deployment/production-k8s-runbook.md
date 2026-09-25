@@ -337,9 +337,11 @@ before opening signup. Headroom is `provisioning.capacity.headroomPercent`
 ### 3.6 Registration mode
 
 `provisioning.registrationMode: invite` renders `REGISTRATION_MODE=invite`
-(`templates/provisioning.yaml`): after the first admin, only an email with a
-pending org invite (`POST /api/orgs/{id}/invite`) can register; everyone else
-gets `403 registration is invite-only` (`server-go/internal/handler/auth.go`).
+(`templates/provisioning.yaml`): after the first admin, only a registration
+that carries a live one-time invite link can register. An org admin creates the
+link by inviting an address (`POST /api/orgs/{id}/members`) and passes it on;
+everyone else gets `403 registration is invite-only`
+(`server-go/internal/handler/auth.go`).
 Set it before the admin host is reachable from anywhere you do not control.
 
 ## 4. Day-2 operations

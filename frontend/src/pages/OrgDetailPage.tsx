@@ -4,6 +4,7 @@ import { Settings, Users, Trash2, UserPlus, Shield, ChevronRight, Database, Cloc
 import { getOrg, listOrgMembers, inviteOrgMember, removeOrgMember, updateOrgMemberRole, updateOrg, deleteOrg, listPendingInvites, type Org, type OrgMember, type PendingInvite } from '../api/orgs';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
+import { InviteLinkNotice } from '../components/InviteLinkNotice';
 import { useAuthStore } from '../stores/auth-store';
 
 interface DatabaseInstance {
@@ -37,6 +38,7 @@ export function OrgDetailPage() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('developer');
   const [inviteError, setInviteError] = useState<string | null>(null);
+  const [issuedInvite, setIssuedInvite] = useState<{ email: string; link: string } | null>(null);
 
   const isOwnerOrAdmin = members.some(
     (m) => m.userId === currentUser?.id && (m.role === 'owner' || m.role === 'admin')
@@ -83,7 +85,9 @@ export function OrgDetailPage() {
     if (!orgId || !inviteEmail.trim()) return;
     setInviteError(null);
     try {
-      await inviteOrgMember(orgId, inviteEmail.trim(), inviteRole);
+      const email = inviteEmail.trim();
+      const result = await inviteOrgMember(orgId, email, inviteRole);
+      setIssuedInvite(result.status === 'pending' && result.inviteLink ? { email, link: result.inviteLink } : null);
       setShowInvite(false);
       setInviteEmail('');
       loadMembers();
@@ -223,7 +227,13 @@ export function OrgDetailPage() {
                 </select>
                 <Button onClick={handleInvite} disabled={!inviteEmail.trim()}>Invite</Button>
               </div>
-              <p className="text-xs text-text-tertiary">User must have a platform account to be invited</p>
+              <p className="text-xs text-text-tertiary">An existing account is added at once; anyone else gets a one-time link to send them</p>
+            </div>
+          )}
+
+          {issuedInvite && (
+            <div className="mb-4">
+              <InviteLinkNotice email={issuedInvite.email} link={issuedInvite.link} />
             </div>
           )}
 
@@ -278,7 +288,7 @@ export function OrgDetailPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-text-primary text-sm">{inv.email}</div>
-                      <div className="text-xs text-text-tertiary">Not registered yet</div>
+                      <div className="text-xs text-text-tertiary">Waiting for the invite link to be used</div>
                     </div>
                     <span className="px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-400">
                       pending &middot; {inv.role}
