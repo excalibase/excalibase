@@ -13,6 +13,7 @@ import (
 
 	_ "github.com/lib/pq"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -69,10 +70,11 @@ func startRolePostgres(t *testing.T) *rolePostgres {
 }
 
 // psql runs sqlText exactly the way provisioning does: psql -c as postgres.
+// Multiplexed drains output first: undrained, Exec can report exit 0 before dockerd has started psql.
 func (p *rolePostgres) psql(t *testing.T, sqlText string) {
 	t.Helper()
 	code, out, err := p.container.Exec(context.Background(),
-		[]string{"psql", "-U", "postgres", "-d", "app", "-c", sqlText})
+		[]string{"psql", "-U", "postgres", "-d", "app", "-c", sqlText}, tcexec.Multiplexed())
 	if err != nil {
 		t.Fatalf("exec psql: %v", err)
 	}
