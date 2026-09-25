@@ -22,7 +22,7 @@ func setupBackupTest(t *testing.T) (*BackupService, *storage.FileSystemStore) {
 
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
-		DBType: domain.PostgreSQL,
+		DBType: domain.PostgreSQL, PostgresVersion: "17",
 	})
 	return svc, store
 }
@@ -80,7 +80,7 @@ func TestRestoreFromBackup(t *testing.T) {
 	armRestore(svc, mock, store)
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
-		DBType: domain.PostgreSQL,
+		DBType: domain.PostgreSQL, PostgresVersion: "17",
 	})
 
 	resp, err := svc.RestoreFromBackup(context.Background(), "bk-db", domain.RestoreRequest{

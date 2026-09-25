@@ -32,7 +32,7 @@ func setupOpsTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore,
 	port := 5432
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: testOpsDB, OrgID: "org1", Namespace: testOpsDBNS,
-		DBType: domain.PostgreSQL, Tier: domain.Free, Status: "ACTIVE",
+		DBType: domain.PostgreSQL, Tier: domain.Free, Status: "ACTIVE", PostgresVersion: "17",
 		Host: "h.local", Port: &port, DatabaseName: "app",
 		Username: "app", Password: testutil.FixturePassword(testOpsDB), SSLMode: "require",
 	})

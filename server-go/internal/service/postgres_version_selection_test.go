@@ -217,3 +217,74 @@ func TestCanonicalPostgresMajorReturnsTheCatalogueSpelling(t *testing.T) {
 		}
 	}
 }
+
+func upgradeFixture(t *testing.T, recordedMajor string) (*ProvisioningService, *k8s.MockClient) {
+	t.Helper()
+	svc, store, mock := setupOpsTest(t)
+	inst, err := store.FindByProjectID(testOpsDB)
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	inst.PostgresVersion = recordedMajor
+	if err := store.Update(inst); err != nil {
+		t.Fatalf("fixture update: %v", err)
+	}
+	cluster := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
+		ProjectID: testOpsDB, Namespace: testOpsDBNS,
+		Tier: config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
+	})
+	if err := mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, cluster); err != nil {
+		t.Fatalf("fixture cluster: %v", err)
+	}
+	return svc, mock
+}
+
+func clusterImage(t *testing.T, mock *k8s.MockClient) interface{} {
+	t.Helper()
+	got, err := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
+	if err != nil {
+		t.Fatalf("read cluster: %v", err)
+	}
+	return got.Object["spec"].(map[string]interface{})["imageName"]
+}
+
+// A major upgrade needs pg_upgrade, which is not verified for our operator
+// version, so re-pinning a cluster onto another major is refused before the
+// cluster is touched.
+func TestUpgradeVersionRefusesAMajorChange(t *testing.T) {
+	svc, mock := upgradeFixture(t, "16")
+	err := svc.UpgradeVersion(context.Background(), testOpsDB, "17")
+	if err == nil {
+		t.Fatal("UpgradeVersion moved a 16 project onto 17")
+	}
+	if !strings.Contains(err.Error(), "16") || !strings.Contains(err.Error(), "17") {
+		t.Errorf("error should name both majors, got %q", err)
+	}
+	if image := clusterImage(t, mock); image != nil {
+		t.Errorf("the cluster was patched to %v", image)
+	}
+}
+
+func TestUpgradeVersionRefusesAProjectWithNoRecordedMajor(t *testing.T) {
+	svc, mock := upgradeFixture(t, "")
+	if err := svc.UpgradeVersion(context.Background(), testOpsDB, "17"); err == nil {
+		t.Fatal("UpgradeVersion guessed the major of a project that records none")
+	}
+	if image := clusterImage(t, mock); image != nil {
+		t.Errorf("the cluster was patched to %v", image)
+	}
+}
+
+func TestUpgradeVersionRepinsTheSameMajor(t *testing.T) {
+	svc, mock := upgradeFixture(t, "16")
+	if err := svc.UpgradeVersion(context.Background(), testOpsDB, "16"); err != nil {
+		t.Fatalf("UpgradeVersion on the recorded major: %v", err)
+	}
+	want, err := config.PostgresImage("16")
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
+	if image := clusterImage(t, mock); image != want {
+		t.Errorf("imageName: got %v, want %v", image, want)
+	}
+}

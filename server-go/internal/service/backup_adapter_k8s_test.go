@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -27,7 +28,7 @@ func r2Storage() *domain.S3Credentials {
 }
 
 func sourceInstance() *domain.DatabaseInstance {
-	return &domain.DatabaseInstance{ProjectID: "src", OrgID: "org", Namespace: "org-src", Status: "ACTIVE"}
+	return &domain.DatabaseInstance{ProjectID: "src", OrgID: "org", Namespace: "org-src", Status: "ACTIVE", PostgresVersion: "17"}
 }
 
 func restoredBarmanStore(t *testing.T, mock *k8s.MockClient) map[string]interface{} {
@@ -127,5 +128,43 @@ func TestK8sRestoreCarriesPITRTarget(t *testing.T) {
 	target, _, _ := unstructured.NestedMap(obj.Object, "spec", "bootstrap", "recovery", "recoveryTarget")
 	if target["targetName"] != "before-drop" {
 		t.Errorf("recoveryTarget: got %v", target)
+	}
+}
+
+// A physical restore can only start on the major the backup was taken on,
+// and only the platform's image carries the allowlisted extensions, so the
+// recovery cluster names that image rather than leaving the operator default.
+func TestK8sRestorePinsTheSourceMajorsImage(t *testing.T) {
+	mock := k8s.NewMockClient()
+	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
+	src := sourceInstance()
+	src.PostgresVersion = "16"
+
+	if _, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	want, err := config.PostgresImage("16")
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
+	obj := mock.CRDs["org-dst/dst-postgres"]
+	if got, _, _ := unstructured.NestedString(obj.Object, "spec", "imageName"); got != want {
+		t.Errorf("imageName: got %q, want %q", got, want)
+	}
+}
+
+func TestK8sRestoreRefusesAnUnknownSourceMajor(t *testing.T) {
+	for _, major := range []string{"", "13"} {
+		mock := k8s.NewMockClient()
+		adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
+		src := sourceInstance()
+		src.PostgresVersion = major
+
+		if _, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"}); err == nil {
+			t.Errorf("major %q: restore guessed an image", major)
+		}
+		if len(mock.Namespaces) != 0 || len(mock.CRDs) != 0 {
+			t.Errorf("major %q: nothing may be created: ns=%v crds=%v", major, mock.Namespaces, mock.CRDs)
+		}
 	}
 }

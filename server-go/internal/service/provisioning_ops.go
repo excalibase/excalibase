@@ -79,7 +79,8 @@ func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, newS
 	return s.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, existing)
 }
 
-// UpgradeVersion patches the CNPG Cluster CRD imageName to trigger a rolling restart.
+// UpgradeVersion re-pins the CNPG Cluster onto the catalogue's image for the
+// project's own major, which triggers a rolling restart onto the newest patch.
 func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, newVersion string) error {
 	// Resolve before touching the cluster: an unsupported major must fail
 	// without having patched anything.
@@ -91,6 +92,10 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 	inst, err := s.GetInstance(projectID)
 	if err != nil {
 		return err
+	}
+	// A major change needs pg_upgrade, which is not verified for our operator.
+	if inst.PostgresVersion != newVersion {
+		return fmt.Errorf("project %s runs postgres %q; moving it to major %q is a major upgrade, which is not supported", projectID, inst.PostgresVersion, newVersion)
 	}
 
 	clusterName := projectID + postgresSuffix

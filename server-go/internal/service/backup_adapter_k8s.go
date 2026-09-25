@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -176,6 +177,10 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if inst.OrgID == "" {
 		return nil, fmt.Errorf("restore source %s: %w", inst.ProjectID, k8s.ErrProjectOrgRequired)
 	}
+	image, err := config.PostgresImage(inst.PostgresVersion)
+	if err != nil {
+		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
+	}
 	newProject := req.TargetProjectID
 	if err := assertProjectIDAvailable(a.instances, newProject); err != nil {
 		return nil, err
@@ -183,7 +188,7 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	newNamespace := fmt.Sprintf("%s-%s", inst.OrgID, newProject)
 	pc := provisioner.NewProvisionContext(nil, nil)
 
-	restored, err := a.runRestore(ctx, pc, inst, req, store, newProject, newNamespace)
+	restored, err := a.runRestore(ctx, pc, inst, req, restoreTarget{store: store, image: image, project: newProject, namespace: newNamespace})
 	if err != nil {
 		return nil, failRestore(ctx, pc, newProject, err)
 	}
@@ -200,6 +205,14 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	}, nil
 }
 
+// restoreTarget is where a recovery lands and what it runs on.
+type restoreTarget struct {
+	store     *domain.S3Credentials
+	image     string
+	project   string
+	namespace string
+}
+
 // runRestore drives the recovery to a project that has been proved usable.
 // Every failure is returned so Restore can compensate through pc.
 func (a *K8sBackupAdapter) runRestore(
@@ -207,16 +220,15 @@ func (a *K8sBackupAdapter) runRestore(
 	pc *provisioner.ProvisionContext,
 	inst *domain.DatabaseInstance,
 	req domain.RestoreRequest,
-	store *domain.S3Credentials,
-	newProject, newNamespace string,
+	target restoreTarget,
 ) (*domain.DatabaseInstance, error) {
-	if err := a.createRestoreCluster(ctx, pc, inst, req, store, newNamespace); err != nil {
+	if err := a.createRestoreCluster(ctx, pc, inst, req, target); err != nil {
 		return nil, err
 	}
-	if err := a.waitForRecoveredCluster(ctx, newNamespace, newProject); err != nil {
+	if err := a.waitForRecoveredCluster(ctx, target.namespace, target.project); err != nil {
 		return nil, err
 	}
-	restored := a.restoredInstance(ctx, inst, req, newProject, newNamespace)
+	restored := a.restoredInstance(ctx, inst, req, target.project, target.namespace)
 	if err := registerVerifiedProject(ctx, pc, a.registrar, a.instances, a.probe, restored,
 		RegistrationOptions{ResetRolePasswords: true}); err != nil {
 		return nil, err
@@ -226,7 +238,8 @@ func (a *K8sBackupAdapter) runRestore(
 
 // createRestoreCluster creates the target namespace, the object-store secret
 // and the recovery-bootstrapped CNPG Cluster.
-func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisioner.ProvisionContext, inst *domain.DatabaseInstance, req domain.RestoreRequest, store *domain.S3Credentials, newNamespace string) error {
+func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisioner.ProvisionContext, inst *domain.DatabaseInstance, req domain.RestoreRequest, target restoreTarget) error {
+	store, newNamespace := target.store, target.namespace
 	if err := a.k8sClient.CreateProjectNamespace(ctx, newNamespace, inst.OrgID); err != nil {
 		return fmt.Errorf("create restore namespace: %w", err)
 	}
@@ -247,6 +260,7 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisi
 		Namespace:       newNamespace,
 		Store:           k8s.ObjectStoreOpts{EndpointURL: store.Endpoint, Bucket: store.Bucket, SecretName: s3CredsKey},
 		RecoveryTarget:  req.RecoveryTarget(),
+		ImageName:       target.image,
 	})
 	clusterName := req.TargetProjectID + postgresClusterSuffix
 	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, newNamespace, restoreObj); err != nil {
