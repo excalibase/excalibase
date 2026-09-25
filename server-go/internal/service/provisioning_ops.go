@@ -17,7 +17,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 const (
@@ -55,71 +54,6 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 	spec["imageName"] = image
 
 	return s.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, existing)
-}
-
-// CloneDatabase creates a new cluster using pg_basebackup from the source.
-func (s *ProvisioningService) CloneDatabase(ctx context.Context, projectID string, req domain.CloneRequest) (*domain.ProvisioningResponse, error) {
-	inst, err := s.GetInstance(projectID)
-	if err != nil {
-		return nil, err
-	}
-
-	// The clone's id is generated exactly as a provision's is, so the caller
-	// cannot point a clone at an id another project already holds (EXC-415).
-	// req.NewProjectName stays what it says: a display name.
-	cloneRef, err := s.generateUniqueProjectRef()
-	if err != nil {
-		return nil, err
-	}
-
-	newNamespace := fmt.Sprintf("%s-%s", inst.OrgID, cloneRef)
-
-	if err := s.k8sClient.CreateProjectNamespace(ctx, newNamespace, inst.OrgID); err != nil {
-		return nil, fmt.Errorf("create clone namespace: %w", err)
-	}
-
-	cloneObj := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "postgresql.cnpg.io/v1",
-			"kind":       "Cluster",
-			"metadata": map[string]interface{}{
-				"name":      cloneRef + postgresSuffix,
-				"namespace": newNamespace,
-			},
-			"spec": map[string]interface{}{
-				"instances": int64(1),
-				"storage":   map[string]interface{}{"size": "5Gi"},
-				"bootstrap": map[string]interface{}{
-					"pg_basebackup": map[string]interface{}{
-						"source": projectID + postgresSuffix,
-					},
-				},
-				"externalClusters": []interface{}{
-					map[string]interface{}{
-						"name": projectID + postgresSuffix,
-						"connectionParameters": map[string]interface{}{
-							"host":   inst.Host,
-							"dbname": inst.DatabaseName,
-						},
-					},
-				},
-			},
-		},
-	}
-
-	if err := s.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, newNamespace, cloneObj); err != nil {
-		return nil, fmt.Errorf("apply clone CRD: %w", err)
-	}
-
-	now := &domain.FlexTime{Time: time.Now()}
-	return &domain.ProvisioningResponse{
-		ProjectID:    cloneRef,
-		ProjectName:  req.NewProjectName,
-		Status:       "CLONING",
-		CurrentStage: domain.StageWaitingForReady,
-		Namespace:    newNamespace,
-		CreatedAt:    now,
-	}, nil
 }
 
 // GetLogs returns the last N lines of the project's postgres pod log.

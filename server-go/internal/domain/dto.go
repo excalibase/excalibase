@@ -305,11 +305,6 @@ func (r RestoreRequest) RecoveryTarget() map[string]interface{} {
 	return nil
 }
 
-type CloneRequest struct {
-	SourceProjectID string `json:"sourceProjectId"`
-	NewProjectName  string `json:"newProjectName"`
-}
-
 // --- Performance ---
 
 type PerformanceSummary struct {

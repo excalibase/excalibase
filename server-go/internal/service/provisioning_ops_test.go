@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -165,50 +164,6 @@ func TestUpgradeVersion(t *testing.T) {
 func TestUpgradeVersionNotFound(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 	err := svc.UpgradeVersion(context.Background(), "nope", "17")
-	if err == nil {
-		t.Error(testExpectedErr)
-	}
-}
-
-func TestCloneDatabase(t *testing.T) {
-	svc, _, mock := setupOpsTest(t)
-
-	resp, err := svc.CloneDatabase(context.Background(), testOpsDB, domain.CloneRequest{
-		NewProjectName: "ops-db-clone",
-	})
-	if err != nil {
-		t.Fatalf("CloneDatabase: %v", err)
-	}
-	// The clone id is generated; "ops-db-clone" is only its display name.
-	if !strings.HasPrefix(resp.ProjectID, "proj-") {
-		t.Errorf("projectId must be server-generated, got %s", resp.ProjectID)
-	}
-	if resp.ProjectName != "ops-db-clone" {
-		t.Errorf("projectName: got %s", resp.ProjectName)
-	}
-
-	// Verify namespace created
-	if !mock.Namespaces["org1-"+resp.ProjectID] {
-		t.Error("clone namespace not created")
-	}
-
-	// Verify CRD applied with pg_basebackup bootstrap
-	crd, ok := mock.CRDs["org1-"+resp.ProjectID+"/"+resp.ProjectID+"-postgres"]
-	if !ok {
-		t.Fatal("clone Cluster CRD not created")
-	}
-	spec := crd.Object["spec"].(map[string]interface{})
-	bootstrap := spec["bootstrap"].(map[string]interface{})
-	if _, ok := bootstrap["pg_basebackup"]; !ok {
-		t.Error("bootstrap should use pg_basebackup")
-	}
-}
-
-func TestCloneDatabaseNotFound(t *testing.T) {
-	svc, _, _ := setupOpsTest(t)
-	_, err := svc.CloneDatabase(context.Background(), "nope", domain.CloneRequest{
-		NewProjectName: "clone",
-	})
 	if err == nil {
 		t.Error(testExpectedErr)
 	}
