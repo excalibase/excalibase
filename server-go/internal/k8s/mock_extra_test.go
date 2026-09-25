@@ -13,9 +13,9 @@ func TestMockClient_NamespaceAndCRDListing(t *testing.T) {
 	m := NewMockClient()
 	ctx := context.Background()
 
-	_ = m.CreateNamespaceWithLabels(ctx, "org-a-p1", map[string]string{"k": "v"})
-	_ = m.CreateNamespace(ctx, "org-a-p2")
-	_ = m.CreateNamespace(ctx, "other")
+	_ = m.CreateProjectNamespace(ctx, "org-a-p1", "org-a")
+	_ = m.CreateProjectNamespace(ctx, "org-a-p2", "org-a")
+	_ = m.CreateProjectNamespace(ctx, "other", "org-a")
 
 	got, err := m.ListNamespaces(ctx, "org-a-")
 	if err != nil {

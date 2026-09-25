@@ -70,12 +70,12 @@ func TestPostgreSQLProvisionerFree(t *testing.T) {
 	// Verify K8s calls
 	found := false
 	for _, call := range mock.Calls {
-		if call == "CreateNamespaceWithLabels:org1-test-db" {
+		if call == "CreateProjectNamespace:org1-test-db" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("CreateNamespaceWithLabels not called")
+		t.Error("CreateProjectNamespace not called")
 	}
 	// Verify namespace labels
 	labels := mock.NamespaceLabels["org1-test-db"]

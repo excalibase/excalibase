@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,6 +55,12 @@ type ClientOptions struct {
 	// InsecureSkipTLSVerify disables TLS verification on the remote API.
 	// Only set for local development against clusters with self-signed certs.
 	InsecureSkipTLSVerify bool
+}
+
+// NewClientFromInterfaces wraps already-built API clients, such as in-memory
+// fakes; metrics and exec are unavailable on the result.
+func NewClientFromInterfaces(clientset kubernetes.Interface, dynamicClient dynamic.Interface) *Client {
+	return &Client{clientset: clientset, dynamicClient: dynamicClient}
 }
 
 func NewClient() (*Client, error) {
@@ -126,19 +133,29 @@ func loadConfigWith(opts ClientOptions) (*rest.Config, error) {
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
 
-// CreateNamespace creates a K8s namespace.
-func (c *Client) CreateNamespace(ctx context.Context, name string) error {
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+// ErrProjectOrgRequired refuses a project namespace whose owning org is not
+// known: the org label is what tenant-scoped listings and policies key on.
+var ErrProjectOrgRequired = errors.New("project namespace needs an owning org")
+
+// ProjectNamespaceLabels returns the labels every project namespace carries.
+func ProjectNamespaceLabels(orgID string) (map[string]string, error) {
+	if orgID == "" {
+		return nil, ErrProjectOrgRequired
 	}
-	_, err := c.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	return err
+	return map[string]string{
+		"excalibase.io/type": "project",
+		"excalibase.io/org":  orgID,
+	}, nil
 }
 
-// CreateNamespaceWithLabels creates a K8s namespace with the given labels and
-// fences it with a default-deny ingress policy (EXC-325) so one tenant's pods
-// cannot reach another tenant's pods.
-func (c *Client) CreateNamespaceWithLabels(ctx context.Context, name string, labels map[string]string) error {
+// CreateProjectNamespace is the only way a project namespace is made: it is
+// labelled with its org, fenced with a default-deny ingress policy so one
+// tenant's pods cannot reach another's, and capped by a ResourceQuota.
+func (c *Client) CreateProjectNamespace(ctx context.Context, name, orgID string) error {
+	labels, err := ProjectNamespaceLabels(orgID)
+	if err != nil {
+		return err
+	}
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   name,

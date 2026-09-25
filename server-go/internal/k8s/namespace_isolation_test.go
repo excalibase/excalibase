@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	networkingv1 "k8s.io/api/networking/v1"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,13 +12,13 @@ import (
 // ingress policy that admits only same-namespace, the platform namespace, and
 // the CNPG/monitoring operators — so one tenant's pods cannot reach another
 // tenant's pods on the flat cluster network.
-func TestCreateNamespaceWithLabels_AppliesIsolationPolicy(t *testing.T) {
+func TestCreateProjectNamespace_AppliesIsolationPolicy(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 	ns := "org1-proj-iso"
 
-	if err := c.CreateNamespaceWithLabels(ctx, ns, map[string]string{"x": "y"}); err != nil {
-		t.Fatalf("CreateNamespaceWithLabels: %v", err)
+	if err := c.CreateProjectNamespace(ctx, ns, "org1"); err != nil {
+		t.Fatalf("CreateProjectNamespace: %v", err)
 	}
 
 	np, err := c.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, "namespace-isolation", metav1.GetOptions{})
@@ -34,17 +35,7 @@ func TestCreateNamespaceWithLabels_AppliesIsolationPolicy(t *testing.T) {
 		t.Fatalf("expected exactly one ingress rule, got %d", len(np.Spec.Ingress))
 	}
 
-	from := np.Spec.Ingress[0].From
-	sameNS, allowed := false, map[string]bool{}
-	for _, peer := range from {
-		if peer.PodSelector != nil && peer.NamespaceSelector == nil {
-			sameNS = true
-			continue
-		}
-		if peer.NamespaceSelector != nil {
-			allowed[peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]] = true
-		}
-	}
+	sameNS, allowed := classifyIngressPeers(np.Spec.Ingress[0].From)
 	if !sameNS {
 		t.Error("policy must allow same-namespace ingress (postgres replication, watcher→pg)")
 	}
@@ -71,4 +62,16 @@ func TestIsolationPolicy_Idempotent(t *testing.T) {
 	if err := c.ensureNamespaceIsolationPolicy(ctx, ns); err != nil {
 		t.Errorf("second ensure must be a no-op, got %v", err)
 	}
+}
+
+func classifyIngressPeers(peers []networkingv1.NetworkPolicyPeer) (sameNamespace bool, namespaces map[string]bool) {
+	namespaces = map[string]bool{}
+	for _, peer := range peers {
+		if peer.PodSelector != nil && peer.NamespaceSelector == nil {
+			sameNamespace = true
+		} else if peer.NamespaceSelector != nil {
+			namespaces[peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]] = true
+		}
+	}
+	return sameNamespace, namespaces
 }

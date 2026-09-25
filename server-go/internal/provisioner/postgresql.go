@@ -126,11 +126,7 @@ func (p *PostgreSQLProvisioner) SupportedType() domain.DatabaseType {
 }
 
 func (p *PostgreSQLProvisioner) provisionNamespace(ctx context.Context, req domain.ProvisioningRequest, projectID, namespace string) error {
-	labels := map[string]string{
-		"excalibase.io/type": "project",
-		"excalibase.io/org":  req.OrgID,
-	}
-	if err := p.client.CreateNamespaceWithLabels(ctx, namespace, labels); err != nil {
+	if err := p.client.CreateProjectNamespace(ctx, namespace, req.OrgID); err != nil {
 		return fmt.Errorf("create namespace: %w", err)
 	}
 	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 != nil {
@@ -320,11 +316,7 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.ProvisioningRequest, projectID, namespace string, pc *ProvisionContext) error {
 	pc.SetStage(domain.StageNamespaceCreation)
 	pc.SetStep("create namespace")
-	labels := map[string]string{
-		"excalibase.io/type": "project",
-		"excalibase.io/org":  req.OrgID,
-	}
-	if err := p.client.CreateNamespaceWithLabels(ctx, namespace, labels); err != nil {
+	if err := p.client.CreateProjectNamespace(ctx, namespace, req.OrgID); err != nil {
 		return pc.Fail(fmt.Errorf("create namespace: %w", err))
 	}
 	pc.RegisterCleanup("delete namespace "+namespace, func(ctx context.Context) error {

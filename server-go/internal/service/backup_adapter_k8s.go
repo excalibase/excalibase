@@ -173,6 +173,9 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if a.probe == nil {
 		return nil, ErrDatabaseProbeNotConfigured
 	}
+	if inst.OrgID == "" {
+		return nil, fmt.Errorf("restore source %s: %w", inst.ProjectID, k8s.ErrProjectOrgRequired)
+	}
 	newProject := req.TargetProjectID
 	if err := assertProjectIDAvailable(a.instances, newProject); err != nil {
 		return nil, err
@@ -224,7 +227,7 @@ func (a *K8sBackupAdapter) runRestore(
 // createRestoreCluster creates the target namespace, the object-store secret
 // and the recovery-bootstrapped CNPG Cluster.
 func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisioner.ProvisionContext, inst *domain.DatabaseInstance, req domain.RestoreRequest, store *domain.S3Credentials, newNamespace string) error {
-	if err := a.k8sClient.CreateNamespace(ctx, newNamespace); err != nil {
+	if err := a.k8sClient.CreateProjectNamespace(ctx, newNamespace, inst.OrgID); err != nil {
 		return fmt.Errorf("create restore namespace: %w", err)
 	}
 	// Deleting the namespace removes the object-store secret with it, so the

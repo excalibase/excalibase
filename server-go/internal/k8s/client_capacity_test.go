@@ -180,27 +180,11 @@ func TestGetDeployment(t *testing.T) {
 	}
 }
 
-func TestCreateNamespaceWithLabels(t *testing.T) {
-	c := newFakeClient()
-	ctx := context.Background()
-	labels := map[string]string{"excalibase.io/org": "org-1"}
-	if err := c.CreateNamespaceWithLabels(ctx, "labeled-ns", labels); err != nil {
-		t.Fatalf("CreateNamespaceWithLabels: %v", err)
-	}
-	ns, err := c.clientset.CoreV1().Namespaces().Get(ctx, "labeled-ns", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("namespace lookup: %v", err)
-	}
-	if ns.Labels["excalibase.io/org"] != "org-1" {
-		t.Errorf("labels not applied: %v", ns.Labels)
-	}
-}
-
 func TestListNamespaces_FiltersByPrefix(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 	for _, n := range []string{"org-a-proj1", "org-a-proj2", "other"} {
-		_ = c.CreateNamespace(ctx, n)
+		_ = c.CreateProjectNamespace(ctx, n, "org-a")
 	}
 	got, err := c.ListNamespaces(ctx, "org-a-")
 	if err != nil {
