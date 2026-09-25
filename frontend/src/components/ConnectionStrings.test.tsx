@@ -165,23 +165,42 @@ describe('ConnectionStrings — DocumentDB', () => {
     expect(uri).not.toHaveTextContent('sslmode');
   });
 
-  test('authenticates the Mongo client against the project database', async () => {
+  test('authenticates the way the gateway was proven to accept', async () => {
     renderStrings({ documentDb: true, endpoint: WITH_MONGO });
     const uri = await screen.findByTestId('conn-mongo-public');
-    expect(uri).toHaveTextContent('@p-1.db.excalibase.io:27018/appdb');
-    expect(uri).toHaveTextContent('authSource=appdb');
+    expect(uri).toHaveTextContent('@p-1.db.excalibase.io:27018/?tls=true&authMechanism=SCRAM-SHA-256');
+    expect(uri).not.toHaveTextContent('authSource');
   });
 
-  test('shows the internal Mongo address too', async () => {
+  test('shows the internal Mongo address too, over TLS', async () => {
     renderStrings({ documentDb: true, endpoint: WITH_MONGO });
     const internal = await screen.findByTestId('conn-mongo-internal');
-    expect(internal).toHaveTextContent('@p-1-documentdb.org-1.svc.cluster.local:27017/appdb');
+    expect(internal).toHaveTextContent('@p-1-documentdb.org-1.svc.cluster.local:27017/?tls=true');
+  });
+
+  test('shows the internal Mongo address of a project that publishes no public port', async () => {
+    renderStrings({
+      documentDb: true,
+      endpoint: {
+        ...PUBLIC_ENDPOINT,
+        publicEnabled: false,
+        available: false,
+        port: 0,
+        mongo: { available: false, internal: { host: 'p-1-postgres-rw.org-1.svc.cluster.local', port: 10260 } },
+      },
+    });
+    const internal = await screen.findByTestId('conn-mongo-internal');
+    expect(internal).toHaveTextContent('@p-1-postgres-rw.org-1.svc.cluster.local:10260/');
+    expect(screen.queryByTestId('conn-mongo-unavailable')).not.toBeInTheDocument();
   });
 
   test('says the Mongo endpoint is not answering yet while Postgres already is', async () => {
     renderStrings({
       documentDb: true,
-      endpoint: { ...PUBLIC_ENDPOINT, mongo: { available: false } },
+      endpoint: {
+        ...PUBLIC_ENDPOINT,
+        mongo: { available: false, port: 27018, internal: { host: 'p-1-postgres-rw.org-1.svc.cluster.local', port: 10260 } },
+      },
     });
     await screen.findByTestId('conn-mongo-section');
     expect(screen.getByTestId('conn-postgres-public')).toBeInTheDocument();

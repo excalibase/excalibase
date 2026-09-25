@@ -27,29 +27,9 @@ export interface ProjectEndpointInternal {
   connectionString: string;
 }
 
-// ---------------------------------------------------------------------------
-// SEAM: the Mongo half of a DocumentDB project (EXC-409, PR 59, unmerged)
-//
-// A DocumentDB project is one database with one credential answering two
-// protocols. The endpoint API on main reports the Postgres half only; the
-// gateway that answers Mongo clients is still on an open pull request, and
-// nothing served by main names a Mongo port or says whether the gateway is
-// up.
-//
-// So `mongo` is absent today, and a DocumentDB project honestly says its
-// Mongo endpoint is not answering yet rather than printing a port nobody
-// allocated. What EXC-409 has to add to the db-endpoint response to close
-// this seam, and nothing more:
-//
-//   mongo.available  whether the gateway is up AND has created its user.
-//                    It is false for a while after Postgres already answers:
-//                    the gateway waits for the database first.
-//   mongo.port       the public port Mongo clients dial. Absent when the
-//                    project publishes no public port.
-//   mongo.internal   the in-cluster host and port of the gateway.
-//
-// Closing the seam is: serve the field, nothing here changes shape.
-// ---------------------------------------------------------------------------
+// The Mongo half of a DocumentDB project. `available` is whether the gateway
+// behind the public port is serving; the server reports no readiness for the
+// internal address, which exists for every DocumentDB project.
 export interface ProjectMongoEndpoint {
   available: boolean;
   port?: number;
@@ -76,8 +56,28 @@ export interface ProjectEndpoint {
   mongo?: ProjectMongoEndpoint;
 }
 
-export const getProjectEndpoint = async (projectId: string): Promise<ProjectEndpoint> =>
-  (await api.get<ProjectEndpoint>(`/projects/${projectId}/db-endpoint`)).data;
+// The wire shape carries the Mongo half as flat fields beside the Postgres ones.
+interface ProjectEndpointWire extends Omit<ProjectEndpoint, 'mongo'> {
+  mongoPort?: number;
+  mongoAvailable?: boolean;
+  internal: ProjectEndpointInternal & { mongoPort?: number };
+}
+
+function mongoOf(wire: ProjectEndpointWire): ProjectMongoEndpoint | undefined {
+  const internalPort = wire.internal.mongoPort;
+  if (!wire.mongoPort && !internalPort) return undefined;
+  return {
+    available: wire.mongoAvailable === true,
+    ...(wire.mongoPort ? { port: wire.mongoPort } : {}),
+    ...(internalPort ? { internal: { host: wire.internal.host, port: internalPort } } : {}),
+  };
+}
+
+export const getProjectEndpoint = async (projectId: string): Promise<ProjectEndpoint> => {
+  const wire = (await api.get<ProjectEndpointWire>(`/projects/${projectId}/db-endpoint`)).data;
+  const mongo = mongoOf(wire);
+  return mongo ? { ...wire, mongo } : wire;
+};
 
 // useProjectEndpoint reads one project's endpoint. A failure is not retried
 // and not surfaced as an error: the pages that use it fall back to the

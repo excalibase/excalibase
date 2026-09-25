@@ -54,6 +54,8 @@ export interface DatabaseInstance {
   // The PostgreSQL major this project's data lives on, in the catalogue's
   // spelling. Absent on projects created before the major was recorded.
   postgresVersion?: string;
+  // Whether this project was created with the DocumentDB extension.
+  documentDb?: boolean;
   namespace: string;
   host: string;
   port: number;
