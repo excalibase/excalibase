@@ -45,6 +45,23 @@ func ownedOrchestrator(jobs *fakeRestoreJobStore, instance string, clock *movabl
 	})
 }
 
+// waitForCurrentStep blocks until the driving goroutine's claim write for
+// the named step has landed in the store, so a test can prove that write
+// happened before doing something order-sensitive (like moving the clock).
+func waitForCurrentStep(t *testing.T, jobs *fakeRestoreJobStore, projectID, id, step string) *domain.RestoreJob {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := jobs.FindRestoreJob(context.Background(), projectID, id)
+		if got != nil && got.CurrentStep == step {
+			return got
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("job %s never claimed step %q", id, step)
+	return nil
+}
+
 func startedJob(t *testing.T, orch *RestoreOrchestrator) *domain.RestoreJob {
 	t.Helper()
 	job, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"},
@@ -97,12 +114,25 @@ func TestBootSweepLeavesAJobADifferentLiveReplicaIsDriving(t *testing.T) {
 func TestSweepFailsAJobWhoseOwnerStoppedHeartbeating(t *testing.T) {
 	clock := &movableClock{t: time.Unix(1_000_000, 0)}
 	jobs := newOwnedJobs(clock.now)
-	replicaA := ownedOrchestrator(jobs, "replica-a", clock)
+	// replicaA's Heartbeat is set far longer than this test runs, so its
+	// background ticker never fires and refreshes the job after the clock
+	// is advanced below — the only thing that can make the job look fresh
+	// is its own initial claim write, which the test waits out first.
+	replicaA := NewRestoreOrchestrator(RestoreOrchestratorConfig{
+		Jobs: jobs, InstanceID: "replica-a", Now: clock.now, Heartbeat: time.Hour,
+	})
 	replicaA.SetSteps([]RestoreStep{{Name: "held", Run: func(ctx context.Context, _ *domain.RestoreJob) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}}})
 	job := startedJob(t, replicaA)
+
+	// Replica A's driving goroutine claims the "held" step asynchronously.
+	// That claim write stamps HeartbeatAt with whatever the clock reads at
+	// the moment it lands, so the test must wait for it before advancing
+	// the clock — otherwise the write can race past the advance and record
+	// a heartbeat that looks fresh, which is what made this test flaky.
+	waitForCurrentStep(t, jobs, "src", job.ID, "held")
 
 	clock.advance(2 * defaultRestoreHeartbeatStale)
 	replicaB := ownedOrchestrator(jobs, "replica-b", clock)
