@@ -102,6 +102,9 @@ type RestoreClusterOpts struct {
 	// RecoveryTarget is the optional PITR target (targetTime / targetXID /
 	// targetLSN / targetName) in CNPG's recoveryTarget shape.
 	RecoveryTarget map[string]interface{}
+	// ImageName is the catalogue image for the source's major; a physical
+	// recovery cannot start on any other.
+	ImageName string
 }
 
 // BuildPostgreSQLCluster builds a CloudNativePG Cluster CRD as unstructured.
@@ -408,6 +411,17 @@ func BuildRestoreCluster(opts RestoreClusterOpts) *unstructured.Unstructured {
 	}
 	barman := buildBarmanObjectStore(opts.SourceProjectID, opts.Store)
 	barman["wal"] = map[string]interface{}{"maxParallel": int64(8)}
+	spec := map[string]interface{}{
+		"instances": int64(1),
+		"storage":   map[string]interface{}{"size": "5Gi"},
+		"bootstrap": map[string]interface{}{"recovery": recovery},
+		"externalClusters": []interface{}{
+			map[string]interface{}{"name": "clusterBackup", "barmanObjectStore": barman},
+		},
+	}
+	if opts.ImageName != "" {
+		spec["imageName"] = opts.ImageName
+	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": cnpgAPIVersion,
@@ -416,14 +430,7 @@ func BuildRestoreCluster(opts RestoreClusterOpts) *unstructured.Unstructured {
 				"name":      opts.NewProjectID + postgresSuffix,
 				"namespace": opts.Namespace,
 			},
-			"spec": map[string]interface{}{
-				"instances": int64(1),
-				"storage":   map[string]interface{}{"size": "5Gi"},
-				"bootstrap": map[string]interface{}{"recovery": recovery},
-				"externalClusters": []interface{}{
-					map[string]interface{}{"name": "clusterBackup", "barmanObjectStore": barman},
-				},
-			},
+			"spec": spec,
 		},
 	}
 }

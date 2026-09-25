@@ -93,3 +93,14 @@ func TestBuildBackupSpecHonoursExplicitLocalstack(t *testing.T) {
 		t.Errorf("explicit localstack endpoint must be kept, got %v", store["endpointURL"])
 	}
 }
+
+func TestBuildRestoreClusterNamesTheImage(t *testing.T) {
+	image := "excalibase/postgresql:16@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	obj := BuildRestoreCluster(RestoreClusterOpts{
+		SourceProjectID: "src", NewProjectID: "dst", Namespace: "org-dst", ImageName: image,
+	})
+	spec := obj.Object["spec"].(map[string]interface{})
+	if spec["imageName"] != image {
+		t.Errorf("imageName: got %v, want %s", spec["imageName"], image)
+	}
+}

@@ -129,7 +129,7 @@ func seedInstance(store *storage.FileSystemStore, mock *k8s.MockClient) {
 		ProjectID: "test-db", OrgID: "org1", DBType: domain.PostgreSQL,
 		// STANDARD, so the restore tests below have a free project slot to
 		// restore into; FREE allows the one project this seeds.
-		Tier: domain.Standard, Namespace: "org1-test-db", Status: "ACTIVE",
+		Tier: domain.Standard, Namespace: "org1-test-db", Status: "ACTIVE", PostgresVersion: "17",
 		Host: "h.local", Port: &port, DatabaseName: "app",
 		Username: "user", Password: testutil.FixturePassword(testPGCreds), SSLMode: "require",
 	})
