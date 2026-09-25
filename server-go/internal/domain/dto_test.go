@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -251,5 +252,19 @@ func TestIsDeletionStatus(t *testing.T) {
 		if IsDeletionStatus(status) {
 			t.Errorf("%s must not count as a deletion status", status)
 		}
+	}
+}
+
+func TestProvisioningRequestDoesNotAcceptACallerChosenPassword(t *testing.T) {
+	var req ProvisioningRequest
+	if err := json.Unmarshal([]byte(`{"projectName":"p","appPassword":"caller-chosen"}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	out, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(out), "caller-chosen") {
+		t.Errorf("a caller-chosen database password survived decoding: %s", out)
 	}
 }

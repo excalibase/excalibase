@@ -619,3 +619,20 @@ func mapKeys(m map[string][]byte) []string {
 	}
 	return out
 }
+
+// The restored container's superuser keeps this password, so it must not be
+// derivable from when the restore ran.
+func TestRestoredDockerSuperuserPasswordIsRandom(t *testing.T) {
+	first, second := generateRestorePassword(), generateRestorePassword()
+	if first == second {
+		t.Fatal("two restores were given the same superuser password")
+	}
+	for _, password := range []string{first, second} {
+		if len(password) < 32 {
+			t.Errorf("restore password is %d chars, want at least 32", len(password))
+		}
+		if strings.HasPrefix(password, "restored-") {
+			t.Errorf("restore password is predictable: %s", password)
+		}
+	}
+}

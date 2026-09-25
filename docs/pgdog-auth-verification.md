@@ -23,7 +23,7 @@ Sources read:
 Provision(req)
   |- CNPG cluster up, read secret <proj>-postgres-app          postgresql.go:206
   |     -> result.Username/Password = CNPG owner ("app")       (docker mode: "postgres" superuser, docker_postgresql.go:46)
-  |- newProjectRoleCredentials(req.AppPassword)                provisioning.go:561
+  |- newProjectRoleCredentials()                provisioning.go:561
   |- createProjectRoles(...)                                   provisioning.go:892-925
   |     CREATE ROLE auth_admin / excalibase_app / cdc_watcher
   |     vault: projects/<id>/credentials/{admin,auth_admin,excalibase_app,cdc_watcher}

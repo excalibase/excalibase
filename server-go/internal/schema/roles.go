@@ -31,12 +31,9 @@ func (i *Introspector) CreateRole(ctx context.Context, db *sql.DB, req CreateRol
 	if protectedRoles[strings.ToLower(req.Name)] {
 		return fmt.Errorf("cannot create role with protected name %q", req.Name)
 	}
-	stmt := "CREATE ROLE " + QuoteIdent(req.Name)
-	if req.Login {
-		stmt += " LOGIN"
-	}
-	if req.Password != nil {
-		stmt += " PASSWORD " + QuoteLiteral(*req.Password)
+	var stmt string
+	if err := db.QueryRowContext(ctx, createRoleStatementQuery, req.Name, req.Login, req.Password).Scan(&stmt); err != nil {
+		return fmt.Errorf("build create role: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("create role: %w", err)
@@ -64,6 +61,13 @@ func (i *Introspector) DropRole(ctx context.Context, db *sql.DB, name string) er
 	}
 	return nil
 }
+
+// createRoleStatementQuery has Postgres quote the name and password itself,
+// under the session's own string settings.
+const createRoleStatementQuery = `
+SELECT format('CREATE ROLE %I', $1::text)
+    || CASE WHEN $2::boolean THEN ' LOGIN' ELSE '' END
+    || CASE WHEN $3::text IS NULL THEN '' ELSE format(' PASSWORD %L', $3::text) END`
 
 const rolesQuery = `
 SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolconnlimit

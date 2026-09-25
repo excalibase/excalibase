@@ -814,12 +814,10 @@ func (a *DockerBackupAdapter) addWALToTar(ctx context.Context, tw *tar.Writer, o
 	return nil
 }
 
-// generateRestorePassword produces a one-shot password for the
-// restored container's superuser env. The actual DB users + their
-// passwords come from the backup; this only satisfies the postgres
-// image's startup contract.
+// generateRestorePassword produces the restored project's superuser password;
+// registration resets the admin role to it and files it in vault.
 func generateRestorePassword() string {
-	return fmt.Sprintf("restored-%d", time.Now().UnixNano())
+	return generatePassword(32)
 }
 
 // buildRecoveryTar produces a tar archive containing the two files

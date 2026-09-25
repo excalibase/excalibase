@@ -45,8 +45,6 @@ type ProjectEventPublisher interface {
 
 // RegistrationOptions tunes how a project's credentials are established.
 type RegistrationOptions struct {
-	// AppPassword pins excalibase_app's password instead of generating one.
-	AppPassword string
 	// ResetRolePasswords re-sets the platform roles' passwords after creating
 	// them. Required for a restored cluster, whose roles arrived from the
 	// source project with the source's passwords.
@@ -193,7 +191,7 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 	if inst.Port != nil {
 		port = *inst.Port
 	}
-	creds := newProjectRoleCredentials(opts.AppPassword)
+	creds := newProjectRoleCredentials()
 	if err := s.createProjectRoles(ctx, projectRoleSpec{
 		projectID:      inst.ProjectID,
 		namespace:      inst.Namespace,
@@ -202,7 +200,6 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 		databaseName:   inst.DatabaseName,
 		adminUsername:  inst.Username,
 		adminPassword:  inst.Password,
-		appPassword:    opts.AppPassword,
 		resetPasswords: opts.ResetRolePasswords,
 		resetAdmin:     opts.ResetAdminPassword,
 	}, creds, pc); err != nil {
@@ -220,14 +217,10 @@ type projectRoleCredentials struct {
 	watcherPassword string
 }
 
-func newProjectRoleCredentials(requestedAppPassword string) projectRoleCredentials {
-	appPassword := requestedAppPassword
-	if appPassword == "" {
-		appPassword = generatePassword(32)
-	}
+func newProjectRoleCredentials() projectRoleCredentials {
 	return projectRoleCredentials{
 		authPassword:    generatePassword(32),
-		appPassword:     appPassword,
+		appPassword:     generatePassword(32),
 		watcherPassword: generatePassword(32),
 	}
 }
@@ -292,7 +285,6 @@ type projectRoleSpec struct {
 	databaseName   string
 	adminUsername  string
 	adminPassword  string
-	appPassword    string
 	resetPasswords bool
 	resetAdmin     bool
 }

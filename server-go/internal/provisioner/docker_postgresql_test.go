@@ -23,6 +23,7 @@ type mockDockerClient struct {
 	copyDst    string     // last CopyToContainer destination path
 	copyBytes  int64      // total bytes drained from CopyToContainer streams
 	lastImage  string     // image of the most recent CreateContainer call
+	lastEnv    map[string]string
 	// stopKeepsRunning models a container the daemon accepts a stop for but
 	// which is still running while postgres shuts down.
 	stopKeepsRunning bool
@@ -37,6 +38,7 @@ func (m *mockDockerClient) CreateContainer(_ context.Context, name, image string
 		return "", fmt.Errorf("create failed")
 	}
 	m.lastImage = image
+	m.lastEnv = env
 	id := "container-" + name
 	m.containers[id] = "created"
 	return id, nil
@@ -170,6 +172,30 @@ func TestDockerProvisioner_Provision(t *testing.T) {
 	status, _ := docker.ContainerStatus(context.Background(), result.Namespace)
 	if status != "running" {
 		t.Errorf("expected running, got %s", status)
+	}
+}
+
+func TestDockerProvisioner_EachProjectGetsItsOwnRandomSuperuserPassword(t *testing.T) {
+	docker := newMockDocker()
+	p := NewDockerPostgreSQLProvisioner(docker)
+	seen := map[string]bool{}
+	for _, name := range []string{"one", "two", "three"} {
+		req := domain.ProvisioningRequest{ProjectName: name, DBType: domain.PostgreSQL, PostgresVersion: "17"}
+		result, err := p.Provision(context.Background(), req, config.TierConfig{}, func(domain.ProvisioningStage) {})
+		if err != nil {
+			t.Fatalf("Provision: %v", err)
+		}
+		password := docker.lastEnv["POSTGRES_PASSWORD"]
+		if password != result.Password {
+			t.Error("the container's superuser password must be the one handed back for the vault")
+		}
+		if len(password) < 32 {
+			t.Errorf("superuser password is %d chars, want at least 32", len(password))
+		}
+		if seen[password] {
+			t.Fatal("two projects were given the same superuser password")
+		}
+		seen[password] = true
 	}
 }
 

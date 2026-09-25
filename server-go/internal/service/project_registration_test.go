@@ -134,13 +134,10 @@ func TestRegisterProjectResetsRolePasswordsToTheVaultValues(t *testing.T) {
 
 	sql := strings.Join(h.kube.ExecCommands, "\n")
 	appCreds, _ := h.vault.Get(vaultCredentialPath(testRegProject, "excalibase_app"))
-	if !strings.Contains(sql, "ALTER ROLE \"excalibase_app\"") {
-		t.Fatalf("restored cluster must have its inherited role passwords reset; sql=%s", sql)
+	if !strings.Contains(sql, alterRolePasswordSQL("excalibase_app", appCreds["password"])) {
+		t.Fatalf("restored cluster must have its inherited role passwords reset to the vault value; sql=%s", sql)
 	}
-	if !strings.Contains(sql, appCreds["password"]) {
-		t.Error("the password written to vault must be the one set on the role")
-	}
-	if !strings.Contains(sql, "ALTER ROLE \"app\"") {
+	if !strings.Contains(sql, "ALTER ROLE %I WITH LOGIN PASSWORD %L', "+sqlTextLiteral("app")+",") {
 		t.Error("ResetAdminPassword must reset the admin role too")
 	}
 }

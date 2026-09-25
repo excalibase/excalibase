@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -27,10 +28,24 @@ func BuildProjectRoleResetSQL(roles []RolePassword) string {
 		if r.Role == "" || r.Password == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "\nALTER ROLE %s WITH LOGIN PASSWORD %s;",
-			schema.QuoteIdent(r.Role), schema.QuoteLiteral(r.Password))
+		b.WriteString("\n")
+		b.WriteString(alterRolePasswordSQL(r.Role, r.Password))
 	}
 	return b.String()
+}
+
+// sqlTextLiteral renders s as an expression Postgres decodes itself. Only hex
+// digits reach the statement, so no quoting context (dollar quotes,
+// standard_conforming_strings=off) can be broken out of.
+func sqlTextLiteral(s string) string {
+	return "convert_from(decode('" + hex.EncodeToString([]byte(s)) + "', 'hex'), 'UTF8')"
+}
+
+// alterRolePasswordSQL sets a role's password with the quoting done by
+// Postgres' format(), never by string interpolation.
+func alterRolePasswordSQL(role, password string) string {
+	return fmt.Sprintf("DO $$ BEGIN EXECUTE format('ALTER ROLE %%I WITH LOGIN PASSWORD %%L', %s, %s); END $$;",
+		sqlTextLiteral(role), sqlTextLiteral(password))
 }
 
 // BuildProjectRoleSQL produces the role-creation SQL run as the postgres
@@ -56,9 +71,10 @@ func BuildProjectRoleSQL(authPass, appPass, watcherPass, dbName, publicationName
 	appRole := schema.QuoteIdent("excalibase_app")
 	watcherRole := schema.QuoteIdent("cdc_watcher")
 	pubIdent := schema.QuoteIdent(publicationName)
-	safeAuthPass := schema.QuoteLiteral(authPass)
-	safeAppPass := schema.QuoteLiteral(appPass)
-	safeWatcherPass := schema.QuoteLiteral(watcherPass)
+	pubName := sqlTextLiteral(publicationName)
+	safeAuthPass := sqlTextLiteral(authPass)
+	safeAppPass := sqlTextLiteral(appPass)
+	safeWatcherPass := sqlTextLiteral(watcherPass)
 	dbIdent := schema.QuoteIdent(dbName)
 
 	return fmt.Sprintf(`
@@ -66,7 +82,7 @@ CREATE SCHEMA IF NOT EXISTS auth;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'auth_admin') THEN
-    EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s::text);
+    EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s);
   END IF;
 END $$;
 GRANT CREATE ON DATABASE %s TO %s;
@@ -75,7 +91,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO %s;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'excalibase_app') THEN
-    EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s::text);
+    EXECUTE format('CREATE ROLE %s WITH LOGIN PASSWORD %%L', %s);
   END IF;
 END $$;
 GRANT ALL ON SCHEMA public TO %s;
@@ -104,7 +120,7 @@ GRANT ALL ON ALL SEQUENCES IN SCHEMA excalibase TO %s;
 -- dump raw WAL via test_decoding (which would bypass RLS and expose auth).
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'cdc_watcher') THEN
-    EXECUTE format('CREATE ROLE %s WITH LOGIN REPLICATION PASSWORD %%L', %s::text);
+    EXECUTE format('CREATE ROLE %s WITH LOGIN REPLICATION PASSWORD %%L', %s);
   END IF;
 END $$;
 
@@ -116,7 +132,7 @@ END $$;
 -- of truth for the publication name; both ends must agree.
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = %s) THEN
-    CREATE PUBLICATION %s;
+    EXECUTE format('CREATE PUBLICATION %%I', %s);
   END IF;
 END $$;
 ALTER PUBLICATION %s OWNER TO %s;
@@ -129,8 +145,7 @@ ALTER PUBLICATION %s OWNER TO %s;
 		appRole, appRole, appRole, // GRANT auth read
 		appRole, appRole, appRole, // GRANT reserved excalibase schema
 		watcherRole, safeWatcherPass, // cdc_watcher DO block
-		schema.QuoteLiteral(publicationName), // pubname check (literal)
-		pubIdent,                             // CREATE PUBLICATION ident
-		pubIdent, appRole,                    // ALTER PUBLICATION ... OWNER TO
+		pubName, pubName, // pubname check + CREATE PUBLICATION
+		pubIdent, appRole, // ALTER PUBLICATION ... OWNER TO
 	)
 }

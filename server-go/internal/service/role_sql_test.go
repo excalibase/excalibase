@@ -37,9 +37,8 @@ func TestBuildProjectRoleSQL_DoesNotAlterRoleApp(t *testing.T) {
 func TestBuildProjectRoleSQL_PublicationIsEmpty(t *testing.T) {
 	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
 
-	// QuoteIdent wraps the publication name in double quotes.
-	if !strings.Contains(sql, `CREATE PUBLICATION "cdc_watcher_pub"`) {
-		t.Errorf("expected CREATE PUBLICATION \"cdc_watcher_pub\"; sql:\n%s", sql)
+	if !strings.Contains(sql, "format('CREATE PUBLICATION %I', "+sqlTextLiteral("cdc_watcher_pub")+")") {
+		t.Errorf("expected CREATE PUBLICATION of cdc_watcher_pub; sql:\n%s", sql)
 	}
 	if strings.Contains(sql, "FOR ALL TABLES") {
 		t.Error("publication must be empty (no FOR ALL TABLES) — opt-in only")
@@ -54,11 +53,12 @@ func TestBuildProjectRoleSQL_PublicationIsEmpty(t *testing.T) {
 func TestBuildProjectRoleSQL_HonoursCustomPublicationName(t *testing.T) {
 	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "custom_pub_name")
 
-	if !strings.Contains(sql, `pubname = 'custom_pub_name'`) {
-		t.Error("expected pubname existence check against 'custom_pub_name'")
+	name := sqlTextLiteral("custom_pub_name")
+	if !strings.Contains(sql, "pubname = "+name) {
+		t.Error("expected pubname existence check against custom_pub_name")
 	}
-	if !strings.Contains(sql, `CREATE PUBLICATION "custom_pub_name"`) {
-		t.Error("expected CREATE PUBLICATION \"custom_pub_name\"")
+	if !strings.Contains(sql, "format('CREATE PUBLICATION %I', "+name+")") {
+		t.Error("expected CREATE PUBLICATION of custom_pub_name")
 	}
 	if !strings.Contains(sql, `ALTER PUBLICATION "custom_pub_name" OWNER TO "excalibase_app"`) {
 		t.Error("expected ALTER PUBLICATION \"custom_pub_name\" OWNER TO \"excalibase_app\"")
@@ -109,4 +109,26 @@ func extractRoleBlock(sql, role string) string {
 		return sql[start:]
 	}
 	return sql[start : start+end]
+}
+
+func TestBuildProjectRoleSQL_NeverEmbedsSecretText(t *testing.T) {
+	hostile := []string{"a$$; SELECT 1; DO $$ BEGIN", `x\'; --`, "$t$'\"", "pw'd"}
+	for _, pw := range hostile {
+		sql := BuildProjectRoleSQL(pw, pw, pw, "app", "cdc_watcher_pub") +
+			BuildProjectRoleResetSQL([]RolePassword{{Role: "owner$$", Password: pw}})
+		if strings.Contains(sql, pw) {
+			t.Errorf("password %q appears verbatim in the SQL", pw)
+		}
+		if strings.Contains(sql, "owner$$") {
+			t.Error("role name appears verbatim inside a dollar-quoted body")
+		}
+	}
+}
+
+func TestSQLTextLiteral_UsesOnlyHexDigits(t *testing.T) {
+	got := sqlTextLiteral("$$'\\")
+	want := "convert_from(decode('2424275c', 'hex'), 'UTF8')"
+	if got != want {
+		t.Errorf("sqlTextLiteral = %s, want %s", got, want)
+	}
 }
