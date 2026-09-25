@@ -1,8 +1,7 @@
 package k8s
 
-// It renders an app (apphost.App) into a Deployment plus an egress
-// CiliumNetworkPolicy in the project's namespace. Pod hardening is EXC-380;
-// applying the result to a cluster is EXC-386.
+// It renders an app (apphost.App) into a Deployment, its Service and Ingress,
+// and the CiliumNetworkPolicies fencing its egress and ingress, in the project's namespace.
 
 import (
 	"crypto/sha256"
@@ -16,6 +15,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -71,8 +71,11 @@ type Resolver interface {
 
 // AppWorkload is one app's rendered manifests; a value, applied by nothing here.
 type AppWorkload struct {
-	Deployment   *appsv1.Deployment
-	EgressPolicy *unstructured.Unstructured
+	Deployment    *appsv1.Deployment
+	EgressPolicy  *unstructured.Unstructured
+	Service       *corev1.Service
+	Ingress       *networkingv1.Ingress
+	IngressPolicy *unstructured.Unstructured
 }
 
 // credentialBearingVariables must never resolve to a plain value: a
@@ -88,6 +91,7 @@ type AppRenderOptions struct {
 	RuntimeClass string
 	// ExtraDenyCIDRs are APP_EGRESS_EXTRA_DENY_CIDRS, already validated by config.
 	ExtraDenyCIDRs []string
+	Route          AppRouteOptions
 }
 
 // AppObjectName is the name the app's Deployment holds in the project namespace.
@@ -139,7 +143,14 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 	if err != nil {
 		return nil, err
 	}
-	return &AppWorkload{Deployment: deployment, EgressPolicy: policy}, nil
+	route, err := buildAppRoute(namespace, app, opts.Route)
+	if err != nil {
+		return nil, err
+	}
+	return &AppWorkload{
+		Deployment: deployment, EgressPolicy: policy,
+		Service: route.service, Ingress: route.ingress, IngressPolicy: route.policy,
+	}, nil
 }
 
 // appLabels identify and clean up everything one app owns; app id is the stable key.
@@ -320,6 +331,7 @@ func buildAppDeployment(
 		Spec: appsv1.DeploymentSpec{
 			Replicas:        &replicas,
 			MinReadySeconds: appMinReadySeconds,
+			Strategy:        appRolloutStrategy(),
 			Selector:        &metav1.LabelSelector{MatchLabels: appSelectorLabels(app)},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
@@ -336,6 +348,19 @@ func buildAppDeployment(
 			},
 		},
 	}, nil
+}
+
+// appRolloutStrategy starts a new pod before stopping an old one, so a redeploy never drops below the asked-for count.
+func appRolloutStrategy() appsv1.DeploymentStrategy {
+	maxUnavailable := intstr.FromInt(0)
+	maxSurge := intstr.FromInt(1)
+	return appsv1.DeploymentStrategy{
+		Type: appsv1.RollingUpdateDeploymentStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateDeployment{
+			MaxUnavailable: &maxUnavailable,
+			MaxSurge:       &maxSurge,
+		},
+	}
 }
 
 // podSecurityContext leaves the uid to the image: the sandbox runtime, not the uid, is the boundary.
@@ -377,8 +402,17 @@ func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.R
 		Env:             env,
 		Resources:       resources,
 		ReadinessProbe:  appReadinessProbe(app),
+		Lifecycle:       appLifecycle(),
 		SecurityContext: containerSecurityContext(),
 	}
+}
+
+// appDrainSeconds keeps a stopping pod serving until the ingress controller has
+// dropped it from its endpoints; a kubelet sleep, so the image needs no sleep binary.
+const appDrainSeconds = 10
+
+func appLifecycle() *corev1.Lifecycle {
+	return &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{Sleep: &corev1.SleepAction{Seconds: appDrainSeconds}}}
 }
 
 // imagePullPolicyFor re-pulls a mutable tag: a node caching a different build

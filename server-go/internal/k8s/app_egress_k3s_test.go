@@ -206,7 +206,7 @@ func (lab *egressLab) render(t *testing.T, pod string) *AppWorkload {
 	t.Helper()
 	client := lab.clients[pod]
 	// Only the policy is applied here, so the runtime class never reaches a node.
-	options := AppRenderOptions{RuntimeClass: gvisorRuntimeClass, ExtraDenyCIDRs: client.extra}
+	options := AppRenderOptions{RuntimeClass: gvisorRuntimeClass, ExtraDenyCIDRs: client.extra, Route: liveRoute}
 	workload, err := RenderAppWorkload(egressNamespaceA, client.app, &fakeResolver{namespace: egressNamespaceA}, options)
 	if err != nil {
 		t.Fatalf("render %s: %v", pod, err)

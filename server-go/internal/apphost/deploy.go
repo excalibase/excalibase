@@ -38,6 +38,8 @@ type DeploySpec struct {
 	Port      int             `json:"port"`
 	Replicas  int             `json:"replicas"`
 	Resources DeployResources `json:"resources"`
+	// URL is where this deploy is served.
+	URL string `json:"url,omitempty"`
 }
 
 // DeployConfig is the full app config a deploy froze and rolled out: literal

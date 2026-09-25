@@ -55,3 +55,18 @@ func TestVerifyAppRuntime_Refusals(t *testing.T) {
 		})
 	}
 }
+
+func TestAppRouteCarriesTheRouteConfig(t *testing.T) {
+	cfg := config.AppConfig{
+		AppDomain: "apps.example.com", AppIngressClass: "haproxy", AppTLSSecret: "apps-tls",
+		AppIngressFromNamespace: "haproxy-controller", AppIngressFromLabels: map[string]string{"app": "edge"},
+	}
+	route := appRoute(cfg)
+	if route.Domain != "apps.example.com" || route.IngressClass != "haproxy" || route.TLSSecret != "apps-tls" ||
+		route.IngressFromNamespace != "haproxy-controller" || route.IngressFromLabels["app"] != "edge" {
+		t.Errorf("appRoute = %+v", route)
+	}
+	if url, err := route.Public().URL("web", "proj-abc"); err != nil || url != "https://web-abc.apps.example.com" {
+		t.Errorf("public URL = %q, %v", url, err)
+	}
+}

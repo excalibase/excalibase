@@ -250,6 +250,15 @@ type AppConfig struct {
 
 	// AppEgressExtraDenyCIDRs are off-cluster ranges denied to apps beyond the fixed private list.
 	AppEgressExtraDenyCIDRs []string
+
+	// AppDomain is the parent of every app hostname: <app>-<project>.<AppDomain>.
+	AppDomain       string
+	AppIngressClass string
+	// AppTLSSecret names a wildcard certificate for AppDomain; empty serves apps over HTTP only.
+	AppTLSSecret string
+	// AppIngressFromNamespace and AppIngressFromLabels select the only pods an app accepts traffic from.
+	AppIngressFromNamespace string
+	AppIngressFromLabels    map[string]string
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -275,7 +284,7 @@ func (c AppConfig) Validate() error {
 	if c.ProvisionerMode == "docker" && c.IsCloud() {
 		return errDockerCloudUnsupported
 	}
-	return nil
+	return c.validateAppRoute()
 }
 
 func Load() AppConfig {
@@ -377,6 +386,11 @@ func Load() AppConfig {
 		AppHostingEnabled:           envOr("APP_HOSTING_ENABLED", "") == "true",
 		AppRuntimeClass:             envOr("APP_RUNTIME_CLASS", "gvisor"),
 		AppEgressExtraDenyCIDRs:     envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),
+		AppDomain:                   os.Getenv("APP_DOMAIN"),
+		AppIngressClass:             envOr("APP_INGRESS_CLASS", "haproxy"),
+		AppTLSSecret:                os.Getenv("APP_TLS_SECRET"),
+		AppIngressFromNamespace:     os.Getenv("APP_INGRESS_FROM_NAMESPACE"),
+		AppIngressFromLabels:        envIngressFromLabels("APP_INGRESS_FROM_LABELS"),
 	}
 }
 

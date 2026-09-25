@@ -25,3 +25,13 @@ func verifyAppRuntime(ctx context.Context, cfg config.AppConfig, kube k8s.KubeCl
 	}
 	return nil
 }
+
+func appRoute(cfg config.AppConfig) k8s.AppRouteOptions {
+	return k8s.AppRouteOptions{
+		Domain:               cfg.AppDomain,
+		IngressClass:         cfg.AppIngressClass,
+		TLSSecret:            cfg.AppTLSSecret,
+		IngressFromNamespace: cfg.AppIngressFromNamespace,
+		IngressFromLabels:    cfg.AppIngressFromLabels,
+	}
+}

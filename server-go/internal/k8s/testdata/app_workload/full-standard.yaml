@@ -19,11 +19,15 @@ spec:
     matchLabels:
       excalibase.io/app: app-01H
       excalibase.io/component: app
-  strategy: {}
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
   template:
     metadata:
       annotations:
-        excalibase.io/app-config-hash: ae3cf71b01fe98ae
+        excalibase.io/app-config-hash: ffbda37467a71977
       labels:
         app.kubernetes.io/component: app
         app.kubernetes.io/managed-by: excalibase-provisioning
@@ -53,6 +57,10 @@ spec:
               name: proj-abc-app-secrets
         image: ghcr.io/acme/web:1.4.2
         imagePullPolicy: Always
+        lifecycle:
+          preStop:
+            sleep:
+              seconds: 10
         name: web
         ports:
         - containerPort: 8080
@@ -153,3 +161,85 @@ spec:
     matchLabels:
       excalibase.io/app: app-01H
       excalibase.io/component: app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: web
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: standard
+  name: app-web
+  namespace: org1-proj-abc
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+  type: ClusterIP
+status:
+  loadBalancer: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: web
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: standard
+  name: app-web
+  namespace: org1-proj-abc
+spec:
+  ingressClassName: haproxy
+  rules:
+  - host: web-abc.apps.example.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: app-web
+            port:
+              number: 80
+        path: /
+        pathType: Prefix
+status:
+  loadBalancer: {}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: web
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: standard
+  name: app-web-ingress
+  namespace: org1-proj-abc
+spec:
+  endpointSelector:
+    matchLabels:
+      excalibase.io/app: app-01H
+      excalibase.io/component: app
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: haproxy-controller
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
