@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // DocumentDBGatewayContainer is the name the CNPG-I sidecar injector gives the
@@ -77,4 +79,68 @@ func gatewayServing(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// DocumentDBServiceName is the in-cluster Service for a project's gateway; the
+// operator's read-write Service carries only the Postgres port.
+func DocumentDBServiceName(projectID string) string {
+	return projectID + "-documentdb"
+}
+
+// DocumentDBServiceHost is the name an in-cluster client dials for the gateway.
+func DocumentDBServiceHost(projectID, namespace string) string {
+	return fmt.Sprintf("%s.%s.svc.cluster.local", DocumentDBServiceName(projectID), namespace)
+}
+
+// EnsureDocumentDBService creates or re-renders the gateway's ClusterIP
+// Service. The selector is copied from the read-write Service so it follows
+// whichever pod the operator labels primary.
+func (c *Client) EnsureDocumentDBService(ctx context.Context, namespace, projectID string) error {
+	selector, err := c.readWriteSelector(ctx, namespace, projectID+postgresSuffix+"-rw")
+	if err != nil {
+		return err
+	}
+	desired := buildDocumentDBService(namespace, projectID, selector)
+	services := c.clientset.CoreV1().Services(namespace)
+	existing, err := services.Get(ctx, desired.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if _, err := services.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create documentdb service: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read documentdb service: %w", err)
+	}
+	updated := existing.DeepCopy()
+	updated.Labels = desired.Labels
+	updated.Spec.Selector = desired.Spec.Selector
+	updated.Spec.Ports = desired.Spec.Ports
+	if _, err := services.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update documentdb service: %w", err)
+	}
+	return nil
+}
+
+func buildDocumentDBService(namespace, projectID string, selector map[string]string) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      DocumentDBServiceName(projectID),
+			Namespace: namespace,
+			Labels: map[string]string{
+				dbEndpointManagedByLabel: dbEndpointManagedByValue,
+				dbEndpointProjectLabel:   projectID,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:     corev1.ServiceTypeClusterIP,
+			Selector: selector,
+			Ports: []corev1.ServicePort{{
+				Name:       "documentdb",
+				Port:       config.DocumentDBGatewayPort,
+				TargetPort: intstr.FromInt(config.DocumentDBGatewayPort),
+				Protocol:   corev1.ProtocolTCP,
+			}},
+		},
+	}
 }

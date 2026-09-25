@@ -45,3 +45,15 @@ func ensureDocumentDBCredential(ctx context.Context, client k8s.KubeClient, name
 	}
 	return nil
 }
+
+// ensureDocumentDBService runs after the pods are ready, because the selector
+// is copied from the operator's read-write Service.
+func ensureDocumentDBService(ctx context.Context, client k8s.KubeClient, namespace, projectID string, documentDB bool) error {
+	if !documentDB {
+		return nil
+	}
+	if err := client.EnsureDocumentDBService(ctx, namespace, projectID); err != nil {
+		return fmt.Errorf("create documentdb gateway service: %w", err)
+	}
+	return nil
+}

@@ -144,6 +144,25 @@ func TestADocumentDBProjectThatDoesNotPublishStaysInternal(t *testing.T) {
 	}
 }
 
+// The CNPG read-write Service carries 5432 only, so the gateway is reached
+// through the project's own Service that exposes its port.
+func TestTheInternalMongoAddressIsTheGatewayService(t *testing.T) {
+	f := newMongoEndpointFixture(t, true)
+
+	view, err := f.svc.Describe(context.Background(), f.inst.ProjectID)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+
+	host := "proj-mongo0001-documentdb.org-a-proj-mongo0001.svc.cluster.local:10260"
+	if !strings.Contains(view.Internal.MongoConnectionString, "@"+host+"/") {
+		t.Errorf("internal Mongo string does not dial %s: %q", host, view.Internal.MongoConnectionString)
+	}
+	if strings.Contains(view.Internal.MongoConnectionString, "-postgres-rw") {
+		t.Errorf("internal Mongo string dials the Postgres-only Service: %q", view.Internal.MongoConnectionString)
+	}
+}
+
 // Lifecycle honesty: the Mongo endpoint is available only when the gateway is
 // observed ready, not merely when the Service exists.
 func TestTheMongoEndpointIsNotAvailableUntilTheGatewayIsReady(t *testing.T) {

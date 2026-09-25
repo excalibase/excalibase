@@ -119,22 +119,26 @@ func (c *Client) applyAppIngress(ctx context.Context, namespace string, desired 
 
 // A cluster without Cilium has no such kind, so the apply fails instead of leaving the app unfenced.
 func (c *Client) applyAppPolicy(ctx context.Context, namespace string, desired *unstructured.Unstructured, direction string) error {
+	return c.applyCiliumPolicy(ctx, namespace, desired, "app "+direction+" policy")
+}
+
+func (c *Client) applyCiliumPolicy(ctx context.Context, namespace string, desired *unstructured.Unstructured, what string) error {
 	policies := c.dynamicClient.Resource(CiliumNetworkPolicyGVR).Namespace(namespace)
 	existing, err := policies.Get(ctx, desired.GetName(), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		if _, err := policies.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create app %s policy: %w", direction, err)
+			return fmt.Errorf("create %s: %w", what, err)
 		}
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("read app %s policy: %w", direction, err)
+		return fmt.Errorf("read %s: %w", what, err)
 	}
 	updated := existing.DeepCopy()
 	updated.SetLabels(desired.GetLabels())
 	updated.Object["spec"] = runtime.DeepCopyJSONValue(desired.Object["spec"])
 	if _, err := policies.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update app %s policy: %w", direction, err)
+		return fmt.Errorf("update %s: %w", what, err)
 	}
 	return nil
 }

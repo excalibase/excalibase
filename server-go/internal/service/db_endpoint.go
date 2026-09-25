@@ -343,6 +343,9 @@ func (s *DBEndpointService) releasePorts(ctx context.Context, inst *domain.Datab
 // success. A mongoPort of zero means the project has no Mongo endpoint, and
 // none is created.
 func (s *DBEndpointService) ensureObserved(ctx context.Context, inst *domain.DatabaseInstance, port, mongoPort int) error {
+	if err := s.openIngress(ctx, inst, mongoPort); err != nil {
+		return err
+	}
 	if err := s.ensureServiceObserved(ctx, inst, k8s.PublicDBServiceSpec{
 		Name:             domain.DBEndpointServiceName(inst.ProjectID),
 		Port:             port,
@@ -366,6 +369,19 @@ func (s *DBEndpointService) ensureObserved(ctx context.Context, inst *domain.Dat
 		SharedIPKey:      s.sharedIPKey,
 		ProjectID:        inst.ProjectID,
 	})
+}
+
+// openIngress lets outside traffic through the project's namespace isolation
+// to the ports its public Services forward to.
+func (s *DBEndpointService) openIngress(ctx context.Context, inst *domain.DatabaseInstance, mongoPort int) error {
+	ports := []int{postgresPort}
+	if mongoPort != 0 {
+		ports = append(ports, config.DocumentDBGatewayPort)
+	}
+	if err := s.kube.EnsurePublicDBIngressPolicy(ctx, inst.Namespace, inst.ProjectID, ports); err != nil {
+		return fmt.Errorf("open public database ingress: %w", err)
+	}
+	return nil
 }
 
 // ensureServiceObserved creates one Service and confirms it exists.
@@ -404,6 +420,9 @@ func (s *DBEndpointService) deleteObserved(ctx context.Context, inst *domain.Dat
 		if exists {
 			return ErrDBEndpointNotObserved
 		}
+	}
+	if err := s.kube.DeletePublicDBIngressPolicy(ctx, inst.Namespace, inst.ProjectID); err != nil {
+		return fmt.Errorf("close public database ingress: %w", err)
 	}
 	return nil
 }
@@ -513,7 +532,7 @@ func (s *DBEndpointService) addMongoEndpoint(
 	}
 	view.Internal.MongoPort = config.DocumentDBGatewayPort
 	view.Internal.MongoConnectionString = domain.MongoConnectionString(
-		inst.Host, config.DocumentDBGatewayPort, inst.Username, true)
+		k8s.DocumentDBServiceHost(inst.ProjectID, inst.Namespace), config.DocumentDBGatewayPort, inst.Username, true)
 
 	port, err := s.mongoPort(ctx, inst)
 	if err != nil {
