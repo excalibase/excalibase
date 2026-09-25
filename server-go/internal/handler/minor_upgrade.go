@@ -58,7 +58,7 @@ func (h *ProvisioningHandler) UpgradeMinorVersion(w http.ResponseWriter, r *http
 	}
 
 	if err := h.svc.UpgradeVersion(r.Context(), projectID, inst.PostgresVersion); err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
 		return
 	}
 

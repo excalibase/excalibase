@@ -81,24 +81,13 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 	if s.vault == nil || s.credVerifier == nil {
 		return nil, ErrCredentialRotationUnavailable
 	}
-	release, claimed, err := s.claimer().Claim(ctx, projectID, OperationRotation)
-	if err != nil {
-		return nil, fmt.Errorf("claim project for rotation: %w", err)
-	}
-	if !claimed {
-		return nil, fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
-	}
-	defer release()
-
 	// Work from the claimed row: whatever held the project before this
 	// rotation may have changed its status or its owner credential.
-	inst, err := s.GetInstance(projectID)
+	inst, release, err := s.holdProject(ctx, projectID, OperationRotation, requireServable)
 	if err != nil {
 		return nil, err
 	}
-	if domain.IsNotServable(inst.Status) {
-		return nil, fmt.Errorf("%w: %s", notServableErr(inst.Status), projectID)
-	}
+	defer release()
 
 	filed, err := s.filedCredentialPaths(projectID)
 	if err != nil {
@@ -230,7 +219,7 @@ func (s *ProvisioningService) promoteCredential(ctx context.Context, inst *domai
 	}
 	if target.owner {
 		inst.Password = password
-		if err := s.store.Update(inst); err != nil {
+		if err := s.store.UpdateIfStatus(inst, inst.Status); err != nil {
 			return fmt.Errorf("persist rotated credentials: %w", err)
 		}
 	}

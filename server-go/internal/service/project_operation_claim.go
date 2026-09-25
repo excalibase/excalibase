@@ -16,10 +16,12 @@ import (
 type ProjectOperation string
 
 const (
-	OperationDeletion ProjectOperation = "deletion"
-	OperationPause    ProjectOperation = "pause"
-	OperationResume   ProjectOperation = "resume"
-	OperationRotation ProjectOperation = "rotation"
+	OperationDeletion    ProjectOperation = "deletion"
+	OperationPause       ProjectOperation = "pause"
+	OperationResume      ProjectOperation = "resume"
+	OperationRotation    ProjectOperation = "rotation"
+	OperationUpgrade     ProjectOperation = "version upgrade"
+	OperationMaintenance ProjectOperation = "maintenance window change"
 )
 
 // ErrProjectOperationRunning is what every caller refused the project's

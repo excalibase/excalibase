@@ -483,7 +483,7 @@ func (h *ProvisioningHandler) RotateCredentials(w http.ResponseWriter, r *http.R
 	projectID := chi.URLParam(r, "projectId")
 	creds, err := h.svc.RotateCredentials(r.Context(), projectID)
 	if err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		httpError(w, safeError(err), unsettledOr(err, http.StatusInternalServerError))
 		return
 	}
 	writeJSON(w, creds)
@@ -496,11 +496,21 @@ func (h *ProvisioningHandler) SetMaintenanceWindow(w http.ResponseWriter, r *htt
 		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
 		return
 	}
-	if err := h.svc.SetMaintenanceWindow(projectID, cfg); err != nil {
-		httpError(w, safeError(err), http.StatusBadRequest)
+	if err := h.svc.SetMaintenanceWindow(r.Context(), projectID, cfg); err != nil {
+		httpError(w, safeError(err), unsettledOr(err, http.StatusBadRequest))
 		return
 	}
 	writeJSON(w, map[string]string{"status": "updated"})
+}
+
+// unsettledOr answers 409 for a project another operation holds or whose
+// status moved under this one: the same call converges once it settles.
+func unsettledOr(err error, fallback int) int {
+	if errors.Is(err, storage.ErrProjectBusy) || errors.Is(err, storage.ErrProjectStatusChanged) ||
+		errors.Is(err, service.ErrProjectNotActive) {
+		return http.StatusConflict
+	}
+	return fallback
 }
 
 func (h *ProvisioningHandler) GetMaintenanceWindow(w http.ResponseWriter, r *http.Request) {

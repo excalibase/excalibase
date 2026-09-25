@@ -352,3 +352,10 @@ func (u *unlistableVault) List(string) ([]string, error) {
 	return nil, errors.New("vault list unavailable")
 }
 func (u *unlistableVault) Sealed() bool { return false }
+
+func (s *failingStore) UpdateIfStatus(inst *domain.DatabaseInstance, expected string) error {
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	return s.InstanceStore.UpdateIfStatus(inst, expected)
+}
