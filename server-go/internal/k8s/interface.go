@@ -84,6 +84,10 @@ type KubeClient interface {
 	// EnsureDocumentDBService exposes a DocumentDB project's gateway port
 	// inside the cluster, on whichever pod is primary.
 	EnsureDocumentDBService(ctx context.Context, namespace, projectID string) error
+	// EnsurePublicDBIngressPolicy lets traffic from outside the cluster reach
+	// the project's database on the given ports while its endpoint is public.
+	EnsurePublicDBIngressPolicy(ctx context.Context, namespace, projectID string, ports []int) error
+	DeletePublicDBIngressPolicy(ctx context.Context, namespace, projectID string) error
 
 	// GetClusterCapacity returns aggregate Allocatable + already-Requested
 	// CPU/memory across all schedulable nodes. Used by capacity-aware

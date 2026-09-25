@@ -83,6 +83,10 @@ type MockClient struct {
 	DocumentDBServices           map[string]bool
 	EnsureDocumentDBServiceError error
 
+	// PublicDBIngress — open ports per "namespace/projectID".
+	PublicDBIngress      map[string][]int
+	PublicDBIngressError error
+
 	// CreateSecretError fails every secret write, so a test can assert what
 	// a provision does when the cluster refuses one.
 	CreateSecretError error
@@ -123,6 +127,7 @@ func NewMockClient() *MockClient {
 		GatewayReady:     make(map[string]bool),
 
 		DocumentDBServices: make(map[string]bool),
+		PublicDBIngress:    make(map[string][]int),
 
 		AppWorkloads:  make(map[string]*AppWorkload),
 		AppRolloutErr: make(map[string]error),
@@ -163,6 +168,30 @@ func (m *MockClient) EnsureDocumentDBService(ctx context.Context, namespace, pro
 		return m.EnsureDocumentDBServiceError
 	}
 	m.DocumentDBServices[namespace+"/"+projectID] = true
+	return nil
+}
+
+// EnsurePublicDBIngressPolicy records the ports opened to outside traffic.
+func (m *MockClient) EnsurePublicDBIngressPolicy(ctx context.Context, namespace, projectID string, ports []int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "EnsurePublicDBIngressPolicy:"+namespace+"/"+projectID)
+	if m.PublicDBIngressError != nil {
+		return m.PublicDBIngressError
+	}
+	m.PublicDBIngress[namespace+"/"+projectID] = append([]int(nil), ports...)
+	return nil
+}
+
+// DeletePublicDBIngressPolicy forgets the opened ports.
+func (m *MockClient) DeletePublicDBIngressPolicy(ctx context.Context, namespace, projectID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "DeletePublicDBIngressPolicy:"+namespace+"/"+projectID)
+	if m.PublicDBIngressError != nil {
+		return m.PublicDBIngressError
+	}
+	delete(m.PublicDBIngress, namespace+"/"+projectID)
 	return nil
 }
 

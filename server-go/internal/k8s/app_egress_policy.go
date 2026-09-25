@@ -42,6 +42,7 @@ type ciliumPolicySpec struct {
 
 type ciliumIngressRule struct {
 	FromEndpoints []metav1.LabelSelector `json:"fromEndpoints,omitempty"`
+	FromEntities  []string               `json:"fromEntities,omitempty"`
 	ToPorts       []ciliumPortRule       `json:"toPorts,omitempty"`
 }
 
