@@ -19,7 +19,6 @@ const (
 	gatewayLabNamespace = "org1-gwproj"
 	gatewayLabProject   = "gw"
 	gatewayLabCluster   = gatewayLabProject + postgresSuffix
-	cnpgManifest        = "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.23/releases/cnpg-1.23.0.yaml"
 	// A stand-in for the gateway: the real one needs the operator's plugin support, which no test cluster here runs.
 	gatewayStandIn = `import socket, os
 s = socket.socket()

@@ -17,7 +17,6 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -36,7 +35,10 @@ const (
 	mongoProbeScript     = `const r = db.getSiblingDB("probe").items.insertOne({k: "exc-454", n: 1});
 const f = db.getSiblingDB("probe").items.findOne({k: "exc-454"});
 print("inserted=" + r.acknowledged + " found=" + f.k + "/" + f.n);`
-	mongoFindScript = `print("found=" + db.getSiblingDB("probe").items.findOne({k: "exc-454"}).k);`
+	mongoFindScript  = `print("found=" + db.getSiblingDB("probe").items.findOne({k: "exc-454"}).k);`
+	mongoIndexScript = `const c = db.getSiblingDB("probe").indexed;
+c.insertMany(Array.from({length: 200}, (_, i) => ({i: i, k: "k" + i})));
+print("count=" + c.countDocuments() + " index=" + c.createIndex({k: 1}));`
 )
 
 type documentDBLab struct {
@@ -69,6 +71,42 @@ func TestLiveDocumentDBOnLatestCNPG(t *testing.T) {
 	} else {
 		t.Logf("wrong password: %s", out)
 	}
+
+	if out := lab.mongo(t, creds.Username, creds.Password, mongoIndexScript); !strings.Contains(out, "count=200 index=k_1") {
+		t.Errorf("createIndex on a populated collection: %s", out)
+	} else {
+		t.Logf("index: %s", out)
+	}
+	lab.expectCronSucceeds(t)
+	lab.expectDeletionWithinWindow(t)
+}
+
+// expectCronSucceeds waits for DocumentDB's scheduled jobs to run, which they only do once they can log in.
+func (lab *documentDBLab) expectCronSucceeds(t *testing.T) {
+	t.Helper()
+	var last string
+	eventuallyLive(t, "a DocumentDB cron job succeeded", 3*time.Minute, func() bool {
+		out, _ := lab.client.ExecInPod(lab.ctx, documentDBLiveNS, documentDBLiveName+"-postgres-1", "postgres",
+			[]string{"psql", "-U", "postgres", "-d", config.DocumentDBDatabase, "-tAc",
+				"SELECT status || ':' || count(*) FROM cron.job_run_details GROUP BY status ORDER BY status"})
+		last = strings.Join(strings.Fields(out), " ")
+		return strings.Contains(last, "succeeded:")
+	})
+	t.Logf("cron runs: %s", last)
+}
+
+// expectDeletionWithinWindow tears the project down the way deletion does, inside provisioning's own budget.
+func (lab *documentDBLab) expectDeletionWithinWindow(t *testing.T) {
+	t.Helper()
+	started := time.Now()
+	if err := provisioner.NewPostgreSQLProvisioner(lab.client, "").Deprovision(lab.ctx, documentDBLiveNS, documentDBLiveName); err != nil {
+		t.Fatalf("Deprovision after %s: %v", time.Since(started).Round(time.Second), err)
+	}
+	exists, err := lab.client.NamespaceExists(lab.ctx, documentDBLiveNS)
+	if err != nil || exists {
+		t.Fatalf("namespace still present after deprovision: %v", err)
+	}
+	t.Logf("deprovisioned in %s", time.Since(started).Round(time.Second))
 }
 
 func startDocumentDBLab(t *testing.T) *documentDBLab {
@@ -87,6 +125,8 @@ func startDocumentDBLab(t *testing.T) *documentDBLab {
 	if err := os.WriteFile(path, kubeconfig, 0o600); err != nil {
 		t.Fatalf("write kubeconfig: %v", err)
 	}
+	// Teardown's Helm step reads its cluster from KUBECONFIG.
+	t.Setenv("KUBECONFIG", path)
 	client, err := k8s.NewClientWith(k8s.ClientOptions{KubeconfigPath: path})
 	if err != nil {
 		t.Fatalf("client: %v", err)
@@ -208,32 +248,22 @@ func (lab *documentDBLab) gatewayLogged(t *testing.T, line string) bool {
 	return err == nil && strings.Contains(string(raw), line)
 }
 
-// exposeGateway renders the <project>-documentdb Service: the read-write selector, the gateway port.
 func (lab *documentDBLab) exposeGateway(t *testing.T) {
 	t.Helper()
-	services := lab.cs.CoreV1().Services(documentDBLiveNS)
-	rw, err := services.Get(lab.ctx, documentDBLiveName+"-postgres-rw", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("read the read-write service: %v", err)
-	}
-	gateway := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: documentDBLiveName + "-documentdb", Namespace: documentDBLiveNS},
-		Spec: corev1.ServiceSpec{Selector: rw.Spec.Selector, Ports: []corev1.ServicePort{{
-			Name: "documentdb", Port: config.DocumentDBGatewayPort, TargetPort: intstr.FromInt(config.DocumentDBGatewayPort),
-		}}},
-	}
-	if _, err := services.Create(lab.ctx, gateway, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create the gateway service: %v", err)
+	if err := lab.client.EnsureDocumentDBService(lab.ctx, documentDBLiveNS, documentDBLiveName); err != nil {
+		t.Fatalf("EnsureDocumentDBService: %v", err)
 	}
 }
 
 // startMongoClient mounts the cluster CA so the client verifies the gateway's chain.
 func (lab *documentDBLab) startMongoClient(t *testing.T) {
 	t.Helper()
+	noGrace := int64(0)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "mongo", Namespace: documentDBLiveNS},
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
+			RestartPolicy:                 corev1.RestartPolicyNever,
+			TerminationGracePeriodSeconds: &noGrace,
 			Containers: []corev1.Container{{
 				Name: "mongo", Image: mongoClientImage, Command: []string{"sleep", "3600"},
 				VolumeMounts: []corev1.VolumeMount{{Name: "ca", MountPath: "/ca"}},
@@ -252,12 +282,12 @@ func (lab *documentDBLab) startMongoClient(t *testing.T) {
 	})
 }
 
-// mongo dials the gateway Service with TLS against the cluster CA and SCRAM-SHA-256.
+// mongo dials the gateway Service by name, verifying its certificate and hostname, with SCRAM-SHA-256.
 func (lab *documentDBLab) mongo(t *testing.T, user, password, script string) string {
 	t.Helper()
 	host := documentDBLiveName + "-documentdb." + documentDBLiveNS + ".svc.cluster.local"
 	uri := "mongodb://" + user + ":" + password + "@" + host + ":10260/?tls=true&tlsCAFile=/ca/ca.crt" +
-		"&tlsAllowInvalidHostnames=true&authMechanism=SCRAM-SHA-256"
+		"&authMechanism=SCRAM-SHA-256"
 	out, err := lab.client.ExecInPod(lab.ctx, documentDBLiveNS, "mongo", "mongo",
 		[]string{"mongosh", "--quiet", uri, "--eval", script})
 	if err != nil {

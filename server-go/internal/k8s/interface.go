@@ -78,6 +78,8 @@ type KubeClient interface {
 	// not, and a Mongo endpoint reported up in that window refuses
 	// connections.
 	DocumentDBGatewayReady(ctx context.Context, namespace, pod string) (bool, error)
+	// ForceDeleteClusterPods removes a cluster's instance pods with no grace period.
+	ForceDeleteClusterPods(ctx context.Context, namespace, cluster string) error
 	// DocumentDBGatewayAddress is the pod IP of the primary whose gateway is
 	// serving; ErrDocumentDBGatewayNotReady when there is none.
 	DocumentDBGatewayAddress(ctx context.Context, namespace, readWriteService string) (string, error)

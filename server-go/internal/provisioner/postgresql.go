@@ -604,7 +604,11 @@ func (p *PostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, proj
 	if err := p.client.UninstallHelmChart(ctx, namespace, watcherReleaseName); err != nil {
 		return fmt.Errorf("stop tenant watcher: %w", err)
 	}
-	if err := p.deleteClusterAndWait(ctx, namespace, projectID+clusterNameSuffix); err != nil {
+	cluster := projectID + clusterNameSuffix
+	if err := p.deleteClusterAndWait(ctx, namespace, cluster); err != nil {
+		return err
+	}
+	if err := p.client.ForceDeleteClusterPods(ctx, namespace, cluster); err != nil {
 		return err
 	}
 	return p.deleteNamespaceAndWait(ctx, namespace)

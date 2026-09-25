@@ -8,6 +8,12 @@ spec:
     initdb:
       database: appdb
       owner: owner_doc
+  certificates:
+    serverAltDNSNames:
+    - proj-hba00001-documentdb
+    - proj-hba00001-documentdb.org-a-proj-hba00001
+    - proj-hba00001-documentdb.org-a-proj-hba00001.svc
+    - proj-hba00001-documentdb.org-a-proj-hba00001.svc.cluster.local
   imageName: excalibase/postgresql@sha256:0000000000000000000000000000000000000000000000000000000000000000
   instances: 1
   monitoring:
@@ -22,6 +28,8 @@ spec:
   postgresql:
     parameters:
       cron.database_name: postgres
+      cron.host: /controller/run
+      documentdb.localhost_connection_string: host=/controller/run
       max_connections: "100"
     pg_hba:
     - host all documentdb 127.0.0.1/32 trust
@@ -34,6 +42,11 @@ spec:
     - host all app all scram-sha-256
     - host all excalibase_app all scram-sha-256
     - host all auth_admin all scram-sha-256
+    pg_ident:
+    - local postgres documentdb_bg_worker_role
+    - local postgres documentdb
+    - local postgres owner_doc
+    - local postgres excalibase_app
     shared_preload_libraries:
     - pg_cron
     - pg_documentdb_core
@@ -45,5 +58,7 @@ spec:
     requests:
       cpu: "0.5"
       memory: 512Mi
+  smartShutdownTimeout: 15
+  stopDelay: 60
   storage:
     size: 5Gi
