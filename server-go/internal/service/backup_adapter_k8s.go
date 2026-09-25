@@ -170,6 +170,9 @@ func (a *K8sBackupAdapter) List(ctx context.Context, inst *domain.DatabaseInstan
 // caller is told only that the restore was not confirmed; the step that gave
 // up and what it saw go to the log.
 func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
+	if inst.DocumentDB {
+		return nil, ErrDocumentDBRestoreNotSupported
+	}
 	store, ok := a.backupStorage()
 	if !ok {
 		return nil, ErrBackupStorageNotConfigured

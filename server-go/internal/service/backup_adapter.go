@@ -57,6 +57,14 @@ const defaultRestoreDatabase = "app"
 // backup surface (operator owns it).
 var ErrUnsupportedBackupMode = errors.New("backup not supported for this deployment mode")
 
+// ErrDocumentDBRestoreNotSupported is returned when a restore is asked for a
+// DocumentDB project. The recovered cluster from a plain CNPG/pg_basebackup
+// restore carries none of the DocumentDB setup (preload, gateway plugin,
+// gateway credentials, the project's DocumentDB flag), so it would come back
+// half-working. Refused before anything is created, until that setup is
+// carried through a restore.
+var ErrDocumentDBRestoreNotSupported = errors.New("restoring a DocumentDB project is not supported yet")
+
 // resolveAdapter looks up the adapter for an instance's mode, treating
 // the empty string as ModeK8s for legacy rows that pre-date the
 // deployment_mode column migration.

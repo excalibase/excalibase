@@ -103,6 +103,14 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}
+	// EXC-409, owner decision: a restored cluster carries none of the
+	// DocumentDB setup (preload, gateway plugin, gateway credentials,
+	// project flag), so it is refused here, before a job is filed or a
+	// project id is allocated.
+	if inst.DocumentDB {
+		httpError(w, service.ErrDocumentDBRestoreNotSupported.Error(), http.StatusConflict)
+		return
+	}
 	// A restore creates a project, so the organisation must have a slot for
 	// it. Asked here as well as in the service so an async restore is refused
 	// at submission rather than by a job that fails minutes later.

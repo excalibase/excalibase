@@ -116,6 +116,44 @@ func TestK8sRestoreFailsWhenStorageNotConfigured(t *testing.T) {
 	}
 }
 
+// TestK8sRestoreRefusesDocumentDBProject: EXC-409, owner decision — a
+// restored cluster carries none of the DocumentDB setup (preload, gateway
+// plugin, gateway credentials, project flag), so it must be refused before
+// anything is created rather than come back half-working.
+func TestK8sRestoreRefusesDocumentDBProject(t *testing.T) {
+	mock := k8s.NewMockClient()
+	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
+
+	src := sourceInstance()
+	src.DocumentDB = true
+
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
+	if !errors.Is(err, ErrDocumentDBRestoreNotSupported) {
+		t.Fatalf("err: got %v, want ErrDocumentDBRestoreNotSupported", err)
+	}
+	if len(mock.Namespaces) != 0 || len(mock.CRDs) != 0 || len(mock.Secrets) != 0 {
+		t.Errorf("nothing must be created for a refused DocumentDB restore: ns=%v crds=%v secrets=%v", mock.Namespaces, mock.CRDs, mock.Secrets)
+	}
+}
+
+// TestK8sRestoreStillProceedsForPlainPostgres pins that the DocumentDB
+// refusal does not catch an ordinary Postgres project.
+func TestK8sRestoreStillProceedsForPlainPostgres(t *testing.T) {
+	mock := k8s.NewMockClient()
+	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
+
+	src := sourceInstance()
+	src.DocumentDB = false
+
+	resp, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if resp.ProjectID != "dst" || resp.Status != "ACTIVE" {
+		t.Errorf("response: %+v", resp)
+	}
+}
+
 func TestK8sRestoreCarriesPITRTarget(t *testing.T) {
 	mock := k8s.NewMockClient()
 	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})

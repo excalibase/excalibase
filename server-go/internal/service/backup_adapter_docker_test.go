@@ -444,6 +444,31 @@ func TestDockerAdapter_Restore_HappyPath(t *testing.T) {
 	}
 }
 
+// TestDockerAdapter_Restore_RefusesDocumentDBProject: EXC-409, owner
+// decision — the docker path's restored container carries none of the
+// DocumentDB setup either, so it is refused before touching docker.
+func TestDockerAdapter_Restore_RefusesDocumentDBProject(t *testing.T) {
+	adapter, store, _, _, _ := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
+	dc := &fakeDockerClientForAdapter{}
+	adapter.SetDockerClient(dc)
+	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
+
+	src, _ := store.FindByProjectID("dk-1")
+	src.DocumentDB = true
+
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-restored", TargetProjectID: "dk-restored"})
+	if !errors.Is(err, ErrDocumentDBRestoreNotSupported) {
+		t.Fatalf("err: got %v, want ErrDocumentDBRestoreNotSupported", err)
+	}
+	if dc.createdName != "" {
+		t.Errorf("no container must be created for a refused DocumentDB restore, got %q", dc.createdName)
+	}
+	if got, _ := store.FindByProjectID("dk-restored"); got != nil {
+		t.Error("no project row must be registered for a refused DocumentDB restore")
+	}
+}
+
 func TestDockerAdapter_Restore_NoBaseBackup_Errors(t *testing.T) {
 	adapter, store, _, _, _ := setupDockerAdapter(t)
 	adapter.SetInstanceStore(store)

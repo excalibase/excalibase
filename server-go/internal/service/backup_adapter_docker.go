@@ -424,6 +424,9 @@ func (a *DockerBackupAdapter) List(ctx context.Context, inst *domain.DatabaseIns
 // RestoreJob COMPLETED. A failure after the container exists leaves it
 // running for inspection with no project row, and fails the job.
 func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
+	if inst.DocumentDB {
+		return nil, ErrDocumentDBRestoreNotSupported
+	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
