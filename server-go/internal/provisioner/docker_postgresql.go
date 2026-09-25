@@ -2,6 +2,8 @@ package provisioner
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"time"
@@ -371,10 +373,7 @@ func (p *DockerPostgreSQLProvisioner) waitForPostgresReady(ctx context.Context, 
 }
 
 func generatePassword() string {
-	b := make([]byte, 16)
-	// crypto/rand would be used in production
-	for i := range b {
-		b[i] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[i%62]
-	}
-	return string(b)
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
