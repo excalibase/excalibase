@@ -722,7 +722,11 @@ func TestAppWorkloadGoldenManifests(t *testing.T) {
 
 func assertGolden(t *testing.T, name, got string) {
 	t.Helper()
-	path := filepath.Join("testdata", "app_workload", name+".yaml")
+	assertGoldenAt(t, filepath.Join("testdata", "app_workload", name+".yaml"), got)
+}
+
+func assertGoldenAt(t *testing.T, path, got string) {
+	t.Helper()
 	if *updateGolden {
 		writeGolden(t, path, got)
 		return

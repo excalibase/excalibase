@@ -2,7 +2,7 @@
 set -euo pipefail
 
 NS="excalibase-platform"
-CNPG_VERSION="1.23.0"
+CNPG_VERSION="1.30.1"
 
 echo "=== 1. Create namespace ==="
 kubectl create namespace $NS --dry-run=client -o yaml | kubectl apply -f -

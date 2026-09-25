@@ -147,6 +147,8 @@ func buildClusterMetadata(opts PostgreSQLClusterOpts) map[string]interface{} {
 const (
 	defaultClusterDatabase = "app"
 	defaultClusterUser     = "app"
+	// appRoleName is the platform's own login role in every project database.
+	appRoleName = "excalibase_app"
 )
 
 // clusterDatabaseName is the database CNPG bootstraps for this project.
@@ -157,13 +159,31 @@ func clusterDatabaseName(opts PostgreSQLClusterOpts) string {
 	return defaultClusterDatabase
 }
 
+func clusterOwner(opts PostgreSQLClusterOpts) string {
+	if opts.MasterUsername != "" {
+		return opts.MasterUsername
+	}
+	return defaultClusterUser
+}
+
+// documentDBLoopbackTrust lets the gateway, which only does passwordless local
+// logins, reach Postgres as itself and as the roles clients authenticate as.
+// Loopback only: nothing outside the pod matches these lines.
+func documentDBLoopbackTrust(opts PostgreSQLClusterOpts) []interface{} {
+	roles := []string{config.DocumentDBGatewayRole, clusterOwner(opts), appRoleName}
+	lines := make([]interface{}, 0, 2*len(roles))
+	for _, role := range roles {
+		lines = append(lines,
+			"host all "+role+" 127.0.0.1/32 trust",
+			"host all "+role+" ::1/128 trust")
+	}
+	return lines
+}
+
 // buildClusterSpec builds the spec section of a CNPG Cluster CRD.
 func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 	dbName := clusterDatabaseName(opts)
-	dbUser := defaultClusterUser
-	if opts.MasterUsername != "" {
-		dbUser = opts.MasterUsername
-	}
+	dbUser := clusterOwner(opts)
 
 	postgresql, storage := buildPostgresqlAndStorage(opts)
 
@@ -267,7 +287,7 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 	// not actually being one.
 	if opts.DocumentDB {
 		sharedPreloadLibs = withDocumentDBLibraries(sharedPreloadLibs)
-		params[config.DocumentDBCronDatabaseSetting] = clusterDatabaseName(opts)
+		params[config.DocumentDBCronDatabaseSetting] = config.DocumentDBDatabase
 	}
 
 	postgresql := map[string]interface{}{
@@ -280,9 +300,12 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 		"pg_hba": []interface{}{
 			"host replication cdc_watcher all scram-sha-256",
 			"host all app all scram-sha-256",
-			"host all excalibase_app all scram-sha-256",
+			"host all " + appRoleName + " all scram-sha-256",
 			"host all auth_admin all scram-sha-256",
 		},
+	}
+	if opts.DocumentDB {
+		postgresql["pg_hba"] = append(documentDBLoopbackTrust(opts), postgresql["pg_hba"].([]interface{})...)
 	}
 	if len(sharedPreloadLibs) > 0 {
 		postgresql["shared_preload_libraries"] = sharedPreloadLibs

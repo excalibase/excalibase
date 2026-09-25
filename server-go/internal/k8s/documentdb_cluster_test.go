@@ -66,10 +66,8 @@ func TestDocumentDBClusterPreloadsTheExtensionsLibraries(t *testing.T) {
 	}
 }
 
-// pg_cron serves one database per cluster and DocumentDB's DDL path goes
-// through it, so the setting has to name the project's own application
-// database — the one the extension is created in.
-func TestDocumentDBClusterPointsPgCronAtTheProjectsDatabase(t *testing.T) {
+// The gateway only serves the postgres database, so the extension and pg_cron live there.
+func TestDocumentDBClusterPointsPgCronAtThePostgresDatabase(t *testing.T) {
 	postgresql := postgresqlSection(t, PostgreSQLClusterOpts{
 		ProjectID:    "proj-doc000002",
 		Namespace:    "org-a-proj-doc000002",
@@ -79,8 +77,8 @@ func TestDocumentDBClusterPointsPgCronAtTheProjectsDatabase(t *testing.T) {
 	})
 
 	params := postgresql["parameters"].(map[string]interface{})
-	if got := params[config.DocumentDBCronDatabaseSetting]; got != "appdb" {
-		t.Errorf("%s: got %v, want the project's database", config.DocumentDBCronDatabaseSetting, got)
+	if got := params[config.DocumentDBCronDatabaseSetting]; got != config.DocumentDBDatabase {
+		t.Errorf("%s: got %v, want %q", config.DocumentDBCronDatabaseSetting, got, config.DocumentDBDatabase)
 	}
 }
 
@@ -131,8 +129,7 @@ func TestATenantParameterCannotDropDocumentDBsLibraries(t *testing.T) {
 	}
 }
 
-// Nor may a tenant repoint pg_cron at another database, which would leave
-// DocumentDB's DDL path pointed away from the database it lives in.
+// Nor may a tenant repoint pg_cron away from the database DocumentDB lives in.
 func TestATenantParameterCannotRepointPgCron(t *testing.T) {
 	postgresql := postgresqlSection(t, PostgreSQLClusterOpts{
 		ProjectID:    "proj-doc000004",
@@ -140,28 +137,11 @@ func TestATenantParameterCannotRepointPgCron(t *testing.T) {
 		Tier:         documentDBTier(),
 		DatabaseName: "appdb",
 		DocumentDB:   true,
-		Parameters:   map[string]string{config.DocumentDBCronDatabaseSetting: "postgres"},
+		Parameters:   map[string]string{config.DocumentDBCronDatabaseSetting: "appdb"},
 	})
 
 	params := postgresql["parameters"].(map[string]interface{})
-	if got := params[config.DocumentDBCronDatabaseSetting]; got != "appdb" {
-		t.Errorf("%s: got %v, want the project's database", config.DocumentDBCronDatabaseSetting, got)
-	}
-}
-
-// The extension is created in the database CNPG bootstraps, so when the
-// request names none, pg_cron must follow CNPG's default rather than a name
-// the builder invented.
-func TestDocumentDBFollowsTheDefaultDatabaseNameWhenTheRequestNamesNone(t *testing.T) {
-	postgresql := postgresqlSection(t, PostgreSQLClusterOpts{
-		ProjectID:  "proj-doc000005",
-		Namespace:  "org-a-proj-doc000005",
-		Tier:       documentDBTier(),
-		DocumentDB: true,
-	})
-
-	params := postgresql["parameters"].(map[string]interface{})
-	if got := params[config.DocumentDBCronDatabaseSetting]; got != defaultClusterDatabase {
-		t.Errorf("%s: got %v, want %q", config.DocumentDBCronDatabaseSetting, got, defaultClusterDatabase)
+	if got := params[config.DocumentDBCronDatabaseSetting]; got != config.DocumentDBDatabase {
+		t.Errorf("%s: got %v, want %q", config.DocumentDBCronDatabaseSetting, got, config.DocumentDBDatabase)
 	}
 }

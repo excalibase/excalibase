@@ -1,0 +1,150 @@
+# Rendered from excalibase-service charts/platform-aio with documentdb.enabled=true:
+#   helm template x charts/platform-aio --set documentdb.enabled=true \
+#     --api-versions cert-manager.io/v1/Certificate --show-only templates/documentdb-sidecar-injector.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: documentdb-sidecar-injector
+  namespace: cnpg-system
+  labels:
+    app: documentdb-sidecar-injector
+    app.kubernetes.io/name: documentdb-sidecar-injector
+    app.kubernetes.io/part-of: platform-aio
+    # This label is how CloudNativePG finds the plugin at all, and its value is
+    # the name a Cluster must use in spec.plugins.
+    cnpg.io/pluginName: cnpg-i-sidecar-injector.documentdb.io
+  annotations:
+    # The two halves of the mutual TLS: CNPG presents the client certificate
+    # and verifies the server one against the same issuer.
+    cnpg.io/pluginClientSecret: documentdb-sidecar-injector-client-tls
+    cnpg.io/pluginServerSecret: documentdb-sidecar-injector-server-tls
+    cnpg.io/pluginPort: "9090"
+spec:
+  ports:
+    - port: 9090
+      protocol: TCP
+      targetPort: 9090
+  selector:
+    app: documentdb-sidecar-injector
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: documentdb-sidecar-injector
+  namespace: cnpg-system
+  labels:
+    app: documentdb-sidecar-injector
+    app.kubernetes.io/name: documentdb-sidecar-injector
+    app.kubernetes.io/part-of: platform-aio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: documentdb-sidecar-injector
+  template:
+    metadata:
+      labels:
+        app: documentdb-sidecar-injector
+    spec:
+      # The plugin is called by CNPG and calls nothing back: it needs no
+      # Kubernetes API access, so it gets no token it could be pivoted with.
+      automountServiceAccountToken: false
+      containers:
+        - name: documentdb-sidecar-injector
+          # Pinned by digest: this is a third-party image the platform does not
+          # build, and a moving tag would change what runs inside every tenant's
+          # database pod without anything recording that it happened. The tag it
+          # resolves from is in values.yaml beside it.
+          image: ghcr.io/documentdb/documentdb-kubernetes-operator/sidecar@sha256:89c049354cb212ca5f0bcf1d3126c119d07b02b422fa08d508f8ca90640658e8
+          imagePullPolicy: IfNotPresent
+          args:
+            - plugin
+            - --server-cert=/server/tls.crt
+            - --server-key=/server/tls.key
+            - --client-cert=/client/tls.crt
+            - --server-address=:9090
+          env:
+            # Decides the gateway image tag the plugin injects when a Cluster
+            # does not name one. Every Cluster this platform creates names one
+            # explicitly, so this is a backstop, not the source of truth.
+            - name: DOCUMENTDB_VERSION
+              value: "0.117.0"
+          ports:
+            - containerPort: 9090
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 200m
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: server
+              mountPath: /server
+            - name: client
+              mountPath: /client
+      volumes:
+        - name: server
+          secret:
+            secretName: documentdb-sidecar-injector-server-tls
+        - name: client
+          secret:
+            secretName: documentdb-sidecar-injector-client-tls
+
+
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: documentdb-sidecar-injector-server
+  namespace: cnpg-system
+spec:
+  secretName: documentdb-sidecar-injector-server-tls
+  commonName: documentdb-sidecar-injector
+  dnsNames:
+    - documentdb-sidecar-injector
+    - documentdb-sidecar-injector.cnpg-system.svc
+    - documentdb-sidecar-injector.cnpg-system.svc.cluster.local
+  usages:
+    - server auth
+  issuerRef:
+    name: documentdb-sidecar-injector-issuer
+    kind: Issuer
+
+
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: documentdb-sidecar-injector-client
+  namespace: cnpg-system
+spec:
+  secretName: documentdb-sidecar-injector-client-tls
+  commonName: documentdb-sidecar-injector-client
+  usages:
+    - client auth
+  issuerRef:
+    name: documentdb-sidecar-injector-issuer
+    kind: Issuer
+
+
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: documentdb-sidecar-injector-issuer
+  namespace: cnpg-system
+spec:
+  selfSigned: {}
+
+

@@ -47,7 +47,7 @@ const documentDBStep = "enable documentdb extension"
 // speak the MongoDB wire protocol.
 const documentDBGrantStep = "grant documentdb access"
 
-// enableDocumentDB creates the DocumentDB extension in the project's own
+// enableDocumentDB creates the DocumentDB extension in the postgres
 // database and confirms it is installed. A project that was not created with
 // DocumentDB is left alone entirely.
 //
@@ -69,8 +69,8 @@ func (s *ProvisioningService) enableDocumentDB(ctx context.Context, inst *domain
 
 	pc.SetStep(documentDBStep)
 	primaryPod := inst.ProjectID + primaryPodSuffix
-	for _, statement := range []string{documentDBCreateSQL(), documentDBConfirmSQL()} {
-		cmd := documentDBPsql(inst.DatabaseName, statement)
+	for _, statement := range []string{documentDBCreateSQL(), documentDBConfirmSQL(), documentDBGatewayRoleSQL()} {
+		cmd := documentDBPsql(config.DocumentDBDatabase, statement)
 		if err := s.execRoleSQL(ctx, inst.Namespace, primaryPod, cmd); err != nil {
 			return pc.Fail(fmt.Errorf("enable %s in %s: %w", config.DocumentDBExtension, inst.ProjectID, err))
 		}
@@ -101,7 +101,8 @@ func (s *ProvisioningService) grantDocumentDBAccess(
 	ctx context.Context, inst *domain.DatabaseInstance, primaryPod string, pc *provisioner.ProvisionContext,
 ) error {
 	pc.SetStep(documentDBGrantStep)
-	cmd := documentDBPsql(inst.DatabaseName, documentDBGrantSQL(inst.Username, roleApp))
+	cmd := documentDBPsql(config.DocumentDBDatabase,
+		documentDBGrantSQL(config.DocumentDBGatewayRole, inst.Username, roleApp))
 	if err := s.execRoleSQL(ctx, inst.Namespace, primaryPod, cmd); err != nil {
 		return pc.Fail(fmt.Errorf("grant %s access to %s in %s: %w",
 			config.DocumentDBExtension, inst.Username, inst.ProjectID, err))
@@ -142,6 +143,13 @@ func documentDBCreateSQL() string {
 // evidence the extension is installed — IF NOT EXISTS succeeds against a
 // database that already had it, and an exec layer that swallowed an error
 // would look the same — so the project's claim rests on this read instead.
+// documentDBGatewayRoleSQL creates the gateway's login role; never a superuser.
+func documentDBGatewayRoleSQL() string {
+	role := schema.QuoteIdent(config.DocumentDBGatewayRole)
+	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" +
+		config.DocumentDBGatewayRole + "') THEN CREATE ROLE " + role + " LOGIN; END IF; END $$"
+}
+
 func documentDBConfirmSQL() string {
 	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = '" +
 		config.DocumentDBExtension + "') THEN RAISE EXCEPTION " +

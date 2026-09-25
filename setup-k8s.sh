@@ -92,7 +92,7 @@ echo ""
 
 # Install CloudNativePG (PostgreSQL operator)
 echo "🐘 Installing CloudNativePG operator (PostgreSQL)..."
-kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.23/releases/cnpg-1.23.0.yaml
+kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml
 
 echo "Waiting for CloudNativePG operator to be ready..."
 kubectl wait --for=condition=available --timeout=120s deployment/cnpg-controller-manager -n cnpg-system 2>/dev/null || true
