@@ -15,17 +15,6 @@ const (
 	testPostgresNS = "t-postgres"
 )
 
-func TestMockClientCreateNamespace(t *testing.T) {
-	m := NewMockClient()
-	err := m.CreateNamespace(context.Background(), "test-ns")
-	if err != nil {
-		t.Fatalf("CreateNamespace: %v", err)
-	}
-	if !m.Namespaces["test-ns"] {
-		t.Error("namespace not created")
-	}
-}
-
 func TestMockClientDeleteNamespace(t *testing.T) {
 	m := NewMockClient()
 	m.Namespaces[testMockDelNS] = true
@@ -183,7 +172,7 @@ func TestMockClientGetPodMetricsNotFound(t *testing.T) {
 
 func TestMockClientCallTracking(t *testing.T) {
 	m := NewMockClient()
-	m.CreateNamespace(context.Background(), "ns")
+	m.CreateProjectNamespace(context.Background(), "ns", "org")
 	m.DeleteNamespace(context.Background(), "ns")
 
 	if len(m.Calls) != 2 {

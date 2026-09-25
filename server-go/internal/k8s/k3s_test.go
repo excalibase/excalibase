@@ -56,10 +56,10 @@ func TestK3sNamespaceAndSecret(t *testing.T) {
 		restConfig:    restCfg,
 	}
 
-	// Test: CreateNamespace
-	t.Log("Testing CreateNamespace...")
-	if err := client.CreateNamespace(ctx, testK3SNS); err != nil {
-		t.Fatalf("CreateNamespace: %v", err)
+	// Test: CreateProjectNamespace
+	t.Log("Testing CreateProjectNamespace...")
+	if err := client.CreateProjectNamespace(ctx, testK3SNS, "it-org"); err != nil {
+		t.Fatalf("CreateProjectNamespace: %v", err)
 	}
 
 	// Test: CreateSecret + GetSecret
@@ -157,7 +157,7 @@ func TestK3sWithCNPGOperator(t *testing.T) {
 	// Create PostgreSQL cluster CRD
 	t.Log("Creating PostgreSQL cluster CRD...")
 	ns := "integ-test"
-	client.CreateNamespace(ctx, ns)
+	client.CreateProjectNamespace(ctx, ns, "it-org")
 
 	cluster := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
 		ProjectID: "k3s-db",

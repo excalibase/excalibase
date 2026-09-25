@@ -122,7 +122,7 @@ func (s *ProvisioningService) CloneDatabase(ctx context.Context, projectID strin
 
 	newNamespace := fmt.Sprintf("%s-%s", inst.OrgID, cloneRef)
 
-	if err := s.k8sClient.CreateNamespace(ctx, newNamespace); err != nil {
+	if err := s.k8sClient.CreateProjectNamespace(ctx, newNamespace, inst.OrgID); err != nil {
 		return nil, fmt.Errorf("create clone namespace: %w", err)
 	}
 

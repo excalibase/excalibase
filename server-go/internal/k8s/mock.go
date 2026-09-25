@@ -37,7 +37,7 @@ type MockClient struct {
 	ExecCommands         []string                          // every argv ExecInPod was called with, joined by " "
 	ExecStdin            []string                          // every non-empty stdin payload ExecInPodStdin was given
 	HelmError            error                             // if non-nil, InstallHelmChart returns this error
-	NamespaceError       error                             // if non-nil, CreateNamespace returns this error
+	NamespaceError       error                             // if non-nil, CreateProjectNamespace returns this error
 	DeleteNamespaceError error                             // if non-nil, DeleteNamespace returns this error
 	PodReadyError        error                             // if non-nil, IsPodReady returns this error
 	CRDError             error                             // if non-nil, ApplyCRD returns this error
@@ -169,23 +169,16 @@ func (m *MockClient) DeletePublicDBService(ctx context.Context, namespace, name 
 	return nil
 }
 
-func (m *MockClient) CreateNamespace(ctx context.Context, name string) error {
+func (m *MockClient) CreateProjectNamespace(ctx context.Context, name, orgID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Calls = append(m.Calls, "CreateNamespace:"+name)
+	m.Calls = append(m.Calls, "CreateProjectNamespace:"+name)
 	if m.NamespaceError != nil {
 		return m.NamespaceError
 	}
-	m.Namespaces[name] = true
-	return nil
-}
-
-func (m *MockClient) CreateNamespaceWithLabels(ctx context.Context, name string, labels map[string]string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.Calls = append(m.Calls, "CreateNamespaceWithLabels:"+name)
-	if m.NamespaceError != nil {
-		return m.NamespaceError
+	labels, err := ProjectNamespaceLabels(orgID)
+	if err != nil {
+		return err
 	}
 	m.Namespaces[name] = true
 	m.NamespaceLabels[name] = labels

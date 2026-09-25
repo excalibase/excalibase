@@ -74,8 +74,8 @@ func TestK3sHelmInstallUninstall(t *testing.T) {
 	ns := "helm-test"
 
 	// Create namespace
-	if err := client.CreateNamespace(ctx, ns); err != nil {
-		t.Fatalf("CreateNamespace: %v", err)
+	if err := client.CreateProjectNamespace(ctx, ns, "it-org"); err != nil {
+		t.Fatalf("CreateProjectNamespace: %v", err)
 	}
 
 	// --- Test: Install chart ---
@@ -166,7 +166,7 @@ func TestK3sHelmInstallWithOverrides(t *testing.T) {
 	}
 
 	ns := "helm-override"
-	client.CreateNamespace(ctx, ns)
+	client.CreateProjectNamespace(ctx, ns, "it-org")
 
 	// Install with custom values (2 replicas, custom name)
 	values := map[string]interface{}{

@@ -23,25 +23,17 @@ const (
 
 // newFakeClient builds a Client backed by in-memory fakes (no real K8s needed).
 func newFakeClient(objects ...runtime.Object) *Client {
-	cs := fake.NewSimpleClientset(objects...)
-	scheme := runtime.NewScheme()
-	dynClient := dynamicfake.NewSimpleDynamicClient(scheme)
-
-	return &Client{
-		clientset:     cs,
-		dynamicClient: dynClient,
-		// metricsClient and restConfig left nil — tested separately
-	}
+	return NewClientFromInterfaces(fake.NewSimpleClientset(objects...), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()))
 }
 
 // --- Namespace tests ---
 
-func TestClientCreateNamespace(t *testing.T) {
+func TestClientCreateProjectNamespace(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	if err := c.CreateNamespace(ctx, testNS); err != nil {
-		t.Fatalf("CreateNamespace: %v", err)
+	if err := c.CreateProjectNamespace(ctx, testNS, "org"); err != nil {
+		t.Fatalf("CreateProjectNamespace: %v", err)
 	}
 
 	ns, err := c.clientset.CoreV1().Namespaces().Get(ctx, testNS, metav1.GetOptions{})
@@ -53,12 +45,12 @@ func TestClientCreateNamespace(t *testing.T) {
 	}
 }
 
-func TestClientCreateNamespaceDuplicate(t *testing.T) {
+func TestClientCreateProjectNamespaceDuplicate(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	c.CreateNamespace(ctx, "dup-ns")
-	err := c.CreateNamespace(ctx, "dup-ns")
+	c.CreateProjectNamespace(ctx, "dup-ns", "org")
+	err := c.CreateProjectNamespace(ctx, "dup-ns", "org")
 	if err == nil {
 		t.Error("expected error for duplicate namespace")
 	}
@@ -68,7 +60,7 @@ func TestClientDeleteNamespace(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	c.CreateNamespace(ctx, testDelNS)
+	c.CreateProjectNamespace(ctx, testDelNS, "org")
 	if err := c.DeleteNamespace(ctx, testDelNS); err != nil {
 		t.Fatalf("DeleteNamespace: %v", err)
 	}
@@ -85,7 +77,7 @@ func TestClientCreateAndGetSecret(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 
-	c.CreateNamespace(ctx, testSecNS)
+	c.CreateProjectNamespace(ctx, testSecNS, "org")
 	err := c.CreateSecret(ctx, testSecNS, "my-secret", map[string][]byte{
 		"username": []byte("app"),
 		"password": []byte("s3cret"),

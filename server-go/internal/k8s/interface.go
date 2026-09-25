@@ -11,8 +11,9 @@ import (
 
 // KubeClient abstracts Kubernetes operations for testability.
 type KubeClient interface {
-	CreateNamespace(ctx context.Context, name string) error
-	CreateNamespaceWithLabels(ctx context.Context, name string, labels map[string]string) error
+	// CreateProjectNamespace creates a tenant namespace with its org labels,
+	// default-deny ingress policy and quota; there is no unfenced variant.
+	CreateProjectNamespace(ctx context.Context, name, orgID string) error
 	DeleteNamespace(ctx context.Context, name string) error
 	// NamespaceExists reports whether the namespace object is still present.
 	// A namespace stuck in Terminating still exists, so a teardown that

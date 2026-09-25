@@ -34,8 +34,8 @@ func TestIntegrationCRDApplyAndGet(t *testing.T) {
 	defer client.DeleteNamespace(ctx, ns)
 
 	// Create namespace
-	if err := client.CreateNamespace(ctx, ns); err != nil {
-		t.Fatalf("CreateNamespace: %v", err)
+	if err := client.CreateProjectNamespace(ctx, ns, "it-org"); err != nil {
+		t.Fatalf("CreateProjectNamespace: %v", err)
 	}
 
 	// Apply a CNPG cluster CRD
@@ -129,7 +129,7 @@ func TestIntegrationNamespaceLifecycle(t *testing.T) {
 	ctx := context.Background()
 	ns := "integ-ns-test"
 
-	if err := client.CreateNamespace(ctx, ns); err != nil {
+	if err := client.CreateProjectNamespace(ctx, ns, "it-org"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 

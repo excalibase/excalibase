@@ -40,12 +40,12 @@ func TestCluster_NoStatementTimeoutWhenEmpty(t *testing.T) {
 
 // EXC-329: creating a project namespace applies a count-based ResourceQuota so a
 // tenant cannot balloon the shared box with unbounded pods/PVCs.
-func TestCreateNamespaceWithLabels_AppliesQuota(t *testing.T) {
+func TestCreateProjectNamespace_AppliesQuota(t *testing.T) {
 	c := newFakeClient()
 	ctx := context.Background()
 	ns := "org1-proj-quota"
-	if err := c.CreateNamespaceWithLabels(ctx, ns, map[string]string{"x": "y"}); err != nil {
-		t.Fatalf("CreateNamespaceWithLabels: %v", err)
+	if err := c.CreateProjectNamespace(ctx, ns, "org1"); err != nil {
+		t.Fatalf("CreateProjectNamespace: %v", err)
 	}
 	q, err := c.clientset.CoreV1().ResourceQuotas(ns).Get(ctx, "namespace-quota", metav1.GetOptions{})
 	if err != nil {
