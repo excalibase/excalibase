@@ -104,3 +104,19 @@ func TestBuildRestoreClusterNamesTheImage(t *testing.T) {
 		t.Errorf("imageName: got %v, want %s", spec["imageName"], image)
 	}
 }
+
+func TestBuildRestoreClusterNamesThePublicHost(t *testing.T) {
+	obj := BuildRestoreCluster(RestoreClusterOpts{
+		SourceProjectID: "src", NewProjectID: "dst", Namespace: "org-dst",
+		ServerAltDNSNames: []string{"dst.db.example.com"},
+	})
+	spec := obj.Object["spec"].(map[string]interface{})
+	certificates, ok := spec["certificates"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("no certificates section: %v", spec)
+	}
+	names, _ := certificates["serverAltDNSNames"].([]interface{})
+	if len(names) != 1 || names[0] != "dst.db.example.com" {
+		t.Errorf("serverAltDNSNames: got %v", certificates["serverAltDNSNames"])
+	}
+}

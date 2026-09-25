@@ -64,6 +64,31 @@ type PostgreSQLProvisioner struct {
 	// away. CNPG shuts postgres down cleanly, so this is a wait on a real
 	// shutdown, not on an API call.
 	pausePoller Poller
+	// publicDomainSuffix is the suffix public endpoint names hang off; empty
+	// when the platform offers no public endpoints.
+	publicDomainSuffix string
+}
+
+// SetPublicDomainSuffix names the suffix under which a project's public
+// endpoint is dialled, so its server certificate can carry that name.
+func (p *PostgreSQLProvisioner) SetPublicDomainSuffix(suffix string) { p.publicDomainSuffix = suffix }
+
+func (p *PostgreSQLProvisioner) serverAltDNSNames(projectID string) ([]string, error) {
+	return PublicServerNames(projectID, p.publicDomainSuffix)
+}
+
+// PublicServerNames is the public name a client verifying a project's
+// server certificate dials, or nothing when the platform has no public
+// endpoints.
+func PublicServerNames(projectID, domainSuffix string) ([]string, error) {
+	if domainSuffix == "" {
+		return nil, nil
+	}
+	host, err := domain.DBEndpointHost(projectID, domainSuffix)
+	if err != nil {
+		return nil, fmt.Errorf("public endpoint name: %w", err)
+	}
+	return []string{host}, nil
 }
 
 // SetWatcherImage pins the image every tenant's watcher runs.
@@ -147,6 +172,10 @@ func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.Pro
 	if err != nil {
 		return fmt.Errorf("resolve postgres image: %w", err)
 	}
+	altNames, err := p.serverAltDNSNames(projectID)
+	if err != nil {
+		return err
+	}
 	opts := k8s.PostgreSQLClusterOpts{
 		ProjectID:      projectID,
 		Namespace:      namespace,
@@ -163,6 +192,7 @@ func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.Pro
 		// default, decides what runs in this tenant's pod.
 		DocumentDB:             req.DocumentDB,
 		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
+		ServerAltDNSNames:      altNames,
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{
@@ -347,6 +377,10 @@ func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.Provisi
 	if err != nil {
 		return pc.Fail(fmt.Errorf("resolve postgres image: %w", err))
 	}
+	altNames, err := p.serverAltDNSNames(projectID)
+	if err != nil {
+		return pc.Fail(err)
+	}
 	opts := k8s.PostgreSQLClusterOpts{
 		ProjectID:      projectID,
 		Namespace:      namespace,
@@ -363,6 +397,7 @@ func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.Provisi
 		// default, decides what runs in this tenant's pod.
 		DocumentDB:             req.DocumentDB,
 		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
+		ServerAltDNSNames:      altNames,
 	}
 	if req.Backup != nil && req.Backup.Enabled {
 		opts.Backup = &k8s.BackupOpts{

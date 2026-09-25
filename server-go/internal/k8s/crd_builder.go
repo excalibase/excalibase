@@ -63,6 +63,9 @@ type PostgreSQLClusterOpts struct {
 	// upgraded. Empty means the platform has pinned no image, and the plugin
 	// is then not registered at all.
 	DocumentDBGatewayImage string
+	// ServerAltDNSNames are extra names the operator-issued server
+	// certificate carries, so a client verifying the public name succeeds.
+	ServerAltDNSNames []string
 }
 
 type BackupOpts struct {
@@ -104,7 +107,8 @@ type RestoreClusterOpts struct {
 	RecoveryTarget map[string]interface{}
 	// ImageName is the catalogue image for the source's major; a physical
 	// recovery cannot start on any other.
-	ImageName string
+	ImageName         string
+	ServerAltDNSNames []string
 }
 
 // BuildPostgreSQLCluster builds a CloudNativePG Cluster CRD as unstructured.
@@ -218,8 +222,20 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 	if opts.ImageName != "" {
 		spec["imageName"] = opts.ImageName
 	}
+	addServerAltDNSNames(spec, opts.ServerAltDNSNames)
 
 	return spec
+}
+
+func addServerAltDNSNames(spec map[string]interface{}, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	altNames := make([]interface{}, len(names))
+	for i, name := range names {
+		altNames[i] = name
+	}
+	spec["certificates"] = map[string]interface{}{"serverAltDNSNames": altNames}
 }
 
 // buildPostgresqlAndStorage builds the postgresql config and storage sections.
@@ -422,6 +438,7 @@ func BuildRestoreCluster(opts RestoreClusterOpts) *unstructured.Unstructured {
 	if opts.ImageName != "" {
 		spec["imageName"] = opts.ImageName
 	}
+	addServerAltDNSNames(spec, opts.ServerAltDNSNames)
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": cnpgAPIVersion,

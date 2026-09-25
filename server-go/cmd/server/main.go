@@ -991,6 +991,7 @@ func buildBackupService(
 ) *service.BackupService {
 	k8sAdapter := service.NewK8sBackupAdapter(k8sClient, cfg.StoragePath, backupStorage)
 	k8sAdapter.SetInstanceStore(store)
+	k8sAdapter.SetPublicDomainSuffix(cfg.DBEndpointDomain)
 	adapters := map[domain.DeploymentMode]service.BackupAdapter{
 		domain.ModeK8s: k8sAdapter,
 	}
@@ -1780,6 +1781,7 @@ func buildProvisionerFactory(cfg config.AppConfig, k8sClient k8s.KubeClient) (*p
 	log.Println("Provisioner mode: k8s (CNPG)")
 	pgProvisioner := provisioner.NewPostgreSQLProvisioner(k8sClient, cfg.WatcherChartPath)
 	pgProvisioner.SetWatcherImage(cfg.WatcherImage)
+	pgProvisioner.SetPublicDomainSuffix(cfg.DBEndpointDomain)
 	pgProvisioner.SetDeletionPoller(deletionPoller())
 	return provisioner.NewFactory(pgProvisioner), nil
 }
