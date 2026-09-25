@@ -7,6 +7,11 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
+const (
+	parameterGroupRoute = "/api/parameter-groups/{name}"
+	vaultSecretsRoute   = "/api/vault/secrets/*"
+)
+
 // get, post and so on keep the table itself readable — the rows are data, and
 // a row should fit on one line's worth of thought.
 var (
@@ -65,11 +70,11 @@ var platformRows = []Row{
 	{Methods: get, Pattern: "/api/alerts/history", Auth: AuthSession, Owner: OwnerNone, Note: "scoped like the active list"},
 	{Methods: post, Pattern: "/api/setup/install/{databaseType}", Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole, Note: "applies a remote YAML cluster-wide"},
 
-	{Methods: get, Pattern: "/api/parameter-groups/", Auth: AuthSession, Owner: OwnerNone, Note: "the provision form's group selector; readable by any authenticated member, writes are platform-operator only"},
-	{Methods: get, Pattern: "/api/parameter-groups/{name}", Auth: AuthSession, Owner: OwnerNone, Note: "readable by any authenticated member"},
+	{Methods: get, Pattern: "/api/parameter-groups/", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole, Note: "cluster-wide configuration no tenant-facing surface reads"},
+	{Methods: get, Pattern: parameterGroupRoute, Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole},
 	{Methods: post, Pattern: "/api/parameter-groups/", Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole, Note: "parameter groups are cluster-wide configuration"},
-	{Methods: put, Pattern: "/api/parameter-groups/{name}", Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole},
-	{Methods: del, Pattern: "/api/parameter-groups/{name}", Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole},
+	{Methods: put, Pattern: parameterGroupRoute, Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole},
+	{Methods: del, Pattern: parameterGroupRoute, Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole},
 
 	{Methods: get, Pattern: "/api/auth/me", Auth: AuthSession, Owner: OwnerNone, Capability: "self:read", Note: "every credential may read its own identity"},
 	{Methods: get, Pattern: "/api/auth/users/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
@@ -104,9 +109,9 @@ var vaultRows = []Row{
 	{Methods: post, Pattern: "/api/vault/rekey", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
 	{Methods: get, Pattern: "/api/vault/secrets-list", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true, Note: "a prefix spanning projects inventories every tenant; a prefix naming one is bound to it like any other project read"},
 	{Methods: del, Pattern: "/api/vault/secrets-list", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true, Note: "deletes an entire secret prefix"},
-	{Methods: get, Pattern: "/api/vault/secrets/*", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Capability: "vault:read:<secret path>", Note: "the capability's selector names the one secret the service may read; a human caller is additionally bound to the project the path names, and every read is audited"},
-	{Methods: put, Pattern: "/api/vault/secrets/*", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
-	{Methods: del, Pattern: "/api/vault/secrets/*", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
+	{Methods: get, Pattern: vaultSecretsRoute, Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Capability: "vault:read:<secret path>", Note: "the capability's selector names the one secret the service may read; a human caller is additionally bound to the project the path names, and every read is audited"},
+	{Methods: put, Pattern: vaultSecretsRoute, Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
+	{Methods: del, Pattern: vaultSecretsRoute, Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Unrestricted: true},
 }
 
 // orgRows are the team surfaces. Reads bind to membership and hide the org

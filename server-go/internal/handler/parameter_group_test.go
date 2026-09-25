@@ -110,8 +110,7 @@ func TestParameterGroupDecodeErrorIsBadRequest(t *testing.T) {
 
 // TestParameterGroupWritesRequirePlatformAdmin reproduces the authorization
 // half of EXC-398 finding 4: these groups are global, so an ordinary user
-// must not create, update or delete one. Reading stays open to any
-// authenticated caller (the provision page's selector).
+// must not create, update or delete one.
 func TestParameterGroupWritesRequirePlatformAdmin(t *testing.T) {
 	router, _ := paramGroupRouter(t, "user")
 	writes := []struct {
@@ -130,9 +129,6 @@ func TestParameterGroupWritesRequirePlatformAdmin(t *testing.T) {
 		})
 	}
 
-	if w := doRequest(router, "GET", "/api/parameter-groups/", ""); w.Code != http.StatusOK {
-		t.Errorf("list as ordinary user: got %d, want 200", w.Code)
-	}
 }
 
 // TestParameterGroupAdminRoundTrip keeps the legitimate path working.
@@ -150,5 +146,28 @@ func TestParameterGroupAdminRoundTrip(t *testing.T) {
 	}
 	if w := doRequest(router, "DELETE", "/api/parameter-groups/high-perf", ""); w.Code != http.StatusOK {
 		t.Errorf("delete: got %d", w.Code)
+	}
+}
+
+func TestParameterGroupReadsArePlatformOperatorOnly(t *testing.T) {
+	for role, want := range map[string]int{
+		"user":              http.StatusForbidden,
+		"platform_viewer":   http.StatusOK,
+		"platform_operator": http.StatusOK,
+		"platform_admin":    http.StatusOK,
+	} {
+		t.Run(role, func(t *testing.T) {
+			router, _ := paramGroupRouter(t, role)
+			if w := doRequest(router, "GET", "/api/parameter-groups/", ""); w.Code != want {
+				t.Errorf("list: got %d, want %d", w.Code, want)
+			}
+			getWant := want
+			if want == http.StatusOK {
+				getWant = http.StatusNotFound
+			}
+			if w := doRequest(router, "GET", "/api/parameter-groups/absent", ""); w.Code != getWant {
+				t.Errorf("get: got %d, want %d", w.Code, getWant)
+			}
+		})
 	}
 }

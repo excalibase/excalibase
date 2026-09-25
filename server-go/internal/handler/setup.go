@@ -68,14 +68,14 @@ func NewParameterGroupHandler(store interface {
 const errInvalidParamGroupName = "invalid parameter group name"
 
 func (h *ParameterGroupHandler) Routes(r chi.Router) {
-	// Reads stay open to any authenticated caller (the provision page's group
-	// selector). Parameter groups are global, cluster-wide configuration, so
-	// writing one is a platform-admin act — the same tier as installing an
-	// operator above.
+	// Parameter groups are global, cluster-wide configuration: reading one is
+	// a platform-operator act like reading tier configs, and writing one is
+	// the same tier as installing an operator above.
+	operator := auth.RequirePermission(auth.PermViewAny)
 	admin := auth.RequirePermission(auth.PermManageSetup)
-	r.Get("/", h.List)
+	r.With(operator).Get("/", h.List)
 	r.With(admin).Post("/", h.Create)
-	r.Get(routeNameParam, h.Get)
+	r.With(operator).Get(routeNameParam, h.Get)
 	r.With(admin).Put(routeNameParam, h.Update)
 	r.With(admin).Delete(routeNameParam, h.Delete)
 }
