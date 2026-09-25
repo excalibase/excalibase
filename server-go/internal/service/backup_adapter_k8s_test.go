@@ -168,3 +168,20 @@ func TestK8sRestoreRefusesAnUnknownSourceMajor(t *testing.T) {
 		}
 	}
 }
+
+// A restored project is a new project with its own public name, and its
+// certificate has to carry that name for verify-full to work.
+func TestK8sRestoreCertificateNamesTheRestoredProjectsPublicHost(t *testing.T) {
+	mock := k8s.NewMockClient()
+	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
+	adapter.SetPublicDomainSuffix("db.example.com")
+
+	if _, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	obj := mock.CRDs["org-dst/dst-postgres"]
+	names, _, _ := unstructured.NestedStringSlice(obj.Object, "spec", "certificates", "serverAltDNSNames")
+	if len(names) != 1 || names[0] != "dst.db.example.com" {
+		t.Errorf("serverAltDNSNames: got %v", names)
+	}
+}

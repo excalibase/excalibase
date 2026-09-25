@@ -43,6 +43,9 @@ type K8sBackupAdapter struct {
 	// WAL, so the default budget is generous; the clock is injected so
 	// tests observe the wait without sleeping.
 	poller provisioner.Poller
+	// publicDomainSuffix names the restored project's public endpoint, so
+	// its server certificate can carry it. Empty without public endpoints.
+	publicDomainSuffix string
 }
 
 // ErrProjectRegistrarNotConfigured is returned when a restore would produce a
@@ -68,6 +71,9 @@ func NewK8sBackupAdapter(client k8s.KubeClient, storagePath string, storage Back
 		poller:      provisioner.NewPoller(defaultRestoreReadyPoll, defaultRestoreReadyTimeout),
 	}
 }
+
+// SetPublicDomainSuffix names the suffix public endpoint names hang off.
+func (a *K8sBackupAdapter) SetPublicDomainSuffix(suffix string) { a.publicDomainSuffix = suffix }
 
 // SetDatabaseProbe wires the check that proves a recovered database serves
 // queries. Without it a restore refuses to run.
@@ -182,13 +188,19 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
 	}
 	newProject := req.TargetProjectID
+	altNames, err := provisioner.PublicServerNames(newProject, a.publicDomainSuffix)
+	if err != nil {
+		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
+	}
 	if err := assertProjectIDAvailable(a.instances, newProject); err != nil {
 		return nil, err
 	}
 	newNamespace := fmt.Sprintf("%s-%s", inst.OrgID, newProject)
 	pc := provisioner.NewProvisionContext(nil, nil)
 
-	restored, err := a.runRestore(ctx, pc, inst, req, restoreTarget{store: store, image: image, project: newProject, namespace: newNamespace})
+	restored, err := a.runRestore(ctx, pc, inst, req, restoreTarget{
+		store: store, image: image, altNames: altNames, project: newProject, namespace: newNamespace,
+	})
 	if err != nil {
 		return nil, failRestore(ctx, pc, newProject, err)
 	}
@@ -209,6 +221,7 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 type restoreTarget struct {
 	store     *domain.S3Credentials
 	image     string
+	altNames  []string
 	project   string
 	namespace string
 }
@@ -255,12 +268,13 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisi
 		return fmt.Errorf("create restore credentials secret: %w", err)
 	}
 	restoreObj := k8s.BuildRestoreCluster(k8s.RestoreClusterOpts{
-		SourceProjectID: inst.ProjectID,
-		NewProjectID:    req.TargetProjectID,
-		Namespace:       newNamespace,
-		Store:           k8s.ObjectStoreOpts{EndpointURL: store.Endpoint, Bucket: store.Bucket, SecretName: s3CredsKey},
-		RecoveryTarget:  req.RecoveryTarget(),
-		ImageName:       target.image,
+		SourceProjectID:   inst.ProjectID,
+		NewProjectID:      req.TargetProjectID,
+		Namespace:         newNamespace,
+		Store:             k8s.ObjectStoreOpts{EndpointURL: store.Endpoint, Bucket: store.Bucket, SecretName: s3CredsKey},
+		RecoveryTarget:    req.RecoveryTarget(),
+		ImageName:         target.image,
+		ServerAltDNSNames: target.altNames,
 	})
 	clusterName := req.TargetProjectID + postgresClusterSuffix
 	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, newNamespace, restoreObj); err != nil {
