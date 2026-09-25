@@ -25,19 +25,22 @@ const DocumentDBPluginName = "cnpg-i-sidecar-injector.documentdb.io"
 // reader would expect a real mongod on.
 const DocumentDBGatewayPort = 10260
 
-// DocumentDBExtension is the extension created in a DocumentDB project's
-// application database. It is created with CASCADE, which brings in what it
+// DocumentDBExtension is the extension created in DocumentDBDatabase. It is created with CASCADE, which brings in what it
 // depends on — pg_documentdb_core, pg_cron and the contrib extensions the
 // image carries — rather than making the platform name them one by one.
 const DocumentDBExtension = "documentdb"
 
-// DocumentDBCronDatabaseSetting is pg_cron's "which database does the
-// background worker connect to" parameter. pg_cron serves exactly one
-// database per cluster and DocumentDB's DDL path goes through it, so this
-// must name the database the extension lives in — the project's own
-// application database. Pointing it anywhere else leaves DocumentDB
-// installed and its DDL silently unable to run.
+// DocumentDBCronDatabaseSetting is pg_cron's one-database-per-cluster setting;
+// DocumentDB's DDL path runs through it, so it names DocumentDBDatabase.
 const DocumentDBCronDatabaseSetting = "cron.database_name"
+
+// DocumentDBDatabase is where the extension lives: the gateway serves only the
+// postgres database, whatever the project's own database is called.
+const DocumentDBDatabase = "postgres"
+
+// DocumentDBGatewayRole is the gateway's OS user, which it logs in as over
+// loopback without a password before any client authenticates.
+const DocumentDBGatewayRole = "documentdb"
 
 // documentDBPreloadLibraries is the shared_preload_libraries list DocumentDB
 // needs. It is upstream's own, produced by scripts/preload_libraries.sh for a

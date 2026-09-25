@@ -22,7 +22,7 @@ echo ""
 
 # Install CloudNativePG (PostgreSQL)
 echo "📦 Installing CloudNativePG operator (PostgreSQL)..."
-kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.23/releases/cnpg-1.23.0.yaml
+kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml
 
 echo ""
 echo "⏳ Waiting for CloudNativePG operator to be ready..."

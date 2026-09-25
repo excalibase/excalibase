@@ -1,0 +1,64 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: proj-hba00001-postgres
+  namespace: org-a-proj-hba00001
+spec:
+  bootstrap:
+    initdb:
+      database: appdb
+      owner: owner_doc
+  certificates:
+    serverAltDNSNames:
+    - proj-hba00001-documentdb
+    - proj-hba00001-documentdb.org-a-proj-hba00001
+    - proj-hba00001-documentdb.org-a-proj-hba00001.svc
+    - proj-hba00001-documentdb.org-a-proj-hba00001.svc.cluster.local
+  imageName: excalibase/postgresql@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  instances: 1
+  monitoring:
+    enablePodMonitor: false
+  plugins:
+  - enabled: true
+    name: cnpg-i-sidecar-injector.documentdb.io
+    parameters:
+      documentDbCredentialSecret: proj-hba00001-documentdb-credentials
+      gatewayImage: ghcr.io/documentdb/documentdb-kubernetes-operator/gateway@sha256:8a5c7e533dc0fbed8ed780b22e31001a6b12ae0eb670f4aac62c1ded782742ed
+      gatewayTLSSecret: proj-hba00001-postgres-server
+  postgresql:
+    parameters:
+      cron.database_name: postgres
+      cron.host: /controller/run
+      documentdb.localhost_connection_string: host=/controller/run
+      max_connections: "100"
+    pg_hba:
+    - host all documentdb 127.0.0.1/32 trust
+    - host all documentdb ::1/128 trust
+    - host all owner_doc 127.0.0.1/32 trust
+    - host all owner_doc ::1/128 trust
+    - host all excalibase_app 127.0.0.1/32 trust
+    - host all excalibase_app ::1/128 trust
+    - host replication cdc_watcher all scram-sha-256
+    - host all app all scram-sha-256
+    - host all excalibase_app all scram-sha-256
+    - host all auth_admin all scram-sha-256
+    pg_ident:
+    - local postgres documentdb_bg_worker_role
+    - local postgres documentdb
+    - local postgres owner_doc
+    - local postgres excalibase_app
+    shared_preload_libraries:
+    - pg_cron
+    - pg_documentdb_core
+    - pg_documentdb
+  resources:
+    limits:
+      cpu: "0.5"
+      memory: 512Mi
+    requests:
+      cpu: "0.5"
+      memory: 512Mi
+  smartShutdownTimeout: 15
+  stopDelay: 60
+  storage:
+    size: 5Gi

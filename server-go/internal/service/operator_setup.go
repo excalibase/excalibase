@@ -24,7 +24,7 @@ func NewOperatorSetupService(k8sClient k8s.KubeClient) *OperatorSetupService {
 }
 
 var operatorURLs = map[domain.DatabaseType]string{
-	domain.PostgreSQL: "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.23/releases/cnpg-1.23.0.yaml",
+	domain.PostgreSQL: "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml",
 	domain.MySQL:      "https://raw.githubusercontent.com/planetscale/vitess-operator/main/deploy/operator.yaml",
 	domain.MongoDB:    "https://raw.githubusercontent.com/mongodb/mongodb-kubernetes-operator/master/config/manager/manager.yaml",
 }

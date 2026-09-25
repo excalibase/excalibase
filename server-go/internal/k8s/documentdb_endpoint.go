@@ -144,3 +144,21 @@ func buildDocumentDBService(namespace, projectID string, selector map[string]str
 		},
 	}
 }
+
+// ForceDeleteClusterPods removes a deleted cluster's instance pods without a
+// grace period; teardown destroys them anyway.
+func (c *Client) ForceDeleteClusterPods(ctx context.Context, namespace, cluster string) error {
+	pods := c.clientset.CoreV1().Pods(namespace)
+	list, err := pods.List(ctx, metav1.ListOptions{LabelSelector: "cnpg.io/cluster=" + cluster})
+	if err != nil {
+		return fmt.Errorf("list the pods of %s/%s: %w", namespace, cluster, err)
+	}
+	zero := int64(0)
+	for _, pod := range list.Items {
+		err := pods.Delete(ctx, pod.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("force delete pod %s/%s: %w", namespace, pod.Name, err)
+		}
+	}
+	return nil
+}

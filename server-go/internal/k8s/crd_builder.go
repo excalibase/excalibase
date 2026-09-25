@@ -147,6 +147,8 @@ func buildClusterMetadata(opts PostgreSQLClusterOpts) map[string]interface{} {
 const (
 	defaultClusterDatabase = "app"
 	defaultClusterUser     = "app"
+	// appRoleName is the platform's own login role in every project database.
+	appRoleName = "excalibase_app"
 )
 
 // clusterDatabaseName is the database CNPG bootstraps for this project.
@@ -157,13 +159,71 @@ func clusterDatabaseName(opts PostgreSQLClusterOpts) string {
 	return defaultClusterDatabase
 }
 
+func clusterOwner(opts PostgreSQLClusterOpts) string {
+	if opts.MasterUsername != "" {
+		return opts.MasterUsername
+	}
+	return defaultClusterUser
+}
+
+// documentDBLoopbackTrust lets the gateway, which only does passwordless local
+// logins, reach Postgres as itself and as the roles clients authenticate as.
+// Loopback only: nothing outside the pod matches these lines.
+func documentDBLoopbackTrust(opts PostgreSQLClusterOpts) []interface{} {
+	roles := []string{config.DocumentDBGatewayRole, clusterOwner(opts), appRoleName}
+	lines := make([]interface{}, 0, 2*len(roles))
+	for _, role := range roles {
+		lines = append(lines,
+			"host all "+role+" 127.0.0.1/32 trust",
+			"host all "+role+" ::1/128 trust")
+	}
+	return lines
+}
+
+// CNPG fixes unix_socket_directories here; local connections get its peer mapping.
+const cnpgSocketDirectory = "/controller/run"
+
+// documentDBLocalhostSetting is how the extension and its background worker connect back to Postgres.
+const documentDBLocalhostSetting = "documentdb.localhost_connection_string"
+
+// The gateway sidecar ignores SIGTERM, so without these a pod holds CNPG's
+// 1800s grace period on every delete, pause and rollout.
+const (
+	documentDBStopDelaySeconds     = 60
+	documentDBSmartShutdownSeconds = 15
+)
+
+// documentDBPeerIdentities lets the postgres OS user, which already maps to
+// the superuser, connect over the socket as the roles DocumentDB's own
+// connect-backs use: its background worker, and the roles clients act as.
+func documentDBPeerIdentities(opts PostgreSQLClusterOpts) []interface{} {
+	roles := []string{"documentdb_bg_worker_role", config.DocumentDBGatewayRole, clusterOwner(opts), appRoleName}
+	lines := make([]interface{}, 0, len(roles))
+	for _, role := range roles {
+		lines = append(lines, "local postgres "+role)
+	}
+	return lines
+}
+
+// serverAltDNSNames adds the gateway Service's names for a DocumentDB project,
+// whose gateway presents this same certificate.
+func serverAltDNSNames(opts PostgreSQLClusterOpts) []string {
+	names := append([]string(nil), opts.ServerAltDNSNames...)
+	if !opts.DocumentDB {
+		return names
+	}
+	service := DocumentDBServiceName(opts.ProjectID)
+	return append(names,
+		service,
+		service+"."+opts.Namespace,
+		service+"."+opts.Namespace+".svc",
+		service+"."+opts.Namespace+".svc.cluster.local")
+}
+
 // buildClusterSpec builds the spec section of a CNPG Cluster CRD.
 func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 	dbName := clusterDatabaseName(opts)
-	dbUser := defaultClusterUser
-	if opts.MasterUsername != "" {
-		dbUser = opts.MasterUsername
-	}
+	dbUser := clusterOwner(opts)
 
 	postgresql, storage := buildPostgresqlAndStorage(opts)
 
@@ -205,6 +265,10 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 	if plugins := buildDocumentDBPlugins(opts); len(plugins) > 0 {
 		spec["plugins"] = plugins
 	}
+	if opts.DocumentDB {
+		spec["stopDelay"] = int64(documentDBStopDelaySeconds)
+		spec["smartShutdownTimeout"] = int64(documentDBSmartShutdownSeconds)
+	}
 
 	if dbName != "app" || dbUser != "app" {
 		spec["bootstrap"] = map[string]interface{}{
@@ -222,7 +286,7 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 	if opts.ImageName != "" {
 		spec["imageName"] = opts.ImageName
 	}
-	addServerAltDNSNames(spec, opts.ServerAltDNSNames)
+	addServerAltDNSNames(spec, serverAltDNSNames(opts))
 
 	return spec
 }
@@ -267,7 +331,9 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 	// not actually being one.
 	if opts.DocumentDB {
 		sharedPreloadLibs = withDocumentDBLibraries(sharedPreloadLibs)
-		params[config.DocumentDBCronDatabaseSetting] = clusterDatabaseName(opts)
+		params[config.DocumentDBCronDatabaseSetting] = config.DocumentDBDatabase
+		params["cron.host"] = cnpgSocketDirectory
+		params[documentDBLocalhostSetting] = "host=" + cnpgSocketDirectory
 	}
 
 	postgresql := map[string]interface{}{
@@ -280,9 +346,13 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 		"pg_hba": []interface{}{
 			"host replication cdc_watcher all scram-sha-256",
 			"host all app all scram-sha-256",
-			"host all excalibase_app all scram-sha-256",
+			"host all " + appRoleName + " all scram-sha-256",
 			"host all auth_admin all scram-sha-256",
 		},
+	}
+	if opts.DocumentDB {
+		postgresql["pg_hba"] = append(documentDBLoopbackTrust(opts), postgresql["pg_hba"].([]interface{})...)
+		postgresql["pg_ident"] = documentDBPeerIdentities(opts)
 	}
 	if len(sharedPreloadLibs) > 0 {
 		postgresql["shared_preload_libraries"] = sharedPreloadLibs

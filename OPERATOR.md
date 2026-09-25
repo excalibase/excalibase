@@ -779,7 +779,7 @@ What happens per mode:
 | docker | Stops the container. | Starts it and waits for the health check. |
 
 Requires CloudNativePG >= 1.20 (declarative hibernation). The
-`charts/platform-aio` install script and the nightly e2e pin 1.23.0.
+`charts/platform-aio` install script and the nightly e2e pin 1.30.1.
 
 Do not read `status.phase` to decide whether a paused cluster is back:
 CNPG leaves it at `Cluster in healthy state` while hibernated and keeps

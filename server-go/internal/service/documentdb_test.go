@@ -65,9 +65,8 @@ func execCommandsMentioning(kube *k8s.MockClient, fragment string) []string {
 	return matched
 }
 
-// The extension is created in the project's own database, by name, with
-// CASCADE so its dependencies come with it.
-func TestEnableDocumentDBCreatesTheExtensionInTheProjectsDatabase(t *testing.T) {
+// The gateway serves the postgres database only, so the extension is created there.
+func TestEnableDocumentDBCreatesTheExtensionInThePostgresDatabase(t *testing.T) {
 	kube := k8s.NewMockClient()
 	svc := documentDBService(t, kube)
 	inst := documentDBProject()
@@ -80,7 +79,7 @@ func TestEnableDocumentDBCreatesTheExtensionInTheProjectsDatabase(t *testing.T) 
 	if len(created) != 1 {
 		t.Fatalf("CREATE EXTENSION ran %d times: %v", len(created), kube.ExecCommands)
 	}
-	for _, want := range []string{"documentdb", "CASCADE", "-d appdb"} {
+	for _, want := range []string{"documentdb", "CASCADE", "-d postgres"} {
 		if !strings.Contains(created[0], want) {
 			t.Errorf("CREATE EXTENSION command %q is missing %q", created[0], want)
 		}
@@ -275,7 +274,7 @@ func TestEnableDocumentDBGrantsThePlatformAppRoleMongoAccess(t *testing.T) {
 	if len(granted) != 1 {
 		t.Fatalf("GRANT ran %d times: %v", len(granted), kube.ExecCommands)
 	}
-	for _, want := range []string{`"owner_doc"`, `"excalibase_app"`} {
+	for _, want := range []string{`"owner_doc"`, `"excalibase_app"`, `"documentdb"`} {
 		if !strings.Contains(granted[0], want) {
 			t.Errorf("the grant is missing %s: %s", want, granted[0])
 		}
@@ -353,5 +352,50 @@ func TestRotationNeedsNoDocumentDBSpecialCase(t *testing.T) {
 	}
 	if strings.Contains(statement, "documentdb") {
 		t.Errorf("rotation has grown a DocumentDB special case: %s", statement)
+	}
+}
+
+// The gateway logs in as its OS user, documentdb, before any client authenticates.
+func TestEnableDocumentDBCreatesTheGatewayLoginRole(t *testing.T) {
+	kube := k8s.NewMockClient()
+	svc := documentDBService(t, kube)
+
+	if err := svc.enableDocumentDB(context.Background(), documentDBProject(), idleContext()); err != nil {
+		t.Fatalf("enableDocumentDB: %v", err)
+	}
+
+	created := execCommandsMentioning(kube, "CREATE ROLE")
+	if len(created) != 1 {
+		t.Fatalf("CREATE ROLE ran %d times: %v", len(created), kube.ExecCommands)
+	}
+	for _, want := range []string{`"documentdb"`, "LOGIN", "IF NOT EXISTS", "-d postgres"} {
+		if !strings.Contains(created[0], want) {
+			t.Errorf("role creation %q is missing %q", created[0], want)
+		}
+	}
+	if strings.Contains(strings.ToUpper(created[0]), "SUPERUSER") {
+		t.Errorf("the gateway role is a superuser: %s", created[0])
+	}
+}
+
+func TestEnableDocumentDBCreatesTheRoleBeforeGrantingIt(t *testing.T) {
+	kube := k8s.NewMockClient()
+	svc := documentDBService(t, kube)
+
+	if err := svc.enableDocumentDB(context.Background(), documentDBProject(), idleContext()); err != nil {
+		t.Fatalf("enableDocumentDB: %v", err)
+	}
+
+	role, grant := -1, -1
+	for i, cmd := range kube.ExecCommands {
+		if strings.Contains(cmd, "CREATE ROLE") {
+			role = i
+		}
+		if strings.Contains(cmd, "GRANT") {
+			grant = i
+		}
+	}
+	if role < 0 || grant < role {
+		t.Errorf("role at %d, grant at %d: %v", role, grant, kube.ExecCommands)
 	}
 }

@@ -16,7 +16,7 @@ operations (PATs, capacity, logs, drop project, revoke org) live in
 
 ```
 [ ] Cluster: Kubernetes >= 1.30, default StorageClass (RWO), enforcing CNI
-[ ] CNPG operator 1.23.0 installed (cnpg-system)                        -> §1.2
+[ ] CNPG operator 1.30.1 installed (cnpg-system)                        -> §1.2
 [ ] kube-prometheus-stack CRDs present (or serviceMonitors.enabled=false) -> §1.4
 [ ] cert-manager + ClusterIssuer letsencrypt-prod, DNS for api.* and admin.* -> §1.5
 [ ] Namespace excalibase-platform created                               -> §2
@@ -62,7 +62,7 @@ Every install path in both repos pins the same manifest:
 ```bash
 # charts/background/cnpg-operator/install.sh and .github/workflows/aio-e2e.yml
 kubectl apply --server-side --force-conflicts -f \
-  https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.23/releases/cnpg-1.23.0.yaml
+  https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml
 kubectl wait --for=condition=available --timeout=180s \
   deployment/cnpg-controller-manager -n cnpg-system
 ```

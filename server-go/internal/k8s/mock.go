@@ -75,6 +75,8 @@ type MockClient struct {
 	// which is what a project that has none looks like (EXC-409).
 	GatewayReady      map[string]bool
 	GatewayReadyError error
+
+	ForceDeletePodsError error
 	// GatewayAddresses is what DocumentDBGatewayAddress reports, keyed
 	// "namespace/readWriteService".
 	GatewayAddresses map[string]string
@@ -146,6 +148,14 @@ func (m *MockClient) DocumentDBGatewayAddress(ctx context.Context, namespace, re
 		return "", ErrDocumentDBGatewayNotReady
 	}
 	return address, nil
+}
+
+// ForceDeleteClusterPods records the forced removal of a cluster's pods.
+func (m *MockClient) ForceDeleteClusterPods(ctx context.Context, namespace, cluster string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ForceDeleteClusterPods:"+namespace+"/"+cluster)
+	return m.ForceDeletePodsError
 }
 
 // DocumentDBGatewayReady answers from what the test put in GatewayReady.
