@@ -25,6 +25,7 @@ import {
   FileText,
   FolderOpen,
   FileJson,
+  Container,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -42,6 +43,12 @@ export interface NavSection {
   icon: LucideIcon;
   to?: string;
   children?: NavItem[];
+  // Shown only when the server reports the capability as enabled.
+  requires?: 'appHosting';
+}
+
+export interface NavCapabilities {
+  appHosting: boolean;
 }
 
 export const PROJECT_NAV: NavSection[] = [
@@ -50,7 +57,7 @@ export const PROJECT_NAV: NavSection[] = [
   { key: 'schema', label: 'Schema', icon: GitBranch, to: 'schema' },
   {
     key: 'database',
-    label: 'Database',
+    label: 'Databases',
     icon: Database,
     children: [
       { label: 'Tables', icon: Table2, to: 'database/tables' },
@@ -65,6 +72,7 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Documents', icon: FileJson, to: 'database/documents', documentDbOnly: true },
     ],
   },
+  { key: 'containers', label: 'Containers', icon: Container, to: 'containers', requires: 'appHosting' },
   {
     key: 'auth',
     label: 'Authentication',
@@ -107,3 +115,6 @@ export const PROJECT_NAV: NavSection[] = [
 export function visibleNavItems(items: readonly NavItem[], documentDb: boolean): NavItem[] {
   return items.filter((item) => !item.documentDbOnly || documentDb);
 }
+
+export const visibleProjectNav = (capabilities: NavCapabilities): NavSection[] =>
+  PROJECT_NAV.filter((section) => !section.requires || capabilities[section.requires]);

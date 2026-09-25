@@ -7,7 +7,7 @@ import (
 
 var (
 	corsAllowMethods = strings.Join([]string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"}, ", ")
-	corsAllowHeaders = strings.Join([]string{"Authorization", "Content-Type", "X-Request-ID", "X-CSRF-Token"}, ", ")
+	corsAllowHeaders = strings.Join([]string{"Authorization", "Content-Type", "X-Request-ID", "X-CSRF-Token", "If-Match"}, ", ")
 )
 
 // CORS returns middleware that validates Origin against allowed origins

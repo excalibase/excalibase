@@ -43,6 +43,9 @@ const TypesPage = lazy(() => import('./pages/TypesPage').then(m => ({ default: m
 const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ default: m.AdvisorsPage })));
 const LogExplorerPage = lazy(() => import('./pages/LogExplorerPage').then(m => ({ default: m.LogExplorerPage })));
 const PlatformAdminPage = lazy(() => import('./pages/PlatformAdminPage').then(m => ({ default: m.PlatformAdminPage })));
+const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ default: m.ContainersPage })));
+const ContainerFormPage = lazy(() => import('./pages/ContainerFormPage').then(m => ({ default: m.ContainerFormPage })));
+const ContainerDetailPage = lazy(() => import('./pages/ContainerDetailPage').then(m => ({ default: m.ContainerDetailPage })));
 const StoragePage = lazy(() => import('./pages/StoragePage').then(m => ({ default: m.StoragePage })));
 
 function PageLoader() {
@@ -96,6 +99,11 @@ export default function App() {
             <Route path="database/types" element={<TypesPage />} />
             <Route path="database/advisors" element={<AdvisorsPage />} />
             <Route path="database/documents" element={<DocumentsPage />} />
+            {/* Containers */}
+            <Route path="containers" element={<ContainersPage />} />
+            <Route path="containers/new" element={<ContainerFormPage />} />
+            <Route path="containers/:appId" element={<ContainerDetailPage />} />
+            <Route path="containers/:appId/edit" element={<ContainerFormPage />} />
             {/* Authentication */}
             <Route path="auth/users" element={<AuthUsersPage />} />
             <Route path="auth/sessions" element={<AuthSessionsPage />} />

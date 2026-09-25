@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -621,6 +622,7 @@ type handlerDeps struct {
 	tableGrantHandler *handler.TableGrantHandler
 	appHandler        *handler.AppHandler
 	appDeployHandler  *handler.AppDeployHandler
+	appSecretHandler  *handler.AppSecretHandler
 	tierHandler       *handler.TierHandler
 	pgCatalogHandler  *handler.PostgresCatalogHandler
 	capDeps           *capacityDeps
@@ -1179,6 +1181,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants(), cfg.ExposureEnforced),
 		appHandler: handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 			handler.NewProjectSourceLookup(store), appRoute(cfg).Public()),
+		appSecretHandler: handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeployHandler: handler.NewAppDeployHandler(service.NewAppDeployService(
 			apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
 			k8sClient, store, nil, k8s.AppRenderOptions{
@@ -1215,6 +1218,21 @@ type routerStores interface {
 	storage.OrgStore
 }
 
+// serveConfig answers what the studio must know before login: the deployment
+// mode, and whether app hosting is mounted so it never links to a 404.
+func serveConfig(cfg config.AppConfig) http.HandlerFunc {
+	body := struct {
+		DeploymentMode string `json:"deploymentMode"`
+		AppHosting     bool   `json:"appHosting"`
+	}{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled}
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			log.Printf("write /api/config: %v", err)
+		}
+	}
+}
+
 // buildRouter wires the chi router with global middleware and mounts every
 // API subtree. The per-subtree mounting is delegated to focused helpers so
 // this top-level remains a manifest of which features are exposed.
@@ -1236,10 +1254,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})
-	r.Get("/api/config", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"deploymentMode":"%s"}`, cfg.DeploymentMode)
-	})
+	r.Get("/api/config", serveConfig(cfg))
 	r.Get("/api/capacity", auth.RequireAuth(http.HandlerFunc(d.capDeps.serveCapacity)).ServeHTTP)
 
 	mountProvisioningRoutes(r, sqlStore, store, d)
@@ -1480,6 +1495,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.With(dev).Post("/deploy", d.appDeployHandler.Deploy)
 				r.Get("/deploys", d.appDeployHandler.ListDeploys)
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
+				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)
 			})
 		})
 	}

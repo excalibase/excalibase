@@ -41,7 +41,7 @@ const (
 // why, because "no auth" is the single most expensive thing to get wrong.
 var publicRows = []Row{
 	{Methods: get, Pattern: "/healthz", Auth: AuthPublic, Note: "liveness probe"},
-	{Methods: get, Pattern: "/api/config", Auth: AuthPublic, Note: "deployment mode only; the studio reads it before login"},
+	{Methods: get, Pattern: "/api/config", Auth: AuthPublic, Note: "deployment mode and whether app hosting is mounted; the studio reads it before login"},
 	{Methods: anyVerb, Pattern: "/metrics", Auth: AuthPublic, Note: "Prometheus scrape target; network-restricted, not credential-restricted"},
 
 	{Methods: post, Pattern: "/api/auth/register", Auth: AuthPublic, Note: "rate-limited per IP; invite-only mode gates it in the handler"},
