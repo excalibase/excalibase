@@ -131,6 +131,16 @@ func TestInternalInvoke_RouteAuthCheck(t *testing.T) {
 		t.Errorf("wrong runtime token: got %d, want 401", w.Code)
 	}
 
+	// Another project's valid runtime token → 401
+	req = httptest.NewRequest("POST", "/internal/invoke/proj_p1/"+testInternalOnlyFnID,
+		bytes.NewBufferString(`{"args":{}}`))
+	req.Header.Set("X-Excalibase-Runtime-Token", edgefn.DeriveRuntimeSecret("test-runtime-secret", "proj_p2"))
+	w = httptest.NewRecorder()
+	rtr.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("another project's runtime token: got %d, want 401", w.Code)
+	}
+
 	// Correct header → forwards through to runtime → 200
 	req = httptest.NewRequest("POST", "/internal/invoke/proj_p1/"+testInternalOnlyFnID,
 		bytes.NewBufferString(`{"args":{}}`))
