@@ -230,6 +230,9 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 	if err := p.waitForAllPods(ctx, tier, projectID, namespace); err != nil {
 		return nil, err
 	}
+	if err := ensureDocumentDBService(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
+		return nil, err
+	}
 
 	// Stage 5: Credentials
 	cb(domain.StageCredentialGeneration)
@@ -280,6 +283,10 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 	// Stage 4: Wait for pods
 	if err := p.stageWaitForPods(ctx, tier, projectID, namespace, pc); err != nil {
 		return nil, err
+	}
+	pc.SetStep("create documentdb gateway service")
+	if err := ensureDocumentDBService(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
+		return nil, pc.Fail(err)
 	}
 
 	// Stage 5: Credentials

@@ -513,7 +513,7 @@ func (s *DBEndpointService) addMongoEndpoint(
 	}
 	view.Internal.MongoPort = config.DocumentDBGatewayPort
 	view.Internal.MongoConnectionString = domain.MongoConnectionString(
-		inst.Host, config.DocumentDBGatewayPort, inst.Username, true)
+		k8s.DocumentDBServiceHost(inst.ProjectID, inst.Namespace), config.DocumentDBGatewayPort, inst.Username, true)
 
 	port, err := s.mongoPort(ctx, inst)
 	if err != nil {

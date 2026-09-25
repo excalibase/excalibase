@@ -79,6 +79,10 @@ type MockClient struct {
 	// "namespace/readWriteService".
 	GatewayAddresses map[string]string
 
+	// DocumentDBServices — "namespace/projectID" of each gateway Service.
+	DocumentDBServices           map[string]bool
+	EnsureDocumentDBServiceError error
+
 	// CreateSecretError fails every secret write, so a test can assert what
 	// a provision does when the cluster refuses one.
 	CreateSecretError error
@@ -118,6 +122,8 @@ func NewMockClient() *MockClient {
 		PublicDBServices: make(map[string]PublicDBServiceSpec),
 		GatewayReady:     make(map[string]bool),
 
+		DocumentDBServices: make(map[string]bool),
+
 		AppWorkloads:  make(map[string]*AppWorkload),
 		AppRolloutErr: make(map[string]error),
 
@@ -146,6 +152,18 @@ func (m *MockClient) DocumentDBGatewayReady(ctx context.Context, namespace, pod 
 		return false, m.GatewayReadyError
 	}
 	return m.GatewayReady[namespace+"/"+pod], nil
+}
+
+// EnsureDocumentDBService records the project's gateway Service.
+func (m *MockClient) EnsureDocumentDBService(ctx context.Context, namespace, projectID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "EnsureDocumentDBService:"+namespace+"/"+projectID)
+	if m.EnsureDocumentDBServiceError != nil {
+		return m.EnsureDocumentDBServiceError
+	}
+	m.DocumentDBServices[namespace+"/"+projectID] = true
+	return nil
 }
 
 // EnsurePublicDBService records the project's public endpoint Service.

@@ -81,6 +81,9 @@ type KubeClient interface {
 	// DocumentDBGatewayAddress is the pod IP of the primary whose gateway is
 	// serving; ErrDocumentDBGatewayNotReady when there is none.
 	DocumentDBGatewayAddress(ctx context.Context, namespace, readWriteService string) (string, error)
+	// EnsureDocumentDBService exposes a DocumentDB project's gateway port
+	// inside the cluster, on whichever pod is primary.
+	EnsureDocumentDBService(ctx context.Context, namespace, projectID string) error
 
 	// GetClusterCapacity returns aggregate Allocatable + already-Requested
 	// CPU/memory across all schedulable nodes. Used by capacity-aware
