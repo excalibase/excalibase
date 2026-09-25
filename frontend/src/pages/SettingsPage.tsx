@@ -7,7 +7,6 @@ import { useDeprovisionDatabase, usePauseProject, useResumeProject } from '../ho
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { ConnectionStrings } from '../components/ConnectionStrings';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
-import { usePostgresCatalog, findMajor } from '../api/postgresCatalog';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 
@@ -55,7 +54,6 @@ export function SettingsPage() {
   const deprovision = useDeprovisionDatabase();
   const pauseProject = usePauseProject();
   const resumeProject = useResumeProject();
-  const catalog = usePostgresCatalog();
   // The public host, port, TLS posture and cluster CA all come from the
   // control plane. A failed read leaves this undefined, and the connection
   // card falls back to the in-cluster details rather than guessing.
@@ -74,9 +72,9 @@ export function SettingsPage() {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
   }
 
-  // Whether Mongo clients have anything to talk to is a property of the image
-  // this project's major carries, and the catalogue is what knows that.
-  const documentDb = findMajor(catalog.data, project.postgresVersion ?? '')?.documentDb ?? false;
+  // A major that can carry DocumentDB says nothing about whether this project
+  // was created with it; only the project record does.
+  const documentDb = project.documentDb === true;
 
   const info = [
     { icon: Server, label: 'Display Name', value: project.projectName || '-' },

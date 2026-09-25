@@ -31,11 +31,10 @@ function postgresUri(credentials: CredentialsResponse, target: Target, password:
   return `postgresql://${credentials.username}:${password}@${target.host}:${target.port}/${credentials.databaseName}?sslmode=${sslMode}`;
 }
 
-// A Mongo client authenticates against the database it connects to, so the
-// database name carries both the path and authSource. TLS is spelled the way
-// a driver reads it — `tls`, never libpq's `sslmode`, which a driver rejects.
+// The shape the control plane renders and the gateway was proven to accept.
+// TLS is spelled the way a driver reads it — `tls`, never libpq's `sslmode`.
 function mongoUri(credentials: CredentialsResponse, target: Target, password: string, tls: boolean): string {
-  return `mongodb://${credentials.username}:${password}@${target.host}:${target.port}/${credentials.databaseName}?authSource=${credentials.databaseName}&tls=${tls}`;
+  return `mongodb://${credentials.username}:${password}@${target.host}:${target.port}/?tls=${tls}&authMechanism=SCRAM-SHA-256`;
 }
 
 // internalTarget is where a workload inside the cluster connects. It is shown
@@ -64,9 +63,9 @@ function mongoPublicTarget(endpoint?: ProjectEndpoint): Target | null {
 }
 
 function mongoInternalTarget(endpoint?: ProjectEndpoint): Target | null {
-  const mongo = endpoint?.mongo;
-  if (!mongo?.available || !mongo.internal) return null;
-  return { host: mongo.internal.host, port: mongo.internal.port };
+  const internal = endpoint?.mongo?.internal;
+  if (!internal) return null;
+  return { host: internal.host, port: internal.port };
 }
 
 interface StringRowProps {
@@ -190,7 +189,7 @@ function MongoSection({ projectId, credentials, endpoint, shownPassword }: Secti
     <div className="border-t border-border-primary pt-4 space-y-2" data-testid="conn-mongo-section">
       <h5 className="text-sm font-medium text-text-primary">MongoDB (DocumentDB)</h5>
       {internal && (
-        <StringRow testId="conn-mongo-internal" label="Internal — from inside the cluster" {...row(internal, false)} />
+        <StringRow testId="conn-mongo-internal" label="Internal — from inside the cluster" {...row(internal, true)} />
       )}
       {external && (
         <>
@@ -202,7 +201,7 @@ function MongoSection({ projectId, credentials, endpoint, shownPassword }: Secti
           <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />
         </>
       )}
-      {!internal && !external && (
+      {!external && (!internal || endpoint?.mongo?.port) && (
         <p className="text-xs text-text-tertiary" data-testid="conn-mongo-unavailable">
           This project carries DocumentDB, but its MongoDB endpoint is not answering yet — it starts after the database
           and creates its user first. The PostgreSQL endpoint above already works, and both speak to the same database
