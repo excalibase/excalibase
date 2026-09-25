@@ -55,7 +55,7 @@ function SecretField({ index, row, update }: Omit<RowProps, 'databaseName'>) {
         className={inputClass}
         data-testid={`env-secret-value-${index}`}
       />
-      {row.storedSecret && (
+      {row.storedSecret && row.name === row.storedName && (
         <button
           type="button"
           onClick={() => update({ replacing: false, secretValue: '' })}

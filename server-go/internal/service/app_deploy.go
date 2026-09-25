@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -135,7 +136,9 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		s.fail(deploy, err)
 		return deploy, nil
 	}
-	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver, s.render)
+	render := s.render
+	render.EnvRevision = strconv.Itoa(deploy.Revision)
+	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver, render)
 	if err != nil {
 		s.fail(deploy, err)
 		return deploy, nil

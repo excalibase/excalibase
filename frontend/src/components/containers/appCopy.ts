@@ -82,6 +82,10 @@ const FAILURE_RULES: Array<[RegExp, string]> = [
     /no resolver was given/,
     'This installation cannot supply database or secret variables to containers yet.',
   ],
+  [
+    /no value is stored/,
+    'A secret variable has no value stored. Enter it again on the edit page, then deploy.',
+  ],
   [/resolve secret/, 'A secret variable could not be read. Check where the secret is stored.'],
   [
     /resolve "/,

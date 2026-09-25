@@ -27,6 +27,12 @@ func validApp() *apphost.App {
 	}
 }
 
+// ownSecret is the vault entry the platform chooses for validApp's variable.
+func ownSecret(name string) *apphost.SecretRef {
+	ref := apphost.AppSecretRef("proj_abc123", "app_01", name)
+	return &ref
+}
+
 func TestValidateAcceptsAWellFormedApp(t *testing.T) {
 	if err := validApp().Validate(); err != nil {
 		t.Fatalf("valid app refused: %v", err)
@@ -188,7 +194,7 @@ func TestValidateVariableKindMatchesItsPayload(t *testing.T) {
 
 	accepted := []apphost.EnvVar{
 		{Name: "A", Kind: apphost.KindLiteral, Value: &value},
-		{Name: "B", Kind: apphost.KindSecret, Secret: secret},
+		{Name: "B", Kind: apphost.KindSecret, Secret: ownSecret("B")},
 		{Name: "C", Kind: apphost.KindReference, Reference: reference},
 	}
 	app := validApp()
@@ -380,9 +386,7 @@ func TestVariablesRoundTripThroughJSON(t *testing.T) {
 	app := validApp()
 	app.Env = []apphost.EnvVar{
 		{Name: "EMPTY", Kind: apphost.KindLiteral, Value: &empty},
-		{Name: "TOKEN", Kind: apphost.KindSecret, Secret: &apphost.SecretRef{
-			Path: "projects/proj_abc123/apps/app_01/secrets", Key: "token",
-		}},
+		{Name: "TOKEN", Kind: apphost.KindSecret, Secret: ownSecret("TOKEN")},
 		{Name: "DATABASE_URL", Kind: apphost.KindReference, Reference: &apphost.ReferenceTarget{
 			SourceKind: apphost.SourceDatabase, SourceName: "storefront_db", Variable: "DATABASE_URL",
 		}},
@@ -401,7 +405,7 @@ func TestVariablesRoundTripThroughJSON(t *testing.T) {
 	if got.Env[0].Kind != apphost.KindLiteral || got.Env[0].Value == nil || *got.Env[0].Value != "" {
 		t.Errorf("the empty literal did not survive: %+v", got.Env[0])
 	}
-	if got.Env[1].Kind != apphost.KindSecret || got.Env[1].Secret.Key != "token" {
+	if got.Env[1].Kind != apphost.KindSecret || *got.Env[1].Secret != *ownSecret("TOKEN") {
 		t.Errorf("the secret did not survive: %+v", got.Env[1])
 	}
 	if got.Env[2].Kind != apphost.KindReference || got.Env[2].Reference.Variable != "DATABASE_URL" {
@@ -523,10 +527,9 @@ func TestValidateSecretPathCharsetAndLength(t *testing.T) {
 	}
 
 	app := validApp()
-	app.Env = []apphost.EnvVar{{Name: "TOKEN", Kind: apphost.KindSecret,
-		Secret: &apphost.SecretRef{Path: "projects/proj_abc123/apps/app_01/secrets", Key: "token"}}}
+	app.Env = []apphost.EnvVar{{Name: "TOKEN", Kind: apphost.KindSecret, Secret: ownSecret("TOKEN")}}
 	if err := app.Validate(); err != nil {
-		t.Errorf("an ordinary vault path must be accepted: %v", err)
+		t.Errorf("the server-chosen vault path must be accepted: %v", err)
 	}
 }
 
@@ -538,10 +541,8 @@ func TestPointerVariablesAreChargedTheirResolvedWeight(t *testing.T) {
 	pointers := func(count int) []apphost.EnvVar {
 		out := make([]apphost.EnvVar, 0, count)
 		for i := 0; i < count; i++ {
-			out = append(out, apphost.EnvVar{
-				Name: fmt.Sprintf("S%d", i), Kind: apphost.KindSecret,
-				Secret: &apphost.SecretRef{Path: "projects/proj_abc123/apps/app_01/secrets", Key: "k"},
-			})
+			name := fmt.Sprintf("S%d", i)
+			out = append(out, apphost.EnvVar{Name: name, Kind: apphost.KindSecret, Secret: ownSecret(name)})
 		}
 		return out
 	}

@@ -1184,7 +1184,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appSecretHandler: handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeployHandler: handler.NewAppDeployHandler(service.NewAppDeployService(
 			apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
-			k8sClient, store, nil, k8s.AppRenderOptions{
+			k8sClient, store, service.NewAppEnvResolver(vc, store), k8s.AppRenderOptions{
 				RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Route: appRoute(cfg),
 			})),
 		tierHandler:      tierHandler,

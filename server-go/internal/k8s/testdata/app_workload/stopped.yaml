@@ -27,7 +27,8 @@ spec:
   template:
     metadata:
       annotations:
-        excalibase.io/app-config-hash: ffbda37467a71977
+        excalibase.io/app-config-hash: 5b82bef8943eb1aa
+        excalibase.io/app-env-revision: "7"
       labels:
         app.kubernetes.io/component: app
         app.kubernetes.io/managed-by: excalibase-provisioning
@@ -47,14 +48,14 @@ spec:
           valueFrom:
             secretKeyRef:
               key: DATABASE_URL
-              name: proj-abc-app-credentials
+              name: app-web-env
         - name: PGHOST
           value: proj-abc-postgres-rw.org1-proj-abc.svc.cluster.local
         - name: STRIPE_KEY
           valueFrom:
             secretKeyRef:
-              key: api_key
-              name: proj-abc-app-secrets
+              key: STRIPE_KEY
+              name: app-web-env
         image: ghcr.io/acme/web:1.4.2
         imagePullPolicy: Always
         lifecycle:
@@ -106,6 +107,24 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 status: {}
+---
+apiVersion: v1
+data:
+  DATABASE_URL: cG9zdGdyZXM6Ly9vd25lcjpvd25lci1wYXNzLTlmMkBwcm9qLWFiYy1wb3N0Z3Jlcy1ydy5vcmcxLXByb2otYWJjLnN2Yy5jbHVzdGVyLmxvY2FsOjU0MzIvYXBwP3NzbG1vZGU9cmVxdWlyZQ==
+  STRIPE_KEY: c2tfdGVzdF9zdHJpcGVfdmFsdWVfMzFj
+kind: Secret
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: web
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: standard
+  name: app-web-env
+  namespace: org1-proj-abc
+type: Opaque
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

@@ -241,10 +241,9 @@ func TestPGAppStore_SecretRefRoundTrips(t *testing.T) {
 	s := newPGAppStore(t)
 	projectID := "proj_itest_secret"
 	app := sampleApp(projectID, "app_secret", "secrets")
+	token := apphost.AppSecretRef(projectID, "app_secret", "TOKEN")
 	app.Env = []apphost.EnvVar{
-		{Name: "TOKEN", Kind: apphost.KindSecret, Secret: &apphost.SecretRef{
-			Path: "projects/" + projectID + "/apps/app_secret/secrets", Key: "token",
-		}},
+		{Name: "TOKEN", Kind: apphost.KindSecret, Secret: &token},
 		{Name: "DATABASE_URL", Kind: apphost.KindReference, Reference: &apphost.ReferenceTarget{
 			SourceKind: apphost.SourceDatabase, SourceName: "store_db", Variable: "DATABASE_URL",
 		}},
@@ -259,7 +258,7 @@ func TestPGAppStore_SecretRefRoundTrips(t *testing.T) {
 	if got.Env[0].Value != nil {
 		t.Errorf("a secret env var must carry no value, got %q", *got.Env[0].Value)
 	}
-	if got.Env[0].Kind != apphost.KindSecret || got.Env[0].Secret == nil || got.Env[0].Secret.Key != "token" {
+	if got.Env[0].Kind != apphost.KindSecret || got.Env[0].Secret == nil || *got.Env[0].Secret != token {
 		t.Errorf("secret reference did not round trip: %+v", got.Env[0])
 	}
 	if got.Env[1].Kind != apphost.KindReference || got.Env[1].Reference == nil ||

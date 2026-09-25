@@ -26,52 +26,55 @@ import (
 // updateGolden is a flag, not an env var, so regenerating (`-update-golden`) is deliberate and diffed before commit.
 var updateGolden = flag.Bool("update-golden", false, "rewrite the app workload golden manifests")
 
-// fakeResolver stands in for the deploy-time resolver (EXC-386): an unknown
-// reference or secret is an error, never an empty string.
+// fakeResolver stands in for the deploy-time resolver: an unknown reference
+// or secret is an error, never an empty string.
 type fakeResolver struct {
 	namespace string
 	// seenScopes proves the renderer never asks for a public address.
 	seenScopes []apphost.ReferenceScope
 	refErr     error
-	// literalFor proves the renderer refuses a credential in the clear.
-	literalFor map[string]string
+	// valueFor overrides what a variable resolves to.
+	valueFor map[string]string
 }
 
-func (f *fakeResolver) ResolveReference(projectID string, ref apphost.ResolvedReference) (EnvSource, error) {
+const (
+	testDatabaseURL = "postgres://owner:owner-pass-9f2@proj-abc-postgres-rw.org1-proj-abc.svc.cluster.local:5432/app?sslmode=require"
+	testStripeKey   = "sk_test_stripe_value_31c"
+)
+
+func (f *fakeResolver) ResolveReference(projectID string, ref apphost.ResolvedReference) (string, error) {
 	f.seenScopes = append(f.seenScopes, ref.Scope)
 	if f.refErr != nil {
-		return EnvSource{}, f.refErr
+		return "", f.refErr
 	}
-	if value, ok := f.literalFor[ref.Name]; ok {
-		return EnvSource{Literal: &value}, nil
+	if value, ok := f.valueFor[ref.Name]; ok {
+		return value, nil
 	}
 	switch ref.Target.Variable {
 	case "PGHOST":
-		host := ref.Target.SourceName + "-postgres-rw." + f.namespace + ".svc.cluster.local"
-		return EnvSource{Literal: &host}, nil
+		return ref.Target.SourceName + "-postgres-rw." + f.namespace + ".svc.cluster.local", nil
 	case "PGPORT":
-		port := "5432"
-		return EnvSource{Literal: &port}, nil
+		return "5432", nil
 	case "PGDATABASE":
-		name := "app"
-		return EnvSource{Literal: &name}, nil
+		return "app", nil
 	case "PGUSER":
-		user := "excalibase_app"
-		return EnvSource{Literal: &user}, nil
-	case "PGPASSWORD", "DATABASE_URL":
-		return EnvSource{Secret: &SecretKeySelector{
-			SecretName: projectID + "-app-credentials",
-			Key:        ref.Target.Variable,
-		}}, nil
+		return "owner", nil
+	case "PGPASSWORD":
+		return "owner-pass-9f2", nil
+	case "DATABASE_URL":
+		return testDatabaseURL, nil
 	}
-	return EnvSource{}, errUnexpectedReference
+	return "", errUnexpectedReference
 }
 
-func (f *fakeResolver) ResolveSecret(projectID string, ref apphost.SecretRef) (SecretKeySelector, error) {
+func (f *fakeResolver) ResolveSecret(projectID string, ref apphost.SecretRef) (string, error) {
 	if !strings.HasPrefix(ref.Path, "projects/"+projectID+"/") {
-		return SecretKeySelector{}, errUnexpectedReference
+		return "", errUnexpectedReference
 	}
-	return SecretKeySelector{SecretName: projectID + "-app-secrets", Key: ref.Key}, nil
+	if value, ok := f.valueFor[ref.Path]; ok {
+		return value, nil
+	}
+	return testStripeKey, nil
 }
 
 var errUnexpectedReference = &resolverError{"the test resolver was asked for something it does not have"}
@@ -111,11 +114,14 @@ func fullApp() *apphost.App {
 		{Name: "PGHOST", Kind: apphost.KindReference, Reference: &apphost.ReferenceTarget{
 			SourceKind: apphost.SourceDatabase, SourceName: "proj-abc", Variable: "PGHOST",
 		}},
-		{Name: "STRIPE_KEY", Kind: apphost.KindSecret, Secret: &apphost.SecretRef{
-			Path: "projects/proj-abc/stripe", Key: "api_key",
-		}},
+		{Name: "STRIPE_KEY", Kind: apphost.KindSecret, Secret: ownSecret(app, "STRIPE_KEY")},
 	}
 	return app
+}
+
+func ownSecret(app *apphost.App, name string) *apphost.SecretRef {
+	ref := apphost.AppSecretRef(app.ProjectID, app.ID, name)
+	return &ref
 }
 
 const (
@@ -129,7 +135,7 @@ var testRoute = AppRouteOptions{
 	IngressFromNamespace: "haproxy-controller",
 }
 
-var testRenderOptions = AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute}
+var testRenderOptions = AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute, EnvRevision: "7"}
 
 func newResolver() *fakeResolver { return &fakeResolver{namespace: testNamespace} }
 
@@ -252,23 +258,103 @@ func TestRenderAppWorkloadLiteralEnv(t *testing.T) {
 	}
 }
 
-// A secret becomes a secretKeyRef. The value must never reach the manifest.
-func TestRenderAppWorkloadSecretIsNeverInlined(t *testing.T) {
+// A secret and a credential-bearing reference become secretKeyRefs into the
+// app's own Secret; the values live there and nowhere in the Deployment.
+func TestRenderAppWorkloadSecretValuesGoToTheAppSecret(t *testing.T) {
 	workload := mustRender(t, fullApp(), newResolver())
+	secretName := AppEnvSecretName("web")
+	env := map[string]corev1.EnvVar{}
 	for _, e := range workload.Deployment.Spec.Template.Spec.Containers[0].Env {
-		if e.Name != "STRIPE_KEY" {
-			continue
-		}
-		if e.Value != "" {
-			t.Fatalf("STRIPE_KEY carries an inline value %q", e.Value)
-		}
-		ref := e.ValueFrom.SecretKeyRef
-		if ref.Name != "proj-abc-app-secrets" || ref.Key != "api_key" {
-			t.Fatalf("STRIPE_KEY secretKeyRef = %+v", ref)
-		}
-		return
+		env[e.Name] = e
 	}
-	t.Fatal("STRIPE_KEY was not rendered")
+	for _, name := range []string{"STRIPE_KEY", "DATABASE_URL"} {
+		e := env[name]
+		if e.Value != "" || e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil {
+			t.Fatalf("%s = %+v, want a secretKeyRef", name, e)
+		}
+		if ref := e.ValueFrom.SecretKeyRef; ref.Name != secretName || ref.Key != name {
+			t.Fatalf("%s secretKeyRef = %+v, want %s/%s", name, ref, secretName, name)
+		}
+	}
+	if env["PGHOST"].ValueFrom != nil {
+		t.Errorf("PGHOST carries no credential and stays a plain value, got %+v", env["PGHOST"])
+	}
+}
+
+func TestRenderAppWorkloadEnvSecretHoldsTheValues(t *testing.T) {
+	secret := mustRender(t, fullApp(), newResolver()).EnvSecret
+	if secret == nil {
+		t.Fatal("an app with secret values must render its env Secret")
+	}
+	if secret.Name != AppEnvSecretName("web") || secret.Namespace != testNamespace || secret.Type != corev1.SecretTypeOpaque {
+		t.Fatalf("secret meta = %s/%s type %s", secret.Namespace, secret.Name, secret.Type)
+	}
+	if secret.Labels["excalibase.io/app"] != "app-01H" {
+		t.Errorf("the Secret must carry the app's ownership labels, got %v", secret.Labels)
+	}
+	want := map[string]string{"STRIPE_KEY": testStripeKey, "DATABASE_URL": testDatabaseURL}
+	got := map[string]string{}
+	for key, value := range secret.Data {
+		got[key] = string(value)
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("secret data = %v, want %v", got, want)
+	}
+}
+
+// No value an app is given in confidence may appear anywhere in the
+// Deployment, which anything able to list the namespace can read.
+func TestRenderAppWorkloadDeploymentCarriesNoSecretValue(t *testing.T) {
+	app := fullApp()
+	app.Env = append(app.Env, apphost.EnvVar{Name: "PGPASSWORD", Kind: apphost.KindReference,
+		Reference: &apphost.ReferenceTarget{SourceKind: apphost.SourceDatabase, SourceName: "proj-abc", Variable: "PGPASSWORD"}})
+	workload := mustRender(t, app, newResolver())
+	encoded, err := yaml.Marshal(workload.Deployment)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, value := range []string{testStripeKey, testDatabaseURL, "owner-pass-9f2"} {
+		if strings.Contains(string(encoded), value) {
+			t.Fatalf("the Deployment carries a secret value %q:\n%s", value, encoded)
+		}
+	}
+}
+
+// Pods roll on every deploy of an app with secret values, since a value can
+// change without the record changing; the values themselves are never hashed
+// into an annotation a namespace reader could brute-force.
+func TestRenderAppWorkloadSecretValuesRollThePodsPerDeploy(t *testing.T) {
+	workload := mustRender(t, fullApp(), newResolver())
+	if got := workload.Deployment.Spec.Template.Annotations[appEnvRevisionAnnotation]; got != "7" {
+		t.Fatalf("env revision annotation = %q, want 7", got)
+	}
+	if _, err := RenderAppWorkload(testNamespace, fullApp(), newResolver(), AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute}); !errors.Is(err, ErrRenderApp) {
+		t.Fatalf("secret values with no env revision must be refused, got %v", err)
+	}
+	plain := mustRender(t, minimalApp(), newResolver())
+	if plain.EnvSecret != nil {
+		t.Error("an app with no secret values renders no Secret")
+	}
+	if _, ok := plain.Deployment.Spec.Template.Annotations[appEnvRevisionAnnotation]; ok {
+		t.Error("an app with no secret values must not roll on every deploy")
+	}
+}
+
+// A value that resolves empty is never deployed: the container would start
+// with a blank credential and fail somewhere the customer cannot see.
+func TestRenderAppWorkloadRefusesAnEmptyResolvedValue(t *testing.T) {
+	app := fullApp()
+	for _, name := range []string{"STRIPE_KEY", "DATABASE_URL", "PGHOST"} {
+		resolver := newResolver()
+		resolver.valueFor = map[string]string{name: "", ownSecret(app, "STRIPE_KEY").Path: "x"}
+		if name == "STRIPE_KEY" {
+			resolver.valueFor = map[string]string{ownSecret(app, "STRIPE_KEY").Path: ""}
+		}
+		_, err := RenderAppWorkload(testNamespace, app, resolver, testRenderOptions)
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s resolving empty must be refused naming it, got %v", name, err)
+		}
+	}
 }
 
 // A reference resolves at the internal cluster scope. The public per-tenant
@@ -306,26 +392,6 @@ func TestRenderAppWorkloadRefusesUnresolvableReference(t *testing.T) {
 	}
 	if _, err := RenderAppWorkload(testNamespace, fullApp(), nil, testRenderOptions); err == nil {
 		t.Fatal("an app with references and no resolver must be refused")
-	}
-}
-
-// A credential-bearing reference must come back as a secret. A resolver that
-// hands one over in the clear is refused rather than written into a Deployment
-// any namespace reader can dump.
-func TestRenderAppWorkloadRefusesCredentialInTheClear(t *testing.T) {
-	for _, variable := range []string{"DATABASE_URL", "PGPASSWORD"} {
-		app := minimalApp()
-		app.Env = []apphost.EnvVar{{
-			Name: variable, Kind: apphost.KindReference,
-			Reference: &apphost.ReferenceTarget{
-				SourceKind: apphost.SourceDatabase, SourceName: "proj-abc", Variable: variable,
-			},
-		}}
-		resolver := newResolver()
-		resolver.literalFor = map[string]string{variable: "postgres://u:p@h/db"}
-		if _, err := RenderAppWorkload(testNamespace, app, resolver, testRenderOptions); err == nil {
-			t.Errorf("%s handed over as a literal must be refused", variable)
-		}
 	}
 }
 
@@ -682,13 +748,20 @@ func workloadYAML(t *testing.T, workload *AppWorkload) string {
 	deployment := workload.Deployment.DeepCopy()
 	deployment.TypeMeta = metav1.TypeMeta{APIVersion: appsv1.SchemeGroupVersion.String(), Kind: "Deployment"}
 
+	objects := []interface{}{deployment}
+	if workload.EnvSecret != nil {
+		secret := workload.EnvSecret.DeepCopy()
+		secret.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}
+		objects = append(objects, secret)
+	}
 	service := workload.Service.DeepCopy()
 	service.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}
 	ingress := workload.Ingress.DeepCopy()
 	ingress.TypeMeta = metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"}
+	objects = append(objects, workload.EgressPolicy.Object, service, ingress, workload.IngressPolicy.Object)
 
 	var out strings.Builder
-	for _, obj := range []interface{}{deployment, workload.EgressPolicy.Object, service, ingress, workload.IngressPolicy.Object} {
+	for _, obj := range objects {
 		encoded, err := yaml.Marshal(obj)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -779,44 +852,40 @@ func TestRenderEnvVarRefusals(t *testing.T) {
 			}},
 			resolver: newResolver(),
 		},
-		"secret resolved to an incomplete selector": {
-			declared: apphost.EnvVar{Name: "X", Kind: apphost.KindSecret, Secret: &apphost.SecretRef{
-				Path: "projects/proj-abc/stripe", Key: "api_key",
-			}},
+		"secret resolved to nothing": {
+			declared: apphost.EnvVar{Name: "X", Kind: apphost.KindSecret, Secret: ownSecret(app, "X")},
 			resolver: &brokenResolver{},
 		},
 		"reference resolved to nothing": {
 			declared: apphost.EnvVar{Name: "X", Kind: apphost.KindReference, Reference: target},
 			resolver: &brokenResolver{},
 		},
-		"reference resolved to both a value and a secret": {
+		"secret with no resolver": {
+			declared: apphost.EnvVar{Name: "X", Kind: apphost.KindSecret, Secret: ownSecret(app, "X")},
+		},
+		"reference with no resolver": {
 			declared: apphost.EnvVar{Name: "X", Kind: apphost.KindReference, Reference: target},
-			resolver: &brokenResolver{both: true},
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := renderEnvVar(app, tc.declared, tc.resolver); err == nil {
+			if _, err := newEnvRenderer(app, tc.resolver).render(tc.declared); err == nil {
 				t.Error("must be refused")
 			}
 		})
 	}
 }
 
-// brokenResolver answers with sources that are not usable, standing in for a
-// resolver implementation that goes wrong.
-type brokenResolver struct{ both bool }
+// brokenResolver answers with empty values, standing in for a resolver
+// implementation that goes wrong.
+type brokenResolver struct{}
 
-func (b *brokenResolver) ResolveReference(string, apphost.ResolvedReference) (EnvSource, error) {
-	if b.both {
-		value := "v"
-		return EnvSource{Literal: &value, Secret: &SecretKeySelector{SecretName: "s", Key: "k"}}, nil
-	}
-	return EnvSource{}, nil
+func (b *brokenResolver) ResolveReference(string, apphost.ResolvedReference) (string, error) {
+	return "", nil
 }
 
-func (b *brokenResolver) ResolveSecret(string, apphost.SecretRef) (SecretKeySelector, error) {
-	return SecretKeySelector{SecretName: "s"}, nil
+func (b *brokenResolver) ResolveSecret(string, apphost.SecretRef) (string, error) {
+	return "", nil
 }
 
 // A tier whose catalogue entry is unparseable is fatal, never a pod with no

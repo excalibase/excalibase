@@ -166,6 +166,29 @@ describe('AppForm', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  test('renaming a stored secret asks for its value again under the new name', async () => {
+    const withSecret: App = {
+      ...existingApp,
+      env: [
+        {
+          name: 'API_KEY',
+          kind: 'secret',
+          secret: { path: 'projects/proj-1/apps/app-1/env/API_KEY', key: 'value' },
+        },
+      ],
+    };
+    const { onSubmit, user } = renderForm({ initial: withSecret, submitLabel: 'Save' });
+    await user.clear(screen.getByTestId('env-name-0'));
+    await user.type(screen.getByTestId('env-name-0'), 'STRIPE_KEY');
+    expect(screen.getByTestId('env-secret-value-0')).toBeInTheDocument();
+    await user.type(screen.getByTestId('env-secret-value-0'), 'sk_1');
+    await user.click(screen.getByTestId('app-submit'));
+    expect(onSubmit).toHaveBeenLastCalledWith({
+      input: expect.objectContaining({ env: [] }),
+      secrets: [{ name: 'STRIPE_KEY', value: 'sk_1' }],
+    });
+  });
+
   test('a stored secret shows as set and is only ever replaced, never shown', async () => {
     const withSecret: App = {
       ...existingApp,

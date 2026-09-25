@@ -21,6 +21,10 @@ describe('plainFailureReason', () => {
       /database variable could not be resolved/i,
     ],
     [
+      'render app workload: resolve secret for "API_KEY": no value is stored',
+      /has no value stored/i,
+    ],
+    [
       'render app workload: "API_KEY" is a secret and no resolver was given',
       /cannot supply database or secret variables/i,
     ],

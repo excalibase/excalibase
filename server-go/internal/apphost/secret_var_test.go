@@ -1,6 +1,7 @@
 package apphost_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -54,5 +55,37 @@ func TestValidateEnvName(t *testing.T) {
 		if err := apphost.ValidateEnvName(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// A secret variable may point only at the entry the platform chose for it, so
+// no app can have a deploy read some other vault path on its behalf — not
+// another tenant's, and not its own project's database credentials.
+func TestValidateRefusesASecretOutsideItsServerChosenEntry(t *testing.T) {
+	refused := []apphost.SecretRef{
+		{Path: "projects/proj_abc123/credentials/admin", Key: "password"},
+		{Path: "projects/proj_abc123/apps/app_01/env/OTHER", Key: "value"},
+		{Path: "projects/proj_abc123/apps/app_02/env/TOKEN", Key: "value"},
+		{Path: "projects/proj_abc123/apps/app_01/env/TOKEN", Key: "password"},
+		{Path: "projects/proj_other/apps/app_01/env/TOKEN", Key: "value"},
+	}
+	for _, ref := range refused {
+		app := validApp()
+		app.Env = []apphost.EnvVar{{Name: "TOKEN", Kind: apphost.KindSecret, Secret: &ref}}
+		err := app.Validate()
+		if err == nil {
+			t.Errorf("secret ref %+v must be refused", ref)
+			continue
+		}
+		if !strings.Contains(err.Error(), "TOKEN") {
+			t.Errorf("the refusal must name the variable: %v", err)
+		}
+	}
+
+	app := validApp()
+	own := apphost.AppSecretRef(app.ProjectID, app.ID, "TOKEN")
+	app.Env = []apphost.EnvVar{{Name: "TOKEN", Kind: apphost.KindSecret, Secret: &own}}
+	if err := app.Validate(); err != nil {
+		t.Fatalf("the server-chosen entry must be accepted: %v", err)
 	}
 }

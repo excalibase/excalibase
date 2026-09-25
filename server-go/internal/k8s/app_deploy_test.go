@@ -37,6 +37,7 @@ func TestApplyAppWorkload_CreatesThenUpdates(t *testing.T) {
 	app.Replicas = 2
 	updated, err := RenderAppWorkload(testNamespace, app, newResolver(), AppRenderOptions{
 		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32"}, Route: testRoute,
+		EnvRevision: "8",
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -58,6 +59,50 @@ func TestApplyAppWorkload_CreatesThenUpdates(t *testing.T) {
 	stored := egressSpec(t, &AppWorkload{EgressPolicy: policy})
 	if !reflect.DeepEqual(stored, egressSpec(t, updated)) {
 		t.Errorf("egress policy was not updated to the new spec: %+v", stored)
+	}
+}
+
+// The env Secret exists before the Deployment that reads it, is owned by that
+// Deployment so it goes when the app's workload goes, and follows each deploy.
+func TestApplyAppWorkload_AppliesTheEnvSecret(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	app := fullApp()
+	if err := c.ApplyAppWorkload(ctx, testNamespace, mustRender(t, app, newResolver())); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	secrets := c.clientset.CoreV1().Secrets(testNamespace)
+	stored, err := secrets.Get(ctx, AppEnvSecretName(app.Name), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("env secret should exist: %v", err)
+	}
+	if string(stored.Data["STRIPE_KEY"]) != testStripeKey {
+		t.Fatalf("STRIPE_KEY = %q", stored.Data["STRIPE_KEY"])
+	}
+	dep, _ := c.clientset.AppsV1().Deployments(testNamespace).Get(ctx, AppObjectName(app.Name), metav1.GetOptions{})
+	if len(stored.OwnerReferences) != 1 || stored.OwnerReferences[0].UID != dep.UID || stored.OwnerReferences[0].Kind != "Deployment" {
+		t.Fatalf("env secret owner = %+v, want the app's Deployment %s", stored.OwnerReferences, dep.UID)
+	}
+
+	resolver := newResolver()
+	resolver.valueFor = map[string]string{ownSecret(app, "STRIPE_KEY").Path: "rotated"}
+	if err := c.ApplyAppWorkload(ctx, testNamespace, mustRender(t, app, resolver)); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	stored, _ = secrets.Get(ctx, AppEnvSecretName(app.Name), metav1.GetOptions{})
+	if string(stored.Data["STRIPE_KEY"]) != "rotated" {
+		t.Fatalf("a redeploy must carry the new value, got %q", stored.Data["STRIPE_KEY"])
+	}
+	if len(stored.OwnerReferences) != 1 {
+		t.Fatalf("the owner must survive an update, got %+v", stored.OwnerReferences)
+	}
+
+	app.Env = nil
+	if err := c.ApplyAppWorkload(ctx, testNamespace, mustRender(t, app, newResolver())); err != nil {
+		t.Fatalf("third apply: %v", err)
+	}
+	if _, err := secrets.Get(ctx, AppEnvSecretName(app.Name), metav1.GetOptions{}); err == nil {
+		t.Fatal("values an app no longer declares must not stay in the cluster")
 	}
 }
 

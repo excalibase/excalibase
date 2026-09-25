@@ -10,6 +10,8 @@ export interface EnvRow {
   secretValue: string;
   // Where the server already keeps this variable's value, if it does.
   storedSecret?: SecretRef;
+  // The server keys a stored secret by its variable name, so a rename needs the value again.
+  storedName?: string;
   replacing: boolean;
 }
 
@@ -52,9 +54,11 @@ const rowFromVar = (v: EnvVar): EnvRow => ({
   value: v.value ?? '',
   variable: v.reference?.variable ?? 'DATABASE_URL',
   storedSecret: v.secret,
+  storedName: v.secret ? v.name : undefined,
 });
 
-export const needsSecretValue = (row: EnvRow) => !row.storedSecret || row.replacing;
+export const needsSecretValue = (row: EnvRow) =>
+  !row.storedSecret || row.replacing || row.name !== row.storedName;
 
 export const initialValues = (app?: App): AppFormValues =>
   app
@@ -166,7 +170,7 @@ function toEnvVar(row: EnvRow, databaseName?: string): EnvVar | undefined {
   }
   if (row.kind === 'secret') {
     // A secret the server does not hold yet is added by storing its value.
-    return row.storedSecret
+    return row.storedSecret && row.name === row.storedName
       ? { name: row.name, kind: 'secret', secret: row.storedSecret }
       : undefined;
   }
