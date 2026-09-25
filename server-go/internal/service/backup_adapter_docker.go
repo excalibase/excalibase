@@ -510,7 +510,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		password:      newPassword,
 		backupID:      srcRec.ID,
 	})
-	if err := a.startAndVerify(ctx, pc, dc, store, registrar, probe, containerID, dbName, newInst); err != nil {
+	if err := a.startAndVerify(ctx, pc, restoreDeps{dc: dc, store: store, registrar: registrar, probe: probe}, containerID, dbName, newInst); err != nil {
 		return nil, failRestore(ctx, pc, newProject, err)
 	}
 
@@ -532,16 +532,22 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 // container keeps the source's superuser password (the seeded data directory
 // ignores POSTGRES_PASSWORD), so the admin role is reset to the password
 // stamped on the row.
+// restoreDeps are the collaborators a docker restore finishes through.
+type restoreDeps struct {
+	dc        provisioner.DockerClient
+	store     storage.InstanceStore
+	registrar ProjectRegistrar
+	probe     DatabaseProbe
+}
+
 func (a *DockerBackupAdapter) startAndVerify(
 	ctx context.Context,
 	pc *provisioner.ProvisionContext,
-	dc provisioner.DockerClient,
-	store storage.InstanceStore,
-	registrar ProjectRegistrar,
-	probe DatabaseProbe,
+	deps restoreDeps,
 	containerID, dbName string,
 	newInst *domain.DatabaseInstance,
 ) error {
+	dc, store, registrar, probe := deps.dc, deps.store, deps.registrar, deps.probe
 	if err := dc.StartContainer(ctx, containerID); err != nil {
 		return fmt.Errorf("start restored container: %w", err)
 	}
