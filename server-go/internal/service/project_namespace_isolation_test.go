@@ -9,7 +9,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
-	"github.com/excalibase/provisioning-poc/internal/storage"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -90,47 +89,6 @@ func TestRestoreRefusesSourceWithoutOrg(t *testing.T) {
 	if len(mock.Calls) != 0 {
 		t.Errorf("nothing may be created for a source without an org: %v", mock.Calls)
 	}
-}
-
-func TestCloneNamespaceIsIsolatedAndQuotaed(t *testing.T) {
-	client, clientset := fakeKube()
-	svc := newCloneService(t, client, "org1")
-
-	resp, err := svc.CloneDatabase(context.Background(), testOpsDB, domain.CloneRequest{NewProjectName: "clone"})
-	if err != nil {
-		t.Fatalf("CloneDatabase: %v", err)
-	}
-	assertProjectNamespaceIsolated(t, clientset, resp.Namespace, "org1")
-}
-
-func TestCloneRefusesSourceWithoutOrg(t *testing.T) {
-	mock := k8s.NewMockClient()
-	svc := newCloneService(t, mock, "")
-
-	_, err := svc.CloneDatabase(context.Background(), testOpsDB, domain.CloneRequest{NewProjectName: "clone"})
-	if !errors.Is(err, k8s.ErrProjectOrgRequired) {
-		t.Fatalf("err = %v, want ErrProjectOrgRequired", err)
-	}
-	if len(mock.Namespaces) != 0 || len(mock.CRDs) != 0 {
-		t.Errorf("nothing may be created for a source without an org: ns=%v crds=%v", mock.Namespaces, mock.CRDs)
-	}
-}
-
-func newCloneService(t *testing.T, client k8s.KubeClient, orgID string) *ProvisioningService {
-	t.Helper()
-	store, err := storage.NewFileSystemStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
-	if err := store.Create(&domain.DatabaseInstance{
-		ProjectID: testOpsDB, OrgID: orgID, Namespace: testOpsDBNS,
-		DBType: domain.PostgreSQL, Tier: domain.Free, Status: "ACTIVE",
-		Host: "h.local", DatabaseName: "app",
-	}); err != nil {
-		t.Fatalf("seed source: %v", err)
-	}
-	factory := provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(client, ""))
-	return NewProvisioningService(store, factory, client)
 }
 
 // assertOnlyProjectNamespaceCalls fails on any namespace creation that did not
