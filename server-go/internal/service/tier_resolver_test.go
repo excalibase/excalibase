@@ -28,7 +28,7 @@ func (f fakeTierStore) UpsertTierConfig(_ context.Context, tier domain.TierType,
 }
 
 func TestTierConfig_PrefersDBOverDefaults(t *testing.T) {
-	override := config.TierConfig{MaxProjects: 99, Instances: 2, StorageSize: "200Gi", Memory: "32Gi", CPU: "8"}
+	override := config.TierConfig{MaxProjects: 99, Instances: 2, StorageSize: "200Gi", Memory: "32Gi", CPU: "8", StatementTimeout: "5s"}
 	svc := NewProvisioningService(nil, nil, nil)
 	svc.SetTierStore(fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Standard: override}})
 
