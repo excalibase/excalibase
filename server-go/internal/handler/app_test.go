@@ -330,6 +330,13 @@ func TestAppCreateRejectsBadRequests(t *testing.T) {
 		"env with mismatched kind": func(b map[string]any) {
 			b["env"] = []map[string]any{{"name": "TOKEN", "kind": "secret", "value": "x"}}
 		},
+		"project credentials as a secret": func(b map[string]any) {
+			b["env"] = []map[string]any{{
+				"name":   "TOKEN",
+				"kind":   "secret",
+				"secret": map[string]any{"path": "projects/" + appTestProject + "/credentials/admin", "key": "password"},
+			}}
+		},
 		"foreign secret path": func(b map[string]any) {
 			b["env"] = []map[string]any{{
 				"name":   "TOKEN",
@@ -633,12 +640,13 @@ func TestAppUpdateReplacesTheEnvSet(t *testing.T) {
 func TestAppUpdateSwapsAValueForASecret(t *testing.T) {
 	r, _ := setupAppRouter(t)
 	created := createAppForTest(t, r)
+	own := apphost.AppSecretRef(appTestProject, created.ID, "MODE")
 
 	w := doAppRequest(t, r, http.MethodPatch, "/api/projects/"+appTestProject+"/apps/"+created.ID+"/",
 		map[string]any{"env": []map[string]any{{
 			"name":   "MODE",
 			"kind":   "secret",
-			"secret": map[string]any{"path": "projects/" + appTestProject + "/apps/x/secrets", "key": "mode"},
+			"secret": map[string]any{"path": own.Path, "key": own.Key},
 		}}})
 	if w.Code != http.StatusOK {
 		t.Fatalf("update: got %d, body=%s", w.Code, w.Body.String())
@@ -647,8 +655,27 @@ func TestAppUpdateSwapsAValueForASecret(t *testing.T) {
 	if got.Env[0].Value != nil {
 		t.Errorf("the literal value must be gone, got %q", *got.Env[0].Value)
 	}
-	if got.Env[0].Secret == nil || got.Env[0].Secret.Key != "mode" {
+	if got.Env[0].Secret == nil || *got.Env[0].Secret != own {
 		t.Errorf("the secret reference must be applied, got %+v", got.Env[0].Secret)
+	}
+}
+
+// An edit may keep a secret the platform stored, never point one elsewhere.
+func TestAppUpdateRefusesASecretPathTheCallerChose(t *testing.T) {
+	r, _ := setupAppRouter(t)
+	created := createAppForTest(t, r)
+
+	w := doAppRequest(t, r, http.MethodPatch, "/api/projects/"+appTestProject+"/apps/"+created.ID+"/",
+		map[string]any{"env": []map[string]any{{
+			"name":   "MODE",
+			"kind":   "secret",
+			"secret": map[string]any{"path": "projects/" + appTestProject + "/credentials/admin", "key": "password"},
+		}}})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("update: got %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "secrets endpoint") {
+		t.Errorf("the refusal must say how to set a secret: %s", w.Body.String())
 	}
 }
 

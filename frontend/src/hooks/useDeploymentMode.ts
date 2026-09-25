@@ -5,10 +5,11 @@ export type DeploymentMode = 'selfhosted' | 'cloud';
 
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
+  appHosting?: boolean;
 }
 
-export function useDeploymentMode(): DeploymentMode {
-  const { data } = useQuery<ConfigResponse>({
+function useStudioConfig() {
+  return useQuery<ConfigResponse>({
     queryKey: ['config'],
     queryFn: async () => {
       const { data } = await api.get<ConfigResponse>('/config');
@@ -16,8 +17,18 @@ export function useDeploymentMode(): DeploymentMode {
     },
     staleTime: Infinity, // mode doesn't change at runtime
   });
+}
 
+export function useDeploymentMode(): DeploymentMode {
+  const { data } = useStudioConfig();
   return data?.deploymentMode ?? 'selfhosted';
+}
+
+// Off until the server says otherwise, so Studio never links to a route the
+// server has not mounted.
+export function useAppHostingEnabled(): { enabled: boolean; isLoading: boolean } {
+  const { data, isLoading } = useStudioConfig();
+  return { enabled: data?.appHosting === true, isLoading };
 }
 
 export function isSelfHosted(mode: DeploymentMode): boolean {

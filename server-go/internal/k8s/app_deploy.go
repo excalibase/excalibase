@@ -37,7 +37,17 @@ func (c *Client) ApplyAppWorkload(ctx context.Context, namespace string, workloa
 	if err := c.applyAppPolicy(ctx, namespace, workload.IngressPolicy, "ingress"); err != nil {
 		return err
 	}
-	if err := c.applyAppDeployment(ctx, namespace, workload.Deployment); err != nil {
+	// The Secret goes before the Deployment: a pod started before it exists fails to start.
+	if workload.EnvSecret != nil {
+		if err := c.applyAppEnvSecret(ctx, namespace, workload.EnvSecret); err != nil {
+			return err
+		}
+	}
+	deployment, err := c.applyAppDeployment(ctx, namespace, workload.Deployment)
+	if err != nil {
+		return err
+	}
+	if err := c.settleAppEnvSecret(ctx, namespace, workload, deployment); err != nil {
 		return err
 	}
 	if err := c.applyAppService(ctx, namespace, workload.Service); err != nil {
@@ -51,23 +61,83 @@ func (w *AppWorkload) complete() bool {
 		w.Service != nil && w.Ingress != nil && w.IngressPolicy != nil
 }
 
-func (c *Client) applyAppDeployment(ctx context.Context, namespace string, desired *appsv1.Deployment) error {
+func (c *Client) applyAppDeployment(ctx context.Context, namespace string, desired *appsv1.Deployment) (*appsv1.Deployment, error) {
 	deployments := c.clientset.AppsV1().Deployments(namespace)
 	existing, err := deployments.Get(ctx, desired.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		if _, err := deployments.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create app deployment: %w", err)
+		created, err := deployments.Create(ctx, desired, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			return deployments.Get(ctx, desired.Name, metav1.GetOptions{})
 		}
-		return nil
+		if err != nil {
+			return nil, fmt.Errorf("create app deployment: %w", err)
+		}
+		return created, nil
 	}
 	if err != nil {
-		return fmt.Errorf("read app deployment: %w", err)
+		return nil, fmt.Errorf("read app deployment: %w", err)
 	}
 	updated := existing.DeepCopy()
 	updated.Labels = desired.Labels
 	updated.Spec = desired.Spec
-	if _, err := deployments.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update app deployment: %w", err)
+	applied, err := deployments.Update(ctx, updated, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("update app deployment: %w", err)
+	}
+	return applied, nil
+}
+
+// applyAppEnvSecret writes the values; the owner reference it already carries
+// is kept, since the Deployment it names is the same one across deploys.
+func (c *Client) applyAppEnvSecret(ctx context.Context, namespace string, desired *corev1.Secret) error {
+	secrets := c.clientset.CoreV1().Secrets(namespace)
+	existing, err := secrets.Get(ctx, desired.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if _, err := secrets.Create(ctx, desired, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("create app env secret: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read app env secret: %w", err)
+	}
+	updated := existing.DeepCopy()
+	updated.Labels = desired.Labels
+	updated.Type = desired.Type
+	updated.Data = desired.Data
+	updated.StringData = nil
+	if _, err := secrets.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update app env secret: %w", err)
+	}
+	return nil
+}
+
+// settleAppEnvSecret hands the Secret to the Deployment, so it is collected
+// with the app's workload, or deletes a Secret the app no longer needs so no
+// value it stopped declaring stays readable in the cluster.
+func (c *Client) settleAppEnvSecret(ctx context.Context, namespace string, workload *AppWorkload, owner *appsv1.Deployment) error {
+	secrets := c.clientset.CoreV1().Secrets(namespace)
+	name := workload.Deployment.Name + appEnvSecretSuffix
+	if workload.EnvSecret == nil {
+		if err := secrets.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete app env secret: %w", err)
+		}
+		return nil
+	}
+	secret, err := secrets.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read app env secret: %w", err)
+	}
+	ownerRef := metav1.OwnerReference{
+		APIVersion: appsv1.SchemeGroupVersion.String(), Kind: "Deployment",
+		Name: owner.Name, UID: owner.UID,
+	}
+	if len(secret.OwnerReferences) == 1 && secret.OwnerReferences[0] == ownerRef {
+		return nil
+	}
+	secret.OwnerReferences = []metav1.OwnerReference{ownerRef}
+	if _, err := secrets.Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("own app env secret: %w", err)
 	}
 	return nil
 }

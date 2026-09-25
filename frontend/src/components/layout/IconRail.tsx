@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useParams, useNavigate, Link } from 'react-router-dom';
-import { PROJECT_NAV, type NavSection } from './navigation';
+import { visibleProjectNav, type NavSection } from './navigation';
+import { useAppHostingEnabled } from '../../hooks/useDeploymentMode';
 import { cn } from '../../utils/cn';
 import { PanelLeftDashed } from 'lucide-react';
 
@@ -18,6 +19,8 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const basePath = `/project/${projectId}`;
+  const { enabled: appHosting } = useAppHostingEnabled();
+  const sections = visibleProjectNav({ appHosting });
 
   const [mode, setMode] = useState<SidebarMode>(() => {
     return (localStorage.getItem(STORAGE_KEY) as SidebarMode) ?? 'expandable';
@@ -83,7 +86,7 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
 
       {/* Nav items */}
       <nav className="flex-1 flex flex-col py-2 gap-0.5 px-1.5 overflow-y-auto">
-        {PROJECT_NAV.map((section) => {
+        {sections.map((section) => {
           const Icon = section.icon;
           const active = isActive(section) || activeSection === section.key;
           return (

@@ -268,13 +268,6 @@ var (
 	// validSourceName — the name of a source within the project (a database
 	// name), as the platform recorded it.
 	validSourceName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	// validSecretPath — a vault path: plain path segments only. Percent signs
-	// are excluded deliberately: "..%2f.." is one segment to a splitter and
-	// two levels up to anything that decodes it, and the vault client builds
-	// a URL out of these segments.
-	validSecretPath = regexp.MustCompile(`^[A-Za-z0-9_./~@+-]+$`)
-	// validSecretKey — a field name inside a vault secret.
-	validSecretKey = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 	// validHealthPath — an absolute path with no query, fragment or space.
 	validHealthPath = regexp.MustCompile(`^/[A-Za-z0-9._~/%:@!$&'()*+,;=-]*$`)
 )
@@ -389,7 +382,7 @@ func (a *App) Validate() error {
 	if err := a.validateReplicas(); err != nil {
 		return err
 	}
-	if err := validateEnv(a.ProjectID, a.Env); err != nil {
+	if err := validateEnv(a.ProjectID, a.ID, a.Env); err != nil {
 		return err
 	}
 	if !validStatuses[a.Status] {
@@ -452,7 +445,7 @@ func validateHealthCheckPath(path string) error {
 
 // validateEnv checks the variables as a set: the set fits its caps, names are
 // unique, and every variable carries exactly the payload its kind names.
-func validateEnv(projectID string, env []EnvVar) error {
+func validateEnv(projectID, appID string, env []EnvVar) error {
 	if len(env) > MaxEnvVars {
 		return fmt.Errorf("at most %d environment variables are allowed", MaxEnvVars)
 	}
@@ -466,7 +459,7 @@ func validateEnv(projectID string, env []EnvVar) error {
 			return fmt.Errorf("duplicate environment variable: %q", v.Name)
 		}
 		seen[v.Name] = true
-		if err := validateVarPayload(projectID, v); err != nil {
+		if err := validateVarPayload(projectID, appID, v); err != nil {
 			return err
 		}
 		total += envVarBytes(v)
@@ -480,7 +473,7 @@ func validateEnv(projectID string, env []EnvVar) error {
 // validateVarPayload checks that exactly the payload the kind names is set.
 // The kind is authoritative: a variable declared a secret that also carries a
 // literal is a refusal, not a choice to be made downstream.
-func validateVarPayload(projectID string, v EnvVar) error {
+func validateVarPayload(projectID, appID string, v EnvVar) error {
 	present := 0
 	for _, set := range []bool{v.Value != nil, v.Reference != nil, v.Secret != nil} {
 		if set {
@@ -512,10 +505,7 @@ func validateVarPayload(projectID string, v EnvVar) error {
 		if v.Secret == nil {
 			return fmt.Errorf("environment variable %q is declared %s and must carry a secret", v.Name, v.Kind)
 		}
-		if err := validateSecretRef(projectID, *v.Secret); err != nil {
-			return fmt.Errorf("environment variable %q: %w", v.Name, err)
-		}
-		return nil
+		return validateSecretRef(projectID, appID, v.Name, *v.Secret)
 	default:
 		return fmt.Errorf("environment variable %q has an unknown kind: %q (expected %s, %s or %s)",
 			v.Name, v.Kind, KindLiteral, KindReference, KindSecret)
@@ -611,27 +601,13 @@ func (a *App) Resolutions() []ResolvedReference {
 	return out
 }
 
-// validateSecretRef holds a secret reference inside the project's own vault
-// prefix. Without the prefix check, an app could name another tenant's secret
-// and have the deploy read it on its behalf.
-func validateSecretRef(projectID string, ref SecretRef) error {
-	if len(ref.Path) >= MaxSecretPathLength {
-		return fmt.Errorf("secret path must be shorter than %d characters", MaxSecretPathLength)
-	}
-	if !validSecretPath.MatchString(ref.Path) {
-		return fmt.Errorf("invalid secret path: %q", ref.Path)
-	}
-	prefix := "projects/" + projectID + "/"
-	if !strings.HasPrefix(ref.Path, prefix) {
-		return fmt.Errorf("secret path must start with %q", prefix)
-	}
-	for _, segment := range strings.Split(ref.Path, "/") {
-		if segment == "" || segment == "." || segment == ".." {
-			return fmt.Errorf("invalid secret path segment: %q", segment)
-		}
-	}
-	if !validSecretKey.MatchString(ref.Key) {
-		return fmt.Errorf("invalid secret key: %q", ref.Key)
+// validateSecretRef holds a secret variable to the one vault entry the
+// platform chose for it. Anything else would let a deploy read, on the app's
+// behalf, a path the tenant named: another tenant's secret, or the project's
+// own database credentials.
+func validateSecretRef(projectID, appID, name string, ref SecretRef) error {
+	if ref != AppSecretRef(projectID, appID, name) {
+		return fmt.Errorf("environment variable %q: a secret can only be set through the app's secrets endpoint, not by naming a vault path", name)
 	}
 	return nil
 }

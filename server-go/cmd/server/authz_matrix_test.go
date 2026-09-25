@@ -124,11 +124,12 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		// The app store talks to a database that never connects: the matrix
 		// asserts authorization outcomes, and a failed query is a 500, which
 		// is not a gate refusal.
-		appHandler:  handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances), apphost.Route{}),
-		rlUnauth:    custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
-		rlAuthed:    custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
-		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
-		rlMailSend:  custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		appHandler:       handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances), apphost.Route{}),
+		appSecretHandler: handler.NewAppSecretHandler(apphost.NewPostgresAppStore(offlineDB(t)), nil),
+		rlUnauth:         custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
+		rlAuthed:         custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		rlDataPlane:      custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
+		rlMailSend:       custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),

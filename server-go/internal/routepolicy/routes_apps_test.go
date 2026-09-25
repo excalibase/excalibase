@@ -17,13 +17,14 @@ func TestAppRowsSitOnTheAuthoringRung(t *testing.T) {
 		t.Fatalf("Index: %v", err)
 	}
 	want := map[Key]string{
-		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/apps/"}:                domain.OrgRoleViewer,
-		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/apps/{appId}/"}:        domain.OrgRoleViewer,
-		{Method: http.MethodPost, Pattern: "/api/projects/{projectId}/apps/"}:               domain.OrgRoleDeveloper,
-		{Method: http.MethodPatch, Pattern: "/api/projects/{projectId}/apps/{appId}/"}:      domain.OrgRoleDeveloper,
-		{Method: http.MethodDelete, Pattern: "/api/projects/{projectId}/apps/{appId}/"}:     domain.OrgRoleDeveloper,
-		{Method: http.MethodPost, Pattern: "/api/projects/{projectId}/apps/{appId}/deploy"}: domain.OrgRoleDeveloper,
-		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys"}: domain.OrgRoleViewer,
+		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/apps/"}:                       domain.OrgRoleViewer,
+		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/apps/{appId}/"}:               domain.OrgRoleViewer,
+		{Method: http.MethodPost, Pattern: "/api/projects/{projectId}/apps/"}:                      domain.OrgRoleDeveloper,
+		{Method: http.MethodPatch, Pattern: "/api/projects/{projectId}/apps/{appId}/"}:             domain.OrgRoleDeveloper,
+		{Method: http.MethodDelete, Pattern: "/api/projects/{projectId}/apps/{appId}/"}:            domain.OrgRoleDeveloper,
+		{Method: http.MethodPost, Pattern: "/api/projects/{projectId}/apps/{appId}/deploy"}:        domain.OrgRoleDeveloper,
+		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys"}:        domain.OrgRoleViewer,
+		{Method: http.MethodPut, Pattern: "/api/projects/{projectId}/apps/{appId}/secrets/{name}"}: domain.OrgRoleDeveloper,
 	}
 	for key, role := range want {
 		row, ok := index[key]

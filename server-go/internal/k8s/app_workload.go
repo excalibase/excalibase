@@ -32,6 +32,9 @@ const (
 	appManagedByValue = "excalibase-provisioning"
 	// appConfigHashAnnotation rolls the Deployment when the record changes.
 	appConfigHashAnnotation = "excalibase.io/app-config-hash"
+	// appEnvRevisionAnnotation rolls the Deployment on each deploy of an app
+	// with secret values, which can change while the record does not.
+	appEnvRevisionAnnotation = "excalibase.io/app-env-revision"
 	// appObjectPrefix avoids colliding with CNPG's and the platform's own objects.
 	appObjectPrefix = "app-"
 	// maxLabelValueLength is Kubernetes' limit; checked rather than truncated
@@ -54,24 +57,21 @@ type SecretKeySelector struct {
 	Key        string
 }
 
-// EnvSource is a resolved variable: a plain value or a Secret reference, never both.
-type EnvSource struct {
-	Literal *string
-	Secret  *SecretKeySelector
-}
-
-// Resolver turns the pointers an app record stores into addresses at render
-// time, so nothing durable holds a credential. EXC-386 provides the real implementation.
+// Resolver reads, at deploy time, the values an app record only points at, so
+// nothing durable in the platform's own tables holds them.
 type Resolver interface {
 	// ResolveReference always resolves at internal cluster scope.
-	ResolveReference(projectID string, ref apphost.ResolvedReference) (EnvSource, error)
-	// ResolveSecret returns a selector, never a value.
-	ResolveSecret(projectID string, ref apphost.SecretRef) (SecretKeySelector, error)
+	ResolveReference(projectID string, ref apphost.ResolvedReference) (string, error)
+	// ResolveSecret reads the value stored at the app's own vault entry.
+	ResolveSecret(projectID string, ref apphost.SecretRef) (string, error)
 }
 
 // AppWorkload is one app's rendered manifests; a value, applied by nothing here.
 type AppWorkload struct {
-	Deployment    *appsv1.Deployment
+	Deployment *appsv1.Deployment
+	// EnvSecret holds every secret and credential value the container reads,
+	// referenced from the Deployment by key; nil when the app has none.
+	EnvSecret     *corev1.Secret
 	EgressPolicy  *unstructured.Unstructured
 	Service       *corev1.Service
 	Ingress       *networkingv1.Ingress
@@ -92,10 +92,18 @@ type AppRenderOptions struct {
 	// ExtraDenyCIDRs are APP_EGRESS_EXTRA_DENY_CIDRS, already validated by config.
 	ExtraDenyCIDRs []string
 	Route          AppRouteOptions
+	// EnvRevision is set per deploy by the deploy service; required once the
+	// app has secret values, so their changes roll the pods.
+	EnvRevision string
 }
 
 // AppObjectName is the name the app's Deployment holds in the project namespace.
 func AppObjectName(appName string) string { return appObjectPrefix + appName }
+
+// AppEnvSecretName is the name of the Secret holding the app's secret values.
+func AppEnvSecretName(appName string) string { return AppObjectName(appName) + appEnvSecretSuffix }
+
+const appEnvSecretSuffix = "-env"
 
 // AppEgressPolicyName is the name of the app's egress fence.
 func AppEgressPolicyName(appName string) string { return appObjectPrefix + appName + "-egress" }
@@ -103,32 +111,22 @@ func AppEgressPolicyName(appName string) string { return appObjectPrefix + appNa
 // RenderAppWorkload renders the app into the project's namespace. Every input
 // is checked and nothing is defaulted; the output is a pure function of its arguments.
 func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, opts AppRenderOptions) (*AppWorkload, error) {
-	if app == nil {
-		return nil, fmt.Errorf("%w: no app", ErrRenderApp)
-	}
-	if opts.RuntimeClass == "" {
-		return nil, fmt.Errorf("%w: no sandbox runtime class", ErrRenderApp)
-	}
-	if !namespacePattern.MatchString(namespace) {
-		return nil, fmt.Errorf("%w: %q is not a project namespace", ErrRenderApp, namespace)
-	}
-	if err := app.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrRenderApp, err)
-	}
-	for what, value := range map[string]string{"app id": app.ID, "project id": app.ProjectID} {
-		if len(value) > maxLabelValueLength {
-			return nil, fmt.Errorf("%w: %s %q exceeds %d characters and cannot be a label",
-				ErrRenderApp, what, value, maxLabelValueLength)
-		}
+	if err := validateRenderInputs(namespace, app, opts); err != nil {
+		return nil, err
 	}
 	tier, err := config.GetAppTierConfig(app.Tier)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrRenderApp, err)
 	}
 
-	env, err := renderAppEnv(app, resolver)
+	envRenderer := newEnvRenderer(app, resolver)
+	env, err := envRenderer.renderAll()
 	if err != nil {
 		return nil, err
+	}
+	envSecret := envRenderer.secret(namespace)
+	if envSecret != nil && opts.EnvRevision == "" {
+		return nil, fmt.Errorf("%w: an app with secret values needs an env revision", ErrRenderApp)
 	}
 	resources, err := appResourceRequirements(tier)
 	if err != nil {
@@ -139,6 +137,9 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 	if err != nil {
 		return nil, err
 	}
+	if envSecret != nil {
+		deployment.Spec.Template.Annotations[appEnvRevisionAnnotation] = opts.EnvRevision
+	}
 	policy, err := buildAppEgressPolicy(namespace, app, opts.ExtraDenyCIDRs)
 	if err != nil {
 		return nil, err
@@ -148,9 +149,31 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 		return nil, err
 	}
 	return &AppWorkload{
-		Deployment: deployment, EgressPolicy: policy,
+		Deployment: deployment, EnvSecret: envSecret, EgressPolicy: policy,
 		Service: route.service, Ingress: route.ingress, IngressPolicy: route.policy,
 	}, nil
+}
+
+func validateRenderInputs(namespace string, app *apphost.App, opts AppRenderOptions) error {
+	if app == nil {
+		return fmt.Errorf("%w: no app", ErrRenderApp)
+	}
+	if opts.RuntimeClass == "" {
+		return fmt.Errorf("%w: no sandbox runtime class", ErrRenderApp)
+	}
+	if !namespacePattern.MatchString(namespace) {
+		return fmt.Errorf("%w: %q is not a project namespace", ErrRenderApp, namespace)
+	}
+	if err := app.Validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrRenderApp, err)
+	}
+	for what, value := range map[string]string{"app id": app.ID, "project id": app.ProjectID} {
+		if len(value) > maxLabelValueLength {
+			return fmt.Errorf("%w: %s %q exceeds %d characters and cannot be a label",
+				ErrRenderApp, what, value, maxLabelValueLength)
+		}
+	}
+	return nil
 }
 
 // appLabels identify and clean up everything one app owns; app id is the stable key.
@@ -199,14 +222,31 @@ func appResourceRequirements(tier config.AppTierConfig) (corev1.ResourceRequirem
 	}, nil
 }
 
-// renderAppEnv walks variables in authored order so the rendered list is stable. Nothing iterates a map.
-func renderAppEnv(app *apphost.App, resolver Resolver) ([]corev1.EnvVar, error) {
-	if len(app.Env) == 0 {
+// envRenderer walks variables in authored order so the rendered list is
+// stable, collecting every value that must not sit in the Deployment into the
+// app's env Secret.
+type envRenderer struct {
+	app        *apphost.App
+	resolver   Resolver
+	secretName string
+	secretData map[string][]byte
+}
+
+func newEnvRenderer(app *apphost.App, resolver Resolver) *envRenderer {
+	return &envRenderer{
+		app: app, resolver: resolver,
+		secretName: AppEnvSecretName(app.Name),
+		secretData: map[string][]byte{},
+	}
+}
+
+func (r *envRenderer) renderAll() ([]corev1.EnvVar, error) {
+	if len(r.app.Env) == 0 {
 		return nil, nil
 	}
-	out := make([]corev1.EnvVar, 0, len(app.Env))
-	for _, declared := range app.Env {
-		rendered, err := renderEnvVar(app, declared, resolver)
+	out := make([]corev1.EnvVar, 0, len(r.app.Env))
+	for _, declared := range r.app.Env {
+		rendered, err := r.render(declared)
 		if err != nil {
 			return nil, err
 		}
@@ -215,9 +255,9 @@ func renderAppEnv(app *apphost.App, resolver Resolver) ([]corev1.EnvVar, error) 
 	return out, nil
 }
 
-// renderEnvVar re-checks payload presence even after App.Validate: tenant-supplied
+// render re-checks payload presence even after App.Validate: tenant-supplied
 // data must be refused, never panic the control plane.
-func renderEnvVar(app *apphost.App, declared apphost.EnvVar, resolver Resolver) (corev1.EnvVar, error) {
+func (r *envRenderer) render(declared apphost.EnvVar) (corev1.EnvVar, error) {
 	switch declared.Kind {
 	case apphost.KindLiteral:
 		if declared.Value == nil {
@@ -229,12 +269,12 @@ func renderEnvVar(app *apphost.App, declared apphost.EnvVar, resolver Resolver) 
 		if declared.Secret == nil {
 			return corev1.EnvVar{}, missingPayload(declared)
 		}
-		return renderSecretEnv(app, declared, resolver)
+		return r.renderSecret(declared)
 	case apphost.KindReference:
 		if declared.Reference == nil {
 			return corev1.EnvVar{}, missingPayload(declared)
 		}
-		return renderReferenceEnv(app, declared, resolver)
+		return r.renderReference(declared)
 	default:
 		return corev1.EnvVar{}, fmt.Errorf("%w: variable %q has an unknown kind %q",
 			ErrRenderApp, declared.Name, declared.Kind)
@@ -246,22 +286,26 @@ func missingPayload(declared apphost.EnvVar) error {
 		ErrRenderApp, declared.Name, declared.Kind, declared.Kind)
 }
 
-func renderSecretEnv(app *apphost.App, declared apphost.EnvVar, resolver Resolver) (corev1.EnvVar, error) {
-	if resolver == nil {
+func (r *envRenderer) renderSecret(declared apphost.EnvVar) (corev1.EnvVar, error) {
+	if r.resolver == nil {
 		return corev1.EnvVar{}, fmt.Errorf("%w: %q is a secret and no resolver was given",
 			ErrRenderApp, declared.Name)
 	}
-	selector, err := resolver.ResolveSecret(app.ProjectID, *declared.Secret)
+	value, err := r.resolver.ResolveSecret(r.app.ProjectID, *declared.Secret)
 	if err != nil {
 		return corev1.EnvVar{}, fmt.Errorf("%w: resolve secret for %q: %w", ErrRenderApp, declared.Name, err)
 	}
-	return secretEnvVar(declared.Name, selector)
+	if value == "" {
+		return corev1.EnvVar{}, fmt.Errorf("%w: resolve secret for %q: no value is stored", ErrRenderApp, declared.Name)
+	}
+	return r.hide(declared.Name, value)
 }
 
-// renderReferenceEnv resolves to the internal cluster address; unresolvable is
-// fatal here, not an empty container variable, and a credential may only come back as a Secret.
-func renderReferenceEnv(app *apphost.App, declared apphost.EnvVar, resolver Resolver) (corev1.EnvVar, error) {
-	if resolver == nil {
+// renderReference resolves to the internal cluster address; unresolvable or
+// empty is fatal here, never an empty container variable, and a credential
+// only ever reaches the container through the env Secret.
+func (r *envRenderer) renderReference(declared apphost.EnvVar) (corev1.EnvVar, error) {
+	if r.resolver == nil {
 		return corev1.EnvVar{}, fmt.Errorf("%w: %q is a reference and no resolver was given",
 			ErrRenderApp, declared.Name)
 	}
@@ -270,25 +314,39 @@ func renderReferenceEnv(app *apphost.App, declared apphost.EnvVar, resolver Reso
 		Target: *declared.Reference,
 		Scope:  apphost.ScopeInternal,
 	}
-	source, err := resolver.ResolveReference(app.ProjectID, reference)
+	value, err := r.resolver.ResolveReference(r.app.ProjectID, reference)
 	if err != nil {
 		return corev1.EnvVar{}, fmt.Errorf("%w: resolve %q (%s): %w",
 			ErrRenderApp, declared.Name, reference.Target, err)
 	}
-	switch {
-	case source.Secret != nil && source.Literal != nil:
-		return corev1.EnvVar{}, fmt.Errorf("%w: %q resolved to both a value and a secret",
-			ErrRenderApp, declared.Name)
-	case source.Secret != nil:
-		return secretEnvVar(declared.Name, *source.Secret)
-	case source.Literal != nil:
-		if credentialBearingVariables[declared.Reference.Variable] {
-			return corev1.EnvVar{}, fmt.Errorf("%w: %q resolves to %s, which carries a credential and must be a secret reference",
-				ErrRenderApp, declared.Name, declared.Reference.Variable)
-		}
-		return corev1.EnvVar{Name: declared.Name, Value: *source.Literal}, nil
-	default:
-		return corev1.EnvVar{}, fmt.Errorf("%w: %q resolved to nothing", ErrRenderApp, declared.Name)
+	if value == "" {
+		return corev1.EnvVar{}, fmt.Errorf("%w: resolve %q (%s): resolved to an empty value",
+			ErrRenderApp, declared.Name, reference.Target)
+	}
+	if credentialBearingVariables[declared.Reference.Variable] {
+		return r.hide(declared.Name, value)
+	}
+	return corev1.EnvVar{Name: declared.Name, Value: value}, nil
+}
+
+func (r *envRenderer) hide(name, value string) (corev1.EnvVar, error) {
+	r.secretData[name] = []byte(value)
+	return secretEnvVar(name, SecretKeySelector{SecretName: r.secretName, Key: name})
+}
+
+// secret is the app's env Secret, or nil when no variable needed one.
+func (r *envRenderer) secret(namespace string) *corev1.Secret {
+	if len(r.secretData) == 0 {
+		return nil
+	}
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.secretName,
+			Namespace: namespace,
+			Labels:    appLabels(r.app),
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: r.secretData,
 	}
 }
 

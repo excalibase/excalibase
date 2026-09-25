@@ -41,6 +41,12 @@ export default defineConfig({
         'src/pages/LoginPage.tsx',
         'src/pages/OrgDetailPage.tsx',
         'src/api/orgs.ts',
+        'src/api/apps.ts',
+        'src/components/containers/**/*.{ts,tsx}',
+        'src/components/layout/IconRail.tsx',
+        'src/pages/ContainersPage.tsx',
+        'src/pages/ContainerFormPage.tsx',
+        'src/pages/ContainerDetailPage.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {
