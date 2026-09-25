@@ -15,6 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/bootstrap"
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/docbrowser"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/email"
@@ -605,24 +606,27 @@ type handlerDeps struct {
 	emailTokensHandler *handler.EmailTokensHandler
 	internalEmail      *handler.InternalEmailHandler
 	storageHandler     *handler.StorageHandler
-	adminHandler       *handler.AdminHandler
-	authHandler        *handler.AuthHandler
-	svcAcctHandler     *handler.ServiceAccountHandler
-	orgHandler         *handler.OrgHandler
-	vaultHandler       *handler.VaultHandler
-	schemaHandler      *handler.SchemaHandler
-	realtimeHandler    *handler.RealtimeHandler
-	fnHandler          *handler.FunctionHandler
-	rlsPolicyHandler   *handler.RlsPolicyHandler
-	tableGrantHandler  *handler.TableGrantHandler
-	appHandler         *handler.AppHandler
-	appDeployHandler   *handler.AppDeployHandler
-	tierHandler        *handler.TierHandler
-	pgCatalogHandler   *handler.PostgresCatalogHandler
-	capDeps            *capacityDeps
-	rlUnauth           func(http.Handler) http.Handler
-	rlAuthed           func(http.Handler) http.Handler
-	rlDataPlane        func(http.Handler) http.Handler
+	// documentsHandler is Studio's DocumentDB document browser; nil without
+	// Kubernetes, which is where DocumentDB projects run.
+	documentsHandler  *handler.DocumentBrowserHandler
+	adminHandler      *handler.AdminHandler
+	authHandler       *handler.AuthHandler
+	svcAcctHandler    *handler.ServiceAccountHandler
+	orgHandler        *handler.OrgHandler
+	vaultHandler      *handler.VaultHandler
+	schemaHandler     *handler.SchemaHandler
+	realtimeHandler   *handler.RealtimeHandler
+	fnHandler         *handler.FunctionHandler
+	rlsPolicyHandler  *handler.RlsPolicyHandler
+	tableGrantHandler *handler.TableGrantHandler
+	appHandler        *handler.AppHandler
+	appDeployHandler  *handler.AppDeployHandler
+	tierHandler       *handler.TierHandler
+	pgCatalogHandler  *handler.PostgresCatalogHandler
+	capDeps           *capacityDeps
+	rlUnauth          func(http.Handler) http.Handler
+	rlAuthed          func(http.Handler) http.Handler
+	rlDataPlane       func(http.Handler) http.Handler
 	// rlMailSend bounds the routes that make the platform send mail. It is far
 	// tighter than rlAuthed because the cost of overuse is not our CPU, it is
 	// the sending domain's reputation.
@@ -1162,6 +1166,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		pgHandler:          handler.NewParameterGroupHandler(pgStore),
 		emailTokensHandler: emailTokensHandler,
 		storageHandler:     storageHandler,
+		documentsHandler:   buildDocumentBrowser(k8sClient, vc, store),
 		adminHandler:       adminHandler,
 		authHandler:        authHandler,
 		svcAcctHandler:     handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
@@ -1542,6 +1547,19 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(d.activity)
 		d.realtimeHandler.Routes(r)
 	})
+	// Studio's DocumentDB document browser: reading collections, documents
+	// and indexes is open to any member; every write is Developer+, the rung
+	// the rest of the data plane uses.
+	if d.documentsHandler != nil {
+		r.Route("/api/projects/{projectId}/documentdb", func(r chi.Router) {
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
+			r.Use(d.activity)
+			d.documentsHandler.Routes(r)
+		})
+	}
 	if d.storageHandler != nil {
 		r.Route("/api/projects/{projectId}/storage", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
@@ -1687,6 +1705,19 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 		log.Fatalf("Failed to init K8s client: %v", err)
 	}
 	return k8sClient
+}
+
+// buildDocumentBrowser wires the document browser, which reaches a project's
+// gateway as excalibase_app from vault. It needs Kubernetes to find the
+// gateway and the cluster CA, so a deployment without one mounts nothing.
+func buildDocumentBrowser(k8sClient k8s.KubeClient, vc vaultclient.VaultClient, store storage.InstanceStore) *handler.DocumentBrowserHandler {
+	if k8sClient == nil || vc == nil {
+		return nil
+	}
+	connector := docbrowser.NewGatewayConnector(docbrowser.GatewayConnectorConfig{
+		Projects: store, Credentials: vc, Cluster: k8sClient,
+	})
+	return handler.NewDocumentBrowserHandler(docbrowser.NewService(connector, docbrowser.Options{}))
 }
 
 // buildDBEndpointService wires a project's public database endpoint (EXC-410):

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -99,7 +101,7 @@ func (s *ProvisioningService) grantDocumentDBAccess(
 	ctx context.Context, inst *domain.DatabaseInstance, primaryPod string, pc *provisioner.ProvisionContext,
 ) error {
 	pc.SetStep(documentDBGrantStep)
-	cmd := documentDBPsql(inst.DatabaseName, documentDBGrantSQL(inst.Username))
+	cmd := documentDBPsql(inst.DatabaseName, documentDBGrantSQL(inst.Username, roleApp))
 	if err := s.execRoleSQL(ctx, inst.Namespace, primaryPod, cmd); err != nil {
 		return pc.Fail(fmt.Errorf("grant %s access to %s in %s: %w",
 			config.DocumentDBExtension, inst.Username, inst.ProjectID, err))
@@ -107,11 +109,16 @@ func (s *ProvisioningService) grantDocumentDBAccess(
 	return nil
 }
 
-// documentDBGrantSQL makes the project's credential a DocumentDB user. GRANT
-// is idempotent, so a retried provision converges rather than failing on a
-// membership it added itself a moment ago.
-func documentDBGrantSQL(role string) string {
-	return "GRANT " + config.DocumentDBExtension + "_admin_role TO " + schema.QuoteIdent(role)
+// documentDBGrantSQL makes the owner and the platform's app role DocumentDB
+// users; Studio's document browser connects as the latter. The membership
+// carries no user management: that needs CREATEROLE, which neither role has.
+// GRANT is idempotent, so a retried provision converges.
+func documentDBGrantSQL(roles ...string) string {
+	quoted := make([]string, 0, len(roles))
+	for _, role := range roles {
+		quoted = append(quoted, schema.QuoteIdent(role))
+	}
+	return "GRANT " + config.DocumentDBExtension + "_admin_role TO " + strings.Join(quoted, ", ")
 }
 
 // documentDBPsql builds the psql invocation one statement runs under.

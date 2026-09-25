@@ -19,6 +19,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/docbrowser"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/handler"
@@ -225,6 +226,8 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 	deps.realtimeHandler = handler.NewRealtimeHandler(instances, platform.Orgs, nil)
 	deps.fnHandler = policyFunctionHandler(t, instances, functions)
 	deps.storageHandler = policyStorageHandler(t, instances)
+	deps.documentsHandler = handler.NewDocumentBrowserHandler(docbrowser.NewService(
+		docbrowser.NewGatewayConnector(docbrowser.GatewayConnectorConfig{Projects: instances}), docbrowser.Options{}))
 	deps.vaultHandler = policyVaultHandler(t)
 	deps.internalEmail = handler.NewInternalEmailHandler(&countingSender{})
 	deps.emailTokensHandler = handler.NewEmailTokensHandler(offlineDB(t), nil, nil, "", "")

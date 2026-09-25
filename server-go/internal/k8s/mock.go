@@ -75,6 +75,9 @@ type MockClient struct {
 	// which is what a project that has none looks like (EXC-409).
 	GatewayReady      map[string]bool
 	GatewayReadyError error
+	// GatewayAddresses is what DocumentDBGatewayAddress reports, keyed
+	// "namespace/readWriteService".
+	GatewayAddresses map[string]string
 
 	// CreateSecretError fails every secret write, so a test can assert what
 	// a provision does when the cluster refuses one.
@@ -120,6 +123,18 @@ func NewMockClient() *MockClient {
 
 		RuntimeClasses: make(map[string]bool),
 	}
+}
+
+// DocumentDBGatewayAddress answers from what the test put in GatewayAddresses.
+func (m *MockClient) DocumentDBGatewayAddress(ctx context.Context, namespace, readWriteService string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "DocumentDBGatewayAddress:"+namespace+"/"+readWriteService)
+	address, ok := m.GatewayAddresses[namespace+"/"+readWriteService]
+	if !ok {
+		return "", ErrDocumentDBGatewayNotReady
+	}
+	return address, nil
 }
 
 // DocumentDBGatewayReady answers from what the test put in GatewayReady.

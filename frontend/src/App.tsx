@@ -37,6 +37,7 @@ const VaultPage = lazy(() => import('./pages/VaultPage').then(m => ({ default: m
 const SetupPage = lazy(() => import('./pages/SetupPage').then(m => ({ default: m.SetupPage })));
 const SchemaDesignerPage = lazy(() => import('./pages/SchemaDesignerPage').then(m => ({ default: m.SchemaDesignerPage })));
 const TriggersPage = lazy(() => import('./pages/TriggersPage').then(m => ({ default: m.TriggersPage })));
+const DocumentsPage = lazy(() => import('./pages/DocumentsPage').then(m => ({ default: m.DocumentsPage })));
 const IndexesPage = lazy(() => import('./pages/IndexesPage').then(m => ({ default: m.IndexesPage })));
 const TypesPage = lazy(() => import('./pages/TypesPage').then(m => ({ default: m.TypesPage })));
 const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ default: m.AdvisorsPage })));
@@ -94,6 +95,7 @@ export default function App() {
             <Route path="database/indexes" element={<IndexesPage />} />
             <Route path="database/types" element={<TypesPage />} />
             <Route path="database/advisors" element={<AdvisorsPage />} />
+            <Route path="database/documents" element={<DocumentsPage />} />
             {/* Authentication */}
             <Route path="auth/users" element={<AuthUsersPage />} />
             <Route path="auth/sessions" element={<AuthSessionsPage />} />

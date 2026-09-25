@@ -259,6 +259,47 @@ func TestEnableDocumentDBGrantsTheProjectsOwnCredentialMongoAccess(t *testing.T)
 	}
 }
 
+// Studio's document browser reaches the gateway as the platform's own app
+// role, so that role needs the same membership the owner has.
+func TestEnableDocumentDBGrantsThePlatformAppRoleMongoAccess(t *testing.T) {
+	kube := k8s.NewMockClient()
+	svc := documentDBService(t, kube)
+	inst := documentDBProject()
+	inst.Username = "owner_doc"
+
+	if err := svc.enableDocumentDB(context.Background(), inst, idleContext()); err != nil {
+		t.Fatalf("enableDocumentDB: %v", err)
+	}
+
+	granted := execCommandsMentioning(kube, "GRANT")
+	if len(granted) != 1 {
+		t.Fatalf("GRANT ran %d times: %v", len(granted), kube.ExecCommands)
+	}
+	for _, want := range []string{`"owner_doc"`, `"excalibase_app"`} {
+		if !strings.Contains(granted[0], want) {
+			t.Errorf("the grant is missing %s: %s", want, granted[0])
+		}
+	}
+}
+
+// A restore registers the project through the same path, so an existing
+// DocumentDB project brought back gets the app role's membership too.
+func TestRestoredDocumentDBProjectGrantsThePlatformAppRole(t *testing.T) {
+	kube := k8s.NewMockClient()
+	svc := documentDBService(t, kube)
+	inst := documentDBProject()
+
+	err := svc.RegisterProject(context.Background(), inst, RegistrationOptions{Unverified: true})
+	if err != nil {
+		t.Fatalf("RegisterProject: %v", err)
+	}
+
+	granted := execCommandsMentioning(kube, "documentdb_admin_role")
+	if len(granted) != 1 || !strings.Contains(granted[0], `"excalibase_app"`) {
+		t.Errorf("restored project: app role grant missing: %v", granted)
+	}
+}
+
 // No second identity is created and none is filed anywhere: a DocumentDB
 // project has exactly the credentials every other project has.
 func TestEnableDocumentDBCreatesNoSecondIdentity(t *testing.T) {

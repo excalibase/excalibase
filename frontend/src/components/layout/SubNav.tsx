@@ -1,5 +1,6 @@
 import { NavLink, useParams } from 'react-router-dom';
-import { PROJECT_NAV } from './navigation';
+import { PROJECT_NAV, visibleNavItems } from './navigation';
+import { useProjectIsDocumentDB } from '../../hooks/useDocuments';
 import { cn } from '../../utils/cn';
 
 interface SubNavProps {
@@ -9,6 +10,7 @@ interface SubNavProps {
 export function SubNav({ sectionKey }: SubNavProps) {
   const { projectId } = useParams<{ projectId: string }>();
   const section = PROJECT_NAV.find((s) => s.key === sectionKey);
+  const { data: documentDb = false } = useProjectIsDocumentDB(projectId ?? '');
 
   if (!section?.children) return null;
 
@@ -20,7 +22,7 @@ export function SubNav({ sectionKey }: SubNavProps) {
         </h2>
       </div>
       <nav className="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto">
-        {section.children.map((item) => {
+        {visibleNavItems(section.children, documentDb).map((item) => {
           const Icon = item.icon;
           return (
             <NavLink
