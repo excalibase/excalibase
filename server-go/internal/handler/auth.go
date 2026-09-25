@@ -18,10 +18,10 @@ const errNotAuthenticated = "not authenticated"
 type AuthHandler struct {
 	userStore     storage.UserStore
 	tokenStore    storage.TokenStore
-	orgStore      storage.OrgStore      // optional — resolves pending invites on user creation
+	orgStore      storage.OrgStore      // optional — joins an org through an invite token at registration
 	instanceStore storage.InstanceStore // optional — lets CreateToken bind a PAT to a project the caller can see
 	auditLog      auditWriter           // optional — records PAT rotations
-	inviteOnly    bool                  // when true, only invited emails (and the first admin) may register
+	inviteOnly    bool                  // when true, only an invite token (or the first admin) may register
 }
 
 // SetInstanceStore wires the instance store CreateToken uses to confirm the
@@ -37,7 +37,7 @@ func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) 
 func (h *AuthHandler) SetAuditLog(auditLog auditWriter) { h.auditLog = auditLog }
 
 // SetInviteOnly closes open self-registration: once the platform has its first
-// admin, only emails with a pending org invite may register. Default (false)
+// admin, only a registration carrying a live org invite token may proceed. Default (false)
 // keeps registration open for back-compat / self-hosted single-tenant use.
 func (h *AuthHandler) SetInviteOnly(v bool) { h.inviteOnly = v }
 
@@ -47,37 +47,17 @@ func (h *AuthHandler) SetOrgStore(orgStore storage.OrgStore) {
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Username    string `json:"username"`
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		InviteToken string `json:"inviteToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if req.Username == "" || req.Email == "" || req.Password == "" {
-		httpError(w, "username, email, and password are required", http.StatusBadRequest)
-		return
-	}
-	if !isValidEmail(req.Email) {
-		httpError(w, "invalid email format", http.StatusBadRequest)
-		return
-	}
-	if msg := isValidPassword(req.Password); msg != "" {
-		httpError(w, msg, http.StatusBadRequest)
-		return
-	}
-
-	// Check duplicates (indexed lookups). A service principal occupies its
-	// name too: registration can never take over a service identity.
-	existing, _ := h.userStore.FindUserByUsername(r.Context(), req.Username)
-	if existing != nil {
-		httpError(w, "username already taken", http.StatusConflict)
-		return
-	}
-	existingEmail, _ := h.userStore.FindUserByEmail(r.Context(), req.Email)
-	if existingEmail != nil {
-		httpError(w, "email already registered", http.StatusConflict)
+	if status, msg := h.checkRegistration(r.Context(), req.Username, req.Email, req.Password); status != 0 {
+		httpError(w, msg, status)
 		return
 	}
 
@@ -96,21 +76,10 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		role = "platform_admin"
 	}
 
-	// Invite-only gate (EXC-329 hardening): the very first registration always
-	// proceeds (it bootstraps the platform admin). After that, in invite-only
-	// mode a new account requires a pending org invite for its email — this is
-	// what stops anyone on the internet from minting a studio account.
-	if h.inviteOnly && role != "platform_admin" {
-		invited := false
-		if h.orgStore != nil {
-			if invites, err := h.orgStore.FindPendingInvitesByEmail(r.Context(), req.Email); err == nil && len(invites) > 0 {
-				invited = true
-			}
-		}
-		if !invited {
-			httpError(w, "registration is invite-only", http.StatusForbidden)
-			return
-		}
+	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, role == "platform_admin")
+	if status != 0 {
+		httpError(w, msg, status)
+		return
 	}
 
 	now := time.Now()
@@ -143,7 +112,12 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.resolvePendingInvites(r.Context(), user)
+	if inviteHash != "" {
+		if status, msg := h.joinInvitedOrg(r.Context(), inviteHash, user); status != 0 {
+			httpError(w, msg, status)
+			return
+		}
+	}
 
 	// Auto-login: a bounded session token, same shape as Login issues.
 	raw := auth.GenerateToken()
@@ -328,32 +302,64 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.resolvePendingInvites(r.Context(), user)
-
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, user)
 }
 
-func (h *AuthHandler) resolvePendingInvites(ctx context.Context, user *domain.User) {
+// checkRegistration validates the submitted fields and refuses a name or
+// address already in use. A service principal occupies its name too:
+// registration can never take over a service identity.
+func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, password string) (int, string) {
+	if username == "" || email == "" || password == "" {
+		return http.StatusBadRequest, "username, email, and password are required"
+	}
+	if !isValidEmail(email) {
+		return http.StatusBadRequest, "invalid email format"
+	}
+	if msg := isValidPassword(password); msg != "" {
+		return http.StatusBadRequest, msg
+	}
+	if existing, _ := h.userStore.FindUserByUsername(ctx, username); existing != nil {
+		return http.StatusConflict, "username already taken"
+	}
+	if existing, _ := h.userStore.FindUserByEmail(ctx, email); existing != nil {
+		return http.StatusConflict, "email already registered"
+	}
+	return 0, ""
+}
+
+// checkRegistrationInvite validates an invite token before any account is
+// created. Without one, only the first registration or open mode may proceed:
+// an email that matches a pending invite grants nothing on its own.
+func (h *AuthHandler) checkRegistrationInvite(ctx context.Context, token string, firstUser bool) (string, int, string) {
+	if token == "" {
+		if h.inviteOnly && !firstUser {
+			return "", http.StatusForbidden, "registration is invite-only"
+		}
+		return "", 0, ""
+	}
 	if h.orgStore == nil {
-		return
+		return "", http.StatusBadRequest, storage.ErrInviteInvalid.Error()
 	}
-	invites, err := h.orgStore.FindPendingInvitesByEmail(ctx, user.Email)
-	if err != nil {
-		log.Printf("WARN: list pending invites for %s: %v", user.Email, err)
-		return
+	hash := hashToken(token)
+	if _, err := h.orgStore.FindPendingInviteByToken(ctx, hash, time.Now()); err != nil {
+		return "", inviteErrorStatus(err), inviteErrorMessage(err)
 	}
-	for _, inv := range invites {
-		if err := h.orgStore.AddOrgMember(ctx, &domain.OrgMember{
-			OrgID: inv.OrgID, UserID: user.ID, Role: inv.Role,
-		}); err != nil {
-			log.Printf("WARN: add org member %s/%s: %v", inv.OrgID, user.ID, err)
-			continue // don't delete the invite if the membership write failed
-		}
-		if err := h.orgStore.DeletePendingInvite(ctx, inv.ID); err != nil {
-			log.Printf("WARN: delete pending invite %d: %v", inv.ID, err)
-		}
+	return hash, 0, ""
+}
+
+// joinInvitedOrg spends the invite for the account just created. If the token
+// was spent in between, the account is removed again so a refused invite
+// leaves nothing behind.
+func (h *AuthHandler) joinInvitedOrg(ctx context.Context, hash string, user *domain.User) (int, string) {
+	_, err := h.orgStore.AcceptPendingInvite(ctx, hash, user.ID, time.Now())
+	if err == nil {
+		return 0, ""
 	}
+	if derr := h.userStore.DeleteUser(ctx, user.ID); derr != nil {
+		log.Printf("WARN: remove account %s after a refused invite: %v", user.ID, derr)
+	}
+	return inviteErrorStatus(err), inviteErrorMessage(err)
 }
 
 func (h *AuthHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {

@@ -119,6 +119,7 @@ var vaultRows = []Row{
 var orgRows = []Row{
 	{Methods: get, Pattern: "/api/orgs/", Auth: AuthSession, Owner: OwnerNone, Note: "lists only the caller's own orgs"},
 	{Methods: post, Pattern: "/api/orgs/", Auth: AuthSession, Owner: OwnerNone, Note: "cloud only; the creator becomes its owner"},
+	{Methods: post, Pattern: "/api/orgs/invites/accept", Auth: AuthSession, Owner: OwnerNone, Note: "the one-time invite token is the credential; it joins only the org it names"},
 	{Methods: get, Pattern: "/api/orgs/{orgId}/", Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership},
 	{Methods: patch, Pattern: "/api/orgs/{orgId}/", Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership, MinRole: roleAdmin},
 	{Methods: del, Pattern: "/api/orgs/{orgId}/", Auth: AuthSession, Param: ParamOrg, Owner: OwnerOrgMembership, MinRole: roleOwner, Note: "cloud only"},

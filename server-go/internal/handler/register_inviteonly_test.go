@@ -16,20 +16,45 @@ import (
 )
 
 // inviteOrgStore is a minimal OrgStore: it embeds the interface (nil) so it
-// satisfies the type, and implements only the methods Register touches on the
-// subsequent-user path — the invite lookup plus the two resolvePendingInvites
-// writes. (Tests below pre-seed an existing user so the registration under test
-// is never the first/platform_admin one, which would call BootstrapDefaultOrg.)
+// satisfies the type, and implements only the invite methods Register touches.
+// (Tests below pre-seed an existing user so the registration under test is
+// never the first/platform_admin one, which would call BootstrapDefaultOrg.)
 type inviteOrgStore struct {
 	storage.OrgStore
-	invites []*domain.PendingInvite
+	tokenHash string
+	accepted  []string
+	acceptErr error
+	createErr error
+	created   []*domain.PendingInvite
 }
 
-func (s *inviteOrgStore) FindPendingInvitesByEmail(context.Context, string) ([]*domain.PendingInvite, error) {
-	return s.invites, nil
+func (s *inviteOrgStore) CreatePendingInvite(_ context.Context, inv *domain.PendingInvite) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
+	s.created = append(s.created, inv)
+	return nil
 }
-func (s *inviteOrgStore) AddOrgMember(context.Context, *domain.OrgMember) error { return nil }
-func (s *inviteOrgStore) DeletePendingInvite(context.Context, int64) error      { return nil }
+
+func (s *inviteOrgStore) FindPendingInviteByToken(_ context.Context, hash string, _ time.Time) (*domain.PendingInvite, error) {
+	if s.tokenHash == "" || hash != s.tokenHash {
+		return nil, storage.ErrInviteInvalid
+	}
+	return &domain.PendingInvite{ID: 1, OrgID: "org1", Role: "developer"}, nil
+}
+
+func (s *inviteOrgStore) AcceptPendingInvite(ctx context.Context, hash, userID string, now time.Time) (*domain.PendingInvite, error) {
+	if s.acceptErr != nil {
+		return nil, s.acceptErr
+	}
+	inv, err := s.FindPendingInviteByToken(ctx, hash, now)
+	if err != nil {
+		return nil, err
+	}
+	s.tokenHash = ""
+	s.accepted = append(s.accepted, userID)
+	return inv, nil
+}
 
 // seededStore returns a user store that already has one user, so the next
 // registration is a "subsequent" one (role=user), not the platform bootstrap.
@@ -50,7 +75,12 @@ func registerHandler(us *mockUserStore, org storage.OrgStore, inviteOnly bool) *
 }
 
 func postRegister(h *AuthHandler, username, email string) *httptest.ResponseRecorder {
-	body := fmt.Sprintf(`{"username":%q,"email":%q,"password":%q}`, username, email, testutil.FixturePassword("reg-"+username))
+	return postRegisterWithInvite(h, username, email, "")
+}
+
+func postRegisterWithInvite(h *AuthHandler, username, email, token string) *httptest.ResponseRecorder {
+	body := fmt.Sprintf(`{"username":%q,"email":%q,"password":%q,"inviteToken":%q}`,
+		username, email, testutil.FixturePassword("reg-"+username), token)
 	req := httptest.NewRequest("POST", "/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -78,13 +108,45 @@ func TestInviteOnly_UninvitedRejected(t *testing.T) {
 	}
 }
 
-// A subsequent registration WITH a pending invite is allowed.
+// A subsequent registration carrying a live invite token is allowed and joins.
 func TestInviteOnly_InvitedAllowed(t *testing.T) {
-	org := &inviteOrgStore{invites: []*domain.PendingInvite{{ID: 1, OrgID: "org1", Role: "developer"}}}
+	const token = "invite-token"
+	org := &inviteOrgStore{tokenHash: hashToken(token)}
 	h := registerHandler(seededStore(), org, true)
-	w := postRegister(h, "bob", "bob@company.test")
+	w := postRegisterWithInvite(h, "bob", "bob@company.test", token)
 	if w.Code != http.StatusCreated {
 		t.Errorf("invited registration must succeed, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(org.accepted) != 1 {
+		t.Errorf("the invite must be spent once, got %d", len(org.accepted))
+	}
+}
+
+// Knowing an invited address is not enough: without the token it is refused.
+func TestInviteOnly_InvitedEmailWithoutTokenRejected(t *testing.T) {
+	h := registerHandler(seededStore(), &inviteOrgStore{tokenHash: hashToken("invite-token")}, true)
+	if w := postRegister(h, "bob", "bob@company.test"); w.Code != http.StatusForbidden {
+		t.Errorf("registration without the token must be 403, got %d", w.Code)
+	}
+}
+
+// A wrong token is refused before any account exists.
+func TestRegister_WrongInviteTokenCreatesNoAccount(t *testing.T) {
+	us := seededStore()
+	h := registerHandler(us, &inviteOrgStore{tokenHash: hashToken("invite-token")}, false)
+	if w := postRegisterWithInvite(h, "eve", "eve@x.test", "not-the-token"); w.Code != http.StatusBadRequest {
+		t.Fatalf("wrong token must be 400, got %d", w.Code)
+	}
+	if len(us.users) != 1 {
+		t.Errorf("a refused invite created an account")
+	}
+}
+
+// With no org store wired, a token cannot be honoured.
+func TestRegister_InviteTokenWithoutOrgStoreRefused(t *testing.T) {
+	h := registerHandler(seededStore(), nil, false)
+	if w := postRegisterWithInvite(h, "eve", "eve@x.test", "any"); w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400", w.Code)
 	}
 }
 

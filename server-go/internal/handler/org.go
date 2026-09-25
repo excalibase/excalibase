@@ -61,6 +61,7 @@ func (h *OrgHandler) projectBelongsToOrg(projectID, orgID string) bool {
 // self-hosted users still need to invite teammates to the default org.
 func (h *OrgHandler) Routes(r chi.Router, isCloud bool) {
 	r.Get("/", h.ListMyOrgs)
+	r.Post("/invites/accept", h.AcceptInvite)
 	if isCloud {
 		// Cloud-only: multi-org creation. Self-hosted has one default org.
 		r.Post("/", h.CreateOrg)
@@ -343,16 +344,7 @@ func (h *OrgHandler) resolveAndAddMember(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, map[string]string{"status": "invited"})
 		return
 	}
-	// User doesn't exist — create pending invite
-	inviter := auth.GetUser(r.Context())
-	if err := h.orgStore.CreatePendingInvite(r.Context(), &domain.PendingInvite{
-		OrgID: orgID, Email: email, Role: role, InvitedBy: inviter.ID,
-	}); err != nil {
-		httpError(w, "failed to create invite", http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]string{"status": "pending", "message": "invite created, user will be added on registration"})
+	h.createInviteLink(w, r, orgID, email, role)
 }
 
 func (h *OrgHandler) UpdateOrgMemberRole(w http.ResponseWriter, r *http.Request) {

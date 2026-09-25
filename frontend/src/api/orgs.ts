@@ -61,8 +61,17 @@ export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
   return data;
 }
 
-export async function inviteOrgMember(orgId: string, email: string, role: string): Promise<void> {
-  await api.post(`/orgs/${orgId}/members`, { email, role });
+// An existing account is added at once ("invited"); an address with no
+// account gets a one-time link ("pending") that only the inviter sees.
+export interface InviteResult {
+  status: 'invited' | 'pending';
+  inviteLink?: string;
+  expiresAt?: string;
+}
+
+export async function inviteOrgMember(orgId: string, email: string, role: string): Promise<InviteResult> {
+  const { data } = await api.post<InviteResult>(`/orgs/${orgId}/members`, { email, role });
+  return data;
 }
 
 export async function updateOrgMemberRole(orgId: string, userId: string, role: string): Promise<void> {
@@ -88,6 +97,7 @@ export interface PendingInvite {
   email: string;
   role: string;
   invitedBy: string;
+  expiresAt?: string;
   createdAt?: string;
 }
 

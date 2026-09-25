@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/excalibase/provisioning-poc/internal/domain"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	pgtest "github.com/excalibase/provisioning-poc/internal/testutil/pgstore"
@@ -161,50 +160,6 @@ func TestRegister_InvalidEmail(t *testing.T) {
 				t.Errorf("%s: got %d, want %d", tt.name, w.Code, http.StatusBadRequest)
 			}
 		})
-	}
-}
-
-func TestRegister_ResolvesPendingInvites(t *testing.T) {
-	r, store := setupRegisterRouter(t)
-	ctx := t.Context()
-
-	// Create an org and a pending invite
-	ownerID := testutil.FixtureToken("owner-id")
-	store.CreateUser(ctx, &domain.User{
-		ID: ownerID, Username: testutil.FixtureToken("owner"), Email: "owner@t.com",
-		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true,
-	})
-	store.CreateOrg(ctx, &domain.Org{ID: "org-1", Name: "TestOrg", Slug: "test-org", Tier: domain.Free, OwnerID: ownerID})
-	store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-1", UserID: ownerID, Role: "owner"})
-	store.CreatePendingInvite(ctx, &domain.PendingInvite{OrgID: "org-1", Email: testNewGuyEmail, Role: "developer", InvitedBy: ownerID})
-
-	// Register with the invited email
-	body := fmt.Sprintf(`{"username":"newguy","email":"%s","password":%q}`, testNewGuyEmail, testutil.FixturePassword("newguy-reg"))
-	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
-	req.Header.Set(sharedContentType, sharedMIMEJSON)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("register: got %d. Body: %s", w.Code, w.Body.String())
-	}
-
-	// Check: user should be auto-added to org
-	members, _ := store.ListOrgMembers(ctx, "org-1")
-	found := false
-	for _, m := range members {
-		if m.Email == testNewGuyEmail && m.Role == "developer" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("pending invite should have been resolved — newguy not found in org members")
-	}
-
-	// Check: pending invite should be deleted
-	invites, _ := store.FindPendingInvitesByEmail(ctx, testNewGuyEmail)
-	if len(invites) != 0 {
-		t.Errorf("expected 0 pending invites after registration, got %d", len(invites))
 	}
 }
 

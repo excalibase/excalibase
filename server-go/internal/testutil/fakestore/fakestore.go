@@ -210,8 +210,11 @@ func (s *Orgs) GetProjectMember(context.Context, string, string) (*domain.Projec
 	return nil, nil
 }
 func (s *Orgs) CreatePendingInvite(context.Context, *domain.PendingInvite) error { return nil }
-func (s *Orgs) FindPendingInvitesByEmail(context.Context, string) ([]*domain.PendingInvite, error) {
-	return nil, nil
+func (s *Orgs) FindPendingInviteByToken(context.Context, string, time.Time) (*domain.PendingInvite, error) {
+	return nil, storage.ErrInviteInvalid
+}
+func (s *Orgs) AcceptPendingInvite(context.Context, string, string, time.Time) (*domain.PendingInvite, error) {
+	return nil, storage.ErrInviteInvalid
 }
 func (s *Orgs) DeletePendingInvite(context.Context, int64) error { return nil }
 func (s *Orgs) ListPendingInvites(context.Context, string) ([]*domain.PendingInvite, error) {

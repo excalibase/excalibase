@@ -616,7 +616,10 @@ func TestDeleteOrg_CascadesMembers(t *testing.T) {
 
 	// Invite bob + add pending invite
 	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
-	store.CreatePendingInvite(ctx, &domain.PendingInvite{OrgID: org.ID, Email: "pending@t.com", Role: "viewer", InvitedBy: testAliceID})
+	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"email":"pending@t.com","role":"viewer"}`, testAliceID)
+	if invites, _ := store.ListPendingInvites(ctx, org.ID); len(invites) != 1 {
+		t.Fatalf("expected the pending invite before delete, got %d", len(invites))
+	}
 
 	// Delete org
 	orgRequest(r, "DELETE", testOrgsSlash+org.ID, "", testAliceID)

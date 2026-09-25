@@ -4,12 +4,14 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -747,21 +749,28 @@ func TestPendingInvites(t *testing.T) {
 
 	store.CreateOrg(ctx, &domain.Org{ID: testOrgInv, Name: "Invites", Slug: "invites", Tier: domain.Free, OwnerID: userID})
 
+	expires := &domain.FlexTime{Time: time.Now().Add(time.Hour)}
 	if err := store.CreatePendingInvite(ctx, &domain.PendingInvite{
 		OrgID: testOrgInv, Email: testNewGuyEmail, Role: "developer", InvitedBy: userID,
+		TokenHash: "hash-1", ExpiresAt: expires,
 	}); err != nil {
 		t.Fatalf("CreatePendingInvite: %v", err)
 	}
+	if err := store.CreatePendingInvite(ctx, &domain.PendingInvite{
+		OrgID: testOrgInv, Email: "tokenless@test.com", Role: "viewer", InvitedBy: userID,
+	}); err == nil {
+		t.Error("an invite without a token hash and expiry must be refused")
+	}
 
-	invites, err := store.FindPendingInvitesByEmail(ctx, testNewGuyEmail)
+	invite, err := store.FindPendingInviteByToken(ctx, "hash-1", time.Now())
 	if err != nil {
-		t.Fatalf("FindPendingInvitesByEmail: %v", err)
+		t.Fatalf("FindPendingInviteByToken: %v", err)
 	}
-	if len(invites) != 1 {
-		t.Fatalf("expected 1 invite, got %d", len(invites))
+	if invite.Role != "developer" || invite.ExpiresAt == nil {
+		t.Errorf("invite = %+v", invite)
 	}
-	if invites[0].Role != "developer" {
-		t.Errorf(testRoleFmt, invites[0].Role)
+	if _, err := store.FindPendingInviteByToken(ctx, "hash-1", time.Now().Add(2*time.Hour)); !errors.Is(err, storage.ErrInviteInvalid) {
+		t.Errorf("an expired invite must read as invalid, got %v", err)
 	}
 
 	listed, _ := store.ListPendingInvites(ctx, testOrgInv)
@@ -769,10 +778,9 @@ func TestPendingInvites(t *testing.T) {
 		t.Errorf("expected 1 listed invite, got %d", len(listed))
 	}
 
-	store.DeletePendingInvite(ctx, invites[0].ID)
-	remaining, _ := store.FindPendingInvitesByEmail(ctx, testNewGuyEmail)
-	if len(remaining) != 0 {
-		t.Errorf("expected 0 invites after delete, got %d", len(remaining))
+	store.DeletePendingInvite(ctx, invite.ID)
+	if _, err := store.FindPendingInviteByToken(ctx, "hash-1", time.Now()); !errors.Is(err, storage.ErrInviteInvalid) {
+		t.Errorf("a deleted invite must read as invalid, got %v", err)
 	}
 }
 

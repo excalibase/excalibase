@@ -36,6 +36,11 @@ export default defineConfig({
         'src/utils/extendedJson.ts',
         'src/components/layout/SubNav.tsx',
         'src/components/layout/navigation.ts',
+        'src/components/InviteLinkNotice.tsx',
+        'src/pages/RegisterPage.tsx',
+        'src/pages/LoginPage.tsx',
+        'src/pages/OrgDetailPage.tsx',
+        'src/api/orgs.ts',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

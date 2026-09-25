@@ -375,7 +375,12 @@ type OrgStore interface {
 	GetProjectMember(ctx context.Context, projectID, userID string) (*domain.ProjectMember, error)
 
 	CreatePendingInvite(ctx context.Context, invite *domain.PendingInvite) error
-	FindPendingInvitesByEmail(ctx context.Context, email string) ([]*domain.PendingInvite, error)
+	// FindPendingInviteByToken returns the live invite a token hash names, or
+	// ErrInviteInvalid when there is none or it has expired.
+	FindPendingInviteByToken(ctx context.Context, tokenHash string, now time.Time) (*domain.PendingInvite, error)
+	// AcceptPendingInvite spends the invite and adds the user to its org in
+	// one transaction, so a token joins exactly one account.
+	AcceptPendingInvite(ctx context.Context, tokenHash, userID string, now time.Time) (*domain.PendingInvite, error)
 	DeletePendingInvite(ctx context.Context, id int64) error
 	ListPendingInvites(ctx context.Context, orgID string) ([]*domain.PendingInvite, error)
 }

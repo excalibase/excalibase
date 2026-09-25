@@ -8,11 +8,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -61,8 +63,11 @@ func (a *adminOrgStore) GetProjectMember(context.Context, string, string) (*doma
 	return nil, nil
 }
 func (a *adminOrgStore) CreatePendingInvite(context.Context, *domain.PendingInvite) error { return nil }
-func (a *adminOrgStore) FindPendingInvitesByEmail(context.Context, string) ([]*domain.PendingInvite, error) {
-	return nil, nil
+func (a *adminOrgStore) FindPendingInviteByToken(context.Context, string, time.Time) (*domain.PendingInvite, error) {
+	return nil, storage.ErrInviteInvalid
+}
+func (a *adminOrgStore) AcceptPendingInvite(context.Context, string, string, time.Time) (*domain.PendingInvite, error) {
+	return nil, storage.ErrInviteInvalid
 }
 func (a *adminOrgStore) DeletePendingInvite(context.Context, int64) error { return nil }
 func (a *adminOrgStore) ListPendingInvites(context.Context, string) ([]*domain.PendingInvite, error) {

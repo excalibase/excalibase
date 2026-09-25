@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuthStore, type AuthUser } from '../stores/auth-store';
@@ -13,6 +13,8 @@ interface LoginResponse {
 export function LoginPage() {
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
+  const [searchParams] = useSearchParams();
+  const inviteToken = searchParams.get('invite') ?? '';
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -39,7 +41,6 @@ export function LoginPage() {
       // raw token as legacyToken to keep the axios header fallback alive
       // for callers that don't yet honour the cookie.
       setAuth(response.data.user, { legacyToken: response.data.token });
-      navigate('/', { replace: true });
     } catch (err: unknown) {
       const axiosErr = err as { response?: { status?: number; data?: { error?: string } } };
       if (axiosErr.response?.status === 401) {
@@ -47,6 +48,20 @@ export function LoginPage() {
       } else {
         setError(axiosErr.response?.data?.error || 'Login failed. Please try again.');
       }
+      setLoading(false);
+      return;
+    }
+    if (!inviteToken) {
+      setLoading(false);
+      navigate('/', { replace: true });
+      return;
+    }
+    try {
+      await api.post('/orgs/invites/accept', { token: inviteToken });
+      navigate('/orgs', { replace: true });
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { error?: string } } };
+      setError(axiosErr.response?.data?.error || 'Could not accept the invite');
     } finally {
       setLoading(false);
     }
@@ -110,7 +125,7 @@ export function LoginPage() {
 
       <p className="text-center text-sm text-text-secondary">
         Don't have an account?{' '}
-        <Link to="/register" className="text-purple-400 hover:text-purple-300 transition-colors">Register</Link>
+        <Link to={inviteToken ? `/register?invite=${encodeURIComponent(inviteToken)}` : '/register'} className="text-purple-400 hover:text-purple-300 transition-colors">Register</Link>
       </p>
     </form>
   );
