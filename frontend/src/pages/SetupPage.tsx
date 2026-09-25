@@ -50,7 +50,7 @@ export function SetupPage() {
   });
 
   const adminForm = useForm({
-    defaultValues: { username: '', email: '', password: '' },
+    defaultValues: { username: '', email: '', password: '', setupToken: '' },
     onSubmit: async ({ value }) => {
       const data = await registerMutation.mutateAsync(value);
       // Server set the httpOnly session cookie on the response — frontend
@@ -385,6 +385,24 @@ export function SetupPage() {
                 field={field}
                 testId="admin-password"
                 hint="Min 8 chars, mixed case, at least one digit"
+              />
+            )}
+          </adminForm.Field>
+
+          <adminForm.Field
+            name="setupToken"
+            validators={{
+              onChange: ({ value }) => (value.trim().length === 0 ? 'Setup token is required' : undefined),
+            }}
+          >
+            {(field) => (
+              <TextField
+                label="Setup token"
+                type="password"
+                autoComplete="off"
+                field={field}
+                testId="admin-setup-token"
+                hint="printed in the server log on first start"
               />
             )}
           </adminForm.Field>

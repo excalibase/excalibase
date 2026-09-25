@@ -136,7 +136,7 @@ Postgres-only storage in both modes (`PLATFORM_DB_URL` always required): the CNP
 ### Vault
 
 Two deployment options, both implement the same `VaultClient` interface:
-- **In-process** (default) — Shamir secret sharing on the platform Postgres (`vault_barrier` / `vault_secrets`). On k8s the chart bootstrap Job inits/unseals it in every deployment mode and keeps the share in the `platform-bootstrap` Secret; on the docker provisioner the binary auto-inits with one share persisted to `STORAGE_PATH/unseal.key` (or honours `VAULT_UNSEAL_KEY`). Setup wizard at `/setup` creates the first admin.
+- **In-process** (default) — Shamir secret sharing on the platform Postgres (`vault_barrier` / `vault_secrets`). On k8s the chart bootstrap Job inits/unseals it in every deployment mode and keeps the share in the `platform-bootstrap` Secret; on the docker provisioner the binary auto-inits with one share persisted to `STORAGE_PATH/unseal.key` (or honours `VAULT_UNSEAL_KEY`). Setup wizard at `/setup` creates the first admin, gated by a one-time setup token (printed to the log at startup, or `SETUP_TOKEN` env for the chart's bootstrap Job — EXC-451).
 - **Standalone HTTP** — set `VAULT_URL` + `VAULT_PAT` and the server skips local vault init; the local server's `/api/vault/*` routes are not mounted.
 
 Vault paths are org-scoped: `projects/{orgSlug}/{projectId}/credentials/{role}`. Backup S3 creds at `backup/s3`. Vault setup wizard handles share generation + first-admin creation atomically.

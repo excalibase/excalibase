@@ -9,6 +9,10 @@ interface RegisterRequest {
   username: string;
   email: string;
   password: string;
+  // Required for the very first registration (EXC-451): the server prints a
+  // one-time token to its log at startup when no platform admin exists yet.
+  // Ignored by the backend once an admin already exists.
+  setupToken?: string;
 }
 
 interface RegisterResponse {

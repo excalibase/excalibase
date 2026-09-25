@@ -333,6 +333,29 @@ type UserStore interface {
 	UpdateUserPassword(ctx context.Context, username, passwordHash string) error
 }
 
+// ErrInvalidSetupToken is returned by SetupTokenStore.CreateFirstAdmin when
+// the given hash does not match the currently stored one-time token — wrong
+// value, already burned, or none was ever generated.
+var ErrInvalidSetupToken = errors.New("invalid or already-used setup token")
+
+// SetupTokenStore backs the one-time first-admin setup token (EXC-451): a
+// fresh platform prints a random token once at startup, and the very first
+// registration must present it to become platform_admin.
+type SetupTokenStore interface {
+	// HasPlatformAdmin reports whether any user already holds the
+	// platform_admin role.
+	HasPlatformAdmin(ctx context.Context) (bool, error)
+	// StoreSetupTokenHash replaces any previously stored one-time token hash
+	// with tokenHash. Called once at startup, only when HasPlatformAdmin is
+	// false.
+	StoreSetupTokenHash(ctx context.Context, tokenHash string) error
+	// CreateFirstAdmin verifies tokenHash against the stored one-time token
+	// and, only on a match, creates user and deletes the token — both in one
+	// transaction, so two callers racing with the same valid token can never
+	// both succeed. Returns ErrInvalidSetupToken on a mismatch.
+	CreateFirstAdmin(ctx context.Context, tokenHash string, user *domain.User) error
+}
+
 // TokenStore persists access tokens (PAT pattern).
 type TokenStore interface {
 	CreateToken(ctx context.Context, token *domain.AccessToken) error

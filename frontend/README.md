@@ -15,7 +15,7 @@ React + TypeScript + Vite frontend for the Excalibase database provisioning plat
 - **Performance + advisors** — pg_stat_statements top queries, performance/security advisors
 - **Backups + PITR** — manual backup trigger, list, restore to point in time
 - **Org + project members** — invite by email, role management, project-level membership separate from org membership
-- **Auth + tokens** — login, register (first registrant becomes platform_admin in self-hosted mode), PAT lifecycle
+- **Auth + tokens** — login, register (first registrant becomes platform_admin, gated by a one-time setup token — EXC-451), PAT lifecycle
 
 ## Tech Stack
 
@@ -65,7 +65,7 @@ go build -o excalibase-server ./cmd/server/
 PORT=24005 STORAGE_PATH=../provisioning-data CORS_ORIGINS=http://localhost:5173 ./excalibase-server
 ```
 
-On first run, the studio will redirect to `/setup` to initialize the vault and create the first platform_admin.
+On first run, the studio will redirect to `/setup` to initialize the vault and create the first platform_admin. The setup wizard's admin step needs a one-time setup token, printed to the server's log at startup ("First-admin setup token: ...").
 
 ## Project Structure
 

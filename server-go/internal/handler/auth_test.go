@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ const (
 // --- in-memory mock stores for auth tests ---
 
 type mockUserStore struct {
+	mu         sync.Mutex
 	users      map[string]*domain.User
 	failSave   bool
 	failList   bool
@@ -40,6 +42,8 @@ func newMockUserStore() *mockUserStore {
 }
 
 func (s *mockUserStore) CreateUser(_ context.Context, u *domain.User) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.failSave {
 		return errors.New("db error")
 	}
@@ -48,10 +52,14 @@ func (s *mockUserStore) CreateUser(_ context.Context, u *domain.User) error {
 }
 
 func (s *mockUserStore) FindUserByID(_ context.Context, id string) (*domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.users[id], nil
 }
 
 func (s *mockUserStore) FindUserByUsername(_ context.Context, username string) (*domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, u := range s.users {
 		if u.Username == username {
 			return u, nil
@@ -61,6 +69,8 @@ func (s *mockUserStore) FindUserByUsername(_ context.Context, username string) (
 }
 
 func (s *mockUserStore) FindUserByEmail(_ context.Context, email string) (*domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, u := range s.users {
 		if u.Email == email {
 			return u, nil
@@ -70,6 +80,8 @@ func (s *mockUserStore) FindUserByEmail(_ context.Context, email string) (*domai
 }
 
 func (s *mockUserStore) FindAllUsers(_ context.Context) ([]*domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.failList {
 		return nil, errors.New("db error")
 	}
@@ -81,6 +93,8 @@ func (s *mockUserStore) FindAllUsers(_ context.Context) ([]*domain.User, error) 
 }
 
 func (s *mockUserStore) DeleteUser(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.failDelete {
 		return errors.New("db error")
 	}
@@ -89,6 +103,8 @@ func (s *mockUserStore) DeleteUser(_ context.Context, id string) error {
 }
 
 func (s *mockUserStore) UpdateUserPassword(_ context.Context, username, hash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, u := range s.users {
 		if u.Username == username {
 			u.PasswordHash = hash
@@ -99,6 +115,7 @@ func (s *mockUserStore) UpdateUserPassword(_ context.Context, username, hash str
 }
 
 type mockTokenStore struct {
+	mu         sync.Mutex
 	tokens     map[string]*domain.AccessToken
 	failSave   bool
 	failList   bool
@@ -110,6 +127,8 @@ func newMockTokenStore() *mockTokenStore {
 }
 
 func (s *mockTokenStore) CreateToken(_ context.Context, t *domain.AccessToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.failSave {
 		return errors.New("db error")
 	}
@@ -118,10 +137,14 @@ func (s *mockTokenStore) CreateToken(_ context.Context, t *domain.AccessToken) e
 }
 
 func (s *mockTokenStore) FindByTokenHash(_ context.Context, hash string) (*domain.AccessToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.tokens[hash], nil
 }
 
 func (s *mockTokenStore) ListTokensByUser(_ context.Context, userID string) ([]*domain.AccessToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.failList {
 		return nil, errors.New("db error")
 	}
@@ -135,6 +158,8 @@ func (s *mockTokenStore) ListTokensByUser(_ context.Context, userID string) ([]*
 }
 
 func (s *mockTokenStore) DeleteToken(_ context.Context, tokenHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.failDelete {
 		return errors.New("db error")
 	}
@@ -143,6 +168,8 @@ func (s *mockTokenStore) DeleteToken(_ context.Context, tokenHash string) error 
 }
 
 func (s *mockTokenStore) UpdateTokenExpiry(_ context.Context, tokenHash string, expiresAt *time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if tok, ok := s.tokens[tokenHash]; ok {
 		tok.ExpiresAt = expiresAt
 	}
@@ -150,6 +177,8 @@ func (s *mockTokenStore) UpdateTokenExpiry(_ context.Context, tokenHash string, 
 }
 
 func (s *mockTokenStore) TouchTokenLastUsed(_ context.Context, tokenHash string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if tok, ok := s.tokens[tokenHash]; ok {
 		tok.LastUsed = &at
 	}

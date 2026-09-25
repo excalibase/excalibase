@@ -145,6 +145,7 @@ typo does not stop the pod, it silently degrades the feature.
 | `r2-creds` | `access_key_id`, `secret_access_key`, `endpoint`, `bucket`, `region` | `R2_*` env → backup store for every tenant cluster and restores (OPERATOR.md §6 "Vault uninitialised fallback") | you, before install |
 | `resend-creds` | `api-key` | `RESEND_API_KEY`; requires `email.provider: resend` | you, before install |
 | `deno-runtime-secret` | `secret` | `DENO_RUNTIME_SECRET` / `RUNTIME_SECRET` on every per-project Deno pod | chart, first install only (`helm.sh/resource-policy: keep`, `lookup`-preserved) |
+| `platform-setup-token` | `token` | `SETUP_TOKEN` on provisioning — the one-time first-admin registration token (EXC-451) | chart, first install only (`lookup`-preserved, same pattern as `deno-runtime-secret`) |
 | `platform-bootstrap` | `provisioning-pat`, `unseal-key`, `admin-pass` | vault auto-unseal, auth/graphql service PAT, first admin password | `platform-bootstrap` Job |
 | `platform-db-app` | `uri`, `username`, `password` | `PLATFORM_DB_URL` | CNPG operator |
 | `excalibase-api-tls`, `excalibase-admin-tls` | TLS | ingress | cert-manager |
@@ -250,9 +251,11 @@ post-install **and** post-upgrade hook, idempotent):
 
 1. waits for provisioning `/healthz`;
 2. first run: `POST /api/auth/register` user `admin` (email
-   `admin@excalibase.local`, random password) — the first registration on a
-   fresh platform is auto-promoted to `platform_admin`
-   (`server-go/internal/handler/auth.go`); logs in to obtain a PAT;
+   `admin@excalibase.local`, random password), with `setupToken` set to the
+   `platform-setup-token` Secret's value — provisioning was started with that
+   same value as `SETUP_TOKEN`, so it accepts it and promotes this one
+   registration to `platform_admin` (EXC-451; `server-go/internal/handler/auth.go`,
+   `server-go/internal/auth/setup_token.go`); logs in to obtain a PAT;
 3. `POST /api/vault/init` with `{"shares":1,"threshold":1}`, then
    `POST /api/vault/unseal`; on every later run it re-unseals if
    `GET /api/vault/status` reports `sealed: true`;

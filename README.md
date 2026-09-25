@@ -117,10 +117,12 @@ curl -s -X POST http://localhost:24005/api/vault/unseal \
   -H "Content-Type: application/json" \
   -d '{"share": "<share-hex>"}'
 
-# Register the first admin (auto-promoted to platform_admin in self-hosted mode)
+# Register the first admin — the server prints a one-time setup token to its
+# log on first start ("First-admin setup token: ..."); it's required here and
+# burned on use (EXC-451)
 curl -s -X POST http://localhost:24005/api/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "<password>", "email": "admin@example.com"}'
+  -d '{"username": "admin", "password": "<password>", "email": "admin@example.com", "setupToken": "<token from the server log>"}'
 
 # Login (returns bearer token)
 curl -s -X POST http://localhost:24005/api/auth/login \
@@ -166,7 +168,7 @@ Every route with a project in its path binds that project to the caller before t
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/auth/register` | No | Public registration; first registrant becomes platform_admin |
+| POST | `/api/auth/register` | No | Public registration; the first registrant becomes platform_admin, but only with a valid one-time `setupToken` (printed to the server log at startup, or supplied via `SETUP_TOKEN`) — EXC-451 |
 | POST | `/api/auth/login` | No | Login (argon2id), returns bearer token |
 | GET | `/api/auth/setup-status` | No | `{hasAdmin}` — used by the setup wizard |
 | GET | `/api/auth/me` | Yes | Current user info |

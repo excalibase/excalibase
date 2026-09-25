@@ -14,6 +14,7 @@ import (
 type PlatformStore interface {
 	InstanceStore
 	UserStore
+	SetupTokenStore
 	TokenStore
 	OrgStore
 	TierConfigStore

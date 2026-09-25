@@ -56,13 +56,19 @@ describe('useRegisterAdmin', () => {
 
     const { Wrapper } = makeWrapper();
     const { result } = renderHook(() => useRegisterAdmin(), { wrapper: Wrapper });
-    result.current.mutate({ username: 'founder', email: 'a@b.c', password: TEST_PASSWORD_PLACEHOLDER });
+    result.current.mutate({
+      username: 'founder',
+      email: 'a@b.c',
+      password: TEST_PASSWORD_PLACEHOLDER,
+      setupToken: 'the-one-time-token',
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.post).toHaveBeenCalledWith('/auth/register', {
       username: 'founder',
       email: 'a@b.c',
       password: TEST_PASSWORD_PLACEHOLDER,
+      setupToken: 'the-one-time-token',
     });
     expect(result.current.data?.token).toBe('pat-bootstrap');
     expect(result.current.data?.user.role).toBe('platform_admin');
