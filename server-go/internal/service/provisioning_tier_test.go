@@ -29,7 +29,7 @@ func (erroringTierStore) UpsertTierConfig(context.Context, domain.TierType, conf
 // The exported wrapper is what the capacity report calls; it must return the
 // same store-first answer the unexported resolver gives admission.
 func TestTierConfig_ExportedWrapperPrefersStoreRow(t *testing.T) {
-	edited := config.TierConfig{MaxProjects: 1, Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.25"}
+	edited := config.TierConfig{MaxProjects: 1, Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.25", StatementTimeout: "10s"}
 	svc := NewProvisioningService(nil, nil, nil)
 	svc.SetTierStore(fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: edited}})
 

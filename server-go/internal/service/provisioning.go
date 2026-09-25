@@ -152,10 +152,23 @@ func (s *ProvisioningService) SetTierStore(ts storage.TierConfigStore) {
 func (s *ProvisioningService) tierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
 	if s.tierStore != nil {
 		if tc, ok, err := s.tierStore.GetTierConfig(ctx, tier); err == nil && ok {
-			return tc, nil
+			return s.withStatementTimeoutFallback(tier, tc)
 		}
 	}
 	return config.GetTierConfig(tier)
+}
+
+// The tier_configs table has no timeout column, so rows take the built-in tier's; a tenant never runs without one.
+func (s *ProvisioningService) withStatementTimeoutFallback(tier domain.TierType, tc config.TierConfig) (config.TierConfig, error) {
+	if tc.StatementTimeout != "" {
+		return tc, nil
+	}
+	builtin, err := config.GetTierConfig(tier)
+	if err != nil || builtin.StatementTimeout == "" {
+		return config.TierConfig{}, fmt.Errorf("tier %q has no statement timeout in the store and no built-in default to fall back to", tier)
+	}
+	tc.StatementTimeout = builtin.StatementTimeout
+	return tc, nil
 }
 
 // TierConfig is the exported form of tierConfig for readers outside this
