@@ -35,8 +35,14 @@ var appDeniedRanges = []string{
 
 type ciliumPolicySpec struct {
 	EndpointSelector metav1.LabelSelector `json:"endpointSelector"`
+	Ingress          []ciliumIngressRule  `json:"ingress,omitempty"`
 	Egress           []ciliumEgressRule   `json:"egress,omitempty"`
 	EgressDeny       []ciliumEgressRule   `json:"egressDeny,omitempty"`
+}
+
+type ciliumIngressRule struct {
+	FromEndpoints []metav1.LabelSelector `json:"fromEndpoints,omitempty"`
+	ToPorts       []ciliumPortRule       `json:"toPorts,omitempty"`
 }
 
 type ciliumEgressRule struct {
@@ -71,14 +77,18 @@ func buildAppEgressPolicy(namespace string, app *apphost.App, extraDenyCIDRs []s
 		Egress:           allow,
 		EgressDeny:       []ciliumEgressRule{appDeniedRangesRule(extraDenyCIDRs), appSMTPDenyRule()},
 	}
+	return newCiliumPolicy(namespace, AppEgressPolicyName(app.Name), app, spec)
+}
+
+func newCiliumPolicy(namespace, name string, app *apphost.App, spec ciliumPolicySpec) (*unstructured.Unstructured, error) {
 	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&spec)
 	if err != nil {
-		return nil, fmt.Errorf("%w: egress policy: %w", ErrRenderApp, err)
+		return nil, fmt.Errorf("%w: policy %s: %w", ErrRenderApp, name, err)
 	}
 	policy := &unstructured.Unstructured{Object: map[string]interface{}{"spec": content}}
 	policy.SetAPIVersion(CiliumNetworkPolicyGVR.GroupVersion().String())
 	policy.SetKind(ciliumPolicyKind)
-	policy.SetName(AppEgressPolicyName(app.Name))
+	policy.SetName(name)
 	policy.SetNamespace(namespace)
 	policy.SetLabels(appLabels(app))
 	return policy, nil

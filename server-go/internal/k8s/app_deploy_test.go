@@ -36,7 +36,7 @@ func TestApplyAppWorkload_CreatesThenUpdates(t *testing.T) {
 
 	app.Replicas = 2
 	updated, err := RenderAppWorkload(testNamespace, app, newResolver(), AppRenderOptions{
-		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32"},
+		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32"}, Route: testRoute,
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)

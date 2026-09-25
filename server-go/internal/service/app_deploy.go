@@ -98,6 +98,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		return nil, fmt.Errorf("resolve app tier: %w", err)
 	}
 
+	url, routeErr := s.render.Route.Public().URL(app.Name, app.ProjectID)
 	deploy := &apphost.Deploy{
 		ID:        uuid.NewString(),
 		AppID:     app.ID,
@@ -112,6 +113,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 				CPURequest: tier.CPURequest, CPULimit: tier.CPULimit,
 				MemoryRequest: tier.MemoryRequest, MemoryLimit: tier.MemoryLimit,
 			},
+			URL: url,
 		},
 		Config:     cfg,
 		RedeployOf: redeployOf,
@@ -123,6 +125,10 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		return nil, err
 	}
 	s.cancelActive(app.ID)
+	if routeErr != nil {
+		s.fail(deploy, routeErr)
+		return deploy, nil
+	}
 
 	namespace, err := s.namespaceFor(app.ProjectID)
 	if err != nil {

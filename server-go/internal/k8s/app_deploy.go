@@ -8,6 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -25,14 +26,29 @@ const (
 
 var ErrAppRollout = fmt.Errorf("app rollout")
 
+// ApplyAppWorkload fences the pods before they exist, so no app pod ever runs unfenced.
 func (c *Client) ApplyAppWorkload(ctx context.Context, namespace string, workload *AppWorkload) error {
-	if workload == nil || workload.Deployment == nil || workload.EgressPolicy == nil {
+	if !workload.complete() {
 		return fmt.Errorf("apply app workload: nothing rendered")
+	}
+	if err := c.applyAppPolicy(ctx, namespace, workload.EgressPolicy, "egress"); err != nil {
+		return err
+	}
+	if err := c.applyAppPolicy(ctx, namespace, workload.IngressPolicy, "ingress"); err != nil {
+		return err
 	}
 	if err := c.applyAppDeployment(ctx, namespace, workload.Deployment); err != nil {
 		return err
 	}
-	return c.applyAppEgressPolicy(ctx, namespace, workload.EgressPolicy)
+	if err := c.applyAppService(ctx, namespace, workload.Service); err != nil {
+		return err
+	}
+	return c.applyAppIngress(ctx, namespace, workload.Ingress)
+}
+
+func (w *AppWorkload) complete() bool {
+	return w != nil && w.Deployment != nil && w.EgressPolicy != nil &&
+		w.Service != nil && w.Ingress != nil && w.IngressPolicy != nil
 }
 
 func (c *Client) applyAppDeployment(ctx context.Context, namespace string, desired *appsv1.Deployment) error {
@@ -56,24 +72,69 @@ func (c *Client) applyAppDeployment(ctx context.Context, namespace string, desir
 	return nil
 }
 
-// A cluster without Cilium has no such kind, so the apply fails instead of leaving the app unfenced.
-func (c *Client) applyAppEgressPolicy(ctx context.Context, namespace string, desired *unstructured.Unstructured) error {
-	policies := c.dynamicClient.Resource(CiliumNetworkPolicyGVR).Namespace(namespace)
-	existing, err := policies.Get(ctx, desired.GetName(), metav1.GetOptions{})
+// applyAppService keeps the cluster IP the API server assigned: it is immutable.
+func (c *Client) applyAppService(ctx context.Context, namespace string, desired *corev1.Service) error {
+	services := c.clientset.CoreV1().Services(namespace)
+	existing, err := services.Get(ctx, desired.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		if _, err := policies.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create app egress policy: %w", err)
+		if _, err := services.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create app service: %w", err)
 		}
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("read app egress policy: %w", err)
+		return fmt.Errorf("read app service: %w", err)
+	}
+	updated := existing.DeepCopy()
+	updated.Labels = desired.Labels
+	updated.Spec.Type = desired.Spec.Type
+	updated.Spec.Selector = desired.Spec.Selector
+	updated.Spec.Ports = desired.Spec.Ports
+	if _, err := services.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update app service: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) applyAppIngress(ctx context.Context, namespace string, desired *networkingv1.Ingress) error {
+	ingresses := c.clientset.NetworkingV1().Ingresses(namespace)
+	existing, err := ingresses.Get(ctx, desired.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if _, err := ingresses.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create app ingress: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read app ingress: %w", err)
+	}
+	updated := existing.DeepCopy()
+	updated.Labels = desired.Labels
+	updated.Spec = desired.Spec
+	if _, err := ingresses.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update app ingress: %w", err)
+	}
+	return nil
+}
+
+// A cluster without Cilium has no such kind, so the apply fails instead of leaving the app unfenced.
+func (c *Client) applyAppPolicy(ctx context.Context, namespace string, desired *unstructured.Unstructured, direction string) error {
+	policies := c.dynamicClient.Resource(CiliumNetworkPolicyGVR).Namespace(namespace)
+	existing, err := policies.Get(ctx, desired.GetName(), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if _, err := policies.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create app %s policy: %w", direction, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read app %s policy: %w", direction, err)
 	}
 	updated := existing.DeepCopy()
 	updated.SetLabels(desired.GetLabels())
 	updated.Object["spec"] = runtime.DeepCopyJSONValue(desired.Object["spec"])
 	if _, err := policies.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update app egress policy: %w", err)
+		return fmt.Errorf("update app %s policy: %w", direction, err)
 	}
 	return nil
 }

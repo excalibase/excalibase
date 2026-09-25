@@ -19,7 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const appTestProject = "proj_apps1"
+const appTestProject = "proj-apps1"
 
 // errPersisted stands in for a storage failure carrying detail a caller must
 // never be shown.
@@ -172,7 +172,7 @@ func setupAppRouter(t *testing.T) (chi.Router, *fakeAppStore) {
 func setupAppRouterWithSources(t *testing.T, sources *fakeSources) (chi.Router, *fakeAppStore, *fakeSources) {
 	t.Helper()
 	store := newFakeAppStore()
-	h := NewAppHandler(store, sources)
+	h := NewAppHandler(store, sources, testAppRoute)
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
 	return r, store, sources
@@ -894,5 +894,60 @@ func TestAppGetCarriesItsVersionAsAnETag(t *testing.T) {
 	w := doAppRequest(t, r, http.MethodGet, "/api/projects/"+appTestProject+"/apps/"+created.ID+"/", nil)
 	if got := w.Header().Get("ETag"); got != strconv.Itoa(created.Version) {
 		t.Errorf("ETag: got %q want %q", got, strconv.Itoa(created.Version))
+	}
+}
+
+var testAppRoute = apphost.Route{Domain: "apps.example.com", TLS: true}
+
+const wantAppURL = "https://storefront-apps1.apps.example.com"
+
+func decodeURL(t *testing.T, body []byte) string {
+	t.Helper()
+	var withURL struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(body, &withURL); err != nil {
+		t.Fatalf("decode url: %v (body=%s)", err, body)
+	}
+	return withURL.URL
+}
+
+func TestAppResponsesCarryTheURL(t *testing.T) {
+	r, _ := setupAppRouter(t)
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", validAppBody())
+	if got := decodeURL(t, w.Body.Bytes()); got != wantAppURL {
+		t.Errorf("create url = %q, want %q", got, wantAppURL)
+	}
+	created := decodeApp(t, w)
+	path := "/api/projects/" + appTestProject + "/apps/" + created.ID + "/"
+
+	if got := decodeURL(t, doAppRequest(t, r, http.MethodGet, path, nil).Body.Bytes()); got != wantAppURL {
+		t.Errorf("get url = %q, want %q", got, wantAppURL)
+	}
+	updated := doAppRequest(t, r, http.MethodPatch, path, map[string]any{"name": "shop"})
+	if got := decodeURL(t, updated.Body.Bytes()); got != "https://shop-apps1.apps.example.com" {
+		t.Errorf("a renamed app's url = %q", got)
+	}
+	var list []struct {
+		URL string `json:"url"`
+	}
+	listed := doAppRequest(t, r, http.MethodGet, "/api/projects/"+appTestProject+"/apps/", nil)
+	if err := json.Unmarshal(listed.Body.Bytes(), &list); err != nil || len(list) != 1 || list[0].URL != "https://shop-apps1.apps.example.com" {
+		t.Errorf("list must carry the url, got %s (%v)", listed.Body.String(), err)
+	}
+}
+
+// An app that cannot be given a hostname shows none; its deploy is what reports why.
+func TestAppResponseOmitsAnUnroutableURL(t *testing.T) {
+	store := newFakeAppStore()
+	h := NewAppHandler(store, newFakeSources("storefront_db"), apphost.Route{})
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", validAppBody())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: got %d, body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"url"`) {
+		t.Errorf("no route configured, so no url: %s", w.Body.String())
 	}
 }

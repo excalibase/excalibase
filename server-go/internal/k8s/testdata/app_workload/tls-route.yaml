@@ -9,12 +9,12 @@ metadata:
     excalibase.io/app: app-01H
     excalibase.io/component: app
     excalibase.io/project: proj-abc
-    excalibase.io/tier: enterprise
+    excalibase.io/tier: free
   name: app-web
   namespace: org1-proj-abc
 spec:
   minReadySeconds: 10
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       excalibase.io/app: app-01H
@@ -27,7 +27,7 @@ spec:
   template:
     metadata:
       annotations:
-        excalibase.io/app-config-hash: 9aada7d139ecbe27
+        excalibase.io/app-config-hash: 4e17e0dbfbd55550
       labels:
         app.kubernetes.io/component: app
         app.kubernetes.io/managed-by: excalibase-provisioning
@@ -35,7 +35,7 @@ spec:
         excalibase.io/app: app-01H
         excalibase.io/component: app
         excalibase.io/project: proj-abc
-        excalibase.io/tier: enterprise
+        excalibase.io/tier: free
     spec:
       automountServiceAccountToken: false
       containers:
@@ -59,11 +59,11 @@ spec:
           timeoutSeconds: 3
         resources:
           limits:
-            cpu: "2"
-            memory: 4Gi
+            cpu: 250m
+            memory: 256Mi
           requests:
-            cpu: "1"
-            memory: 2Gi
+            cpu: 50m
+            memory: 128Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -100,7 +100,7 @@ metadata:
     excalibase.io/app: app-01H
     excalibase.io/component: app
     excalibase.io/project: proj-abc
-    excalibase.io/tier: enterprise
+    excalibase.io/tier: free
   name: app-web-egress
   namespace: org1-proj-abc
 spec:
@@ -149,7 +149,7 @@ metadata:
     excalibase.io/app: app-01H
     excalibase.io/component: app
     excalibase.io/project: proj-abc
-    excalibase.io/tier: enterprise
+    excalibase.io/tier: free
   name: app-web
   namespace: org1-proj-abc
 spec:
@@ -175,7 +175,7 @@ metadata:
     excalibase.io/app: app-01H
     excalibase.io/component: app
     excalibase.io/project: proj-abc
-    excalibase.io/tier: enterprise
+    excalibase.io/tier: free
   name: app-web
   namespace: org1-proj-abc
 spec:
@@ -191,6 +191,10 @@ spec:
               number: 80
         path: /
         pathType: Prefix
+  tls:
+  - hosts:
+    - web-abc.apps.example.com
+    secretName: apps-wildcard-tls
 status:
   loadBalancer: {}
 ---
@@ -204,7 +208,7 @@ metadata:
     excalibase.io/app: app-01H
     excalibase.io/component: app
     excalibase.io/project: proj-abc
-    excalibase.io/tier: enterprise
+    excalibase.io/tier: free
   name: app-web-ingress
   namespace: org1-proj-abc
 spec:
@@ -215,6 +219,7 @@ spec:
   ingress:
   - fromEndpoints:
     - matchLabels:
+        k8s:app.kubernetes.io/name: kubernetes-ingress
         k8s:io.kubernetes.pod.namespace: haproxy-controller
     toPorts:
     - ports:

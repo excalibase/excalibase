@@ -58,7 +58,7 @@ func (lab *egressLab) applyCiliumPolicies(t *testing.T) {
 		if pod == egressClientNoDeny {
 			unstructured.RemoveNestedField(policy.Object, "spec", "egressDeny")
 		}
-		if err := lab.client.applyAppEgressPolicy(lab.ctx, egressNamespaceA, policy); err != nil {
+		if err := lab.client.applyAppPolicy(lab.ctx, egressNamespaceA, policy, "egress"); err != nil {
 			t.Fatalf("apply policy for %s: %v", pod, err)
 		}
 	}
@@ -67,10 +67,17 @@ func (lab *egressLab) applyCiliumPolicies(t *testing.T) {
 // startCiliumCluster is k3s with its own CNI and policy controller off, and Cilium installed from its Helm chart.
 func (lab *egressLab) startCiliumCluster(t *testing.T) {
 	t.Helper()
-	container, err := k3s.Run(lab.ctx, "rancher/k3s:v1.31.6-k3s1",
+	lab.startCiliumClusterWith(t)
+}
+
+func (lab *egressLab) startCiliumClusterWith(t *testing.T, extra ...testcontainers.ContainerCustomizer) {
+	t.Helper()
+	options := append([]testcontainers.ContainerCustomizer{
 		testcontainers.WithCmdArgs("--flannel-backend=none", "--disable-network-policy"),
 		// The module waits for a node sync that never comes while no CNI is installed.
-		testcontainers.WithWaitStrategyAndDeadline(3*time.Minute, wait.ForLog("k3s is up and running").WithStartupTimeout(3*time.Minute)))
+		testcontainers.WithWaitStrategyAndDeadline(3*time.Minute, wait.ForLog("k3s is up and running").WithStartupTimeout(3*time.Minute)),
+	}, extra...)
+	container, err := k3s.Run(lab.ctx, "rancher/k3s:v1.31.6-k3s1", options...)
 	// Registered before the error check: a container that failed to become ready still runs.
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {

@@ -8,9 +8,8 @@
 // An app is a container image the platform runs beside the project's database,
 // but the two are independent services: nothing here reads, requires or
 // implies a provisioned database, so a project may hold an app and no
-// database. This is the resource model and its CRUD surface only — it renders
-// no Kubernetes object (EXC-379), routes no traffic (EXC-383/384) and runs no
-// deploy (EXC-386).
+// database. This is the resource model and its CRUD surface only; each app is
+// shown with the URL it is served at, which the deploy creates.
 package handler
 
 import (
@@ -39,10 +38,26 @@ const maxAppBodyBytes = 128 * 1024
 type AppHandler struct {
 	store   apphost.Store
 	project apphost.ProjectFacts
+	route   apphost.Route
 }
 
-func NewAppHandler(store apphost.Store, project apphost.ProjectFacts) *AppHandler {
-	return &AppHandler{store: store, project: project}
+func NewAppHandler(store apphost.Store, project apphost.ProjectFacts, route apphost.Route) *AppHandler {
+	return &AppHandler{store: store, project: project, route: route}
+}
+
+// appResponse adds the URL, derived rather than stored so a renamed app or a new domain never shows a stale one.
+type appResponse struct {
+	*apphost.App
+	URL string `json:"url,omitempty"`
+}
+
+// present leaves the URL out when the app has no hostname; its deploy is what reports why.
+func (h *AppHandler) present(app *apphost.App) appResponse {
+	url, err := h.route.URL(app.Name, app.ProjectID)
+	if err != nil {
+		return appResponse{App: app}
+	}
+	return appResponse{App: app, URL: url}
 }
 
 // projectSources answers what a project exposes to a reference variable. The
@@ -144,10 +159,11 @@ func (h *AppHandler) List(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
-	if apps == nil {
-		apps = []*apphost.App{}
+	out := make([]appResponse, 0, len(apps))
+	for _, app := range apps {
+		out = append(out, h.present(app))
 	}
-	writeJSON(w, apps)
+	writeJSON(w, out)
 }
 
 func (h *AppHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +180,7 @@ func (h *AppHandler) Get(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errNotFound, http.StatusNotFound)
 		return
 	}
-	writeAppJSON(w, app)
+	h.writeAppJSON(w, app)
 }
 
 // Create stores a new app. The id is assigned here rather than taken from the
@@ -224,7 +240,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("ETag", strconv.Itoa(app.Version))
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, app)
+	writeJSON(w, h.present(app))
 }
 
 // Update applies a partial change onto the stored app. The body is read into
@@ -282,7 +298,7 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, err)
 		return
 	}
-	writeAppJSON(w, existing)
+	h.writeAppJSON(w, existing)
 }
 
 func (h *AppHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -352,9 +368,9 @@ func (h *AppHandler) appPath(w http.ResponseWriter, r *http.Request) (string, st
 
 // writeAppJSON answers with the app and the version to send back with the
 // next write, so a client never has to invent one.
-func writeAppJSON(w http.ResponseWriter, app *apphost.App) {
+func (h *AppHandler) writeAppJSON(w http.ResponseWriter, app *apphost.App) {
 	w.Header().Set("ETag", strconv.Itoa(app.Version))
-	writeJSON(w, app)
+	writeJSON(w, h.present(app))
 }
 
 // appVersionPrecondition reads the version the caller claims to have read,

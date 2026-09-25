@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	deployTestProject   = "proj_deploy1"
+	deployTestProject   = "proj-deploy1"
 	deployTestApp       = "app_deploy1"
 	testDeployNamespace = "ns-proj-deploy1"
 )
@@ -203,9 +203,51 @@ func newDeployTestService(t *testing.T, app *apphost.App) (*AppDeployService, *f
 	instances.Items[app.ProjectID] = &domain.DatabaseInstance{
 		ProjectID: app.ProjectID, Namespace: testDeployNamespace,
 	}
-	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, k8s.AppRenderOptions{RuntimeClass: "gvisor"})
+	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, testDeployRender)
 	svc.async = func(f func()) { f() }
 	return svc, deployStore, kube
+}
+
+var testDeployRender = k8s.AppRenderOptions{RuntimeClass: "gvisor", Route: k8s.AppRouteOptions{
+	Domain: "apps.example.com", IngressClass: "haproxy", TLSSecret: "apps-tls", IngressFromNamespace: "haproxy-controller",
+}}
+
+func TestDeployApp_RecordsTheAppURL(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deploys, kube := newDeployTestService(t, app)
+
+	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	want := "https://" + app.Name + "-deploy1.apps.example.com"
+	if deploy.Spec.URL != want {
+		t.Errorf("deploy URL = %q, want %q", deploy.Spec.URL, want)
+	}
+	if stored := deploys.deploys[0]; stored.Spec.URL != want {
+		t.Errorf("stored deploy URL = %q, want %q", stored.Spec.URL, want)
+	}
+	workload := kube.AppWorkloads[rolloutKey(app, testDeployNamespace)]
+	if workload == nil || workload.Ingress == nil || workload.Ingress.Spec.Rules[0].Host != app.Name+"-deploy1.apps.example.com" {
+		t.Fatal("the ingress for the recorded URL should have been applied")
+	}
+}
+
+func TestDeployApp_FailsWhenTheAppHasNoHostname(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+	svc.render.Route.Domain = ""
+
+	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	if err != nil {
+		t.Fatalf("DeployApp: %v", err)
+	}
+	if deploy.Status != apphost.DeployStatusFailed || !strings.Contains(deploy.FailureReason, "app domain") {
+		t.Fatalf("want a failed deploy naming the missing domain, got %q: %s", deploy.Status, deploy.FailureReason)
+	}
+	if len(kube.AppWorkloads) != 0 {
+		t.Error("nothing may be applied for an app with no hostname")
+	}
 }
 
 func rolloutKey(app *apphost.App, namespace string) string {

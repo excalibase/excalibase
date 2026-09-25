@@ -123,7 +123,13 @@ const (
 	testRuntimeClass = "gvisor"
 )
 
-var testRenderOptions = AppRenderOptions{RuntimeClass: testRuntimeClass}
+var testRoute = AppRouteOptions{
+	Domain:               "apps.example.com",
+	IngressClass:         "haproxy",
+	IngressFromNamespace: "haproxy-controller",
+}
+
+var testRenderOptions = AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute}
 
 func newResolver() *fakeResolver { return &fakeResolver{namespace: testNamespace} }
 
@@ -419,7 +425,7 @@ func TestRenderAppWorkloadRunsUnderTheSandboxRuntime(t *testing.T) {
 }
 
 func TestRenderAppWorkloadRefusesNoRuntimeClass(t *testing.T) {
-	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{}); !errors.Is(err, ErrRenderApp) {
+	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{Route: testRoute}); !errors.Is(err, ErrRenderApp) {
 		t.Fatalf("an app with no sandbox runtime must be refused, got %v", err)
 	}
 }
@@ -617,7 +623,7 @@ func assertPorts(t *testing.T, rule string, got []ciliumPortRule, want ...cilium
 // Extras are additional to the fixed ranges, never a replacement.
 func TestRenderAppWorkloadEgressPolicyExtraDenyCIDRs(t *testing.T) {
 	workload, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{
-		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32", "198.51.100.0/24"},
+		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32", "198.51.100.0/24"}, Route: testRoute,
 	})
 	if err != nil {
 		t.Fatalf("RenderAppWorkload: %v", err)
@@ -668,12 +674,21 @@ func TestRenderAppWorkloadConfigHashTracksTheApp(t *testing.T) {
 
 func renderYAML(t *testing.T, app *apphost.App) string {
 	t.Helper()
-	workload := mustRender(t, app, newResolver())
+	return workloadYAML(t, mustRender(t, app, newResolver()))
+}
+
+func workloadYAML(t *testing.T, workload *AppWorkload) string {
+	t.Helper()
 	deployment := workload.Deployment.DeepCopy()
 	deployment.TypeMeta = metav1.TypeMeta{APIVersion: appsv1.SchemeGroupVersion.String(), Kind: "Deployment"}
 
+	service := workload.Service.DeepCopy()
+	service.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}
+	ingress := workload.Ingress.DeepCopy()
+	ingress.TypeMeta = metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"}
+
 	var out strings.Builder
-	for _, obj := range []interface{}{deployment, workload.EgressPolicy.Object} {
+	for _, obj := range []interface{}{deployment, workload.EgressPolicy.Object, service, ingress, workload.IngressPolicy.Object} {
 		encoded, err := yaml.Marshal(obj)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -701,21 +716,23 @@ func TestAppWorkloadGoldenManifests(t *testing.T) {
 		"enterprise-no-env": enterprise,
 	}
 	for name, app := range cases {
-		t.Run(name, func(t *testing.T) {
-			got := renderYAML(t, app)
-			path := filepath.Join("testdata", "app_workload", name+".yaml")
-			if *updateGolden {
-				writeGolden(t, path, got)
-				return
-			}
-			want, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read golden (regenerate with -update-golden): %v", err)
-			}
-			if got != string(want) {
-				t.Errorf("rendered manifests differ from %s\n--- got ---\n%s", path, got)
-			}
-		})
+		t.Run(name, func(t *testing.T) { assertGolden(t, name, renderYAML(t, app)) })
+	}
+}
+
+func assertGolden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("testdata", "app_workload", name+".yaml")
+	if *updateGolden {
+		writeGolden(t, path, got)
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden (regenerate with -update-golden): %v", err)
+	}
+	if got != string(want) {
+		t.Errorf("rendered manifests differ from %s\n--- got ---\n%s", path, got)
 	}
 }
 

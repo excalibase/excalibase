@@ -1171,11 +1171,12 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:    realtimeHandler,
 		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies()),
 		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants(), cfg.ExposureEnforced),
-		appHandler:         handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()), handler.NewProjectSourceLookup(store)),
+		appHandler: handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
+			handler.NewProjectSourceLookup(store), appRoute(cfg).Public()),
 		appDeployHandler: handler.NewAppDeployHandler(service.NewAppDeployService(
 			apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
 			k8sClient, store, nil, k8s.AppRenderOptions{
-				RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs,
+				RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Route: appRoute(cfg),
 			})),
 		tierHandler:      tierHandler,
 		pgCatalogHandler: handler.NewPostgresCatalogHandler(),

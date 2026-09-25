@@ -124,7 +124,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		// The app store talks to a database that never connects: the matrix
 		// asserts authorization outcomes, and a failed query is a 500, which
 		// is not a gate refusal.
-		appHandler:  handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances)),
+		appHandler:  handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances), apphost.Route{}),
 		rlUnauth:    custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
 		rlAuthed:    custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
