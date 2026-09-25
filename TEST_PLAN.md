@@ -27,6 +27,7 @@ For each surface, four columns:
 | Token issuance + verification | `internal/auth/auth_test.go`, `middleware_token_test.go` | covered, `-race` clean | — |
 | Org / project RBAC matrix | `internal/auth/org_rbac.go` | `bootstrap_org_test.go` + `handler/org_test.go`, `org_member_test.go` | LOW: cross-tenant access denial — verify a project member of org A can't read org B's projects via crafted handler calls |
 | Setup wizard (vault init + first admin) | `internal/handler/setup.go`, `setup_wizard_test.go` | covered + Playwright `setup-wizard.spec.ts` | — |
+| First-admin one-time setup token (EXC-451): no/wrong/burned token, concurrent registration race, `SETUP_TOKEN` env preset, restart-with-admin generates nothing | `internal/auth/setup_token.go`, `internal/storage/postgres/pg_setup_token.go`, `internal/handler/auth.go` | `internal/auth/setup_token_test.go` (unit), `internal/handler/setup_token_test.go` (unit, mock race), `internal/handler/setup_token_integration_test.go` (real Postgres, incl. concurrent) | — |
 | Email verification + password reset | `internal/handler/auth.go` (email handlers), `internal/email/` | unit + Resend `live_test` (live send verified) | MED: end-to-end "click link in email → land on /reset" not exercised |
 
 ### 1.2 Provisioning + lifecycle

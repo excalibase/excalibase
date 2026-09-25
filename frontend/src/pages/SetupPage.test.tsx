@@ -109,6 +109,16 @@ describe('SetupPage', () => {
     expect(await screen.findByTestId('vault-setup-admin')).toBeInTheDocument();
   });
 
+  // EXC-451: the first admin now needs a one-time setup token — printed to
+  // the server log at startup — so the wizard must ask for it and explain
+  // where to find it.
+  test('admin step shows the setup token field with log hint', async () => {
+    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    await screen.findByTestId('vault-setup-admin');
+    expect(screen.getByTestId('admin-setup-token')).toBeInTheDocument();
+    expect(screen.getByText('printed in the server log on first start')).toBeInTheDocument();
+  });
+
   test('renders init step once the admin exists', async () => {
     renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
     expect(await screen.findByTestId('vault-setup-init')).toBeInTheDocument();
@@ -178,6 +188,7 @@ describe('SetupPage', () => {
     await user.type(screen.getByTestId('admin-username'), 'founder');
     await user.type(screen.getByTestId('admin-email'), 'founder@example.com');
     await user.type(screen.getByTestId('admin-password'), TEST_PASSWORD_PLACEHOLDER);
+    await user.type(screen.getByTestId('admin-setup-token'), 'the-one-time-token');
 
     const submit = screen.getByTestId('admin-submit');
     await waitFor(() => expect(submit).toBeEnabled());
@@ -188,6 +199,7 @@ describe('SetupPage', () => {
         username: 'founder',
         email: 'founder@example.com',
         password: TEST_PASSWORD_PLACEHOLDER,
+        setupToken: 'the-one-time-token',
       });
     });
     await waitFor(() => {

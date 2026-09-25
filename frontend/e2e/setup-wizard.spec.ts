@@ -187,6 +187,10 @@ test.describe('Setup wizard', () => {
     await page.getByTestId('admin-username').fill('founder');
     await page.getByTestId('admin-email').fill('founder@example.com');
     await page.getByTestId('admin-password').fill('Founder123!');
+    // EXC-451: required field — the mocked /api/auth/register below accepts
+    // any body, but the browser's own `required` validation blocks submit
+    // until every field, including this one, has a value.
+    await page.getByTestId('admin-setup-token').fill('e2e-mock-setup-token');
     await page.getByTestId('admin-submit').click();
 
     // Token persisted to localStorage by setAuth

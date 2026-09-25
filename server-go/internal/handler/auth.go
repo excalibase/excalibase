@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -22,7 +23,15 @@ type AuthHandler struct {
 	instanceStore storage.InstanceStore // optional — lets CreateToken bind a PAT to a project the caller can see
 	auditLog      auditWriter           // optional — records PAT rotations
 	inviteOnly    bool                  // when true, only an invite token (or the first admin) may register
+	setupTokens   storage.SetupTokenStore
 }
+
+// SetSetupTokenStore wires the one-time first-admin setup token check
+// (EXC-451). Required for Register to ever create a platform_admin — with it
+// unset, Register always takes the ordinary "user" path and a fresh platform
+// can never bootstrap, which fails loudly (missing store, not a fallback)
+// rather than silently minting an unguarded admin.
+func (h *AuthHandler) SetSetupTokenStore(s storage.SetupTokenStore) { h.setupTokens = s }
 
 // SetInstanceStore wires the instance store CreateToken uses to confirm the
 // caller may see the project a new PAT is bound to.
@@ -45,13 +54,23 @@ func (h *AuthHandler) SetOrgStore(orgStore storage.OrgStore) {
 	h.orgStore = orgStore
 }
 
+// registerRequest is the POST /api/auth/register body. SetupToken is only
+// consulted on the very first registration (EXC-451): it mints the
+// platform_admin and is ignored on every registration after that.
+// InviteToken is consulted on every OTHER registration (EXC-468): it spends
+// a one-time org-invite link and is ignored on the first registration's own
+// admin promotion (though a first admin may also arrive via an invite link,
+// e.g. to join an org another install already created).
+type registerRequest struct {
+	Username    string `json:"username"`
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	SetupToken  string `json:"setupToken"`
+	InviteToken string `json:"inviteToken"`
+}
+
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Username    string `json:"username"`
-		Email       string `json:"email"`
-		Password    string `json:"password"`
-		InviteToken string `json:"inviteToken"`
-	}
+	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, "invalid request", http.StatusBadRequest)
 		return
@@ -67,16 +86,20 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// First-run auto-promotion: the very first registration on a fresh
-	// platform becomes platform_admin so the setup wizard can complete
-	// without a separate "promote" step. All subsequent registrations
-	// keep the default "user" role and must be elevated by an admin.
-	role := "user"
-	if existing, _ := h.userStore.FindAllUsers(r.Context()); len(existing) == 0 {
-		role = "platform_admin"
+	// First-run detection: the very first registration on a fresh platform
+	// becomes platform_admin so the setup wizard can complete without a
+	// separate "promote" step. This check alone used to be the whole gate —
+	// racy, and requiring nothing but being first to the wire (EXC-451). It
+	// now only decides which branch below runs; the atomic token burn in
+	// CreateFirstAdmin is what actually decides who becomes admin.
+	allUsers, err := h.userStore.FindAllUsers(r.Context())
+	if err != nil {
+		httpError(w, "internal error", http.StatusInternalServerError)
+		return
 	}
+	isFirstUser := len(allUsers) == 0
 
-	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, role == "platform_admin")
+	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, isFirstUser)
 	if status != 0 {
 		httpError(w, msg, status)
 		return
@@ -88,28 +111,20 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Username:     req.Username,
 		Email:        req.Email,
 		PasswordHash: hash,
-		Role:         role,
+		Role:         "user",
 		Active:       true,
 		Kind:         domain.UserKindHuman,
 		CreatedAt:    &now,
 	}
 
-	if err := h.userStore.CreateUser(r.Context(), user); err != nil {
-		httpError(w, "failed to create account", http.StatusInternalServerError)
-		return
+	var ok bool
+	if isFirstUser {
+		ok = h.createFirstAdmin(w, r, req.SetupToken, user)
+	} else {
+		ok = h.createSubsequentUser(w, r, user)
 	}
-
-	// First-run org bootstrap. The legacy startup path used to create a
-	// default org when self-hosted mode found a single user; that path
-	// runs at server boot, before the wizard's first registration. So
-	// inline it here: when the auto-promoted platform_admin lands, also
-	// create the default org and add them as owner. Idempotent (skips if
-	// any org already exists). Best-effort — log but don't fail the
-	// registration if the org creation fails.
-	if role == "platform_admin" && h.orgStore != nil {
-		if err := auth.BootstrapDefaultOrg(r.Context(), h.orgStore, user.ID); err != nil {
-			log.Printf("WARN: bootstrap default org failed: %v", err)
-		}
+	if !ok {
+		return
 	}
 
 	if inviteHash != "" {
@@ -119,7 +134,63 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Auto-login: a bounded session token, same shape as Login issues.
+	h.issueRegistrationToken(w, r, user, now)
+}
+
+// createFirstAdmin handles the very first registration: it requires the
+// one-time setup token and atomically burns it while creating user as
+// platform_admin (EXC-451). Returns false (response already written) on any
+// failure.
+func (h *AuthHandler) createFirstAdmin(w http.ResponseWriter, r *http.Request, setupToken string, user *domain.User) bool {
+	if h.setupTokens == nil {
+		httpError(w, "setup is not available", http.StatusInternalServerError)
+		return false
+	}
+	if setupToken == "" {
+		httpError(w, "setup token required", http.StatusForbidden)
+		return false
+	}
+	user.Role = "platform_admin"
+	if err := h.setupTokens.CreateFirstAdmin(r.Context(), auth.HashToken(setupToken), user); err != nil {
+		if errors.Is(err, storage.ErrInvalidSetupToken) {
+			httpError(w, "invalid setup token", http.StatusForbidden)
+			return false
+		}
+		httpError(w, "failed to create account", http.StatusInternalServerError)
+		return false
+	}
+
+	// First-run org bootstrap. The legacy startup path used to create a
+	// default org when self-hosted mode found a single user; that path runs
+	// at server boot, before the wizard's first registration. So inline it
+	// here: when the platform_admin lands, also create the default org and
+	// add them as owner. Idempotent (skips if any org already exists).
+	// Best-effort — log but don't fail the registration if it fails.
+	if h.orgStore != nil {
+		if err := auth.BootstrapDefaultOrg(r.Context(), h.orgStore, user.ID); err != nil {
+			log.Printf("WARN: bootstrap default org failed: %v", err)
+		}
+	}
+	return true
+}
+
+// createSubsequentUser handles every registration after the first admin. The
+// setup token, if one was sent, is never consulted here — it can only ever
+// mint the first admin. Whether an invite token was required at all is
+// already decided by checkRegistrationInvite before this runs; by the time
+// this is called, either the platform is open or a live invite was
+// validated, so this only needs to write the row.
+func (h *AuthHandler) createSubsequentUser(w http.ResponseWriter, r *http.Request, user *domain.User) bool {
+	if err := h.userStore.CreateUser(r.Context(), user); err != nil {
+		httpError(w, "failed to create account", http.StatusInternalServerError)
+		return false
+	}
+	return true
+}
+
+// issueRegistrationToken auto-logs the new user in: a bounded session token,
+// the same shape as Login issues.
+func (h *AuthHandler) issueRegistrationToken(w http.ResponseWriter, r *http.Request, user *domain.User, now time.Time) {
 	raw := auth.GenerateToken()
 	expiry := now.Add(sessionTokenTTL)
 	token := &domain.AccessToken{

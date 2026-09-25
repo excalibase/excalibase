@@ -65,8 +65,13 @@ func seededStore() *mockUserStore {
 	return us
 }
 
+// registerHandler wires an AuthHandler for Register tests. Every case here
+// pre-seeds an existing admin (via seededStore), so the registration under
+// test is always the "subsequent" path — the first-admin/setup-token path is
+// covered in setup_token_test.go.
 func registerHandler(us *mockUserStore, org storage.OrgStore, inviteOnly bool) *AuthHandler {
 	h := NewAuthHandler(us, newMockTokenStore())
+	h.SetSetupTokenStore(newMockSetupTokenStore(us))
 	if org != nil {
 		h.SetOrgStore(org)
 	}
@@ -75,12 +80,26 @@ func registerHandler(us *mockUserStore, org storage.OrgStore, inviteOnly bool) *
 }
 
 func postRegister(h *AuthHandler, username, email string) *httptest.ResponseRecorder {
-	return postRegisterWithInvite(h, username, email, "")
+	return postRegisterWithToken(h, username, email, "")
 }
 
+// postRegisterWithToken sends a registration carrying a setupToken
+// (EXC-451's first-admin path).
+func postRegisterWithToken(h *AuthHandler, username, email, setupToken string) *httptest.ResponseRecorder {
+	body := fmt.Sprintf(`{"username":%q,"email":%q,"password":%q,"setupToken":%q}`,
+		username, email, testutil.FixturePassword("reg-"+username), setupToken)
+	return doRegisterRequest(h, body)
+}
+
+// postRegisterWithInvite sends a registration carrying an inviteToken
+// (EXC-468's subsequent-user path).
 func postRegisterWithInvite(h *AuthHandler, username, email, token string) *httptest.ResponseRecorder {
 	body := fmt.Sprintf(`{"username":%q,"email":%q,"password":%q,"inviteToken":%q}`,
 		username, email, testutil.FixturePassword("reg-"+username), token)
+	return doRegisterRequest(h, body)
+}
+
+func doRegisterRequest(h *AuthHandler, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("POST", "/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -88,15 +107,6 @@ func postRegisterWithInvite(h *AuthHandler, username, email, token string) *http
 	r.Post("/register", h.Register)
 	r.ServeHTTP(w, req)
 	return w
-}
-
-// EXC-329 hardening: in invite-only mode the FIRST registration still succeeds
-// (it bootstraps the platform admin) — otherwise the platform is uninstallable.
-func TestInviteOnly_FirstUserStillBootstraps(t *testing.T) {
-	h := registerHandler(newMockUserStore(), nil, true) // empty store → first user → platform_admin
-	if w := postRegister(h, "admin", "admin@x.test"); w.Code != http.StatusCreated {
-		t.Fatalf("first registration must succeed in invite-only mode, got %d: %s", w.Code, w.Body.String())
-	}
 }
 
 // A subsequent registration with no invite is rejected.

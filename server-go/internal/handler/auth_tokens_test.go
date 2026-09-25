@@ -337,10 +337,16 @@ func TestRotateToken_WritesAuditWithoutSecret(t *testing.T) {
 func TestRegister_AutoLoginTokenIsBoundedSession(t *testing.T) {
 	us, ts := newMockUserStore(), newMockTokenStore()
 	h := NewAuthHandler(us, ts)
+	sts := newMockSetupTokenStore(us)
+	setupToken := auth.GenerateSetupToken()
+	if err := sts.StoreSetupTokenHash(t.Context(), auth.HashToken(setupToken)); err != nil {
+		t.Fatalf("seed setup token: %v", err)
+	}
+	h.SetSetupTokenStore(sts)
 	r := chi.NewRouter()
 	r.Post("/api/auth/register", h.Register)
 
-	body := `{"username":"alice","email":"alice@test.com","password":"` + testutil.FixturePassword("alice-reg") + `"}`
+	body := `{"username":"alice","email":"alice@test.com","password":"` + testutil.FixturePassword("alice-reg") + `","setupToken":"` + setupToken + `"}`
 	w := doRequest(r, "POST", "/api/auth/register", body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf(statusFmt, w.Code, w.Body.String())

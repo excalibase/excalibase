@@ -34,9 +34,10 @@ func wireSetupStatus(t *testing.T, base chi.Router, store *pgstore.Store) chi.Ro
 // registration on a fresh platform is auto-promoted to platform_admin so
 // the setup wizard can complete without a separate "promote" step.
 func TestRegister_FirstUser_BecomesPlatformAdmin(t *testing.T) {
-	r, store := setupRegisterRouter(t)
+	r, store, setupToken := setupRegisterRouter(t)
 
-	body := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q}`, testutil.FixturePassword("founder"))
+	body := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q,"setupToken":%q}`,
+		testutil.FixturePassword("founder"), setupToken)
 	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
 	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	w := httptest.NewRecorder()
@@ -59,10 +60,11 @@ func TestRegister_FirstUser_BecomesPlatformAdmin(t *testing.T) {
 // rule fires for the FIRST registration only — subsequent registrations
 // must keep the default "user" role.
 func TestRegister_SecondUser_StaysAsRegularUser(t *testing.T) {
-	r, store := setupRegisterRouter(t)
+	r, store, setupToken := setupRegisterRouter(t)
 
 	// First registration — becomes platform_admin
-	first := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q}`, testutil.FixturePassword("founder"))
+	first := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q,"setupToken":%q}`,
+		testutil.FixturePassword("founder"), setupToken)
 	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(first))
 	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	w := httptest.NewRecorder()
@@ -96,9 +98,10 @@ func TestRegister_SecondUser_StaysAsRegularUser(t *testing.T) {
 // matching what the legacy auth.Bootstrap+BootstrapDefaultOrg pair did
 // at server startup before the wizard owned first-run.
 func TestRegister_FirstUser_CreatesDefaultOrg(t *testing.T) {
-	r, store := setupRegisterRouter(t)
+	r, store, setupToken := setupRegisterRouter(t)
 
-	body := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q}`, testutil.FixturePassword("founder"))
+	body := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q,"setupToken":%q}`,
+		testutil.FixturePassword("founder"), setupToken)
 	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(body))
 	req.Header.Set(sharedContentType, sharedMIMEJSON)
 	w := httptest.NewRecorder()
@@ -138,9 +141,10 @@ func TestRegister_FirstUser_CreatesDefaultOrg(t *testing.T) {
 // only fires for the very first registration; subsequent registrations
 // must NOT spawn additional orgs.
 func TestRegister_SecondUser_DoesNotCreateAnotherOrg(t *testing.T) {
-	r, store := setupRegisterRouter(t)
+	r, store, setupToken := setupRegisterRouter(t)
 
-	first := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q}`, testutil.FixturePassword("founder"))
+	first := fmt.Sprintf(`{"username":"founder","email":"founder@example.com","password":%q,"setupToken":%q}`,
+		testutil.FixturePassword("founder"), setupToken)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", testRegisterPath, strings.NewReader(first))
 	req.Header.Set(sharedContentType, sharedMIMEJSON)
@@ -162,7 +166,7 @@ func TestRegister_SecondUser_DoesNotCreateAnotherOrg(t *testing.T) {
 // endpoint reports hasAdmin=false on an empty platform so the studio
 // knows to render the create-admin step.
 func TestSetupStatus_NoUsers_ReturnsHasAdminFalse(t *testing.T) {
-	r, store := setupRegisterRouter(t)
+	r, store, _ := setupRegisterRouter(t)
 	r2 := wireSetupStatus(t, r, store)
 
 	w := httptest.NewRecorder()
@@ -182,7 +186,7 @@ func TestSetupStatus_NoUsers_ReturnsHasAdminFalse(t *testing.T) {
 // TestSetupStatus_AfterRegister_ReturnsHasAdminTrue asserts the endpoint
 // flips to hasAdmin=true once a platform_admin exists.
 func TestSetupStatus_AfterRegister_ReturnsHasAdminTrue(t *testing.T) {
-	r, store := setupRegisterRouter(t)
+	r, store, _ := setupRegisterRouter(t)
 	r2 := wireSetupStatus(t, r, store)
 
 	// Seed an admin row directly so the test isolates the status logic.

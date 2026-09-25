@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 )
@@ -18,6 +19,15 @@ func GenerateToken() string {
 func HashToken(raw string) string {
 	h := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(h[:])
+}
+
+// GenerateSetupToken creates a random one-time token for the first-admin
+// setup flow (EXC-451): 32 random bytes, URL-safe base64 so it can be pasted
+// into a link or a form field without escaping.
+func GenerateSetupToken() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // TokenPrefix returns the first 12 chars for display.
