@@ -208,8 +208,8 @@ func TestMockClientUpdateCRD(t *testing.T) {
 func TestMockClientAutoReconcileStampsClusterStatus(t *testing.T) {
 	m := NewMockClient()
 	m.AutoReconcileClusters = true
-	cluster := BuildRestoreCluster(RestoreClusterOpts{
-		SourceProjectID: "src", NewProjectID: "dst", Namespace: "ns",
+	cluster := mustBuildRestore(t, RestoreClusterOpts{
+		SourceProjectID: "src", Cluster: clusterOpts("dst", "ns"),
 		Store: ObjectStoreOpts{Bucket: "b"},
 	})
 

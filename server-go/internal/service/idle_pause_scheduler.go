@@ -64,8 +64,8 @@ func pauseRetryDue(inst *domain.DatabaseInstance, now time.Time) bool {
 	return now.Sub(inst.PauseLastAttemptAt.Time) >= pauseRetryBackoffFor(inst.PauseAttempts)
 }
 
-// TierResolver returns the effective tier spec (store row or built-in
-// fallback). ProvisioningService.TierConfig satisfies it.
+// TierResolver returns the tier spec from its source, or an error when the
+// source cannot answer. ProvisioningService.TierConfig satisfies it.
 type TierResolver func(ctx context.Context, tier domain.TierType) (config.TierConfig, error)
 
 // IdlePauser is the slice of PauseService the sweep needs.

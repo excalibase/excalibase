@@ -9,9 +9,8 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
-// erroringTierStore fails every read, to prove a broken tier table degrades to
-// the config defaults instead of blocking provisioning. (The happy paths of the
-// resolver are covered in tier_resolver_test.go via fakeTierStore.)
+// erroringTierStore fails every read, to prove a broken tier table fails the
+// operation rather than sizing a project from values nobody chose.
 type erroringTierStore struct{}
 
 func (erroringTierStore) ListTierConfigs(context.Context) (map[domain.TierType]config.TierConfig, error) {
@@ -42,17 +41,28 @@ func TestTierConfig_ExportedWrapperPrefersStoreRow(t *testing.T) {
 	}
 }
 
-func TestTierConfig_FallsBackWhenStoreErrors(t *testing.T) {
+func TestTierConfig_StoreErrorFails(t *testing.T) {
 	svc := NewProvisioningService(nil, nil, nil)
 	svc.SetTierStore(erroringTierStore{})
 
-	got, err := svc.TierConfig(context.Background(), domain.Free)
-	if err != nil {
-		t.Fatalf("a store error must not fail resolution: %v", err)
+	if _, err := svc.TierConfig(context.Background(), domain.Free); !errors.Is(err, ErrTierConfigUnavailable) {
+		t.Fatalf("a tier store that cannot be read must fail resolution, got %v", err)
 	}
-	want, _ := config.GetTierConfig(domain.Free)
-	if got != want {
-		t.Fatalf("expected config default when the store errors: got %+v want %+v", got, want)
+}
+
+func TestProvision_RefusesWhenTheTierStoreFails(t *testing.T) {
+	svc, store, mock := setupProvisioningTest(t)
+	svc.SetTierStore(erroringTierStore{})
+
+	_, err := provisionInto(t, svc, "org", "p")
+	if !errors.Is(err, ErrTierConfigUnavailable) {
+		t.Fatalf("Provision = %v, want ErrTierConfigUnavailable", err)
+	}
+	if all, _ := store.FindAll(); len(all) != 0 {
+		t.Errorf("no project may be recorded: %v", all)
+	}
+	if len(mock.CRDs) != 0 || len(mock.Namespaces) != 0 {
+		t.Errorf("nothing may be created: crds=%v ns=%v", mock.CRDs, mock.Namespaces)
 	}
 }
 

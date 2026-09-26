@@ -62,6 +62,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	provSvc.SetOrgStore(orgs)
 	backupSvc.SetProjectRegistrar(provSvc)
 	backupSvc.SetOrgProjectCapacity(provSvc)
+	backupSvc.SetRestorePlanSource(provSvc)
 	if err := backupSvc.SetDatabaseProbe(answeringProbe{}); err != nil {
 		t.Fatalf("SetDatabaseProbe: %v", err)
 	}

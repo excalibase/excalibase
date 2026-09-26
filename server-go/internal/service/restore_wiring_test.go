@@ -227,12 +227,15 @@ func TestRegisterProjectHoldsAnUnverifiedRestoreInRestoring(t *testing.T) {
 // restoreClusterObject rebuilds the CRD the restore applied, for tests that
 // take it away and put it back.
 func restoreClusterObject() *unstructured.Unstructured {
-	return k8s.BuildRestoreCluster(k8s.RestoreClusterOpts{
+	cluster, err := k8s.BuildRestoreCluster(k8s.RestoreClusterOpts{
+		Cluster:         k8s.PostgreSQLClusterOpts{ProjectID: "dst", Namespace: restoreTargetNS, Tier: enterprisePlan().plan.Config},
 		SourceProjectID: "src",
-		NewProjectID:    "dst",
-		Namespace:       restoreTargetNS,
 		Store:           k8s.ObjectStoreOpts{Bucket: "b"},
 	})
+	if err != nil {
+		panic(err)
+	}
+	return cluster
 }
 
 func TestSetDatabaseProbeRefusesAnUnverifiableWiring(t *testing.T) {

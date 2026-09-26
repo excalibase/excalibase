@@ -17,10 +17,9 @@ func barmanStoreOf(t *testing.T, spec map[string]interface{}) map[string]interfa
 }
 
 func TestBuildRestoreClusterPointsAtConfiguredStore(t *testing.T) {
-	obj := BuildRestoreCluster(RestoreClusterOpts{
+	obj := mustBuildRestore(t, RestoreClusterOpts{
 		SourceProjectID: "src-db",
-		NewProjectID:    "dst-db",
-		Namespace:       "org-dst-db",
+		Cluster:         clusterOpts("dst-db", "org-dst-db"),
 		Store:           ObjectStoreOpts{EndpointURL: testR2Endpoint, Bucket: "excalibase-backups", SecretName: "backup-s3-creds"},
 	})
 
@@ -51,10 +50,9 @@ func TestBuildRestoreClusterPointsAtConfiguredStore(t *testing.T) {
 }
 
 func TestBuildRestoreClusterOmitsEndpointWhenUnset(t *testing.T) {
-	obj := BuildRestoreCluster(RestoreClusterOpts{
+	obj := mustBuildRestore(t, RestoreClusterOpts{
 		SourceProjectID: "src-db",
-		NewProjectID:    "dst-db",
-		Namespace:       "ns",
+		Cluster:         clusterOpts("dst-db", "ns"),
 		Store:           ObjectStoreOpts{Bucket: "b", SecretName: "s"},
 	})
 	store := barmanStoreOf(t, obj.Object["spec"].(map[string]interface{}))
@@ -64,10 +62,9 @@ func TestBuildRestoreClusterOmitsEndpointWhenUnset(t *testing.T) {
 }
 
 func TestBuildRestoreClusterCarriesRecoveryTarget(t *testing.T) {
-	obj := BuildRestoreCluster(RestoreClusterOpts{
+	obj := mustBuildRestore(t, RestoreClusterOpts{
 		SourceProjectID: "src-db",
-		NewProjectID:    "dst-db",
-		Namespace:       "ns",
+		Cluster:         clusterOpts("dst-db", "ns"),
 		Store:           ObjectStoreOpts{EndpointURL: testR2Endpoint, Bucket: "b", SecretName: "s"},
 		RecoveryTarget:  map[string]interface{}{"targetTime": "2026-01-01T00:00:00Z"},
 	})
@@ -96,9 +93,9 @@ func TestBuildBackupSpecHonoursExplicitLocalstack(t *testing.T) {
 
 func TestBuildRestoreClusterNamesTheImage(t *testing.T) {
 	image := "excalibase/postgresql:16@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	obj := BuildRestoreCluster(RestoreClusterOpts{
-		SourceProjectID: "src", NewProjectID: "dst", Namespace: "org-dst", ImageName: image,
-	})
+	cluster := clusterOpts("dst", "org-dst")
+	cluster.ImageName = image
+	obj := mustBuildRestore(t, RestoreClusterOpts{SourceProjectID: "src", Cluster: cluster})
 	spec := obj.Object["spec"].(map[string]interface{})
 	if spec["imageName"] != image {
 		t.Errorf("imageName: got %v, want %s", spec["imageName"], image)
@@ -106,10 +103,9 @@ func TestBuildRestoreClusterNamesTheImage(t *testing.T) {
 }
 
 func TestBuildRestoreClusterNamesThePublicHost(t *testing.T) {
-	obj := BuildRestoreCluster(RestoreClusterOpts{
-		SourceProjectID: "src", NewProjectID: "dst", Namespace: "org-dst",
-		ServerAltDNSNames: []string{"dst.db.example.com"},
-	})
+	cluster := clusterOpts("dst", "org-dst")
+	cluster.ServerAltDNSNames = []string{"dst.db.example.com"}
+	obj := mustBuildRestore(t, RestoreClusterOpts{SourceProjectID: "src", Cluster: cluster})
 	spec := obj.Object["spec"].(map[string]interface{})
 	certificates, ok := spec["certificates"].(map[string]interface{})
 	if !ok {

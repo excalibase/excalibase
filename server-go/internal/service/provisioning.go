@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"sync"
 	"time"
 
@@ -140,22 +141,32 @@ func (s *ProvisioningService) SetOrgStore(os storage.OrgStore) {
 	s.orgStore = os
 }
 
-// SetTierStore wires the DB-backed tier-config source. Optional: when unset
-// (or a tier row is missing), tier resolution falls back to config.GetTierConfig.
+// SetTierStore wires the DB-backed tier-config source. Once wired it is the
+// only source: a tier it cannot answer for is refused, never sized from the
+// built-in catalogue. Unset, the built-in catalogue is the source.
 func (s *ProvisioningService) SetTierStore(ts storage.TierConfigStore) {
 	s.tierStore = ts
 }
 
-// tierConfig resolves a tier's resource spec, preferring the DB-backed store
-// (so admin edits take effect without a redeploy) and falling back to the
-// hardcoded config defaults when the store is absent, errors, or has no row.
+// ErrTierConfigUnavailable refuses an operation whose tier's size and limits
+// cannot be read. A tier is never sized from values its source did not give.
+var ErrTierConfigUnavailable = errors.New("the tier's configuration could not be read")
+
+// tierConfig resolves a tier's resource spec from the DB-backed store, so admin
+// edits take effect without a redeploy. The store is seeded with every tier
+// and nothing deletes a row, so a missing row is a broken table, not a default.
 func (s *ProvisioningService) tierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
-	if s.tierStore != nil {
-		if tc, ok, err := s.tierStore.GetTierConfig(ctx, tier); err == nil && ok {
-			return s.withStatementTimeoutFallback(tier, tc)
-		}
+	if s.tierStore == nil {
+		return config.GetTierConfig(tier)
 	}
-	return config.GetTierConfig(tier)
+	tc, ok, err := s.tierStore.GetTierConfig(ctx, tier)
+	if err != nil {
+		return config.TierConfig{}, fmt.Errorf("%w: tier %s: %v", ErrTierConfigUnavailable, tier, err)
+	}
+	if !ok {
+		return config.TierConfig{}, fmt.Errorf("%w: tier %s has no row in the tier store", ErrTierConfigUnavailable, tier)
+	}
+	return s.withStatementTimeoutFallback(tier, tc)
 }
 
 // The tier_configs table has no timeout column, so rows take the built-in tier's; a tenant never runs without one.
@@ -176,6 +187,24 @@ func (s *ProvisioningService) withStatementTimeoutFallback(tier domain.TierType,
 // edits in the tier_configs table exactly as admission does.
 func (s *ProvisioningService) TierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, error) {
 	return s.tierConfig(ctx, tier)
+}
+
+// RestorePlan decides what a project restored from source is created with,
+// the way Provision decides it for a new project: its organisation's current
+// tier, that tier's size and limits, and the backups a new project of that
+// tier gets.
+func (s *ProvisioningService) RestorePlan(ctx context.Context, source *domain.DatabaseInstance) (RestorePlan, error) {
+	tierType, err := s.orgTier(ctx, source.OrgID)
+	if err != nil {
+		return RestorePlan{}, err
+	}
+	tier, err := s.tierConfig(ctx, tierType)
+	if err != nil {
+		return RestorePlan{}, err
+	}
+	var req domain.ProvisioningRequest
+	s.applyBackupDefaults(&req, tier)
+	return RestorePlan{Tier: tierType, Config: tier, Backup: req.Backup}, nil
 }
 
 func (s *ProvisioningService) SetSelfHostedMode(enabled bool) {
@@ -398,6 +427,8 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		// later and the store leaves the column out of every UPDATE to keep
 		// it that way (EXC-409). The major has already been checked capable.
 		DocumentDB:   req.DocumentDB,
+		StorageClass: req.StorageClass,
+		Parameters:   maps.Clone(req.Parameters),
 		Status:       "PROVISIONING",
 		CurrentStage: domain.StageValidating,
 		CreatedAt:    now,
