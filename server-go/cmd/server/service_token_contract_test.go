@@ -234,8 +234,8 @@ func contractRouterWithProjectStatus(t *testing.T, status string) (http.Handler,
 	deps := matrixDeps(t, instances)
 	deps.vaultHandler = handler.NewVaultHandler(localVault)
 	deps.vaultHandler.SetInstanceStore(instances)
-	deps.tableGrantHandler = handler.NewTableGrantHandler(grants, true)
-	deps.rlsPolicyHandler = handler.NewRlsPolicyHandler(emptyPolicyStore{})
+	deps.tableGrantHandler = handler.NewTableGrantHandler(grants, instances, true)
+	deps.rlsPolicyHandler = handler.NewRlsPolicyHandler(emptyPolicyStore{}, instances)
 	deps.internalEmail = handler.NewInternalEmailHandler(&countingSender{})
 	cfg := config.AppConfig{DeploymentMode: "selfhosted"}
 	return buildRouter(cfg, platform, instances, deps), who, grants

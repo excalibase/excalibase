@@ -86,6 +86,14 @@ func (f *fakeGrantStore) DeleteGrant(_ context.Context, projectID, id string) er
 	return nil
 }
 
+// everyProject treats any project id as known; the unknown-project answer is
+// covered in policy_project_lookup_test.go.
+type everyProject struct{}
+
+func (everyProject) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
+	return &domain.DatabaseInstance{ProjectID: projectID}, nil
+}
+
 // grantBus records published change events without dialing NATS.
 type grantBus struct {
 	mu     sync.Mutex
@@ -117,7 +125,7 @@ func setupGrantRouterEnforcing(t *testing.T, enforced bool) (chi.Router, *fakeGr
 	t.Helper()
 	store := newFakeGrantStore()
 	bus := &grantBus{}
-	h := NewTableGrantHandler(store, enforced)
+	h := NewTableGrantHandler(store, everyProject{}, enforced)
 	h.SetPublisher(bus)
 
 	r := chi.NewRouter()
@@ -475,7 +483,7 @@ func TestTableGrants_StoreFailureIsSanitized(t *testing.T) {
 func TestTableGrants_PublisherIsOptional(t *testing.T) {
 	// Handlers constructed without a publisher (unit tests, NATS-less dev)
 	// must still serve writes rather than panicking.
-	h := NewTableGrantHandler(newFakeGrantStore(), true)
+	h := NewTableGrantHandler(newFakeGrantStore(), everyProject{}, true)
 	r := chi.NewRouter()
 	r.Route("/api/provision/{projectId}/table-grants", func(r chi.Router) { h.Routes(r) })
 

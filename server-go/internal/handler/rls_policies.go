@@ -39,14 +39,21 @@ type PolicyChangePublisher interface {
 	PublishPolicyChange(ctx context.Context, evt domain.PolicyChangeEvent)
 }
 
+// ProjectFinder resolves a project row; a nil instance with no error means the
+// project does not exist.
+type ProjectFinder interface {
+	FindByProjectID(projectID string) (*domain.DatabaseInstance, error)
+}
+
 // RlsPolicyHandler exposes CRUD for both rls_policies and column_policies.
 type RlsPolicyHandler struct {
 	store     storage.RlsPolicyStore
+	projects  ProjectFinder
 	publisher PolicyChangePublisher // optional
 }
 
-func NewRlsPolicyHandler(store storage.RlsPolicyStore) *RlsPolicyHandler {
-	return &RlsPolicyHandler{store: store}
+func NewRlsPolicyHandler(store storage.RlsPolicyStore, projects ProjectFinder) *RlsPolicyHandler {
+	return &RlsPolicyHandler{store: store, projects: projects}
 }
 
 // SetPublisher wires the NATS publisher post-construction so handler
@@ -74,7 +81,7 @@ func (h *RlsPolicyHandler) ColumnRoutes(r chi.Router) {
 // -------------------- RLS handlers --------------------
 
 func (h *RlsPolicyHandler) ListRls(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := projectIDFromPath(w, r)
+	projectID, ok := knownProjectFromPath(w, r, h.projects)
 	if !ok {
 		return
 	}
@@ -202,7 +209,7 @@ func (h *RlsPolicyHandler) DeleteRls(w http.ResponseWriter, r *http.Request) {
 // -------------------- Column handlers --------------------
 
 func (h *RlsPolicyHandler) ListColumn(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := projectIDFromPath(w, r)
+	projectID, ok := knownProjectFromPath(w, r, h.projects)
 	if !ok {
 		return
 	}
@@ -344,6 +351,30 @@ func projectIDFromPath(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return id, true
+}
+
+// knownProjectFromPath is projectIDFromPath for the lists the data plane reads.
+// Platform service tokens skip the membership lookup that would 404 an unknown
+// project, and an empty list for one reads as "unrestricted" to the engine.
+func knownProjectFromPath(w http.ResponseWriter, r *http.Request, projects ProjectFinder) (string, bool) {
+	projectID, ok := projectIDFromPath(w, r)
+	if !ok {
+		return "", false
+	}
+	if projects == nil {
+		httpError(w, "project lookup unavailable", http.StatusInternalServerError)
+		return "", false
+	}
+	inst, err := projects.FindByProjectID(projectID)
+	if err != nil {
+		httpError(w, safeError(err), http.StatusInternalServerError)
+		return "", false
+	}
+	if inst == nil {
+		httpError(w, "project not found", http.StatusNotFound)
+		return "", false
+	}
+	return projectID, true
 }
 
 func validateRls(p *domain.Policy) error {
