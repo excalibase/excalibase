@@ -143,3 +143,19 @@ func TestSQLTextLiteral_UsesOnlyHexDigits(t *testing.T) {
 		t.Errorf("sqlTextLiteral = %s, want %s", got, want)
 	}
 }
+
+func TestBuildProjectRoleSQL_WatcherWritesOnlyItsOwnSchema(t *testing.T) {
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
+
+	for _, want := range []string{
+		`GRANT USAGE, CREATE ON SCHEMA excalibase_cdc TO "cdc_watcher"`,
+		`ALTER ROLE "cdc_watcher" IN DATABASE "app" SET search_path = excalibase_cdc`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("expected %q; sql:\n%s", want, sql)
+		}
+	}
+	if strings.Contains(sql, `SCHEMA public TO "cdc_watcher"`) {
+		t.Error("cdc_watcher must not be granted anything on public")
+	}
+}
