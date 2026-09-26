@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
@@ -115,10 +116,29 @@ func TestAPaidTierProvisionBacksUpToTheVaultTarget(t *testing.T) {
 	}
 }
 
-func TestAFreeTierProvisionNeedsNoBackupTarget(t *testing.T) {
+func tierWithoutBackups() config.TierConfig {
+	return config.TierConfig{MaxProjects: 1, Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5", StatementTimeout: "15s"}
+}
+
+func TestATierConfiguredWithoutBackupsNeedsNoBackupTarget(t *testing.T) {
 	svc, _ := withoutBackupTarget(t)
+	svc.SetTierStore(fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: tierWithoutBackups()}})
 	if err := provisionOnTier(t, svc, domain.Free, nil); err != nil {
 		t.Fatalf("Provision: %v", err)
+	}
+}
+
+func TestAFreeProvisionIsBackedUpLikeEveryOtherTier(t *testing.T) {
+	svc, mock := withoutBackupTarget(t)
+	if err := provisionOnTier(t, svc, domain.Free, nil); !errors.Is(err, ErrBackupTargetNotConfigured) {
+		t.Fatalf("a FREE provision without a backup target: got %v, want ErrBackupTargetNotConfigured", err)
+	}
+	withBackupTarget(t, svc)
+	if err := provisionOnTier(t, svc, domain.Free, nil); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if clusterBackup(t, mock) == nil {
+		t.Error("a FREE project was provisioned without backups")
 	}
 }
 

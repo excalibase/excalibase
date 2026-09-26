@@ -166,6 +166,7 @@ func TestProvisioningRecordsTheMajorItWasCreatedOn(t *testing.T) {
 		"dbname":   []byte("app"),
 	}
 	svc := NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
+	withBackupTarget(t, svc)
 	svc.SetOrgStore(testOrgs())
 
 	// Padded on purpose: what is stored must be the catalogue's spelling, not

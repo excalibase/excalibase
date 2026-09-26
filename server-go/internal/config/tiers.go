@@ -39,7 +39,7 @@ var tiers = map[domain.TierType]TierConfig{
 		StorageSize:        "5Gi",
 		Memory:             "512Mi",
 		CPU:                "0.5",
-		BackupEnabled:      false,
+		BackupEnabled:      true,
 		StatementTimeout:   "15s",
 		AutoPauseAfterDays: 7,
 	},

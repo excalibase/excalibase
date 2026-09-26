@@ -61,6 +61,7 @@ func provisionRouterWithOrgs(t *testing.T, store storage.InstanceStore, mock *k8
 	t.Helper()
 	svc := service.NewProvisioningService(store,
 		provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
+	withBackupTarget(t, svc)
 	svc.SetOrgStore(orgs)
 	h := NewProvisioningHandler(svc, nil)
 

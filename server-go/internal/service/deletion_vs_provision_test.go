@@ -66,6 +66,7 @@ func provisionAgainstDeletionWithProvisioner(t *testing.T, during func(*Provisio
 	var svc *ProvisioningService
 	wrapped := &midProvisionProvisioner{PostgreSQLProvisioner: inner, during: func() { during(svc) }}
 	svc = NewProvisioningService(store, provisioner.NewFactory(wrapped), mock)
+	withBackupTarget(t, svc)
 	svc.SetOrgStore(testOrgs())
 	svc.SetVault(newFakeVault())
 

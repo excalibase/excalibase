@@ -180,7 +180,7 @@ func (s *BackupService) ListBackups(projectID string) ([]map[string]interface{},
 // turned on, and the platform has an object store to put them in.
 //
 // The per-project half matters as much as the platform half. A project on a
-// tier without backups (FREE) that is asked for one anyway gets a Backup CR
+// tier configured without backups that is asked for one anyway gets a Backup CR
 // the engine accepts and then fails asynchronously — long after whoever asked
 // believed it had a recovery point (EXC-363). A row whose flag was never set
 // is treated as off: nothing has claimed this project has backups.

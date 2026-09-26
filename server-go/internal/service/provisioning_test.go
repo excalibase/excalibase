@@ -227,8 +227,10 @@ func TestProvisionExceedsFreeTierLimit(t *testing.T) {
 	}
 }
 
-func TestProvisionBackupNotAllowedOnFreeTier(t *testing.T) {
+// A tier an operator configured without backups refuses a request for them.
+func TestProvisionBackupNotAllowedOnATierWithoutBackups(t *testing.T) {
 	svc, _, _ := setupProvisioningTest(t)
+	svc.SetTierStore(fakeTierStore{m: map[domain.TierType]config.TierConfig{domain.Free: tierWithoutBackups()}})
 
 	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		PostgresVersion: "17",
@@ -237,10 +239,7 @@ func TestProvisionBackupNotAllowedOnFreeTier(t *testing.T) {
 		DBType:          domain.PostgreSQL,
 		Backup:          &domain.BackupSettings{Enabled: true},
 	})
-	if err == nil {
-		t.Error("expected error for backup on FREE tier")
-	}
-	if err != nil && !strings.Contains(err.Error(), "not available") {
+	if err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Errorf("expected backup not available error, got: %v", err)
 	}
 }

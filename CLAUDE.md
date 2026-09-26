@@ -194,7 +194,7 @@ Permissions wired through `auth.RequirePermission(...)` middleware. Org membersh
 
 | Tier | MaxProjects | Instances | Storage | Memory | CPU | Backup |
 |------|------------|-----------|---------|--------|-----|--------|
-| FREE | 1 | 1 | 5Gi | 512Mi | 0.5 | No |
+| FREE | 1 | 1 | 5Gi | 512Mi | 0.5 | Yes |
 | STANDARD | 5 | 3 | 50Gi | 4Gi | 2 | Yes |
 | ENTERPRISE | unlimited | 5 | 500Gi | 16Gi | 4 | Yes |
 
