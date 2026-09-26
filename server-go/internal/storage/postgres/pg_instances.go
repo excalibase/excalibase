@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -25,11 +26,15 @@ func (s *Store) Create(inst *domain.DatabaseInstance) error {
 // insertInstance writes the row through the given executor, so the same INSERT
 // serves a plain Create and the org-limit transaction in pg_instances_limit.go.
 func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
+	parameters, err := encodeParameters(inst.Parameters)
+	if err != nil {
+		return err
+	}
 	mode := inst.DeploymentMode
 	if mode == "" {
 		mode = domain.ModeK8s
 	}
-	_, err := q.Exec(`
+	_, err = q.Exec(`
 		INSERT INTO database_instances (
 			project_id, project_name, org_id, owner_id, database_type, tier, namespace,
 			deployment_mode,
@@ -45,8 +50,9 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 			restored_from_project_id, restored_from_backup_id,
 			last_active_at, last_xact_count, pause_reason,
 			pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
-			created_at, updated_at, last_health_check
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53)`,
+			created_at, updated_at, last_health_check,
+			storage_class, parameters
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username, inst.Password,
@@ -63,6 +69,7 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 		inst.PauseAttempts, flexTimePtr(inst.PauseLastAttemptAt),
 		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
+		inst.StorageClass, parameters,
 	)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && string(pqErr.Code) == uniqueViolation {
@@ -76,7 +83,8 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 // its owning org and whether its database carries DocumentDB are all fixed at
 // creation. No update path can move a tenant's database, and none can claim a
 // project runs an extension its cluster never preloaded the libraries for
-// (EXC-409).
+// (EXC-409). storage_class and parameters are left out for the same reason:
+// they are what the cluster was created with.
 func (s *Store) Update(inst *domain.DatabaseInstance) error {
 	return s.update(inst, "")
 }
@@ -356,7 +364,8 @@ const pgInstanceColumns = `
 	restored_from_project_id, restored_from_backup_id,
 	last_active_at, last_xact_count, pause_reason,
 	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
-	created_at, updated_at, last_health_check`
+	created_at, updated_at, last_health_check,
+	storage_class, parameters`
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
 	row := s.db.QueryRow(`SELECT`+pgInstanceColumns+`
@@ -472,6 +481,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	var pauseLastAttemptAt sql.NullTime
 	var pauseBackupID sql.NullString
 	var pauseBackupAt sql.NullTime
+	var parameters []byte
 
 	err := s.Scan(
 		&inst.ProjectID, &inst.ProjectName, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
@@ -489,9 +499,13 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&lastActiveAt, &lastXactCount, &pauseReason,
 		&pauseAttempts, &pauseLastAttemptAt, &pauseBackupID, &pauseBackupAt,
 		&createdAt, &updatedAt, &lastHealth,
+		&inst.StorageClass, &parameters,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if inst.Parameters, err = decodeParameters(parameters); err != nil {
+		return nil, fmt.Errorf("project %s: %w", inst.ProjectID, err)
 	}
 
 	nf := nullableInstanceFields{
@@ -593,4 +607,27 @@ func nullFlexTime(n sql.NullTime) *domain.FlexTime {
 		return &domain.FlexTime{Time: n.Time}
 	}
 	return nil
+}
+
+// encodeParameters stores no parameters as an empty object, never as null.
+func encodeParameters(parameters map[string]string) ([]byte, error) {
+	if len(parameters) == 0 {
+		return []byte("{}"), nil
+	}
+	encoded, err := json.Marshal(parameters)
+	if err != nil {
+		return nil, fmt.Errorf("encode project parameters: %w", err)
+	}
+	return encoded, nil
+}
+
+func decodeParameters(raw []byte) (map[string]string, error) {
+	var parameters map[string]string
+	if err := json.Unmarshal(raw, &parameters); err != nil {
+		return nil, fmt.Errorf("decode project parameters: %w", err)
+	}
+	if len(parameters) == 0 {
+		return nil, nil
+	}
+	return parameters, nil
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,31 @@ type K8sBackupAdapter struct {
 	// publicDomainSuffix names the restored project's public endpoint, so
 	// its server certificate can carry it. Empty without public endpoints.
 	publicDomainSuffix string
+	// plans decides the restored project's tier and backups, exactly as they
+	// would be decided for a new project.
+	plans RestorePlanSource
 }
+
+// RestorePlan is what a restored project is created with.
+type RestorePlan struct {
+	Tier   domain.TierType
+	Config config.TierConfig
+	// Backup is nil when a new project of this tier would get no backups.
+	Backup *domain.BackupSettings
+}
+
+// RestorePlanSource decides the plan for a project restored from source.
+type RestorePlanSource interface {
+	RestorePlan(ctx context.Context, source *domain.DatabaseInstance) (RestorePlan, error)
+}
+
+// ErrRestorePlanNotConfigured is returned when nothing can say what a restored
+// project is created with. There is no default size.
+var ErrRestorePlanNotConfigured = errors.New("restore: the restored project's tier cannot be resolved")
+
+// ErrRestoreBackupUnscheduled refuses a restore whose plan enables backups
+// without saying when they run.
+var ErrRestoreBackupUnscheduled = errors.New("restore: the backup plan has no schedule")
 
 // ErrProjectRegistrarNotConfigured is returned when a restore would produce a
 // database the platform cannot register as a project.
@@ -91,6 +116,10 @@ func (a *K8sBackupAdapter) SetRestoreReadyTimeout(d time.Duration) {
 // SetProjectRegistrar wires the shared registration path. Called from main.go
 // once the provisioning service exists.
 func (a *K8sBackupAdapter) SetProjectRegistrar(r ProjectRegistrar) { a.registrar = r }
+
+// SetRestorePlanSource wires what decides a restored project's tier and
+// backups. Without it a restore refuses to run.
+func (a *K8sBackupAdapter) SetRestorePlanSource(p RestorePlanSource) { a.plans = p }
 
 // SetInstanceStore wires the store a restore checks its target id against.
 func (a *K8sBackupAdapter) SetInstanceStore(s storage.InstanceStore) { a.instances = s }
@@ -183,6 +212,9 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if a.probe == nil {
 		return nil, ErrDatabaseProbeNotConfigured
 	}
+	if a.plans == nil {
+		return nil, ErrRestorePlanNotConfigured
+	}
 	if inst.OrgID == "" {
 		return nil, fmt.Errorf("restore source %s: %w", inst.ProjectID, k8s.ErrProjectOrgRequired)
 	}
@@ -198,12 +230,18 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if err := assertProjectIDAvailable(a.instances, newProject); err != nil {
 		return nil, err
 	}
-	newNamespace := fmt.Sprintf("%s-%s", inst.OrgID, newProject)
+	plan, err := a.plans.RestorePlan(ctx, inst)
+	if err != nil {
+		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
+	}
+	target := restoreTarget{store: store, plan: plan, project: newProject, namespace: fmt.Sprintf("%s-%s", inst.OrgID, newProject)}
+	target.cluster, err = restoreCluster(inst, req, target, clusterIdentity{image: image, altNames: altNames})
+	if err != nil {
+		return nil, fmt.Errorf("restore %s at tier %s: %w", inst.ProjectID, plan.Tier, err)
+	}
 	pc := provisioner.NewProvisionContext(nil, nil)
 
-	restored, err := a.runRestore(ctx, pc, inst, req, restoreTarget{
-		store: store, image: image, altNames: altNames, project: newProject, namespace: newNamespace,
-	})
+	restored, err := a.runRestore(ctx, pc, inst, req, target)
 	if err != nil {
 		return nil, failRestore(ctx, pc, newProject, err)
 	}
@@ -223,10 +261,49 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 // restoreTarget is where a recovery lands and what it runs on.
 type restoreTarget struct {
 	store     *domain.S3Credentials
-	image     string
-	altNames  []string
+	plan      RestorePlan
+	cluster   *unstructured.Unstructured
 	project   string
 	namespace string
+}
+
+// clusterIdentity is what the restored cluster runs and is known by.
+type clusterIdentity struct {
+	image    string
+	altNames []string
+}
+
+// restoreCluster is the cluster a new project with the source's settings and
+// the plan's tier would get, bootstrapped from the source's backups. Its own
+// backups go to the store it is restored from, under its own prefix, with the
+// credentials the restore puts in the namespace.
+func restoreCluster(src *domain.DatabaseInstance, req domain.RestoreRequest, target restoreTarget, id clusterIdentity) (*unstructured.Unstructured, error) {
+	cluster := k8s.PostgreSQLClusterOpts{
+		ProjectID:         target.project,
+		Namespace:         target.namespace,
+		Tier:              target.plan.Config,
+		StorageClass:      src.StorageClass,
+		ImageName:         id.image,
+		DatabaseName:      src.DatabaseName,
+		MasterUsername:    src.Username,
+		Parameters:        src.Parameters,
+		ServerAltDNSNames: id.altNames,
+	}
+	if backup := target.plan.Backup; backup != nil && backup.Enabled {
+		if backup.Schedule == "" {
+			return nil, ErrRestoreBackupUnscheduled
+		}
+		cluster.Backup = &k8s.BackupOpts{
+			Schedule: backup.Schedule, RetentionDays: backup.Retention,
+			EndpointURL: target.store.Endpoint, Bucket: target.store.Bucket, SecretName: s3CredsKey,
+		}
+	}
+	return k8s.BuildRestoreCluster(k8s.RestoreClusterOpts{
+		Cluster:         cluster,
+		SourceProjectID: src.ProjectID,
+		Store:           k8s.ObjectStoreOpts{EndpointURL: target.store.Endpoint, Bucket: target.store.Bucket, SecretName: s3CredsKey},
+		RecoveryTarget:  req.RecoveryTarget(),
+	})
 }
 
 // runRestore drives the recovery to a project that has been proved usable.
@@ -244,7 +321,10 @@ func (a *K8sBackupAdapter) runRestore(
 	if err := a.waitForRecoveredCluster(ctx, target.namespace, target.project); err != nil {
 		return nil, err
 	}
-	restored := a.restoredInstance(ctx, inst, req, target.project, target.namespace)
+	if err := a.scheduleBackups(ctx, target); err != nil {
+		return nil, err
+	}
+	restored := a.restoredInstance(ctx, inst, req, target)
 	if err := registerVerifiedProject(ctx, pc, a.registrar, a.instances, a.probe, restored,
 		RegistrationOptions{ResetRolePasswords: true}); err != nil {
 		return nil, err
@@ -270,22 +350,28 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisi
 	}); err != nil {
 		return fmt.Errorf("create restore credentials secret: %w", err)
 	}
-	restoreObj := k8s.BuildRestoreCluster(k8s.RestoreClusterOpts{
-		SourceProjectID:   inst.ProjectID,
-		NewProjectID:      req.TargetProjectID,
-		Namespace:         newNamespace,
-		Store:             k8s.ObjectStoreOpts{EndpointURL: store.Endpoint, Bucket: store.Bucket, SecretName: s3CredsKey},
-		RecoveryTarget:    req.RecoveryTarget(),
-		ImageName:         target.image,
-		ServerAltDNSNames: target.altNames,
-	})
 	clusterName := req.TargetProjectID + postgresClusterSuffix
-	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, newNamespace, restoreObj); err != nil {
+	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, newNamespace, target.cluster); err != nil {
 		return fmt.Errorf("apply restore CRD: %w", err)
 	}
 	pc.RegisterCleanup("delete restore cluster", func(ctx context.Context) error {
 		return a.k8sClient.DeleteCRD(ctx, k8s.CNPGClusterGVR, newNamespace, clusterName)
 	})
+	return nil
+}
+
+// scheduleBackups schedules the restored project's backups as the provisioner
+// does a new project's, once its cluster is up. The namespace's deletion takes
+// the schedule with it, so it needs no compensation of its own.
+func (a *K8sBackupAdapter) scheduleBackups(ctx context.Context, target restoreTarget) error {
+	backup := target.plan.Backup
+	if backup == nil || !backup.Enabled {
+		return nil
+	}
+	scheduled := k8s.BuildScheduledBackup(target.project, target.namespace, backup.Schedule)
+	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, target.namespace, scheduled); err != nil {
+		return fmt.Errorf("schedule restored project backups: %w", err)
+	}
 	return nil
 }
 
@@ -332,11 +418,13 @@ func isUnrecoverableClusterPhase(phase string) bool {
 }
 
 // restoredInstance builds the project row for the restored cluster. It
-// inherits the source project's org, tier and database name; credentials come
+// inherits the source project's org and database name, and records the tier
+// its cluster was sized by; credentials come
 // from the CNPG-managed secret when the recovered cluster has one, otherwise
 // from the source (the restored database is a copy, so the source's owner
 // credentials are valid in it).
-func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.DatabaseInstance, req domain.RestoreRequest, newProject, newNamespace string) *domain.DatabaseInstance {
+func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.DatabaseInstance, req domain.RestoreRequest, target restoreTarget) *domain.DatabaseInstance {
+	newProject, newNamespace := target.project, target.namespace
 	dbName := src.DatabaseName
 	if dbName == "" {
 		dbName = defaultRestoreDatabase
@@ -349,12 +437,13 @@ func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.Dat
 	}
 	port := 5432
 	now := &domain.FlexTime{Time: time.Now()}
-	return &domain.DatabaseInstance{
+	restored := &domain.DatabaseInstance{
 		ProjectID:             newProject,
 		ProjectName:           req.NewProjectName,
 		OrgID:                 src.OrgID,
 		OwnerID:               src.OwnerID,
 		DBType:                src.DBType,
+		Tier:                  target.plan.Tier,
 		DeploymentMode:        domain.ModeK8s,
 		Namespace:             newNamespace,
 		Host:                  fmt.Sprintf("%s-postgres-rw.%s.svc.cluster.local", newProject, newNamespace),
@@ -365,10 +454,18 @@ func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.Dat
 		Password:              password,
 		SSLMode:               src.SSLMode,
 		PostgresVersion:       src.PostgresVersion,
+		StorageClass:          src.StorageClass,
+		Parameters:            maps.Clone(src.Parameters),
 		RestoredFromProjectID: src.ProjectID,
 		RestoredFromBackupID:  req.BackupID,
 		CreatedAt:             now,
 	}
+	if backup := target.plan.Backup; backup != nil {
+		restored.BackupEnabled = boolPtr(backup.Enabled)
+		restored.BackupSchedule = backup.Schedule
+		restored.BackupRetentionDays = intPtr(backup.Retention)
+	}
+	return restored
 }
 
 // backupStorage resolves the configured object store, tolerating a nil

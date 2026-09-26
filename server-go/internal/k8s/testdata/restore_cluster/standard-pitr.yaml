@@ -1,0 +1,76 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: dst-postgres
+  namespace: org-dst
+spec:
+  backup:
+    barmanObjectStore:
+      data:
+        compression: gzip
+      destinationPath: s3://excalibase-backups/dst
+      endpointURL: https://acct.r2.cloudflarestorage.com
+      s3Credentials:
+        accessKeyId:
+          key: ACCESS_KEY_ID
+          name: backup-s3-creds
+        secretAccessKey:
+          key: ACCESS_SECRET_KEY
+          name: backup-s3-creds
+      serverName: cloud
+      wal:
+        compression: gzip
+        maxParallel: 2
+    retentionPolicy: 14d
+  bootstrap:
+    recovery:
+      database: shop
+      owner: owner
+      recoveryTarget:
+        targetTime: "2026-01-01T00:00:00Z"
+      source: clusterBackup
+  certificates:
+    serverAltDNSNames:
+    - dst.db.example.com
+  externalClusters:
+  - barmanObjectStore:
+      destinationPath: s3://excalibase-backups/src
+      endpointURL: https://acct.r2.cloudflarestorage.com
+      s3Credentials:
+        accessKeyId:
+          key: ACCESS_KEY_ID
+          name: backup-s3-creds
+        secretAccessKey:
+          key: ACCESS_SECRET_KEY
+          name: backup-s3-creds
+      serverName: cloud
+      wal:
+        maxParallel: 8
+    name: clusterBackup
+  imageName: excalibase/postgresql@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  instances: 3
+  monitoring:
+    enablePodMonitor: false
+  postgresql:
+    parameters:
+      idle_in_transaction_session_timeout: 60s
+      max_connections: "100"
+      statement_timeout: 60s
+      work_mem: 64MB
+    pg_hba:
+    - host replication cdc_watcher all scram-sha-256
+    - host all app all scram-sha-256
+    - host all excalibase_app all scram-sha-256
+    - host all auth_admin all scram-sha-256
+    shared_preload_libraries:
+    - pg_stat_statements
+  resources:
+    limits:
+      cpu: "4"
+      memory: 16Gi
+    requests:
+      cpu: "4"
+      memory: 16Gi
+  storage:
+    size: 500Gi
+    storageClass: fast-ssd

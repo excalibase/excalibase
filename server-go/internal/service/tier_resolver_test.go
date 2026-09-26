@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -41,18 +42,12 @@ func TestTierConfig_PrefersDBOverDefaults(t *testing.T) {
 	}
 }
 
-func TestTierConfig_FallsBackWhenTierAbsentFromStore(t *testing.T) {
-	// Store has no row for FREE → resolver must fall back to the hardcoded default.
+func TestTierConfig_AbsentRowFailsWhenTheStoreIsTheSource(t *testing.T) {
 	svc := NewProvisioningService(nil, nil, nil)
 	svc.SetTierStore(fakeTierStore{m: map[domain.TierType]config.TierConfig{}})
 
-	got, err := svc.tierConfig(context.Background(), domain.Free)
-	if err != nil {
-		t.Fatalf("tierConfig: %v", err)
-	}
-	want, _ := config.GetTierConfig(domain.Free)
-	if got != want {
-		t.Errorf("expected hardcoded default %+v, got %+v", want, got)
+	if _, err := svc.tierConfig(context.Background(), domain.Free); !errors.Is(err, ErrTierConfigUnavailable) {
+		t.Fatalf("a tier the store does not hold must not be sized from the built-in catalogue, got %v", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"maps"
 	"strings"
 	"time"
 )
@@ -79,6 +80,11 @@ type DatabaseInstance struct {
 	// from an absent field.
 	DocumentDB bool   `json:"documentDb"`
 	Tags       string `json:"tags,omitempty"` // JSON string
+	// StorageClass and Parameters are the cluster settings the project was
+	// created with. Like DocumentDB they are fixed at creation, and a restore
+	// reads them back so the restored cluster is the project's own.
+	StorageClass string            `json:"storageClass,omitempty"`
+	Parameters   map[string]string `json:"parameters,omitempty"`
 
 	// Status
 	Status        string            `json:"status"`
@@ -194,6 +200,7 @@ func (inst *DatabaseInstance) Clone() *DatabaseInstance {
 	copied.LastHealthCheck = clonePtr(inst.LastHealthCheck)
 	copied.PauseLastAttemptAt = clonePtr(inst.PauseLastAttemptAt)
 	copied.PauseBackupAt = clonePtr(inst.PauseBackupAt)
+	copied.Parameters = maps.Clone(inst.Parameters)
 	return &copied
 }
 

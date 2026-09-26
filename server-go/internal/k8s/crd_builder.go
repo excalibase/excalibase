@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -98,17 +99,56 @@ type ObjectStoreOpts struct {
 // RestoreClusterOpts describes a CNPG cluster bootstrapped by recovery
 // from another project's Barman object store.
 type RestoreClusterOpts struct {
+	// Cluster is the restored project's cluster exactly as a new project with
+	// the same settings would get it; only its bootstrap is replaced.
+	Cluster         PostgreSQLClusterOpts
 	SourceProjectID string
-	NewProjectID    string
-	Namespace       string
 	Store           ObjectStoreOpts
 	// RecoveryTarget is the optional PITR target (targetTime / targetXID /
 	// targetLSN / targetName) in CNPG's recoveryTarget shape.
 	RecoveryTarget map[string]interface{}
-	// ImageName is the catalogue image for the source's major; a physical
-	// recovery cannot start on any other.
-	ImageName         string
-	ServerAltDNSNames []string
+}
+
+// ErrTierSizingIncomplete refuses to render a cluster whose tier does not say
+// how large it is or what it may use.
+var ErrTierSizingIncomplete = errors.New("tier does not define the cluster's instances, storage, cpu and memory")
+
+func validateTierSizing(tier config.TierConfig) error {
+	if tier.Instances < 1 || tier.StorageSize == "" || tier.CPU == "" || tier.Memory == "" {
+		return ErrTierSizingIncomplete
+	}
+	return nil
+}
+
+// applyTierSizing is the one place a tier becomes a cluster's instance count,
+// volume and CPU/memory, so a new and a restored project of the same tier
+// cannot drift apart.
+func applyTierSizing(spec map[string]interface{}, tier config.TierConfig, storageClass string) {
+	storage := map[string]interface{}{"size": tier.StorageSize}
+	if storageClass != "" {
+		storage["storageClass"] = storageClass
+	}
+	spec["instances"] = int64(tier.Instances)
+	spec["storage"] = storage
+	spec["resources"] = map[string]interface{}{
+		"requests": tierBounds(tier),
+		"limits":   tierBounds(tier),
+	}
+}
+
+func tierBounds(tier config.TierConfig) map[string]interface{} {
+	return map[string]interface{}{"memory": tier.Memory, "cpu": tier.CPU}
+}
+
+// tierQueryGuard cancels queries and idle-in-transaction sessions past the
+// tier's budget so one tenant can't peg a shared box with a never-ending query.
+func tierQueryGuard(tier config.TierConfig) map[string]interface{} {
+	params := map[string]interface{}{}
+	if tier.StatementTimeout != "" {
+		params["statement_timeout"] = tier.StatementTimeout
+		params["idle_in_transaction_session_timeout"] = tier.StatementTimeout
+	}
+	return params
 }
 
 // BuildPostgreSQLCluster builds a CloudNativePG Cluster CRD as unstructured.
@@ -220,12 +260,19 @@ func serverAltDNSNames(opts PostgreSQLClusterOpts) []string {
 		service+"."+opts.Namespace+".svc.cluster.local")
 }
 
+// namedAppDatabase is the database and owner a bootstrap names, or nil when
+// they are CNPG's own defaults.
+func namedAppDatabase(opts PostgreSQLClusterOpts) map[string]interface{} {
+	dbName, dbUser := clusterDatabaseName(opts), clusterOwner(opts)
+	if dbName == defaultClusterDatabase && dbUser == defaultClusterUser {
+		return nil
+	}
+	return map[string]interface{}{"database": dbName, "owner": dbUser}
+}
+
 // buildClusterSpec builds the spec section of a CNPG Cluster CRD.
 func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
-	dbName := clusterDatabaseName(opts)
-	dbUser := clusterOwner(opts)
-
-	postgresql, storage := buildPostgresqlAndStorage(opts)
+	postgresql := buildPostgresql(opts)
 
 	// enablePodMonitor is left off entirely. CNPG's PodMonitor reconciler
 	// blows up with "cannot create Cluster auxiliary objects: expected
@@ -243,21 +290,10 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 	}
 
 	spec := map[string]interface{}{
-		"instances":  int64(opts.Tier.Instances),
-		"storage":    storage,
 		"postgresql": postgresql,
 		"monitoring": monitoring,
-		"resources": map[string]interface{}{
-			"requests": map[string]interface{}{
-				"memory": opts.Tier.Memory,
-				"cpu":    opts.Tier.CPU,
-			},
-			"limits": map[string]interface{}{
-				"memory": opts.Tier.Memory,
-				"cpu":    opts.Tier.CPU,
-			},
-		},
 	}
+	applyTierSizing(spec, opts.Tier, opts.StorageClass)
 
 	// The gateway sidecar is opt-in per cluster (EXC-409). A cluster that
 	// names no plugin is never handed to the injector, so an ordinary
@@ -270,13 +306,8 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 		spec["smartShutdownTimeout"] = int64(documentDBSmartShutdownSeconds)
 	}
 
-	if dbName != "app" || dbUser != "app" {
-		spec["bootstrap"] = map[string]interface{}{
-			"initdb": map[string]interface{}{
-				"database": dbName,
-				"owner":    dbUser,
-			},
-		}
+	if initdb := namedAppDatabase(opts); initdb != nil {
+		spec["bootstrap"] = map[string]interface{}{"initdb": initdb}
 	}
 
 	if opts.Backup != nil {
@@ -302,18 +333,11 @@ func addServerAltDNSNames(spec map[string]interface{}, names []string) {
 	spec["certificates"] = map[string]interface{}{"serverAltDNSNames": altNames}
 }
 
-// buildPostgresqlAndStorage builds the postgresql config and storage sections.
-func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface{}, map[string]interface{}) {
-	params := map[string]interface{}{
-		"max_connections": "100",
-	}
-	// Runaway-query guard (per tier). Cancel queries and idle-in-transaction
-	// sessions past the tier's budget so one tenant can't peg a shared box with
-	// a never-ending query. Overridable via opts.Parameters below.
-	if opts.Tier.StatementTimeout != "" {
-		params["statement_timeout"] = opts.Tier.StatementTimeout
-		params["idle_in_transaction_session_timeout"] = opts.Tier.StatementTimeout
-	}
+// buildPostgresql builds the postgresql config section. The tier's query
+// guard is overridable via opts.Parameters.
+func buildPostgresql(opts PostgreSQLClusterOpts) map[string]interface{} {
+	params := tierQueryGuard(opts.Tier)
+	params["max_connections"] = "100"
 	var sharedPreloadLibs []interface{}
 	for k, v := range opts.Parameters {
 		if k == "shared_preload_libraries" {
@@ -358,12 +382,7 @@ func buildPostgresqlAndStorage(opts PostgreSQLClusterOpts) (map[string]interface
 		postgresql["shared_preload_libraries"] = sharedPreloadLibs
 	}
 
-	storage := map[string]interface{}{"size": opts.Tier.StorageSize}
-	if opts.StorageClass != "" {
-		storage["storageClass"] = opts.StorageClass
-	}
-
-	return postgresql, storage
+	return postgresql
 }
 
 // DocumentDBCredentialSecretName is the Secret in the project's own namespace
@@ -488,38 +507,30 @@ func buildBarmanObjectStore(projectID string, store ObjectStoreOpts) map[string]
 	return barman
 }
 
-// BuildRestoreCluster builds a CNPG Cluster CRD that bootstraps by
-// recovering the source project's Barman backups from the given store.
-func BuildRestoreCluster(opts RestoreClusterOpts) *unstructured.Unstructured {
+// BuildRestoreCluster builds the project's cluster as BuildPostgreSQLCluster
+// does, bootstrapped by recovering the source project's Barman backups from
+// the given store instead of by initdb.
+func BuildRestoreCluster(opts RestoreClusterOpts) (*unstructured.Unstructured, error) {
+	if err := validateTierSizing(opts.Cluster.Tier); err != nil {
+		return nil, err
+	}
 	recovery := map[string]interface{}{"source": "clusterBackup"}
+	for key, value := range namedAppDatabase(opts.Cluster) {
+		recovery[key] = value
+	}
 	if opts.RecoveryTarget != nil {
 		recovery["recoveryTarget"] = opts.RecoveryTarget
 	}
 	barman := buildBarmanObjectStore(opts.SourceProjectID, opts.Store)
 	barman["wal"] = map[string]interface{}{"maxParallel": int64(8)}
-	spec := map[string]interface{}{
-		"instances": int64(1),
-		"storage":   map[string]interface{}{"size": "5Gi"},
-		"bootstrap": map[string]interface{}{"recovery": recovery},
-		"externalClusters": []interface{}{
-			map[string]interface{}{"name": "clusterBackup", "barmanObjectStore": barman},
-		},
+
+	cluster := BuildPostgreSQLCluster(opts.Cluster)
+	spec := cluster.Object["spec"].(map[string]interface{})
+	spec["bootstrap"] = map[string]interface{}{"recovery": recovery}
+	spec["externalClusters"] = []interface{}{
+		map[string]interface{}{"name": "clusterBackup", "barmanObjectStore": barman},
 	}
-	if opts.ImageName != "" {
-		spec["imageName"] = opts.ImageName
-	}
-	addServerAltDNSNames(spec, opts.ServerAltDNSNames)
-	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": cnpgAPIVersion,
-			"kind":       "Cluster",
-			"metadata": map[string]interface{}{
-				"name":      opts.NewProjectID + postgresSuffix,
-				"namespace": opts.Namespace,
-			},
-			"spec": spec,
-		},
-	}
+	return cluster, nil
 }
 
 // BuildScheduledBackup builds a CNPG ScheduledBackup CRD.

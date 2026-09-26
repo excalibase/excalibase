@@ -67,6 +67,16 @@ func (s *BackupService) SetProjectRegistrar(r ProjectRegistrar) {
 	}
 }
 
+// SetRestorePlanSource hands every adapter that plans a restored project what
+// decides its tier and backups.
+func (s *BackupService) SetRestorePlanSource(p RestorePlanSource) {
+	for _, adapter := range s.adapters {
+		if setter, ok := adapter.(interface{ SetRestorePlanSource(RestorePlanSource) }); ok {
+			setter.SetRestorePlanSource(p)
+		}
+	}
+}
+
 // SetDatabaseProbe hands every adapter the check that proves a recovered
 // database serves queries before its project is activated.
 //
