@@ -148,7 +148,6 @@ const (
 	// stalls leaves nothing the outside world can still dial.
 	DeletionStepReleaseEndpoint = "RELEASE_PUBLIC_ENDPOINT"
 	DeletionStepRevokeNats      = "REVOKE_NATS_CREDENTIALS"
-	DeletionStepDeregisterPgDog = "DEREGISTER_PGDOG"
 	DeletionStepDeleteResources = "DELETE_DATABASE_RESOURCES"
 	DeletionStepDeleteBackups   = "DELETE_BACKUPS"
 	DeletionStepDeleteObjects   = "DELETE_PROJECT_OBJECTS"

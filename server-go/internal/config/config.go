@@ -28,7 +28,6 @@ type AppConfig struct {
 	NatsUser              string
 	NatsPassword          string
 	NatsGraphQLPassword   string
-	NatsPgDogPassword     string
 	NatsCDCStream         string
 	NatsCalloutAccount    string
 	NatsCalloutUser       string
@@ -308,7 +307,6 @@ func Load() AppConfig {
 		NatsUser:                 envOr("NATS_USER", natsauth.PrincipalProvisioning),
 		NatsPassword:             os.Getenv("NATS_PASSWORD"),
 		NatsGraphQLPassword:      os.Getenv("NATS_GRAPHQL_PASSWORD"),
-		NatsPgDogPassword:        os.Getenv("NATS_PGDOG_PASSWORD"),
 		NatsCDCStream:            envOr("NATS_CDC_STREAM", "CDC"),
 		NatsCalloutAccount:       envOr("NATS_AUTH_CALLOUT_ACCOUNT", "APP"),
 		NatsCalloutUser:          envOr("NATS_AUTH_CALLOUT_USER", "auth-callout"),

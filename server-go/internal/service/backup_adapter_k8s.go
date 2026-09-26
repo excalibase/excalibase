@@ -29,7 +29,7 @@ type K8sBackupAdapter struct {
 	// id that is already registered is refused rather than built over.
 	instances storage.InstanceStore
 	// registrar finishes a restore the way a provision ends: roles, vault,
-	// instance row, PgDog, events. Restore refuses to run without it —
+	// instance row, events. Restore refuses to run without it —
 	// a restored project nobody registered is invisible to the API.
 	registrar ProjectRegistrar
 	// probe proves the recovered database answers a query before the

@@ -85,6 +85,6 @@ reconnecting after two consecutive authorization errors, so one late callout
 takes a service off the bus for the life of the process unless
 `IgnoreAuthErrorAbort` is set.
 
-Publishers never drop an event silently: `PgDogNotifier` and
-`PolicyChangePublisher` expose `Connected()`, and an event that cannot be
+Publishers never drop an event silently: `PolicyChangePublisher` exposes
+`Connected()`, and an event that cannot be
 published increments `excalibase_nats_publish_dropped_total{publisher=...}`.

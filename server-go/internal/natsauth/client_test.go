@@ -34,18 +34,6 @@ func TestClientOptionsRejectsUnknownPrincipal(t *testing.T) {
 	}
 }
 
-func TestClientOptionsOmitsInboxForPgDog(t *testing.T) {
-	// PgDog never issues a request, so the matrix grants it no inbox and
-	// the dial options must not set a prefix it cannot subscribe to.
-	opts, err := ClientOptions(PrincipalPgDog, "pw", testStream)
-	if err != nil {
-		t.Fatalf("ClientOptions: %v", err)
-	}
-	if want := len(BaseOptions(PrincipalPgDog)) + 1; len(opts) != want {
-		t.Errorf("got %d options, want %d (shared + credential only)", len(opts), want)
-	}
-}
-
 // TestBaseOptionsKeepReconnectingThroughAuthFailures is the EXC-414 client
 // half: a callout that times out once must not take a service off the bus
 // for the life of the process.

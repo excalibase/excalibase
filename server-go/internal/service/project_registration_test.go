@@ -24,7 +24,6 @@ type registrationHarness struct {
 	store    *storage.FileSystemStore
 	vault    *fakeVault
 	kube     *k8s.MockClient
-	pgdog    *fakePgDogStore
 	activity *fakeActivityStore
 	events   *fakePolicyPublisher
 }
@@ -47,7 +46,6 @@ func newRegistrationHarness(t *testing.T) *registrationHarness {
 		store:    store,
 		vault:    newFakeVault(),
 		kube:     kube,
-		pgdog:    &fakePgDogStore{},
 		activity: &fakeActivityStore{},
 		events:   &fakePolicyPublisher{},
 	}
@@ -55,11 +53,6 @@ func newRegistrationHarness(t *testing.T) *registrationHarness {
 	h.svc.SetOrgStore(testOrgs())
 	setOrgTier(h.svc, testRegOrg, domain.Standard)
 	h.svc.SetVault(h.vault)
-	notifier, err := NewPgDogNotifier(h.pgdog, "")
-	if err != nil {
-		t.Fatalf("pgdog notifier: %v", err)
-	}
-	h.svc.SetPgDogNotifier(notifier)
 	h.svc.SetActivityRecorder(NewActivityRecorder(ActivityRecorderConfig{Store: h.activity}))
 	h.svc.SetProjectEventPublisher(h.events)
 	return h
@@ -154,17 +147,6 @@ func TestRegisterProjectKeepsRolePasswordsOnAFreshCluster(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(h.kube.ExecCommands, "\n"), "ALTER ROLE %I WITH LOGIN PASSWORD") {
 		t.Error("a freshly created cluster must not get password-reset statements")
-	}
-}
-
-func TestRegisterProjectRegistersWithPgDog(t *testing.T) {
-	h := newRegistrationHarness(t)
-
-	if err := h.svc.RegisterProject(context.Background(), restoredInstance(), RegistrationOptions{}); err != nil {
-		t.Fatalf("RegisterProject: %v", err)
-	}
-	if len(h.pgdog.databases) == 0 || len(h.pgdog.users) == 0 {
-		t.Errorf("pgdog registration missing: dbs=%d users=%d", len(h.pgdog.databases), len(h.pgdog.users))
 	}
 }
 

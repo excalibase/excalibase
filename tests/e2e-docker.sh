@@ -312,7 +312,7 @@ echo "$R" | jq -r '.status' 2>/dev/null | grep -q deleted && pass "function dele
 
 # --- Step 15: Backup → restore → query the restored project through the API ---
 # EXC-366: a restore must end exactly like a provision — instance row, vault
-# credentials, PgDog, events — so the restored project is usable immediately.
+# credentials, events — so the restored project is usable immediately.
 echo "15. Write a marker row into the source project"
 CONTAINER_ID=$(docker ps -q --filter "name=^${CONTAINER_NAME}$")
 MARKER="marker-$(date +%s)"

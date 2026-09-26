@@ -155,7 +155,6 @@ func TestDeprovision_StepOrderIsBackupsThenObjectsThenVaultThenRecord(t *testing
 	}
 	want := []string{
 		domain.DeletionStepRevokeNats,
-		domain.DeletionStepDeregisterPgDog,
 		domain.DeletionStepDeleteResources,
 		domain.DeletionStepDeleteBackups,
 		domain.DeletionStepDeleteObjects,

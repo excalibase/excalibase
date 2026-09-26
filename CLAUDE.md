@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Excalibase Provisioning — database provisioning platform written in Go. Provisions PostgreSQL in **two production-grade modes**: Kubernetes (CloudNativePG operator — works against any distro from EKS/GKE/AKS down to single-node k0s/k3s/RKE2) or Docker (containers on a local or remote Docker daemon, Dokploy/CapRover-style). Includes org/project RBAC, PgDog connection pooler integration, edge functions runtime, realtime publication management, and a React studio.
+Excalibase Provisioning — database provisioning platform written in Go. Provisions PostgreSQL in **two production-grade modes**: Kubernetes (CloudNativePG operator — works against any distro from EKS/GKE/AKS down to single-node k0s/k3s/RKE2) or Docker (containers on a local or remote Docker daemon, Dokploy/CapRover-style). Includes org/project RBAC, edge functions runtime, realtime publication management, and a React studio.
 
 **Mode trade-offs (deliberate user choice):**
 - **K8s mode** has a real auth/isolation surface — the provisioner runs with a least-privilege ServiceAccount + Role, projects get separate namespaces, NetworkPolicies are available. More moving parts to operate, but tighter security posture.
@@ -50,7 +50,7 @@ Handler (HTTP) → Service (business logic) → Provisioner (strategy) → K8s C
                                                                   → Docker Client
                                            → Storage (Postgres)
                                            → Vault (in-process Postgres-backed or HTTP)
-                                           → PgDog Notifier (NATS)
+                                           → Policy change publisher (NATS)
                                            → Edge Function Runtime (Deno HTTP)
 ```
 
@@ -68,7 +68,7 @@ server-go/
 │   ├── handler/                 # HTTP handlers (chi router)
 │   │   └── vaultapi/            # Subrouter for the standalone vault service
 │   ├── service/                 # Business logic (provisioning, metrics, backup,
-│   │                            #   migrations, snapshot, alerting, PgDog notifier)
+│   │                            #   migrations, snapshot, alerting)
 │   ├── provisioner/             # Strategy: PostgreSQL (CNPG), Docker; Factory dispatch
 │   ├── k8s/                     # client-go wrapper, CRD builders, Helm SDK, mock
 │   ├── edgefn/                  # Edge function store + Deno runtime client + esbuild
@@ -115,9 +115,9 @@ frontend/                        # React 18 studio (Vite, Tailwind, TanStack)
 
 Stages register rollback compensations into a `ProvisionContext`; failure runs them in LIFO order. The Docker mode condenses to: container create → wait for `pg_isready` → create roles via `docker exec`.
 
-After `ROLE_CREATION` the provisioner publishes vault entries at `projects/{orgSlug}/{projectId}/credentials/{role}` and (if PgDog is configured) registers the cluster.
+After `ROLE_CREATION` the provisioner publishes vault entries at `projects/{orgSlug}/{projectId}/credentials/{role}`.
 
-`Deprovision` reverses the chain: PgDog deregister → operator/container teardown → vault path purge under `projects/{orgSlug}/{projectId}/` → store delete.
+`Deprovision` reverses the chain: operator/container teardown → vault path purge under `projects/{orgSlug}/{projectId}/` → store delete.
 
 ### Kubernetes Integration
 
@@ -131,7 +131,7 @@ CRDs built as `unstructured.Unstructured` objects via `BuildPostgreSQLCluster()`
 
 ### Storage
 
-Postgres-only storage in both modes (`PLATFORM_DB_URL` always required): the CNPG platform-db cluster (or any Postgres), auto-migrates on startup. The `PlatformStore` interface (InstanceStore + UserStore + TokenStore + OrgStore + PgDogConfigStore + AuditLogStore) is implemented by `internal/storage/postgres`; the same connection backs the vault tables (`vault_barrier`, `vault_secrets`).
+Postgres-only storage in both modes (`PLATFORM_DB_URL` always required): the CNPG platform-db cluster (or any Postgres), auto-migrates on startup. The `PlatformStore` interface (InstanceStore + UserStore + TokenStore + OrgStore + AuditLogStore) is implemented by `internal/storage/postgres`; the same connection backs the vault tables (`vault_barrier`, `vault_secrets`).
 
 ### Vault
 
@@ -151,15 +151,6 @@ Vault paths are org-scoped: `projects/{orgSlug}/{projectId}/credentials/{role}`.
 If the vault is sealed/uninitialised, the platform falls back to env-driven `service.BackupDefaults` populated from the cluster-scoped `r2-creds` K8s secret. Functional but worse for security: the master creds are visible to anyone with cluster-scoped `get secret` rights. Initialise the vault and store `backup/s3` there to tighten.
 
 Rotation: `vault put backup/s3 ...` rotates the source. New provisions pick up the new value; existing per-project K8s secrets retain the old value until re-provisioned. No auto-rotation today.
-
-### Connection Pooler (PgDog)
-
-Centralized PgDog pooler routes client connections to per-project CNPG clusters:
-- Config stored in `pgdog_databases` / `pgdog_users` tables in platform-db
-- NATS-triggered reload — provisioner publishes `pgdog.config.reload` after cluster creation
-- Read/write splitting: SELECTs → replicas, writes → primary
-- Fork repo: github.com/excalibase/pgdog
-- Wired only when both `PLATFORM_DB_URL` and `NATS_URL` are set
 
 ### Edge Functions
 
@@ -203,11 +194,11 @@ Tier enforcement is bypassed entirely in self-hosted mode.
 ## Testing
 
 - **Go**: 16 internal packages, 114 test files, all pass with `-race`. Run cmd: `go test ./internal/... -short -race -count=1` (~80s)
-- **Postgres integration**: ~32 tests via testcontainers-go (`-tags=integration`); includes Docker restore E2E + Docker PITR E2E (target_name + target_xid + target_time variants) + pgdog notifier integration
+- **Postgres integration**: ~32 tests via testcontainers-go (`-tags=integration`); includes Docker restore E2E + Docker PITR E2E (target_name + target_xid + target_time variants)
 - **K8s integration**: ~45 tests including k3s in Docker (`-tags=integration`)
 - **R2 / S3 integration**: 2 tests gated on `R2_ACCESS_KEY_ID` (uploader-only + full pipeline). LocalStack covers the structural path; real R2 catches TLS-SAN / multipart quirks LocalStack doesn't reproduce.
 - **Resend integration**: 1 live test gated on `RESEND_API_KEY`
-- **Sister-repo contracts**: `internal/service/contract_test.go` pins ProjectID format, vault path shape, NATS CDC subject, JWT vault paths, PgDog reload subject. Runs in default `go test`.
+- **Sister-repo contracts**: `internal/service/contract_test.go` pins ProjectID format, vault path shape, NATS CDC subject, JWT vault paths. Runs in default `go test`.
 - **Playwright E2E**: 26 spec files, gated on `REAL_E2E=1` or `STUDIO_LIVE=1` for the live ones; covers vault setup wizard, deployment modes, edge functions, realtime, advisors, schema CRUD, backup history + restore (`backups.spec.ts`), live studio-vs-data-plane (`studio-live-data.spec.ts`)
 - **Frontend unit**: Vitest suite for hooks and components (≥80% coverage)
 - All critical paths use `MockClient` (fake K8s) and `fakeVault` for hermetic tests
@@ -219,7 +210,6 @@ Tier enforcement is bypassed entirely in self-hosted mode.
 - `internal/provisioner/postgresql.go` — CNPG 9-stage pipeline
 - `internal/provisioner/docker.go` — Docker SDK provisioner
 - `internal/service/provisioning.go` — orchestration + vault cleanup on deprovision
-- `internal/service/pgdog_notifier.go` — NATS publish + config table CRUD
 - `internal/service/backup.go` — adapter dispatch shim (resolveAdapter → K8s | Docker)
 - `internal/service/backup_adapter.go` — `BackupAdapter` interface + `BackupRef` + `ErrUnsupportedBackupMode`
 - `internal/service/backup_adapter_k8s.go` — CNPG flow (writes JSON-on-disk records)
@@ -294,7 +284,7 @@ Environment variables:
 - `DENO_RUNTIME_IMAGE` — image tag for per-project Deno pods
 
 **Pooler / CDC**
-- `NATS_URL` — NATS server for PgDog reload + CDC fan-out
+- `NATS_URL` — NATS server for policy-change events + CDC fan-out
 - `REALTIME_PUBLICATION_NAME` — publication name (default: `cdc_watcher_pub`)
 
 **Email**

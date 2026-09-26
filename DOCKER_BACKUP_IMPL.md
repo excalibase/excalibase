@@ -250,13 +250,11 @@ The sidecar image *must be published to GHCR* before integration tests can pull 
 - `t.Run("restore_source_project_unaffected_post_failure", ...)`
 - `t.Run("restore_request_with_two_targets_rejected", ...)` (e.g. both targetTime and targetXid)
 - `t.Run("restore_with_no_target_uses_latest", ...)`
-- `t.Run("restore_pgdog_reconfig_within_5s", ...)`
 
 ### Acceptance gates (Phase 3)
 
 - Restore RTO < 5 min for a 100MB DB (measured in CI, not just claimed)
 - Source project unaffected (post-condition: `SELECT count(*)` returns same number before and after)
-- PgDog routes the new project on the next config reload (NATS-published, < 5s observed)
 - Platform restart mid-restore: restore continues from last successful step within 30s of restart
 - Multi-target test matrix runs (`time`, `xid`, `lsn`, `name`, `latest`)
 

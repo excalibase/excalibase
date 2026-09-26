@@ -20,7 +20,6 @@ import (
 const (
 	PrincipalGraphQL      = "svc-graphql"
 	PrincipalProvisioning = "svc-provisioning"
-	PrincipalPgDog        = "svc-pgdog"
 )
 
 // tenantWatcherPrefix names the per-project CDC watcher principal family;
@@ -30,12 +29,8 @@ const tenantWatcherPrefix = "tenant-watcher:"
 // Subjects the platform uses. Kept as constants so the matrix, the tests and
 // the callout all agree on one spelling.
 const (
-	// SubjectPgDogReload is the single signal PgDog listens for.
-	SubjectPgDogReload = "pgdog.config.reload"
-
 	subjectCDCAll      = "cdc.>"
 	subjectPoliciesAll = "policies.>"
-	subjectPgDogAll    = "pgdog.>"
 
 	subjectJSInfo        = "$JS.API.INFO"
 	subjectJSStreamAll   = "$JS.API.STREAM.>"
@@ -96,16 +91,11 @@ func PermissionsFor(principal, cdcStream string) (Permissions, error) {
 		}), nil
 
 	case PrincipalProvisioning:
-		// Control plane: announces policy changes and PgDog reloads, and
-		// provisions the shared CDC stream. Reads no tenant traffic.
+		// Control plane: announces policy changes and provisions the
+		// shared CDC stream. Reads no tenant traffic.
 		return withInbox(principal, Permissions{
-			Publish: []string{subjectPoliciesAll, subjectPgDogAll, subjectJSInfo, subjectJSStreamAll},
+			Publish: []string{subjectPoliciesAll, subjectJSInfo, subjectJSStreamAll},
 		}), nil
-
-	case PrincipalPgDog:
-		// Pure listener on one subject; never publishes, never requests,
-		// so it gets no inbox either.
-		return Permissions{Subscribe: []string{SubjectPgDogReload}}, nil
 	}
 
 	projectID, ok := ProjectIDForPrincipal(principal)

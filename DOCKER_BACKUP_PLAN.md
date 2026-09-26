@@ -117,7 +117,7 @@ Existing handlers + routes (`POST /backup/trigger`, `GET /backup/list`, `POST /r
    - `Configure`: persist schedule + retention to instance metadata; register an in-process cron job
    - `TriggerManual`: `docker exec <pg-container> pg_basebackup -Ft -z -X fetch -D - | <stream to R2 via aws-go-sdk multipart>`
    - `List`: enumerate R2 keys under `backups/{projectId}/manual/*` and `backups/{projectId}/scheduled/*`
-   - `Restore`: stop old container, fetch tar.gz, untar to fresh data dir, start new container, route via PgDog
+   - `Restore`: stop old container, fetch tar.gz, untar to fresh data dir, start new container
 5. **Wire** the adapter map in `cmd/server/main.go` based on `PROVISIONER_MODE`
 
 ### Tests (TDD red → green → refactor)
@@ -185,7 +185,6 @@ Existing handlers + routes (`POST /backup/trigger`, `GET /backup/list`, `POST /r
    - Start postgres in recovery mode, wait for `pg_isready`
    - Issue `pg_promote()` once recovery completes
    - Register the new instance in `BackupService` storage
-   - Update PgDog routing to expose the new project
 2. Studio UI: existing form already supports "New project name" field for K8s; reuse for Docker
 3. Cleanup of failed restores (rollback if any step fails)
 
@@ -197,7 +196,6 @@ Existing handlers + routes (`POST /backup/trigger`, `GET /backup/list`, `POST /r
 ### Acceptance gates
 - Restore RTO < 5 minutes for a 100MB DB (measured in CI)
 - Original project unaffected (verified by post-restore SELECT)
-- PgDog routes the new project on the next config reload (NATS-published, < 5s)
 
 ## Out of scope for this plan
 - MySQL backup adapter (Phase 4, lands when MySQL provisioner does)

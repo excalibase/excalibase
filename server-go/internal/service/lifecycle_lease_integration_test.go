@@ -16,7 +16,7 @@ import (
 // of the control plane shares.
 func TestLifecycleLeaseReturnsItsConnection(t *testing.T) {
 	ctx := context.Background()
-	store := startPgDogPostgres(ctx, t)
+	store := startPlatformPostgres(ctx, t)
 	claimer := NewAdvisoryOperationClaimer(
 		func(key int64) storage.LeaderLock { return pgstore.NewAdvisoryLock(store.DB(), key) })
 	baseline := store.DB().Stats().InUse
@@ -39,7 +39,7 @@ func TestLifecycleLeaseReturnsItsConnection(t *testing.T) {
 // many times it loses.
 func TestASecondLifecycleOperationIsRefusedAndHoldsNothing(t *testing.T) {
 	ctx := context.Background()
-	store := startPgDogPostgres(ctx, t)
+	store := startPlatformPostgres(ctx, t)
 	claimer := NewAdvisoryOperationClaimer(
 		func(key int64) storage.LeaderLock { return pgstore.NewAdvisoryLock(store.DB(), key) })
 

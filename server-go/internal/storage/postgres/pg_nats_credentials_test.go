@@ -76,13 +76,13 @@ func TestNatsCredentials_DeleteSinglePrincipal(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	if err := store.UpsertNatsCredential(ctx, natsauth.PrincipalPgDog, "", natsCredHash); err != nil {
+	if err := store.UpsertNatsCredential(ctx, natsauth.PrincipalGraphQL, "", natsCredHash); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := store.DeleteNatsCredential(ctx, natsauth.PrincipalPgDog); err != nil {
+	if err := store.DeleteNatsCredential(ctx, natsauth.PrincipalGraphQL); err != nil {
 		t.Fatalf("DeleteNatsCredential: %v", err)
 	}
-	if _, found, _ := store.LookupNatsCredentialHash(ctx, natsauth.PrincipalPgDog); found {
+	if _, found, _ := store.LookupNatsCredentialHash(ctx, natsauth.PrincipalGraphQL); found {
 		t.Error("credential survived delete")
 	}
 }

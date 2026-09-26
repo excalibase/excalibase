@@ -599,4 +599,3 @@ blocks forever (`values.yaml` comment on `platformDb.enablePDB`).
 | `EXCALIBASE_AUTOPAUSE_ENABLED`, `EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS` not chart values | none found |
 | Bootstrap Job stores a 12h session token as `provisioning-pat`; auth/graphql break after 12h unless replaced (§3.4) | none found; incident recorded in `aio-e2e/k8s-dataplane/README.md` |
 | HAProxy-as-Ingress: nginx-only annotations and regex paths | none found |
-| PgDog: notifier wiring is present but PgDog itself is not deployed | tracked outside this repo |

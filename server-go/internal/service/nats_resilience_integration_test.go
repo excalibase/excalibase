@@ -67,30 +67,6 @@ func TestPolicyPublisher_SurvivesABusThatIsNotUpYet(t *testing.T) {
 	}
 }
 
-// TestPgDogNotifier_SurvivesABusThatIsNotUpYet holds the reload signal to
-// the same contract, since a missed reload leaves PgDog routing on a stale
-// config.
-func TestPgDogNotifier_SurvivesABusThatIsNotUpYet(t *testing.T) {
-	port := reserveHostPort(t)
-	url := fmt.Sprintf("nats://127.0.0.1:%d", port)
-
-	opts, err := natsauth.ClientOptions(natsauth.PrincipalProvisioning, "", "CDC")
-	if err != nil {
-		t.Fatalf("ClientOptions: %v", err)
-	}
-	notifier, err := NewPgDogNotifier(nil, url, opts...)
-	if err != nil {
-		t.Fatalf("notifier construction failed while the bus was down: %v", err)
-	}
-	t.Cleanup(notifier.Close)
-	if notifier.Connected() {
-		t.Fatal("notifier reports connected although no bus is running")
-	}
-
-	startNATSOnHostPort(t, port)
-	waitForBus(t, notifier.Connected)
-}
-
 // reserveHostPort finds a free TCP port and gives it up again, so the NATS
 // container can be published on a port the publisher already knows. The
 // publisher has to be pointed at its bus before that bus exists, which a

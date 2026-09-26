@@ -132,15 +132,14 @@ func TestHandleIssuesReadScopeForGraphQL(t *testing.T) {
 // An empty allow-list is "allow everything" to a NATS server, so a
 // principal that publishes nothing must carry an explicit deny instead.
 func TestHandleDeniesEmptyDirectionsExplicitly(t *testing.T) {
-	responder, _ := newTestResponder(t, PrincipalPgDog, testPassword)
+	var perm jwt.Permission
+	applyAllowList(&perm, nil)
 
-	user := grantedUser(t, responder, PrincipalPgDog, testPassword)
-
-	if len(user.Pub.Allow) != 0 {
-		t.Fatalf("pgdog publish allow = %v, want empty", user.Pub.Allow)
+	if len(perm.Allow) != 0 {
+		t.Fatalf("allow = %v, want empty", perm.Allow)
 	}
-	if !slices.Contains(user.Pub.Deny, ">") {
-		t.Errorf("pgdog publish deny = %v, want a deny-all wildcard", user.Pub.Deny)
+	if !slices.Contains(perm.Deny, ">") {
+		t.Errorf("deny = %v, want a deny-all wildcard", perm.Deny)
 	}
 }
 

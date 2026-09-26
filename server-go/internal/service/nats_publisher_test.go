@@ -87,37 +87,6 @@ func TestPolicyChangePublisherWithoutABusIsSilent(t *testing.T) {
 	}
 }
 
-// TestPgDogNotifierCountsReloadsTheBusCannotTake: a reload that never
-// arrives leaves PgDog routing on a stale config, so it has to be counted.
-func TestPgDogNotifierCountsReloadsTheBusCannotTake(t *testing.T) {
-	store := &fakePgDogStore{}
-	notifier, err := NewPgDogNotifier(store, unreachableBus, provisioningDialOptions(t)...)
-	if err != nil {
-		t.Fatalf("construction failed against an unreachable bus: %v", err)
-	}
-	defer notifier.Close()
-
-	if notifier.Connected() {
-		t.Fatal("notifier reports connected against an unreachable bus")
-	}
-
-	before := droppedPublishes(t, pgdogPublisherName)
-	if err := notifier.RegisterCluster(context.Background(), "proj-dropped", "ns", "appdb", testPgDogAppRole); err != nil {
-		t.Fatalf("RegisterCluster: %v", err)
-	}
-	if after := droppedPublishes(t, pgdogPublisherName); after != before+1 {
-		t.Errorf("dropped counter = %v, want %v", after, before+1)
-	}
-
-	// Deregistering signals PgDog too, so it is the second drop.
-	if err := notifier.DeregisterCluster(context.Background(), "proj-dropped"); err != nil {
-		t.Fatalf("DeregisterCluster: %v", err)
-	}
-	if after := droppedPublishes(t, pgdogPublisherName); after != before+2 {
-		t.Errorf("dropped counter = %v, want %v", after, before+2)
-	}
-}
-
 // TestPublishersWithoutAConnectionReportNotConnected covers the nil-receiver
 // and nil-connection guards the health signal is read through.
 func TestPublishersWithoutAConnectionReportNotConnected(t *testing.T) {
@@ -125,16 +94,12 @@ func TestPublishersWithoutAConnectionReportNotConnected(t *testing.T) {
 	if absentPublisher.Connected() {
 		t.Error("a nil policy publisher reports connected")
 	}
-	var absentNotifier *PgDogNotifier
-	if absentNotifier.Connected() {
-		t.Error("a nil pgdog notifier reports connected")
-	}
 
-	notifier, err := NewPgDogNotifier(nil, "")
+	publisher, err := NewPolicyChangePublisher("")
 	if err != nil {
-		t.Fatalf("NewPgDogNotifier: %v", err)
+		t.Fatalf("NewPolicyChangePublisher: %v", err)
 	}
-	if notifier.Connected() {
-		t.Error("a notifier with no bus configured reports connected")
+	if publisher.Connected() {
+		t.Error("a publisher with no bus configured reports connected")
 	}
 }

@@ -337,7 +337,7 @@ func assertProjectIDAvailable(store storage.InstanceStore, projectID string) err
 // generateProjectRef returns an opaque immutable identifier for a project,
 // e.g. "proj-a3k9fx7b2k". Hyphen separator (not underscore) so the ref is a
 // valid DNS-1123 label for use directly as K8s namespace, CNPG cluster,
-// vault path segment, pgdog config, and URL path.
+// vault path segment and URL path.
 // 10-char alphabet [a-z0-9] → 36^10 ≈ 3.6e15 combinations; collision probability
 // with 1M projects is ~10^-4, defended by a retry-on-collision check in the caller.
 func generateProjectRef() string {
