@@ -30,6 +30,8 @@ func documentDBProvisionService(t *testing.T) (*ProvisioningService, storage.Ins
 		"dbname":   []byte("app"),
 	}
 	svc := NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
+	svc.SetOrgStore(testOrgs())
+	setOrgTier(svc, "org1", domain.Enterprise)
 	return svc, store
 }
 
@@ -40,7 +42,6 @@ func documentDBRequest(name string, documentDB bool) domain.ProvisioningRequest 
 		ProjectName:     name,
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Enterprise,
 		PostgresVersion: majors[len(majors)-1],
 		DocumentDB:      documentDB,
 	}

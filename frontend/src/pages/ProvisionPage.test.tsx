@@ -158,3 +158,24 @@ describe('ProvisionPage — DocumentDB', () => {
     expect(screen.getByTestId('documentdb-toggle')).toBeDisabled();
   });
 });
+
+describe('ProvisionPage — plan', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // The organisation's plan decides the project's tier; the form only shows it.
+  test("shows the organisation's plan and sends no tier", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pg-version-16');
+
+    expect(screen.queryByRole('button', { name: /enterprise/i })).not.toBeInTheDocument();
+    expect(await screen.findByTestId('provision-org-plan')).toHaveTextContent('Free');
+
+    await user.type(screen.getByLabelText('Project Name'), 'my-db');
+    await user.click(screen.getByTestId('pg-version-16'));
+    await user.click(screen.getByTestId('provision-submit'));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][1]).not.toHaveProperty('tier');
+  });
+});

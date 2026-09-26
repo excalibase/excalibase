@@ -29,7 +29,8 @@ func TestConcurrentProvisionSameDisplayName(t *testing.T) {
 	pgProv := provisioner.NewPostgreSQLProvisioner(mock, "")
 	factory := provisioner.NewFactory(pgProv)
 	svc := NewProvisioningService(store, factory, mock)
-	// STANDARD tier so we can create >1 project per org
+	svc.SetOrgStore(testOrgs())
+	setOrgTier(svc, "org1", domain.Enterprise)
 	var wg sync.WaitGroup
 	results := make(chan string, 5)
 
@@ -42,7 +43,6 @@ func TestConcurrentProvisionSameDisplayName(t *testing.T) {
 				ProjectName:     "race-db",
 				OrgID:           "org1",
 				DBType:          domain.PostgreSQL,
-				Tier:            domain.Enterprise,
 			})
 			if err != nil {
 				results <- "error:" + err.Error()

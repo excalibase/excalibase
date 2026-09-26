@@ -234,7 +234,7 @@ ORG_SLUG=$(echo "$R" | jq -r '.[0].slug' 2>/dev/null)
 echo "8. Provision project (Docker mode)"
 R=$(curl -s -X POST "$API/api/provision/" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"e2e-docker-test\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
+  -d "{\"projectName\":\"e2e-docker-test\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\"}")
 PROJECT_ID=$(echo "$R" | jq -r '.projectId' 2>/dev/null)
 [ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" == proj-* ]] && pass "provision started (ref=$PROJECT_ID)" || fail "provision" "$R"
 

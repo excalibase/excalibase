@@ -101,6 +101,7 @@ func TestRegisterProjectRefusesAnExistingProjectID(t *testing.T) {
 	}
 
 	svc := NewProvisioningService(store, provisioner.NewFactory(), nil)
+	svc.SetOrgStore(testOrgs())
 	err = svc.RegisterProject(context.Background(), &domain.DatabaseInstance{
 		ProjectID: victim.ProjectID, OrgID: "org-attacker", Tier: domain.Free,
 		Host: "attacker-rw", Username: "attacker", Password: "attacker-password",
@@ -127,7 +128,7 @@ func TestProvisionCannotNameAnExistingProject(t *testing.T) {
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		PostgresVersion: "17",
 		ProjectName:     victim.ProjectID, OrgID: "org-attacker",
-		DBType: domain.PostgreSQL, Tier: domain.Free,
+		DBType: domain.PostgreSQL,
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -236,7 +237,7 @@ func TestProvisionFailsWhenTheProjectCannotBeRegistered(t *testing.T) {
 	req := domain.ProvisioningRequest{
 		PostgresVersion: "17",
 		ProjectName:     "external", OrgID: "org-a",
-		DBType: domain.PostgreSQL, Tier: domain.Free,
+		DBType: domain.PostgreSQL,
 	}
 
 	lookupBroken := fakestore.NewInstances()

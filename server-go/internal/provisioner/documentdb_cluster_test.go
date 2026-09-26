@@ -35,7 +35,6 @@ func appliedClusterPostgresql(t *testing.T, documentDB bool) map[string]interfac
 		ProjectName:     "docproj",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: majors[len(majors)-1],
 		DocumentDB:      documentDB,
 	}
@@ -62,7 +61,6 @@ func appliedClusterSpec(t *testing.T, documentDB bool) map[string]interface{} {
 		ProjectName:     "docproj",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: majors[len(majors)-1],
 		DocumentDB:      documentDB,
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -33,6 +34,9 @@ func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 	// Empty factory (no real K8s provisioners for unit tests)
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
+	orgs := fakestore.NewOrgs()
+	orgs.AddOrg("org", domain.Free)
+	svc.SetOrgStore(orgs)
 	// A non-nil orgStore is required: ListInstances now fails closed (503)
 	// when the org store is missing rather than dumping every tenant's
 	// instances. The fake returns no orgs, which is fine for these tests —
@@ -138,7 +142,7 @@ func TestGetStatus(t *testing.T) {
 func TestProvisionNoK8s(t *testing.T) {
 	r, _ := setupTestRouter(t)
 
-	body := `{"projectName":"test","orgId":"org","databaseType":"POSTGRESQL","tier":"FREE","postgresVersion":"17"}`
+	body := `{"projectName":"test","orgId":"org","databaseType":"POSTGRESQL","postgresVersion":"17"}`
 	req := httptest.NewRequest("POST", testProvisionPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	// Authenticated platform_admin bypasses the create_project org check, so the

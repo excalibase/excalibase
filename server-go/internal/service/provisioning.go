@@ -23,7 +23,7 @@ const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
 	store          storage.InstanceStore
-	orgStore       storage.OrgStore        // optional, for org slug lookup
+	orgStore       storage.OrgStore        // org slug lookup; provisioning refuses without it
 	tierStore      storage.TierConfigStore // optional; DB-backed tier specs, falls back to config defaults
 	factory        *provisioner.Factory
 	vault          vaultclient.VaultClient  // optional
@@ -258,7 +258,7 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 
 	// The row is the project's slot: creating it is what admits the project
 	// to the organisation, and it happens before any cluster resource exists.
-	if err := s.createProjectRow(ctx, inst, req.Tier); err != nil {
+	if err := s.createProjectRow(ctx, inst, inst.Tier); err != nil {
 		return nil, err
 	}
 
@@ -330,12 +330,17 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, err
 	}
 
+	tierType, err := s.orgTier(ctx, req.OrgID)
+	if err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+
 	projectRef, err := s.generateUniqueProjectRef()
 	if err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 
-	tier, err := s.tierConfig(ctx, req.Tier)
+	tier, err := s.tierConfig(ctx, tierType)
 	if err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
@@ -344,13 +349,13 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 	// is looked at, so a caller who has used up their projects is told that
 	// rather than about capacity they are not asking for. The slot is still
 	// taken atomically at insert time; this only fixes which refusal wins.
-	if err := s.EnsureOrgProjectCapacity(ctx, req.OrgID, req.Tier); err != nil {
+	if err := s.EnsureOrgProjectCapacity(ctx, req.OrgID, tierType); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 
 	s.applyBackupDefaults(req, tier)
 
-	if err := s.enforceBackupTierPolicy(req, tier); err != nil {
+	if err := s.enforceBackupTierPolicy(req, tierType, tier); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 
@@ -384,7 +389,7 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		OrgID:           req.OrgID,
 		OwnerID:         req.OwnerID,
 		DBType:          req.DBType,
-		Tier:            req.Tier,
+		Tier:            tierType,
 		DeploymentMode:  mode,
 		Namespace:       namespace,
 		PostgresVersion: major,
@@ -468,9 +473,9 @@ func (s *ProvisioningService) vaultBackupStorage() (*domain.S3Credentials, bool)
 }
 
 // enforceBackupTierPolicy rejects backup requests on tiers that do not support backup.
-func (s *ProvisioningService) enforceBackupTierPolicy(req *domain.ProvisioningRequest, tier config.TierConfig) error {
+func (s *ProvisioningService) enforceBackupTierPolicy(req *domain.ProvisioningRequest, tierType domain.TierType, tier config.TierConfig) error {
 	if req.Backup != nil && req.Backup.Enabled && !tier.BackupEnabled && !s.selfHostedMode {
-		return fmt.Errorf("backups are not available on %s tier", req.Tier)
+		return fmt.Errorf("backups are not available on %s tier", tierType)
 	}
 	return nil
 }

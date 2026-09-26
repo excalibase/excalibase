@@ -201,7 +201,7 @@ ORG_ID=$(echo "$R" | jq -r '.id' 2>/dev/null)
 echo "8. Provision project"
 R=$(curl -s -X POST "$API/api/provision/" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"e2e-cloud-test\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
+  -d "{\"projectName\":\"e2e-cloud-test\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\"}")
 PROJECT_ID=$(echo "$R" | jq -r '.projectId' 2>/dev/null)
 [ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" == proj-* ]] \
   && pass "provision started (ref=$PROJECT_ID)" \

@@ -31,7 +31,6 @@ func TestPostgreSQLProvisionerFree(t *testing.T) {
 		ProjectName:     "test-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	}, tier, cb)
 
 	if err != nil {
@@ -98,7 +97,6 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 		ProjectName:     testBKTest,
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		Backup: &domain.BackupSettings{
 			Enabled:   true,
 			Schedule:  "0 2 * * *",
@@ -143,7 +141,6 @@ func TestPostgreSQLProvisionerStandard(t *testing.T) {
 		ProjectName:     "std-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Standard,
 	}, tier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	if err != nil {
@@ -219,7 +216,6 @@ func TestPostgreSQL_ProvisionWithRollback_Success(t *testing.T) {
 		ProjectName:     "ok-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	}, tier, pc)
 
 	if err != nil {
@@ -249,7 +245,6 @@ func TestPostgreSQL_ProvisionWithRollback_NamespaceFailsNoCleanups(t *testing.T)
 		ProjectName:     "ns-fail",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	}, tier, pc)
 
 	if err == nil {
@@ -280,7 +275,6 @@ func TestPostgreSQL_ProvisionWithRollback_CRDFailRollsBackNamespace(t *testing.T
 		ProjectName:     "crd-fail",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	}, tier, pc)
 
 	if err == nil {
@@ -324,7 +318,6 @@ func TestPostgreSQL_ProvisionWithRollback_WaitFailRollsBackNamespace(t *testing.
 		ProjectName:     "wait-fail",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	}, tier, pc)
 
 	if err == nil {
@@ -368,7 +361,6 @@ func TestPostgreSQL_ProvisionWithRollback_ReplicaStepCaptured(t *testing.T) {
 		ProjectName:     "rep-fail",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Standard,
 	}, tier, pc)
 
 	if err == nil {

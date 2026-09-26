@@ -573,7 +573,8 @@ type restoredDockerSpec struct {
 }
 
 // restoredDockerInstance builds the project row for a restored container,
-// inheriting the source project's org, owner, type and tier.
+// inheriting the source project's org, owner and type. Its tier is the org's
+// current plan, set when it is registered.
 func restoredDockerInstance(src *domain.DatabaseInstance, spec restoredDockerSpec) *domain.DatabaseInstance {
 	port := 5432
 	return &domain.DatabaseInstance{
@@ -582,7 +583,6 @@ func restoredDockerInstance(src *domain.DatabaseInstance, spec restoredDockerSpe
 		OrgID:                 src.OrgID,
 		OwnerID:               src.OwnerID,
 		DBType:                src.DBType,
-		Tier:                  src.Tier,
 		DeploymentMode:        domain.ModeDocker,
 		Namespace:             spec.containerID,
 		Host:                  spec.containerName,

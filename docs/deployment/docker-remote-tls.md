@@ -129,7 +129,7 @@ curl http://localhost:24005/healthz
 # Create a project — it should land on the remote Docker host
 curl -X POST http://localhost:24005/api/provision \
   -H "Content-Type: application/json" \
-  -d '{"projectName":"remote-pg","orgId":"default","databaseType":"POSTGRESQL","tier":"FREE"}'
+  -d '{"projectName":"remote-pg","orgId":"default","databaseType":"POSTGRESQL"}'
 
 # Verify the container on the remote host
 ssh dockerhost docker ps | grep default-remote-pg

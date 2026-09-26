@@ -66,11 +66,12 @@ func provisionAgainstDeletionWithProvisioner(t *testing.T, during func(*Provisio
 	var svc *ProvisioningService
 	wrapped := &midProvisionProvisioner{PostgreSQLProvisioner: inner, during: func() { during(svc) }}
 	svc = NewProvisioningService(store, provisioner.NewFactory(wrapped), mock)
+	svc.SetOrgStore(testOrgs())
 	svc.SetVault(newFakeVault())
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		PostgresVersion: "17",
-		ProjectName:     "race-db", OrgID: "org1", DBType: domain.PostgreSQL, Tier: domain.Free,
+		ProjectName:     "race-db", OrgID: "org1", DBType: domain.PostgreSQL,
 	})
 	return svc, store, resp, err, wrapped
 }

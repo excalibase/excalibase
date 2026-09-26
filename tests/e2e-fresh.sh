@@ -67,7 +67,7 @@ ORG_ID=$(echo "$R" | jq -r '.[0].id')
 echo "6. Provision project (display name '$PROJECT')"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"$PROJECT\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
+  -d "{\"projectName\":\"$PROJECT\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\"}")
 PROJECT_ID=$(echo "$R" | jq -r '.projectId')
 [ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" == proj-* ]] && pass "provision project (ref=$PROJECT_ID)" || fail "provision" "$R"
 
@@ -75,7 +75,7 @@ PROJECT_ID=$(echo "$R" | jq -r '.projectId')
 echo "6b. Validation: reject invalid postgres version"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"bad-ver\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\",\"postgresVersion\":\"9.2\"}")
+  -d "{\"projectName\":\"bad-ver\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"postgresVersion\":\"9.2\"}")
 echo "$R" | grep -q "postgres version" && pass "validation rejects pg 9.2" || fail "validation" "$R"
 
 # 7. Vault credentials (now keyed by generated ref, not display name)
@@ -164,7 +164,7 @@ CLOUD_PROJECT="cloud-$(date +%s)"
 echo "C4. K8s provisioning (cloud mode, display name '$CLOUD_PROJECT')"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"$CLOUD_PROJECT\",\"orgId\":\"$CLOUD_ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"STANDARD\"}")
+  -d "{\"projectName\":\"$CLOUD_PROJECT\",\"orgId\":\"$CLOUD_ORG_ID\",\"databaseType\":\"POSTGRESQL\"}")
 CLOUD_PROJECT_ID=$(echo "$R" | jq -r '.projectId')
 [ -n "$CLOUD_PROJECT_ID" ] && [[ "$CLOUD_PROJECT_ID" == proj-* ]] && cpass "k8s provision in cloud (ref=$CLOUD_PROJECT_ID)" || cfail "k8s provision" "$R"
 
@@ -180,7 +180,7 @@ kubectl -n $NS exec platform-db-1 -- psql -U postgres -d platform -c "UPDATE org
 echo "C6. Tier enforcement (FREE limit=1, now has 2 projects)"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"cloud-blocked\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
+  -d "{\"projectName\":\"cloud-blocked\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\"}")
 echo "$R" | grep -q "reached the maximum" && cpass "tier enforcement blocks over-limit" || cfail "tier" "$R"
 
 echo ""

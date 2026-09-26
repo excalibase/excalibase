@@ -13,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 )
 
 const (
@@ -46,7 +47,23 @@ func setupProvisioningTest(t *testing.T) (*ProvisioningService, *storage.FileSys
 	pgProv := provisioner.NewPostgreSQLProvisioner(mock, "")
 	factory := provisioner.NewFactory(pgProv)
 	svc := NewProvisioningService(store, factory, mock)
+	svc.SetOrgStore(testOrgs())
 	return svc, store, mock
+}
+
+// testOrgs holds the organisations the service tests provision into, all on
+// the FREE plan unless a test moves one with setOrgTier.
+func testOrgs() *fakestore.Orgs {
+	orgs := fakestore.NewOrgs()
+	for _, id := range []string{"org", "org1", "org2", "org9", "o", "org-a", "org-attacker", "org-victim", "org-secret", "org-doc"} {
+		orgs.AddOrg(id, domain.Free)
+	}
+	return orgs
+}
+
+// setOrgTier puts orgID on the given plan in the service's org store.
+func setOrgTier(svc *ProvisioningService, orgID string, tier domain.TierType) {
+	svc.orgStore.(*fakestore.Orgs).AddOrg(orgID, tier)
 }
 
 // TestTierResourceFootprint pins the CPU/memory math the /api/capacity
@@ -102,7 +119,6 @@ func TestProvision_RefusesWhenClusterFull(t *testing.T) {
 		ProjectName:     "no-room",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err == nil {
 		t.Fatalf("expected capacity error, got resp=%+v", resp)
@@ -127,7 +143,6 @@ func TestProvision_AcceptsWhenClusterHasRoom(t *testing.T) {
 		ProjectName:     "fits",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -145,7 +160,6 @@ func TestProvisionSuccess(t *testing.T) {
 		ProjectName:     testDBName,
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testProvisionFmt, err)
@@ -168,6 +182,7 @@ func TestProvisionSuccess(t *testing.T) {
 // The test stays as a smoke test that existing instances don't block new ones.
 func TestProvisionSameDisplayNameDoesNotBlock(t *testing.T) {
 	svc, store, mock := setupProvisioningTest(t)
+	setOrgTier(svc, "org1", domain.Standard)
 	mock.WildcardPodReady = true
 	mock.WildcardSecret = map[string][]byte{
 		"username": []byte("app"),
@@ -181,7 +196,6 @@ func TestProvisionSameDisplayNameDoesNotBlock(t *testing.T) {
 		ProjectName:     "Blog",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Standard,
 	})
 	if err != nil {
 		t.Fatalf("same display name should be allowed: %v", err)
@@ -202,7 +216,6 @@ func TestProvisionExceedsFreeTierLimit(t *testing.T) {
 		ProjectName:     "second-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err == nil {
 		t.Error("expected error for exceeding FREE tier project limit")
@@ -220,7 +233,6 @@ func TestProvisionBackupNotAllowedOnFreeTier(t *testing.T) {
 		ProjectName:     "backup-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		Backup:          &domain.BackupSettings{Enabled: true},
 	})
 	if err == nil {
@@ -233,6 +245,7 @@ func TestProvisionBackupNotAllowedOnFreeTier(t *testing.T) {
 
 func TestProvisionStandardTierAllowsMultipleProjects(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
+	setOrgTier(svc, "org1", domain.Standard)
 
 	// Org already has 1 project but STANDARD allows 5
 	store.Create(&domain.DatabaseInstance{ProjectID: "proj-stdfirst01", OrgID: "org1", Status: "ACTIVE"})
@@ -242,7 +255,6 @@ func TestProvisionStandardTierAllowsMultipleProjects(t *testing.T) {
 		ProjectName:     "std-second",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Standard,
 	})
 	if err != nil {
 		t.Fatalf("STANDARD tier should allow 2nd project: %v", err)
@@ -265,7 +277,6 @@ func TestProvision_SetsDeploymentMode_K8s(t *testing.T) {
 		ProjectName:     "k8s-mode-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -288,7 +299,6 @@ func TestProvision_SetsDeploymentMode_Docker(t *testing.T) {
 		ProjectName:     "docker-mode-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -313,7 +323,6 @@ func TestProvision_DefaultsToK8s_WhenUnset(t *testing.T) {
 		ProjectName:     "default-mode-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -332,7 +341,6 @@ func TestProvisionUnsupportedType(t *testing.T) {
 		ProjectName:     "test",
 		OrgID:           "org1",
 		DBType:          "REDIS", // unsupported
-		Tier:            domain.Free,
 	})
 	if err == nil {
 		t.Error("expected error for unsupported type")
@@ -583,7 +591,6 @@ func TestProvisionValidation_EmptyProjectName(t *testing.T) {
 		ProjectName:     "",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err == nil || !strings.Contains(err.Error(), "project name") {
 		t.Errorf("expected project name error, got: %v", err)
@@ -597,7 +604,6 @@ func TestProvisionValidation_ProjectNameTooLong(t *testing.T) {
 		ProjectName:     strings.Repeat("a", 101),
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err == nil || !strings.Contains(err.Error(), "project name") {
 		t.Errorf("expected project name length error, got: %v", err)
@@ -611,7 +617,6 @@ func TestProvisionValidation_EmptyOrgID(t *testing.T) {
 		ProjectName:     "blog",
 		OrgID:           "",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err == nil || !strings.Contains(err.Error(), "org") {
 		t.Errorf("expected org error, got: %v", err)
@@ -625,7 +630,6 @@ func TestProvisionValidation_InvalidOrgIDChars(t *testing.T) {
 		ProjectName:     "blog",
 		OrgID:           "Invalid_Org!",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err == nil || !strings.Contains(err.Error(), "org") {
 		t.Errorf("expected org chars error, got: %v", err)
@@ -638,7 +642,6 @@ func TestProvisionValidation_InvalidPostgresVersion(t *testing.T) {
 		ProjectName:     "blog",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: "9.2",
 	})
 	if err == nil || !strings.Contains(err.Error(), "postgres version") {
@@ -652,7 +655,6 @@ func TestProvisionValidation_ValidPostgresVersion(t *testing.T) {
 		ProjectName:     "blog",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: "17",
 	})
 	if err != nil {
@@ -667,7 +669,6 @@ func TestProvisionValidation_BackupRetentionOutOfRange(t *testing.T) {
 		ProjectName:     "blog",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Standard,
 		Backup:          &domain.BackupSettings{Enabled: true, Retention: 9999},
 	})
 	if err == nil || !strings.Contains(err.Error(), "retention") {
@@ -695,7 +696,6 @@ func TestProvision_GeneratesOpaqueProjectRef(t *testing.T) {
 		ProjectName:     testCoolApp,
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testProvisionFmt, err)
@@ -721,6 +721,7 @@ func TestProvision_GeneratesOpaqueProjectRef(t *testing.T) {
 
 func TestProvision_SameDisplayNameAllowedUniqueRefs(t *testing.T) {
 	svc, _, mock := setupProvisioningTest(t)
+	setOrgTier(svc, "org1", domain.Standard)
 	mock.WildcardPodReady = true
 	mock.WildcardSecret = map[string][]byte{
 		"username": []byte("app"),
@@ -733,7 +734,6 @@ func TestProvision_SameDisplayNameAllowedUniqueRefs(t *testing.T) {
 		ProjectName:     "Blog",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Standard,
 	})
 	if err != nil {
 		t.Fatalf("Provision 1: %v", err)
@@ -743,7 +743,6 @@ func TestProvision_SameDisplayNameAllowedUniqueRefs(t *testing.T) {
 		ProjectName:     "Blog", // same display name — must be allowed
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Standard,
 	})
 	if err != nil {
 		t.Fatalf("Provision 2 (same display name): %v", err)
@@ -767,7 +766,6 @@ func TestProvision_NamespaceUsesGeneratedRef(t *testing.T) {
 		ProjectName:     "App",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testProvisionFmt, err)
@@ -867,7 +865,6 @@ func TestProvisionFailure_PopulatesFailureStageAndStep(t *testing.T) {
 		ProjectName:     "fail-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf("Provision should return response+nil err, got err: %v", err)
@@ -906,7 +903,6 @@ func TestProvisionFailure_RollbackDeletesNamespace(t *testing.T) {
 		ProjectName:     "rb-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testUnexpErrFmt, err)
@@ -925,7 +921,6 @@ func TestProvisionFailure_PersistsRollbackLog(t *testing.T) {
 		ProjectName:     "log-db",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	inst, _ := store.FindByProjectID(resp.ProjectID)
 	if inst == nil {
@@ -963,7 +958,6 @@ func TestProvisionFailure_RollsBackVaultWritesOnRoleCreationFailure(t *testing.T
 		ProjectName:     "vault-fail",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testUnexpErrFmt, err)
@@ -1021,7 +1015,6 @@ func TestProvisionFailure_NamespaceFailureHasNoRollbackLog(t *testing.T) {
 		ProjectName:     "ns-fail",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testUnexpErrFmt, err)

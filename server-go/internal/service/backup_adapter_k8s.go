@@ -355,7 +355,6 @@ func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.Dat
 		OrgID:                 src.OrgID,
 		OwnerID:               src.OwnerID,
 		DBType:                src.DBType,
-		Tier:                  src.Tier,
 		DeploymentMode:        domain.ModeK8s,
 		Namespace:             newNamespace,
 		Host:                  fmt.Sprintf("%s-postgres-rw.%s.svc.cluster.local", newProject, newNamespace),

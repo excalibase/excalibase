@@ -102,7 +102,7 @@ func safeError(err error) string {
 	return msg
 }
 
-// writeProjectCreationError answers the two refusals every path that creates a
+// writeProjectCreationError answers the refusals every path that creates a
 // project shares, and reports whether it wrote the response. A full
 // organisation conflicts with the caller's current state (409) and is told the
 // fixed refusal; a platform database that could not answer is ours to own
@@ -116,6 +116,9 @@ func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, service.ErrProjectStoreUnavailable):
 		log.Printf("project creation refused: %v", err)
 		httpError(w, service.ErrProjectStoreUnavailable.Error(), http.StatusInternalServerError)
+	case errors.Is(err, service.ErrOrgTierUnresolved):
+		log.Printf("project creation refused: %v", err)
+		httpError(w, service.ErrOrgTierUnresolved.Error(), http.StatusInternalServerError)
 	default:
 		return false
 	}

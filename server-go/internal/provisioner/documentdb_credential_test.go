@@ -27,7 +27,6 @@ func provisionForCredential(t *testing.T, documentDB bool) (*k8s.MockClient, str
 		ProjectName:     "docproj",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: majors[len(majors)-1],
 		DocumentDB:      documentDB,
 	}
@@ -111,7 +110,6 @@ func TestDocumentDBProvisionFailsWhenTheCredentialCannotBeWritten(t *testing.T) 
 		ProjectName:     "docproj",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: majors[len(majors)-1],
 		DocumentDB:      true,
 	}, config.TierConfig{Instances: 1, StorageSize: "5Gi"}, func(domain.ProvisioningStage) {})

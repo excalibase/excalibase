@@ -16,7 +16,6 @@ func documentDBRequest(documentDB bool) domain.ProvisioningRequest {
 		ProjectName:     "docproj",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: majors[len(majors)-1],
 		DocumentDB:      documentDB,
 	}

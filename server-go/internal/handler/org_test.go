@@ -305,27 +305,43 @@ func TestCreateOrg_InvalidSlug(t *testing.T) {
 	}
 }
 
-func TestUpdateOrg_InvalidTier(t *testing.T) {
-	r, _ := setupOrgRouter(t)
+const testPlatformAdminID = "platform-admin-1"
 
-	w := orgRequest(r, "POST", testOrgsPath, `{"name":"TierOrg","slug":"tier-org"}`, testAliceID)
+func addPlatformAdmin(t *testing.T, store *pgstore.Store) {
+	t.Helper()
+	if err := store.CreateUser(t.Context(), &domain.User{
+		ID: testPlatformAdminID, Username: testutil.FixtureToken("padmin"), Email: "padmin@test.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "platform_admin", Active: true,
+	}); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+}
+
+func createOrgAs(t *testing.T, r chi.Router, slug, userID string) domain.Org {
+	t.Helper()
+	w := orgRequest(r, "POST", testOrgsPath, `{"name":"`+slug+`","slug":"`+slug+`"}`, userID)
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
+	return org
+}
 
-	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"tier":"SUPER_PLAN"}`, testAliceID)
+func TestUpdateOrg_InvalidTier(t *testing.T) {
+	r, store := setupOrgRouter(t)
+	addPlatformAdmin(t, store)
+	org := createOrgAs(t, r, "tier-org", testAliceID)
+
+	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"tier":"SUPER_PLAN"}`, testPlatformAdminID)
 	if w2.Code != http.StatusBadRequest {
 		t.Errorf("invalid tier: got %d, want %d. Body: %s", w2.Code, http.StatusBadRequest, w2.Body.String())
 	}
 }
 
-func TestUpdateOrg_ValidTier(t *testing.T) {
-	r, _ := setupOrgRouter(t)
+func TestUpdateOrg_PlatformAdminSetsTheTier(t *testing.T) {
+	r, store := setupOrgRouter(t)
+	addPlatformAdmin(t, store)
+	org := createOrgAs(t, r, "up-org", testAliceID)
 
-	w := orgRequest(r, "POST", testOrgsPath, `{"name":"UpOrg","slug":"up-org"}`, testAliceID)
-	var org domain.Org
-	json.NewDecoder(w.Body).Decode(&org)
-
-	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"tier":"STANDARD"}`, testAliceID)
+	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"tier":"STANDARD"}`, testPlatformAdminID)
 	if w2.Code != http.StatusOK {
 		t.Errorf("valid tier upgrade: got %d, want %d. Body: %s", w2.Code, http.StatusOK, w2.Body.String())
 	}
@@ -334,6 +350,35 @@ func TestUpdateOrg_ValidTier(t *testing.T) {
 	json.NewDecoder(w2.Body).Decode(&updated)
 	if updated.Tier != domain.Standard {
 		t.Errorf("tier: got %q, want STANDARD", updated.Tier)
+	}
+}
+
+// The plan decides a project's size and limit, so an org's own owner cannot
+// move it; only the platform can.
+func TestUpdateOrg_OwnerCannotChangeTheTier(t *testing.T) {
+	r, store := setupOrgRouter(t)
+	org := createOrgAs(t, r, "own-org", testAliceID)
+
+	w := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"name":"Renamed","tier":"ENTERPRISE"}`, testAliceID)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("owner tier change: got %d, want 403. Body: %s", w.Code, w.Body.String())
+	}
+	got, err := store.FindOrgByID(t.Context(), org.ID)
+	if err != nil {
+		t.Fatalf("find org: %v", err)
+	}
+	if got.Tier != domain.Free || got.Name != "own-org" {
+		t.Fatalf("org changed on a refused request: %+v", got)
+	}
+}
+
+func TestUpdateOrg_OwnerCanStillRename(t *testing.T) {
+	r, _ := setupOrgRouter(t)
+	org := createOrgAs(t, r, "name-org", testAliceID)
+
+	w := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"name":"Renamed"}`, testAliceID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("rename: got %d. Body: %s", w.Code, w.Body.String())
 	}
 }
 

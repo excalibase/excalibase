@@ -9,7 +9,7 @@ One API call provisions a production PostgreSQL cluster with backup, monitoring,
 ```bash
 curl -X POST http://localhost:24005/api/provision \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"projectName":"my-db","orgId":"myorg","databaseType":"POSTGRESQL","tier":"STANDARD"}'
+  -d '{"projectName":"my-db","orgId":"myorg","databaseType":"POSTGRESQL"}'
 ```
 
 - **9-stage provisioning pipeline** — namespace, CRD deployment, pod readiness, credential extraction, backup config, metrics setup, watcher deployment, role creation
@@ -142,7 +142,6 @@ curl -X POST http://localhost:24005/api/provision \
     "projectName": "duke-database",
     "orgId": "exca",
     "databaseType": "POSTGRESQL",
-    "tier": "STANDARD",
     "backup": {"enabled": true, "schedule": "0 2 * * *", "retention": 30},
     "parameters": {"shared_preload_libraries": "pg_stat_statements"}
   }'

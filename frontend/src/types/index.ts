@@ -35,7 +35,6 @@ export interface ProvisioningRequest {
   projectName: string;
   orgId: string;
   databaseType: DatabaseType;
-  tier: TierType;
   // The PostgreSQL major, in the catalogue's spelling. Required: the API has
   // no default and refuses a request that names none.
   postgresVersion: string;

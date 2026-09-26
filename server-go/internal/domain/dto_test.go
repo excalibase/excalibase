@@ -25,7 +25,6 @@ func TestProvisioningRequestRoundTrip(t *testing.T) {
 		ProjectName: testDTODBName,
 		OrgID:       "org1",
 		DBType:      PostgreSQL,
-		Tier:        Standard,
 		Backup:      &BackupSettings{Enabled: true, Schedule: "0 2 * * *", Retention: 30},
 		Parameters:  map[string]string{"shared_preload_libraries": "pg_stat_statements"},
 		Tags:        map[string]string{"env": "demo"},
@@ -47,14 +46,25 @@ func TestProvisioningRequestRoundTrip(t *testing.T) {
 	if got.DBType != PostgreSQL {
 		t.Errorf("databaseType: got %s, want POSTGRESQL", got.DBType)
 	}
-	if got.Tier != Standard {
-		t.Errorf("tier: got %s, want STANDARD", got.Tier)
-	}
 	if got.Backup == nil || !got.Backup.Enabled {
 		t.Error("backup should be enabled")
 	}
 	if got.Parameters["shared_preload_libraries"] != "pg_stat_statements" {
 		t.Error("parameters not preserved")
+	}
+}
+
+func TestProvisioningRequestCarriesNoTier(t *testing.T) {
+	var got ProvisioningRequest
+	if err := json.Unmarshal([]byte(`{"projectName":"p","tier":"ENTERPRISE"}`), &got); err != nil {
+		t.Fatalf(testDTOUnmarshalFmt, err)
+	}
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf(testDTOMarshalFmt, err)
+	}
+	if strings.Contains(string(b), "tier") {
+		t.Fatalf("a project's tier is not part of the request: %s", b)
 	}
 }
 

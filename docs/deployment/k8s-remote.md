@@ -135,7 +135,7 @@ curl http://localhost:24005/healthz
 # Should successfully create a project on the remote cluster
 curl -X POST http://localhost:24005/api/provision \
   -H "Content-Type: application/json" \
-  -d '{"projectName":"remote-test","orgId":"default","databaseType":"POSTGRESQL","tier":"FREE"}'
+  -d '{"projectName":"remote-test","orgId":"default","databaseType":"POSTGRESQL"}'
 
 # On the target cluster, verify the namespace was created
 kubectl --context=target get ns | grep default-remote-test

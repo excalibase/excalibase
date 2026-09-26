@@ -46,7 +46,7 @@ TOKEN=$(curl -s http://localhost:24005/api/auth/login -H 'Content-Type: applicat
 echo "5. Provision project (selfhosted, no tier limit)"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"$PROJECT\",\"orgId\":\"a06b19b4-9599-41c6-95f2-dae79f60de9a\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
+  -d "{\"projectName\":\"$PROJECT\",\"orgId\":\"a06b19b4-9599-41c6-95f2-dae79f60de9a\",\"databaseType\":\"POSTGRESQL\"}")
 echo "$R" | jq -r '.projectId' | grep -q $PROJECT && pass "provision project" || fail "provision" "$R"
 
 # TEST 6: Wait for credentials in vault

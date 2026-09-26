@@ -43,7 +43,7 @@ func TestProvision_DeletingProjectDoesNotHoldTheSlot(t *testing.T) {
 			if _, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 				PostgresVersion: "17",
 				ProjectName:     "replacement", OrgID: "org1",
-				DBType: domain.PostgreSQL, Tier: domain.Free,
+				DBType: domain.PostgreSQL,
 			}); err != nil {
 				t.Fatalf("a project under teardown must not block a new one: %v", err)
 			}
@@ -64,7 +64,7 @@ func TestProvision_AtTheLimitReturnsTheFixedRefusal(t *testing.T) {
 	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		PostgresVersion: "17",
 		ProjectName:     "second", OrgID: "org-secret",
-		DBType: domain.PostgreSQL, Tier: domain.Free,
+		DBType: domain.PostgreSQL,
 	})
 	var limitErr *OrgProjectLimitError
 	if !errors.As(err, &limitErr) {
@@ -87,11 +87,12 @@ func TestProvision_StoreFailureRefusesAndCreatesNothing(t *testing.T) {
 	mock := k8s.NewMockClient()
 	mock.WildcardPodReady = true
 	svc := NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
+	svc.SetOrgStore(testOrgs())
 
 	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		PostgresVersion: "17",
 		ProjectName:     "unlucky", OrgID: "org1",
-		DBType: domain.PostgreSQL, Tier: domain.Free,
+		DBType: domain.PostgreSQL,
 	})
 	if !errors.Is(err, ErrProjectStoreUnavailable) {
 		t.Fatalf("Provision = %v, want ErrProjectStoreUnavailable", err)
@@ -106,6 +107,7 @@ func TestProvision_StoreFailureRefusesAndCreatesNothing(t *testing.T) {
 
 func TestProvision_UnlimitedTierIsUnaffected(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
+	setOrgTier(svc, "org1", domain.Enterprise)
 	for _, id := range []string{"proj-ent00001", "proj-ent00002", "proj-ent00003"} {
 		if err := store.Create(&domain.DatabaseInstance{
 			ProjectID: id, OrgID: "org1", Tier: domain.Enterprise, Status: "ACTIVE",
@@ -117,7 +119,7 @@ func TestProvision_UnlimitedTierIsUnaffected(t *testing.T) {
 	if _, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		PostgresVersion: "17",
 		ProjectName:     "another", OrgID: "org1",
-		DBType: domain.PostgreSQL, Tier: domain.Enterprise,
+		DBType: domain.PostgreSQL,
 	}); err != nil {
 		t.Fatalf("an unlimited tier must admit the project: %v", err)
 	}
@@ -136,7 +138,7 @@ func TestProvision_SelfHostedModeIsUnlimited(t *testing.T) {
 	if _, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		PostgresVersion: "17",
 		ProjectName:     "second", OrgID: "org1",
-		DBType: domain.PostgreSQL, Tier: domain.Free,
+		DBType: domain.PostgreSQL,
 	}); err != nil {
 		t.Fatalf("self-hosted mode must stay unlimited: %v", err)
 	}
@@ -182,7 +184,7 @@ func TestEnsureOrgProjectCapacity_StoreFailureRefuses(t *testing.T) {
 // is not the limit.
 type unlimitedCapacity struct{}
 
-func (unlimitedCapacity) EnsureOrgProjectCapacity(context.Context, string, domain.TierType) error {
+func (unlimitedCapacity) EnsureOrgCanTakeProject(context.Context, string) error {
 	return nil
 }
 
@@ -195,9 +197,10 @@ func TestRestore_RefusedAtTheLimitBeforeAnySideEffect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	// FREE allows one project, and the source project is it.
+	// The org is on FREE, which allows one project, and the source project is
+	// it. The source's own ENTERPRISE tier is stale and must not be used.
 	if err := store.Create(&domain.DatabaseInstance{
-		ProjectID: "proj-source001", OrgID: "org1", Tier: domain.Free,
+		ProjectID: "proj-source001", OrgID: "org1", Tier: domain.Enterprise,
 		Namespace: "org1-proj-source001", Status: "ACTIVE", DBType: domain.PostgreSQL,
 	}); err != nil {
 		t.Fatalf("seed source: %v", err)
@@ -207,14 +210,16 @@ func TestRestore_RefusedAtTheLimitBeforeAnySideEffect(t *testing.T) {
 	svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
 	svc.SetProjectRegistrar(&fakeRegistrar{store: store})
 	armRestore(svc, mock, store)
-	svc.SetOrgProjectCapacity(NewProvisioningService(store, provisioner.NewFactory(), mock))
+	capacity := NewProvisioningService(store, provisioner.NewFactory(), mock)
+	capacity.SetOrgStore(testOrgs())
+	svc.SetOrgProjectCapacity(capacity)
 
 	_, err = svc.RestoreFromBackup(context.Background(), "proj-source001", domain.RestoreRequest{
 		NewProjectName: "recovered", TargetProjectID: "proj-target001",
 	})
 	var limitErr *OrgProjectLimitError
-	if !errors.As(err, &limitErr) {
-		t.Fatalf("RestoreFromBackup = %v, want *OrgProjectLimitError", err)
+	if !errors.As(err, &limitErr) || limitErr.Tier != domain.Free {
+		t.Fatalf("RestoreFromBackup = %v, want the org's FREE limit", err)
 	}
 	if len(mock.Namespaces) != 0 {
 		t.Fatalf("no namespace may be created for a refused restore: %v", mock.Namespaces)
@@ -266,9 +271,10 @@ func TestRegisterProject_TakesTheOrgSlot(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	svc := NewProvisioningService(store, provisioner.NewFactory(), nil)
+	svc.SetOrgStore(testOrgs())
 
 	err = svc.RegisterProject(context.Background(), &domain.DatabaseInstance{
-		ProjectID: "proj-restored1", OrgID: "org1", Tier: domain.Free,
+		ProjectID: "proj-restored1", OrgID: "org1", Tier: domain.Enterprise,
 	}, RegistrationOptions{})
 	if !errors.Is(err, storage.ErrOrgProjectLimitReached) {
 		t.Fatalf("RegisterProject = %v, want the org project limit refusal", err)

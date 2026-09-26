@@ -35,7 +35,9 @@ func documentDBProject() *domain.DatabaseInstance {
 // documentDBService builds a service whose only capability is executing SQL.
 func documentDBService(t *testing.T, kube k8s.KubeClient) *ProvisioningService {
 	t.Helper()
-	return NewProvisioningService(documentDBStore(t), provisioner.NewFactory(), kube)
+	svc := NewProvisioningService(documentDBStore(t), provisioner.NewFactory(), kube)
+	svc.SetOrgStore(testOrgs())
+	return svc
 }
 
 // documentDBStore is an empty project store on disk, discarded with the test.
@@ -217,6 +219,7 @@ func TestRegisterProjectWithoutDocumentDBRunsNoExtensionSQL(t *testing.T) {
 	kube := k8s.NewMockClient()
 	store := documentDBStore(t)
 	svc := NewProvisioningService(store, provisioner.NewFactory(), kube)
+	svc.SetOrgStore(testOrgs())
 
 	inst := documentDBProject()
 	inst.DocumentDB = false
