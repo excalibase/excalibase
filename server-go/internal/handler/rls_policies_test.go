@@ -47,7 +47,7 @@ func setupRlsRouter(t *testing.T) (chi.Router, *captureBus) {
 	store := pgtest.New(t)
 
 	bus := &captureBus{}
-	h := NewRlsPolicyHandler(store.RlsPolicies())
+	h := NewRlsPolicyHandler(store.RlsPolicies(), everyProject{})
 	h.SetPublisher(bus)
 
 	r := chi.NewRouter()

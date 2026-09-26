@@ -50,14 +50,15 @@ var validGrantIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
 // can reach it: there is no code here that writes it, per project or at all.
 type TableGrantHandler struct {
 	store     storage.TableGrantStore
+	projects  ProjectFinder
 	enforced  bool
 	publisher PolicyChangePublisher // optional
 }
 
 // NewTableGrantHandler builds the handler. enforced comes from
 // config.AppConfig.ExposureEnforced and applies to every project alike.
-func NewTableGrantHandler(store storage.TableGrantStore, enforced bool) *TableGrantHandler {
-	return &TableGrantHandler{store: store, enforced: enforced}
+func NewTableGrantHandler(store storage.TableGrantStore, projects ProjectFinder, enforced bool) *TableGrantHandler {
+	return &TableGrantHandler{store: store, projects: projects, enforced: enforced}
 }
 
 // SetPublisher wires the NATS publisher post-construction so handler
@@ -75,7 +76,7 @@ func (h *TableGrantHandler) Routes(r chi.Router) {
 // List returns the project's grants together with the explicit enforcement
 // flag. This is the endpoint excalibase-graphql polls.
 func (h *TableGrantHandler) List(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := projectIDFromPath(w, r)
+	projectID, ok := knownProjectFromPath(w, r, h.projects)
 	if !ok {
 		return
 	}
