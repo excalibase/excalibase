@@ -535,6 +535,16 @@ func BuildRestoreCluster(opts RestoreClusterOpts) (*unstructured.Unstructured, e
 
 // BuildScheduledBackup builds a CNPG ScheduledBackup CRD.
 func BuildScheduledBackup(projectID, namespace, schedule string) *unstructured.Unstructured {
+	return scheduledBackup(projectID, namespace, schedule, false)
+}
+
+// BuildFirstScheduledBackup is a ScheduledBackup that also takes a backup as
+// soon as it is created, for a cluster with no base backup of its own yet.
+func BuildFirstScheduledBackup(projectID, namespace, schedule string) *unstructured.Unstructured {
+	return scheduledBackup(projectID, namespace, schedule, true)
+}
+
+func scheduledBackup(projectID, namespace, schedule string, immediate bool) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": cnpgAPIVersion,
@@ -549,7 +559,7 @@ func BuildScheduledBackup(projectID, namespace, schedule string) *unstructured.U
 				"cluster": map[string]interface{}{
 					"name": projectID + postgresSuffix,
 				},
-				"immediate": false,
+				"immediate": immediate,
 				"target":    "prefer-standby",
 			},
 		},
