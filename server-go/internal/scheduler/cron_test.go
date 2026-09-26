@@ -168,3 +168,73 @@ func cronProject(t *testing.T, db *sql.DB) string {
 	}
 	return projectID
 }
+
+type steppingClock struct{ current time.Time }
+
+func (c *steppingClock) now() time.Time { return c.current }
+
+func (c *steppingClock) advance(d time.Duration) { c.current = c.current.Add(d) }
+
+func seedCronJob(t *testing.T, db *sql.DB, name, schedule string) {
+	t.Helper()
+	if _, err := db.ExecContext(context.Background(), `
+		INSERT INTO excalibase.excalibase_cron_jobs
+		  (name, project_id, module_name, export_name, args, schedule, last_enqueued_at)
+		VALUES ($1, 'proj_a', 'jobs', $1, '{}', $2::jsonb, NULL)
+	`, name, schedule); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+}
+
+func scheduledCount(t *testing.T, db *sql.DB, exportName string) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT count(*) FROM excalibase.excalibase_scheduled_functions WHERE export_name = $1`,
+		exportName,
+	).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	return count
+}
+
+func tickEvery(t *testing.T, cr *CronRunner, clock *steppingClock, ticks int, step time.Duration) {
+	t.Helper()
+	for i := 0; i < ticks; i++ {
+		if err := cr.Tick(context.Background()); err != nil {
+			t.Fatalf("tick %d: %v", i, err)
+		}
+		clock.advance(step)
+	}
+}
+
+func TestCronRunner_IntervalEnqueuesOncePerInterval(t *testing.T) {
+	db, teardown := setupSchedulerPG(t)
+	defer teardown()
+	seedCronJob(t, db, "beat", `{"kind":"interval","minutes":10}`)
+	clock := &steppingClock{current: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}, Now: clock.now})
+
+	tickEvery(t, cr, clock, 5, time.Minute)
+	if got := scheduledCount(t, db, "beat"); got != 1 {
+		t.Fatalf("rows within the first interval: got %d, want 1", got)
+	}
+	clock.advance(6 * time.Minute)
+	tickEvery(t, cr, clock, 3, time.Minute)
+	if got := scheduledCount(t, db, "beat"); got != 2 {
+		t.Errorf("rows after the pending run passed: got %d, want 2", got)
+	}
+}
+
+func TestCronRunner_FireTimeInsideMinimumWindowEnqueuesOnce(t *testing.T) {
+	db, teardown := setupSchedulerPG(t)
+	defer teardown()
+	seedCronJob(t, db, "purge", `{"kind":"hourly","minuteUTC":15}`)
+	clock := &steppingClock{current: time.Date(2026, 9, 26, 15, 14, 30, 0, time.UTC)}
+	cr := NewCronRunner(CronRunnerConfig{DB: db, ProjectID: cronProject(t, db), Functions: allModules{}, Now: clock.now})
+
+	tickEvery(t, cr, clock, 3, 20*time.Second)
+	if got := scheduledCount(t, db, "purge"); got != 1 {
+		t.Errorf("rows for one fire time: got %d, want 1", got)
+	}
+}

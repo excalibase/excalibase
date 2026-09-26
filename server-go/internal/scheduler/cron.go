@@ -36,6 +36,8 @@ type CronRunnerConfig struct {
 	// IDGen overrides the scheduled-task id generator (tests use a
 	// deterministic stub; production uses base32Rand).
 	IDGen func() (string, error)
+	// Now overrides the clock (tests); production uses time.Now.
+	Now func() time.Time
 }
 
 // DefaultCronMinInterval is the finest cron cadence the platform runs.
@@ -57,6 +59,7 @@ type CronRunner struct {
 	functions    FunctionChecker
 	logger       *log.Logger
 	idGen        func() (string, error)
+	now          func() time.Time
 	parser       cron.Parser
 }
 
@@ -72,6 +75,10 @@ func NewCronRunner(c CronRunnerConfig) *CronRunner {
 	minInterval := c.MinInterval
 	if minInterval <= 0 {
 		minInterval = DefaultCronMinInterval
+	}
+	now := c.Now
+	if now == nil {
+		now = time.Now
 	}
 	maxJobs := c.MaxJobs
 	if maxJobs <= 0 {
@@ -90,6 +97,7 @@ func NewCronRunner(c CronRunnerConfig) *CronRunner {
 		functions:    c.Functions,
 		logger:       logger,
 		idGen:        idGen,
+		now:          now,
 		// Standard 5-field cron expression — matches what cronJobs.cron()
 		// validates on the lib side. Robfig/cron's default parser
 		// expects the optional seconds field; we strip the seconds slot
@@ -149,7 +157,7 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 		return fmt.Errorf("list cron jobs: %w", err)
 	}
 	defer rows.Close()
-	now := time.Now()
+	now := cr.now()
 	for rows.Next() {
 		var (
 			name, projectID, moduleName, exportName string
@@ -159,51 +167,16 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 		if err := rows.Scan(&name, &projectID, &moduleName, &exportName, &args, &scheduleRaw, &lastEnqueued); err != nil {
 			return fmt.Errorf("scan cron row: %w", err)
 		}
-		// Tenant-written columns: the row may only speak for the project
-		// whose database this is, and only through plain identifiers.
-		if projectID != cr.projectID {
-			cr.logger.Printf("scheduler: cron %s refused: names another project", name)
+		if !cr.admissible(name, projectID, moduleName, exportName) {
 			continue
 		}
-		if !validModuleName(moduleName) || !validExportName(exportName) {
-			cr.logger.Printf("scheduler: cron %s refused: module or export is not an identifier", name)
+		// A run is already queued for the future: the next one is computed
+		// only after it passes, or a moving "now" re-enqueues every tick.
+		if lastEnqueued.Valid && lastEnqueued.Time.After(now) {
 			continue
 		}
-		// Same rule as the task half: a registry row may only name a module
-		// the platform deployed for this project. Enqueueing anything else
-		// would fill the queue with rows the worker then has to refuse, at
-		// the tenant's chosen cadence.
-		if !cr.deployed(name, moduleName) {
-			continue
-		}
-		var schedule struct {
-			Kind       string `json:"kind"`
-			Expression string `json:"expression,omitempty"`
-			Hours      int    `json:"hours,omitempty"`
-			Minutes    int    `json:"minutes,omitempty"`
-			Seconds    int    `json:"seconds,omitempty"`
-			HourUTC    int    `json:"hourUTC,omitempty"`
-			MinuteUTC  int    `json:"minuteUTC,omitempty"`
-		}
-		if err := json.Unmarshal(scheduleRaw, &schedule); err != nil {
-			cr.logger.Printf("scheduler: cron %s/%s bad schedule: %v", projectID, name, err)
-			continue
-		}
-		nextDue, ok := nextDueAt(schedule, now, cr.parser)
+		nextDue, ok := cr.nextEnqueue(projectID, name, scheduleRaw, now)
 		if !ok {
-			cr.logger.Printf("scheduler: cron %s/%s unsupported schedule kind=%q", projectID, name, schedule.Kind)
-			continue
-		}
-		// A schedule finer than the platform minimum is clipped: the cadence
-		// a tenant asks for cannot set the platform's load.
-		if earliest := now.Add(cr.minInterval); nextDue.Before(earliest) {
-			nextDue = earliest
-		}
-		// Skip when we've already enqueued the upcoming due time. The
-		// runner tick interval is 60s, so this guards against the
-		// 1-minute window where the same nextDue would otherwise be
-		// inserted twice.
-		if lastEnqueued.Valid && !nextDue.After(lastEnqueued.Time) {
 			continue
 		}
 		// Insert the row and bump last_enqueued_at in a single transaction
@@ -217,6 +190,52 @@ func (cr *CronRunner) Tick(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// admissible applies the rules for tenant-written registry rows: the row may
+// only speak for the project whose database this is, through plain
+// identifiers, and only name a module the platform deployed for it (anything
+// else fills the queue with rows the worker must refuse, at the tenant's
+// chosen cadence).
+func (cr *CronRunner) admissible(name, projectID, moduleName, exportName string) bool {
+	if projectID != cr.projectID {
+		cr.logger.Printf("scheduler: cron %s refused: names another project", name)
+		return false
+	}
+	if !validModuleName(moduleName) || !validExportName(exportName) {
+		cr.logger.Printf("scheduler: cron %s refused: module or export is not an identifier", name)
+		return false
+	}
+	return cr.deployed(name, moduleName)
+}
+
+// nextEnqueue parses a registry schedule and returns the due time to enqueue,
+// clipped to the platform minimum cadence.
+func (cr *CronRunner) nextEnqueue(projectID, name string, scheduleRaw []byte, now time.Time) (time.Time, bool) {
+	var schedule struct {
+		Kind       string `json:"kind"`
+		Expression string `json:"expression,omitempty"`
+		Hours      int    `json:"hours,omitempty"`
+		Minutes    int    `json:"minutes,omitempty"`
+		Seconds    int    `json:"seconds,omitempty"`
+		HourUTC    int    `json:"hourUTC,omitempty"`
+		MinuteUTC  int    `json:"minuteUTC,omitempty"`
+	}
+	if err := json.Unmarshal(scheduleRaw, &schedule); err != nil {
+		cr.logger.Printf("scheduler: cron %s/%s bad schedule: %v", projectID, name, err)
+		return time.Time{}, false
+	}
+	nextDue, ok := nextDueAt(schedule, now, cr.parser)
+	if !ok {
+		cr.logger.Printf("scheduler: cron %s/%s unsupported schedule kind=%q", projectID, name, schedule.Kind)
+		return time.Time{}, false
+	}
+	// A schedule finer than the platform minimum is clipped: the cadence
+	// a tenant asks for cannot set the platform's load.
+	if earliest := now.Add(cr.minInterval); nextDue.Before(earliest) {
+		nextDue = earliest
+	}
+	return nextDue, true
 }
 
 // deployed asks the platform registry whether this project has the module.
