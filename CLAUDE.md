@@ -312,4 +312,5 @@ Environment variables:
 - `BACKUP_DEFAULT_BUCKET` (default `excalibase-backups`)
 - `BACKUP_DEFAULT_REGION` (default `auto` for R2)
 - `BACKUP_S3_PATH_STYLE` — set to `0` to disable path-style addressing (only flip for real AWS S3 buckets — R2/MinIO/LocalStack all need it on, the default)
+- A tier with backups enabled needs a target (these envs, else a complete vault `backup/s3`): without one its provisions are refused with 503. Partial credentials (key without secret, or no endpoint/bucket) fail boot.
 - K8s restore reads the same config via `ProvisioningService.BackupStorage()` (env defaults, then vault `backup/s3`). No restore-side defaults, no localstack fallback — unconfigured storage makes restore fail with `ErrBackupStorageNotConfigured`.

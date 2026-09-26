@@ -49,6 +49,7 @@ func setupProvisioningTest(t *testing.T) (*ProvisioningService, *storage.FileSys
 	svc := NewProvisioningService(store, factory, mock)
 	svc.SetOrgStore(testOrgs())
 	svc.SetVault(newFakeVault())
+	withBackupTarget(t, svc)
 	return svc, store, mock
 }
 

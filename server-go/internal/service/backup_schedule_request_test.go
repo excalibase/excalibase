@@ -62,6 +62,11 @@ func TestProvisionGivesAnUnscheduledBackupThePlatformSchedule(t *testing.T) {
 
 func TestProvisionRefusesAnUnscheduledBackupWithNoPlatformSchedule(t *testing.T) {
 	svc, _, mock := setupProvisioningTest(t)
+	// A platform backup target always carries a schedule, so only a platform
+	// without one leaves the request unscheduled.
+	if err := svc.SetBackupDefaults(nil); err != nil {
+		t.Fatalf("SetBackupDefaults: %v", err)
+	}
 
 	_, err := provisionWithBackup(t, svc, &domain.BackupSettings{Enabled: true, Retention: 7})
 	if !errors.Is(err, k8s.ErrInvalidBackupSchedule) {

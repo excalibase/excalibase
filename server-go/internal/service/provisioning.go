@@ -99,9 +99,9 @@ type ProvisioningService struct {
 	defaultDeploymentMode domain.DeploymentMode
 }
 
-// BackupDefaults — platform-wide CNPG backup target. All four fields are
-// required for the defaults to apply; an incomplete config is ignored
-// (provisions land without backup, matching pre-v1.1 behaviour).
+// BackupDefaults — platform-wide CNPG backup target. Credentials are what
+// decide whether one is configured, and once they are given the endpoint and
+// bucket are required too.
 type BackupDefaults struct {
 	AccessKeyID     string
 	SecretAccessKey string
@@ -245,29 +245,37 @@ func (s *ProvisioningService) SetLokiURL(url string) {
 	s.lokiURL = url
 }
 
-// SetBackupDefaults wires the platform-wide CNPG backup target. After
-// this is called, every new project provisions with backup enabled
-// against the configured S3-compatible store (R2 in production), unless
-// the provision request explicitly overrides via req.Backup.
-//
-// Pass nil (or a struct with empty AccessKeyID/Endpoint/Bucket) to
-// disable platform-wide backup defaults — projects then provision
-// without backup config (matches pre-v1.1 behaviour).
-func (s *ProvisioningService) SetBackupDefaults(d *BackupDefaults) {
-	if d == nil || d.AccessKeyID == "" || d.SecretAccessKey == "" || d.Endpoint == "" || d.Bucket == "" {
+// ErrBackupDefaultsIncomplete refuses a backup target that is only partly
+// configured, which would otherwise leave every project without backups.
+var ErrBackupDefaultsIncomplete = errors.New("backup target is incomplete: access key id, secret access key, endpoint and bucket are all required")
+
+// ErrBackupTargetNotConfigured refuses a project whose backups have nowhere to
+// go: its tier requires them, or the request enables them.
+var ErrBackupTargetNotConfigured = errors.New("backups are required but no backup target is configured")
+
+// SetBackupDefaults wires the platform-wide CNPG backup target. No
+// credentials means the platform has none; partial credentials are refused.
+func (s *ProvisioningService) SetBackupDefaults(d *BackupDefaults) error {
+	if d == nil || (d.AccessKeyID == "" && d.SecretAccessKey == "") {
 		s.backupDefaults = nil
-		return
+		return nil
 	}
-	if d.Region == "" {
-		d.Region = "auto"
+	if d.AccessKeyID == "" || d.SecretAccessKey == "" || d.Endpoint == "" || d.Bucket == "" {
+		s.backupDefaults = nil
+		return ErrBackupDefaultsIncomplete
 	}
-	if d.Schedule == "" {
-		d.Schedule = "0 0 2 * * *"
+	settled := *d
+	if settled.Region == "" {
+		settled.Region = "auto"
 	}
-	if d.RetentionDays == 0 {
-		d.RetentionDays = 7
+	if settled.Schedule == "" {
+		settled.Schedule = defaultBackupSchedule
 	}
-	s.backupDefaults = d
+	if settled.RetentionDays == 0 {
+		settled.RetentionDays = defaultBackupRetentionDays
+	}
+	s.backupDefaults = &settled
+	return nil
 }
 
 // CapacityHeadroom returns the configured % held back as a safety buffer.
@@ -329,14 +337,6 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 			persist()
 		},
 	)
-
-	// Backups asked for without a store go to the platform's, the one a
-	// restore reads from.
-	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 == nil {
-		if s3Creds, ok := s.BackupStorage(); ok {
-			req.Backup.S3 = s3Creds
-		}
-	}
 
 	var result *provisioner.ProvisioningResult
 	var provErr error
@@ -403,6 +403,9 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, err
 	}
 	if err := s.settleBackupSchedule(req); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+	if err := s.requireBackupTarget(req, tier); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 
@@ -485,6 +488,30 @@ func (s *ProvisioningService) applyBackupDefaults(req *domain.ProvisioningReques
 	}
 }
 
+// requireBackupTarget gives a project that must be backed up the platform's
+// backup target, and refuses it when there is none: its tier requires
+// backups and the request left them unsaid, or the request enabled them
+// without naming a target.
+func (s *ProvisioningService) requireBackupTarget(req *domain.ProvisioningRequest, tier config.TierConfig) error {
+	if req.Backup == nil && tier.BackupEnabled {
+		req.Backup = &domain.BackupSettings{Enabled: true, Schedule: defaultBackupSchedule, Retention: defaultBackupRetentionDays}
+	}
+	if req.Backup == nil || !req.Backup.Enabled || req.Backup.S3 != nil {
+		return nil
+	}
+	target, ok := s.BackupStorage()
+	if !ok {
+		return ErrBackupTargetNotConfigured
+	}
+	req.Backup.S3 = target
+	return nil
+}
+
+const (
+	defaultBackupSchedule      = "0 0 2 * * *"
+	defaultBackupRetentionDays = 7
+)
+
 // BackupStorage resolves the object store new backups are written to, in
 // the same order Provision applies it: platform defaults first (they fill
 // req.Backup.S3 before the vault lookup runs), then vault backup/s3. The
@@ -503,7 +530,9 @@ func (s *ProvisioningService) BackupStorage() (*domain.S3Credentials, bool) {
 	return s.vaultBackupStorage()
 }
 
-// vaultBackupStorage reads vault backup/s3 when the vault is wired and unsealed.
+// vaultBackupStorage reads vault backup/s3 when the vault is wired and
+// unsealed. An entry missing any of its credentials, endpoint or bucket is
+// not a target.
 func (s *ProvisioningService) vaultBackupStorage() (*domain.S3Credentials, bool) {
 	if s.vault == nil || s.vault.Sealed() {
 		return nil, false
@@ -512,13 +541,17 @@ func (s *ProvisioningService) vaultBackupStorage() (*domain.S3Credentials, bool)
 	if err != nil || s3Creds == nil {
 		return nil, false
 	}
-	return &domain.S3Credentials{
+	target := &domain.S3Credentials{
 		AccessKeyID:     s3Creds["accessKeyId"],
 		SecretAccessKey: s3Creds["secretAccessKey"],
 		Bucket:          s3Creds["bucket"],
 		Region:          s3Creds["region"],
 		Endpoint:        s3Creds["endpoint"],
-	}, true
+	}
+	if target.AccessKeyID == "" || target.SecretAccessKey == "" || target.Bucket == "" || target.Endpoint == "" {
+		return nil, false
+	}
+	return target, true
 }
 
 // settleBackupSchedule gives an enabled backup that names no schedule the

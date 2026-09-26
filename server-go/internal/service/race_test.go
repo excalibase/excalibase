@@ -31,6 +31,7 @@ func TestConcurrentProvisionSameDisplayName(t *testing.T) {
 	svc := NewProvisioningService(store, factory, mock)
 	svc.SetOrgStore(testOrgs())
 	setOrgTier(svc, "org1", domain.Enterprise)
+	withBackupTarget(t, svc)
 	var wg sync.WaitGroup
 	results := make(chan string, 5)
 
