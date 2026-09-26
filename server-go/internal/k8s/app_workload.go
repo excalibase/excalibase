@@ -35,6 +35,7 @@ const (
 	// appEnvRevisionAnnotation rolls the Deployment on each deploy of an app
 	// with secret values, which can change while the record does not.
 	appEnvRevisionAnnotation = "excalibase.io/app-env-revision"
+	appDeployAnnotation      = "excalibase.io/app-deploy"
 	// appObjectPrefix avoids colliding with CNPG's and the platform's own objects.
 	appObjectPrefix = "app-"
 	// maxLabelValueLength is Kubernetes' limit; checked rather than truncated
@@ -95,6 +96,9 @@ type AppRenderOptions struct {
 	// EnvRevision is set per deploy by the deploy service; required once the
 	// app has secret values, so their changes roll the pods.
 	EnvRevision string
+	// DeployID names the deploy on the Deployment, so a rollout watch can tell
+	// its own workload from the one a previous deploy left running.
+	DeployID string
 }
 
 // AppObjectName is the name the app's Deployment holds in the project namespace.
@@ -140,6 +144,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 	if envSecret != nil {
 		deployment.Spec.Template.Annotations[appEnvRevisionAnnotation] = opts.EnvRevision
 	}
+	deployment.Annotations = map[string]string{appDeployAnnotation: opts.DeployID}
 	policy, err := buildAppEgressPolicy(namespace, app, opts.ExtraDenyCIDRs)
 	if err != nil {
 		return nil, err
@@ -160,6 +165,9 @@ func validateRenderInputs(namespace string, app *apphost.App, opts AppRenderOpti
 	}
 	if opts.RuntimeClass == "" {
 		return fmt.Errorf("%w: no sandbox runtime class", ErrRenderApp)
+	}
+	if opts.DeployID == "" {
+		return fmt.Errorf("%w: no deploy id", ErrRenderApp)
 	}
 	if !namespacePattern.MatchString(namespace) {
 		return fmt.Errorf("%w: %q is not a project namespace", ErrRenderApp, namespace)

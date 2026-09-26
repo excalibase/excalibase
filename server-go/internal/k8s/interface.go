@@ -97,7 +97,8 @@ type KubeClient interface {
 	GetClusterCapacity(ctx context.Context) (ClusterCapacity, error)
 
 	ApplyAppWorkload(ctx context.Context, namespace string, workload *AppWorkload) error
-	WaitForAppRollout(ctx context.Context, namespace, name string, timeout time.Duration) error
+	WaitForAppRollout(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error
+	AppAvailableReplicas(ctx context.Context, namespace, name string) (int32, error)
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
 }
 

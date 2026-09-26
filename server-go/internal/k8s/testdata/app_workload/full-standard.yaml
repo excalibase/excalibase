@@ -2,6 +2,8 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  annotations:
+    excalibase.io/app-deploy: dep-7
   labels:
     app.kubernetes.io/component: app
     app.kubernetes.io/managed-by: excalibase-provisioning

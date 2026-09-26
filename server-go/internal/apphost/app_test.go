@@ -493,6 +493,34 @@ func TestStatusForReplicas(t *testing.T) {
 	}
 }
 
+func TestStatusAfterDeploy(t *testing.T) {
+	cases := []struct {
+		succeeded bool
+		replicas  int
+		serving   bool
+		want      string
+	}{
+		{true, 1, true, apphost.StatusRunning},
+		{true, 0, false, apphost.StatusStopped},
+		{false, 1, false, apphost.StatusFailed},
+		{false, 1, true, apphost.StatusRunning},
+		{false, 0, true, apphost.StatusRunning},
+	}
+	for _, c := range cases {
+		if got := apphost.StatusAfterDeploy(c.succeeded, c.replicas, c.serving); got != c.want {
+			t.Errorf("succeeded=%v replicas=%d serving=%v: got %q, want %q", c.succeeded, c.replicas, c.serving, got, c.want)
+		}
+	}
+	if !apphost.IsNotServable(apphost.StatusFailed) {
+		t.Error("a failed app must refuse serving")
+	}
+	app := validApp()
+	app.Status = apphost.StatusFailed
+	if err := app.Validate(); err != nil {
+		t.Errorf("FAILED is part of the vocabulary: %v", err)
+	}
+}
+
 func TestValidateRefusesUnknownStatus(t *testing.T) {
 	app := validApp()
 	app.Status = "DEPLOYING"

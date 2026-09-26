@@ -18,9 +18,12 @@ import (
 
 const defaultAppRolloutTimeout = 5 * time.Minute
 
+var errNoAppNamespace = errors.New("the project has no namespace to deploy into")
+
 // activeRollout lets a newer deploy cancel an earlier one's rollout wait.
 type activeRollout struct {
 	deployID string
+	revision int
 	cancel   context.CancelFunc
 }
 
@@ -126,51 +129,148 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		return nil, err
 	}
 	s.cancelActive(app.ID)
-	if routeErr != nil {
-		s.fail(deploy, routeErr)
-		return deploy, nil
-	}
-
 	namespace, err := s.namespaceFor(app.ProjectID)
 	if err != nil {
-		s.fail(deploy, err)
+		s.failWithoutWorkload(deploy, err)
+		return deploy, nil
+	}
+	name := k8s.AppObjectName(app.Name)
+	if routeErr != nil {
+		s.fail(ctx, deploy, routeErr, namespace, name)
 		return deploy, nil
 	}
 	render := s.render
 	render.EnvRevision = strconv.Itoa(deploy.Revision)
+	render.DeployID = deploy.ID
 	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver, render)
 	if err != nil {
-		s.fail(deploy, err)
+		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil
 	}
 	if err := s.kube.ApplyAppWorkload(ctx, namespace, workload); err != nil {
-		s.fail(deploy, fmt.Errorf("apply app workload: %w", err))
+		s.fail(ctx, deploy, fmt.Errorf("apply app workload: %w", err), namespace, name)
 		return deploy, nil
 	}
 	s.setStatus(deploy, apphost.DeployStatusRolling, "", nil)
+	s.watch(ctx, *deploy, namespace, name)
+	return deploy, nil
+}
 
-	name := k8s.AppObjectName(app.Name)
-	timeout := s.timeout
+// watch waits out the rollout on its own copy of the deploy, so the one handed
+// back to the caller is never written while it is being encoded.
+func (s *AppDeployService) watch(ctx context.Context, deploy apphost.Deploy, namespace, name string) {
 	rolloutCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	entry := &activeRollout{deployID: deploy.ID, cancel: cancel}
+	entry := &activeRollout{deployID: deploy.ID, revision: deploy.Revision, cancel: cancel}
 	s.mu.Lock()
-	s.active[app.ID] = entry
+	s.active[deploy.AppID] = entry
 	s.mu.Unlock()
 
+	timeout := s.timeout
 	s.async(func() {
-		defer s.clearActive(app.ID, entry)
-		err := s.kube.WaitForAppRollout(rolloutCtx, namespace, name, timeout)
+		defer cancel()
+		defer s.clearActive(deploy.AppID, entry)
+		err := s.kube.WaitForAppRollout(rolloutCtx, namespace, name, deploy.ID, timeout)
 		if rolloutCtx.Err() != nil {
 			return // superseded; the store would refuse this write anyway
 		}
 		if err != nil {
-			s.fail(deploy, err)
+			s.fail(rolloutCtx, &deploy, err, namespace, name)
 			return
 		}
-		s.setStatus(deploy, apphost.DeployStatusSucceeded, "", timeNowPtr())
+		s.finish(&deploy, apphost.DeployStatusSucceeded, "",
+			apphost.StatusAfterDeploy(true, deploy.Config.Replicas, true))
 	})
+}
 
-	return deploy, nil
+// ResumeRollouts watches every unfinished deploy this process is not already
+// watching, so a deploy whose watch died with its process still ends. The
+// watch runs a full timeout from here: how long the process was gone is not
+// the rollout's fault.
+func (s *AppDeployService) ResumeRollouts(ctx context.Context) error {
+	deploys, err := s.deploys.ListUnfinished()
+	if err != nil {
+		return fmt.Errorf("list unfinished deploys: %w", err)
+	}
+	for _, deploy := range deploys {
+		if s.claimResume(deploy) {
+			s.resume(ctx, deploy)
+		}
+	}
+	return nil
+}
+
+// claimResume stops a local watch of an older deploy of the same app, which a
+// newer deploy made elsewhere has superseded, and leaves a current one alone.
+func (s *AppDeployService) claimResume(deploy *apphost.Deploy) bool {
+	s.mu.Lock()
+	current, ok := s.active[deploy.AppID]
+	if ok && current.revision >= deploy.Revision {
+		s.mu.Unlock()
+		return false
+	}
+	if ok {
+		delete(s.active, deploy.AppID)
+	}
+	s.mu.Unlock()
+	if ok {
+		current.cancel()
+	}
+	return true
+}
+
+func (s *AppDeployService) resume(ctx context.Context, deploy *apphost.Deploy) {
+	app, err := s.apps.Get(deploy.ProjectID, deploy.AppID)
+	if err != nil {
+		log.Printf("resume deploy %s: look up app: %v", deploy.ID, err)
+		return
+	}
+	if app == nil {
+		return // deleted; its deploys go with it
+	}
+	namespace, err := s.namespaceFor(deploy.ProjectID)
+	if errors.Is(err, errNoAppNamespace) {
+		s.failWithoutWorkload(deploy, err)
+		return
+	}
+	if err != nil {
+		log.Printf("resume deploy %s: %v", deploy.ID, err)
+		return
+	}
+	s.watch(ctx, *deploy, namespace, k8s.AppObjectName(app.Name))
+}
+
+// StartRolloutSweeper resumes orphaned rollouts at once and then on a timer,
+// while this replica leads, so a watch lost with a crashed replica does not
+// wait for the next restart. Returns a function that stops it.
+func (s *AppDeployService) StartRolloutSweeper(ctx context.Context, leader LeaderChecker, every time.Duration) func() {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			s.sweepIfLeader(ctx, leader)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return cancel
+}
+
+func (s *AppDeployService) sweepIfLeader(ctx context.Context, leader LeaderChecker) {
+	leading, err := leader.IsLeader(ctx)
+	if err != nil {
+		log.Printf("app rollout sweep: leadership check: %v", err)
+		return
+	}
+	if !leading {
+		return
+	}
+	if err := s.ResumeRollouts(ctx); err != nil {
+		log.Printf("app rollout sweep: %v", err)
+	}
 }
 
 func (s *AppDeployService) cancelActive(appID string) {
@@ -217,13 +317,48 @@ func (s *AppDeployService) namespaceFor(projectID string) (string, error) {
 		return "", fmt.Errorf("look up project namespace: %w", err)
 	}
 	if inst == nil || inst.Namespace == "" {
-		return "", errors.New("the project has no namespace to deploy into")
+		return "", errNoAppNamespace
 	}
 	return inst.Namespace, nil
 }
 
-func (s *AppDeployService) fail(deploy *apphost.Deploy, err error) {
-	s.setStatus(deploy, apphost.DeployStatusFailed, err.Error(), timeNowPtr())
+// fail leaves the app ACTIVE while anything, such as the previous version, is
+// still serving; only a failure that left nothing serving fails the app.
+func (s *AppDeployService) fail(ctx context.Context, deploy *apphost.Deploy, err error, namespace, name string) {
+	s.finish(deploy, apphost.DeployStatusFailed, err.Error(), s.statusAfterFailure(ctx, namespace, name))
+}
+
+// failWithoutWorkload handles a deploy that never learnt its namespace: with
+// none there is nothing serving, but a lookup that failed says nothing.
+func (s *AppDeployService) failWithoutWorkload(deploy *apphost.Deploy, err error) {
+	appStatus := ""
+	if errors.Is(err, errNoAppNamespace) {
+		appStatus = apphost.StatusFailed
+	}
+	s.finish(deploy, apphost.DeployStatusFailed, err.Error(), appStatus)
+}
+
+// statusAfterFailure asks the cluster rather than assuming; when it cannot
+// answer, the app's status is left as it is.
+func (s *AppDeployService) statusAfterFailure(ctx context.Context, namespace, name string) string {
+	available, err := s.kube.AppAvailableReplicas(ctx, namespace, name)
+	if err != nil {
+		log.Printf("app %s/%s: read serving replicas: %v", namespace, name, err)
+		return ""
+	}
+	return apphost.StatusAfterDeploy(false, 0, available > 0)
+}
+
+// finish records the outcome and the app status it observed together; an
+// empty appStatus leaves the app as it is.
+func (s *AppDeployService) finish(deploy *apphost.Deploy, status, failureReason, appStatus string) {
+	now := time.Now().UTC()
+	deploy.Status = status
+	deploy.FailureReason = failureReason
+	deploy.FinishedAt = &now
+	if err := s.deploys.Finish(deploy.ID, status, failureReason, now, appStatus); err != nil {
+		log.Printf("finish deploy %s as %s: %v", deploy.ID, status, err)
+	}
 }
 
 // Applies only from pending/rolling, so a late write loses instead of
@@ -235,9 +370,4 @@ func (s *AppDeployService) setStatus(deploy *apphost.Deploy, status, failureReas
 	if err := s.deploys.UpdateStatus(deploy.ID, status, failureReason, finishedAt); err != nil {
 		log.Printf("update deploy %s status to %s: %v", deploy.ID, status, err)
 	}
-}
-
-func timeNowPtr() *time.Time {
-	now := time.Now().UTC()
-	return &now
 }

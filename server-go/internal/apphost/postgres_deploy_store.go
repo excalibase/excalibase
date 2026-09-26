@@ -87,6 +87,59 @@ func (s *PostgresDeployStore) UpdateStatus(id, status, failureReason string, fin
 	return nil
 }
 
+// Finish leaves the app's version alone: the status is observed state, not a
+// change to the record a developer's If-Match is checked against.
+func (s *PostgresDeployStore) Finish(id, status, failureReason string, finishedAt time.Time, appStatus string) error {
+	if appStatus != "" && !validStatuses[appStatus] {
+		return fmt.Errorf("unknown app status: %q", appStatus)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin deploy finish transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+
+	var projectID, appID string
+	err = tx.QueryRow(
+		`UPDATE app_deploys SET status = $2, failure_reason = NULLIF($3, ''), finished_at = $4
+		 WHERE id = $1 AND status IN ($5, $6) RETURNING project_id, app_id`,
+		id, status, failureReason, finishedAt, DeployStatusPending, DeployStatusRolling).Scan(&projectID, &appID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("finish deploy: %w", err)
+	}
+	if appStatus == "" {
+		return tx.Commit()
+	}
+	if _, err := tx.Exec(
+		`UPDATE apps SET status = $3, doc = jsonb_set(doc, '{status}', to_jsonb($3::text))
+		 WHERE project_id = $1 AND id = $2`, projectID, appID, appStatus); err != nil {
+		return fmt.Errorf("record app status: %w", err)
+	}
+	return tx.Commit()
+}
+
+func (s *PostgresDeployStore) ListUnfinished() ([]*Deploy, error) {
+	rows, err := s.db.Query(
+		`SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at
+		 FROM app_deploys WHERE status IN ($1, $2) ORDER BY created_at`, DeployStatusPending, DeployStatusRolling)
+	if err != nil {
+		return nil, fmt.Errorf("list unfinished deploys: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*Deploy, 0)
+	for rows.Next() {
+		deploy, err := scanDeploy(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, deploy)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresDeployStore) ListByApp(projectID, appID string, limit int) ([]*Deploy, error) {
 	if err := ValidateProjectID(projectID); err != nil {
 		return nil, err

@@ -44,10 +44,11 @@ func TestFunctionCronAdvisoryKeyIsDistinct(t *testing.T) {
 		backupSchedulerLockID: "backup scheduler",
 		idlePauseLockID:       "idle pause",
 		storageReapLockID:     "storage reaper",
+		appRolloutSweepLockID: "app rollout sweeper",
 		restoreSweepLockID:    "restore sweeper",
 		functionCronLockID:    "function cron",
 	}
-	if len(keys) != 5 {
+	if len(keys) != 6 {
 		t.Fatalf("advisory keys collide: %v", keys)
 	}
 	if functionCronLockID <= 0 {

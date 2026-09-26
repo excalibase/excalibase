@@ -265,6 +265,9 @@ func runServer(cfg config.AppConfig) {
 		defer stopRestoreSweeper()
 	}
 
+	stopAppRollouts := startAppRolloutSweeper(cfg, sqlStore, deps.appDeploySvc)
+	defer stopAppRollouts()
+
 	checkFeatureWiring(cfg, wiring.Deps{
 		SchedulerInvoker:  fnHandler != nil,
 		SchedulerProjects: projectDB != nil,
@@ -330,6 +333,26 @@ func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStor
 	}
 	return orchestrator.StartSweeper(context.Background(), service.NewLeadership(lock), restoreSweepInterval)
 }
+
+// startAppRolloutSweeper ends deploys whose rollout watch died with the
+// replica running it; a no-op when app hosting is off.
+func startAppRolloutSweeper(cfg config.AppConfig, sqlStore storage.PlatformStore, deploys *service.AppDeployService) func() {
+	if !cfg.AppHostingEnabled || deploys == nil {
+		return func() {
+			// app hosting is off: no deploys to resume
+		}
+	}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() && sqlStore != nil {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), appRolloutSweepLockID)
+	}
+	return deploys.StartRolloutSweeper(context.Background(), service.NewLeadership(lock), appRolloutSweepInterval)
+}
+
+const (
+	appRolloutSweepLockID   int64 = 0x6168_0acb_3a9d_52e1
+	appRolloutSweepInterval       = time.Minute
+)
 
 // restoreSweepLockID is the advisory lock the restore sweeper leads on. It
 // must stay distinct from every other advisory lock id the platform takes.
@@ -621,6 +644,7 @@ type handlerDeps struct {
 	rlsPolicyHandler  *handler.RlsPolicyHandler
 	tableGrantHandler *handler.TableGrantHandler
 	appHandler        *handler.AppHandler
+	appDeploySvc      *service.AppDeployService
 	appDeployHandler  *handler.AppDeployHandler
 	appSecretHandler  *handler.AppSecretHandler
 	tierHandler       *handler.TierHandler
@@ -1073,6 +1097,11 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	provSvc, pgStore := a.provSvc, a.pgStore
 
 	metricsSvc := service.NewMetricsService(store, k8sClient, cfg.StoragePath)
+	appDeploySvc := service.NewAppDeployService(
+		apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
+		k8sClient, store, service.NewAppEnvResolver(vc, store), k8s.AppRenderOptions{
+			RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Route: appRoute(cfg),
+		})
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
 	// A restore finishes the way a provision does: the adapters hand the
 	// recovered database to the provisioning service's registration path
@@ -1184,11 +1213,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appHandler: handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 			handler.NewProjectSourceLookup(store), appRoute(cfg).Public()),
 		appSecretHandler: handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
-		appDeployHandler: handler.NewAppDeployHandler(service.NewAppDeployService(
-			apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
-			k8sClient, store, service.NewAppEnvResolver(vc, store), k8s.AppRenderOptions{
-				RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Route: appRoute(cfg),
-			})),
+		appDeploySvc:     appDeploySvc,
+		appDeployHandler: handler.NewAppDeployHandler(appDeploySvc),
 		tierHandler:      tierHandler,
 		pgCatalogHandler: handler.NewPostgresCatalogHandler(),
 		capDeps: &capacityDeps{

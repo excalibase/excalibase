@@ -316,8 +316,8 @@ func (h *AppHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // -------------------- helpers --------------------
 
 // applyAppUpdate copies the fields the caller sent onto the stored record. The
-// status follows the replica count, so a stop or a restart is recorded as what
-// was asked for and never as an observation that the workload is running.
+// status is left alone: an edit changes what the next deploy runs, not what
+// is running now.
 func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 	if req.Name != nil {
 		app.Name = strings.TrimSpace(*req.Name)
@@ -339,7 +339,6 @@ func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 	}
 	if req.Replicas != nil {
 		app.Replicas = *req.Replicas
-		app.Status = apphost.StatusFor(*req.Replicas)
 	}
 }
 

@@ -116,6 +116,7 @@ func (f *fakeAppStore) Update(app *apphost.App, expectedVersion int) error {
 		return apphost.ErrAppVersionConflict
 	}
 	app.Version = existing.Version + 1
+	app.Status = existing.Status
 	f.apps[appKey(app.ProjectID, app.ID)] = *app
 	return nil
 }
@@ -679,9 +680,10 @@ func TestAppUpdateRefusesASecretPathTheCallerChose(t *testing.T) {
 	}
 }
 
-// Replicas moving to zero is a stop, and back is not a claim that it runs.
-func TestAppUpdateReplicasMovesTheStatus(t *testing.T) {
-	r, _ := setupAppRouter(t)
+// An edit changes what the next deploy runs, not what is running: the status
+// a deploy observed survives it, and nothing is claimed stopped or running.
+func TestAppUpdateReplicasLeavesTheObservedStatus(t *testing.T) {
+	r, store := setupAppRouter(t)
 	created := createAppForTest(t, r)
 	path := "/api/projects/" + appTestProject + "/apps/" + created.ID + "/"
 
@@ -689,16 +691,22 @@ func TestAppUpdateReplicasMovesTheStatus(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("update: got %d, body=%s", w.Code, w.Body.String())
 	}
-	if got := decodeApp(t, w); got.Status != apphost.StatusStopped {
-		t.Errorf("zero replicas must stop the app, got %q", got.Status)
+	if got := decodeApp(t, w); got.Status != apphost.StatusCreated {
+		t.Errorf("an undeployed edit must not claim the app stopped, got %q", got.Status)
 	}
+
+	store.mu.Lock()
+	running := store.apps[appKey(appTestProject, created.ID)]
+	running.Status = apphost.StatusRunning
+	store.apps[appKey(appTestProject, created.ID)] = running
+	store.mu.Unlock()
 
 	w = doAppRequestWithVersion(t, r, http.MethodPatch, path, map[string]any{"replicas": 2}, created.Version+1)
 	if w.Code != http.StatusOK {
 		t.Fatalf("update: got %d, body=%s", w.Code, w.Body.String())
 	}
-	if got := decodeApp(t, w); got.Status != apphost.StatusCreated {
-		t.Errorf("restarting must not claim the app runs, got %q", got.Status)
+	if got := decodeApp(t, w); got.Status != apphost.StatusRunning {
+		t.Errorf("an edit must keep the status the last deploy observed, got %q", got.Status)
 	}
 }
 

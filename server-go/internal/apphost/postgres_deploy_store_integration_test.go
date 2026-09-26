@@ -289,3 +289,154 @@ func TestPGDeployStore_ClosedDBErrors(t *testing.T) {
 }
 
 func timePtr(t time.Time) *time.Time { return &t }
+
+// A finished deploy and the app's status land together, and the status is
+// observed state: it moves no version a developer's edit is checked against.
+func TestPGDeployStore_FinishSetsTheAppStatus(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	app := sampleApp("proj_deploy_finish", "app_deploy_finish", "storefront")
+	if err := appStore.Create(app); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	deploy := sampleDeploy(app.ProjectID, app.ID, "dev-1")
+	if err := deployStore.Create(deploy); err != nil {
+		t.Fatalf("create deploy: %v", err)
+	}
+
+	if err := deployStore.Finish(deploy.ID, apphost.DeployStatusSucceeded, "", time.Now(), apphost.StatusRunning); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	got, err := appStore.Get(app.ProjectID, app.ID)
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if got.Status != apphost.StatusRunning {
+		t.Errorf("app status: got %q want %q", got.Status, apphost.StatusRunning)
+	}
+	if got.Version != app.Version {
+		t.Errorf("an observed status must not move the version: got %d want %d", got.Version, app.Version)
+	}
+	var column string
+	if err := sharedDB.QueryRow(`SELECT status FROM apps WHERE project_id = $1 AND id = $2`, app.ProjectID, app.ID).
+		Scan(&column); err != nil || column != apphost.StatusRunning {
+		t.Errorf("status column: got %q (%v) want %q", column, err, apphost.StatusRunning)
+	}
+	stored, _ := deployStore.Get(app.ProjectID, app.ID, deploy.ID)
+	if stored.Status != apphost.DeployStatusSucceeded || stored.FinishedAt == nil {
+		t.Errorf("deploy: got %+v", stored)
+	}
+}
+
+// A superseded deploy finishing late must not speak for the app.
+func TestPGDeployStore_FinishOfASupersededDeployLeavesTheApp(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	app := sampleApp("proj_deploy_late", "app_deploy_late", "storefront")
+	if err := appStore.Create(app); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	first := sampleDeploy(app.ProjectID, app.ID, "dev-1")
+	second := sampleDeploy(app.ProjectID, app.ID, "dev-2")
+	for _, deploy := range []*apphost.Deploy{first, second} {
+		if err := deployStore.Create(deploy); err != nil {
+			t.Fatalf("create deploy: %v", err)
+		}
+	}
+
+	if err := deployStore.Finish(first.ID, apphost.DeployStatusFailed, "boom", time.Now(), apphost.StatusFailed); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	got, _ := appStore.Get(app.ProjectID, app.ID)
+	if got.Status != apphost.StatusCreated {
+		t.Errorf("app status: got %q, want it untouched", got.Status)
+	}
+	stored, _ := deployStore.Get(app.ProjectID, app.ID, first.ID)
+	if stored.Status != apphost.DeployStatusSuperseded {
+		t.Errorf("first deploy: got %q want superseded", stored.Status)
+	}
+}
+
+// A failure whose effect on serving could not be observed leaves the app as it was.
+func TestPGDeployStore_FinishWithNoAppStatusLeavesTheApp(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	app := sampleApp("proj_deploy_unobserved", "app_deploy_unobserved", "storefront")
+	if err := appStore.Create(app); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	deploy := sampleDeploy(app.ProjectID, app.ID, "dev-1")
+	if err := deployStore.Create(deploy); err != nil {
+		t.Fatalf("create deploy: %v", err)
+	}
+	if err := deployStore.Finish(deploy.ID, apphost.DeployStatusFailed, "boom", time.Now(), ""); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	got, _ := appStore.Get(app.ProjectID, app.ID)
+	if got.Status != apphost.StatusCreated {
+		t.Errorf("app status: got %q, want it untouched", got.Status)
+	}
+	stored, _ := deployStore.Get(app.ProjectID, app.ID, deploy.ID)
+	if stored.Status != apphost.DeployStatusFailed {
+		t.Errorf("deploy: got %q want failed", stored.Status)
+	}
+}
+
+func TestPGDeployStore_FinishRefusesAnUnknownAppStatus(t *testing.T) {
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	if err := deployStore.Finish("dep1", apphost.DeployStatusSucceeded, "", time.Now(), "RUNNING"); err == nil {
+		t.Fatal("an app status outside the vocabulary must be refused")
+	}
+}
+
+func TestPGDeployStore_ListUnfinished(t *testing.T) {
+	appStore := newPGAppStore(t)
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	app := sampleApp("proj_deploy_unfinished", "app_deploy_unfinished", "storefront")
+	if err := appStore.Create(app); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	done := sampleDeploy(app.ProjectID, app.ID, "dev-1")
+	if err := deployStore.Create(done); err != nil {
+		t.Fatalf("create deploy: %v", err)
+	}
+	if err := deployStore.Finish(done.ID, apphost.DeployStatusSucceeded, "", time.Now(), apphost.StatusRunning); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	rolling := sampleDeploy(app.ProjectID, app.ID, "dev-2")
+	if err := deployStore.Create(rolling); err != nil {
+		t.Fatalf("create deploy: %v", err)
+	}
+	if err := deployStore.UpdateStatus(rolling.ID, apphost.DeployStatusRolling, "", nil); err != nil {
+		t.Fatalf("roll: %v", err)
+	}
+
+	unfinished, err := deployStore.ListUnfinished()
+	if err != nil {
+		t.Fatalf("list unfinished: %v", err)
+	}
+	var ours []*apphost.Deploy
+	for _, deploy := range unfinished {
+		if deploy.AppID == app.ID {
+			ours = append(ours, deploy)
+		}
+	}
+	if len(ours) != 1 || ours[0].ID != rolling.ID || ours[0].Config.Image == "" {
+		t.Fatalf("unfinished deploys of the app: got %+v, want only the rolling one with its config", ours)
+	}
+}
+
+func TestPGDeployStore_ClosedDBErrorsOnFinishAndListUnfinished(t *testing.T) {
+	db, err := sql.Open("postgres", "postgres://x:x@127.0.0.1:1/x?sslmode=disable")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	db.Close()
+	deployStore := apphost.NewPostgresDeployStore(db)
+	if err := deployStore.Finish("dep1", apphost.DeployStatusSucceeded, "", time.Now(), apphost.StatusRunning); err == nil {
+		t.Error("Finish on a closed db must fail")
+	}
+	if _, err := deployStore.ListUnfinished(); err == nil {
+		t.Error("ListUnfinished on a closed db must fail")
+	}
+}

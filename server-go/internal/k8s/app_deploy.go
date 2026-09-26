@@ -79,6 +79,12 @@ func (c *Client) applyAppDeployment(ctx context.Context, namespace string, desir
 	}
 	updated := existing.DeepCopy()
 	updated.Labels = desired.Labels
+	if updated.Annotations == nil {
+		updated.Annotations = map[string]string{}
+	}
+	for key, value := range desired.Annotations {
+		updated.Annotations[key] = value
+	}
 	updated.Spec = desired.Spec
 	applied, err := deployments.Update(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
@@ -222,36 +228,67 @@ var badImageReasons = map[string]bool{
 	"InvalidImageName":           true,
 }
 
-func (c *Client) WaitForAppRollout(ctx context.Context, namespace, name string, timeout time.Duration) error {
+// WaitForAppRollout reports success only once the Deployment carries deployID
+// and has converged, so a watch resumed after a restart never mistakes the
+// workload a previous deploy left running for this one.
+func (c *Client) WaitForAppRollout(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error {
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	applied := false
 	err := wait.PollUntilContextCancel(waitCtx, appRolloutPollInterval, true, func(pollCtx context.Context) (bool, error) {
 		dep, err := c.clientset.AppsV1().Deployments(namespace).Get(pollCtx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
 		if err != nil {
 			return false, fmt.Errorf("read app deployment: %w", err)
 		}
-		if converged(dep) {
-			return true, nil
-		}
-		// Until the controller has seen the new spec, the revision annotation
-		// still names the previous ReplicaSet, whose pods may be failing.
-		if dep.Status.ObservedGeneration < dep.Generation {
+		if dep.Annotations[appDeployAnnotation] != deployID {
 			return false, nil
 		}
-		if reason, message, bad := c.badPod(pollCtx, namespace, dep); bad {
-			return false, fmt.Errorf("%w: %s %s: %s", ErrAppRollout, name, reason, message)
-		}
-		return false, nil
+		applied = true
+		return c.rolloutDone(pollCtx, namespace, name, dep)
 	})
 	if err == nil {
 		return nil
 	}
 	// The client's rate limiter reports the deadline in its own words, so ask
 	// the context rather than the error.
-	if ctx.Err() == nil && errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %s did not become ready within %s", ErrAppRollout, name, timeout)
+	if ctx.Err() != nil || !errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+		return err
 	}
-	return err
+	if !applied {
+		return fmt.Errorf("%w: %s never ran this deploy's workload within %s", ErrAppRollout, name, timeout)
+	}
+	return fmt.Errorf("%w: %s did not become ready within %s", ErrAppRollout, name, timeout)
+}
+
+// AppAvailableReplicas counts the app's serving pods of any revision, so a
+// failed rollout still reports the previous version's; no Deployment is zero.
+func (c *Client) AppAvailableReplicas(ctx context.Context, namespace, name string) (int32, error) {
+	dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read app deployment: %w", err)
+	}
+	return dep.Status.AvailableReplicas, nil
+}
+
+func (c *Client) rolloutDone(ctx context.Context, namespace, name string, dep *appsv1.Deployment) (bool, error) {
+	if converged(dep) {
+		return true, nil
+	}
+	// Until the controller has seen the new spec, the revision annotation
+	// still names the previous ReplicaSet, whose pods may be failing.
+	if dep.Status.ObservedGeneration < dep.Generation {
+		return false, nil
+	}
+	if reason, message, bad := c.badPod(ctx, namespace, dep); bad {
+		return false, fmt.Errorf("%w: %s %s: %s", ErrAppRollout, name, reason, message)
+	}
+	return false, nil
 }
 
 func converged(dep *appsv1.Deployment) bool {

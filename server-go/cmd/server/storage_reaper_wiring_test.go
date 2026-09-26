@@ -51,8 +51,9 @@ func TestStorageReaperAdvisoryKeyIsDistinct(t *testing.T) {
 		backupSchedulerLockID: "backup scheduler",
 		idlePauseLockID:       "idle pause",
 		storageReapLockID:     "storage reaper",
+		appRolloutSweepLockID: "app rollout sweeper",
 	}
-	if len(keys) != 3 {
+	if len(keys) != 4 {
 		t.Fatalf("advisory keys collide: %v", keys)
 	}
 	if storageReapLockID <= 0 {

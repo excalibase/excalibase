@@ -35,7 +35,7 @@ func TestMockClient_ApplyAppWorkload_ReturnsScriptedError(t *testing.T) {
 
 func TestMockClient_WaitForAppRollout_DefaultsToSuccess(t *testing.T) {
 	m := NewMockClient()
-	if err := m.WaitForAppRollout(context.Background(), "ns1", "app-web", time.Second); err != nil {
+	if err := m.WaitForAppRollout(context.Background(), "ns1", "app-web", "dep-1", time.Second); err != nil {
 		t.Fatalf("expected success with no error scripted, got %v", err)
 	}
 }
@@ -45,10 +45,10 @@ func TestMockClient_WaitForAppRollout_ScriptedErrorByKey(t *testing.T) {
 	want := errors.New("crash loop")
 	m.AppRolloutErr["ns1/app-web"] = want
 
-	if err := m.WaitForAppRollout(context.Background(), "ns1", "app-web", time.Second); !errors.Is(err, want) {
+	if err := m.WaitForAppRollout(context.Background(), "ns1", "app-web", "dep-1", time.Second); !errors.Is(err, want) {
 		t.Fatalf("expected the scripted error, got %v", err)
 	}
-	if err := m.WaitForAppRollout(context.Background(), "ns1", "other-app", time.Second); err != nil {
+	if err := m.WaitForAppRollout(context.Background(), "ns1", "other-app", "dep-1", time.Second); err != nil {
 		t.Fatalf("a different name must not see another app's scripted error, got %v", err)
 	}
 }
@@ -57,12 +57,12 @@ func TestMockClient_WaitForAppRollout_FuncTakesPriorityOverErr(t *testing.T) {
 	m := NewMockClient()
 	m.AppRolloutErr["ns1/app-web"] = errors.New("would fail via map")
 	called := false
-	m.AppRolloutFunc = func(ctx context.Context, namespace, name string, timeout time.Duration) error {
+	m.AppRolloutFunc = func(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error {
 		called = true
 		return nil
 	}
 
-	if err := m.WaitForAppRollout(context.Background(), "ns1", "app-web", time.Second); err != nil {
+	if err := m.WaitForAppRollout(context.Background(), "ns1", "app-web", "dep-1", time.Second); err != nil {
 		t.Fatalf("AppRolloutFunc should have overridden the map error, got %v", err)
 	}
 	if !called {
