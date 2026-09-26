@@ -20,7 +20,9 @@ var CiliumNetworkPolicyGVR = schema.GroupVersionResource{
 const (
 	ciliumPolicyKind = "CiliumNetworkPolicy"
 	// world excludes host, remote-node and kube-apiserver, which are entities of their own.
-	worldEntity     = "world"
+	worldEntity = "world"
+	// hostEntity is the local node, where the kubelet's health probes come from.
+	hostEntity      = "host"
 	smtpPortNumber  = 25
 	protocolTCP     = "TCP"
 	protocolUDP     = "UDP"
@@ -29,8 +31,8 @@ const (
 
 // appDeniedRanges are off-cluster addresses world still covers; link-local holds cloud metadata.
 var appDeniedRanges = []string{
-	"169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
-	"127.0.0.0/8", "0.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4",
+	"169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", //NOSONAR
+	"127.0.0.0/8", "0.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4", //NOSONAR
 }
 
 type ciliumPolicySpec struct {

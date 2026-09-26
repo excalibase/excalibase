@@ -262,3 +262,9 @@ spec:
     - ports:
       - port: "8080"
         protocol: TCP
+  - fromEntities:
+    - host
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
