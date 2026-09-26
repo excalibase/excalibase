@@ -101,8 +101,10 @@ type MockClient struct {
 	AppWorkloads        map[string]*AppWorkload // keyed "namespace/deploymentName"
 	ApplyAppWorkloadErr error
 
-	AppRolloutFunc func(ctx context.Context, namespace, name string, timeout time.Duration) error
-	AppRolloutErr  map[string]error // keyed "namespace/name"
+	AppRolloutFunc  func(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error
+	AppRolloutErr   map[string]error // keyed "namespace/name"
+	AppAvailable    map[string]int32 // keyed "namespace/name"
+	AppAvailableErr error
 
 	RuntimeClasses    map[string]bool
 	RuntimeClassError error
@@ -133,6 +135,7 @@ func NewMockClient() *MockClient {
 
 		AppWorkloads:  make(map[string]*AppWorkload),
 		AppRolloutErr: make(map[string]error),
+		AppAvailable:  make(map[string]int32),
 
 		RuntimeClasses: make(map[string]bool),
 	}
@@ -590,16 +593,23 @@ func (m *MockClient) ApplyAppWorkload(ctx context.Context, namespace string, wor
 	return nil
 }
 
-func (m *MockClient) WaitForAppRollout(ctx context.Context, namespace, name string, timeout time.Duration) error {
+func (m *MockClient) WaitForAppRollout(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error {
 	m.mu.Lock()
 	m.Calls = append(m.Calls, "WaitForAppRollout:"+namespace+"/"+name)
 	fn := m.AppRolloutFunc
 	err := m.AppRolloutErr[namespace+"/"+name]
 	m.mu.Unlock()
 	if fn != nil {
-		return fn(ctx, namespace, name, timeout)
+		return fn(ctx, namespace, name, deployID, timeout)
 	}
 	return err
+}
+
+func (m *MockClient) AppAvailableReplicas(ctx context.Context, namespace, name string) (int32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "AppAvailableReplicas:"+namespace+"/"+name)
+	return m.AppAvailable[namespace+"/"+name], m.AppAvailableErr
 }
 
 func (m *MockClient) RuntimeClassExists(ctx context.Context, name string) (bool, error) {

@@ -155,7 +155,8 @@ func (s *PostgresAppStore) List(projectID string) ([]*App, error) {
 // comparison and the write cannot be separated: two developers who read the
 // same app and both patch it do not silently lose one of the changes — the
 // second is told the app moved. created_at is read back from the row for the
-// same reason, so a stale copy cannot rewrite the app's history.
+// same reason, so a stale copy cannot rewrite the app's history, and so is the
+// status, which a deploy may have moved since the caller read the app.
 func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 	if err := app.Validate(); err != nil {
 		return err
@@ -168,9 +169,10 @@ func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 
 	var version int
 	var createdAt time.Time
+	var status string
 	err = tx.QueryRow(
-		`SELECT version, created_at FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
-		app.ProjectID, app.ID).Scan(&version, &createdAt)
+		`SELECT version, created_at, status FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
+		app.ProjectID, app.ID).Scan(&version, &createdAt, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrAppNotFound
 	}
@@ -183,6 +185,8 @@ func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 	}
 	app.Version = version + 1
 	app.CreatedAt = createdAt
+	// Only a finished deploy moves the status; the caller's copy may predate it.
+	app.Status = status
 	app.UpdatedAt = time.Now().UTC()
 	blob, err := json.Marshal(app)
 	if err != nil {

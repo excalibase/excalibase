@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,162 +21,6 @@ const (
 	deployTestApp       = "app_deploy1"
 	testDeployNamespace = "ns-proj-deploy1"
 )
-
-type fakeAppStoreForDeploy struct {
-	mu     sync.Mutex
-	apps   map[string]*apphost.App
-	getErr error
-}
-
-func newFakeAppStoreForDeploy(app *apphost.App) *fakeAppStoreForDeploy {
-	return &fakeAppStoreForDeploy{apps: map[string]*apphost.App{app.ProjectID + "/" + app.ID: app}}
-}
-
-func (f *fakeAppStoreForDeploy) Create(*apphost.App) error { return errors.New("not used") }
-
-func (f *fakeAppStoreForDeploy) Get(projectID, id string) (*apphost.App, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.getErr != nil {
-		return nil, f.getErr
-	}
-	app, ok := f.apps[projectID+"/"+id]
-	if !ok {
-		return nil, nil
-	}
-	copied := *app
-	return &copied, nil
-}
-
-func (f *fakeAppStoreForDeploy) List(string) ([]*apphost.App, error) { return nil, nil }
-func (f *fakeAppStoreForDeploy) Update(*apphost.App, int) error      { return errors.New("not used") }
-func (f *fakeAppStoreForDeploy) Delete(string, string) error         { return errors.New("not used") }
-
-type fakeDeployStore struct {
-	mu        sync.Mutex
-	deploys   []*apphost.Deploy
-	createErr error
-	listErr   error
-	updateErr error
-	getErr    error
-}
-
-func newFakeDeployStore() *fakeDeployStore { return &fakeDeployStore{} }
-
-func (f *fakeDeployStore) Create(deploy *apphost.Deploy) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.createErr != nil {
-		return f.createErr
-	}
-	revision := 0
-	for _, d := range f.deploys {
-		if d.AppID != deploy.AppID {
-			continue
-		}
-		if d.Status == apphost.DeployStatusPending || d.Status == apphost.DeployStatusRolling {
-			d.Status = apphost.DeployStatusSuperseded
-		}
-		if d.Revision > revision {
-			revision = d.Revision
-		}
-	}
-	deploy.Revision = revision + 1
-	stored := *deploy
-	f.deploys = append(f.deploys, &stored)
-	return nil
-}
-
-func (f *fakeDeployStore) UpdateStatus(id, status, failureReason string, finishedAt *time.Time) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.updateErr != nil {
-		return f.updateErr
-	}
-	for _, d := range f.deploys {
-		if d.ID != id {
-			continue
-		}
-		if d.Status != apphost.DeployStatusPending && d.Status != apphost.DeployStatusRolling {
-			return nil
-		}
-		d.Status = status
-		d.FailureReason = failureReason
-		d.FinishedAt = finishedAt
-		return nil
-	}
-	return nil
-}
-
-func (f *fakeDeployStore) ListByApp(projectID, appID string, limit int) ([]*apphost.Deploy, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.listErr != nil {
-		return nil, f.listErr
-	}
-	out := make([]*apphost.Deploy, 0)
-	for i := len(f.deploys) - 1; i >= 0; i-- {
-		d := f.deploys[i]
-		if d.ProjectID == projectID && d.AppID == appID {
-			copied := *d
-			out = append(out, &copied)
-			if limit > 0 && len(out) >= limit {
-				break
-			}
-		}
-	}
-	return out, nil
-}
-
-func (f *fakeDeployStore) GetLatest(projectID, appID string) (*apphost.Deploy, error) {
-	deploys, err := f.ListByApp(projectID, appID, 1)
-	if err != nil || len(deploys) == 0 {
-		return nil, err
-	}
-	return deploys[0], nil
-}
-
-func (f *fakeDeployStore) Get(projectID, appID, id string) (*apphost.Deploy, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.getErr != nil {
-		return nil, f.getErr
-	}
-	for _, d := range f.deploys {
-		if d.ID == id && d.AppID == appID && d.ProjectID == projectID {
-			copied := *d
-			return &copied, nil
-		}
-	}
-	return nil, nil
-}
-
-func (f *fakeDeployStore) getByID(id string) *apphost.Deploy {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, d := range f.deploys {
-		if d.ID == id {
-			copied := *d
-			return &copied
-		}
-	}
-	return nil
-}
-
-func waitForDeployStatus(t *testing.T, store *fakeDeployStore, id, want string) *apphost.Deploy {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		d := store.getByID(id)
-		if d != nil && d.Status == want {
-			return d
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("deploy %s did not reach status %q in time (last: %+v)", id, want, d)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
 
 func sampleDeployApp() *apphost.App {
 	secret := "sk_live_should_never_be_stored"
@@ -256,13 +99,14 @@ func rolloutKey(app *apphost.App, namespace string) string {
 
 func TestDeployApp_Success(t *testing.T) {
 	app := sampleDeployApp()
-	svc, _, kube := newDeployTestService(t, app)
+	svc, deploys, kube := newDeployTestService(t, app)
 	namespace := testDeployNamespace
 
-	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	returned, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
 	if err != nil {
 		t.Fatalf("DeployApp: %v", err)
 	}
+	deploy := deploys.getByID(returned.ID)
 	if deploy.Status != apphost.DeployStatusSucceeded {
 		t.Fatalf("status: got %q want %q (reason: %s)", deploy.Status, apphost.DeployStatusSucceeded, deploy.FailureReason)
 	}
@@ -312,14 +156,15 @@ func TestDeployApp_AppliesTheConfiguredExtraDenyRanges(t *testing.T) {
 
 func TestDeployApp_ImagePullFailure(t *testing.T) {
 	app := sampleDeployApp()
-	svc, _, kube := newDeployTestService(t, app)
+	svc, deploys, kube := newDeployTestService(t, app)
 	namespace := testDeployNamespace
 	kube.AppRolloutErr[rolloutKey(app, namespace)] = fmt.Errorf("%w: storefront ImagePullBackOff: back-off pulling image", k8s.ErrAppRollout)
 
-	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	returned, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
 	if err != nil {
 		t.Fatalf("DeployApp: %v", err)
 	}
+	deploy := deploys.getByID(returned.ID)
 	if deploy.Status != apphost.DeployStatusFailed {
 		t.Fatalf("status: got %q want failed", deploy.Status)
 	}
@@ -330,14 +175,15 @@ func TestDeployApp_ImagePullFailure(t *testing.T) {
 
 func TestDeployApp_CrashLoop(t *testing.T) {
 	app := sampleDeployApp()
-	svc, _, kube := newDeployTestService(t, app)
+	svc, deploys, kube := newDeployTestService(t, app)
 	namespace := testDeployNamespace
 	kube.AppRolloutErr[rolloutKey(app, namespace)] = fmt.Errorf("%w: storefront CrashLoopBackOff: back-off restarting failed container", k8s.ErrAppRollout)
 
-	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	returned, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
 	if err != nil {
 		t.Fatalf("DeployApp: %v", err)
 	}
+	deploy := deploys.getByID(returned.ID)
 	if deploy.Status != apphost.DeployStatusFailed {
 		t.Fatalf("status: got %q want failed", deploy.Status)
 	}
@@ -348,14 +194,15 @@ func TestDeployApp_CrashLoop(t *testing.T) {
 
 func TestDeployApp_Timeout(t *testing.T) {
 	app := sampleDeployApp()
-	svc, _, kube := newDeployTestService(t, app)
+	svc, deploys, kube := newDeployTestService(t, app)
 	namespace := testDeployNamespace
 	kube.AppRolloutErr[rolloutKey(app, namespace)] = fmt.Errorf("%w: storefront did not become ready within 5m0s", k8s.ErrAppRollout)
 
-	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
+	returned, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
 	if err != nil {
 		t.Fatalf("DeployApp: %v", err)
 	}
+	deploy := deploys.getByID(returned.ID)
 	if deploy.Status != apphost.DeployStatusFailed {
 		t.Fatalf("status: got %q want failed", deploy.Status)
 	}
@@ -405,7 +252,7 @@ func TestDeployApp_SupersedesEarlierPendingOrRolling(t *testing.T) {
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	secondReturned := make(chan struct{})
-	kube.AppRolloutFunc = func(ctx context.Context, ns, name string, timeout time.Duration) error {
+	kube.AppRolloutFunc = func(ctx context.Context, ns, name, deployID string, timeout time.Duration) error {
 		if atomic.AddInt32(&calls, 1) == 1 {
 			close(firstStarted)
 			<-releaseFirst
@@ -739,7 +586,7 @@ func TestRedeployApp_SupersedesARollingDeploy(t *testing.T) {
 	var calls int32
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
-	kube.AppRolloutFunc = func(ctx context.Context, ns, name string, timeout time.Duration) error {
+	kube.AppRolloutFunc = func(ctx context.Context, ns, name, deployID string, timeout time.Duration) error {
 		if atomic.AddInt32(&calls, 1) == 1 {
 			close(firstStarted)
 			<-releaseFirst

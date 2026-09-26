@@ -395,3 +395,34 @@ func TestPGAppStore_UpdateRefusesAStaleVersion(t *testing.T) {
 		t.Errorf("version: got %d want 2", got.Version)
 	}
 }
+
+// A record edit never overwrites the status a deploy observed, even when the
+// editor's copy was read before the deploy finished.
+func TestPGAppStore_UpdateKeepsTheObservedStatus(t *testing.T) {
+	s := newPGAppStore(t)
+	projectID := "proj_itest_observed"
+	app := sampleApp(projectID, "app_observed", "observed")
+	if err := s.Create(app); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	stale, err := s.Get(projectID, "app_observed")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, err := sharedDB.Exec(`UPDATE apps SET status = $3, doc = jsonb_set(doc, '{status}', to_jsonb($3::text))
+		WHERE project_id = $1 AND id = $2`, projectID, "app_observed", apphost.StatusRunning); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+
+	stale.Image = "ghcr.io/acme/storefront:2.0.0"
+	if err := s.Update(stale, stale.Version); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if stale.Status != apphost.StatusRunning {
+		t.Errorf("the written record must carry the observed status, got %q", stale.Status)
+	}
+	got, _ := s.Get(projectID, "app_observed")
+	if got.Status != apphost.StatusRunning || got.Image != "ghcr.io/acme/storefront:2.0.0" {
+		t.Errorf("got status=%q image=%q", got.Status, got.Image)
+	}
+}

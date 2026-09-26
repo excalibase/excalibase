@@ -49,6 +49,8 @@ const (
 // liveRoute is the route every live render uses; the controller namespace is the one this file installs HAProxy into.
 var liveRoute = AppRouteOptions{Domain: "apps.test", IngressClass: "haproxy", IngressFromNamespace: haproxyNamespace}
 
+const liveDeployID = "dep-live-1"
+
 // Run with: go test ./internal/k8s/ -tags=live -run TestK3sCiliumAppRoute -v -count=1 -timeout 40m
 func TestK3sCiliumAppRoute(t *testing.T) {
 	lab := &egressLab{ctx: context.Background()}
@@ -122,14 +124,14 @@ func (lab *egressLab) installHAProxyIngress(t *testing.T) {
 // deployRouteApp drives the production path: render, apply, wait.
 func (lab *egressLab) deployRouteApp(t *testing.T, app *apphost.App) {
 	t.Helper()
-	workload, err := RenderAppWorkload(routeNamespace, app, nil, AppRenderOptions{RuntimeClass: gvisorRuntimeClass, Route: liveRoute})
+	workload, err := RenderAppWorkload(routeNamespace, app, nil, AppRenderOptions{RuntimeClass: gvisorRuntimeClass, Route: liveRoute, DeployID: liveDeployID})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	if err := lab.client.ApplyAppWorkload(lab.ctx, routeNamespace, workload); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if err := lab.client.WaitForAppRollout(lab.ctx, routeNamespace, AppObjectName(app.Name), 5*time.Minute); err != nil {
+	if err := lab.client.WaitForAppRollout(lab.ctx, routeNamespace, AppObjectName(app.Name), liveDeployID, 5*time.Minute); err != nil {
 		t.Fatalf("rollout: %v", err)
 	}
 }

@@ -52,14 +52,12 @@ func envDeployFixture(t *testing.T) (*AppDeployService, *fakeDeployStore, *k8s.M
 }
 
 func TestDeployApp_GivesTheContainerItsDatabaseAndSecretValues(t *testing.T) {
-	svc, _, kube, _, app := envDeployFixture(t)
+	svc, deployStore, kube, _, app := envDeployFixture(t)
 	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
 	if err != nil {
 		t.Fatalf("DeployApp: %v", err)
 	}
-	if deploy.Status != apphost.DeployStatusSucceeded {
-		t.Fatalf("status %q: %s", deploy.Status, deploy.FailureReason)
-	}
+	waitForDeployStatus(t, deployStore, deploy.ID, apphost.DeployStatusSucceeded)
 	workload := kube.AppWorkloads[rolloutKey(app, testDeployNamespace)]
 	if workload == nil || workload.EnvSecret == nil {
 		t.Fatal("the workload must carry the app's env Secret")

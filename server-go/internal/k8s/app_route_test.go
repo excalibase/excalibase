@@ -34,7 +34,7 @@ func tlsRoute() AppRouteOptions {
 func renderWithRoute(t *testing.T, route AppRouteOptions) *AppWorkload {
 	t.Helper()
 	workload, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(),
-		AppRenderOptions{RuntimeClass: testRuntimeClass, Route: route})
+		AppRenderOptions{RuntimeClass: testRuntimeClass, Route: route, DeployID: testDeployID})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRenderAppWorkloadRefusesIncompleteRoute(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			route := testRoute
 			mutate(&route)
-			_, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{RuntimeClass: testRuntimeClass, Route: route})
+			_, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{RuntimeClass: testRuntimeClass, Route: route, DeployID: testDeployID})
 			if !errors.Is(err, ErrRenderApp) {
 				t.Fatalf("want ErrRenderApp, got %v", err)
 			}
@@ -256,7 +256,7 @@ func TestApplyAppWorkload_CreatesThenUpdatesTheRoute(t *testing.T) {
 
 func renderWithRouteFor(t *testing.T, app *apphost.App, route AppRouteOptions) *AppWorkload {
 	t.Helper()
-	workload, err := RenderAppWorkload(testNamespace, app, newResolver(), AppRenderOptions{RuntimeClass: testRuntimeClass, Route: route})
+	workload, err := RenderAppWorkload(testNamespace, app, newResolver(), AppRenderOptions{RuntimeClass: testRuntimeClass, Route: route, DeployID: testDeployID})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}

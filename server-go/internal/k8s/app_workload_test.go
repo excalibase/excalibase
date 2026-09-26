@@ -135,7 +135,11 @@ var testRoute = AppRouteOptions{
 	IngressFromNamespace: "haproxy-controller",
 }
 
-var testRenderOptions = AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute, EnvRevision: "7"}
+var testRenderOptions = AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute, EnvRevision: "7", DeployID: testDeployID}
+
+const testDeployID = "dep-7"
+
+func carriesDeploy(id string) map[string]string { return map[string]string{appDeployAnnotation: id} }
 
 func newResolver() *fakeResolver { return &fakeResolver{namespace: testNamespace} }
 
@@ -323,12 +327,28 @@ func TestRenderAppWorkloadDeploymentCarriesNoSecretValue(t *testing.T) {
 // Pods roll on every deploy of an app with secret values, since a value can
 // change without the record changing; the values themselves are never hashed
 // into an annotation a namespace reader could brute-force.
+// The deploy is named on the Deployment, not its pod template, so it never rolls a pod.
+func TestRenderAppWorkloadNamesItsDeploy(t *testing.T) {
+	workload := mustRender(t, minimalApp(), newResolver())
+	if got := workload.Deployment.Annotations[appDeployAnnotation]; got != testDeployID {
+		t.Fatalf("deploy annotation = %q, want %q", got, testDeployID)
+	}
+	if _, ok := workload.Deployment.Spec.Template.Annotations[appDeployAnnotation]; ok {
+		t.Error("the deploy id must not reach the pod template")
+	}
+	options := testRenderOptions
+	options.DeployID = ""
+	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), options); !errors.Is(err, ErrRenderApp) {
+		t.Fatalf("a workload no deploy names must be refused, got %v", err)
+	}
+}
+
 func TestRenderAppWorkloadSecretValuesRollThePodsPerDeploy(t *testing.T) {
 	workload := mustRender(t, fullApp(), newResolver())
 	if got := workload.Deployment.Spec.Template.Annotations[appEnvRevisionAnnotation]; got != "7" {
 		t.Fatalf("env revision annotation = %q, want 7", got)
 	}
-	if _, err := RenderAppWorkload(testNamespace, fullApp(), newResolver(), AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute}); !errors.Is(err, ErrRenderApp) {
+	if _, err := RenderAppWorkload(testNamespace, fullApp(), newResolver(), AppRenderOptions{RuntimeClass: testRuntimeClass, Route: testRoute, DeployID: testDeployID}); !errors.Is(err, ErrRenderApp) {
 		t.Fatalf("secret values with no env revision must be refused, got %v", err)
 	}
 	plain := mustRender(t, minimalApp(), newResolver())
@@ -491,7 +511,7 @@ func TestRenderAppWorkloadRunsUnderTheSandboxRuntime(t *testing.T) {
 }
 
 func TestRenderAppWorkloadRefusesNoRuntimeClass(t *testing.T) {
-	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{Route: testRoute}); !errors.Is(err, ErrRenderApp) {
+	if _, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{Route: testRoute, DeployID: testDeployID}); !errors.Is(err, ErrRenderApp) {
 		t.Fatalf("an app with no sandbox runtime must be refused, got %v", err)
 	}
 }
@@ -690,6 +710,7 @@ func assertPorts(t *testing.T, rule string, got []ciliumPortRule, want ...cilium
 func TestRenderAppWorkloadEgressPolicyExtraDenyCIDRs(t *testing.T) {
 	workload, err := RenderAppWorkload(testNamespace, minimalApp(), newResolver(), AppRenderOptions{
 		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32", "198.51.100.0/24"}, Route: testRoute,
+		DeployID: testDeployID,
 	})
 	if err != nil {
 		t.Fatalf("RenderAppWorkload: %v", err)

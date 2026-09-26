@@ -36,6 +36,7 @@ type Store interface {
 	// is the version the caller read: the write applies only while the stored
 	// row still holds it, and otherwise reports ErrAppVersionConflict without
 	// writing. Reports ErrAppNotFound when the project holds no such app.
+	// The stored status is kept: only a finished deploy moves it.
 	Update(app *App, expectedVersion int) error
 	// Delete removes the app, reporting ErrAppNotFound when absent.
 	Delete(projectID, id string) error

@@ -37,7 +37,7 @@ func TestApplyAppWorkload_CreatesThenUpdates(t *testing.T) {
 	app.Replicas = 2
 	updated, err := RenderAppWorkload(testNamespace, app, newResolver(), AppRenderOptions{
 		RuntimeClass: testRuntimeClass, ExtraDenyCIDRs: []string{"203.0.113.9/32"}, Route: testRoute,
-		EnvRevision: "8",
+		EnvRevision: "8", DeployID: "dep-8",
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -106,6 +106,63 @@ func TestApplyAppWorkload_AppliesTheEnvSecret(t *testing.T) {
 	}
 }
 
+// The controller's own annotations survive a redeploy, and the Deployment
+// then names the deploy that last wrote it.
+func TestApplyAppWorkload_MarksTheDeploymentWithItsDeploy(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	app := fullApp()
+	if err := c.ApplyAppWorkload(ctx, testNamespace, mustRender(t, app, newResolver())); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	deployments := c.clientset.AppsV1().Deployments(testNamespace)
+	dep, _ := deployments.Get(ctx, AppObjectName(app.Name), metav1.GetOptions{})
+	if got := dep.Annotations[appDeployAnnotation]; got != testDeployID {
+		t.Fatalf("deploy annotation = %q, want %q", got, testDeployID)
+	}
+	dep.Annotations[revisionAnnotation] = "1"
+	if _, err := deployments.Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("seed controller annotation: %v", err)
+	}
+
+	options := testRenderOptions
+	options.DeployID = "dep-8"
+	next, err := RenderAppWorkload(testNamespace, app, newResolver(), options)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if err := c.ApplyAppWorkload(ctx, testNamespace, next); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	dep, _ = deployments.Get(ctx, AppObjectName(app.Name), metav1.GetOptions{})
+	if got := dep.Annotations[appDeployAnnotation]; got != "dep-8" {
+		t.Errorf("deploy annotation after redeploy = %q, want dep-8", got)
+	}
+	if got := dep.Annotations[revisionAnnotation]; got != "1" {
+		t.Errorf("the controller's revision annotation must survive, got %q", got)
+	}
+}
+
+// A converged Deployment that another deploy wrote is not this deploy's success.
+func TestWaitForAppRollout_FailsWhenTheDeploymentNeverRanThisDeploy(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	one := int32(1)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-web", Namespace: testNamespace, Generation: 1, Annotations: carriesDeploy("dep-older")},
+		Spec:       appsv1.DeploymentSpec{Replicas: &one},
+		Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 1, AvailableReplicas: 1, Replicas: 1},
+	}
+	if _, err := c.clientset.AppsV1().Deployments(testNamespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed deployment: %v", err)
+	}
+
+	err := c.WaitForAppRollout(ctx, testNamespace, "app-web", testDeployID, 300*time.Millisecond)
+	if !errors.Is(err, ErrAppRollout) || !strings.Contains(err.Error(), "never") {
+		t.Fatalf("want a failure saying the workload never ran this deploy, got %v", err)
+	}
+}
+
 func TestApplyAppWorkload_RefusesNilWorkload(t *testing.T) {
 	c := newFakeClient()
 	if err := c.ApplyAppWorkload(context.Background(), testNamespace, nil); err == nil {
@@ -119,7 +176,7 @@ func TestWaitForAppRollout_SucceedsWhenConverged(t *testing.T) {
 	name := "app-web"
 	one := int32(1)
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Generation: 1},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Generation: 1, Annotations: carriesDeploy(testDeployID)},
 		Spec:       appsv1.DeploymentSpec{Replicas: &one},
 		Status: appsv1.DeploymentStatus{
 			ObservedGeneration: 1, UpdatedReplicas: 1, AvailableReplicas: 1, Replicas: 1,
@@ -129,7 +186,7 @@ func TestWaitForAppRollout_SucceedsWhenConverged(t *testing.T) {
 		t.Fatalf("seed deployment: %v", err)
 	}
 
-	if err := c.WaitForAppRollout(ctx, testNamespace, name, 5*time.Second); err != nil {
+	if err := c.WaitForAppRollout(ctx, testNamespace, name, testDeployID, 5*time.Second); err != nil {
 		t.Fatalf("expected rollout success, got %v", err)
 	}
 }
@@ -140,7 +197,7 @@ func TestWaitForAppRollout_NotConvergedWhileOldPodsRemain(t *testing.T) {
 	name := "app-web"
 	want := int32(2)
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Generation: 1},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Generation: 1, Annotations: carriesDeploy(testDeployID)},
 		Spec:       appsv1.DeploymentSpec{Replicas: &want},
 		Status: appsv1.DeploymentStatus{
 			ObservedGeneration: 1, UpdatedReplicas: 2, AvailableReplicas: 2, Replicas: 3,
@@ -150,7 +207,7 @@ func TestWaitForAppRollout_NotConvergedWhileOldPodsRemain(t *testing.T) {
 		t.Fatalf("seed deployment: %v", err)
 	}
 
-	err := c.WaitForAppRollout(ctx, testNamespace, name, 300*time.Millisecond)
+	err := c.WaitForAppRollout(ctx, testNamespace, name, testDeployID, 300*time.Millisecond)
 	if err == nil || !errors.Is(err, ErrAppRollout) {
 		t.Fatalf("expected an ErrAppRollout timeout, got %v", err)
 	}
@@ -162,7 +219,7 @@ func TestWaitForAppRollout_TimesOutWhenNeverReady(t *testing.T) {
 	name := "app-web"
 	one := int32(1)
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Generation: 1},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Generation: 1, Annotations: carriesDeploy(testDeployID)},
 		Spec:       appsv1.DeploymentSpec{Replicas: &one},
 		Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 0, AvailableReplicas: 0},
 	}
@@ -170,7 +227,7 @@ func TestWaitForAppRollout_TimesOutWhenNeverReady(t *testing.T) {
 		t.Fatalf("seed deployment: %v", err)
 	}
 
-	err := c.WaitForAppRollout(ctx, testNamespace, name, 300*time.Millisecond)
+	err := c.WaitForAppRollout(ctx, testNamespace, name, testDeployID, 300*time.Millisecond)
 	if err == nil || !errors.Is(err, ErrAppRollout) {
 		t.Fatalf("expected an ErrAppRollout timeout, got %v", err)
 	}
@@ -178,7 +235,7 @@ func TestWaitForAppRollout_TimesOutWhenNeverReady(t *testing.T) {
 
 func seedCurrentReplicaSet(t *testing.T, c *Client, dep *appsv1.Deployment, revision string) types.UID {
 	t.Helper()
-	dep.Annotations = map[string]string{revisionAnnotation: revision}
+	dep.Annotations = map[string]string{revisionAnnotation: revision, appDeployAnnotation: testDeployID}
 	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
 		Name: dep.Name + "-" + revision, Namespace: dep.Namespace, UID: types.UID(dep.Name + "-rs-" + revision),
 		Annotations:     map[string]string{revisionAnnotation: revision},
@@ -201,7 +258,7 @@ func TestWaitForAppRollout_FailsFastOnStuckContainer(t *testing.T) {
 
 func TestWaitForAppRollout_ToleratesEarlyCrashLoops(t *testing.T) {
 	c := seedRollingPod(t, waitingStatus("CrashLoopBackOff", crashLoopRestartLimit-1))
-	err := c.WaitForAppRollout(context.Background(), testNamespace, "app-web", 300*time.Millisecond)
+	err := c.WaitForAppRollout(context.Background(), testNamespace, "app-web", testDeployID, 300*time.Millisecond)
 	if err == nil || strings.Contains(err.Error(), "CrashLoopBackOff") {
 		t.Fatalf("want a timeout while restarts are below the limit, got %v", err)
 	}
@@ -222,7 +279,7 @@ func TestWaitForAppRollout_FailsOnPersistentlyUnschedulablePod(t *testing.T) {
 
 func TestWaitForAppRollout_ToleratesBriefSchedulingDelay(t *testing.T) {
 	c := seedRollingPod(t, unschedulableStatus(time.Now()))
-	err := c.WaitForAppRollout(context.Background(), testNamespace, "app-web", 300*time.Millisecond)
+	err := c.WaitForAppRollout(context.Background(), testNamespace, "app-web", testDeployID, 300*time.Millisecond)
 	if err == nil || strings.Contains(err.Error(), "Unschedulable") {
 		t.Fatalf("want a timeout, not an unschedulable failure, got %v", err)
 	}
@@ -248,7 +305,7 @@ func unschedulableStatus(since time.Time) corev1.PodStatus {
 
 func assertRolloutFails(t *testing.T, c *Client, reason string) error {
 	t.Helper()
-	err := c.WaitForAppRollout(context.Background(), testNamespace, "app-web", 5*time.Second)
+	err := c.WaitForAppRollout(context.Background(), testNamespace, "app-web", testDeployID, 5*time.Second)
 	if !errors.Is(err, ErrAppRollout) {
 		t.Fatalf("expected an ErrAppRollout, got %v", err)
 	}
@@ -360,8 +417,30 @@ func TestWaitForAppRollout_IgnoresOldPodsBeforeTheControllerSeesTheNewSpec(t *te
 		t.Fatalf("seed pod: %v", err)
 	}
 
-	err := c.WaitForAppRollout(ctx, testNamespace, "app-web", 3*time.Second)
+	err := c.WaitForAppRollout(ctx, testNamespace, "app-web", testDeployID, 3*time.Second)
 	if err == nil || strings.Contains(err.Error(), "ErrImagePull") {
 		t.Fatalf("want a timeout, not the previous revision's pull error: %v", err)
+	}
+}
+
+// Available replicas count whichever revision serves them, so a failed
+// redeploy still reports the previous version's ready pods.
+func TestAppAvailableReplicas(t *testing.T) {
+	c := newFakeClient()
+	ctx := context.Background()
+	if got, err := c.AppAvailableReplicas(ctx, testNamespace, "app-web"); err != nil || got != 0 {
+		t.Fatalf("no deployment: got %d, %v; want 0", got, err)
+	}
+	two := int32(2)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-web", Namespace: testNamespace},
+		Spec:       appsv1.DeploymentSpec{Replicas: &two},
+		Status:     appsv1.DeploymentStatus{Replicas: 3, AvailableReplicas: 2, UnavailableReplicas: 1},
+	}
+	if _, err := c.clientset.AppsV1().Deployments(testNamespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed deployment: %v", err)
+	}
+	if got, err := c.AppAvailableReplicas(ctx, testNamespace, "app-web"); err != nil || got != 2 {
+		t.Fatalf("got %d, %v; want 2", got, err)
 	}
 }

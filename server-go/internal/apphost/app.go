@@ -82,20 +82,18 @@ const (
 // re-spelled, and it obeys the same lifecycle-honesty rule: a status is
 // written only after the result it names has been observed.
 //
-// Only two statuses are reachable from this ticket. An app whose record exists
-// but whose workload nothing has deployed holds StatusCreated; an app the
-// tenant asked for zero replicas of holds StatusStopped. Neither means a
-// container is running, so neither serves traffic. The deploy lifecycle that
-// reaches StatusRunning is EXC-386's, and nothing here writes it.
+// A new app holds StatusCreated, or StatusStopped when created with zero
+// replicas. From then on only a finished deploy moves it (StatusAfterDeploy);
+// editing the record changes what the next deploy runs, not what is running.
 const (
-	// StatusCreated — the record exists and no workload has been observed.
+	// StatusCreated — the record exists and no deploy has finished.
 	StatusCreated = domain.StatusProvisioning
-	// StatusStopped — zero replicas were asked for, on purpose.
+	// StatusStopped — a deploy of zero replicas, or a create with zero.
 	StatusStopped = string(domain.StatusPaused)
-	// StatusRunning — a deploy observed the workload answering. Unreachable
-	// until EXC-386; named here so IsNotServable has something to compare to
-	// instead of guessing.
-	StatusRunning = "ACTIVE"
+	// StatusRunning — the latest deploy's rollout converged.
+	StatusRunning = string(domain.StatusActive)
+	// StatusFailed — the latest deploy failed and nothing is serving.
+	StatusFailed = string(domain.StageFailed)
 )
 
 // validStatuses bounds what may be written to the status column, so a typo
@@ -104,11 +102,11 @@ var validStatuses = map[string]bool{
 	StatusCreated: true,
 	StatusStopped: true,
 	StatusRunning: true,
+	StatusFailed:  true,
 }
 
-// StatusFor is the status an app holds given the replica count it was last
-// asked for. It never claims a workload is running: only a deploy that
-// observed one may write StatusRunning.
+// StatusFor is the status a new app holds given the replica count it was
+// created with. It never claims a workload is running.
 func StatusFor(replicas int) string {
 	if replicas == 0 {
 		return StatusStopped
@@ -116,10 +114,22 @@ func StatusFor(replicas int) string {
 	return StatusCreated
 }
 
-// IsNotServable reports whether an app must not receive traffic. Only an app a
-// deploy has observed running is servable; everything else — including both
-// statuses this ticket can reach — refuses. Mirrors domain.IsNotServable for
-// projects: the row existing is exactly why every read has to ask.
+// StatusAfterDeploy is the app status a finished deploy observed: what the
+// deploy ran when it succeeded, and otherwise whether anything, such as the
+// previous version, is still serving.
+func StatusAfterDeploy(succeeded bool, replicas int, stillServing bool) string {
+	switch {
+	case succeeded && replicas == 0:
+		return StatusStopped
+	case succeeded, stillServing:
+		return StatusRunning
+	default:
+		return StatusFailed
+	}
+}
+
+// IsNotServable reports whether an app must not receive traffic: only an app a
+// deploy has observed running is servable.
 func IsNotServable(status string) bool { return status != StatusRunning }
 
 // SecretRef names a secret by its vault path instead of carrying its value.

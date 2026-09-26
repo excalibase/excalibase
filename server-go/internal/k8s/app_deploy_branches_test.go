@@ -103,11 +103,12 @@ func TestApplyAppWorkload_RefusesMissingEgressPolicy(t *testing.T) {
 	}
 }
 
-func TestWaitForAppRollout_PropagatesGetError(t *testing.T) {
+// An absent Deployment is a workload not applied yet, not a read failure.
+func TestWaitForAppRollout_WaitsForAMissingDeployment(t *testing.T) {
 	c := newFakeClient()
-	err := c.WaitForAppRollout(context.Background(), testNamespace, "does-not-exist", 5*time.Second)
-	if err == nil || !strings.Contains(err.Error(), "read app deployment") {
-		t.Fatalf("expected a wrapped read error, got %v", err)
+	err := c.WaitForAppRollout(context.Background(), testNamespace, "does-not-exist", testDeployID, 300*time.Millisecond)
+	if !errors.Is(err, ErrAppRollout) || !strings.Contains(err.Error(), "never") {
+		t.Fatalf("want a failure saying the workload never ran this deploy, got %v", err)
 	}
 }
 
