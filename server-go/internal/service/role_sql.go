@@ -52,12 +52,12 @@ func alterRolePasswordSQL(role, password string) string {
 // superuser at provisioning time. Output:
 //
 //   - auth_admin   — owns the auth schema (used by excalibase-auth)
-//   - excalibase_app — DML on public, read-only on auth, owns the
-//     publication for managing realtime membership. NO REPLICATION.
+//   - excalibase_app — DML on public, read-only on auth. NO REPLICATION.
 //   - cdc_watcher  — REPLICATION attribute, used by the watcher daemon
 //     to consume the logical slot. No DML grants.
-//   - empty publication, owned by excalibase_app so studio / graphql /
-//     NoSQL auto-create can ALTER ADD/DROP TABLE. Name is configurable
+//   - empty publication, owned by the superuser. excalibase_app changes its
+//     membership only through excalibase.set_realtime_table, which publishes
+//     user tables whoever owns them and nothing else. Name is configurable
 //     because the watcher daemon's config is the source of truth — both
 //     ends must agree.
 //
@@ -124,18 +124,51 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- Empty publication. Tables are added on demand:
---   - studio toggle UI (provisioning's /api/projects/{id}/realtime endpoints)
---   - NoSQL auto-create in graphql (when project's realtime_auto_enable=true)
--- Owner is excalibase_app so those code paths can ALTER ADD/DROP TABLE
--- without superuser escalation. The watcher daemon's config is the source
--- of truth for the publication name; both ends must agree.
+-- Empty publication; tables are added on demand from the realtime API. The
+-- watcher daemon's config is the source of truth for its name.
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = %s) THEN
     EXECUTE format('CREATE PUBLICATION %%I', %s);
   END IF;
 END $$;
-ALTER PUBLICATION %s OWNER TO %s;
+ALTER PUBLICATION %s OWNER TO CURRENT_USER;
+
+-- ALTER PUBLICATION ADD TABLE needs ownership of the publication and of the
+-- table, and user tables belong to the project owner role. Rather than let
+-- excalibase_app act as that owner, this function does the one thing needed:
+-- toggle a user table in this publication. Platform and system schemas stay out.
+CREATE OR REPLACE FUNCTION excalibase.set_realtime_table(target_schema text, target_table text, publish boolean)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+  target_publication CONSTANT text := %s;
+  target_relation oid;
+  is_member boolean;
+BEGIN
+  SELECT c.oid INTO target_relation
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = target_schema AND c.relname = target_table AND c.relkind = 'r'
+    AND %s;
+  IF target_relation IS NULL THEN
+    RAISE EXCEPTION 'table %%.%% cannot be published', target_schema, target_table
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  SELECT EXISTS (
+    SELECT 1 FROM pg_publication_rel r JOIN pg_publication p ON p.oid = r.prpubid
+    WHERE p.pubname = target_publication AND r.prrelid = target_relation
+  ) INTO is_member;
+  IF publish AND NOT is_member THEN
+    EXECUTE format('ALTER PUBLICATION %%I ADD TABLE %%I.%%I', target_publication, target_schema, target_table);
+  ELSIF NOT publish AND is_member THEN
+    EXECUTE format('ALTER PUBLICATION %%I DROP TABLE %%I.%%I', target_publication, target_schema, target_table);
+  END IF;
+END
+$fn$;
+REVOKE ALL ON FUNCTION excalibase.set_realtime_table(text, text, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION excalibase.set_realtime_table(text, text, boolean) TO %s;
 `,
 		authRole, safeAuthPass, // auth_admin DO block
 		dbIdent, authRole, // GRANT CREATE ON DATABASE
@@ -146,6 +179,8 @@ ALTER PUBLICATION %s OWNER TO %s;
 		appRole, appRole, appRole, // GRANT reserved excalibase schema
 		watcherRole, safeWatcherPass, // cdc_watcher DO block
 		pubName, pubName, // pubname check + CREATE PUBLICATION
-		pubIdent, appRole, // ALTER PUBLICATION ... OWNER TO
+		pubIdent,                             // ALTER PUBLICATION ... OWNER TO
+		pubName, realtimeUserSchemaPredicate, // set_realtime_table body
+		appRole, // GRANT EXECUTE
 	)
 }

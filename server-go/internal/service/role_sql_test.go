@@ -60,20 +60,31 @@ func TestBuildProjectRoleSQL_HonoursCustomPublicationName(t *testing.T) {
 	if !strings.Contains(sql, "format('CREATE PUBLICATION %I', "+name+")") {
 		t.Error("expected CREATE PUBLICATION of custom_pub_name")
 	}
-	if !strings.Contains(sql, `ALTER PUBLICATION "custom_pub_name" OWNER TO "excalibase_app"`) {
-		t.Error("expected ALTER PUBLICATION \"custom_pub_name\" OWNER TO \"excalibase_app\"")
+	if !strings.Contains(sql, "target_publication CONSTANT text := "+name) {
+		t.Error("expected the realtime function to be bound to custom_pub_name")
 	}
 }
 
-// TestBuildProjectRoleSQL_PublicationOwnedByExcalibaseApp asserts the
-// publication ownership transfers to excalibase_app so studio + graphql
-// (which connect as excalibase_app) can ALTER PUBLICATION ADD/DROP TABLE
-// without superuser escalation.
-func TestBuildProjectRoleSQL_PublicationOwnedByExcalibaseApp(t *testing.T) {
+// TestBuildProjectRoleSQL_PublicationChangesOnlyThroughTheRealtimeFunction
+// asserts excalibase_app changes membership through the function only: ALTER
+// PUBLICATION ADD TABLE needs ownership of the table, which excalibase_app
+// does not have for tables the project owner role created.
+func TestBuildProjectRoleSQL_PublicationChangesOnlyThroughTheRealtimeFunction(t *testing.T) {
 	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
 
-	if !strings.Contains(sql, `ALTER PUBLICATION "cdc_watcher_pub" OWNER TO "excalibase_app"`) {
-		t.Errorf("expected publication ownership transfer to excalibase_app; sql:\n%s", sql)
+	if strings.Contains(sql, `OWNER TO "excalibase_app"`) {
+		t.Errorf("excalibase_app must not own the publication; sql:\n%s", sql)
+	}
+	for _, want := range []string{
+		`ALTER PUBLICATION "cdc_watcher_pub" OWNER TO CURRENT_USER`,
+		"SECURITY DEFINER",
+		"SET search_path = pg_catalog, pg_temp",
+		"REVOKE ALL ON FUNCTION excalibase.set_realtime_table(text, text, boolean) FROM PUBLIC",
+		`GRANT EXECUTE ON FUNCTION excalibase.set_realtime_table(text, text, boolean) TO "excalibase_app"`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("expected %q; sql:\n%s", want, sql)
+		}
 	}
 }
 

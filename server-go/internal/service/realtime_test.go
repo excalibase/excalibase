@@ -5,67 +5,32 @@ package service
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"testing"
-	"time"
-
-	_ "github.com/lib/pq"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// realtimeTestDB spins up a Postgres container, applies the role-creation
-// SQL, and returns a *sql.DB plus cleanup. Tests run as the postgres
-// superuser because that mirrors how the studio backend connects when
-// performing privileged ops; in production it'd be excalibase_app instead,
-// but the service layer is role-agnostic — it just runs ALTER PUBLICATION.
+// realtimeTestDB provisions a database the way production does: the project
+// owner role (CNPG's `app`) owns the database and the user tables, provisioning
+// runs the role SQL as the superuser, and the service connects as
+// excalibase_app, the role the realtime API dials with.
 func realtimeTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	ctx := context.Background()
-
-	pg, err := postgres.Run(ctx, "postgres:16-alpine",
-		postgres.WithDatabase("app"),
-		postgres.WithUsername("postgres"),
-		postgres.WithPassword("p"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(45*time.Second),
-		),
-	)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { pg.Terminate(ctx) })
-
-	host, _ := pg.Host(ctx)
-	port, _ := pg.MappedPort(ctx, "5432/tcp")
-	dsn := fmt.Sprintf("postgres://postgres:p@%s:%s/app?sslmode=disable", host, port.Port())
-
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	// Apply the same role + publication setup that production provisioning runs.
-	if _, err := db.ExecContext(ctx, BuildProjectRoleSQL("aP", "eP", "wP", "app", "cdc_watcher_pub")); err != nil {
-		t.Fatalf("apply role SQL: %v", err)
-	}
-	// Seed user-data tables in public + nosql schemas to mimic post-provision state.
-	seedSQL := `
-CREATE SCHEMA IF NOT EXISTS nosql;
-CREATE TABLE IF NOT EXISTS public.posts    (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT);
-CREATE TABLE IF NOT EXISTS public.comments (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), body  TEXT);
-CREATE TABLE IF NOT EXISTS nosql.notes     (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), data  JSONB);
-ALTER TABLE public.posts    OWNER TO excalibase_app;
-ALTER TABLE public.comments OWNER TO excalibase_app;
-ALTER TABLE nosql.notes     OWNER TO excalibase_app;
-`
-	if _, err := db.ExecContext(ctx, seedSQL); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	return db
+	pg := startRolePostgres(t)
+	pg.psql(t, "CREATE ROLE app LOGIN PASSWORD 'oP'; ALTER DATABASE app OWNER TO app")
+	pg.psql(t, BuildProjectRoleSQL("aP", "eP", "wP", "app", "cdc_watcher_pub"))
+	pg.psql(t, `
+SET ROLE app;
+CREATE TABLE public.posts    (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT);
+CREATE TABLE public.comments (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), body  TEXT);
+RESET ROLE;
+CREATE SCHEMA nosql AUTHORIZATION excalibase_app;
+SET ROLE excalibase_app;
+CREATE TABLE nosql.notes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), data JSONB);
+CREATE TABLE excalibase.jobs (id int PRIMARY KEY);
+RESET ROLE;
+SET ROLE auth_admin;
+CREATE TABLE auth.users (id int PRIMARY KEY, password_hash text);
+`)
+	return pg.connect(t, "excalibase_app", "eP")
 }
 
 // TestRealtimeService_ListTables_AllDisabledInitially asserts the bulk-page
@@ -207,6 +172,51 @@ func TestRealtimeService_ListTables_ExcludesSystemSchemas(t *testing.T) {
 		}
 		if len(tt.Schema) >= 3 && tt.Schema[:3] == "pg_" {
 			t.Errorf("pg_ system schema %s.%s leaked into Realtime listing", tt.Schema, tt.Table)
+		}
+	}
+}
+
+func TestRealtimeService_ListTables_ExcludesPlatformSchemas(t *testing.T) {
+	db := realtimeTestDB(t)
+	tables, err := NewRealtimeService(db).ListTables(context.Background())
+	if err != nil {
+		t.Fatalf("ListTables: %v", err)
+	}
+	for _, tt := range tables {
+		if tt.Schema == "excalibase" {
+			t.Errorf("platform table %s.%s offered for Realtime", tt.Schema, tt.Table)
+		}
+	}
+}
+
+func TestRealtimeService_EnableTable_RefusesPlatformAndAuthTables(t *testing.T) {
+	db := realtimeTestDB(t)
+	svc := NewRealtimeService(db)
+	ctx := context.Background()
+
+	for _, ref := range [][2]string{{"auth", "users"}, {"excalibase", "jobs"}, {"public", "missing"}, {"pg_catalog", "pg_authid"}} {
+		if err := svc.EnableTable(ctx, ref[0], ref[1]); err == nil {
+			t.Errorf("%s.%s must not be publishable", ref[0], ref[1])
+		}
+	}
+	var published int
+	if err := db.QueryRow(`SELECT count(*) FROM pg_publication_tables WHERE pubname = 'cdc_watcher_pub'`).Scan(&published); err != nil {
+		t.Fatalf("count published: %v", err)
+	}
+	if published != 0 {
+		t.Errorf("published %d tables, want 0", published)
+	}
+}
+
+func TestRealtimeService_AppRoleCannotAlterThePublicationDirectly(t *testing.T) {
+	db := realtimeTestDB(t)
+	for _, stmt := range []string{
+		`ALTER PUBLICATION cdc_watcher_pub ADD TABLE nosql.notes`,
+		`ALTER PUBLICATION cdc_watcher_pub RENAME TO other_pub`,
+		`DROP PUBLICATION cdc_watcher_pub`,
+	} {
+		if _, err := db.Exec(stmt); err == nil {
+			t.Errorf("excalibase_app ran %q; only the realtime functions may change the publication", stmt)
 		}
 	}
 }
