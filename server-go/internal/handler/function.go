@@ -1057,10 +1057,14 @@ func (h *FunctionHandler) validateProjectJWT(tokenStr, expectedProjectID string)
 const (
 	errCodeAudMismatch        = "aud_mismatch"
 	errCodeRefreshNotAccepted = "refresh_token_not_accepted"
+	errCodeNotAccessToken     = "not_an_access_token"
 	// tokenUseRefresh is the token_use value the auth service stamps on
 	// refresh credentials. They are exchanged at the auth service's token
 	// endpoint, never presented to a project API.
 	tokenUseRefresh = "refresh"
+	// tokenUseAccess marks an access credential; a missing token_use is an
+	// access token minted before the claim existed.
+	tokenUseAccess = "access"
 )
 
 // codedJWTError carries a stable error code alongside a human-readable reason.
@@ -1078,10 +1082,14 @@ func (e *codedJWTError) Code() string { return e.code }
 // checkTokenUse refuses refresh credentials on API calls. A missing token_use
 // claim is accepted — legacy access tokens predate the claim.
 func (h *FunctionHandler) checkTokenUse(claims jwt.MapClaims) error {
-	if use, _ := claims["token_use"].(string); use == tokenUseRefresh {
+	use, present := claims["token_use"]
+	if !present || use == tokenUseAccess {
+		return nil
+	}
+	if use == tokenUseRefresh {
 		return &codedJWTError{code: errCodeRefreshNotAccepted, reason: "refresh credentials are not API access tokens"}
 	}
-	return nil
+	return &codedJWTError{code: errCodeNotAccessToken, reason: "only access tokens invoke functions"}
 }
 
 // checkAudience enforces that the token was minted for THIS project: its aud

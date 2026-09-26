@@ -28,6 +28,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
+	"github.com/excalibase/provisioning-poc/internal/sdkkeys"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
@@ -619,6 +620,7 @@ func functionCronLock(cfg config.AppConfig, sqlStore storage.PlatformStore) stor
 // Centralising the bag keeps buildRouter focused on routing rather than wiring.
 type handlerDeps struct {
 	provHandler        *handler.ProvisioningHandler
+	sdkKeysHandler     *handler.SDKKeysHandler
 	metricsHandler     *handler.MetricsHandler
 	backupHandler      *handler.BackupHandler
 	perfHandler        *handler.PerformanceHandler
@@ -1191,6 +1193,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	withRegistryCredentials(appDeploySvc, registryCreds)
 	return &handlerDeps{
 		provHandler:        provHandler,
+		sdkKeysHandler:     handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
 		metricsHandler:     handler.NewMetricsHandler(metricsSvc),
 		backupHandler:      handler.NewBackupHandler(backupSvc),
 		perfHandler:        handler.NewPerformanceHandler(perfSvc),
@@ -1513,6 +1516,17 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 	})
 }
 
+// buildSDKKeyManager reaches excalibase-auth with a key-admin token signed by
+// the platform key in vault. Without an auth URL or a vault the SDK key
+// routes answer 503.
+func buildSDKKeyManager(cfg config.AppConfig, vc vaultclient.VaultClient) handler.SDKKeyManager {
+	if cfg.AuthInternalURL == "" || vc == nil {
+		log.Println("WARN: AUTH_INTERNAL_URL or vault not set — SDK key management is unavailable")
+		return nil
+	}
+	return sdkkeys.NewClient(cfg.AuthInternalURL, sdkkeys.NewSigner(vc), &http.Client{Timeout: 15 * time.Second})
+}
+
 // mountProjectScopedRoutes mounts every /api/projects/{projectId}/* subtree.
 func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) {
@@ -1597,6 +1611,16 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	// Browser-origin allowlist (EXC-23): it decides which web apps may call
 	// the project's data plane, so reads and writes carry the same Developer+
 	// gate as the other data-plane authoring surfaces.
+	// SDK api keys (EXC-10): any member sees prefixes; generating and
+	// revoking are Developer+. The browser never holds the credential auth
+	// is called with.
+	r.Route("/api/projects/{projectId}/sdk-keys", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
+		d.sdkKeysHandler.Routes(r)
+	})
 	r.Route("/api/projects/{projectId}/cors", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)

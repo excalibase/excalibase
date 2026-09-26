@@ -49,6 +49,7 @@ const PlatformAdminPage = lazy(() => import('./pages/PlatformAdminPage').then(m 
 const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ default: m.ContainersPage })));
 const ContainerFormPage = lazy(() => import('./pages/ContainerFormPage').then(m => ({ default: m.ContainerFormPage })));
 const ContainerDetailPage = lazy(() => import('./pages/ContainerDetailPage').then(m => ({ default: m.ContainerDetailPage })));
+const SdkKeysPage = lazy(() => import('./pages/SdkKeysPage').then(m => ({ default: m.SdkKeysPage })));
 const StoragePage = lazy(() => import('./pages/StoragePage').then(m => ({ default: m.StoragePage })));
 
 function PageLoader() {
@@ -117,6 +118,7 @@ export default function App() {
             <Route path="edge-functions" element={<EdgeFunctionsPage />} />
             {/* Storage */}
             <Route path="storage" element={<StoragePage />} />
+            <Route path="api-keys" element={<SdkKeysPage />} />
             {/* API */}
             <Route path="api" element={<ApiInfoPage />} />
             {/* Realtime */}

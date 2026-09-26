@@ -48,6 +48,7 @@ type AppConfig struct {
 	DeploymentMode    string // "selfhosted" (default) or "cloud"
 	PublicBaseURL     string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
 	StudioURL         string // Studio origin that emailed verification and reset links open
+	AuthInternalURL   string // excalibase-auth inside the platform network; SDK key management calls it
 	RegistrationMode  string // "open" (default) or "invite" — invite closes open studio signup
 
 	// ExposureEnforced is the installation-wide kill switch for the table
@@ -335,6 +336,7 @@ func Load() AppConfig {
 		DeploymentMode:              deploymentMode,
 		PublicBaseURL:               envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
 		StudioURL:                   strings.TrimRight(strings.TrimSpace(os.Getenv("STUDIO_URL")), "/"),
+		AuthInternalURL:             strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_INTERNAL_URL")), "/"),
 		KubeconfigPath:              envOr("KUBECONFIG_PATH", ""),
 		KubeAPIURL:                  envOr("KUBE_API_URL", ""),
 		KubeBearerToken:             envOr("KUBE_BEARER_TOKEN", ""),

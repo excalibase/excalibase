@@ -87,6 +87,7 @@ export const PROJECT_NAV: NavSection[] = [
   // { key: 'api', label: 'API', icon: Globe, to: 'api' },
   // { key: 'realtime', label: 'Realtime', icon: Radio, to: 'realtime' },
   { key: 'storage', label: 'Storage', icon: FolderOpen, to: 'storage' },
+  { key: 'api-keys', label: 'API Keys', icon: KeyRound, to: 'api-keys' },
   {
     key: 'monitoring',
     label: 'Monitoring',
