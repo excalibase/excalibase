@@ -114,6 +114,9 @@ type MockClient struct {
 	AppPodsGoneErr error
 	AppDeleteErr   error
 	AppPruneErr    error
+	// PullSecretsDeleted records "namespace/registry" per DeleteRegistryPullSecrets call.
+	PullSecretsDeleted   []string
+	PullSecretsDeleteErr error
 
 	RuntimeClasses    map[string]bool
 	RuntimeClassError error
@@ -673,6 +676,17 @@ func (m *MockClient) PruneAppWorkload(ctx context.Context, namespace, appID, kee
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "PruneAppWorkload:"+namespace+"/"+appID+"!="+keepName)
 	return m.AppPruneErr
+}
+
+func (m *MockClient) DeleteRegistryPullSecrets(ctx context.Context, namespace, registry string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "DeleteRegistryPullSecrets:"+namespace+"/"+registry)
+	if m.PullSecretsDeleteErr != nil {
+		return m.PullSecretsDeleteErr
+	}
+	m.PullSecretsDeleted = append(m.PullSecretsDeleted, namespace+"/"+registry)
+	return nil
 }
 
 func (m *MockClient) RuntimeClassExists(ctx context.Context, name string) (bool, error) {

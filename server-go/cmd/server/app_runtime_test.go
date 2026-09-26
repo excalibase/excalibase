@@ -8,6 +8,9 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
 func hostingConfig(enabled bool) config.AppConfig {
@@ -68,5 +71,22 @@ func TestAppRouteCarriesTheRouteConfig(t *testing.T) {
 	}
 	if url, err := route.Public().URL("web", "proj-abc"); err != nil || url != "https://web-abc.apps.example.com" {
 		t.Errorf("public URL = %q, %v", url, err)
+	}
+}
+
+func TestRegistryCredentialWiring(t *testing.T) {
+	if registryCredentials(nil, fakestore.NewInstances(), k8s.NewMockClient()) != nil {
+		t.Fatal("no vault, no credential store")
+	}
+	if newRegistryCredentialHandler(nil) == nil {
+		t.Fatal("the handler must exist to answer 503")
+	}
+	creds := registryCredentials(vaultclient.NewHTTPClient("http://vault.invalid", "pat"), fakestore.NewInstances(), k8s.NewMockClient())
+	if creds == nil || newRegistryCredentialHandler(creds) == nil {
+		t.Fatal("a vault gives a credential store")
+	}
+	deploys := service.NewAppDeployService(nil, nil, k8s.NewMockClient(), fakestore.NewInstances(), nil, k8s.AppRenderOptions{})
+	if withRegistryCredentials(deploys, nil) != deploys || withRegistryCredentials(deploys, creds) != deploys {
+		t.Fatal("the deploy service is returned as given")
 	}
 }

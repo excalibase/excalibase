@@ -126,3 +126,20 @@ func TestAppHostingEnabled_SecretRouteIsMounted(t *testing.T) {
 		t.Fatalf("hosting enabled: got 404, the secret route must be mounted")
 	}
 }
+
+func TestRegistryCredentialRoutes_FollowTheHostingGate(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		router := appHostingRouter(t, enabled)
+		for _, req := range []*http.Request{
+			httptest.NewRequest(http.MethodGet, "/api/projects/"+matrixProjectA+"/registry-credentials/", nil),
+			httptest.NewRequest(http.MethodPut, "/api/projects/"+matrixProjectA+"/registry-credentials/ghcr.io", nil),
+			httptest.NewRequest(http.MethodDelete, "/api/projects/"+matrixProjectA+"/registry-credentials/ghcr.io", nil),
+		} {
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if (w.Code == http.StatusNotFound) == enabled {
+				t.Errorf("hosting %v: %s %s answered %d", enabled, req.Method, req.URL.Path, w.Code)
+			}
+		}
+	}
+}

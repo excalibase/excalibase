@@ -106,3 +106,14 @@ func TestMockClient_AppLifecycle(t *testing.T) {
 		}
 	}
 }
+
+func TestMockClient_DeleteRegistryPullSecrets(t *testing.T) {
+	m := NewMockClient()
+	if err := m.DeleteRegistryPullSecrets(context.Background(), "ns1", "ghcr.io"); err != nil || len(m.PullSecretsDeleted) != 1 {
+		t.Fatalf("delete: %v %v", err, m.PullSecretsDeleted)
+	}
+	m.PullSecretsDeleteErr = errors.New("boom")
+	if err := m.DeleteRegistryPullSecrets(context.Background(), "ns1", "ghcr.io"); err == nil {
+		t.Fatal("want the scripted error")
+	}
+}

@@ -16,4 +16,8 @@ var appRows = []Row{
 	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys/{deployId}/redeploy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "rolls an earlier deploy's frozen config out again as a new deploy; never edits the app"},
 	{Methods: put, Pattern: "/api/projects/{projectId}/apps/{appId}/secrets/{name}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "write-only: stores a secret variable's value in the project vault and points the variable at it; no route returns the value"},
+
+	{Methods: get, Pattern: "/api/projects/{projectId}/registry-credentials/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "names the registries that have a credential; never a username or a password"},
+	{Methods: put, Pattern: "/api/projects/{projectId}/registry-credentials/{registry}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "write-only: stores the credential in the project vault; no route returns it"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/registry-credentials/{registry}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "also deletes the pull secrets rendered from it"},
 }

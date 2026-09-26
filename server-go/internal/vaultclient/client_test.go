@@ -2,6 +2,7 @@ package vaultclient
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -84,8 +85,8 @@ func TestHTTPClient_GetNotFound(t *testing.T) {
 	c := NewHTTPClient(ts.URL, testPAT)
 
 	_, err := c.Get("nonexistent/path")
-	if err == nil {
-		t.Error("expected error for nonexistent secret")
+	if !errors.Is(err, vault.ErrNotFound) {
+		t.Errorf("err = %v, want vault.ErrNotFound so a caller can tell absence from failure", err)
 	}
 }
 
