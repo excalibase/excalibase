@@ -143,9 +143,11 @@ curl -X POST http://localhost:24005/api/provision \
     "orgId": "exca",
     "databaseType": "POSTGRESQL",
     "backup": {"enabled": true, "schedule": "0 2 * * *", "retention": 30},
-    "parameters": {"shared_preload_libraries": "pg_stat_statements"}
+    "parameters": {"work_mem": "16MB"}
   }'
 ```
+
+`parameters` accepts only tenant-tunable settings, each bounded by the tier: `work_mem`, `maintenance_work_mem`, `effective_cache_size`, `random_page_cost`, `seq_page_cost`, `effective_io_concurrency`, `default_statistics_target`, `jit`, `default_transaction_isolation`, `lock_timeout`, `deadlock_timeout`. Anything else (timeouts, `max_connections`, `shared_preload_libraries`, logging, TLS) is set by the platform and refused with 400.
 
 ## API Reference
 

@@ -103,11 +103,8 @@ func TestAProjectWithoutDocumentDBGetsNoneOfItsConfiguration(t *testing.T) {
 	}
 }
 
-// Tenant parameters are merged into the cluster, so a tenant could otherwise
-// replace shared_preload_libraries with a list of their own and leave the
-// extension unable to load on the next restart — a project reported as
-// DocumentDB that silently is not. DocumentDB's libraries survive, and the
-// tenant's own additions survive alongside them.
+// A tenant's preload list never replaces DocumentDB's, which would leave the
+// extension unable to load on the next restart.
 func TestATenantParameterCannotDropDocumentDBsLibraries(t *testing.T) {
 	postgresql := postgresqlSection(t, PostgreSQLClusterOpts{
 		ProjectID:    "proj-doc000003",
@@ -124,8 +121,8 @@ func TestATenantParameterCannotDropDocumentDBsLibraries(t *testing.T) {
 			t.Errorf("a tenant parameter dropped %q: got %v", want, libraries)
 		}
 	}
-	if !listHas(libraries, "pg_stat_statements") {
-		t.Errorf("the tenant's own library was dropped: got %v", libraries)
+	if listHas(libraries, "pg_stat_statements") {
+		t.Errorf("a tenant chose a preloaded library: got %v", libraries)
 	}
 }
 

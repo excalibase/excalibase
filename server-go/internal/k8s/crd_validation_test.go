@@ -12,14 +12,11 @@ import (
 // that matches what CNPG operator expects. This catches field name typos and schema issues.
 func TestCRDProducesValidYAML(t *testing.T) {
 	obj := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
-		ProjectID: "test-db",
-		Namespace: "org-test-db",
-		Tier:      config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2"},
-		Backup:    &BackupOpts{Schedule: "0 0 2 * * *", RetentionDays: 30},
-		Parameters: map[string]string{
-			"shared_preload_libraries": "pg_stat_statements",
-			"pg_stat_statements.max":   "10000",
-		},
+		ProjectID:      "test-db",
+		Namespace:      "org-test-db",
+		Tier:           config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2"},
+		Backup:         &BackupOpts{Schedule: "0 0 2 * * *", RetentionDays: 30},
+		Parameters:     map[string]string{"work_mem": "16MB"},
 		Tags:           map[string]string{"owner": "duke"},
 		ImageName:      "excalibase/postgresql:17@sha256:abc123",
 		DatabaseName:   "mydb",
@@ -52,9 +49,7 @@ func TestCRDProducesValidYAML(t *testing.T) {
 		"storageClass: standard",
 		"memory: 4Gi",
 		"enablePodMonitor: false",
-		"shared_preload_libraries:",
-		"- pg_stat_statements",
-		"pg_stat_statements.max:",
+		"work_mem: 16MB",
 		"max_connections:",
 		"barmanObjectName: test-db-backups",
 		"isWALArchiver: true",
@@ -67,35 +62,6 @@ func TestCRDProducesValidYAML(t *testing.T) {
 		if !containsString(yamlStr, field) {
 			t.Errorf("YAML missing required field: %s\n\nFull YAML:\n%s", field, yamlStr)
 		}
-	}
-}
-
-// TestCRDSharedPreloadLibrariesNotInParameters ensures shared_preload_libraries
-// is NOT inside spec.postgresql.parameters (CNPG rejects this).
-func TestCRDSharedPreloadLibrariesNotInParameters(t *testing.T) {
-	obj := BuildPostgreSQLCluster(PostgreSQLClusterOpts{
-		ProjectID:  "test",
-		Namespace:  "ns",
-		Tier:       config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"},
-		Parameters: map[string]string{"shared_preload_libraries": "pg_stat_statements,pgaudit"},
-	})
-
-	spec := obj.Object["spec"].(map[string]interface{})
-	pg := spec["postgresql"].(map[string]interface{})
-	params := pg["parameters"].(map[string]interface{})
-
-	// shared_preload_libraries must NOT be in parameters
-	if _, exists := params["shared_preload_libraries"]; exists {
-		t.Error("shared_preload_libraries should NOT be in spec.postgresql.parameters — CNPG rejects it there")
-	}
-
-	// It should be in the dedicated array field
-	libs := pg["shared_preload_libraries"].([]interface{})
-	if len(libs) != 2 {
-		t.Errorf("expected 2 libraries, got %d: %v", len(libs), libs)
-	}
-	if libs[0] != "pg_stat_statements" || libs[1] != "pgaudit" {
-		t.Errorf("libraries: got %v", libs)
 	}
 }
 

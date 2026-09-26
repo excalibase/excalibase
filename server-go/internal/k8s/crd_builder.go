@@ -2,8 +2,7 @@ package k8s
 
 import (
 	"errors"
-	"slices"
-	"strings"
+	"maps"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -328,28 +327,26 @@ func addServerAltDNSNames(spec map[string]interface{}, names []string) {
 	spec["certificates"] = map[string]interface{}{"serverAltDNSNames": altNames}
 }
 
-// buildPostgresql builds the postgresql config section. The tier's query
-// guard is overridable via opts.Parameters.
+// buildPostgresql builds the postgresql config section. Only tenant-tunable
+// parameters are taken from opts.Parameters, and the platform's own settings
+// are written after them so they always win.
 func buildPostgresql(opts PostgreSQLClusterOpts) map[string]interface{} {
-	params := tierQueryGuard(opts.Tier)
-	params["max_connections"] = "100"
-	var sharedPreloadLibs []interface{}
+	params := map[string]interface{}{}
 	for k, v := range opts.Parameters {
-		if k == "shared_preload_libraries" {
-			for _, lib := range strings.Split(v, ",") {
-				sharedPreloadLibs = append(sharedPreloadLibs, strings.TrimSpace(lib))
-			}
-		} else {
+		if config.TenantTunableParameter(k) {
 			params[k] = v
 		}
 	}
+	params["max_connections"] = "100"
+	maps.Copy(params, tierQueryGuard(opts.Tier))
+	var sharedPreloadLibs []interface{}
 	// DocumentDB's configuration is applied after the tenant's, and wins.
 	// Both settings are load-bearing: without the libraries the extension
 	// does not load, and with pg_cron pointed elsewhere its DDL path cannot
 	// run — either way the project would be recorded as DocumentDB while
 	// not actually being one.
 	if opts.DocumentDB {
-		sharedPreloadLibs = withDocumentDBLibraries(sharedPreloadLibs)
+		sharedPreloadLibs = documentDBLibraries()
 		params[config.DocumentDBCronDatabaseSetting] = config.DocumentDBDatabase
 		params["cron.host"] = cnpgSocketDirectory
 		params[documentDBLocalhostSetting] = "host=" + cnpgSocketDirectory
@@ -422,25 +419,13 @@ func buildDocumentDBPlugins(opts PostgreSQLClusterOpts) []interface{} {
 	}
 }
 
-// withDocumentDBLibraries returns the cluster's preload list with DocumentDB's
-// own libraries present. The tenant's entries are kept — a project may well
-// want pg_stat_statements alongside DocumentDB — and an entry DocumentDB
-// already requires is not repeated, because Postgres reads the list as a set
-// and a duplicate only makes the parameter harder to read.
-func withDocumentDBLibraries(tenant []interface{}) []interface{} {
+// documentDBLibraries is DocumentDB's preload list, in the shape the
+// cluster's shared_preload_libraries takes.
+func documentDBLibraries() []interface{} {
 	required := config.DocumentDBPreloadLibraries()
-	libraries := make([]interface{}, 0, len(required)+len(tenant))
+	libraries := make([]interface{}, 0, len(required))
 	for _, library := range required {
 		libraries = append(libraries, library)
-	}
-	for _, entry := range tenant {
-		name, ok := entry.(string)
-		if !ok {
-			continue
-		}
-		if !slices.Contains(required, name) {
-			libraries = append(libraries, name)
-		}
 	}
 	return libraries
 }

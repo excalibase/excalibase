@@ -10,7 +10,6 @@ import (
 
 const (
 	testCronSchedule = "0 0 2 * * *"
-	testPGStatParam  = "pg_stat_statements.max"
 )
 
 func TestBuildPostgreSQLClusterFree(t *testing.T) {
@@ -44,9 +43,8 @@ func TestBuildPostgreSQLClusterStandard(t *testing.T) {
 		Tier:      config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2"},
 		Backup:    &BackupOpts{Schedule: testCronSchedule, RetentionDays: 30},
 		Parameters: map[string]string{
-			"shared_preload_libraries": "pg_stat_statements",
-			testPGStatParam:            "10000",
-			"pg_stat_statements.track": "all",
+			"work_mem":         "16MB",
+			"random_page_cost": "1.1",
 		},
 		Tags: map[string]string{"owner": "duke", "env": "demo"},
 	})
@@ -70,17 +68,10 @@ func TestBuildPostgreSQLClusterStandard(t *testing.T) {
 		t.Fatal("backups should archive through the Barman Cloud plugin")
 	}
 
-	// shared_preload_libraries in postgresql section
 	pg := spec["postgresql"].(map[string]interface{})
-	libs := pg["shared_preload_libraries"].([]interface{})
-	if len(libs) != 1 || libs[0] != "pg_stat_statements" {
-		t.Errorf("shared_preload_libraries: got %v", libs)
-	}
-
-	// Custom params should be in parameters (not shared_preload_libraries)
 	params := pg["parameters"].(map[string]interface{})
-	if params[testPGStatParam] != "10000" {
-		t.Errorf("pg_stat_statements.max: got %v", params[testPGStatParam])
+	if params["work_mem"] != "16MB" || params["random_page_cost"] != "1.1" {
+		t.Errorf("tenant parameters: got %v", params)
 	}
 
 	// Tags as labels
