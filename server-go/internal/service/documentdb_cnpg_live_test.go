@@ -190,7 +190,7 @@ func (lab *documentDBLab) installOperators(t *testing.T) {
 func (lab *documentDBLab) provision(t *testing.T) *provisioner.ProvisioningResult {
 	t.Helper()
 	req := domain.ProvisioningRequest{
-		ProjectName: documentDBLiveName, OrgID: documentDBLiveOrg, DBType: domain.PostgreSQL, Tier: domain.Free,
+		ProjectName: documentDBLiveName, OrgID: documentDBLiveOrg, DBType: domain.PostgreSQL,
 		PostgresVersion: "17", DatabaseName: "appdb", MasterUsername: documentDBLiveOwner, DocumentDB: true,
 	}
 	tier := config.TierConfig{Instances: 1, StorageSize: "1Gi", Memory: "1Gi", CPU: "0.5"}
