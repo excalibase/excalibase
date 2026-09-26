@@ -140,8 +140,8 @@ func TestInstanceSaveAndFind(t *testing.T) {
 	if got.Host != "host.local" {
 		t.Errorf("host: got %s", got.Host)
 	}
-	if got.Password != testutil.FixturePassword("pg-inst") {
-		t.Errorf("password: got %s", got.Password)
+	if got.Password != "" {
+		t.Error("the owner password must not be stored")
 	}
 	if got.Status != "ACTIVE" {
 		t.Errorf("status: got %s", got.Status)

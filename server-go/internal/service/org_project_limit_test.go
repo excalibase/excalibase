@@ -272,6 +272,7 @@ func TestRegisterProject_TakesTheOrgSlot(t *testing.T) {
 	}
 	svc := NewProvisioningService(store, provisioner.NewFactory(), nil)
 	svc.SetOrgStore(testOrgs())
+	svc.SetVault(newFakeVault())
 
 	err = svc.RegisterProject(context.Background(), &domain.DatabaseInstance{
 		ProjectID: "proj-restored1", OrgID: "org1", Tier: domain.Enterprise,

@@ -418,6 +418,11 @@ func (h *ProvisioningHandler) GetCredentials(w http.ResponseWriter, r *http.Requ
 		httpError(w, safeError(err), http.StatusConflict)
 		return
 	}
+	if errors.Is(err, service.ErrOwnerCredentialUnavailable) {
+		log.Printf("credentials for %s: %v", projectID, err)
+		httpError(w, service.ErrOwnerCredentialUnavailable.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		httpError(w, safeError(err), http.StatusNotFound)
 		return

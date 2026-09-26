@@ -60,7 +60,6 @@ export interface DatabaseInstance {
   port: number;
   databaseName: string;
   username: string;
-  password: string;
   status: string;
   currentStage: ProvisioningStage;
   currentStep?: string;

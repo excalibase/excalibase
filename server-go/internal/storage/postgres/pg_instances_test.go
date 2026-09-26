@@ -44,7 +44,7 @@ func TestInstances_CreateRejectsAnExistingProjectID(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("victim row: %v", err)
 	}
-	if got.OrgID != "org-victim" || got.Host != victim.Host || got.Password != victim.Password {
+	if got.OrgID != "org-victim" || got.Host != victim.Host {
 		t.Errorf("victim row was rewritten: org=%q host=%q", got.OrgID, got.Host)
 	}
 }

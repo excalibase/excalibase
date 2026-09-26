@@ -55,7 +55,9 @@ type DatabaseInstance struct {
 
 	// Credentials
 	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
+	// Password is the owner credential while a project is being created or
+	// restored. It is kept only in the vault, never stored or serialised.
+	Password string `json:"-"`
 
 	// Settings
 	DeletionProtection *bool  `json:"deletionProtection,omitempty"`

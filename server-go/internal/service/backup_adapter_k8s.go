@@ -50,7 +50,13 @@ type K8sBackupAdapter struct {
 	// plans decides the restored project's tier and backups, exactly as they
 	// would be decided for a new project.
 	plans RestorePlanSource
+	// owners answers the source's owner password when the recovered cluster
+	// carries no credential of its own.
+	owners OwnerCredentials
 }
+
+// SetOwnerCredentials wires where a source project's owner password is read.
+func (a *K8sBackupAdapter) SetOwnerCredentials(o OwnerCredentials) { a.owners = o }
 
 // RestorePlan is what a restored project is created with.
 type RestorePlan struct {
@@ -215,6 +221,9 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if a.plans == nil {
 		return nil, ErrRestorePlanNotConfigured
 	}
+	if a.owners == nil {
+		return nil, fmt.Errorf("%w: restore has no owner credential source", ErrOwnerCredentialUnavailable)
+	}
 	if inst.OrgID == "" {
 		return nil, fmt.Errorf("restore source %s: %w", inst.ProjectID, k8s.ErrProjectOrgRequired)
 	}
@@ -325,6 +334,13 @@ func (a *K8sBackupAdapter) runRestore(
 		return nil, err
 	}
 	restored := a.restoredInstance(ctx, inst, req, target)
+	if restored.Password == "" {
+		password, err := a.sourceOwnerPassword(inst.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		restored.Password = password
+	}
 	if err := registerVerifiedProject(ctx, pc, a.registrar, a.instances, a.probe, restored,
 		RegistrationOptions{ResetRolePasswords: true}); err != nil {
 		return nil, err
@@ -419,6 +435,12 @@ func isUnrecoverableClusterPhase(phase string) bool {
 	return strings.Contains(lower, "unrecoverable") || strings.Contains(lower, "failed")
 }
 
+// sourceOwnerPassword is the source's owner password, valid in the restored
+// database because it is a copy.
+func (a *K8sBackupAdapter) sourceOwnerPassword(projectID string) (string, error) {
+	return a.owners.OwnerPassword(projectID)
+}
+
 // restoredInstance builds the project row for the restored cluster. It
 // inherits the source project's org and database name, and records the tier
 // its cluster was sized by; credentials come
@@ -431,7 +453,7 @@ func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.Dat
 	if dbName == "" {
 		dbName = defaultRestoreDatabase
 	}
-	username, password := src.Username, src.Password
+	username, password := src.Username, ""
 	if secret, err := a.k8sClient.GetSecret(ctx, newNamespace, newProject+"-postgres-app"); err == nil {
 		if u := string(secret["username"]); u != "" {
 			username, password = u, string(secret["password"])

@@ -102,6 +102,7 @@ func TestRegisterProjectRefusesAnExistingProjectID(t *testing.T) {
 
 	svc := NewProvisioningService(store, provisioner.NewFactory(), nil)
 	svc.SetOrgStore(testOrgs())
+	svc.SetVault(newFakeVault())
 	err = svc.RegisterProject(context.Background(), &domain.DatabaseInstance{
 		ProjectID: victim.ProjectID, OrgID: "org-attacker", Tier: domain.Free,
 		Host: "attacker-rw", Username: "attacker", Password: "attacker-password",

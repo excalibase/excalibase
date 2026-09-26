@@ -77,6 +77,16 @@ func (s *BackupService) SetRestorePlanSource(p RestorePlanSource) {
 	}
 }
 
+// SetOwnerCredentials hands every adapter that restores from a source project
+// where that project's owner password is read.
+func (s *BackupService) SetOwnerCredentials(o OwnerCredentials) {
+	for _, adapter := range s.adapters {
+		if setter, ok := adapter.(interface{ SetOwnerCredentials(OwnerCredentials) }); ok {
+			setter.SetOwnerCredentials(o)
+		}
+	}
+}
+
 // SetDatabaseProbe hands every adapter the check that proves a recovered
 // database serves queries before its project is activated.
 //

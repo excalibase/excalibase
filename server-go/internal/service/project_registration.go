@@ -183,21 +183,21 @@ func markProjectActive(inst *domain.DatabaseInstance) {
 }
 
 // setupProjectCredentials creates the platform roles and files their
-// credentials in vault. Skipped — as it always has been — when the platform
-// has no vault or no way to execute SQL in the project's database. Returns
-// the generated engine-facing passwords so the caller can hand them to PgDog
-// without re-reading the vault; nil means role creation was skipped.
+// credentials, the owner's among them, in vault. The vault is the only place
+// the owner credential is kept, so without one registration is refused.
+// Role creation is skipped when the platform has no way to execute SQL in the
+// project's database. Returns the generated engine-facing passwords so the
+// caller can hand them to PgDog without re-reading the vault; nil means role
+// creation was skipped.
 func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst *domain.DatabaseInstance, opts RegistrationOptions, pc *provisioner.ProvisionContext) (*projectRoleCredentials, error) {
-	canExecSQL := (s.k8sClient != nil) || (s.dockerClient != nil)
-	if s.vault == nil || !canExecSQL || s.vault.Sealed() {
-		return nil, nil
+	if s.vault == nil || s.vault.Sealed() {
+		return nil, pc.Fail(fmt.Errorf("%w: the vault is not available", ErrOwnerCredentialUnavailable))
 	}
 	port := 5432
 	if inst.Port != nil {
 		port = *inst.Port
 	}
-	creds := newProjectRoleCredentials()
-	if err := s.createProjectRoles(ctx, projectRoleSpec{
+	spec := projectRoleSpec{
 		projectID:      inst.ProjectID,
 		namespace:      inst.Namespace,
 		host:           inst.Host,
@@ -207,7 +207,13 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 		adminPassword:  inst.Password,
 		resetPasswords: opts.ResetRolePasswords,
 		resetAdmin:     opts.ResetAdminPassword,
-	}, creds, pc); err != nil {
+	}
+	canExecSQL := (s.k8sClient != nil) || (s.dockerClient != nil)
+	if !canExecSQL {
+		return nil, s.fileOwnerCredential(spec, pc)
+	}
+	creds := newProjectRoleCredentials()
+	if err := s.createProjectRoles(ctx, spec, creds, pc); err != nil {
 		return nil, err
 	}
 	return &creds, nil
@@ -300,13 +306,8 @@ type projectRoleSpec struct {
 func (s *ProvisioningService) createProjectRoles(ctx context.Context, spec projectRoleSpec, creds projectRoleCredentials, pc *provisioner.ProvisionContext) error {
 	pc.SetStage(domain.StageRoleCreation)
 
-	if err := s.assertNoStoredCredentials(spec.projectID); err != nil {
-		return pc.Fail(err)
-	}
-
-	pc.SetStep("store admin credentials")
-	if err := s.putRoleCredentials(spec, roleAdmin, spec.adminUsername, spec.adminPassword, pc); err != nil {
-		return pc.Fail(err)
+	if err := s.fileOwnerCredential(spec, pc); err != nil {
+		return err
 	}
 
 	pc.SetStep("exec CREATE ROLE in database")
@@ -328,6 +329,19 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, spec proje
 
 	log.Printf("Created project roles for %s and stored in vault", spec.projectID)
 	return s.deployWatcher(ctx, spec, pc, creds.watcherPassword)
+}
+
+// fileOwnerCredential files the owner credential in vault under a project id
+// that holds no credentials yet.
+func (s *ProvisioningService) fileOwnerCredential(spec projectRoleSpec, pc *provisioner.ProvisionContext) error {
+	if err := s.assertNoStoredCredentials(spec.projectID); err != nil {
+		return pc.Fail(err)
+	}
+	pc.SetStep("store admin credentials")
+	if err := s.putRoleCredentials(spec, roleAdmin, spec.adminUsername, spec.adminPassword, pc); err != nil {
+		return pc.Fail(err)
+	}
+	return nil
 }
 
 // execProjectRoleSQL runs the create-if-absent role SQL, followed by the

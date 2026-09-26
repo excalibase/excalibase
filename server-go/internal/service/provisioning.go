@@ -1041,13 +1041,17 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 		return nil, fmt.Errorf("%w: %s", notServableErr(inst.Status), projectID)
 	}
 
+	password, err := s.OwnerPassword(projectID)
+	if err != nil {
+		return nil, err
+	}
 	port := 5432
 	if inst.Port != nil {
 		port = *inst.Port
 	}
 
 	connURL := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=%s",
-		inst.Username, inst.Password, inst.Host, port, inst.DatabaseName, inst.SSLMode)
+		inst.Username, password, inst.Host, port, inst.DatabaseName, inst.SSLMode)
 
 	return &domain.CredentialsResponse{
 		ProjectID:     projectID,
@@ -1056,7 +1060,7 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 		Port:          port,
 		DatabaseName:  inst.DatabaseName,
 		Username:      inst.Username,
-		Password:      inst.Password,
+		Password:      password,
 		SSLMode:       inst.SSLMode,
 		ConnectionURL: connURL,
 	}, nil
