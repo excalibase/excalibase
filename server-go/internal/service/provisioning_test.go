@@ -830,6 +830,10 @@ func (s *sealedVault) GetPublicKey() (string, error)         { return "", nil }
 
 func TestProvisionFailure_PopulatesFailureStageAndStep(t *testing.T) {
 	svc, store, mock := setupProvisioningTest(t)
+	// Without backups the Cluster is the first custom resource applied.
+	svc.SetTierStore(fakeTierStore{m: map[domain.TierType]config.TierConfig{
+		domain.Free: tierWithoutBackups(), domain.Standard: tierWithoutBackups(), domain.Enterprise: tierWithoutBackups(),
+	}})
 	mock.CRDError = errors.New("forbidden: CNPG CRD missing")
 
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{

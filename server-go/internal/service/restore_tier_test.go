@@ -232,8 +232,19 @@ func TestRestorePlanRefusesWhenTheTierStoreFails(t *testing.T) {
 	}
 }
 
+func TestRestorePlanRefusesWithoutABackupTarget(t *testing.T) {
+	svc, _, _ := setupProvisioningTest(t)
+	if err := svc.SetBackupDefaults(nil); err != nil {
+		t.Fatalf("SetBackupDefaults: %v", err)
+	}
+
+	if _, err := svc.RestorePlan(context.Background(), sourceInstance()); !errors.Is(err, ErrBackupTargetNotConfigured) {
+		t.Fatalf("err: got %v, want ErrBackupTargetNotConfigured", err)
+	}
+}
+
 func TestRestorePlanBacksUpExactlyAsANewProjectWould(t *testing.T) {
-	cases := map[domain.TierType]bool{domain.Free: false, domain.Standard: true}
+	cases := map[domain.TierType]bool{domain.Free: true, domain.Standard: true}
 	for tier, wantBackups := range cases {
 		t.Run(string(tier), func(t *testing.T) {
 			svc, _, _ := setupProvisioningTest(t)

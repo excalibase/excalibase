@@ -48,16 +48,16 @@ func projectRows(t *testing.T, svc *ProvisioningService) int {
 	return len(all)
 }
 
+// clusterBackup is the object store the project's backups go to, or nil when
+// the project has none.
 func clusterBackup(t *testing.T, mock *k8s.MockClient) map[string]interface{} {
 	t.Helper()
 	for _, crd := range mock.CRDs {
-		if crd.GetKind() != "Cluster" {
-			continue
+		if crd.GetKind() == "ObjectStore" {
+			configuration, _ := crd.Object["spec"].(map[string]interface{})["configuration"].(map[string]interface{})
+			return configuration
 		}
-		backup, _ := crd.Object["spec"].(map[string]interface{})["backup"].(map[string]interface{})
-		return backup
 	}
-	t.Fatal("no cluster was applied")
 	return nil
 }
 
@@ -110,9 +110,8 @@ func TestAPaidTierProvisionBacksUpToTheVaultTarget(t *testing.T) {
 	if backup == nil {
 		t.Fatal("a paid-tier project was provisioned without backups")
 	}
-	store := backup["barmanObjectStore"].(map[string]interface{})
-	if store["endpointURL"] != testR2Endpoint {
-		t.Errorf("endpointURL = %v, want %s", store["endpointURL"], testR2Endpoint)
+	if backup["endpointURL"] != testR2Endpoint {
+		t.Errorf("endpointURL = %v, want %s", backup["endpointURL"], testR2Endpoint)
 	}
 }
 

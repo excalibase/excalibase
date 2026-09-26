@@ -208,6 +208,9 @@ func (s *ProvisioningService) RestorePlan(ctx context.Context, source *domain.Da
 	}
 	var req domain.ProvisioningRequest
 	s.applyBackupDefaults(&req, tier)
+	if err := s.requireBackupTarget(&req, tier); err != nil {
+		return RestorePlan{}, err
+	}
 	return RestorePlan{Tier: tierType, Config: tier, Backup: req.Backup}, nil
 }
 
