@@ -117,3 +117,16 @@ func TestMockClient_DeleteRegistryPullSecrets(t *testing.T) {
 		t.Fatal("want the scripted error")
 	}
 }
+
+func TestMockClient_AppLogs(t *testing.T) {
+	m := NewMockClient()
+	m.AppLogLines = map[string][]AppLogLine{"ns1/a1": {{Pod: "p", Text: "hi"}}}
+	page, err := m.AppLogs(context.Background(), "ns1", "a1", AppLogOptions{TailLines: 5})
+	if err != nil || len(page.Lines) != 1 || m.AppLogsAsked[0].TailLines != 5 {
+		t.Fatalf("AppLogs = %v, %v", page, err)
+	}
+	m.AppLogsErr = errors.New("boom")
+	if _, err := m.AppLogs(context.Background(), "ns1", "a1", AppLogOptions{}); err == nil {
+		t.Fatal("want the scripted error")
+	}
+}

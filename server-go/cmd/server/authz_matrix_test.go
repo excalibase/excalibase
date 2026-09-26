@@ -127,10 +127,12 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		appHandler:          handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances), apphost.Route{}),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(offlineDB(t)), nil),
 		registryCredHandler: handler.NewRegistryCredentialHandler(nil),
-		rlUnauth:            custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
-		rlAuthed:            custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
-		rlDataPlane:         custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
-		rlMailSend:          custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
+			apphost.NewPostgresAppStore(offlineDB(t)), instances, k8s.NewMockClient())),
+		rlUnauth:    custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
+		rlAuthed:    custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
+		rlMailSend:  custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),

@@ -63,6 +63,10 @@ function renderPage(scenario: Scenario) {
     if (url === '/config')
       return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting: true } } as never);
     if (url === '/projects/proj-1/apps/app-1') return Promise.resolve({ data: state.app } as never);
+    if (url === '/projects/proj-1/apps/app-1/logs')
+      return Promise.resolve({
+        data: { lines: [{ pod: 'web-1', time: '2026-09-21T10:00:00Z', text: 'ready' }] },
+      } as never);
     if (url.startsWith('/projects/proj-1/apps/app-1/deploys')) {
       const newest = state.deploys[0];
       const next =
@@ -257,6 +261,12 @@ describe('ContainerDetailPage', () => {
       expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/deploys/dep-1/redeploy'),
     );
     expect(await screen.findByTestId('deploy-row-dep-3')).toHaveTextContent('nginx:1.26');
+  });
+
+  test("shows the container's live output", async () => {
+    renderPage({ deploys: [] });
+    expect(await screen.findByText('ready')).toBeInTheDocument();
+    expect(screen.getByTestId('app-logs')).toHaveTextContent('web-1');
   });
 
   test('variables are masked and never show a value or a secret location', async () => {

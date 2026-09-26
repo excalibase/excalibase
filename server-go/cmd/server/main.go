@@ -647,6 +647,7 @@ type handlerDeps struct {
 	appSecretHandler  *handler.AppSecretHandler
 	// registryCredHandler stores a project's private-registry credentials, write-only.
 	registryCredHandler *handler.RegistryCredentialHandler
+	appLogHandler       *handler.AppLogHandler
 	tierHandler         *handler.TierHandler
 	pgCatalogHandler    *handler.PostgresCatalogHandler
 	capDeps             *capacityDeps
@@ -1228,8 +1229,10 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		appDeploySvc:        appDeploySvc,
 		appDeployHandler:    handler.NewAppDeployHandler(appDeploySvc),
 		registryCredHandler: newRegistryCredentialHandler(registryCreds),
-		tierHandler:         tierHandler,
-		pgCatalogHandler:    handler.NewPostgresCatalogHandler(),
+		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
+			apphost.NewPostgresAppStore(sqlStore.DB()), store, k8sClient)),
+		tierHandler:      tierHandler,
+		pgCatalogHandler: handler.NewPostgresCatalogHandler(),
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
 			store:           store,
@@ -1537,6 +1540,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.With(dev).Post("/resume", d.appDeployHandler.Resume)
 				r.With(dev).Post("/deploy", d.appDeployHandler.Deploy)
 				r.Get("/deploys", d.appDeployHandler.ListDeploys)
+				r.Get("/logs", d.appLogHandler.Logs)
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)
 			})

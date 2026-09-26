@@ -143,3 +143,14 @@ func TestRegistryCredentialRoutes_FollowTheHostingGate(t *testing.T) {
 		}
 	}
 }
+
+func TestAppLogRoute_FollowsTheHostingGate(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		req := httptest.NewRequest(http.MethodGet, "/api/projects/"+matrixProjectA+"/apps/app-1/logs", nil)
+		w := httptest.NewRecorder()
+		appHostingRouter(t, enabled).ServeHTTP(w, req)
+		if (w.Code == http.StatusNotFound) == enabled {
+			t.Errorf("hosting %v: answered %d", enabled, w.Code)
+		}
+	}
+}
