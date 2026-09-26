@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { API_BASE } from './base';
 
 // withCredentials lets the browser attach the httpOnly `excali_session`
 // cookie that the backend sets on /api/auth/login. The cookie is the
@@ -10,7 +11,7 @@ import axios from 'axios';
 //     (graceful degradation; will be removed once all users have logged in
 //     fresh after the cookie flow ships)
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:24005/api',
+  baseURL: API_BASE,
   timeout: 30000,
   withCredentials: true,
   headers: {

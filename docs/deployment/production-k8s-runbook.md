@@ -363,6 +363,25 @@ with `POST /api/auth/users/{userId}/verify-email` (audited as
 issued to, and only once that address is verified. Completing a password reset
 also verifies the address, since the reset link reached the mailbox.
 
+### 3.8 Studio sign-in with Google and GitHub
+
+Studio offers "Continue with Google/GitHub" for each provider whose OAuth
+client is stored in the vault; with none stored, no button shows. Register an
+OAuth app at the provider with the callback
+`STUDIO_URL/api/auth/oauth/<google|github>/callback` (the admin ingress routes
+`/api` on the Studio host to provisioning), then store its credentials:
+
+    vault put oauth/studio/google client_id=... client_secret=...
+    vault put oauth/studio/github client_id=... client_secret=...
+
+The flow is the authorization code with PKCE; the state is bound to the
+browser by a short-lived cookie and spent once. Only a provider-verified email
+is accepted, and it counts as a verified Studio address. A provider account is
+linked to the Studio account with the same address instead of creating a
+second one. New accounts follow password sign-up's rules: the first admin
+still comes from the setup token, `REGISTRATION_MODE=invite` needs an invite
+link, and an invite only works for its own address.
+
 ## 4. Day-2 operations
 
 ### 4.1 Upgrades

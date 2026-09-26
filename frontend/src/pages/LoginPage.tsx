@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { useAuthStore, type AuthUser } from '../stores/auth-store';
 import { Button } from '../components/Button';
 import { ResendVerification } from '../components/auth/ResendVerification';
+import { ProviderButtons, ProviderRefusal } from '../components/auth/ProviderSignIn';
 
 interface LoginResponse {
   token: string;
@@ -16,6 +17,7 @@ export function LoginPage() {
   const setAuth = useAuthStore((s) => s.setAuth);
   const [searchParams] = useSearchParams();
   const inviteToken = searchParams.get('invite') ?? '';
+  const oauthError = searchParams.get('oauth_error');
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -79,6 +81,8 @@ export function LoginPage() {
         <p className="text-sm text-text-secondary">Enter your credentials to continue</p>
       </div>
 
+      <ProviderRefusal reason={oauthError} />
+
       {unverified && (
         <div data-testid="email-not-verified" className="space-y-3 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-300">
           <p>Confirm your email address before signing in. Use the link we sent you, or ask for a new one.</p>
@@ -134,6 +138,8 @@ export function LoginPage() {
         {loading && <Loader2 className="w-4 h-4 animate-spin" />}
         {loading ? 'Signing in...' : 'Sign in'}
       </Button>
+
+      <ProviderButtons invite={inviteToken || undefined} />
 
       <p className="text-center text-sm text-text-secondary">
         Don't have an account?{' '}

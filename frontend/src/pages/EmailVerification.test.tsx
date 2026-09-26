@@ -33,6 +33,7 @@ describe('Studio email verification', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useAuthStore.getState().clearAuth();
+    vi.mocked(api.get).mockResolvedValue({ data: { providers: [] } } as never);
   });
 
   test('sign-up asks the developer to confirm their address and signs nobody in', async () => {

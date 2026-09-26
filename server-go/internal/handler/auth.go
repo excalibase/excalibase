@@ -289,28 +289,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue a session-scope PAT. 12h TTL bounds blast radius if the cookie
-	// leaks; "session" scope distinguishes it from long-lived CI tokens in
-	// the token-list UI so users can spot and revoke active sessions.
-	raw := auth.GenerateToken()
-	now := time.Now()
-	expiry := now.Add(sessionTokenTTL)
-	token := &domain.AccessToken{
-		TokenHash:   auth.HashToken(raw),
-		TokenPrefix: auth.TokenPrefix(raw),
-		UserID:      user.ID,
-		Name:        "login",
-		Scopes:      "session",
-		CreatedAt:   &now,
-		ExpiresAt:   &expiry,
-	}
-
-	if err := h.tokenStore.CreateToken(r.Context(), token); err != nil {
+	raw, expiry, err := h.startSession(r.Context(), w, user, "login")
+	if err != nil {
 		httpError(w, "token creation failed", http.StatusInternalServerError)
 		return
 	}
-
-	writeSessionCookie(w, raw, expiry)
 
 	writeJSON(w, map[string]interface{}{
 		// Token is also returned in the body so SDK / curl callers can
@@ -320,6 +303,29 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		"expiresAt": expiry,
 		"user":      user,
 	})
+}
+
+// startSession issues a session-scope PAT and sets it as the session cookie.
+// The 12h TTL bounds the blast radius of a leaked cookie; "session" scope
+// tells it apart from long-lived CI tokens in the token list.
+func (h *AuthHandler) startSession(ctx context.Context, w http.ResponseWriter, user *domain.User, name string) (string, time.Time, error) {
+	raw := auth.GenerateToken()
+	now := time.Now()
+	expiry := now.Add(sessionTokenTTL)
+	token := &domain.AccessToken{
+		TokenHash:   auth.HashToken(raw),
+		TokenPrefix: auth.TokenPrefix(raw),
+		UserID:      user.ID,
+		Name:        name,
+		Scopes:      "session",
+		CreatedAt:   &now,
+		ExpiresAt:   &expiry,
+	}
+	if err := h.tokenStore.CreateToken(ctx, token); err != nil {
+		return "", time.Time{}, err
+	}
+	writeSessionCookie(w, raw, expiry)
+	return raw, expiry, nil
 }
 
 // writeEmailNotVerified refuses a sign-in whose password was right but whose
