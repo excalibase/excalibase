@@ -339,6 +339,11 @@ func buildPostgresql(opts PostgreSQLClusterOpts) map[string]interface{} {
 	}
 	params["max_connections"] = "100"
 	maps.Copy(params, tierQueryGuard(opts.Tier))
+	// The platform's cap on WAL a stalled replication slot may pin also wins.
+	// An unparseable storage size fails the cluster's own storage spec anyway.
+	if walCap, err := opts.Tier.SlotWALKeepSize(); err == nil {
+		params["max_slot_wal_keep_size"] = walCap
+	}
 	var sharedPreloadLibs []interface{}
 	// DocumentDB's configuration is applied after the tenant's, and wins.
 	// Both settings are load-bearing: without the libraries the extension
