@@ -120,19 +120,20 @@ func TestRenderAppIngressPolicyAdmitsOnlyTheIngressController(t *testing.T) {
 	if len(spec.Egress) != 0 || len(spec.EgressDeny) != 0 {
 		t.Errorf("the ingress policy must leave egress to the egress fence: %+v", spec)
 	}
-	want := []ciliumIngressRule{{
-		FromEndpoints: []metav1.LabelSelector{{MatchLabels: map[string]string{podNamespaceKey: "haproxy-controller"}}},
-		ToPorts:       []ciliumPortRule{{Ports: []ciliumPort{{Port: "8080", Protocol: "TCP"}}}},
-	}}
+	appPort := []ciliumPortRule{{Ports: []ciliumPort{{Port: "8080", Protocol: "TCP"}}}}
+	want := []ciliumIngressRule{
+		{FromEndpoints: []metav1.LabelSelector{{MatchLabels: map[string]string{podNamespaceKey: "haproxy-controller"}}}, ToPorts: appPort},
+		{FromEntities: []string{"host"}, ToPorts: appPort},
+	}
 	if !reflect.DeepEqual(spec.Ingress, want) {
-		t.Errorf("ingress rules = %+v, want %+v", spec.Ingress, want)
+		t.Errorf("ingress rules = %+v, want only the edge and the node's kubelet, on the app port: %+v", spec.Ingress, want)
 	}
 }
 
 func TestRenderAppIngressPolicyNarrowsToControllerLabels(t *testing.T) {
 	spec := ingressPolicySpec(t, renderWithRoute(t, tlsRoute()).IngressPolicy)
 	want := map[string]string{podNamespaceKey: "haproxy-controller", "k8s:app.kubernetes.io/name": "kubernetes-ingress"}
-	if len(spec.Ingress) != 1 || len(spec.Ingress[0].FromEndpoints) != 1 || !maps.Equal(spec.Ingress[0].FromEndpoints[0].MatchLabels, want) {
+	if len(spec.Ingress) != 2 || len(spec.Ingress[0].FromEndpoints) != 1 || !maps.Equal(spec.Ingress[0].FromEndpoints[0].MatchLabels, want) {
 		t.Errorf("ingress peers = %+v, want %v", spec.Ingress, want)
 	}
 }

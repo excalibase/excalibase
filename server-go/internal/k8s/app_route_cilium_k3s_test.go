@@ -32,8 +32,16 @@ const (
 	haproxyNodePort     = 30080
 	routeNamespace      = "org1-proj-routea"
 	routeOtherTenant    = "org2-proj-routeb"
+	routePlatform       = "excalibase-platform"
+	routeDatabasePort   = 5432
 	routeAppImage       = "nginxinc/nginx-unprivileged"
 	routeRequestsPerSec = 20
+	podIntruder         = "intruder"
+	podNeighbour        = "neighbour"
+	podSecondApp        = "second-app"
+	podPlatform         = "platform"
+	podDatabase         = "database"
+	routeAppLabel       = "excalibase.io/app=app-route"
 	// Covers the last old pod's drain and shutdown after the rollout reports done.
 	routeSettleAfterRollout = 20 * time.Second
 )
@@ -47,9 +55,16 @@ func TestK3sCiliumAppRoute(t *testing.T) {
 	lab.startCiliumClusterWith(t, testcontainers.WithFiles(gvisorFiles(t, gvisorPlatformSystrap)...))
 	lab.nodeIP = nodeInternalIP(lab.ctx, t, lab.cs)
 	lab.createGVisorRuntimeClass(t)
-	for _, ns := range []string{haproxyNamespace, routeNamespace, routeOtherTenant} {
+	t.Setenv("POD_NAMESPACE", routePlatform)
+	for _, ns := range []string{haproxyNamespace, routePlatform} {
 		if _, err := lab.cs.CoreV1().Namespaces().Create(lab.ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{}); err != nil {
 			t.Fatalf("create namespace %s: %v", ns, err)
+		}
+	}
+	// Project namespaces are made the production way, so their isolation policies are live.
+	for ns, org := range map[string]string{routeNamespace: "org1", routeOtherTenant: "org2"} {
+		if err := lab.client.CreateProjectNamespace(lab.ctx, ns, org); err != nil {
+			t.Fatalf("create project namespace %s: %v", ns, err)
 		}
 	}
 	lab.installHAProxyIngress(t)
@@ -67,7 +82,7 @@ func TestK3sCiliumAppRoute(t *testing.T) {
 		app.Image = routeAppImage + ":1.28"
 		lab.redeployUnderLoad(t, route, app)
 	})
-	t.Run("another tenant's pod cannot reach the app pod", func(t *testing.T) { lab.checkIngressFence(t, app) })
+	t.Run("the app accepts only the edge and kubelet probes", func(t *testing.T) { lab.checkIngressFence(t, app, route) })
 }
 
 func stringPtr(v string) *string { return &v }
@@ -142,14 +157,20 @@ func (lab *egressLab) redeployUnderLoad(t *testing.T, route *routeProbe, app *ap
 	}
 }
 
-func (lab *egressLab) appPodNames(t *testing.T) map[string]bool {
+// listAppPods lists the route app's live pods, failing the test on any list error.
+func (lab *egressLab) listAppPods(t *testing.T) []corev1.Pod {
 	t.Helper()
-	pods, err := lab.cs.CoreV1().Pods(routeNamespace).List(lab.ctx, metav1.ListOptions{LabelSelector: "excalibase.io/app=app-route"})
+	pods, err := lab.cs.CoreV1().Pods(routeNamespace).List(lab.ctx, metav1.ListOptions{LabelSelector: routeAppLabel})
 	if err != nil {
 		t.Fatalf("list app pods: %v", err)
 	}
+	return pods.Items
+}
+
+func (lab *egressLab) appPodNames(t *testing.T) map[string]bool {
+	t.Helper()
 	names := map[string]bool{}
-	for _, pod := range pods.Items {
+	for _, pod := range lab.listAppPods(t) {
 		if pod.DeletionTimestamp == nil {
 			names[pod.Name] = true
 		}
@@ -157,34 +178,100 @@ func (lab *egressLab) appPodNames(t *testing.T) map[string]bool {
 	return names
 }
 
-// checkIngressFence proves the refusal is the policy's doing: with it removed the same connection succeeds.
-func (lab *egressLab) checkIngressFence(t *testing.T, app *apphost.App) {
+// routeSecondApp carries a second app's identity labels without its egress
+// fence, so only the first app's ingress side decides whether it connects.
+func routeSecondApp() map[string]string {
+	second := &apphost.App{ID: "app-route-2", ProjectID: "proj-routea", Name: "api", Tier: domain.Free}
+	return appLabels(second)
+}
+
+// routeDatabaseLabels are the labels CNPG puts on the project's database pod.
+var routeDatabaseLabels = map[string]string{"cnpg.io/cluster": "proj-routea-postgres", "cnpg.io/podRole": "instance"}
+
+func (lab *egressLab) startFencePods(t *testing.T) {
 	t.Helper()
-	runPod(lab.ctx, t, lab.cs, routeOtherTenant, "intruder", nil, []string{"/bin/sleep", "3600"})
-	runPod(lab.ctx, t, lab.cs, routeNamespace, "neighbour", nil, []string{"/bin/sleep", "3600"})
-	target := net.JoinHostPort(lab.newestAppPodIP(t), strconv.Itoa(app.Port))
-	connect := func(namespace, pod string) error {
+	sleep := []string{"/bin/sleep", "3600"}
+	runPod(lab.ctx, t, lab.cs, routeOtherTenant, podIntruder, nil, sleep)
+	runPod(lab.ctx, t, lab.cs, routeNamespace, podNeighbour, nil, sleep)
+	runPod(lab.ctx, t, lab.cs, routeNamespace, podSecondApp, routeSecondApp(), sleep)
+	runPod(lab.ctx, t, lab.cs, routePlatform, podPlatform, nil, sleep)
+	runPod(lab.ctx, t, lab.cs, routeNamespace, podDatabase, routeDatabaseLabels,
+		[]string{"/agnhost", "netexec", "--http-port=" + strconv.Itoa(routeDatabasePort)})
+}
+
+// checkIngressFence proves each refusal is the policies' doing: the same
+// clients reach the project's database, and a neighbour connects to the app
+// once every policy selecting it is gone.
+func (lab *egressLab) checkIngressFence(t *testing.T, app *apphost.App, route *routeProbe) {
+	t.Helper()
+	lab.startFencePods(t)
+	appAddr := net.JoinHostPort(lab.newestAppPodIP(t), strconv.Itoa(app.Port))
+	dbAddr := net.JoinHostPort(podIP(lab.ctx, t, lab.cs, routeNamespace, podDatabase), strconv.Itoa(routeDatabasePort))
+	connect := func(namespace, pod, target string) error {
 		_, err := lab.client.ExecInPod(lab.ctx, namespace, pod, "main", []string{"/agnhost", "connect", "--timeout=3s", target})
 		return err
 	}
+	refused := func(desc, namespace, pod string) {
+		eventually(t, desc, time.Minute, func() bool { return connect(namespace, pod, appAddr) != nil })
+		for range 3 {
+			if connect(namespace, pod, appAddr) == nil {
+				t.Errorf("%s: a connection got through", desc)
+			}
+		}
+	}
 
-	eventually(t, "another tenant is refused", time.Minute, func() bool { return connect(routeOtherTenant, "intruder") != nil })
-	eventually(t, "a pod in the app's own namespace is refused", time.Minute, func() bool { return connect(routeNamespace, "neighbour") != nil })
+	if err := route.get(); err != nil {
+		t.Fatalf("the edge must reach the app: %v", err)
+	}
+	refused("another tenant is refused", routeOtherTenant, podIntruder)
+	refused("a pod in the app's own namespace is refused", routeNamespace, podNeighbour)
+	refused("a second app in the same project is refused", routeNamespace, podSecondApp)
+	refused("the project's database is refused", routeNamespace, podDatabase)
+	refused("the platform is refused", routePlatform, podPlatform)
+
+	eventually(t, "the project's own pods still reach its database", time.Minute, func() bool { return connect(routeNamespace, podNeighbour, dbAddr) == nil })
+	eventually(t, "the platform still reaches the project's database", time.Minute, func() bool { return connect(routePlatform, podPlatform, dbAddr) == nil })
+	eventually(t, "an app still reaches its project's database", time.Minute, func() bool { return connect(routeNamespace, podSecondApp, dbAddr) == nil })
+	lab.expectAppPodsReady(t)
 
 	policies := lab.client.dynamicClient.Resource(CiliumNetworkPolicyGVR).Namespace(routeNamespace)
 	if err := policies.Delete(lab.ctx, AppIngressPolicyName(app.Name), metav1.DeleteOptions{}); err != nil {
-		t.Fatalf("remove the ingress policy for the control: %v", err)
+		t.Fatalf("remove the app's ingress policy: %v", err)
 	}
-	eventually(t, "control: another tenant connects once the policy is gone", time.Minute, func() bool { return connect(routeOtherTenant, "intruder") == nil })
+	eventually(t, "without its own fence the app is closed, even to the edge", time.Minute, func() bool { return route.get() != nil })
+	refused("without its own fence a neighbour is still refused", routeNamespace, podNeighbour)
+
+	if err := lab.cs.NetworkingV1().NetworkPolicies(routeNamespace).Delete(lab.ctx, namespaceDefaultDenyPolicy, metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("remove the namespace default deny for the control: %v", err)
+	}
+	eventually(t, "control: a neighbour connects once no policy selects the app", time.Minute, func() bool { return connect(routeNamespace, podNeighbour, appAddr) == nil })
+}
+
+func (lab *egressLab) expectAppPodsReady(t *testing.T) {
+	t.Helper()
+	pods := lab.listAppPods(t)
+	if len(pods) == 0 {
+		t.Fatal("list app pods: none found")
+	}
+	for _, pod := range pods {
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type == corev1.PodReady && condition.Status != corev1.ConditionTrue {
+				t.Errorf("app pod %s is not ready: the kubelet's probes must still pass", pod.Name)
+			}
+		}
+	}
 }
 
 func (lab *egressLab) newestAppPodIP(t *testing.T) string {
 	t.Helper()
-	pods, err := lab.cs.CoreV1().Pods(routeNamespace).List(lab.ctx, metav1.ListOptions{LabelSelector: "excalibase.io/app=app-route"})
-	if err != nil || len(pods.Items) == 0 {
-		t.Fatalf("list app pods: %v", err)
+	pods := lab.listAppPods(t)
+	if len(pods) == 0 {
+		t.Fatal("list app pods: none found")
 	}
-	for _, pod := range pods.Items {
+	for _, pod := range pods {
 		if pod.DeletionTimestamp == nil && pod.Status.PodIP != "" {
 			return pod.Status.PodIP
 		}

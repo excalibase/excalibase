@@ -116,19 +116,21 @@ func buildAppIngress(namespace string, app *apphost.App, host string, opts AppRo
 	return ingress
 }
 
-// buildAppIngressPolicy: once any policy selects a pod for ingress, Cilium denies every
-// other source, so other tenants and the app's own namespace are refused by default.
+// buildAppIngressPolicy is the only policy that admits anything to an app: the
+// project namespace's own allows leave app pods out (ProjectPodsExceptApps),
+// so the edge and the node's kubelet probes are all an app accepts.
 func buildAppIngressPolicy(namespace string, app *apphost.App, opts AppRouteOptions) (*unstructured.Unstructured, error) {
 	from := map[string]string{podNamespaceKey: opts.IngressFromNamespace}
 	for key, value := range opts.IngressFromLabels {
 		from["k8s:"+key] = value
 	}
+	appPort := []ciliumPortRule{{Ports: []ciliumPort{{Port: strconv.Itoa(app.Port), Protocol: protocolTCP}}}}
 	spec := ciliumPolicySpec{
 		EndpointSelector: metav1.LabelSelector{MatchLabels: appSelectorLabels(app)},
-		Ingress: []ciliumIngressRule{{
-			FromEndpoints: []metav1.LabelSelector{{MatchLabels: from}},
-			ToPorts:       []ciliumPortRule{{Ports: []ciliumPort{{Port: strconv.Itoa(app.Port), Protocol: protocolTCP}}}},
-		}},
+		Ingress: []ciliumIngressRule{
+			{FromEndpoints: []metav1.LabelSelector{{MatchLabels: from}}, ToPorts: appPort},
+			{FromEntities: []string{hostEntity}, ToPorts: appPort},
+		},
 	}
 	return newCiliumPolicy(namespace, AppIngressPolicyName(app.Name), app, spec)
 }

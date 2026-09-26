@@ -191,7 +191,7 @@ func (c *Client) ensureNamespaceQuota(ctx context.Context, namespace string) err
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "namespace-quota",
 			Namespace: namespace,
-			Labels:    map[string]string{"excalibase.io/component": "quota"},
+			Labels:    map[string]string{componentLabelKey: "quota"},
 		},
 		Spec: corev1.ResourceQuotaSpec{
 			Hard: corev1.ResourceList{
@@ -208,25 +208,80 @@ func (c *Client) ensureNamespaceQuota(ctx context.Context, namespace string) err
 	return nil
 }
 
-// ensureNamespaceIsolationPolicy applies a default-deny INGRESS policy to every
-// pod in a project namespace, opening it only to traffic that legitimately
-// crosses in (EXC-325). Without it every project namespace is on a flat network
+const (
+	namespaceDefaultDenyPolicy = "namespace-default-deny"
+	namespaceIsolationPolicy   = "namespace-isolation"
+	componentLabelKey          = "excalibase.io/component"
+)
+
+// ensureNamespaceIsolationPolicy fences a project namespace's ingress (EXC-325)
+// with two policies. Without them every project namespace is on a flat network
 // and a compromised pod in tenant A reaches tenant B's database directly.
 //
-// Allowed sources:
-//   - same namespace  (postgres replication, watcher→pg, deno→pg)
+// The default deny selects every pod, apps included, and admits nothing, so a
+// pod no allow names is closed rather than open. The isolation policy then
+// opens every pod except apps to the traffic that legitimately crosses in:
+//   - same namespace  (postgres replication, watcher→pg, app→pg, deno→pg)
 //   - the platform namespace (provisioning → deno /deploy /invoke, and the
 //     schema handler's direct connection to the project's Postgres)
 //   - cnpg-system (the CloudNativePG operator managing the Postgres cluster)
 //   - monitoring (Prometheus scraping, when observability is enabled)
 //
-// Everything else — notably every OTHER {org}-{project} namespace — is denied by
-// omission. Egress is untouched (the Deno pod's egress is fenced separately by
-// ensureDenoEgressPolicy). Kubelet health probes are node-local and bypass
-// NetworkPolicy, so readiness/liveness are unaffected. Requires a
+// Apps are left out because allow policies add together: an app's only allow
+// is its own edge-only fence, so anything it should accept is added there.
+// Kubelet health probes are node-local and bypass NetworkPolicy. Requires a
 // policy-enforcing CNI (Calico/Cilium); a CNI that ignores policies creates the
-// object without enforcing it.
+// objects without enforcing them.
 func (c *Client) ensureNamespaceIsolationPolicy(ctx context.Context, namespace string) error {
+	for _, policy := range []*networkingv1.NetworkPolicy{
+		buildNamespaceDefaultDenyPolicy(namespace),
+		buildNamespaceIsolationPolicy(namespace),
+	} {
+		if err := c.applyNetworkPolicy(ctx, policy); err != nil {
+			return fmt.Errorf("apply namespace policy %s: %w", policy.Name, err)
+		}
+	}
+	return nil
+}
+
+// applyNetworkPolicy converges an existing policy, so a namespace made under
+// an older shape is fenced by the current one.
+func (c *Client) applyNetworkPolicy(ctx context.Context, desired *networkingv1.NetworkPolicy) error {
+	policies := c.clientset.NetworkingV1().NetworkPolicies(desired.Namespace)
+	current, err := policies.Get(ctx, desired.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = policies.Create(ctx, desired, metav1.CreateOptions{})
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	updated := current.DeepCopy()
+	updated.Labels = desired.Labels
+	updated.Spec = desired.Spec
+	_, err = policies.Update(ctx, updated, metav1.UpdateOptions{})
+	return err
+}
+
+func namespacePolicyMeta(namespace, name string) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Name:      name,
+		Namespace: namespace,
+		Labels:    map[string]string{componentLabelKey: "isolation"},
+	}
+}
+
+func buildNamespaceDefaultDenyPolicy(namespace string) *networkingv1.NetworkPolicy {
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: namespacePolicyMeta(namespace, namespaceDefaultDenyPolicy),
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+		},
+	}
+}
+
+func buildNamespaceIsolationPolicy(namespace string) *networkingv1.NetworkPolicy {
 	nsPeer := func(n string) networkingv1.NetworkPolicyPeer {
 		return networkingv1.NetworkPolicyPeer{
 			NamespaceSelector: &metav1.LabelSelector{
@@ -234,15 +289,10 @@ func (c *Client) ensureNamespaceIsolationPolicy(ctx context.Context, namespace s
 			},
 		}
 	}
-	policy := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "namespace-isolation",
-			Namespace: namespace,
-			Labels:    map[string]string{"excalibase.io/component": "isolation"},
-		},
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: namespacePolicyMeta(namespace, namespaceIsolationPolicy),
 		Spec: networkingv1.NetworkPolicySpec{
-			// All pods in the namespace.
-			PodSelector: metav1.LabelSelector{},
+			PodSelector: ProjectPodsExceptApps(),
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From: []networkingv1.NetworkPolicyPeer{
@@ -255,11 +305,17 @@ func (c *Client) ensureNamespaceIsolationPolicy(ctx context.Context, namespace s
 			}},
 		},
 	}
-	_, err := c.clientset.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create namespace isolation policy: %w", err)
-	}
-	return nil
+}
+
+// ProjectPodsExceptApps selects every pod in a project namespace but a
+// Containers app's. A namespace-wide allow must use it: an allow that selected
+// an app would widen the app's edge-only ingress.
+func ProjectPodsExceptApps() metav1.LabelSelector {
+	return metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
+		Key:      componentLabelKey,
+		Operator: metav1.LabelSelectorOpNotIn,
+		Values:   []string{appComponentLabel},
+	}}}
 }
 
 // DeleteNamespace deletes a K8s namespace. An already-absent namespace is a

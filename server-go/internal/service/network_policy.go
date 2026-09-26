@@ -8,6 +8,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -30,6 +31,12 @@ func (s *NetworkPolicyService) UpdateNetworkPolicy(ctx context.Context, projectI
 		return fmt.Errorf("project not found: %s", projectID)
 	}
 
+	appsExcluded := k8s.ProjectPodsExceptApps()
+	podSelector, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&appsExcluded)
+	if err != nil {
+		return fmt.Errorf("render network policy selector: %w", err)
+	}
+
 	var ingress []interface{}
 	for _, cidr := range cfg.AllowedCIDRs {
 		ingress = append(ingress, map[string]interface{}{
@@ -50,7 +57,7 @@ func (s *NetworkPolicyService) UpdateNetworkPolicy(ctx context.Context, projectI
 				"namespace": inst.Namespace,
 			},
 			"spec": map[string]interface{}{
-				"podSelector": map[string]interface{}{},
+				"podSelector": podSelector,
 				"policyTypes": []interface{}{"Ingress"},
 				"ingress":     ingress,
 			},
