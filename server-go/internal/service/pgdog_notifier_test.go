@@ -120,7 +120,6 @@ func TestProvision_RegistersEngineRolesWithPgDog(t *testing.T) {
 		ProjectName:     "pgdog-roles",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testUnexpErrFmt, err)
@@ -173,7 +172,6 @@ func TestProvision_WithoutEngineRoles_RegistersNothingWithPgDog(t *testing.T) {
 		ProjectName:     "pgdog-novault",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	})
 	if err != nil {
 		t.Fatalf(testUnexpErrFmt, err)

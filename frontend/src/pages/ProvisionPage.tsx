@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useProvisionDatabase } from '../hooks/useProvisioning';
-import { DatabaseType, TierType } from '../types';
+import { DatabaseType } from '../types';
 import { Button } from '../components/Button';
 import { Database, Loader2, Server, Cloud } from 'lucide-react';
 import { listMyOrgs, type Org } from '../api/orgs';
-import { useTiers, sortTiers, type TierConfig } from '../api/tiers';
+import { useTiers, type TierConfig } from '../api/tiers';
 import { usePostgresCatalog, findMajor, type PostgresMajor } from '../api/postgresCatalog';
 import { PostgresVersionPicker } from '../components/PostgresVersionPicker';
 
@@ -26,15 +26,6 @@ const DB_TYPES = [
   { type: DatabaseType.POSTGRESQL, icon: '🐘', label: 'PostgreSQL', desc: 'CloudNativePG operator', disabled: false },
   { type: DatabaseType.MYSQL,      icon: '🐬', label: 'MySQL',      desc: 'Coming soon',            disabled: true  },
   { type: DatabaseType.MONGODB,    icon: '🍃', label: 'MongoDB',    desc: 'Coming soon',            disabled: true  },
-];
-
-// Shown only while the live tier specs load (or if the endpoint is unreachable).
-// Tiers are single-instance on the current alpha; the real specs come from
-// GET /api/tiers and are admin-editable.
-const FALLBACK_TIERS = [
-  { tier: TierType.FREE,       label: 'Free',       features: ['1 instance', '5Gi storage', '512Mi RAM', '0.5 vCPU'] },
-  { tier: TierType.STANDARD,   label: 'Standard',   features: ['1 instance', '50Gi storage', '4Gi RAM', '2 vCPU'] },
-  { tier: TierType.ENTERPRISE, label: 'Enterprise', features: ['1 instance', '500Gi storage', '16Gi RAM', '4 vCPU'] },
 ];
 
 function tierLabel(tier: string): string {
@@ -60,7 +51,6 @@ export function ProvisionPage() {
   const [projectName, setProjectName] = useState('');
   const [orgId, setOrgId] = useState('');
   const [dbType, setDbType] = useState<DatabaseType>(DatabaseType.POSTGRESQL);
-  const [tier, setTier] = useState<TierType>(TierType.FREE);
   // No default major, on purpose: see PostgresVersionPicker.
   const [postgresVersion, setPostgresVersion] = useState('');
   const [documentDb, setDocumentDb] = useState(false);
@@ -75,12 +65,10 @@ export function ProvisionPage() {
     if (!entry?.documentDb) setDocumentDb(false);
   };
 
-  // Live tier specs (admin-editable, DB-backed). Falls back to a static list
-  // while loading or if the endpoint is unreachable.
+  // The organisation's plan decides the project's tier; the form only shows it.
   const { data: tierConfigs } = useTiers();
-  const tierOptions = tierConfigs && tierConfigs.length > 0
-    ? sortTiers(tierConfigs).map((tc) => ({ tier: tc.tier, label: tierLabel(tc.tier), features: tierFeatures(tc) }))
-    : FALLBACK_TIERS;
+  const selectedOrg = orgs.find((org) => org.id === orgId);
+  const planConfig = tierConfigs?.find((tc) => tc.tier === selectedOrg?.tier);
 
   useEffect(() => {
     listMyOrgs().then((data) => {
@@ -98,7 +86,6 @@ export function ProvisionPage() {
       projectName,
       orgId,
       databaseType: dbType,
-      tier,
       postgresVersion,
       documentDb,
     });
@@ -191,21 +178,19 @@ export function ProvisionPage() {
 
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
               <h2 className="font-semibold text-text-primary">Plan</h2>
-              <div className="grid grid-cols-3 gap-3">
-                {tierOptions.map(({ tier: t, label, features }) => (
-                  <button key={t} type="button" onClick={() => setTier(t)}
-                    className={`p-4 rounded-xl border-2 text-left transition-all ${
-                      tier === t ? 'border-accent-primary bg-accent-primary/10'
-                        : 'border-border-primary bg-bg-tertiary hover:border-border-secondary'
-                    }`}
-                  >
-                    <p className="font-semibold text-text-primary mb-2">{label}</p>
+              {selectedOrg ? (
+                <div data-testid="provision-org-plan" className="p-4 rounded-xl border-2 border-border-primary bg-bg-tertiary">
+                  <p className="font-semibold text-text-primary mb-2">{tierLabel(selectedOrg.tier)}</p>
+                  {planConfig && (
                     <ul className="space-y-1">
-                      {features.map((f) => (<li key={f} className="text-xs text-text-secondary">{'\u00b7'} {f}</li>))}
+                      {tierFeatures(planConfig).map((f) => (<li key={f} className="text-xs text-text-secondary">{'\u00b7'} {f}</li>))}
                     </ul>
-                  </button>
-                ))}
-              </div>
+                  )}
+                  <p className="text-xs text-text-tertiary mt-2">Projects take their organization&apos;s plan.</p>
+                </div>
+              ) : (
+                <p className="text-sm text-text-tertiary">Select an organization to see its plan.</p>
+              )}
             </div>
           </>
         )}

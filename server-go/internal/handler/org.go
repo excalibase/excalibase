@@ -213,6 +213,10 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 		org.Name = *req.Name
 	}
 	if req.Tier != nil {
+		if !auth.HasPermission(user.Role, auth.PermManageOrgs) {
+			httpError(w, "only the platform can change an organization's plan", http.StatusForbidden)
+			return
+		}
 		if !domain.IsValidTier(*req.Tier) {
 			httpError(w, "invalid tier: must be FREE, STANDARD, or ENTERPRISE", http.StatusBadRequest)
 			return

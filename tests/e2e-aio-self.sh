@@ -96,6 +96,11 @@ ORG_ID=$(echo "$ORGS" | jq -r '.[0].id' 2>/dev/null)
 ORG_SLUG=$(echo "$ORGS" | jq -r '.[0].slug' 2>/dev/null)
 [ -n "$ORG_ID" ] && [ "$ORG_ID" != "null" ] && pass "org list ($ORG_SLUG)" || fail "org list" "$ORGS"
 
+# A project takes its org's plan; this run creates two projects, so the org goes on STANDARD.
+PLAN_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$PAT_HDR" -H 'Content-Type: application/json' \
+  -d '{"tier":"STANDARD"}' "$API_PROV/api/orgs/$ORG_ID/")
+[ "$PLAN_CODE" = "200" ] && pass "org on STANDARD plan" || fail "org plan" "got $PLAN_CODE"
+
 EXISTING=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/provision/" 2>/dev/null | jq -r ".[] | select(.orgId==\"$ORG_ID\") | .projectId" 2>/dev/null)
 for pid in $EXISTING; do
   [ -z "$pid" ] || [ "$pid" = "null" ] && continue
@@ -147,7 +152,7 @@ curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "$PAT_HDR" \
 section "F6. Provision project (cloud mode, real CNPG)"
 PROJ_NAME="aio-e2e-$(date +%s)"
 PROV_REQ=$(jq -n --arg n "$PROJ_NAME" --arg o "$ORG_ID" \
-  '{projectName:$n, orgId:$o, databaseType:"POSTGRESQL", tier:"STANDARD"}')
+  '{projectName:$n, orgId:$o, databaseType:"POSTGRESQL"}')
 PROV_RESP=$(curl -s -X POST -H "$PAT_HDR" -H 'Content-Type: application/json' \
   -d "$PROV_REQ" "$API_PROV/api/provision/")
 PROJECT_ID=$(echo "$PROV_RESP" | jq -r '.projectId' 2>/dev/null)
@@ -354,7 +359,7 @@ if [ -z "${SKIP_PROVISIONED:-}" ]; then
     # Cross-project replay
     PROJ2_NAME="aio-x-$(date +%s)"
     PROV2=$(curl -s -X POST -H "$PAT_HDR" -H 'Content-Type: application/json' \
-      -d "$(jq -n --arg n "$PROJ2_NAME" --arg o "$ORG_ID" '{projectName:$n,orgId:$o,databaseType:"POSTGRESQL",tier:"STANDARD"}')" \
+      -d "$(jq -n --arg n "$PROJ2_NAME" --arg o "$ORG_ID" '{projectName:$n,orgId:$o,databaseType:"POSTGRESQL"}')" \
       "$API_PROV/api/provision/" 2>/dev/null)
     PROJECT2_ID=$(echo "$PROV2" | jq -r '.projectId' 2>/dev/null)
     if [[ "$PROJECT2_ID" == proj-* ]]; then

@@ -17,6 +17,7 @@ import (
 	tclocalstack "github.com/testcontainers/testcontainers-go/modules/localstack"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
@@ -140,6 +141,8 @@ func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, b
 	vault := newFakeVault()
 	registrar := NewProvisioningService(store, provisioner.NewFactory(), nil)
 	registrar.SetDockerClient(realDocker)
+	registrar.SetOrgStore(testOrgs())
+	setOrgTier(registrar, "org", domain.Standard)
 	registrar.SetVault(vault)
 	adapter.SetProjectRegistrar(registrar)
 	// A restore completes only once the recovered database has answered a

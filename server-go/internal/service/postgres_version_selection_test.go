@@ -21,7 +21,6 @@ func provisionRequest(version string) domain.ProvisioningRequest {
 		ProjectName:     "blog",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: version,
 	}
 }
@@ -167,6 +166,7 @@ func TestProvisioningRecordsTheMajorItWasCreatedOn(t *testing.T) {
 		"dbname":   []byte("app"),
 	}
 	svc := NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
+	svc.SetOrgStore(testOrgs())
 
 	// Padded on purpose: what is stored must be the catalogue's spelling, not
 	// whatever the caller typed, or a later exact-match lookup fails.
@@ -175,7 +175,6 @@ func TestProvisioningRecordsTheMajorItWasCreatedOn(t *testing.T) {
 		ProjectName:     "records-its-major",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Enterprise,
 	}
 	resp, err := svc.Provision(context.Background(), req)
 	if err != nil {

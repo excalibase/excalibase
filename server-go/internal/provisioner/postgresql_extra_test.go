@@ -166,7 +166,6 @@ func TestProvisionNamespaceCreationFailure(t *testing.T) {
 		ProjectName:     "fail-proj",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
 
 	if err == nil {
@@ -187,7 +186,6 @@ func TestProvisionCRDDeploymentFailure(t *testing.T) {
 		ProjectName:     "crd-fail",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
 
 	if err == nil {
@@ -208,7 +206,6 @@ func TestProvisionWithBackupDefaultSchedule(t *testing.T) {
 		ProjectName:     "sched-test",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		Backup:          &domain.BackupSettings{Enabled: true, Schedule: "", Retention: 7},
 	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
 

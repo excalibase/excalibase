@@ -256,7 +256,7 @@ curl http://localhost:24005/healthz
 # Create a Postgres project on the local Docker host
 curl -X POST http://localhost:24005/api/provision \
   -H "Content-Type: application/json" \
-  -d '{"projectName":"local-pg","orgId":"default","databaseType":"POSTGRESQL","tier":"FREE"}'
+  -d '{"projectName":"local-pg","orgId":"default","databaseType":"POSTGRESQL"}'
 
 # The provisioner creates a Docker container — verify
 docker ps | grep default-local-pg

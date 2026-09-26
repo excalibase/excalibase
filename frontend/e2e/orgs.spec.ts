@@ -148,6 +148,7 @@ test.describe('Organizations', () => {
     await page.goto('/provision');
     await expect(page.getByText('Select organization...')).toBeAttached();
     await expect(page.getByText('Alice Corp (FREE)')).toBeAttached();
+    await expect(page.getByRole('button', { name: /enterprise/i })).toHaveCount(0);
   });
 });
 

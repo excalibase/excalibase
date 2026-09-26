@@ -11,7 +11,6 @@ type ProvisioningRequest struct {
 	OrgID           string                   `json:"orgId"`
 	OwnerID         string                   `json:"ownerId,omitempty"` // set by handler from auth context
 	DBType          DatabaseType             `json:"databaseType"`
-	Tier            TierType                 `json:"tier"`
 	Backup          *BackupSettings          `json:"backup,omitempty"`
 	Pooler          *PoolerSettings          `json:"pooler,omitempty"`
 	Network         *NetworkConfig           `json:"network,omitempty"`

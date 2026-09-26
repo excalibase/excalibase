@@ -55,6 +55,11 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	// (EXC-401); the mock reconciles the Cluster and the probe answers.
 	mock.WildcardPodReady = true
 	mock.AutoReconcileClusters = true
+	orgs := fakestore.NewOrgs()
+	orgs.AddOrg("org1", domain.Standard)
+	orgs.AddOrg("org-free", domain.Free)
+	orgs.AddOrg("org-notier", "PLATINUM")
+	provSvc.SetOrgStore(orgs)
 	backupSvc.SetProjectRegistrar(provSvc)
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	if err := backupSvc.SetDatabaseProbe(answeringProbe{}); err != nil {
@@ -798,7 +803,7 @@ func TestProvisionWithAuthUser(t *testing.T) {
 	r.Post(testProvisionPath, h.Provision)
 
 	req := httptest.NewRequest("POST", testProvisionPath,
-		strings.NewReader(`{"projectName":"owned-db","orgId":"org1","databaseType":"POSTGRESQL","tier":"FREE","postgresVersion":"17"}`))
+		strings.NewReader(`{"projectName":"owned-db","orgId":"org1","databaseType":"POSTGRESQL","postgresVersion":"17"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()

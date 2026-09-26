@@ -18,7 +18,6 @@ func provisionedSpec(t *testing.T, domainSuffix string) map[string]interface{} {
 		ProjectName:     "docproj",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: config.PostgresMajors()[0],
 	}
 	if _, err := p.Provision(context.Background(), req, config.TierConfig{Instances: 1, StorageSize: "5Gi"},
@@ -61,7 +60,6 @@ func TestProvisionRefusesAPublicHostThatIsNotAName(t *testing.T) {
 		ProjectName:     "docproj",
 		OrgID:           "org1",
 		DBType:          domain.PostgreSQL,
-		Tier:            domain.Free,
 		PostgresVersion: config.PostgresMajors()[0],
 	}
 	if _, err := p.Provision(context.Background(), req, config.TierConfig{Instances: 1, StorageSize: "5Gi"},

@@ -75,11 +75,16 @@ ORG_ID=$(curl -sf -H "$AUTH" "$API/api/orgs" | jq -r '.[] | select(.slug=="acme"
 [ -z "$ORG_ID" ] && { fail "org" "no acme org"; exit 1; }
 pass "org acme: $ORG_ID"
 
+# A project takes its org's plan, and FREE has no backups to restore from.
+curl -sf -X PATCH -H "$AUTH" -H 'Content-Type: application/json' -d '{"tier":"STANDARD"}' \
+  "$API/api/orgs/$ORG_ID/" > /dev/null || { fail "org plan" "could not put $ORG_ID on STANDARD"; exit 1; }
+pass "org on STANDARD plan"
+
 # ---------- provision project A ----------
 section "provision project A"
 NAME_A="restore-src-$(date +%s)"
 REQ_A=$(jq -n --arg n "$NAME_A" --arg o "$ORG_ID" \
-  '{projectName:$n, orgId:$o, databaseType:"POSTGRESQL", tier:"STANDARD"}')
+  '{projectName:$n, orgId:$o, databaseType:"POSTGRESQL"}')
 PROJ_A=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
   -d "$REQ_A" "$API/api/provision/" | jq -r .projectId)
 [ -z "$PROJ_A" ] || [[ ! "$PROJ_A" == proj-* ]] && { fail "provision A" "got: $PROJ_A"; exit 1; }

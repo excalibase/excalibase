@@ -306,22 +306,28 @@ export function OrgDetailPage() {
         <div className="space-y-6">
           <div className="p-4 bg-surface-card border border-border-primary rounded-lg space-y-3">
             <h3 className="font-semibold text-text-primary">Organization Settings</h3>
-            <div>
-              <label htmlFor="org-tier-select" className="block text-sm text-text-secondary mb-1">Tier</label>
-              <select
-                id="org-tier-select"
-                value={org.tier}
-                onChange={async (e) => {
-                  const updated = await updateOrg(org.id, { tier: e.target.value });
-                  setOrg(updated);
-                }}
-                className="px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm"
-              >
-                <option value="FREE">Free</option>
-                <option value="STANDARD">Standard</option>
-                <option value="ENTERPRISE">Enterprise</option>
-              </select>
-            </div>
+            {currentUser?.role === 'platform_admin' ? (
+              <div>
+                <label htmlFor="org-tier-select" className="block text-sm text-text-secondary mb-1">Tier</label>
+                <select
+                  id="org-tier-select"
+                  value={org.tier}
+                  onChange={async (e) => {
+                    const updated = await updateOrg(org.id, { tier: e.target.value });
+                    setOrg(updated);
+                  }}
+                  className="px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm"
+                >
+                  <option value="FREE">Free</option>
+                  <option value="STANDARD">Standard</option>
+                  <option value="ENTERPRISE">Enterprise</option>
+                </select>
+              </div>
+            ) : (
+              <p className="text-sm text-text-secondary">
+                Plan: <span data-testid="org-plan" className="text-text-primary">{org.tier}</span>
+              </p>
+            )}
           </div>
 
           <div className="p-4 bg-red-500/5 border border-red-500/20 rounded-lg">

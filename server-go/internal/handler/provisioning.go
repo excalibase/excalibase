@@ -439,7 +439,9 @@ func (h *ProvisioningHandler) SetDeletionProtection(w http.ResponseWriter, r *ht
 }
 
 func (h *ProvisioningHandler) EstimateCost(w http.ResponseWriter, r *http.Request) {
-	var req domain.ProvisioningRequest
+	var req struct {
+		Tier domain.TierType `json:"tier"`
+	}
 	json.NewDecoder(r.Body).Decode(&req)
 
 	// Simple cost estimation

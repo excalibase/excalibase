@@ -130,13 +130,18 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 //
 // A create here is a new project taking one of its organisation's slots — a
 // restore is a creation as much as a provision is — so it goes through the
-// same limited insert. An update does not: the slot was taken when the
-// provision pipeline inserted the row.
+// same limited insert, at the organisation's current plan. An update does
+// not: the slot was taken when the provision pipeline inserted the row.
 func (s *ProvisioningService) persistProjectRow(ctx context.Context, inst *domain.DatabaseInstance, opts RegistrationOptions) error {
 	if opts.RowAlreadyCreated {
 		return s.store.Update(inst)
 	}
-	return s.createProjectRow(ctx, inst, inst.Tier)
+	tier, err := s.orgTier(ctx, inst.OrgID)
+	if err != nil {
+		return err
+	}
+	inst.Tier = tier
+	return s.createProjectRow(ctx, inst, tier)
 }
 
 // rollbackIfOwned runs the compensations RegisterProject registered itself.

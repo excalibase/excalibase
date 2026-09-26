@@ -41,14 +41,14 @@ echo ""
 echo "1. Empty project name rejected"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\"}")
+  -d "{\"projectName\":\"\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\"}")
 echo "$R" | grep -q "project name" && pass "empty project name rejected" || fail "empty project name" "$R"
 
 # 2. Empty org id
 echo "2. Empty org id rejected"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"projectName":"valid","orgId":"","databaseType":"POSTGRESQL","tier":"FREE"}')
+  -d '{"projectName":"valid","orgId":"","databaseType":"POSTGRESQL"}')
 echo "$R" | grep -q "org id" && pass "empty org id rejected" || fail "empty org id" "$R"
 
 # 3. Invalid postgres version — fail fast, no namespace created
@@ -56,7 +56,7 @@ echo "3. Invalid postgres version rejected"
 BEFORE_NS=$(kubectl get ns -o name 2>/dev/null | wc -l)
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"bad-ver\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\",\"postgresVersion\":\"9.2\"}")
+  -d "{\"projectName\":\"bad-ver\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"postgresVersion\":\"9.2\"}")
 AFTER_NS=$(kubectl get ns -o name 2>/dev/null | wc -l)
 echo "$R" | grep -q "postgres version" && pass "pg 9.2 rejected (message)" || fail "pg version" "$R"
 [ "$BEFORE_NS" -eq "$AFTER_NS" ] && pass "no namespace created on validation failure" || fail "ns leak" "before=$BEFORE_NS after=$AFTER_NS"
@@ -65,7 +65,7 @@ echo "$R" | grep -q "postgres version" && pass "pg 9.2 rejected (message)" || fa
 echo "4. Backup retention > 365 rejected"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"bad-backup\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"STANDARD\",\"backup\":{\"enabled\":true,\"retention\":9999}}")
+  -d "{\"projectName\":\"bad-backup\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"backup\":{\"enabled\":true,\"retention\":9999}}")
 echo "$R" | grep -q "retention" && pass "retention 9999 rejected" || fail "retention" "$R"
 
 # 5. Valid postgres version still works
@@ -73,7 +73,7 @@ echo "5. Valid postgres version 17 accepted"
 PROJECT="rb-check-$(date +%s)"
 R=$(curl -s -X POST http://localhost:24005/api/provision/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"projectName\":\"$PROJECT\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"tier\":\"FREE\",\"postgresVersion\":\"17\"}")
+  -d "{\"projectName\":\"$PROJECT\",\"orgId\":\"$ORG_ID\",\"databaseType\":\"POSTGRESQL\",\"postgresVersion\":\"17\"}")
 PROJECT_ID=$(echo "$R" | jq -r '.projectId')
 if [[ "$PROJECT_ID" == proj-* ]]; then
   pass "valid request accepted (ref=$PROJECT_ID)"

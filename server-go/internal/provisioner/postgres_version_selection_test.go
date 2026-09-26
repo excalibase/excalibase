@@ -19,7 +19,6 @@ func TestDockerProvisionUsesTheRequestedMajor(t *testing.T) {
 			ProjectName:     "blog-" + major,
 			OrgID:           "org1",
 			DBType:          domain.PostgreSQL,
-			Tier:            domain.Free,
 			PostgresVersion: major,
 		}, config.TierConfig{}, func(domain.ProvisioningStage) {})
 		if err != nil {
@@ -39,7 +38,6 @@ func TestDockerProvisionRefusesAMissingOrUnsupportedMajor(t *testing.T) {
 			ProjectName:     "blog",
 			OrgID:           "org1",
 			DBType:          domain.PostgreSQL,
-			Tier:            domain.Free,
 			PostgresVersion: major,
 		}, config.TierConfig{}, func(domain.ProvisioningStage) {})
 		if err == nil {

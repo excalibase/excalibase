@@ -34,7 +34,17 @@ var ErrProjectStoreUnavailable = errors.New("the project could not be registered
 // project. *ProvisioningService implements it; the backup service depends on
 // this narrow surface so a restore is metered exactly like a provision.
 type OrgProjectCapacity interface {
-	EnsureOrgProjectCapacity(ctx context.Context, orgID string, tier domain.TierType) error
+	EnsureOrgCanTakeProject(ctx context.Context, orgID string) error
+}
+
+// EnsureOrgCanTakeProject is EnsureOrgProjectCapacity at the organisation's
+// current plan.
+func (s *ProvisioningService) EnsureOrgCanTakeProject(ctx context.Context, orgID string) error {
+	tier, err := s.orgTier(ctx, orgID)
+	if err != nil {
+		return err
+	}
+	return s.EnsureOrgProjectCapacity(ctx, orgID, tier)
 }
 
 // EnsureOrgProjectCapacity refuses a new project before anything is created
@@ -92,4 +102,27 @@ func (s *ProvisioningService) createProjectRow(ctx context.Context, inst *domain
 	default:
 		return fmt.Errorf("%w: create instance: %v", ErrProjectStoreUnavailable, err)
 	}
+}
+
+// ErrOrgTierUnresolved refuses a project whose organisation's plan cannot be
+// read. The plan decides the project's size and limit, so there is no default.
+var ErrOrgTierUnresolved = errors.New("the organization's plan could not be determined")
+
+// orgTier reads the plan of the organisation a new project is created in. The
+// organisation record is the only source: a caller never chooses its tier.
+func (s *ProvisioningService) orgTier(ctx context.Context, orgID string) (domain.TierType, error) {
+	if s.orgStore == nil {
+		return "", fmt.Errorf("%w: no organisation store", ErrOrgTierUnresolved)
+	}
+	org, err := s.orgStore.FindOrgByID(ctx, orgID)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrOrgTierUnresolved, err)
+	}
+	if org == nil {
+		return "", fmt.Errorf("%w: organisation not found", ErrOrgTierUnresolved)
+	}
+	if !domain.IsValidTier(org.Tier) {
+		return "", fmt.Errorf("%w: organisation has tier %q", ErrOrgTierUnresolved, org.Tier)
+	}
+	return org.Tier, nil
 }

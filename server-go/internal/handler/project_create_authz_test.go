@@ -31,14 +31,17 @@ func provisionAs(t *testing.T, memberships map[string]string) int {
 		t.Fatalf("store: %v", err)
 	}
 	orgs := fakestore.NewOrgs()
+	orgs.AddOrg(createAuthzOrg, domain.Free)
 	for orgID, role := range memberships {
 		orgs.AddMember(orgID, createAuthzCaller, role)
 	}
-	h := NewProvisioningHandler(service.NewProvisioningService(store, provisioner.NewFactory(), nil), orgs)
+	svc := service.NewProvisioningService(store, provisioner.NewFactory(), nil)
+	svc.SetOrgStore(orgs)
+	h := NewProvisioningHandler(svc, orgs)
 	r := chi.NewRouter()
 	r.Post("/api/provision/", h.Provision)
 
-	body := `{"projectName":"p","orgId":"` + createAuthzOrg + `","databaseType":"POSTGRESQL","tier":"FREE","postgresVersion":"17"}`
+	body := `{"projectName":"p","orgId":"` + createAuthzOrg + `","databaseType":"POSTGRESQL","postgresVersion":"17"}`
 	req := httptest.NewRequest("POST", "/api/provision/", strings.NewReader(body))
 	req = req.WithContext(auth.SetUser(req.Context(), &domain.User{ID: createAuthzCaller, Role: "user", Active: true}))
 	w := httptest.NewRecorder()
@@ -66,8 +69,8 @@ func TestProvisionRefusesCallersWithoutTheCreateProjectOrgPermission(t *testing.
 func TestProvisionLetsOrgOwnersAndAdminsPastThePermissionCheck(t *testing.T) {
 	for _, role := range []string{domain.OrgRoleOwner, domain.OrgRoleAdmin} {
 		t.Run(role, func(t *testing.T) {
-			if code := provisionAs(t, map[string]string{createAuthzOrg: role}); code == http.StatusForbidden {
-				t.Errorf("an org %s was refused project creation", role)
+			if code := provisionAs(t, map[string]string{createAuthzOrg: role}); code != http.StatusBadRequest {
+				t.Errorf("an org %s got %d, want 400 from the empty provisioner", role, code)
 			}
 		})
 	}

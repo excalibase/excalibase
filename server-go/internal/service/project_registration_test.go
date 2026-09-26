@@ -52,6 +52,8 @@ func newRegistrationHarness(t *testing.T) *registrationHarness {
 		events:   &fakePolicyPublisher{},
 	}
 	h.svc = NewProvisioningService(store, provisioner.NewFactory(), kube)
+	h.svc.SetOrgStore(testOrgs())
+	setOrgTier(h.svc, testRegOrg, domain.Standard)
 	h.svc.SetVault(h.vault)
 	notifier, err := NewPgDogNotifier(h.pgdog, "")
 	if err != nil {
@@ -101,7 +103,7 @@ func TestRegisterProjectSavesActiveRowWithRestoreProvenance(t *testing.T) {
 		t.Errorf("provenance lost: %+v", saved)
 	}
 	if saved.Tier != domain.Standard || saved.OrgID != testRegOrg {
-		t.Errorf("tier/org not carried: %s/%s", saved.Tier, saved.OrgID)
+		t.Errorf("tier/org: got %s/%s, want the org's plan", saved.Tier, saved.OrgID)
 	}
 }
 

@@ -243,7 +243,7 @@ func (s *BackupService) RestoreFromBackup(ctx context.Context, projectID string,
 func (s *BackupService) SetOrgProjectCapacity(c OrgProjectCapacity) { s.capacity = c }
 
 // EnsureOrgProjectCapacity refuses a restore whose new project would take the
-// source project's organisation past its tier limit — before the restore
+// source project's organisation past its current plan's limit — before the restore
 // creates a namespace, a container, or a single vault entry. The handler
 // calls it too, so a caller polling an async restore is told at submission
 // rather than by a failed job.
@@ -251,7 +251,7 @@ func (s *BackupService) EnsureOrgProjectCapacity(ctx context.Context, source *do
 	if s.capacity == nil {
 		return ErrOrgCapacityNotConfigured
 	}
-	return s.capacity.EnsureOrgProjectCapacity(ctx, source.OrgID, source.Tier)
+	return s.capacity.EnsureOrgCanTakeProject(ctx, source.OrgID)
 }
 
 // AllocateProjectID reserves the id a restore will register its new project

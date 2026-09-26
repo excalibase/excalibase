@@ -144,7 +144,7 @@ curl http://localhost:24005/healthz
 # Create a project (self-hosted uses the default org)
 curl -X POST http://localhost:24005/api/provision \
   -H "Content-Type: application/json" \
-  -d '{"projectName":"test","orgId":"default","databaseType":"POSTGRESQL","tier":"FREE"}'
+  -d '{"projectName":"test","orgId":"default","databaseType":"POSTGRESQL"}'
 ```
 
 ## Troubleshooting

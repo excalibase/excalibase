@@ -119,18 +119,28 @@ describe('OrgDetailPage', () => {
     expect(api.delete).toHaveBeenCalledWith('/orgs/o1/members/u-dev');
   });
 
-  test('settings change the tier and delete the org', async () => {
+  test('settings show the plan read-only to the org owner and delete the org', async () => {
     const u = userEvent.setup();
-    vi.mocked(api.patch).mockResolvedValue({ data: { ...org, tier: 'STANDARD' } } as never);
     vi.mocked(api.delete).mockResolvedValue({ data: null } as never);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderPage();
     await u.click(await screen.findByRole('button', { name: /settings/i }));
 
-    await u.selectOptions(screen.getByLabelText('Tier'), 'STANDARD');
-    expect(api.patch).toHaveBeenCalledWith('/orgs/o1', { tier: 'STANDARD' });
+    expect(screen.queryByLabelText('Tier')).not.toBeInTheDocument();
+    expect(screen.getByTestId('org-plan')).toHaveTextContent('FREE');
 
     await u.click(screen.getByRole('button', { name: /delete/i }));
     expect(await screen.findByTestId('orgs-list')).toBeInTheDocument();
+  });
+
+  test('a platform admin changes the plan', async () => {
+    const u = userEvent.setup();
+    useAuthStore.getState().setAuth({ id: 'u-owner', username: 'owner', email: 'owner@x.test', role: 'platform_admin' });
+    vi.mocked(api.patch).mockResolvedValue({ data: { ...org, tier: 'STANDARD' } } as never);
+    renderPage();
+    await u.click(await screen.findByRole('button', { name: /settings/i }));
+
+    await u.selectOptions(screen.getByLabelText('Tier'), 'STANDARD');
+    expect(api.patch).toHaveBeenCalledWith('/orgs/o1', { tier: 'STANDARD' });
   });
 });

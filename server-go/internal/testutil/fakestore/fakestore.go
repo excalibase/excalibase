@@ -157,16 +157,36 @@ func (s *Instances) Delete(projectID string) error {
 	return nil
 }
 
-// Orgs is an OrgStore that only models org membership; every other method is
-// a no-op returning zero values. Members is keyed by org id then user id.
+// Orgs is an OrgStore that only models org membership and org records; every
+// other method is a no-op returning zero values. Members is keyed by org id
+// then user id.
 type Orgs struct {
 	Members map[string]map[string]*domain.OrgMember
+	ByID    map[string]*domain.Org
 	Err     error
 }
 
 // NewOrgs returns an empty org store.
 func NewOrgs() *Orgs {
-	return &Orgs{Members: map[string]map[string]*domain.OrgMember{}}
+	return &Orgs{Members: map[string]map[string]*domain.OrgMember{}, ByID: map[string]*domain.Org{}}
+}
+
+// AddOrg records an organisation on the given plan.
+func (s *Orgs) AddOrg(orgID string, tier domain.TierType) {
+	s.ByID[orgID] = &domain.Org{ID: orgID, Name: orgID, Slug: orgID, Tier: tier}
+}
+
+// FindOrgByID returns a copy of the recorded org, or nil when absent.
+func (s *Orgs) FindOrgByID(_ context.Context, orgID string) (*domain.Org, error) {
+	if s.Err != nil {
+		return nil, s.Err
+	}
+	org, ok := s.ByID[orgID]
+	if !ok {
+		return nil, nil
+	}
+	found := *org
+	return &found, nil
 }
 
 // AddMember records userID as a member of orgID with the given role.
@@ -186,7 +206,6 @@ func (s *Orgs) GetOrgMember(_ context.Context, orgID, userID string) (*domain.Or
 }
 
 func (s *Orgs) CreateOrg(context.Context, *domain.Org) error                      { return nil }
-func (s *Orgs) FindOrgByID(context.Context, string) (*domain.Org, error)          { return nil, nil }
 func (s *Orgs) FindOrgBySlug(context.Context, string) (*domain.Org, error)        { return nil, nil }
 func (s *Orgs) FindOrgsByUser(context.Context, string) ([]*domain.Org, error)     { return nil, nil }
 func (s *Orgs) FindAllOrgs(context.Context) ([]*domain.Org, error)                { return nil, nil }
