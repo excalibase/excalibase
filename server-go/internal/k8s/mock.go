@@ -106,6 +106,15 @@ type MockClient struct {
 	AppAvailable    map[string]int32 // keyed "namespace/name"
 	AppAvailableErr error
 
+	// Lifecycle, keyed "namespace/appID".
+	AppPaused      map[string]bool
+	AppDeleted     map[string]bool
+	AppPauseErr    error
+	AppResumeErr   error
+	AppPodsGoneErr error
+	AppDeleteErr   error
+	AppPruneErr    error
+
 	RuntimeClasses    map[string]bool
 	RuntimeClassError error
 }
@@ -136,6 +145,8 @@ func NewMockClient() *MockClient {
 		AppWorkloads:  make(map[string]*AppWorkload),
 		AppRolloutErr: make(map[string]error),
 		AppAvailable:  make(map[string]int32),
+		AppPaused:     make(map[string]bool),
+		AppDeleted:    make(map[string]bool),
 
 		RuntimeClasses: make(map[string]bool),
 	}
@@ -615,6 +626,53 @@ func (m *MockClient) AppAvailableReplicas(ctx context.Context, namespace, name s
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "AppAvailableReplicas:"+namespace+"/"+name)
 	return m.AppAvailable[namespace+"/"+name], m.AppAvailableErr
+}
+
+func (m *MockClient) PauseAppWorkload(ctx context.Context, namespace, appID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "PauseAppWorkload:"+namespace+"/"+appID)
+	if m.AppPauseErr != nil {
+		return m.AppPauseErr
+	}
+	m.AppPaused[namespace+"/"+appID] = true
+	return nil
+}
+
+func (m *MockClient) ResumeAppWorkload(ctx context.Context, namespace, appID, appName string, timeout time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ResumeAppWorkload:"+namespace+"/"+appID)
+	if m.AppResumeErr != nil {
+		return m.AppResumeErr
+	}
+	delete(m.AppPaused, namespace+"/"+appID)
+	return nil
+}
+
+func (m *MockClient) WaitForAppPodsGone(ctx context.Context, namespace, appID string, timeout time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "WaitForAppPodsGone:"+namespace+"/"+appID)
+	return m.AppPodsGoneErr
+}
+
+func (m *MockClient) DeleteAppWorkload(ctx context.Context, namespace, appID string, timeout time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "DeleteAppWorkload:"+namespace+"/"+appID)
+	if m.AppDeleteErr != nil {
+		return m.AppDeleteErr
+	}
+	m.AppDeleted[namespace+"/"+appID] = true
+	return nil
+}
+
+func (m *MockClient) PruneAppWorkload(ctx context.Context, namespace, appID, keepName string, timeout time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "PruneAppWorkload:"+namespace+"/"+appID+"!="+keepName)
+	return m.AppPruneErr
 }
 
 func (m *MockClient) RuntimeClassExists(ctx context.Context, name string) (bool, error) {

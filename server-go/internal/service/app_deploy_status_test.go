@@ -385,7 +385,7 @@ func seedUnfinishedDeploy(t *testing.T, deploys *fakeDeployStore, app *apphost.A
 	t.Helper()
 	deploy := &apphost.Deploy{
 		ID: fmt.Sprintf("dep-orphan-%d", time.Now().UnixNano()), AppID: app.ID, ProjectID: app.ProjectID,
-		Image: app.Image, Config: apphost.ConfigFromApp(app),
+		Image: app.Image, Config: apphost.ConfigFromApp(app), Spec: apphost.DeploySpec{AppName: app.Name},
 		Status: apphost.DeployStatusPending, CreatedBy: "dev-1", CreatedAt: time.Now().UTC(),
 	}
 	if err := deploys.Create(deploy); err != nil {

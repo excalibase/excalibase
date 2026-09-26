@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Pencil, Rocket } from 'lucide-react';
 import {
@@ -19,6 +20,7 @@ import {
   plainFailureReason,
 } from '../components/containers/appCopy';
 import { DeployHistory } from '../components/containers/DeployHistory';
+import { LifecycleActions } from '../components/containers/LifecycleActions';
 import {
   ContainersHeader,
   HostingGate,
@@ -121,6 +123,7 @@ function Detail({
   const { data: deploys = [] } = useDeploys(projectId, appId, pollIntervalMs);
   const deployApp = useDeployApp(projectId, appId);
   const redeploy = useRedeployApp(projectId, appId);
+  const [lifecycleError, setLifecycleError] = useState<unknown>(null);
 
   if (isLoading) return <Spinner />;
   if (error || !app) {
@@ -134,7 +137,7 @@ function Detail({
   const newest = deploys[0];
   const busy = deployApp.isPending || (newest !== undefined && isDeployInProgress(newest.status));
   const status = appDisplayStatus(app, newest);
-  const actionError = deployApp.error ?? redeploy.error;
+  const actionError = deployApp.error ?? redeploy.error ?? lifecycleError;
 
   return (
     <>
@@ -160,6 +163,11 @@ function Detail({
             >
               <Rocket className="w-4 h-4" /> Deploy
             </button>
+            <LifecycleActions
+              app={app}
+              deployed={newest !== undefined}
+              onError={setLifecycleError}
+            />
           </>
         }
       />
@@ -180,7 +188,10 @@ function Detail({
           role="alert"
           className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400"
         >
-          {apiErrorMessage(actionError, 'The deploy could not be started')}
+          {apiErrorMessage(
+            actionError,
+            lifecycleError ? 'The container could not be changed' : 'The deploy could not be started',
+          )}
         </div>
       )}
       <CurrentDeploy deploy={newest} />

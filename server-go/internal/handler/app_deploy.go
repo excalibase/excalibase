@@ -8,6 +8,8 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -15,6 +17,9 @@ type AppDeployer interface {
 	DeployApp(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, error)
 	RedeployApp(ctx context.Context, projectID, appID, deployID, actor string) (*apphost.Deploy, error)
 	ListDeploys(projectID, appID string, limit int) ([]*apphost.Deploy, error)
+	PauseApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
+	ResumeApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
+	DeleteApp(ctx context.Context, projectID, appID string) error
 }
 
 type AppDeployHandler struct {
@@ -105,10 +110,53 @@ func (h *AppDeployHandler) appPath(w http.ResponseWriter, r *http.Request) (stri
 	return projectID, appID, true
 }
 
+func (h *AppDeployHandler) Pause(w http.ResponseWriter, r *http.Request) {
+	h.lifecycle(w, r, h.deploys.PauseApp)
+}
+
+func (h *AppDeployHandler) Resume(w http.ResponseWriter, r *http.Request) {
+	h.lifecycle(w, r, h.deploys.ResumeApp)
+}
+
+// Delete answers once the app's pods are gone and the app is forgotten, not when the deletion was asked for.
+func (h *AppDeployHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	projectID, appID, ok := h.appPath(w, r)
+	if !ok {
+		return
+	}
+	if err := h.deploys.DeleteApp(r.Context(), projectID, appID); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AppDeployHandler) lifecycle(w http.ResponseWriter, r *http.Request,
+	op func(context.Context, string, string) (*apphost.App, error)) {
+	projectID, appID, ok := h.appPath(w, r)
+	if !ok {
+		return
+	}
+	app, err := op(r.Context(), projectID, appID)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"id": app.ID, "status": app.Status})
+}
+
 func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, apphost.ErrAppNotFound), errors.Is(err, apphost.ErrDeployNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)
+	case errors.Is(err, apphost.ErrAppStatusConflict), errors.Is(err, apphost.ErrAppBusy),
+		errors.Is(err, storage.ErrProjectBusy),
+		errors.Is(err, k8s.ErrAppNotDeployed), errors.Is(err, k8s.ErrAppNotPaused):
+		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, k8s.ErrAppPodsRemain):
+		httpError(w, err.Error()+"; retry to finish", http.StatusGatewayTimeout)
+	case errors.Is(err, k8s.ErrAppRollout):
+		httpError(w, err.Error(), http.StatusBadGateway)
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)
 	}

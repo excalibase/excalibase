@@ -99,6 +99,11 @@ type KubeClient interface {
 	ApplyAppWorkload(ctx context.Context, namespace string, workload *AppWorkload) error
 	WaitForAppRollout(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error
 	AppAvailableReplicas(ctx context.Context, namespace, name string) (int32, error)
+	PauseAppWorkload(ctx context.Context, namespace, appID string) error
+	ResumeAppWorkload(ctx context.Context, namespace, appID, appName string, timeout time.Duration) error
+	WaitForAppPodsGone(ctx context.Context, namespace, appID string, timeout time.Duration) error
+	DeleteAppWorkload(ctx context.Context, namespace, appID string, timeout time.Duration) error
+	PruneAppWorkload(ctx context.Context, namespace, appID, keepName string, timeout time.Duration) error
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
 }
 

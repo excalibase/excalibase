@@ -11,6 +11,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
 // A deploy whose rollout watch died with its replica only ends if the sweep
@@ -37,4 +38,10 @@ func TestAppRolloutSweeper_RunsWhenAppHostingIsOn(t *testing.T) {
 	stop := startAppRolloutSweeper(config.AppConfig{AppHostingEnabled: true}, nil, deploys)
 	stop()
 	startAppRolloutSweeper(config.AppConfig{}, nil, deploys)()
+}
+
+func TestWireAppLifecycle_AcceptsMissingPieces(t *testing.T) {
+	deploys := service.NewAppDeployService(nil, nil, k8s.NewMockClient(), fakestore.NewInstances(), nil, k8s.AppRenderOptions{})
+	wireAppLifecycle(deploys, nil, nil)
+	wireAppLifecycle(deploys, service.NewInProcessOperationClaimer(), vaultclient.NewHTTPClient("http://vault.invalid", "pat"))
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -584,5 +585,24 @@ func TestPointerVariablesAreChargedTheirResolvedWeight(t *testing.T) {
 	app.Env = pointers(fits + 1)
 	if err := app.Validate(); err == nil {
 		t.Fatalf("%d secret references must be refused: each one renders a value", fits+1)
+	}
+}
+
+func TestLifecycleStatuses(t *testing.T) {
+	for _, status := range []string{apphost.StatusPausing, apphost.StatusResuming, apphost.StatusDeleting} {
+		if !apphost.IsBusy(status) {
+			t.Errorf("%s must hold off deploys", status)
+		}
+		if !slices.Contains(apphost.AllStatuses(), status) {
+			t.Errorf("%s must be a known status", status)
+		}
+	}
+	for _, status := range []string{apphost.StatusCreated, apphost.StatusStopped, apphost.StatusRunning, apphost.StatusFailed} {
+		if apphost.IsBusy(status) {
+			t.Errorf("%s must not hold off deploys", status)
+		}
+	}
+	if len(apphost.AllStatuses()) != 7 {
+		t.Errorf("AllStatuses = %v", apphost.AllStatuses())
 	}
 }

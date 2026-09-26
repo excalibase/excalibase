@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/lib/pq"
@@ -180,6 +181,9 @@ func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 		return fmt.Errorf("read app for update: %w", err)
 	}
 
+	if status == StatusDeleting {
+		return ErrAppBusy
+	}
 	if version != expectedVersion {
 		return fmt.Errorf("%w: it is at version %d, not %d", ErrAppVersionConflict, version, expectedVersion)
 	}
@@ -206,14 +210,61 @@ WHERE project_id = $1 AND id = $2`
 	return tx.Commit()
 }
 
-// Delete removes the app row outright and frees the project's app slot.
-//
-// A hard delete is correct while nothing renders a workload: an app record is
-// the only thing that exists for it, so there is no container, no namespace
-// and no address to tear down, and a tombstone would track a teardown that
-// does not happen. The deploy lifecycle (EXC-386) is what introduces a
-// workload worth waiting for, and the deleting status and soft delete belong
-// with it — inventing them here would be a state machine no code could move.
+// Transition locks the app row before the deploy rows, the same order Finish
+// and the deploy store's Create take them in.
+func (s *PostgresAppStore) Transition(projectID, id string, from []string, to string) (*App, error) {
+	if err := ValidateProjectID(projectID); err != nil {
+		return nil, err
+	}
+	if err := ValidateID(id); err != nil {
+		return nil, err
+	}
+	if !validStatuses[to] {
+		return nil, fmt.Errorf("unknown app status: %q", to)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin app transition: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+
+	var blob []byte
+	var status string
+	err = tx.QueryRow(`SELECT doc, status FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
+		projectID, id).Scan(&blob, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrAppNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read app for transition: %w", err)
+	}
+	if !slices.Contains(from, status) {
+		return nil, fmt.Errorf("%w: it is %s", ErrAppStatusConflict, status)
+	}
+	if _, err := tx.Exec(
+		`UPDATE apps SET status = $3, doc = jsonb_set(doc, '{status}', to_jsonb($3::text))
+		 WHERE project_id = $1 AND id = $2`, projectID, id, to); err != nil {
+		return nil, fmt.Errorf("record app status: %w", err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE app_deploys SET status = $3 WHERE project_id = $1 AND app_id = $2 AND status IN ($4, $5)`,
+		projectID, id, DeployStatusSuperseded, DeployStatusPending, DeployStatusRolling); err != nil {
+		return nil, fmt.Errorf("supersede unfinished deploys: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit app transition: %w", err)
+	}
+	app, err := decodeApp(blob)
+	if err != nil {
+		return nil, err
+	}
+	app.Status = to
+	return app, nil
+}
+
+// Delete removes the row, and its deploy history with it, only after a
+// teardown has claimed the app; a row in any other status still describes a
+// workload that may be running.
 func (s *PostgresAppStore) Delete(projectID, id string) error {
 	if err := ValidateProjectID(projectID); err != nil {
 		return err
@@ -221,19 +272,23 @@ func (s *PostgresAppStore) Delete(projectID, id string) error {
 	if err := ValidateID(id); err != nil {
 		return err
 	}
-	res, err := s.db.Exec(
-		`DELETE FROM apps WHERE project_id = $1 AND id = $2`, projectID, id)
+	var status string
+	err := s.db.QueryRow(
+		`WITH target AS (SELECT status FROM apps WHERE project_id = $1 AND id = $2),
+		      removed AS (DELETE FROM apps WHERE project_id = $1 AND id = $2 AND status = $3 RETURNING status)
+		 SELECT COALESCE((SELECT status FROM removed), (SELECT status FROM target), '')`,
+		projectID, id, StatusDeleting).Scan(&status)
 	if err != nil {
 		return fmt.Errorf("delete app: %w", err)
 	}
-	removed, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete app: %w", err)
-	}
-	if removed == 0 {
+	switch status {
+	case "":
 		return ErrAppNotFound
+	case StatusDeleting:
+		return nil
+	default:
+		return fmt.Errorf("%w: it is %s, not being deleted", ErrAppStatusConflict, status)
 	}
-	return nil
 }
 
 func decodeApp(blob []byte) (*App, error) {

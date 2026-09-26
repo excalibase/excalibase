@@ -8,7 +8,7 @@ import { api } from '../api/client';
 import type { App, Deploy, DeployStatus } from '../api/apps';
 
 vi.mock('../api/client', () => ({
-  api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() },
+  api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
 const app: App = {
@@ -47,17 +47,22 @@ const deploy = (overrides: Partial<Deploy>): Deploy => ({
 });
 
 interface Scenario {
+  app?: Partial<App>;
   deploys: Deploy[];
   // Statuses the newest deploy moves through on each successive poll.
   progression?: Array<{ status: DeployStatus; failureReason?: string }>;
 }
 
 function renderPage(scenario: Scenario) {
-  const state = { deploys: [...scenario.deploys], progression: [...(scenario.progression ?? [])] };
+  const state = {
+    app: { ...app, ...scenario.app },
+    deploys: [...scenario.deploys],
+    progression: [...(scenario.progression ?? [])],
+  };
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config')
       return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting: true } } as never);
-    if (url === '/projects/proj-1/apps/app-1') return Promise.resolve({ data: app } as never);
+    if (url === '/projects/proj-1/apps/app-1') return Promise.resolve({ data: state.app } as never);
     if (url.startsWith('/projects/proj-1/apps/app-1/deploys')) {
       const newest = state.deploys[0];
       const next =
@@ -69,7 +74,13 @@ function renderPage(scenario: Scenario) {
     }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
+  vi.mocked(api.delete).mockResolvedValue({ status: 204 } as never);
   vi.mocked(api.post).mockImplementation((url: string) => {
+    const lifecycle = url.match(/\/apps\/app-1\/(pause|resume)$/);
+    if (lifecycle) {
+      state.app = { ...state.app, status: lifecycle[1] === 'pause' ? 'PAUSED' : 'ACTIVE' };
+      return Promise.resolve({ data: { id: 'app-1', status: state.app.status } } as never);
+    }
     const revision = state.deploys.length + 1;
     if (url === '/projects/proj-1/apps/app-1/deploy') {
       const created = deploy({
@@ -108,6 +119,7 @@ function renderPage(scenario: Scenario) {
             path="/project/:projectId/containers/:appId"
             element={<ContainerDetailPage pollIntervalMs={10} />}
           />
+          <Route path="/project/:projectId/containers" element={<p>containers list</p>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -119,6 +131,54 @@ describe('ContainerDetailPage', () => {
   beforeEach(() => {
     vi.mocked(api.get).mockReset();
     vi.mocked(api.post).mockReset();
+    vi.mocked(api.delete).mockReset();
+  });
+
+  test('pause stops a running container and shows it paused', async () => {
+    const { user } = renderPage({ app: { status: 'ACTIVE' }, deploys: [deploy({})] });
+    await user.click(await screen.findByTestId('pause-button'));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/pause'));
+    await waitFor(() => expect(screen.getByTestId('container-status')).toHaveTextContent('Paused'));
+    expect(screen.queryByTestId('pause-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('resume-button')).toBeInTheDocument();
+  });
+
+  test('resume starts a paused container again', async () => {
+    const { user } = renderPage({ app: { status: 'PAUSED' }, deploys: [deploy({})] });
+    await user.click(await screen.findByTestId('resume-button'));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/resume'));
+    await waitFor(() => expect(screen.getByTestId('container-status')).toHaveTextContent('Running'));
+  });
+
+  test('a container that never ran offers neither pause nor resume', async () => {
+    renderPage({ deploys: [] });
+    expect(await screen.findByTestId('delete-button')).toBeInTheDocument();
+    expect(screen.queryByTestId('pause-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('resume-button')).not.toBeInTheDocument();
+  });
+
+  test('delete asks for confirmation, then removes the container and goes back to the list', async () => {
+    const { user } = renderPage({ app: { status: 'ACTIVE' }, deploys: [deploy({})] });
+    await user.click(await screen.findByTestId('delete-button'));
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(screen.getByTestId('delete-confirm-text')).toHaveTextContent(/stops the container/i);
+
+    await user.click(screen.getByTestId('delete-cancel'));
+    expect(screen.queryByTestId('delete-confirm-text')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('delete-button'));
+    await user.click(screen.getByTestId('delete-confirm'));
+    await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/projects/proj-1/apps/app-1'));
+    expect(await screen.findByText('containers list')).toBeInTheDocument();
+  });
+
+  test('a refused lifecycle action says why', async () => {
+    const { user } = renderPage({ app: { status: 'ACTIVE' }, deploys: [deploy({})] });
+    vi.mocked(api.post).mockRejectedValueOnce({
+      response: { data: { error: 'the app is being paused, resumed or deleted' } },
+    });
+    await user.click(await screen.findByTestId('pause-button'));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/being paused, resumed or deleted/);
   });
 
   test('deploy shows the rollout moving from queued to rolling out to live', async () => {

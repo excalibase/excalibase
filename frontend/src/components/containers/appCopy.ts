@@ -42,8 +42,17 @@ export const DEPLOY_STATUS: Record<DeployStatus, { label: string; tone: Tone }> 
   superseded: { label: 'Replaced by a newer deploy', tone: 'neutral' },
 };
 
+const LIFECYCLE_STATUS: Record<string, { label: string; tone: Tone }> = {
+  PAUSING: { label: 'Pausing', tone: 'progress' },
+  RESUMING: { label: 'Resuming', tone: 'progress' },
+  DELETING: { label: 'Deleting', tone: 'progress' },
+};
+
 export function appDisplayStatus(app: App, lastDeploy?: Deploy): { label: string; tone: Tone } {
+  const lifecycle = LIFECYCLE_STATUS[app.status];
+  if (lifecycle) return lifecycle;
   if (app.replicas === 0) return { label: 'Stopped', tone: 'warning' };
+  if (app.status === 'PAUSED') return { label: 'Paused', tone: 'warning' };
   switch (lastDeploy?.status) {
     case undefined:
       return { label: 'Not deployed', tone: 'neutral' };

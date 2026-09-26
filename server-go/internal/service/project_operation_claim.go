@@ -22,6 +22,7 @@ const (
 	OperationRotation    ProjectOperation = "rotation"
 	OperationUpgrade     ProjectOperation = "version upgrade"
 	OperationMaintenance ProjectOperation = "maintenance window change"
+	OperationDeploy      ProjectOperation = "deploy"
 )
 
 // ErrProjectOperationRunning is what every caller refused the project's

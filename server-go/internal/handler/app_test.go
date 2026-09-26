@@ -121,6 +121,10 @@ func (f *fakeAppStore) Update(app *apphost.App, expectedVersion int) error {
 	return nil
 }
 
+func (f *fakeAppStore) Transition(string, string, []string, string) (*apphost.App, error) {
+	return nil, errors.New("not used")
+}
+
 func (f *fakeAppStore) Delete(projectID, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -577,7 +581,7 @@ func TestAppGetMissingIs404(t *testing.T) {
 func TestAppIsScopedToItsProject(t *testing.T) {
 	r, _ := setupAppRouter(t)
 	created := createAppForTest(t, r)
-	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+	for _, method := range []string{http.MethodGet, http.MethodPatch} {
 		w := doAppRequest(t, r, method, "/api/projects/proj_intruder/apps/"+created.ID+"/", nil)
 		if w.Code != http.StatusNotFound {
 			t.Errorf("%s through another project must be 404, got %d", method, w.Code)
@@ -736,23 +740,6 @@ func TestAppUpdateMissingIs404(t *testing.T) {
 		map[string]any{"replicas": 2})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404, body=%s", w.Code, w.Body.String())
-	}
-}
-
-func TestAppDelete(t *testing.T) {
-	r, store := setupAppRouter(t)
-	created := createAppForTest(t, r)
-
-	w := doAppRequest(t, r, http.MethodDelete, "/api/projects/"+appTestProject+"/apps/"+created.ID+"/", nil)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("delete: got %d, body=%s", w.Code, w.Body.String())
-	}
-	if _, ok := store.apps[appKey(appTestProject, created.ID)]; ok {
-		t.Error("the app must be gone from the store")
-	}
-	w = doAppRequest(t, r, http.MethodDelete, "/api/projects/"+appTestProject+"/apps/"+created.ID+"/", nil)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("a repeated delete must be 404, got %d", w.Code)
 	}
 }
 
@@ -984,5 +971,18 @@ func TestAppResponseOmitsAnUnroutableURL(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), `"url"`) {
 		t.Errorf("no route configured, so no url: %s", w.Body.String())
+	}
+}
+
+func TestAppUpdate_RefusedWhileDeleting(t *testing.T) {
+	store := newFakeAppStore()
+	seedSecretApp(t, store)
+	h := NewAppHandler(busyAppStore{store}, newFakeSources("storefront_db"), testAppRoute)
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
+	w := doAppRequest(t, r, http.MethodPatch, "/api/projects/"+appTestProject+"/apps/"+secretTestApp+"/",
+		map[string]any{"replicas": 1})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("got %d, want 409, body=%s", w.Code, w.Body.String())
 	}
 }

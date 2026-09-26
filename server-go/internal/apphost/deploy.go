@@ -40,6 +40,9 @@ type DeploySpec struct {
 	Resources DeployResources `json:"resources"`
 	// URL is where this deploy is served.
 	URL string `json:"url,omitempty"`
+	// AppName is the name the workload was rendered under, so a resumed watch
+	// follows it even after the app has been renamed.
+	AppName string `json:"appName,omitempty"`
 }
 
 // DeployConfig is the full app config a deploy froze and rolled out: literal

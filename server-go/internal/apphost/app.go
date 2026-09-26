@@ -94,6 +94,11 @@ const (
 	StatusRunning = string(domain.StatusActive)
 	// StatusFailed — the latest deploy failed and nothing is serving.
 	StatusFailed = string(domain.StageFailed)
+	// StatusPausing, StatusResuming and StatusDeleting are held while a
+	// lifecycle operation runs, and stay behind when one fails so it is retried.
+	StatusPausing  = string(domain.StatusPausing)
+	StatusResuming = string(domain.StatusResuming)
+	StatusDeleting = string(domain.StatusDeleting)
 )
 
 // validStatuses bounds what may be written to the status column, so a typo
@@ -103,6 +108,24 @@ var validStatuses = map[string]bool{
 	StatusStopped: true,
 	StatusRunning: true,
 	StatusFailed:  true,
+
+	StatusPausing:  true,
+	StatusResuming: true,
+	StatusDeleting: true,
+}
+
+// AllStatuses lists every status an app may hold.
+func AllStatuses() []string {
+	out := make([]string, 0, len(validStatuses))
+	for status := range validStatuses {
+		out = append(out, status)
+	}
+	return out
+}
+
+// IsBusy reports whether a lifecycle operation owns the app, so no deploy may start.
+func IsBusy(status string) bool {
+	return status == StatusPausing || status == StatusResuming || status == StatusDeleting
 }
 
 // StatusFor is the status a new app holds given the replica count it was

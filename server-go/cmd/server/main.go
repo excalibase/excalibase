@@ -179,6 +179,7 @@ func runServer(cfg config.AppConfig) {
 		provSvc:      provSvc,
 		pgStore:      pgStore,
 		dockerClient: dockerClientRef,
+		claimer:      lifecycleClaimer,
 	})
 	deps.fnHandler = fnHandler
 	// The schema browser holds one connection per project for ten minutes.
@@ -981,6 +982,8 @@ type handlerDepsArgs struct {
 	provSvc      *service.ProvisioningService
 	pgStore      storage.ParameterGroupStore
 	dockerClient provisioner.DockerClient // optional, for Docker-mode backup adapter
+	// claimer is the cross-replica lifecycle lease; nil keeps the in-process one.
+	claimer service.ProjectOperationClaimer
 }
 
 // buildBackupService wires the BackupService with the right adapter
@@ -1102,6 +1105,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		k8sClient, store, service.NewAppEnvResolver(vc, store), k8s.AppRenderOptions{
 			RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Route: appRoute(cfg),
 		})
+	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
 	// A restore finishes the way a provision does: the adapters hand the
 	// recovered database to the provisioning service's registration path
@@ -1521,7 +1525,9 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Route("/{appId}", func(r chi.Router) {
 				r.Get("/", d.appHandler.Get)
 				r.With(dev).Patch("/", d.appHandler.Update)
-				r.With(dev).Delete("/", d.appHandler.Delete)
+				r.With(dev).Delete("/", d.appDeployHandler.Delete)
+				r.With(dev).Post("/pause", d.appDeployHandler.Pause)
+				r.With(dev).Post("/resume", d.appDeployHandler.Resume)
 				r.With(dev).Post("/deploy", d.appDeployHandler.Deploy)
 				r.Get("/deploys", d.appDeployHandler.ListDeploys)
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)

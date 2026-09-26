@@ -248,3 +248,44 @@ func TestAppSecret_NoResponseEverCarriesTheValue(t *testing.T) {
 		}
 	}
 }
+
+func TestAppSecret_RefusedWhileTheAppIsDeleting(t *testing.T) {
+	store, vault := newFakeAppStore(), newFakeVault()
+	seedSecretApp(t, store)
+	app := store.apps[appKey(appTestProject, secretTestApp)]
+	app.Status = apphost.StatusDeleting
+	store.apps[appKey(appTestProject, secretTestApp)] = app
+	r := appSurfaceRouter(store, NewAppSecretHandler(store, vault), newFakeAppDeployer())
+
+	if w := putSecret(r, secretTestApp, "API_KEY", valueBody(secretTestValue)); w.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409", w.Code)
+	}
+	if len(vault.data) != 0 {
+		t.Fatalf("a value was stored for an app being deleted: %v", vault.data)
+	}
+}
+
+// A deletion that finished between the read and the write must not leave the value behind.
+func TestAppSecret_AValueWrittenForAnAppThatWentIsRemoved(t *testing.T) {
+	for name, store := range map[string]func(*fakeAppStore) apphost.Store{
+		"deleted":  func(s *fakeAppStore) apphost.Store { return vanishingAppStore{s} },
+		"deleting": func(s *fakeAppStore) apphost.Store { return busyAppStore{s} },
+	} {
+		base, vault := newFakeAppStore(), newFakeVault()
+		seedSecretApp(t, base)
+		wrapped := store(base)
+		r := appSurfaceRouter(wrapped, NewAppSecretHandler(wrapped, vault), newFakeAppDeployer())
+		w := putSecret(r, secretTestApp, "API_KEY", valueBody(secretTestValue))
+		if w.Code == http.StatusOK {
+			t.Fatalf("%s: status 200", name)
+		}
+		ref := apphost.AppSecretRef(appTestProject, secretTestApp, "API_KEY")
+		if _, still := vault.data[ref.Path]; still {
+			t.Errorf("%s: the value outlived its app", name)
+		}
+	}
+}
+
+type busyAppStore struct{ *fakeAppStore }
+
+func (busyAppStore) Update(*apphost.App, int) error { return apphost.ErrAppBusy }

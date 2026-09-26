@@ -183,6 +183,22 @@ export const redeployApp = async (
 ): Promise<Deploy> =>
   (await api.post<Deploy>(`${appsBase(projectId)}/${appId}/deploys/${deployId}/redeploy`)).data;
 
+export interface AppLifecycleResult {
+  id: string;
+  status: string;
+}
+
+export const pauseApp = async (projectId: string, appId: string): Promise<AppLifecycleResult> =>
+  (await api.post<AppLifecycleResult>(`${appsBase(projectId)}/${appId}/pause`)).data;
+
+export const resumeApp = async (projectId: string, appId: string): Promise<AppLifecycleResult> =>
+  (await api.post<AppLifecycleResult>(`${appsBase(projectId)}/${appId}/resume`)).data;
+
+// Answers once the container's pods are gone and it is forgotten.
+export const deleteApp = async (projectId: string, appId: string): Promise<void> => {
+  await api.delete(`${appsBase(projectId)}/${appId}`);
+};
+
 export const useApps = (projectId: string, enabled = true) =>
   useQuery({
     queryKey: appsKey(projectId),
@@ -244,3 +260,24 @@ export const useRedeployApp = (projectId: string, appId: string) => {
     onSuccess: () => qc.invalidateQueries({ queryKey: deploysKey(projectId, appId) }),
   });
 };
+
+const useLifecycle = (
+  projectId: string,
+  appId: string,
+  action: (projectId: string, appId: string) => Promise<unknown>,
+) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => action(projectId, appId),
+    onSettled: () => qc.invalidateQueries({ queryKey: appsKey(projectId) }),
+  });
+};
+
+export const usePauseApp = (projectId: string, appId: string) =>
+  useLifecycle(projectId, appId, pauseApp);
+
+export const useResumeApp = (projectId: string, appId: string) =>
+  useLifecycle(projectId, appId, resumeApp);
+
+export const useDeleteApp = (projectId: string, appId: string) =>
+  useLifecycle(projectId, appId, deleteApp);
