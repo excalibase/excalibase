@@ -42,6 +42,19 @@ const DocumentDBDatabase = "postgres"
 // loopback without a password before any client authenticates.
 const DocumentDBGatewayRole = "documentdb"
 
+// DocumentDBBootstrapSQL creates what the gateway needs the moment it starts:
+// the extension it serves, then its login role, never a superuser, as a
+// DocumentDB user. All are idempotent, so the provisioning step can run them again to converge. The
+// block is tagged $role$, not $$: CNPG's initdb job receives $$ as $.
+func DocumentDBBootstrapSQL() []string {
+	return []string{
+		"CREATE EXTENSION IF NOT EXISTS " + DocumentDBExtension + " CASCADE",
+		"DO $role$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + DocumentDBGatewayRole +
+			"') THEN CREATE ROLE \"" + DocumentDBGatewayRole + "\" LOGIN; END IF; END $role$",
+		"GRANT " + DocumentDBExtension + "_admin_role TO \"" + DocumentDBGatewayRole + "\"",
+	}
+}
+
 // documentDBPreloadLibraries is the shared_preload_libraries list DocumentDB
 // needs. It is upstream's own, produced by scripts/preload_libraries.sh for a
 // non-distributed build (no citus, no extended rum) at the pinned tag:

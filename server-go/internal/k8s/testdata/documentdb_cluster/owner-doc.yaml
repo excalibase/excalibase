@@ -8,6 +8,11 @@ spec:
     initdb:
       database: appdb
       owner: owner_doc
+      postInitSQL:
+      - CREATE EXTENSION IF NOT EXISTS documentdb CASCADE
+      - DO $role$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'documentdb')
+        THEN CREATE ROLE "documentdb" LOGIN; END IF; END $role$
+      - GRANT documentdb_admin_role TO "documentdb"
   certificates:
     serverAltDNSNames:
     - proj-hba00001-documentdb
