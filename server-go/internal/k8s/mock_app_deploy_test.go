@@ -130,3 +130,15 @@ func TestMockClient_AppLogs(t *testing.T) {
 		t.Fatal("want the scripted error")
 	}
 }
+
+func TestMockClient_AppCapacityAnswers(t *testing.T) {
+	m := NewMockClient()
+	m.LivePods = map[string]AppPods{"ns1/a1": {Count: 2}}
+	m.Placement = RuntimePlacement{OverheadCPUMilli: 10, OverheadMemBytes: 20}
+	if pods, err := m.LiveAppPods(context.Background(), "ns1", "a1"); pods.Count != 2 || err != nil {
+		t.Fatalf("LiveAppPods = %+v %v", pods, err)
+	}
+	if placement, err := m.RuntimeClassPlacement(context.Background(), "gvisor"); placement.OverheadCPUMilli != 10 || err != nil {
+		t.Fatalf("placement = %+v %v", placement, err)
+	}
+}

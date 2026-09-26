@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -427,6 +429,23 @@ func TestAppDeployHandler_ResponsesNeverLeakEnvValues(t *testing.T) {
 		}
 		if strings.Contains(body, "\"config\"") {
 			t.Fatalf("%s %s: response must never carry the frozen config: %s", req.method, req.path, body)
+		}
+	}
+}
+
+func TestAppDeployHandler_Deploy_PlanRefusals(t *testing.T) {
+	for err, code := range map[error]int{
+		fmt.Errorf("%w: the FREE plan allows at most 1", service.ErrAppOverPlan): http.StatusConflict,
+		fmt.Errorf("%w: organisation missing", service.ErrOrgTierUnresolved):     http.StatusInternalServerError,
+	} {
+		deployer := newFakeAppDeployer()
+		deployer.deployErr = err
+		rec := doDeployRequest(t, setupAppDeployRouter(t, deployer), http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/app-1/deploy")
+		if rec.Code != code {
+			t.Errorf("%v: got %d want %d", err, rec.Code, code)
+		}
+		if strings.Contains(rec.Body.String(), "organisation missing") {
+			t.Errorf("detail leaked: %s", rec.Body.String())
 		}
 	}
 }

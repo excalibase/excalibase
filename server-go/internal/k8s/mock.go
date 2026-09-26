@@ -121,6 +121,12 @@ type MockClient struct {
 	AppLogLines  map[string][]AppLogLine
 	AppLogsErr   error
 	AppLogsAsked []AppLogOptions
+	// LivePods answers LiveAppPods, keyed "namespace/appID".
+	LivePods    map[string]AppPods
+	LivePodsErr error
+	// Placement answers RuntimeClassPlacement for any class.
+	Placement    RuntimePlacement
+	PlacementErr error
 
 	RuntimeClasses    map[string]bool
 	RuntimeClassError error
@@ -702,6 +708,20 @@ func (m *MockClient) AppLogs(ctx context.Context, namespace, appID string, opts 
 		return AppLogPage{}, m.AppLogsErr
 	}
 	return AppLogPage{Lines: m.AppLogLines[namespace+"/"+appID]}, nil
+}
+
+func (m *MockClient) LiveAppPods(ctx context.Context, namespace, appID string) (AppPods, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "LiveAppPods:"+namespace+"/"+appID)
+	return m.LivePods[namespace+"/"+appID], m.LivePodsErr
+}
+
+func (m *MockClient) RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "RuntimeClassPlacement:"+name)
+	return m.Placement, m.PlacementErr
 }
 
 func (m *MockClient) RuntimeClassExists(ctx context.Context, name string) (bool, error) {

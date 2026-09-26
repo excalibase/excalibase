@@ -98,7 +98,7 @@ func TestLiveAppStatusFollowsTheRollout(t *testing.T) {
 			t.Fatalf("deploy left behind: got %q want rolling", got)
 		}
 
-		restarted := NewAppDeployService(apps, deploys, lab.client, lab.instances, nil, lab.render())
+		restarted := lab.newService(apps, deploys)
 		stop := restarted.StartRolloutSweeper(lab.ctx, NewLeadership(AlwaysLeader{}), time.Minute)
 		defer stop()
 		lab.expectOutcome(t, deploys, deploy.ID, apphost.DeployStatusSucceeded, apphost.StatusRunning)
@@ -215,7 +215,7 @@ func (lab *appLiveLab) app(t *testing.T, projectID, name, image string) *apphost
 	t.Helper()
 	namespace := "org1-" + projectID
 	lab.namespace(t, namespace)
-	lab.instances.Items[projectID] = &domain.DatabaseInstance{ProjectID: projectID, Namespace: namespace}
+	lab.instances.Items[projectID] = &domain.DatabaseInstance{ProjectID: projectID, Namespace: namespace, OrgID: "org1"}
 	return &apphost.App{ID: "app-" + name, ProjectID: projectID, Name: name, Image: image,
 		Port: 8080, Replicas: 1, Tier: domain.Free, Status: apphost.StatusCreated}
 }
@@ -223,7 +223,16 @@ func (lab *appLiveLab) app(t *testing.T, projectID, name, image string) *apphost
 func (lab *appLiveLab) service(app *apphost.App) (*AppDeployService, *fakeDeployStore, *fakeAppStoreForDeploy) {
 	apps := newFakeAppStoreForDeploy(app)
 	deploys := newFakeDeployStore()
-	return NewAppDeployService(apps, deploys, lab.client, lab.instances, nil, lab.render()), deploys, apps
+	return lab.newService(apps, deploys), deploys, apps
+}
+
+// newService sizes apps by a FREE organisation and admits them against the live cluster's capacity.
+func (lab *appLiveLab) newService(apps *fakeAppStoreForDeploy, deploys *fakeDeployStore) *AppDeployService {
+	orgs := fakestore.NewOrgs()
+	orgs.AddOrg("org1", domain.Free)
+	svc := NewAppDeployService(apps, deploys, lab.client, lab.instances, nil, lab.render())
+	svc.SetPlanTiers(NewOrgPlanTiers(lab.instances, orgs))
+	return svc
 }
 
 func (lab *appLiveLab) deploy(t *testing.T, svc *AppDeployService, app *apphost.App) *apphost.Deploy {

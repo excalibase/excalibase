@@ -46,9 +46,33 @@ func newDeployTestService(t *testing.T, app *apphost.App) (*AppDeployService, *f
 	instances.Items[app.ProjectID] = &domain.DatabaseInstance{
 		ProjectID: app.ProjectID, Namespace: testDeployNamespace,
 	}
+	kube.Capacity = roomyCluster
 	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, testDeployRender)
+	svc.SetPlanTiers(fixedPlan{tier: app.Tier})
 	svc.async = func(f func()) { f() }
 	return svc, deployStore, kube
+}
+
+// roomyCluster has room for anything a test deploys.
+var roomyCluster = oneNodeCluster(64000, 256<<30, 0, 0)
+
+// oneNodeCluster is a single schedulable node, accounted the same way cluster-wide and per node.
+func oneNodeCluster(cpuMilli, memBytes, requestedCPU, requestedMem int64) k8s.ClusterCapacity {
+	return k8s.ClusterCapacity{
+		AllocatableCPUMilli: cpuMilli, AllocatableMemBytes: memBytes,
+		RequestedCPUMilli: requestedCPU, RequestedMemBytes: requestedMem,
+		Nodes: []k8s.NodeCapacity{{Name: "n1", AllocatableCPUMilli: cpuMilli, AllocatableMemBytes: memBytes,
+			RequestedCPUMilli: requestedCPU, RequestedMemBytes: requestedMem}},
+	}
+}
+
+type fixedPlan struct {
+	tier domain.TierType
+	err  error
+}
+
+func (p fixedPlan) ProjectPlanTier(context.Context, string) (domain.TierType, error) {
+	return p.tier, p.err
 }
 
 var testDeployRender = k8s.AppRenderOptions{RuntimeClass: "gvisor", Route: k8s.AppRouteOptions{
@@ -369,8 +393,8 @@ func TestDeployApp_InvalidTier(t *testing.T) {
 	svc, _, _ := newDeployTestService(t, app)
 
 	_, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
-	if err == nil || !strings.Contains(err.Error(), "resolve app tier") {
-		t.Fatalf("expected a wrapped tier error, got %v", err)
+	if !errors.Is(err, ErrOrgTierUnresolved) || !strings.Contains(err.Error(), "unknown app tier") {
+		t.Fatalf("expected an unresolved plan, got %v", err)
 	}
 }
 

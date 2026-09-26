@@ -12,6 +12,7 @@ describe('plainFailureReason', () => {
     ['app rollout: web did not become ready within 5m0s', /did not become ready in time/i],
     ['app rollout: web Unschedulable: no node can run runtime class "gvisor"', /no room to run/i],
     ['the project has no namespace to deploy into', /not ready to run containers/i],
+    ['there is no room to run the app right now; try again later', /no room to run/i],
     [
       'read the pull credential for ghcr.io: the credential store could not be read',
       /credential for the image's registry could not be read/i,

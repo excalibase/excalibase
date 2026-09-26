@@ -51,7 +51,9 @@ func newLifecycleFixture(t *testing.T, status string) *lifecycleFixture {
 	kube := k8s.NewMockClient()
 	instances := fakestore.NewInstances()
 	instances.Items[app.ProjectID] = &domain.DatabaseInstance{ProjectID: app.ProjectID, Namespace: testDeployNamespace}
+	kube.Capacity = roomyCluster
 	svc := NewAppDeployService(apps, deploys, kube, instances, nil, testDeployRender)
+	svc.SetPlanTiers(fixedPlan{tier: app.Tier})
 	svc.async = func(f func()) { f() }
 	purger := &fakeSecretPurger{}
 	svc.SetSecretPurger(purger)

@@ -107,6 +107,8 @@ type KubeClient interface {
 	DeleteRegistryPullSecrets(ctx context.Context, namespace, registry string) error
 	AppLogs(ctx context.Context, namespace, appID string, opts AppLogOptions) (AppLogPage, error)
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
+	LiveAppPods(ctx context.Context, namespace, appID string) (AppPods, error)
+	RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error)
 }
 
 // ClusterCapacity holds aggregate cluster resource state. All values are in
@@ -124,6 +126,55 @@ type ClusterCapacity struct {
 	RequestedCPUMilli   int64 // sum of pod CPU requests in flight (milli)
 	RequestedMemBytes   int64 // sum of pod memory requests in flight (bytes)
 	HeadroomPercent     int   // % of allocatable held back as a safety buffer (0-100)
+	// Nodes is the same accounting per schedulable node: a pod must fit on one.
+	Nodes []NodeCapacity
+}
+
+// NodeCapacity is one schedulable node's allocatable and what its pods request.
+type NodeCapacity struct {
+	Name                string
+	Labels              map[string]string
+	AllocatableCPUMilli int64
+	AllocatableMemBytes int64
+	RequestedCPUMilli   int64
+	RequestedMemBytes   int64
+}
+
+// Fits reports whether one more pod of this size fits on the node, keeping
+// the same headroom back as the cluster-wide check.
+func (n NodeCapacity) Fits(cpuMilli, memBytes int64, headroomPercent int) bool {
+	node := ClusterCapacity{
+		AllocatableCPUMilli: n.AllocatableCPUMilli, AllocatableMemBytes: n.AllocatableMemBytes,
+		RequestedCPUMilli: n.RequestedCPUMilli, RequestedMemBytes: n.RequestedMemBytes,
+		HeadroomPercent: headroomPercent,
+	}
+	return node.FreeCPUMilli() >= cpuMilli && node.FreeMemBytes() >= memBytes
+}
+
+// Matches reports whether the node carries every label of a node selector.
+func (n NodeCapacity) Matches(selector map[string]string) bool {
+	for key, value := range selector {
+		if n.Labels[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+// AppPods is what an app's live pods request now.
+type AppPods struct {
+	Count       int
+	CPUMilli    int64
+	MemBytes    int64
+	MaxCPUMilli int64
+	MaxMemBytes int64
+}
+
+// RuntimePlacement is what a RuntimeClass adds to each pod and where it may run.
+type RuntimePlacement struct {
+	OverheadCPUMilli int64
+	OverheadMemBytes int64
+	NodeSelector     map[string]string
 }
 
 // UsableCPUMilli is allocatable minus the headroom buffer. This is the

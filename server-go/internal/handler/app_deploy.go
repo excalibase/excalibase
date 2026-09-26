@@ -9,6 +9,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -157,6 +158,10 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, err.Error()+"; retry to finish", http.StatusGatewayTimeout)
 	case errors.Is(err, k8s.ErrAppRollout):
 		httpError(w, err.Error(), http.StatusBadGateway)
+	case errors.Is(err, service.ErrAppOverPlan):
+		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, service.ErrOrgTierUnresolved):
+		httpError(w, service.ErrOrgTierUnresolved.Error(), http.StatusInternalServerError)
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)
 	}
