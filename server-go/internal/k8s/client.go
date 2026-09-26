@@ -145,6 +145,13 @@ func ProjectNamespaceLabels(orgID string) (map[string]string, error) {
 	return map[string]string{
 		"excalibase.io/type": "project",
 		"excalibase.io/org":  orgID,
+		// Baseline admits gVisor apps, which keep root images and the default capabilities.
+		"pod-security.kubernetes.io/enforce":         "baseline",
+		"pod-security.kubernetes.io/enforce-version": "latest",
+		"pod-security.kubernetes.io/warn":            "restricted",
+		"pod-security.kubernetes.io/warn-version":    "latest",
+		"pod-security.kubernetes.io/audit":           "restricted",
+		"pod-security.kubernetes.io/audit-version":   "latest",
 	}, nil
 }
 
