@@ -204,7 +204,6 @@ export interface RestoreRequest {
   newProjectName: string;
   targetTime?: string;       // ISO-8601, e.g. "2024-01-15T12:00:00" — leave blank for full restore
   backupId?: string;
-  storageClassName?: string;
 }
 
 export const useRestoreFromBackup = (projectId: string) => {

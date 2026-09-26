@@ -259,6 +259,12 @@ type AppConfig struct {
 	// AppIngressFromNamespace and AppIngressFromLabels select the only pods an app accepts traffic from.
 	AppIngressFromNamespace string
 	AppIngressFromLabels    map[string]string
+
+	// TenantStorageClass is the StorageClass a project's database runs on when
+	// its request names none; empty is the cluster's default StorageClass.
+	// TenantStorageClasses are the further classes a request may name.
+	TenantStorageClass   string
+	TenantStorageClasses []string
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -283,6 +289,9 @@ func (c AppConfig) IsCloud() bool {
 func (c AppConfig) Validate() error {
 	if c.ProvisionerMode == "docker" && c.IsCloud() {
 		return errDockerCloudUnsupported
+	}
+	if err := c.validateTenantStorageClasses(); err != nil {
+		return err
 	}
 	return c.validateAppRoute()
 }
@@ -391,6 +400,8 @@ func Load() AppConfig {
 		AppTLSSecret:                os.Getenv("APP_TLS_SECRET"),
 		AppIngressFromNamespace:     os.Getenv("APP_INGRESS_FROM_NAMESPACE"),
 		AppIngressFromLabels:        envIngressFromLabels("APP_INGRESS_FROM_LABELS"),
+		TenantStorageClass:          strings.TrimSpace(os.Getenv("TENANT_STORAGE_CLASS")),
+		TenantStorageClasses:        envList("TENANT_STORAGE_CLASSES"),
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	testCronSchedule = "0 2 * * *"
+	testCronSchedule = "0 0 2 * * *"
 	testPGStatParam  = "pg_stat_statements.max"
 )
 
@@ -108,10 +108,15 @@ func TestBuildPostgreSQLClusterJSON(t *testing.T) {
 }
 
 func TestFirstScheduledBackupStartsImmediately(t *testing.T) {
-	for want, obj := range map[bool]*unstructured.Unstructured{
-		false: BuildScheduledBackup("duke-db", "exca-duke-db", testCronSchedule),
-		true:  BuildFirstScheduledBackup("duke-db", "exca-duke-db", testCronSchedule),
-	} {
+	builders := map[bool]func(string, string, string) (*unstructured.Unstructured, error){
+		false: BuildScheduledBackup,
+		true:  BuildFirstScheduledBackup,
+	}
+	for want, build := range builders {
+		obj, err := build("duke-db", "exca-duke-db", testCronSchedule)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
 		if got := obj.Object["spec"].(map[string]interface{})["immediate"]; got != want {
 			t.Errorf("immediate: got %v, want %v", got, want)
 		}
@@ -119,7 +124,10 @@ func TestFirstScheduledBackupStartsImmediately(t *testing.T) {
 }
 
 func TestBuildScheduledBackup(t *testing.T) {
-	obj := BuildScheduledBackup("duke-db", "exca-duke-db", testCronSchedule)
+	obj, err := BuildScheduledBackup("duke-db", "exca-duke-db", testCronSchedule)
+	if err != nil {
+		t.Fatalf("BuildScheduledBackup: %v", err)
+	}
 
 	meta := obj.Object["metadata"].(map[string]interface{})
 	if meta["name"] != "duke-db-postgres-backup" {

@@ -15,7 +15,7 @@ func TestCRDProducesValidYAML(t *testing.T) {
 		ProjectID: "test-db",
 		Namespace: "org-test-db",
 		Tier:      config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2"},
-		Backup:    &BackupOpts{Schedule: "0 2 * * *", RetentionDays: 30},
+		Backup:    &BackupOpts{Schedule: "0 0 2 * * *", RetentionDays: 30},
 		Parameters: map[string]string{
 			"shared_preload_libraries": "pg_stat_statements",
 			"pg_stat_statements.max":   "10000",
@@ -159,10 +159,13 @@ func TestCRDDefaultDatabaseName(t *testing.T) {
 
 // TestScheduledBackupTargetsCorrectCluster verifies the backup CRD references the right cluster.
 func TestScheduledBackupTargetsCorrectCluster(t *testing.T) {
-	obj := BuildScheduledBackup("my-db", "my-ns", "0 3 * * *")
+	obj, err := BuildScheduledBackup("my-db", "my-ns", "0 0 3 * * *")
+	if err != nil {
+		t.Fatalf("BuildScheduledBackup: %v", err)
+	}
 	spec := obj.Object["spec"].(map[string]interface{})
 
-	if spec["schedule"] != "0 3 * * *" {
+	if spec["schedule"] != "0 0 3 * * *" {
 		t.Errorf("schedule: got %v", spec["schedule"])
 	}
 	cluster := spec["cluster"].(map[string]interface{})

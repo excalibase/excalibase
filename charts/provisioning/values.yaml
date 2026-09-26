@@ -49,6 +49,11 @@ env:
   LOG_LEVEL: "info"
   CORS_ORIGINS: "https://app.excalibase.io"
   WATCHER_CHART_PATH: "/charts/excalibase-watcher"
+  # StorageClass a project's database runs on when its request names none;
+  # empty = the cluster's default StorageClass.
+  TENANT_STORAGE_CLASS: ""
+  # Comma-separated further classes a create request may name; empty = only the default.
+  TENANT_STORAGE_CLASSES: ""
 
 platformDB:
   enabled: true

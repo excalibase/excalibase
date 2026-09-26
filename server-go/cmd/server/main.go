@@ -810,6 +810,7 @@ func buildProvisioningService(
 	provSvc.SetCredentialVerifier(service.NewTenantRoleVerifier())
 	provSvc.SetOrgStore(sqlStore)
 	provSvc.SetTierStore(sqlStore)
+	provSvc.SetStorageClassPolicy(cfg.TenantStorageClassPolicy())
 	provSvc.SetSelfHostedMode(!cfg.IsCloud())
 	provSvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
 	if cfg.ProvisionerMode == "docker" {

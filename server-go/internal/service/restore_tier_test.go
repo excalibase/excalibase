@@ -270,6 +270,7 @@ func TestBackupServiceHandsThePlanSourceToItsAdapters(t *testing.T) {
 
 func TestProvisionRecordsTheClusterSettingsARestoreNeeds(t *testing.T) {
 	svc, store, _ := setupProvisioningTest(t)
+	svc.SetStorageClassPolicy(config.StorageClassPolicy{Allowed: []string{"fast-ssd"}})
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		PostgresVersion: "17", ProjectName: "p", OrgID: "org", DBType: domain.PostgreSQL,
 		StorageClass: "fast-ssd", Parameters: map[string]string{"work_mem": "64MB"},

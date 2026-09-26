@@ -533,18 +533,22 @@ func BuildRestoreCluster(opts RestoreClusterOpts) (*unstructured.Unstructured, e
 	return cluster, nil
 }
 
-// BuildScheduledBackup builds a CNPG ScheduledBackup CRD.
-func BuildScheduledBackup(projectID, namespace, schedule string) *unstructured.Unstructured {
+// BuildScheduledBackup builds a CNPG ScheduledBackup CRD, refusing a schedule
+// CloudNativePG would misread.
+func BuildScheduledBackup(projectID, namespace, schedule string) (*unstructured.Unstructured, error) {
 	return scheduledBackup(projectID, namespace, schedule, false)
 }
 
 // BuildFirstScheduledBackup is a ScheduledBackup that also takes a backup as
 // soon as it is created, for a cluster with no base backup of its own yet.
-func BuildFirstScheduledBackup(projectID, namespace, schedule string) *unstructured.Unstructured {
+func BuildFirstScheduledBackup(projectID, namespace, schedule string) (*unstructured.Unstructured, error) {
 	return scheduledBackup(projectID, namespace, schedule, true)
 }
 
-func scheduledBackup(projectID, namespace, schedule string, immediate bool) *unstructured.Unstructured {
+func scheduledBackup(projectID, namespace, schedule string, immediate bool) (*unstructured.Unstructured, error) {
+	if err := ValidateBackupSchedule(schedule); err != nil {
+		return nil, err
+	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": cnpgAPIVersion,
@@ -563,7 +567,7 @@ func scheduledBackup(projectID, namespace, schedule string, immediate bool) *uns
 				"target":    "prefer-standby",
 			},
 		},
-	}
+	}, nil
 }
 
 // BuildManualBackup builds a CNPG Backup CRD for on-demand backup.
