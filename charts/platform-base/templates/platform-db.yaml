@@ -9,7 +9,7 @@ metadata:
 spec:
   instances: {{ .Values.platformDB.instances }}
 
-  imageName: "{{ .Values.platformDB.image.repository }}:{{ .Values.platformDB.image.tag }}"
+  imageName: "{{ .Values.platformDB.image.repository }}:{{ .Values.platformDB.image.tag }}@{{ required "platformDB.image.digest is required" .Values.platformDB.image.digest }}"
 
   postgresql:
     parameters:
@@ -42,15 +42,16 @@ spec:
   {{- end }}
 
   {{- if .Values.platformDB.backup.enabled }}
+  {{- if has .Values.platformDB.backup.s3Secret (list "r2-creds" "backup-s3-creds") }}
+  {{- fail (printf "platformDB.backup.s3Secret %q is the tenant object-storage key; the platform database needs a key of its own" .Values.platformDB.backup.s3Secret) }}
+  {{- end }}
   backup:
     barmanObjectStore:
       destinationPath: {{ .Values.platformDB.backup.destinationPath }}
-      {{- if .Values.platformDB.backup.endpointURL }}
-      endpointURL: {{ .Values.platformDB.backup.endpointURL }}
-      {{- end }}
+      endpointURL: {{ required "platformDB.backup.endpointURL is required when backups are enabled" .Values.platformDB.backup.endpointURL }}
       s3Credentials:
         accessKeyId:
-          name: {{ .Values.platformDB.backup.s3Secret }}
+          name: {{ required "platformDB.backup.s3Secret is required" .Values.platformDB.backup.s3Secret }}
           key: {{ .Values.platformDB.backup.s3AccessKeyIDKey | default "ACCESS_KEY_ID" }}
         secretAccessKey:
           name: {{ .Values.platformDB.backup.s3Secret }}

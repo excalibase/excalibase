@@ -350,10 +350,13 @@ s3://excalibase-backups/{projectId}/cloud/{base,wals}/...
   deployment. Same R2 destination, but the master creds are visible to
   anyone with `get secret -n excalibase-platform r2-creds`. **This is the
   state of the current minikube** — initialise the vault to tighten this.
-- **Platform-db cluster has no backup configured** in the deployed
-  `charts/platform-base/values.yaml`. Per-project clusters are protected;
-  the platform DB itself is not. Single-line fix: wire
-  `.Values.platformDb.backup.s3` to the same secret. Not done by default.
+- **Platform-db backups use a bucket and key of their own**
+  (`platform-db-backup-creds`, `s3://excalibase-platform-db-backups/` in
+  `charts/platform-base`). Never point them at `r2-creds`: every tenant
+  namespace holds a copy of that key, and the platform DB holds every user's
+  password hash and the vault. The chart refuses `r2-creds` and
+  `backup-s3-creds`, requires `platformDB.backup.endpointURL`, and pins the
+  image by digest.
 
 #### R2 layout (Barman convention)
 
