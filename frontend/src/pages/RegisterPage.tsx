@@ -1,13 +1,11 @@
 import { useState } from 'react';
-import { useNavigate, Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { api } from '../api/client';
-import { useAuthStore, type AuthUser } from '../stores/auth-store';
 import { Button } from '../components/Button';
+import { ResendVerification } from '../components/auth/ResendVerification';
 
 export function RegisterPage() {
-  const navigate = useNavigate();
-  const setAuth = useAuthStore((s) => s.setAuth);
   const [searchParams] = useSearchParams();
   const inviteToken = searchParams.get('invite') ?? '';
 
@@ -16,6 +14,7 @@ export function RegisterPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,14 +27,13 @@ export function RegisterPage() {
 
     setLoading(true);
     try {
-      const response = await api.post<{ token: string; user: AuthUser }>('/auth/register', {
+      const response = await api.post<{ status: string; email: string }>('/auth/register', {
         username: username.trim(),
         email: email.trim(),
         password,
         ...(inviteToken ? { inviteToken } : {}),
       });
-      setAuth(response.data.user, { legacyToken: response.data.token });
-      navigate('/orgs', { replace: true });
+      setPendingEmail(response.data.email || email.trim());
     } catch (err: unknown) {
       const axiosErr = err as { response?: { status?: number; data?: { error?: string } } };
       if (axiosErr.response?.status === 409) {
@@ -47,6 +45,21 @@ export function RegisterPage() {
       setLoading(false);
     }
   };
+
+  if (pendingEmail) {
+    return (
+      <div data-testid="check-email" className="space-y-4">
+        <h2 className="text-lg font-semibold text-text-primary">Check your email</h2>
+        <p className="text-sm text-text-secondary">
+          We sent a link to <span className="text-text-primary">{pendingEmail}</span>. Open it to finish creating your account, then sign in.
+        </p>
+        <ResendVerification email={pendingEmail} />
+        <p className="text-center text-sm text-text-secondary">
+          <Link to="/login" className="text-purple-400 hover:text-purple-300 transition-colors">Back to sign in</Link>
+        </p>
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">

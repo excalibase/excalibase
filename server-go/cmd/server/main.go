@@ -124,6 +124,9 @@ func printHelp() {
 
 // runServer initialises all dependencies and starts the HTTP server.
 func runServer(cfg config.AppConfig) {
+	if err := cfg.CheckStudioURL(); err != nil {
+		log.Fatal(err)
+	}
 	sqlStore := buildPlatformStore(cfg)
 	defer sqlStore.Close()
 
@@ -1129,9 +1132,17 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		sqlStore.DB(),
 		emailSender,
 		sqlStore,
-		cfg.PublicBaseURL,
+		cfg.StudioURL,
 		cfg.EmailProductName,
 	)
+	emailVerifier := handler.NewEmailVerifier(sqlStore, emailSender, cfg.StudioURL, cfg.EmailProductName)
+	if !emailVerifier.Available() {
+		log.Println("WARN: no email provider — Studio sign-up is refused until one is configured")
+	}
+	emailTokensHandler.SetVerifier(emailVerifier)
+	// The public resend mails whoever an address names, so it gets its own
+	// tight per-IP budget.
+	emailTokensHandler.SetPublicLimit(custommw.RateLimit(custommw.PerIP, 5, time.Hour))
 
 	var promClient *handler.PromClient
 	if cfg.PromURL != "" {
@@ -1146,6 +1157,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler.SetInstanceStore(store)
 	authHandler.SetInviteOnly(cfg.RegistrationMode == "invite")
 	authHandler.SetSetupTokenStore(sqlStore)
+	authHandler.SetEmailVerifier(emailVerifier)
 	logFirstAdminSetupToken(sqlStore)
 
 	var vaultHandler *handler.VaultHandler
@@ -1415,6 +1427,7 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 			r.With(auth.RequirePermission(auth.PermManageUsers)).Get("/", d.authHandler.ListUsers)
 			r.With(auth.RequirePermission(auth.PermManageUsers)).Post("/", d.authHandler.CreateUser)
 			r.With(auth.RequirePermission(auth.PermManageUsers)).Delete("/{userId}", d.authHandler.DeleteUser)
+			r.With(auth.RequirePermission(auth.PermManageUsers)).Post("/{userId}/verify-email", d.authHandler.MarkEmailVerified)
 		})
 		r.With(auth.RequireAuth, d.rlAuthed).Route("/tokens", func(r chi.Router) {
 			r.Get("/", d.authHandler.ListTokens)

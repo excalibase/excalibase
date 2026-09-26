@@ -18,9 +18,11 @@ type User struct {
 	Active       bool   `json:"active"`
 	// Kind is UserKindHuman or UserKindService. Empty rows predate the column
 	// and are read as human.
-	Kind      string     `json:"kind,omitempty"`
-	CreatedAt *time.Time `json:"createdAt,omitempty"`
-	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// EmailVerifiedAt is when the account proved it owns Email; nil until then.
+	EmailVerifiedAt *time.Time `json:"emailVerifiedAt,omitempty"`
+	CreatedAt       *time.Time `json:"createdAt,omitempty"`
+	UpdatedAt       *time.Time `json:"updatedAt,omitempty"`
 }
 
 // IsService reports whether the user is a service principal.

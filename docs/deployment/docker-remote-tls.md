@@ -45,6 +45,7 @@ directory on the platform host. Then:
 export DEPLOYMENT_MODE=selfhosted
 export CORS_ORIGINS="https://studio.example.com"
 export PUBLIC_BASE_URL="https://api.example.com"
+export STUDIO_URL="https://studio.example.com"
 export STORAGE_PATH=/var/lib/excalibase
 # Platform store — Postgres required in both modes (no SQLite). Point at a
 # Postgres reachable from this host (local container or managed PG).
@@ -104,6 +105,7 @@ services:
       DEPLOYMENT_MODE: selfhosted
       CORS_ORIGINS: "https://studio.example.com"
       PUBLIC_BASE_URL: "https://api.example.com"
+      STUDIO_URL: "https://studio.example.com"
       STORAGE_PATH: /var/lib/excalibase
       # Postgres required in both modes (no SQLite fallback).
       PLATFORM_DB_URL: "postgres://platform:${PLATFORM_DB_PASSWORD}@platform-db:5432/platform?sslmode=disable"

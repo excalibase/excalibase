@@ -68,9 +68,9 @@ func (s *Store) CreateFirstAdmin(ctx context.Context, tokenHash string, user *do
 
 	now := time.Now().UTC()
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO users (id, username, email, password_hash, role, active, kind, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		user.ID, user.Username, user.Email, user.PasswordHash, user.Role, user.Active, userKind(user), now, now); err != nil {
+		`INSERT INTO users (id, username, email, password_hash, role, active, kind, email_verified_at, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		user.ID, user.Username, user.Email, user.PasswordHash, user.Role, user.Active, userKind(user), user.EmailVerifiedAt, now, now); err != nil {
 		return fmt.Errorf("create first admin: %w", err)
 	}
 

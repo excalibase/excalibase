@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -19,6 +20,10 @@ const inviteTTL = 7 * 24 * time.Hour
 // invitePath is the Studio route an invite link opens. The server hands back
 // the path only: Studio prefixes its own origin, which the API cannot know.
 const invitePath = "/register"
+
+// errInviteForAnotherAddress refuses an invite presented by an account whose
+// address is not the one the invite was issued to.
+const errInviteForAnotherAddress = "this invite was issued to a different email address"
 
 func inviteLink(token string) string {
 	return invitePath + "?" + url.Values{"invite": {token}}.Encode()
@@ -84,7 +89,17 @@ func (h *OrgHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "token required", http.StatusBadRequest)
 		return
 	}
-	inv, err := h.orgStore.AcceptPendingInvite(r.Context(), hashToken(body.Token), user.ID, time.Now())
+	hash := hashToken(body.Token)
+	invite, err := h.orgStore.FindPendingInviteByToken(r.Context(), hash, time.Now())
+	if err != nil {
+		httpError(w, inviteErrorMessage(err), inviteErrorStatus(err))
+		return
+	}
+	if user.EmailVerifiedAt == nil || !strings.EqualFold(invite.Email, user.Email) {
+		httpError(w, errInviteForAnotherAddress, http.StatusForbidden)
+		return
+	}
+	inv, err := h.orgStore.AcceptPendingInvite(r.Context(), hash, user.ID, time.Now())
 	if err != nil {
 		httpError(w, inviteErrorMessage(err), inviteErrorStatus(err))
 		return

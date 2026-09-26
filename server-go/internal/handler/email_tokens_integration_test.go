@@ -51,8 +51,13 @@ func TestEmailTokens_VerifyFlow(t *testing.T) {
 	store := pgtest.New(t)
 	sender := &capturingSender{}
 	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
 
-	user := &domain.User{ID: "user-verify", Username: testutil.FixturePassword("vuser"), Email: "v@example.com"}
+	user := &domain.User{ID: "user-verify", Username: testutil.FixturePassword("vuser"), Email: "v@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
 
 	// SendVerify (authenticated).
 	req := httptest.NewRequest("POST", "/verify/send", nil)
@@ -80,6 +85,9 @@ func TestEmailTokens_VerifyFlow(t *testing.T) {
 	if resp["status"] != "verified" || resp["userId"] != user.ID {
 		t.Errorf("unexpected confirm response: %+v", resp)
 	}
+	if stored, _ := store.FindUserByID(context.Background(), user.ID); stored == nil || stored.EmailVerifiedAt == nil {
+		t.Error("confirming the link did not verify the account")
+	}
 
 	// Re-confirming the same token is rejected (consumed).
 	req = httptest.NewRequest("POST", "/verify/confirm", strings.NewReader(body))
@@ -94,6 +102,7 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	store := pgtest.New(t)
 	sender := &capturingSender{}
 	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
 
 	// Seed a user with a known password.
 	origHash, _ := auth.HashPassword(testutil.FixturePassword("old"))
@@ -113,6 +122,9 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	if token == "" {
 		t.Fatalf("no token in reset email body: %s", sender.last.HTMLBody)
 	}
+	if !strings.Contains(sender.last.TextBody, "https://app.example.com/reset-password?token=") {
+		t.Fatalf("reset link is not a Studio link: %s", sender.last.TextBody)
+	}
 
 	// ConfirmReset with a new password.
 	req = httptest.NewRequest("POST", "/reset/confirm",
@@ -127,6 +139,10 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	updated, _ := store.FindUserByID(context.Background(), user.ID)
 	if updated == nil || !auth.CheckPassword("brand-new-pass", updated.PasswordHash) {
 		t.Errorf("password not updated to new value")
+	}
+	// The link reached the account's mailbox, which proves the address.
+	if updated == nil || updated.EmailVerifiedAt == nil {
+		t.Errorf("a completed reset did not verify the address")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -46,6 +47,7 @@ type AppConfig struct {
 	VaultPAT          string
 	DeploymentMode    string // "selfhosted" (default) or "cloud"
 	PublicBaseURL     string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
+	StudioURL         string // Studio origin that emailed verification and reset links open
 	RegistrationMode  string // "open" (default) or "invite" — invite closes open studio signup
 
 	// ExposureEnforced is the installation-wide kill switch for the table
@@ -332,6 +334,7 @@ func Load() AppConfig {
 		VaultPAT:                    envOr("VAULT_PAT", ""),
 		DeploymentMode:              deploymentMode,
 		PublicBaseURL:               envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
+		StudioURL:                   strings.TrimRight(strings.TrimSpace(os.Getenv("STUDIO_URL")), "/"),
 		KubeconfigPath:              envOr("KUBECONFIG_PATH", ""),
 		KubeAPIURL:                  envOr("KUBE_API_URL", ""),
 		KubeBearerToken:             envOr("KUBE_BEARER_TOKEN", ""),
@@ -479,6 +482,23 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: exposureEnvKey, Field: "ExposureEnforced", Enabled: c.ExposureEnforced},
 		{Env: "APP_HOSTING_ENABLED", Field: "AppHostingEnabled", Enabled: c.AppHostingEnabled},
 	}
+}
+
+// CheckStudioURL refuses a missing or malformed STUDIO_URL. Emailed links are
+// built from it and never from a request, so the server must not start
+// without a real origin.
+func (c AppConfig) CheckStudioURL() error {
+	if c.StudioURL == "" {
+		return errors.New("STUDIO_URL must be set to the Studio origin, e.g. https://studio.example.com")
+	}
+	parsed, err := url.Parse(c.StudioURL)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return fmt.Errorf("STUDIO_URL %q is not an http(s) origin", c.StudioURL)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return fmt.Errorf("STUDIO_URL %q must be an origin without a path or query", c.StudioURL)
+	}
+	return nil
 }
 
 func parseCORSOrigins(raw string) []string {

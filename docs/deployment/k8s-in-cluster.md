@@ -91,6 +91,7 @@ env:
   DEPLOYMENT_MODE: "selfhosted"
   CORS_ORIGINS: "https://your-studio.example.com"
   PUBLIC_BASE_URL: "https://api.your-domain.example.com"
+  STUDIO_URL: "https://studio.your-domain.example.com"
   DENO_RUNTIME_SECRET: "" # generate with: openssl rand -hex 32
 
 ingress:

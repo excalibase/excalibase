@@ -52,7 +52,8 @@ describe('invite link flow', () => {
       password: TEST_PASSWORD_PLACEHOLDER,
       inviteToken: 'tok123',
     }));
-    expect(await screen.findByTestId('orgs')).toBeInTheDocument();
+    // The invited account still confirms its address before it can sign in.
+    expect(await screen.findByTestId('check-email')).toBeInTheDocument();
   });
 
   test('registration without a link sends no invite token', async () => {

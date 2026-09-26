@@ -282,11 +282,12 @@ func TestAuthLogin_Success(t *testing.T) {
 	hash, _ := auth.HashPassword(alicePwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
-		ID:           "u1",
-		Username:     aliceUser,
-		PasswordHash: hash,
-		Active:       true,
-		CreatedAt:    &now,
+		ID:              "u1",
+		Username:        aliceUser,
+		PasswordHash:    hash,
+		Active:          true,
+		EmailVerifiedAt: &now,
+		CreatedAt:       &now,
 	}
 
 	r := setupAuthRouter(t, us, ts)
@@ -347,7 +348,7 @@ func TestAuthLogin_TokenCreationFails_Returns500(t *testing.T) {
 	hash, _ := auth.HashPassword(carolPwd)
 	now := time.Now()
 	us.users["u1"] = &domain.User{
-		ID: "u1", Username: carolUser, PasswordHash: hash, Active: true, CreatedAt: &now,
+		ID: "u1", Username: carolUser, PasswordHash: hash, Active: true, EmailVerifiedAt: &now, CreatedAt: &now,
 	}
 
 	r := setupAuthRouter(t, us, ts)
@@ -560,7 +561,7 @@ func TestAuthLogin_SetsSessionCookie(t *testing.T) {
 	now := time.Now()
 	aliceUser2 := testutil.FixtureToken("alice")
 	us.users["u1"] = &domain.User{
-		ID: "u1", Username: aliceUser2, PasswordHash: hash, Active: true, CreatedAt: &now,
+		ID: "u1", Username: aliceUser2, PasswordHash: hash, Active: true, EmailVerifiedAt: &now, CreatedAt: &now,
 	}
 	ts := newMockTokenStore()
 	r := setupAuthRouter(t, us, ts)

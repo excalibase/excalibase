@@ -7,14 +7,16 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/email"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -34,12 +36,36 @@ import (
 // existing per-IP middleware covers it) and no captcha. Both can be
 // added in v1.2 once we see abuse signals.
 type EmailTokensHandler struct {
-	db          *sql.DB               // platform-db, already used by sqlite/postgres stores
-	sender      email.Sender          // SES, SMTP, or noop in dev
-	store       storage.PlatformStore // user lookup for verify/reset
-	publicBase  string                // for building click URLs (e.g. https://app.excalibase.io)
+	db          *sql.DB         // platform-db, holds password_resets
+	sender      email.Sender    // SES, Resend, or noop in dev
+	store       emailTokenUsers // user lookup for verify/reset
+	studioURL   string          // Studio origin the click links open
 	productName string
 	pg          bool // true if backing db is Postgres (uses $1 placeholders)
+	verifier    *EmailVerifier
+	publicLimit func(http.Handler) http.Handler
+}
+
+// emailTokenUsers is the slice of the user store the click-link flows need.
+type emailTokenUsers interface {
+	FindUserByEmail(ctx context.Context, email string) (*domain.User, error)
+	FindUserByID(ctx context.Context, id string) (*domain.User, error)
+	UpdateUserPassword(ctx context.Context, username, passwordHash string) error
+}
+
+// SetVerifier wires the Studio email verification the verify routes use.
+func (h *EmailTokensHandler) SetVerifier(v *EmailVerifier) { h.verifier = v }
+
+func (h *EmailTokensHandler) resendLimit(next http.Handler) http.Handler {
+	if h == nil || h.publicLimit == nil {
+		return next
+	}
+	return h.publicLimit(next)
+}
+
+// SetPublicLimit rate-limits the public resend route, which anyone may call.
+func (h *EmailTokensHandler) SetPublicLimit(limit func(http.Handler) http.Handler) {
+	h.publicLimit = limit
 }
 
 // rebind converts SQLite-style `?` placeholders to Postgres-style `$1, $2, ...`
@@ -63,7 +89,7 @@ func (h *EmailTokensHandler) rebind(q string) string {
 	return string(b)
 }
 
-func NewEmailTokensHandler(db *sql.DB, sender email.Sender, store storage.PlatformStore, publicBase, productName string) *EmailTokensHandler {
+func NewEmailTokensHandler(db *sql.DB, sender email.Sender, store emailTokenUsers, studioURL, productName string) *EmailTokensHandler {
 	if productName == "" {
 		productName = "Excalibase"
 	}
@@ -83,7 +109,7 @@ func NewEmailTokensHandler(db *sql.DB, sender email.Sender, store storage.Platfo
 		db:          db,
 		sender:      sender,
 		store:       store,
-		publicBase:  strings.TrimRight(publicBase, "/"),
+		studioURL:   strings.TrimRight(studioURL, "/"),
 		productName: productName,
 		pg:          pg,
 	}
@@ -99,6 +125,7 @@ func (h *EmailTokensHandler) Routes(r chi.Router, sendLimits ...func(http.Handle
 	r.With(append([]func(http.Handler) http.Handler{auth.RequireAuth}, sendLimits...)...).
 		Post("/verify/send", h.SendVerify)
 	r.Post("/verify/confirm", h.ConfirmVerify)
+	r.With(h.resendLimit).Post("/verify/resend", h.ResendVerify)
 	r.Post("/reset/send", h.SendReset)
 	r.Post("/reset/confirm", h.ConfirmReset)
 }
@@ -115,40 +142,47 @@ func (h *EmailTokensHandler) SendVerify(w http.ResponseWriter, r *http.Request) 
 		httpError(w, "user has no email", http.StatusBadRequest)
 		return
 	}
-
-	token, hash, err := mintToken()
-	if err != nil {
-		httpError(w, "mint token: "+safeError(err), http.StatusInternalServerError)
+	if err := h.verifier.Send(r.Context(), user); err != nil {
+		writeVerificationSendError(w, err)
 		return
 	}
-	expires := time.Now().Add(24 * time.Hour)
-	if _, err := h.db.ExecContext(r.Context(),
-		h.rebind(`INSERT INTO email_verifications (user_id, email, token_hash, expires_at) VALUES (?, ?, ?, ?)`),
-		user.ID, user.Email, hash, expires.Format(time.RFC3339)); err != nil {
-		httpError(w, "store token: "+safeError(err), http.StatusInternalServerError)
-		return
-	}
-
-	msg, err := email.BuildVerifyEmail(email.VerifyEmailData{
-		UserEmail:   user.Email,
-		VerifyURL:   fmt.Sprintf("%s/verify-email?token=%s", h.publicBase, token),
-		ExpiresHour: 24,
-		ProductName: h.productName,
-	})
-	if err != nil {
-		httpError(w, "build email: "+safeError(err), http.StatusInternalServerError)
-		return
-	}
-	msg.To = []string{user.Email}
-	msgID, err := h.sender.Send(r.Context(), msg)
-	if err != nil {
-		httpError(w, "send: "+safeError(err), http.StatusInternalServerError)
-		return
-	}
-	// Log MessageId for audit. Without this, operators can't correlate
-	// "did the email actually leave?" with the SES dashboard.
-	logEmailSent("verify", user.Email, msgID, user.ID)
 	writeJSON(w, map[string]string{"status": "sent"})
+}
+
+// ResendVerify mails a fresh link to an account that has not verified yet.
+// It is public — the caller cannot sign in — and answers the same for every
+// address so it reveals nothing about who is registered.
+func (h *EmailTokensHandler) ResendVerify(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Email == "" {
+		httpError(w, "email required", http.StatusBadRequest)
+		return
+	}
+	if !h.verifier.Available() {
+		httpError(w, ErrVerificationUnavailable.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	user, err := h.store.FindUserByEmail(r.Context(), body.Email)
+	if err != nil {
+		log.Printf("ERROR: resend verification lookup: %v", err)
+	}
+	if user != nil && !user.IsService() && user.EmailVerifiedAt == nil {
+		if err := h.verifier.Send(r.Context(), user); err != nil {
+			log.Printf("ERROR: resend verification to %s: %v", user.ID, err)
+		}
+	}
+	writeJSON(w, map[string]string{"status": "sent"})
+}
+
+func writeVerificationSendError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrVerificationUnavailable) {
+		httpError(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	log.Printf("ERROR: verification mail: %v", err)
+	httpError(w, "failed to send the verification email", http.StatusInternalServerError)
 }
 
 func (h *EmailTokensHandler) ConfirmVerify(w http.ResponseWriter, r *http.Request) {
@@ -159,33 +193,19 @@ func (h *EmailTokensHandler) ConfirmVerify(w http.ResponseWriter, r *http.Reques
 		httpError(w, "token required", http.StatusBadRequest)
 		return
 	}
-	hash := hashToken(body.Token)
-	row := h.db.QueryRowContext(r.Context(),
-		h.rebind(`SELECT user_id, expires_at, consumed_at FROM email_verifications WHERE token_hash = ?`), hash)
-	var userID, expiresStr string
-	var consumed sql.NullString
-	if err := row.Scan(&userID, &expiresStr, &consumed); err != nil {
-		httpError(w, "invalid token", http.StatusBadRequest)
+	userID, err := h.verifier.Confirm(r.Context(), body.Token)
+	switch {
+	case errors.Is(err, storage.ErrEmailVerificationInvalid):
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	case errors.Is(err, ErrVerificationUnavailable):
+		httpError(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	case err != nil:
+		log.Printf("ERROR: confirm verification: %v", err)
+		httpError(w, "failed to verify the email address", http.StatusInternalServerError)
 		return
 	}
-	if consumed.Valid {
-		httpError(w, "token already used", http.StatusBadRequest)
-		return
-	}
-	expires, _ := time.Parse(time.RFC3339, expiresStr)
-	if time.Now().After(expires) {
-		httpError(w, "token expired", http.StatusBadRequest)
-		return
-	}
-	if _, err := h.db.ExecContext(r.Context(),
-		h.rebind(`UPDATE email_verifications SET consumed_at = ? WHERE token_hash = ?`),
-		time.Now().UTC().Format(time.RFC3339), hash); err != nil {
-		httpError(w, "consume: "+safeError(err), http.StatusInternalServerError)
-		return
-	}
-	// Caller can now flip a "verified" flag on the user; we don't keep
-	// a column for that yet — exposing the userID is enough for the
-	// auth service to set its own per-tenant verified flag.
 	writeJSON(w, map[string]string{"status": "verified", "userId": userID})
 }
 
@@ -220,7 +240,7 @@ func (h *EmailTokensHandler) SendReset(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := email.BuildPasswordResetEmail(email.PasswordResetData{
 		UserEmail:   body.Email,
-		ResetURL:    fmt.Sprintf("%s/reset-password?token=%s", h.publicBase, token),
+		ResetURL:    h.studioURL + "/reset-password?" + url.Values{"token": {token}}.Encode(),
 		ExpiresMin:  60,
 		ProductName: h.productName,
 		IPAddress:   ip,
@@ -285,8 +305,11 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 	if _, err := h.db.ExecContext(r.Context(),
 		h.rebind(`UPDATE password_resets SET consumed_at = ? WHERE token_hash = ?`),
 		time.Now().UTC().Format(time.RFC3339), hash); err != nil {
-		// Best-effort — the password is already updated.
-		_ = err
+		log.Printf("ERROR: consume reset token for %s: %v", user.ID, err)
+	}
+	// The reset link reached the account's mailbox, which proves the address.
+	if err := h.verifier.MarkVerified(r.Context(), user.ID); err != nil {
+		log.Printf("ERROR: mark %s verified after reset: %v", user.ID, err)
 	}
 	writeJSON(w, map[string]string{"status": "reset"})
 }

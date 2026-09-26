@@ -32,8 +32,8 @@ func TestNewEmailTokensHandler_DefaultsProductName(t *testing.T) {
 		t.Errorf("default product name: got %q", h.productName)
 	}
 	// Trailing slash on publicBase is trimmed.
-	if h.publicBase != "https://app.example.com" {
-		t.Errorf("publicBase trim: got %q", h.publicBase)
+	if h.studioURL != "https://app.example.com" {
+		t.Errorf("studioURL trim: got %q", h.studioURL)
 	}
 }
 

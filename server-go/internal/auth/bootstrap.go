@@ -40,8 +40,11 @@ func Bootstrap(ctx context.Context, userStore storage.UserStore) error {
 		PasswordHash: hash,
 		Role:         "platform_admin",
 		Active:       true,
-		CreatedAt:    &now,
-		UpdatedAt:    &now,
+		// Created by an operator on the platform's own host, the same trust
+		// the setup token carries, so it is not held for a mailbox check.
+		EmailVerifiedAt: &now,
+		CreatedAt:       &now,
+		UpdatedAt:       &now,
 	}
 
 	if err := userStore.CreateUser(ctx, user); err != nil {

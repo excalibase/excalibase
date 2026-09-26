@@ -10,14 +10,14 @@ import (
 )
 
 // userColumns is the select list every user read shares, in scanUserRow order.
-const userColumns = `id, username, email, password_hash, role, active, kind, created_at, updated_at`
+const userColumns = `id, username, email, password_hash, role, active, kind, email_verified_at, created_at, updated_at`
 
 func (s *Store) CreateUser(ctx context.Context, u *domain.User) error {
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (id, username, email, password_hash, role, active, kind, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		u.ID, u.Username, u.Email, u.PasswordHash, u.Role, u.Active, userKind(u), now, now)
+		`INSERT INTO users (id, username, email, password_hash, role, active, kind, email_verified_at, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		u.ID, u.Username, u.Email, u.PasswordHash, u.Role, u.Active, userKind(u), u.EmailVerifiedAt, now, now)
 	return err
 }
 
@@ -105,13 +105,17 @@ func scanUser(row *sql.Row) (*domain.User, error) {
 func scanUserRow(r pgRowScanner) (*domain.User, error) {
 	var u domain.User
 	var kind sql.NullString
-	var createdAt, updatedAt sql.NullTime
-	if err := r.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.Active, &kind, &createdAt, &updatedAt); err != nil {
+	var verifiedAt, createdAt, updatedAt sql.NullTime
+	if err := r.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &u.Active, &kind, &verifiedAt, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	u.Kind = kind.String
 	if u.Kind == "" {
 		u.Kind = domain.UserKindHuman
+	}
+	if verifiedAt.Valid {
+		ts := verifiedAt.Time
+		u.EmailVerifiedAt = &ts
 	}
 	if createdAt.Valid {
 		ts := createdAt.Time

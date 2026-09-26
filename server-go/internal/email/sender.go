@@ -151,3 +151,12 @@ func validateRecipients(to []string) error {
 	}
 	return nil
 }
+
+// Configured reports whether s can actually deliver mail.
+func Configured(s Sender) bool {
+	if s == nil {
+		return false
+	}
+	_, noop := s.(noopSender)
+	return !noop
+}

@@ -4,6 +4,7 @@ import { Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import { useAuthStore, type AuthUser } from '../stores/auth-store';
 import { Button } from '../components/Button';
+import { ResendVerification } from '../components/auth/ResendVerification';
 
 interface LoginResponse {
   token: string;
@@ -20,10 +21,12 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [unverified, setUnverified] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setUnverified(false);
 
     if (!username.trim() || !password.trim()) {
       setError('Username and password are required');
@@ -42,8 +45,10 @@ export function LoginPage() {
       // for callers that don't yet honour the cookie.
       setAuth(response.data.user, { legacyToken: response.data.token });
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { status?: number; data?: { error?: string } } };
-      if (axiosErr.response?.status === 401) {
+      const axiosErr = err as { response?: { status?: number; data?: { error?: string; code?: string } } };
+      if (axiosErr.response?.data?.code === 'email_not_verified') {
+        setUnverified(true);
+      } else if (axiosErr.response?.status === 401) {
         setError('Invalid username or password');
       } else {
         setError(axiosErr.response?.data?.error || 'Login failed. Please try again.');
@@ -73,6 +78,13 @@ export function LoginPage() {
         <h2 className="text-lg font-semibold text-text-primary mb-1">Sign in</h2>
         <p className="text-sm text-text-secondary">Enter your credentials to continue</p>
       </div>
+
+      {unverified && (
+        <div data-testid="email-not-verified" className="space-y-3 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-300">
+          <p>Confirm your email address before signing in. Use the link we sent you, or ask for a new one.</p>
+          <ResendVerification />
+        </div>
+      )}
 
       {error && (
         <div className="px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">

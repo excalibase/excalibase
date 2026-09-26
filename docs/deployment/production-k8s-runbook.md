@@ -347,6 +347,22 @@ everyone else gets `403 registration is invite-only`
 (`server-go/internal/handler/auth.go`).
 Set it before the admin host is reachable from anywhere you do not control.
 
+### 3.7 Studio email verification
+
+Every Studio account except the first admin must confirm its email address
+before it can sign in. Sign-up mails a link to `STUDIO_URL/verify-email`
+(`provisioning.studioUrl`, required) valid for 24 hours; login answers
+`403 {"code":"email_not_verified"}` until the link is used, and
+`POST /api/email/verify/resend {"email"}` mails a fresh one. With no email
+provider configured, sign-up is refused with 503 rather than creating accounts
+that can never verify. The first admin, created with the setup token, is
+verified on creation; the bootstrap Job registers it with
+`bootstrap.adminEmail` (required). A platform admin can vouch for an address
+with `POST /api/auth/users/{userId}/verify-email` (audited as
+`user.email.mark_verified`). An invite link only works for the address it was
+issued to, and only once that address is verified. Completing a password reset
+also verifies the address, since the reset link reached the mailbox.
+
 ## 4. Day-2 operations
 
 ### 4.1 Upgrades

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -36,6 +37,7 @@ func newInviteFixture(t *testing.T, inviteOnly bool) *inviteFixture {
 	authHandler := NewAuthHandler(store, store)
 	authHandler.SetOrgStore(store)
 	authHandler.SetInviteOnly(inviteOnly)
+	authHandler.SetEmailVerifier(NewEmailVerifier(store, &capturingSender{}, "https://studio.example.com", ""))
 	register := chi.NewRouter()
 	register.Post(testRegisterPath, authHandler.Register)
 
@@ -219,6 +221,12 @@ func TestInviteLink_SignedInUserAcceptsOnce(t *testing.T) {
 		t.Fatalf("register: %d", w.Code)
 	}
 	carol := f.userID(t, "carol")
+	if w := f.accept(carol, token); w.Code != http.StatusForbidden {
+		t.Fatalf("an unverified account accepted: %d", w.Code)
+	}
+	if err := f.store.MarkEmailVerified(t.Context(), carol, time.Now()); err != nil {
+		t.Fatalf("verify carol: %v", err)
+	}
 
 	if w := f.accept(carol, token); w.Code != http.StatusOK {
 		t.Fatalf("accept: %d %s", w.Code, w.Body.String())

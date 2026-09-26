@@ -333,6 +333,23 @@ type UserStore interface {
 	UpdateUserPassword(ctx context.Context, username, passwordHash string) error
 }
 
+// ErrEmailVerificationInvalid is returned when a verification link is unknown,
+// already used, expired, or was sent to an address the account no longer has.
+var ErrEmailVerificationInvalid = errors.New("verification link is invalid or has expired")
+
+// ErrUserNotFound is returned when an operation names a user that does not exist.
+var ErrUserNotFound = errors.New("user not found")
+
+// EmailVerificationStore records Studio email-verification links (hashed) and
+// the account's verified state.
+type EmailVerificationStore interface {
+	CreateEmailVerification(ctx context.Context, userID, email, tokenHash string, expiresAt time.Time) error
+	// ConsumeEmailVerification spends a live link and marks its account
+	// verified in one transaction, returning the account's id.
+	ConsumeEmailVerification(ctx context.Context, tokenHash string, now time.Time) (string, error)
+	MarkEmailVerified(ctx context.Context, userID string, now time.Time) error
+}
+
 // ErrInvalidSetupToken is returned by SetupTokenStore.CreateFirstAdmin when
 // the given hash does not match the currently stored one-time token — wrong
 // value, already burned, or none was ever generated.

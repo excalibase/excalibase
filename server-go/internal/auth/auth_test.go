@@ -377,6 +377,10 @@ func TestBootstrapCreatesAdminWhenEmpty(t *testing.T) {
 	if admin.ID == "" {
 		t.Error("ID should not be empty")
 	}
+	// Recovery runs on the operator's own host; the account must be able to sign in.
+	if admin.EmailVerifiedAt == nil {
+		t.Error("the recovery admin must be created verified")
+	}
 }
 
 func TestBootstrapSkipsWhenUsersExist(t *testing.T) {

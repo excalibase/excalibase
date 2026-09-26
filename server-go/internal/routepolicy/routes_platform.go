@@ -54,6 +54,7 @@ var publicRows = []Row{
 
 	{Methods: post, Pattern: "/api/email/verify/confirm", Auth: AuthPublic, Note: "the emailed token is the credential"},
 	{Methods: post, Pattern: "/api/email/reset/send", Auth: AuthPublic, Note: "a password reset is requested by someone who cannot log in"},
+	{Methods: post, Pattern: "/api/email/verify/resend", Auth: AuthPublic, Note: "an unverified account cannot log in; rate-limited per IP and answers the same for every address"},
 	{Methods: post, Pattern: "/api/email/reset/confirm", Auth: AuthPublic, Note: "the emailed token is the credential"},
 
 	{Methods: get, Pattern: "/api/setup/status", Auth: AuthPublic, Note: "the installer polls it before any credential exists; it answers only whether setup is complete"},
@@ -80,6 +81,7 @@ var platformRows = []Row{
 	{Methods: get, Pattern: "/api/auth/users/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
 	{Methods: post, Pattern: "/api/auth/users/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
 	{Methods: del, Pattern: "/api/auth/users/{userId}", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
+	{Methods: post, Pattern: "/api/auth/users/{userId}/verify-email", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Note: "an admin vouches for an address when no mail can be sent; audited"},
 
 	{Methods: get, Pattern: "/api/auth/tokens/", Auth: AuthSession, Owner: OwnerTokenSubject, Note: "lists only the caller's own tokens"},
 	{Methods: post, Pattern: "/api/auth/tokens/", Auth: AuthSession, Owner: OwnerTokenSubject, Note: "a narrowed PAT may only mint a subset of its own scopes"},
