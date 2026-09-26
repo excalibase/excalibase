@@ -841,70 +841,6 @@
       "strokeWidth": 2,
       "roughness": 0,
       "opacity": 100,
-      "seed": 10140,
-      "version": 1,
-      "versionNonce": 20140,
-      "isDeleted": false,
-      "boundElements": [
-        {
-          "id": "pgdog-t",
-          "type": "text"
-        }
-      ],
-      "groupIds": [],
-      "frameId": null,
-      "link": null,
-      "locked": false,
-      "id": "pgdog",
-      "type": "rectangle",
-      "x": 40,
-      "y": 660,
-      "width": 200,
-      "height": 60,
-      "strokeColor": "#5c940d",
-      "backgroundColor": "#d8f5a2",
-      "roundness": {
-        "type": 3
-      }
-    },
-    {
-      "angle": 0,
-      "fillStyle": "solid",
-      "strokeWidth": 1,
-      "roughness": 0,
-      "opacity": 100,
-      "seed": 10141,
-      "version": 1,
-      "versionNonce": 20141,
-      "isDeleted": false,
-      "boundElements": null,
-      "groupIds": [],
-      "frameId": null,
-      "link": null,
-      "locked": false,
-      "id": "pgdog-t",
-      "type": "text",
-      "x": 44,
-      "y": 664,
-      "width": 192,
-      "height": 52,
-      "strokeColor": "#1e1e1e",
-      "backgroundColor": "transparent",
-      "text": "PgDog (Rust)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nR/W split \u00b7 pooling",
-      "fontSize": 12,
-      "fontFamily": 2,
-      "textAlign": "center",
-      "verticalAlign": "middle",
-      "containerId": "pgdog",
-      "originalText": "PgDog (Rust)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nR/W split \u00b7 pooling",
-      "lineHeight": 1.35
-    },
-    {
-      "angle": 0,
-      "fillStyle": "solid",
-      "strokeWidth": 2,
-      "roughness": 0,
-      "opacity": 100,
       "seed": 10150,
       "version": 1,
       "versionNonce": 20150,
@@ -954,13 +890,13 @@
       "height": 52,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
-      "text": "NATS\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\npgdog.config.reload \u00b7 CDC",
+      "text": "NATS\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nCDC",
       "fontSize": 12,
       "fontFamily": 2,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "nats",
-      "originalText": "NATS\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\npgdog.config.reload \u00b7 CDC",
+      "originalText": "NATS\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nCDC",
       "lineHeight": 1.35
     },
     {
@@ -2019,126 +1955,6 @@
         [
           -140,
           -190
-        ]
-      ],
-      "lastCommittedPoint": null,
-      "startBinding": null,
-      "endBinding": null,
-      "startArrowhead": null,
-      "endArrowhead": "arrow"
-    },
-    {
-      "angle": 0,
-      "fillStyle": "solid",
-      "strokeWidth": 2,
-      "roughness": 0,
-      "opacity": 100,
-      "seed": 10237,
-      "version": 1,
-      "versionNonce": 20237,
-      "isDeleted": false,
-      "boundElements": null,
-      "groupIds": [],
-      "frameId": null,
-      "link": null,
-      "locked": false,
-      "id": "a15",
-      "type": "arrow",
-      "x": 500,
-      "y": 560,
-      "width": 260,
-      "height": 160,
-      "strokeColor": "#5c940d",
-      "backgroundColor": "transparent",
-      "strokeStyle": "dashed",
-      "points": [
-        [
-          0,
-          0
-        ],
-        [
-          -260,
-          160
-        ]
-      ],
-      "lastCommittedPoint": null,
-      "startBinding": null,
-      "endBinding": null,
-      "startArrowhead": null,
-      "endArrowhead": "arrow"
-    },
-    {
-      "angle": 0,
-      "fillStyle": "solid",
-      "strokeWidth": 2,
-      "roughness": 0,
-      "opacity": 100,
-      "seed": 10238,
-      "version": 1,
-      "versionNonce": 20238,
-      "isDeleted": false,
-      "boundElements": null,
-      "groupIds": [],
-      "frameId": null,
-      "link": null,
-      "locked": false,
-      "id": "a16",
-      "type": "arrow",
-      "x": 140,
-      "y": 720,
-      "width": 260,
-      "height": 40,
-      "strokeColor": "#5c940d",
-      "backgroundColor": "transparent",
-      "strokeStyle": "solid",
-      "points": [
-        [
-          0,
-          0
-        ],
-        [
-          260,
-          40
-        ]
-      ],
-      "lastCommittedPoint": null,
-      "startBinding": null,
-      "endBinding": null,
-      "startArrowhead": null,
-      "endArrowhead": "arrow"
-    },
-    {
-      "angle": 0,
-      "fillStyle": "solid",
-      "strokeWidth": 2,
-      "roughness": 0,
-      "opacity": 100,
-      "seed": 10239,
-      "version": 1,
-      "versionNonce": 20239,
-      "isDeleted": false,
-      "boundElements": null,
-      "groupIds": [],
-      "frameId": null,
-      "link": null,
-      "locked": false,
-      "id": "a17",
-      "type": "arrow",
-      "x": 260,
-      "y": 690,
-      "width": 20,
-      "height": 0,
-      "strokeColor": "#e67700",
-      "backgroundColor": "transparent",
-      "strokeStyle": "dashed",
-      "points": [
-        [
-          0,
-          0
-        ],
-        [
-          -20,
-          0
         ]
       ],
       "lastCommittedPoint": null,

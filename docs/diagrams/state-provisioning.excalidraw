@@ -695,13 +695,13 @@
       "height": 102,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
-      "text": "9. COMPLETED\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u2022 Mark status=ACTIVE\n\u2022 Register in PgDog\n\u2022 Notify via NATS",
+      "text": "9. COMPLETED\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u2022 Mark status=ACTIVE\n\u2022 Notify via NATS",
       "fontSize": 11,
       "fontFamily": 2,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "s9",
-      "originalText": "9. COMPLETED\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u2022 Mark status=ACTIVE\n\u2022 Register in PgDog\n\u2022 Notify via NATS",
+      "originalText": "9. COMPLETED\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u2022 Mark status=ACTIVE\n\u2022 Notify via NATS",
       "lineHeight": 1.35
     },
     {
