@@ -267,6 +267,12 @@ type AppConfig struct {
 	// TenantStorageClasses are the further classes a request may name.
 	TenantStorageClass   string
 	TenantStorageClasses []string
+	// AppDomainIssuer is the ACME ClusterIssuer custom domains get certificates
+	// from; empty turns custom domains off.
+	AppDomainIssuer string
+	// AppDomainResolver is host:port of the resolver custom-domain CNAMEs are
+	// read from; empty uses the host's first nameserver.
+	AppDomainResolver string
 }
 
 // IsCloud returns true when running in cloud deployment mode. Derived from
@@ -405,6 +411,8 @@ func Load() AppConfig {
 		AppIngressFromLabels:        envIngressFromLabels("APP_INGRESS_FROM_LABELS"),
 		TenantStorageClass:          strings.TrimSpace(os.Getenv("TENANT_STORAGE_CLASS")),
 		TenantStorageClasses:        envList("TENANT_STORAGE_CLASSES"),
+		AppDomainIssuer:             os.Getenv("APP_DOMAIN_ISSUER"),
+		AppDomainResolver:           os.Getenv("APP_DOMAIN_RESOLVER"),
 	}
 }
 

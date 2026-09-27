@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"strings"
 	"sync"
 	"time"
@@ -135,6 +136,13 @@ type MockClient struct {
 	// ResumedTier records the plan size each resume ran at, keyed "namespace/appID".
 	ResumedTier map[string]domain.TierType
 
+	// DomainHosts is the last SyncAppDomains, keyed "namespace/appID".
+	DomainHosts    map[string][]string
+	DomainSyncErr  error
+	DomainCerts    map[string]CertificateState // keyed host
+	DomainCertErr  error
+	IssuerReadyErr error
+
 	RuntimeClasses    map[string]bool
 	RuntimeClassError error
 }
@@ -169,6 +177,8 @@ func NewMockClient() *MockClient {
 		AppDeleted:    make(map[string]bool),
 
 		RuntimeClasses: make(map[string]bool),
+		DomainHosts:    make(map[string][]string),
+		DomainCerts:    make(map[string]CertificateState),
 	}
 }
 
@@ -743,6 +753,30 @@ func (m *MockClient) RuntimeClassPlacement(ctx context.Context, name string) (Ru
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "RuntimeClassPlacement:"+name)
 	return m.Placement, m.PlacementErr
+}
+
+func (m *MockClient) SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts AppDomainOptions) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "SyncAppDomains:"+namespace+"/"+app.ID)
+	if m.DomainSyncErr != nil {
+		return m.DomainSyncErr
+	}
+	m.DomainHosts[namespace+"/"+app.ID] = append([]string(nil), hosts...)
+	return nil
+}
+
+func (m *MockClient) AppDomainCertificate(ctx context.Context, namespace, appName, host string) (CertificateState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.DomainCerts[host], m.DomainCertErr
+}
+
+func (m *MockClient) ClusterIssuerReady(ctx context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ClusterIssuerReady:"+name)
+	return m.IssuerReadyErr
 }
 
 func (m *MockClient) RuntimeClassExists(ctx context.Context, name string) (bool, error) {

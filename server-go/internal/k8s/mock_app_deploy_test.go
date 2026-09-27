@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"testing"
 	"time"
 
@@ -157,5 +158,25 @@ func TestMockClient_PausedAppReplicas(t *testing.T) {
 	m.PausedReplicasErr = ErrAppNotPaused
 	if _, err := m.PausedAppReplicas(context.Background(), "ns1", "app-1", "web"); !errors.Is(err, ErrAppNotPaused) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMockClient_Domains(t *testing.T) {
+	m := NewMockClient()
+	ctx := context.Background()
+	app := &apphost.App{ID: "a1", Name: "web"}
+	if err := m.SyncAppDomains(ctx, "ns1", app, []string{"x.example.com"}, AppDomainOptions{}); err != nil || len(m.DomainHosts["ns1/a1"]) != 1 {
+		t.Fatalf("sync: %v %v", err, m.DomainHosts)
+	}
+	m.DomainCerts["x.example.com"] = CertificateState{Ready: true}
+	if state, err := m.AppDomainCertificate(ctx, "ns1", "web", "x.example.com"); !state.Ready || err != nil {
+		t.Fatalf("cert: %+v %v", state, err)
+	}
+	if err := m.ClusterIssuerReady(ctx, "le"); err != nil {
+		t.Fatal(err)
+	}
+	m.DomainSyncErr = errors.New("boom")
+	if err := m.SyncAppDomains(ctx, "ns1", app, nil, AppDomainOptions{}); err == nil {
+		t.Fatal("want the scripted error")
 	}
 }

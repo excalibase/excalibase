@@ -20,6 +20,8 @@ import {
   plainFailureReason,
 } from '../components/containers/appCopy';
 import { DeployHistory } from '../components/containers/DeployHistory';
+import { AppDomains } from '../components/containers/AppDomains';
+import { useCustomDomainsEnabled } from '../hooks/useDeploymentMode';
 import { LifecycleActions } from '../components/containers/LifecycleActions';
 import { AppLogs } from '../components/containers/AppLogs';
 import {
@@ -125,6 +127,7 @@ function Detail({
   const deployApp = useDeployApp(projectId, appId);
   const redeploy = useRedeployApp(projectId, appId);
   const [lifecycleError, setLifecycleError] = useState<unknown>(null);
+  const customDomains = useCustomDomainsEnabled();
 
   if (isLoading) return <Spinner />;
   if (error || !app) {
@@ -191,7 +194,9 @@ function Detail({
         >
           {apiErrorMessage(
             actionError,
-            lifecycleError ? 'The container could not be changed' : 'The deploy could not be started',
+            lifecycleError
+              ? 'The container could not be changed'
+              : 'The deploy could not be started',
           )}
         </div>
       )}
@@ -209,6 +214,11 @@ function Detail({
       <div className="mb-6">
         <AppLogs projectId={projectId} appId={appId} />
       </div>
+      {customDomains && (
+        <div className="mb-6">
+          <AppDomains projectId={projectId} appId={appId} />
+        </div>
+      )}
       <section className="space-y-2">
         <h4 className="text-sm font-semibold text-text-primary">Deployments</h4>
         <div className="bg-surface-card border border-border-primary rounded-lg">

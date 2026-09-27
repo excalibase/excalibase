@@ -28,7 +28,11 @@ const shortWait = 50 * time.Millisecond
 func newLifecycleFakeClient() (*Client, *fake.Clientset) {
 	clientset := fake.NewSimpleClientset()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
-		map[schema.GroupVersionResource]string{CiliumNetworkPolicyGVR: "CiliumNetworkPolicyList"})
+		map[schema.GroupVersionResource]string{
+			CiliumNetworkPolicyGVR: "CiliumNetworkPolicyList",
+			CertificateGVR:         "CertificateList",
+			ClusterIssuerGVR:       "ClusterIssuerList",
+		})
 	return NewClientFromInterfaces(clientset, dyn), clientset
 }
 

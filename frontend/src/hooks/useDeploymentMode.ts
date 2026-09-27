@@ -6,6 +6,7 @@ export type DeploymentMode = 'selfhosted' | 'cloud';
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
   appHosting?: boolean;
+  customDomains?: boolean;
 }
 
 function useStudioConfig() {
@@ -29,6 +30,12 @@ export function useDeploymentMode(): DeploymentMode {
 export function useAppHostingEnabled(): { enabled: boolean; isLoading: boolean } {
   const { data, isLoading } = useStudioConfig();
   return { enabled: data?.appHosting === true, isLoading };
+}
+
+// Off unless the server has an ACME issuer for custom domains.
+export function useCustomDomainsEnabled(): boolean {
+  const { data } = useStudioConfig();
+  return data?.customDomains === true;
 }
 
 export function isSelfHosted(mode: DeploymentMode): boolean {
