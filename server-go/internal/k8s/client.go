@@ -700,12 +700,22 @@ func (c *Client) accumulateNodeCapacity(ctx context.Context, cap *ClusterCapacit
 			Name: n.Name, Labels: n.Labels,
 			AllocatableCPUMilli: n.Status.Allocatable.Cpu().MilliValue(),
 			AllocatableMemBytes: n.Status.Allocatable.Memory().Value(),
+			Tainted:             repelsUntoleratedPods(n.Spec.Taints),
 		}
 		cap.AllocatableCPUMilli += node.AllocatableCPUMilli
 		cap.AllocatableMemBytes += node.AllocatableMemBytes
 		cap.Nodes = append(cap.Nodes, node)
 	}
 	return nil
+}
+
+func repelsUntoleratedPods(taints []corev1.Taint) bool {
+	for _, taint := range taints {
+		if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
+			return true
+		}
+	}
+	return false
 }
 
 // podListPage bounds each read of the cluster's pods.

@@ -39,6 +39,8 @@ func setupProvisioningTest(t *testing.T) (*ProvisioningService, *storage.FileSys
 	// Enable wildcards so provisioning tests work with server-generated project refs
 	// (tests can't pre-populate pod/secret entries keyed by unknown ref).
 	mock.WildcardPodReady = true
+	// Room for the largest tier's instances, one per node.
+	mock.Capacity = roomyNodes(5)
 	mock.WildcardSecret = map[string][]byte{
 		"username": []byte("app"),
 		"password": []byte("testpassword123"),

@@ -65,6 +65,7 @@ func setupOrgRouterWithInstances(t *testing.T, isCloud bool) (chi.Router, *pgsto
 
 	instances := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}
 	orgHandler := NewOrgHandler(store, store)
+	orgHandler.SetNodePlacement(&fakeNodes{nodes: 5})
 	orgHandler.SetInstanceStore(instances)
 	r := chi.NewRouter()
 	r.Route(testOrgsPath, func(r chi.Router) {

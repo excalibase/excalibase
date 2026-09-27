@@ -3,6 +3,8 @@ package provisioner
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -132,7 +134,7 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 
 func TestPostgreSQLProvisionerStandard(t *testing.T) {
 	mock := k8s.NewMockClient()
-	mock.SetupPostgreSQLMock("std-db", "org1-std-db", 1)
+	mock.SetupPostgreSQLMock("std-db", "org1-std-db", 3)
 	prov := NewPostgreSQLProvisioner(mock, "")
 
 	tier, _ := config.GetTierConfig(domain.Standard)
@@ -150,15 +152,13 @@ func TestPostgreSQLProvisionerStandard(t *testing.T) {
 		t.Errorf("namespace: got %s", result.Namespace)
 	}
 
-	// Single-instance tier (no HA) — exactly one pod is waited on.
-	readyChecks := 0
-	for _, call := range mock.Calls {
-		if len(call) > 10 && call[:10] == "IsPodReady" {
-			readyChecks++
+	// The primary and both standbys are waited on.
+	for _, pod := range []string{"std-db-postgres-1", "std-db-postgres-2", "std-db-postgres-3"} {
+		if !slices.ContainsFunc(mock.Calls, func(call string) bool {
+			return strings.HasPrefix(call, "IsPodReady") && strings.Contains(call, pod)
+		}) {
+			t.Errorf("provision must wait for %s: calls=%v", pod, mock.Calls)
 		}
-	}
-	if readyChecks < 1 {
-		t.Errorf("expected 1 IsPodReady check, got %d", readyChecks)
 	}
 }
 

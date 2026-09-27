@@ -1077,9 +1077,10 @@ func buildBackupService(
 // newOrgHandler builds the org handler and wires the instance store so the
 // project-member endpoints can verify a project belongs to the URL's org
 // before operating on it (prevents cross-org project-member enumeration).
-func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceStore) *handler.OrgHandler {
+func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceStore, nodes handler.NodePlacement) *handler.OrgHandler {
 	h := handler.NewOrgHandler(sqlStore, sqlStore)
 	h.SetInstanceStore(instances)
+	h.SetNodePlacement(nodes)
 	return h
 }
 
@@ -1181,6 +1182,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 	adminHandler := handler.NewAdminHandler(provSvc, store, sqlStore, sqlStore, k8sClient, cfg.LokiURL, promClient)
 	tierHandler := handler.NewTierHandler(sqlStore)
+	tierHandler.SetNodePlacement(provSvc)
 
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
 	authHandler.SetOrgStore(sqlStore)
@@ -1237,7 +1239,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		oauthHandler:       buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
 		ssoHandler:         buildSSOProvidersHandler(cfg, vc, sqlStore),
 		svcAcctHandler:     handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
-		orgHandler:         newOrgHandler(sqlStore, store),
+		orgHandler:         newOrgHandler(sqlStore, store, provSvc),
 		vaultHandler:       vaultHandler,
 		schemaHandler:      newSchemaHandler(cfg, vc, store),
 		realtimeHandler:    realtimeHandler,

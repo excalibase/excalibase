@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,6 +43,12 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
+	// Five roomy nodes: every tier's instances each get their own.
+	for i := range 5 {
+		mock.Capacity.Nodes = append(mock.Capacity.Nodes, k8s.NodeCapacity{
+			Name: fmt.Sprintf("node-%d", i), AllocatableCPUMilli: 32000, AllocatableMemBytes: 64 << 30,
+		})
+	}
 	pgStore, _ := storage.NewFileSystemParameterGroupStore(dir)
 
 	// Teardown must observe the project's resources gone, so the factory

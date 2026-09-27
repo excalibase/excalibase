@@ -18,6 +18,7 @@ func patchOrgAs(t *testing.T, user *domain.User, body string) *httptest.Response
 	orgs.AddOrg("org-plan", domain.Free)
 	orgs.AddMember("org-plan", "owner-1", domain.OrgRoleOwner)
 	h := NewOrgHandler(orgs, nil)
+	h.SetNodePlacement(&fakeNodes{nodes: 5})
 	r := chi.NewRouter()
 	r.Patch("/orgs/{orgId}", h.UpdateOrg)
 

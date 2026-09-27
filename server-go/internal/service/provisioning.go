@@ -203,6 +203,9 @@ func (s *ProvisioningService) RestorePlan(ctx context.Context, source *domain.Da
 	if err != nil {
 		return RestorePlan{}, err
 	}
+	if err := s.RequireNodeSpread(ctx, tierType, tier); err != nil {
+		return RestorePlan{}, err
+	}
 	var req domain.ProvisioningRequest
 	s.applyBackupDefaults(&req, tier)
 	if err := s.requireBackupTarget(&req, tier); err != nil {
@@ -412,6 +415,9 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, err
 	}
 
+	if err := s.RequireNodeSpread(ctx, tierType, tier); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
 	if s.k8sClient != nil {
 		if err := s.checkClusterCapacity(tier); err != nil {
 			return nil, nil, config.TierConfig{}, err
@@ -1181,6 +1187,10 @@ func (s *ProvisioningService) execRoleSQL(ctx context.Context, namespace, primar
 func boolPtr(b bool) *bool { return &b }
 func intPtr(i int) *int    { return &i }
 
+// errNotEnoughCapacity is the short refusal a caller gets when the cluster
+// lacks room; the numbers go to the server log only.
+var errNotEnoughCapacity = errors.New("not enough capacity right now — try again later or contact support")
+
 // checkClusterCapacity refuses the provision if the cluster lacks headroom
 // for `tier.Instances` postgres pods of (tier.CPU, tier.Memory) plus the
 // per-project sidecars (watcher + deno-runtime).
@@ -1217,12 +1227,12 @@ func (s *ProvisioningService) checkClusterCapacity(tier config.TierConfig) error
 		// no allocatable counts, no signal about cluster sizing.
 		log.Printf("INFO: provision refused (CPU): tier=%s need=%dm free=%dm allocatable=%dm requested=%dm headroom=%d%%",
 			tier.CPUString(), cpu, cap.FreeCPUMilli(), cap.AllocatableCPUMilli, cap.RequestedCPUMilli, cap.HeadroomPercent)
-		return fmt.Errorf("not enough capacity right now — try again later or contact support")
+		return errNotEnoughCapacity
 	}
 	if cap.FreeMemBytes() < mem {
 		log.Printf("INFO: provision refused (memory): tier=%s need=%d free=%d allocatable=%d requested=%d headroom=%d%%",
 			tier.MemoryString(), mem, cap.FreeMemBytes(), cap.AllocatableMemBytes, cap.RequestedMemBytes, cap.HeadroomPercent)
-		return fmt.Errorf("not enough capacity right now — try again later or contact support")
+		return errNotEnoughCapacity
 	}
 	return nil
 }

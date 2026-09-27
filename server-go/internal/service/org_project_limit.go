@@ -38,13 +38,16 @@ type OrgProjectCapacity interface {
 }
 
 // EnsureOrgCanTakeProject is EnsureOrgProjectCapacity at the organisation's
-// current plan.
+// current plan, plus a node for each of that plan's instances.
 func (s *ProvisioningService) EnsureOrgCanTakeProject(ctx context.Context, orgID string) error {
 	tier, err := s.orgTier(ctx, orgID)
 	if err != nil {
 		return err
 	}
-	return s.EnsureOrgProjectCapacity(ctx, orgID, tier)
+	if err := s.EnsureOrgProjectCapacity(ctx, orgID, tier); err != nil {
+		return err
+	}
+	return s.RequireNodesForTier(ctx, tier)
 }
 
 // EnsureOrgProjectCapacity refuses a new project before anything is created

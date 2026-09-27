@@ -15,8 +15,9 @@ func TestGetTierConfig(t *testing.T) {
 		cpu       string
 	}{
 		{domain.Free, 1, "5Gi", "512Mi", "0.5"},
-		{domain.Standard, 1, "50Gi", "4Gi", "2"},
-		{domain.Enterprise, 1, "500Gi", "16Gi", "4"},
+		// Paid tiers: one instance per node, odd counts (owner decision 2026-09-28).
+		{domain.Standard, 3, "50Gi", "4Gi", "2"},
+		{domain.Enterprise, 5, "500Gi", "16Gi", "4"},
 	}
 
 	for _, tt := range tests {

@@ -148,6 +148,9 @@ type NodeCapacity struct {
 	AllocatableMemBytes int64
 	RequestedCPUMilli   int64
 	RequestedMemBytes   int64
+	// Tainted is a NoSchedule/NoExecute taint: a pod without a matching
+	// toleration (a database instance) cannot land there.
+	Tainted bool
 }
 
 // Fits reports whether one more pod of this size fits on the node, keeping

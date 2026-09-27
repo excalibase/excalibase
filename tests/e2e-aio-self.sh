@@ -97,6 +97,8 @@ ORG_SLUG=$(echo "$ORGS" | jq -r '.[0].slug' 2>/dev/null)
 [ -n "$ORG_ID" ] && [ "$ORG_ID" != "null" ] && pass "org list ($ORG_SLUG)" || fail "org list" "$ORGS"
 
 # A project takes its org's plan; this run creates two projects, so the org goes on STANDARD.
+. "$(dirname "$0")/standard-tier-fits-nodes.sh"
+standard_tier_fits_nodes "$API_PROV" "$PAT_HDR" || fail "standard tier" "could not size STANDARD to this cluster"
 PLAN_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH -H "$PAT_HDR" -H 'Content-Type: application/json' \
   -d '{"tier":"STANDARD"}' "$API_PROV/api/orgs/$ORG_ID/")
 [ "$PLAN_CODE" = "200" ] && pass "org on STANDARD plan" || fail "org plan" "got $PLAN_CODE"

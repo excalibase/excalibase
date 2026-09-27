@@ -32,6 +32,13 @@ func TestTierConfigs_SeededDefaults(t *testing.T) {
 	if len(all) != 3 {
 		t.Errorf("expected 3 seeded tiers, got %d", len(all))
 	}
+	// One instance per node on paid tiers, as the built-in catalogue says.
+	for tier, stored := range all {
+		builtin, _ := config.GetTierConfig(tier)
+		if stored.Instances != builtin.Instances {
+			t.Errorf("%s: stored instances %d, built-in %d", tier, stored.Instances, builtin.Instances)
+		}
+	}
 }
 
 func TestTierConfigs_UpsertRoundTrip(t *testing.T) {

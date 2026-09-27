@@ -153,6 +153,8 @@ TOKEN=$(curl -s http://localhost:24005/api/auth/login -H 'Content-Type: applicat
 
 # C3. Create a fresh STANDARD org for cloud tests
 echo "C3. Create STANDARD org for cloud"
+. "$(dirname "$0")/standard-tier-fits-nodes.sh"
+standard_tier_fits_nodes http://localhost:24005 "Authorization: Bearer $TOKEN" || cfail "standard tier" "could not size STANDARD to this cluster"
 CLOUD_ORG_ID=$(curl -s -X POST http://localhost:24005/api/orgs/ \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"name":"Cloud Corp","slug":"cloud-corp"}' | jq -r '.id')

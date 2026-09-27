@@ -4,7 +4,10 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,8 +47,10 @@ print("count=" + c.countDocuments() + " index=" + c.createIndex({k: 1}));`
 type documentDBLab struct {
 	ctx       context.Context
 	container *k3s.K3sContainer
-	cs        kubernetes.Interface
-	client    *k8s.Client
+	// kubeconfig is set instead of container for a cluster the test did not start.
+	kubeconfig string
+	cs         kubernetes.Interface
+	client     *k8s.Client
 }
 
 // Run with: go test ./internal/service/ -tags=live -run TestLiveDocumentDBOnLatestCNPG -v -count=1 -timeout 30m
@@ -174,8 +179,58 @@ func startDocumentDBLab(t *testing.T) *documentDBLab {
 	return &documentDBLab{ctx: ctx, container: container, cs: cs, client: client}
 }
 
+// startExternalLab drives an already running cluster (a multi-node k3d) named
+// by the kubeconfig in env, and skips when it is unset.
+func startExternalLab(t *testing.T, env string) *documentDBLab {
+	t.Helper()
+	path := os.Getenv(env)
+	if path == "" {
+		t.Skipf("%s names no cluster", env)
+	}
+	t.Setenv("KUBECONFIG", path)
+	client, err := k8s.NewClientWith(k8s.ClientOptions{KubeconfigPath: path})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	restCfg, err := clientcmd.BuildConfigFromFlags("", path)
+	if err != nil {
+		t.Fatalf("rest config: %v", err)
+	}
+	cs, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		t.Fatalf("clientset: %v", err)
+	}
+	return &documentDBLab{ctx: context.Background(), kubeconfig: path, cs: cs, client: client}
+}
+
+// kubectlOutput runs kubectl inside the lab's k3s container, or against its
+// external cluster.
+func (lab *documentDBLab) kubectlOutput(args ...string) (string, error) {
+	if lab.container == nil {
+		out, err := exec.CommandContext(lab.ctx, "kubectl", append([]string{"--kubeconfig", lab.kubeconfig}, args...)...).CombinedOutput()
+		return string(out), err
+	}
+	code, reader, err := lab.container.Exec(lab.ctx, append([]string{"kubectl"}, args...))
+	out := ""
+	if reader != nil {
+		raw, _ := io.ReadAll(reader)
+		out = string(raw)
+	}
+	if err == nil && code != 0 {
+		err = fmt.Errorf("exit %d", code)
+	}
+	return out, err
+}
+
 func (lab *documentDBLab) kubectl(t *testing.T, args ...string) string {
 	t.Helper()
+	if lab.container == nil {
+		out, err := lab.kubectlOutput(args...)
+		if err != nil {
+			t.Fatalf("kubectl %v: %v\n%s", args, err, out)
+		}
+		return out
+	}
 	code, reader, err := lab.container.Exec(lab.ctx, append([]string{"kubectl"}, args...))
 	var out strings.Builder
 	if reader != nil {
