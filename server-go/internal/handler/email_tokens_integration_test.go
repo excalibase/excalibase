@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -117,6 +118,7 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
 	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
 	h.runInBackground = func(f func()) { f() }
+	h.SetSessionStore(store)
 
 	// Seed a user with a known password.
 	origHash, _ := auth.HashPassword(testutil.FixturePassword("old"))
@@ -246,5 +248,138 @@ func TestEmailTokens_ResetSendHidesAProviderFailure(t *testing.T) {
 	h.SendReset(w, httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"d@example.com"}`)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: a failed send for a registered address answers differently", w.Code)
+	}
+}
+
+func seedToken(t *testing.T, store interface {
+	CreateToken(context.Context, *domain.AccessToken) error
+}, userID, hash, scopes string) {
+	t.Helper()
+	now := time.Now()
+	later := now.Add(time.Hour)
+	if err := store.CreateToken(context.Background(), &domain.AccessToken{
+		TokenHash: hash, TokenPrefix: hash[:8], UserID: userID, Name: scopes,
+		Scopes: scopes, CreatedAt: &now, ExpiresAt: &later,
+	}); err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+}
+
+// A reset is the remedy for a stolen account: every session that existed
+// before it, the attacker's included, must stop working.
+func TestEmailTokens_ResetEndsEveryExistingSession(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &capturingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+	h.SetSessionStore(store)
+	h.runInBackground = func(f func()) { f() }
+
+	victim := &domain.User{ID: "user-victim", Username: testutil.FixturePassword("victim"), Email: "victim@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	other := &domain.User{ID: "user-other", Username: testutil.FixturePassword("other"), Email: "other@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	for _, u := range []*domain.User{victim, other} {
+		if err := store.CreateUser(context.Background(), u); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+	}
+	seedToken(t, store, victim.ID, "hash-victim-session-a", "session")
+	seedToken(t, store, victim.ID, "hash-victim-session-b", "session")
+	seedToken(t, store, victim.ID, "hash-victim-ci-token", "read,write")
+	seedToken(t, store, other.ID, "hash-other-session-1", "session")
+
+	h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"victim@example.com"}`)))
+	token := tokenFromURL(sender.message().HTMLBody)
+	w := httptest.NewRecorder()
+	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
+		strings.NewReader(`{"token":"`+token+`","newPassword":"brand-new-pass"}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ConfirmReset: %d %s", w.Code, w.Body.String())
+	}
+
+	for _, hash := range []string{"hash-victim-session-a", "hash-victim-session-b"} {
+		if tok, _ := store.FindByTokenHash(context.Background(), hash); tok != nil {
+			t.Errorf("session %s survived the reset", hash)
+		}
+	}
+	if tok, _ := store.FindByTokenHash(context.Background(), "hash-other-session-1"); tok == nil {
+		t.Error("another account's session was ended")
+	}
+	if tok, _ := store.FindByTokenHash(context.Background(), "hash-victim-ci-token"); tok == nil {
+		t.Error("a named access token was revoked; only sessions end on reset")
+	}
+}
+
+// Without a place to revoke sessions the reset must refuse, not succeed while
+// leaving them alive.
+func TestEmailTokens_ResetRefusesWithoutASessionStore(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &capturingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.runInBackground = func(f func()) { f() }
+	user := &domain.User{ID: "user-nostore", Username: testutil.FixturePassword("nostore"), Email: "n@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"n@example.com"}`)))
+	w := httptest.NewRecorder()
+	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
+		strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"brand-new-pass"}`)))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("got %d, want 500", w.Code)
+	}
+	if updated, _ := store.FindUserByID(context.Background(), user.ID); updated.PasswordHash != user.PasswordHash {
+		t.Error("the password changed although sessions could not be ended")
+	}
+}
+
+// failingSessions stands in for a token store that errors on list or delete.
+type failingSessions struct {
+	sessionTokens
+	failList bool
+}
+
+func (f failingSessions) ListTokensByUser(ctx context.Context, userID string) ([]*domain.AccessToken, error) {
+	if f.failList {
+		return nil, errors.New("list failed")
+	}
+	return f.sessionTokens.ListTokensByUser(ctx, userID)
+}
+
+func (f failingSessions) DeleteToken(context.Context, string) error {
+	return errors.New("delete failed")
+}
+
+// When sessions cannot be ended the reset must not report success, or the
+// owner believes a stolen session is gone while it still works.
+func TestEmailTokens_ResetReportsSessionsThatCouldNotBeEnded(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failList bool
+	}{{"list fails", true}, {"delete fails", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := pgtest.New(t)
+			sender := &capturingSender{}
+			h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+			h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+			h.SetSessionStore(failingSessions{sessionTokens: store, failList: tc.failList})
+			h.runInBackground = func(f func()) { f() }
+			user := &domain.User{ID: "user-stuck", Username: testutil.FixturePassword("stuck"), Email: "s@example.com",
+				PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+			if err := store.CreateUser(context.Background(), user); err != nil {
+				t.Fatalf("CreateUser: %v", err)
+			}
+			seedToken(t, store, user.ID, "hash-stuck-session", "session")
+
+			h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"s@example.com"}`)))
+			w := httptest.NewRecorder()
+			h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
+				strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"brand-new-pass"}`)))
+			if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "could not be signed out") {
+				t.Fatalf("got %d %s, want 500 naming the sessions", w.Code, w.Body.String())
+			}
+		})
 	}
 }
