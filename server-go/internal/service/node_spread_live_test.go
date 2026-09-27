@@ -69,6 +69,13 @@ func TestLiveStandardIsRefusedOnASingleNode(t *testing.T) {
 	}
 }
 
+// freshNamespaces removes what an earlier run on the same external cluster
+// left, so this run's store credentials and projects start clean.
+func (lab *documentDBLab) freshNamespaces(t *testing.T, names ...string) {
+	t.Helper()
+	lab.kubectl(t, append([]string{"delete", "namespace", "--ignore-not-found", "--wait=true", "--timeout=300s"}, names...)...)
+}
+
 func namespaceCount(t *testing.T, lab *documentDBLab) int {
 	t.Helper()
 	list, err := lab.cs.CoreV1().Namespaces().List(lab.ctx, metav1.ListOptions{})
@@ -81,6 +88,7 @@ func namespaceCount(t *testing.T, lab *documentDBLab) int {
 // Run with: EXCALIBASE_LIVE_KUBECONFIG=<k3d with 3 agents> go test ./internal/service/ -tags=live -run TestLiveStandardSpreadsAndRestoresAtItsTier -v -count=1 -timeout 60m
 func TestLiveStandardSpreadsAndRestoresAtItsTier(t *testing.T) {
 	lab := &backupLab{documentDBLab: startExternalLab(t, multiNodeKubeconfigEnv)}
+	lab.freshNamespaces(t, "backup-store", backupLiveOrg+"-"+spreadLiveSource, backupLiveOrg+"-"+spreadLiveRestored)
 	lab.installBackupStack(t)
 	svc := liveService(t, lab.client, lab.store)
 	tier, err := svc.TierConfig(lab.ctx, domain.Standard)

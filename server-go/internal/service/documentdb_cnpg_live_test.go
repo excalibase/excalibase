@@ -44,6 +44,10 @@ c.insertMany(Array.from({length: 200}, (_, i) => ({i: i, k: "k" + i})));
 print("count=" + c.countDocuments() + " index=" + c.createIndex({k: 1}));`
 )
 
+// labProjectAccess is the binding provisioning files in each project
+// namespace; the lab binds an identity that exists in any cluster.
+var labProjectAccess = k8s.ProjectAccess{ClusterRole: "cluster-admin", ServiceAccount: "default", Namespace: "default"}
+
 type documentDBLab struct {
 	ctx       context.Context
 	container *k3s.K3sContainer
@@ -168,6 +172,7 @@ func startDocumentDBLab(t *testing.T) *documentDBLab {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
+	client = client.WithProjectAccess(labProjectAccess)
 	restCfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 	if err != nil {
 		t.Fatalf("rest config: %v", err)
@@ -192,6 +197,7 @@ func startExternalLab(t *testing.T, env string) *documentDBLab {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
+	client = client.WithProjectAccess(labProjectAccess)
 	restCfg, err := clientcmd.BuildConfigFromFlags("", path)
 	if err != nil {
 		t.Fatalf("rest config: %v", err)
