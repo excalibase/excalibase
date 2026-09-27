@@ -52,8 +52,11 @@ type AppConfig struct {
 	StudioURL         string // Studio origin that emailed verification and reset links open
 	AuthInternalURL   string // excalibase-auth inside the platform network; SDK key management calls it
 	RegistrationMode  string // "open" (default) or "invite" — invite closes open studio signup
-	// TrustedProxyCIDRs are the only peers whose X-Forwarded-For is believed
-	// (the edge); empty means client addresses come from the TCP peer alone.
+	// PublicPort serves the edge only; Port serves in-cluster callers and
+	// never believes X-Forwarded-For.
+	PublicPort string
+	// TrustedProxyCIDRs are the peers whose X-Forwarded-For the public
+	// listener believes (the edge).
 	TrustedProxyCIDRs []*net.IPNet
 
 	// ExposureEnforced is the installation-wide kill switch for the table
@@ -334,6 +337,7 @@ func Load() AppConfig {
 		NatsCalloutPassword:      os.Getenv("NATS_AUTH_CALLOUT_PASSWORD"),
 		NatsCalloutIssuerSeed:    os.Getenv("NATS_AUTH_CALLOUT_ISSUER_SEED"),
 		RegistrationMode:         envOr("REGISTRATION_MODE", "open"),
+		PublicPort:               os.Getenv("PUBLIC_PORT"),
 		TrustedProxyCIDRs:        envTrustedProxyCIDRs("TRUSTED_PROXY_CIDRS"),
 		ExposureEnforced:         exposureEnforced(),
 		DBEndpointDomain:         envDBEndpointDomain("EXCALIBASE_DB_ENDPOINT_DOMAIN"),
@@ -523,6 +527,24 @@ func (c AppConfig) CheckStudioURL() error {
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return fmt.Errorf("STUDIO_URL %q must be an origin without a path or query", c.StudioURL)
+	}
+	return nil
+}
+
+// CheckPublicListener refuses to start without the edge's own listener and
+// the edge addresses it believes.
+func (c AppConfig) CheckPublicListener() error {
+	if c.PublicPort == "" {
+		return errors.New("PUBLIC_PORT must be set: the port only the edge reaches")
+	}
+	if n, err := strconv.Atoi(c.PublicPort); err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("PUBLIC_PORT %q is not a port", c.PublicPort)
+	}
+	if c.PublicPort == c.Port {
+		return errors.New("PUBLIC_PORT must differ from PORT: in-cluster callers must not reach the edge's listener")
+	}
+	if len(c.TrustedProxyCIDRs) == 0 {
+		return errors.New("TRUSTED_PROXY_CIDRS must name the edge: the public listener believes X-Forwarded-For only from it")
 	}
 	return nil
 }

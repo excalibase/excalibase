@@ -104,6 +104,9 @@ jobs:
       - name: Chart requires the Studio URL
         run: sh charts/provisioning/tests/studio-url.sh
 
+      - name: Chart serves the edge on its own listener
+        run: sh charts/provisioning/tests/public-listener.sh
+
       - name: Install provisioning chart (Helm)
         run: |
           helm upgrade --install provisioning charts/provisioning \
@@ -113,6 +116,7 @@ jobs:
             --set image.pullPolicy=IfNotPresent \
             --set ingress.enabled=false \
             --set studioUrl=https://studio.excalibase.test \
+            --set trustedProxyCIDRs=10.42.0.0/16 \
             --set-string platformDB.url='postgres://platform:platform@platform-db.excalibase-platform:5432/platform?sslmode=disable'
 
       - name: Wait for provisioning rollout

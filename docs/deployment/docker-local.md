@@ -32,6 +32,12 @@ Use this when:
 networks:
   excalibase:
     name: excalibase
+  # Caddy's own network. Tenant containers never join it, so provisioning's
+  # public listener believes X-Forwarded-For only from this subnet.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.30.250.0/28
 
 services:
   # Caddy terminates TLS (automatic Let's Encrypt) and fronts the HTTP
@@ -46,7 +52,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-    networks: [excalibase]
+    networks: [edge]
     depends_on:
       - provisioning
       - studio
@@ -66,6 +72,8 @@ services:
       CORS_ORIGINS: "https://studio.example.com"
       PUBLIC_BASE_URL: "https://api.example.com"
       STUDIO_URL: "https://studio.example.com"
+      PUBLIC_PORT: "24006"
+      TRUSTED_PROXY_CIDRS: "172.30.250.0/28"
       STORAGE_PATH: /var/lib/excalibase           # vault unseal.key only
       DENO_RUNTIME_SECRET: ${DENO_RUNTIME_SECRET}
       # Docker provisioner (single-tenant; docker + cloud is refused at boot).
@@ -86,7 +94,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - excalibase-data:/var/lib/excalibase
-    networks: [excalibase]
+    networks: [excalibase, edge]
     depends_on:
       platform-db:
         condition: service_healthy
@@ -117,7 +125,7 @@ services:
     environment:
       VITE_API_URL: "https://api.example.com"
       VITE_DEPLOYMENT_MODE: selfhosted
-    networks: [excalibase]
+    networks: [excalibase, edge]
     depends_on:
       - provisioning
 
@@ -145,7 +153,7 @@ services:
       # secret the tenant's own backend signs with. If you also run
       # excalibase-auth, set APP_SECURITY_AUTH_JWKS_URL to its JWKS instead.
       APP_SECURITY_AUTH_HMAC_SECRET: ${GRAPHQL_JWT_HMAC_SECRET}
-    networks: [excalibase]
+    networks: [excalibase, edge]
     depends_on:
       - provisioning
 
@@ -173,7 +181,7 @@ api.example.com {
 	#   /functions/v1/* edge-function invoke (public)
 	#   /api/*         admin/studio backend (gate this if internet-facing)
 	handle {
-		reverse_proxy provisioning:24005
+		reverse_proxy provisioning:24006
 	}
 
 	# Internet-facing? The admin API (/api/*) should not be open — gate it to
@@ -181,7 +189,7 @@ api.example.com {
 	#   @admin path /api/*
 	#   handle @admin {
 	#     @allowed remote_ip 203.0.113.0/24 198.51.100.7
-	#     handle @allowed { reverse_proxy provisioning:24005 }
+	#     handle @allowed { reverse_proxy provisioning:24006 }
 	#     respond 403
 	#   }
 }

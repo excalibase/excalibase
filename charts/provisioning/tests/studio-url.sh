@@ -7,13 +7,13 @@ set -eu
 
 CHART=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
-if out=$(helm template t "$CHART" 2>&1); then
+if out=$(helm template t "$CHART" --set trustedProxyCIDRs=10.42.0.0/16 2>&1); then
   echo "rendered without studioUrl" >&2
   exit 1
 fi
 echo "$out" | grep -q studioUrl || { echo "refusal does not name studioUrl: $out" >&2; exit 1; }
 
-helm template t "$CHART" --set studioUrl=https://studio.example.test \
+helm template t "$CHART" --set studioUrl=https://studio.example.test --set trustedProxyCIDRs=10.42.0.0/16 \
   | grep -A1 'name: STUDIO_URL' | grep -q '"https://studio.example.test"' \
   || { echo "STUDIO_URL is not passed to provisioning" >&2; exit 1; }
 

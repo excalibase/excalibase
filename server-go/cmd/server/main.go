@@ -130,6 +130,9 @@ func runServer(cfg config.AppConfig) {
 	if err := cfg.CheckStudioURL(); err != nil {
 		log.Fatal(err)
 	}
+	if err := cfg.CheckPublicListener(); err != nil {
+		log.Fatal(err)
+	}
 	sqlStore := buildPlatformStore(cfg)
 	defer sqlStore.Close()
 
@@ -1302,7 +1305,6 @@ func serveConfig(cfg config.AppConfig) http.HandlerFunc {
 // this top-level remains a manifest of which features are exposed.
 func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.InstanceStore, d *handlerDeps) *chi.Mux {
 	r := chi.NewRouter()
-	r.Use(clientaddr.Middleware(cfg.TrustedProxyCIDRs))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(metrics.Middleware)
@@ -1774,13 +1776,32 @@ func mountEmailRoutes(r *chi.Mux, d *handlerDeps) {
 	})
 }
 
-// startServer binds the address and runs ListenAndServe; exits the process on error.
-func startServer(cfg config.AppConfig, r *chi.Mux) {
-	addr := fmt.Sprintf(":%s", cfg.Port)
-	log.Printf("Excalibase Go server starting on %s", addr)
-	if err := http.ListenAndServe(addr, r); err != nil {
-		log.Fatalf("Server failed: %v", err)
+// newListeners serves one router twice. The public listener is the edge's:
+// it believes X-Forwarded-For from TrustedProxyCIDRs. The internal one is for
+// in-cluster callers and keys on the TCP peer alone.
+func newListeners(cfg config.AppConfig, router http.Handler) (public, internal *http.Server) {
+	public = &http.Server{
+		Addr:              ":" + cfg.PublicPort,
+		Handler:           clientaddr.Middleware(cfg.TrustedProxyCIDRs)(router),
+		ReadHeaderTimeout: 30 * time.Second,
 	}
+	internal = &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           clientaddr.Middleware(nil)(router),
+		ReadHeaderTimeout: 30 * time.Second,
+	}
+	return public, internal
+}
+
+// startServer runs both listeners; either one failing exits the process.
+func startServer(cfg config.AppConfig, r *chi.Mux) {
+	public, internal := newListeners(cfg, r)
+	failed := make(chan error, 2)
+	for _, srv := range []*http.Server{public, internal} {
+		go func(srv *http.Server) { failed <- fmt.Errorf("%s: %w", srv.Addr, srv.ListenAndServe()) }(srv)
+	}
+	log.Printf("Excalibase Go server starting: public (edge) on %s, internal on %s", public.Addr, internal.Addr)
+	log.Fatalf("Server failed: %v", <-failed)
 }
 
 // buildPlatformStore opens the PostgreSQL platform store. The platform is

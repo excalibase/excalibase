@@ -94,6 +94,10 @@ env:
   STUDIO_URL: "https://studio.your-domain.example.com"
   DENO_RUNTIME_SECRET: "" # generate with: openssl rand -hex 32
 
+# The ingress controller's pod CIDR: the only peers whose X-Forwarded-For
+# provisioning's public listener (service.publicPort) believes.
+trustedProxyCIDRs: "10.42.0.0/16"
+
 ingress:
   enabled: true
   host: api.your-domain.example.com
