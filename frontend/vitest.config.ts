@@ -50,6 +50,8 @@ export default defineConfig({
         'src/pages/ContainersPage.tsx',
         'src/pages/ContainerFormPage.tsx',
         'src/pages/ContainerDetailPage.tsx',
+        'src/pages/SdkKeysPage.tsx',
+        'src/api/sdkKeys.ts',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

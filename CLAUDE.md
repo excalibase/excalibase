@@ -255,6 +255,7 @@ Environment variables:
 - `DEPLOYMENT_MODE` — `selfhosted` (default) or `cloud`
 - `PUBLIC_BASE_URL` — public base URL for SDK snippets + function invoke
 - `STUDIO_URL` — required; Studio origin that emailed verification and password-reset links open
+- `AUTH_INTERNAL_URL` — excalibase-auth inside the platform network; `/api/projects/{id}/sdk-keys` relays to it with a 60-second key-admin token signed by the vault PKI key
 
 **Storage**
 - `DB_PATH` — SQLite path (self-hosted only, default: ../provisioning-data/excalibase.db)

@@ -348,6 +348,7 @@ Error messages are sanitized — PostgreSQL internal details are stripped from 5
 | `DEPLOYMENT_MODE` | `selfhosted` | `selfhosted` or `cloud`. Cloud requires `PLATFORM_DB_URL` and enables tier enforcement + multi-org. |
 | `PUBLIC_BASE_URL` | `https://api.excalibase.io` | Base URL emitted in SDK snippets and function invoke URLs |
 | `STUDIO_URL` | **required** | Studio origin that verification and password-reset emails link to; the server refuses to start without it |
+| `AUTH_INTERNAL_URL` | | excalibase-auth inside the platform network (e.g. `http://auth:24000`); Studio's SDK key routes call it and answer 503 without it |
 
 **Storage**
 

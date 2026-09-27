@@ -96,6 +96,9 @@ var projectRows = []Row{
 	{Methods: put, Pattern: "/api/projects/{projectId}/cors/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: get, Pattern: "/api/projects/{projectId}/db-endpoint/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "reports the host, port and cluster CA a client needs; never the password"},
 	{Methods: put, Pattern: "/api/projects/{projectId}/db-endpoint/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "opening the database to the internet is an admin decision"},
+	{Methods: get, Pattern: "/api/projects/{projectId}/sdk-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, Note: "prefixes and dates only; the key itself is shown once, at creation"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/sdk-keys/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "relayed to auth with the control plane's own short key-admin token"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/sdk-keys/{keyId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: get, Pattern: "/api/projects/{projectId}/auth-settings/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: put, Pattern: "/api/projects/{projectId}/auth-settings/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 

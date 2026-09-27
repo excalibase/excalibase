@@ -180,6 +180,25 @@ func TestValidateProjectJWT_RefreshTokenRejected(t *testing.T) {
 	}
 }
 
+// Only access tokens invoke functions: a key-management token signed with the
+// same key is refused even when the audience requirement is off.
+func TestValidateProjectJWT_KeyAdminTokenRejected(t *testing.T) {
+	h, priv, pub := newAudTestHandler(t)
+	h.SetAudienceRequirement(false, audTestPrefix)
+
+	claims := baseAudClaims()
+	claims["aud"] = []string{audTestCorrect}
+	claims["token_use"] = "key_admin"
+	w := invokeWithToken(pub, signES256(t, priv, claims))
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("key-admin token should be 401, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), errCodeNotAccessToken) {
+		t.Errorf("body should carry %q, got %s", errCodeNotAccessToken, w.Body.String())
+	}
+}
+
 func TestNormalizeAudience(t *testing.T) {
 	cases := []struct {
 		name string

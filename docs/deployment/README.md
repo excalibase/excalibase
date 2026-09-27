@@ -60,6 +60,7 @@ These apply to every matrix. Matrix-specific pages cover the rest.
 | `CORS_ORIGINS` | yes | `https://app.excalibase.io` | Comma-separated allow-list. No default means no origin allowed — fail-closed. |
 | `PUBLIC_BASE_URL` | yes | `https://api.excalibase.io` | Base URL for edge function invoke + SDK snippets. |
 | `STUDIO_URL` | **yes** | — | Studio origin that verification and password-reset emails link to. The server refuses to start without it. |
+| `AUTH_INTERNAL_URL` | for SDK keys | — | excalibase-auth inside the platform network. Studio's SDK key management answers 503 without it. |
 | `LOG_LEVEL` | no | `debug` | `debug`, `info`, `warn`, `error` |
 | `STORAGE_PATH` | no | `../provisioning-data` | On-disk dir for the auto-generated vault unseal key (`unseal.key`). Docker provisioner only; unused when `VAULT_UNSEAL_KEY` is set or on k8s (the bootstrap Job holds the key). |
 | `PLATFORM_DB_URL` | **yes** | — | Postgres DSN for the platform store. Required in both modes (no SQLite fallback). |
