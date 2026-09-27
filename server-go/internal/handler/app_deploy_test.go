@@ -449,3 +449,21 @@ func TestAppDeployHandler_Deploy_PlanRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestAppDeployHandler_Resume_AdmissionRefusals(t *testing.T) {
+	for err, code := range map[error]int{
+		fmt.Errorf("%w: the FREE plan allows at most 1", service.ErrAppOverPlan): http.StatusConflict,
+		fmt.Errorf("%w: organisation missing", service.ErrOrgTierUnresolved):     http.StatusInternalServerError,
+		fmt.Errorf("%w: organisation missing", service.ErrAppCapacity):           http.StatusServiceUnavailable,
+	} {
+		deployer := newFakeAppDeployer()
+		deployer.lifecycleErr = err
+		rec := doDeployRequest(t, setupAppDeployRouter(t, deployer), http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/app-1/resume")
+		if rec.Code != code {
+			t.Errorf("%v: got %d want %d", err, rec.Code, code)
+		}
+		if strings.Contains(rec.Body.String(), "organisation missing") {
+			t.Errorf("detail leaked: %s", rec.Body.String())
+		}
+	}
+}

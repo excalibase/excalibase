@@ -109,6 +109,7 @@ type KubeClient interface {
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
 	LiveAppPods(ctx context.Context, namespace, appID string) (AppPods, error)
 	RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error)
+	PausedAppSize(ctx context.Context, namespace, appID, appName string) (PausedApp, error)
 }
 
 // ClusterCapacity holds aggregate cluster resource state. All values are in
@@ -168,6 +169,13 @@ type AppPods struct {
 	MemBytes    int64
 	MaxCPUMilli int64
 	MaxMemBytes int64
+}
+
+// PausedApp is what a resume brings back: the paused replica count at the pod size the workload was deployed with.
+type PausedApp struct {
+	Replicas      int
+	CPURequest    string
+	MemoryRequest string
 }
 
 // RuntimePlacement is what a RuntimeClass adds to each pod and where it may run.

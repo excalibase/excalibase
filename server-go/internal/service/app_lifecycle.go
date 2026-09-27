@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
@@ -118,6 +119,9 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID strin
 		[]string{apphost.StatusStopped, apphost.StatusFailed, apphost.StatusResuming}, apphost.StatusResuming); err != nil {
 		return nil, err
 	}
+	if err := s.admitResume(ctx, namespace, app); err != nil {
+		return nil, s.putBack(projectID, appID, apphost.StatusResuming, app.Status, err, resumeRefusals...)
+	}
 	err = s.kube.ResumeAppWorkload(ctx, namespace, appID, app.Name, s.timeout)
 	switch {
 	case err == nil:
@@ -130,6 +134,22 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID strin
 	default:
 		return nil, s.putBack(projectID, appID, apphost.StatusResuming, app.Status, err, k8s.ErrAppNotPaused, k8s.ErrAppNotDeployed)
 	}
+}
+
+var resumeRefusals = []error{ErrAppOverPlan, ErrOrgTierUnresolved, ErrAppCapacity, k8s.ErrAppNotPaused, k8s.ErrAppNotDeployed}
+
+// admitResume holds a resume to the plan and the room a deploy is held to,
+// counting the pods at the size they were deployed with.
+func (s *AppDeployService) admitResume(ctx context.Context, namespace string, app *apphost.App) error {
+	size, err := s.kube.PausedAppSize(ctx, namespace, app.ID, app.Name)
+	if err != nil {
+		return err
+	}
+	if _, _, err := s.planTier(ctx, app.ProjectID, size.Replicas); err != nil {
+		return err
+	}
+	pod := config.AppTierConfig{CPURequest: size.CPURequest, MemoryRequest: size.MemoryRequest}
+	return s.admit(ctx, namespace, &apphost.Deploy{AppID: app.ID}, pod, size.Replicas)
 }
 
 // DeleteApp tears the workload down, waits until none of its pods is left,

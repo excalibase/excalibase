@@ -52,6 +52,7 @@ func newLifecycleFixture(t *testing.T, status string) *lifecycleFixture {
 	instances := fakestore.NewInstances()
 	instances.Items[app.ProjectID] = &domain.DatabaseInstance{ProjectID: app.ProjectID, Namespace: testDeployNamespace}
 	kube.Capacity = roomyCluster
+	kube.PausedSize = k8s.PausedApp{Replicas: 1, CPURequest: "50m", MemoryRequest: "128Mi"}
 	svc := NewAppDeployService(apps, deploys, kube, instances, nil, testDeployRender)
 	svc.SetPlanTiers(fixedPlan{tier: app.Tier})
 	svc.async = func(f func()) { f() }

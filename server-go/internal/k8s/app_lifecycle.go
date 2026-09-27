@@ -9,7 +9,9 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
@@ -66,6 +68,30 @@ func (c *Client) ResumeAppWorkload(ctx context.Context, namespace, appID, appNam
 		return err
 	}
 	return c.resumeDeployment(ctx, namespace, AppObjectName(appName), timeout)
+}
+
+// PausedAppSize reads the Deployment a resume would scale up, so it can be admitted first.
+func (c *Client) PausedAppSize(ctx context.Context, namespace, appID, appName string) (PausedApp, error) {
+	if _, err := c.appDeploymentNames(ctx, namespace, appID); err != nil {
+		return PausedApp{}, err
+	}
+	dep, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, AppObjectName(appName), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return PausedApp{}, ErrAppNotDeployed
+	}
+	if err != nil {
+		return PausedApp{}, fmt.Errorf("read app deployment: %w", err)
+	}
+	replicas, err := pausedReplicas(dep)
+	if err != nil {
+		return PausedApp{}, err
+	}
+	cpu, mem := podRequest(&corev1.Pod{Spec: dep.Spec.Template.Spec})
+	return PausedApp{
+		Replicas:      int(replicas),
+		CPURequest:    resource.NewMilliQuantity(cpu, resource.DecimalSI).String(),
+		MemoryRequest: resource.NewQuantity(mem, resource.BinarySI).String(),
+	}, nil
 }
 
 func (c *Client) resumeDeployment(ctx context.Context, namespace, name string, timeout time.Duration) error {

@@ -127,6 +127,9 @@ type MockClient struct {
 	// Placement answers RuntimeClassPlacement for any class.
 	Placement    RuntimePlacement
 	PlacementErr error
+	// PausedSize answers PausedAppSize for any app.
+	PausedSize    PausedApp
+	PausedSizeErr error
 
 	RuntimeClasses    map[string]bool
 	RuntimeClassError error
@@ -715,6 +718,16 @@ func (m *MockClient) LiveAppPods(ctx context.Context, namespace, appID string) (
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "LiveAppPods:"+namespace+"/"+appID)
 	return m.LivePods[namespace+"/"+appID], m.LivePodsErr
+}
+
+func (m *MockClient) PausedAppSize(ctx context.Context, namespace, appID, appName string) (PausedApp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "PausedAppSize:"+namespace+"/"+appID)
+	if m.PausedSizeErr != nil {
+		return PausedApp{}, m.PausedSizeErr
+	}
+	return m.PausedSize, nil
 }
 
 func (m *MockClient) RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error) {

@@ -142,3 +142,15 @@ func TestMockClient_AppCapacityAnswers(t *testing.T) {
 		t.Fatalf("placement = %+v %v", placement, err)
 	}
 }
+
+func TestMockClient_PausedAppSize(t *testing.T) {
+	m := NewMockClient()
+	m.PausedSize = PausedApp{Replicas: 2, CPURequest: "50m", MemoryRequest: "128Mi"}
+	if got, err := m.PausedAppSize(context.Background(), "ns1", "app-1", "web"); err != nil || got != m.PausedSize {
+		t.Fatalf("PausedAppSize = %+v, %v", got, err)
+	}
+	m.PausedSizeErr = ErrAppNotPaused
+	if _, err := m.PausedAppSize(context.Background(), "ns1", "app-1", "web"); !errors.Is(err, ErrAppNotPaused) {
+		t.Fatalf("err = %v", err)
+	}
+}

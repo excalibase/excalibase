@@ -409,3 +409,50 @@ func TestResumeAppWorkload_LeavesAnEarlierNameStopped(t *testing.T) {
 		t.Errorf("the earlier name came back with %d replicas", got)
 	}
 }
+
+func TestPausedAppSize_ReadsWhatAResumeWouldBringBack(t *testing.T) {
+	c, _ := newLifecycleFakeClient()
+	app := fullApp()
+	deployedApp(t, c, app)
+	if err := c.PauseAppWorkload(context.Background(), testNamespace, app.ID); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+
+	size, err := c.PausedAppSize(context.Background(), testNamespace, app.ID, app.Name)
+	if err != nil {
+		t.Fatalf("PausedAppSize: %v", err)
+	}
+	if size.Replicas != 3 || size.CPURequest != "250m" || size.MemoryRequest != "512Mi" {
+		t.Fatalf("size = %+v", size)
+	}
+}
+
+func TestPausedAppSize_RefusesWhatIsNotPaused(t *testing.T) {
+	c, _ := newLifecycleFakeClient()
+	app := fullApp()
+	deployedApp(t, c, app)
+
+	if _, err := c.PausedAppSize(context.Background(), testNamespace, app.ID, app.Name); !errors.Is(err, ErrAppNotPaused) {
+		t.Fatalf("err = %v, want ErrAppNotPaused", err)
+	}
+	if _, err := c.PausedAppSize(context.Background(), testNamespace, "app-missing", "missing"); !errors.Is(err, ErrAppNotDeployed) {
+		t.Fatalf("missing deployment: err = %v, want ErrAppNotDeployed", err)
+	}
+	if _, err := c.PausedAppSize(context.Background(), testNamespace, app.ID, "renamed"); !errors.Is(err, ErrAppNotDeployed) {
+		t.Fatalf("no deployment under the name: err = %v, want ErrAppNotDeployed", err)
+	}
+}
+
+func TestPausedAppSize_AnUnreadableDeploymentFails(t *testing.T) {
+	c, clientset := newLifecycleFakeClient()
+	app := fullApp()
+	deployedApp(t, c, app)
+	clientset.PrependReactor("get", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("connection refused")
+	})
+
+	_, err := c.PausedAppSize(context.Background(), testNamespace, app.ID, app.Name)
+	if err == nil || errors.Is(err, ErrAppNotDeployed) {
+		t.Fatalf("err = %v, want the read failure", err)
+	}
+}

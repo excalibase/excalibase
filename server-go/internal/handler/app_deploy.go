@@ -162,6 +162,8 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, service.ErrOrgTierUnresolved):
 		httpError(w, service.ErrOrgTierUnresolved.Error(), http.StatusInternalServerError)
+	case errors.Is(err, service.ErrAppCapacity):
+		httpError(w, service.ErrAppCapacity.Error(), http.StatusServiceUnavailable)
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)
 	}
