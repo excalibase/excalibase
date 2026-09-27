@@ -10,7 +10,7 @@ export function ResetPasswordPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(token ? null : 'This reset link is incomplete.');
   const [loading, setLoading] = useState(false);
-  const [done, setDone] = useState(false);
+  const [revokedTokens, setRevokedTokens] = useState<number | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,8 +18,8 @@ export function ResetPasswordPage() {
     setError(null);
     setLoading(true);
     try {
-      await api.post('/email/reset/confirm', { token, newPassword: password });
-      setDone(true);
+      const { data } = await api.post<{ accessTokensRevoked?: number }>('/email/reset/confirm', { token, newPassword: password });
+      setRevokedTokens(data?.accessTokensRevoked ?? 0);
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { error?: string } } };
       setError(axiosErr.response?.data?.error || 'Could not reset your password.');
@@ -28,10 +28,14 @@ export function ResetPasswordPage() {
     }
   };
 
-  if (done) {
+  if (revokedTokens !== null) {
     return (
       <div data-testid="password-reset" className="space-y-4">
         <h2 className="text-lg font-semibold text-text-primary">Password updated</h2>
+        <p data-testid="tokens-revoked" className="text-sm text-text-secondary">
+          Every session on this account was signed out.
+          {revokedTokens > 0 && ` ${revokedTokens} personal access ${revokedTokens === 1 ? 'token was' : 'tokens were'} revoked; create new ones for your scripts and CI.`}
+        </p>
         <Link to="/login" className="text-purple-400 hover:text-purple-300 transition-colors text-sm">Sign in</Link>
       </div>
     );

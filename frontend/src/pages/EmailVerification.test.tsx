@@ -125,4 +125,30 @@ describe('Studio email verification', () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith('/email/reset/confirm', { token: 'rst', newPassword: PASSWORD }));
     expect(await screen.findByTestId('password-reset')).toBeInTheDocument();
   });
+
+  test('after a reset the user is told their access tokens were revoked', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { status: 'reset', accessTokensRevoked: 2 } } as never);
+    renderAt('/reset-password?token=rst');
+
+    await u.type(screen.getByLabelText('New password'), PASSWORD);
+    await u.click(screen.getByRole('button', { name: /set password/i }));
+
+    const notice = await screen.findByTestId('tokens-revoked');
+    expect(notice).toHaveTextContent(/2 personal access tokens were revoked/i);
+    expect(notice).toHaveTextContent(/signed out/i);
+  });
+
+  test('a reset with no access tokens still says every session was signed out', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { status: 'reset', accessTokensRevoked: 0 } } as never);
+    renderAt('/reset-password?token=rst');
+
+    await u.type(screen.getByLabelText('New password'), PASSWORD);
+    await u.click(screen.getByRole('button', { name: /set password/i }));
+
+    const notice = await screen.findByTestId('tokens-revoked');
+    expect(notice).toHaveTextContent(/signed out/i);
+    expect(notice).not.toHaveTextContent(/were revoked/i);
+  });
 });
