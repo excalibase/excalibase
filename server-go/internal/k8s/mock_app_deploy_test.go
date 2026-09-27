@@ -7,6 +7,8 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 func TestMockClient_ApplyAppWorkload_RecordsByNamespaceAndName(t *testing.T) {
@@ -76,8 +78,11 @@ func TestMockClient_AppLifecycle(t *testing.T) {
 	if err := m.PauseAppWorkload(ctx, "ns1", "a1"); err != nil || !m.AppPaused["ns1/a1"] {
 		t.Fatalf("pause: %v %v", err, m.AppPaused)
 	}
-	if err := m.ResumeAppWorkload(ctx, "ns1", "a1", "web", time.Second); err != nil || m.AppPaused["ns1/a1"] {
+	if err := m.ResumeAppWorkload(ctx, "ns1", "a1", "web", domain.Free, time.Second); err != nil || m.AppPaused["ns1/a1"] {
 		t.Fatalf("resume: %v %v", err, m.AppPaused)
+	}
+	if m.ResumedTier["ns1/a1"] != domain.Free {
+		t.Fatalf("resumed at %q", m.ResumedTier["ns1/a1"])
 	}
 	if err := m.WaitForAppPodsGone(ctx, "ns1", "a1", time.Second); err != nil {
 		t.Fatalf("pods gone: %v", err)
@@ -97,7 +102,7 @@ func TestMockClient_AppLifecycle(t *testing.T) {
 	m.AppPauseErr, m.AppResumeErr, m.AppPodsGoneErr, m.AppDeleteErr = boom, boom, boom, boom
 	for name, err := range map[string]error{
 		"pause":     m.PauseAppWorkload(ctx, "ns1", "a1"),
-		"resume":    m.ResumeAppWorkload(ctx, "ns1", "a1", "web", time.Second),
+		"resume":    m.ResumeAppWorkload(ctx, "ns1", "a1", "web", domain.Free, time.Second),
 		"pods gone": m.WaitForAppPodsGone(ctx, "ns1", "a1", time.Second),
 		"delete":    m.DeleteAppWorkload(ctx, "ns1", "a2", time.Second),
 	} {
@@ -143,14 +148,14 @@ func TestMockClient_AppCapacityAnswers(t *testing.T) {
 	}
 }
 
-func TestMockClient_PausedAppSize(t *testing.T) {
+func TestMockClient_PausedAppReplicas(t *testing.T) {
 	m := NewMockClient()
-	m.PausedSize = PausedApp{Replicas: 2, CPURequest: "50m", MemoryRequest: "128Mi"}
-	if got, err := m.PausedAppSize(context.Background(), "ns1", "app-1", "web"); err != nil || got != m.PausedSize {
-		t.Fatalf("PausedAppSize = %+v, %v", got, err)
+	m.PausedReplicas = 2
+	if got, err := m.PausedAppReplicas(context.Background(), "ns1", "app-1", "web"); err != nil || got != 2 {
+		t.Fatalf("PausedAppReplicas = %d, %v", got, err)
 	}
-	m.PausedSizeErr = ErrAppNotPaused
-	if _, err := m.PausedAppSize(context.Background(), "ns1", "app-1", "web"); !errors.Is(err, ErrAppNotPaused) {
+	m.PausedReplicasErr = ErrAppNotPaused
+	if _, err := m.PausedAppReplicas(context.Background(), "ns1", "app-1", "web"); !errors.Is(err, ErrAppNotPaused) {
 		t.Fatalf("err = %v", err)
 	}
 }

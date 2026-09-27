@@ -7,6 +7,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 // KubeClient abstracts Kubernetes operations for testability.
@@ -100,7 +102,7 @@ type KubeClient interface {
 	WaitForAppRollout(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error
 	AppAvailableReplicas(ctx context.Context, namespace, name string) (int32, error)
 	PauseAppWorkload(ctx context.Context, namespace, appID string) error
-	ResumeAppWorkload(ctx context.Context, namespace, appID, appName string, timeout time.Duration) error
+	ResumeAppWorkload(ctx context.Context, namespace, appID, appName string, tier domain.TierType, timeout time.Duration) error
 	WaitForAppPodsGone(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	DeleteAppWorkload(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	PruneAppWorkload(ctx context.Context, namespace, appID, keepName string, timeout time.Duration) error
@@ -109,7 +111,7 @@ type KubeClient interface {
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
 	LiveAppPods(ctx context.Context, namespace, appID string) (AppPods, error)
 	RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error)
-	PausedAppSize(ctx context.Context, namespace, appID, appName string) (PausedApp, error)
+	PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error)
 }
 
 // ClusterCapacity holds aggregate cluster resource state. All values are in
@@ -169,13 +171,6 @@ type AppPods struct {
 	MemBytes    int64
 	MaxCPUMilli int64
 	MaxMemBytes int64
-}
-
-// PausedApp is what a resume brings back: the paused replica count at the pod size the workload was deployed with.
-type PausedApp struct {
-	Replicas      int
-	CPURequest    string
-	MemoryRequest string
 }
 
 // RuntimePlacement is what a RuntimeClass adds to each pod and where it may run.

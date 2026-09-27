@@ -9,6 +9,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -18,6 +19,8 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 const shortWait = 50 * time.Millisecond
@@ -105,7 +108,7 @@ func TestResumeAppWorkload_RestoresTheReplicasAndWaitsForThem(t *testing.T) {
 		t.Fatalf("pause: %v", err)
 	}
 
-	if err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, time.Second); err != nil {
+	if err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, app.Tier, time.Second); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	dep := readDeployment(t, c, app)
@@ -125,7 +128,7 @@ func TestResumeAppWorkload_NotReadyKeepsThePausedMarker(t *testing.T) {
 		t.Fatalf("pause: %v", err)
 	}
 
-	err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, shortWait)
+	err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, app.Tier, shortWait)
 	if !errors.Is(err, ErrAppRollout) {
 		t.Fatalf("err = %v, want ErrAppRollout", err)
 	}
@@ -139,11 +142,11 @@ func TestResumeAppWorkload_RefusesWhatWasNotPaused(t *testing.T) {
 	app := fullApp()
 	deployedApp(t, c, app)
 
-	err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, shortWait)
+	err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, app.Tier, shortWait)
 	if !errors.Is(err, ErrAppNotPaused) {
 		t.Fatalf("err = %v, want ErrAppNotPaused", err)
 	}
-	if err := c.ResumeAppWorkload(context.Background(), testNamespace, "app-missing", "missing", shortWait); !errors.Is(err, ErrAppNotDeployed) {
+	if err := c.ResumeAppWorkload(context.Background(), testNamespace, "app-missing", "missing", app.Tier, shortWait); !errors.Is(err, ErrAppNotDeployed) {
 		t.Fatalf("missing deployment: err = %v, want ErrAppNotDeployed", err)
 	}
 }
@@ -157,7 +160,7 @@ func TestResumeAppWorkload_RefusesACorruptMarker(t *testing.T) {
 	if _, err := c.clientset.AppsV1().Deployments(testNamespace).Update(context.Background(), dep, metav1.UpdateOptions{}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, shortWait); err == nil {
+	if err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, app.Tier, shortWait); err == nil {
 		t.Fatal("want a refusal for an unreadable replica count")
 	}
 }
@@ -399,7 +402,7 @@ func TestResumeAppWorkload_LeavesAnEarlierNameStopped(t *testing.T) {
 	if err := c.PauseAppWorkload(context.Background(), testNamespace, old.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ResumeAppWorkload(context.Background(), testNamespace, old.ID, renamed.Name, time.Second); err != nil {
+	if err := c.ResumeAppWorkload(context.Background(), testNamespace, old.ID, renamed.Name, renamed.Tier, time.Second); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	if got := *readDeployment(t, c, renamed).Spec.Replicas; got != 3 {
@@ -410,7 +413,7 @@ func TestResumeAppWorkload_LeavesAnEarlierNameStopped(t *testing.T) {
 	}
 }
 
-func TestPausedAppSize_ReadsWhatAResumeWouldBringBack(t *testing.T) {
+func TestPausedAppReplicas_ReadsTheCountAResumeRestores(t *testing.T) {
 	c, _ := newLifecycleFakeClient()
 	app := fullApp()
 	deployedApp(t, c, app)
@@ -418,32 +421,29 @@ func TestPausedAppSize_ReadsWhatAResumeWouldBringBack(t *testing.T) {
 		t.Fatalf("pause: %v", err)
 	}
 
-	size, err := c.PausedAppSize(context.Background(), testNamespace, app.ID, app.Name)
-	if err != nil {
-		t.Fatalf("PausedAppSize: %v", err)
-	}
-	if size.Replicas != 3 || size.CPURequest != "250m" || size.MemoryRequest != "512Mi" {
-		t.Fatalf("size = %+v", size)
+	replicas, err := c.PausedAppReplicas(context.Background(), testNamespace, app.ID, app.Name)
+	if err != nil || replicas != 3 {
+		t.Fatalf("PausedAppReplicas = %d, %v", replicas, err)
 	}
 }
 
-func TestPausedAppSize_RefusesWhatIsNotPaused(t *testing.T) {
+func TestPausedAppReplicas_RefusesWhatIsNotPaused(t *testing.T) {
 	c, _ := newLifecycleFakeClient()
 	app := fullApp()
 	deployedApp(t, c, app)
 
-	if _, err := c.PausedAppSize(context.Background(), testNamespace, app.ID, app.Name); !errors.Is(err, ErrAppNotPaused) {
+	if _, err := c.PausedAppReplicas(context.Background(), testNamespace, app.ID, app.Name); !errors.Is(err, ErrAppNotPaused) {
 		t.Fatalf("err = %v, want ErrAppNotPaused", err)
 	}
-	if _, err := c.PausedAppSize(context.Background(), testNamespace, "app-missing", "missing"); !errors.Is(err, ErrAppNotDeployed) {
+	if _, err := c.PausedAppReplicas(context.Background(), testNamespace, "app-missing", "missing"); !errors.Is(err, ErrAppNotDeployed) {
 		t.Fatalf("missing deployment: err = %v, want ErrAppNotDeployed", err)
 	}
-	if _, err := c.PausedAppSize(context.Background(), testNamespace, app.ID, "renamed"); !errors.Is(err, ErrAppNotDeployed) {
+	if _, err := c.PausedAppReplicas(context.Background(), testNamespace, app.ID, "renamed"); !errors.Is(err, ErrAppNotDeployed) {
 		t.Fatalf("no deployment under the name: err = %v, want ErrAppNotDeployed", err)
 	}
 }
 
-func TestPausedAppSize_AnUnreadableDeploymentFails(t *testing.T) {
+func TestPausedAppReplicas_AnUnreadableDeploymentFails(t *testing.T) {
 	c, clientset := newLifecycleFakeClient()
 	app := fullApp()
 	deployedApp(t, c, app)
@@ -451,8 +451,80 @@ func TestPausedAppSize_AnUnreadableDeploymentFails(t *testing.T) {
 		return true, nil, errors.New("connection refused")
 	})
 
-	_, err := c.PausedAppSize(context.Background(), testNamespace, app.ID, app.Name)
+	_, err := c.PausedAppReplicas(context.Background(), testNamespace, app.ID, app.Name)
 	if err == nil || errors.Is(err, ErrAppNotDeployed) {
 		t.Fatalf("err = %v, want the read failure", err)
+	}
+}
+
+func planResources(t *testing.T, tier domain.TierType) corev1.ResourceRequirements {
+	t.Helper()
+	cfg, err := config.GetAppTierConfig(tier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := appResourceRequirements(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resources
+}
+
+func assertPodResources(t *testing.T, dep *appsv1.Deployment, want corev1.ResourceRequirements) {
+	t.Helper()
+	got := dep.Spec.Template.Spec.Containers[0].Resources
+	if !apiequality.Semantic.DeepEqual(got, want) {
+		t.Fatalf("pod resources = %+v, want %+v", got, want)
+	}
+}
+
+func TestResumeAppWorkload_RunsAtThePlanSizeItIsGiven(t *testing.T) {
+	c, clientset := newLifecycleFakeClient()
+	convergeOnUpdate(clientset)
+	app := fullApp()
+	deployedApp(t, c, app)
+	if err := c.PauseAppWorkload(context.Background(), testNamespace, app.ID); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+
+	if err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, domain.Free, time.Second); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	dep := readDeployment(t, c, app)
+	assertPodResources(t, dep, planResources(t, domain.Free))
+	if *dep.Spec.Replicas != 3 {
+		t.Errorf("replicas = %d, want 3", *dep.Spec.Replicas)
+	}
+}
+
+func TestResumeAppWorkload_AnUnchangedPlanKeepsTheSize(t *testing.T) {
+	c, clientset := newLifecycleFakeClient()
+	convergeOnUpdate(clientset)
+	app := fullApp()
+	deployedApp(t, c, app)
+	before := readDeployment(t, c, app).Spec.Template.Spec.Containers[0].Resources
+	if err := c.PauseAppWorkload(context.Background(), testNamespace, app.ID); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+
+	if err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, app.Tier, time.Second); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	assertPodResources(t, readDeployment(t, c, app), before)
+}
+
+func TestResumeAppWorkload_AnUnknownPlanChangesNothing(t *testing.T) {
+	c, _ := newLifecycleFakeClient()
+	app := fullApp()
+	deployedApp(t, c, app)
+	if err := c.PauseAppWorkload(context.Background(), testNamespace, app.ID); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+
+	if err := c.ResumeAppWorkload(context.Background(), testNamespace, app.ID, app.Name, "GOLD", shortWait); err == nil {
+		t.Fatal("want a refusal for a plan with no size")
+	}
+	if got := *readDeployment(t, c, app).Spec.Replicas; got != 0 {
+		t.Fatalf("replicas = %d, the app must stay paused", got)
 	}
 }

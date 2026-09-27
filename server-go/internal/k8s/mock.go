@@ -11,6 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 const podNameFmt = "%s-postgres-%d"
@@ -127,9 +129,11 @@ type MockClient struct {
 	// Placement answers RuntimeClassPlacement for any class.
 	Placement    RuntimePlacement
 	PlacementErr error
-	// PausedSize answers PausedAppSize for any app.
-	PausedSize    PausedApp
-	PausedSizeErr error
+	// PausedReplicas answers PausedAppReplicas for any app.
+	PausedReplicas    int
+	PausedReplicasErr error
+	// ResumedTier records the plan size each resume ran at, keyed "namespace/appID".
+	ResumedTier map[string]domain.TierType
 
 	RuntimeClasses    map[string]bool
 	RuntimeClassError error
@@ -655,7 +659,7 @@ func (m *MockClient) PauseAppWorkload(ctx context.Context, namespace, appID stri
 	return nil
 }
 
-func (m *MockClient) ResumeAppWorkload(ctx context.Context, namespace, appID, appName string, timeout time.Duration) error {
+func (m *MockClient) ResumeAppWorkload(ctx context.Context, namespace, appID, appName string, tier domain.TierType, timeout time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "ResumeAppWorkload:"+namespace+"/"+appID)
@@ -663,6 +667,10 @@ func (m *MockClient) ResumeAppWorkload(ctx context.Context, namespace, appID, ap
 		return m.AppResumeErr
 	}
 	delete(m.AppPaused, namespace+"/"+appID)
+	if m.ResumedTier == nil {
+		m.ResumedTier = map[string]domain.TierType{}
+	}
+	m.ResumedTier[namespace+"/"+appID] = tier
 	return nil
 }
 
@@ -720,14 +728,14 @@ func (m *MockClient) LiveAppPods(ctx context.Context, namespace, appID string) (
 	return m.LivePods[namespace+"/"+appID], m.LivePodsErr
 }
 
-func (m *MockClient) PausedAppSize(ctx context.Context, namespace, appID, appName string) (PausedApp, error) {
+func (m *MockClient) PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Calls = append(m.Calls, "PausedAppSize:"+namespace+"/"+appID)
-	if m.PausedSizeErr != nil {
-		return PausedApp{}, m.PausedSizeErr
+	m.Calls = append(m.Calls, "PausedAppReplicas:"+namespace+"/"+appID)
+	if m.PausedReplicasErr != nil {
+		return 0, m.PausedReplicasErr
 	}
-	return m.PausedSize, nil
+	return m.PausedReplicas, nil
 }
 
 func (m *MockClient) RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error) {

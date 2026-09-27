@@ -31,7 +31,7 @@ func TestK3sAppLifecycle(t *testing.T) {
 	t.Logf("pods gone %s after pause", time.Since(start).Round(time.Second))
 	g.assertPodCount(t, namespace, app.ID, 0)
 
-	if err := g.client.ResumeAppWorkload(ctx, namespace, app.ID, app.Name, 3*time.Minute); err != nil {
+	if err := g.client.ResumeAppWorkload(ctx, namespace, app.ID, app.Name, app.Tier, 3*time.Minute); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	g.assertPodCount(t, namespace, app.ID, 1)
