@@ -15,7 +15,7 @@ Excalibase Provisioning — database provisioning platform written in Go. Provis
 cd server-go && go build -o excalibase-server ./cmd/server/
 
 # Self-hosted mode (default) — Postgres platform DB + Postgres vault, single default org, no tier enforcement
-PORT=24005 PLATFORM_DB_URL=postgres://platform:pass@localhost:5432/platform STORAGE_PATH=../provisioning-data CORS_ORIGINS=http://localhost:5173 ./excalibase-server
+PORT=24005 PUBLIC_PORT=24006 TRUSTED_PROXY_CIDRS=127.0.0.1 PLATFORM_DB_URL=postgres://platform:pass@localhost:5432/platform STORAGE_PATH=../provisioning-data CORS_ORIGINS=http://localhost:5173 ./excalibase-server
 
 # Cloud mode — Postgres platform DB + Postgres-backed vault, multi-tenant, tier enforcement
 DEPLOYMENT_MODE=cloud PLATFORM_DB_URL=postgres://platform:pass@localhost:5432/platform ./excalibase-server
@@ -254,6 +254,8 @@ Environment variables:
 - `CORS_ORIGINS` — comma-separated allowed origins (required, default: https://app.excalibase.io)
 - `DEPLOYMENT_MODE` — `selfhosted` (default) or `cloud`
 - `PUBLIC_BASE_URL` — public base URL for SDK snippets + function invoke
+- `PUBLIC_PORT` — required; the listener only the edge reaches (differs from `PORT`, which serves in-cluster callers and ignores X-Forwarded-For)
+- `TRUSTED_PROXY_CIDRS` — required; the edge addresses whose X-Forwarded-For the public listener believes
 - `STUDIO_URL` — required; Studio origin that emailed verification and password-reset links open
 - `AUTH_INTERNAL_URL` — excalibase-auth inside the platform network; `/api/projects/{id}/sdk-keys` relays to it with a 60-second key-admin token signed by the vault PKI key
 

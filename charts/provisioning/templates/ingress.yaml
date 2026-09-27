@@ -25,6 +25,6 @@ spec:
               service:
                 name: provisioning
                 port:
-                  number: {{ $.Values.service.port }}
+                  number: {{ $.Values.service.publicPort }}
           {{- end }}
 {{- end }}

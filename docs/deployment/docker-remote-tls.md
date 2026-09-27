@@ -106,6 +106,10 @@ services:
       CORS_ORIGINS: "https://studio.example.com"
       PUBLIC_BASE_URL: "https://api.example.com"
       STUDIO_URL: "https://studio.example.com"
+      # No proxy in front: clients reach PORT directly and are keyed by their
+      # own address. The public listener is required but unused here.
+      PUBLIC_PORT: "24006"
+      TRUSTED_PROXY_CIDRS: "127.0.0.1"
       STORAGE_PATH: /var/lib/excalibase
       # Postgres required in both modes (no SQLite fallback).
       PLATFORM_DB_URL: "postgres://platform:${PLATFORM_DB_PASSWORD}@platform-db:5432/platform?sslmode=disable"

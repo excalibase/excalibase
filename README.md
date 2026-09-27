@@ -90,7 +90,7 @@ kubectl patch deployment metrics-server -n kube-system \
 ```bash
 cd server-go
 go build -o excalibase-server ./cmd/server/
-PORT=24005 STORAGE_PATH=../provisioning-data ./excalibase-server
+PORT=24005 PUBLIC_PORT=24006 TRUSTED_PROXY_CIDRS=127.0.0.1 STORAGE_PATH=../provisioning-data ./excalibase-server
 ```
 
 ### 3. Start the frontend
@@ -347,6 +347,8 @@ Error messages are sanitized — PostgreSQL internal details are stripped from 5
 | `CORS_ORIGINS` | `https://app.excalibase.io` | Comma-separated allowed origins (required, server refuses to start if empty) |
 | `DEPLOYMENT_MODE` | `selfhosted` | `selfhosted` or `cloud`. Cloud requires `PLATFORM_DB_URL` and enables tier enforcement + multi-org. |
 | `PUBLIC_BASE_URL` | `https://api.excalibase.io` | Base URL emitted in SDK snippets and function invoke URLs |
+| `PUBLIC_PORT` | **required** | Listener only the edge reaches (e.g. `24006`); must differ from `PORT`. `PORT` serves in-cluster callers and ignores X-Forwarded-For |
+| `TRUSTED_PROXY_CIDRS` | **required** | The edge's addresses; the public listener believes X-Forwarded-For only from them |
 | `STUDIO_URL` | **required** | Studio origin that verification and password-reset emails link to; the server refuses to start without it |
 | `AUTH_INTERNAL_URL` | | excalibase-auth inside the platform network (e.g. `http://auth:24000`); Studio's SDK key routes call it and answer 503 without it |
 

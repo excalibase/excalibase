@@ -119,6 +119,8 @@ DEPLOYMENT_MODE=selfhosted
 CORS_ORIGINS=https://studio.example.com
 PUBLIC_BASE_URL=https://api.example.com
 STUDIO_URL=https://studio.example.com
+PUBLIC_PORT=24006
+TRUSTED_PROXY_CIDRS=127.0.0.1
 STORAGE_PATH=/var/lib/excalibase
 # Postgres required in both modes (no SQLite fallback).
 PLATFORM_DB_URL=postgres://platform:CHANGEME@platform-db:5432/platform?sslmode=disable

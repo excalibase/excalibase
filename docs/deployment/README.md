@@ -56,7 +56,9 @@ These apply to every matrix. Matrix-specific pages cover the rest.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `DEPLOYMENT_MODE` | no | `selfhosted` | `selfhosted` or `cloud` |
-| `PORT` | no | `24005` | HTTP listen port |
+| `PORT` | no | `24005` | Internal listener for in-cluster callers; X-Forwarded-For is ignored |
+| `PUBLIC_PORT` | **yes** | — | Listener only the edge reaches; must differ from `PORT`. The server refuses to start without it. |
+| `TRUSTED_PROXY_CIDRS` | **yes** | — | The edge's addresses; the public listener believes X-Forwarded-For only from them. |
 | `CORS_ORIGINS` | yes | `https://app.excalibase.io` | Comma-separated allow-list. No default means no origin allowed — fail-closed. |
 | `PUBLIC_BASE_URL` | yes | `https://api.excalibase.io` | Base URL for edge function invoke + SDK snippets. |
 | `STUDIO_URL` | **yes** | — | Studio origin that verification and password-reset emails link to. The server refuses to start without it. |
