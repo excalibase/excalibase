@@ -152,7 +152,7 @@ func TestRegisterProjectKeepsRolePasswordsOnAFreshCluster(t *testing.T) {
 	if err := h.svc.RegisterProject(context.Background(), inst, RegistrationOptions{}); err != nil {
 		t.Fatalf("RegisterProject: %v", err)
 	}
-	if strings.Contains(strings.Join(h.kube.ExecCommands, "\n"), "ALTER ROLE") {
+	if strings.Contains(strings.Join(h.kube.ExecCommands, "\n"), "ALTER ROLE %I WITH LOGIN PASSWORD") {
 		t.Error("a freshly created cluster must not get password-reset statements")
 	}
 }

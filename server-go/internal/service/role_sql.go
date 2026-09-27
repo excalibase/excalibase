@@ -54,7 +54,7 @@ func alterRolePasswordSQL(role, password string) string {
 //   - auth_admin   — owns the auth schema (used by excalibase-auth)
 //   - excalibase_app — DML on public, read-only on auth. NO REPLICATION.
 //   - cdc_watcher  — REPLICATION attribute, used by the watcher daemon
-//     to consume the logical slot. No DML grants.
+//     to consume the logical slot. Writes only its own excalibase_cdc schema.
 //   - empty publication, owned by the superuser. excalibase_app changes its
 //     membership only through excalibase.set_realtime_table, which publishes
 //     user tables whoever owns them and nothing else. Name is configurable
@@ -124,6 +124,13 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- The watcher keeps its slot owner registry in a schema of its own, found
+-- through its search_path, so it needs no write access to public.
+CREATE SCHEMA IF NOT EXISTS excalibase_cdc;
+REVOKE ALL ON SCHEMA excalibase_cdc FROM PUBLIC;
+GRANT USAGE, CREATE ON SCHEMA excalibase_cdc TO %s;
+ALTER ROLE %s IN DATABASE %s SET search_path = excalibase_cdc;
+
 -- Empty publication; tables are added on demand from the realtime API. The
 -- watcher daemon's config is the source of truth for its name.
 DO $$ BEGIN
@@ -178,6 +185,7 @@ GRANT EXECUTE ON FUNCTION excalibase.set_realtime_table(text, text, boolean) TO 
 		appRole, appRole, appRole, // GRANT auth read
 		appRole, appRole, appRole, // GRANT reserved excalibase schema
 		watcherRole, safeWatcherPass, // cdc_watcher DO block
+		watcherRole, watcherRole, dbIdent, // cdc_watcher registry schema + search_path
 		pubName, pubName, // pubname check + CREATE PUBLICATION
 		pubIdent,                             // ALTER PUBLICATION ... OWNER TO
 		pubName, realtimeUserSchemaPredicate, // set_realtime_table body
