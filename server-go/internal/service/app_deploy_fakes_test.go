@@ -2,6 +2,8 @@ package service
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +15,11 @@ type fakeAppStoreForDeploy struct {
 	mu     sync.Mutex
 	apps   map[string]*apphost.App
 	getErr error
+	// deploys, when set, is superseded by Transition the way the real store does.
+	deploys       *fakeDeployStore
+	transitionErr error
+	deleteErr     error
+	transitions   []string
 }
 
 func newFakeAppStoreForDeploy(app *apphost.App) *fakeAppStoreForDeploy {
@@ -37,7 +44,64 @@ func (f *fakeAppStoreForDeploy) Get(projectID, id string) (*apphost.App, error) 
 
 func (f *fakeAppStoreForDeploy) List(string) ([]*apphost.App, error) { return nil, nil }
 func (f *fakeAppStoreForDeploy) Update(*apphost.App, int) error      { return errors.New("not used") }
-func (f *fakeAppStoreForDeploy) Delete(string, string) error         { return errors.New("not used") }
+
+func (f *fakeAppStoreForDeploy) Transition(projectID, id string, from []string, to string) (*apphost.App, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.transitionErr != nil {
+		return nil, f.transitionErr
+	}
+	app, ok := f.apps[projectID+"/"+id]
+	if !ok {
+		return nil, apphost.ErrAppNotFound
+	}
+	if !slices.Contains(from, app.Status) {
+		return nil, fmt.Errorf("%w: it is %s", apphost.ErrAppStatusConflict, app.Status)
+	}
+	app.Status = to
+	f.transitions = append(f.transitions, to)
+	if f.deploys != nil {
+		f.deploys.supersedeUnfinished(id)
+	}
+	copied := *app
+	return &copied, nil
+}
+
+func (f *fakeAppStoreForDeploy) Delete(projectID, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	app, ok := f.apps[projectID+"/"+id]
+	if !ok {
+		return apphost.ErrAppNotFound
+	}
+	if app.Status != apphost.StatusDeleting {
+		return apphost.ErrAppStatusConflict
+	}
+	delete(f.apps, projectID+"/"+id)
+	return nil
+}
+
+func (f *fakeAppStoreForDeploy) statusOf(projectID, id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if app, ok := f.apps[projectID+"/"+id]; ok {
+		return app.Status
+	}
+	return ""
+}
+
+func (f *fakeDeployStore) supersedeUnfinished(appID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.deploys {
+		if d.AppID == appID && (d.Status == apphost.DeployStatusPending || d.Status == apphost.DeployStatusRolling) {
+			d.Status = apphost.DeployStatusSuperseded
+		}
+	}
+}
 
 type fakeDeployStore struct {
 	mu        sync.Mutex

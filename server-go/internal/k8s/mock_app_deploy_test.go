@@ -69,3 +69,40 @@ func TestMockClient_WaitForAppRollout_FuncTakesPriorityOverErr(t *testing.T) {
 		t.Fatal("AppRolloutFunc was not invoked")
 	}
 }
+
+func TestMockClient_AppLifecycle(t *testing.T) {
+	m := NewMockClient()
+	ctx := context.Background()
+	if err := m.PauseAppWorkload(ctx, "ns1", "a1"); err != nil || !m.AppPaused["ns1/a1"] {
+		t.Fatalf("pause: %v %v", err, m.AppPaused)
+	}
+	if err := m.ResumeAppWorkload(ctx, "ns1", "a1", "web", time.Second); err != nil || m.AppPaused["ns1/a1"] {
+		t.Fatalf("resume: %v %v", err, m.AppPaused)
+	}
+	if err := m.WaitForAppPodsGone(ctx, "ns1", "a1", time.Second); err != nil {
+		t.Fatalf("pods gone: %v", err)
+	}
+	if err := m.DeleteAppWorkload(ctx, "ns1", "a1", time.Second); err != nil || !m.AppDeleted["ns1/a1"] {
+		t.Fatalf("delete: %v %v", err, m.AppDeleted)
+	}
+
+	if err := m.PruneAppWorkload(ctx, "ns1", "a1", "web", time.Second); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	boom := errors.New("boom")
+	m.AppPruneErr = boom
+	if err := m.PruneAppWorkload(ctx, "ns1", "a1", "web", time.Second); !errors.Is(err, boom) {
+		t.Fatalf("prune: %v", err)
+	}
+	m.AppPauseErr, m.AppResumeErr, m.AppPodsGoneErr, m.AppDeleteErr = boom, boom, boom, boom
+	for name, err := range map[string]error{
+		"pause":     m.PauseAppWorkload(ctx, "ns1", "a1"),
+		"resume":    m.ResumeAppWorkload(ctx, "ns1", "a1", "web", time.Second),
+		"pods gone": m.WaitForAppPodsGone(ctx, "ns1", "a1", time.Second),
+		"delete":    m.DeleteAppWorkload(ctx, "ns1", "a2", time.Second),
+	} {
+		if !errors.Is(err, boom) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}

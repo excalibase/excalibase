@@ -299,6 +299,9 @@ func TestPGAppStore_Delete(t *testing.T) {
 	if err := s.Create(sampleApp(projectID, "app_del", "deleteme")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	if _, err := s.Transition(projectID, "app_del", []string{apphost.StatusCreated}, apphost.StatusDeleting); err != nil {
+		t.Fatalf("Transition: %v", err)
+	}
 	if err := s.Delete(projectID, "app_del"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}

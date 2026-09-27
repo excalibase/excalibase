@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -56,6 +57,10 @@ func (h *AppSecretHandler) Set(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errNotFound, http.StatusNotFound)
 		return
 	}
+	if app.Status == apphost.StatusDeleting {
+		httpError(w, apphost.ErrAppBusy.Error(), http.StatusConflict)
+		return
+	}
 
 	readVersion := app.Version
 	ref := app.SetSecretVar(name)
@@ -68,11 +73,24 @@ func (h *AppSecretHandler) Set(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.Update(app, readVersion); err != nil {
+		h.forgetOrphan(ref.Path, err)
 		h.writeStoreError(w, err)
 		return
 	}
 	w.Header().Set("ETag", strconv.Itoa(app.Version))
 	writeJSON(w, map[string]any{"name": name, "set": true})
+}
+
+// forgetOrphan removes a value written for an app that was deleted, or began
+// to be, while the value was being stored: its deletion has already purged
+// the app's secrets and would not see this one.
+func (h *AppSecretHandler) forgetOrphan(path string, cause error) {
+	if !errors.Is(cause, apphost.ErrAppNotFound) && !errors.Is(cause, apphost.ErrAppBusy) {
+		return
+	}
+	if err := h.vault.Delete(path); err != nil {
+		log.Printf("app secret: remove the value written for a deleted app: %v", err)
+	}
 }
 
 func (h *AppSecretHandler) secretPath(w http.ResponseWriter, r *http.Request) (string, string, string, bool) {
@@ -115,6 +133,8 @@ func (h *AppSecretHandler) writeStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, apphost.ErrAppNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)
+	case errors.Is(err, apphost.ErrAppBusy):
+		httpError(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, apphost.ErrAppVersionConflict):
 		httpError(w, "the app was changed by someone else; try again", http.StatusPreconditionFailed)
 	default:

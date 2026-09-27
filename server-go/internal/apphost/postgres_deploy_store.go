@@ -34,6 +34,9 @@ func (s *PostgresDeployStore) Create(deploy *Deploy) error {
 		deployLockSpace, deploy.AppID); err != nil {
 		return fmt.Errorf("lock app deploy slot: %w", err)
 	}
+	if err := lockAppForDeploy(tx, deploy.ProjectID, deploy.AppID); err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec(
 		`UPDATE app_deploys SET status = $3 WHERE app_id = $1 AND status IN ($2, $4)`,
@@ -64,6 +67,24 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 		return fmt.Errorf("create deploy: %w", err)
 	}
 	return tx.Commit()
+}
+
+// lockAppForDeploy holds the app row for the rest of the transaction, so a
+// pause, resume or deletion cannot start between this check and the insert.
+func lockAppForDeploy(tx *sql.Tx, projectID, appID string) error {
+	var status string
+	err := tx.QueryRow(`SELECT status FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
+		projectID, appID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrAppNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read app for deploy: %w", err)
+	}
+	if IsBusy(status) {
+		return fmt.Errorf("%w: it is %s", ErrAppBusy, status)
+	}
+	return nil
 }
 
 // nullIfEmpty lets an empty RedeployOf insert NULL rather than a value the
@@ -98,6 +119,13 @@ func (s *PostgresDeployStore) Finish(id, status, failureReason string, finishedA
 		return fmt.Errorf("begin deploy finish transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+
+	// The app row is locked before the deploy row, the order Transition takes them in.
+	if _, err := tx.Exec(
+		`SELECT 1 FROM apps WHERE (project_id, id) = (SELECT project_id, app_id FROM app_deploys WHERE id = $1) FOR UPDATE`,
+		id); err != nil {
+		return fmt.Errorf("lock app for deploy finish: %w", err)
+	}
 
 	var projectID, appID string
 	err = tx.QueryRow(

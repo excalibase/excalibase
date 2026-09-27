@@ -11,6 +11,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
 // A deploy whose rollout watch died with its replica only ends if the sweep
@@ -37,4 +38,21 @@ func TestAppRolloutSweeper_RunsWhenAppHostingIsOn(t *testing.T) {
 	stop := startAppRolloutSweeper(config.AppConfig{AppHostingEnabled: true}, nil, deploys)
 	stop()
 	startAppRolloutSweeper(config.AppConfig{}, nil, deploys)()
+}
+
+func TestWireAppLifecycle_AcceptsMissingPieces(t *testing.T) {
+	deploys := service.NewAppDeployService(nil, nil, k8s.NewMockClient(), fakestore.NewInstances(), nil, k8s.AppRenderOptions{})
+	wireAppLifecycle(deploys, nil, nil)
+	wireAppLifecycle(deploys, service.NewInProcessOperationClaimer(), vaultclient.NewHTTPClient("http://vault.invalid", "pat"))
+}
+
+// A deleted project's app rows must go with it; without this wiring they outlive it.
+func TestProjectDeletion_RemovesAppsWhenWired(t *testing.T) {
+	body, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(body), "provSvc.SetAppPurger(apphost.NewPostgresAppStore(pg.DB()))") {
+		t.Error("project deletion is not wired to remove the project's apps")
+	}
 }

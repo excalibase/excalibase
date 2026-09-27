@@ -85,6 +85,7 @@ func (c *Client) applyAppDeployment(ctx context.Context, namespace string, desir
 	for key, value := range desired.Annotations {
 		updated.Annotations[key] = value
 	}
+	delete(updated.Annotations, appPausedReplicasAnnotation)
 	updated.Spec = desired.Spec
 	applied, err := deployments.Update(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
@@ -232,6 +233,11 @@ var badImageReasons = map[string]bool{
 // and has converged, so a watch resumed after a restart never mistakes the
 // workload a previous deploy left running for this one.
 func (c *Client) WaitForAppRollout(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error {
+	return c.waitForApp(ctx, namespace, name, deployID, timeout)
+}
+
+// waitForApp waits for the Deployment to converge; an empty deployID accepts whichever deploy it carries.
+func (c *Client) waitForApp(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error {
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	applied := false
@@ -243,7 +249,7 @@ func (c *Client) WaitForAppRollout(ctx context.Context, namespace, name, deployI
 		if err != nil {
 			return false, fmt.Errorf("read app deployment: %w", err)
 		}
-		if dep.Annotations[appDeployAnnotation] != deployID {
+		if deployID != "" && dep.Annotations[appDeployAnnotation] != deployID {
 			return false, nil
 		}
 		applied = true

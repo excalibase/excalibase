@@ -85,6 +85,69 @@ func TestK3sCiliumAppRoute(t *testing.T) {
 		lab.redeployUnderLoad(t, route, app)
 	})
 	t.Run("the app accepts only the edge and kubelet probes", func(t *testing.T) { lab.checkIngressFence(t, app, route) })
+	t.Run("a rename moves the route and leaves nothing under the old name", func(t *testing.T) {
+		app = lab.renameUnderRoute(t, app, route)
+		route = newRouteProbe(t, lab.nodeIP, app)
+	})
+	t.Run("a deleted app stops answering and leaves nothing behind", func(t *testing.T) {
+		if err := lab.client.DeleteAppWorkload(lab.ctx, routeNamespace, app.ID, 3*time.Minute); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		eventually(t, "the deleted app's URL stops answering", time.Minute, func() bool { return route.get() != nil })
+		lab.expectNothingLabelled(t, "excalibase.io/app="+app.ID)
+	})
+}
+
+// renameUnderRoute deploys the app under a new name the way the deploy
+// service does, pruning the old name once the new one has rolled out.
+func (lab *egressLab) renameUnderRoute(t *testing.T, app *apphost.App, oldRoute *routeProbe) *apphost.App {
+	t.Helper()
+	renamed := *app
+	renamed.Name = "shop"
+	lab.deployRouteApp(t, &renamed)
+	if err := lab.client.PruneAppWorkload(lab.ctx, routeNamespace, renamed.ID, renamed.Name, 3*time.Minute); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	newRoute := newRouteProbe(t, lab.nodeIP, &renamed)
+	eventually(t, "the new name answers", 2*time.Minute, func() bool { return newRoute.get() == nil })
+	eventually(t, "the old name stops answering", time.Minute, func() bool { return oldRoute.get() != nil })
+	lab.expectNothingLabelled(t, "excalibase.io/app="+app.ID+",app.kubernetes.io/name="+app.Name)
+	return &renamed
+}
+
+func (lab *egressLab) expectNothingLabelled(t *testing.T, selector string) {
+	t.Helper()
+	opts := metav1.ListOptions{LabelSelector: selector}
+	counts := map[string]int{}
+	if l, err := lab.cs.CoreV1().Pods(routeNamespace).List(lab.ctx, opts); err == nil {
+		counts["pods"] = len(l.Items)
+	}
+	if l, err := lab.cs.AppsV1().Deployments(routeNamespace).List(lab.ctx, opts); err == nil {
+		counts["deployments"] = len(l.Items)
+	}
+	if l, err := lab.cs.AppsV1().ReplicaSets(routeNamespace).List(lab.ctx, opts); err == nil {
+		counts["replicasets"] = len(l.Items)
+	}
+	if l, err := lab.cs.CoreV1().Services(routeNamespace).List(lab.ctx, opts); err == nil {
+		counts["services"] = len(l.Items)
+	}
+	if l, err := lab.cs.CoreV1().Secrets(routeNamespace).List(lab.ctx, opts); err == nil {
+		counts["secrets"] = len(l.Items)
+	}
+	if l, err := lab.cs.NetworkingV1().Ingresses(routeNamespace).List(lab.ctx, opts); err == nil {
+		counts["ingresses"] = len(l.Items)
+	}
+	if l, err := lab.client.dynamicClient.Resource(CiliumNetworkPolicyGVR).Namespace(routeNamespace).List(lab.ctx, opts); err == nil {
+		counts["cilium policies"] = len(l.Items)
+	}
+	if len(counts) != 7 {
+		t.Fatalf("could not list every kind: %v", counts)
+	}
+	for kind, n := range counts {
+		if n != 0 {
+			t.Errorf("%d %s left for %s", n, kind, selector)
+		}
+	}
 }
 
 func stringPtr(v string) *string { return &v }

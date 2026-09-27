@@ -119,7 +119,6 @@ func (h *AppHandler) Routes(r chi.Router) {
 	r.Route(routeAppID, func(r chi.Router) {
 		r.Get("/", h.Get)
 		r.Patch("/", h.Update)
-		r.Delete("/", h.Delete)
 	})
 }
 
@@ -301,18 +300,6 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 	h.writeAppJSON(w, existing)
 }
 
-func (h *AppHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	projectID, appID, ok := h.appPath(w, r)
-	if !ok {
-		return
-	}
-	if err := h.store.Delete(projectID, appID); err != nil {
-		h.writeStoreError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // -------------------- helpers --------------------
 
 // applyAppUpdate copies the fields the caller sent onto the stored record. The
@@ -418,7 +405,8 @@ func (h *AppHandler) writeStoreError(w http.ResponseWriter, err error) {
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, apphost.ErrAppVersionConflict):
 		httpError(w, err.Error(), http.StatusPreconditionFailed)
-	case errors.Is(err, apphost.ErrAppLimitReached), errors.Is(err, apphost.ErrAppNameTaken):
+	case errors.Is(err, apphost.ErrAppLimitReached), errors.Is(err, apphost.ErrAppNameTaken),
+		errors.Is(err, apphost.ErrAppBusy):
 		httpError(w, err.Error(), http.StatusConflict)
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)

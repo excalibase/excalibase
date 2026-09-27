@@ -6,6 +6,8 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
 // verifyAppRuntime refuses to host apps on a cluster that cannot sandbox them.
@@ -33,5 +35,16 @@ func appRoute(cfg config.AppConfig) k8s.AppRouteOptions {
 		TLSSecret:            cfg.AppTLSSecret,
 		IngressFromNamespace: cfg.AppIngressFromNamespace,
 		IngressFromLabels:    cfg.AppIngressFromLabels,
+	}
+}
+
+// wireAppLifecycle shares the lease with every replica and lets a deleted app
+// take its secret values with it; with no vault none could have been stored.
+func wireAppLifecycle(apps *service.AppDeployService, claimer service.ProjectOperationClaimer, vc vaultclient.VaultClient) {
+	if claimer != nil {
+		apps.SetOperationClaimer(claimer)
+	}
+	if vc != nil {
+		apps.SetSecretPurger(vc)
 	}
 }

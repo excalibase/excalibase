@@ -57,6 +57,10 @@ describe('appDisplayStatus', () => {
     [app, withStatus('rolling'), 'Deploying'],
     [app, withStatus('succeeded'), 'Running'],
     [app, withStatus('failed'), 'Failed'],
+    [{ replicas: 1, status: 'PAUSED' } as App, withStatus('succeeded'), 'Paused'],
+    [{ replicas: 1, status: 'PAUSING' } as App, withStatus('succeeded'), 'Pausing'],
+    [{ replicas: 1, status: 'RESUMING' } as App, withStatus('succeeded'), 'Resuming'],
+    [{ replicas: 1, status: 'DELETING' } as App, withStatus('succeeded'), 'Deleting'],
   ])('%#', (a, d, label) => {
     expect(appDisplayStatus(a, d).label).toBe(label);
   });

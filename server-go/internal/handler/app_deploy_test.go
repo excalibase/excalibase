@@ -28,6 +28,8 @@ type fakeAppDeployer struct {
 	redeployApp     map[string]*apphost.Deploy // keyed projectID+"/"+appID+"/"+deployID
 	redeployErr     error
 	lastRedeployIDs [3]string // projectID, appID, deployID of the last RedeployApp call
+	lifecycleErr    error
+	lifecycleCalls  []string
 }
 
 func newFakeAppDeployer() *fakeAppDeployer {
@@ -66,6 +68,27 @@ func (f *fakeAppDeployer) ListDeploys(projectID, appID string, limit int) ([]*ap
 	return f.listDeploys, nil
 }
 
+func (f *fakeAppDeployer) lifecycle(op, projectID, appID string, status string) (*apphost.App, error) {
+	f.lifecycleCalls = append(f.lifecycleCalls, op+":"+projectID+"/"+appID)
+	if f.lifecycleErr != nil {
+		return nil, f.lifecycleErr
+	}
+	return &apphost.App{ID: appID, ProjectID: projectID, Status: status}, nil
+}
+
+func (f *fakeAppDeployer) PauseApp(_ context.Context, projectID, appID string) (*apphost.App, error) {
+	return f.lifecycle("pause", projectID, appID, apphost.StatusStopped)
+}
+
+func (f *fakeAppDeployer) ResumeApp(_ context.Context, projectID, appID string) (*apphost.App, error) {
+	return f.lifecycle("resume", projectID, appID, apphost.StatusRunning)
+}
+
+func (f *fakeAppDeployer) DeleteApp(_ context.Context, projectID, appID string) error {
+	_, err := f.lifecycle("delete", projectID, appID, "")
+	return err
+}
+
 func setupAppDeployRouter(t *testing.T, deployer *fakeAppDeployer) chi.Router {
 	t.Helper()
 	h := NewAppDeployHandler(deployer)
@@ -74,6 +97,9 @@ func setupAppDeployRouter(t *testing.T, deployer *fakeAppDeployer) chi.Router {
 		r.Post("/deploy", h.Deploy)
 		r.Get("/deploys", h.ListDeploys)
 		r.Post("/deploys/{deployId}/redeploy", h.Redeploy)
+		r.Post("/pause", h.Pause)
+		r.Post("/resume", h.Resume)
+		r.Delete("/", h.Delete)
 	})
 	return r
 }

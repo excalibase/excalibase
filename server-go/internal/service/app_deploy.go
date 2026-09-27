@@ -36,6 +36,12 @@ type AppDeployService struct {
 	// render carries the sandbox runtime class and extra egress deny ranges.
 	render  k8s.AppRenderOptions
 	timeout time.Duration
+	// stopTimeout bounds a pause's and a deletion's wait for the pods to be gone.
+	stopTimeout time.Duration
+	// deployLeaseWait is how long a deploy queues behind another operation on the app.
+	deployLeaseWait time.Duration
+	claimer         ProjectOperationClaimer
+	secrets         AppSecretPurger
 	// async lets tests run the rollout wait inline instead of in a goroutine.
 	async func(func())
 
@@ -53,53 +59,68 @@ func NewAppDeployService(
 ) *AppDeployService {
 	return &AppDeployService{
 		apps: apps, deploys: deploys, kube: kube, instances: instances, resolver: resolver,
-		render:  render,
-		timeout: defaultAppRolloutTimeout,
-		async:   func(f func()) { go f() },
-		active:  make(map[string]*activeRollout),
+		render:          render,
+		timeout:         defaultAppRolloutTimeout,
+		stopTimeout:     defaultAppStopTimeout,
+		deployLeaseWait: defaultDeployLeaseWait,
+		claimer:         newInProcessOperationClaimer(),
+		async:           func(f func()) { go f() },
+		active:          make(map[string]*activeRollout),
 	}
 }
 
 func (s *AppDeployService) DeployApp(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, error) {
-	app, err := s.apps.Get(projectID, appID)
-	if err != nil {
-		return nil, fmt.Errorf("look up app: %w", err)
-	}
-	if app == nil {
-		return nil, apphost.ErrAppNotFound
-	}
-	return s.rollout(ctx, app, apphost.ConfigFromApp(app), actor, "")
+	return s.underLease(ctx, projectID, appID, func(app *apphost.App) (*apphost.Deploy, func(), error) {
+		return s.rollout(ctx, app, apphost.ConfigFromApp(app), actor, "")
+	})
 }
 
 // RedeployApp rolls a deploy's frozen config out again as a new deploy. It
 // never touches the app record — the source deploy's config is what runs,
 // even if the app has since been edited.
 func (s *AppDeployService) RedeployApp(ctx context.Context, projectID, appID, deployID, actor string) (*apphost.Deploy, error) {
-	app, err := s.apps.Get(projectID, appID)
+	return s.underLease(ctx, projectID, appID, func(app *apphost.App) (*apphost.Deploy, func(), error) {
+		source, err := s.deploys.Get(projectID, appID, deployID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("look up deploy: %w", err)
+		}
+		if source == nil {
+			return nil, nil, apphost.ErrDeployNotFound
+		}
+		return s.rollout(ctx, app, source.Config, actor, source.ID)
+	})
+}
+
+// underLease applies a deploy while holding the app's lease, and starts its
+// rollout watch only once the lease is released: the watch takes the lease
+// again to finish.
+func (s *AppDeployService) underLease(ctx context.Context, projectID, appID string,
+	apply func(*apphost.App) (*apphost.Deploy, func(), error)) (*apphost.Deploy, error) {
+	release, err := s.holdAppForDeploy(ctx, projectID, appID)
 	if err != nil {
-		return nil, fmt.Errorf("look up app: %w", err)
+		return nil, err
 	}
-	if app == nil {
-		return nil, apphost.ErrAppNotFound
-	}
-	source, err := s.deploys.Get(projectID, appID, deployID)
+	app, err := s.lookupApp(projectID, appID)
 	if err != nil {
-		return nil, fmt.Errorf("look up deploy: %w", err)
+		release()
+		return nil, err
 	}
-	if source == nil {
-		return nil, apphost.ErrDeployNotFound
+	deploy, startWatch, err := apply(app)
+	release()
+	if startWatch != nil {
+		startWatch()
 	}
-	return s.rollout(ctx, app, source.Config, actor, source.ID)
+	return deploy, err
 }
 
 // rollout is the deploy engine DeployApp and RedeployApp both drive: create
 // the record, apply the workload, and watch the rollout. cfg is what actually
 // runs; redeployOf names the deploy it was frozen from, or "" for a plain
 // deploy.
-func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, actor, redeployOf string) (*apphost.Deploy, error) {
+func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, actor, redeployOf string) (*apphost.Deploy, func(), error) {
 	tier, err := config.GetAppTierConfig(cfg.Tier)
 	if err != nil {
-		return nil, fmt.Errorf("resolve app tier: %w", err)
+		return nil, nil, fmt.Errorf("resolve app tier: %w", err)
 	}
 
 	url, routeErr := s.render.Route.Public().URL(app.Name, app.ProjectID)
@@ -117,7 +138,8 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 				CPURequest: tier.CPURequest, CPULimit: tier.CPULimit,
 				MemoryRequest: tier.MemoryRequest, MemoryLimit: tier.MemoryLimit,
 			},
-			URL: url,
+			URL:     url,
+			AppName: app.Name,
 		},
 		Config:     cfg,
 		RedeployOf: redeployOf,
@@ -126,18 +148,18 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		CreatedAt:  time.Now().UTC(),
 	}
 	if err := s.deploys.Create(deploy); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	s.cancelActive(app.ID)
 	namespace, err := s.namespaceFor(app.ProjectID)
 	if err != nil {
 		s.failWithoutWorkload(deploy, err)
-		return deploy, nil
+		return deploy, nil, nil
 	}
 	name := k8s.AppObjectName(app.Name)
 	if routeErr != nil {
 		s.fail(ctx, deploy, routeErr, namespace, name)
-		return deploy, nil
+		return deploy, nil, nil
 	}
 	render := s.render
 	render.EnvRevision = strconv.Itoa(deploy.Revision)
@@ -145,20 +167,21 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver, render)
 	if err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
-		return deploy, nil
+		return deploy, nil, nil
 	}
 	if err := s.kube.ApplyAppWorkload(ctx, namespace, workload); err != nil {
 		s.fail(ctx, deploy, fmt.Errorf("apply app workload: %w", err), namespace, name)
-		return deploy, nil
+		return deploy, nil, nil
 	}
 	s.setStatus(deploy, apphost.DeployStatusRolling, "", nil)
-	s.watch(ctx, *deploy, namespace, name)
-	return deploy, nil
+	watched := *deploy
+	return deploy, func() { s.watch(ctx, watched, namespace, app.Name) }, nil
 }
 
 // watch waits out the rollout on its own copy of the deploy, so the one handed
 // back to the caller is never written while it is being encoded.
-func (s *AppDeployService) watch(ctx context.Context, deploy apphost.Deploy, namespace, name string) {
+func (s *AppDeployService) watch(ctx context.Context, deploy apphost.Deploy, namespace, appName string) {
+	name := k8s.AppObjectName(appName)
 	rolloutCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	entry := &activeRollout{deployID: deploy.ID, revision: deploy.Revision, cancel: cancel}
 	s.mu.Lock()
@@ -177,9 +200,40 @@ func (s *AppDeployService) watch(ctx context.Context, deploy apphost.Deploy, nam
 			s.fail(rolloutCtx, &deploy, err, namespace, name)
 			return
 		}
-		s.finish(&deploy, apphost.DeployStatusSucceeded, "",
-			apphost.StatusAfterDeploy(true, deploy.Config.Replicas, true))
+		s.finishRollout(rolloutCtx, &deploy, namespace, appName)
 	})
+}
+
+// finishRollout prunes what the app ran under an earlier name, but only while
+// holding the app's lease and only if this deploy is still the current one: a
+// watch outliving a newer deploy, a pause or a deletion must not delete what
+// they made. Without the lease the deploy stays rolling for the sweeper.
+func (s *AppDeployService) finishRollout(ctx context.Context, deploy *apphost.Deploy, namespace, appName string) {
+	release, err := s.holdAppForDeploy(ctx, deploy.ProjectID, deploy.AppID)
+	if err != nil {
+		log.Printf("finish deploy %s: %v", deploy.ID, err)
+		return
+	}
+	defer release()
+	current, err := s.deploys.Get(deploy.ProjectID, deploy.AppID, deploy.ID)
+	if err != nil {
+		log.Printf("finish deploy %s: %v", deploy.ID, err)
+		return
+	}
+	if current == nil || !isUnfinished(current.Status) {
+		return
+	}
+	name := k8s.AppObjectName(appName)
+	if err := s.kube.PruneAppWorkload(ctx, namespace, deploy.AppID, appName, s.stopTimeout); err != nil {
+		s.fail(ctx, deploy, fmt.Errorf("remove what the app ran under an earlier name: %w", err), namespace, name)
+		return
+	}
+	s.finish(deploy, apphost.DeployStatusSucceeded, "",
+		apphost.StatusAfterDeploy(true, deploy.Config.Replicas, true))
+}
+
+func isUnfinished(status string) bool {
+	return status == apphost.DeployStatusPending || status == apphost.DeployStatusRolling
 }
 
 // ResumeRollouts watches every unfinished deploy this process is not already
@@ -236,7 +290,11 @@ func (s *AppDeployService) resume(ctx context.Context, deploy *apphost.Deploy) {
 		log.Printf("resume deploy %s: %v", deploy.ID, err)
 		return
 	}
-	s.watch(ctx, *deploy, namespace, k8s.AppObjectName(app.Name))
+	if deploy.Spec.AppName == "" {
+		s.finish(deploy, apphost.DeployStatusFailed, "the deploy does not record the name its workload runs under", "")
+		return
+	}
+	s.watch(ctx, *deploy, namespace, deploy.Spec.AppName)
 }
 
 // StartRolloutSweeper resumes orphaned rollouts at once and then on a timer,
