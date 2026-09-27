@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react';
 import { useApps, useDeploys, apiErrorMessage, type App } from '../api/apps';
 import { useAppHostingEnabled } from '../hooks/useDeploymentMode';
 import { appDisplayStatus, formatWhen } from '../components/containers/appCopy';
+import { RegistryCredentials } from '../components/containers/RegistryCredentials';
 import {
   ContainersHeader,
   HostingGate,
@@ -119,6 +120,7 @@ export function ContainersPage() {
       />
       <HostingGate>
         <ContainersList projectId={projectId} />
+        <RegistryCredentials projectId={projectId} />
       </HostingGate>
     </div>
   );

@@ -104,6 +104,7 @@ type KubeClient interface {
 	WaitForAppPodsGone(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	DeleteAppWorkload(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	PruneAppWorkload(ctx context.Context, namespace, appID, keepName string, timeout time.Duration) error
+	DeleteRegistryPullSecrets(ctx context.Context, namespace, registry string) error
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
 }
 

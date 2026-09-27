@@ -86,6 +86,10 @@ const FAILURE_RULES: Array<[RegExp, string]> = [
     'The app did not become ready in time. Check that it listens on the port you set and that the health check path answers.',
   ],
   [/Unschedulable/, 'There is no room to run the app right now. Try again later.'],
+  [
+    /pull credential/,
+    "The credential for the image's registry could not be read. Try again, or save it again under Private registries.",
+  ],
   [/no namespace to deploy into/, 'The project is not ready to run containers yet.'],
   [
     /no resolver was given/,

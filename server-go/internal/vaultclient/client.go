@@ -1,6 +1,8 @@
 package vaultclient
 
 import (
+	"github.com/excalibase/provisioning-poc/pkg/vault"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -114,7 +116,7 @@ func (c *HTTPClient) Get(path string) (map[string]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("secret not found: %s", path)
+		return nil, fmt.Errorf("%w: %s", vault.ErrNotFound, path)
 	}
 	if resp.StatusCode == http.StatusServiceUnavailable {
 		return nil, errors.New(errVaultSealed)

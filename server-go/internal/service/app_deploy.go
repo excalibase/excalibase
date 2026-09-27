@@ -42,6 +42,8 @@ type AppDeployService struct {
 	deployLeaseWait time.Duration
 	claimer         ProjectOperationClaimer
 	secrets         AppSecretPurger
+	// registries reads the pull credential for the image's registry; nil when no vault is configured.
+	registries RegistryCredentialLookup
 	// async lets tests run the rollout wait inline instead of in a goroutine.
 	async func(func())
 
@@ -67,6 +69,54 @@ func NewAppDeployService(
 		async:           func(f func()) { go f() },
 		active:          make(map[string]*activeRollout),
 	}
+}
+
+// RegistryCredentialLookup answers which credential, if any, pulls from a registry.
+type RegistryCredentialLookup interface {
+	Lookup(projectID, registry string) (*apphost.RegistryCredential, error)
+}
+
+func (s *AppDeployService) SetRegistryCredentials(registries RegistryCredentialLookup) {
+	s.registries = registries
+}
+
+// pullAuth fails rather than pull anonymously when the credential cannot be read.
+func (s *AppDeployService) pullAuth(projectID, image string) (*k8s.RegistryAuth, error) {
+	if s.registries == nil {
+		return nil, nil
+	}
+	registry := apphost.ImageRegistry(image)
+	cred, err := s.registries.Lookup(projectID, registry)
+	if err != nil {
+		return nil, fmt.Errorf("read the pull credential for %s: %w", registry, err)
+	}
+	if cred == nil {
+		return nil, nil
+	}
+	return &k8s.RegistryAuth{Registry: registry, Username: cred.Username, Password: cred.Password}, nil
+}
+
+// errPullAuthChanged fails a deploy whose credential was removed or replaced while it was applied.
+var errPullAuthChanged = errors.New("the registry credential was removed or replaced while the app deployed; deploy again")
+
+// confirmPullAuth reads the credential again after the pull secret was
+// written: a removal that ran in between deleted the secrets before this one
+// existed, so this deploy takes its own copy away.
+func (s *AppDeployService) confirmPullAuth(ctx context.Context, projectID, namespace string, used *k8s.RegistryAuth) error {
+	if used == nil {
+		return nil
+	}
+	cred, err := s.registries.Lookup(projectID, used.Registry)
+	if err == nil && cred != nil && cred.Username == used.Username && cred.Password == used.Password {
+		return nil
+	}
+	if delErr := s.kube.DeleteRegistryPullSecrets(ctx, namespace, used.Registry); delErr != nil {
+		return errors.Join(errPullAuthChanged, fmt.Errorf("remove the stale pull secret: %w", delErr))
+	}
+	if err != nil {
+		return fmt.Errorf("read the pull credential for %s: %w", used.Registry, err)
+	}
+	return errPullAuthChanged
 }
 
 func (s *AppDeployService) DeployApp(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, error) {
@@ -164,6 +214,10 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	render := s.render
 	render.EnvRevision = strconv.Itoa(deploy.Revision)
 	render.DeployID = deploy.ID
+	if render.PullAuth, err = s.pullAuth(app.ProjectID, cfg.Image); err != nil {
+		s.fail(ctx, deploy, err, namespace, name)
+		return deploy, nil, nil
+	}
 	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver, render)
 	if err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
@@ -171,6 +225,10 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	}
 	if err := s.kube.ApplyAppWorkload(ctx, namespace, workload); err != nil {
 		s.fail(ctx, deploy, fmt.Errorf("apply app workload: %w", err), namespace, name)
+		return deploy, nil, nil
+	}
+	if err := s.confirmPullAuth(ctx, app.ProjectID, namespace, render.PullAuth); err != nil {
+		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}
 	s.setStatus(deploy, apphost.DeployStatusRolling, "", nil)

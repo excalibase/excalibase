@@ -645,12 +645,14 @@ type handlerDeps struct {
 	appDeploySvc      *service.AppDeployService
 	appDeployHandler  *handler.AppDeployHandler
 	appSecretHandler  *handler.AppSecretHandler
-	tierHandler       *handler.TierHandler
-	pgCatalogHandler  *handler.PostgresCatalogHandler
-	capDeps           *capacityDeps
-	rlUnauth          func(http.Handler) http.Handler
-	rlAuthed          func(http.Handler) http.Handler
-	rlDataPlane       func(http.Handler) http.Handler
+	// registryCredHandler stores a project's private-registry credentials, write-only.
+	registryCredHandler *handler.RegistryCredentialHandler
+	tierHandler         *handler.TierHandler
+	pgCatalogHandler    *handler.PostgresCatalogHandler
+	capDeps             *capacityDeps
+	rlUnauth            func(http.Handler) http.Handler
+	rlAuthed            func(http.Handler) http.Handler
+	rlDataPlane         func(http.Handler) http.Handler
 	// rlMailSend bounds the routes that make the platform send mail. It is far
 	// tighter than rlAuthed because the cost of overuse is not our CPU, it is
 	// the sending domain's reputation.
@@ -1195,6 +1197,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// marker straight away so idle-pause never sees them as stale.
 	provSvc.SetActivityRecorder(activityRecorder)
 
+	registryCreds := registryCredentials(vc, store, k8sClient)
+	withRegistryCredentials(appDeploySvc, registryCreds)
 	return &handlerDeps{
 		provHandler:        provHandler,
 		metricsHandler:     handler.NewMetricsHandler(metricsSvc),
@@ -1220,11 +1224,12 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants(), store, cfg.ExposureEnforced),
 		appHandler: handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 			handler.NewProjectSourceLookup(store), appRoute(cfg).Public()),
-		appSecretHandler: handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
-		appDeploySvc:     appDeploySvc,
-		appDeployHandler: handler.NewAppDeployHandler(appDeploySvc),
-		tierHandler:      tierHandler,
-		pgCatalogHandler: handler.NewPostgresCatalogHandler(),
+		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
+		appDeploySvc:        appDeploySvc,
+		appDeployHandler:    handler.NewAppDeployHandler(appDeploySvc),
+		registryCredHandler: newRegistryCredentialHandler(registryCreds),
+		tierHandler:         tierHandler,
+		pgCatalogHandler:    handler.NewPostgresCatalogHandler(),
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
 			store:           store,
@@ -1535,6 +1540,16 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)
 			})
+		})
+		r.Route("/api/projects/{projectId}/registry-credentials", func(r chi.Router) {
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(d.activity)
+			dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
+			r.Get("/", d.registryCredHandler.List)
+			r.With(dev).Put("/{registry}", d.registryCredHandler.Set)
+			r.With(dev).Delete("/{registry}", d.registryCredHandler.Remove)
 		})
 	}
 	r.Route("/api/projects/{projectId}/schema", func(r chi.Router) {

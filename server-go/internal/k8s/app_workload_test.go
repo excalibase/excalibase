@@ -456,8 +456,10 @@ func TestRenderAppWorkloadPortAndProbe(t *testing.T) {
 	}
 }
 
-// The image is used exactly as recorded, and a mutable tag is always pulled:
-// a node that cached a different build under the same tag must not serve it.
+// The image is used exactly as recorded and always pulled: a node that cached
+// a different build under the same tag must not serve it, and a node that
+// cached another tenant's private image must not run it for a caller the
+// registry would refuse.
 func TestRenderAppWorkloadImageAndPullPolicy(t *testing.T) {
 	tagged := mustRender(t, minimalApp(), newResolver())
 	container := tagged.Deployment.Spec.Template.Spec.Containers[0]
@@ -471,8 +473,8 @@ func TestRenderAppWorkloadImageAndPullPolicy(t *testing.T) {
 	app := minimalApp()
 	app.Image = "ghcr.io/acme/web@sha256:" + strings.Repeat("a", 64)
 	digested := mustRender(t, app, newResolver())
-	if got := digested.Deployment.Spec.Template.Spec.Containers[0].ImagePullPolicy; got != corev1.PullIfNotPresent {
-		t.Errorf("a digest is immutable and need not be re-pulled, got %q", got)
+	if got := digested.Deployment.Spec.Template.Spec.Containers[0].ImagePullPolicy; got != corev1.PullAlways {
+		t.Errorf("a digest must still be checked with the registry, got %q", got)
 	}
 }
 
@@ -506,7 +508,7 @@ func TestRenderAppWorkloadPodSecurityContext(t *testing.T) {
 func TestRenderAppWorkloadRunsUnderTheSandboxRuntime(t *testing.T) {
 	spec := mustRender(t, fullApp(), newResolver()).Deployment.Spec.Template.Spec
 	if spec.RuntimeClassName == nil || *spec.RuntimeClassName != testRuntimeClass {
-		t.Fatalf("runtimeClassName = %v, want %q", spec.RuntimeClassName, testRenderOptions)
+		t.Fatalf("runtimeClassName = %v, want %q", spec.RuntimeClassName, testRuntimeClass)
 	}
 }
 

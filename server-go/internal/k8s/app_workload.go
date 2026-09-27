@@ -72,7 +72,9 @@ type AppWorkload struct {
 	Deployment *appsv1.Deployment
 	// EnvSecret holds every secret and credential value the container reads,
 	// referenced from the Deployment by key; nil when the app has none.
-	EnvSecret     *corev1.Secret
+	EnvSecret *corev1.Secret
+	// PullSecret authenticates the image pull; nil for a public image.
+	PullSecret    *corev1.Secret
 	EgressPolicy  *unstructured.Unstructured
 	Service       *corev1.Service
 	Ingress       *networkingv1.Ingress
@@ -99,6 +101,8 @@ type AppRenderOptions struct {
 	// DeployID names the deploy on the Deployment, so a rollout watch can tell
 	// its own workload from the one a previous deploy left running.
 	DeployID string
+	// PullAuth is the credential for the image's registry, when the project has one.
+	PullAuth *RegistryAuth
 }
 
 // AppObjectName is the name the app's Deployment holds in the project namespace.
@@ -145,6 +149,13 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 		deployment.Spec.Template.Annotations[appEnvRevisionAnnotation] = opts.EnvRevision
 	}
 	deployment.Annotations = map[string]string{appDeployAnnotation: opts.DeployID}
+	pullSecret, err := buildAppPullSecret(namespace, app, opts.PullAuth)
+	if err != nil {
+		return nil, err
+	}
+	if pullSecret != nil {
+		deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: pullSecret.Name}}
+	}
 	policy, err := buildAppEgressPolicy(namespace, app, opts.ExtraDenyCIDRs)
 	if err != nil {
 		return nil, err
@@ -154,7 +165,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 		return nil, err
 	}
 	return &AppWorkload{
-		Deployment: deployment, EnvSecret: envSecret, EgressPolicy: policy,
+		Deployment: deployment, EnvSecret: envSecret, PullSecret: pullSecret, EgressPolicy: policy,
 		Service: route.service, Ingress: route.ingress, IngressPolicy: route.policy,
 	}, nil
 }
@@ -454,12 +465,15 @@ func containerSecurityContext() *corev1.SecurityContext {
 	}
 }
 
+// buildAppContainer always pulls: a node may hold a different build under the
+// same tag, or another tenant's private image, and only the registry can say
+// whether this pod's credentials may have it.
 func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.ResourceRequirements) corev1.Container {
 	return corev1.Container{
 		Name: app.Name,
 		// Used exactly as recorded; EXC-386 fills App.ResolvedDigest once one exists.
 		Image:           app.Image,
-		ImagePullPolicy: imagePullPolicyFor(app.Image),
+		ImagePullPolicy: corev1.PullAlways,
 		Ports: []corev1.ContainerPort{{
 			Name:          "http",
 			ContainerPort: int32(app.Port),
@@ -479,15 +493,6 @@ const appDrainSeconds = 10
 
 func appLifecycle() *corev1.Lifecycle {
 	return &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{Sleep: &corev1.SleepAction{Seconds: appDrainSeconds}}}
-}
-
-// imagePullPolicyFor re-pulls a mutable tag: a node caching a different build
-// under the same tag would make what runs depend on which node the pod landed on.
-func imagePullPolicyFor(image string) corev1.PullPolicy {
-	if strings.Contains(image, "@") {
-		return corev1.PullIfNotPresent
-	}
-	return corev1.PullAlways
 }
 
 // appMinReadySeconds: a pod must stay ready this long to count, so an app that

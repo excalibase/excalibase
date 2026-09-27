@@ -13,6 +13,10 @@ describe('plainFailureReason', () => {
     ['app rollout: web Unschedulable: no node can run runtime class "gvisor"', /no room to run/i],
     ['the project has no namespace to deploy into', /not ready to run containers/i],
     [
+      'read the pull credential for ghcr.io: the credential store could not be read',
+      /credential for the image's registry could not be read/i,
+    ],
+    [
       'render app workload: resolve secret for "API_KEY": not found',
       /secret variable could not be read/i,
     ],

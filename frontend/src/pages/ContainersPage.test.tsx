@@ -46,6 +46,8 @@ function renderPage({
     if (url === '/config')
       return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting } } as never);
     if (url === '/projects/proj-1/apps/') return Promise.resolve({ data: apps } as never);
+    if (url === '/projects/proj-1/registry-credentials/')
+      return Promise.resolve({ data: [] } as never);
     if (url.startsWith('/projects/proj-1/apps/app-1/deploys'))
       return Promise.resolve({ data: deploys } as never);
     return Promise.reject(new Error(`unexpected GET ${url}`));

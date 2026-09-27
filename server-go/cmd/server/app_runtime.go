@@ -5,8 +5,10 @@ import (
 	"fmt"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 )
 
@@ -47,4 +49,27 @@ func wireAppLifecycle(apps *service.AppDeployService, claimer service.ProjectOpe
 	if vc != nil {
 		apps.SetSecretPurger(vc)
 	}
+}
+
+// registryCredentials is nil without a vault: there is nowhere to keep a credential.
+func registryCredentials(vc vaultclient.VaultClient, instances storage.InstanceStore, kube k8s.KubeClient) *service.RegistryCredentialService {
+	if vc == nil {
+		return nil
+	}
+	return service.NewRegistryCredentialService(vc, instances, kube)
+}
+
+func newRegistryCredentialHandler(creds *service.RegistryCredentialService) *handler.RegistryCredentialHandler {
+	if creds == nil {
+		return handler.NewRegistryCredentialHandler(nil)
+	}
+	return handler.NewRegistryCredentialHandler(creds)
+}
+
+// withRegistryCredentials lets a deploy pull with the project's credential for the image's registry.
+func withRegistryCredentials(deploys *service.AppDeployService, creds *service.RegistryCredentialService) *service.AppDeployService {
+	if creds != nil {
+		deploys.SetRegistryCredentials(creds)
+	}
+	return deploys
 }
