@@ -243,6 +243,7 @@ done
 
 # --- Step 11: Deprovision ---
 echo "11. Deprovision"
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"enabled":false}' "$API/api/provision/$PROJECT_ID/deletion-protection" > /dev/null 2>&1
 R=$(curl -s -X DELETE "$API/api/provision/$PROJECT_ID/" -H "Authorization: Bearer $TOKEN")
 echo "$R" | grep -qi "delet" \
   && pass "deprovision started" \

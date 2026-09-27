@@ -1365,6 +1365,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			// Org-role tiers on top of membership (Owner⊇Admin⊇Developer⊇Viewer):
 			//   reads = any member (Viewer); writes = Developer; credentials +
 			//   destructive lifecycle = Admin. Platform admins bypass. (RBAC gate)
+			owner := custommw.RequireProjectRole(domain.OrgRoleOwner, store, sqlStore)
 			admin := custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore)
 			dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
 
@@ -1376,12 +1377,14 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			// Developer+ — a routine write.
 			r.With(dev).Put("/maintenance-window", d.provHandler.SetMaintenanceWindow)
 
+			// Owner — turning protection off is what makes a project deletable.
+			r.With(owner).Patch("/deletion-protection", d.provHandler.SetDeletionProtection)
+
 			// Admin+ — credentials and destructive lifecycle. Pause/resume stop
 			// and restart the tenant workload, so they sit with the lifecycle tier.
 			r.With(admin).Delete("/", d.provHandler.Delete)
 			r.With(admin).Get("/credentials", d.provHandler.GetCredentials)
 			r.With(admin).Post("/credentials/rotate", d.provHandler.RotateCredentials)
-			r.With(admin).Patch("/deletion-protection", d.provHandler.SetDeletionProtection)
 			r.With(admin).Post("/backups/purge", d.provHandler.PurgeBackups)
 			r.With(admin).Post("/pause", d.provHandler.Pause)
 			r.With(admin).Post("/resume", d.provHandler.Resume)

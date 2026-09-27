@@ -16,7 +16,7 @@ var provisionRows = []Row{
 	{Methods: del, Pattern: "/api/provision/{projectId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
 	{Methods: get, Pattern: "/api/provision/{projectId}/credentials", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "hands out the tenant database's superuser password"},
 	{Methods: post, Pattern: "/api/provision/{projectId}/credentials/rotate", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
-	{Methods: patch, Pattern: "/api/provision/{projectId}/deletion-protection", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
+	{Methods: patch, Pattern: "/api/provision/{projectId}/deletion-protection", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleOwner, Note: "turning it off is what makes a project deletable"},
 	{Methods: post, Pattern: "/api/provision/{projectId}/backups/purge", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
 	{Methods: post, Pattern: "/api/provision/{projectId}/pause", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
 	{Methods: post, Pattern: "/api/provision/{projectId}/resume", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},

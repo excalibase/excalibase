@@ -384,9 +384,11 @@ GOT=$(curl -s -X POST "$API/api/schema/$RESTORED_ID/query" \
 
 # --- Step 20: Deprovision both projects ---
 echo "20. Deprovision projects"
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"enabled":false}' "$API/api/provision/$PROJECT_ID/deletion-protection" > /dev/null 2>&1
 R=$(curl -s -X DELETE "$API/api/provision/$PROJECT_ID/" \
   -H "Authorization: Bearer $TOKEN")
 echo "$R" | grep -qi "deleted\|deprovisioned\|success" && pass "deprovisioned source" || fail "deprovision" "$R"
+curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"enabled":false}' "$API/api/provision/$RESTORED_ID/deletion-protection" > /dev/null 2>&1
 R=$(curl -s -X DELETE "$API/api/provision/$RESTORED_ID/" \
   -H "Authorization: Bearer $TOKEN")
 echo "$R" | grep -qi "deleted\|deprovisioned\|success" && pass "deprovisioned restored project" || fail "deprovision restored" "$R"
