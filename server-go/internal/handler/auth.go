@@ -6,11 +6,13 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/loginguard"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -26,7 +28,17 @@ type AuthHandler struct {
 	inviteOnly    bool                  // when true, only an invite token (or the first admin) may register
 	setupTokens   storage.SetupTokenStore
 	verifier      *EmailVerifier
+	loginGuard    *loginguard.Guard
 }
+
+// Five guesses per account per quarter hour, whatever address they come from.
+const (
+	defaultLoginAttempts = 5
+	defaultLoginWindow   = 15 * time.Minute
+)
+
+// SetLoginGuard replaces the per-account sign-in budget.
+func (h *AuthHandler) SetLoginGuard(g *loginguard.Guard) { h.loginGuard = g }
 
 // SetEmailVerifier wires the verification mail every Studio account must
 // answer before it can sign in. Without it no account but the first admin
@@ -45,7 +57,11 @@ func (h *AuthHandler) SetSetupTokenStore(s storage.SetupTokenStore) { h.setupTok
 func (h *AuthHandler) SetInstanceStore(s storage.InstanceStore) { h.instanceStore = s }
 
 func NewAuthHandler(userStore storage.UserStore, tokenStore storage.TokenStore) *AuthHandler {
-	return &AuthHandler{userStore: userStore, tokenStore: tokenStore}
+	return &AuthHandler{
+		userStore:  userStore,
+		tokenStore: tokenStore,
+		loginGuard: loginguard.New(defaultLoginAttempts, defaultLoginWindow),
+	}
 }
 
 // SetAuditLog enables audit entries for token rotation. Nil (the default)
@@ -275,6 +291,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Counted before the password is checked and for unknown names alike, so
+	// the lock neither leaks which accounts exist nor races concurrent guesses.
+	if !h.loginGuard.Attempt(req.Username) {
+		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
+		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
 	user, _ := h.userStore.FindUserByUsername(r.Context(), req.Username)
 	// A service principal has no password and must never hold a session: its
 	// only credential is a capability token minted by a platform admin. The
@@ -284,6 +307,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+	h.loginGuard.Succeeded(req.Username)
 	if user.EmailVerifiedAt == nil {
 		writeEmailNotVerified(w)
 		return

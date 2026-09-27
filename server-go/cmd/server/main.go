@@ -15,6 +15,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/bootstrap"
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/docbrowser"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -1295,6 +1296,7 @@ func serveConfig(cfg config.AppConfig) http.HandlerFunc {
 // this top-level remains a manifest of which features are exposed.
 func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.InstanceStore, d *handlerDeps) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(clientaddr.Middleware(cfg.TrustedProxyCIDRs))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(metrics.Middleware)

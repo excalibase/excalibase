@@ -1,13 +1,12 @@
 package middleware
 
 import (
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 )
 
 // KeyFunc derives a rate-limit bucket key from a request. Returning ""
@@ -15,21 +14,10 @@ import (
 // per-user limiter has no user yet).
 type KeyFunc func(r *http.Request) string
 
-// PerIP keys by client IP, walking X-Forwarded-For if present (only the
-// first hop — anything beyond the trusted proxy is attacker-controlled).
-// Use behind a trusted reverse proxy that strips and re-sets XFF.
+// PerIP keys by the client address clientaddr resolved: X-Forwarded-For is
+// believed only from the configured trusted proxies, never from a client.
 func PerIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i > 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return clientaddr.FromRequest(r)
 }
 
 // PerUser keys by authenticated user ID. Returns "" if no user is in

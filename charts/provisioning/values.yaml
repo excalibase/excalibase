@@ -52,6 +52,9 @@ env:
   PORT: "24005"
   LOG_LEVEL: "info"
   CORS_ORIGINS: "https://app.excalibase.io"
+  # The ingress controller's pod CIDR(s): only these peers' X-Forwarded-For is
+  # believed. Empty keys every sign-in on the ingress pod, one shared bucket.
+  TRUSTED_PROXY_CIDRS: ""
   WATCHER_CHART_PATH: "/charts/excalibase-watcher"
   # StorageClass a project's database runs on when its request names none;
   # empty = the cluster's default StorageClass.

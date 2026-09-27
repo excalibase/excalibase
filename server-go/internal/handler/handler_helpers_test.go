@@ -26,9 +26,8 @@ func TestClientIP(t *testing.T) {
 		addr string
 		want string
 	}{
-		{"forwarded single", "203.0.113.9", "10.0.0.1:5", "203.0.113.9"},
-		{"forwarded chain", "203.0.113.9, 10.0.0.1", "10.0.0.1:5", "203.0.113.9"},
-		{"no forwarded", "", "192.0.2.1:9999", "192.0.2.1:9999"},
+		{"client-written forwarded is ignored", "203.0.113.9", "192.0.2.1:5", "192.0.2.1"},
+		{"no forwarded", "", "192.0.2.1:9999", "192.0.2.1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
