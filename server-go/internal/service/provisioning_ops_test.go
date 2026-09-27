@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -173,9 +174,16 @@ func TestUpgradeVersionChangesOnlyTheImage(t *testing.T) {
 	})
 	before := clusterObj.DeepCopy()
 	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
+	applied := len(mock.Calls)
 
 	if err := svc.UpgradeVersion(context.Background(), testOpsDB, "17"); err != nil {
 		t.Fatalf("UpgradeVersion: %v", err)
+	}
+	// The fetched object carries its resourceVersion; only an update accepts it
+	// (a create-first apply is refused by the API server).
+	upgradeCalls := strings.Join(mock.Calls[applied:], " ")
+	if !strings.Contains(upgradeCalls, "UpdateCRD:") || strings.Contains(upgradeCalls, "ApplyCRD") {
+		t.Errorf("the upgrade must update the fetched cluster in place, calls: %s", upgradeCalls)
 	}
 	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
 	gotSpec := got.DeepCopy().Object["spec"].(map[string]interface{})

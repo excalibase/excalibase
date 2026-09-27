@@ -107,8 +107,8 @@ func (lab *backupLab) repin(t *testing.T, project, image string) {
 	if err := unstructured.SetNestedField(cluster.Object, image, "spec", "imageName"); err != nil {
 		t.Fatalf("set image: %v", err)
 	}
-	if err := lab.client.ApplyCRD(lab.ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
-		t.Fatalf("apply: %v", err)
+	if err := lab.client.UpdateCRD(lab.ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
+		t.Fatalf("update: %v", err)
 	}
 }
 
