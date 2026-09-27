@@ -273,20 +273,27 @@ func runServer(cfg config.AppConfig) {
 	stopAppRollouts := startAppRolloutSweeper(cfg, sqlStore, deps.appDeploySvc)
 	defer stopAppRollouts()
 
-	checkFeatureWiring(cfg, wiring.Deps{
-		SchedulerInvoker:  fnHandler != nil,
+	checkFeatureWiring(cfg, featureWiringDeps(fnHandler, projectDB, pauseSvc))
+
+	r := buildRouter(cfg, sqlStore, store, deps)
+
+	startServer(cfg, r)
+}
+
+// featureWiringDeps reports what main actually built. The project database
+// counts only when the function handler itself can open one, since schema
+// apply and cron sync go through the handler, not through main's opener.
+func featureWiringDeps(fnHandler *handler.FunctionHandler, projectDB *projectdb.Opener, pauseSvc *service.PauseService) wiring.Deps {
+	return wiring.Deps{
+		SchedulerInvoker:  fnHandler != nil && fnHandler.SchedulerInvoker() != nil,
 		SchedulerProjects: projectDB != nil,
-		ProjectDB:         projectDB != nil,
+		ProjectDB:         projectDB != nil && fnHandler != nil && fnHandler.HasProjectDB(),
 		// functionCronLock always yields a claim: the platform advisory lock
 		// in cloud, a no-op one in a single-process deployment.
 		CronLeader:      true,
 		PauseService:    pauseSvc != nil,
 		FunctionRuntime: fnHandler != nil,
-	})
-
-	r := buildRouter(cfg, sqlStore, store, deps)
-
-	startServer(cfg, r)
+	}
 }
 
 // checkFeatureWiring stops the process when a switched-on feature is

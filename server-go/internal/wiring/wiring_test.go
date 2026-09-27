@@ -15,6 +15,7 @@ func fullyWired() Deps {
 		ProjectDB:         true,
 		CronLeader:        true,
 		PauseService:      true,
+		FunctionRuntime:   true,
 	}
 }
 
@@ -25,6 +26,7 @@ func allOn() config.AppConfig {
 		AutoMigrate:      true,
 		AutoPauseEnabled: true,
 		JWTRequireAud:    true,
+		FnReplayEnabled:  true,
 	}
 }
 
@@ -41,6 +43,7 @@ func TestCheck_FailsForEachEnabledButUnwiredFeature(t *testing.T) {
 		"EXCALIBASE_SCHEDULER_ENABLED": func(d *Deps) { d.SchedulerInvoker = false },
 		"EXCALIBASE_AUTO_MIGRATE":      func(d *Deps) { d.ProjectDB = false },
 		"EXCALIBASE_AUTOPAUSE_ENABLED": func(d *Deps) { d.PauseService = false },
+		"EXCALIBASE_FN_REPLAY_ENABLED": func(d *Deps) { d.FunctionRuntime = false },
 	}
 	for flag, strip := range cases {
 		t.Run(flag, func(t *testing.T) {
@@ -73,6 +76,7 @@ func TestCheck_ReportsEveryGapAtOnce(t *testing.T) {
 	}
 	for _, flag := range []string{
 		"EXCALIBASE_SCHEDULER_ENABLED", "EXCALIBASE_AUTO_MIGRATE", "EXCALIBASE_AUTOPAUSE_ENABLED",
+		"EXCALIBASE_FN_REPLAY_ENABLED",
 	} {
 		if !strings.Contains(err.Error(), flag) {
 			t.Errorf("err must name %s: %v", flag, err)
