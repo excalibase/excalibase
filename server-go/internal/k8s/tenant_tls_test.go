@@ -24,6 +24,8 @@ func TestEveryNetworkLoginRequiresTLSByDefault(t *testing.T) {
 		"hostssl all app all scram-sha-256",
 		"hostssl all excalibase_app all scram-sha-256",
 		"hostssl all auth_admin all scram-sha-256",
+		"hostnossl all all all reject",
+		"hostnossl replication all all reject",
 	}
 	if got := hbaLines(t, plainTLSOpts()); !slices.Equal(got, want) {
 		t.Errorf("pg_hba:\n got %q\nwant %q", got, want)
@@ -40,12 +42,29 @@ func TestAllowingPlaintextAcceptsUnencryptedLogins(t *testing.T) {
 	}
 }
 
+// CNPG appends "host all all all scram-sha-256" after our rules, so a
+// plaintext login that skips every hostssl line would still be let in there.
+func TestPlaintextIsRejectedBeforeTheOperatorsCatchAll(t *testing.T) {
+	lines := hbaLines(t, plainTLSOpts())
+	for _, want := range []string{"hostnossl all all all reject", "hostnossl replication all all reject"} {
+		if !slices.Contains(lines, want) {
+			t.Errorf("missing %q in %q", want, lines)
+		}
+	}
+	if last := lines[len(lines)-1]; !strings.HasSuffix(last, " reject") {
+		t.Errorf("the reject must come after every login rule, last line is %q", last)
+	}
+}
+
 // The DocumentDB gateway reaches Postgres over loopback inside the pod; that
 // hop never leaves the pod and stays a host line either way.
 func TestLoopbackTrustIsNotTurnedIntoATLSRule(t *testing.T) {
 	for _, line := range hbaLines(t, documentDBOpts("owner_doc")) {
 		if isLoopbackLine(line) && !strings.HasPrefix(line, "host ") {
 			t.Errorf("loopback line changed: %q", line)
+		}
+		if strings.HasSuffix(line, " reject") {
+			continue
 		}
 		if !isLoopbackLine(line) && !strings.HasPrefix(line, "hostssl ") {
 			t.Errorf("network line does not require TLS: %q", line)
@@ -62,10 +81,8 @@ func TestARestoredClusterRequiresTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRestoreCluster: %v", err)
 	}
-	for _, line := range clusterHBA(t, cluster) {
-		if !strings.HasPrefix(line, "hostssl ") {
-			t.Errorf("restored cluster accepts plaintext: %q", line)
-		}
+	if !ClusterRequiresTLS(cluster) {
+		t.Errorf("restored cluster accepts plaintext: %q", clusterHBA(t, cluster))
 	}
 }
 
@@ -86,14 +103,14 @@ func TestSetClusterRequireTLSRewritesOnlyTheNetworkLines(t *testing.T) {
 		t.Fatalf("SetClusterRequireTLS(false): %v", err)
 	}
 	off := clusterHBA(t, cluster)
-	if len(off) != len(before) {
-		t.Fatalf("line count changed: %q -> %q", before, off)
-	}
-	for i, line := range off {
-		want := strings.Replace(before[i], "hostssl ", "host ", 1)
-		if line != want {
-			t.Errorf("line %d: got %q want %q", i, line, want)
+	var want []string
+	for _, line := range before {
+		if !strings.HasSuffix(line, " reject") {
+			want = append(want, strings.Replace(line, "hostssl ", "host ", 1))
 		}
+	}
+	if !slices.Equal(off, want) {
+		t.Errorf("plaintext allowed:\n got %q\nwant %q", off, want)
 	}
 	if ClusterRequiresTLS(cluster) {
 		t.Error("cluster still reported as requiring TLS")
@@ -107,6 +124,23 @@ func TestSetClusterRequireTLSRewritesOnlyTheNetworkLines(t *testing.T) {
 	}
 	if !ClusterRequiresTLS(cluster) {
 		t.Error("cluster not reported as requiring TLS")
+	}
+}
+
+func TestAClusterWithHostSSLButNoRejectDoesNotCountAsRequiringTLS(t *testing.T) {
+	cluster := BuildPostgreSQLCluster(plainTLSOpts())
+	lines := clusterHBA(t, cluster)
+	kept := make([]interface{}, 0, len(lines))
+	for _, line := range lines {
+		if !strings.HasSuffix(line, " reject") {
+			kept = append(kept, line)
+		}
+	}
+	if err := unstructured.SetNestedSlice(cluster.Object, kept, "spec", "postgresql", "pg_hba"); err != nil {
+		t.Fatal(err)
+	}
+	if ClusterRequiresTLS(cluster) {
+		t.Fatal("hostssl without the reject lets plaintext reach the operator's catch-all")
 	}
 }
 

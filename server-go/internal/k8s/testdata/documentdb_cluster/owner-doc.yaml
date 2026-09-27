@@ -48,6 +48,8 @@ spec:
     - hostssl all app all scram-sha-256
     - hostssl all excalibase_app all scram-sha-256
     - hostssl all auth_admin all scram-sha-256
+    - hostnossl all all all reject
+    - hostnossl replication all all reject
     pg_ident:
     - local postgres documentdb_bg_worker_role
     - local postgres documentdb

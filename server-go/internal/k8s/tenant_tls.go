@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"errors"
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -12,11 +13,22 @@ import (
 // Postgres cannot tell an outside client from a platform one and the rule
 // applies to both. Only the in-pod loopback trust for the DocumentDB gateway
 // stays a host line.
+//
+// hostssl alone is not enough: CNPG appends "host all all all
+// scram-sha-256" after the user rules, and a plaintext login that matches no
+// hostssl line would be let in there. The hostnossl reject lines stop it first.
 
 const (
 	hbaHost    = "host"
 	hbaHostSSL = "hostssl"
 )
+
+// plaintextRejects close CNPG's catch-all to unencrypted logins. "all" as a
+// database does not match replication, so that needs a line of its own.
+var plaintextRejects = []string{
+	"hostnossl all all all reject",
+	"hostnossl replication all all reject",
+}
 
 // ErrClusterHasNoHBA refuses a cluster whose rules were not rendered by us.
 var ErrClusterHasNoHBA = errors.New("cluster has no pg_hba rules to apply the TLS setting to")
@@ -28,13 +40,20 @@ func hbaConnectionType(requireTLS bool) string {
 	return hbaHost
 }
 
-func networkLogins(connectionType string) []interface{} {
-	return []interface{}{
+func networkLogins(requireTLS bool) []interface{} {
+	connectionType := hbaConnectionType(requireTLS)
+	lines := []interface{}{
 		connectionType + " replication cdc_watcher all scram-sha-256",
 		connectionType + " all app all scram-sha-256",
 		connectionType + " all " + appRoleName + " all scram-sha-256",
 		connectionType + " all auth_admin all scram-sha-256",
 	}
+	if requireTLS {
+		for _, reject := range plaintextRejects {
+			lines = append(lines, reject)
+		}
+	}
+	return lines
 }
 
 // isNetworkLogin is a host or hostssl line that is not the loopback trust.
@@ -47,7 +66,8 @@ func isNetworkLogin(fields []string) bool {
 }
 
 // SetClusterRequireTLS rewrites the connection type of every network login
-// on a CNPG Cluster. The operator reloads pg_hba without a restart.
+// on a CNPG Cluster and adds or drops the plaintext rejects. The operator
+// reloads pg_hba without a restart.
 func SetClusterRequireTLS(cluster *unstructured.Unstructured, requireTLS bool) error {
 	lines, found, err := unstructured.NestedStringSlice(cluster.Object, "spec", "postgresql", "pg_hba")
 	if err != nil {
@@ -56,8 +76,11 @@ func SetClusterRequireTLS(cluster *unstructured.Unstructured, requireTLS bool) e
 	if !found || len(lines) == 0 {
 		return ErrClusterHasNoHBA
 	}
-	rewritten := make([]interface{}, 0, len(lines))
+	rewritten := make([]interface{}, 0, len(lines)+len(plaintextRejects))
 	for _, line := range lines {
+		if slices.Contains(plaintextRejects, line) {
+			continue
+		}
 		fields := strings.Fields(line)
 		if isNetworkLogin(fields) {
 			fields[0] = hbaConnectionType(requireTLS)
@@ -65,12 +88,23 @@ func SetClusterRequireTLS(cluster *unstructured.Unstructured, requireTLS bool) e
 		}
 		rewritten = append(rewritten, line)
 	}
+	if requireTLS {
+		for _, reject := range plaintextRejects {
+			rewritten = append(rewritten, reject)
+		}
+	}
 	return unstructured.SetNestedSlice(cluster.Object, rewritten, "spec", "postgresql", "pg_hba")
 }
 
-// ClusterRequiresTLS reports whether every network login is hostssl.
+// ClusterRequiresTLS reports whether every network login is hostssl and
+// plaintext is rejected before the operator's catch-all.
 func ClusterRequiresTLS(cluster *unstructured.Unstructured) bool {
 	lines, _, _ := unstructured.NestedStringSlice(cluster.Object, "spec", "postgresql", "pg_hba")
+	for _, reject := range plaintextRejects {
+		if !slices.Contains(lines, reject) {
+			return false
+		}
+	}
 	networkLines := 0
 	for _, line := range lines {
 		fields := strings.Fields(line)
