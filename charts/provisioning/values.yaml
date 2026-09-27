@@ -44,6 +44,10 @@ storage:
   size: 5Gi
   storageClass: ""
 
+# Required. The Studio origin that emailed verification and password-reset
+# links open, e.g. https://studio.example.com. No default.
+studioUrl: ""
+
 env:
   PORT: "24005"
   LOG_LEVEL: "info"
