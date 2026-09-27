@@ -21,6 +21,17 @@ var (
 	ErrAppOverPlan = errors.New("the plan does not allow this many copies")
 )
 
+type overPlanError struct {
+	tier    domain.TierType
+	allowed int
+}
+
+func (e *overPlanError) Error() string {
+	return fmt.Sprintf("%s: the %s plan allows at most %d", ErrAppOverPlan, e.tier, e.allowed)
+}
+
+func (e *overPlanError) Unwrap() error { return ErrAppOverPlan }
+
 // PlanTiers answers which plan sizes a project's apps: its organisation's, as it is now.
 type PlanTiers interface {
 	ProjectPlanTier(ctx context.Context, projectID string) (domain.TierType, error)
@@ -77,7 +88,7 @@ func (s *AppDeployService) planTier(ctx context.Context, projectID string, repli
 		return "", config.AppTierConfig{}, fmt.Errorf("%w: %v", ErrOrgTierUnresolved, err)
 	}
 	if replicas > tier.MaxReplicas {
-		return "", config.AppTierConfig{}, fmt.Errorf("%w: the %s plan allows at most %d", ErrAppOverPlan, tierType, tier.MaxReplicas)
+		return "", config.AppTierConfig{}, &overPlanError{tier: tierType, allowed: tier.MaxReplicas}
 	}
 	return tierType, tier, nil
 }

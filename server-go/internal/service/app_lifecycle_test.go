@@ -186,7 +186,7 @@ func TestPauseApp_RefusedWhileAnotherOperationHoldsTheApp(t *testing.T) {
 func TestResumeApp_RestoresTheWorkloadAndRuns(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusStopped)
 
-	app, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID)
+	app, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev")
 	if err != nil {
 		t.Fatalf("ResumeApp: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestResumeApp_ARolloutThatFailsFailsTheApp(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusStopped)
 	f.kube.AppResumeErr = fmt.Errorf("%w: storefront CrashLoopBackOff", k8s.ErrAppRollout)
 
-	_, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID)
+	_, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev")
 	if !errors.Is(err, k8s.ErrAppRollout) {
 		t.Fatalf("err = %v", err)
 	}
@@ -215,14 +215,14 @@ func TestResumeApp_AnUnreachableClusterStaysResuming(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusStopped)
 	f.kube.AppResumeErr = errors.New("connection refused")
 
-	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID); err == nil {
+	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev"); err == nil {
 		t.Fatal("want the error")
 	}
 	if f.status() != apphost.StatusResuming {
 		t.Fatalf("status = %q, want RESUMING so a retry picks it up", f.status())
 	}
 	f.kube.AppResumeErr = nil
-	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID); err != nil {
+	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev"); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 }
@@ -231,7 +231,7 @@ func TestResumeApp_NotPausedPutsTheStatusBack(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusStopped)
 	f.kube.AppResumeErr = k8s.ErrAppNotPaused
 
-	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID); !errors.Is(err, k8s.ErrAppNotPaused) {
+	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev"); !errors.Is(err, k8s.ErrAppNotPaused) {
 		t.Fatalf("err = %v", err)
 	}
 	if f.status() != apphost.StatusStopped {
@@ -241,12 +241,12 @@ func TestResumeApp_NotPausedPutsTheStatusBack(t *testing.T) {
 
 func TestResumeApp_RunningIsANoOpAndBusyIsRefused(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusRunning)
-	if app, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID); err != nil || app.Status != apphost.StatusRunning {
+	if app, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev"); err != nil || app.Status != apphost.StatusRunning {
 		t.Fatalf("ResumeApp = %+v, %v", app, err)
 	}
 	for _, status := range []string{apphost.StatusCreated, apphost.StatusPausing, apphost.StatusDeleting} {
 		f := newLifecycleFixture(t, status)
-		if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID); !errors.Is(err, apphost.ErrAppStatusConflict) {
+		if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev"); !errors.Is(err, apphost.ErrAppStatusConflict) {
 			t.Errorf("%s: err = %v, want ErrAppStatusConflict", status, err)
 		}
 	}
@@ -359,7 +359,7 @@ func TestPauseAndResume_NoNamespaceMeansNothingDeployed(t *testing.T) {
 	}
 	g := newLifecycleFixture(t, apphost.StatusStopped)
 	g.svc.instances = fakestore.NewInstances()
-	if _, err := g.svc.ResumeApp(context.Background(), g.app.ProjectID, g.app.ID); !errors.Is(err, k8s.ErrAppNotDeployed) {
+	if _, err := g.svc.ResumeApp(context.Background(), g.app.ProjectID, g.app.ID, "dev"); !errors.Is(err, k8s.ErrAppNotDeployed) {
 		t.Fatalf("resume: err = %v", err)
 	}
 }

@@ -32,6 +32,7 @@ type fakeAppDeployer struct {
 	lastRedeployIDs [3]string // projectID, appID, deployID of the last RedeployApp call
 	lifecycleErr    error
 	lifecycleCalls  []string
+	resumedBy       string
 }
 
 func newFakeAppDeployer() *fakeAppDeployer {
@@ -82,7 +83,8 @@ func (f *fakeAppDeployer) PauseApp(_ context.Context, projectID, appID string) (
 	return f.lifecycle("pause", projectID, appID, apphost.StatusStopped)
 }
 
-func (f *fakeAppDeployer) ResumeApp(_ context.Context, projectID, appID string) (*apphost.App, error) {
+func (f *fakeAppDeployer) ResumeApp(_ context.Context, projectID, appID, actor string) (*apphost.App, error) {
+	f.resumedBy = actor
 	return f.lifecycle("resume", projectID, appID, apphost.StatusRunning)
 }
 
@@ -465,5 +467,19 @@ func TestAppDeployHandler_Resume_AdmissionRefusals(t *testing.T) {
 		if strings.Contains(rec.Body.String(), "organisation missing") {
 			t.Errorf("detail leaked: %s", rec.Body.String())
 		}
+	}
+}
+
+func TestAppDeployHandler_Resume_NamesTheCallerAndSaysWhatThePlanAllows(t *testing.T) {
+	deployer := newFakeAppDeployer()
+	rec := doDeployRequest(t, setupAppDeployRouter(t, deployer), http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/app-1/resume")
+	if rec.Code != http.StatusOK || deployer.resumedBy != "dev-1" {
+		t.Fatalf("code %d resumed by %q", rec.Code, deployer.resumedBy)
+	}
+
+	deployer.lifecycleErr = fmt.Errorf("%w: the FREE plan allows at most 1 copies and the app was paused with 3; scale it down to 1 or redeploy it", service.ErrAppOverPlan)
+	rec = doDeployRequest(t, setupAppDeployRouter(t, deployer), http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/app-1/resume")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "allows at most 1") {
+		t.Fatalf("code %d body %s", rec.Code, rec.Body.String())
 	}
 }

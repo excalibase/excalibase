@@ -195,6 +195,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		},
 		Config:     cfg,
 		RedeployOf: redeployOf,
+		Kind:       apphost.DeployKindDeploy,
 		Status:     apphost.DeployStatusPending,
 		CreatedBy:  actor,
 		CreatedAt:  time.Now().UTC(),

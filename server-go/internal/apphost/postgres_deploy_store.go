@@ -69,6 +69,64 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 	return tx.Commit()
 }
 
+func (s *PostgresDeployStore) RecordResize(resize *Deploy) error {
+	if resize.Kind != DeployKindResize || resize.Status != DeployStatusSucceeded || resize.FinishedAt == nil {
+		return fmt.Errorf("a resize is recorded as a finished %s entry", DeployKindResize)
+	}
+	spec, err := json.Marshal(resize.Spec)
+	if err != nil {
+		return fmt.Errorf("marshal resize spec: %w", err)
+	}
+	config, err := json.Marshal(resize.Config)
+	if err != nil {
+		return fmt.Errorf("marshal resize config: %w", err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin resize transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1, hashtext($2))`, deployLockSpace, resize.AppID); err != nil {
+		return fmt.Errorf("lock app deploy slot: %w", err)
+	}
+	if err := lockResumingApp(tx, resize.ProjectID, resize.AppID); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(`SELECT COALESCE(max(revision), 0) + 1 FROM app_deploys WHERE app_id = $1`, resize.AppID).
+		Scan(&resize.Revision); err != nil {
+		return fmt.Errorf("count app deploys: %w", err)
+	}
+	const q = `
+INSERT INTO app_deploys (id, app_id, project_id, revision, image, spec, config, status, created_by, created_at, finished_at, kind)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
+	if _, err := tx.Exec(q, resize.ID, resize.AppID, resize.ProjectID, resize.Revision, resize.Image, spec, config,
+		resize.Status, resize.CreatedBy, resize.CreatedAt, resize.FinishedAt, resize.Kind); err != nil {
+		return fmt.Errorf("record resize: %w", err)
+	}
+	// The recorded size follows the plan, not a developer's edit, so the version stays.
+	if _, err := tx.Exec(`UPDATE apps SET doc = jsonb_set(doc, '{tier}', to_jsonb($3::text)) WHERE project_id = $1 AND id = $2`,
+		resize.ProjectID, resize.AppID, string(resize.Config.Tier)); err != nil {
+		return fmt.Errorf("record app tier: %w", err)
+	}
+	return tx.Commit()
+}
+
+func lockResumingApp(tx *sql.Tx, projectID, appID string) error {
+	var status string
+	err := tx.QueryRow(`SELECT status FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`, projectID, appID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrAppNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read app for resize: %w", err)
+	}
+	if status != StatusResuming {
+		return fmt.Errorf("%w: it is %s", ErrAppStatusConflict, status)
+	}
+	return nil
+}
+
 // lockAppForDeploy holds the app row for the rest of the transaction, so a
 // pause, resume or deletion cannot start between this check and the insert.
 func lockAppForDeploy(tx *sql.Tx, projectID, appID string) error {
@@ -151,7 +209,7 @@ func (s *PostgresDeployStore) Finish(id, status, failureReason string, finishedA
 
 func (s *PostgresDeployStore) ListUnfinished() ([]*Deploy, error) {
 	rows, err := s.db.Query(
-		`SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at
+		`SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at, kind
 		 FROM app_deploys WHERE status IN ($1, $2) ORDER BY created_at`, DeployStatusPending, DeployStatusRolling)
 	if err != nil {
 		return nil, fmt.Errorf("list unfinished deploys: %w", err)
@@ -175,7 +233,7 @@ func (s *PostgresDeployStore) ListByApp(projectID, appID string, limit int) ([]*
 	if err := ValidateID(appID); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at
+	q := `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at, kind
 	      FROM app_deploys WHERE project_id = $1 AND app_id = $2 ORDER BY revision DESC`
 	args := []any{projectID, appID}
 	if limit > 0 {
@@ -221,7 +279,7 @@ func (s *PostgresDeployStore) Get(projectID, appID, id string) (*Deploy, error) 
 		return nil, err
 	}
 	row := s.db.QueryRow(
-		`SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at
+		`SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at, kind
 		 FROM app_deploys WHERE id = $1 AND app_id = $2 AND project_id = $3`, id, appID, projectID)
 	deploy, err := scanDeploy(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -243,7 +301,7 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 	var failureReason, redeployOf sql.NullString
 	var finishedAt sql.NullTime
 	if err := row.Scan(&d.ID, &d.AppID, &d.ProjectID, &d.Revision, &d.Image, &spec, &config, &redeployOf,
-		&d.Status, &failureReason, &d.CreatedBy, &d.CreatedAt, &finishedAt); err != nil {
+		&d.Status, &failureReason, &d.CreatedBy, &d.CreatedAt, &finishedAt, &d.Kind); err != nil {
 		return nil, fmt.Errorf("scan deploy: %w", err)
 	}
 	if err := json.Unmarshal(spec, &d.Spec); err != nil {

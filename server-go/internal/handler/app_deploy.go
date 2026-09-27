@@ -19,7 +19,7 @@ type AppDeployer interface {
 	RedeployApp(ctx context.Context, projectID, appID, deployID, actor string) (*apphost.Deploy, error)
 	ListDeploys(projectID, appID string, limit int) ([]*apphost.Deploy, error)
 	PauseApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
-	ResumeApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
+	ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error)
 	DeleteApp(ctx context.Context, projectID, appID string) error
 }
 
@@ -116,7 +116,9 @@ func (h *AppDeployHandler) Pause(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AppDeployHandler) Resume(w http.ResponseWriter, r *http.Request) {
-	h.lifecycle(w, r, h.deploys.ResumeApp)
+	h.lifecycle(w, r, func(ctx context.Context, projectID, appID string) (*apphost.App, error) {
+		return h.deploys.ResumeApp(ctx, projectID, appID, actorID(r))
+	})
 }
 
 // Delete answers once the app's pods are gone and the app is forgotten, not when the deletion was asked for.

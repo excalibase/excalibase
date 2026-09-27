@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
-	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 )
 
@@ -99,7 +98,7 @@ func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string
 // ResumeApp restores what the pause stopped and records ACTIVE once it is
 // ready. A rollout that fails leaves the app FAILED; any other failure leaves
 // it RESUMING, for a retry.
-func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID string) (*apphost.App, error) {
+func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error) {
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdApp(ctx, projectID, appID, OperationResume)
 	if err != nil {
@@ -119,11 +118,14 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID strin
 		[]string{apphost.StatusStopped, apphost.StatusFailed, apphost.StatusResuming}, apphost.StatusResuming); err != nil {
 		return nil, err
 	}
-	tier, err := s.admitResume(ctx, namespace, app)
+	size, err := s.admitResume(ctx, namespace, app)
 	if err != nil {
 		return nil, s.putBack(projectID, appID, apphost.StatusResuming, app.Status, err, resumeRefusals...)
 	}
-	err = s.kube.ResumeAppWorkload(ctx, namespace, appID, app.Name, tier, s.timeout)
+	if err := s.recordResize(app, size, actor); err != nil {
+		return nil, err
+	}
+	err = s.kube.ResumeAppWorkload(ctx, namespace, appID, app.Name, size.tier, s.timeout)
 	switch {
 	case err == nil:
 		return s.apps.Transition(projectID, appID, []string{apphost.StatusResuming}, apphost.StatusRunning)
@@ -135,25 +137,6 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID strin
 	default:
 		return nil, s.putBack(projectID, appID, apphost.StatusResuming, app.Status, err, k8s.ErrAppNotPaused, k8s.ErrAppNotDeployed)
 	}
-}
-
-var resumeRefusals = []error{ErrAppOverPlan, ErrOrgTierUnresolved, ErrAppCapacity, k8s.ErrAppNotPaused, k8s.ErrAppNotDeployed}
-
-// admitResume holds a resume to the plan and the room a deploy is held to.
-// The pods come back at the organisation's current plan size, so that is the size admitted.
-func (s *AppDeployService) admitResume(ctx context.Context, namespace string, app *apphost.App) (domain.TierType, error) {
-	replicas, err := s.kube.PausedAppReplicas(ctx, namespace, app.ID, app.Name)
-	if err != nil {
-		return "", err
-	}
-	tierType, tier, err := s.planTier(ctx, app.ProjectID, replicas)
-	if err != nil {
-		return "", err
-	}
-	if err := s.admit(ctx, namespace, &apphost.Deploy{AppID: app.ID}, tier, replicas); err != nil {
-		return "", err
-	}
-	return tierType, nil
 }
 
 // DeleteApp tears the workload down, waits until none of its pods is left,

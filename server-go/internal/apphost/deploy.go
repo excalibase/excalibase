@@ -16,6 +16,12 @@ const (
 	DeployStatusSuperseded = "superseded"
 )
 
+const (
+	DeployKindDeploy = "deploy"
+	// DeployKindResize records a resume that brought the app back at its organisation's current plan size.
+	DeployKindResize = "resize"
+)
+
 type DeployResources struct {
 	CPURequest    string `json:"cpuRequest"`
 	CPULimit      string `json:"cpuLimit"`
@@ -100,6 +106,7 @@ type Deploy struct {
 	// store, not through this struct's JSON tags.
 	Config        DeployConfig `json:"-"`
 	RedeployOf    string       `json:"redeployOf,omitempty"`
+	Kind          string       `json:"kind"`
 	Status        string       `json:"status"`
 	FailureReason string       `json:"failureReason,omitempty"`
 	CreatedBy     string       `json:"createdBy"`
