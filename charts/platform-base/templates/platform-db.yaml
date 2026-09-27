@@ -9,7 +9,7 @@ metadata:
 spec:
   instances: {{ .Values.platformDB.instances }}
 
-  imageName: "{{ .Values.platformDB.image.repository }}:{{ .Values.platformDB.image.tag }}"
+  imageName: "{{ .Values.platformDB.image.repository }}:{{ .Values.platformDB.image.tag }}@{{ required "platformDB.image.digest is required" .Values.platformDB.image.digest }}"
 
   postgresql:
     parameters:
@@ -42,18 +42,10 @@ spec:
   {{- end }}
 
   {{- if .Values.platformDB.backup.enabled }}
-  backup:
-    barmanObjectStore:
-      destinationPath: {{ .Values.platformDB.backup.destinationPath }}
-      {{- if .Values.platformDB.backup.endpointURL }}
-      endpointURL: {{ .Values.platformDB.backup.endpointURL }}
-      {{- end }}
-      s3Credentials:
-        accessKeyId:
-          name: {{ .Values.platformDB.backup.s3Secret }}
-          key: {{ .Values.platformDB.backup.s3AccessKeyIDKey | default "ACCESS_KEY_ID" }}
-        secretAccessKey:
-          name: {{ .Values.platformDB.backup.s3Secret }}
-          key: {{ .Values.platformDB.backup.s3SecretAccessKeyKey | default "ACCESS_SECRET_KEY" }}
-    retentionPolicy: {{ .Values.platformDB.backup.retentionPolicy | quote }}
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      enabled: true
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: platform-db-backups
   {{- end }}

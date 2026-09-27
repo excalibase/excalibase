@@ -3,6 +3,8 @@ platformDB:
   image:
     repository: ghcr.io/cloudnative-pg/postgresql
     tag: "16.4"
+    # Required: the bits under the platform database change only when this does.
+    digest: "sha256:99be063781d171d3971089b49c992706bdab9ccbd2b57cdf126c7542773aedfe"
   resources:
     requests:
       cpu: 300m
@@ -16,20 +18,21 @@ platformDB:
   monitoring:
     enabled: true
   backup:
-    # Platform-DB → R2. Reuses the cluster-scoped r2-creds secret (the
-    # same one per-project clusters consume) so operators don't manage
-    # two sets of S3 credentials. Override s3Secret +
-    # s3AccessKeyIDKey / s3SecretAccessKeyKey when targeting a separate
-    # backup account.
+    # Goes through the Barman Cloud plugin, which must be installed first.
+    # Platform-DB → object storage, on a bucket and key used by nothing else.
+    # Tenant namespaces hold a copy of the tenant key (r2-creds, copied as
+    # backup-s3-creds), so sharing it would hand any tenant every user's
+    # password hash and the vault. The chart refuses either name.
     enabled: true
-    destinationPath: "s3://excalibase-backups/_platform-db/"
-    endpointURL: ""               # required for R2; set via --set platformDB.backup.endpointURL=https://<account>.r2.cloudflarestorage.com
+    destinationPath: "s3://excalibase-platform-db-backups/"
+    endpointURL: ""               # required; e.g. --set platformDB.backup.endpointURL=https://<account>.r2.cloudflarestorage.com
     retentionPolicy: "30d"
-    s3Secret: r2-creds
-    s3AccessKeyIDKey: access_key_id
-    s3SecretAccessKeyKey: secret_access_key
-    # Inline creds only used when not reusing r2-creds. When empty,
-    # the chart skips creating its own secret and trusts s3Secret to
-    # already exist in the namespace.
+    # CloudNativePG cron: six fields, seconds first.
+    schedule: "0 0 3 * * *"
+    s3Secret: platform-db-backup-creds
+    s3AccessKeyIDKey: ACCESS_KEY_ID
+    s3SecretAccessKeyKey: ACCESS_SECRET_KEY
+    # Inline creds create s3Secret; left empty, s3Secret must already exist
+    # in the namespace.
     s3AccessKeyID: ""
     s3SecretAccessKey: ""
