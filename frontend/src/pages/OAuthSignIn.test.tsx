@@ -71,6 +71,13 @@ describe('Studio sign-in with Google and GitHub', () => {
     expect(await screen.findByTestId('orgs')).toBeInTheDocument();
   });
 
+  test('a sign-in whose invite was refused lands on the org list', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: user } as never);
+    renderAt('/oauth/complete?invite_error=already_member');
+    expect(await screen.findByTestId('orgs')).toBeInTheDocument();
+    expect(useAuthStore.getState().user).toEqual(user);
+  });
+
   test('a sign-in whose session did not stick goes back to login', async () => {
     vi.mocked(api.get).mockImplementation((url: string) =>
       url === '/auth/me'

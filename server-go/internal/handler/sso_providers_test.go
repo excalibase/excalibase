@@ -193,3 +193,40 @@ func TestSSOProviderReportsAVaultFailure(t *testing.T) {
 		t.Fatalf("got %d, want 500", w.Code)
 	}
 }
+
+func TestSSOProvidersWithoutAVaultAreUnconfiguredAndCannotBeSaved(t *testing.T) {
+	r := chi.NewRouter()
+	r.Route("/api/admin/sso-providers", NewSSOProvidersHandler([]string{"google"}, nil, testStudioURL, nil).Routes)
+
+	list := doRequest(r, "GET", "/api/admin/sso-providers/", "")
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"enabled":false`) || !strings.Contains(list.Body.String(), `"clientSecretSet":false`) {
+		t.Fatalf("list: %d %s", list.Code, list.Body.String())
+	}
+	if w := doRequest(r, "PUT", "/api/admin/sso-providers/google", `{"enabled":false,"clientId":"g1"}`); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("save without a vault: %d", w.Code)
+	}
+}
+
+type failingSSOAudit struct{ calls int }
+
+func (a *failingSSOAudit) LogAudit(context.Context, *domain.AuditEntry) error {
+	a.calls++
+	return errors.New("audit down")
+}
+
+// The vault write is the change; an audit that cannot be written is logged
+// and does not undo it.
+func TestSSOProviderSaveStandsWhenTheAuditCannotBeWritten(t *testing.T) {
+	audit := &failingSSOAudit{}
+	secrets := newSSOHarness(t, nil).vault
+	r := chi.NewRouter()
+	r.Route("/api/admin/sso-providers", NewSSOProvidersHandler([]string{"google"}, secrets, testStudioURL, audit).Routes)
+
+	if w := doRequest(r, "PUT", "/api/admin/sso-providers/google", `{"enabled":true,"clientId":"g1","clientSecret":"s1"}`); w.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", w.Code, w.Body.String())
+	}
+	stored, _ := secrets.Get(studiooauth.SecretPath("google"))
+	if stored["client_id"] != "g1" || audit.calls != 1 {
+		t.Fatalf("vault %v, audit calls %d", stored, audit.calls)
+	}
+}

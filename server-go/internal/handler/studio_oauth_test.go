@@ -42,11 +42,17 @@ func (f *fakeSignIn) Finish(_ context.Context, _, queryState, browserState, _ st
 }
 
 type memIdentities struct {
-	users *mockUserStore
-	links map[string]string
+	users    *mockUserStore
+	links    map[string]string
+	findErr  error
+	emailErr error
+	linkErr  error
 }
 
 func (m *memIdentities) FindUserByIdentity(_ context.Context, provider, subject string) (*domain.User, error) {
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
 	if id, ok := m.links[provider+"/"+subject]; ok {
 		return m.users.users[id], nil
 	}
@@ -54,6 +60,9 @@ func (m *memIdentities) FindUserByIdentity(_ context.Context, provider, subject 
 }
 
 func (m *memIdentities) FindUserByEmailFold(_ context.Context, address string) (*domain.User, error) {
+	if m.emailErr != nil {
+		return nil, m.emailErr
+	}
 	for _, u := range m.users.users {
 		if strings.EqualFold(u.Email, address) {
 			return u, nil
@@ -63,6 +72,9 @@ func (m *memIdentities) FindUserByEmailFold(_ context.Context, address string) (
 }
 
 func (m *memIdentities) LinkStudioIdentity(_ context.Context, provider, subject, userID, _ string) error {
+	if m.linkErr != nil {
+		return m.linkErr
+	}
 	m.links[provider+"/"+subject] = userID
 	return nil
 }

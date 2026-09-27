@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ func (m mapSecrets) Get(path string) (map[string]string, error) {
 type memStates struct {
 	mu      sync.Mutex
 	records map[string]memState
+	saveErr error
 }
 
 type memState struct {
@@ -39,6 +41,9 @@ type memState struct {
 func (m *memStates) SaveOAuthState(_ context.Context, hash string, state domain.OAuthState, expires time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.saveErr != nil {
+		return m.saveErr
+	}
 	m.records[hash] = memState{state: state, expires: expires}
 	return nil
 }
@@ -63,6 +68,7 @@ type fakeProvider struct {
 	googleUser map[string]any
 	githubMail []map[string]any
 	failToken  bool
+	failPath   string
 }
 
 func newFakeProvider(t *testing.T) *fakeProvider {
@@ -81,7 +87,13 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 		f.requireBearer(r)
 		_ = json.NewEncoder(w).Encode(f.githubMail)
 	})
-	f.server = httptest.NewServer(mux)
+	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == f.failPath {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(f.server.Close)
 	return f
 }
@@ -262,5 +274,71 @@ func TestOnlyConfiguredProvidersAreOffered(t *testing.T) {
 	var nilService *Service
 	if len(nilService.Configured()) != 0 {
 		t.Fatal("a nil service offers providers")
+	}
+}
+
+func TestProvidersAreNamedInOfferOrder(t *testing.T) {
+	fake := newFakeProvider(t)
+	svc, _ := newService(t, fake, configured())
+	names := svc.Names()
+	if !slices.Equal(names, []string{"google", "github"}) {
+		t.Fatalf("names = %v", names)
+	}
+	names[0] = "changed"
+	if svc.Names()[0] != "google" {
+		t.Fatal("the caller changed the service's provider order")
+	}
+}
+
+func TestAFailedIdentityCallFailsTheSignIn(t *testing.T) {
+	cases := map[string]string{"google": "/userinfo", "github": "/user"}
+	for provider, path := range cases {
+		fake := newFakeProvider(t)
+		fake.failPath = path
+		svc, _ := newService(t, fake, configured())
+		state := start(t, svc, fake, provider, "")
+		_, _, err := svc.Finish(context.Background(), provider, state, state, "the-code")
+		if err == nil || !strings.Contains(err.Error(), "status 502") {
+			t.Errorf("%s: got %v", provider, err)
+		}
+	}
+	fake := newFakeProvider(t)
+	fake.failPath = "/user/emails"
+	svc, _ := newService(t, fake, configured())
+	state := start(t, svc, fake, "github", "")
+	if _, _, err := svc.Finish(context.Background(), "github", state, state, "the-code"); err == nil || errors.Is(err, ErrEmailNotVerified) {
+		t.Fatalf("emails call failed: got %v", err)
+	}
+}
+
+func TestAnUnreachableIdentityEndpointFailsTheSignIn(t *testing.T) {
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	for name, apiBase := range map[string]string{"unreachable": gone.URL, "malformed": "http://bad host"} {
+		_, err := identifyGoogle(context.Background(), http.DefaultClient, apiBase, "provider-access-token")
+		if err == nil {
+			t.Errorf("%s: an identity was returned", name)
+		}
+	}
+}
+
+func TestStartFailsWhenTheStateCannotBeSaved(t *testing.T) {
+	fake := newFakeProvider(t)
+	svc, states := newService(t, fake, configured())
+	states.saveErr = errors.New("db down")
+	if _, _, err := svc.Start(context.Background(), "google", ""); err == nil {
+		t.Fatal("a sign-in started without a saved state")
+	}
+}
+
+// Disabling a provider stops sign-ins that were already on their way back.
+func TestAProviderDisabledMidSignInRefusesTheCallback(t *testing.T) {
+	fake := newFakeProvider(t)
+	secrets := configured()
+	svc, _ := newService(t, fake, secrets)
+	state := start(t, svc, fake, "google", "")
+	secrets["oauth/studio/google"]["enabled"] = "false"
+	if _, _, err := svc.Finish(context.Background(), "google", state, state, "the-code"); !errors.Is(err, ErrProviderNotConfigured) {
+		t.Fatalf("got %v", err)
 	}
 }

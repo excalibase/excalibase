@@ -61,4 +61,39 @@ describe('Studio sign-in providers settings', () => {
     await u.click(within(google).getByRole('button', { name: /save/i }));
     expect(await within(google).findByText(/needs its client id/i)).toBeInTheDocument();
   });
+
+  test('a list that cannot be loaded is reported', async () => {
+    vi.mocked(api.get).mockRejectedValue(new Error('network'));
+    render(<SignInProviders />);
+    expect(await screen.findByText(/could not load the sign-in providers/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save/i })).not.toBeInTheDocument();
+  });
+
+  test('a saved provider confirms and shows its secret as set', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValue({ data: { ...listed.providers[0], enabled: true, clientId: 'g-client', clientSecretSet: true } } as never);
+    render(<SignInProviders />);
+    const google = await screen.findByTestId('sso-google');
+    await u.type(within(google).getByLabelText('Client secret'), 'g-secret');
+    await u.click(within(google).getByRole('button', { name: /save/i }));
+    expect(await within(google).findByText(/applies to the next sign-in/i)).toBeInTheDocument();
+    expect(within(google).getByText(/secret is set/i)).toBeInTheDocument();
+    expect(within(google).getByLabelText('Client secret')).toHaveValue('');
+  });
+
+  test('a save refused without a reason gets a generic message', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.put).mockRejectedValue(new Error('network'));
+    render(<SignInProviders />);
+    const github = await screen.findByTestId('sso-github');
+    await u.click(within(github).getByRole('button', { name: /save/i }));
+    expect(await within(github).findByText('Could not save the provider')).toBeInTheDocument();
+  });
+
+  test('a provider without a display name is shown by its id', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { providers: [{ ...listed.providers[0], provider: 'gitlab' }] } } as never);
+    render(<SignInProviders />);
+    const gitlab = await screen.findByTestId('sso-gitlab');
+    expect(within(gitlab).getByRole('heading', { name: 'gitlab' })).toBeInTheDocument();
+  });
 });

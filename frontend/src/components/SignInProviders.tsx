@@ -45,7 +45,7 @@ function ProviderForm({ initial }: { readonly initial: ProviderSettings }) {
         <h3 className="font-medium text-text-primary">{name}</h3>
         <label htmlFor={`${prefix}-enabled`} className="flex items-center gap-2 text-sm text-text-secondary">
           <input id={`${prefix}-enabled`} type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Enabled
+          <span>Enabled</span>
         </label>
       </div>
       <div className="text-xs text-text-secondary">
