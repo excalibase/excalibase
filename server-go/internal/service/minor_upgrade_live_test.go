@@ -58,6 +58,7 @@ type outage struct {
 // platform's minor upgrade under a loop of SELECT 1 through the rw service.
 func (lab *backupLab) measureMinorUpgrade(t *testing.T, svc *ProvisioningService, project string, tier config.TierConfig) outage {
 	t.Helper()
+	lab.freshNamespaces(t, backupLiveOrg+"-"+project)
 	lab.provisionAt(t, project, tier)
 	namespace := backupLiveOrg + "-" + project
 	lab.source.Tier = domain.Free
