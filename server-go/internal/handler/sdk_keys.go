@@ -30,11 +30,8 @@ type SDKKeyManager interface {
 	Revoke(ctx context.Context, orgSlug, projectID string, keyID int64) error
 }
 
-type projectLookup interface {
-	FindByProjectID(id string) (*domain.DatabaseInstance, error)
-}
-
-type orgLookup interface {
+// OrgFinder resolves an organisation row by id.
+type OrgFinder interface {
 	FindOrgByID(ctx context.Context, id string) (*domain.Org, error)
 }
 
@@ -43,12 +40,12 @@ type orgLookup interface {
 // Studio user's request with the control plane's own credential.
 type SDKKeysHandler struct {
 	keys      SDKKeyManager
-	instances projectLookup
-	orgs      orgLookup
+	instances ProjectFinder
+	orgs      OrgFinder
 	audit     auditWriter
 }
 
-func NewSDKKeysHandler(keys SDKKeyManager, instances projectLookup, orgs orgLookup, audit auditWriter) *SDKKeysHandler {
+func NewSDKKeysHandler(keys SDKKeyManager, instances ProjectFinder, orgs OrgFinder, audit auditWriter) *SDKKeysHandler {
 	return &SDKKeysHandler{keys: keys, instances: instances, orgs: orgs, audit: audit}
 }
 

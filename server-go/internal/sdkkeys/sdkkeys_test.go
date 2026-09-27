@@ -181,3 +181,71 @@ func TestClientRefusesPathInjection(t *testing.T) {
 		t.Fatal("an unsafe org slug reached auth")
 	}
 }
+
+func TestSignerRefusesAKeyThatIsNotECDSA(t *testing.T) {
+	notEC := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: []byte("junk")}))
+	if _, err := NewSigner(mapVault{signingKeyPath: {"key": notEC}}).Sign("proj-a", "acme"); err == nil {
+		t.Fatal("signed with a key that does not parse")
+	}
+}
+
+type answer struct {
+	status int
+	body   string
+}
+
+func (a answer) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(a.status)
+	_, _ = w.Write([]byte(a.body))
+}
+
+func clientFor(t *testing.T, handler http.Handler) *Client {
+	t.Helper()
+	_, vault := newSigningKey(t)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return NewClient(server.URL+"/", NewSigner(vault), server.Client())
+}
+
+func TestClientListsNoKeysAsAnEmptyList(t *testing.T) {
+	keys, err := clientFor(t, answer{status: http.StatusOK, body: `{}`}).List(context.Background(), "acme", "proj-a")
+	if err != nil || keys == nil || len(keys) != 0 {
+		t.Fatalf("got %#v %v", keys, err)
+	}
+}
+
+func TestClientReportsAnUnreadableAnswer(t *testing.T) {
+	_, err := clientFor(t, answer{status: http.StatusOK, body: `not json`}).List(context.Background(), "acme", "proj-a")
+	if err == nil || errors.Is(err, ErrAuthUnavailable) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRefusalWithoutAMessageStillExplainsItself(t *testing.T) {
+	err := clientFor(t, answer{status: http.StatusForbidden, body: `forbidden`}).Revoke(context.Background(), "acme", "proj-a", 7)
+	var refused *RefusedError
+	if !errors.As(err, &refused) || refused.Message != "request refused" {
+		t.Fatalf("got %v", err)
+	}
+	if got := refused.Error(); !strings.Contains(got, "403") || !strings.Contains(got, "request refused") {
+		t.Fatalf("Error() = %q", got)
+	}
+}
+
+func TestClientDoesNotCallAuthWhenItCannotSign(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	t.Cleanup(server.Close)
+	client := NewClient(server.URL, NewSigner(mapVault{}), server.Client())
+	if _, err := client.List(context.Background(), "acme", "proj-a"); err == nil || called {
+		t.Fatalf("err %v, auth called %v", err, called)
+	}
+}
+
+func TestClientRefusesAMalformedAuthURL(t *testing.T) {
+	_, vault := newSigningKey(t)
+	client := NewClient("http://[bad", NewSigner(vault), http.DefaultClient)
+	if _, err := client.List(context.Background(), "acme", "proj-a"); err == nil || errors.Is(err, ErrAuthUnavailable) {
+		t.Fatalf("got %v", err)
+	}
+}

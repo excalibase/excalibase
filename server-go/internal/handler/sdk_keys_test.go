@@ -16,11 +16,12 @@ import (
 )
 
 type fakeSDKKeys struct {
-	created  []sdkkeys.CreateRequest
-	revoked  []int64
-	listErr  error
-	createFn func() (*sdkkeys.CreatedKey, error)
-	calls    []string
+	created   []sdkkeys.CreateRequest
+	revoked   []int64
+	listErr   error
+	revokeErr error
+	createFn  func() (*sdkkeys.CreatedKey, error)
+	calls     []string
 }
 
 func (f *fakeSDKKeys) List(_ context.Context, orgSlug, projectID string) ([]sdkkeys.Key, error) {
@@ -42,15 +43,21 @@ func (f *fakeSDKKeys) Create(_ context.Context, orgSlug, projectID string, req s
 
 func (f *fakeSDKKeys) Revoke(_ context.Context, orgSlug, projectID string, keyID int64) error {
 	f.calls = append(f.calls, "revoke "+orgSlug+"/"+projectID)
+	if f.revokeErr != nil {
+		return f.revokeErr
+	}
 	f.revoked = append(f.revoked, keyID)
 	return nil
 }
 
-type sdkKeyAudit struct{ entries []*domain.AuditEntry }
+type sdkKeyAudit struct {
+	entries []*domain.AuditEntry
+	err     error
+}
 
 func (a *sdkKeyAudit) LogAudit(_ context.Context, entry *domain.AuditEntry) error {
 	a.entries = append(a.entries, entry)
-	return nil
+	return a.err
 }
 
 type sdkKeyOrgs struct{ orgs map[string]*domain.Org }
@@ -136,6 +143,12 @@ func TestSDKKeysUnknownProjectOrOrgIsRefused(t *testing.T) {
 	if w := doRequest(r, "GET", "/api/projects/proj-missing/sdk-keys/", ""); w.Code != http.StatusNotFound {
 		t.Errorf("unknown project: %d", w.Code)
 	}
+	if w := doRequest(r, "POST", "/api/projects/proj-missing/sdk-keys/", `{"keyType":"secret"}`); w.Code != http.StatusNotFound {
+		t.Errorf("create in an unknown project: %d", w.Code)
+	}
+	if w := doRequest(r, "DELETE", "/api/projects/proj-missing/sdk-keys/7", ""); w.Code != http.StatusNotFound {
+		t.Errorf("revoke in an unknown project: %d", w.Code)
+	}
 	if w := doRequest(r, "GET", "/api/projects/proj-orphan/sdk-keys/", ""); w.Code != http.StatusInternalServerError {
 		t.Errorf("project without an org: %d", w.Code)
 	}
@@ -163,5 +176,63 @@ func TestSDKKeysWithoutAuthConfiguredIs503(t *testing.T) {
 	r, _ := newSDKKeysRouter(nil)
 	if w := doRequest(r, "GET", "/api/projects/proj-a/sdk-keys/", ""); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("got %d, want 503", w.Code)
+	}
+}
+
+func TestSDKKeysFailedChangesAreNotAudited(t *testing.T) {
+	keys := &fakeSDKKeys{
+		createFn:  func() (*sdkkeys.CreatedKey, error) { return nil, sdkkeys.ErrAuthUnavailable },
+		revokeErr: &sdkkeys.RefusedError{Status: http.StatusNotFound, Message: "no such key"},
+	}
+	r, audit := newSDKKeysRouter(keys)
+
+	if w := doRequest(r, "POST", "/api/projects/proj-a/sdk-keys/", `{"name":"web","keyType":"publishable"}`); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("create: got %d, want 503", w.Code)
+	}
+	if w := doRequest(r, "DELETE", "/api/projects/proj-a/sdk-keys/7", ""); w.Code != http.StatusBadGateway {
+		t.Errorf("revoke: got %d, want 502", w.Code)
+	}
+	if len(audit.entries) != 0 {
+		t.Fatalf("a failed change was audited: %+v", audit.entries)
+	}
+}
+
+func TestSDKKeysRevokeRefusesANonPositiveID(t *testing.T) {
+	keys := &fakeSDKKeys{}
+	r, _ := newSDKKeysRouter(keys)
+	for _, id := range []string{"0", "-3"} {
+		if w := doRequest(r, "DELETE", "/api/projects/proj-a/sdk-keys/"+id, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("id %s: got %d, want 400", id, w.Code)
+		}
+	}
+	if len(keys.calls) != 0 {
+		t.Fatalf("auth was called: %v", keys.calls)
+	}
+}
+
+func TestSDKKeysChangeStandsWhenTheAuditWriteFails(t *testing.T) {
+	r, audit := newSDKKeysRouter(&fakeSDKKeys{})
+	audit.err = errors.New("audit store down")
+	if w := doRequest(r, "DELETE", "/api/projects/proj-a/sdk-keys/7", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("got %d, want 204", w.Code)
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit attempts = %d", len(audit.entries))
+	}
+}
+
+func TestSDKKeysWithoutAnAuditWriterOrSignedInUser(t *testing.T) {
+	instances := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{"proj-a": {ProjectID: "proj-a", OrgID: "org-1"}}}
+	orgs := sdkKeyOrgs{orgs: map[string]*domain.Org{"org-1": {ID: "org-1", Slug: "acme"}}}
+	audit := &sdkKeyAudit{}
+	for _, writer := range []auditWriter{nil, audit} {
+		r := chi.NewRouter()
+		r.Route("/api/projects/{projectId}/sdk-keys", NewSDKKeysHandler(&fakeSDKKeys{}, instances, orgs, writer).Routes)
+		if w := doRequest(r, "DELETE", "/api/projects/proj-a/sdk-keys/7", ""); w.Code != http.StatusNoContent {
+			t.Fatalf("got %d, want 204", w.Code)
+		}
+	}
+	if len(audit.entries) != 1 || audit.entries[0].UserID != "" {
+		t.Fatalf("audit: %+v", audit.entries)
 	}
 }

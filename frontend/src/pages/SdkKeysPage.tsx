@@ -108,8 +108,8 @@ export function SdkKeysPage() {
 
       {keys.isLoading && <Loader2 className="w-5 h-5 animate-spin text-text-secondary" />}
       {keys.isError && <p className="text-sm text-red-400">{errorText(keys.error, 'Could not load keys')}</p>}
-      {keys.data && keys.data.length === 0 && <p className="text-sm text-text-secondary">No keys yet.</p>}
-      {keys.data && keys.data.length > 0 && (
+      {keys.data?.length === 0 && <p className="text-sm text-text-secondary">No keys yet.</p>}
+      {!!keys.data?.length && (
         <table className="w-full text-sm">
           <thead className="text-left text-text-secondary">
             <tr><th className="py-2">Name</th><th>Type</th><th>Key</th><th>Created</th><th /></tr>
