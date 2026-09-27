@@ -34,6 +34,14 @@ spec:
           port: 443
         - protocol: TCP
           port: 6443
+    # The platform store (platform-db) in the platform namespace.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              excalibase.io/type: platform
+      ports:
+        - protocol: TCP
+          port: 5432
     # Project namespace PostgreSQL (for pod exec role creation)
     - to:
         - namespaceSelector:
