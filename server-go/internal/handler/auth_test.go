@@ -30,8 +30,8 @@ const (
 // --- in-memory mock stores for auth tests ---
 
 type mockUserStore struct {
-	mu         sync.Mutex
-	users      map[string]*domain.User
+	mu           sync.Mutex
+	users        map[string]*domain.User
 	failSave     bool
 	failList     bool
 	failDelete   bool
