@@ -7,6 +7,7 @@ import { StatusBadge } from '../components/shared/StatusBadge';
 import { MetricCard } from '../components/shared/MetricCard';
 import { CredentialsViewer } from '../components/CredentialsViewer';
 import { Button } from '../components/Button';
+import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { ArrowLeft, Cpu, Database, HardDrive, Users, Loader2, Trash2, RefreshCw, Archive, FileText } from 'lucide-react';
 
 type Tab = 'overview' | 'credentials' | 'backups' | 'logs';
@@ -60,10 +61,21 @@ export function InstanceDetailPage() {
             </p>
           </div>
         </div>
-        <Button variant="danger" size="sm" onClick={handleDelete} disabled={deprovision.isPending}>
-          <Trash2 className="w-4 h-4 mr-1.5" />
-          Deprovision
-        </Button>
+        <div className="flex flex-col items-end gap-1">
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={handleDelete}
+            disabled={deprovision.isPending || isDeletionProtected(instance)}
+            data-testid="deprovision-btn"
+          >
+            <Trash2 className="w-4 h-4 mr-1.5" />
+            Deprovision
+          </Button>
+          {isDeletionProtected(instance) && (
+            <p className="text-xs text-text-tertiary max-w-xs text-right">{DELETION_PROTECTED_REASON}</p>
+          )}
+        </div>
       </div>
 
       {/* Stage timeline */}
