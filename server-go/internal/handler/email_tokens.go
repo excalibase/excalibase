@@ -18,6 +18,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/email"
+	"github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -32,9 +33,8 @@ import (
 // so a database leak doesn't expose live click links. Each row has a
 // consumed_at column so a token can only be used once.
 //
-// We're intentionally minimal here — no rate-limit on /send (the
-// existing per-IP middleware covers it) and no captcha. Both can be
-// added in v1.2 once we see abuse signals.
+// The two public sends mail whoever an address names, so each is limited per
+// client and per address, and answers before it looks the address up.
 type EmailTokensHandler struct {
 	db          *sql.DB         // platform-db, holds password_resets
 	sender      email.Sender    // SES, Resend, or noop in dev
@@ -44,7 +44,24 @@ type EmailTokensHandler struct {
 	pg          bool // true if backing db is Postgres (uses $1 placeholders)
 	verifier    *EmailVerifier
 	publicLimit func(http.Handler) http.Handler
+	// confirmLimit bounds attempts at the emailed links per client.
+	confirmLimit func(http.Handler) http.Handler
+	// addressLimit caps mail to one address across every client.
+	addressLimit *middleware.KeyLimiter
+	// runInBackground runs a send after the answer is written.
+	runInBackground func(func())
 }
+
+// Public mail budgets: five sends per client and three per address an hour;
+// thirty link attempts per client a minute.
+const (
+	publicSendsPerClient   = 5
+	publicSendsPerAddress  = 3
+	publicSendWindow       = time.Hour
+	confirmsPerClient      = 30
+	confirmWindow          = time.Minute
+	backgroundMailDeadline = 30 * time.Second
+)
 
 // emailTokenUsers is the slice of the user store the click-link flows need.
 type emailTokenUsers interface {
@@ -56,17 +73,33 @@ type emailTokenUsers interface {
 // SetVerifier wires the Studio email verification the verify routes use.
 func (h *EmailTokensHandler) SetVerifier(v *EmailVerifier) { h.verifier = v }
 
-func (h *EmailTokensHandler) resendLimit(next http.Handler) http.Handler {
-	if h == nil || h.publicLimit == nil {
-		return next
-	}
-	return h.publicLimit(next)
-}
-
-// SetPublicLimit rate-limits the public resend route, which anyone may call.
+// SetPublicLimit replaces the per-client limit on the two public sends.
 func (h *EmailTokensHandler) SetPublicLimit(limit func(http.Handler) http.Handler) {
 	h.publicLimit = limit
 }
+
+// limits returns the public-send and link-confirm limiters. Route tables are
+// built from a nil handler in tests; that mounts the routes unlimited.
+func (h *EmailTokensHandler) limits() (public, confirm func(http.Handler) http.Handler) {
+	if h == nil {
+		pass := func(next http.Handler) http.Handler { return next }
+		return pass, pass
+	}
+	return h.publicLimit, h.confirmLimit
+}
+
+// allowMailTo spends one of the address's sends. Keyed before any lookup, so
+// an unregistered address runs out exactly like a registered one.
+func (h *EmailTokensHandler) allowMailTo(address string) bool {
+	return h.addressLimit.Allow(strings.ToLower(strings.TrimSpace(address)))
+}
+
+// The platform store is Postgres only (no SQLite driver ships), so newer
+// statements are plain Postgres literals.
+const (
+	insertPasswordResetSQL = `INSERT INTO password_resets (user_id, token_hash, expires_at, requested_from) VALUES ($1, $2, $3, $4)`
+	claimPasswordResetSQL  = `UPDATE password_resets SET consumed_at = $1 WHERE token_hash = $2 AND consumed_at IS NULL`
+)
 
 // rebind converts SQLite-style `?` placeholders to Postgres-style `$1, $2, ...`
 // when the underlying driver is Postgres. Sqlite passes the string unchanged.
@@ -106,12 +139,16 @@ func NewEmailTokensHandler(db *sql.DB, sender email.Sender, store emailTokenUser
 		pg = err == nil
 	}
 	return &EmailTokensHandler{
-		db:          db,
-		sender:      sender,
-		store:       store,
-		studioURL:   strings.TrimRight(studioURL, "/"),
-		productName: productName,
-		pg:          pg,
+		db:              db,
+		sender:          sender,
+		store:           store,
+		studioURL:       strings.TrimRight(studioURL, "/"),
+		productName:     productName,
+		pg:              pg,
+		publicLimit:     middleware.RateLimit(middleware.PerIP, publicSendsPerClient, publicSendWindow),
+		confirmLimit:    middleware.RateLimit(middleware.PerIP, confirmsPerClient, confirmWindow),
+		addressLimit:    middleware.NewKeyLimiter(publicSendsPerAddress, publicSendWindow),
+		runInBackground: func(f func()) { go f() },
 	}
 }
 
@@ -124,10 +161,11 @@ func NewEmailTokensHandler(db *sql.DB, sender email.Sender, store emailTokenUser
 func (h *EmailTokensHandler) Routes(r chi.Router, sendLimits ...func(http.Handler) http.Handler) {
 	r.With(append([]func(http.Handler) http.Handler{auth.RequireAuth}, sendLimits...)...).
 		Post("/verify/send", h.SendVerify)
-	r.Post("/verify/confirm", h.ConfirmVerify)
-	r.With(h.resendLimit).Post("/verify/resend", h.ResendVerify)
-	r.Post("/reset/send", h.SendReset)
-	r.Post("/reset/confirm", h.ConfirmReset)
+	publicLimit, confirmLimit := h.limits()
+	r.With(confirmLimit).Post("/verify/confirm", h.ConfirmVerify)
+	r.With(publicLimit).Post("/verify/resend", h.ResendVerify)
+	r.With(publicLimit).Post("/reset/send", h.SendReset)
+	r.With(confirmLimit).Post("/reset/confirm", h.ConfirmReset)
 }
 
 // --- email verification ---
@@ -164,16 +202,35 @@ func (h *EmailTokensHandler) ResendVerify(w http.ResponseWriter, r *http.Request
 		httpError(w, ErrVerificationUnavailable.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	user, err := h.store.FindUserByEmail(r.Context(), body.Email)
-	if err != nil {
-		log.Printf("ERROR: resend verification lookup: %v", err)
-	}
-	if user != nil && !user.IsService() && user.EmailVerifiedAt == nil {
-		if err := h.verifier.Send(r.Context(), user); err != nil {
-			log.Printf("ERROR: resend verification to %s: %v", user.ID, err)
-		}
+	address := strings.TrimSpace(body.Email)
+	if h.allowMailTo(address) {
+		h.inBackground(func(ctx context.Context) { h.resendVerification(ctx, address) })
 	}
 	writeJSON(w, map[string]string{"status": "sent"})
+}
+
+func (h *EmailTokensHandler) resendVerification(ctx context.Context, address string) {
+	user, err := h.store.FindUserByEmail(ctx, address)
+	if err != nil {
+		log.Printf("ERROR: resend verification lookup: %v", err)
+		return
+	}
+	if user == nil || user.IsService() || user.EmailVerifiedAt != nil {
+		return
+	}
+	if err := h.verifier.Send(ctx, user); err != nil {
+		log.Printf("ERROR: resend verification to %s: %v", user.ID, err)
+	}
+}
+
+// inBackground runs a send detached from the request, so the caller's answer
+// never depends on whether the address is registered.
+func (h *EmailTokensHandler) inBackground(send func(ctx context.Context)) {
+	h.runInBackground(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), backgroundMailDeadline)
+		defer cancel()
+		send(ctx)
+	})
 }
 
 func writeVerificationSendError(w http.ResponseWriter, err error) {
@@ -219,44 +276,53 @@ func (h *EmailTokensHandler) SendReset(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "email required", http.StatusBadRequest)
 		return
 	}
-	user, err := h.store.FindUserByEmail(r.Context(), body.Email)
-	if err != nil || user == nil {
-		// Always 200 to avoid disclosing whether an email is registered.
-		writeJSON(w, map[string]string{"status": "sent"})
+	address := strings.TrimSpace(body.Email)
+	if h.allowMailTo(address) {
+		ip := clientIP(r)
+		h.inBackground(func(ctx context.Context) { h.sendResetLink(ctx, address, ip) })
+	}
+	writeJSON(w, map[string]string{"status": "sent"})
+}
+
+func (h *EmailTokensHandler) sendResetLink(ctx context.Context, address, ip string) {
+	user, err := h.store.FindUserByEmail(ctx, address)
+	if err != nil {
+		log.Printf("ERROR: reset lookup: %v", err)
+		return
+	}
+	if user == nil || user.IsService() || user.Email == "" {
 		return
 	}
 	token, hash, err := mintToken()
 	if err != nil {
-		httpError(w, "mint token: "+safeError(err), http.StatusInternalServerError)
+		log.Printf("ERROR: reset mint token for %s: %v", user.ID, err)
 		return
 	}
 	expires := time.Now().Add(time.Hour)
-	ip := clientIP(r)
-	if _, err := h.db.ExecContext(r.Context(),
-		h.rebind(`INSERT INTO password_resets (user_id, token_hash, expires_at, requested_from) VALUES (?, ?, ?, ?)`),
+	if _, err := h.db.ExecContext(ctx,
+		insertPasswordResetSQL,
 		user.ID, hash, expires.Format(time.RFC3339), ip); err != nil {
-		httpError(w, "store token: "+safeError(err), http.StatusInternalServerError)
+		log.Printf("ERROR: reset store token for %s: %v", user.ID, err)
 		return
 	}
 	msg, err := email.BuildPasswordResetEmail(email.PasswordResetData{
-		UserEmail:   body.Email,
+		UserEmail:   user.Email,
 		ResetURL:    h.studioURL + "/reset-password?" + url.Values{"token": {token}}.Encode(),
 		ExpiresMin:  60,
 		ProductName: h.productName,
 		IPAddress:   ip,
 	})
 	if err != nil {
-		httpError(w, "build email: "+safeError(err), http.StatusInternalServerError)
+		log.Printf("ERROR: reset build email for %s: %v", user.ID, err)
 		return
 	}
-	msg.To = []string{body.Email}
-	msgID, err := h.sender.Send(r.Context(), msg)
+	msg.To = []string{user.Email}
+	msgID, err := h.sender.Send(ctx, msg)
 	if err != nil {
-		httpError(w, "send: "+safeError(err), http.StatusInternalServerError)
+		log.Printf("ERROR: reset send to %s: %v", user.ID, err)
 		return
 	}
-	logEmailSent("reset", body.Email, msgID, user.ID)
-	writeJSON(w, map[string]string{"status": "sent"})
+	logEmailSent("reset", user.Email, msgID, user.ID)
 }
 
 func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request) {
@@ -293,6 +359,15 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 		httpError(w, "user not found", http.StatusBadRequest)
 		return
 	}
+	claimed, err := h.claimReset(r.Context(), hash)
+	if err != nil {
+		httpError(w, "consume token: "+safeError(err), http.StatusInternalServerError)
+		return
+	}
+	if !claimed {
+		httpError(w, "token already used", http.StatusBadRequest)
+		return
+	}
 	hashed, err := auth.HashPassword(body.NewPassword)
 	if err != nil {
 		httpError(w, "hash: "+safeError(err), http.StatusInternalServerError)
@@ -302,16 +377,24 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 		httpError(w, "update password: "+safeError(err), http.StatusInternalServerError)
 		return
 	}
-	if _, err := h.db.ExecContext(r.Context(),
-		h.rebind(`UPDATE password_resets SET consumed_at = ? WHERE token_hash = ?`),
-		time.Now().UTC().Format(time.RFC3339), hash); err != nil {
-		log.Printf("ERROR: consume reset token for %s: %v", user.ID, err)
-	}
 	// The reset link reached the account's mailbox, which proves the address.
 	if err := h.verifier.MarkVerified(r.Context(), user.ID); err != nil {
 		log.Printf("ERROR: mark %s verified after reset: %v", user.ID, err)
 	}
 	writeJSON(w, map[string]string{"status": "reset"})
+}
+
+// claimReset consumes a reset link before the password changes. Of two
+// confirms racing on one link only one claims it.
+func (h *EmailTokensHandler) claimReset(ctx context.Context, tokenHash string) (bool, error) {
+	res, err := h.db.ExecContext(ctx,
+		claimPasswordResetSQL,
+		time.Now().UTC().Format(time.RFC3339), tokenHash)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // --- helpers ---

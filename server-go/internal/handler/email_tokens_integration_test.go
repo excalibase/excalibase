@@ -5,9 +5,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -21,13 +23,23 @@ import (
 // capturingSender records the last message so tests can pull the click token
 // out of the verify/reset URL (the raw token is never returned in the API
 // response — it only travels by email).
+// Concurrent registrations send through one sender, so access is locked.
 type capturingSender struct {
-	last email.Message
+	mu     sync.Mutex
+	latest email.Message
 }
 
 func (c *capturingSender) Send(_ context.Context, m email.Message) (string, error) {
-	c.last = m
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.latest = m
 	return "msg-test-1", nil
+}
+
+func (c *capturingSender) message() email.Message {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.latest
 }
 
 // tokenFromURL extracts the ?token=... value from the most recent message body.
@@ -52,6 +64,7 @@ func TestEmailTokens_VerifyFlow(t *testing.T) {
 	sender := &capturingSender{}
 	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
 	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+	h.runInBackground = func(f func()) { f() }
 
 	user := &domain.User{ID: "user-verify", Username: testutil.FixturePassword("vuser"), Email: "v@example.com",
 		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
@@ -67,9 +80,9 @@ func TestEmailTokens_VerifyFlow(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("SendVerify: %d body=%s", w.Code, w.Body.String())
 	}
-	token := tokenFromURL(sender.last.HTMLBody)
+	token := tokenFromURL(sender.message().HTMLBody)
 	if token == "" {
-		t.Fatalf("no token in verify email body: %s", sender.last.HTMLBody)
+		t.Fatalf("no token in verify email body: %s", sender.message().HTMLBody)
 	}
 
 	// ConfirmVerify with the captured token.
@@ -103,6 +116,7 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	sender := &capturingSender{}
 	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
 	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+	h.runInBackground = func(f func()) { f() }
 
 	// Seed a user with a known password.
 	origHash, _ := auth.HashPassword(testutil.FixturePassword("old"))
@@ -118,12 +132,12 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("SendReset: %d body=%s", w.Code, w.Body.String())
 	}
-	token := tokenFromURL(sender.last.HTMLBody)
+	token := tokenFromURL(sender.message().HTMLBody)
 	if token == "" {
-		t.Fatalf("no token in reset email body: %s", sender.last.HTMLBody)
+		t.Fatalf("no token in reset email body: %s", sender.message().HTMLBody)
 	}
-	if !strings.Contains(sender.last.TextBody, "https://app.example.com/reset-password?token=") {
-		t.Fatalf("reset link is not a Studio link: %s", sender.last.TextBody)
+	if !strings.Contains(sender.message().TextBody, "https://app.example.com/reset-password?token=") {
+		t.Fatalf("reset link is not a Studio link: %s", sender.message().TextBody)
 	}
 
 	// ConfirmReset with a new password.
@@ -163,4 +177,74 @@ func TestEmailTokens_Routes_Mountable(t *testing.T) {
 	h := NewEmailTokensHandler(store.DB(), email.NewNoopSender(), store, "https://app", "App")
 	r := chi.NewRouter()
 	h.Routes(r) // exercises Routes wiring
+}
+
+// Two confirms that both passed the lookup before either consumed the link:
+// only the first claim may win, or one emailed link sets two passwords.
+func TestEmailTokens_ResetLinkIsClaimedOnce(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &capturingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.runInBackground = func(f func()) { f() }
+	user := &domain.User{ID: "user-claim", Username: testutil.FixturePassword("cuser"), Email: "c@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"c@example.com"}`)))
+	hash := hashToken(tokenFromURL(sender.message().HTMLBody))
+
+	ok, err := h.claimReset(context.Background(), hash)
+	if err != nil || !ok {
+		t.Fatalf("first claim: ok=%v err=%v", ok, err)
+	}
+	if ok, err := h.claimReset(context.Background(), hash); ok || err != nil {
+		t.Fatalf("second claim: ok=%v err=%v, want a plain refusal", ok, err)
+	}
+}
+
+// Registered or not, the caller sees the same answer; only a registered
+// address is mailed.
+func TestEmailTokens_ResetSendAnswersAlikeForEveryAddress(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &recordingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.runInBackground = func(f func()) { f() }
+	user := &domain.User{ID: "user-alike", Username: testutil.FixturePassword("auser"), Email: "a@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	send := func(address string) (int, string) {
+		w := httptest.NewRecorder()
+		h.SendReset(w, httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"`+address+`"}`)))
+		return w.Code, w.Body.String()
+	}
+	knownCode, knownBody := send("a@example.com")
+	unknownCode, unknownBody := send("nobody@example.com")
+	if knownCode != unknownCode || knownBody != unknownBody {
+		t.Fatalf("answers differ: %d %q vs %d %q", knownCode, knownBody, unknownCode, unknownBody)
+	}
+	if len(sender.sent) != 1 || sender.sent[0].To[0] != "a@example.com" {
+		t.Fatalf("mail sent: %+v", sender.sent)
+	}
+}
+
+// A provider failure for a registered address must not surface as a
+// different answer than an unregistered one gets.
+func TestEmailTokens_ResetSendHidesAProviderFailure(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &recordingSender{err: errors.New("provider down")}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.runInBackground = func(f func()) { f() }
+	user := &domain.User{ID: "user-down", Username: testutil.FixturePassword("duser"), Email: "d@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	w := httptest.NewRecorder()
+	h.SendReset(w, httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"d@example.com"}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d: a failed send for a registered address answers differently", w.Code)
+	}
 }

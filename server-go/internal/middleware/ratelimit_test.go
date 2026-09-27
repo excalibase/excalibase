@@ -183,3 +183,18 @@ func TestRateLimit_ForgedForwardedForDoesNotEscapeTheBucket(t *testing.T) {
 		t.Errorf("forged hops must share the client's bucket; codes %v", codes)
 	}
 }
+
+func TestKeyLimiterAllowsTheBurstPerKey(t *testing.T) {
+	l := NewKeyLimiter(2, time.Hour)
+	for i := 1; i <= 2; i++ {
+		if !l.Allow("a") {
+			t.Fatalf("request %d of the burst refused", i)
+		}
+	}
+	if l.Allow("a") {
+		t.Fatal("third within the window allowed")
+	}
+	if !l.Allow("b") {
+		t.Fatal("another key shares the budget")
+	}
+}
