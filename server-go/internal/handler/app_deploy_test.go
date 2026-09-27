@@ -457,6 +457,7 @@ func TestAppDeployHandler_Resume_AdmissionRefusals(t *testing.T) {
 		fmt.Errorf("%w: the FREE plan allows at most 1", service.ErrAppOverPlan): http.StatusConflict,
 		fmt.Errorf("%w: organisation missing", service.ErrOrgTierUnresolved):     http.StatusInternalServerError,
 		fmt.Errorf("%w: organisation missing", service.ErrAppCapacity):           http.StatusServiceUnavailable,
+		fmt.Errorf("%w: organisation missing", service.ErrAppNoSandboxNode):      http.StatusServiceUnavailable,
 	} {
 		deployer := newFakeAppDeployer()
 		deployer.lifecycleErr = err

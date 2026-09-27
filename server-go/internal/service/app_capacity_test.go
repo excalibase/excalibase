@@ -206,8 +206,13 @@ func TestAppAdmission_OnlyNodesTheSandboxRunsOnCount(t *testing.T) {
 	app := sampleDeployApp()
 	svc, deploys, kube := newDeployTestService(t, app)
 	kube.Placement = k8s.RuntimePlacement{NodeSelector: map[string]string{"excalibase.io/gvisor": "true"}}
-	if got := deployOutcome(t, svc, deploys, app); got.Status != apphost.DeployStatusFailed {
+	got := deployOutcome(t, svc, deploys, app)
+	if got.Status != apphost.DeployStatusFailed {
 		t.Fatalf("no node offers the sandbox, yet the app was admitted: %s", got.Status)
+	}
+	// Waiting frees no room here: no node carries the sandbox at all.
+	if !strings.Contains(got.FailureReason, ErrAppNoSandboxNode.Error()) || strings.Contains(got.FailureReason, "try again") {
+		t.Fatalf("failure reason %q, want the missing sandbox named", got.FailureReason)
 	}
 	kube.Capacity.Nodes[0].Labels = map[string]string{"excalibase.io/gvisor": "true"}
 	if got := deployOutcome(t, svc, deploys, app); got.Status != apphost.DeployStatusSucceeded {

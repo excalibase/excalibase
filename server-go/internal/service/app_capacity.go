@@ -17,6 +17,9 @@ import (
 var (
 	// ErrAppCapacity refuses a rollout the cluster has no room for; the numbers go to the log only.
 	ErrAppCapacity = errors.New("there is no room to run the app right now; try again later")
+	// ErrAppNoSandboxNode: no node carries the app's sandbox runtime, so no
+	// amount of waiting admits it; the operator has to provide one.
+	ErrAppNoSandboxNode = errors.New("no node can run the app's sandbox runtime")
 	// ErrAppOverPlan refuses more copies than the organisation's plan allows.
 	ErrAppOverPlan = errors.New("the plan does not allow this many copies")
 )
@@ -128,6 +131,9 @@ func (s *AppDeployService) admit(ctx context.Context, namespace string, deploy *
 	if capacity.AllocatableCPUMilli == 0 || capacity.AllocatableMemBytes == 0 {
 		return fmt.Errorf("%w: the cluster reports no allocatable capacity", ErrAppCapacity)
 	}
+	if !anyNodeMatches(capacity, placement.NodeSelector) {
+		return fmt.Errorf("%w (runtime class %q)", ErrAppNoSandboxNode, s.render.RuntimeClass)
+	}
 	capacity.HeadroomPercent = s.headroomPercent
 	if capacity.FreeCPUMilli()-reservedCPU < needCPU || capacity.FreeMemBytes()-reservedMem < needMem ||
 		!anyNodeFits(capacity, placement.NodeSelector, perCPU, perMem) {
@@ -147,6 +153,15 @@ func rolloutNeed(live k8s.AppPods, replicas int, podCPU, podMem int64) (needCPU,
 	peak := int64(max(live.Count, replicas+surge))
 	perCPU, perMem = max(podCPU, live.MaxCPUMilli), max(podMem, live.MaxMemBytes)
 	return max(peak*perCPU-live.CPUMilli, 0), max(peak*perMem-live.MemBytes, 0), podCPU, podMem
+}
+
+func anyNodeMatches(capacity k8s.ClusterCapacity, selector map[string]string) bool {
+	for _, node := range capacity.Nodes {
+		if node.Matches(selector) {
+			return true
+		}
+	}
+	return false
 }
 
 func anyNodeFits(capacity k8s.ClusterCapacity, selector map[string]string, cpu, mem int64) bool {
