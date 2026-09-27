@@ -26,7 +26,7 @@ func TestProvisioningRequestRoundTrip(t *testing.T) {
 		OrgID:       "org1",
 		DBType:      PostgreSQL,
 		Backup:      &BackupSettings{Enabled: true, Schedule: "0 2 * * *", Retention: 30},
-		Parameters:  map[string]string{"shared_preload_libraries": "pg_stat_statements"},
+		Parameters:  map[string]string{"work_mem": "16MB"},
 		Tags:        map[string]string{"env": "demo"},
 	}
 
@@ -49,7 +49,7 @@ func TestProvisioningRequestRoundTrip(t *testing.T) {
 	if got.Backup == nil || !got.Backup.Enabled {
 		t.Error("backup should be enabled")
 	}
-	if got.Parameters["shared_preload_libraries"] != "pg_stat_statements" {
+	if got.Parameters["work_mem"] != "16MB" {
 		t.Error("parameters not preserved")
 	}
 }

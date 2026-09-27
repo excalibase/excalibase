@@ -391,6 +391,9 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 	if err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
+	if err := config.ValidateTenantParameters(req.Parameters, tier); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
 
 	// The organisation's limit is answered before anything about the cluster
 	// is looked at, so a caller who has used up their projects is told that

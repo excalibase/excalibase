@@ -43,8 +43,6 @@ spec:
     - host all app all scram-sha-256
     - host all excalibase_app all scram-sha-256
     - host all auth_admin all scram-sha-256
-    shared_preload_libraries:
-    - pg_stat_statements
   resources:
     limits:
       cpu: "4"
