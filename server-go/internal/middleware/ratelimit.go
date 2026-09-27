@@ -93,21 +93,7 @@ func (b *rateLimiter) take() bool {
 // Buckets are GC'd lazily when their key hasn't been touched for >= 10×
 // window — bounds memory under random-key scans (e.g. IP scans).
 func RateLimit(keyFn KeyFunc, burst int, window time.Duration) func(http.Handler) http.Handler {
-	if burst < 1 {
-		burst = 1
-	}
-	if window <= 0 {
-		window = time.Minute
-	}
-	rate := float64(burst) / window.Seconds()
-	state := &rateState{
-		buckets: make(map[string]*rateLimiter),
-		burst:   burst,
-		rate:    rate,
-		gcAfter: window * 10,
-	}
-	go state.gcLoop(window * 5) // periodic eviction
-
+	limiter := NewKeyLimiter(burst, window)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := keyFn(r)
@@ -115,8 +101,7 @@ func RateLimit(keyFn KeyFunc, burst int, window time.Duration) func(http.Handler
 				next.ServeHTTP(w, r)
 				return
 			}
-			b := state.bucketFor(key)
-			if !b.take() {
+			if !limiter.Allow(key) {
 				w.Header().Set("Retry-After", "1")
 				http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 				return
@@ -124,6 +109,35 @@ func RateLimit(keyFn KeyFunc, burst int, window time.Duration) func(http.Handler
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// KeyLimiter is the token bucket behind RateLimit, for callers that key on
+// something only the handler knows (a normalised address, say).
+type KeyLimiter struct {
+	state *rateState
+}
+
+// NewKeyLimiter allows `burst` per `window` per key.
+func NewKeyLimiter(burst int, window time.Duration) *KeyLimiter {
+	if burst < 1 {
+		burst = 1
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
+	state := &rateState{
+		buckets: make(map[string]*rateLimiter),
+		burst:   burst,
+		rate:    float64(burst) / window.Seconds(),
+		gcAfter: window * 10,
+	}
+	go state.gcLoop(window * 5)
+	return &KeyLimiter{state: state}
+}
+
+// Allow takes one token from key's bucket.
+func (l *KeyLimiter) Allow(key string) bool {
+	return l.state.bucketFor(key).take()
 }
 
 type rateState struct {

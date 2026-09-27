@@ -1170,9 +1170,6 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		log.Println("WARN: no email provider — Studio sign-up is refused until one is configured")
 	}
 	emailTokensHandler.SetVerifier(emailVerifier)
-	// The public resend mails whoever an address names, so it gets its own
-	// tight per-IP budget.
-	emailTokensHandler.SetPublicLimit(custommw.RateLimit(custommw.PerIP, 5, time.Hour))
 
 	var promClient *handler.PromClient
 	if cfg.PromURL != "" {

@@ -234,10 +234,10 @@ func TestRegister_SignInWaitsForTheEmailedLink(t *testing.T) {
 	if w := doRequest(r, "POST", "/api/auth/login", login); w.Code != http.StatusForbidden {
 		t.Fatalf("login before verifying: %d", w.Code)
 	}
-	if !strings.Contains(sender.last.TextBody, "https://studio.example.com/verify-email?token=") {
-		t.Fatalf("verification link: %s", sender.last.TextBody)
+	if !strings.Contains(sender.message().TextBody, "https://studio.example.com/verify-email?token=") {
+		t.Fatalf("verification link: %s", sender.message().TextBody)
 	}
-	confirm := `{"token":"` + tokenFromURL(sender.last.TextBody) + `"}`
+	confirm := `{"token":"` + tokenFromURL(sender.message().TextBody) + `"}`
 	if w := doRequest(r, "POST", "/api/email/verify/confirm", confirm); w.Code != http.StatusOK {
 		t.Fatalf("confirm: %d %s", w.Code, w.Body.String())
 	}

@@ -24,6 +24,7 @@ func newEmailFlowHarness(sender email.Sender) *emailFlowHarness {
 	h.sender, _ = sender.(*recordingSender)
 	tokens := NewEmailTokensHandler(nil, sender, h.users, testStudioURL, "")
 	tokens.SetVerifier(NewEmailVerifier(h.links, sender, testStudioURL, ""))
+	tokens.runInBackground = func(f func()) { f() }
 	r := chi.NewRouter()
 	tokens.Routes(r)
 	h.router = r
