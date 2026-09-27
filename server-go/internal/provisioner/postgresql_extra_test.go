@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -193,26 +194,36 @@ func TestProvisionCRDDeploymentFailure(t *testing.T) {
 	}
 }
 
-// TestProvisionWithBackupDefaultSchedule covers the branch in Provision where
-// Backup.Enabled is true but Schedule is empty, so the default "0 0 * * *" is used.
-func TestProvisionWithBackupDefaultSchedule(t *testing.T) {
-	mock := k8s.NewMockClient()
-	mock.SetupPostgreSQLMock("sched-test", "org1-sched-test", 1)
-	prov := NewPostgreSQLProvisioner(mock, "")
+// A backup with no schedule, or one CloudNativePG would misread, is refused
+// before the namespace exists: there is no schedule to fall back to.
+func TestProvisionRefusesABackupScheduleCloudNativePGCannotRun(t *testing.T) {
+	for _, schedule := range []string{"", "0 0 * * *"} {
+		t.Run(schedule, func(t *testing.T) {
+			tier, _ := config.GetTierConfig(domain.Free)
+			req := domain.ProvisioningRequest{
+				PostgresVersion: "17", ProjectName: "sched-test", OrgID: "org1", DBType: domain.PostgreSQL,
+				Backup: &domain.BackupSettings{Enabled: true, Schedule: schedule, Retention: 7},
+			}
 
-	tier, _ := config.GetTierConfig(domain.Free)
-	_, err := prov.Provision(context.Background(), domain.ProvisioningRequest{
-		PostgresVersion: "17",
-		ProjectName:     "sched-test",
-		OrgID:           "org1",
-		DBType:          domain.PostgreSQL,
-		Backup:          &domain.BackupSettings{Enabled: true, Schedule: "", Retention: 7},
-	}, tier, func(domain.ProvisioningStage) { /* noop: test only checks error, not stage progression */ })
+			mock := k8s.NewMockClient()
+			mock.SetupPostgreSQLMock("sched-test", "org1-sched-test", 1)
+			_, err := NewPostgreSQLProvisioner(mock, "").Provision(context.Background(), req, tier, func(domain.ProvisioningStage) {})
+			assertRefusedBeforeCreation(t, mock, err)
 
-	if err != nil {
-		t.Fatalf("Provision with default schedule: %v", err)
+			mock = k8s.NewMockClient()
+			mock.SetupPostgreSQLMock("sched-test", "org1-sched-test", 1)
+			_, err = NewPostgreSQLProvisioner(mock, "").ProvisionWithRollback(context.Background(), req, tier, NewProvisionContext(nil, nil))
+			assertRefusedBeforeCreation(t, mock, err)
+		})
 	}
-	if _, ok := mock.CRDs["org1-sched-test/sched-test-postgres-backup"]; !ok {
-		t.Error("ScheduledBackup CRD should have been created with default schedule")
+}
+
+func assertRefusedBeforeCreation(t *testing.T, mock *k8s.MockClient, err error) {
+	t.Helper()
+	if !errors.Is(err, k8s.ErrInvalidBackupSchedule) {
+		t.Fatalf("err = %v, want ErrInvalidBackupSchedule", err)
+	}
+	if len(mock.Namespaces) != 0 || len(mock.CRDs) != 0 {
+		t.Errorf("nothing may be created for an unschedulable backup: ns=%v crds=%v", mock.Namespaces, mock.CRDs)
 	}
 }

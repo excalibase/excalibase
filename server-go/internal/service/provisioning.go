@@ -54,6 +54,10 @@ type ProvisioningService struct {
 	// Cloudflare R2 instead of the legacy floci/localstack mock.
 	backupDefaults *BackupDefaults
 
+	// storageClasses decides which StorageClass a project's database runs
+	// on. Its zero value offers only the cluster's own default.
+	storageClasses config.StorageClassPolicy
+
 	// objectPurger clears the project's own object-store prefix. Nil when
 	// storage is not configured: there is then no blob plane to clear, and
 	// the teardown carries no purge step at all.
@@ -207,6 +211,11 @@ func (s *ProvisioningService) RestorePlan(ctx context.Context, source *domain.Da
 	return RestorePlan{Tier: tierType, Config: tier, Backup: req.Backup}, nil
 }
 
+// SetStorageClassPolicy sets which storage classes a request may name.
+func (s *ProvisioningService) SetStorageClassPolicy(p config.StorageClassPolicy) {
+	s.storageClasses = p
+}
+
 func (s *ProvisioningService) SetSelfHostedMode(enabled bool) {
 	s.selfHostedMode = enabled
 }
@@ -358,6 +367,11 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 	if err := validateProvisioningRequest(*req); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
+	storageClass, err := s.storageClasses.Resolve(req.StorageClass)
+	if err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+	req.StorageClass = storageClass
 
 	tierType, err := s.orgTier(ctx, req.OrgID)
 	if err != nil {
@@ -385,6 +399,9 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 	s.applyBackupDefaults(req, tier)
 
 	if err := s.enforceBackupTierPolicy(req, tierType, tier); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+	if err := s.settleBackupSchedule(req); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 
@@ -501,6 +518,23 @@ func (s *ProvisioningService) vaultBackupStorage() (*domain.S3Credentials, bool)
 		Region:          s3Creds["region"],
 		Endpoint:        s3Creds["endpoint"],
 	}, true
+}
+
+// settleBackupSchedule gives an enabled backup that names no schedule the
+// platform's, and refuses one CloudNativePG would not run as written. A
+// Docker project's backups are scheduled by the platform itself, so an empty
+// schedule is left empty there.
+func (s *ProvisioningService) settleBackupSchedule(req *domain.ProvisioningRequest) error {
+	if req.Backup == nil || !req.Backup.Enabled {
+		return nil
+	}
+	if req.Backup.Schedule == "" && s.backupDefaults != nil {
+		req.Backup.Schedule = s.backupDefaults.Schedule
+	}
+	if req.Backup.Schedule == "" && s.defaultDeploymentMode == domain.ModeDocker {
+		return nil
+	}
+	return k8s.ValidateBackupSchedule(req.Backup.Schedule)
 }
 
 // enforceBackupTierPolicy rejects backup requests on tiers that do not support backup.

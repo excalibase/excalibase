@@ -41,7 +41,7 @@ operations (PATs, capacity, logs, drop project, revoke org) live in
 | Requirement | Why | Source |
 |---|---|---|
 | Kubernetes >= 1.30 | graphql pod uses the native `lifecycle.preStop.sleep` action | `charts/platform-aio/templates/graphql.yaml` ("Requires k8s >= 1.30") |
-| A default StorageClass supporting RWO | CNPG data volumes (platform-db + every tenant) and the optional `provisioning-data` PVC | `values.yaml` `provisioning.persistence.storageClass: ""` (empty = cluster default); tenant clusters take `storageClassName` from the provision request (`server-go/internal/domain/dto.go`) |
+| A default StorageClass supporting RWO | CNPG data volumes (platform-db + every tenant) and the optional `provisioning-data` PVC | `values.yaml` `provisioning.persistence.storageClass: ""` (empty = cluster default); tenant clusters run on `TENANT_STORAGE_CLASS` (empty = cluster default); a create request may name only that class or one listed in `TENANT_STORAGE_CLASSES`, anything else is refused (`server-go/internal/config/storage_class.go`) |
 | An enforcing CNI (Calico / Cilium) | per-project default-deny ingress policy (EXC-325) and the Deno egress NetworkPolicy are no-ops on a CNI that ignores NetworkPolicy | `server-go/internal/k8s/client.go` `ensureNamespaceIsolationPolicy`; OPERATOR.md §6.1 |
 | Nodes sized for the tiers you enable | provisioning refuses a project that does not fit `Allocatable - headroom` | §3.5, `CAPACITY_HEADROOM_PERCENT` |
 | `kubectl` >= 1.30, `helm` >= 3.15 | versions the nightly install job runs with | `.github/workflows/aio-e2e.yml` |

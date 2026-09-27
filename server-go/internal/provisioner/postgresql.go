@@ -226,15 +226,23 @@ func (p *PostgreSQLProvisioner) waitForAllPods(ctx context.Context, tier config.
 }
 
 func (p *PostgreSQLProvisioner) provisionScheduledBackup(ctx context.Context, req domain.ProvisioningRequest, projectID, namespace string) error {
-	schedule := req.Backup.Schedule
-	if schedule == "" {
-		schedule = "0 0 * * *"
+	backup, err := k8s.BuildScheduledBackup(projectID, namespace, req.Backup.Schedule)
+	if err != nil {
+		return err
 	}
-	backup := k8s.BuildScheduledBackup(projectID, namespace, schedule)
 	if err := p.client.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, backup); err != nil {
 		return fmt.Errorf("configure backup: %w", err)
 	}
 	return nil
+}
+
+// validateBackupSchedule refuses, before anything exists, a backup whose
+// schedule CloudNativePG would not run as written. There is no fallback.
+func validateBackupSchedule(req domain.ProvisioningRequest) error {
+	if req.Backup == nil || !req.Backup.Enabled {
+		return nil
+	}
+	return k8s.ValidateBackupSchedule(req.Backup.Schedule)
 }
 
 func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error) {
@@ -242,6 +250,9 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 	namespace := fmt.Sprintf("%s-%s", req.OrgID, req.ProjectName)
 
 	cb(domain.StageValidating)
+	if err := validateBackupSchedule(req); err != nil {
+		return nil, err
+	}
 
 	// Stage 2: Namespace + optional backup secret
 	cb(domain.StageNamespaceCreation)
@@ -299,6 +310,9 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 
 	// Stage 1: Validate
 	pc.SetStage(domain.StageValidating)
+	if err := validateBackupSchedule(req); err != nil {
+		return nil, pc.Fail(err)
+	}
 
 	// Stage 2: Namespace + backup secret
 	if err := p.stageNamespace(ctx, req, projectID, namespace, pc); err != nil {
@@ -443,11 +457,10 @@ func (p *PostgreSQLProvisioner) stageWaitForPods(ctx context.Context, tier confi
 func (p *PostgreSQLProvisioner) stageBackup(ctx context.Context, req domain.ProvisioningRequest, projectID, namespace string, pc *ProvisionContext) error {
 	pc.SetStage(domain.StageBackupConfiguration)
 	pc.SetStep("apply scheduled backup")
-	schedule := req.Backup.Schedule
-	if schedule == "" {
-		schedule = "0 0 * * *"
+	backup, err := k8s.BuildScheduledBackup(projectID, namespace, req.Backup.Schedule)
+	if err != nil {
+		return pc.Fail(err)
 	}
-	backup := k8s.BuildScheduledBackup(projectID, namespace, schedule)
 	if err := p.client.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, backup); err != nil {
 		return pc.Fail(fmt.Errorf("configure backup: %w", err))
 	}
@@ -678,7 +691,10 @@ func (p *PostgreSQLProvisioner) GetStatus(ctx context.Context, namespace, projec
 }
 
 func (p *PostgreSQLProvisioner) ConfigureBackup(ctx context.Context, namespace, projectID, schedule string, retention int) error {
-	backup := k8s.BuildScheduledBackup(projectID, namespace, schedule)
+	backup, err := k8s.BuildScheduledBackup(projectID, namespace, schedule)
+	if err != nil {
+		return err
+	}
 	return p.client.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, backup)
 }
 
