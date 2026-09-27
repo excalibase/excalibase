@@ -150,14 +150,16 @@ func (s *ProvisioningService) markPendingDeletion(ctx context.Context, projectID
 	inst.CurrentStage = domain.StatusPendingDeletion
 	inst.CurrentStep = ""
 	inst.DeletionDeleteBackups = opts.DeleteBackups != nil && *opts.DeleteBackups
-	inst.DeletionScheduledAt = &domain.FlexTime{Time: now}
-	inst.DeletionDueAt = &domain.FlexTime{Time: now.Add(DeletionGracePeriod)}
+	scheduledAt := now.UTC()
+	inst.DeletionScheduledAt = &scheduledAt
+	dueAt := now.Add(DeletionGracePeriod).UTC()
+	inst.DeletionDueAt = &dueAt
 	inst.UpdatedAt = &domain.FlexTime{Time: now}
 	if err := s.store.UpdateIfStatus(inst, string(domain.StatusPaused)); err != nil {
 		return nil, err
 	}
 	log.Printf("action=schedule_deletion project=%s due=%s delete_backups=%t",
-		projectID, inst.DeletionDueAt.Time.Format(time.RFC3339), inst.DeletionDeleteBackups)
+		projectID, inst.DeletionDueAt.Format(time.RFC3339), inst.DeletionDeleteBackups)
 	return inst, nil
 }
 
@@ -260,7 +262,7 @@ func (s *ProvisioningService) RunDueDeletions(ctx context.Context) DeletionSweep
 // grace period is over, or a teardown the schedule started has stopped
 // (including at the backup purge, which no owner is left to retry).
 func deletionDue(inst *domain.DatabaseInstance, now time.Time) bool {
-	if inst.DeletionDueAt == nil || inst.DeletionDueAt.Time.After(now) {
+	if inst.DeletionDueAt == nil || inst.DeletionDueAt.After(now) {
 		return false
 	}
 	return inst.Status == string(domain.StatusPendingDeletion) || domain.IsDeletionStatus(inst.Status)

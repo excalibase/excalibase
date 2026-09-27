@@ -22,14 +22,15 @@ func TestInstances_DeletionScheduleRoundTrips(t *testing.T) {
 	scheduled := time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
 	inst.Status = string(domain.StatusPendingDeletion)
 	inst.DeletionDeleteBackups = true
-	inst.DeletionScheduledAt = &domain.FlexTime{Time: scheduled}
-	inst.DeletionDueAt = &domain.FlexTime{Time: scheduled.Add(7 * 24 * time.Hour)}
+	inst.DeletionScheduledAt = &scheduled
+	due := scheduled.Add(7 * 24 * time.Hour)
+	inst.DeletionDueAt = &due
 	if err := store.UpdateIfStatus(inst, string(domain.StatusPaused)); err != nil {
 		t.Fatalf("UpdateIfStatus: %v", err)
 	}
 	got, _ := store.FindByProjectID(inst.ProjectID)
 	if got.Status != string(domain.StatusPendingDeletion) || !got.DeletionDeleteBackups ||
-		got.DeletionDueAt == nil || !got.DeletionDueAt.Time.Equal(inst.DeletionDueAt.Time) ||
+		got.DeletionDueAt == nil || !got.DeletionDueAt.Equal(*inst.DeletionDueAt) ||
 		got.DeletionScheduledAt == nil {
 		t.Fatalf("schedule lost: %+v", got)
 	}

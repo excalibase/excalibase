@@ -88,7 +88,7 @@ func TestScheduleDeletionStopsTheProjectAndKeepsItForTheGracePeriod(t *testing.T
 	if row == nil || row.Status != string(domain.StatusPendingDeletion) {
 		t.Fatalf("row = %+v, want PENDING_DELETION", row)
 	}
-	if row.DeletionDueAt == nil || !row.DeletionDueAt.Time.Equal(h.now.Add(DeletionGracePeriod)) {
+	if row.DeletionDueAt == nil || !row.DeletionDueAt.Equal(h.now.Add(DeletionGracePeriod)) {
 		t.Fatalf("due = %v, want %v", row.DeletionDueAt, h.now.Add(DeletionGracePeriod))
 	}
 	if DeletionGracePeriod != 7*24*time.Hour {
@@ -135,10 +135,10 @@ func TestScheduleDeletionTwiceKeepsTheFirstDueDate(t *testing.T) {
 	if _, err := h.svc.ScheduleDeletion(ctx, graceProject, DeprovisionOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	first := h.row(t).DeletionDueAt.Time
+	first := *h.row(t).DeletionDueAt
 	h.now = h.now.Add(48 * time.Hour)
 	again, err := h.svc.ScheduleDeletion(ctx, graceProject, DeprovisionOptions{})
-	if err != nil || again == nil || !again.DeletionDueAt.Time.Equal(first) {
+	if err != nil || again == nil || !again.DeletionDueAt.Equal(first) {
 		t.Fatalf("second schedule: %v %v, want the first due date kept", again, err)
 	}
 	if len(h.pauser.calls) != 1 {

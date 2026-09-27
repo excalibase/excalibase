@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -123,5 +124,18 @@ func TestProtectionCannotBeToggledWhileScheduled(t *testing.T) {
 	w := doRequest(r, "PATCH", "/api/provision/"+graceHandlerProject+"/deletion-protection", `{"enabled":true}`)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("got %d, want 409", w.Code)
+	}
+}
+
+// The due date is an instant: it carries its zone, so a browser in any time
+// zone reads the same moment.
+func TestDeletionDueAtCarriesItsZone(t *testing.T) {
+	r, _ := graceRouter(t, &pausingStub{})
+	w := doRequest(r, "DELETE", "/api/provision/"+graceHandlerProject, "")
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	raw, _ := body["deletionDueAt"].(string)
+	if _, err := time.Parse(time.RFC3339Nano, raw); err != nil {
+		t.Fatalf("deletionDueAt %q is not RFC 3339 with a zone: %v", raw, err)
 	}
 }

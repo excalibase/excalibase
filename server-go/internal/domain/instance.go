@@ -108,9 +108,10 @@ type DatabaseInstance struct {
 	DeletionDeleteBackups bool `json:"deletionDeleteBackups,omitempty"`
 	// DeletionScheduledAt and DeletionDueAt are set while the project is
 	// PENDING_DELETION: when the delete was asked for, and when the grace
-	// period ends and the sweep hard-deletes it.
-	DeletionScheduledAt *FlexTime `json:"deletionScheduledAt,omitempty"`
-	DeletionDueAt       *FlexTime `json:"deletionDueAt,omitempty"`
+	// period ends and the sweep hard-deletes it. Plain times, so the JSON
+	// carries the zone and a browser reads the same instant.
+	DeletionScheduledAt *time.Time `json:"deletionScheduledAt,omitempty"`
+	DeletionDueAt       *time.Time `json:"deletionDueAt,omitempty"`
 
 	// Network
 	NetworkPolicyEnabled *bool `json:"networkPolicyEnabled,omitempty"`

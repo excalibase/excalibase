@@ -71,7 +71,7 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 		inst.StorageClass, parameters,
-		flexTimePtr(inst.DeletionScheduledAt), flexTimePtr(inst.DeletionDueAt),
+		inst.DeletionScheduledAt, inst.DeletionDueAt,
 	)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && string(pqErr.Code) == uniqueViolation {
@@ -183,7 +183,7 @@ func (s *Store) update(inst *domain.DatabaseInstance, expectedStatus string) err
 		inst.PauseAttempts, flexTimePtr(inst.PauseLastAttemptAt),
 		expectedStatus,
 		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
-		inst.DeletionDeleteBackups, flexTimePtr(inst.DeletionScheduledAt), flexTimePtr(inst.DeletionDueAt),
+		inst.DeletionDeleteBackups, inst.DeletionScheduledAt, inst.DeletionDueAt,
 	)
 	if err != nil {
 		return err
@@ -529,8 +529,8 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		pauseBackupID: pauseBackupID, pauseBackupAt: pauseBackupAt,
 	}
 	applyNullableInstanceFields(&inst, nf)
-	inst.DeletionScheduledAt = nullFlexTime(deletionScheduledAt)
-	inst.DeletionDueAt = nullFlexTime(deletionDueAt)
+	inst.DeletionScheduledAt = nullTimePtr(deletionScheduledAt)
+	inst.DeletionDueAt = nullTimePtr(deletionDueAt)
 
 	if err := storage.CheckDeploymentMode(inst.ProjectID, inst.DeploymentMode); err != nil {
 		return nil, err
@@ -641,4 +641,12 @@ func decodeParameters(raw []byte) (map[string]string, error) {
 		return nil, nil
 	}
 	return parameters, nil
+}
+
+func nullTimePtr(n sql.NullTime) *time.Time {
+	if !n.Valid {
+		return nil
+	}
+	t := n.Time.UTC()
+	return &t
 }
