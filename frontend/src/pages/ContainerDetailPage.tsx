@@ -21,6 +21,7 @@ import {
 } from '../components/containers/appCopy';
 import { DeployHistory } from '../components/containers/DeployHistory';
 import { LifecycleActions } from '../components/containers/LifecycleActions';
+import { AppLogs } from '../components/containers/AppLogs';
 import {
   ContainersHeader,
   HostingGate,
@@ -204,6 +205,9 @@ function Detail({
           <h4 className="text-sm font-semibold text-text-primary">Variables</h4>
           <Variables env={app.env} />
         </section>
+      </div>
+      <div className="mb-6">
+        <AppLogs projectId={projectId} appId={appId} />
       </div>
       <section className="space-y-2">
         <h4 className="text-sm font-semibold text-text-primary">Deployments</h4>

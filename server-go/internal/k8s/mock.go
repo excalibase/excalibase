@@ -117,6 +117,10 @@ type MockClient struct {
 	// PullSecretsDeleted records "namespace/registry" per DeleteRegistryPullSecrets call.
 	PullSecretsDeleted   []string
 	PullSecretsDeleteErr error
+	// AppLogLines answers AppLogs, keyed "namespace/appID".
+	AppLogLines  map[string][]AppLogLine
+	AppLogsErr   error
+	AppLogsAsked []AppLogOptions
 
 	RuntimeClasses    map[string]bool
 	RuntimeClassError error
@@ -687,6 +691,17 @@ func (m *MockClient) DeleteRegistryPullSecrets(ctx context.Context, namespace, r
 	}
 	m.PullSecretsDeleted = append(m.PullSecretsDeleted, namespace+"/"+registry)
 	return nil
+}
+
+func (m *MockClient) AppLogs(ctx context.Context, namespace, appID string, opts AppLogOptions) (AppLogPage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "AppLogs:"+namespace+"/"+appID)
+	m.AppLogsAsked = append(m.AppLogsAsked, opts)
+	if m.AppLogsErr != nil {
+		return AppLogPage{}, m.AppLogsErr
+	}
+	return AppLogPage{Lines: m.AppLogLines[namespace+"/"+appID]}, nil
 }
 
 func (m *MockClient) RuntimeClassExists(ctx context.Context, name string) (bool, error) {
