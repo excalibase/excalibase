@@ -17,14 +17,22 @@ const (
 	barmanCloudStoreVersion = "barmancloud.cnpg.io/v1"
 )
 
+// renderPlatformBase renders for a cluster that has the Barman Cloud plugin.
 func renderPlatformBase(t *testing.T, overrides map[string]interface{}) ([]*unstructured.Unstructured, error) {
+	t.Helper()
+	capabilities := *chartutil.DefaultCapabilities
+	capabilities.APIVersions = append(chartutil.VersionSet{"barmancloud.cnpg.io/v1/ObjectStore"}, chartutil.DefaultCapabilities.APIVersions...)
+	return renderPlatformBaseOn(t, overrides, &capabilities)
+}
+
+func renderPlatformBaseOn(t *testing.T, overrides map[string]interface{}, capabilities *chartutil.Capabilities) ([]*unstructured.Unstructured, error) {
 	t.Helper()
 	chart, err := loader.Load(platformBaseChartDir)
 	if err != nil {
 		t.Fatalf("load chart: %v", err)
 	}
 	options := chartutil.ReleaseOptions{Name: "platform-base", Namespace: "excalibase-platform", IsInstall: true}
-	values, err := chartutil.ToRenderValues(chart, map[string]interface{}{"platformDB": overrides}, options, chartutil.DefaultCapabilities)
+	values, err := chartutil.ToRenderValues(chart, map[string]interface{}{"platformDB": overrides}, options, capabilities)
 	if err != nil {
 		t.Fatalf("render values: %v", err)
 	}
@@ -206,5 +214,12 @@ func TestThePlatformDatabaseWithoutBackupsRendersNoPluginObjects(t *testing.T) {
 	cluster := renderedOfKind(objects, "Cluster")[0]
 	if _, present, _ := unstructured.NestedSlice(cluster.Object, "spec", "plugins"); present {
 		t.Error("backups disabled still registers the plugin on the cluster")
+	}
+}
+
+func TestPlatformDBBackupsRefuseWithoutTheBarmanCloudPlugin(t *testing.T) {
+	_, err := renderPlatformBaseOn(t, withEndpoint(), chartutil.DefaultCapabilities)
+	if err == nil || !strings.Contains(err.Error(), "barman-cloud-plugin/install.sh") {
+		t.Fatalf("render without the plugin: got %v, want a refusal naming the install script", err)
 	}
 }

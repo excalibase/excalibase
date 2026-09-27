@@ -1,4 +1,7 @@
 {{- if .Values.platformDB.backup.enabled }}
+{{- if not (.Capabilities.APIVersions.Has "barmancloud.cnpg.io/v1/ObjectStore") }}
+{{- fail "platformDB.backup.enabled needs the Barman Cloud plugin: install it first with excalibase-service charts/background/barman-cloud-plugin/install.sh" }}
+{{- end }}
 {{- if has .Values.platformDB.backup.s3Secret (list "r2-creds" "backup-s3-creds") }}
 {{- fail (printf "platformDB.backup.s3Secret %q is the tenant object-storage key; the platform database needs a key of its own" .Values.platformDB.backup.s3Secret) }}
 {{- end }}
