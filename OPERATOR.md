@@ -356,7 +356,9 @@ s3://excalibase-backups/{projectId}/cloud/{base,wals}/...
   namespace holds a copy of that key, and the platform DB holds every user's
   password hash and the vault. The chart refuses `r2-creds` and
   `backup-s3-creds`, requires `platformDB.backup.endpointURL`, and pins the
-  image by digest.
+  image by digest. They go through the Barman Cloud plugin (ObjectStore
+  `platform-db-backups`, ScheduledBackup `platform-db-backup`), so the plugin
+  must be installed before platform-base when backups are enabled.
 
 #### R2 layout (Barman convention)
 

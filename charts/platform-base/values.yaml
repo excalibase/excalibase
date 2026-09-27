@@ -18,6 +18,7 @@ platformDB:
   monitoring:
     enabled: true
   backup:
+    # Goes through the Barman Cloud plugin, which must be installed first.
     # Platform-DB → object storage, on a bucket and key used by nothing else.
     # Tenant namespaces hold a copy of the tenant key (r2-creds, copied as
     # backup-s3-creds), so sharing it would hand any tenant every user's
@@ -26,6 +27,8 @@ platformDB:
     destinationPath: "s3://excalibase-platform-db-backups/"
     endpointURL: ""               # required; e.g. --set platformDB.backup.endpointURL=https://<account>.r2.cloudflarestorage.com
     retentionPolicy: "30d"
+    # CloudNativePG cron: six fields, seconds first.
+    schedule: "0 0 3 * * *"
     s3Secret: platform-db-backup-creds
     s3AccessKeyIDKey: ACCESS_KEY_ID
     s3SecretAccessKeyKey: ACCESS_SECRET_KEY

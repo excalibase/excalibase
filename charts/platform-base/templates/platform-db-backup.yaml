@@ -1,0 +1,47 @@
+{{- if .Values.platformDB.backup.enabled }}
+{{- if has .Values.platformDB.backup.s3Secret (list "r2-creds" "backup-s3-creds") }}
+{{- fail (printf "platformDB.backup.s3Secret %q is the tenant object-storage key; the platform database needs a key of its own" .Values.platformDB.backup.s3Secret) }}
+{{- end }}
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: platform-db-backups
+  namespace: excalibase-platform
+  labels:
+    app.kubernetes.io/name: platform-db
+    app.kubernetes.io/part-of: excalibase-platform
+spec:
+  configuration:
+    destinationPath: {{ required "platformDB.backup.destinationPath is required" .Values.platformDB.backup.destinationPath }}
+    endpointURL: {{ required "platformDB.backup.endpointURL is required when backups are enabled" .Values.platformDB.backup.endpointURL }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ required "platformDB.backup.s3Secret is required" .Values.platformDB.backup.s3Secret }}
+        key: {{ .Values.platformDB.backup.s3AccessKeyIDKey | default "ACCESS_KEY_ID" }}
+      secretAccessKey:
+        name: {{ .Values.platformDB.backup.s3Secret }}
+        key: {{ .Values.platformDB.backup.s3SecretAccessKeyKey | default "ACCESS_SECRET_KEY" }}
+    wal:
+      compression: gzip
+    data:
+      compression: gzip
+  retentionPolicy: {{ .Values.platformDB.backup.retentionPolicy | quote }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: platform-db-backup
+  namespace: excalibase-platform
+  labels:
+    app.kubernetes.io/name: platform-db
+    app.kubernetes.io/part-of: excalibase-platform
+spec:
+  schedule: {{ required "platformDB.backup.schedule is required when backups are enabled" .Values.platformDB.backup.schedule | quote }}
+  immediate: true
+  backupOwnerReference: self
+  cluster:
+    name: platform-db
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+{{- end }}
