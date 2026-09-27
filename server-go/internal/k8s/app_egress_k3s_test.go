@@ -164,7 +164,7 @@ func (lab *egressLab) useCluster(t *testing.T, restCfg *rest.Config) {
 		t.Fatalf("dynamic client: %v", err)
 	}
 	lab.cs = cs
-	lab.client = &Client{clientset: cs, dynamicClient: dyn, restConfig: restCfg}
+	lab.client = &Client{clientset: cs, dynamicClient: dyn, restConfig: restCfg, projectAccess: testAccess}
 }
 
 func (lab *egressLab) startTenantB(t *testing.T) {

@@ -646,6 +646,15 @@ func clusterHibernated(cluster *unstructured.Unstructured) bool {
 // Every step reports its own error — a submitted delete request is not proof
 // that anything was removed.
 func (p *PostgreSQLProvisioner) Deprovision(ctx context.Context, namespace, projectID string) error {
+	// A retry after the namespace delete began: Kubernetes is removing its
+	// contents, and provisioning's rights in it went with its role binding.
+	deleting, err := p.client.NamespaceDeleting(ctx, namespace)
+	if err != nil {
+		return err
+	}
+	if deleting {
+		return p.waitForNamespaceGone(ctx, namespace)
+	}
 	// Stop the tenant watcher first so replication ends cleanly and no
 	// surviving pod keeps publishing while the database is torn down.
 	if err := p.client.UninstallHelmChart(ctx, namespace, watcherReleaseName); err != nil {
@@ -679,6 +688,10 @@ func (p *PostgreSQLProvisioner) deleteNamespaceAndWait(ctx context.Context, name
 	if err := p.client.DeleteNamespace(ctx, namespace); err != nil {
 		return fmt.Errorf("delete namespace %s: %w", namespace, err)
 	}
+	return p.waitForNamespaceGone(ctx, namespace)
+}
+
+func (p *PostgreSQLProvisioner) waitForNamespaceGone(ctx context.Context, namespace string) error {
 	return p.deletionPoller.WaitUntilClear(ctx, "namespace "+namespace,
 		func(ctx context.Context) ([]string, error) { return p.namespaceRemnants(ctx, namespace) })
 }

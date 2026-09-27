@@ -21,9 +21,13 @@ const (
 	testAPIVersion = "test.io/v1"
 )
 
-// newFakeClient builds a Client backed by in-memory fakes (no real K8s needed).
+// newFakeClient builds a Client backed by in-memory fakes (no real K8s needed),
+// whose project-namespace role bindings take effect at once.
 func newFakeClient(objects ...runtime.Object) *Client {
-	return NewClientFromInterfaces(fake.NewSimpleClientset(objects...), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()))
+	clientset := fake.NewSimpleClientset(objects...)
+	allowAfter(clientset, 1)
+	return NewClientFromInterfaces(clientset, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())).
+		WithProjectAccess(testAccess)
 }
 
 // --- Namespace tests ---

@@ -30,25 +30,27 @@ type MockClient struct {
 	// StuckNamespaces model a namespace whose deletion is accepted but never
 	// completes — a finalizer or a Terminating pod holds it. DeleteNamespace
 	// returns nil for these, yet the namespace and its contents survive.
-	StuckNamespaces      map[string]bool
-	PodReady             map[string]bool
-	ExecOutput           map[string]string // key: "namespace/pod" → output
-	ExecError            map[string]error
-	Metrics              map[string][]PodResourceMetrics
-	HelmReleases         map[string]map[string]interface{} // key: "namespace/release" → values
-	Calls                []string                          // track method calls
-	ExecCommands         []string                          // every argv ExecInPod was called with, joined by " "
-	ExecStdin            []string                          // every non-empty stdin payload ExecInPodStdin was given
-	HelmError            error                             // if non-nil, InstallHelmChart returns this error
-	NamespaceError       error                             // if non-nil, CreateProjectNamespace returns this error
-	DeleteNamespaceError error                             // if non-nil, DeleteNamespace returns this error
-	PodReadyError        error                             // if non-nil, IsPodReady returns this error
-	CRDError             error                             // if non-nil, ApplyCRD returns this error
-	DeleteCRDError       error                             // if non-nil, DeleteCRD returns this error
-	UninstallHelmError   error                             // if non-nil, UninstallHelmChart returns this error
-	NamespaceExistsError error                             // if non-nil, NamespaceExists returns this error
-	GetPodsError         error                             // if non-nil, GetPods returns this error
-	ListPVCsError        error                             // if non-nil, ListPVCs returns this error
+	StuckNamespaces map[string]bool
+	// TerminatingNamespaces are reported by NamespaceDeleting as on their way out.
+	TerminatingNamespaces map[string]bool
+	PodReady              map[string]bool
+	ExecOutput            map[string]string // key: "namespace/pod" → output
+	ExecError             map[string]error
+	Metrics               map[string][]PodResourceMetrics
+	HelmReleases          map[string]map[string]interface{} // key: "namespace/release" → values
+	Calls                 []string                          // track method calls
+	ExecCommands          []string                          // every argv ExecInPod was called with, joined by " "
+	ExecStdin             []string                          // every non-empty stdin payload ExecInPodStdin was given
+	HelmError             error                             // if non-nil, InstallHelmChart returns this error
+	NamespaceError        error                             // if non-nil, CreateProjectNamespace returns this error
+	DeleteNamespaceError  error                             // if non-nil, DeleteNamespace returns this error
+	PodReadyError         error                             // if non-nil, IsPodReady returns this error
+	CRDError              error                             // if non-nil, ApplyCRD returns this error
+	DeleteCRDError        error                             // if non-nil, DeleteCRD returns this error
+	UninstallHelmError    error                             // if non-nil, UninstallHelmChart returns this error
+	NamespaceExistsError  error                             // if non-nil, NamespaceExists returns this error
+	GetPodsError          error                             // if non-nil, GetPods returns this error
+	ListPVCsError         error                             // if non-nil, ListPVCs returns this error
 
 	// Wildcards — used when tests don't know the generated project ID upfront.
 	WildcardPodReady bool // IsPodReady returns true for any pod not in PodReady
@@ -326,6 +328,13 @@ func (m *MockClient) NamespaceExists(ctx context.Context, name string) (bool, er
 		return false, m.NamespaceExistsError
 	}
 	return m.Namespaces[name], nil
+}
+
+func (m *MockClient) NamespaceDeleting(ctx context.Context, name string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "NamespaceDeleting:"+name)
+	return m.TerminatingNamespaces[name], nil
 }
 
 func (m *MockClient) ListPVCs(ctx context.Context, namespace string) ([]string, error) {

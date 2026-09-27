@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -36,6 +37,9 @@ type Client struct {
 	dynamicClient dynamic.Interface
 	metricsClient *metricsv.Clientset
 	restConfig    *rest.Config
+	projectAccess ProjectAccess
+	accessPoll    time.Duration
+	accessTimeout time.Duration
 }
 
 // ClientOptions configures how NewClientWith builds a K8s client. All fields
@@ -156,8 +160,9 @@ func ProjectNamespaceLabels(orgID string) (map[string]string, error) {
 }
 
 // CreateProjectNamespace is the only way a project namespace is made: it is
-// labelled with its org, fenced with a default-deny ingress policy so one
-// tenant's pods cannot reach another's, and capped by a ResourceQuota.
+// labelled with its org, provisioning is bound to its tenant role inside it,
+// it is fenced with a default-deny ingress policy so one tenant's pods cannot
+// reach another's, and capped by a ResourceQuota.
 func (c *Client) CreateProjectNamespace(ctx context.Context, name, orgID string) error {
 	labels, err := ProjectNamespaceLabels(orgID)
 	if err != nil {
@@ -169,7 +174,13 @@ func (c *Client) CreateProjectNamespace(ctx context.Context, name, orgID string)
 			Labels: labels,
 		},
 	}
+	if err := c.projectAccess.validate(); err != nil {
+		return err
+	}
 	if _, err := c.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {
+		return err
+	}
+	if err := c.bindProjectAccess(ctx, name); err != nil {
 		return err
 	}
 	if err := c.ensureNamespaceIsolationPolicy(ctx, name); err != nil {

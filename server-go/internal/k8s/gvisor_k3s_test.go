@@ -112,7 +112,7 @@ func (g *gvisorCluster) connect(t *testing.T) {
 		t.Fatalf("dynamic client: %v", err)
 	}
 	g.clientset = clientset
-	g.client = &Client{clientset: clientset, dynamicClient: dyn, restConfig: restCfg}
+	g.client = &Client{clientset: clientset, dynamicClient: dyn, restConfig: restCfg, projectAccess: testAccess}
 }
 
 // installCiliumPolicyKind registers the CiliumNetworkPolicy kind only, so the deploy path applies its

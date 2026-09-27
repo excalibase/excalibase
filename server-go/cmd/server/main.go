@@ -1877,7 +1877,11 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 		}
 		log.Fatalf("Failed to init K8s client: %v", err)
 	}
-	return k8sClient
+	return k8sClient.WithProjectAccess(k8s.ProjectAccess{
+		ClusterRole:    cfg.ProjectNamespaceRole,
+		ServiceAccount: cfg.ProvisioningServiceAccount,
+		Namespace:      cfg.PodNamespace,
+	})
 }
 
 // buildDocumentBrowser wires the document browser, which reaches a project's

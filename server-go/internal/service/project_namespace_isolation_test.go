@@ -9,18 +9,29 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // fakeKube is a real k8s.Client over in-memory API fakes, so a test sees the
 // exact objects a namespace creation leaves behind.
 func fakeKube() (*k8s.Client, kubernetes.Interface) {
 	clientset := fake.NewSimpleClientset()
-	return k8s.NewClientFromInterfaces(clientset, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())), clientset
+	clientset.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		review := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview).DeepCopy()
+		review.Status.Allowed = true
+		return true, review, nil
+	})
+	client := k8s.NewClientFromInterfaces(clientset, dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())).
+		WithProjectAccess(k8s.ProjectAccess{
+			ClusterRole: "excalibase-provisioning-project", ServiceAccount: "provisioning-sa", Namespace: "excalibase-platform",
+		})
+	return client, clientset
 }
 
 // assertProjectNamespaceIsolated checks what a fresh project's namespace
@@ -48,6 +59,13 @@ func assertProjectNamespaceIsolated(t *testing.T, clientset kubernetes.Interface
 	}
 	if pods := quota.Spec.Hard["pods"]; pods.Value() != 20 {
 		t.Errorf("pods quota = %d, want 20", pods.Value())
+	}
+	binding, err := clientset.RbacV1().RoleBindings(namespace).Get(ctx, k8s.ProjectRoleBindingName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("provisioning is not bound in %s: %v", namespace, err)
+	}
+	if binding.RoleRef.Name != "excalibase-provisioning-project" {
+		t.Errorf("%s binds %s, want the tenant role", namespace, binding.RoleRef.Name)
 	}
 }
 

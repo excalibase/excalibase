@@ -77,6 +77,13 @@ type AppConfig struct {
 	KubeCACert             string // PEM-encoded CA cert for remote API TLS
 	KubeInsecureSkipVerify bool   // disable TLS verification (dev only)
 
+	// Who provisioning binds, in each project namespace it creates, to the
+	// tenant ClusterRole it holds nowhere else. No defaults: unset refuses
+	// project namespaces rather than creating ones it cannot manage.
+	ProjectNamespaceRole       string
+	ProvisioningServiceAccount string
+	PodNamespace               string
+
 	// SES + R2 are read directly from K8s secrets at startup; see main.go.
 	// We only carry the public-facing knobs (URLs, default From) in config
 	// so per-deployment overrides don't require touching the secret.
@@ -348,6 +355,9 @@ func Load() AppConfig {
 		KubeBearerToken:             envOr("KUBE_BEARER_TOKEN", ""),
 		KubeCACert:                  envOr("KUBE_CA_CERT", ""),
 		KubeInsecureSkipVerify:      envOr("KUBE_INSECURE_SKIP_VERIFY", "") == "true",
+		ProjectNamespaceRole:        os.Getenv("PROJECT_NAMESPACE_ROLE"),
+		ProvisioningServiceAccount:  os.Getenv("PROVISIONING_SERVICE_ACCOUNT"),
+		PodNamespace:                os.Getenv("POD_NAMESPACE"),
 		EmailFromAddress:            envOr("EMAIL_FROM", "noreply@excalibase.io"),
 		EmailFromName:               envOr("EMAIL_FROM_NAME", "Excalibase"),
 		EmailProductName:            envOr("EMAIL_PRODUCT_NAME", "Excalibase"),
