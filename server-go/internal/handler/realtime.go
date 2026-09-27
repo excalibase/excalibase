@@ -15,8 +15,8 @@ import (
 
 // RealtimeHandler exposes per-project Realtime publication membership
 // management. All endpoints connect to the project's Postgres database
-// using `excalibase_app` credentials from vault — that role owns the
-// publication so it can ALTER ADD/DROP TABLE without superuser access.
+// using `excalibase_app` credentials from vault; membership changes go
+// through the function provisioning grants that role.
 type RealtimeHandler struct {
 	store           storage.InstanceStore
 	orgStore        storage.OrgStore
@@ -128,8 +128,7 @@ func (h *RealtimeHandler) DisableAll(w http.ResponseWriter, r *http.Request) {
 // dial resolves the project's excalibase_app credentials from vault
 // and opens a short-lived connection. The caller must close the *sql.DB.
 // Connection pooling is intentionally minimal — Realtime ops are rare
-// (one click per toggle) and the publication owner is granted to
-// excalibase_app, so re-dialing per request is fine.
+// (one click per toggle), so re-dialing per request is fine.
 func (h *RealtimeHandler) dial(r *http.Request) (*service.RealtimeService, *sql.DB, error) {
 	projectID := chi.URLParam(r, "projectId")
 	if !isValidID(projectID) {

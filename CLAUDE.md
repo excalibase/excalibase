@@ -174,7 +174,7 @@ Per-project Deno workers, Supabase-style:
 
 ### Realtime Publication Management
 
-Studio surfaces a per-table CDC toggle by ALTERing the `cdc_watcher_pub` PostgreSQL publication. Handler at `/api/projects/{projectId}/realtime` connects as `excalibase_app` (the publication owner — no superuser escalation) and exposes:
+Studio surfaces a per-table CDC toggle by ALTERing the `cdc_watcher_pub` PostgreSQL publication. Handler at `/api/projects/{projectId}/realtime` connects as `excalibase_app` and changes membership only through `excalibase.set_realtime_table` (superuser-owned SECURITY DEFINER, user schemas only; the publication itself is owned by the superuser) and exposes:
 - `GET /tables` — current publication membership
 - `PUT/DELETE /tables/{schema}/{table}` — toggle one table
 - `POST /enable-all` / `POST /disable-all`

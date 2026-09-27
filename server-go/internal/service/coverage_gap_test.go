@@ -18,7 +18,7 @@ import (
 
 const (
 	testApplyManifestPrefix = "ApplyManifestURL:"
-	testAlterPub            = "ALTER PUBLICATION"
+	testSetRealtime         = "SELECT excalibase.set_realtime_table"
 )
 
 // --- OperatorSetupService ---
@@ -323,33 +323,6 @@ func TestValidIdent(t *testing.T) {
 	}
 }
 
-func TestIsPgCode(t *testing.T) {
-	pqErr := &pq.Error{Code: "42710"}
-	if !isPgCode(pqErr, "42710") {
-		t.Error("direct match should be true")
-	}
-	if isPgCode(pqErr, "42704") {
-		t.Error("different code should be false")
-	}
-	// Wrapped pq.Error is detected via Unwrap().
-	wrapped := wrapErr{inner: pqErr}
-	if !isPgCode(wrapped, "42710") {
-		t.Error("wrapped pq.Error should still match by code")
-	}
-	// Non-pq error returns false without panicking.
-	if isPgCode(errors.New("plain"), "42710") {
-		t.Error("non-pq error should not match any code")
-	}
-	if isPgCode(nil, "42710") {
-		t.Error("nil error should not match")
-	}
-}
-
-type wrapErr struct{ inner error }
-
-func (w wrapErr) Error() string { return w.inner.Error() }
-func (w wrapErr) Unwrap() error { return w.inner }
-
 // --- realtime constructors ---
 
 func TestNewRealtimeService_DefaultPubName(t *testing.T) {
@@ -453,12 +426,16 @@ func TestRealtimeService_ListTables_QueryError(t *testing.T) {
 func TestRealtimeService_EnableTable_HappyPath(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
-	mock.ExpectExec(regexp.QuoteMeta(`ALTER PUBLICATION "cdc_watcher_pub" ADD TABLE "public"."posts"`)).
+	mock.ExpectExec(regexp.QuoteMeta(`SELECT excalibase.set_realtime_table($1, $2, $3)`)).
+		WithArgs("public", "posts", true).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	svc := NewRealtimeService(db)
 	if err := svc.EnableTable(context.Background(), "public", "posts"); err != nil {
 		t.Fatalf("EnableTable: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -473,42 +450,43 @@ func TestRealtimeService_EnableTable_RejectsBadIdent(t *testing.T) {
 	}
 }
 
-func TestRealtimeService_EnableTable_SwallowsAlreadyMember(t *testing.T) {
+func TestRealtimeService_EnableTable_PropagatesRefusal(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
-	// Postgres returns 42710 when a table is already in the publication.
-	// EnableTable must treat that as success.
-	mock.ExpectExec(testAlterPub).
-		WillReturnError(&pq.Error{Code: "42710"})
+	mock.ExpectExec(testSetRealtime).
+		WillReturnError(&pq.Error{Code: "42501", Message: "auth.users cannot be published"})
 
 	svc := NewRealtimeService(db)
-	if err := svc.EnableTable(context.Background(), "public", "posts"); err != nil {
-		t.Errorf("42710 should be swallowed, got %v", err)
+	if err := svc.EnableTable(context.Background(), "auth", "users"); err == nil {
+		t.Error("a refused table must surface as an error")
 	}
 }
 
-func TestRealtimeService_DisableTable_SwallowsNotMember(t *testing.T) {
+func TestRealtimeService_DisableTable_HappyPath(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
-	// 42704 = undefined object (not in publication). Idempotent disable.
-	mock.ExpectExec(testAlterPub).
-		WillReturnError(&pq.Error{Code: "42704"})
+	mock.ExpectExec(testSetRealtime).
+		WithArgs("public", "posts", false).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	svc := NewRealtimeService(db)
 	if err := svc.DisableTable(context.Background(), "public", "posts"); err != nil {
-		t.Errorf("42704 should be swallowed, got %v", err)
+		t.Fatalf("DisableTable: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
 	}
 }
 
 func TestRealtimeService_DisableTable_PropagatesOtherErrors(t *testing.T) {
 	db, mock, _ := sqlmock.New()
 	defer db.Close()
-	mock.ExpectExec(testAlterPub).
+	mock.ExpectExec(testSetRealtime).
 		WillReturnError(errors.New("connection lost"))
 
 	svc := NewRealtimeService(db)
 	if err := svc.DisableTable(context.Background(), "public", "posts"); err == nil {
-		t.Error("non-pg error should not be swallowed")
+		t.Error("errors must not be swallowed")
 	}
 }
 
@@ -529,9 +507,10 @@ func TestRealtimeService_EnableAll_AddsDisabledTables(t *testing.T) {
 		AddRow("public", "posts", false).
 		AddRow("public", "comments", true)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
-	// Only the disabled row should appear in the bulk ADD.
-	mock.ExpectExec(regexp.QuoteMeta(`ALTER PUBLICATION "cdc_watcher_pub" ADD TABLE "public"."posts"`)).
+	mock.ExpectBegin()
+	mock.ExpectExec(testSetRealtime).WithArgs("public", "posts", true).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	svc := NewRealtimeService(db)
 	added, err := svc.EnableAll(context.Background())
@@ -541,6 +520,47 @@ func TestRealtimeService_EnableAll_AddsDisabledTables(t *testing.T) {
 	if added != 1 {
 		t.Errorf("added: got %d, want 1", added)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRealtimeService_EnableAll_RollsBackOnFailure(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"schema", "table_name", "enabled"}).
+		AddRow("public", "posts", false).
+		AddRow("public", "comments", false)
+	mock.ExpectQuery("SELECT").WillReturnRows(rows)
+	mock.ExpectBegin()
+	mock.ExpectExec(testSetRealtime).WithArgs("public", "posts", true).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(testSetRealtime).WithArgs("public", "comments", true).
+		WillReturnError(errors.New("boom"))
+	mock.ExpectRollback()
+
+	svc := NewRealtimeService(db)
+	if _, err := svc.EnableAll(context.Background()); err == nil {
+		t.Fatal("EnableAll must report the failed table")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRealtimeService_EnableAll_BeginError(t *testing.T) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+	rows := sqlmock.NewRows([]string{"schema", "table_name", "enabled"}).
+		AddRow("public", "posts", false)
+	mock.ExpectQuery("SELECT").WillReturnRows(rows)
+	mock.ExpectBegin().WillReturnError(errors.New("no tx"))
+
+	svc := NewRealtimeService(db)
+	if _, err := svc.EnableAll(context.Background()); err == nil {
+		t.Fatal("EnableAll must report a failed BEGIN")
+	}
 }
 
 func TestRealtimeService_EnableAll_NoOpWhenAllEnabled(t *testing.T) {
@@ -549,12 +569,14 @@ func TestRealtimeService_EnableAll_NoOpWhenAllEnabled(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"schema", "table_name", "enabled"}).
 		AddRow("public", "posts", true)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
-	// No ALTER expected — early-return path.
 
 	svc := NewRealtimeService(db)
 	n, err := svc.EnableAll(context.Background())
 	if err != nil || n != 0 {
 		t.Errorf("EnableAll: n=%d err=%v, want 0/nil", n, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -566,8 +588,10 @@ func TestRealtimeService_DisableAll_DropsEnabledTables(t *testing.T) {
 		AddRow("public", "posts", true).
 		AddRow("public", "comments", false)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
-	mock.ExpectExec(regexp.QuoteMeta(`ALTER PUBLICATION "cdc_watcher_pub" DROP TABLE "public"."posts"`)).
+	mock.ExpectBegin()
+	mock.ExpectExec(testSetRealtime).WithArgs("public", "posts", false).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	svc := NewRealtimeService(db)
 	dropped, err := svc.DisableAll(context.Background())
@@ -576,6 +600,9 @@ func TestRealtimeService_DisableAll_DropsEnabledTables(t *testing.T) {
 	}
 	if dropped != 1 {
 		t.Errorf("dropped: got %d, want 1", dropped)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
 	}
 }
 
