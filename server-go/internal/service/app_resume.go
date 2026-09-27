@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var resumeRefusals = []error{ErrAppOverPlan, ErrOrgTierUnresolved, ErrAppCapacity, k8s.ErrAppNotPaused, k8s.ErrAppNotDeployed}
+var resumeRefusals = []error{ErrAppOverPlan, ErrOrgTierUnresolved, ErrAppCapacity, ErrAppNoSandboxNode, k8s.ErrAppNotPaused, k8s.ErrAppNotDeployed}
 
 // resumeSize is what a resume brings back: the paused copies at the plan's size now.
 type resumeSize struct {
