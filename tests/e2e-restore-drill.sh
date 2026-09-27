@@ -34,8 +34,7 @@ cleanup() {
   # Both projects are real platform projects (EXC-366): the restored one is
   # registered exactly like a provisioned one, so both deprovision via the API.
   for p in "$PROJ_A" "$PROJ_B"; do
-    [ -n "$p" ] && curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' -d '{"enabled":false}' "$API/api/provision/$p/deletion-protection" > /dev/null 2>&1
-    [ -n "$p" ] && curl -sf -X DELETE -H "$AUTH" "$API/api/provision/$p/" > /dev/null 2>&1 && echo "  deprovisioned $p (api)" || true
+    [ -n "$p" ] && curl -sf -X DELETE -H "$AUTH" "$API/api/admin/projects/$p" > /dev/null 2>&1 && echo "  deprovisioned $p (api)" || true
   done
 }
 

@@ -353,3 +353,36 @@ func (s *Users) DeleteUser(_ context.Context, id string) error {
 	return nil
 }
 func (s *Users) UpdateUserPassword(context.Context, string, string) error { return nil }
+
+// RetainedBackups is an in-memory storage.RetainedBackupStore.
+type RetainedBackups struct {
+	Items map[string]storage.RetainedBackup
+}
+
+// NewRetainedBackups returns an empty retained-backup store.
+func NewRetainedBackups() *RetainedBackups {
+	return &RetainedBackups{Items: map[string]storage.RetainedBackup{}}
+}
+
+// RecordRetainedBackups stores the record, replacing an earlier one.
+func (s *RetainedBackups) RecordRetainedBackups(r storage.RetainedBackup) error {
+	s.Items[r.ProjectID] = r
+	return nil
+}
+
+// DueRetainedBackups lists records whose purge date has come.
+func (s *RetainedBackups) DueRetainedBackups(now time.Time) ([]storage.RetainedBackup, error) {
+	var due []storage.RetainedBackup
+	for _, r := range s.Items {
+		if !r.PurgeAfter.After(now) {
+			due = append(due, r)
+		}
+	}
+	return due, nil
+}
+
+// DeleteRetainedBackups removes the project's record.
+func (s *RetainedBackups) DeleteRetainedBackups(projectID string) error {
+	delete(s.Items, projectID)
+	return nil
+}

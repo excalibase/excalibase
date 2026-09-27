@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -74,6 +75,7 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 	r.Route("/{projectId}", func(r chi.Router) {
 		r.Get("/", h.GetStatus)
 		r.Delete("/", h.Delete)
+		r.Post("/deletion/cancel", h.CancelDeletion)
 		r.Get("/credentials", h.GetCredentials)
 		r.Patch("/deletion-protection", h.SetDeletionProtection)
 		r.Post("/backups/purge", h.PurgeBackups)
@@ -327,13 +329,46 @@ func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// Read the row before it is removed: its backups, if the deletion is not
 	// purging them, outlive the only record that names them.
 	inst, _ := h.svc.GetInstance(projectID)
-	if err := h.svc.DeprovisionWithOptions(r.Context(), projectID, opts); err != nil {
+	scheduled, err := h.svc.ScheduleDeletion(r.Context(), projectID, opts)
+	if err != nil {
 		log.Printf("tenant=%s action=deprovision status=failed err=%v", tenant, err)
 		writeDeprovisionError(w, err)
 		return
 	}
+	if scheduled != nil {
+		log.Printf("tenant=%s action=deprovision status=scheduled", tenant)
+		writeJSONStatus(w, http.StatusAccepted, map[string]interface{}{
+			"projectId":     projectID,
+			"status":        scheduled.Status,
+			"deletionDueAt": scheduled.DeletionDueAt,
+			"deleteBackups": scheduled.DeletionDeleteBackups,
+		})
+		return
+	}
 	log.Printf("tenant=%s action=deprovision status=ok", tenant)
 	writeJSON(w, h.deleteResponse(projectID, inst))
+}
+
+// errDeletionStopFailed is the fixed answer when the pause a scheduled
+// deletion starts with does not complete; the cause stays in the server log.
+const errDeletionStopFailed = "the project could not be stopped for deletion and was not deleted; retry the request"
+
+// CancelDeletion ends a project's deletion grace period (Owner).
+func (h *ProvisioningHandler) CancelDeletion(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectId")
+	err := h.svc.CancelDeletion(r.Context(), projectID)
+	switch {
+	case err == nil:
+		writeJSON(w, map[string]interface{}{"projectId": projectID, "status": domain.StatusPaused})
+	case errors.Is(err, service.ErrProjectNotFound):
+		httpError(w, "project not found", http.StatusNotFound)
+	case errors.Is(err, service.ErrNotScheduledForDeletion), errors.Is(err, service.ErrProjectOperationRunning),
+		errors.Is(err, storage.ErrProjectStatusChanged):
+		httpError(w, safeError(err), http.StatusConflict)
+	default:
+		log.Printf("action=cancel_deletion project=%s status=failed err=%v", projectID, err)
+		httpError(w, "cancelling the deletion did not complete; retry the request", http.StatusInternalServerError)
+	}
 }
 
 // deleteResponse reports the deletion and, when the project's backups were
@@ -349,7 +384,8 @@ func (h *ProvisioningHandler) deleteResponse(projectID string, inst *domain.Data
 	if prefix, ok := h.svc.RetainedBackupPrefix(inst); ok {
 		resp["retainedBackupPrefix"] = prefix
 		resp["retainedBackupsNote"] = "the project's backups were kept and are no longer reachable through this API; " +
-			"they remain in the platform's object store under the prefix above"
+			fmt.Sprintf("they remain in the platform's object store under the prefix above until they are purged "+
+				"%d days after the deletion", int(service.RetainedBackupPeriod.Hours()/24))
 	}
 	return resp
 }
@@ -367,8 +403,12 @@ func writeDeprovisionError(w http.ResponseWriter, err error) {
 		httpError(w, safeError(err), http.StatusBadRequest)
 	case errors.Is(err, service.ErrDeletionProtected):
 		httpError(w, safeError(err), http.StatusBadRequest)
-	case errors.Is(err, service.ErrProjectOperationRunning):
+	case errors.Is(err, service.ErrProjectOperationRunning), errors.Is(err, storage.ErrProjectStatusChanged):
 		httpError(w, safeError(err), http.StatusConflict)
+	case errors.Is(err, service.ErrDeletionGraceUnavailable):
+		httpError(w, safeError(err), http.StatusServiceUnavailable)
+	case errors.Is(err, service.ErrDeletionStopFailed):
+		httpError(w, errDeletionStopFailed, http.StatusInternalServerError)
 	case errors.Is(err, storage.ErrProjectBusy):
 		httpError(w, "project is busy: "+busyState(err)+"; retry when it settles", http.StatusConflict)
 	case errors.Is(err, storage.ErrBackupPurgeAlreadyConfirmed):
@@ -440,7 +480,11 @@ func (h *ProvisioningHandler) SetDeletionProtection(w http.ResponseWriter, r *ht
 		return
 	}
 	if err := h.svc.SetDeletionProtection(projectID, *body.Enabled); err != nil {
-		httpError(w, safeError(err), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if errors.Is(err, service.ErrScheduledForDeletion) {
+			status = http.StatusConflict
+		}
+		httpError(w, safeError(err), status)
 		return
 	}
 	writeJSON(w, map[string]interface{}{"projectId": projectID, "deletionProtection": *body.Enabled})

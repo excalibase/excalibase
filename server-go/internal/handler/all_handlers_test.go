@@ -387,9 +387,13 @@ func TestEstimateAllTiers(t *testing.T) {
 
 // --- Provisioning CRUD handlers ---
 
+// A FAILED project holds no data, so DELETE removes it at once.
 func TestDeleteHandler(t *testing.T) {
 	r, store, mock := fullRouter(t)
 	seedInstance(store, mock)
+	inst, _ := store.FindByProjectID("test-db")
+	inst.Status = string(domain.StageFailed)
+	store.Update(inst)
 
 	w := doRequest(r, "DELETE", "/api/provision/test-db", "")
 	if w.Code != 200 {

@@ -28,6 +28,7 @@ func deletingProjectRouter(t *testing.T, status string) (chi.Router, string) {
 		r.Get("/", ok)
 		r.Delete("/", ok)
 		r.Post("/backups/purge", ok)
+		r.Post("/deletion/cancel", ok)
 		r.Post("/credentials/rotate", ok)
 		r.Post("/pause", ok)
 		r.Post("/resume", ok)
@@ -138,6 +139,33 @@ func TestDeletingProjectRefusesPlatformAdminWrites(t *testing.T) {
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
 		req = req.WithContext(projectRequest(tc.method, testProject, admin, nil).Context())
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != tc.want {
+			t.Errorf("%s %s: got %d, want %d", tc.method, tc.path, w.Code, tc.want)
+		}
+	}
+}
+
+// A project in its deletion grace period keeps its status read, the DELETE
+// and the cancel; it is stopped, so everything else is refused.
+func TestPendingDeletionProjectAllowsOnlyStatusDeleteAndCancel(t *testing.T) {
+	r, memberID := deletingProjectRouter(t, string(domain.StatusPendingDeletion))
+	cases := []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodGet, "/api/provision/" + testProject + "/", http.StatusOK},
+		{http.MethodDelete, "/api/provision/" + testProject + "/", http.StatusOK},
+		{http.MethodPost, "/api/provision/" + testProject + "/deletion/cancel", http.StatusOK},
+		{http.MethodPost, "/api/provision/" + testProject + "/resume", http.StatusConflict},
+		{http.MethodPost, "/api/provision/" + testProject + "/credentials/rotate", http.StatusConflict},
+		{http.MethodPost, "/api/provision/" + testProject + "/backups/purge", http.StatusConflict},
+		{http.MethodPost, "/api/projects/" + testProject + "/functions", http.StatusConflict},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req = req.WithContext(projectRequest(tc.method, testProject, memberUser(memberID), nil).Context())
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 		if w.Code != tc.want {

@@ -51,8 +51,9 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 			last_active_at, last_xact_count, pause_reason,
 			pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 			created_at, updated_at, last_health_check,
-			storage_class, parameters
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54)`,
+			storage_class, parameters,
+			deletion_scheduled_at, deletion_due_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username,
@@ -70,6 +71,7 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 		inst.StorageClass, parameters,
+		flexTimePtr(inst.DeletionScheduledAt), flexTimePtr(inst.DeletionDueAt),
 	)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && string(pqErr.Code) == uniqueViolation {
@@ -157,7 +159,10 @@ func (s *Store) update(inst *domain.DatabaseInstance, expectedStatus string) err
 			pause_attempts = $46,
 			pause_last_attempt_at = $47,
 			pause_backup_id = $49,
-			pause_backup_at = $50
+			pause_backup_at = $50,
+			deletion_delete_backups = $51,
+			deletion_scheduled_at = $52,
+			deletion_due_at = $53
 		WHERE project_id = $1 AND status <> ALL($45)
 		  AND ($48 = '' OR status = $48)`,
 		inst.ProjectID, inst.ProjectName, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
@@ -178,6 +183,7 @@ func (s *Store) update(inst *domain.DatabaseInstance, expectedStatus string) err
 		inst.PauseAttempts, flexTimePtr(inst.PauseLastAttemptAt),
 		expectedStatus,
 		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
+		inst.DeletionDeleteBackups, flexTimePtr(inst.DeletionScheduledAt), flexTimePtr(inst.DeletionDueAt),
 	)
 	if err != nil {
 		return err
@@ -346,6 +352,7 @@ var notServableStatuses = []string{
 	string(domain.StatusDeleting),
 	string(domain.StatusBackupsPendingDelete),
 	string(domain.StatusRestoring),
+	string(domain.StatusPendingDeletion),
 }
 
 const pgInstanceColumns = `
@@ -364,7 +371,8 @@ const pgInstanceColumns = `
 	last_active_at, last_xact_count, pause_reason,
 	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 	created_at, updated_at, last_health_check,
-	storage_class, parameters`
+	storage_class, parameters,
+	deletion_scheduled_at, deletion_due_at`
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
 	row := s.db.QueryRow(`SELECT`+pgInstanceColumns+`
@@ -481,6 +489,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 	var pauseBackupID sql.NullString
 	var pauseBackupAt sql.NullTime
 	var parameters []byte
+	var deletionScheduledAt, deletionDueAt sql.NullTime
 
 	err := s.Scan(
 		&inst.ProjectID, &inst.ProjectName, &inst.OrgID, &inst.OwnerID, &inst.DBType, &inst.Tier, &inst.Namespace,
@@ -499,6 +508,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&pauseAttempts, &pauseLastAttemptAt, &pauseBackupID, &pauseBackupAt,
 		&createdAt, &updatedAt, &lastHealth,
 		&inst.StorageClass, &parameters,
+		&deletionScheduledAt, &deletionDueAt,
 	)
 	if err != nil {
 		return nil, err
@@ -519,6 +529,8 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		pauseBackupID: pauseBackupID, pauseBackupAt: pauseBackupAt,
 	}
 	applyNullableInstanceFields(&inst, nf)
+	inst.DeletionScheduledAt = nullFlexTime(deletionScheduledAt)
+	inst.DeletionDueAt = nullFlexTime(deletionDueAt)
 
 	if err := storage.CheckDeploymentMode(inst.ProjectID, inst.DeploymentMode); err != nil {
 		return nil, err

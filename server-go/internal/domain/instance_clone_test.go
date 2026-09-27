@@ -79,6 +79,7 @@ func fullyPopulatedInstance() *DatabaseInstance {
 		MaintenanceWindowDurationMinutes: &minutes, BackupRetentionDays: &days,
 		LastActiveAt: epoch, CreatedAt: epoch, UpdatedAt: epoch, LastHealthCheck: epoch,
 		PauseLastAttemptAt: epoch, PauseBackupAt: epoch,
+		DeletionScheduledAt: epoch, DeletionDueAt: epoch,
 		Parameters: map[string]string{"max_connections": "100"},
 	}
 }
