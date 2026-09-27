@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -72,32 +73,44 @@ type emailTokenUsers interface {
 }
 
 // sessionTokens is the slice of the token store a reset needs to end every
-// session the account holds.
+// session and revoke every access token the account holds.
 type sessionTokens interface {
 	ListTokensByUser(ctx context.Context, userID string) ([]*domain.AccessToken, error)
 	DeleteToken(ctx context.Context, tokenHash string) error
 }
 
-// SetSessionStore wires where a reset ends the account's sessions. A reset
-// is refused without it.
+// SetSessionStore wires where a reset ends the account's sessions and access
+// tokens. A reset is refused without it.
 func (h *EmailTokensHandler) SetSessionStore(s sessionTokens) { h.sessions = s }
 
-// endSessions deletes every session token the user holds. Named access
-// tokens are the user's own credentials for scripts and stay.
-func (h *EmailTokensHandler) endSessions(ctx context.Context, userID string) error {
+var (
+	errSessionsNotEnded     = errors.New("sessions not ended")
+	errAccessTokensNotEnded = errors.New("access tokens not revoked")
+)
+
+// revokeCredentials ends every session, then revokes every access token, and
+// returns how many access tokens it revoked.
+func (h *EmailTokensHandler) revokeCredentials(ctx context.Context, userID string) (int, error) {
 	tokens, err := h.sessions.ListTokensByUser(ctx, userID)
 	if err != nil {
-		return err
+		return 0, fmt.Errorf("%w: %v", errSessionsNotEnded, err)
 	}
+	var accessTokens []*domain.AccessToken
 	for _, t := range tokens {
 		if !isSessionToken(t) {
+			accessTokens = append(accessTokens, t)
 			continue
 		}
 		if err := h.sessions.DeleteToken(ctx, t.TokenHash); err != nil {
-			return err
+			return 0, fmt.Errorf("%w: %v", errSessionsNotEnded, err)
 		}
 	}
-	return nil
+	for i, t := range accessTokens {
+		if err := h.sessions.DeleteToken(ctx, t.TokenHash); err != nil {
+			return i, fmt.Errorf("%w: %v", errAccessTokensNotEnded, err)
+		}
+	}
+	return len(accessTokens), nil
 }
 
 func isSessionToken(t *domain.AccessToken) bool {
@@ -423,16 +436,21 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 	}
 	// After the update, so a sign-in with the old password in between is
 	// ended too.
-	if err := h.endSessions(r.Context(), user.ID); err != nil {
-		log.Printf("ERROR: end sessions for %s after reset: %v", user.ID, err)
-		httpError(w, "password changed, but existing sessions could not be signed out; reset again", http.StatusInternalServerError)
+	revoked, err := h.revokeCredentials(r.Context(), user.ID)
+	if err != nil {
+		log.Printf("ERROR: revoke credentials for %s after reset: %v", user.ID, err)
+		msg := "password changed, but existing sessions could not be signed out; reset again"
+		if errors.Is(err, errAccessTokensNotEnded) {
+			msg = "password changed and sessions signed out, but some access tokens could not be revoked; reset again"
+		}
+		httpError(w, msg, http.StatusInternalServerError)
 		return
 	}
 	// The reset link reached the account's mailbox, which proves the address.
 	if err := h.verifier.MarkVerified(r.Context(), user.ID); err != nil {
 		log.Printf("ERROR: mark %s verified after reset: %v", user.ID, err)
 	}
-	writeJSON(w, map[string]string{"status": "reset"})
+	writeJSON(w, map[string]any{"status": "reset", "accessTokensRevoked": revoked})
 }
 
 // claimReset consumes a reset link before the password changes. Of two

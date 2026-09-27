@@ -265,9 +265,9 @@ func seedToken(t *testing.T, store interface {
 	}
 }
 
-// A reset is the remedy for a stolen account: every session that existed
-// before it, the attacker's included, must stop working.
-func TestEmailTokens_ResetEndsEveryExistingSession(t *testing.T) {
+// A reset is the remedy for a stolen account: every session and every access
+// token that existed before it, the attacker's included, must stop working.
+func TestEmailTokens_ResetEndsEverySessionAndRevokesEveryAccessToken(t *testing.T) {
 	store := pgtest.New(t)
 	sender := &capturingSender{}
 	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
@@ -287,7 +287,9 @@ func TestEmailTokens_ResetEndsEveryExistingSession(t *testing.T) {
 	seedToken(t, store, victim.ID, "hash-victim-session-a", "session")
 	seedToken(t, store, victim.ID, "hash-victim-session-b", "session")
 	seedToken(t, store, victim.ID, "hash-victim-ci-token", "read,write")
+	seedToken(t, store, victim.ID, "hash-victim-legacy-token", "")
 	seedToken(t, store, other.ID, "hash-other-session-1", "session")
+	seedToken(t, store, other.ID, "hash-other-ci-token", "read")
 
 	h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"victim@example.com"}`)))
 	token := tokenFromURL(sender.message().HTMLBody)
@@ -297,17 +299,26 @@ func TestEmailTokens_ResetEndsEveryExistingSession(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("ConfirmReset: %d %s", w.Code, w.Body.String())
 	}
+	var answer struct {
+		Status              string `json:"status"`
+		AccessTokensRevoked int    `json:"accessTokensRevoked"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("decode answer: %v", err)
+	}
+	if answer.Status != "reset" || answer.AccessTokensRevoked != 2 {
+		t.Errorf("answer = %+v, want status reset and 2 access tokens revoked", answer)
+	}
 
-	for _, hash := range []string{"hash-victim-session-a", "hash-victim-session-b"} {
+	for _, hash := range []string{"hash-victim-session-a", "hash-victim-session-b", "hash-victim-ci-token", "hash-victim-legacy-token"} {
 		if tok, _ := store.FindByTokenHash(context.Background(), hash); tok != nil {
-			t.Errorf("session %s survived the reset", hash)
+			t.Errorf("token %s survived the reset", hash)
 		}
 	}
-	if tok, _ := store.FindByTokenHash(context.Background(), "hash-other-session-1"); tok == nil {
-		t.Error("another account's session was ended")
-	}
-	if tok, _ := store.FindByTokenHash(context.Background(), "hash-victim-ci-token"); tok == nil {
-		t.Error("a named access token was revoked; only sessions end on reset")
+	for _, hash := range []string{"hash-other-session-1", "hash-other-ci-token"} {
+		if tok, _ := store.FindByTokenHash(context.Background(), hash); tok == nil {
+			t.Errorf("another account's token %s was revoked", hash)
+		}
 	}
 }
 
@@ -381,5 +392,66 @@ func TestEmailTokens_ResetReportsSessionsThatCouldNotBeEnded(t *testing.T) {
 				t.Fatalf("got %d %s, want 500 naming the sessions", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+// recordingTokens deletes through the real store, remembers the order, and
+// fails on the hash named in failOn.
+type recordingTokens struct {
+	sessionTokens
+	failOn  string
+	deleted *[]string
+}
+
+func (r recordingTokens) DeleteToken(ctx context.Context, hash string) error {
+	if hash == r.failOn {
+		return errors.New("delete failed")
+	}
+	*r.deleted = append(*r.deleted, hash)
+	return r.sessionTokens.DeleteToken(ctx, hash)
+}
+
+func resetWithTokens(t *testing.T, failOn string) (*httptest.ResponseRecorder, []string) {
+	t.Helper()
+	store := pgtest.New(t)
+	sender := &capturingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+	var deleted []string
+	h.SetSessionStore(recordingTokens{sessionTokens: store, failOn: failOn, deleted: &deleted})
+	h.runInBackground = func(f func()) { f() }
+	user := &domain.User{ID: "user-order", Username: testutil.FixturePassword("order"), Email: "o@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	seedToken(t, store, user.ID, "hash-order-ci-token", "read")
+	seedToken(t, store, user.ID, "hash-order-session", "session")
+
+	h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"o@example.com"}`)))
+	w := httptest.NewRecorder()
+	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
+		strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"brand-new-pass"}`)))
+	return w, deleted
+}
+
+// Sessions end before access tokens are revoked, so a token failure never
+// leaves a live session behind.
+func TestEmailTokens_ResetEndsSessionsBeforeRevokingAccessTokens(t *testing.T) {
+	w, deleted := resetWithTokens(t, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("ConfirmReset: %d %s", w.Code, w.Body.String())
+	}
+	if want := []string{"hash-order-session", "hash-order-ci-token"}; strings.Join(deleted, ",") != strings.Join(want, ",") {
+		t.Errorf("deleted %v, want %v", deleted, want)
+	}
+}
+
+// When an access token cannot be revoked the reset must not report success,
+// or the owner believes a stolen script token is dead while it still works.
+func TestEmailTokens_ResetReportsAccessTokensThatCouldNotBeRevoked(t *testing.T) {
+	w, _ := resetWithTokens(t, "hash-order-ci-token")
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "access tokens could not be revoked") {
+		t.Fatalf("got %d %s, want 500 naming the access tokens", w.Code, w.Body.String())
 	}
 }
