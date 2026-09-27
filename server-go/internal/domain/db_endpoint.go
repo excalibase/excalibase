@@ -93,6 +93,7 @@ func (r PortRange) Contains(port int) bool {
 const (
 	SSLModeVerifyFull = "verify-full"
 	SSLModePrefer     = "prefer"
+	SSLModeRequire    = "require"
 )
 
 // DBEndpoint is a project's public database endpoint setting.

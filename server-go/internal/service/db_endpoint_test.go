@@ -164,6 +164,9 @@ func newEndpointHarness(t *testing.T, status string) *endpointHarness {
 	kube := k8s.NewMockClient()
 	kube.Secrets[endpointNamespace+"/"+endpointProject+"-postgres-ca"] = map[string][]byte{"ca.crt": []byte("-----BEGIN CERTIFICATE-----")}
 	inst := endpointInstance(status)
+	kube.CRDs[endpointNamespace+"/"+endpointProject+"-postgres"] = k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
+		ProjectID: endpointProject, Namespace: endpointNamespace, DatabaseName: "appdb",
+	})
 	svc := NewDBEndpointService(DBEndpointServiceConfig{
 		Endpoints:    store,
 		Instances:    &stubInstanceLookup{inst: inst},

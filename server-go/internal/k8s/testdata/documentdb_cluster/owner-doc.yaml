@@ -44,10 +44,10 @@ spec:
     - host all owner_doc ::1/128 trust
     - host all excalibase_app 127.0.0.1/32 trust
     - host all excalibase_app ::1/128 trust
-    - host replication cdc_watcher all scram-sha-256
-    - host all app all scram-sha-256
-    - host all excalibase_app all scram-sha-256
-    - host all auth_admin all scram-sha-256
+    - hostssl replication cdc_watcher all scram-sha-256
+    - hostssl all app all scram-sha-256
+    - hostssl all excalibase_app all scram-sha-256
+    - hostssl all auth_admin all scram-sha-256
     pg_ident:
     - local postgres documentdb_bg_worker_role
     - local postgres documentdb

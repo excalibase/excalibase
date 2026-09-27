@@ -65,6 +65,9 @@ type PostgreSQLClusterOpts struct {
 	// ServerAltDNSNames are extra names the operator-issued server
 	// certificate carries, so a client verifying the public name succeeds.
 	ServerAltDNSNames []string
+	// AllowPlaintext renders network logins as host rather than hostssl. The
+	// zero value requires TLS (EXC-410).
+	AllowPlaintext bool
 }
 
 // BackupOpts turns a cluster's backups on. The cluster only names its
@@ -383,12 +386,7 @@ func buildPostgresql(opts PostgreSQLClusterOpts) map[string]interface{} {
 		// cdc_watcher role (created post-bootstrap by createProjectRoles) and
 		// regular client access to app + excalibase_app + auth_admin via
 		// password auth.
-		"pg_hba": []interface{}{
-			"host replication cdc_watcher all scram-sha-256",
-			"host all app all scram-sha-256",
-			"host all " + appRoleName + " all scram-sha-256",
-			"host all auth_admin all scram-sha-256",
-		},
+		"pg_hba": networkLogins(hbaConnectionType(!opts.AllowPlaintext)),
 	}
 	if opts.DocumentDB {
 		postgresql["pg_hba"] = append(documentDBLoopbackTrust(opts), postgresql["pg_hba"].([]interface{})...)

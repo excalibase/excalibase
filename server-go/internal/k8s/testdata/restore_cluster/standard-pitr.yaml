@@ -40,10 +40,10 @@ spec:
       statement_timeout: 60s
       work_mem: 64MB
     pg_hba:
-    - host replication cdc_watcher all scram-sha-256
-    - host all app all scram-sha-256
-    - host all excalibase_app all scram-sha-256
-    - host all auth_admin all scram-sha-256
+    - hostssl replication cdc_watcher all scram-sha-256
+    - hostssl all app all scram-sha-256
+    - hostssl all excalibase_app all scram-sha-256
+    - hostssl all auth_admin all scram-sha-256
   resources:
     limits:
       cpu: "4"
