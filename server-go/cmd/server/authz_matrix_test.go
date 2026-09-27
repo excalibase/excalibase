@@ -124,7 +124,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		// The app store talks to a database that never connects: the matrix
 		// asserts authorization outcomes, and a failed query is a 500, which
 		// is not a gate refusal.
-		appHandler:          handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances), apphost.Route{}),
+		appHandler:          handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances, service.NewOrgPlanTiers(instances, fakestore.NewOrgs())), apphost.Route{}),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(offlineDB(t)), nil),
 		registryCredHandler: handler.NewRegistryCredentialHandler(nil),
 		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(

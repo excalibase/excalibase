@@ -98,7 +98,7 @@ func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string
 // ResumeApp restores what the pause stopped and records ACTIVE once it is
 // ready. A rollout that fails leaves the app FAILED; any other failure leaves
 // it RESUMING, for a retry.
-func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID string) (*apphost.App, error) {
+func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error) {
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdApp(ctx, projectID, appID, OperationResume)
 	if err != nil {
@@ -118,7 +118,14 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID strin
 		[]string{apphost.StatusStopped, apphost.StatusFailed, apphost.StatusResuming}, apphost.StatusResuming); err != nil {
 		return nil, err
 	}
-	err = s.kube.ResumeAppWorkload(ctx, namespace, appID, app.Name, s.timeout)
+	size, err := s.admitResume(ctx, namespace, app)
+	if err != nil {
+		return nil, s.putBack(projectID, appID, apphost.StatusResuming, app.Status, err, resumeRefusals...)
+	}
+	if err := s.recordResize(app, size, actor); err != nil {
+		return nil, err
+	}
+	err = s.kube.ResumeAppWorkload(ctx, namespace, appID, app.Name, size.tier, s.timeout)
 	switch {
 	case err == nil:
 		return s.apps.Transition(projectID, appID, []string{apphost.StatusResuming}, apphost.StatusRunning)

@@ -19,6 +19,7 @@
 package apphost
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -595,7 +596,7 @@ type SourceLookup interface {
 // project, so it is read here rather than accepted from the caller.
 type ProjectFacts interface {
 	SourceLookup
-	Tier(projectID string) (domain.TierType, error)
+	Tier(ctx context.Context, projectID string) (domain.TierType, error)
 }
 
 // ValidateReferences refuses the app unless every reference it declares names

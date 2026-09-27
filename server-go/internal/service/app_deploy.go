@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
-	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/google/uuid"
@@ -43,7 +42,9 @@ type AppDeployService struct {
 	claimer         ProjectOperationClaimer
 	secrets         AppSecretPurger
 	// registries reads the pull credential for the image's registry; nil when no vault is configured.
-	registries RegistryCredentialLookup
+	registries      RegistryCredentialLookup
+	plans           PlanTiers
+	headroomPercent int
 	// async lets tests run the rollout wait inline instead of in a goroutine.
 	async func(func())
 
@@ -168,10 +169,11 @@ func (s *AppDeployService) underLease(ctx context.Context, projectID, appID stri
 // runs; redeployOf names the deploy it was frozen from, or "" for a plain
 // deploy.
 func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, actor, redeployOf string) (*apphost.Deploy, func(), error) {
-	tier, err := config.GetAppTierConfig(cfg.Tier)
+	tierType, tier, err := s.planTier(ctx, app.ProjectID, cfg.Replicas)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve app tier: %w", err)
+		return nil, nil, err
 	}
+	cfg.Tier = tierType
 
 	url, routeErr := s.render.Route.Public().URL(app.Name, app.ProjectID)
 	deploy := &apphost.Deploy{
@@ -193,6 +195,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		},
 		Config:     cfg,
 		RedeployOf: redeployOf,
+		Kind:       apphost.DeployKindDeploy,
 		Status:     apphost.DeployStatusPending,
 		CreatedBy:  actor,
 		CreatedAt:  time.Now().UTC(),
@@ -209,6 +212,10 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	name := k8s.AppObjectName(app.Name)
 	if routeErr != nil {
 		s.fail(ctx, deploy, routeErr, namespace, name)
+		return deploy, nil, nil
+	}
+	if err := s.admit(ctx, namespace, deploy, tier, cfg.Replicas); err != nil {
+		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}
 	render := s.render

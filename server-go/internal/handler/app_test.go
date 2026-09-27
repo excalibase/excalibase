@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -155,7 +156,7 @@ func newFakeSources(names ...string) *fakeSources {
 	return &fakeSources{names: set, tier: domain.Standard}
 }
 
-func (f *fakeSources) Tier(string) (domain.TierType, error) {
+func (f *fakeSources) Tier(context.Context, string) (domain.TierType, error) {
 	if f.tierErr != nil {
 		return "", f.tierErr
 	}
@@ -776,7 +777,7 @@ func TestProjectSourceLookup(t *testing.T) {
 	instances.Items["proj_going"] = &domain.DatabaseInstance{
 		ProjectID: "proj_going", DatabaseName: "storefront_db", Status: string(domain.StatusDeleting),
 	}
-	lookup := NewProjectSourceLookup(instances)
+	lookup := NewProjectSourceLookup(instances, nil)
 
 	cases := []struct {
 		name      string
@@ -810,7 +811,7 @@ func TestProjectSourceLookup(t *testing.T) {
 func TestProjectSourceLookupPropagatesFailure(t *testing.T) {
 	instances := fakestore.NewInstances()
 	instances.Err = errPersisted
-	if _, err := NewProjectSourceLookup(instances).
+	if _, err := NewProjectSourceLookup(instances, nil).
 		HasSource("proj_live", apphost.SourceDatabase, "storefront_db"); err == nil {
 		t.Fatal("a failed read must be reported, not read as an absent source")
 	}
@@ -984,5 +985,30 @@ func TestAppUpdate_RefusedWhileDeleting(t *testing.T) {
 		map[string]any{"replicas": 1})
 	if w.Code != http.StatusConflict {
 		t.Fatalf("got %d, want 409, body=%s", w.Code, w.Body.String())
+	}
+}
+
+type stubPlans struct {
+	tier domain.TierType
+	err  error
+}
+
+func (s stubPlans) ProjectPlanTier(context.Context, string) (domain.TierType, error) {
+	return s.tier, s.err
+}
+
+// The size is the organisation's plan as it is now, never the project row's copy of an older one.
+func TestProjectSourceLookupTierIsTheOrganisationsPlan(t *testing.T) {
+	instances := fakestore.NewInstances()
+	instances.Items["p1"] = &domain.DatabaseInstance{ProjectID: "p1", Tier: domain.Enterprise}
+	tier, err := NewProjectSourceLookup(instances, stubPlans{tier: domain.Free}).Tier(context.Background(), "p1")
+	if err != nil || tier != domain.Free {
+		t.Fatalf("Tier = %s, %v", tier, err)
+	}
+	if _, err := NewProjectSourceLookup(instances, stubPlans{err: errPersisted}).Tier(context.Background(), "p1"); err == nil {
+		t.Fatal("an unreadable plan must refuse")
+	}
+	if _, err := NewProjectSourceLookup(instances, nil).Tier(context.Background(), "p1"); err == nil {
+		t.Fatal("no plan source must refuse, not fall back to the project row")
 	}
 }

@@ -685,34 +685,70 @@ func (c *Client) accumulateNodeCapacity(ctx context.Context, cap *ClusterCapacit
 		if n.Spec.Unschedulable {
 			continue
 		}
-		if cpu, ok := n.Status.Allocatable[corev1.ResourceCPU]; ok {
-			cap.AllocatableCPUMilli += cpu.MilliValue()
+		node := NodeCapacity{
+			Name: n.Name, Labels: n.Labels,
+			AllocatableCPUMilli: n.Status.Allocatable.Cpu().MilliValue(),
+			AllocatableMemBytes: n.Status.Allocatable.Memory().Value(),
 		}
-		if mem, ok := n.Status.Allocatable[corev1.ResourceMemory]; ok {
-			cap.AllocatableMemBytes += mem.Value()
-		}
+		cap.AllocatableCPUMilli += node.AllocatableCPUMilli
+		cap.AllocatableMemBytes += node.AllocatableMemBytes
+		cap.Nodes = append(cap.Nodes, node)
 	}
 	return nil
 }
 
-// accumulatePodRequests sums CPU/memory requests for all non-terminal pods cluster-wide.
+// podListPage bounds each read of the cluster's pods.
+const podListPage = 500
+
+// accumulatePodRequests sums what the scheduler charges every pod that has not
+// finished, including one marked for deletion: it holds its request until it
+// exits. The pods are read a page at a time.
 func (c *Client) accumulatePodRequests(ctx context.Context, cap *ClusterCapacity) error {
-	pods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("list pods: %w", err)
+	byNode := make(map[string]int, len(cap.Nodes))
+	for i, node := range cap.Nodes {
+		byNode[node.Name] = i
 	}
-	for _, p := range pods.Items {
-		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
-			continue
+	opts := metav1.ListOptions{Limit: podListPage}
+	for {
+		pods, err := c.clientset.CoreV1().Pods("").List(ctx, opts)
+		if err != nil {
+			return fmt.Errorf("list pods: %w", err)
 		}
-		for _, ctr := range p.Spec.Containers {
-			if cpu, ok := ctr.Resources.Requests[corev1.ResourceCPU]; ok {
-				cap.RequestedCPUMilli += cpu.MilliValue()
-			}
-			if mem, ok := ctr.Resources.Requests[corev1.ResourceMemory]; ok {
-				cap.RequestedMemBytes += mem.Value()
-			}
+		for i := range pods.Items {
+			addPodRequest(cap, byNode, &pods.Items[i])
 		}
+		if pods.Continue == "" {
+			return nil
+		}
+		opts.Continue = pods.Continue
 	}
-	return nil
+}
+
+func addPodRequest(cap *ClusterCapacity, byNode map[string]int, p *corev1.Pod) {
+	if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+		return
+	}
+	cpu, mem := podRequest(p)
+	cap.RequestedCPUMilli += cpu
+	cap.RequestedMemBytes += mem
+	if i, ok := byNode[p.Spec.NodeName]; ok {
+		cap.Nodes[i].RequestedCPUMilli += cpu
+		cap.Nodes[i].RequestedMemBytes += mem
+	}
+}
+
+// podRequest is the scheduler's effective request: the larger of the regular
+// containers' sum and the largest init container, plus the pod's overhead.
+func podRequest(p *corev1.Pod) (cpuMilli, memBytes int64) {
+	for _, ctr := range p.Spec.Containers {
+		cpuMilli += ctr.Resources.Requests.Cpu().MilliValue()
+		memBytes += ctr.Resources.Requests.Memory().Value()
+	}
+	for _, ctr := range p.Spec.InitContainers {
+		cpuMilli = max(cpuMilli, ctr.Resources.Requests.Cpu().MilliValue())
+		memBytes = max(memBytes, ctr.Resources.Requests.Memory().Value())
+	}
+	cpuMilli += p.Spec.Overhead.Cpu().MilliValue()
+	memBytes += p.Spec.Overhead.Memory().Value()
+	return cpuMilli, memBytes
 }

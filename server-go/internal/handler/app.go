@@ -13,9 +13,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -70,28 +70,28 @@ func (h *AppHandler) present(app *apphost.App) appResponse {
 // reference resolves to is rendered by EXC-379/386.
 type projectSources struct {
 	instances storage.InstanceStore
+	plans     ProjectPlans
+}
+
+// ProjectPlans answers which plan a project's organisation is on now.
+type ProjectPlans interface {
+	ProjectPlanTier(ctx context.Context, projectID string) (domain.TierType, error)
 }
 
 // NewProjectSourceLookup answers both questions an app write asks about the
-// project it is being written to: which tier it is on, and whether it exposes
+// project it is being written to: which plan sizes it, and whether it exposes
 // the source a reference names.
-func NewProjectSourceLookup(instances storage.InstanceStore) apphost.ProjectFacts {
-	return projectSources{instances: instances}
+func NewProjectSourceLookup(instances storage.InstanceStore, plans ProjectPlans) apphost.ProjectFacts {
+	return projectSources{instances: instances, plans: plans}
 }
 
-// Tier reports the tier the project is on. It is the project's tier that
-// sizes an app, exactly as it sizes the project's function runtime and its
-// storage quota — a caller never names one. A project with no tier recorded
-// is a broken row and is reported as an error, not sized as free.
-func (p projectSources) Tier(projectID string) (domain.TierType, error) {
-	inst, err := p.instances.FindByProjectID(projectID)
-	if err != nil {
-		return "", fmt.Errorf("look up project tier: %w", err)
+// Tier is the organisation's current plan: it sizes an app exactly as it
+// sizes the project, and a caller never names one.
+func (p projectSources) Tier(ctx context.Context, projectID string) (domain.TierType, error) {
+	if p.plans == nil {
+		return "", errors.New("no plan source")
 	}
-	if inst == nil || inst.Tier == "" {
-		return "", fmt.Errorf("project %s has no tier recorded", projectID)
-	}
-	return inst.Tier, nil
+	return p.plans.ProjectPlanTier(ctx, projectID)
 }
 
 func (p projectSources) HasSource(projectID string, kind apphost.SourceKind, name string) (bool, error) {
@@ -205,7 +205,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tier, err := h.project.Tier(projectID)
+	tier, err := h.project.Tier(r.Context(), projectID)
 	if err != nil {
 		httpError(w, "could not read the project's tier", http.StatusInternalServerError)
 		return
@@ -279,7 +279,7 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 	applyAppUpdate(existing, req)
 	// The tier follows the project, so an app never keeps an envelope the
 	// project has moved off.
-	tier, err := h.project.Tier(projectID)
+	tier, err := h.project.Tier(r.Context(), projectID)
 	if err != nil {
 		httpError(w, "could not read the project's tier", http.StatusInternalServerError)
 		return

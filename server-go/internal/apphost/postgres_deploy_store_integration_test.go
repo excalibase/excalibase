@@ -4,6 +4,7 @@ package apphost_test
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -438,5 +439,64 @@ func TestPGDeployStore_ClosedDBErrorsOnFinishAndListUnfinished(t *testing.T) {
 	}
 	if _, err := deployStore.ListUnfinished(); err == nil {
 		t.Error("ListUnfinished on a closed db must fail")
+	}
+}
+
+func resizeOf(from *apphost.Deploy, tier domain.TierType) *apphost.Deploy {
+	resize := *from
+	resize.ID = from.ID + "-resize"
+	resize.Kind = apphost.DeployKindResize
+	resize.Status = apphost.DeployStatusSucceeded
+	resize.Config.Tier = tier
+	resize.Spec.Resources = apphost.DeployResources{CPURequest: "50m", CPULimit: "250m", MemoryRequest: "128Mi", MemoryLimit: "256Mi"}
+	resize.CreatedAt = time.Now().UTC()
+	resize.FinishedAt = &resize.CreatedAt
+	return &resize
+}
+
+// A resized resume is one history entry and the app's recorded size, in one
+// write, and only while the app is resuming.
+func TestPGDeployStore_RecordResize(t *testing.T) {
+	appStore, app := createdApp(t, "proj_deploy_resize", "app_deploy_resize")
+	deployStore := apphost.NewPostgresDeployStore(sharedDB)
+	first := sampleDeploy(app.ProjectID, app.ID, "dev-1")
+	if err := deployStore.Create(first); err != nil {
+		t.Fatalf("create deploy: %v", err)
+	}
+	if err := deployStore.Finish(first.ID, apphost.DeployStatusSucceeded, "", time.Now(), apphost.StatusRunning); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+
+	resize := resizeOf(first, domain.Free)
+	if err := deployStore.RecordResize(resize); !errors.Is(err, apphost.ErrAppStatusConflict) {
+		t.Fatalf("while running: err = %v, want ErrAppStatusConflict", err)
+	}
+	if _, err := appStore.Transition(app.ProjectID, app.ID, []string{apphost.StatusRunning}, apphost.StatusResuming); err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	if err := deployStore.RecordResize(resize); err != nil {
+		t.Fatalf("RecordResize: %v", err)
+	}
+
+	latest, err := deployStore.GetLatest(app.ProjectID, app.ID)
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if latest.ID != resize.ID || latest.Revision != 2 || latest.Kind != apphost.DeployKindResize ||
+		latest.Status != apphost.DeployStatusSucceeded || latest.FinishedAt == nil || latest.Config.Tier != domain.Free {
+		t.Fatalf("latest = %+v", latest)
+	}
+	if earlier, _ := deployStore.Get(app.ProjectID, app.ID, first.ID); earlier.Kind != apphost.DeployKindDeploy {
+		t.Fatalf("a deploy reads back as kind %q", earlier.Kind)
+	}
+	stored, err := appStore.Get(app.ProjectID, app.ID)
+	if err != nil || stored.Tier != domain.Free || stored.Version != app.Version || stored.Status != apphost.StatusResuming {
+		t.Fatalf("app = %+v, %v; the tier moves, the version and status do not", stored, err)
+	}
+
+	pending := resizeOf(first, domain.Free)
+	pending.ID, pending.Status = "not-finished", apphost.DeployStatusPending
+	if err := deployStore.RecordResize(pending); err == nil {
+		t.Fatal("a resize is recorded finished, never pending")
 	}
 }

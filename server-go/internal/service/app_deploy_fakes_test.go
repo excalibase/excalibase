@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 type fakeAppStoreForDeploy struct {
@@ -112,9 +113,49 @@ type fakeDeployStore struct {
 	getErr    error
 	// appStatus is what Finish recorded for each app, keyed by app id.
 	appStatus map[string]string
+	// appTier is what RecordResize recorded for each app, keyed by app id.
+	appTier   map[string]domain.TierType
+	recordErr error
 }
 
-func newFakeDeployStore() *fakeDeployStore { return &fakeDeployStore{appStatus: map[string]string{}} }
+func (f *fakeDeployStore) RecordResize(resize *apphost.Deploy) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.recordErr != nil {
+		return f.recordErr
+	}
+	revision := 0
+	for _, d := range f.deploys {
+		if d.AppID == resize.AppID {
+			revision = max(revision, d.Revision)
+		}
+	}
+	resize.Revision = revision + 1
+	stored := *resize
+	f.deploys = append(f.deploys, &stored)
+	f.appTier[resize.AppID] = resize.Config.Tier
+	return nil
+}
+
+func (f *fakeDeployStore) appTierOf(appID string) domain.TierType {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.appTier[appID]
+}
+
+func (f *fakeDeployStore) finishSeeded(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.deploys {
+		if d.ID == id {
+			d.Status = apphost.DeployStatusSucceeded
+		}
+	}
+}
+
+func newFakeDeployStore() *fakeDeployStore {
+	return &fakeDeployStore{appStatus: map[string]string{}, appTier: map[string]domain.TierType{}}
+}
 
 func (f *fakeDeployStore) Create(deploy *apphost.Deploy) error {
 	f.mu.Lock()

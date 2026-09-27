@@ -27,6 +27,9 @@ type DeployStore interface {
 	// Get returns nil (no error) when id names no deploy scoped to
 	// (projectID, appID).
 	Get(projectID, appID, id string) (*Deploy, error)
+	// RecordResize adds a finished resize entry and sets the app's recorded
+	// tier to the one it names, in one write and only while the app is resuming.
+	RecordResize(resize *Deploy) error
 }
 
 var _ DeployStore = (*PostgresDeployStore)(nil)

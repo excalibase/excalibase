@@ -1111,6 +1111,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 			RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Route: appRoute(cfg),
 		})
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
+	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
+	appDeploySvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
 	// A restore finishes the way a provision does: the adapters hand the
 	// recovered database to the provisioning service's registration path
@@ -1224,7 +1226,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies(), store),
 		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants(), store, cfg.ExposureEnforced),
 		appHandler: handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
-			handler.NewProjectSourceLookup(store), appRoute(cfg).Public()),
+			handler.NewProjectSourceLookup(store, service.NewOrgPlanTiers(store, sqlStore)), appRoute(cfg).Public()),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeploySvc:        appDeploySvc,
 		appDeployHandler:    handler.NewAppDeployHandler(appDeploySvc),

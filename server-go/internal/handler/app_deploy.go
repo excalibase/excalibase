@@ -9,6 +9,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
@@ -18,7 +19,7 @@ type AppDeployer interface {
 	RedeployApp(ctx context.Context, projectID, appID, deployID, actor string) (*apphost.Deploy, error)
 	ListDeploys(projectID, appID string, limit int) ([]*apphost.Deploy, error)
 	PauseApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
-	ResumeApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
+	ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error)
 	DeleteApp(ctx context.Context, projectID, appID string) error
 }
 
@@ -115,7 +116,9 @@ func (h *AppDeployHandler) Pause(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AppDeployHandler) Resume(w http.ResponseWriter, r *http.Request) {
-	h.lifecycle(w, r, h.deploys.ResumeApp)
+	h.lifecycle(w, r, func(ctx context.Context, projectID, appID string) (*apphost.App, error) {
+		return h.deploys.ResumeApp(ctx, projectID, appID, actorID(r))
+	})
 }
 
 // Delete answers once the app's pods are gone and the app is forgotten, not when the deletion was asked for.
@@ -157,6 +160,12 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, err.Error()+"; retry to finish", http.StatusGatewayTimeout)
 	case errors.Is(err, k8s.ErrAppRollout):
 		httpError(w, err.Error(), http.StatusBadGateway)
+	case errors.Is(err, service.ErrAppOverPlan):
+		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, service.ErrOrgTierUnresolved):
+		httpError(w, service.ErrOrgTierUnresolved.Error(), http.StatusInternalServerError)
+	case errors.Is(err, service.ErrAppCapacity):
+		httpError(w, service.ErrAppCapacity.Error(), http.StatusServiceUnavailable)
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)
 	}
