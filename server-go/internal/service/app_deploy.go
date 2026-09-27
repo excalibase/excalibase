@@ -15,7 +15,8 @@ import (
 	"github.com/google/uuid"
 )
 
-const defaultAppRolloutTimeout = 5 * time.Minute
+// Large images need time to pull.
+const defaultAppRolloutTimeout = 10 * time.Minute
 
 var errNoAppNamespace = errors.New("the project has no namespace to deploy into")
 
