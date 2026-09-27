@@ -325,3 +325,56 @@ func TestScheduleDeletionOfAResumingProjectIsRefusedNotDeleted(t *testing.T) {
 type noopPauser struct{}
 
 func (noopPauser) Pause(context.Context, string, string) error { return nil }
+
+// The sweep's list is read before each teardown takes the lease. A project
+// cancelled (and even unprotected) in between is not due and must survive.
+func TestSweepSkipsAProjectCancelledAfterItWasListed(t *testing.T) {
+	h := newGraceHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.ScheduleDeletion(ctx, graceProject, DeprovisionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.CancelDeletion(ctx, graceProject); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.SetDeletionProtection(graceProject, false); err != nil {
+		t.Fatal(err)
+	}
+	due := h.now.Add(DeletionGracePeriod + time.Hour)
+	err := h.svc.DeprovisionWithOptions(ctx, graceProject, DeprovisionOptions{dueAt: &due})
+	if !errors.Is(err, ErrDeletionNotDue) || h.row(t) == nil {
+		t.Fatalf("got %v: a cancelled project must not be hard-deleted by a stale sweep", err)
+	}
+}
+
+// A scheduled teardown that stopped at the backup purge is retried by the
+// sweep; no owner is left to retry it.
+func TestSweepRetriesAScheduledDeletionStuckAtTheBackupPurge(t *testing.T) {
+	h := newGraceHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.ScheduleDeletion(ctx, graceProject, DeprovisionOptions{DeleteBackups: DeleteBackupsOption(true)}); err != nil {
+		t.Fatal(err)
+	}
+	h.now = h.now.Add(DeletionGracePeriod + time.Minute)
+	h.deleter.deleteErr = errors.New("r2 unavailable")
+	h.svc.RunDueDeletions(ctx)
+	if row := h.row(t); row == nil || row.Status != string(domain.StatusBackupsPendingDelete) {
+		t.Fatalf("row = %+v, want BACKUPS_PENDING_DELETE", row)
+	}
+	h.deleter.deleteErr = nil
+	if report := h.svc.RunDueDeletions(ctx); len(report.Deleted) != 1 || h.row(t) != nil {
+		t.Fatalf("report %+v: the sweep must finish the teardown", report)
+	}
+}
+
+type unsupportedPauser struct{}
+
+func (unsupportedPauser) Pause(context.Context, string, string) error { return ErrPauseUnsupported }
+
+func TestScheduleDeletionWithAnUnsupportedModeIsUnavailable(t *testing.T) {
+	h := newGraceHarness(t)
+	h.svc.SetDeletionPauser(unsupportedPauser{})
+	if _, err := h.svc.ScheduleDeletion(context.Background(), graceProject, DeprovisionOptions{}); !errors.Is(err, ErrDeletionGraceUnavailable) {
+		t.Fatalf("got %v, want ErrDeletionGraceUnavailable", err)
+	}
+}

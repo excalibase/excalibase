@@ -771,6 +771,9 @@ type DeprovisionOptions struct {
 	// never drop a purge someone already confirmed. A caller that explicitly
 	// asks to keep backups over a confirmed purge is refused.
 	DeleteBackups *bool
+	// dueAt, set only by the deletion sweep, makes the teardown proceed only
+	// if the row it re-reads under the lease is still due at that time.
+	dueAt *time.Time
 }
 
 // DeleteBackupsOption builds the explicit form of the option.
@@ -875,6 +878,11 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 	}
 	if !domain.IsDeletionStatus(inst.Status) && isProtected(inst) {
 		return fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
+	}
+	// The sweep listed this project before taking the lease; a cancel or a
+	// fresh schedule since then means it is not due any more.
+	if opts.dueAt != nil && !deletionDue(inst, *opts.dueAt) {
+		return fmt.Errorf("%w: %s", ErrDeletionNotDue, projectID)
 	}
 
 	deleteBackups, err := s.store.BeginDeletion(projectID, opts.DeleteBackups)
@@ -1222,7 +1230,9 @@ func (s *ProvisioningService) SetDeletionProtection(projectID string, enabled bo
 		return fmt.Errorf("%w: %s", ErrScheduledForDeletion, projectID)
 	}
 	inst.DeletionProtection = &enabled
-	return s.store.Update(inst)
+	// Pinned to the status read, so a DELETE that scheduled the project in
+	// between is not written back over.
+	return s.store.UpdateIfStatus(inst, inst.Status)
 }
 
 // execRoleSQL executes a psql command in the appropriate container (Docker or K8s).

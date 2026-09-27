@@ -481,7 +481,7 @@ func (h *ProvisioningHandler) SetDeletionProtection(w http.ResponseWriter, r *ht
 	}
 	if err := h.svc.SetDeletionProtection(projectID, *body.Enabled); err != nil {
 		status := http.StatusBadRequest
-		if errors.Is(err, service.ErrScheduledForDeletion) {
+		if errors.Is(err, service.ErrScheduledForDeletion) || errors.Is(err, storage.ErrProjectStatusChanged) {
 			status = http.StatusConflict
 		}
 		httpError(w, safeError(err), status)
