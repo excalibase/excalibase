@@ -212,6 +212,11 @@ func (h *StudioOAuthHandler) linkExisting(ctx context.Context, user *domain.User
 	if user.IsService() || !user.Active {
 		return nil, false, signInRefusal("account_conflict")
 	}
+	if user.EmailVerifiedAt == nil {
+		if err := h.discardUnprovenCredentials(ctx, user); err != nil {
+			return nil, false, err
+		}
+	}
 	if err := h.identities.LinkStudioIdentity(ctx, identity.Provider, identity.Subject, user.ID, identity.Email); err != nil {
 		return nil, false, err
 	}
@@ -223,6 +228,39 @@ func (h *StudioOAuthHandler) linkExisting(ctx context.Context, user *domain.User
 		user.EmailVerifiedAt = &now
 	}
 	return user, false, nil
+}
+
+// discardUnprovenCredentials replaces the password and revokes the sessions
+// of an account whose address was never proven: whoever registered it may not
+// own the address the provider has just proven.
+func (h *StudioOAuthHandler) discardUnprovenCredentials(ctx context.Context, user *domain.User) error {
+	hash, err := unusablePasswordHash()
+	if err != nil {
+		return err
+	}
+	if err := h.auth.userStore.UpdateUserPassword(ctx, user.Username, hash); err != nil {
+		return err
+	}
+	tokens, err := h.auth.tokenStore.ListTokensByUser(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	for _, token := range tokens {
+		if err := h.auth.tokenStore.DeleteToken(ctx, token.TokenHash); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unusablePasswordHash hashes a random secret nobody holds, so the account
+// signs in only through its provider until a reset sets a password.
+func unusablePasswordHash() (string, error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", err
+	}
+	return auth.HashPassword(hex.EncodeToString(secret))
 }
 
 func (h *StudioOAuthHandler) createFromIdentity(ctx context.Context, identity studiooauth.Identity, inviteHash string) (*domain.User, bool, error) {
@@ -283,11 +321,7 @@ func (h *StudioOAuthHandler) newUser(ctx context.Context, address string) (*doma
 	if err != nil {
 		return nil, err
 	}
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return nil, err
-	}
-	hash, err := auth.HashPassword(hex.EncodeToString(secret))
+	hash, err := unusablePasswordHash()
 	if err != nil {
 		return nil, err
 	}

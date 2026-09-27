@@ -32,9 +32,10 @@ const (
 type mockUserStore struct {
 	mu         sync.Mutex
 	users      map[string]*domain.User
-	failSave   bool
-	failList   bool
-	failDelete bool
+	failSave     bool
+	failList     bool
+	failDelete   bool
+	failPassword bool
 }
 
 func newMockUserStore() *mockUserStore {
@@ -105,6 +106,9 @@ func (s *mockUserStore) DeleteUser(_ context.Context, id string) error {
 func (s *mockUserStore) UpdateUserPassword(_ context.Context, username, hash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failPassword {
+		return errors.New("db error")
+	}
 	for _, u := range s.users {
 		if u.Username == username {
 			u.PasswordHash = hash

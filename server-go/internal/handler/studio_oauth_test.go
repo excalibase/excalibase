@@ -92,6 +92,7 @@ func newOAuthHarness(t *testing.T, inviteOnly bool) *oauthHarness {
 	oauth := NewStudioOAuthHandler(h.signIn, authHandler, h.identities, testStudioURL)
 	r := chi.NewRouter()
 	r.Route("/api/auth/oauth", func(r chi.Router) { oauth.Routes(r) })
+	r.Post("/api/auth/login", authHandler.Login)
 	h.router = r
 	return h
 }
@@ -204,6 +205,90 @@ func TestOAuthLinksAnExistingAccountWithTheSameEmail(t *testing.T) {
 	redirectedTo(t, h.callback("st4te"))
 	if len(h.users.users) != before {
 		t.Fatal("signing in again created an account")
+	}
+}
+
+// seedPasswordAccount files an account for dev@example.com that signs in
+// with a password and holds one live session.
+func seedPasswordAccount(t *testing.T, h *oauthHarness, verified bool) {
+	t.Helper()
+	hash, err := auth.HashPassword("registered-pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := &domain.User{ID: "u-dev", Username: "dev", Email: "dev@example.com", PasswordHash: hash, Active: true, Kind: domain.UserKindHuman}
+	if verified {
+		now := time.Now()
+		user.EmailVerifiedAt = &now
+	}
+	h.users.users[user.ID] = user
+	h.links.users[user.ID] = user.Email
+	h.tokens.tokens["old-session"] = &domain.AccessToken{UserID: user.ID, TokenHash: "old-session", Scopes: "session"}
+}
+
+func (h *oauthHarness) passwordLogin() int {
+	return doRequest(h.router, "POST", "/api/auth/login", `{"username":"dev","password":"registered-pass"}`).Code
+}
+
+// Whoever registered an unproven address may not be its owner: once the
+// owner proves it through a provider, the password and sessions that
+// registration produced stop working.
+func TestOAuthLinkToAnUnverifiedAccountDiscardsItsPassword(t *testing.T) {
+	h := newOAuthHarness(t, false)
+	seedPasswordAccount(t, h, false)
+
+	w := h.callback("st4te")
+
+	if loc := redirectedTo(t, w); loc.Path != "/oauth/complete" || sessionCookie(w) == nil {
+		t.Fatalf("redirected to %s", loc)
+	}
+	if _, ok := h.links.verified["u-dev"]; !ok || h.identities.links["github/4242"] != "u-dev" {
+		t.Fatal("the account was not linked and verified")
+	}
+	if code := h.passwordLogin(); code != http.StatusUnauthorized {
+		t.Fatalf("the registered password still signs in: %d", code)
+	}
+	if _, ok := h.tokens.tokens["old-session"]; ok {
+		t.Fatal("a session from before the link survived")
+	}
+}
+
+func TestOAuthLinkToAVerifiedAccountKeepsItsPassword(t *testing.T) {
+	h := newOAuthHarness(t, false)
+	seedPasswordAccount(t, h, true)
+
+	redirectedTo(t, h.callback("st4te"))
+
+	if code := h.passwordLogin(); code != http.StatusOK {
+		t.Fatalf("the owner's password stopped working: %d", code)
+	}
+	if _, ok := h.tokens.tokens["old-session"]; !ok {
+		t.Fatal("the owner's session was revoked")
+	}
+}
+
+func TestOAuthLinkIsRefusedWhenTheOldCredentialsCannotBeDiscarded(t *testing.T) {
+	cases := map[string]func(h *oauthHarness){
+		"password":     func(h *oauthHarness) { h.users.failPassword = true },
+		"list tokens":  func(h *oauthHarness) { h.tokens.failList = true },
+		"delete token": func(h *oauthHarness) { h.tokens.failDelete = true },
+	}
+	for name, breakStore := range cases {
+		h := newOAuthHarness(t, false)
+		seedPasswordAccount(t, h, false)
+		breakStore(h)
+
+		w := h.callback("st4te")
+
+		if got := redirectedTo(t, w).Query().Get("oauth_error"); got != "failed" || sessionCookie(w) != nil {
+			t.Errorf("%s: oauth_error=%q", name, got)
+		}
+		if _, linked := h.identities.links["github/4242"]; linked {
+			t.Errorf("%s: the identity was linked", name)
+		}
+		if _, verified := h.links.verified["u-dev"]; verified || h.users.users["u-dev"].EmailVerifiedAt != nil {
+			t.Errorf("%s: the account was verified", name)
+		}
 	}
 }
 
