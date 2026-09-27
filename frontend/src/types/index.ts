@@ -68,6 +68,8 @@ export interface DatabaseInstance {
   failureStep?: string;
   rollbackLog?: string;
   backupEnabled: boolean;
+  // On for every new project; only an org Owner may turn it off.
+  deletionProtection?: boolean;
   backupSchedule?: string;
   backupRetentionDays?: number;
   metricsEndpoint?: string;

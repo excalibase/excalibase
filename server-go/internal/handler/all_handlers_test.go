@@ -888,3 +888,24 @@ func testBackupStorage() service.BackupStorageSource {
 type answeringProbe struct{}
 
 func (answeringProbe) Probe(context.Context, string) error { return nil }
+
+// A body that does not say which way to set protection must not turn it off.
+func TestSetDeletionProtectionRequiresExplicitValue(t *testing.T) {
+	for _, body := range []string{``, `{}`, `not json`, `{"enabled":null}`} {
+		r, store, mock := fullRouter(t)
+		seedInstance(store, mock)
+		on := true
+		inst, _ := store.FindByProjectID("test-db")
+		inst.DeletionProtection = &on
+		store.Update(inst)
+
+		w := doRequest(r, "PATCH", "/api/provision/test-db/deletion-protection", body)
+		if w.Code != 400 {
+			t.Errorf("body %q: got %d, want 400", body, w.Code)
+		}
+		after, _ := store.FindByProjectID("test-db")
+		if after.DeletionProtection == nil || !*after.DeletionProtection {
+			t.Errorf("body %q turned protection off", body)
+		}
+	}
+}

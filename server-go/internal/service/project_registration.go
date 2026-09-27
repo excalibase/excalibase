@@ -158,6 +158,8 @@ func markProjectRestoring(inst *domain.DatabaseInstance) {
 	markProjectActive(inst)
 	inst.Status = string(domain.StatusRestoring)
 	inst.CurrentStage = domain.StatusRestoring
+	// DELETE is an abandoned restore's only way out; protection starts at ACTIVE.
+	inst.DeletionProtection = nil
 }
 
 // markProjectActive stamps the terminal provisioning state onto the row.
@@ -166,7 +168,7 @@ func markProjectActive(inst *domain.DatabaseInstance) {
 	inst.CurrentStage = domain.StageCompleted
 	inst.CurrentStep = ""
 	if inst.DeletionProtection == nil {
-		inst.DeletionProtection = boolPtr(false)
+		inst.DeletionProtection = boolPtr(true)
 	}
 	if inst.PoolerEnabled == nil {
 		inst.PoolerEnabled = boolPtr(false)

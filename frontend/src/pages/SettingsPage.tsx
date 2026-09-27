@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Loader2, Server, Database, Shield, Clock, Trash2, Copy, Check, AlertTriangle, PauseCircle, PlayCircle } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../api/client';
-import { useDeprovisionDatabase, usePauseProject, useResumeProject } from '../hooks/useProvisioning';
+import { useDeprovisionDatabase, usePauseProject, useResumeProject, useSetDeletionProtection } from '../hooks/useProvisioning';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { ConnectionStrings } from '../components/ConnectionStrings';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
@@ -52,6 +52,7 @@ export function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [showDelete, setShowDelete] = useState(false);
   const deprovision = useDeprovisionDatabase();
+  const setProtection = useSetDeletionProtection();
   const pauseProject = usePauseProject();
   const resumeProject = useResumeProject();
   // The public host, port, TLS posture and cluster CA all come from the
@@ -75,6 +76,7 @@ export function SettingsPage() {
   // A major that can carry DocumentDB says nothing about whether this project
   // was created with it; only the project record does.
   const documentDb = project.documentDb === true;
+  const protectedFromDeletion = project.deletionProtection === true;
 
   const info = [
     { icon: Server, label: 'Display Name', value: project.projectName || '-' },
@@ -199,13 +201,30 @@ const excalibase = createClient({
         <p className="text-xs text-text-secondary mb-3">
           Deleting this project will permanently remove all data, backups, and configurations.
         </p>
-        <button
-          onClick={() => setShowDelete(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors"
-          data-testid="delete-project-btn"
-        >
-          <Trash2 className="w-4 h-4" /> Delete Project
-        </button>
+        <p className="text-xs text-text-secondary mb-3" data-testid="deletion-protection-state">
+          {protectedFromDeletion
+            ? 'Deletion protection is on. An org owner must turn it off before the project can be deleted.'
+            : 'Deletion protection is off. Any org admin can delete this project.'}
+        </p>
+        <div className="flex gap-2">
+          <button
+            onClick={() => projectId && setProtection.mutate({ projectId, enabled: !protectedFromDeletion })}
+            disabled={setProtection.isPending}
+            className="flex items-center gap-2 px-4 py-2 border border-red-500/40 text-red-400 hover:bg-red-500/10 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+            data-testid="deletion-protection-btn"
+          >
+            <Shield className="w-4 h-4" />
+            {protectedFromDeletion ? 'Turn off deletion protection' : 'Turn on deletion protection'}
+          </button>
+          <button
+            onClick={() => setShowDelete(true)}
+            disabled={protectedFromDeletion}
+            className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="delete-project-btn"
+          >
+            <Trash2 className="w-4 h-4" /> Delete Project
+          </button>
+        </div>
       </div>
 
       <ConfirmModal

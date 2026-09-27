@@ -96,6 +96,19 @@ export const useDeprovisionDatabase = () => {
   });
 };
 
+export const useSetDeletionProtection = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ projectId, enabled }: { projectId: string; enabled: boolean }) => {
+      await api.patch(`/provision/${projectId}/deletion-protection`, { enabled });
+    },
+    onSuccess: (_data, { projectId }) => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['instances'] });
+    },
+  });
+};
+
 interface PauseResponse {
   projectId: string;
   status: string;

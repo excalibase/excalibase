@@ -135,6 +135,18 @@ curl -X DELETE -H "Authorization: Bearer $PAT" \
   https://<host>/api/admin/projects/proj-abc123
 ```
 
+### Deletion protection is on for every project
+
+A project is created with deletion protection on, and `DELETE
+/api/provision/<projectId>/` answers `400` until an org **Owner** turns it off:
+
+```bash
+curl -X PATCH -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' \
+  -d '{"enabled": false}' https://<host>/api/provision/proj-abc123/deletion-protection
+```
+
+The body must name `enabled`; an empty or malformed body is refused.
+
 ### Deleting a project is observed, not fire-and-forget
 
 `DELETE /api/provision/<projectId>/` runs the teardown and only removes the

@@ -433,14 +433,17 @@ func (h *ProvisioningHandler) GetCredentials(w http.ResponseWriter, r *http.Requ
 func (h *ProvisioningHandler) SetDeletionProtection(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	var body struct {
-		Enabled bool `json:"enabled"`
+		Enabled *bool `json:"enabled"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
-	if err := h.svc.SetDeletionProtection(projectID, body.Enabled); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Enabled == nil {
+		httpError(w, `body must be {"enabled": true|false}`, http.StatusBadRequest)
+		return
+	}
+	if err := h.svc.SetDeletionProtection(projectID, *body.Enabled); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"projectId": projectID, "deletionProtection": body.Enabled})
+	writeJSON(w, map[string]interface{}{"projectId": projectID, "deletionProtection": *body.Enabled})
 }
 
 func (h *ProvisioningHandler) EstimateCost(w http.ResponseWriter, r *http.Request) {

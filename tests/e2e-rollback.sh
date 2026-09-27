@@ -78,6 +78,7 @@ PROJECT_ID=$(echo "$R" | jq -r '.projectId')
 if [[ "$PROJECT_ID" == proj-* ]]; then
   pass "valid request accepted (ref=$PROJECT_ID)"
   # Clean up
+  curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"enabled":false}' "http://localhost:24005/api/provision/$PROJECT_ID/deletion-protection" > /dev/null 2>&1
   curl -s -X DELETE "http://localhost:24005/api/provision/$PROJECT_ID" \
     -H "Authorization: Bearer $TOKEN" > /dev/null
 else
