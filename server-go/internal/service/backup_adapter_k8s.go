@@ -368,7 +368,9 @@ func (a *K8sBackupAdapter) scheduleBackups(ctx context.Context, target restoreTa
 	if backup == nil || !backup.Enabled {
 		return nil
 	}
-	scheduled := k8s.BuildScheduledBackup(target.project, target.namespace, backup.Schedule)
+	// The recovered data has no base backup under the new project's prefix, so
+	// its WAL is unusable for recovery until one is taken.
+	scheduled := k8s.BuildFirstScheduledBackup(target.project, target.namespace, backup.Schedule)
 	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, target.namespace, scheduled); err != nil {
 		return fmt.Errorf("schedule restored project backups: %w", err)
 	}

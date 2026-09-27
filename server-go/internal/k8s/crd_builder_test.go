@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 const (
@@ -103,6 +104,17 @@ func TestBuildPostgreSQLClusterJSON(t *testing.T) {
 	_, err := json.Marshal(obj.Object)
 	if err != nil {
 		t.Fatalf("CRD not serializable to JSON: %v", err)
+	}
+}
+
+func TestFirstScheduledBackupStartsImmediately(t *testing.T) {
+	for want, obj := range map[bool]*unstructured.Unstructured{
+		false: BuildScheduledBackup("duke-db", "exca-duke-db", testCronSchedule),
+		true:  BuildFirstScheduledBackup("duke-db", "exca-duke-db", testCronSchedule),
+	} {
+		if got := obj.Object["spec"].(map[string]interface{})["immediate"]; got != want {
+			t.Errorf("immediate: got %v, want %v", got, want)
+		}
 	}
 }
 
