@@ -18,6 +18,8 @@ type BackupRef struct {
 	StartedAt  string `json:"startedAt,omitempty"`
 	FinishedAt string `json:"finishedAt,omitempty"`
 	SizeBytes  int64  `json:"sizeBytes,omitempty"`
+	// Error is why the backup failed, as the engine reported it.
+	Error string `json:"error,omitempty"`
 }
 
 // BackupAdapter routes backup/restore lifecycle to the deployment-mode

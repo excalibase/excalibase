@@ -2,7 +2,6 @@ package k8s
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -69,21 +68,17 @@ type PostgreSQLClusterOpts struct {
 	ServerAltDNSNames []string
 }
 
+// BackupOpts turns a cluster's backups on. The cluster only names its
+// ObjectStore; the store itself is BuildBackupObjectStore's, from the same
+// options.
 type BackupOpts struct {
 	Schedule      string
 	RetentionDays int
-	// EndpointURL is the S3-compatible storage endpoint Barman writes to.
-	// For Cloudflare R2: https://<account_id>.r2.cloudflarestorage.com
-	// For AWS S3: empty (the key is omitted and Barman defaults to AWS).
-	// A localstack/floci endpoint is only ever used when set explicitly.
+	// EndpointURL is the S3-compatible endpoint. Empty means AWS S3.
 	EndpointURL string
-	// Bucket is the destination bucket name. Path within the bucket is
-	// automatically scoped to the project: s3://<bucket>/<projectID>/...
-	// Empty defaults to "postgres-backups" (legacy default).
+	// Bucket is required; objects land under s3://<bucket>/<projectID>/.
 	Bucket string
-	// SecretName is the K8s Secret holding ACCESS_KEY_ID + ACCESS_SECRET_KEY.
-	// Same field names work for AWS S3, R2, MinIO, floci/localstack — Barman
-	// is provider-agnostic at this layer.
+	// SecretName is the Secret holding ACCESS_KEY_ID + ACCESS_SECRET_KEY.
 	SecretName string
 }
 
@@ -298,7 +293,11 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 	// The gateway sidecar is opt-in per cluster (EXC-409). A cluster that
 	// names no plugin is never handed to the injector, so an ordinary
 	// project's pods are untouched by any of this.
-	if plugins := buildDocumentDBPlugins(opts); len(plugins) > 0 {
+	plugins := buildDocumentDBPlugins(opts)
+	if opts.Backup != nil {
+		plugins = append(plugins, backupPlugin(opts.ProjectID))
+	}
+	if len(plugins) > 0 {
 		spec["plugins"] = plugins
 	}
 	if opts.DocumentDB {
@@ -308,10 +307,6 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 
 	if initdb := namedAppDatabase(opts); initdb != nil {
 		spec["bootstrap"] = map[string]interface{}{"initdb": initdb}
-	}
-
-	if opts.Backup != nil {
-		spec["backup"] = buildBackupSpec(opts.ProjectID, opts.Backup)
 	}
 
 	if opts.ImageName != "" {
@@ -450,86 +445,28 @@ func withDocumentDBLibraries(tenant []interface{}) []interface{} {
 	return libraries
 }
 
-// buildBackupSpec builds the backup section of the CNPG Cluster spec.
-// Provider-agnostic: works for AWS S3, Cloudflare R2, MinIO, floci. The
-// caller picks via BackupOpts{EndpointURL, Bucket, SecretName}; bucket and
-// secret keep legacy defaults, the endpoint never does — an empty endpoint
-// means AWS S3, never a localstack mock.
-func buildBackupSpec(projectID string, backup *BackupOpts) map[string]interface{} {
-	store := ObjectStoreOpts{EndpointURL: backup.EndpointURL, Bucket: backup.Bucket, SecretName: backup.SecretName}
-	if store.Bucket == "" {
-		store.Bucket = DefaultBackupBucket
-	}
-	if store.SecretName == "" {
-		store.SecretName = "backup-s3-creds"
-	}
-	barman := buildBarmanObjectStore(projectID, store)
-	barman["wal"] = map[string]interface{}{"compression": "gzip", "maxParallel": int64(2)}
-	barman["data"] = map[string]interface{}{"compression": "gzip"}
-	return map[string]interface{}{
-		"retentionPolicy":   fmt.Sprintf("%dd", backup.RetentionDays),
-		"barmanObjectStore": barman,
-	}
-}
-
-const (
-	// DefaultBackupBucket is the bucket Barman writes to when the backup
-	// options carry none (legacy default).
-	DefaultBackupBucket = "postgres-backups"
-	// barmanServerName is the Barman server name under destinationPath;
-	// every base backup and WAL segment lands beneath it.
-	barmanServerName = "cloud"
-)
-
-// BarmanObjectPrefix is the object-key prefix (relative to the bucket) that
-// holds everything Barman wrote for a project: destinationPath/serverName/.
-// The deprovision purge deletes exactly this prefix, so it is derived from
-// the same values buildBarmanObjectStore puts in the CRD.
-func BarmanObjectPrefix(projectID string) string {
-	return projectID + "/" + barmanServerName + "/"
-}
-
-// buildBarmanObjectStore is the one place the barmanObjectStore block is
-// shaped, so backup (write), restore (read) and purge (delete) agree on
-// serverName, destinationPath, endpoint and credential keys.
-func buildBarmanObjectStore(projectID string, store ObjectStoreOpts) map[string]interface{} {
-	barman := map[string]interface{}{
-		"serverName":      barmanServerName,
-		"destinationPath": fmt.Sprintf("s3://%s/%s", store.Bucket, projectID),
-		"s3Credentials": map[string]interface{}{
-			"accessKeyId":     map[string]interface{}{"name": store.SecretName, "key": "ACCESS_KEY_ID"},
-			"secretAccessKey": map[string]interface{}{"name": store.SecretName, "key": "ACCESS_SECRET_KEY"},
-		},
-	}
-	if store.EndpointURL != "" {
-		barman["endpointURL"] = store.EndpointURL
-	}
-	return barman
-}
-
 // BuildRestoreCluster builds the project's cluster as BuildPostgreSQLCluster
-// does, bootstrapped by recovering the source project's Barman backups from
-// the given store instead of by initdb.
+// does, bootstrapped by recovering the source project's backups through
+// BuildRecoverySourceObjectStore's store instead of by initdb.
 func BuildRestoreCluster(opts RestoreClusterOpts) (*unstructured.Unstructured, error) {
 	if err := validateTierSizing(opts.Cluster.Tier); err != nil {
 		return nil, err
 	}
-	recovery := map[string]interface{}{"source": "clusterBackup"}
+	if _, err := objectStoreConfiguration(opts.SourceProjectID, opts.Store); err != nil {
+		return nil, err
+	}
+	recovery := map[string]interface{}{"source": recoverySourceName}
 	for key, value := range namedAppDatabase(opts.Cluster) {
 		recovery[key] = value
 	}
 	if opts.RecoveryTarget != nil {
 		recovery["recoveryTarget"] = opts.RecoveryTarget
 	}
-	barman := buildBarmanObjectStore(opts.SourceProjectID, opts.Store)
-	barman["wal"] = map[string]interface{}{"maxParallel": int64(8)}
 
 	cluster := BuildPostgreSQLCluster(opts.Cluster)
 	spec := cluster.Object["spec"].(map[string]interface{})
 	spec["bootstrap"] = map[string]interface{}{"recovery": recovery}
-	spec["externalClusters"] = []interface{}{
-		map[string]interface{}{"name": "clusterBackup", "barmanObjectStore": barman},
-	}
+	spec["externalClusters"] = []interface{}{recoverySource(opts.Cluster.ProjectID)}
 	return cluster, nil
 }
 
@@ -557,15 +494,7 @@ func scheduledBackup(projectID, namespace, schedule string, immediate bool) (*un
 				"name":      projectID + "-postgres-backup",
 				"namespace": namespace,
 			},
-			"spec": map[string]interface{}{
-				"schedule":             schedule,
-				"backupOwnerReference": "self",
-				"cluster": map[string]interface{}{
-					"name": projectID + postgresSuffix,
-				},
-				"immediate": immediate,
-				"target":    "prefer-standby",
-			},
+			"spec": scheduledBackupSpec(projectID, schedule, immediate),
 		},
 	}, nil
 }
@@ -580,11 +509,16 @@ func BuildManualBackup(projectID, namespace, backupName string) *unstructured.Un
 				"name":      backupName,
 				"namespace": namespace,
 			},
-			"spec": map[string]interface{}{
-				"cluster": map[string]interface{}{
-					"name": projectID + postgresSuffix,
-				},
-			},
+			"spec": pluginBackupSpec(projectID + postgresSuffix),
 		},
 	}
+}
+
+func scheduledBackupSpec(projectID, schedule string, immediate bool) map[string]interface{} {
+	spec := pluginBackupSpec(projectID + postgresSuffix)
+	spec["schedule"] = schedule
+	spec["backupOwnerReference"] = "self"
+	spec["immediate"] = immediate
+	spec["target"] = "prefer-standby"
+	return spec
 }

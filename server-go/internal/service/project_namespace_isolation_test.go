@@ -53,7 +53,7 @@ func assertProjectNamespaceIsolated(t *testing.T, clientset kubernetes.Interface
 
 func TestRestoreNamespaceIsIsolatedAndQuotaed(t *testing.T) {
 	client, clientset := fakeKube()
-	adapter := NewK8sBackupAdapter(client, t.TempDir(), StaticBackupStorage(r2Storage()))
+	adapter := NewK8sBackupAdapter(client, StaticBackupStorage(r2Storage()))
 	pc := provisioner.NewProvisionContext(nil, nil)
 	req := domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"}
 

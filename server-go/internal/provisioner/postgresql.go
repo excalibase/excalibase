@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -154,13 +155,8 @@ func (p *PostgreSQLProvisioner) provisionNamespace(ctx context.Context, req doma
 	if err := p.client.CreateProjectNamespace(ctx, namespace, req.OrgID); err != nil {
 		return fmt.Errorf("create namespace: %w", err)
 	}
-	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 != nil {
-		if err := p.client.CreateSecret(ctx, namespace, "backup-s3-creds", map[string][]byte{
-			"ACCESS_KEY_ID":     []byte(req.Backup.S3.AccessKeyID),
-			"ACCESS_SECRET_KEY": []byte(req.Backup.S3.SecretAccessKey),
-		}); err != nil {
-			return fmt.Errorf("create backup secret: %w", err)
-		}
+	if err := p.createBackupStore(ctx, req, projectID, namespace, NewProvisionContext(nil, nil)); err != nil {
+		return err
 	}
 	// Before the cluster: the gateway container's env reads this Secret, and
 	// a pod whose env cannot be resolved does not start (EXC-409).
@@ -194,16 +190,7 @@ func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.Pro
 		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
 		ServerAltDNSNames:      altNames,
 	}
-	if req.Backup != nil && req.Backup.Enabled {
-		opts.Backup = &k8s.BackupOpts{
-			Schedule:      req.Backup.Schedule,
-			RetentionDays: req.Backup.Retention,
-		}
-		if req.Backup.S3 != nil {
-			opts.Backup.EndpointURL = req.Backup.S3.Endpoint
-			opts.Backup.Bucket = req.Backup.S3.Bucket
-		}
-	}
+	opts.Backup = clusterBackupOpts(req)
 	cluster := k8s.BuildPostgreSQLCluster(opts)
 	if err := p.client.ApplyCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
 		return fmt.Errorf("deploy cluster CRD: %w", err)
@@ -236,6 +223,15 @@ func (p *PostgreSQLProvisioner) provisionScheduledBackup(ctx context.Context, re
 	return nil
 }
 
+// validateBackup refuses, before anything exists, a backup CloudNativePG
+// could not run or that has nowhere to go.
+func validateBackup(req domain.ProvisioningRequest) error {
+	if err := validateBackupSchedule(req); err != nil {
+		return err
+	}
+	return validateBackupStore(req)
+}
+
 // validateBackupSchedule refuses, before anything exists, a backup whose
 // schedule CloudNativePG would not run as written. There is no fallback.
 func validateBackupSchedule(req domain.ProvisioningRequest) error {
@@ -245,12 +241,65 @@ func validateBackupSchedule(req domain.ProvisioningRequest) error {
 	return k8s.ValidateBackupSchedule(req.Backup.Schedule)
 }
 
+// ErrBackupStoreMissing refuses a project with backups on and no object store
+// to write them to.
+var ErrBackupStoreMissing = errors.New("backups are enabled but no backup object store is configured")
+
+// validateBackupStore refuses, before anything exists, backups that have
+// nowhere to go. There is no default store.
+func validateBackupStore(req domain.ProvisioningRequest) error {
+	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 == nil {
+		return ErrBackupStoreMissing
+	}
+	return nil
+}
+
+// clusterBackupOpts is the cluster's backups, or nil when the project has none.
+func clusterBackupOpts(req domain.ProvisioningRequest) *k8s.BackupOpts {
+	if req.Backup == nil || !req.Backup.Enabled || req.Backup.S3 == nil {
+		return nil
+	}
+	return &k8s.BackupOpts{
+		Schedule:      req.Backup.Schedule,
+		RetentionDays: req.Backup.Retention,
+		EndpointURL:   req.Backup.S3.Endpoint,
+		Bucket:        req.Backup.S3.Bucket,
+		SecretName:    k8s.BackupCredentialsSecretName,
+	}
+}
+
+// createBackupStore writes the project's object-store credentials and the
+// ObjectStore the Barman Cloud plugin archives through. Both live in the
+// project namespace, whose deletion removes them.
+func (p *PostgreSQLProvisioner) createBackupStore(ctx context.Context, req domain.ProvisioningRequest, projectID, namespace string, pc *ProvisionContext) error {
+	backup := clusterBackupOpts(req)
+	if backup == nil {
+		return nil
+	}
+	pc.SetStep("create backup secret")
+	if err := p.client.CreateSecret(ctx, namespace, k8s.BackupCredentialsSecretName, map[string][]byte{
+		"ACCESS_KEY_ID":     []byte(req.Backup.S3.AccessKeyID),
+		"ACCESS_SECRET_KEY": []byte(req.Backup.S3.SecretAccessKey),
+	}); err != nil {
+		return fmt.Errorf("create backup secret: %w", err)
+	}
+	pc.SetStep("create backup object store")
+	store, err := k8s.BuildBackupObjectStore(projectID, namespace, backup.Store(), backup.RetentionDays)
+	if err != nil {
+		return err
+	}
+	if err := p.client.ApplyCRD(ctx, k8s.ObjectStoreGVR, namespace, store); err != nil {
+		return fmt.Errorf("create backup object store (is the Barman Cloud plugin installed?): %w", err)
+	}
+	return nil
+}
+
 func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error) {
 	projectID := req.ProjectName
 	namespace := fmt.Sprintf("%s-%s", req.OrgID, req.ProjectName)
 
 	cb(domain.StageValidating)
-	if err := validateBackupSchedule(req); err != nil {
+	if err := validateBackup(req); err != nil {
 		return nil, err
 	}
 
@@ -310,7 +359,7 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 
 	// Stage 1: Validate
 	pc.SetStage(domain.StageValidating)
-	if err := validateBackupSchedule(req); err != nil {
+	if err := validateBackup(req); err != nil {
 		return nil, pc.Fail(err)
 	}
 
@@ -373,14 +422,8 @@ func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.P
 	pc.RegisterCleanup("delete namespace "+namespace, func(ctx context.Context) error {
 		return p.client.DeleteNamespace(ctx, namespace)
 	})
-	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 != nil {
-		pc.SetStep("create backup secret")
-		if err := p.client.CreateSecret(ctx, namespace, "backup-s3-creds", map[string][]byte{
-			"ACCESS_KEY_ID":     []byte(req.Backup.S3.AccessKeyID),
-			"ACCESS_SECRET_KEY": []byte(req.Backup.S3.SecretAccessKey),
-		}); err != nil {
-			return pc.Fail(fmt.Errorf("create backup secret: %w", err))
-		}
+	if err := p.createBackupStore(ctx, req, projectID, namespace, pc); err != nil {
+		return pc.Fail(err)
 	}
 	// Before the cluster: the gateway container's env reads this Secret, and
 	// a pod whose env cannot be resolved does not start (EXC-409).
@@ -420,16 +463,7 @@ func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.Provisi
 		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
 		ServerAltDNSNames:      altNames,
 	}
-	if req.Backup != nil && req.Backup.Enabled {
-		opts.Backup = &k8s.BackupOpts{
-			Schedule:      req.Backup.Schedule,
-			RetentionDays: req.Backup.Retention,
-		}
-		if req.Backup.S3 != nil {
-			opts.Backup.EndpointURL = req.Backup.S3.Endpoint
-			opts.Backup.Bucket = req.Backup.S3.Bucket
-		}
-	}
+	opts.Backup = clusterBackupOpts(req)
 	cluster := k8s.BuildPostgreSQLCluster(opts)
 	if err := p.client.ApplyCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
 		return pc.Fail(fmt.Errorf("deploy cluster CRD: %w", err))

@@ -79,7 +79,7 @@ func setupAdapterTest(t *testing.T) (*BackupService, *storage.FileSystemStore, *
 
 func TestBackupAdapter_DispatchesK8sToK8sAdapter(t *testing.T) {
 	svc, store, k8sFake, dockerFake := setupAdapterTest(t)
-	store.Create(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{BackupEnabled: boolPtr(true),
 		ProjectID: "k8s-1", OrgID: "org", Namespace: "org-k8s-1",
 		DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 	})
@@ -97,7 +97,7 @@ func TestBackupAdapter_DispatchesK8sToK8sAdapter(t *testing.T) {
 
 func TestBackupAdapter_DispatchesDockerToDockerAdapter(t *testing.T) {
 	svc, store, k8sFake, dockerFake := setupAdapterTest(t)
-	store.Create(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{BackupEnabled: boolPtr(true),
 		ProjectID: "dk-1", OrgID: "org", Namespace: "org-dk-1",
 		DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
@@ -117,7 +117,7 @@ func TestBackupAdapter_EmptyModeFallsBackToK8s(t *testing.T) {
 	// Pre-Phase-0 instances may exist with DeploymentMode="" before
 	// the migration backfilled them. Dispatch must treat empty as k8s.
 	svc, store, k8sFake, _ := setupAdapterTest(t)
-	store.Create(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{BackupEnabled: boolPtr(true),
 		ProjectID: "legacy", OrgID: "org", Namespace: "org-legacy",
 		Status: "ACTIVE", // DeploymentMode intentionally unset
 	})
@@ -156,7 +156,7 @@ func TestBackupAdapter_InstanceNotFound(t *testing.T) {
 
 func TestBackupAdapter_PropagatesAdapterError(t *testing.T) {
 	svc, store, k8sFake, _ := setupAdapterTest(t)
-	store.Create(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{BackupEnabled: boolPtr(true),
 		ProjectID: "err-1", OrgID: "org",
 		DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 	})

@@ -295,7 +295,19 @@ kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-pa
 
 ## 6. Backup + restore
 
-### K8s mode (CNPG + Barman → R2)
+### K8s mode (CNPG + Barman Cloud plugin → R2)
+
+Backups go through the CloudNativePG Barman Cloud plugin (CNPG-I), installed
+beside the operator in `cnpg-system` (charts repo:
+`charts/background/barman-cloud-plugin/install.sh`, needs cert-manager). Its
+sidecar carries barman-cloud, so the Postgres image does not need it. Each
+project namespace holds an `ObjectStore` named `{projectId}-backups`; the
+Cluster names it in `spec.plugins` as its WAL archiver, and Backups /
+ScheduledBackups use `method: plugin`. A restored project reads its source
+through `{newProjectId}-recovery-source` (no retention policy, so it never
+prunes the source). A restore by `backupId` passes that Backup's
+`status.backupId` as `recoveryTarget.backupID` and stops at the end of that
+backup (`targetImmediate`) unless a later target is also given.
 
 #### Credential flow (what actually happens at runtime)
 
@@ -311,11 +323,11 @@ req.Backup.S3 (in-memory, scoped to one provision call)
 K8s secret  excalibase-{org}-{projectId}/backup-s3-creds
                 ACCESS_KEY_ID, ACCESS_SECRET_KEY
         │
-        │ crd_builder.go:223 references it from:
+        │ k8s/barman_cloud.go references it from:
         ▼
-CNPG Cluster CRD → barmanObjectStore.s3Credentials.{accessKeyId,secretAccessKey}
+ObjectStore {projectId}-backups → configuration.s3Credentials.{accessKeyId,secretAccessKey}
         │
-        │ CNPG operator + Barman read the project-namespace secret
+        │ the plugin sidecar reads the project-namespace secret
         ▼
 s3://excalibase-backups/{projectId}/cloud/{base,wals}/...
 ```
@@ -351,7 +363,7 @@ s3://excalibase-backups/
   {projectId}/cloud/wals/{timeline}/{walSegment}.gz
 ```
 
-`serverName: cloud` is hardcoded in `crd_builder.go:165`; `destinationPath`
+`serverName: cloud` is the plugin parameter set in `k8s/barman_cloud.go`; `destinationPath`
 is `s3://excalibase-backups/{projectId}`. Inspect with `aws s3 ls
 s3://excalibase-backups/{projectId}/cloud/ --endpoint-url https://<account>.r2.cloudflarestorage.com`.
 

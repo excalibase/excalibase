@@ -105,7 +105,7 @@ func newObservedRestore(t *testing.T) *observedRestoreFixture {
 		probe: &probeFunc{store: store},
 		clock: &restoreClock{now: time.Unix(0, 0)},
 	}
-	adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(r2Storage()))
+	adapter := NewK8sBackupAdapter(mock, StaticBackupStorage(r2Storage()))
 	adapter.SetInstanceStore(store)
 	adapter.SetProjectRegistrar(f.reg)
 	adapter.SetDatabaseProbe(f.probe)

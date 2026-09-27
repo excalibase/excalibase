@@ -146,7 +146,7 @@ Vault paths are org-scoped: `projects/{orgSlug}/{projectId}/credentials/{role}`.
 1. Admin uploads R2/S3 master creds to vault path `backup/s3` once.
 2. On project provision, `service/provisioning.go:268` reads vault → fills `req.Backup.S3` in memory.
 3. `provisioner/postgresql.go:40` writes those creds to a **project-namespace-scoped** K8s secret named `backup-s3-creds` in `excalibase-{org}-{projectId}`. Each project gets its own copy.
-4. `k8s/crd_builder.go:223` references that secret from the per-project CNPG cluster CRD's `barmanObjectStore.s3Credentials`. CNPG operator reads only the project-namespace secret — never vault.
+4. `k8s/barman_cloud.go` references that secret from the per-project `ObjectStore` (Barman Cloud plugin), which the cluster names in `spec.plugins`. The plugin sidecar reads only the project-namespace secret — never vault.
 
 If the vault is sealed/uninitialised, the platform falls back to env-driven `service.BackupDefaults` populated from the cluster-scoped `r2-creds` K8s secret. Functional but worse for security: the master creds are visible to anyone with cluster-scoped `get secret` rights. Initialise the vault and store `backup/s3` there to tighten.
 

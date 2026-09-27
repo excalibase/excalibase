@@ -1,0 +1,26 @@
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: proj-bkp-backups
+  namespace: org-proj-bkp
+spec:
+  configuration:
+    data:
+      compression: gzip
+    destinationPath: s3://excalibase-backups/proj-bkp
+    endpointURL: https://acct.r2.cloudflarestorage.com
+    s3Credentials:
+      accessKeyId:
+        key: ACCESS_KEY_ID
+        name: backup-s3-creds
+      secretAccessKey:
+        key: ACCESS_SECRET_KEY
+        name: backup-s3-creds
+    wal:
+      compression: gzip
+      maxParallel: 2
+  instanceSidecarConfiguration:
+    env:
+    - name: PGOPTIONS
+      value: -c statement_timeout=0 -c idle_in_transaction_session_timeout=0
+  retentionPolicy: 7d

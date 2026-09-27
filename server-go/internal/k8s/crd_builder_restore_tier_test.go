@@ -89,12 +89,20 @@ func TestRestoreClusterLeavesTheDefaultDatabaseUnnamed(t *testing.T) {
 }
 
 func TestRestoreClusterRecoversFromTheSourceAndBacksUpToItself(t *testing.T) {
-	spec := mustBuildRestore(t, restoreOf(fullProjectCluster())).Object["spec"].(map[string]interface{})
-
-	if source := barmanStoreOf(t, spec)["destinationPath"]; source != "s3://excalibase-backups/src" {
+	opts := restoreOf(fullProjectCluster())
+	if source := recoverySourceOf(t, opts)["destinationPath"]; source != "s3://excalibase-backups/src" {
 		t.Errorf("recovery must read the source's backups, got %v", source)
 	}
-	target, _, _ := unstructured.NestedString(spec, "backup", "barmanObjectStore", "destinationPath")
+	own, err := BuildBackupObjectStore("dst", "org-dst", opts.Cluster.Backup.Store(), opts.Cluster.Backup.RetentionDays)
+	if err == nil {
+		t.Fatalf("the restored project's own store has no credentials in these options, got %v", own)
+	}
+	opts.Cluster.Backup.SecretName = "backup-s3-creds"
+	own, err = BuildBackupObjectStore("dst", "org-dst", opts.Cluster.Backup.Store(), opts.Cluster.Backup.RetentionDays)
+	if err != nil {
+		t.Fatalf("BuildBackupObjectStore: %v", err)
+	}
+	target, _, _ := unstructured.NestedString(own.Object, "spec", "configuration", "destinationPath")
 	if target != "s3://excalibase-backups/dst" {
 		t.Errorf("the restored project must back up under its own prefix, got %q", target)
 	}

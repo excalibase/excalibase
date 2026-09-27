@@ -202,7 +202,8 @@ func TestProvisionRefusesABackupScheduleCloudNativePGCannotRun(t *testing.T) {
 			tier, _ := config.GetTierConfig(domain.Free)
 			req := domain.ProvisioningRequest{
 				PostgresVersion: "17", ProjectName: "sched-test", OrgID: "org1", DBType: domain.PostgreSQL,
-				Backup: &domain.BackupSettings{Enabled: true, Schedule: schedule, Retention: 7},
+				Backup: &domain.BackupSettings{Enabled: true, Schedule: schedule, Retention: 7,
+					S3: &domain.S3Credentials{AccessKeyID: "k", SecretAccessKey: "s", Bucket: "b"}},
 			}
 
 			mock := k8s.NewMockClient()

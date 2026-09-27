@@ -66,10 +66,8 @@ func TestBuildPostgreSQLClusterStandard(t *testing.T) {
 		t.Error("enablePodMonitor must be false to avoid CNPG operator panic")
 	}
 
-	// Backup configured
-	backup := spec["backup"]
-	if backup == nil {
-		t.Fatal("backup should be configured")
+	if barmanPlugin(t, obj) == nil {
+		t.Fatal("backups should archive through the Barman Cloud plugin")
 	}
 
 	// shared_preload_libraries in postgresql section

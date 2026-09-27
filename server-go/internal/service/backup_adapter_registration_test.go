@@ -52,7 +52,7 @@ func newRestoreReadyAdapter(t *testing.T, mock *k8s.MockClient, reg ProjectRegis
 	if f, ok := reg.(*fakeRegistrar); ok && f.store == nil {
 		f.store = store
 	}
-	adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(r2Storage()))
+	adapter := NewK8sBackupAdapter(mock, StaticBackupStorage(r2Storage()))
 	adapter.SetInstanceStore(store)
 	adapter.SetProjectRegistrar(reg)
 	adapter.SetDatabaseProbe(alwaysAnswers{})
@@ -103,6 +103,7 @@ func reconcilingPoller(mock *k8s.MockClient) provisioner.Poller {
 
 func TestK8sRestoreRegistersTheRestoredProject(t *testing.T) {
 	mock := k8s.NewMockClient()
+	withSourceBackup(mock, cnpgBackup("bk-9", "src-postgres", "completed", "20260926T223600"))
 	reg := &fakeRegistrar{}
 	adapter := newRestoreReadyAdapter(t, mock, reg)
 
@@ -142,7 +143,7 @@ func emptyInstanceStore(t *testing.T) storage.InstanceStore {
 
 func TestK8sRestoreRefusesWithoutRegistrar(t *testing.T) {
 	mock := k8s.NewMockClient()
-	adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(r2Storage()))
+	adapter := NewK8sBackupAdapter(mock, StaticBackupStorage(r2Storage()))
 	adapter.SetInstanceStore(emptyInstanceStore(t))
 
 	_, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})

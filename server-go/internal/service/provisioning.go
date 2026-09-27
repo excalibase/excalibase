@@ -330,9 +330,10 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 		},
 	)
 
-	// Populate S3 credentials from vault if backup enabled but no S3 creds provided
+	// Backups asked for without a store go to the platform's, the one a
+	// restore reads from.
 	if req.Backup != nil && req.Backup.Enabled && req.Backup.S3 == nil {
-		if s3Creds, ok := s.vaultBackupStorage(); ok {
+		if s3Creds, ok := s.BackupStorage(); ok {
 			req.Backup.S3 = s3Creds
 		}
 	}

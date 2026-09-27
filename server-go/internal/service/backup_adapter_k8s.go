@@ -2,13 +2,11 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"maps"
-	"os"
-	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,17 +14,14 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
-	"github.com/excalibase/provisioning-poc/internal/security"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// K8sBackupAdapter wraps the CNPG flow. Every method here was lifted
-// verbatim from the pre-Phase-1 BackupService body — keeping behaviour
-// pinned so existing CNPG tests pass unchanged.
+// K8sBackupAdapter takes, lists and restores CNPG backups, all through the
+// Barman Cloud plugin.
 type K8sBackupAdapter struct {
-	k8sClient   k8s.KubeClient
-	storagePath string
+	k8sClient k8s.KubeClient
 	// storage is the object store backups are written to; restores read
 	// from it. Resolved per call so vault rotation is picked up.
 	storage BackupStorageSource
@@ -94,12 +89,11 @@ const (
 // NewK8sBackupAdapter wires the CNPG adapter. storage must be the same
 // source the provisioner writes backups with (ProvisioningService
 // implements it); nil means restores fail with ErrBackupStorageNotConfigured.
-func NewK8sBackupAdapter(client k8s.KubeClient, storagePath string, storage BackupStorageSource) *K8sBackupAdapter {
+func NewK8sBackupAdapter(client k8s.KubeClient, storage BackupStorageSource) *K8sBackupAdapter {
 	return &K8sBackupAdapter{
-		k8sClient:   client,
-		storagePath: storagePath,
-		storage:     storage,
-		poller:      provisioner.NewPoller(defaultRestoreReadyPoll, defaultRestoreReadyTimeout),
+		k8sClient: client,
+		storage:   storage,
+		poller:    provisioner.NewPoller(defaultRestoreReadyPoll, defaultRestoreReadyTimeout),
 	}
 }
 
@@ -144,16 +138,13 @@ func (a *K8sBackupAdapter) TriggerManual(ctx context.Context, inst *domain.Datab
 	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGBackupGVR, inst.Namespace, backup); err != nil {
 		return BackupRef{}, fmt.Errorf("trigger backup: %w", err)
 	}
-
-	ref := BackupRef{
+	return BackupRef{
 		ID:        backupName,
 		ProjectID: inst.ProjectID,
-		Type:      "MANUAL",
-		Status:    "IN_PROGRESS",
-		StartedAt: time.Now().Format(time.RFC3339),
-	}
-	a.saveBackupRecord(inst.ProjectID, backupName, ref)
-	return ref, nil
+		Type:      backupTypeManual,
+		Status:    backupStatusInProgress,
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}, nil
 }
 
 // BackupsConfigured reports whether an object store is wired. Without one
@@ -163,34 +154,22 @@ func (a *K8sBackupAdapter) BackupsConfigured() bool {
 	return ok
 }
 
+// List reports the project's backups as the operator does: every Backup of
+// its cluster, manual or scheduled, with the phase the operator gave it.
 func (a *K8sBackupAdapter) List(ctx context.Context, inst *domain.DatabaseInstance) ([]BackupRef, error) {
-	a.syncBackupStatus(ctx, inst.Namespace, inst.ProjectID)
-
-	dir := filepath.Join(a.storagePath, "projects", inst.ProjectID, "backups")
-	entries, err := os.ReadDir(dir)
+	objects, err := a.k8sClient.ListCRDs(ctx, k8s.CNPGBackupGVR, inst.Namespace)
 	if err != nil {
-		return []BackupRef{}, nil
+		return nil, fmt.Errorf("list backups of %s: %w", inst.ProjectID, err)
 	}
-
-	result := make([]BackupRef, 0, len(entries))
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		if _, err := security.SafePathComponent(e.Name()); err != nil {
-			continue
-		}
-		data, _ := os.ReadFile(filepath.Join(dir, filepath.Base(e.Name())))
-		var ref BackupRef
-		if json.Unmarshal(data, &ref) == nil {
-			// IDOR safety: even if a malicious file were dropped on disk
-			// with another projectId, override with the trusted one from
-			// the loaded instance.
-			ref.ProjectID = inst.ProjectID
-			result = append(result, ref)
+	cluster := inst.ProjectID + postgresClusterSuffix
+	refs := make([]BackupRef, 0, len(objects))
+	for _, obj := range objects {
+		if name, _, _ := unstructured.NestedString(obj.Object, "spec", "cluster", "name"); name == cluster {
+			refs = append(refs, backupRefOf(inst.ProjectID, obj))
 		}
 	}
-	return result, nil
+	sort.Slice(refs, func(i, j int) bool { return refs[i].StartedAt < refs[j].StartedAt })
+	return refs, nil
 }
 
 // Restore bootstraps a new CNPG cluster from the source project's backups and
@@ -243,8 +222,12 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if err != nil {
 		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
 	}
+	recoveryTarget, err := a.recoveryTarget(ctx, inst, req)
+	if err != nil {
+		return nil, err
+	}
 	target := restoreTarget{store: store, plan: plan, project: newProject, namespace: fmt.Sprintf("%s-%s", inst.OrgID, newProject)}
-	target.cluster, err = restoreCluster(inst, req, target, clusterIdentity{image: image, altNames: altNames})
+	err = target.render(inst, recoveryTarget, clusterIdentity{image: image, altNames: altNames})
 	if err != nil {
 		return nil, fmt.Errorf("restore %s at tier %s: %w", inst.ProjectID, plan.Tier, err)
 	}
@@ -267,10 +250,12 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	}, nil
 }
 
-// restoreTarget is where a recovery lands and what it runs on.
+// restoreTarget is where a recovery lands and what it runs on. stores are
+// applied before cluster, which reads through them.
 type restoreTarget struct {
 	store     *domain.S3Credentials
 	plan      RestorePlan
+	stores    []*unstructured.Unstructured
 	cluster   *unstructured.Unstructured
 	project   string
 	namespace string
@@ -282,11 +267,12 @@ type clusterIdentity struct {
 	altNames []string
 }
 
-// restoreCluster is the cluster a new project with the source's settings and
-// the plan's tier would get, bootstrapped from the source's backups. Its own
-// backups go to the store it is restored from, under its own prefix, with the
-// credentials the restore puts in the namespace.
-func restoreCluster(src *domain.DatabaseInstance, req domain.RestoreRequest, target restoreTarget, id clusterIdentity) (*unstructured.Unstructured, error) {
+// render builds the cluster a new project with the source's settings and the
+// plan's tier would get, bootstrapped from the source's backups, and the
+// stores it reads and writes. Its own backups go to the store it is restored
+// from, under its own prefix, with the credentials the restore puts in the
+// namespace.
+func (target *restoreTarget) render(src *domain.DatabaseInstance, recoveryTarget map[string]interface{}, id clusterIdentity) error {
 	cluster := k8s.PostgreSQLClusterOpts{
 		ProjectID:         target.project,
 		Namespace:         target.namespace,
@@ -300,19 +286,33 @@ func restoreCluster(src *domain.DatabaseInstance, req domain.RestoreRequest, tar
 	}
 	if backup := target.plan.Backup; backup != nil && backup.Enabled {
 		if backup.Schedule == "" {
-			return nil, ErrRestoreBackupUnscheduled
+			return ErrRestoreBackupUnscheduled
 		}
 		cluster.Backup = &k8s.BackupOpts{
 			Schedule: backup.Schedule, RetentionDays: backup.Retention,
 			EndpointURL: target.store.Endpoint, Bucket: target.store.Bucket, SecretName: s3CredsKey,
 		}
 	}
-	return k8s.BuildRestoreCluster(k8s.RestoreClusterOpts{
+	opts := k8s.RestoreClusterOpts{
 		Cluster:         cluster,
 		SourceProjectID: src.ProjectID,
 		Store:           k8s.ObjectStoreOpts{EndpointURL: target.store.Endpoint, Bucket: target.store.Bucket, SecretName: s3CredsKey},
-		RecoveryTarget:  req.RecoveryTarget(),
-	})
+		RecoveryTarget:  recoveryTarget,
+	}
+	source, err := k8s.BuildRecoverySourceObjectStore(opts)
+	if err != nil {
+		return err
+	}
+	target.stores = []*unstructured.Unstructured{source}
+	if cluster.Backup != nil {
+		own, err := k8s.BuildBackupObjectStore(target.project, target.namespace, cluster.Backup.Store(), cluster.Backup.RetentionDays)
+		if err != nil {
+			return err
+		}
+		target.stores = append(target.stores, own)
+	}
+	target.cluster, err = k8s.BuildRestoreCluster(opts)
+	return err
 }
 
 // runRestore drives the recovery to a project that has been proved usable.
@@ -365,6 +365,11 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisi
 		"ACCESS_SECRET_KEY": []byte(store.SecretAccessKey),
 	}); err != nil {
 		return fmt.Errorf("create restore credentials secret: %w", err)
+	}
+	for _, store := range target.stores {
+		if err := a.k8sClient.ApplyCRD(ctx, k8s.ObjectStoreGVR, newNamespace, store); err != nil {
+			return fmt.Errorf("apply restore object store %s: %w", store.GetName(), err)
+		}
 	}
 	clusterName := req.TargetProjectID + postgresClusterSuffix
 	if err := a.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, newNamespace, target.cluster); err != nil {
@@ -502,87 +507,4 @@ func (a *K8sBackupAdapter) backupStorage() (*domain.S3Credentials, bool) {
 		return nil, false
 	}
 	return a.storage.BackupStorage()
-}
-
-func (a *K8sBackupAdapter) syncBackupStatus(ctx context.Context, namespace, projectID string) {
-	dir := filepath.Join(a.storagePath, "projects", projectID, "backups")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		if _, err := security.SafePathComponent(e.Name()); err != nil {
-			continue
-		}
-		safePath := filepath.Join(dir, filepath.Base(e.Name()))
-		a.syncBackupEntry(ctx, namespace, safePath)
-	}
-}
-
-func (a *K8sBackupAdapter) syncBackupEntry(ctx context.Context, namespace, safePath string) {
-	data, _ := os.ReadFile(safePath)
-	var ref BackupRef
-	if json.Unmarshal(data, &ref) != nil {
-		return
-	}
-	if ref.Status != "IN_PROGRESS" || ref.ID == "" {
-		return
-	}
-	obj, err := a.k8sClient.GetCRD(ctx, k8s.CNPGBackupGVR, namespace, ref.ID)
-	if err != nil {
-		return
-	}
-	status, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
-	newStatus := mapK8sBackupPhase(status)
-	if newStatus == "" {
-		return
-	}
-	ref.Status = newStatus
-	if newStatus == "COMPLETED" || newStatus == "FAILED" {
-		ref.FinishedAt = time.Now().Format(time.RFC3339)
-	}
-	a.writeBackupRecord(safePath, ref)
-}
-
-// mapK8sBackupPhase converts a CNPG backup phase to our status string.
-// Returns "" when the phase requires no update.
-func mapK8sBackupPhase(phase string) string {
-	switch phase {
-	case "completed":
-		return "COMPLETED"
-	case "failed":
-		return "FAILED"
-	default:
-		return ""
-	}
-}
-
-func (a *K8sBackupAdapter) writeBackupRecord(safePath string, ref BackupRef) {
-	updated, err := json.MarshalIndent(ref, "", "  ")
-	if err != nil {
-		log.Printf(warnMarshalFmt, safePath, err)
-		return
-	}
-	if err := os.WriteFile(safePath, updated, 0644); err != nil {
-		log.Printf(warnWriteFmt, safePath, err)
-	}
-}
-
-func (a *K8sBackupAdapter) saveBackupRecord(projectID, backupName string, ref BackupRef) {
-	dir := filepath.Join(a.storagePath, "projects", projectID, "backups")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Printf("WARN: mkdir %s: %v", dir, err)
-		return
-	}
-	data, err := json.MarshalIndent(ref, "", "  ")
-	if err != nil {
-		log.Printf(warnMarshalFmt, backupName, err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(dir, backupName+".json"), data, 0644); err != nil {
-		log.Printf(warnWriteFmt, filepath.Join(dir, backupName+".json"), err)
-	}
 }

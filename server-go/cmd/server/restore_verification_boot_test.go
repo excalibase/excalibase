@@ -62,7 +62,7 @@ func bootBackupService(t *testing.T, modes ...domain.DeploymentMode) *service.Ba
 	for _, mode := range modes {
 		switch mode {
 		case domain.ModeK8s:
-			k8sAdapter := service.NewK8sBackupAdapter(k8s.NewMockClient(), t.TempDir(), storageSource)
+			k8sAdapter := service.NewK8sBackupAdapter(k8s.NewMockClient(), storageSource)
 			k8sAdapter.SetInstanceStore(store)
 			adapters[domain.ModeK8s] = k8sAdapter
 		case domain.ModeDocker:

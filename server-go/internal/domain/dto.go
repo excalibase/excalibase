@@ -208,9 +208,12 @@ type RestoreJob struct {
 	NewProjectName string `json:"newProjectName,omitempty"`
 	Status         string `json:"status"` // RUNNING | COMPLETED | FAILED
 	CurrentStep    string `json:"currentStep,omitempty"`
-	TargetKind     string `json:"targetKind"` // latest | time | xid | lsn | name
+	TargetKind     string `json:"targetKind"` // latest | time | xid | lsn | name | backup
 	TargetValue    string `json:"targetValue,omitempty"`
-	FailureReason  string `json:"failureReason,omitempty"`
+	// Request is what the driving process restores from. It is not stored: a
+	// job whose driver dies is failed, never resumed from its row.
+	Request       RestoreRequest `json:"-"`
+	FailureReason string         `json:"failureReason,omitempty"`
 	// Owner names the platform process driving this job. Only that process
 	// may write progress onto it, so a replica restarting mid-deploy cannot
 	// fail a restore one of its peers is still running.
@@ -234,6 +237,8 @@ func (r RestoreRequest) RestoreTargetKind() (kind, value string) {
 		return "lsn", r.TargetLSN
 	case r.TargetName != "":
 		return "name", r.TargetName
+	case r.BackupID != "":
+		return "backup", r.BackupID
 	}
 	return "latest", ""
 }

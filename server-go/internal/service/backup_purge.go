@@ -138,7 +138,7 @@ func (p *BackupPurger) Purge(ctx context.Context, inst *domain.DatabaseInstance)
 	if !ok {
 		return 0, ErrBackupStorageNotConfigured
 	}
-	bucket, err := p.resolveBucket(creds, inst.DeploymentMode)
+	bucket, err := resolveBucket(creds)
 	if err != nil {
 		return 0, err
 	}
@@ -149,14 +149,11 @@ func (p *BackupPurger) Purge(ctx context.Context, inst *domain.DatabaseInstance)
 	return deleteAllUnderPrefix(ctx, deleter, bucket, prefix, p.pageSize)
 }
 
-// resolveBucket picks the bucket the backups were written to. K8s CRDs fall
-// back to DefaultBackupBucket when none is configured, so the purge must too.
-func (p *BackupPurger) resolveBucket(creds *domain.S3Credentials, mode domain.DeploymentMode) (string, error) {
+// resolveBucket picks the bucket the backups were written to. Nothing is
+// ever written without one, so there is nothing to guess.
+func resolveBucket(creds *domain.S3Credentials) (string, error) {
 	if creds.Bucket != "" {
 		return creds.Bucket, nil
-	}
-	if mode == domain.ModeK8s || mode == "" {
-		return k8s.DefaultBackupBucket, nil
 	}
 	return "", fmt.Errorf("%w: no bucket", ErrBackupStorageNotConfigured)
 }

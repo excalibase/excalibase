@@ -18,6 +18,8 @@ func TestRestoreTargetKind(t *testing.T) {
 		{"xid", RestoreRequest{TargetXID: "100"}, "xid", "100"},
 		{"lsn", RestoreRequest{TargetLSN: "0/ABCDEF"}, "lsn", "0/ABCDEF"},
 		{"name", RestoreRequest{TargetName: "snap1"}, "name", "snap1"},
+		{"backup", RestoreRequest{BackupID: "b1"}, "backup", "b1"},
+		{"backup then time", RestoreRequest{BackupID: "b1", TargetTime: &FlexTime{Time: ts}}, "time", "2026-01-02T03:04:05Z"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

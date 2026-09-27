@@ -155,6 +155,7 @@ func (o *RestoreOrchestrator) Start(ctx context.Context, source *domain.Database
 		Status:          domain.RestoreStatusRunning,
 		TargetKind:      kind,
 		TargetValue:     value,
+		Request:         req,
 		Owner:           o.instance,
 	}
 	if err := o.jobs.UpsertRestoreJob(ctx, &job); err != nil {
