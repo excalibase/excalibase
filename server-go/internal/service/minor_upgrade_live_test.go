@@ -25,6 +25,7 @@ const olderMinorImage = "ghcr.io/cloudnative-pg/postgresql:17.10-standard-bookwo
 // Run with: EXCALIBASE_LIVE_KUBECONFIG=<k3d with 3 nodes> go test ./internal/service/ -tags=live -run TestLiveMinorUpgrade -v -count=1 -timeout 60m
 func TestLiveMinorUpgradeOfAStandardProjectSwitchesOver(t *testing.T) {
 	lab := &backupLab{documentDBLab: startExternalLab(t, multiNodeKubeconfigEnv)}
+	lab.freshNamespaces(t, "backup-store")
 	lab.installBackupStack(t)
 	svc := liveService(t, lab.client, lab.store)
 	tier, err := svc.TierConfig(lab.ctx, domain.Standard)
@@ -40,6 +41,7 @@ func TestLiveMinorUpgradeOfAStandardProjectSwitchesOver(t *testing.T) {
 // Run with: EXCALIBASE_LIVE_KUBECONFIG=<k3d> go test ./internal/service/ -tags=live -run TestLiveMinorUpgradeOfAFreeProject -v -count=1 -timeout 60m
 func TestLiveMinorUpgradeOfAFreeProjectRestartsInPlace(t *testing.T) {
 	lab := &backupLab{documentDBLab: startExternalLab(t, multiNodeKubeconfigEnv)}
+	lab.freshNamespaces(t, "backup-store")
 	lab.installBackupStack(t)
 	svc := liveService(t, lab.client, lab.store)
 	tier, err := svc.TierConfig(lab.ctx, domain.Free)
