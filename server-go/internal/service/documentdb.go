@@ -19,8 +19,9 @@ import (
 // catalogue records per major and provisioning refuses to promise on a major
 // that cannot (EXC-407/408). The cluster preloads the extension's libraries
 // and points pg_cron at the project's database, which the cluster spec does.
-// This file is the third: creating the extension in that database, and
-// refusing to let the project be called finished unless it is really there.
+// The cluster's initdb creates the extension; this file is the third:
+// converging on it and refusing to let the project be called finished unless
+// it is really there.
 //
 // It follows the rule the rest of the lifecycle keeps — nothing is recorded
 // until it has been observed. A project is never reported ACTIVE with
@@ -69,7 +70,10 @@ func (s *ProvisioningService) enableDocumentDB(ctx context.Context, inst *domain
 
 	pc.SetStep(documentDBStep)
 	primaryPod := inst.ProjectID + primaryPodSuffix
-	for _, statement := range []string{documentDBCreateSQL(), documentDBConfirmSQL(), documentDBGatewayRoleSQL()} {
+	// The cluster's initdb already ran these; running them again converges a
+	// cluster bootstrapped some other way, and the confirmation is what the
+	// project's claim rests on.
+	for _, statement := range append(config.DocumentDBBootstrapSQL(), documentDBConfirmSQL()) {
 		cmd := documentDBPsql(config.DocumentDBDatabase, statement)
 		if err := s.execRoleSQL(ctx, inst.Namespace, primaryPod, cmd); err != nil {
 			return pc.Fail(fmt.Errorf("enable %s in %s: %w", config.DocumentDBExtension, inst.ProjectID, err))
@@ -102,7 +106,7 @@ func (s *ProvisioningService) grantDocumentDBAccess(
 ) error {
 	pc.SetStep(documentDBGrantStep)
 	cmd := documentDBPsql(config.DocumentDBDatabase,
-		documentDBGrantSQL(config.DocumentDBGatewayRole, inst.Username, roleApp))
+		documentDBGrantSQL(inst.Username, roleApp))
 	if err := s.execRoleSQL(ctx, inst.Namespace, primaryPod, cmd); err != nil {
 		return pc.Fail(fmt.Errorf("grant %s access to %s in %s: %w",
 			config.DocumentDBExtension, inst.Username, inst.ProjectID, err))
@@ -130,26 +134,11 @@ func documentDBPsql(database, statement string) []string {
 	return []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database, "-c", statement}
 }
 
-// documentDBCreateSQL creates the extension. CASCADE brings in what it
-// depends on — pg_documentdb_core, pg_cron and the contrib extensions the
-// image carries — so the platform does not have to name them itself and
-// cannot fall out of step with upstream when that list changes.
-func documentDBCreateSQL() string {
-	return "CREATE EXTENSION IF NOT EXISTS " + config.DocumentDBExtension + " CASCADE"
-}
-
 // documentDBConfirmSQL asks the database what it actually holds and raises
 // when the answer is not the extension. A CREATE that returned zero is not
 // evidence the extension is installed — IF NOT EXISTS succeeds against a
 // database that already had it, and an exec layer that swallowed an error
 // would look the same — so the project's claim rests on this read instead.
-// documentDBGatewayRoleSQL creates the gateway's login role; never a superuser.
-func documentDBGatewayRoleSQL() string {
-	role := schema.QuoteIdent(config.DocumentDBGatewayRole)
-	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" +
-		config.DocumentDBGatewayRole + "') THEN CREATE ROLE " + role + " LOGIN; END IF; END $$"
-}
-
 func documentDBConfirmSQL() string {
 	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = '" +
 		config.DocumentDBExtension + "') THEN RAISE EXCEPTION " +

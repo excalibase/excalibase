@@ -68,6 +68,18 @@ func execCommandsMentioning(kube *k8s.MockClient, fragment string) []string {
 	return matched
 }
 
+// appRoleGrants are the extension-role grants that name the platform's app
+// role; the project's role creation also mentions it and is not one of them.
+func appRoleGrants(kube *k8s.MockClient) []string {
+	var grants []string
+	for _, cmd := range execCommandsMentioning(kube, "GRANT documentdb_admin_role TO") {
+		if strings.Contains(cmd, `"excalibase_app"`) {
+			grants = append(grants, cmd)
+		}
+	}
+	return grants
+}
+
 // The gateway serves the postgres database only, so the extension is created there.
 func TestEnableDocumentDBCreatesTheExtensionInThePostgresDatabase(t *testing.T) {
 	kube := k8s.NewMockClient()
@@ -252,9 +264,9 @@ func TestEnableDocumentDBGrantsTheProjectsOwnCredentialMongoAccess(t *testing.T)
 		t.Fatalf("enableDocumentDB: %v", err)
 	}
 
-	granted := execCommandsMentioning(kube, "GRANT")
+	granted := appRoleGrants(kube)
 	if len(granted) != 1 {
-		t.Fatalf("GRANT ran %d times: %v", len(granted), kube.ExecCommands)
+		t.Fatalf("the project's grant ran %d times: %v", len(granted), kube.ExecCommands)
 	}
 	for _, want := range []string{"documentdb_admin_role", inst.Username} {
 		if !strings.Contains(granted[0], want) {
@@ -275,14 +287,17 @@ func TestEnableDocumentDBGrantsThePlatformAppRoleMongoAccess(t *testing.T) {
 		t.Fatalf("enableDocumentDB: %v", err)
 	}
 
-	granted := execCommandsMentioning(kube, "GRANT")
+	granted := appRoleGrants(kube)
 	if len(granted) != 1 {
-		t.Fatalf("GRANT ran %d times: %v", len(granted), kube.ExecCommands)
+		t.Fatalf("the project's grant ran %d times: %v", len(granted), kube.ExecCommands)
 	}
-	for _, want := range []string{`"owner_doc"`, `"excalibase_app"`, `"documentdb"`} {
+	for _, want := range []string{`"owner_doc"`, `"excalibase_app"`} {
 		if !strings.Contains(granted[0], want) {
 			t.Errorf("the grant is missing %s: %s", want, granted[0])
 		}
+	}
+	if len(execCommandsMentioning(kube, `documentdb_admin_role TO "documentdb"`)) != 1 {
+		t.Errorf("the gateway role's grant must converge too: %v", kube.ExecCommands)
 	}
 }
 
@@ -298,8 +313,8 @@ func TestRestoredDocumentDBProjectGrantsThePlatformAppRole(t *testing.T) {
 		t.Fatalf("RegisterProject: %v", err)
 	}
 
-	granted := execCommandsMentioning(kube, "documentdb_admin_role")
-	if len(granted) != 1 || !strings.Contains(granted[0], `"excalibase_app"`) {
+	granted := appRoleGrants(kube)
+	if len(granted) != 1 || !strings.Contains(granted[0], "documentdb_admin_role") {
 		t.Errorf("restored project: app role grant missing: %v", granted)
 	}
 }

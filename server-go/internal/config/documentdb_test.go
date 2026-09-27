@@ -134,3 +134,44 @@ func TestPublishPostgresCatalogForTestKeepsEveryOtherField(t *testing.T) {
 		t.Errorf("after restore, gateway image: got %q, want %q", got, realImage)
 	}
 }
+
+// The gateway logs in as its role the moment its container starts, and the
+// extension is what it serves, so both are created before any pod exists.
+func TestDocumentDBBootstrapSQLReadiesTheGatewayRole(t *testing.T) {
+	statements := DocumentDBBootstrapSQL()
+	if len(statements) != 3 {
+		t.Fatalf("bootstrap statements: got %v", statements)
+	}
+	for _, want := range []string{"CREATE EXTENSION IF NOT EXISTS documentdb", "CASCADE"} {
+		if !strings.Contains(statements[0], want) {
+			t.Errorf("extension statement %q is missing %q", statements[0], want)
+		}
+	}
+	for _, want := range []string{`CREATE ROLE "documentdb" LOGIN`, "IF NOT EXISTS", "rolname = 'documentdb'"} {
+		if !strings.Contains(statements[1], want) {
+			t.Errorf("role statement %q is missing %q", statements[1], want)
+		}
+	}
+	if statements[2] != `GRANT documentdb_admin_role TO "documentdb"` {
+		t.Errorf("the gateway role must be a DocumentDB user before it starts: %s", statements[2])
+	}
+	for _, forbidden := range []string{"SUPERUSER", "PASSWORD"} {
+		if strings.Contains(strings.ToUpper(statements[1]), forbidden) {
+			t.Errorf("the gateway role must carry no %s: %s", forbidden, statements[1])
+		}
+	}
+}
+
+// CNPG's initdb job receives "$$" as "$" and fails the bootstrap.
+func TestDocumentDBBootstrapSQLSurvivesTheInitdbJob(t *testing.T) {
+	statements := DocumentDBBootstrapSQL()
+	for _, statement := range statements {
+		if strings.Contains(statement, "$$") || strings.Contains(statement, "$(") {
+			t.Errorf("statement would break the initdb job: %s", statement)
+		}
+	}
+	statements[0] = "tampered"
+	if DocumentDBBootstrapSQL()[0] == "tampered" {
+		t.Fatal("a caller's write leaked into the next read")
+	}
+}

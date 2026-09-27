@@ -54,6 +54,7 @@ func TestLiveDocumentDBOnLatestCNPG(t *testing.T) {
 	lab.installOperators(t)
 
 	creds := lab.provision(t)
+	lab.expectGatewayServingBeforeTheProvisioningStep(t)
 	lab.enable(t, creds)
 	lab.exposeGateway(t)
 	lab.startMongoClient(t)
@@ -78,7 +79,38 @@ func TestLiveDocumentDBOnLatestCNPG(t *testing.T) {
 		t.Logf("index: %s", out)
 	}
 	lab.expectCronSucceeds(t)
+	lab.expectNoGatewayRestarts(t)
 	lab.expectDeletionWithinWindow(t)
+}
+
+// The cluster's initdb already created the gateway's role, so the gateway
+// serves without the provisioning step having run and without restarting.
+func (lab *documentDBLab) expectGatewayServingBeforeTheProvisioningStep(t *testing.T) {
+	t.Helper()
+	eventuallyLive(t, "gateway serving on a fresh project", 5*time.Minute, func() bool {
+		ready, err := lab.client.DocumentDBGatewayReady(lab.ctx, documentDBLiveNS, documentDBLiveName+"-postgres-1")
+		return err == nil && ready && lab.gatewayLogged(t, "Gateway ready to accept connections")
+	})
+	lab.expectNoGatewayRestarts(t)
+}
+
+func (lab *documentDBLab) expectNoGatewayRestarts(t *testing.T) {
+	t.Helper()
+	pod, err := lab.cs.CoreV1().Pods(documentDBLiveNS).Get(lab.ctx, documentDBLiveName+"-postgres-1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read primary pod: %v", err)
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name != k8s.DocumentDBGatewayContainer {
+			continue
+		}
+		if status.RestartCount != 0 {
+			t.Fatalf("the gateway restarted %d times", status.RestartCount)
+		}
+		t.Logf("gateway restarts: 0")
+		return
+	}
+	t.Fatalf("no gateway container status on %s", pod.Name)
 }
 
 // expectCronSucceeds waits for DocumentDB's scheduled jobs to run, which they only do once they can log in.

@@ -304,7 +304,7 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 		spec["smartShutdownTimeout"] = int64(documentDBSmartShutdownSeconds)
 	}
 
-	if initdb := namedAppDatabase(opts); initdb != nil {
+	if initdb := buildInitDB(opts); len(initdb) > 0 {
 		spec["bootstrap"] = map[string]interface{}{"initdb": initdb}
 	}
 
@@ -314,6 +314,25 @@ func buildClusterSpec(opts PostgreSQLClusterOpts) map[string]interface{} {
 	addServerAltDNSNames(spec, serverAltDNSNames(opts))
 
 	return spec
+}
+
+// buildInitDB gives a DocumentDB cluster its extension and gateway role from
+// CNPG's initdb job, which finishes before the first instance pod is created:
+// the gateway in that pod then never starts ahead of the role it logs in as.
+func buildInitDB(opts PostgreSQLClusterOpts) map[string]interface{} {
+	initdb := namedAppDatabase(opts)
+	if initdb == nil {
+		initdb = map[string]interface{}{}
+	}
+	if opts.DocumentDB {
+		statements := config.DocumentDBBootstrapSQL()
+		postInit := make([]interface{}, len(statements))
+		for i, statement := range statements {
+			postInit[i] = statement
+		}
+		initdb["postInitSQL"] = postInit
+	}
+	return initdb
 }
 
 func addServerAltDNSNames(spec map[string]interface{}, names []string) {
