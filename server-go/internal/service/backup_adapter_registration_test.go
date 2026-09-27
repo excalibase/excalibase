@@ -58,8 +58,14 @@ func newRestoreReadyAdapter(t *testing.T, mock *k8s.MockClient, reg ProjectRegis
 	adapter.SetDatabaseProbe(alwaysAnswers{})
 	adapter.SetReadyPoller(reconcilingPoller(mock))
 	adapter.SetRestorePlanSource(enterprisePlan())
+	adapter.SetOwnerCredentials(sourceOwner{})
 	return adapter
 }
+
+// sourceOwner answers every source project's owner password.
+type sourceOwner struct{}
+
+func (sourceOwner) OwnerPassword(string) (string, error) { return "source-owner-password", nil }
 
 // alwaysAnswers is a DatabaseProbe for tests whose subject is not the probe.
 type alwaysAnswers struct{}
@@ -261,6 +267,7 @@ func TestDockerRestoreRefusesWithoutRegistrar(t *testing.T) {
 // reconciles the recovered cluster on the first poll.
 func armRestore(svc *BackupService, mock *k8s.MockClient, store storage.InstanceStore) {
 	_ = svc.SetDatabaseProbe(alwaysAnswers{})
+	svc.SetOwnerCredentials(sourceOwner{})
 	svc.SetOrgProjectCapacity(unlimitedCapacity{})
 	svc.SetRestorePlanSource(enterprisePlan())
 	for _, adapter := range svc.adapters {

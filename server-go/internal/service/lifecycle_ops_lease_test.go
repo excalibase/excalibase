@@ -177,15 +177,15 @@ func TestLifecycleOpsWriteTheRowOnlyWhileItHoldsTheStatusTheyRead(t *testing.T) 
 	}
 }
 
-func TestRotateCredentialsWritesTheOwnerRowConditionally(t *testing.T) {
+func TestRotateCredentialsNeverWritesTheProjectRow(t *testing.T) {
 	h := newRotationHarness(t)
 	rec := &recordingStore{FileSystemStore: h.store, t: t}
 	h.svc.store = rec
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err != nil {
 		t.Fatalf("RotateCredentials: %v", err)
 	}
-	if len(rec.expected) != 1 || rec.expected[0] != "ACTIVE" {
-		t.Errorf("owner row writes = %v, want one conditional write on ACTIVE", rec.expected)
+	if len(rec.expected) != 0 {
+		t.Errorf("row writes = %v, want none: the owner password lives only in the vault", rec.expected)
 	}
 }
 

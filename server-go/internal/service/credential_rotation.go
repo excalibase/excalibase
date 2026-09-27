@@ -57,8 +57,6 @@ type credentialRotationTarget struct {
 	// name for the platform's own roles and inst.Username for the owner,
 	// whose name is chosen per project.
 	username string
-	// owner marks the credential the API returns and the project row holds.
-	owner bool
 }
 
 // RotateCredentials replaces the passwords of every platform role filed under
@@ -66,15 +64,13 @@ type credentialRotationTarget struct {
 //
 // Roles are rotated one at a time, in a fixed order: auth_admin, then
 // excalibase_app, then the owner. The owner is last because it is the value
-// the caller is handed and the one stored on the project row — a caller is
-// only told a rotation succeeded once every role behind it has been replaced
-// and proved. cdc_watcher is deliberately not rotated: its password is baked
+// the caller is handed — a caller is only told a rotation succeeded once every
+// role behind it has been replaced and proved. cdc_watcher is deliberately not rotated: its password is baked
 // into the deployed watcher workload's configuration, so changing it without
 // redeploying that workload stops the project's replication.
 // Rotation takes the project's lifecycle lease. Two rotations running at once
-// would each mint a password over the other's pending record and then write
-// the owner's row last-writer-wins, which can leave the database requiring a
-// value recorded nowhere. The lease is one key per project, so a rotation also
+// would each mint a password over the other's pending record, which can leave
+// the database requiring a value recorded nowhere. The lease is one key per project, so a rotation also
 // excludes — and is excluded by — pause, resume, restore and teardown.
 func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID string) (*domain.CredentialsResponse, error) {
 	if s.vault == nil || s.credVerifier == nil {
@@ -112,7 +108,7 @@ func rotationTargets(inst *domain.DatabaseInstance, filed map[string]bool) []cre
 		}
 	}
 	return append(targets, credentialRotationTarget{
-		role: roleAdmin, username: inst.Username, owner: true,
+		role: roleAdmin, username: inst.Username,
 	})
 }
 
@@ -205,22 +201,15 @@ func (s *ProvisioningService) recordedCredentialStillOpensTheDatabase(ctx contex
 }
 
 // promoteCredential makes the proved password the current one: the vault copy
-// first, then the project row for the owner, and the pending record last. The
-// pending record is removed only once everything that reads the credential has
-// the new value, so an interruption anywhere in here leaves a retry something
-// to finish from.
+// first, and the pending record last. The pending record is removed only once
+// the vault holds the new value, so an interruption in between leaves a retry
+// something to finish from.
 func (s *ProvisioningService) promoteCredential(ctx context.Context, inst *domain.DatabaseInstance,
 	target credentialRotationTarget, password, pendingPath string) error {
 
 	if err := s.vault.Put(vaultCredentialPath(inst.ProjectID, target.role),
 		roleCredentialRecord(inst, target.username, password)); err != nil {
 		return fmt.Errorf("promote credential: %w", err)
-	}
-	if target.owner {
-		inst.Password = password
-		if err := s.store.UpdateIfStatus(inst, inst.Status); err != nil {
-			return fmt.Errorf("persist rotated credentials: %w", err)
-		}
 	}
 	if err := s.vault.Delete(pendingPath); err != nil {
 		return fmt.Errorf("clear pending credential: %w", err)

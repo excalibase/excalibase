@@ -159,10 +159,12 @@ func TestProvision_RegistersEngineRolesWithPgDog(t *testing.T) {
 	}
 }
 
-// Without a vault the engine roles are never created, so there is nothing
-// safe to route — PgDog must not fall back to the owner credential.
-func TestProvision_WithoutEngineRoles_RegistersNothingWithPgDog(t *testing.T) {
+// Without a vault neither the owner credential nor the engine roles have
+// anywhere to be kept, so the provision fails and PgDog is never handed the
+// owner credential instead.
+func TestProvision_WithoutAVault_RegistersNothingWithPgDog(t *testing.T) {
 	svc, _, _ := setupProvisioningTest(t)
+	svc.SetVault(nil)
 	store := &fakePgDogStore{}
 	n, _ := NewPgDogNotifier(store, "")
 	svc.SetPgDogNotifier(n)
@@ -176,8 +178,8 @@ func TestProvision_WithoutEngineRoles_RegistersNothingWithPgDog(t *testing.T) {
 	if err != nil {
 		t.Fatalf(testUnexpErrFmt, err)
 	}
-	if resp.Status != "ACTIVE" {
-		t.Fatalf("status: got %s want ACTIVE", resp.Status)
+	if resp.Status != "FAILED" {
+		t.Fatalf("status: got %s want FAILED", resp.Status)
 	}
 	if len(store.users) != 0 || len(store.databases) != 0 {
 		t.Errorf("no PgDog rows expected without engine roles: users=%v databases=%v", store.users, store.databases)

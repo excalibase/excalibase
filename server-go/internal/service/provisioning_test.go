@@ -48,6 +48,7 @@ func setupProvisioningTest(t *testing.T) (*ProvisioningService, *storage.FileSys
 	factory := provisioner.NewFactory(pgProv)
 	svc := NewProvisioningService(store, factory, mock)
 	svc.SetOrgStore(testOrgs())
+	svc.SetVault(newFakeVault())
 	return svc, store, mock
 }
 
@@ -525,35 +526,6 @@ func TestDeprovisionDeletionProtection(t *testing.T) {
 	err := svc.Deprovision(context.Background(), "protected-db")
 	if err == nil {
 		t.Error("expected error for deletion-protected project")
-	}
-}
-
-func TestGetCredentials(t *testing.T) {
-	svc, store, _ := setupProvisioningTest(t)
-	port := 5432
-	store.Create(&domain.DatabaseInstance{
-		ProjectID:    "cred-db",
-		Host:         "host.local",
-		Port:         &port,
-		DatabaseName: "mydb",
-		Username:     "user",
-		Password:     "pass",
-		SSLMode:      "require",
-		Status:       "ACTIVE",
-	})
-
-	creds, err := svc.GetCredentials("cred-db")
-	if err != nil {
-		t.Fatalf("GetCredentials: %v", err)
-	}
-	if creds.Host != "host.local" {
-		t.Errorf("host: got %s", creds.Host)
-	}
-	if creds.Password != "pass" {
-		t.Errorf("password not returned")
-	}
-	if creds.ConnectionURL == "" {
-		t.Error("connectionUrl should be set")
 	}
 }
 

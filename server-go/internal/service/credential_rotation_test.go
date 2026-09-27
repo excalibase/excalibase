@@ -129,26 +129,40 @@ func (h *rotationHarness) onlyTheSeededPasswordsWork() func(string, string) erro
 	}
 }
 
-func (h *rotationHarness) storedPassword(t *testing.T) string {
+// currentOwnerPassword is the owner credential the vault holds as current.
+func (h *rotationHarness) currentOwnerPassword(t *testing.T) string {
 	t.Helper()
-	inst, err := h.store.FindByProjectID(rotProject)
-	if err != nil || inst == nil {
-		t.Fatalf("read project row: %v", err)
-	}
-	return inst.Password
+	return h.vault.data[rotAdminCurrent]["password"]
 }
 
-// A rotation whose ALTER reached the database but whose persist failed must
-// leave the new password recoverable. The database now wants a value the row
-// does not hold, so the only thing standing between the project and an
+// refusePromotion makes the vault refuse to replace the owner's current
+// credential — the interruption between a proved ALTER and its promotion.
+func (h *rotationHarness) refusePromotion() {
+	h.svc.SetVault(&promotionRefusingVault{fakeVault: h.vault})
+}
+
+func (h *rotationHarness) allowPromotion() { h.svc.SetVault(h.vault) }
+
+type promotionRefusingVault struct{ *fakeVault }
+
+func (v *promotionRefusingVault) Put(p string, d map[string]string) error {
+	if p == rotAdminCurrent {
+		return errors.New("vault unavailable")
+	}
+	return v.fakeVault.Put(p, d)
+}
+
+// A rotation whose ALTER reached the database but whose promotion failed must
+// leave the new password recoverable. The database now wants a value the vault
+// does not hold as current, so the only thing standing between the project and an
 // operator-run forced rotation is the pending record — and a retry must
 // converge on exactly that value rather than minting a third one.
-func TestRotateCredentialsLeavesPendingRecoverableWhenPersistFails(t *testing.T) {
+func TestRotateCredentialsLeavesPendingRecoverableWhenPromotionFails(t *testing.T) {
 	h := newRotationHarness(t)
-	h.failing.updateErr = errors.New("platform database unavailable")
+	h.refusePromotion()
 
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
-		t.Fatal("rotation must report the failed persist")
+		t.Fatal("rotation must report the failed promotion")
 	}
 
 	pending := h.pendingPaths(t)
@@ -159,15 +173,15 @@ func TestRotateCredentialsLeavesPendingRecoverableWhenPersistFails(t *testing.T)
 	if recorded == "" {
 		t.Fatal("the pending credential must carry the password the database now wants")
 	}
-	if h.storedPassword(t) == recorded {
-		t.Fatal("the row must not hold the new password when the persist failed")
+	if h.currentOwnerPassword(t) == recorded {
+		t.Fatal("the vault must not hold the new password as current when the promotion failed")
 	}
 
-	h.failing.updateErr = nil
+	h.allowPromotion()
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err != nil {
 		t.Fatalf("retry must converge: %v", err)
 	}
-	if got := h.storedPassword(t); got != recorded {
+	if got := h.currentOwnerPassword(t); got != recorded {
 		t.Error("the retry must promote the recorded pending credential, not a fresh one")
 	}
 	if got := h.vault.data[rotAdminCurrent]["password"]; got != recorded {
@@ -186,11 +200,11 @@ func TestRotateCredentialsRollsBackPendingWhenAlterFails(t *testing.T) {
 	h.kube.WildcardExecError = errors.New("exec refused")
 	h.verifier.accept = h.onlyTheSeededPasswordsWork()
 
-	before := h.storedPassword(t)
+	before := h.currentOwnerPassword(t)
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
 		t.Fatal("rotation must report the failed statement")
 	}
-	if got := h.storedPassword(t); got != before {
+	if got := h.currentOwnerPassword(t); got != before {
 		t.Error("the old credential must stay the stored one")
 	}
 	if got := h.vault.data[rotAuthCurrent]["password"]; got != testutil.FixturePassword(roleAuthAdmin) {
@@ -210,9 +224,9 @@ func TestRotateCredentialsRollsBackPendingWhenAlterFails(t *testing.T) {
 // survive.
 func TestRotateCredentialsKeepsPendingWhenNeitherCredentialCanBeProved(t *testing.T) {
 	h := newRotationHarness(t)
-	h.failing.updateErr = errors.New("platform database unavailable")
+	h.refusePromotion()
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
-		t.Fatal("the first attempt must report the failed persist")
+		t.Fatal("the first attempt must report the failed promotion")
 	}
 	recorded := h.vault.data[rotAdminPending]["password"]
 	if recorded == "" {
@@ -221,7 +235,7 @@ func TestRotateCredentialsKeepsPendingWhenNeitherCredentialCanBeProved(t *testin
 
 	// The retry finds a database it cannot reach at all. The roles before the
 	// owner already finished, so the owner is the rotation that gets there.
-	h.failing.updateErr = nil
+	h.allowPromotion()
 	delete(h.vault.data, rotAuthCurrent)
 	delete(h.vault.data, rotAppCurrent)
 	h.kube.WildcardExecError = errors.New("pod is restarting")
@@ -307,13 +321,13 @@ func TestRotateCredentialsRefusesAProjectBeingTornDown(t *testing.T) {
 // recorded nowhere.
 func TestRotateCredentialsFailsWhenThePendingRecordCannotBeRead(t *testing.T) {
 	h := newRotationHarness(t)
-	h.failing.updateErr = errors.New("platform database unavailable")
+	h.refusePromotion()
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
-		t.Fatal("the first attempt must report the failed persist")
+		t.Fatal("the first attempt must report the failed promotion")
 	}
 	recorded := h.vault.data[rotAdminPending]["password"]
 
-	h.failing.updateErr = nil
+	h.allowPromotion()
 	h.svc.SetVault(&getRefusingVault{fakeVault: h.vault, path: rotAdminPending, refuse: errors.New("vault unreachable")})
 
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
@@ -344,9 +358,9 @@ func (v *getRefusingVault) Get(p string) (map[string]string, error) {
 // accepting the moment auth_admin was replaced.
 func TestRotateCredentialsAnnouncesEachRoleAsItIsPromoted(t *testing.T) {
 	h := newRotationHarness(t)
-	// The owner is rotated last, and its persist fails — so the roles before
+	// The owner is rotated last, and its promotion fails — so the roles before
 	// it are promoted and the rotation as a whole does not finish.
-	h.failing.updateErr = errors.New("platform database unavailable")
+	h.refusePromotion()
 
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err == nil {
 		t.Fatal(testExpectedErr)
@@ -472,8 +486,8 @@ func TestRotateCredentialsReplacesEveryFiledRoleOwnerLast(t *testing.T) {
 			t.Errorf("%s lost its username", path)
 		}
 	}
-	if h.vault.data[rotAdminCurrent]["password"] != h.storedPassword(t) {
-		t.Error("the owner's vault copy and the project row must agree")
+	if h.currentOwnerPassword(t) == testutil.FixturePassword(rotOwner) {
+		t.Error("the owner credential was not promoted")
 	}
 
 	order := rotatedRoleOrder(t, h.kube.ExecStdin)
@@ -620,8 +634,8 @@ func TestRotateCredentialsKeepsPendingWhenVerificationFailsAfterASuccessfulAlter
 	if left := h.pendingPaths(t); len(left) != 1 || left[0] != rotAdminPending {
 		t.Fatalf("the unverified credential must stay recoverable, got %v", left)
 	}
-	if h.storedPassword(t) != testutil.FixturePassword(rotOwner) {
-		t.Error("an unverified credential must not be promoted onto the row")
+	if h.currentOwnerPassword(t) != testutil.FixturePassword(rotOwner) {
+		t.Error("an unverified credential must not be promoted")
 	}
 }
 
@@ -681,7 +695,7 @@ func TestRotateCredentialsWithoutAPublisher(t *testing.T) {
 	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err != nil {
 		t.Fatalf("RotateCredentials: %v", err)
 	}
-	if h.vault.data[rotAdminCurrent]["password"] != h.storedPassword(t) {
+	if h.currentOwnerPassword(t) == testutil.FixturePassword(rotOwner) {
 		t.Error("the owner credential must still be promoted")
 	}
 }

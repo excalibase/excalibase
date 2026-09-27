@@ -37,6 +37,7 @@ func documentDBService(t *testing.T, kube k8s.KubeClient) *ProvisioningService {
 	t.Helper()
 	svc := NewProvisioningService(documentDBStore(t), provisioner.NewFactory(), kube)
 	svc.SetOrgStore(testOrgs())
+	svc.SetVault(newFakeVault())
 	return svc
 }
 
@@ -220,6 +221,7 @@ func TestRegisterProjectWithoutDocumentDBRunsNoExtensionSQL(t *testing.T) {
 	store := documentDBStore(t)
 	svc := NewProvisioningService(store, provisioner.NewFactory(), kube)
 	svc.SetOrgStore(testOrgs())
+	svc.SetVault(newFakeVault())
 
 	inst := documentDBProject()
 	inst.DocumentDB = false

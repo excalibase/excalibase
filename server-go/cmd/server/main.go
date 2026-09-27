@@ -1111,6 +1111,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	// tier limit exactly as a provision is (EXC-421).
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	backupSvc.SetRestorePlanSource(provSvc)
+	backupSvc.SetOwnerCredentials(provSvc)
 	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout); err != nil {
 		log.Fatalf("restore verification: %v", err)
 	}

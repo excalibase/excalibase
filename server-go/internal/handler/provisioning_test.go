@@ -25,6 +25,11 @@ const (
 
 func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 	t.Helper()
+	return setupTestRouterWithVault(t, newFakeVault())
+}
+
+func setupTestRouterWithVault(t *testing.T, vault *fakeVault) (chi.Router, *storage.FileSystemStore) {
+	t.Helper()
 	dir := t.TempDir()
 	store, err := storage.NewFileSystemStore(dir)
 	if err != nil {
@@ -34,6 +39,7 @@ func setupTestRouter(t *testing.T) (chi.Router, *storage.FileSystemStore) {
 	// Empty factory (no real K8s provisioners for unit tests)
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
+	svc.SetVault(vault)
 	orgs := fakestore.NewOrgs()
 	orgs.AddOrg("org", domain.Free)
 	svc.SetOrgStore(orgs)
@@ -215,7 +221,9 @@ func TestListInstances_NilOrgStoreFailsClosed(t *testing.T) {
 }
 
 func TestGetCredentialsForCDS(t *testing.T) {
-	r, store := setupTestRouter(t)
+	vault := newFakeVault()
+	vault.data["projects/cds-project/credentials/admin"] = map[string]string{"password": testutil.FixturePassword("cds-proj")}
+	r, store := setupTestRouterWithVault(t, vault)
 
 	port := 5432
 	pgUsername := testutil.FixtureToken("pguser")
@@ -229,7 +237,6 @@ func TestGetCredentialsForCDS(t *testing.T) {
 		Port:         &port,
 		DatabaseName: "app_db",
 		Username:     pgUsername,
-		Password:     testutil.FixturePassword("cds-proj"),
 		SSLMode:      "require",
 	})
 

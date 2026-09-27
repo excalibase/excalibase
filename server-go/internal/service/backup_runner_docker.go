@@ -67,8 +67,8 @@ func NewDockerBackupRunner(c *client.Client) *DockerBackupRunner {
 //
 // The container ID lives in inst.Namespace (DockerProvisioner stamps
 // the container ID there at provision time — see
-// docker_postgresql.go:102). The postgres password is the platform-
-// generated superuser secret stored in inst.Password.
+// docker_postgresql.go:102). It connects over the container's local socket,
+// which the image trusts, so no password is involved.
 func (r *DockerBackupRunner) BasebackupTo(ctx context.Context, inst *domain.DatabaseInstance, dst io.Writer) error {
 	if inst.Namespace == "" {
 		return fmt.Errorf("instance %s has no container id", inst.ProjectID)
@@ -85,7 +85,6 @@ func (r *DockerBackupRunner) BasebackupTo(ctx context.Context, inst *domain.Data
 		Cmd:          cmd,
 		AttachStdout: true,
 		AttachStderr: true,
-		Env:          []string{"PGPASSWORD=" + inst.Password},
 	})
 	if err != nil {
 		return fmt.Errorf("exec create: %w", err)

@@ -296,11 +296,11 @@ func (a *DockerBackupAdapter) uploadWALArchive(ctx context.Context, dc provision
 		dbName = "postgres"
 	}
 	// Force WAL switch + checkpoint so the segment containing recent
-	// commits closes and becomes archivable. PGPASSWORD env keeps the
-	// psql exec from prompting.
+	// commits closes and becomes archivable. psql runs over the container's
+	// local socket, which the image trusts.
 	for _, sql := range []string{"SELECT pg_switch_wal();", "CHECKPOINT;"} {
 		_, _ = dc.ExecInContainer(ctx, inst.Namespace,
-			[]string{"sh", "-c", fmt.Sprintf("PGPASSWORD=%q psql -U postgres -d %s -c %q", inst.Password, dbName, sql)})
+			[]string{"psql", "-U", "postgres", "-d", dbName, "-c", sql})
 	}
 
 	stream, err := dc.CopyFromContainer(ctx, inst.Namespace, walArchivePath)

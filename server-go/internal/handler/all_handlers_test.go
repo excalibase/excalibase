@@ -48,6 +48,9 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	// carries a real provisioner over the k8s mock.
 	factory := provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, ""))
 	provSvc := service.NewProvisioningService(store, factory, mock)
+	credVault := newFakeVault()
+	credVault.data["projects/test-db/credentials/admin"] = map[string]string{"username": "user", "password": testutil.FixturePassword(testPGCreds)}
+	provSvc.SetVault(credVault)
 	metricsSvc := service.NewMetricsService(store, mock, dir)
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
 	// Restore ends in the shared registration path (EXC-366) and completes
@@ -63,6 +66,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	backupSvc.SetProjectRegistrar(provSvc)
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	backupSvc.SetRestorePlanSource(provSvc)
+	backupSvc.SetOwnerCredentials(provSvc)
 	if err := backupSvc.SetDatabaseProbe(answeringProbe{}); err != nil {
 		t.Fatalf("SetDatabaseProbe: %v", err)
 	}
@@ -137,7 +141,7 @@ func seedInstance(store *storage.FileSystemStore, mock *k8s.MockClient) {
 		// restore into; FREE allows the one project this seeds.
 		Tier: domain.Standard, Namespace: "org1-test-db", Status: "ACTIVE", PostgresVersion: "17",
 		Host: "h.local", Port: &port, DatabaseName: "app",
-		Username: "user", Password: testutil.FixturePassword(testPGCreds), SSLMode: "require",
+		Username: "user", SSLMode: "require",
 	})
 	mock.SetupPostgreSQLMock("test-db", "org1-test-db", 1)
 }
