@@ -325,50 +325,61 @@ backup (`targetImmediate`) unless a later target is also given.
 
 #### Credential flow (what actually happens at runtime)
 
+The backup store's key (the platform key: `BACKUP_DEFAULT_*`, else `R2_*`,
+else vault `backup/s3`) never leaves the platform namespace (EXC-476). Each
+project namespace holds only a temporary credential for its own prefix,
+minted by provisioning:
+
 ```
-vault://backup/s3                       ← canonical source (admin uploads once)
-        │
-        │ provisioning.go:268 reads at provision time
+platform key (provisioning process only)
+        │  BACKUP_CREDENTIALS_PROVIDER=r2  → R2 temporary credential, signed locally
+        │  BACKUP_CREDENTIALS_PROVIDER=sts → MinIO AssumeRole session + inline policy
         ▼
-req.Backup.S3 (in-memory, scoped to one provision call)
-        │
-        │ provisioner/postgresql.go:40 fans out to:
+K8s secret  {org}-{projectId}/backup-s3-creds
+                ACCESS_KEY_ID, ACCESS_SECRET_KEY, ACCESS_SESSION_TOKEN,
+                EXPIRES_AT, ISSUED_BY (fingerprint of the platform key)
+        │  scope: bucket + prefix {projectId}/cloud/, object read-write,
+        │  lifetime BACKUP_CREDENTIALS_TTL (12h)
         ▼
-K8s secret  excalibase-{org}-{projectId}/backup-s3-creds
-                ACCESS_KEY_ID, ACCESS_SECRET_KEY
-        │
-        │ k8s/barman_cloud.go references it from:
-        ▼
-ObjectStore {projectId}-backups → configuration.s3Credentials.{accessKeyId,secretAccessKey}
-        │
-        │ the plugin sidecar reads the project-namespace secret
+ObjectStore {projectId}-backups → s3Credentials.{accessKeyId,secretAccessKey,sessionToken}
+        │  the plugin sidecar re-reads the Secret on each WAL segment (10 s cache)
         ▼
 s3://excalibase-backups/{projectId}/cloud/{base,wals}/...
 ```
 
-**Properties to keep in mind when operating:**
+- **Renewal:** the leader replica checks every
+  `BACKUP_CREDENTIALS_RENEW_INTERVAL` (10m) and replaces a project's Secret
+  data once less than half its lifetime is left, or at once when it was
+  minted from a different platform key (rotation). Nothing restarts. A
+  failed renewal is logged (`ERROR: backup credential renewal: ...`) and
+  counted (`excalibase_backup_credential_renewals_total{result="failed"}`);
+  the current credential keeps working for up to 6 more hours. Alerts:
+  `BackupCredentialRenewalFailing`, `BackupCredentialsExpiringSoon`,
+  `CNPGWALArchivingFailing`.
+- **Restores** get a second Secret, `backup-source-creds`: read-only for the
+  source's prefix, living `EXCALIBASE_RESTORE_READY_TIMEOUT` + 1h, never
+  renewed. The restored project archives with its own `backup-s3-creds`.
+- **Prefix check:** a project is refused a prefix that already holds objects
+  (e.g. a deleted project's retained backups). This replaces
+  `barman-cloud-check-wal-archive`, which needs HeadBucket — something no
+  prefix-scoped credential can do — so clusters carry
+  `cnpg.io/skipEmptyWalArchiveCheck: enabled`.
+- **Required configuration:** in Kubernetes mode a backup key without
+  `BACKUP_CREDENTIALS_PROVIDER` stops the boot, and a project with backups is
+  refused when nothing can mint its credential. Docker mode keeps the key in
+  the provisioning process (its backups are uploaded by the platform itself)
+  and needs no provider.
+- **Rotating the platform key:** update it, restart provisioning; every
+  project is renewed on the next pass (credentials derived from a revoked R2
+  key stop working at once, so rotate the new key in before revoking the old).
+- A client cannot name its own backup store (`backup.s3` in a provision
+  request is refused).
 
-- The K8s secret is **project-namespace-scoped**, not cluster-scoped. Each
-  project's CNPG operator reads only its own copy; no central secret holds
-  every project's credentials.
-- The platform Go process is the only thing that ever reads vault `backup/s3`.
-  CNPG never touches vault — it only reads the project-namespace K8s secret.
-- **Rotation:** `vault put backup/s3 ...` rotates the source. New provisions
-  pick up the new value; *existing* per-project K8s secrets keep the old
-  value until re-provisioned or rotated by tooling. There is no auto-rotate
-  loop today; if you rotate R2 keys, you must walk every project namespace
-  with `kubectl create secret backup-s3-creds --dry-run=client -o yaml | apply`.
-- **Vault uninitialised fallback:** if vault is sealed / no `backup/s3`,
-  `provisioning.go` falls through to env-driven `BackupDefaults` populated
-  from the cluster-scoped `r2-creds` K8s secret on the `provisioning`
-  deployment. Same R2 destination, but the master creds are visible to
-  anyone with `get secret -n excalibase-platform r2-creds`. **This is the
-  state of the current minikube** — initialise the vault to tighten this.
 - **Platform-db backups use a bucket and key of their own**
   (`platform-db-backup-creds`, `s3://excalibase-platform-db-backups/` in
-  `charts/platform-base`). Never point them at `r2-creds`: every tenant
-  namespace holds a copy of that key, and the platform DB holds every user's
-  password hash and the vault. The chart refuses `r2-creds` and
+  `charts/platform-base`). Never point them at `r2-creds`: the platform DB
+  holds every user's password hash and the vault, and a key shared with
+  tenant backups and files widens what one leak exposes. The chart refuses `r2-creds` and
   `backup-s3-creds`, requires `platformDB.backup.endpointURL`, and pins the
   image by digest. They go through the Barman Cloud plugin (ObjectStore
   `platform-db-backups`, ScheduledBackup `platform-db-backup`), so the plugin

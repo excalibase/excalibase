@@ -19,7 +19,9 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/objectcreds"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // The plugin exactly as the charts repo installs it: this version, these digests.
@@ -32,8 +34,8 @@ const (
 		"@sha256:06c78deca670525daa35fb1e5323159092785d11cf87b86217bdd5c679a41a84"
 	backupLiveMinIOImage = "docker.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372"
 	backupLiveOrg        = "org1"
-	backupLiveSource     = "bkpsrc"
 	backupLiveBucket     = "excalibase-backups"
+	backupLiveNodePort   = 30900
 	backupLiveSchedule   = "0 0 2 * * *"
 )
 
@@ -47,31 +49,51 @@ var sidecarSecretBlock = regexp.MustCompile(`(?m)^  SIDECAR_IMAGE: \|\n(?:    .*
 
 type backupLab struct {
 	*documentDBLab
-	store   *domain.S3Credentials
-	adapter *K8sBackupAdapter
-	source  *domain.DatabaseInstance
+	// store is the platform key; only minted credentials reach a namespace.
+	store     *domain.S3Credentials
+	issuer    *BackupCredentialIssuer
+	ttl       time.Duration
+	suffix    string
+	instances storage.InstanceStore
+	adapter   *K8sBackupAdapter
+	source    *domain.DatabaseInstance
+	sourceID  string
 }
 
-// Run with: go test ./internal/service/ -tags=live -run TestLiveBackupsRunThroughTheBarmanCloudPlugin -v -count=1 -timeout 60m
+// Backups, WAL archiving and restores run on temporary credentials minted per
+// project (EXC-476). With R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT
+// and R2_BUCKET set the store is that R2 bucket and credentials live 4 minutes,
+// so the run crosses a renewal and an expiry; otherwise an in-cluster MinIO
+// issues STS sessions (15 minutes, too long to wait out here).
+//
+// Run with: go test ./internal/service/ -tags=live -run TestLiveBackupsRunThroughTheBarmanCloudPlugin -v -count=1 -timeout 90m
 func TestLiveBackupsRunThroughTheBarmanCloudPlugin(t *testing.T) {
-	lab := &backupLab{documentDBLab: startDocumentDBLab(t)}
+	lab := &backupLab{documentDBLab: startDocumentDBLab(t), suffix: randomHex(t, 3)}
+	lab.sourceID = "bkpsrc" + lab.suffix
 	lab.installBackupStack(t)
+	t.Cleanup(func() { lab.purgePrefixes(t) })
 	lab.provisionSource(t)
+	lab.expectNoPlatformKeyIn(t, lab.sourceID)
+	stopRenewal := lab.startRenewal(t)
+	defer func() { stopRenewal() }()
 
-	lab.write(t, backupLiveSource, 1, 1000)
-	atBackup := lab.checksums(t, backupLiveSource)
+	lab.write(t, lab.sourceID, 1, 1000)
+	atBackup := lab.checksums(t, lab.sourceID)
 	backupID := lab.takeBackup(t)
+	lab.expectArchivingSurvivesExpiry(t)
 
-	lab.write(t, backupLiveSource, 1001, 3000)
-	beforeLoss := lab.checksums(t, backupLiveSource)
+	lab.write(t, lab.sourceID, 1001, 3000)
+	beforeLoss := lab.checksums(t, lab.sourceID)
 	time.Sleep(1100 * time.Millisecond)
-	targetTime := strings.TrimSpace(lab.psql(t, backupLiveSource, "SELECT to_char(date_trunc('second', clock_timestamp() AT TIME ZONE 'UTC'), 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')"))
+	targetTime := strings.TrimSpace(lab.psql(t, lab.sourceID, "SELECT to_char(date_trunc('second', clock_timestamp() AT TIME ZONE 'UTC'), 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')"))
 	time.Sleep(1500 * time.Millisecond)
-	lab.psql(t, backupLiveSource, "DROP TABLE orders; DELETE FROM customers;")
-	lab.expectArchivedThroughNow(t, backupLiveSource)
+	lab.psql(t, lab.sourceID, "DROP TABLE orders; DELETE FROM customers;")
+	lab.expectArchivedThroughNow(t, lab.sourceID)
 	t.Logf("at backup %v, before loss %v (target %s)", atBackup, beforeLoss, targetTime)
 
-	byID := lab.restore(t, "bkpbyid", domain.RestoreRequest{BackupID: backupID})
+	byID := lab.restore(t, "bkpbyid"+lab.suffix, domain.RestoreRequest{BackupID: backupID})
+	lab.expectNoPlatformKeyIn(t, byID)
+	lab.expectConfinedToItsPrefix(t, byID, lab.sourceID)
 	if got := lab.checksums(t, byID); got != atBackup {
 		t.Fatalf("restore by backup id: got %v, want the rows at the backup %v", got, atBackup)
 	}
@@ -82,10 +104,13 @@ func TestLiveBackupsRunThroughTheBarmanCloudPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse target time: %v", err)
 	}
-	pitr := lab.restore(t, "bkppitr", domain.RestoreRequest{TargetTime: &domain.FlexTime{Time: at}})
+	pitr := lab.restore(t, "bkppitr"+lab.suffix, domain.RestoreRequest{TargetTime: &domain.FlexTime{Time: at}})
 	if got := lab.checksums(t, pitr); got != beforeLoss {
 		t.Fatalf("point-in-time restore: got %v, want the rows before the loss %v", got, beforeLoss)
 	}
+	stopRenewal()
+	stopRenewal = func() {}
+	lab.expectArchivingFailsLoudlyOnceExpired(t, pitr)
 }
 
 func randomHex(t *testing.T, n int) string {
@@ -108,11 +133,42 @@ func (lab *backupLab) installBackupStack(t *testing.T) {
 	lab.kubectl(t, "wait", "--for=condition=Ready", "--timeout=300s", "certificate/barman-cloud-server", "certificate/barman-cloud-client", "-n", "cnpg-system")
 	lab.kubectl(t, "rollout", "status", "deployment/barman-cloud", "-n", "cnpg-system", "--timeout=300s")
 
-	user, password := "backup"+randomHex(t, 4), randomHex(t, 24)
-	lab.applyFile(t, "/tmp/minio.yaml", minioManifest(user, password))
-	lab.kubectl(t, "rollout", "status", "deployment/minio", "-n", "backup-store", "--timeout=300s")
-	lab.store = &domain.S3Credentials{AccessKeyID: user, SecretAccessKey: password, Bucket: backupLiveBucket,
-		Endpoint: "http://minio.backup-store.svc.cluster.local:9000", Region: "us-east-1"}
+	var minter objectcreds.Minter
+	if r2 := r2StoreFromEnv(); r2 != nil {
+		lab.store, minter, lab.ttl = r2, objectcreds.R2Signer{}, 4*time.Minute
+	} else {
+		user, password := "backup"+randomHex(t, 4), randomHex(t, 24)
+		lab.applyFile(t, "/tmp/minio.yaml", minioManifest(user, password))
+		lab.kubectl(t, "rollout", "status", "deployment/minio", "-n", "backup-store", "--timeout=300s")
+		nodeIP, err := lab.container.ContainerIP(lab.ctx)
+		if err != nil {
+			t.Fatalf("node ip: %v", err)
+		}
+		// One address both this process (minting) and the pods (archiving) reach.
+		lab.store = &domain.S3Credentials{AccessKeyID: user, SecretAccessKey: password, Bucket: backupLiveBucket,
+			Endpoint: fmt.Sprintf("http://%s:%d", nodeIP, backupLiveNodePort), Region: "us-east-1"}
+		minter, lab.ttl = objectcreds.STSMinter{}, 15*time.Minute
+	}
+	issuer, err := NewBackupCredentialIssuer(BackupCredentialIssuerConfig{
+		Minter: minter, OpenStore: AWSObjectDeleterFactory(true), TTL: lab.ttl, SourceTTL: 30 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("issuer: %v", err)
+	}
+	lab.issuer = issuer
+	lab.instances = emptyInstanceStore(t)
+	t.Logf("backup store %s, credentials live %s", lab.store.Endpoint, lab.ttl)
+}
+
+func r2StoreFromEnv() *domain.S3Credentials {
+	store := &domain.S3Credentials{
+		AccessKeyID: os.Getenv("R2_ACCESS_KEY_ID"), SecretAccessKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
+		Endpoint: os.Getenv("R2_ENDPOINT"), Bucket: os.Getenv("R2_BUCKET"), Region: "auto",
+	}
+	if store.AccessKeyID == "" || store.SecretAccessKey == "" || store.Endpoint == "" || store.Bucket == "" {
+		return nil
+	}
+	return store
 }
 
 func (lab *backupLab) applyFile(t *testing.T, path, manifest string) {
@@ -200,8 +256,9 @@ kind: Service
 metadata: {name: minio, namespace: backup-store}
 spec:
   selector: {app: minio}
-  ports: [{port: 9000, targetPort: 9000}]
-`, user, password, backupLiveBucket, backupLiveMinIOImage)
+  type: NodePort
+  ports: [{port: 9000, targetPort: 9000, nodePort: %d}]
+`, user, password, backupLiveBucket, backupLiveMinIOImage, backupLiveNodePort)
 }
 
 func backupLiveTier() config.TierConfig {
@@ -211,9 +268,13 @@ func backupLiveTier() config.TierConfig {
 // provisionSource runs the platform's own provisioner with backups on, on the catalogue image.
 func (lab *backupLab) provisionSource(t *testing.T) {
 	t.Helper()
+	minted, err := lab.issuer.ForNewProject(lab.ctx, lab.store, lab.sourceID)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
 	req := domain.ProvisioningRequest{
-		ProjectName: backupLiveSource, OrgID: backupLiveOrg, DBType: domain.PostgreSQL, PostgresVersion: "17",
-		Backup: &domain.BackupSettings{Enabled: true, Schedule: backupLiveSchedule, Retention: 7, S3: lab.store},
+		ProjectName: lab.sourceID, OrgID: backupLiveOrg, DBType: domain.PostgreSQL, PostgresVersion: "17",
+		Backup: &domain.BackupSettings{Enabled: true, Schedule: backupLiveSchedule, Retention: 7, S3: minted},
 	}
 	creds, err := provisioner.NewPostgreSQLProvisioner(lab.client, "").
 		ProvisionWithRollback(lab.ctx, req, backupLiveTier(), provisioner.NewProvisionContext(nil, nil))
@@ -222,12 +283,16 @@ func (lab *backupLab) provisionSource(t *testing.T) {
 	}
 	enabled := true
 	lab.source = &domain.DatabaseInstance{
-		ProjectID: backupLiveSource, OrgID: backupLiveOrg, Namespace: backupLiveOrg + "-" + backupLiveSource,
+		ProjectID: lab.sourceID, OrgID: backupLiveOrg, Namespace: backupLiveOrg + "-" + lab.sourceID,
 		DBType: domain.PostgreSQL, PostgresVersion: "17", DeploymentMode: domain.ModeK8s, Status: "ACTIVE",
 		DatabaseName: creds.DatabaseName, Username: creds.Username, Password: creds.Password, BackupEnabled: &enabled,
 	}
+	if err := lab.instances.Create(lab.source); err != nil {
+		t.Fatalf("register source: %v", err)
+	}
 	lab.adapter = NewK8sBackupAdapter(lab.client, StaticBackupStorage(lab.store))
-	lab.psql(t, backupLiveSource, "CREATE TABLE customers (id int PRIMARY KEY, name text NOT NULL);"+
+	lab.adapter.SetBackupCredentials(lab.issuer)
+	lab.psql(t, lab.sourceID, "CREATE TABLE customers (id int PRIMARY KEY, name text NOT NULL);"+
 		"CREATE TABLE orders (id int PRIMARY KEY, customer_id int REFERENCES customers(id), amount numeric(10,2));")
 }
 
@@ -361,9 +426,8 @@ func (p psqlProbe) Probe(ctx context.Context, projectID string) error {
 
 func (lab *backupLab) restore(t *testing.T, project string, req domain.RestoreRequest) string {
 	t.Helper()
-	store := emptyInstanceStore(t)
-	lab.adapter.SetInstanceStore(store)
-	lab.adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
+	lab.adapter.SetInstanceStore(lab.instances)
+	lab.adapter.SetProjectRegistrar(&fakeRegistrar{store: lab.instances})
 	lab.adapter.SetDatabaseProbe(psqlProbe{lab: lab})
 	lab.adapter.SetOwnerCredentials(sourceOwnerPassword(lab.source.Password))
 	lab.adapter.SetRestorePlanSource(&fakeRestorePlans{plan: RestorePlan{
