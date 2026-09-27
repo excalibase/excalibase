@@ -49,7 +49,7 @@ func TestRegister_InviteSpentBeforeJoiningRemovesTheNewAccount(t *testing.T) {
 	for _, failDelete := range []bool{false, true} {
 		us := seededStore()
 		us.failDelete = failDelete
-		org := &inviteOrgStore{tokenHash: hashToken("tok"), acceptErr: storage.ErrInviteInvalid}
+		org := &inviteOrgStore{tokenHash: hashToken("tok"), email: "late@x.test", acceptErr: storage.ErrInviteInvalid}
 		h := registerHandler(us, org, false)
 
 		w := postRegisterWithInvite(h, "late", "late@x.test", "tok")
@@ -71,8 +71,13 @@ func TestRegister_TakenUsernameIsAConflict(t *testing.T) {
 }
 
 func acceptRequest(h *OrgHandler, body string) *httptest.ResponseRecorder {
+	verified := time.Now()
+	return acceptRequestAs(h, &domain.User{ID: "u-accept", Role: "user", Email: "bob@company.test", EmailVerifiedAt: &verified}, body)
+}
+
+func acceptRequestAs(h *OrgHandler, user *domain.User, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/invites/accept", strings.NewReader(body))
-	req = req.WithContext(auth.SetUser(req.Context(), &domain.User{ID: "u-accept", Role: "user"}))
+	req = req.WithContext(auth.SetUser(req.Context(), user))
 	w := httptest.NewRecorder()
 	h.AcceptInvite(w, req)
 	return w
@@ -94,9 +99,29 @@ func TestAcceptInvite(t *testing.T) {
 	if w := acceptRequest(h, `{"token":"tok"}`); w.Code != http.StatusBadRequest {
 		t.Errorf("spent token: got %d", w.Code)
 	}
+	org.tokenHash = hashToken("tok")
 	org.acceptErr = storage.ErrAlreadyOrgMember
 	if w := acceptRequest(h, `{"token":"tok"}`); w.Code != http.StatusConflict {
 		t.Errorf("already a member: got %d", w.Code)
+	}
+}
+
+// Signing in to accept an invite proves the account, not the address the
+// invite was sent to: the two must match, and the address must be verified.
+func TestAcceptInviteRequiresTheInvitedVerifiedAddress(t *testing.T) {
+	verified := time.Now()
+	cases := map[string]*domain.User{
+		"another address": {ID: "u-other", Email: "eve@x.test", EmailVerifiedAt: &verified},
+		"unverified":      {ID: "u-unverified", Email: "bob@company.test"},
+	}
+	for name, user := range cases {
+		org := &inviteOrgStore{tokenHash: hashToken("tok")}
+		if w := acceptRequestAs(NewOrgHandler(org, nil), user, `{"token":"tok"}`); w.Code != http.StatusForbidden {
+			t.Errorf("%s: got %d, want 403", name, w.Code)
+		}
+		if len(org.accepted) != 0 {
+			t.Errorf("%s: the invite was spent", name)
+		}
 	}
 }
 

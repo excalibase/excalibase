@@ -254,6 +254,7 @@ Environment variables:
 - `CORS_ORIGINS` — comma-separated allowed origins (required, default: https://app.excalibase.io)
 - `DEPLOYMENT_MODE` — `selfhosted` (default) or `cloud`
 - `PUBLIC_BASE_URL` — public base URL for SDK snippets + function invoke
+- `STUDIO_URL` — required; Studio origin that emailed verification and password-reset links open
 
 **Storage**
 - `DB_PATH` — SQLite path (self-hosted only, default: ../provisioning-data/excalibase.db)

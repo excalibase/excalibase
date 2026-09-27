@@ -22,6 +22,7 @@ import (
 type inviteOrgStore struct {
 	storage.OrgStore
 	tokenHash string
+	email     string
 	accepted  []string
 	acceptErr error
 	createErr error
@@ -40,7 +41,11 @@ func (s *inviteOrgStore) FindPendingInviteByToken(_ context.Context, hash string
 	if s.tokenHash == "" || hash != s.tokenHash {
 		return nil, storage.ErrInviteInvalid
 	}
-	return &domain.PendingInvite{ID: 1, OrgID: "org1", Role: "developer"}, nil
+	address := s.email
+	if address == "" {
+		address = "bob@company.test"
+	}
+	return &domain.PendingInvite{ID: 1, OrgID: "org1", Role: "developer", Email: address}, nil
 }
 
 func (s *inviteOrgStore) AcceptPendingInvite(ctx context.Context, hash, userID string, now time.Time) (*domain.PendingInvite, error) {
@@ -76,6 +81,7 @@ func registerHandler(us *mockUserStore, org storage.OrgStore, inviteOnly bool) *
 		h.SetOrgStore(org)
 	}
 	h.SetInviteOnly(inviteOnly)
+	h.SetEmailVerifier(NewEmailVerifier(newFakeVerificationStore(), &recordingSender{}, testStudioURL, ""))
 	return h
 }
 
@@ -166,5 +172,29 @@ func TestOpenMode_UninvitedAllowed(t *testing.T) {
 	w := postRegister(h, "carol", "carol@x.test")
 	if w.Code != http.StatusCreated {
 		t.Errorf("open mode must allow uninvited registration, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// An invite names one address; presenting it with another is refused before
+// any account exists.
+func TestRegister_InviteForAnotherAddressCreatesNoAccount(t *testing.T) {
+	us := seededStore()
+	org := &inviteOrgStore{tokenHash: hashToken("invite-token")}
+	h := registerHandler(us, org, false)
+	w := postRegisterWithInvite(h, "eve", "eve@x.test", "invite-token")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("got %d, want 403: %s", w.Code, w.Body.String())
+	}
+	if len(us.users) != 1 || len(org.accepted) != 0 {
+		t.Errorf("a mismatched invite created an account or was spent")
+	}
+}
+
+// The address match ignores case, as mail providers do.
+func TestRegister_InviteAddressMatchIgnoresCase(t *testing.T) {
+	org := &inviteOrgStore{tokenHash: hashToken("invite-token")}
+	h := registerHandler(seededStore(), org, true)
+	if w := postRegisterWithInvite(h, "bob", "Bob@Company.test", "invite-token"); w.Code != http.StatusCreated {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
 }

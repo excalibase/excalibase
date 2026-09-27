@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -24,7 +25,13 @@ type AuthHandler struct {
 	auditLog      auditWriter           // optional — records PAT rotations
 	inviteOnly    bool                  // when true, only an invite token (or the first admin) may register
 	setupTokens   storage.SetupTokenStore
+	verifier      *EmailVerifier
 }
+
+// SetEmailVerifier wires the verification mail every Studio account must
+// answer before it can sign in. Without it no account but the first admin
+// can be created.
+func (h *AuthHandler) SetEmailVerifier(v *EmailVerifier) { h.verifier = v }
 
 // SetSetupTokenStore wires the one-time first-admin setup token check
 // (EXC-451). Required for Register to ever create a platform_admin — with it
@@ -86,12 +93,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// First-run detection: the very first registration on a fresh platform
-	// becomes platform_admin so the setup wizard can complete without a
-	// separate "promote" step. This check alone used to be the whole gate —
-	// racy, and requiring nothing but being first to the wire (EXC-451). It
-	// now only decides which branch below runs; the atomic token burn in
-	// CreateFirstAdmin is what actually decides who becomes admin.
+	// First-run detection only picks the branch below; the atomic token burn
+	// in CreateFirstAdmin decides who actually becomes admin (EXC-451).
 	allUsers, err := h.userStore.FindAllUsers(r.Context())
 	if err != nil {
 		httpError(w, "internal error", http.StatusInternalServerError)
@@ -99,9 +102,13 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	isFirstUser := len(allUsers) == 0
 
-	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, isFirstUser)
+	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, req.Email, isFirstUser)
 	if status != 0 {
 		httpError(w, msg, status)
+		return
+	}
+	if !isFirstUser && !h.verifier.Available() {
+		httpError(w, "sign-up is unavailable: verification email cannot be sent", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -116,25 +123,60 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Kind:         domain.UserKindHuman,
 		CreatedAt:    &now,
 	}
-
-	var ok bool
 	if isFirstUser {
-		ok = h.createFirstAdmin(w, r, req.SetupToken, user)
-	} else {
-		ok = h.createSubsequentUser(w, r, user)
-	}
-	if !ok {
+		h.registerFirstAdmin(w, r, req.SetupToken, inviteHash, user, now)
 		return
 	}
+	h.registerMember(w, r, inviteHash, user)
+}
 
-	if inviteHash != "" {
-		if status, msg := h.joinInvitedOrg(r.Context(), inviteHash, user); status != 0 {
-			httpError(w, msg, status)
-			return
-		}
+// registerFirstAdmin creates the platform's first admin. The one-time setup
+// token proves who is installing the platform, so the account is created
+// verified and signed in.
+func (h *AuthHandler) registerFirstAdmin(w http.ResponseWriter, r *http.Request, setupToken, inviteHash string, user *domain.User, now time.Time) {
+	user.EmailVerifiedAt = &now
+	if !h.createFirstAdmin(w, r, setupToken, user) {
+		return
 	}
-
+	if !h.joinInviteIfAny(w, r, inviteHash, user) {
+		return
+	}
 	h.issueRegistrationToken(w, r, user, now)
+}
+
+// registerMember creates an unverified account and mails its verification
+// link. No session is issued: signing in waits for the link. An account whose
+// link could not be sent is removed again, so the address stays free.
+func (h *AuthHandler) registerMember(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User) {
+	if !h.createSubsequentUser(w, r, user) {
+		return
+	}
+	if err := h.verifier.Send(r.Context(), user); err != nil {
+		log.Printf("ERROR: registration of %s: %v", user.ID, err)
+		if derr := h.userStore.DeleteUser(r.Context(), user.ID); derr != nil {
+			log.Printf("WARN: remove account %s after a failed verification mail: %v", user.ID, derr)
+		}
+		httpError(w, "sign-up is unavailable: verification email could not be sent", http.StatusServiceUnavailable)
+		return
+	}
+	if !h.joinInviteIfAny(w, r, inviteHash, user) {
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]string{"status": "verification_required", "email": user.Email})
+}
+
+// joinInviteIfAny spends the registration's invite, writing the refusal and
+// returning false when it cannot be spent.
+func (h *AuthHandler) joinInviteIfAny(w http.ResponseWriter, r *http.Request, inviteHash string, user *domain.User) bool {
+	if inviteHash == "" {
+		return true
+	}
+	if status, msg := h.joinInvitedOrg(r.Context(), inviteHash, user); status != 0 {
+		httpError(w, msg, status)
+		return false
+	}
+	return true
 }
 
 // createFirstAdmin handles the very first registration: it requires the
@@ -242,6 +284,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+	if user.EmailVerifiedAt == nil {
+		writeEmailNotVerified(w)
+		return
+	}
 
 	// Issue a session-scope PAT. 12h TTL bounds blast radius if the cookie
 	// leaks; "session" scope distinguishes it from long-lived CI tokens in
@@ -273,6 +319,16 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		"token":     raw,
 		"expiresAt": expiry,
 		"user":      user,
+	})
+}
+
+// writeEmailNotVerified refuses a sign-in whose password was right but whose
+// address was never proven; the code lets Studio offer a new link.
+func writeEmailNotVerified(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": "email not verified", "code": "email_not_verified", "status": http.StatusForbidden,
 	})
 }
 
@@ -365,12 +421,19 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		PasswordHash: hash,
 		Role:         req.Role,
 		Active:       true,
+		Kind:         domain.UserKindHuman,
 		CreatedAt:    &now,
 	}
 
 	if err := h.userStore.CreateUser(r.Context(), user); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
+	}
+	// The account verifies like every other; without mail an admin marks it.
+	if h.verifier.Available() {
+		if err := h.verifier.Send(r.Context(), user); err != nil {
+			log.Printf("WARN: verification mail for %s: %v", user.ID, err)
+		}
 	}
 
 	w.WriteHeader(http.StatusCreated)
@@ -402,7 +465,7 @@ func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, pa
 // checkRegistrationInvite validates an invite token before any account is
 // created. Without one, only the first registration or open mode may proceed:
 // an email that matches a pending invite grants nothing on its own.
-func (h *AuthHandler) checkRegistrationInvite(ctx context.Context, token string, firstUser bool) (string, int, string) {
+func (h *AuthHandler) checkRegistrationInvite(ctx context.Context, token, address string, firstUser bool) (string, int, string) {
 	if token == "" {
 		if h.inviteOnly && !firstUser {
 			return "", http.StatusForbidden, "registration is invite-only"
@@ -413,8 +476,12 @@ func (h *AuthHandler) checkRegistrationInvite(ctx context.Context, token string,
 		return "", http.StatusBadRequest, storage.ErrInviteInvalid.Error()
 	}
 	hash := hashToken(token)
-	if _, err := h.orgStore.FindPendingInviteByToken(ctx, hash, time.Now()); err != nil {
+	invite, err := h.orgStore.FindPendingInviteByToken(ctx, hash, time.Now())
+	if err != nil {
 		return "", inviteErrorStatus(err), inviteErrorMessage(err)
+	}
+	if !strings.EqualFold(invite.Email, address) {
+		return "", http.StatusForbidden, errInviteForAnotherAddress
 	}
 	return hash, 0, ""
 }
@@ -431,6 +498,44 @@ func (h *AuthHandler) joinInvitedOrg(ctx context.Context, hash string, user *dom
 		log.Printf("WARN: remove account %s after a refused invite: %v", user.ID, derr)
 	}
 	return inviteErrorStatus(err), inviteErrorMessage(err)
+}
+
+const (
+	auditActionMarkEmailVerified = "user.email.mark_verified"
+	auditResourceUser            = "user"
+)
+
+// MarkEmailVerified lets a platform admin vouch for an account's address, for
+// an install that cannot send mail. Every use is audited.
+func (h *AuthHandler) MarkEmailVerified(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "userId")
+	err := h.verifier.MarkVerified(r.Context(), userID)
+	switch {
+	case errors.Is(err, storage.ErrUserNotFound):
+		httpError(w, "user not found", http.StatusNotFound)
+		return
+	case errors.Is(err, ErrVerificationUnavailable):
+		httpError(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	case err != nil:
+		log.Printf("ERROR: mark %s verified: %v", userID, err)
+		httpError(w, "failed to mark the account verified", http.StatusInternalServerError)
+		return
+	}
+	if h.auditLog != nil {
+		now := time.Now()
+		var actor string
+		if admin := auth.GetUser(r.Context()); admin != nil {
+			actor = admin.ID
+		}
+		if err := h.auditLog.LogAudit(r.Context(), &domain.AuditEntry{
+			UserID: actor, Action: auditActionMarkEmailVerified, Resource: auditResourceUser,
+			ResourceID: userID, IPAddress: clientIP(r), Timestamp: &now,
+		}); err != nil {
+			log.Printf("ERROR: audit mark-verified of %s: %v", userID, err)
+		}
+	}
+	writeJSON(w, map[string]string{"status": "verified", "userId": userID})
 }
 
 func (h *AuthHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {

@@ -67,6 +67,7 @@ func firstAdminHandler(t *testing.T) (*AuthHandler, string) {
 	}
 	h := NewAuthHandler(us, newMockTokenStore())
 	h.SetSetupTokenStore(sts)
+	h.SetEmailVerifier(NewEmailVerifier(newFakeVerificationStore(), &recordingSender{}, testStudioURL, ""))
 	return h, raw
 }
 
@@ -210,16 +211,27 @@ func TestRegister_SubsequentUser_StoreFailure_ServerError(t *testing.T) {
 	}
 }
 
-// A token-store failure after the account is created must not silently 200
-// with a token the caller can never use again.
+// A token-store failure after the first admin is created must not silently
+// 200 with a token the caller can never use again.
 func TestRegister_TokenPersistenceFailure_ServerError(t *testing.T) {
-	us := seededStore()
-	ts := newMockTokenStore()
-	ts.failSave = true
-	h := NewAuthHandler(us, ts)
-	h.SetSetupTokenStore(newMockSetupTokenStore(us))
-	w := postRegister(h, "dave", "dave@x.test")
+	h, raw := firstAdminHandler(t)
+	h.tokenStore.(*mockTokenStore).failSave = true
+	w := postRegisterWithToken(h, "founder", "founder@x.test", raw)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("got %d, want %d: %s", w.Code, http.StatusInternalServerError, w.Body.String())
+	}
+}
+
+// The setup token proves who installs the platform, so the first admin is
+// created verified and signed in without a mail round trip.
+func TestRegister_FirstAdmin_IsCreatedVerified(t *testing.T) {
+	h, raw := firstAdminHandler(t)
+	if w := postRegisterWithToken(h, "founder", "founder@x.test", raw); w.Code != http.StatusCreated {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	for _, u := range h.userStore.(*mockUserStore).users {
+		if u.Username == "founder" && u.EmailVerifiedAt == nil {
+			t.Fatal("the first admin was created unverified")
+		}
 	}
 }

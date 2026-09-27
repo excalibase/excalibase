@@ -19,6 +19,7 @@ type PlatformStore interface {
 	OrgStore
 	TierConfigStore
 	ProjectActivityStore
+	EmailVerificationStore
 	io.Closer
 
 	// Audit log writes — both concrete stores (sqlite, postgres) expose

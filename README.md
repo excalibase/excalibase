@@ -347,6 +347,7 @@ Error messages are sanitized — PostgreSQL internal details are stripped from 5
 | `CORS_ORIGINS` | `https://app.excalibase.io` | Comma-separated allowed origins (required, server refuses to start if empty) |
 | `DEPLOYMENT_MODE` | `selfhosted` | `selfhosted` or `cloud`. Cloud requires `PLATFORM_DB_URL` and enables tier enforcement + multi-org. |
 | `PUBLIC_BASE_URL` | `https://api.excalibase.io` | Base URL emitted in SDK snippets and function invoke URLs |
+| `STUDIO_URL` | **required** | Studio origin that verification and password-reset emails link to; the server refuses to start without it |
 
 **Storage**
 

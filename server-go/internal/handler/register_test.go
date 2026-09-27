@@ -36,6 +36,7 @@ func setupRegisterRouter(t *testing.T) (chi.Router, *pgstore.Store, string) {
 	authHandler := NewAuthHandler(store, store)
 	authHandler.SetOrgStore(store)
 	authHandler.SetSetupTokenStore(store)
+	authHandler.SetEmailVerifier(NewEmailVerifier(store, &capturingSender{}, "https://studio.example.com", ""))
 
 	r := chi.NewRouter()
 	r.Post(testRegisterPath, authHandler.Register)
@@ -195,5 +196,52 @@ func TestRegister_CanLoginAfter(t *testing.T) {
 
 	if w2.Code != http.StatusOK {
 		t.Errorf("login after register: got %d, want %d. Body: %s", w2.Code, http.StatusOK, w2.Body.String())
+	}
+}
+
+// End to end on Postgres: a new account cannot sign in until its emailed
+// link is confirmed, and then can.
+func TestRegister_SignInWaitsForTheEmailedLink(t *testing.T) {
+	store := pgtest.New(t)
+	setupToken, err := auth.BootstrapSetupToken(t.Context(), store, "")
+	if err != nil {
+		t.Fatalf("seed setup token: %v", err)
+	}
+	sender := &capturingSender{}
+	verifier := NewEmailVerifier(store, sender, "https://studio.example.com", "")
+	authHandler := NewAuthHandler(store, store)
+	authHandler.SetOrgStore(store)
+	authHandler.SetSetupTokenStore(store)
+	authHandler.SetEmailVerifier(verifier)
+	tokens := NewEmailTokensHandler(store.DB(), sender, store, "https://studio.example.com", "")
+	tokens.SetVerifier(verifier)
+	r := chi.NewRouter()
+	r.Post(testRegisterPath, authHandler.Register)
+	r.Post("/api/auth/login", authHandler.Login)
+	r.Route("/api/email", func(r chi.Router) { tokens.Routes(r) })
+
+	founderPwd := testutil.FixturePassword("Founder1")
+	doRequest(r, "POST", testRegisterPath, fmt.Sprintf(`{"username":"founder","email":"founder@test.com","password":%q,"setupToken":%q}`, founderPwd, setupToken))
+	if w := doRequest(r, "POST", "/api/auth/login", fmt.Sprintf(`{"username":"founder","password":%q}`, founderPwd)); w.Code != http.StatusOK {
+		t.Fatalf("first admin login: %d %s", w.Code, w.Body.String())
+	}
+
+	pwd := testutil.FixturePassword("Member1a")
+	if w := doRequest(r, "POST", testRegisterPath, fmt.Sprintf(`{"username":"member","email":"member@test.com","password":%q}`, pwd)); w.Code != http.StatusCreated {
+		t.Fatalf("register: %d %s", w.Code, w.Body.String())
+	}
+	login := fmt.Sprintf(`{"username":"member","password":%q}`, pwd)
+	if w := doRequest(r, "POST", "/api/auth/login", login); w.Code != http.StatusForbidden {
+		t.Fatalf("login before verifying: %d", w.Code)
+	}
+	if !strings.Contains(sender.last.TextBody, "https://studio.example.com/verify-email?token=") {
+		t.Fatalf("verification link: %s", sender.last.TextBody)
+	}
+	confirm := `{"token":"` + tokenFromURL(sender.last.TextBody) + `"}`
+	if w := doRequest(r, "POST", "/api/email/verify/confirm", confirm); w.Code != http.StatusOK {
+		t.Fatalf("confirm: %d %s", w.Code, w.Body.String())
+	}
+	if w := doRequest(r, "POST", "/api/auth/login", login); w.Code != http.StatusOK {
+		t.Fatalf("login after verifying: %d %s", w.Code, w.Body.String())
 	}
 }
