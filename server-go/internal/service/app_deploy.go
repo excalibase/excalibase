@@ -15,7 +15,8 @@ import (
 	"github.com/google/uuid"
 )
 
-const defaultAppRolloutTimeout = 5 * time.Minute
+// Large images need time to pull.
+const defaultAppRolloutTimeout = 10 * time.Minute
 
 var errNoAppNamespace = errors.New("the project has no namespace to deploy into")
 
@@ -42,7 +43,7 @@ type AppDeployService struct {
 	claimer         ProjectOperationClaimer
 	secrets         AppSecretPurger
 	// registries reads the pull credential for the image's registry; nil when no vault is configured.
-	registries      RegistryCredentialLookup
+	registries      RegistryCredentialFinder
 	plans           PlanTiers
 	headroomPercent int
 	// domainSync routes the app's custom domains under the name it is deployed as.
@@ -74,12 +75,12 @@ func NewAppDeployService(
 	}
 }
 
-// RegistryCredentialLookup answers which credential, if any, pulls from a registry.
-type RegistryCredentialLookup interface {
+// RegistryCredentialFinder answers which credential, if any, pulls from a registry.
+type RegistryCredentialFinder interface {
 	Lookup(projectID, registry string) (*apphost.RegistryCredential, error)
 }
 
-func (s *AppDeployService) SetRegistryCredentials(registries RegistryCredentialLookup) {
+func (s *AppDeployService) SetRegistryCredentials(registries RegistryCredentialFinder) {
 	s.registries = registries
 }
 
