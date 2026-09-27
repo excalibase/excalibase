@@ -473,6 +473,18 @@ func (c *Client) CreateSecret(ctx context.Context, namespace, name string, data 
 	return err
 }
 
+// UpdateSecret replaces an existing Secret's data, keeping its metadata.
+func (c *Client) UpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
+	secret, err := c.clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	secret.Data = data
+	secret.StringData = nil
+	_, err = c.clientset.CoreV1().Secrets(namespace).Update(ctx, secret, metav1.UpdateOptions{})
+	return err
+}
+
 // ExecInPod runs a command inside a pod and returns stdout.
 func (c *Client) ExecInPod(ctx context.Context, namespace, pod, container string, cmd []string) (string, error) {
 	return c.exec(ctx, namespace, pod, container, cmd, "")

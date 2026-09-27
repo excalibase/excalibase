@@ -97,6 +97,7 @@ type MockClient struct {
 
 	// CreateSecretError fails every secret write, so a test can assert what
 	// a provision does when the cluster refuses one.
+	UpdateSecretError error
 	CreateSecretError error
 
 	// Capacity returned by GetClusterCapacity. Tests set this to simulate
@@ -465,6 +466,20 @@ func (m *MockClient) CreateSecret(ctx context.Context, namespace, name string, d
 	m.Calls = append(m.Calls, "CreateSecret:"+namespace+"/"+name)
 	if m.CreateSecretError != nil {
 		return m.CreateSecretError
+	}
+	m.Secrets[namespace+"/"+name] = data
+	return nil
+}
+
+func (m *MockClient) UpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "UpdateSecret:"+namespace+"/"+name)
+	if m.UpdateSecretError != nil {
+		return m.UpdateSecretError
+	}
+	if _, ok := m.Secrets[namespace+"/"+name]; !ok {
+		return fmt.Errorf("secret not found: %s/%s", namespace, name)
 	}
 	m.Secrets[namespace+"/"+name] = data
 	return nil

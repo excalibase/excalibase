@@ -49,6 +49,8 @@ func TestK8sRestoreResolvesStoreFromBackupConfig(t *testing.T) {
 
 	mock := k8s.NewMockClient()
 	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
+	minter := &recordingMinter{}
+	adapter.SetBackupCredentials(newTestIssuer(t, minter, newFakeObjectDeleter()))
 
 	resp, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
 	if err != nil {
@@ -58,9 +60,12 @@ func TestK8sRestoreResolvesStoreFromBackupConfig(t *testing.T) {
 		t.Errorf("response: %+v", resp)
 	}
 
-	secret := mock.Secrets["org-dst/"+s3CredsKey]
-	if string(secret["ACCESS_KEY_ID"]) != "r2-key" || string(secret["ACCESS_SECRET_KEY"]) != "r2-secret" {
-		t.Errorf("secret must carry the backup config credentials, got %q", secret)
+	if len(minter.parents) == 0 || minter.parents[0].AccessKeyID != "r2-key" || minter.parents[0].Endpoint != testR2Endpoint {
+		t.Errorf("credentials must be derived from the backup config, got %+v", minter.parents)
+	}
+	secret := mock.Secrets["org-dst/"+k8s.RecoverySourceCredentialsSecretName]
+	if string(secret["ACCESS_KEY_ID"]) != "tmp-src/cloud/" {
+		t.Errorf("the namespace must hold the minted source credential, got %q", secret)
 	}
 
 	store := restoredBarmanStore(t, mock)

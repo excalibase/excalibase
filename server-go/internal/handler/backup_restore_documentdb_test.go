@@ -25,6 +25,7 @@ func setupBackupHandlerForDocumentDB(t *testing.T, documentDB bool) (*chi.Mux, *
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
+	backupSvc.SetBackupCredentials(testBackupCredentials(t))
 	backupSvc.SetOrgProjectCapacity(unlimitedCapacity{})
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "p1", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE",

@@ -189,6 +189,9 @@ func buildClusterMetadata(opts PostgreSQLClusterOpts) map[string]interface{} {
 	if len(labels) > 0 {
 		metadata["labels"] = labels
 	}
+	if opts.Backup != nil {
+		metadata["annotations"] = map[string]interface{}{SkipEmptyWalArchiveCheckAnnotation: "enabled"}
+	}
 	return metadata
 }
 

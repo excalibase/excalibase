@@ -59,6 +59,7 @@ func newRestoreReadyAdapter(t *testing.T, mock *k8s.MockClient, reg ProjectRegis
 	adapter.SetReadyPoller(reconcilingPoller(mock))
 	adapter.SetRestorePlanSource(enterprisePlan())
 	adapter.SetOwnerCredentials(sourceOwner{})
+	adapter.SetBackupCredentials(newTestIssuer(t, &recordingMinter{}, newFakeObjectDeleter()))
 	return adapter
 }
 
@@ -277,4 +278,12 @@ func armRestore(svc *BackupService, mock *k8s.MockClient, store storage.Instance
 			k8sAdapter.SetInstanceStore(store)
 		}
 	}
+	issuer, _ := NewBackupCredentialIssuer(BackupCredentialIssuerConfig{
+		Minter: &recordingMinter{},
+		OpenStore: func(context.Context, *domain.S3Credentials) (ObjectDeleter, error) {
+			return newFakeObjectDeleter(), nil
+		},
+		TTL: 12 * time.Hour, SourceTTL: 2 * time.Hour,
+	})
+	svc.SetBackupCredentials(issuer)
 }

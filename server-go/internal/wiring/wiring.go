@@ -170,6 +170,16 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 					Wired: set(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint, cfg.BackupBucket)},
 			},
 		},
+		{
+			// Kubernetes projects only ever receive temporary credentials minted
+			// from the backup key; Docker keeps the key in this process.
+			Flag:    "BACKUP_DEFAULT_* in Kubernetes mode",
+			Enabled: cfg.ProvisionerMode != "docker" && any(cfg.BackupAccessKeyID, cfg.BackupSecretAccessKey, cfg.BackupEndpoint),
+			Requires: []Dependency{
+				{Name: "a temporary-credential provider (BACKUP_CREDENTIALS_PROVIDER=r2 or sts)",
+					Wired: cfg.BackupCredentialsProvider == "r2" || cfg.BackupCredentialsProvider == "sts"},
+			},
+		},
 	}
 }
 

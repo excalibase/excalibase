@@ -1,8 +1,13 @@
 package k8s
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -46,8 +51,63 @@ func BarmanObjectPrefix(projectID string) string {
 }
 
 // BackupCredentialsSecretName is the Secret in a project namespace holding
-// the object store's ACCESS_KEY_ID and ACCESS_SECRET_KEY.
+// the temporary credential its cluster archives with.
 const BackupCredentialsSecretName = "backup-s3-creds"
+
+// RecoverySourceCredentialsSecretName holds a restored project's read-only
+// credential for its source's prefix.
+const RecoverySourceCredentialsSecretName = "backup-source-creds"
+
+const (
+	// BackupCredentialsSessionTokenKey is the session token of the temporary
+	// credential; without it the key and secret are worthless.
+	BackupCredentialsSessionTokenKey = "ACCESS_SESSION_TOKEN"
+	// BackupCredentialsExpiresAtKey is when the credential stops working
+	// (RFC 3339). Renewal reads it; the plugin ignores it.
+	BackupCredentialsExpiresAtKey = "EXPIRES_AT"
+	// BackupCredentialsIssuedByKey fingerprints the platform key the
+	// credential derives from: revoking that key kills the credential, so a
+	// rotation is renewed at once.
+	BackupCredentialsIssuedByKey = "ISSUED_BY"
+	// SkipEmptyWalArchiveCheckAnnotation turns off barman-cloud-check-wal-archive,
+	// which calls HeadBucket: a prefix-scoped temporary credential cannot.
+	// The platform proves the prefix empty itself before minting.
+	SkipEmptyWalArchiveCheckAnnotation = "cnpg.io/skipEmptyWalArchiveCheck"
+)
+
+// ErrLongLivedBackupKey refuses to write an object-store key without a
+// session token and expiry into a tenant namespace: only temporary
+// credentials may leave the platform (EXC-476).
+var ErrLongLivedBackupKey = errors.New("refusing to place a long-lived object-store key in a project namespace")
+
+// BackupCredentialsSecretData is the Secret content for a temporary credential.
+func BackupCredentialsSecretData(creds *domain.S3Credentials) (map[string][]byte, error) {
+	if creds == nil || creds.SessionToken == "" || creds.ExpiresAt.IsZero() {
+		return nil, ErrLongLivedBackupKey
+	}
+	return map[string][]byte{
+		"ACCESS_KEY_ID":                  []byte(creds.AccessKeyID),
+		"ACCESS_SECRET_KEY":              []byte(creds.SecretAccessKey),
+		BackupCredentialsSessionTokenKey: []byte(creds.SessionToken),
+		BackupCredentialsExpiresAtKey:    []byte(creds.ExpiresAt.UTC().Format(time.RFC3339)),
+		BackupCredentialsIssuedByKey:     []byte(creds.IssuedBy),
+	}, nil
+}
+
+// BackupKeyFingerprint names a platform key without revealing it.
+func BackupKeyFingerprint(accessKeyID string) string {
+	digest := sha256.Sum256([]byte(accessKeyID))
+	return hex.EncodeToString(digest[:8])
+}
+
+// BackupCredentialsExpiry reads when a credentials Secret stops working.
+func BackupCredentialsExpiry(data map[string][]byte) (time.Time, error) {
+	raw, ok := data[BackupCredentialsExpiresAtKey]
+	if !ok {
+		return time.Time{}, fmt.Errorf("backup credentials name no %s", BackupCredentialsExpiresAtKey)
+	}
+	return time.Parse(time.RFC3339, string(raw))
+}
 
 // Store is where these backups are written.
 func (b *BackupOpts) Store() ObjectStoreOpts {
@@ -103,6 +163,7 @@ func objectStoreConfiguration(projectID string, store ObjectStoreOpts) (map[stri
 		"s3Credentials": map[string]interface{}{
 			"accessKeyId":     map[string]interface{}{"name": store.SecretName, "key": "ACCESS_KEY_ID"},
 			"secretAccessKey": map[string]interface{}{"name": store.SecretName, "key": "ACCESS_SECRET_KEY"},
+			"sessionToken":    map[string]interface{}{"name": store.SecretName, "key": BackupCredentialsSessionTokenKey},
 		},
 	}
 	if store.EndpointURL != "" {

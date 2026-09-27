@@ -121,9 +121,9 @@ func TestRestoreFromBackup(t *testing.T) {
 		t.Error("restore namespace not created")
 	}
 
-	// Verify S3 secret was created
-	if _, ok := mock.Secrets["org-bk-db-restored/backup-s3-creds"]; !ok {
-		t.Error("backup S3 credentials not created in restore namespace")
+	// The source is read with its own credential
+	if _, ok := mock.Secrets["org-bk-db-restored/"+k8s.RecoverySourceCredentialsSecretName]; !ok {
+		t.Error("source credentials not created in restore namespace")
 	}
 
 	// Verify restore CRD was applied

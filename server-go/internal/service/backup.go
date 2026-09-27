@@ -86,6 +86,16 @@ func (s *BackupService) SetRestorePlanSource(p RestorePlanSource) {
 	}
 }
 
+// SetBackupCredentials hands every adapter that writes object-store
+// credentials into a namespace the issuer that mints them.
+func (s *BackupService) SetBackupCredentials(i *BackupCredentialIssuer) {
+	for _, adapter := range s.adapters {
+		if setter, ok := adapter.(interface{ SetBackupCredentials(*BackupCredentialIssuer) }); ok {
+			setter.SetBackupCredentials(i)
+		}
+	}
+}
+
 // SetOwnerCredentials hands every adapter that restores from a source project
 // where that project's owner password is read.
 func (s *BackupService) SetOwnerCredentials(o OwnerCredentials) {

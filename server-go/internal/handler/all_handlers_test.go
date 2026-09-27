@@ -60,6 +60,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	provSvc.SetVault(credVault)
 	metricsSvc := service.NewMetricsService(store, mock, dir)
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
+	backupSvc.SetBackupCredentials(testBackupCredentials(t))
 	// Restore ends in the shared registration path (EXC-366) and completes
 	// only once the recovered database is observed ready and answers a query
 	// (EXC-401); the mock reconciles the Cluster and the probe answers.

@@ -45,6 +45,8 @@ type KubeClient interface {
 	IsPodReady(ctx context.Context, namespace, name string) (bool, error)
 	GetSecret(ctx context.Context, namespace, name string) (map[string][]byte, error)
 	CreateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
+	// UpdateSecret replaces an existing Secret's data; a missing Secret is an error.
+	UpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
 	ExecInPod(ctx context.Context, namespace, pod, container string, cmd []string) (string, error)
 	// ExecInPodStdin runs a command inside a pod with stdin attached and
 	// returns stdout. Every element of cmd becomes a query parameter on the

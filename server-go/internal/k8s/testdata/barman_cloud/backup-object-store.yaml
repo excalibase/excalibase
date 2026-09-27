@@ -16,6 +16,9 @@ spec:
       secretAccessKey:
         key: ACCESS_SECRET_KEY
         name: backup-s3-creds
+      sessionToken:
+        key: ACCESS_SESSION_TOKEN
+        name: backup-s3-creds
     wal:
       compression: gzip
       maxParallel: 2

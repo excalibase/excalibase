@@ -1,6 +1,9 @@
 package domain
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // DTOs for API request/response
 
@@ -45,6 +48,12 @@ type S3Credentials struct {
 	Bucket          string `json:"bucket"`
 	Region          string `json:"region,omitempty"`
 	Endpoint        string `json:"endpoint,omitempty"`
+	// SessionToken and ExpiresAt are set only on temporary credentials the
+	// platform minted for one project's prefix; no client can supply them.
+	SessionToken string    `json:"-"`
+	ExpiresAt    time.Time `json:"-"`
+	// IssuedBy fingerprints the platform key the credential was derived from.
+	IssuedBy string `json:"-"`
 }
 
 type PoolerSettings struct {
