@@ -748,6 +748,14 @@ type WatcherSpec struct {
 	NatsPassword string
 }
 
+// WatcherComponentLabel marks a pod as a tenant CDC watcher: the platform
+// chart's NATS network policy admits tenant pods to the bus only with it. Set
+// here, never by a tenant; app pods carry component=app.
+const (
+	WatcherComponentLabel = "excalibase.io/component"
+	WatcherComponentValue = "cdc-watcher"
+)
+
 // DeployWatcher installs the per-project CDC watcher Helm chart with inline
 // cdc_watcher credentials. Must be called AFTER the role exists (after
 // createProjectRoles). Soft-fails: logs WARN if the chart install errors so
@@ -791,6 +799,7 @@ func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, spec WatcherS
 			// prefix only it may subscribe to (natsauth.PermissionsFor).
 			"inboxPrefix": natsauth.InboxPrefixFor(spec.NatsUser),
 		},
+		"podLabels": map[string]interface{}{WatcherComponentLabel: WatcherComponentValue},
 		"resources": map[string]interface{}{
 			"limits":   map[string]interface{}{"cpu": "200m", "memory": "256Mi"},
 			"requests": map[string]interface{}{"cpu": "50m", "memory": "128Mi"},

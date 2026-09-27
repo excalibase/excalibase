@@ -58,6 +58,8 @@ jobs:
       - name: Deploy platform Postgres store
         run: |
           kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          # The provisioning chart's NetworkPolicy admits and reaches the platform namespace by this label.
+          kubectl label namespace "$NS" excalibase.io/type=platform --overwrite
           kubectl apply -n "$NS" -f - <<'EOF'
           apiVersion: apps/v1
           kind: Deployment
