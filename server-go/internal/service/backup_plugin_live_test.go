@@ -140,6 +140,9 @@ func (lab *backupLab) installBackupStack(t *testing.T) {
 		user, password := "backup"+randomHex(t, 4), randomHex(t, 24)
 		lab.applyFile(t, "/tmp/minio.yaml", minioManifest(user, password))
 		lab.kubectl(t, "rollout", "status", "deployment/minio", "-n", "backup-store", "--timeout=300s")
+		if lab.container == nil {
+			t.Fatal("the MinIO store needs the k3s container lab; set R2_* to run against an existing cluster")
+		}
 		nodeIP, err := lab.container.ContainerIP(lab.ctx)
 		if err != nil {
 			t.Fatalf("node ip: %v", err)
