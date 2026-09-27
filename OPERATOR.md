@@ -42,6 +42,8 @@ The last command prints the **bootstrap admin password**. Log in once at `https:
 1. Mint a PAT for CI/scripts (Settings → Personal access tokens, or the API below).
 2. Rotate or delete the bootstrap admin user (`/admin`) once a real platform_admin user exists.
 
+**Studio needs HTTPS.** Its only credential is the `excali_session` cookie, which is `HttpOnly`, `Secure` and `SameSite=Strict`, so a browser stores it only over HTTPS or on `http://localhost`. Plain HTTP on any other address signs nobody in. Writes that ride the cookie must come from `STUDIO_URL`'s origin (or an origin listed explicitly in `CORS_ORIGINS`), so open Studio at exactly that address. `CORS_ORIGINS=*` lets any page call the API with a bearer token but never with the cookie.
+
 ### 1.1. Personal access tokens: expiry and rotation
 
 Every PAT expires. The default lifetime is **90 days**; `expiresIn` accepts `<n>d` or a Go duration up to **365d**. Only an explicit `"expiresIn":"never"` mints a non-expiring token — reserve that for break-glass automation and rotate it on a schedule. Login session tokens are separate and always expire after 12h.

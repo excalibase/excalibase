@@ -157,6 +157,10 @@ func TestCORS_WildcardAllowsAll(t *testing.T) {
 	if got := rr.Header().Get(corsOriginHeader); got != testAnythingOrigin {
 		t.Errorf(corsOriginFmt, got, testAnythingOrigin)
 	}
+	// Any page may call with a bearer token; none may ride the session cookie.
+	if got := rr.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Errorf("wildcard granted credentials to %s: %q", testAnythingOrigin, got)
+	}
 }
 
 func TestCORS_VaryHeader(t *testing.T) {

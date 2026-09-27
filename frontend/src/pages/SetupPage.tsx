@@ -53,19 +53,13 @@ export function SetupPage() {
     defaultValues: { username: '', email: '', password: '', setupToken: '' },
     onSubmit: async ({ value }) => {
       const data = await registerMutation.mutateAsync(value);
-      // Server set the httpOnly session cookie on the response — frontend
-      // doesn't need to store the raw token. Pass it as legacyToken so the
-      // axios header fallback still works for any code path that hasn't
-      // moved to cookie auth yet.
-      setAuth(
-        {
-          id: data.user.id,
-          username: data.user.username,
-          email: data.user.email,
-          role: data.user.role,
-        },
-        { legacyToken: data.token },
-      );
+      // The server set the httpOnly session cookie on the response.
+      setAuth({
+        id: data.user.id,
+        username: data.user.username,
+        email: data.user.email,
+        role: data.user.role,
+      });
       navigate('/', { replace: true });
     },
   });

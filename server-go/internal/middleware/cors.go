@@ -22,7 +22,7 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 			originAllowed := origin != "" && (wildcard || originSet[origin])
 
 			if originAllowed {
-				setCORSOriginHeaders(w, origin)
+				setCORSOriginHeaders(w, origin, originSet[origin])
 			}
 
 			if r.Method == http.MethodOptions {
@@ -43,9 +43,13 @@ func buildOriginSet(origins []string) map[string]bool {
 	return set
 }
 
-func setCORSOriginHeaders(w http.ResponseWriter, origin string) {
+// setCORSOriginHeaders grants credentials only to an origin named in the
+// allowlist; the wildcard would otherwise hand the session cookie to any page.
+func setCORSOriginHeaders(w http.ResponseWriter, origin string, withCredentials bool) {
 	w.Header().Set("Access-Control-Allow-Origin", origin)
-	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	if withCredentials {
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
 	w.Header().Set("Vary", "Origin")
 }
 

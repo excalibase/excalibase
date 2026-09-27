@@ -5,13 +5,12 @@ import { mockVaultGuardReady, mockInstances } from './helpers';
  * Verifies the new session-cookie auth flow against the studio:
  *
  *   1. Login is a server-side cookie issuer. The studio receives the
- *      `excali_session` Set-Cookie header on the login response. The token
- *      body field is also handed to the axios header fallback so CI/curl
- *      callers continue to work.
+ *      `excali_session` Set-Cookie header on the login response and keeps
+ *      no copy of the token anywhere a script can read.
  *   2. Subsequent API calls go out with `withCredentials: true` so the
  *      cookie is auto-attached.
  *   3. Logout posts to /api/auth/logout (server revokes the session PAT
- *      and clears the cookie) and wipes the legacy localStorage.
+ *      and clears the cookie) and wipes the cached profile.
  *   4. A 401 response on any authenticated call redirects the user to
  *      /login without leaving stale credentials behind.
  *
@@ -55,7 +54,7 @@ async function mockLogin(page: Page): Promise<{ logoutCalls: number }> {
 }
 
 test.describe('session cookie auth flow', () => {
-  test('login persists user + legacy token, redirects to dashboard', async ({ page }) => {
+  test('login keeps the profile but never the token, redirects to dashboard', async ({ page }) => {
     await mockVaultGuardReady(page);
     await mockLogin(page);
     await mockInstances(page);
@@ -69,12 +68,11 @@ test.describe('session cookie auth flow', () => {
     // path — the redirect target may change.
     await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 5_000 });
 
-    // legacyToken stored for the axios header fallback (CI/scripts).
     const stored = await page.evaluate(() => ({
-      token: localStorage.getItem('auth_token'),
+      all: JSON.stringify(localStorage) + JSON.stringify(sessionStorage),
       user: localStorage.getItem('auth_user'),
     }));
-    expect(stored.token).toBe('cookie-pat-abc');
+    expect(stored.all).not.toContain('cookie-pat-abc');
     expect(stored.user && JSON.parse(stored.user).role).toBe('platform_admin');
   });
 
@@ -119,9 +117,9 @@ test.describe('session cookie auth flow', () => {
     await page.click('button[type="submit"]');
     await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 5_000 });
 
-    // Sanity: localStorage is populated post-login.
-    const before = await page.evaluate(() => localStorage.getItem('auth_token'));
-    expect(before).toBe('cookie-pat-abc');
+    // Sanity: the profile is cached post-login.
+    const before = await page.evaluate(() => localStorage.getItem('auth_user'));
+    expect(before).not.toBeNull();
 
     // Click the logout button (matches both layouts via title attribute).
     await page.click('button[title="Sign out"]');
@@ -129,16 +127,10 @@ test.describe('session cookie auth flow', () => {
     // Wait for the POST /api/auth/logout to land server-side.
     await expect.poll(() => loginState.logoutCalls, { timeout: 3_000 }).toBeGreaterThanOrEqual(1);
 
-    // localStorage cleared.
-    const after = await page.evaluate(() => ({
-      token: localStorage.getItem('auth_token'),
-      user: localStorage.getItem('auth_user'),
-    }));
-    expect(after.token).toBeNull();
-    expect(after.user).toBeNull();
-
-    // Routed back to /login.
+    // Routed back to /login, which happens only after local state is wiped.
     await page.waitForURL(/\/login/, { timeout: 3_000 });
+    const after = await page.evaluate(() => localStorage.getItem('auth_user'));
+    expect(after).toBeNull();
   });
 
   test('401 on any authenticated call clears state and redirects to /login', async ({ page }) => {
@@ -168,7 +160,11 @@ test.describe('session cookie auth flow', () => {
     // Wait for the post-redirect page to settle so the interceptor's
     // localStorage.removeItem has flushed.
     await page.waitForLoadState('domcontentloaded');
-    const after = await page.evaluate(() => localStorage.getItem('auth_token'));
-    expect(after).toBeNull();
+    const after = await page.evaluate(() => ({
+      token: localStorage.getItem('auth_token'),
+      user: localStorage.getItem('auth_user'),
+    }));
+    expect(after.token).toBeNull();
+    expect(after.user).toBeNull();
   });
 });

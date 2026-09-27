@@ -193,8 +193,9 @@ test.describe('Setup wizard', () => {
     await page.getByTestId('admin-setup-token').fill('e2e-mock-setup-token');
     await page.getByTestId('admin-submit').click();
 
-    // Token persisted to localStorage by setAuth
-    await page.waitForFunction(() => localStorage.getItem('auth_token') === 'pat-bootstrap-token');
+    // Signed in: the profile is cached, the session token is not.
+    await page.waitForFunction(() => localStorage.getItem('auth_user') !== null);
+    expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain('pat-bootstrap-token');
     // Guard sees hasAdmin=true, redirects to /
     await expect(page).toHaveURL(/\/(?!setup).*$|^http:\/\/localhost:5173\/$/);
   });
@@ -211,7 +212,6 @@ test.describe('Setup wizard', () => {
 
     // Pretend a user is already authenticated, otherwise AuthGuard sends to /login
     await page.addInitScript(() => {
-      localStorage.setItem('auth_token', 'existing');
       localStorage.setItem(
         'auth_user',
         JSON.stringify({ id: 'u1', username: 'admin', email: 'a@t.com', role: 'platform_admin' })

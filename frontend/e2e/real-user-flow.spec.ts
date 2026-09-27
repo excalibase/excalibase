@@ -69,9 +69,11 @@ test.describe('Real-user studio flow (no mocks)', () => {
 
     // 6. After admin created, should redirect away from /setup. We don't
     // assert exact post-redirect URL (depends on cloud vs self-hosted),
-    // just that we're no longer on /setup and have a token.
+    // just that we're no longer on /setup and hold a session cookie that no
+    // script can read.
     await expect(page).not.toHaveURL(/\/setup$/, { timeout: 10_000 });
-    const tokenInStorage = await page.evaluate(() => localStorage.getItem('auth_token'));
-    expect(tokenInStorage).toBeTruthy();
+    const session = (await page.context().cookies()).find((c) => c.name === 'excali_session');
+    expect(session?.httpOnly).toBe(true);
+    expect(await page.evaluate(() => localStorage.getItem('auth_token'))).toBeNull();
   });
 });
