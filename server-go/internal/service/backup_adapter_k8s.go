@@ -190,9 +190,6 @@ func (a *K8sBackupAdapter) List(ctx context.Context, inst *domain.DatabaseInstan
 // caller is told only that the restore was not confirmed; the step that gave
 // up and what it saw go to the log.
 func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) (*domain.ProvisioningResponse, error) {
-	if inst.DocumentDB {
-		return nil, ErrDocumentDBRestoreNotSupported
-	}
 	store, ok := a.backupStorage()
 	if !ok {
 		return nil, ErrBackupStorageNotConfigured
@@ -215,6 +212,9 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	image, err := config.PostgresImage(inst.PostgresVersion)
 	if err != nil {
 		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
+	}
+	if inst.DocumentDB && !config.DocumentDBSupported(inst.PostgresVersion) {
+		return nil, fmt.Errorf("restore %s: %w: postgres %s", inst.ProjectID, ErrDocumentDBNotAvailableOnMajor, inst.PostgresVersion)
 	}
 	newProject := req.TargetProjectID
 	altNames, err := provisioner.PublicServerNames(newProject, a.publicDomainSuffix)
@@ -318,6 +318,10 @@ func (target *restoreTarget) render(src *domain.DatabaseInstance, recoveryTarget
 		MasterUsername:    src.Username,
 		Parameters:        src.Parameters,
 		ServerAltDNSNames: id.altNames,
+		// The same DocumentDB cluster creation builds: preload, pg_cron and
+		// the gateway plugin are fixed when a cluster is created.
+		DocumentDB:             src.DocumentDB,
+		DocumentDBGatewayImage: config.DocumentDBGatewayImage(),
 	}
 	if backup := target.plan.Backup; backup != nil && backup.Enabled {
 		if backup.Schedule == "" {
@@ -365,22 +369,45 @@ func (a *K8sBackupAdapter) runRestore(
 	if err := a.waitForRecoveredCluster(ctx, target.namespace, target.project); err != nil {
 		return nil, err
 	}
+	// Inside the namespace, so its deletion compensates it.
+	if err := provisioner.EnsureDocumentDBService(ctx, a.k8sClient, target.namespace, target.project, inst.DocumentDB); err != nil {
+		return nil, err
+	}
 	if err := a.scheduleBackups(ctx, target); err != nil {
 		return nil, err
 	}
 	restored := a.restoredInstance(ctx, inst, req, target)
-	if restored.Password == "" {
-		password, err := a.sourceOwnerPassword(inst.ProjectID)
-		if err != nil {
-			return nil, err
-		}
-		restored.Password = password
+	opts, err := a.ownerCredential(inst, restored)
+	if err != nil {
+		return nil, err
 	}
-	if err := registerVerifiedProject(ctx, pc, a.registrar, a.instances, a.probe, restored,
-		RegistrationOptions{ResetRolePasswords: true}); err != nil {
+	if err := registerVerifiedProject(ctx, pc, a.registrar, a.instances, a.probe, restored, opts); err != nil {
 		return nil, err
 	}
 	return restored, nil
+}
+
+// ownerCredential settles the restored project's owner password. A DocumentDB
+// project's owner is also its Mongo login, so it must be the recovered
+// cluster's own credential, forced onto the role: the source's password would
+// otherwise open the copy too. Other projects fall back to the source's.
+func (a *K8sBackupAdapter) ownerCredential(src, restored *domain.DatabaseInstance) (RegistrationOptions, error) {
+	opts := RegistrationOptions{ResetRolePasswords: true}
+	if src.DocumentDB {
+		if restored.Password == "" {
+			return opts, ErrDocumentDBRestoreCredentialMissing
+		}
+		opts.ResetAdminPassword = true
+		return opts, nil
+	}
+	if restored.Password == "" {
+		password, err := a.sourceOwnerPassword(src.ProjectID)
+		if err != nil {
+			return opts, err
+		}
+		restored.Password = password
+	}
+	return opts, nil
 }
 
 // createRestoreCluster creates the target namespace, the object-store secret
@@ -402,6 +429,11 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisi
 		if err := a.writeCredentials(ctx, newNamespace, k8s.BackupCredentialsSecretName, target.ownCreds); err != nil {
 			return err
 		}
+	}
+	// Before the cluster: the gateway's env reads it, and a pod whose env
+	// cannot resolve does not start.
+	if err := provisioner.EnsureDocumentDBCredential(ctx, a.k8sClient, newNamespace, target.project, inst.DocumentDB); err != nil {
+		return err
 	}
 	for _, store := range target.stores {
 		if err := a.k8sClient.ApplyCRD(ctx, k8s.ObjectStoreGVR, newNamespace, store); err != nil {
@@ -534,6 +566,7 @@ func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.Dat
 		Password:              password,
 		SSLMode:               src.SSLMode,
 		PostgresVersion:       src.PostgresVersion,
+		DocumentDB:            src.DocumentDB,
 		StorageClass:          src.StorageClass,
 		Parameters:            maps.Clone(src.Parameters),
 		RestoredFromProjectID: src.ProjectID,
