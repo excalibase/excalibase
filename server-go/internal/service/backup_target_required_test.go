@@ -15,6 +15,9 @@ func withBackupTarget(t *testing.T, svc *ProvisioningService) {
 	if err := svc.SetBackupDefaults(&BackupDefaults{AccessKeyID: "k", SecretAccessKey: "s", Endpoint: testR2Endpoint, Bucket: "backups"}); err != nil {
 		t.Fatalf("SetBackupDefaults: %v", err)
 	}
+	// A Kubernetes platform with a backup target also mints each project's
+	// credentials; the target's own key never reaches a namespace.
+	svc.SetBackupCredentials(newTestIssuer(t, &recordingMinter{}, newFakeObjectDeleter()))
 }
 
 func withoutBackupTarget(t *testing.T) (*ProvisioningService, *k8s.MockClient) {

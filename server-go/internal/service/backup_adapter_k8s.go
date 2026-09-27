@@ -48,7 +48,13 @@ type K8sBackupAdapter struct {
 	// owners answers the source's owner password when the recovered cluster
 	// carries no credential of its own.
 	owners OwnerCredentials
+	// creds mints the restore's credentials: read-only for the source's
+	// prefix, read-write for the restored project's own.
+	creds *BackupCredentialIssuer
 }
+
+// SetBackupCredentials wires the issuer; without one a restore is refused.
+func (a *K8sBackupAdapter) SetBackupCredentials(i *BackupCredentialIssuer) { a.creds = i }
 
 // SetOwnerCredentials wires where a source project's owner password is read.
 func (a *K8sBackupAdapter) SetOwnerCredentials(o OwnerCredentials) { a.owners = o }
@@ -227,6 +233,9 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 		return nil, err
 	}
 	target := restoreTarget{store: store, plan: plan, project: newProject, namespace: fmt.Sprintf("%s-%s", inst.OrgID, newProject)}
+	if err := a.issueRestoreCredentials(ctx, inst.ProjectID, &target); err != nil {
+		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
+	}
 	err = target.render(inst, recoveryTarget, clusterIdentity{image: image, altNames: altNames})
 	if err != nil {
 		return nil, fmt.Errorf("restore %s at tier %s: %w", inst.ProjectID, plan.Tier, err)
@@ -250,15 +259,41 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	}, nil
 }
 
+// issueRestoreCredentials mints, before anything is created, what the
+// restored namespace will hold: the source read-only, its own prefix
+// read-write when its plan backs it up.
+func (a *K8sBackupAdapter) issueRestoreCredentials(ctx context.Context, sourceID string, target *restoreTarget) error {
+	if a.creds == nil {
+		return ErrBackupCredentialsNotConfigured
+	}
+	source, err := a.creds.ForRestoreSource(ctx, target.store, sourceID)
+	if err != nil {
+		return err
+	}
+	target.sourceCreds = source
+	if backup := target.plan.Backup; backup != nil && backup.Enabled {
+		own, err := a.creds.ForNewProject(ctx, target.store, target.project)
+		if err != nil {
+			return err
+		}
+		target.ownCreds = own
+	}
+	return nil
+}
+
 // restoreTarget is where a recovery lands and what it runs on. stores are
 // applied before cluster, which reads through them.
 type restoreTarget struct {
-	store     *domain.S3Credentials
-	plan      RestorePlan
-	stores    []*unstructured.Unstructured
-	cluster   *unstructured.Unstructured
-	project   string
-	namespace string
+	// store is the platform's; only its location is rendered.
+	store *domain.S3Credentials
+	// sourceCreds and ownCreds are what the namespace receives.
+	sourceCreds *domain.S3Credentials
+	ownCreds    *domain.S3Credentials
+	plan        RestorePlan
+	stores      []*unstructured.Unstructured
+	cluster     *unstructured.Unstructured
+	project     string
+	namespace   string
 }
 
 // clusterIdentity is what the restored cluster runs and is known by.
@@ -290,13 +325,13 @@ func (target *restoreTarget) render(src *domain.DatabaseInstance, recoveryTarget
 		}
 		cluster.Backup = &k8s.BackupOpts{
 			Schedule: backup.Schedule, RetentionDays: backup.Retention,
-			EndpointURL: target.store.Endpoint, Bucket: target.store.Bucket, SecretName: s3CredsKey,
+			EndpointURL: target.store.Endpoint, Bucket: target.store.Bucket, SecretName: k8s.BackupCredentialsSecretName,
 		}
 	}
 	opts := k8s.RestoreClusterOpts{
 		Cluster:         cluster,
 		SourceProjectID: src.ProjectID,
-		Store:           k8s.ObjectStoreOpts{EndpointURL: target.store.Endpoint, Bucket: target.store.Bucket, SecretName: s3CredsKey},
+		Store:           k8s.ObjectStoreOpts{EndpointURL: target.store.Endpoint, Bucket: target.store.Bucket, SecretName: k8s.RecoverySourceCredentialsSecretName},
 		RecoveryTarget:  recoveryTarget,
 	}
 	source, err := k8s.BuildRecoverySourceObjectStore(opts)
@@ -351,7 +386,7 @@ func (a *K8sBackupAdapter) runRestore(
 // createRestoreCluster creates the target namespace, the object-store secret
 // and the recovery-bootstrapped CNPG Cluster.
 func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisioner.ProvisionContext, inst *domain.DatabaseInstance, req domain.RestoreRequest, target restoreTarget) error {
-	store, newNamespace := target.store, target.namespace
+	newNamespace := target.namespace
 	if err := a.k8sClient.CreateProjectNamespace(ctx, newNamespace, inst.OrgID); err != nil {
 		return fmt.Errorf("create restore namespace: %w", err)
 	}
@@ -360,11 +395,13 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisi
 	pc.RegisterCleanup("delete restore namespace", func(ctx context.Context) error {
 		return a.k8sClient.DeleteNamespace(ctx, newNamespace)
 	})
-	if err := a.k8sClient.CreateSecret(ctx, newNamespace, s3CredsKey, map[string][]byte{
-		"ACCESS_KEY_ID":     []byte(store.AccessKeyID),
-		"ACCESS_SECRET_KEY": []byte(store.SecretAccessKey),
-	}); err != nil {
-		return fmt.Errorf("create restore credentials secret: %w", err)
+	if err := a.writeCredentials(ctx, newNamespace, k8s.RecoverySourceCredentialsSecretName, target.sourceCreds); err != nil {
+		return err
+	}
+	if target.ownCreds != nil {
+		if err := a.writeCredentials(ctx, newNamespace, k8s.BackupCredentialsSecretName, target.ownCreds); err != nil {
+			return err
+		}
 	}
 	for _, store := range target.stores {
 		if err := a.k8sClient.ApplyCRD(ctx, k8s.ObjectStoreGVR, newNamespace, store); err != nil {
@@ -378,6 +415,17 @@ func (a *K8sBackupAdapter) createRestoreCluster(ctx context.Context, pc *provisi
 	pc.RegisterCleanup("delete restore cluster", func(ctx context.Context) error {
 		return a.k8sClient.DeleteCRD(ctx, k8s.CNPGClusterGVR, newNamespace, clusterName)
 	})
+	return nil
+}
+
+func (a *K8sBackupAdapter) writeCredentials(ctx context.Context, namespace, name string, creds *domain.S3Credentials) error {
+	data, err := k8s.BackupCredentialsSecretData(creds)
+	if err != nil {
+		return err
+	}
+	if err := a.k8sClient.CreateSecret(ctx, namespace, name, data); err != nil {
+		return fmt.Errorf("create restore credentials secret %s: %w", name, err)
+	}
 	return nil
 }
 

@@ -277,10 +277,11 @@ func (p *PostgreSQLProvisioner) createBackupStore(ctx context.Context, req domai
 		return nil
 	}
 	pc.SetStep("create backup secret")
-	if err := p.client.CreateSecret(ctx, namespace, k8s.BackupCredentialsSecretName, map[string][]byte{
-		"ACCESS_KEY_ID":     []byte(req.Backup.S3.AccessKeyID),
-		"ACCESS_SECRET_KEY": []byte(req.Backup.S3.SecretAccessKey),
-	}); err != nil {
+	data, err := k8s.BackupCredentialsSecretData(req.Backup.S3)
+	if err != nil {
+		return err
+	}
+	if err := p.client.CreateSecret(ctx, namespace, k8s.BackupCredentialsSecretName, data); err != nil {
 		return fmt.Errorf("create backup secret: %w", err)
 	}
 	pc.SetStep("create backup object store")

@@ -160,11 +160,43 @@ func TestCheck_ProvidersConfigured(t *testing.T) {
 		EmailProvider: "resend", ResendAPIKey: "re_x",
 		R2AccessKeyID: "k", R2SecretAccessKey: "s", R2Endpoint: "https://r2", R2Bucket: "uploads",
 		BackupAccessKeyID: "k", BackupSecretAccessKey: "s", BackupEndpoint: "https://r2", BackupBucket: "backups",
+		BackupCredentialsProvider: "r2",
 	}
 	if err := Check(Features(cfg, fullyWired())); err != nil {
 		t.Fatalf("fully configured: %v", err)
 	}
 	if err := Check(Features(config.AppConfig{}, Deps{})); err != nil {
 		t.Fatalf("nothing named: %v", err)
+	}
+}
+
+// Kubernetes projects only ever receive temporary credentials minted from the
+// backup key, so a Kubernetes deployment with a backup key and no way to mint
+// them must not start (EXC-476). Docker keeps the key in the platform process.
+func TestCheck_KubernetesBackupsNeedATemporaryCredentialProvider(t *testing.T) {
+	backups := func(mode, provider string) config.AppConfig {
+		return config.AppConfig{
+			ProvisionerMode:   mode,
+			BackupAccessKeyID: "k", BackupSecretAccessKey: "s", BackupEndpoint: "https://r2", BackupBucket: "backups",
+			BackupCredentialsProvider: provider,
+		}
+	}
+	for name, cfg := range map[string]config.AppConfig{
+		"no provider":      backups("k8s", ""),
+		"unknown provider": backups("k8s", "static"),
+	} {
+		err := Check(Features(cfg, fullyWired()))
+		if err == nil || !strings.Contains(err.Error(), "BACKUP_CREDENTIALS_PROVIDER") {
+			t.Errorf("%s: err = %v, want the missing provider named", name, err)
+		}
+	}
+	for name, cfg := range map[string]config.AppConfig{
+		"r2":          backups("k8s", "r2"),
+		"sts":         backups("k8s", "sts"),
+		"docker mode": backups("docker", ""),
+	} {
+		if err := Check(Features(cfg, fullyWired())); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

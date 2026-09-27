@@ -52,6 +52,9 @@ type ProvisioningService struct {
 	// req.Backup. Wired from R2 creds in main.go so backups land in
 	// Cloudflare R2 instead of the legacy floci/localstack mock.
 	backupDefaults *BackupDefaults
+	// backupCreds mints each Kubernetes project's temporary object-store
+	// credentials; the platform key itself never reaches a namespace.
+	backupCreds *BackupCredentialIssuer
 
 	// storageClasses decides which StorageClass a project's database runs
 	// on. Its zero value offers only the cluster's own default.
@@ -211,6 +214,10 @@ func (s *ProvisioningService) RestorePlan(ctx context.Context, source *domain.Da
 	if err := s.requireBackupTarget(&req, tier); err != nil {
 		return RestorePlan{}, err
 	}
+	if req.Backup != nil {
+		// The target exists; the restore mints its own credentials from it.
+		req.Backup.S3 = nil
+	}
 	return RestorePlan{Tier: tierType, Config: tier, Backup: req.Backup}, nil
 }
 
@@ -255,6 +262,32 @@ var ErrBackupDefaultsIncomplete = errors.New("backup target is incomplete: acces
 // ErrBackupTargetNotConfigured refuses a project whose backups have nowhere to
 // go: its tier requires them, or the request enables them.
 var ErrBackupTargetNotConfigured = errors.New("backups are required but no backup target is configured")
+
+// SetBackupCredentials wires what mints Kubernetes projects' backup
+// credentials. Nil leaves Kubernetes projects with backups unprovisionable.
+func (s *ProvisioningService) SetBackupCredentials(i *BackupCredentialIssuer) { s.backupCreds = i }
+
+// BackupCredentials is the issuer restores and renewal share.
+func (s *ProvisioningService) BackupCredentials() *BackupCredentialIssuer { return s.backupCreds }
+
+// issueBackupCredentials swaps the platform store in a Kubernetes project's
+// request for credentials confined to its own prefix, so the provisioner can
+// only ever write those into the namespace. Docker projects are backed up by
+// the platform process itself and keep the platform store.
+func (s *ProvisioningService) issueBackupCredentials(ctx context.Context, req *domain.ProvisioningRequest, projectID string) error {
+	if s.defaultDeploymentMode == domain.ModeDocker || req.Backup == nil || !req.Backup.Enabled || req.Backup.S3 == nil {
+		return nil
+	}
+	if s.backupCreds == nil {
+		return ErrBackupCredentialsNotConfigured
+	}
+	creds, err := s.backupCreds.ForNewProject(ctx, req.Backup.S3, projectID)
+	if err != nil {
+		return err
+	}
+	req.Backup.S3 = creds
+	return nil
+}
 
 // SetBackupDefaults wires the platform-wide CNPG backup target. No
 // credentials means the platform has none; partial credentials are refused.
@@ -371,6 +404,9 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 	if err := validateProvisioningRequest(*req); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
+	if req.Backup != nil && req.Backup.S3 != nil {
+		return nil, nil, config.TierConfig{}, ErrBackupStoreChosenByPlatform
+	}
 	storageClass, err := s.storageClasses.Resolve(req.StorageClass)
 	if err != nil {
 		return nil, nil, config.TierConfig{}, err
@@ -412,6 +448,9 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, err
 	}
 	if err := s.requireBackupTarget(req, tier); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+	if err := s.issueBackupCredentials(ctx, req, projectRef); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 

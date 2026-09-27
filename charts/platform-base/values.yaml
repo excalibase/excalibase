@@ -20,9 +20,9 @@ platformDB:
   backup:
     # Goes through the Barman Cloud plugin, which must be installed first.
     # Platform-DB → object storage, on a bucket and key used by nothing else.
-    # Tenant namespaces hold a copy of the tenant key (r2-creds, copied as
-    # backup-s3-creds), so sharing it would hand any tenant every user's
-    # password hash and the vault. The chart refuses either name.
+    # Never the tenant key (r2-creds) or a tenant's backup-s3-creds: tenant
+    # backup credentials derive from that key, and the platform DB holds every
+    # user's password hash and the vault. The chart refuses either name.
     enabled: true
     destinationPath: "s3://excalibase-platform-db-backups/"
     endpointURL: ""               # required; e.g. --set platformDB.backup.endpointURL=https://<account>.r2.cloudflarestorage.com

@@ -108,6 +108,10 @@ func safeError(err error) string {
 // fixed refusal; a platform database that could not answer is ours to own
 // (500) and the caller learns nothing more than that. Anything else is left to
 // the caller's own mapping.
+// errBackupsUnavailable is all a caller learns when its project's backup
+// credentials could not be issued; the cause is in the log.
+const errBackupsUnavailable = "backups cannot be set up right now; try again later"
+
 func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 	var limitErr *service.OrgProjectLimitError
 	switch {
@@ -122,6 +126,11 @@ func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, service.ErrBackupTargetNotConfigured):
 		log.Printf("project creation refused: %v", err)
 		httpError(w, service.ErrBackupTargetNotConfigured.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, service.ErrBackupCredentialsNotConfigured),
+		errors.Is(err, service.ErrBackupCredentialsUnavailable),
+		errors.Is(err, service.ErrBackupPrefixInUse):
+		log.Printf("project creation refused: %v", err)
+		httpError(w, errBackupsUnavailable, http.StatusServiceUnavailable)
 	default:
 		return writeNodePlacementError(w, err)
 	}

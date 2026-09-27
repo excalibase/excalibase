@@ -26,6 +26,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/metrics"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
+	"github.com/excalibase/provisioning-poc/internal/objectcreds"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
@@ -280,6 +281,8 @@ func runServer(cfg config.AppConfig) {
 
 	stopAppRollouts := startAppRolloutSweeper(cfg, sqlStore, deps.appDeploySvc)
 	defer stopAppRollouts()
+	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
+	defer stopCredentialRenewal()
 	stopDomainSweep := startAppDomainSweeper(cfg, sqlStore, deps.appDomainSvc)
 	defer stopDomainSweep()
 
@@ -355,6 +358,68 @@ func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStor
 	}
 	return orchestrator.StartSweeper(context.Background(), service.NewLeadership(lock), restoreSweepInterval)
 }
+
+// buildBackupCredentialIssuer mints Kubernetes projects' temporary backup
+// credentials from the backup key (EXC-476). No provider leaves it nil: the
+// feature check then refuses a Kubernetes boot that has a backup key, and a
+// Docker platform keeps its key in this process.
+func buildBackupCredentialIssuer(cfg config.AppConfig) *service.BackupCredentialIssuer {
+	if cfg.BackupCredentialsProvider == "" {
+		return nil
+	}
+	minter, err := objectcreds.NewMinter(cfg.BackupCredentialsProvider)
+	if err != nil {
+		log.Fatalf("BACKUP_CREDENTIALS_PROVIDER: %v", err)
+	}
+	if err := objectcreds.ValidateLifetimes(cfg.BackupCredentialsProvider, cfg.BackupCredentialsTTL, cfg.BackupCredentialsRenewInterval); err != nil {
+		log.Fatalf("BACKUP_CREDENTIALS_TTL / BACKUP_CREDENTIALS_RENEW_INTERVAL: %v", err)
+	}
+	// R2 signing needs no network, so a store it cannot sign for is caught here
+	// rather than on the first project.
+	if cfg.BackupCredentialsProvider == objectcreds.ProviderR2 && cfg.BackupEndpoint != "" {
+		if _, err := minter.Mint(context.Background(), objectcreds.Parent{
+			AccessKeyID: cfg.BackupAccessKeyID, SecretAccessKey: cfg.BackupSecretAccessKey,
+			Endpoint: cfg.BackupEndpoint, Bucket: cfg.BackupBucket,
+		}, objectcreds.Scope{Prefix: "boot-check/", Access: objectcreds.ReadOnly, TTL: time.Minute}); err != nil {
+			log.Fatalf("BACKUP_CREDENTIALS_PROVIDER=r2 cannot sign for the backup store: %v", err)
+		}
+	}
+	issuer, err := service.NewBackupCredentialIssuer(service.BackupCredentialIssuerConfig{
+		Minter:    minter,
+		OpenStore: service.AWSObjectDeleterFactory(backupUsePathStyle()),
+		TTL:       cfg.BackupCredentialsTTL,
+		// A restore reads its source while the recovered cluster comes up.
+		SourceTTL: cfg.RestoreReadyTimeout + time.Hour,
+	})
+	if err != nil {
+		log.Fatalf("backup credentials: %v", err)
+	}
+	return issuer
+}
+
+// startBackupCredentialRenewer keeps every archiving project's temporary
+// credential ahead of its expiry; one replica renews at a time.
+func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, k8sClient k8s.KubeClient, provSvc *service.ProvisioningService) func() {
+	issuer := provSvc.BackupCredentials()
+	if issuer == nil || k8sClient == nil || cfg.ProvisionerMode == "docker" {
+		return func() {
+			// no Kubernetes project holds a temporary credential to renew
+		}
+	}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() && sqlStore != nil {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), backupCredentialRenewLockID)
+	}
+	renewer := service.NewBackupCredentialRenewer(service.BackupCredentialRenewerConfig{
+		Instances: store, Kube: k8sClient, Storage: provSvc, Issuer: issuer,
+	})
+	log.Printf("Backup credential renewal started (every %s; credentials live %s, renewed at half-life)",
+		cfg.BackupCredentialsRenewInterval, cfg.BackupCredentialsTTL)
+	return renewer.Start(context.Background(), service.NewLeadership(lock), cfg.BackupCredentialsRenewInterval)
+}
+
+// backupCredentialRenewLockID is the advisory lock the renewer leads on.
+const backupCredentialRenewLockID int64 = 0x0b4c_2e76_e476_91d3
 
 // startAppRolloutSweeper ends deploys whose rollout watch died with the
 // replica running it; a no-op when app hosting is off.
@@ -862,6 +927,7 @@ func buildProvisioningService(
 	if err := provSvc.SetBackupDefaults(backupDefaults(cfg)); err != nil {
 		log.Fatalf("backup target: %v", err)
 	}
+	provSvc.SetBackupCredentials(buildBackupCredentialIssuer(cfg))
 	// Deprovision with confirmDeleteBackups resolves the store through
 	// provSvc.BackupStorage() — the same source backups are written with.
 	provSvc.SetBackupPurger(service.NewBackupPurger(provSvc, dockerBackupKeyPrefix,
@@ -1132,6 +1198,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	backupSvc.SetRestorePlanSource(provSvc)
 	backupSvc.SetOwnerCredentials(provSvc)
+	backupSvc.SetBackupCredentials(provSvc.BackupCredentials())
 	if err := wireRestoreVerification(backupSvc, vc, cfg.RestoreReadyTimeout); err != nil {
 		log.Fatalf("restore verification: %v", err)
 	}

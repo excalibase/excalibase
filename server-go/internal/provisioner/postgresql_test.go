@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -108,6 +109,8 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 				SecretAccessKey: "secret456",
 				Bucket:          "excalibase-backups",
 				Region:          "ap-southeast-1",
+				SessionToken:    "token789",
+				ExpiresAt:       time.Now().Add(time.Hour),
 			},
 		},
 	}, tier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
@@ -126,6 +129,9 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 	}
 	if string(secret["ACCESS_SECRET_KEY"]) != "secret456" {
 		t.Errorf("ACCESS_SECRET_KEY: got %q, want %q", secret["ACCESS_SECRET_KEY"], "secret456")
+	}
+	if string(secret["ACCESS_SESSION_TOKEN"]) != "token789" {
+		t.Errorf("ACCESS_SESSION_TOKEN: got %q", secret["ACCESS_SESSION_TOKEN"])
 	}
 	if _, ok := mock.CRDs["org1-bk-test/bk-test-postgres-backup"]; !ok {
 		t.Error("ScheduledBackup CRD not created")

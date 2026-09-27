@@ -106,6 +106,7 @@ func buildBackupHandlerHarness(t *testing.T) (*chi.Mux, *service.RestoreOrchestr
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 	backupSvc := service.NewBackupService(store, mock, dir, testBackupStorage())
+	backupSvc.SetBackupCredentials(testBackupCredentials(t))
 	backupSvc.SetOrgProjectCapacity(unlimitedCapacity{})
 
 	store.Create(&domain.DatabaseInstance{

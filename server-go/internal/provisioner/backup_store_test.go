@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -25,7 +26,25 @@ func backedUpRequest(s3 *domain.S3Credentials) domain.ProvisioningRequest {
 }
 
 func r2Store() *domain.S3Credentials {
-	return &domain.S3Credentials{AccessKeyID: "AKIA", SecretAccessKey: "secret", Bucket: "excalibase-backups", Endpoint: "https://acct.r2.cloudflarestorage.com"}
+	return &domain.S3Credentials{AccessKeyID: "AKIA", SecretAccessKey: "secret", Bucket: "excalibase-backups", Endpoint: "https://acct.r2.cloudflarestorage.com",
+		SessionToken: "token", ExpiresAt: time.Now().Add(12 * time.Hour)}
+}
+
+func TestProvisionRefusesToWriteALongLivedKeyIntoTheNamespace(t *testing.T) {
+	for name, run := range provisionPaths() {
+		t.Run(name, func(t *testing.T) {
+			mock := k8s.NewMockClient()
+			mock.SetupPostgreSQLMock(storeProject, storeNamespace, 1)
+			platformKey := r2Store()
+			platformKey.SessionToken, platformKey.ExpiresAt = "", time.Time{}
+			if err := run(NewPostgreSQLProvisioner(mock, ""), backedUpRequest(platformKey)); !errors.Is(err, k8s.ErrLongLivedBackupKey) {
+				t.Fatalf("err = %v, want ErrLongLivedBackupKey", err)
+			}
+			if _, written := mock.Secrets[storeNamespace+"/"+k8s.BackupCredentialsSecretName]; written {
+				t.Fatal("a key without a session token reached the namespace")
+			}
+		})
+	}
 }
 
 type provisionRun func(prov *PostgreSQLProvisioner, req domain.ProvisioningRequest) error

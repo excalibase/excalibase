@@ -75,7 +75,7 @@ func TestRestoreNamespaceIsIsolatedAndQuotaed(t *testing.T) {
 	pc := provisioner.NewProvisionContext(nil, nil)
 	req := domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"}
 
-	if err := adapter.createRestoreCluster(context.Background(), pc, sourceInstance(), req, restoreTarget{store: r2Storage(), cluster: restoreClusterObject(), project: "dst", namespace: "org-dst"}); err != nil {
+	if err := adapter.createRestoreCluster(context.Background(), pc, sourceInstance(), req, restoreTarget{store: r2Storage(), sourceCreds: temporaryCredentials(), cluster: restoreClusterObject(), project: "dst", namespace: "org-dst"}); err != nil {
 		t.Fatalf("createRestoreCluster: %v", err)
 	}
 	assertProjectNamespaceIsolated(t, clientset, "org-dst", "org")

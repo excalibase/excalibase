@@ -127,3 +127,72 @@ func NatsConnected(client string) bool {
 func CountNatsPublishDropped(publisher string) {
 	natsPublishDropped.WithLabelValues(publisher).Inc()
 }
+
+var (
+	// backupCredentialsExpiry is when each project's temporary object-store
+	// credential stops working. WAL archiving fails from that moment, so an
+	// alert fires well before it (EXC-476).
+	backupCredentialsExpiry = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "excalibase_backup_credentials_expiry_timestamp_seconds",
+			Help: "Unix time at which the project's temporary backup credential expires.",
+		},
+		[]string{"project"},
+	)
+
+	// backupCredentialRenewals counts renewal attempts by outcome.
+	backupCredentialRenewals = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "excalibase_backup_credential_renewals_total",
+			Help: "Temporary backup credential renewals, by result (renewed or failed).",
+		},
+		[]string{"result"},
+	)
+)
+
+// SetBackupCredentialsExpiry records when a project's backup credential expires.
+func SetBackupCredentialsExpiry(project string, expires time.Time) {
+	backupCredentialsExpiry.WithLabelValues(project).Set(float64(expires.Unix()))
+}
+
+// ForgetBackupCredentialsExpiry drops a project that no longer archives.
+func ForgetBackupCredentialsExpiry(project string) {
+	backupCredentialsExpiry.DeleteLabelValues(project)
+}
+
+// ResetBackupCredentialsExpiry drops every project: a pass re-exports what it
+// sees, and a replica that stops leading exports nothing.
+func ResetBackupCredentialsExpiry() {
+	backupCredentialsExpiry.Reset()
+}
+
+// BackupCredentialsExpiryProjects lists the projects currently exported.
+func BackupCredentialsExpiryProjects() []string {
+	ch := make(chan prometheus.Metric, 64)
+	go func() {
+		backupCredentialsExpiry.Collect(ch)
+		close(ch)
+	}()
+	var projects []string
+	for metric := range ch {
+		var sample dto.Metric
+		if err := metric.Write(&sample); err != nil {
+			continue
+		}
+		for _, label := range sample.GetLabel() {
+			if label.GetName() == "project" {
+				projects = append(projects, label.GetValue())
+			}
+		}
+	}
+	return projects
+}
+
+// CountBackupCredentialRenewal records one renewal attempt.
+func CountBackupCredentialRenewal(renewed bool) {
+	result := "failed"
+	if renewed {
+		result = "renewed"
+	}
+	backupCredentialRenewals.WithLabelValues(result).Inc()
+}
