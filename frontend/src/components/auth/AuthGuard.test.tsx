@@ -30,15 +30,12 @@ describe('AuthGuard', () => {
   });
 
   test('lets authenticated users through to protected routes', () => {
-    useAuthStore.getState().setAuth(
-      {
-        id: '1',
-        username: 'admin',
-        email: 'a@b.c',
-        role: 'platform_admin',
-      },
-      { legacyToken: 'test-token' },
-    );
+    useAuthStore.getState().setAuth({
+      id: '1',
+      username: 'admin',
+      email: 'a@b.c',
+      role: 'platform_admin',
+    });
     renderWithRoutes(['/']);
     expect(screen.getByTestId('protected')).toBeInTheDocument();
   });

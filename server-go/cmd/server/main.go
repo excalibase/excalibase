@@ -1302,6 +1302,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Use(metrics.Middleware)
 	r.Use(custommw.SecurityHeaders)
 	r.Use(custommw.CORS(cfg.CORSOrigins))
+	r.Use(custommw.RequireTrustedOriginForCookies(custommw.TrustedOrigins(cfg.StudioURL, cfg.CORSOrigins)))
 	r.Use(auth.ExtractAuth(sqlStore))
 	// Capability tokens (the platform's own service principals) are
 	// default-deny: mounted here, the gate covers every route including ones

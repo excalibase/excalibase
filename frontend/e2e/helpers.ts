@@ -35,7 +35,6 @@ export async function mockVaultGuardReady(page: Page) {
 
 export async function loginAs(page: Page, user = { id: '1', username: 'admin', email: 'admin@test.com', role: 'admin' }) {
   await page.addInitScript((u) => {
-    localStorage.setItem('auth_token', 'test-token-123');
     localStorage.setItem('auth_user', JSON.stringify(u));
     localStorage.setItem('theme', 'dark');
   }, user);

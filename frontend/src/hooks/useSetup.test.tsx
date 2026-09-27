@@ -70,7 +70,6 @@ describe('useRegisterAdmin', () => {
       password: TEST_PASSWORD_PLACEHOLDER,
       setupToken: 'the-one-time-token',
     });
-    expect(result.current.data?.token).toBe('pat-bootstrap');
     expect(result.current.data?.user.role).toBe('platform_admin');
   });
 

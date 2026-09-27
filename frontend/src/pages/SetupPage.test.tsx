@@ -180,7 +180,7 @@ describe('SetupPage', () => {
     expect(await screen.findByTestId('vault-setup-admin')).toBeInTheDocument();
   });
 
-  test('admin form submits, persists token to auth store, redirects to /', async () => {
+  test('admin form signs the admin in and redirects to /', async () => {
     const user = userEvent.setup();
     renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
 
@@ -203,13 +203,12 @@ describe('SetupPage', () => {
       });
     });
     await waitFor(() => {
-      // Cookie auth flow: state holds the user profile + isAuthenticated.
-      // The raw token lives in localStorage as legacyToken (header fallback)
-      // and in the httpOnly cookie set by the server — neither belongs in
-      // store state any more.
+      // The session lives only in the server's httpOnly cookie; nothing a
+      // script can read holds it.
       expect(useAuthStore.getState().isAuthenticated).toBe(true);
       expect(useAuthStore.getState().user?.role).toBe('platform_admin');
-      expect(localStorage.getItem('auth_token')).toBe('pat-bootstrap');
+      expect(localStorage.getItem('auth_token')).toBeNull();
+      expect(JSON.stringify(localStorage)).not.toContain('pat-bootstrap');
     });
     expect(await screen.findByTestId('dashboard')).toBeInTheDocument();
   });

@@ -8,7 +8,6 @@ import { ResendVerification } from '../components/auth/ResendVerification';
 import { ProviderButtons, ProviderRefusal } from '../components/auth/ProviderSignIn';
 
 interface LoginResponse {
-  token: string;
   user: AuthUser;
 }
 
@@ -41,11 +40,9 @@ export function LoginPage() {
         username: username.trim(),
         password,
       });
-      // Server sets the httpOnly excali_session cookie on this response;
-      // we just persist the user profile for UI bootstrapping. Pass the
-      // raw token as legacyToken to keep the axios header fallback alive
-      // for callers that don't yet honour the cookie.
-      setAuth(response.data.user, { legacyToken: response.data.token });
+      // The server set the httpOnly session cookie on this response; only the
+      // profile is kept here.
+      setAuth(response.data.user);
     } catch (err: unknown) {
       const axiosErr = err as { response?: { status?: number; data?: { error?: string; code?: string } } };
       if (axiosErr.response?.data?.code === 'email_not_verified') {

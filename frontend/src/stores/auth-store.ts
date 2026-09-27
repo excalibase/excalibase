@@ -14,21 +14,22 @@ interface AuthState {
   // the access token in the new flow — the httpOnly cookie owns that.
   user: AuthUser | null;
   isAuthenticated: boolean;
-  // setAuth is called after a successful login / register. Token is
-  // optional: when missing (cookie flow) we trust the cookie. When
-  // present (legacy code paths still passing the body token) we keep
-  // it in localStorage as a header fallback.
-  setAuth: (user: AuthUser, opts?: { legacyToken?: string }) => void;
+  // setAuth records who signed in. The session itself stays in the server's
+  // httpOnly cookie and never passes through here.
+  setAuth: (user: AuthUser) => void;
   // clearAuth wipes local state immediately. The matching server-side
   // revocation goes through `logout()` below.
   clearAuth: () => void;
   // logout: hits the platform's /auth/logout (revokes the session PAT,
-  // clears the httpOnly cookie) then wipes any legacy localStorage.
+  // clears the httpOnly cookie) then wipes the cached profile.
   logout: () => Promise<void>;
 }
 
 const USER_KEY = 'auth_user';
+// Where an older Studio kept the raw session token; removed on sight.
 const LEGACY_TOKEN_KEY = 'auth_token';
+
+localStorage.removeItem(LEGACY_TOKEN_KEY);
 
 function loadFromStorage(): Pick<AuthState, 'user' | 'isAuthenticated'> {
   try {
@@ -43,7 +44,6 @@ function loadFromStorage(): Pick<AuthState, 'user' | 'isAuthenticated'> {
     }
   } catch {
     localStorage.removeItem(USER_KEY);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
   }
   return { user: null, isAuthenticated: false };
 }
@@ -51,17 +51,13 @@ function loadFromStorage(): Pick<AuthState, 'user' | 'isAuthenticated'> {
 export const useAuthStore = create<AuthState>((set) => ({
   ...loadFromStorage(),
 
-  setAuth: (user, opts) => {
+  setAuth: (user) => {
     localStorage.setItem(USER_KEY, JSON.stringify(user));
-    if (opts?.legacyToken) {
-      localStorage.setItem(LEGACY_TOKEN_KEY, opts.legacyToken);
-    }
     set({ user, isAuthenticated: true });
   },
 
   clearAuth: () => {
     localStorage.removeItem(USER_KEY);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
     set({ user: null, isAuthenticated: false });
   },
 
@@ -75,7 +71,6 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Ignored — local logout still proceeds.
     }
     localStorage.removeItem(USER_KEY);
-    localStorage.removeItem(LEGACY_TOKEN_KEY);
     set({ user: null, isAuthenticated: false });
   },
 }));

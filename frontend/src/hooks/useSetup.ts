@@ -16,7 +16,6 @@ interface RegisterRequest {
 }
 
 interface RegisterResponse {
-  token: string;
   user: {
     id: string;
     username: string;

@@ -54,6 +54,22 @@ describe('Studio email verification', () => {
     expect(await screen.findByText(/new link is on its way/i)).toBeInTheDocument();
   });
 
+  test('sign-in keeps the session token out of script-readable storage', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({
+      data: { token: 'session-secret', user: { id: 'u1', username: 'dev', email: 'dev@x.test', role: 'user' } },
+    } as never);
+    renderAt('/login');
+
+    await u.type(screen.getByLabelText('Username'), 'dev');
+    await u.type(screen.getByLabelText('Password'), PASSWORD);
+    await u.click(screen.getByRole('button', { name: /sign in/i }));
+
+    await waitFor(() => expect(useAuthStore.getState().isAuthenticated).toBe(true));
+    expect(JSON.stringify(localStorage)).not.toContain('session-secret');
+    expect(JSON.stringify(sessionStorage)).not.toContain('session-secret');
+  });
+
   test('sign-in of an unverified account offers a new link', async () => {
     const u = userEvent.setup();
     vi.mocked(api.post).mockImplementation((url: string) => {
