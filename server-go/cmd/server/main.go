@@ -150,6 +150,9 @@ func runServer(cfg config.AppConfig) {
 	if err := verifyAppRuntime(context.Background(), cfg, k8sClient); err != nil {
 		log.Fatalf("app hosting: %v", err)
 	}
+	if err := verifyAppDomainIssuer(context.Background(), cfg, k8sClient); err != nil {
+		log.Fatalf("custom domains: %v", err)
+	}
 	factory, dockerClientRef := buildProvisionerFactory(cfg, k8sClient)
 
 	// One way to reach a tenant database, shared by the schema migrator,
@@ -272,6 +275,8 @@ func runServer(cfg config.AppConfig) {
 
 	stopAppRollouts := startAppRolloutSweeper(cfg, sqlStore, deps.appDeploySvc)
 	defer stopAppRollouts()
+	stopDomainSweep := startAppDomainSweeper(cfg, sqlStore, deps.appDomainSvc)
+	defer stopDomainSweep()
 
 	checkFeatureWiring(cfg, featureWiringDeps(fnHandler, projectDB, pauseSvc))
 
@@ -668,6 +673,9 @@ type handlerDeps struct {
 	rlUnauth            func(http.Handler) http.Handler
 	rlAuthed            func(http.Handler) http.Handler
 	rlDataPlane         func(http.Handler) http.Handler
+	// appDomainSvc and appDomainHandler are nil while custom domains are off.
+	appDomainSvc     *service.AppDomainService
+	appDomainHandler *handler.AppDomainHandler
 	// rlMailSend bounds the routes that make the platform send mail. It is far
 	// tighter than rlAuthed because the cost of overuse is not our CPU, it is
 	// the sending domain's reputation.
@@ -1100,6 +1108,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
 	appDeploySvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
+	appDomainSvc := buildAppDomainService(cfg, sqlStore.DB(), k8sClient, store, appDeploySvc)
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
 	// A restore finishes the way a provision does: the adapters hand the
 	// recovered database to the provisioning service's registration path
@@ -1232,6 +1241,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		registryCredHandler: newRegistryCredentialHandler(registryCreds),
 		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
 			apphost.NewPostgresAppStore(sqlStore.DB()), store, k8sClient)),
+		appDomainSvc:     appDomainSvc,
+		appDomainHandler: newAppDomainHandler(appDomainSvc),
 		tierHandler:      tierHandler,
 		pgCatalogHandler: handler.NewPostgresCatalogHandler(),
 		capDeps: &capacityDeps{
@@ -1269,7 +1280,8 @@ func serveConfig(cfg config.AppConfig) http.HandlerFunc {
 	body := struct {
 		DeploymentMode string `json:"deploymentMode"`
 		AppHosting     bool   `json:"appHosting"`
-	}{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled}
+		CustomDomains  bool   `json:"customDomains"`
+	}{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, CustomDomains: customDomainsOn(cfg)}
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
@@ -1588,6 +1600,14 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.Get("/logs", d.appLogHandler.Logs)
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)
+				if d.appDomainHandler != nil {
+					r.Route("/domains", func(r chi.Router) {
+						r.Get("/", d.appDomainHandler.List)
+						r.With(dev).Post("/", d.appDomainHandler.Add)
+						r.With(dev).Post("/{domainId}/verify", d.appDomainHandler.Verify)
+						r.With(dev).Delete("/{domainId}", d.appDomainHandler.Remove)
+					})
+				}
 			})
 		})
 		r.Route("/api/projects/{projectId}/registry-credentials", func(r chi.Router) {

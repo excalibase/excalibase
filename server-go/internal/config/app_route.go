@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strings"
 
@@ -54,6 +55,14 @@ func (c AppConfig) validateAppRoute() error {
 		{"APP_DOMAIN", c.AppDomain, validation.IsDNS1123Subdomain},
 		{"APP_INGRESS_CLASS", c.AppIngressClass, validation.IsDNS1123Subdomain},
 		{"APP_INGRESS_FROM_NAMESPACE", c.AppIngressFromNamespace, validation.IsDNS1123Label},
+	}
+	if c.AppDomainIssuer != "" {
+		settings = append(settings, routeSetting{"APP_DOMAIN_ISSUER", c.AppDomainIssuer, validation.IsDNS1123Subdomain})
+	}
+	if c.AppDomainResolver != "" {
+		if _, _, err := net.SplitHostPort(c.AppDomainResolver); err != nil {
+			return fmt.Errorf("APP_DOMAIN_RESOLVER %q must be host:port: %w", c.AppDomainResolver, err)
+		}
 	}
 	if c.AppTLSSecret != "" {
 		settings = append(settings, routeSetting{"APP_TLS_SECRET", c.AppTLSSecret, validation.IsDNS1123Subdomain})

@@ -61,7 +61,11 @@ function renderPage(scenario: Scenario) {
   };
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config')
-      return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting: true } } as never);
+      return Promise.resolve({
+        data: { deploymentMode: 'cloud', appHosting: true, customDomains: true },
+      } as never);
+    if (url === '/projects/proj-1/apps/app-1/domains/')
+      return Promise.resolve({ data: [] } as never);
     if (url === '/projects/proj-1/apps/app-1') return Promise.resolve({ data: state.app } as never);
     if (url === '/projects/proj-1/apps/app-1/logs')
       return Promise.resolve({
@@ -150,8 +154,12 @@ describe('ContainerDetailPage', () => {
   test('resume starts a paused container again', async () => {
     const { user } = renderPage({ app: { status: 'PAUSED' }, deploys: [deploy({})] });
     await user.click(await screen.findByTestId('resume-button'));
-    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/resume'));
-    await waitFor(() => expect(screen.getByTestId('container-status')).toHaveTextContent('Running'));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/resume'),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('container-status')).toHaveTextContent('Running'),
+    );
   });
 
   test('a container that never ran offers neither pause nor resume', async () => {
@@ -267,6 +275,11 @@ describe('ContainerDetailPage', () => {
     renderPage({ deploys: [] });
     expect(await screen.findByText('ready')).toBeInTheDocument();
     expect(screen.getByTestId('app-logs')).toHaveTextContent('web-1');
+  });
+
+  test('custom domains are offered when the server has an issuer', async () => {
+    renderPage({ deploys: [] });
+    expect(await screen.findByTestId('app-domains')).toBeInTheDocument();
   });
 
   test('variables are masked and never show a value or a secret location', async () => {

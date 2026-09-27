@@ -21,4 +21,9 @@ var appRows = []Row{
 	{Methods: get, Pattern: "/api/projects/{projectId}/registry-credentials/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "names the registries that have a credential; never a username or a password"},
 	{Methods: put, Pattern: "/api/projects/{projectId}/registry-credentials/{registry}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "write-only: stores the credential in the project vault; no route returns it"},
 	{Methods: del, Pattern: "/api/projects/{projectId}/registry-credentials/{registry}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "also deletes the pull secrets rendered from it"},
+
+	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/domains/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "mounted only when APP_DOMAIN_ISSUER is set"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/domains/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "claims nothing: a domain is routed only once verified"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/domains/{domainId}/verify", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "routes the domain only if its CNAME names this app's own hostname"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/apps/{appId}/domains/{domainId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 }

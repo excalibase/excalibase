@@ -45,6 +45,8 @@ type AppDeployService struct {
 	registries      RegistryCredentialLookup
 	plans           PlanTiers
 	headroomPercent int
+	// domainSync routes the app's custom domains under the name it is deployed as.
+	domainSync func(ctx context.Context, namespace string, app *apphost.App) error
 	// async lets tests run the rollout wait inline instead of in a goroutine.
 	async func(func())
 
@@ -118,6 +120,10 @@ func (s *AppDeployService) confirmPullAuth(ctx context.Context, projectID, names
 		return fmt.Errorf("read the pull credential for %s: %w", used.Registry, err)
 	}
 	return errPullAuthChanged
+}
+
+func (s *AppDeployService) SetDomainSync(sync func(ctx context.Context, namespace string, app *apphost.App) error) {
+	s.domainSync = sync
 }
 
 func (s *AppDeployService) DeployApp(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, error) {
@@ -237,6 +243,12 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	if err := s.confirmPullAuth(ctx, app.ProjectID, namespace, render.PullAuth); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
+	}
+	if s.domainSync != nil {
+		if err := s.domainSync(ctx, namespace, app); err != nil {
+			s.fail(ctx, deploy, fmt.Errorf("route the app's custom domains: %w", err), namespace, name)
+			return deploy, nil, nil
+		}
 	}
 	s.setStatus(deploy, apphost.DeployStatusRolling, "", nil)
 	watched := *deploy

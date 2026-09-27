@@ -129,6 +129,11 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		registryCredHandler: handler.NewRegistryCredentialHandler(nil),
 		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
 			apphost.NewPostgresAppStore(offlineDB(t)), instances, k8s.NewMockClient())),
+		appDomainHandler: handler.NewAppDomainHandler(service.NewAppDomainService(apphost.NewPostgresAppStore(offlineDB(t)),
+			apphost.NewPostgresDomainStore(offlineDB(t)), mock, instances, nil,
+			service.NewAppDeployService(apphost.NewPostgresAppStore(offlineDB(t)), apphost.NewPostgresDeployStore(offlineDB(t)),
+				mock, instances, nil, k8s.AppRenderOptions{}),
+			apphost.Route{}, k8s.AppDomainOptions{})),
 		rlUnauth:    custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
 		rlAuthed:    custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),

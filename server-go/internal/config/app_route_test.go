@@ -76,3 +76,33 @@ func TestValidateRouteIgnoredWithoutHosting(t *testing.T) {
 		t.Fatalf("hosting off must not require a route: %v", err)
 	}
 }
+
+func TestAppDomainSettings(t *testing.T) {
+	base := func() AppConfig {
+		return AppConfig{AppHostingEnabled: true, AppDomain: "apps.example.com", AppIngressClass: "haproxy", AppIngressFromNamespace: "haproxy-controller"}
+	}
+	good := base()
+	good.AppDomainIssuer, good.AppDomainResolver = "letsencrypt-prod", "10.43.0.10:53"
+	if err := good.validateAppRoute(); err != nil {
+		t.Fatalf("valid: %v", err)
+	}
+	badIssuer := base()
+	badIssuer.AppDomainIssuer = "Lets Encrypt"
+	if err := badIssuer.validateAppRoute(); err == nil || !strings.Contains(err.Error(), "APP_DOMAIN_ISSUER") {
+		t.Fatalf("bad issuer: %v", err)
+	}
+	badResolver := base()
+	badResolver.AppDomainResolver = "10.43.0.10"
+	if err := badResolver.validateAppRoute(); err == nil || !strings.Contains(err.Error(), "APP_DOMAIN_RESOLVER") {
+		t.Fatalf("bad resolver: %v", err)
+	}
+}
+
+func TestAppDomainSettingsFromEnv(t *testing.T) {
+	t.Setenv("APP_DOMAIN_ISSUER", "letsencrypt-prod")
+	t.Setenv("APP_DOMAIN_RESOLVER", "1.1.1.1:53")
+	cfg := Load()
+	if cfg.AppDomainIssuer != "letsencrypt-prod" || cfg.AppDomainResolver != "1.1.1.1:53" {
+		t.Fatalf("cfg = %q %q", cfg.AppDomainIssuer, cfg.AppDomainResolver)
+	}
+}

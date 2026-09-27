@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -112,6 +113,9 @@ type KubeClient interface {
 	LiveAppPods(ctx context.Context, namespace, appID string) (AppPods, error)
 	RuntimeClassPlacement(ctx context.Context, name string) (RuntimePlacement, error)
 	PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error)
+	SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts AppDomainOptions) error
+	AppDomainCertificate(ctx context.Context, namespace, appName, host string) (CertificateState, error)
+	ClusterIssuerReady(ctx context.Context, name string) error
 }
 
 // ClusterCapacity holds aggregate cluster resource state. All values are in
