@@ -83,4 +83,13 @@ describe('older Studio pages honour deletion protection', () => {
     await userEvent.click(screen.getByTestId('instance-card-expand'));
     expect(screen.getByTestId('instance-card-delete')).toBeEnabled();
   });
+
+  test('an unprotected project is still deleted from the list', async () => {
+    vi.spyOn(globalThis, 'confirm').mockReturnValue(true);
+    vi.mocked(api.delete).mockResolvedValue({} as never);
+    useAuthStore.setState({ user: { id: 'u', username: 'a', role: 'platform_admin' } as never, isAuthenticated: true });
+    withProviders(<InstancesPage />);
+    await userEvent.click(await screen.findByTestId('delete-instance-p-off'));
+    expect(api.delete).toHaveBeenCalledWith('/provision/p-off');
+  });
 });
