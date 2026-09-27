@@ -25,7 +25,6 @@ var envReadAllowList = map[string]string{
 	// pure tunables — nothing selects a provider or turns a subsystem on —
 	// and each caller reads the same three through projectdb.Overrides.
 	"internal/projectdb/opener.go":            "SCHEMA_DB_* development overrides",
-	"internal/handler/schema.go":              "SCHEMA_DB_* development overrides",
 	"internal/service/migration.go":           "SCHEMA_DB_* development overrides",
 	"internal/service/database_probe.go":      "SCHEMA_DB_* development overrides",
 	"internal/service/credential_rotation.go": "SCHEMA_DB_* development overrides, read through the same projectdb.Overrides as the probe",

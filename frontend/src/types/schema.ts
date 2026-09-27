@@ -50,6 +50,8 @@ export interface QueryResult {
   command?: string;
   affectedRows?: number;
   error?: string;
+  // The server kept only the first rows (a row or size cap was reached).
+  truncated?: boolean;
 }
 
 // Roles

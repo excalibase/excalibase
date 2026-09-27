@@ -4,19 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/lib/pq"
 )
@@ -26,27 +24,19 @@ const (
 	errInvalidBody = "invalid request body"
 )
 
-const (
-	connTTL     = 10 * time.Minute
-	maxConns    = 50
-	evictPeriod = 2 * time.Minute
-)
-
-type connEntry struct {
-	db      *sql.DB
-	created time.Time
+// projectPools hands out a bounded pool per project whose sessions carry the
+// platform's statement and lock timeouts (projectdb.Opener).
+type projectPools interface {
+	Open(ctx context.Context, projectID string) (*sql.DB, error)
+	Evict(projectID string)
+	ProjectStatusChanged(projectID, status string)
 }
 
 type SchemaHandler struct {
-	vault             vaultclient.VaultClient
-	introspector      *schema.Introspector
-	mu                sync.RWMutex
-	connCache         map[string]*connEntry
-	dbHostOverride    string // if set, overrides vault host (for local dev with port-forward)
-	dbPortOverride    string // if set, overrides vault port
-	dbSSLModeOverride string // if set, overrides sslmode (for testing)
-	instances         storage.InstanceStore
-	publisher         PolicyChangePublisher // optional
+	pools        projectPools
+	introspector *schema.Introspector
+	instances    storage.InstanceStore
+	publisher    PolicyChangePublisher // optional
 }
 
 // SetPublisher wires the bus this handler announces schema changes on. Leave
@@ -99,56 +89,26 @@ func (s *statusRecorder) WriteHeader(code int) {
 // SetInstanceStore lets the handler resolve a project's instance row.
 func (h *SchemaHandler) SetInstanceStore(s storage.InstanceStore) { h.instances = s }
 
-func NewSchemaHandler(v vaultclient.VaultClient) *SchemaHandler {
-	h := &SchemaHandler{
-		vault:             v,
-		introspector:      schema.NewIntrospector(),
-		connCache:         make(map[string]*connEntry),
-		dbHostOverride:    os.Getenv("SCHEMA_DB_HOST"),
-		dbPortOverride:    os.Getenv("SCHEMA_DB_PORT"),
-		dbSSLModeOverride: os.Getenv("SCHEMA_DB_SSLMODE"),
+// NewSchemaHandler reaches projects through pools, and bounds every
+// statement the SQL runner executes by statementTimeout.
+func NewSchemaHandler(pools projectPools, statementTimeout time.Duration) *SchemaHandler {
+	return &SchemaHandler{
+		pools:        pools,
+		introspector: schema.NewIntrospector().WithStatementTimeout(statementTimeout),
 	}
-	go h.evictLoop()
-	return h
 }
 
 // ProjectDeleting is the teardown hook (service.DeletionObserver). An open
 // session stops the tenant's Postgres shutting down, so its namespace never
-// terminates and the teardown times out; the TTL eviction is far too late at
-// ten minutes (EXC-431).
+// terminates and the teardown times out (EXC-431).
 func (h *SchemaHandler) ProjectDeleting(projectID string) {
-	if err := h.CloseProject(projectID); err != nil {
-		log.Printf("WARN: closing the cached connection for %s: %v", projectID, err)
-	}
+	h.pools.Evict(projectID)
 }
 
-// CloseProject releases the connection held for a project, if there is one.
-func (h *SchemaHandler) CloseProject(projectID string) error {
-	h.mu.Lock()
-	entry, held := h.connCache[projectID]
-	delete(h.connCache, projectID)
-	h.mu.Unlock()
-
-	if !held {
-		return nil
-	}
-	return entry.db.Close()
-}
-
-func (h *SchemaHandler) evictLoop() {
-	ticker := time.NewTicker(evictPeriod)
-	defer ticker.Stop()
-	for range ticker.C {
-		h.mu.Lock()
-		now := time.Now()
-		for k, e := range h.connCache {
-			if now.Sub(e.created) > connTTL {
-				e.db.Close()
-				delete(h.connCache, k)
-			}
-		}
-		h.mu.Unlock()
-	}
+// ProjectStatusChanged is the pause hook: a paused database is down, and its
+// pool must not hold connections against it.
+func (h *SchemaHandler) ProjectStatusChanged(projectID, status string) {
+	h.pools.ProjectStatusChanged(projectID, status)
 }
 
 func schemaParam(r *http.Request) string {
@@ -405,71 +365,21 @@ func (h *SchemaHandler) getDB(projectId string) (*sql.DB, error) {
 	if !isValidID(projectId) {
 		return nil, fmt.Errorf("invalid project id")
 	}
-	cacheKey := projectId
-	h.mu.RLock()
-	if e, ok := h.connCache[cacheKey]; ok {
-		h.mu.RUnlock()
-		return e.db, nil
-	}
-	h.mu.RUnlock()
-
-	// Enforce max connections
-	h.mu.RLock()
-	count := len(h.connCache)
-	h.mu.RUnlock()
-	if count >= maxConns {
-		return nil, fmt.Errorf("connection pool full (%d)", maxConns)
-	}
-
-	// Get excalibase_app credentials from vault. Path is project-scoped only:
-	// `projects/{projectId}/credentials/excalibase_app`. Previously this read
-	// from `orgs/{orgId}/projects/{projectId}/...` which never matched what
-	// the provisioner wrote — a latent bug now fixed alongside the unified
-	// vault path scheme.
-	creds, err := h.vault.Get(fmt.Sprintf("projects/%s/credentials/excalibase_app", projectId))
-	if err != nil {
-		return nil, err
-	}
-
-	connStr, err := projectdb.DSNFor(creds, projectdb.Overrides{
-		Host:    h.dbHostOverride,
-		Port:    h.dbPortOverride,
-		SSLMode: h.dbSSLModeOverride,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := db.PingContext(context.Background()); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("ping: %w", err)
-	}
-
-	h.mu.Lock()
-	// Double-check: another goroutine may have cached it while we were connecting
-	if existing, ok := h.connCache[cacheKey]; ok {
-		h.mu.Unlock()
-		db.Close() // close the one we just opened
-		return existing.db, nil
-	}
-	h.connCache[cacheKey] = &connEntry{db: db, created: time.Now()}
-	h.mu.Unlock()
-
-	return db, nil
+	return h.pools.Open(context.Background(), projectId)
 }
 
 func (h *SchemaHandler) handleDBError(w http.ResponseWriter, err error) {
 	msg := err.Error()
-	if strings.Contains(msg, "sealed") {
+	switch {
+	case errors.Is(err, projectdb.ErrNotServable):
+		httpError(w, "project is not running", http.StatusConflict)
+	case strings.Contains(msg, "unknown project"):
+		httpError(w, "project not found", http.StatusNotFound)
+	case strings.Contains(msg, "sealed"):
 		httpError(w, "vault is sealed", http.StatusServiceUnavailable)
-	} else if strings.Contains(msg, "not found") {
+	case strings.Contains(msg, "not found"):
 		httpError(w, "project credentials not found in vault", http.StatusNotFound)
-	} else {
+	default:
 		log.Printf("schema db error: %v", err)
 		httpError(w, safeError(err), http.StatusInternalServerError)
 	}

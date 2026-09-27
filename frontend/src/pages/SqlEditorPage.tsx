@@ -278,7 +278,7 @@ interface ResultPanelProps {
 
 // ResultPanel replaces the deeply-nested ternary in the parent (S3358) with a
 // straightforward early-return chain.
-function ResultPanel({ result }: ResultPanelProps) {
+export function ResultPanel({ result }: ResultPanelProps) {
   return (
     <div className="rounded-lg border border-border-primary overflow-hidden" data-testid="query-results">
       <ResultBody result={result} />
@@ -312,6 +312,11 @@ function ResultTable({ result }: ResultPanelProps) {
     <>
       <div className="px-4 py-2 bg-surface-card border-b border-border-primary text-xs text-text-tertiary">
         {pluralRows(rowCount)}
+        {result.truncated && (
+          <span className="ml-2 text-amber-400" data-testid="query-truncated">
+            Showing the first {rowCount} rows only; add a LIMIT or narrow the query to see the rest.
+          </span>
+        )}
       </div>
       <div className="overflow-x-auto max-h-96">
         <table className="w-full text-sm">
