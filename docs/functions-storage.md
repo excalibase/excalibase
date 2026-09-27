@@ -165,9 +165,10 @@ upload-attaching mutations that all reuse the same `generateUploadUrl`
 helper. An upload that is never accepted is collected after the platform's
 grace period, so step (c) is part of the flow, not an optimisation.
 
-`db.storage.uploadFile(blob)` in `excalibase-sdk-js` still speaks the older
-two-step shape and needs the same change before it works against this
-protocol.
+`db.storage.uploadFile(blob)` in `excalibase-sdk-js` (0.10.0 and later) runs
+these three steps in one call. By default it calls `system.generateUploadUrl`
+and `system.completeUpload`; `opts.ref` and `opts.completeRef` name other
+mutations. It returns the `storageId` only after the completion succeeds.
 
 ## Server-side upload (actions)
 
