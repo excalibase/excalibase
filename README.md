@@ -40,7 +40,7 @@ server-go/       Go backend (chi router, client-go, Docker SDK)
 │   ├── handler/     HTTP handlers (auth, orgs, provisioning, schema,
 │   │                edge functions, realtime, setup, vaultapi, etc.)
 │   ├── service/     Business logic (provisioning, metrics, backup, migrations,
-│   │                snapshots, alerting, PgDog notifier)
+│   │                snapshots, alerting)
 │   ├── provisioner/ Strategy pattern (PostgreSQL/CNPG, Docker)
 │   ├── k8s/         client-go wrapper, Helm SDK, CRD builders, mock
 │   ├── edgefn/      Edge function store + Deno runtime client + esbuild bundler
@@ -402,7 +402,7 @@ Works against a local socket *or* a remote Docker daemon over TLS, same setup pa
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NATS_URL` | | NATS server for PgDog reload signals + CDC fan-out |
+| `NATS_URL` | | NATS server for policy-change events + CDC fan-out |
 | `REALTIME_PUBLICATION_NAME` | `cdc_watcher_pub` | Publication name; must match watcher daemon config |
 
 ## Testing
@@ -431,7 +431,6 @@ cd frontend && npx playwright test
 - **Storage**: SQLite (self-hosted) / PostgreSQL via CNPG (cloud), auto-migrate on startup
 - **Vault**: in-process Shamir on the platform Postgres, or standalone HTTP service via `VAULT_URL`
 - **Auth**: argon2id password hashing, PATs (`excali_…` prefix), JWT minted via separate auth service
-- **Connection Pooler**: PgDog fork (Postgres-backed config + NATS reload)
 - **Edge Functions**: Deno workers, esbuild bundling, public Supabase-style invoke
 - **Realtime**: PostgreSQL logical replication via watcher daemon, per-table `ALTER PUBLICATION` toggle
 - **Frontend**: React 18, Vite, Tailwind CSS, TanStack Query/Table, CodeMirror 6, cmdk

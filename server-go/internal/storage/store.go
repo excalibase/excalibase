@@ -408,16 +408,6 @@ type OrgStore interface {
 	ListPendingInvites(ctx context.Context, orgID string) ([]*domain.PendingInvite, error)
 }
 
-// PgDogConfigStore persists PgDog connection pooler configuration.
-type PgDogConfigStore interface {
-	RegisterPgDogDatabase(ctx context.Context, db *domain.PgDogDatabase) error
-	RemovePgDogDatabase(ctx context.Context, name string) error
-	RegisterPgDogUser(ctx context.Context, user *domain.PgDogUser) error
-	// RemovePgDogUsers drops every user routed to the logical database, so a
-	// deprovision never leaves a stale (user, database) pair behind.
-	RemovePgDogUsers(ctx context.Context, database string) error
-}
-
 // NatsCredentialStore persists the per-principal NATS bus credentials the
 // auth_callout responder authenticates against (EXC-324). Only bcrypt
 // hashes are kept; the plaintext lives in the principal's k8s Secret.

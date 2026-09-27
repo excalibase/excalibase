@@ -10,9 +10,7 @@ import (
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
-	"github.com/excalibase/provisioning-poc/internal/natsauth"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/lib/pq"
 )
 
@@ -89,166 +87,6 @@ func TestOperatorSetup_GetStatus(t *testing.T) {
 	}
 }
 
-// --- PgDogNotifier ---
-//
-// Empty natsURL → no NATS connection, all publish() calls become no-ops.
-// We can drive RegisterCluster/DeregisterCluster against a fake store and
-// verify both happy path and the early-return when store==nil.
-
-type fakePgDogStore struct {
-	databases            []domain.PgDogDatabase
-	users                []domain.PgDogUser
-	removedDatabases     []string
-	removedUserDatabases []string
-	registerErr          error
-	removeErr            error
-	// removeDatabaseErr fails only the database removal, so the two
-	// failures in DeregisterCluster can be told apart.
-	removeDatabaseErr error
-}
-
-func (f *fakePgDogStore) RegisterPgDogDatabase(_ context.Context, d *domain.PgDogDatabase) error {
-	if f.registerErr != nil {
-		return f.registerErr
-	}
-	f.databases = append(f.databases, *d)
-	return nil
-}
-
-func (f *fakePgDogStore) RemovePgDogDatabase(_ context.Context, name string) error {
-	if f.removeErr != nil {
-		return f.removeErr
-	}
-	if f.removeDatabaseErr != nil {
-		return f.removeDatabaseErr
-	}
-	f.removedDatabases = append(f.removedDatabases, name)
-	return nil
-}
-
-func (f *fakePgDogStore) RegisterPgDogUser(_ context.Context, u *domain.PgDogUser) error {
-	if f.registerErr != nil {
-		return f.registerErr
-	}
-	f.users = append(f.users, *u)
-	return nil
-}
-
-func (f *fakePgDogStore) RemovePgDogUsers(_ context.Context, database string) error {
-	if f.removeErr != nil {
-		return f.removeErr
-	}
-	f.removedUserDatabases = append(f.removedUserDatabases, database)
-	return nil
-}
-
-var testPgDogAppRole = []PgDogRole{{Name: "excalibase_app", Password: "p"}}
-
-func TestPgDogNotifier_NewWithEmptyURL(t *testing.T) {
-	n, err := NewPgDogNotifier(nil, "")
-	if err != nil {
-		t.Fatalf("expected no error for empty natsURL, got %v", err)
-	}
-	if n == nil {
-		t.Fatal("notifier should be non-nil even with no NATS")
-	}
-	// Close on a notifier without a NATS conn must be safe.
-	n.Close()
-}
-
-func TestPgDogNotifier_NewWithUnreachableBusKeepsRetrying(t *testing.T) {
-	// With the shared dial options an unreachable bus is a state, not a
-	// construction failure: the notifier comes up disconnected and keeps
-	// retrying, instead of taking the control plane down with it.
-	opts, err := natsauth.ClientOptions(natsauth.PrincipalProvisioning, "", "CDC")
-	if err != nil {
-		t.Fatalf("ClientOptions: %v", err)
-	}
-	n, err := NewPgDogNotifier(nil, "nats://127.0.0.1:1", opts...)
-	if err != nil {
-		t.Fatalf("construction failed against an unreachable bus: %v", err)
-	}
-	defer n.Close()
-	if n.Connected() {
-		t.Error("notifier reports connected against an unreachable bus")
-	}
-}
-
-func TestPgDogNotifier_NewWithMalformedURLStillFails(t *testing.T) {
-	// A URL that cannot be parsed is a configuration error, not a transient
-	// outage, and must not be retried silently forever.
-	if _, err := NewPgDogNotifier(nil, "://nope"); err == nil {
-		t.Error("expected a connect error for a malformed NATS URL")
-	}
-}
-
-func TestPgDogNotifier_RegisterCluster_NilStore(t *testing.T) {
-	n, _ := NewPgDogNotifier(nil, "")
-	// store==nil branch returns nil without attempting any work.
-	if err := n.RegisterCluster(context.Background(), "p", "ns", "db", testPgDogAppRole); err != nil {
-		t.Errorf("expected nil error when store is nil, got %v", err)
-	}
-}
-
-func TestPgDogNotifier_RegisterCluster_HappyPath(t *testing.T) {
-	store := &fakePgDogStore{}
-	n, _ := NewPgDogNotifier(store, "")
-
-	roles := []PgDogRole{{Name: "excalibase_app", Password: testutil.FixtureSecret("pgdog-cluster")}}
-	if err := n.RegisterCluster(context.Background(), "proj-1", "ns-1", "appdb", roles); err != nil {
-		t.Fatalf("RegisterCluster: %v", err)
-	}
-	// Two databases (primary + replica) and one user must be persisted.
-	if len(store.databases) != 2 {
-		t.Errorf("expected 2 databases, got %d", len(store.databases))
-	}
-	if len(store.users) != 1 {
-		t.Errorf("expected 1 user, got %d", len(store.users))
-	}
-	// Primary host should be the -rw service hostname.
-	want := "proj-1-postgres-rw.ns-1.svc.cluster.local"
-	if store.databases[0].Host != want {
-		t.Errorf("primary host: got %q want %q", store.databases[0].Host, want)
-	}
-}
-
-func TestPgDogNotifier_RegisterCluster_StoreError(t *testing.T) {
-	store := &fakePgDogStore{registerErr: errors.New("db down")}
-	n, _ := NewPgDogNotifier(store, "")
-
-	err := n.RegisterCluster(context.Background(), "p", "ns", "db", testPgDogAppRole)
-	if err == nil {
-		t.Error("expected error when store.RegisterPgDogDatabase fails")
-	}
-}
-
-func TestPgDogNotifier_DeregisterCluster_NilStore(t *testing.T) {
-	n, _ := NewPgDogNotifier(nil, "")
-	if err := n.DeregisterCluster(context.Background(), "p"); err != nil {
-		t.Errorf("expected nil for nil-store path, got %v", err)
-	}
-}
-
-func TestPgDogNotifier_DeregisterCluster_ReportsDatabaseRemovalError(t *testing.T) {
-	store := &fakePgDogStore{removeDatabaseErr: errors.New("gone wrong")}
-	n, _ := NewPgDogNotifier(store, "")
-
-	if err := n.DeregisterCluster(context.Background(), "p"); err == nil {
-		t.Error("a route left in the gateway must be reported")
-	}
-}
-
-func TestPgDogNotifier_DeregisterCluster_ReportsStoreErrors(t *testing.T) {
-	// A route left in the gateway still points at the tenant's database, so
-	// the failure reaches the caller rather than a log line.
-	store := &fakePgDogStore{removeErr: errors.New("transient")}
-	n, _ := NewPgDogNotifier(store, "")
-
-	if err := n.DeregisterCluster(context.Background(), "p"); err == nil {
-		t.Error("Deregister must report store errors")
-	}
-}
-
 // --- ProvisioningService setters / getters ---
 //
 // These were 0% because nothing else in service tests actually wires them.
@@ -279,7 +117,6 @@ func TestProvisioningService_Setters_NoPanic(t *testing.T) {
 
 	// Each setter is a one-line assignment — call once just to flip
 	// the field and prove the method exists / signatures compile.
-	svc.SetPgDogNotifier(nil)
 	svc.SetOrgStore(nil)
 	svc.SetSelfHostedMode(true)
 	svc.SetDockerClient(nil)

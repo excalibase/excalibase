@@ -137,7 +137,7 @@ curl -X DELETE -H "Authorization: Bearer $PAT" \
 
 `DELETE /api/provision/<projectId>/` runs the teardown and only removes the
 project record once every step is observed complete: the tenant watcher is
-stopped, NATS credentials revoked, the PgDog routes removed, the database
+stopped, NATS credentials revoked, the database
 Cluster deleted **and waited out**, the namespace deleted and waited until no
 namespace, pod or PVC carrying the project id is left, backups purged if that
 was asked for, and the vault prefix emptied.
@@ -410,8 +410,7 @@ through:
 3. The instance row is saved `ACTIVE`, carrying the source's org, tier and
    deployment mode plus `restoredFromProjectId` / `restoredFromBackupId` so
    support can trace where the data came from.
-4. The project is registered with PgDog, the project-created event is
-   published, and a `project_activity` marker is written so the new project is
+4. The project-created event is published, and a `project_activity` marker is written so the new project is
    not a candidate for idle-pause.
 
 So `GET /api/provision/{restoredProjectId}/`, `POST /api/schema/{restoredProjectId}/query`,
@@ -441,7 +440,7 @@ curl -X DELETE -H "Authorization: Bearer $PAT" -H 'Content-Type: application/jso
 
 What happens, in order:
 
-1. PgDog deregistration, cluster/container deletion, vault `projects/{id}/`
+1. Cluster/container deletion, vault `projects/{id}/`
    sweep — exactly as without the flag.
 2. Only then every object under the project's backup prefix is deleted, in
    list+delete batches of at most 1000 keys (`ListObjectsV2` +
@@ -886,8 +885,7 @@ fallback.
 | Principal | Publish | Subscribe |
 |---|---|---|
 | `svc-graphql` | `$JS.API.INFO`, `$JS.API.STREAM.INFO.CDC`, `$JS.API.CONSUMER.>`, `$JS.ACK.>` | `cdc.>`, `policies.>`, `_INBOX_svc-graphql.>` |
-| `svc-provisioning` | `policies.>`, `pgdog.>`, `$JS.API.INFO`, `$JS.API.STREAM.>` | `_INBOX_svc-provisioning.>` |
-| `svc-pgdog` | *(deny all)* | `pgdog.config.reload` |
+| `svc-provisioning` | `policies.>`, `$JS.API.INFO`, `$JS.API.STREAM.>` | `_INBOX_svc-provisioning.>` |
 | `tenant-watcher:<projectId>` | `cdc.<projectId>.>`, `$JS.API.INFO`, `$JS.API.STREAM.INFO.CDC` | `_INBOX_tw_<projectId>.>` |
 
 A per-tenant watcher therefore cannot subscribe to anything — not `cdc.>`,
@@ -905,7 +903,7 @@ Environment on provisioning:
 | `NATS_AUTH_CALLOUT_USER` / `_PASSWORD` | the credential the responder itself connects with (in the `AUTH` account, exempt from the callout) |
 | `NATS_AUTH_CALLOUT_ACCOUNT` | account clients are placed into (default `APP`) |
 | `NATS_USER` / `NATS_PASSWORD` | provisioning's own bus credential (`svc-provisioning`) |
-| `NATS_GRAPHQL_PASSWORD` / `NATS_PGDOG_PASSWORD` | the other services' passwords; provisioning hashes them into `nats_credentials` at every boot, so the Secret is the single source of truth and rotation is "change the Secret, restart" |
+| `NATS_GRAPHQL_PASSWORD` | graphql's password; provisioning hashes them into `nats_credentials` at every boot, so the Secret is the single source of truth and rotation is "change the Secret, restart" |
 | `NATS_CDC_STREAM` | shared JetStream stream name (default `CDC`) |
 
 Tenant credentials are minted at provision time, rotated on re-provision and

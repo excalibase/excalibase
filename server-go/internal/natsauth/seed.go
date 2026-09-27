@@ -24,7 +24,7 @@ func SeedServicePrincipals(ctx context.Context, store SeedStore, passwords map[s
 	if store == nil {
 		return fmt.Errorf("nats seed: credential store required")
 	}
-	for _, principal := range []string{PrincipalProvisioning, PrincipalGraphQL, PrincipalPgDog} {
+	for _, principal := range []string{PrincipalProvisioning, PrincipalGraphQL} {
 		password := passwords[principal]
 		if password == "" {
 			continue

@@ -329,32 +329,6 @@ func TestCallout_GraphQLReadsEveryProjectButWritesNone(t *testing.T) {
 	if publishAllowed(t, conn, "cdc."+projectA+".public.orders") {
 		t.Error("graphql published into a tenant CDC subject")
 	}
-	if publishAllowed(t, conn, SubjectPgDogReload) {
-		t.Error("graphql published a PgDog reload")
-	}
-}
-
-func TestCallout_PgDogHearsOnlyItsReloadSubject(t *testing.T) {
-	env := setupCalloutEnv(t, PrincipalPgDog, PrincipalProvisioning)
-	pgdog := env.mustConnectAs(t, PrincipalPgDog)
-
-	if !subscribeAllowed(t, pgdog, SubjectPgDogReload) {
-		t.Error("pgdog denied subscribe on its reload subject")
-	}
-	if subscribeAllowed(t, pgdog, "cdc.>") {
-		t.Error("pgdog subscribed to tenant CDC")
-	}
-	if publishAllowed(t, pgdog, SubjectPgDogReload) {
-		t.Error("pgdog published its own reload signal")
-	}
-
-	provisioning := env.mustConnectAs(t, PrincipalProvisioning)
-	if !publishAllowed(t, provisioning, SubjectPgDogReload) {
-		t.Error("provisioning denied publish on the reload subject")
-	}
-	if subscribeAllowed(t, provisioning, "cdc.>") {
-		t.Error("provisioning subscribed to tenant CDC")
-	}
 }
 
 // TestCallout_UnknownAndAnonymousConnectionsAreRefused proves the callout

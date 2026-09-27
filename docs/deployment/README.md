@@ -64,7 +64,7 @@ These apply to every matrix. Matrix-specific pages cover the rest.
 | `PLATFORM_DB_URL` | **yes** | — | Postgres DSN for the platform store. Required in both modes (no SQLite fallback). |
 | `VAULT_URL` | optional | — | If set, use remote vault over HTTP instead of embedded. |
 | `VAULT_PAT` | with `VAULT_URL` | — | Personal access token for remote vault. |
-| `NATS_URL` | optional | — | NATS server for PgDog reload signals. |
+| `NATS_URL` | optional | — | NATS server for policy-change events and CDC. |
 | `DENO_RUNTIME_IMAGE` | no | `excalibase/deno-runtime:latest` | Image used for per-project edge function runtimes. |
 | `DENO_NAMESPACE` | no | `serverless` | Namespace for the shared-fallback Deno runtime. |
 | `DENO_RUNTIME_SECRET` | yes (for edge functions) | — | HMAC secret between platform and Deno runtime. |

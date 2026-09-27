@@ -54,7 +54,7 @@ func TestPermissionsForProvisioning(t *testing.T) {
 	perms := permsOrFatal(t, PrincipalProvisioning)
 
 	assertAllows(t, "provisioning pub", perms.Publish, "policies.>")
-	assertAllows(t, "provisioning pub", perms.Publish, "pgdog.>")
+	assertDenies(t, "provisioning pub", perms.Publish, "pgdog.>")
 	// Also mints/verifies the shared CDC stream (nats-stream-init).
 	assertAllows(t, "provisioning pub", perms.Publish, "$JS.API.STREAM.>")
 
@@ -65,17 +65,10 @@ func TestPermissionsForProvisioning(t *testing.T) {
 	}
 }
 
-func TestPermissionsForPgDog(t *testing.T) {
-	perms := permsOrFatal(t, PrincipalPgDog)
-
-	if len(perms.Publish) != 0 {
-		t.Errorf("pgdog publish = %v, want none", perms.Publish)
+func TestPermissionsRefuseThePgDogPrincipal(t *testing.T) {
+	if _, err := PermissionsFor("svc-pgdog", testStream); err == nil {
+		t.Error("svc-pgdog still resolves to permissions")
 	}
-	if len(perms.Subscribe) != 1 || perms.Subscribe[0] != SubjectPgDogReload {
-		t.Errorf("pgdog subscribe = %v, want only %q", perms.Subscribe, SubjectPgDogReload)
-	}
-	assertDenies(t, "pgdog sub", perms.Subscribe, "pgdog.>")
-	assertDenies(t, "pgdog sub", perms.Subscribe, "cdc.>")
 }
 
 func TestPermissionsForTenantWatcherIsProjectScoped(t *testing.T) {
@@ -150,9 +143,6 @@ func TestInboxPrefixFor(t *testing.T) {
 	}
 	if got := InboxPrefixFor(PrincipalGraphQL); got != "_INBOX_svc-graphql" {
 		t.Errorf("graphql inbox prefix = %q", got)
-	}
-	if got := InboxPrefixFor(PrincipalPgDog); got != "" {
-		t.Errorf("pgdog inbox prefix = %q, want none", got)
 	}
 	if got := InboxPrefixFor("svc-attacker"); got != "" {
 		t.Errorf("unknown principal inbox prefix = %q, want none", got)

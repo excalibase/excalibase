@@ -22,7 +22,6 @@ import (
 //   2. Vault paths the auth-service reads (pki/signing/* + JWT KIDs)
 //   3. NATS CDC subject pattern: "cdc.{projectId}.*" — flat namespace,
 //      projectId is the only opaque token, no orgSlug prefix
-//   4. PgDog config table column shape (consumed by PgDog operator)
 //
 // Any of these wire-shape decisions should land in CLAUDE.md / a
 // project memory before the test changes — see
@@ -62,9 +61,8 @@ func TestContract_ProjectID_FormatStable(t *testing.T) {
 }
 
 func TestContract_ProjectID_DNSCompliant(t *testing.T) {
-	// projectIds are used directly as Kubernetes namespace names AND
-	// as PgDog config row primary keys, so they must be DNS-1123
-	// label compliant: lowercase alphanumeric + dash, ≤63 chars,
+	// projectIds are used directly as Kubernetes namespace names, so
+	// they must be DNS-1123 label compliant: lowercase alphanumeric + dash, ≤63 chars,
 	// must start AND end with alphanumeric.
 	dns1123 := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	for i := 0; i < 50; i++ {
@@ -135,15 +133,6 @@ func TestContract_NATS_NoOrgSlug(t *testing.T) {
 	}
 	if parts[1] != projectID {
 		t.Errorf("second segment must be projectId, not orgSlug: got %q want %q", parts[1], projectID)
-	}
-}
-
-func TestContract_PgDogReloadSubject(t *testing.T) {
-	// PgDog subscribes to "pgdog.config.reload" (per the fork's
-	// config-reload-on-NATS feature). If this changes, the deployed
-	// PgDog won't pick up changes to pgdog_databases / pgdog_users.
-	if pgdogReloadSubject != "pgdog.config.reload" {
-		t.Errorf("pgdog reload subject changed: got %q — must coordinate with pgdog fork before merging", pgdogReloadSubject)
 	}
 }
 

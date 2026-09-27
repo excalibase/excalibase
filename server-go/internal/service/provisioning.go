@@ -30,7 +30,6 @@ type ProvisioningService struct {
 	vault          vaultclient.VaultClient  // optional
 	k8sClient      k8s.KubeClient           // optional, for role creation via pod exec
 	dockerClient   provisioner.DockerClient // optional, for role creation via container exec (Docker mode)
-	pgdog          *PgDogNotifier           // optional, for PgDog config registration
 	natsCreds      *NatsCredentialMinter    // optional, for project-scoped NATS credentials (EXC-324)
 	selfHostedMode bool                     // skip tier enforcement
 	// publicationName is the CDC publication created during role setup.
@@ -120,10 +119,6 @@ func NewProvisioningService(store storage.InstanceStore, factory *provisioner.Fa
 
 func (s *ProvisioningService) SetVault(v vaultclient.VaultClient) {
 	s.vault = v
-}
-
-func (s *ProvisioningService) SetPgDogNotifier(n *PgDogNotifier) {
-	s.pgdog = n
 }
 
 // SetNatsCredentialMinter enables project-scoped NATS credentials. Nil keeps
@@ -901,7 +896,7 @@ func (s *ProvisioningService) backupKeyPrefix() (string, bool) {
 	return s.backupPurger.DockerKeyPrefix(), true
 }
 
-// deletionSteps is the teardown order. NATS and PgDog go first so nothing
+// deletionSteps is the teardown order. NATS goes first so nothing
 // reconnects to a database that is about to disappear; the provisioner then
 // removes the database resources and waits them out; backups are purged only
 // once those resources are gone; the credentials that reach them are removed
@@ -917,7 +912,6 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	}
 	steps = append(steps,
 		deletionStep{domain.DeletionStepRevokeNats, s.revokeNatsCredentials},
-		deletionStep{domain.DeletionStepDeregisterPgDog, s.deregisterPgDog},
 		deletionStep{domain.DeletionStepDeleteResources, s.deleteDatabaseResources},
 	)
 	if deleteBackups {
@@ -968,15 +962,6 @@ func (s *ProvisioningService) releasePublicEndpoint(ctx context.Context, inst *d
 // watcher pod cannot reconnect and keep publishing after the project is gone.
 func (s *ProvisioningService) revokeNatsCredentials(ctx context.Context, inst *domain.DatabaseInstance) error {
 	return s.natsCreds.RevokeProject(ctx, inst.ProjectID)
-}
-
-// deregisterPgDog removes the project from the database gateway so no pooled
-// connection survives its database.
-func (s *ProvisioningService) deregisterPgDog(ctx context.Context, inst *domain.DatabaseInstance) error {
-	if s.pgdog == nil {
-		return nil
-	}
-	return s.pgdog.DeregisterCluster(ctx, inst.ProjectID)
 }
 
 // deleteDatabaseResources hands teardown to the provisioner, which returns

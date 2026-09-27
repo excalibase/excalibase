@@ -159,8 +159,7 @@ func runServer(cfg config.AppConfig) {
 
 	fnHandler := buildFunctionHandler(cfg, vc, store, sqlStore, k8sClient, projectDB)
 
-	provSvc, lifecycleClaimer, provCleanup := buildProvisioningService(cfg, store, sqlStore, factory, k8sClient, vc, dockerClientRef)
-	defer provCleanup()
+	provSvc, lifecycleClaimer := buildProvisioningService(cfg, store, sqlStore, factory, k8sClient, vc, dockerClientRef)
 	// Function invocation caches "is this project live" for a few seconds so
 	// it does not read the platform database per request; this tells it the
 	// moment a project is claimed for teardown.
@@ -792,8 +791,7 @@ func wireProjectAuthSettings(sqlStore storage.PlatformStore, provHandler *handle
 }
 
 // buildProvisioningService wires the central provisioning service plus its
-// optional collaborators (backup defaults, PgDog notifier, etc). Returns the
-// service and a cleanup function for any goroutine-owning collaborators.
+// optional collaborators (backup defaults, credential verifier, etc).
 func buildProvisioningService(
 	cfg config.AppConfig,
 	store storage.InstanceStore,
@@ -802,7 +800,7 @@ func buildProvisioningService(
 	k8sClient k8s.KubeClient,
 	vc vaultclient.VaultClient,
 	dockerClientRef provisioner.DockerClient,
-) (*service.ProvisioningService, service.ProjectOperationClaimer, func()) {
+) (*service.ProvisioningService, service.ProjectOperationClaimer) {
 	var lifecycleClaimer service.ProjectOperationClaimer
 	provSvc := service.NewProvisioningService(store, factory, k8sClient)
 	provSvc.SetVault(vc)
@@ -849,9 +847,7 @@ func buildProvisioningService(
 	provSvc.SetLokiURL(cfg.LokiURL)
 
 	wireNatsCredentialMinter(sqlStore, provSvc)
-
-	cleanup := wirePgDogNotifier(cfg, sqlStore, provSvc)
-	return provSvc, lifecycleClaimer, cleanup
+	return provSvc, lifecycleClaimer
 }
 
 // wireNatsCredentialMinter lets provisioning issue project-scoped bus
@@ -886,7 +882,6 @@ func startNatsAuthCallout(cfg config.AppConfig, sqlStore storage.PlatformStore) 
 	if err := natsauth.SeedServicePrincipals(context.Background(), credStore, map[string]string{
 		natsauth.PrincipalProvisioning: cfg.NatsPassword,
 		natsauth.PrincipalGraphQL:      cfg.NatsGraphQLPassword,
-		natsauth.PrincipalPgDog:        cfg.NatsPgDogPassword,
 	}); err != nil {
 		log.Printf("WARN: NATS service credentials not seeded: %v", err)
 	}
@@ -952,29 +947,6 @@ func backupDefaults(cfg config.AppConfig) *service.BackupDefaults {
 		Bucket:          cfg.BackupBucket,
 		Region:          cfg.BackupRegion,
 	}
-}
-
-// wirePgDogNotifier returns a cleanup func that closes the notifier on shutdown,
-// or a no-op when prerequisites (Postgres store + NATS) are unmet.
-func wirePgDogNotifier(cfg config.AppConfig, sqlStore storage.PlatformStore, provSvc *service.ProvisioningService) func() {
-	noop := func() {
-		// no-op cleanup: notifier was never started, nothing to close.
-	}
-	if cfg.PlatformDBURL == "" || cfg.NatsURL == "" {
-		return noop
-	}
-	pgStore, ok := sqlStore.(storage.PgDogConfigStore)
-	if !ok {
-		return noop
-	}
-	pgdogNotifier, err := service.NewPgDogNotifier(pgStore, cfg.NatsURL, provisioningNatsOptions(cfg)...)
-	if err != nil {
-		log.Printf("WARN: pgdog notifier: %v", err)
-		return noop
-	}
-	provSvc.SetPgDogNotifier(pgdogNotifier)
-	log.Println("PgDog notifier enabled (NATS + platform-db)")
-	return func() { pgdogNotifier.Close() }
 }
 
 type handlerDepsArgs struct {

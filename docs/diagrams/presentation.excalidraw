@@ -2846,13 +2846,13 @@
       "height": 54,
       "strokeColor": "#5c940d",
       "backgroundColor": "transparent",
-      "text": "PgDog Pooler \u00b7 NATS Event Bus",
+      "text": "NATS Event Bus",
       "fontSize": 15,
       "fontFamily": 2,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "r100087",
-      "originalText": "PgDog Pooler \u00b7 NATS Event Bus",
+      "originalText": "NATS Event Bus",
       "lineHeight": 1.35
     },
     {

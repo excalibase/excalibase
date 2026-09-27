@@ -70,7 +70,7 @@ type DockerBackupAdapter struct {
 	instances storage.InstanceStore
 	docker    provisioner.DockerClient // optional; required for Restore
 	// registrar finishes a restore the way a provision ends: roles, vault,
-	// instance row, PgDog, events. Required for Restore — persisting a row
+	// instance row, events. Required for Restore — persisting a row
 	// without the vault write is what made restored projects unusable.
 	registrar ProjectRegistrar
 	// probe proves the restored container serves queries with the

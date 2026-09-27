@@ -634,13 +634,13 @@
       "height": 152,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
-      "text": "\u2713 SUPPORTED\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nSame as self-hosted\n+ Tier enforcement\n+ Billing tracking\n+ Multi-tenant isolation\n+ PgDog pooler",
+      "text": "\u2713 SUPPORTED\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nSame as self-hosted\n+ Tier enforcement\n+ Billing tracking\n+ Multi-tenant isolation",
       "fontSize": 11,
       "fontFamily": 2,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "cell-1-0",
-      "originalText": "\u2713 SUPPORTED\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nSame as self-hosted\n+ Tier enforcement\n+ Billing tracking\n+ Multi-tenant isolation\n+ PgDog pooler",
+      "originalText": "\u2713 SUPPORTED\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nSame as self-hosted\n+ Tier enforcement\n+ Billing tracking\n+ Multi-tenant isolation",
       "lineHeight": 1.35
     },
     {

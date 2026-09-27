@@ -35,7 +35,6 @@ func TestSeedServicePrincipalsStoresHashesOnly(t *testing.T) {
 	passwords := map[string]string{
 		PrincipalProvisioning: "prov-pw",
 		PrincipalGraphQL:      "gql-pw",
-		PrincipalPgDog:        "pgdog-pw",
 	}
 
 	if err := SeedServicePrincipals(context.Background(), store, passwords); err != nil {

@@ -2,9 +2,8 @@
 //
 // Excalibase-graphql subscribes to "policies.{projectId}.changed" to
 // invalidate its in-process PolicyCache when an operator modifies
-// policies via the provisioning REST endpoints. The publisher matches
-// the shape of [PgDogNotifier] — nil-tolerant, lazy, never blocks the
-// caller on NATS errors.
+// policies via the provisioning REST endpoints. The publisher is
+// nil-tolerant, lazy and never blocks the caller on NATS errors.
 package service
 
 import (
