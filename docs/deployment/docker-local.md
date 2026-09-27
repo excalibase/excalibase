@@ -37,7 +37,7 @@ networks:
   edge:
     ipam:
       config:
-        - subnet: 172.30.250.0/28
+        - subnet: 10.203.250.0/28
 
 services:
   # Caddy terminates TLS (automatic Let's Encrypt) and fronts the HTTP
@@ -73,7 +73,7 @@ services:
       PUBLIC_BASE_URL: "https://api.example.com"
       STUDIO_URL: "https://studio.example.com"
       PUBLIC_PORT: "24006"
-      TRUSTED_PROXY_CIDRS: "172.30.250.0/28"
+      TRUSTED_PROXY_CIDRS: "10.203.250.0/28"
       STORAGE_PATH: /var/lib/excalibase           # vault unseal.key only
       DENO_RUNTIME_SECRET: ${DENO_RUNTIME_SECRET}
       # Docker provisioner (single-tenant; docker + cloud is refused at boot).
