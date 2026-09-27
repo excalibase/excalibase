@@ -62,6 +62,8 @@ type ProvisioningService struct {
 	// storage is not configured: there is then no blob plane to clear, and
 	// the teardown carries no purge step at all.
 	objectPurger ProjectObjectPurger
+	// appPurger removes the project's app records and their deploy history.
+	appPurger ProjectAppPurger
 	// backupPurger deletes a project's backup objects on request at
 	// deprovision time. nil means confirmDeleteBackups is refused.
 	backupPurger *BackupPurger
@@ -735,6 +737,23 @@ type ProjectObjectPurger interface {
 	PurgeProjectObjects(ctx context.Context, projectID string) (int, error)
 }
 
+// ProjectAppPurger removes every app a project holds from the platform store.
+type ProjectAppPurger interface {
+	PurgeProjectApps(projectID string) (int, error)
+}
+
+// SetAppPurger wires the removal of a deleted project's apps.
+func (s *ProvisioningService) SetAppPurger(p ProjectAppPurger) { s.appPurger = p }
+
+func (s *ProvisioningService) purgeProjectApps(_ context.Context, inst *domain.DatabaseInstance) error {
+	removed, err := s.appPurger.PurgeProjectApps(inst.ProjectID)
+	if err != nil {
+		return err
+	}
+	log.Printf("app purge for %s removed %d apps", inst.ProjectID, removed)
+	return nil
+}
+
 // SetObjectPurger wires the purge of a project's stored files. Leave it unset
 // when no object store is configured.
 func (s *ProvisioningService) SetObjectPurger(p ProjectObjectPurger) { s.objectPurger = p }
@@ -910,6 +929,10 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	// than present and failing.
 	if s.objectPurger != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteObjects, s.purgeProjectObjects})
+	}
+	// The app rows go once the namespace their workloads ran in is gone.
+	if s.appPurger != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepDeleteApps, s.purgeProjectApps})
 	}
 	return append(steps,
 		deletionStep{domain.DeletionStepDeleteVault, s.deleteVaultCredentials},

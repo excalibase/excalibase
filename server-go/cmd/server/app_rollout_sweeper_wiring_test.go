@@ -45,3 +45,14 @@ func TestWireAppLifecycle_AcceptsMissingPieces(t *testing.T) {
 	wireAppLifecycle(deploys, nil, nil)
 	wireAppLifecycle(deploys, service.NewInProcessOperationClaimer(), vaultclient.NewHTTPClient("http://vault.invalid", "pat"))
 }
+
+// A deleted project's app rows must go with it; without this wiring they outlive it.
+func TestProjectDeletion_RemovesAppsWhenWired(t *testing.T) {
+	body, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(body), "provSvc.SetAppPurger(apphost.NewPostgresAppStore(pg.DB()))") {
+		t.Error("project deletion is not wired to remove the project's apps")
+	}
+}

@@ -826,6 +826,8 @@ func buildProvisioningService(
 		lifecycleClaimer = service.NewAdvisoryOperationClaimer(
 			func(key int64) storage.LeaderLock { return pgstore.NewAdvisoryLock(pg.DB(), key) })
 		provSvc.SetOperationClaimer(lifecycleClaimer)
+		// A deleted project's apps go with it, whether or not hosting is on now.
+		provSvc.SetAppPurger(apphost.NewPostgresAppStore(pg.DB()))
 	}
 
 	if err := provSvc.SetBackupDefaults(backupDefaults(cfg)); err != nil {

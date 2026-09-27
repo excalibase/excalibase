@@ -129,3 +129,33 @@ func TestPGAppStore_DeleteOnlyATornDownApp(t *testing.T) {
 		t.Fatalf("second delete: err = %v, want ErrAppNotFound", err)
 	}
 }
+
+func TestPGAppStore_PurgeProjectRemovesItsAppsAndHistoryOnly(t *testing.T) {
+	s, app := createdApp(t, "proj_purge_gone", "app_purge_gone")
+	deploys := apphost.NewPostgresDeployStore(sharedDB)
+	if err := deploys.Create(sampleDeploy(app.ProjectID, app.ID, "dev")); err != nil {
+		t.Fatal(err)
+	}
+	_, other := createdApp(t, "proj_purge_kept", "app_purge_kept")
+
+	removed, err := s.PurgeProjectApps(app.ProjectID)
+	if err != nil || removed != 1 {
+		t.Fatalf("PurgeProjectApps = %d, %v", removed, err)
+	}
+	if got, _ := s.Get(app.ProjectID, app.ID); got != nil {
+		t.Error("the app row is still there")
+	}
+	var history int
+	if err := sharedDB.QueryRow(`SELECT count(*) FROM app_deploys WHERE project_id = $1`, app.ProjectID).Scan(&history); err != nil || history != 0 {
+		t.Errorf("deploy history left: %d, %v", history, err)
+	}
+	if got, _ := s.Get(other.ProjectID, other.ID); got == nil {
+		t.Error("another project's app went too")
+	}
+	if removed, err := s.PurgeProjectApps(app.ProjectID); err != nil || removed != 0 {
+		t.Fatalf("a repeated purge = %d, %v", removed, err)
+	}
+	if _, err := s.PurgeProjectApps("bad id!"); err == nil {
+		t.Fatal("an invalid project id must be refused")
+	}
+}

@@ -291,6 +291,23 @@ func (s *PostgresAppStore) Delete(projectID, id string) error {
 	}
 }
 
+// PurgeProjectApps removes every app of a project being deleted, with its
+// deploy history, once the namespace its workloads ran in is gone.
+func (s *PostgresAppStore) PurgeProjectApps(projectID string) (int, error) {
+	if err := ValidateProjectID(projectID); err != nil {
+		return 0, err
+	}
+	res, err := s.db.Exec(`DELETE FROM apps WHERE project_id = $1`, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("purge project apps: %w", err)
+	}
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("purge project apps: %w", err)
+	}
+	return int(removed), nil
+}
+
 func decodeApp(blob []byte) (*App, error) {
 	var app App
 	if err := json.Unmarshal(blob, &app); err != nil {

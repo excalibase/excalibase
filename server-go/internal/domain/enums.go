@@ -152,6 +152,7 @@ const (
 	DeletionStepDeleteResources = "DELETE_DATABASE_RESOURCES"
 	DeletionStepDeleteBackups   = "DELETE_BACKUPS"
 	DeletionStepDeleteObjects   = "DELETE_PROJECT_OBJECTS"
+	DeletionStepDeleteApps      = "DELETE_APPS"
 	DeletionStepDeleteVault     = "DELETE_VAULT_CREDENTIALS"
 	DeletionStepDeleteRecord    = "DELETE_PROJECT_RECORD"
 )
