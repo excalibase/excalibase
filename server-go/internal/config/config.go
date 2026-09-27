@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 )
@@ -50,6 +52,9 @@ type AppConfig struct {
 	StudioURL         string // Studio origin that emailed verification and reset links open
 	AuthInternalURL   string // excalibase-auth inside the platform network; SDK key management calls it
 	RegistrationMode  string // "open" (default) or "invite" — invite closes open studio signup
+	// TrustedProxyCIDRs are the only peers whose X-Forwarded-For is believed
+	// (the edge); empty means client addresses come from the TCP peer alone.
+	TrustedProxyCIDRs []*net.IPNet
 
 	// ExposureEnforced is the installation-wide kill switch for the table
 	// exposure filter (EXC-400). Enforcement is ON for every project and
@@ -329,6 +334,7 @@ func Load() AppConfig {
 		NatsCalloutPassword:      os.Getenv("NATS_AUTH_CALLOUT_PASSWORD"),
 		NatsCalloutIssuerSeed:    os.Getenv("NATS_AUTH_CALLOUT_ISSUER_SEED"),
 		RegistrationMode:         envOr("REGISTRATION_MODE", "open"),
+		TrustedProxyCIDRs:        envTrustedProxyCIDRs("TRUSTED_PROXY_CIDRS"),
 		ExposureEnforced:         exposureEnforced(),
 		DBEndpointDomain:         envDBEndpointDomain("EXCALIBASE_DB_ENDPOINT_DOMAIN"),
 		DBEndpointPorts:          envDBEndpointPortRange("EXCALIBASE_DB_ENDPOINT_PORT_RANGE"),
@@ -710,4 +716,14 @@ func envInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// envTrustedProxyCIDRs fails fast on a malformed list: silently trusting
+// nobody would collapse every client behind the edge into one limiter bucket.
+func envTrustedProxyCIDRs(key string) []*net.IPNet {
+	nets, err := clientaddr.ParseTrustedProxies(os.Getenv(key))
+	if err != nil {
+		log.Fatalf("%s: %v", key, err)
+	}
+	return nets
 }

@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 )
 
 const testRateLimitKey = "X-Test-Key"
@@ -131,11 +134,52 @@ func TestPerIP_StripsPort(t *testing.T) {
 	}
 }
 
-func TestPerIP_HonoursForwardedFor(t *testing.T) {
+func TestPerIP_IgnoresAClientWrittenForwardedFor(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
-	r.RemoteAddr = "10.0.0.1:1234"
-	r.Header.Set("X-Forwarded-For", "203.0.113.5, 10.0.0.1")
-	if got := PerIP(r); got != "203.0.113.5" {
-		t.Errorf("expected 203.0.113.5, got %q", got)
+	r.RemoteAddr = "203.0.113.7:1234"
+	r.Header.Set("X-Forwarded-For", "198.51.100.9")
+	if got := PerIP(r); got != "203.0.113.7" {
+		t.Errorf("expected the peer 203.0.113.7, got %q", got)
+	}
+}
+
+func TestPerIP_KeysOnTheAddressResolvedFromTheEdge(t *testing.T) {
+	trusted, err := clientaddr.ParseTrustedProxies("10.42.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	h := clientaddr.Middleware(trusted)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got = PerIP(r)
+	}))
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "10.42.0.5:1234"
+	r.Header.Set("X-Forwarded-For", "6.6.6.6, 203.0.113.5")
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if got != "203.0.113.5" {
+		t.Errorf("expected the edge-appended 203.0.113.5, got %q", got)
+	}
+}
+
+// A client rotating a forged X-Forwarded-For through the edge still lands in
+// one bucket: the edge appends the real peer and only that hop is believed.
+func TestRateLimit_ForgedForwardedForDoesNotEscapeTheBucket(t *testing.T) {
+	trusted, err := clientaddr.ParseTrustedProxies("10.42.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := clientaddr.Middleware(trusted)(RateLimit(PerIP, 3, time.Minute)(ok))
+	codes := make([]int, 0, 5)
+	for i := 0; i < 5; i++ {
+		r := httptest.NewRequest("POST", "/api/auth/login", nil)
+		r.RemoteAddr = "10.42.0.5:1234"
+		r.Header.Set("X-Forwarded-For", fmt.Sprintf("192.0.2.%d, 203.0.113.5", i))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		codes = append(codes, w.Code)
+	}
+	if codes[3] != http.StatusTooManyRequests || codes[4] != http.StatusTooManyRequests {
+		t.Errorf("forged hops must share the client's bucket; codes %v", codes)
 	}
 }

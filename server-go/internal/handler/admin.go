@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -453,11 +454,5 @@ func (h *AdminHandler) auditFireAndForget(r *http.Request, e *domain.AuditEntry)
 }
 
 func clientIP(r *http.Request) string {
-	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		if i := strings.Index(v, ","); i > 0 {
-			return strings.TrimSpace(v[:i])
-		}
-		return strings.TrimSpace(v)
-	}
-	return r.RemoteAddr
+	return clientaddr.FromRequest(r)
 }
