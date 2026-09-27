@@ -70,6 +70,8 @@ export interface DatabaseInstance {
   backupEnabled: boolean;
   // On for every new project; only an org Owner may turn it off.
   deletionProtection?: boolean;
+  // Set while the project is PENDING_DELETION: when it is permanently deleted.
+  deletionDueAt?: string;
   backupSchedule?: string;
   backupRetentionDays?: number;
   metricsEndpoint?: string;

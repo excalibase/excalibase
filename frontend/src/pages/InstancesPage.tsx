@@ -21,7 +21,7 @@ export function InstancesPage() {
 
   const handleDelete = async (e: React.MouseEvent, projectId: string) => {
     e.stopPropagation();
-    if (confirm(`Delete ${projectId}? This cannot be undone.`)) {
+    if (confirm(`Delete ${projectId}? It is stopped now and permanently deleted after 7 days; an org owner can cancel until then.`)) {
       await deprovision.mutateAsync(projectId);
     }
   };

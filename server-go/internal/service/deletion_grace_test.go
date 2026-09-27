@@ -301,3 +301,27 @@ func TestPurgeDueRetainedBackups(t *testing.T) {
 		t.Fatal("the record goes once its backups are purged")
 	}
 }
+
+// A resuming project holds data: it is never deleted at once, and its
+// schedule waits until it settles.
+func TestScheduleDeletionOfAResumingProjectIsRefusedNotDeleted(t *testing.T) {
+	h := newGraceHarness(t)
+	row := h.row(t)
+	row.Status = string(domain.StatusResuming)
+	_ = h.store.Update(row)
+	h.pauser.err = nil
+	h.pauser.store = nil
+	h.svc.SetDeletionPauser(noopPauser{})
+
+	if _, err := h.svc.ScheduleDeletion(context.Background(), graceProject, DeprovisionOptions{}); !errors.Is(err, storage.ErrProjectStatusChanged) {
+		t.Fatalf("got %v, want ErrProjectStatusChanged", err)
+	}
+	if h.row(t) == nil || h.row(t).Status != string(domain.StatusResuming) {
+		t.Fatal("a resuming project must be left alone")
+	}
+}
+
+// noopPauser mirrors PauseService on a project it may not pause: nothing happens.
+type noopPauser struct{}
+
+func (noopPauser) Pause(context.Context, string, string) error { return nil }

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Loader2, Server, Database, Shield, Clock, Trash2, Copy, Check, AlertTriangle, PauseCircle, PlayCircle } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../api/client';
-import { useDeprovisionDatabase, usePauseProject, useResumeProject, useSetDeletionProtection } from '../hooks/useProvisioning';
+import { useCancelDeletion, useDeprovisionDatabase, usePauseProject, useResumeProject, useSetDeletionProtection } from '../hooks/useProvisioning';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { ConnectionStrings } from '../components/ConnectionStrings';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
@@ -54,6 +54,7 @@ export function SettingsPage() {
   const [showDelete, setShowDelete] = useState(false);
   const deprovision = useDeprovisionDatabase();
   const setProtection = useSetDeletionProtection();
+  const cancelDeletion = useCancelDeletion();
   const pauseProject = usePauseProject();
   const resumeProject = useResumeProject();
   // The public host, port, TLS posture and cluster CA all come from the
@@ -199,33 +200,54 @@ const excalibase = createClient({
 
       <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4">
         <h4 className="text-sm font-medium text-red-400 mb-2">Danger Zone</h4>
-        <p className="text-xs text-text-secondary mb-3">
-          Deleting this project will permanently remove all data, backups, and configurations.
-        </p>
-        <p className="text-xs text-text-secondary mb-3" data-testid="deletion-protection-state">
-          {protectedFromDeletion
-            ? DELETION_PROTECTED_REASON
-            : 'Deletion protection is off. Any org admin can delete this project.'}
-        </p>
-        <div className="flex gap-2">
-          <button
-            onClick={() => projectId && setProtection.mutate({ projectId, enabled: !protectedFromDeletion })}
-            disabled={setProtection.isPending}
-            className="flex items-center gap-2 px-4 py-2 border border-red-500/40 text-red-400 hover:bg-red-500/10 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-            data-testid="deletion-protection-btn"
-          >
-            <Shield className="w-4 h-4" />
-            {protectedFromDeletion ? 'Turn off deletion protection' : 'Turn on deletion protection'}
-          </button>
-          <button
-            onClick={() => setShowDelete(true)}
-            disabled={protectedFromDeletion}
-            className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            data-testid="delete-project-btn"
-          >
-            <Trash2 className="w-4 h-4" /> Delete Project
-          </button>
-        </div>
+        {project.status === 'PENDING_DELETION' ? (
+          <div data-testid="deletion-scheduled">
+            <p className="text-xs text-text-secondary mb-3">
+              This project is scheduled for deletion on{' '}
+              {project.deletionDueAt ? new Date(project.deletionDueAt).toLocaleString() : 'its due date'}. Its database is
+              stopped and its data kept until then. An org owner can cancel; the project is then left paused.
+            </p>
+            <button
+              onClick={() => projectId && cancelDeletion.mutate(projectId)}
+              disabled={cancelDeletion.isPending}
+              className="flex items-center gap-2 px-4 py-2 border border-red-500/40 text-red-400 hover:bg-red-500/10 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+              data-testid="cancel-deletion-btn"
+            >
+              <Shield className="w-4 h-4" /> Cancel deletion
+            </button>
+          </div>
+        ) : (
+          <>
+            <p className="text-xs text-text-secondary mb-3" data-testid="deletion-grace-note">
+              Deleting stops this project now and permanently removes its data 7 days later. Until then an org owner can
+              cancel. Kept backups are purged 14 days after that.
+            </p>
+            <p className="text-xs text-text-secondary mb-3" data-testid="deletion-protection-state">
+              {protectedFromDeletion
+                ? DELETION_PROTECTED_REASON
+                : 'Deletion protection is off. Any org admin can delete this project.'}
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => projectId && setProtection.mutate({ projectId, enabled: !protectedFromDeletion })}
+                disabled={setProtection.isPending}
+                className="flex items-center gap-2 px-4 py-2 border border-red-500/40 text-red-400 hover:bg-red-500/10 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                data-testid="deletion-protection-btn"
+              >
+                <Shield className="w-4 h-4" />
+                {protectedFromDeletion ? 'Turn off deletion protection' : 'Turn on deletion protection'}
+              </button>
+              <button
+                onClick={() => setShowDelete(true)}
+                disabled={protectedFromDeletion}
+                className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="delete-project-btn"
+              >
+                <Trash2 className="w-4 h-4" /> Delete Project
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       <ConfirmModal
@@ -237,7 +259,7 @@ const excalibase = createClient({
           });
         }}
         title="Delete Project"
-        message={`This will permanently delete "${projectId}" and all associated data. This action cannot be undone.`}
+        message={`This stops "${projectId}" now and permanently deletes it and all associated data after 7 days. An org owner can cancel until then.`}
         confirmText={projectId}
         confirmLabel="Delete Project"
         destructive

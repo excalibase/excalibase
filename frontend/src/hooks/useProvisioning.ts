@@ -109,6 +109,19 @@ export const useSetDeletionProtection = () => {
   });
 };
 
+export const useCancelDeletion = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (projectId: string) => {
+      await api.post(`/provision/${projectId}/deletion/cancel`);
+    },
+    onSuccess: (_data, projectId) => {
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['instances'] });
+    },
+  });
+};
+
 interface PauseResponse {
   projectId: string;
   status: string;

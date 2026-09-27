@@ -26,7 +26,7 @@ export function InstanceDetailPage() {
   const triggerBackup = useTriggerBackup();
 
   const handleDelete = async () => {
-    if (confirm(`Delete ${projectId}? This cannot be undone.`)) {
+    if (confirm(`Delete ${projectId}? It is stopped now and permanently deleted after 7 days; an org owner can cancel until then.`)) {
       await deprovision.mutateAsync(projectId!);
       navigate('/instances');
     }

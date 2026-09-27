@@ -63,10 +63,12 @@ func (s *ProvisioningService) deletionClock() time.Time {
 
 // holdsCustomerData reports whether a project in this status has a database
 // worth a grace period. Anything else (FAILED, RESTORING, a teardown already
-// running) is deleted at once, as before.
+// running) is deleted at once, as before. A RESUMING project is not paused by
+// the pause service, so its schedule is refused until it settles.
 func holdsCustomerData(status string) bool {
 	switch status {
-	case string(domain.StatusActive), string(domain.StatusPaused), string(domain.StatusPausing):
+	case string(domain.StatusActive), string(domain.StatusPaused), string(domain.StatusPausing),
+		string(domain.StatusResuming):
 		return true
 	}
 	return false
