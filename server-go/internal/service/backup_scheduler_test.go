@@ -115,7 +115,7 @@ func setupScheduler(t *testing.T) (*BackupScheduler, *fakeScheduleStore, *storag
 
 func TestScheduler_RegisterAndRun(t *testing.T) {
 	scheduler, schedules, instances, adapter, _ := setupScheduler(t)
-	instances.Create(&domain.DatabaseInstance{
+	instances.Create(&domain.DatabaseInstance{BackupEnabled: boolPtr(true),
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 

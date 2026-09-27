@@ -271,6 +271,29 @@ func TestOrchestrator_TargetKindPersisted(t *testing.T) {
 	}
 }
 
+// The steps restore from the request itself: rebuilding it from the stored
+// kind and value lost the backup id, and a restore from a backup came back
+// as the latest state.
+func TestOrchestrator_StepsReceiveTheWholeRequest(t *testing.T) {
+	jobs := newFakeJobs()
+	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
+	at := &domain.FlexTime{Time: time.Date(2026, 9, 26, 22, 40, 0, 0, time.UTC)}
+	req := domain.RestoreRequest{NewProjectName: "p", TargetProjectID: "p", BackupID: "b1", TargetTime: at}
+	seen := make(chan domain.RestoreRequest, 1)
+	orch.SetSteps([]RestoreStep{{Name: "restore", Run: func(_ context.Context, j *domain.RestoreJob) error {
+		seen <- j.Request
+		return nil
+	}}})
+
+	if _, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, req); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	got := <-seen
+	if got.BackupID != "b1" || got.TargetTime == nil || !got.TargetTime.Time.Equal(at.Time) || got.TargetProjectID != "p" {
+		t.Errorf("the step must get the request as submitted, got %+v", got)
+	}
+}
+
 func TestOrchestrator_RejectsTwoTargets(t *testing.T) {
 	jobs := newFakeJobs()
 	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})

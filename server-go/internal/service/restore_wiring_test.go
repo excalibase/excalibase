@@ -45,7 +45,7 @@ func TestDockerRestoreTimeoutFallsBackToThePackageDefault(t *testing.T) {
 func TestRestoreRefusesWithoutADatabaseProbe(t *testing.T) {
 	t.Run("k8s", func(t *testing.T) {
 		mock := k8s.NewMockClient()
-		adapter := NewK8sBackupAdapter(mock, t.TempDir(), StaticBackupStorage(r2Storage()))
+		adapter := NewK8sBackupAdapter(mock, StaticBackupStorage(r2Storage()))
 		adapter.SetInstanceStore(emptyInstanceStore(t))
 		adapter.SetProjectRegistrar(&fakeRegistrar{})
 
@@ -230,7 +230,7 @@ func restoreClusterObject() *unstructured.Unstructured {
 	cluster, err := k8s.BuildRestoreCluster(k8s.RestoreClusterOpts{
 		Cluster:         k8s.PostgreSQLClusterOpts{ProjectID: "dst", Namespace: restoreTargetNS, Tier: enterprisePlan().plan.Config},
 		SourceProjectID: "src",
-		Store:           k8s.ObjectStoreOpts{Bucket: "b"},
+		Store:           k8s.ObjectStoreOpts{Bucket: "b", SecretName: s3CredsKey},
 	})
 	if err != nil {
 		panic(err)

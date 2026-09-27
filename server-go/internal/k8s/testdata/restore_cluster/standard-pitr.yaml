@@ -4,24 +4,6 @@ metadata:
   name: dst-postgres
   namespace: org-dst
 spec:
-  backup:
-    barmanObjectStore:
-      data:
-        compression: gzip
-      destinationPath: s3://excalibase-backups/dst
-      endpointURL: https://acct.r2.cloudflarestorage.com
-      s3Credentials:
-        accessKeyId:
-          key: ACCESS_KEY_ID
-          name: backup-s3-creds
-        secretAccessKey:
-          key: ACCESS_SECRET_KEY
-          name: backup-s3-creds
-      serverName: cloud
-      wal:
-        compression: gzip
-        maxParallel: 2
-    retentionPolicy: 14d
   bootstrap:
     recovery:
       database: shop
@@ -33,24 +15,23 @@ spec:
     serverAltDNSNames:
     - dst.db.example.com
   externalClusters:
-  - barmanObjectStore:
-      destinationPath: s3://excalibase-backups/src
-      endpointURL: https://acct.r2.cloudflarestorage.com
-      s3Credentials:
-        accessKeyId:
-          key: ACCESS_KEY_ID
-          name: backup-s3-creds
-        secretAccessKey:
-          key: ACCESS_SECRET_KEY
-          name: backup-s3-creds
-      serverName: cloud
-      wal:
-        maxParallel: 8
-    name: clusterBackup
+  - name: clusterBackup
+    plugin:
+      name: barman-cloud.cloudnative-pg.io
+      parameters:
+        barmanObjectName: dst-recovery-source
+        serverName: cloud
   imageName: excalibase/postgresql@sha256:0000000000000000000000000000000000000000000000000000000000000000
   instances: 3
   monitoring:
     enablePodMonitor: false
+  plugins:
+  - enabled: true
+    isWALArchiver: true
+    name: barman-cloud.cloudnative-pg.io
+    parameters:
+      barmanObjectName: dst-backups
+      serverName: cloud
   postgresql:
     parameters:
       idle_in_transaction_session_timeout: 60s

@@ -135,6 +135,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 
 func seedInstance(store *storage.FileSystemStore, mock *k8s.MockClient) {
 	port := 5432
+	backupsOn := true
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "test-db", OrgID: "org1", DBType: domain.PostgreSQL,
 		// STANDARD, so the restore tests below have a free project slot to
@@ -142,6 +143,7 @@ func seedInstance(store *storage.FileSystemStore, mock *k8s.MockClient) {
 		Tier: domain.Standard, Namespace: "org1-test-db", Status: "ACTIVE", PostgresVersion: "17",
 		Host: "h.local", Port: &port, DatabaseName: "app",
 		Username: "user", SSLMode: "require",
+		BackupEnabled: &backupsOn,
 	})
 	mock.SetupPostgreSQLMock("test-db", "org1-test-db", 1)
 }

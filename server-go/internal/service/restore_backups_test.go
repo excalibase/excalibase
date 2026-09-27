@@ -25,7 +25,7 @@ func TestARestoredProjectIsBackedUpFromTheMomentItExists(t *testing.T) {
 	if err != nil || !configured {
 		t.Errorf("the restored project must accept backups: configured=%v err=%v", configured, err)
 	}
-	destination, _, _ := unstructured.NestedString(restoredCluster(t, mock).Object, "spec", "backup", "barmanObjectStore", "destinationPath")
+	destination, _, _ := unstructured.NestedString(mock.CRDs["org-dst/"+k8s.BackupObjectStoreName("dst")].Object, "spec", "configuration", "destinationPath")
 	if !strings.HasSuffix(destination, "/dst") {
 		t.Errorf("the restored project must archive to its own prefix, got %q", destination)
 	}

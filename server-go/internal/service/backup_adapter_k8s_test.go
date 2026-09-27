@@ -33,15 +33,12 @@ func sourceInstance() *domain.DatabaseInstance {
 
 func restoredBarmanStore(t *testing.T, mock *k8s.MockClient) map[string]interface{} {
 	t.Helper()
-	obj, ok := mock.CRDs["org-dst/dst-postgres"]
+	obj, ok := mock.CRDs["org-dst/"+k8s.RecoverySourceObjectStoreName("dst")]
 	if !ok {
-		t.Fatalf("restore CRD not applied; CRDs=%v", mock.CRDs)
+		t.Fatalf("recovery source store not applied; CRDs=%v", mock.CRDs)
 	}
-	external, _, _ := unstructured.NestedSlice(obj.Object, "spec", "externalClusters")
-	if len(external) != 1 {
-		t.Fatalf("externalClusters: got %d", len(external))
-	}
-	return external[0].(map[string]interface{})["barmanObjectStore"].(map[string]interface{})
+	configuration, _, _ := unstructured.NestedMap(obj.Object, "spec", "configuration")
+	return configuration
 }
 
 func TestK8sRestoreResolvesStoreFromBackupConfig(t *testing.T) {
@@ -101,7 +98,7 @@ func TestK8sRestoreFailsWhenStorageNotConfigured(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			mock := k8s.NewMockClient()
-			adapter := NewK8sBackupAdapter(mock, t.TempDir(), source)
+			adapter := NewK8sBackupAdapter(mock, source)
 			adapter.SetInstanceStore(emptyInstanceStore(t))
 			adapter.SetProjectRegistrar(&fakeRegistrar{})
 

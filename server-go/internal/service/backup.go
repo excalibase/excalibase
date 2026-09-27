@@ -30,6 +30,15 @@ type BackupService struct {
 	capacity OrgProjectCapacity
 }
 
+// ErrBackupsNotConfigured refuses a backup of a project that has backups off,
+// or on a platform with nowhere to write them.
+var ErrBackupsNotConfigured = errors.New("backups are not configured for this project")
+
+// backupsOn reads the project's backup flag; a row that never set it has none.
+func backupsOn(inst *domain.DatabaseInstance) bool {
+	return inst.BackupEnabled != nil && *inst.BackupEnabled
+}
+
 // ErrOrgCapacityNotConfigured is returned when a restore cannot be metered
 // against the organisation's project limit. There is no unmetered path: an
 // unanswerable limit fails the restore rather than granting a free project.
@@ -39,7 +48,7 @@ var ErrOrgCapacityNotConfigured = errors.New("restore: organisation project limi
 // it builds a one-entry adapter map so dispatch still works. backupStorage
 // is the store backups are written to; restores read from the same one.
 func NewBackupService(store storage.InstanceStore, client k8s.KubeClient, storagePath string, backupStorage BackupStorageSource) *BackupService {
-	adapter := NewK8sBackupAdapter(client, storagePath, backupStorage)
+	adapter := NewK8sBackupAdapter(client, backupStorage)
 	adapter.SetInstanceStore(store)
 	return NewBackupServiceWithAdapters(store, map[domain.DeploymentMode]BackupAdapter{
 		domain.ModeK8s: adapter,
@@ -136,6 +145,9 @@ func (s *BackupService) TriggerManualBackup(ctx context.Context, projectID strin
 	if err != nil {
 		return nil, err
 	}
+	if !backupsOn(inst) || !adapter.BackupsConfigured() {
+		return nil, ErrBackupsNotConfigured
+	}
 	ref, err := adapter.TriggerManual(ctx, inst)
 	if err != nil {
 		return nil, err
@@ -177,7 +189,7 @@ func (s *BackupService) BackupsConfigured(projectID string) (bool, error) {
 	if err != nil || inst == nil {
 		return false, fmt.Errorf("project not found: %s", projectID)
 	}
-	if inst.BackupEnabled == nil || !*inst.BackupEnabled {
+	if !backupsOn(inst) {
 		return false, nil
 	}
 	adapter, err := resolveAdapter(s.adapters, inst)
@@ -302,6 +314,9 @@ func refToMap(ref BackupRef) map[string]interface{} {
 	}
 	if ref.SizeBytes > 0 {
 		m["sizeBytes"] = ref.SizeBytes
+	}
+	if ref.Error != "" {
+		m["error"] = ref.Error
 	}
 	return m
 }

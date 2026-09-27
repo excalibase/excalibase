@@ -49,6 +49,10 @@ func (h *BackupHandler) Routes(r chi.Router) {
 func (h *BackupHandler) TriggerBackup(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	result, err := h.svc.TriggerManualBackup(r.Context(), projectID)
+	if errors.Is(err, service.ErrBackupsNotConfigured) {
+		httpError(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -22,9 +23,28 @@ func setupBackupTest(t *testing.T) (*BackupService, *storage.FileSystemStore) {
 
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: "bk-db", OrgID: "org", Namespace: "org-bk-db", Status: "ACTIVE",
-		DBType: domain.PostgreSQL, PostgresVersion: "17",
+		DBType: domain.PostgreSQL, PostgresVersion: "17", BackupEnabled: boolPtr(true),
 	})
 	return svc, store
+}
+
+func TestTriggerManualBackupRefusedWithoutBackups(t *testing.T) {
+	for name, enabled := range map[string]*bool{"never set": nil, "off": boolPtr(false)} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			store, _ := storage.NewFileSystemStore(dir)
+			mock := k8s.NewMockClient()
+			svc := NewBackupService(store, mock, dir, StaticBackupStorage(r2Storage()))
+			store.Create(&domain.DatabaseInstance{ProjectID: "nb", OrgID: "org", Namespace: "org-nb", BackupEnabled: enabled})
+
+			if _, err := svc.TriggerManualBackup(context.Background(), "nb"); !errors.Is(err, ErrBackupsNotConfigured) {
+				t.Fatalf("err: got %v, want ErrBackupsNotConfigured", err)
+			}
+			if len(mock.CRDs) != 0 {
+				t.Errorf("no Backup may be created: %v", mock.CRDs)
+			}
+		})
+	}
 }
 
 func TestTriggerManualBackup(t *testing.T) {

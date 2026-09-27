@@ -160,7 +160,7 @@ func TestBackupTriggerWhenCRDFails(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
-	store.Create(&domain.DatabaseInstance{
+	store.Create(&domain.DatabaseInstance{BackupEnabled: boolPtr(true),
 		ProjectID: "bk-fail", Namespace: "ns", Status: "ACTIVE",
 	})
 	// ApplyCRD always succeeds in mock, so this just tests the flow

@@ -364,30 +364,27 @@ const restoreSweepLockID int64 = 0x51c2_7d0e_9a41_3b77
 const restoreSweepInterval = 30 * time.Second
 
 // runRestoreStep resolves the source instance and dispatches the restore to
-// the backup service, translating the job's target kind into a RestoreRequest.
+// the backup service with the request the job was started with.
 func runRestoreStep(ctx context.Context, store storage.InstanceStore, backupSvc *service.BackupService, j *domain.RestoreJob) error {
 	inst, err := store.FindByProjectID(j.SourceProjectID)
 	if err != nil || inst == nil {
 		return fmt.Errorf("source project %s not found", j.SourceProjectID)
 	}
-	req := domain.RestoreRequest{
-		TargetProjectID: j.NewProjectID,
-		NewProjectName:  j.NewProjectName,
-	}
-	switch j.TargetKind {
-	case "time":
-		if t, err := time.Parse(time.RFC3339, j.TargetValue); err == nil {
-			req.TargetTime = &domain.FlexTime{Time: t}
-		}
-	case "xid":
-		req.TargetXID = j.TargetValue
-	case "lsn":
-		req.TargetLSN = j.TargetValue
-	case "name":
-		req.TargetName = j.TargetValue
+	req, err := restoreStepRequest(j)
+	if err != nil {
+		return err
 	}
 	_, err = backupSvc.RestoreFromBackup(ctx, j.SourceProjectID, req)
 	return err
+}
+
+// restoreStepRequest is the request the job was started with, for the project
+// the job names. Nothing is rebuilt from the job row.
+func restoreStepRequest(j *domain.RestoreJob) (domain.RestoreRequest, error) {
+	if j.Request.TargetProjectID == "" || j.Request.TargetProjectID != j.NewProjectID {
+		return domain.RestoreRequest{}, fmt.Errorf("restore job %s carries no request for project %s", j.ID, j.NewProjectID)
+	}
+	return j.Request, nil
 }
 
 // Advisory-lock keys, one per scheduled sweep. Each is FNV-1a of the
@@ -1016,7 +1013,7 @@ func buildBackupService(
 	dockerClient provisioner.DockerClient,
 	backupStorage service.BackupStorageSource,
 ) *service.BackupService {
-	k8sAdapter := service.NewK8sBackupAdapter(k8sClient, cfg.StoragePath, backupStorage)
+	k8sAdapter := service.NewK8sBackupAdapter(k8sClient, backupStorage)
 	k8sAdapter.SetInstanceStore(store)
 	k8sAdapter.SetPublicDomainSuffix(cfg.DBEndpointDomain)
 	adapters := map[domain.DeploymentMode]service.BackupAdapter{

@@ -19,6 +19,10 @@ rules:
   - apiGroups: ["postgresql.cnpg.io"]
     resources: ["clusters", "scheduledbackups", "backups"]
     verbs: ["get", "list", "create", "update", "delete"]
+  # Each project's backup store, read by the Barman Cloud plugin
+  - apiGroups: ["barmancloud.cnpg.io"]
+    resources: ["objectstores"]
+    verbs: ["get", "list", "create", "update", "delete"]
   # Deployments (operator checks)
   - apiGroups: ["apps"]
     resources: ["deployments"]

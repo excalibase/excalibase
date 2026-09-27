@@ -210,7 +210,7 @@ func TestMockClientAutoReconcileStampsClusterStatus(t *testing.T) {
 	m.AutoReconcileClusters = true
 	cluster := mustBuildRestore(t, RestoreClusterOpts{
 		SourceProjectID: "src", Cluster: clusterOpts("dst", "ns"),
-		Store: ObjectStoreOpts{Bucket: "b"},
+		Store: ObjectStoreOpts{Bucket: "b", SecretName: "s"},
 	})
 
 	if err := m.ApplyCRD(context.Background(), CNPGClusterGVR, "ns", cluster); err != nil {

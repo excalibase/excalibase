@@ -519,11 +519,16 @@ func (m *MockClient) ListCRDs(ctx context.Context, gvr schema.GroupVersionResour
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "ListCRDs:"+namespace+"/"+gvr.Resource)
-	key := namespace + "/" + gvr.Resource
-	if obj, ok := m.CRDs[key]; ok {
+	if obj, ok := m.CRDs[namespace+"/"+gvr.Resource]; ok {
 		return []*unstructured.Unstructured{obj}, nil
 	}
-	return nil, nil
+	var listed []*unstructured.Unstructured
+	for key, obj := range m.CRDs {
+		if strings.HasPrefix(key, namespace+"/") && strings.ToLower(obj.GetKind())+"s" == gvr.Resource {
+			listed = append(listed, obj)
+		}
+	}
+	return listed, nil
 }
 
 func (m *MockClient) ApplyManifestURL(ctx context.Context, url string) error {

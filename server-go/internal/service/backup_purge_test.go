@@ -221,25 +221,18 @@ func TestPurgeFailsWhenStorageNotConfigured(t *testing.T) {
 	}
 }
 
-func TestPurgeK8sFallsBackToDefaultBucket(t *testing.T) {
-	deleter := newFakeObjectDeleter("proj-1/cloud/x")
-	purger := NewBackupPurger(StaticBackupStorage(&domain.S3Credentials{AccessKeyID: "k", SecretAccessKey: "s"}), "backups/",
-		func(_ context.Context, _ *domain.S3Credentials) (ObjectDeleter, error) { return deleter, nil })
-	if _, err := purger.Purge(context.Background(), &domain.DatabaseInstance{ProjectID: "proj-1", DeploymentMode: domain.ModeK8s}); err != nil {
-		t.Fatalf("Purge: %v", err)
-	}
-	if deleter.lastBucket != "postgres-backups" {
-		t.Fatalf("bucket = %q, want the CRD default postgres-backups", deleter.lastBucket)
-	}
-}
-
-func TestPurgeDockerWithoutBucketIsRefused(t *testing.T) {
-	deleter := newFakeObjectDeleter("backups/proj-1/x")
-	purger := NewBackupPurger(StaticBackupStorage(&domain.S3Credentials{AccessKeyID: "k", SecretAccessKey: "s"}), "backups/",
-		func(_ context.Context, _ *domain.S3Credentials) (ObjectDeleter, error) { return deleter, nil })
-	_, err := purger.Purge(context.Background(), &domain.DatabaseInstance{ProjectID: "proj-1", DeploymentMode: domain.ModeDocker})
-	if !errors.Is(err, ErrBackupStorageNotConfigured) {
-		t.Fatalf("err = %v, want ErrBackupStorageNotConfigured", err)
+func TestPurgeWithoutBucketIsRefused(t *testing.T) {
+	for _, mode := range []domain.DeploymentMode{domain.ModeK8s, domain.ModeDocker} {
+		deleter := newFakeObjectDeleter("proj-1/cloud/x", "backups/proj-1/x")
+		purger := NewBackupPurger(StaticBackupStorage(&domain.S3Credentials{AccessKeyID: "k", SecretAccessKey: "s"}), "backups/",
+			func(_ context.Context, _ *domain.S3Credentials) (ObjectDeleter, error) { return deleter, nil })
+		_, err := purger.Purge(context.Background(), &domain.DatabaseInstance{ProjectID: "proj-1", DeploymentMode: mode})
+		if !errors.Is(err, ErrBackupStorageNotConfigured) {
+			t.Fatalf("%s: err = %v, want ErrBackupStorageNotConfigured", mode, err)
+		}
+		if deleter.lastBucket != "" {
+			t.Fatalf("%s: no bucket may be guessed, deleted from %q", mode, deleter.lastBucket)
+		}
 	}
 }
 

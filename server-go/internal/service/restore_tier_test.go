@@ -132,8 +132,11 @@ func TestK8sRestoreWithoutBackupsRendersNone(t *testing.T) {
 	if _, err := restoreDst(t, adapter, tenantSource()); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if _, has, _ := unstructured.NestedMap(restoredCluster(t, mock).Object, "spec", "backup"); has {
-		t.Error("a plan without backups must render no backup section")
+	plugins, _, _ := unstructured.NestedSlice(restoredCluster(t, mock).Object, "spec", "plugins")
+	for _, plugin := range plugins {
+		if plugin.(map[string]interface{})["name"] == k8s.BarmanCloudPluginName {
+			t.Error("a plan without backups must archive nowhere")
+		}
 	}
 	if _, scheduled := mock.CRDs["org-dst/dst-postgres-backup"]; scheduled {
 		t.Error("a plan without backups must schedule none")
