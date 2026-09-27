@@ -23,6 +23,7 @@ const (
 	OperationUpgrade     ProjectOperation = "version upgrade"
 	OperationMaintenance ProjectOperation = "maintenance window change"
 	OperationDeploy      ProjectOperation = "deploy"
+	OperationTLSChange   ProjectOperation = "TLS setting change"
 )
 
 // ErrProjectOperationRunning is what every caller refused the project's

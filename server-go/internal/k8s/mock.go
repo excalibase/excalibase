@@ -47,6 +47,7 @@ type MockClient struct {
 	PodReadyError         error                             // if non-nil, IsPodReady returns this error
 	CRDError              error                             // if non-nil, ApplyCRD returns this error
 	DeleteCRDError        error                             // if non-nil, DeleteCRD returns this error
+	UpdateCRDError        error                             // if non-nil, UpdateCRD returns this error
 	UninstallHelmError    error                             // if non-nil, UninstallHelmChart returns this error
 	NamespaceExistsError  error                             // if non-nil, NamespaceExists returns this error
 	GetPodsError          error                             // if non-nil, GetPods returns this error
@@ -388,6 +389,9 @@ func (m *MockClient) UpdateCRD(ctx context.Context, gvr schema.GroupVersionResou
 	defer m.mu.Unlock()
 	key := namespace + "/" + obj.GetName()
 	m.Calls = append(m.Calls, "UpdateCRD:"+key)
+	if m.UpdateCRDError != nil {
+		return m.UpdateCRDError
+	}
 	if _, ok := m.CRDs[key]; !ok {
 		return fmt.Errorf("not found: %s", key)
 	}

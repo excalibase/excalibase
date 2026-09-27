@@ -192,9 +192,12 @@ func writeDBEndpointError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrDBEndpointNotConfigured),
 		errors.Is(err, storage.ErrDBEndpointPortsExhausted):
 		httpError(w, safeError(err), http.StatusServiceUnavailable)
-	case errors.Is(err, service.ErrDBEndpointUnsupported):
+	case errors.Is(err, service.ErrDBEndpointUnsupported),
+		errors.Is(err, service.ErrProjectNotActive),
+		errors.Is(err, storage.ErrProjectBusy):
 		httpError(w, safeError(err), http.StatusConflict)
-	case errors.Is(err, service.ErrDBEndpointNotObserved):
+	case errors.Is(err, service.ErrDBEndpointNotObserved),
+		errors.Is(err, service.ErrTLSSettingNotObserved):
 		httpError(w, safeError(err), http.StatusBadGateway)
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)

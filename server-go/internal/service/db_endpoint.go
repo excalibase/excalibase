@@ -10,6 +10,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // DBEndpointService owns how a customer reaches their database from outside
@@ -50,6 +51,14 @@ var ErrDBEndpointUnsupported = errors.New("public database endpoints are not sup
 // setting is left as it was and the same call retried converges.
 var ErrDBEndpointNotObserved = errors.New("the public database endpoint was not confirmed; retry to continue")
 
+// ErrTLSSettingNotObserved is returned when the cluster, read back after the
+// update, does not carry the TLS rule that was asked for.
+var ErrTLSSettingNotObserved = errors.New("the database TLS setting was not confirmed; retry to continue")
+
+// clusterUpdateAttempts bounds read-modify-write retries on a Cluster the
+// operator is also writing.
+const clusterUpdateAttempts = 5
+
 // PublicEndpointReconciler brings a project's public database endpoint into
 // line with its lifecycle state. A project that is paused, deleting,
 // restoring or otherwise not servable has no Service and therefore refuses
@@ -82,6 +91,8 @@ type DBEndpointServiceConfig struct {
 	Ports        domain.PortRange
 	Quarantine   time.Duration
 	SharedIPKey  string
+	// Claimer is the project lifecycle lease; nil means an in-process one.
+	Claimer ProjectOperationClaimer
 }
 
 // DBEndpointService is the control plane's view of one project's public
@@ -94,6 +105,7 @@ type DBEndpointService struct {
 	ports        domain.PortRange
 	quarantine   time.Duration
 	sharedIPKey  string
+	claimer      ProjectOperationClaimer
 }
 
 func NewDBEndpointService(c DBEndpointServiceConfig) *DBEndpointService {
@@ -105,7 +117,15 @@ func NewDBEndpointService(c DBEndpointServiceConfig) *DBEndpointService {
 		ports:        c.Ports,
 		quarantine:   c.Quarantine,
 		sharedIPKey:  c.SharedIPKey,
+		claimer:      claimerOrInProcess(c.Claimer),
 	}
+}
+
+func claimerOrInProcess(claimer ProjectOperationClaimer) ProjectOperationClaimer {
+	if claimer == nil {
+		return newInProcessOperationClaimer()
+	}
+	return claimer
 }
 
 // DBEndpointInternal is the in-cluster endpoint, which exists for every
@@ -228,12 +248,32 @@ func (s *DBEndpointService) SetPublic(ctx context.Context, projectID string, pub
 	return s.view(ctx, inst, endpoint)
 }
 
-// SetRequireTLS records the project's TLS choice. It is enforced in Postgres
-// through pg_hba — hostssl only when on — never at the edge, so nothing
-// between the customer and their database ever holds their credentials.
+// SetRequireTLS applies the project's TLS choice to its database, then
+// records it. It is enforced in Postgres through pg_hba (hostssl when on) for
+// every network login, platform clients included, because SNAT hides whether
+// a client is outside. It is a cluster change, so it takes the project lease
+// and needs an active project.
 func (s *DBEndpointService) SetRequireTLS(ctx context.Context, projectID string, requireTLS bool) (DBEndpointView, error) {
+	if _, err := s.project(projectID); err != nil {
+		return DBEndpointView{}, err
+	}
+	release, claimed, err := s.claimer.Claim(ctx, projectID, OperationTLSChange)
+	if err != nil {
+		return DBEndpointView{}, fmt.Errorf("claim project for %s: %w", OperationTLSChange, err)
+	}
+	if !claimed {
+		return DBEndpointView{}, fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
+	}
+	defer release()
+
 	inst, err := s.project(projectID)
 	if err != nil {
+		return DBEndpointView{}, err
+	}
+	if inst.Status != string(domain.StatusActive) {
+		return DBEndpointView{}, fmt.Errorf("project %s is %s; %w", projectID, inst.Status, ErrProjectNotActive)
+	}
+	if err := s.applyRequireTLS(ctx, inst, requireTLS); err != nil {
 		return DBEndpointView{}, err
 	}
 	endpoint, err := s.endpoints.SetDatabaseEndpointRequireTLS(ctx, projectID, requireTLS)
@@ -241,6 +281,43 @@ func (s *DBEndpointService) SetRequireTLS(ctx context.Context, projectID string,
 		return DBEndpointView{}, err
 	}
 	return s.view(ctx, inst, endpoint)
+}
+
+// applyRequireTLS rewrites the cluster's pg_hba and reads it back.
+func (s *DBEndpointService) applyRequireTLS(ctx context.Context, inst *domain.DatabaseInstance, requireTLS bool) error {
+	name := inst.ProjectID + postgresClusterSuffix
+	var err error
+	for attempt := 0; attempt < clusterUpdateAttempts; attempt++ {
+		if err = s.rewriteClusterTLS(ctx, inst.Namespace, name, requireTLS); !apierrors.IsConflict(err) {
+			break
+		}
+	}
+	if err != nil {
+		return err
+	}
+	observed, err := s.kube.GetCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, name)
+	if err != nil {
+		return fmt.Errorf("confirm database TLS setting: %w", err)
+	}
+	if k8s.ClusterRequiresTLS(observed) != requireTLS {
+		return ErrTLSSettingNotObserved
+	}
+	return nil
+}
+
+func (s *DBEndpointService) rewriteClusterTLS(ctx context.Context, namespace, name string, requireTLS bool) error {
+	current, err := s.kube.GetCRD(ctx, k8s.CNPGClusterGVR, namespace, name)
+	if err != nil {
+		return fmt.Errorf("read cluster %s: %w", name, err)
+	}
+	cluster := current.DeepCopy()
+	if err := k8s.SetClusterRequireTLS(cluster, requireTLS); err != nil {
+		return fmt.Errorf("render TLS setting for %s: %w", name, err)
+	}
+	if err := s.kube.UpdateCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
+		return fmt.Errorf("update cluster %s: %w", name, err)
+	}
+	return nil
 }
 
 // Withdraw removes the project's Service without touching its setting or its
@@ -346,6 +423,30 @@ func (s *DBEndpointService) ensureObserved(ctx context.Context, inst *domain.Dat
 	if err := s.openIngress(ctx, inst, mongoPort); err != nil {
 		return err
 	}
+	if err := s.publishServices(ctx, inst, port, mongoPort); err != nil {
+		return s.closeIngressIfUnpublished(ctx, inst, err)
+	}
+	return nil
+}
+
+// closeIngressIfUnpublished withdraws the ingress rule a failed publish
+// opened, unless an earlier Service for the project is still answering.
+func (s *DBEndpointService) closeIngressIfUnpublished(ctx context.Context, inst *domain.DatabaseInstance, cause error) error {
+	exists, err := s.kube.PublicDBServiceExists(ctx, inst.Namespace, domain.DBEndpointServiceName(inst.ProjectID))
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("confirm database endpoint: %w", err))
+	}
+	if exists {
+		return cause
+	}
+	if err := s.kube.DeletePublicDBIngressPolicy(ctx, inst.Namespace, inst.ProjectID); err != nil {
+		return errors.Join(cause, fmt.Errorf("close public database ingress: %w", err))
+	}
+	return cause
+}
+
+// publishServices creates the project's Services and confirms they exist.
+func (s *DBEndpointService) publishServices(ctx context.Context, inst *domain.DatabaseInstance, port, mongoPort int) error {
 	if err := s.ensureServiceObserved(ctx, inst, k8s.PublicDBServiceSpec{
 		Name:             domain.DBEndpointServiceName(inst.ProjectID),
 		Port:             port,
@@ -497,7 +598,7 @@ func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInsta
 			Host: inst.Host,
 			Port: postgresPort,
 			ConnectionString: domain.DBConnectionString(
-				inst.Host, postgresPort, inst.Username, inst.DatabaseName, domain.SSLModePrefer),
+				inst.Host, postgresPort, inst.Username, inst.DatabaseName, internalSSLMode(endpoint)),
 		},
 	}
 	if err := s.addMongoEndpoint(ctx, inst, host, &view); err != nil {
@@ -511,6 +612,15 @@ func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInsta
 		view.CACertificate = ca
 	}
 	return view, nil
+}
+
+// internalSSLMode is what an in-cluster client should use: the database
+// refuses plaintext while it requires TLS, and a prefer string would hide that.
+func internalSSLMode(endpoint domain.DBEndpoint) string {
+	if endpoint.RequireTLS {
+		return domain.SSLModeRequire
+	}
+	return domain.SSLModePrefer
 }
 
 // addMongoEndpoint fills in the Mongo half for a DocumentDB project, and

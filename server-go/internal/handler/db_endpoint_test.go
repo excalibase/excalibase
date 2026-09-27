@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -162,6 +163,9 @@ func TestDBEndpointErrorsMapToTheirMeaning(t *testing.T) {
 		{"unsupported mode", service.ErrDBEndpointUnsupported, http.StatusConflict},
 		{"ports exhausted", storage.ErrDBEndpointPortsExhausted, http.StatusServiceUnavailable},
 		{"not observed", service.ErrDBEndpointNotObserved, http.StatusBadGateway},
+		{"TLS change not observed", service.ErrTLSSettingNotObserved, http.StatusBadGateway},
+		{"project not active", fmt.Errorf("project p is PAUSED; %w", service.ErrProjectNotActive), http.StatusConflict},
+		{"project busy", fmt.Errorf("%w (p)", service.ErrProjectOperationRunning), http.StatusConflict},
 		{"anything else", errors.New("boom"), http.StatusInternalServerError},
 	}
 	for _, tc := range cases {

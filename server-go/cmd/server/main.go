@@ -199,7 +199,7 @@ func runServer(cfg config.AppConfig) {
 	// How a customer reaches their database from outside the cluster
 	// (EXC-410). Nil when the platform offers no public endpoints, and
 	// every caller then carries no endpoint step at all.
-	dbEndpointSvc := buildDBEndpointService(cfg, sqlStore, store, k8sClient)
+	dbEndpointSvc := buildDBEndpointService(cfg, sqlStore, store, k8sClient, lifecycleClaimer)
 	var dbEndpoints service.PublicEndpointReconciler
 	if dbEndpointSvc != nil {
 		dbEndpoints = dbEndpointSvc
@@ -1917,7 +1917,8 @@ func buildDocumentBrowser(k8sClient k8s.KubeClient, vc vaultclient.VaultClient, 
 // domain configured, a provisioner with no Kubernetes behind it, or a
 // platform store that cannot hold the allocator. Callers then carry no
 // endpoint step at all, rather than one that is present and fails.
-func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore, instances storage.InstanceStore, k8sClient k8s.KubeClient) *service.DBEndpointService {
+func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore, instances storage.InstanceStore,
+	k8sClient k8s.KubeClient, claimer service.ProjectOperationClaimer) *service.DBEndpointService {
 	if cfg.DBEndpointDomain == "" || cfg.ProvisionerMode != "k8s" {
 		return nil
 	}
@@ -1934,6 +1935,7 @@ func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore
 		Ports:        cfg.DBEndpointPorts,
 		Quarantine:   cfg.DBEndpointPortQuarantine,
 		SharedIPKey:  cfg.DBEndpointSharedIPKey,
+		Claimer:      claimer,
 	})
 }
 

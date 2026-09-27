@@ -789,7 +789,7 @@ func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, spec WatcherS
 	values := map[string]interface{}{
 		"postgres": map[string]interface{}{
 			"enabled":           true,
-			"url":               fmt.Sprintf("postgres://%s-postgres-rw.%s.svc.cluster.local:5432/%s?replication=database", projectID, namespace, dbName),
+			"url":               fmt.Sprintf("postgres://%s-postgres-rw.%s.svc.cluster.local:5432/%s?sslmode=require&replication=database", projectID, namespace, dbName),
 			"username":          username,
 			"password":          password,
 			"slotName":          "cdc_watcher",

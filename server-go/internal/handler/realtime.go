@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
@@ -144,11 +145,23 @@ func (h *RealtimeHandler) dial(r *http.Request) (*service.RealtimeService, *sql.
 	if err != nil {
 		return nil, nil, fmt.Errorf("read excalibase_app creds from vault: %w", err)
 	}
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		creds["username"], creds["password"], creds["host"], creds["port"], creds["database"])
+	dsn, err := realtimeDSN(creds, projectdb.OverridesFromEnv())
+	if err != nil {
+		return nil, nil, err
+	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open db: %w", err)
 	}
 	return service.NewRealtimeServiceWithName(db, h.publicationName), db, nil
+}
+
+// realtimeDSN reaches the project the way every other platform client does:
+// TLS required unless a stated override says otherwise.
+func realtimeDSN(creds map[string]string, overrides projectdb.Overrides) (string, error) {
+	dsn, err := projectdb.DSNFor(creds, overrides)
+	if err != nil {
+		return "", fmt.Errorf("compose project connection: %w", err)
+	}
+	return dsn, nil
 }
