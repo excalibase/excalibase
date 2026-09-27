@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -115,6 +117,17 @@ func (lab *backupLab) installBackupStack(t *testing.T) {
 
 func (lab *backupLab) applyFile(t *testing.T, path, manifest string) {
 	t.Helper()
+	if lab.container == nil {
+		local := filepath.Join(t.TempDir(), filepath.Base(path))
+		if err := os.WriteFile(local, []byte(manifest), 0o600); err != nil {
+			t.Fatalf("write %s: %v", local, err)
+		}
+		eventuallyLive(t, "apply "+path+" once its webhooks answer", 3*time.Minute, func() bool {
+			_, err := lab.kubectlOutput("apply", "--server-side", "--force-conflicts", "-f", local)
+			return err == nil
+		})
+		return
+	}
 	if err := lab.container.CopyToContainer(lab.ctx, []byte(manifest), path, 0o644); err != nil {
 		t.Fatalf("copy %s: %v", path, err)
 	}
@@ -303,13 +316,8 @@ func (lab *backupLab) dumpBackupState(t *testing.T, project string) {
 		{"logs", "-n", namespace, project + "-postgres-1", "-c", "postgres", "--tail=80"},
 		{"logs", "-n", "cnpg-system", "deployment/barman-cloud", "--tail=80"},
 	} {
-		code, reader, err := lab.container.Exec(lab.ctx, append([]string{"kubectl"}, args...))
-		out := ""
-		if reader != nil {
-			raw, _ := io.ReadAll(reader)
-			out = string(raw)
-		}
-		t.Logf("kubectl %v (exit %d, %v):\n%s", args, code, err, out)
+		out, err := lab.kubectlOutput(args...)
+		t.Logf("kubectl %v (%v):\n%s", args, err, out)
 	}
 }
 

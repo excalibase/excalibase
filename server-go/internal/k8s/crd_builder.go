@@ -131,6 +131,21 @@ func applyTierSizing(spec map[string]interface{}, tier config.TierConfig, storag
 		"requests": tierBounds(tier),
 		"limits":   tierBounds(tier),
 	}
+	if tier.Instances > 1 {
+		spec["affinity"] = oneInstancePerNode()
+	}
+}
+
+// oneInstancePerNode makes a node loss cost at most one instance. Required,
+// not preferred: an instance that cannot get its own node stays Pending
+// rather than sharing one, and admission refuses a platform with too few
+// nodes before the cluster is created.
+func oneInstancePerNode() map[string]interface{} {
+	return map[string]interface{}{
+		"enablePodAntiAffinity": true,
+		"podAntiAffinityType":   "required",
+		"topologyKey":           "kubernetes.io/hostname",
+	}
 }
 
 func tierBounds(tier config.TierConfig) map[string]interface{} {

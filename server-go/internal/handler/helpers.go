@@ -123,7 +123,7 @@ func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 		log.Printf("project creation refused: %v", err)
 		httpError(w, service.ErrBackupTargetNotConfigured.Error(), http.StatusServiceUnavailable)
 	default:
-		return false
+		return writeNodePlacementError(w, err)
 	}
 	return true
 }

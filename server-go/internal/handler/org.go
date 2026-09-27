@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -23,7 +24,13 @@ type OrgHandler struct {
 	orgStore      storage.OrgStore
 	userStore     storage.UserStore
 	instanceStore storage.InstanceStore // optional; used to confirm a project belongs to the URL org
+	// nodes checks a new plan's instances fit the platform; a plan change
+	// is refused while it is unset.
+	nodes NodePlacement
 }
+
+// SetNodePlacement wires the check a plan change must pass.
+func (h *OrgHandler) SetNodePlacement(nodes NodePlacement) { h.nodes = nodes }
 
 func NewOrgHandler(orgStore storage.OrgStore, userStore storage.UserStore) *OrgHandler {
 	return &OrgHandler{orgStore: orgStore, userStore: userStore}
@@ -221,6 +228,9 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 			httpError(w, "invalid tier: must be FREE, STANDARD, or ENTERPRISE", http.StatusBadRequest)
 			return
 		}
+		if !h.planFitsThePlatform(w, r, *req.Tier) {
+			return
+		}
 		org.Tier = *req.Tier
 	}
 
@@ -229,6 +239,25 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, org)
+}
+
+// planFitsThePlatform refuses a plan whose instances the platform's nodes
+// cannot spread, and reports whether the change may go ahead. Projects the
+// org creates or restores next are built at this plan.
+func (h *OrgHandler) planFitsThePlatform(w http.ResponseWriter, r *http.Request, tier domain.TierType) bool {
+	if h.nodes == nil {
+		httpError(w, errNodePlacementUnchecked, http.StatusServiceUnavailable)
+		return false
+	}
+	err := h.nodes.RequireNodesForTier(r.Context(), tier)
+	if err == nil {
+		return true
+	}
+	if !writeNodePlacementError(w, err) {
+		log.Printf("plan change refused: %v", err)
+		httpError(w, errNodePlacementUnchecked, http.StatusServiceUnavailable)
+	}
+	return false
 }
 
 func (h *OrgHandler) DeleteOrg(w http.ResponseWriter, r *http.Request) {

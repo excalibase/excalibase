@@ -21,6 +21,7 @@ func TestConcurrentProvisionSameDisplayName(t *testing.T) {
 	store, _ := storage.NewFileSystemStore(dir)
 	mock := k8s.NewMockClient()
 	mock.WildcardPodReady = true
+	mock.Capacity = roomyNodes(5)
 	mock.WildcardSecret = map[string][]byte{
 		"username": []byte("app"),
 		"password": []byte("testpassword123"),

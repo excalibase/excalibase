@@ -221,3 +221,28 @@ func TestEnsureDenoRuntime_NoServiceAccountToken(t *testing.T) {
 		t.Errorf("deno pod must set AutomountServiceAccountToken=false so it cannot read namespace secrets (SEC-C3/C4); got %v", amt)
 	}
 }
+
+func TestGetClusterCapacity_MarksNodesUntoleratedPodsCannotUse(t *testing.T) {
+	noSchedule := node("control-plane", 4000, 8<<30, false)
+	noSchedule.Spec.Taints = []corev1.Taint{{Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule}}
+	notReady := node("not-ready", 4000, 8<<30, false)
+	notReady.Spec.Taints = []corev1.Taint{{Key: "node.kubernetes.io/not-ready", Effect: corev1.TaintEffectNoExecute}}
+	preferOnly := node("prefer", 4000, 8<<30, false)
+	preferOnly.Spec.Taints = []corev1.Taint{{Key: "soft", Effect: corev1.TaintEffectPreferNoSchedule}}
+	c := newFakeClient(noSchedule, notReady, preferOnly, node("plain", 4000, 8<<30, false))
+
+	cap, err := c.GetClusterCapacity(context.Background())
+	if err != nil {
+		t.Fatalf("GetClusterCapacity: %v", err)
+	}
+	tainted := map[string]bool{}
+	for _, n := range cap.Nodes {
+		tainted[n.Name] = n.Tainted
+	}
+	want := map[string]bool{"control-plane": true, "not-ready": true, "prefer": false, "plain": false}
+	for name, isTainted := range want {
+		if got, ok := tainted[name]; !ok || got != isTainted {
+			t.Errorf("%s: Tainted = %v (listed %v), want %v", name, got, ok, isTainted)
+		}
+	}
+}

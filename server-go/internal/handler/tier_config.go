@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -17,7 +18,13 @@ import (
 // requires PermManageSetup (platform_admin) so only admins can resize tiers.
 type TierHandler struct {
 	store storage.TierConfigStore
+	// nodes checks a multi-instance spec fits the platform; such a spec is
+	// refused while it is unset.
+	nodes NodePlacement
 }
+
+// SetNodePlacement wires the check a multi-instance spec must pass.
+func (h *TierHandler) SetNodePlacement(nodes NodePlacement) { h.nodes = nodes }
 
 func NewTierHandler(store storage.TierConfigStore) *TierHandler {
 	return &TierHandler{store: store}
@@ -97,6 +104,9 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
+	if !h.instancesFitThePlatform(w, r, tier, tc.Instances) {
+		return
+	}
 	if err := h.store.UpsertTierConfig(r.Context(), tier, tc); err != nil {
 		httpError(w, "update tier: "+safeError(err), http.StatusInternalServerError)
 		return
@@ -125,4 +135,25 @@ func validateTierConfig(tc config.TierConfig) error {
 		return errors.New("storageSize must be a storage quantity such as 5Gi")
 	}
 	return nil
+}
+
+// instancesFitThePlatform refuses a spec with more instances than the
+// platform has nodes for, and reports whether it may be stored.
+func (h *TierHandler) instancesFitThePlatform(w http.ResponseWriter, r *http.Request, tier domain.TierType, instances int) bool {
+	if instances <= 1 {
+		return true
+	}
+	if h.nodes == nil {
+		httpError(w, errNodePlacementUnchecked, http.StatusServiceUnavailable)
+		return false
+	}
+	err := h.nodes.RequireNodeCount(r.Context(), tier, instances)
+	if err == nil {
+		return true
+	}
+	if !writeNodePlacementError(w, err) {
+		log.Printf("tier update refused: %v", err)
+		httpError(w, errNodePlacementUnchecked, http.StatusServiceUnavailable)
+	}
+	return false
 }

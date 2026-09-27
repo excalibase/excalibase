@@ -77,6 +77,8 @@ ORG_ID=$(curl -sf -H "$AUTH" "$API/api/orgs" | jq -r '.[] | select(.slug=="acme"
 pass "org acme: $ORG_ID"
 
 # A project takes its org's plan, and FREE has no backups to restore from.
+. "$(dirname "$0")/standard-tier-fits-nodes.sh"
+standard_tier_fits_nodes "$API" "$AUTH" || { fail "standard tier" "could not size STANDARD to this cluster"; exit 1; }
 curl -sf -X PATCH -H "$AUTH" -H 'Content-Type: application/json' -d '{"tier":"STANDARD"}' \
   "$API/api/orgs/$ORG_ID/" > /dev/null || { fail "org plan" "could not put $ORG_ID on STANDARD"; exit 1; }
 pass "org on STANDARD plan"

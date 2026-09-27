@@ -4,6 +4,10 @@ metadata:
   name: dst-postgres
   namespace: org-dst
 spec:
+  affinity:
+    enablePodAntiAffinity: true
+    podAntiAffinityType: required
+    topologyKey: kubernetes.io/hostname
   bootstrap:
     recovery:
       database: shop
