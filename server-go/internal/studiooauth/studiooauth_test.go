@@ -124,8 +124,8 @@ func newService(t *testing.T, fake *fakeProvider, secrets mapSecrets) (*Service,
 
 func configured() mapSecrets {
 	return mapSecrets{
-		"oauth/studio/google": {"client_id": "cid", "client_secret": "csecret"},
-		"oauth/studio/github": {"client_id": "cid", "client_secret": "csecret"},
+		"oauth/studio/google": {"enabled": "true", "client_id": "cid", "client_secret": "csecret"},
+		"oauth/studio/github": {"enabled": "true", "client_id": "cid", "client_secret": "csecret"},
 	}
 }
 
@@ -242,7 +242,10 @@ func TestAWrongVerifierFailsTheExchange(t *testing.T) {
 
 func TestOnlyConfiguredProvidersAreOffered(t *testing.T) {
 	fake := newFakeProvider(t)
-	svc, _ := newService(t, fake, mapSecrets{"oauth/studio/github": {"client_id": "cid", "client_secret": "csecret"}})
+	svc, _ := newService(t, fake, mapSecrets{
+		"oauth/studio/github": {"enabled": "true", "client_id": "cid", "client_secret": "csecret"},
+		"oauth/studio/google": {"enabled": "false", "client_id": "cid", "client_secret": "csecret"},
+	})
 	if got := svc.Configured(); !slices.Equal(got, []string{"github"}) {
 		t.Fatalf("configured = %v", got)
 	}

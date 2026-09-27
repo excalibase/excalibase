@@ -98,6 +98,8 @@ var platformRows = []Row{
 	{Methods: get, Pattern: "/api/admin/tiers/", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole},
 	{Methods: put, Pattern: "/api/admin/tiers/{tier}", Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole},
 	{Methods: get, Pattern: "/api/admin/service-accounts/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
+	{Methods: get, Pattern: "/api/admin/sso-providers/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Note: "client secrets are reported as set or not, never returned"},
+	{Methods: put, Pattern: "/api/admin/sso-providers/{provider}", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true, Note: "the OAuth client decides who can sign in to Studio; audited without the secret"},
 	{Methods: get, Pattern: "/api/admin/service-accounts/{name}/tokens", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
 	{Methods: post, Pattern: "/api/admin/service-accounts/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true, Note: "minting a service credential from a narrowed PAT would launder it into a wider one"},
 	{Methods: del, Pattern: "/api/admin/service-accounts/{name}", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true},

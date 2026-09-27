@@ -7,6 +7,7 @@ import { listMyOrgs } from '../api/orgs';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { TierConfigTable } from '../components/TierConfigTable';
+import { SignInProviders } from '../components/SignInProviders';
 import { Loader2, Trash2, ShieldAlert, Cpu, MemoryStick } from 'lucide-react';
 
 // PlatformAdminPage is the operator dashboard. Surfaces cluster capacity,
@@ -28,6 +29,7 @@ export function PlatformAdminPage() {
       <TierConfigTable canMutate={canMutate} />
       <ProjectsTable canMutate={canMutate} />
       <OrgsTable canMutate={canMutate} />
+      {canMutate && <SignInProviders />}
     </div>
   );
 }

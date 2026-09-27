@@ -144,17 +144,40 @@ func (s *Service) config(provider string) (*oauth2.Config, error) {
 	if s.secrets == nil {
 		return nil, ErrProviderNotConfigured
 	}
-	creds, err := s.secrets.Get("oauth/studio/" + provider)
-	if err != nil || creds["client_id"] == "" || creds["client_secret"] == "" {
+	creds, err := s.secrets.Get(SecretPath(provider))
+	if err != nil || creds[FieldEnabled] != "true" || creds[FieldClientID] == "" || creds[FieldClientSecret] == "" {
 		return nil, ErrProviderNotConfigured
 	}
 	return &oauth2.Config{
-		ClientID:     creds["client_id"],
-		ClientSecret: creds["client_secret"],
+		ClientID:     creds[FieldClientID],
+		ClientSecret: creds[FieldClientSecret],
 		Endpoint:     oauth2.Endpoint{AuthURL: p.Endpoints.AuthURL, TokenURL: p.Endpoints.TokenURL},
-		RedirectURL:  s.callbackBase + "/api/auth/oauth/" + provider + "/callback",
+		RedirectURL:  CallbackURL(s.callbackBase, provider),
 		Scopes:       p.Scopes,
 	}, nil
+}
+
+// Vault layout of a provider's settings, read on every sign-in so a change
+// applies without a restart.
+const (
+	FieldEnabled      = "enabled"
+	FieldClientID     = "client_id"
+	FieldClientSecret = "client_secret"
+)
+
+// SecretPath is where a provider's settings live in the vault.
+func SecretPath(provider string) string {
+	return "oauth/studio/" + provider
+}
+
+// CallbackURL is the redirect URI to register at the provider.
+func CallbackURL(studioURL, provider string) string {
+	return strings.TrimRight(studioURL, "/") + "/api/auth/oauth/" + provider + "/callback"
+}
+
+// Names lists the providers in offer order.
+func (s *Service) Names() []string {
+	return append([]string(nil), s.order...)
 }
 
 func randomToken() (string, error) {
