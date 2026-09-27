@@ -32,6 +32,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/storagesvc"
+	"github.com/excalibase/provisioning-poc/internal/studiooauth"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 	"github.com/excalibase/provisioning-poc/internal/wiring"
 	"github.com/excalibase/provisioning-poc/pkg/kmsseal"
@@ -635,6 +636,8 @@ type handlerDeps struct {
 	documentsHandler  *handler.DocumentBrowserHandler
 	adminHandler      *handler.AdminHandler
 	authHandler       *handler.AuthHandler
+	oauthHandler      *handler.StudioOAuthHandler
+	ssoHandler        *handler.SSOProvidersHandler
 	svcAcctHandler    *handler.ServiceAccountHandler
 	orgHandler        *handler.OrgHandler
 	vaultHandler      *handler.VaultHandler
@@ -1202,6 +1205,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		documentsHandler:   buildDocumentBrowser(k8sClient, vc, store),
 		adminHandler:       adminHandler,
 		authHandler:        authHandler,
+		oauthHandler:       buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
+		ssoHandler:         buildSSOProvidersHandler(cfg, vc, sqlStore),
 		svcAcctHandler:     handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
 		orgHandler:         newOrgHandler(sqlStore, store),
 		vaultHandler:       vaultHandler,
@@ -1415,12 +1420,37 @@ func mountSimpleAuthRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storage.
 	})
 }
 
+// buildStudioOAuthHandler offers Google and GitHub sign-in for the providers
+// whose client id and secret are in the vault at oauth/studio/<provider>.
+func buildStudioOAuthHandler(cfg config.AppConfig, vc vaultclient.VaultClient, sqlStore storage.PlatformStore, authHandler *handler.AuthHandler) *handler.StudioOAuthHandler {
+	signIn := studiooauth.New(studioSignInProviders(), vc, sqlStore, cfg.StudioURL, &http.Client{Timeout: 15 * time.Second})
+	return handler.NewStudioOAuthHandler(signIn, authHandler, sqlStore, cfg.StudioURL)
+}
+
+func studioSignInProviders() []studiooauth.Provider {
+	return []studiooauth.Provider{studiooauth.Google(studiooauth.GoogleEndpoints), studiooauth.GitHub(studiooauth.GitHubEndpoints)}
+}
+
+// buildSSOProvidersHandler lets platform admins configure the providers in the
+// vault path sign-in reads on every request.
+func buildSSOProvidersHandler(cfg config.AppConfig, vc vaultclient.VaultClient, audit storage.PlatformStore) *handler.SSOProvidersHandler {
+	names := make([]string, 0, 2)
+	for _, p := range studioSignInProviders() {
+		names = append(names, p.Name)
+	}
+	if vc == nil {
+		return handler.NewSSOProvidersHandler(names, nil, cfg.StudioURL, audit)
+	}
+	return handler.NewSSOProvidersHandler(names, vc, cfg.StudioURL, audit)
+}
+
 // mountAuthRoutes mounts /api/auth (mixed public + authed).
 func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 	r.Route("/api/auth", func(r chi.Router) {
 		r.With(d.rlUnauth).Post("/register", d.authHandler.Register)
 		r.With(d.rlUnauth).Post("/login", d.authHandler.Login)
 		r.With(d.rlUnauth).Get("/setup-status", d.authHandler.GetSetupStatus)
+		r.Route("/oauth", func(r chi.Router) { d.oauthHandler.Routes(r, d.rlUnauth) })
 		r.With(d.rlAuthed).Post("/logout", d.authHandler.Logout)
 		r.With(auth.RequireAuth, d.rlAuthed).Get("/me", d.authHandler.Me)
 		r.With(auth.RequireAuth, d.rlAuthed).Route("/users", func(r chi.Router) {
@@ -1452,6 +1482,13 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 			d.tierHandler.Routes(r)
 		})
 		r.Route("/service-accounts", func(r chi.Router) { d.svcAcctHandler.Routes(r) })
+		// Studio sign-in providers: the OAuth client decides who can sign in,
+		// so only an unnarrowed platform-admin credential may change it.
+		r.Route("/sso-providers", func(r chi.Router) {
+			r.Use(auth.RequirePermission(auth.PermManageUsers))
+			r.Use(auth.RequireUnrestrictedCredentialForWrites)
+			d.ssoHandler.Routes(r)
+		})
 	})
 }
 

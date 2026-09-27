@@ -12,6 +12,9 @@ import (
 // userColumns is the select list every user read shares, in scanUserRow order.
 const userColumns = `id, username, email, password_hash, role, active, kind, email_verified_at, created_at, updated_at`
 
+// prefixedUserColumns is userColumns for a query that joins users as u.
+const prefixedUserColumns = `u.id, u.username, u.email, u.password_hash, u.role, u.active, u.kind, u.email_verified_at, u.created_at, u.updated_at`
+
 func (s *Store) CreateUser(ctx context.Context, u *domain.User) error {
 	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx,

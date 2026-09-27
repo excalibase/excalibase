@@ -10,6 +10,7 @@ import { ProjectLayout } from './components/layout/ProjectLayout';
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
 const RegisterPage = lazy(() => import('./pages/RegisterPage').then(m => ({ default: m.RegisterPage })));
 const VerifyEmailPage = lazy(() => import('./pages/VerifyEmailPage').then(m => ({ default: m.VerifyEmailPage })));
+const OAuthCompletePage = lazy(() => import('./pages/OAuthCompletePage').then(m => ({ default: m.OAuthCompletePage })));
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage').then(m => ({ default: m.ResetPasswordPage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
 const OrgsPage = lazy(() => import('./pages/OrgsPage').then(m => ({ default: m.OrgsPage })));
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/verify-email" element={<VerifyEmailPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/oauth/complete" element={<OAuthCompletePage />} />
           </Route>
 
           {/* Platform pages */}

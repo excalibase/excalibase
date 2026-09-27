@@ -363,6 +363,26 @@ with `POST /api/auth/users/{userId}/verify-email` (audited as
 issued to, and only once that address is verified. Completing a password reset
 also verifies the address, since the reset link reached the mailbox.
 
+### 3.8 Studio sign-in with Google and GitHub
+
+Studio offers "Continue with Google/GitHub" for each enabled provider. A
+platform admin configures them in Studio (Platform admin → Sign-in providers,
+backed by `GET /api/admin/sso-providers` and `PUT /api/admin/sso-providers/{provider}`):
+register an OAuth app at the provider with the callback URL the screen shows
+(`STUDIO_URL/api/auth/oauth/<google|github>/callback`), then paste its client
+ID and secret and enable it. The settings live in the vault at
+`oauth/studio/<provider>` and apply to the next sign-in without a restart. The
+secret is write-only (reported only as set), and every change is audited as
+`sso_provider.update` with who made it, never the secret.
+
+The flow is the authorization code with PKCE; the state is bound to the
+browser by a short-lived cookie and spent once. Only a provider-verified email
+is accepted, and it counts as a verified Studio address. A provider account is
+linked to the Studio account with the same address instead of creating a
+second one. New accounts follow password sign-up's rules: the first admin
+still comes from the setup token, `REGISTRATION_MODE=invite` needs an invite
+link, and an invite only works for its own address.
+
 ## 4. Day-2 operations
 
 ### 4.1 Upgrades

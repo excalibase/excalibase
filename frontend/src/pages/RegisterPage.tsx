@@ -4,6 +4,7 @@ import { Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { ResendVerification } from '../components/auth/ResendVerification';
+import { ProviderButtons } from '../components/auth/ProviderSignIn';
 
 export function RegisterPage() {
   const [searchParams] = useSearchParams();
@@ -105,6 +106,8 @@ export function RegisterPage() {
         {loading && <Loader2 className="w-4 h-4 animate-spin" />}
         {loading ? 'Creating account...' : 'Create Account'}
       </Button>
+
+      <ProviderButtons invite={inviteToken || undefined} />
 
       <p className="text-center text-sm text-text-secondary">
         Already have an account?{' '}

@@ -46,6 +46,9 @@ var publicRows = []Row{
 
 	{Methods: post, Pattern: "/api/auth/register", Auth: AuthPublic, Note: "rate-limited per IP; invite-only mode gates it in the handler"},
 	{Methods: post, Pattern: "/api/auth/login", Auth: AuthPublic},
+	{Methods: get, Pattern: "/api/auth/oauth/providers", Auth: AuthPublic, Note: "Studio shows a sign-in button per configured provider"},
+	{Methods: get, Pattern: "/api/auth/oauth/{provider}/start", Auth: AuthPublic, Note: "someone signing in has no session yet; rate-limited per IP"},
+	{Methods: get, Pattern: "/api/auth/oauth/{provider}/callback", Auth: AuthPublic, Note: "the browser-bound state and the PKCE-verified code are the credential; rate-limited per IP"},
 	{Methods: get, Pattern: "/api/auth/setup-status", Auth: AuthPublic, Note: "first-run wizard polls it before any user exists"},
 	{Methods: post, Pattern: "/api/auth/logout", Auth: AuthPublic, Note: "clearing a cookie needs no proof of who owned it"},
 
@@ -95,6 +98,8 @@ var platformRows = []Row{
 	{Methods: get, Pattern: "/api/admin/tiers/", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole},
 	{Methods: put, Pattern: "/api/admin/tiers/{tier}", Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole},
 	{Methods: get, Pattern: "/api/admin/service-accounts/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
+	{Methods: get, Pattern: "/api/admin/sso-providers/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Note: "client secrets are reported as set or not, never returned"},
+	{Methods: put, Pattern: "/api/admin/sso-providers/{provider}", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true, Note: "the OAuth client decides who can sign in to Studio; audited without the secret"},
 	{Methods: get, Pattern: "/api/admin/service-accounts/{name}/tokens", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
 	{Methods: post, Pattern: "/api/admin/service-accounts/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true, Note: "minting a service credential from a narrowed PAT would launder it into a wider one"},
 	{Methods: del, Pattern: "/api/admin/service-accounts/{name}", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Unrestricted: true},

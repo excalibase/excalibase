@@ -33,6 +33,7 @@ describe('invite link flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useAuthStore.getState().clearAuth();
+    vi.mocked(api.get).mockResolvedValue({ data: { providers: [] } } as never);
     vi.mocked(api.post).mockResolvedValue({ data: { token: 't', user } } as never);
   });
 
@@ -124,6 +125,7 @@ describe('sign-in and registration errors', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useAuthStore.getState().clearAuth();
+    vi.mocked(api.get).mockResolvedValue({ data: { providers: [] } } as never);
   });
 
   test('empty forms are refused without a request', async () => {

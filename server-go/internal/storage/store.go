@@ -337,6 +337,18 @@ type UserStore interface {
 // already used, expired, or was sent to an address the account no longer has.
 var ErrEmailVerificationInvalid = errors.New("verification link is invalid or has expired")
 
+// ErrOAuthStateInvalid is returned when a sign-in state is unknown, spent or expired.
+var ErrOAuthStateInvalid = errors.New("sign-in state is invalid or has expired")
+
+// StudioIdentityStore links Google and GitHub accounts to Studio accounts.
+type StudioIdentityStore interface {
+	SaveOAuthState(ctx context.Context, stateHash string, state domain.OAuthState, expiresAt time.Time) error
+	ConsumeOAuthState(ctx context.Context, stateHash string, now time.Time) (*domain.OAuthState, error)
+	FindUserByIdentity(ctx context.Context, provider, subject string) (*domain.User, error)
+	FindUserByEmailFold(ctx context.Context, email string) (*domain.User, error)
+	LinkStudioIdentity(ctx context.Context, provider, subject, userID, email string) error
+}
+
 // ErrUserNotFound is returned when an operation names a user that does not exist.
 var ErrUserNotFound = errors.New("user not found")
 
