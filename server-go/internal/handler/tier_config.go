@@ -121,5 +121,8 @@ func validateTierConfig(tc config.TierConfig) error {
 	if tc.CPU == "" || tc.Memory == "" || tc.StorageSize == "" {
 		return errors.New("cpu, memory and storageSize are required")
 	}
+	if _, err := tc.SlotWALKeepSize(); err != nil {
+		return errors.New("storageSize must be a storage quantity such as 5Gi")
+	}
 	return nil
 }

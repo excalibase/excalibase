@@ -137,3 +137,13 @@ func TestTierHandler_Update_RejectsNegativeAutoPause(t *testing.T) {
 		t.Errorf("expected 400 for negative autoPauseAfterDays, got %d", rec.Code)
 	}
 }
+
+func TestTierHandler_Update_RejectsUnusableStorageSize(t *testing.T) {
+	h := NewTierHandler(&fakeTierStore{m: map[domain.TierType]config.TierConfig{}})
+	rec := httptest.NewRecorder()
+	body := `{"instances":1,"storageSize":"lots","memory":"512Mi","cpu":"0.5"}`
+	h.Update(rec, newTierReqWithParam("PUT", body, string(domain.Free)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for an unparseable storageSize, got %d", rec.Code)
+	}
+}
