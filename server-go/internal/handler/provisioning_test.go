@@ -40,6 +40,7 @@ func setupTestRouterWithVault(t *testing.T, vault *fakeVault) (chi.Router, *stor
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
 	svc.SetVault(vault)
+	withBackupTarget(t, svc)
 	orgs := fakestore.NewOrgs()
 	orgs.AddOrg("org", domain.Free)
 	svc.SetOrgStore(orgs)
@@ -202,6 +203,7 @@ func TestListInstances_NilOrgStoreFailsClosed(t *testing.T) {
 
 	factory := provisioner.NewFactory()
 	svc := service.NewProvisioningService(store, factory, nil)
+	withBackupTarget(t, svc)
 	h := NewProvisioningHandler(svc, nil) // nil org store → must fail closed
 
 	r := chi.NewRouter()

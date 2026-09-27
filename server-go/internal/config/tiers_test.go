@@ -58,3 +58,15 @@ func TestGetTierConfig_AutoPauseDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryBuiltInTierIsBackedUp(t *testing.T) {
+	for _, tier := range []domain.TierType{domain.Free, domain.Standard, domain.Enterprise} {
+		tc, err := GetTierConfig(tier)
+		if err != nil {
+			t.Fatalf("GetTierConfig(%s): %v", tier, err)
+		}
+		if !tc.BackupEnabled {
+			t.Errorf("%s has no backups", tier)
+		}
+	}
+}

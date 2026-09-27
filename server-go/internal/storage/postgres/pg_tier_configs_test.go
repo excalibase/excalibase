@@ -88,3 +88,16 @@ func TestTierConfigs_AutoPauseColumn(t *testing.T) {
 		t.Errorf("round trip mismatch:\n got  %+v\n want %+v", got, want)
 	}
 }
+
+func TestTierConfigs_EveryStoredTierIsBackedUp(t *testing.T) {
+	store := testStore(t)
+	all, err := store.ListTierConfigs(context.Background())
+	if err != nil {
+		t.Fatalf("ListTierConfigs: %v", err)
+	}
+	for tier, tc := range all {
+		if !tc.BackupEnabled {
+			t.Errorf("%s is stored without backups", tier)
+		}
+	}
+}

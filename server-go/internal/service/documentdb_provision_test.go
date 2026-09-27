@@ -32,6 +32,7 @@ func documentDBProvisionService(t *testing.T) (*ProvisioningService, storage.Ins
 	svc := NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
 	svc.SetOrgStore(testOrgs())
 	setOrgTier(svc, "org1", domain.Enterprise)
+	withBackupTarget(t, svc)
 	return svc, store
 }
 

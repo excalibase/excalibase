@@ -119,6 +119,9 @@ func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, service.ErrOrgTierUnresolved):
 		log.Printf("project creation refused: %v", err)
 		httpError(w, service.ErrOrgTierUnresolved.Error(), http.StatusInternalServerError)
+	case errors.Is(err, service.ErrBackupTargetNotConfigured):
+		log.Printf("project creation refused: %v", err)
+		httpError(w, service.ErrBackupTargetNotConfigured.Error(), http.StatusServiceUnavailable)
 	default:
 		return false
 	}

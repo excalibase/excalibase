@@ -63,6 +63,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	orgs.AddOrg("org-free", domain.Free)
 	orgs.AddOrg("org-notier", "PLATINUM")
 	provSvc.SetOrgStore(orgs)
+	withBackupTarget(t, provSvc)
 	backupSvc.SetProjectRegistrar(provSvc)
 	backupSvc.SetOrgProjectCapacity(provSvc)
 	backupSvc.SetRestorePlanSource(provSvc)

@@ -827,7 +827,9 @@ func buildProvisioningService(
 		provSvc.SetOperationClaimer(lifecycleClaimer)
 	}
 
-	provSvc.SetBackupDefaults(backupDefaults(cfg))
+	if err := provSvc.SetBackupDefaults(backupDefaults(cfg)); err != nil {
+		log.Fatalf("backup target: %v", err)
+	}
 	// Deprovision with confirmDeleteBackups resolves the store through
 	// provSvc.BackupStorage() — the same source backups are written with.
 	provSvc.SetBackupPurger(service.NewBackupPurger(provSvc, dockerBackupKeyPrefix,

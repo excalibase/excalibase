@@ -313,7 +313,7 @@ Then, at `https://<admin host>/login` as `admin`:
 ### 3.5 Tiers
 
 Tier defaults are seeded from `server-go/internal/config/tiers.go` into
-`tier_configs`: FREE 0.5 CPU / 512Mi / 5Gi / 1 project / no backup /
+`tier_configs`: FREE 0.5 CPU / 512Mi / 5Gi / 1 project / backup /
 auto-pause 7d; STANDARD 2 CPU / 4Gi / 50Gi / 5 projects / backup;
 ENTERPRISE 4 CPU / 16Gi / 500Gi / unlimited / backup. All tenants are
 single-instance CNPG clusters (no HA per tenant).
@@ -326,7 +326,7 @@ Resize for your nodes through the admin API (`PUT /api/admin/tiers/{tier}`,
 PAT=$(kubectl get secret platform-bootstrap -n excalibase-platform -o jsonpath='{.data.provisioning-pat}' | base64 -d)
 curl -sf -X PUT https://<admin host>/api/admin/tiers/FREE \
   -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' \
-  -d '{"maxProjects":1,"instances":1,"storageSize":"5Gi","memory":"512Mi","cpu":"0.25","backupEnabled":false,"autoPauseAfterDays":7}'
+  -d '{"maxProjects":1,"instances":1,"storageSize":"5Gi","memory":"512Mi","cpu":"0.25","backupEnabled":true,"autoPauseAfterDays":7}'
 curl -sf -H "Authorization: Bearer $PAT" https://<admin host>/api/tiers | jq
 ```
 

@@ -36,6 +36,7 @@ func provisionAs(t *testing.T, memberships map[string]string) int {
 		orgs.AddMember(orgID, createAuthzCaller, role)
 	}
 	svc := service.NewProvisioningService(store, provisioner.NewFactory(), nil)
+	withBackupTarget(t, svc)
 	svc.SetOrgStore(orgs)
 	h := NewProvisioningHandler(svc, orgs)
 	r := chi.NewRouter()
