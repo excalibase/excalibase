@@ -371,6 +371,19 @@ func buildBackupCredentialIssuer(cfg config.AppConfig) *service.BackupCredential
 	if err != nil {
 		log.Fatalf("BACKUP_CREDENTIALS_PROVIDER: %v", err)
 	}
+	if err := objectcreds.ValidateLifetimes(cfg.BackupCredentialsProvider, cfg.BackupCredentialsTTL, cfg.BackupCredentialsRenewInterval); err != nil {
+		log.Fatalf("BACKUP_CREDENTIALS_TTL / BACKUP_CREDENTIALS_RENEW_INTERVAL: %v", err)
+	}
+	// R2 signing needs no network, so a store it cannot sign for is caught here
+	// rather than on the first project.
+	if cfg.BackupCredentialsProvider == objectcreds.ProviderR2 && cfg.BackupEndpoint != "" {
+		if _, err := minter.Mint(context.Background(), objectcreds.Parent{
+			AccessKeyID: cfg.BackupAccessKeyID, SecretAccessKey: cfg.BackupSecretAccessKey,
+			Endpoint: cfg.BackupEndpoint, Bucket: cfg.BackupBucket,
+		}, objectcreds.Scope{Prefix: "boot-check/", Access: objectcreds.ReadOnly, TTL: time.Minute}); err != nil {
+			log.Fatalf("BACKUP_CREDENTIALS_PROVIDER=r2 cannot sign for the backup store: %v", err)
+		}
+	}
 	issuer, err := service.NewBackupCredentialIssuer(service.BackupCredentialIssuerConfig{
 		Minter:    minter,
 		OpenStore: service.AWSObjectDeleterFactory(backupUsePathStyle()),

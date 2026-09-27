@@ -51,6 +51,25 @@ func TestLiveR2TemporaryCredentialsStayInsideTheirPrefix(t *testing.T) {
 	}
 	put(t, reader, parent, own+"b.txt", errAccessDenied)
 
+	// The production prefix is <project>/cloud/: a sibling project id or a
+	// sibling directory must not match it.
+	project := "exc476-live-p" + hex.EncodeToString(suffix)
+	scoped := mint(t, parent, Scope{Prefix: project + "/cloud/", Access: ReadWrite, TTL: 10 * time.Minute})
+	put(t, scoped, parent, project+"/cloud/ok", nil)
+	put(t, scoped, parent, project+"x/cloud/sibling", errAccessDenied)
+	put(t, scoped, parent, project+"/cloudy/sibling", errAccessDenied)
+	put(t, scoped, parent, project+"/escape", errAccessDenied)
+	list(t, scoped, parent, project+"/", errAccessDenied)
+	escaped := project + "/cloud/../../" + other + "escaped"
+	_, escErr := client(scoped, parent).PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(parent.Bucket), Key: aws.String(escaped), Body: strings.NewReader("x")})
+	platform := Credentials{AccessKeyID: parent.AccessKeyID, SecretAccessKey: parent.SecretAccessKey}
+	if _, err := client(platform, parent).HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(parent.Bucket), Key: aws.String(other + "escaped")}); err == nil {
+		t.Fatalf("a dot-dot key escaped the prefix (put err %v)", escErr)
+	}
+	for _, key := range []string{project + "/cloud/ok", escaped} {
+		_, _ = client(platform, parent).DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(parent.Bucket), Key: aws.String(key)})
+	}
+
 	shortLived := mint(t, parent, Scope{Prefix: own, Access: ReadWrite, TTL: 2 * time.Second})
 	time.Sleep(4 * time.Second)
 	put(t, shortLived, parent, own+"late.txt", errAccessDenied)

@@ -51,7 +51,8 @@ func TestBackupCredentialsSecretCarriesTheTemporaryCredentialAndItsExpiry(t *tes
 	expires := time.Date(2026, 9, 28, 15, 0, 0, 0, time.UTC)
 	data, err := BackupCredentialsSecretData(&domain.S3Credentials{
 		AccessKeyID: "tmp-id", SecretAccessKey: "tmp-secret", SessionToken: "tmp-token", ExpiresAt: expires,
-		IssuedBy: BackupKeyFingerprint("platform-key"),
+		IssuedBy: BackupKeyFingerprint(&domain.S3Credentials{AccessKeyID: "platform-key", SecretAccessKey: "s"}),
+		Bucket:   "backups", Endpoint: "https://acct.r2.cloudflarestorage.com",
 	})
 	if err != nil {
 		t.Fatalf("BackupCredentialsSecretData: %v", err)
@@ -59,10 +60,14 @@ func TestBackupCredentialsSecretCarriesTheTemporaryCredentialAndItsExpiry(t *tes
 	want := map[string]string{
 		"ACCESS_KEY_ID": "tmp-id", "ACCESS_SECRET_KEY": "tmp-secret",
 		BackupCredentialsSessionTokenKey: "tmp-token", BackupCredentialsExpiresAtKey: "2026-09-28T15:00:00Z",
-		BackupCredentialsIssuedByKey: BackupKeyFingerprint("platform-key"),
+		BackupCredentialsIssuedByKey: BackupKeyFingerprint(&domain.S3Credentials{AccessKeyID: "platform-key", SecretAccessKey: "s"}),
+		BackupCredentialsBucketKey:   "backups", BackupCredentialsEndpointKey: "https://acct.r2.cloudflarestorage.com",
 	}
-	if fp := BackupKeyFingerprint("platform-key"); len(fp) != 16 || fp == "platform-key" || fp == BackupKeyFingerprint("other-key") {
-		t.Errorf("fingerprint %q must be a short digest that tells keys apart", fp)
+	key := func(id, secret string) string {
+		return BackupKeyFingerprint(&domain.S3Credentials{AccessKeyID: id, SecretAccessKey: secret})
+	}
+	if fp := key("platform-key", "s"); len(fp) != 16 || fp == key("other-key", "s") || fp == key("platform-key", "rolled") {
+		t.Errorf("fingerprint %q must be a short digest that changes with the key id or its secret", fp)
 	}
 	if len(data) != len(want) {
 		t.Errorf("secret keys: got %d, want %d", len(data), len(want))

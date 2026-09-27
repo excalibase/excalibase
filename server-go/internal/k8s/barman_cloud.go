@@ -69,6 +69,10 @@ const (
 	// credential derives from: revoking that key kills the credential, so a
 	// rotation is renewed at once.
 	BackupCredentialsIssuedByKey = "ISSUED_BY"
+	// BackupCredentialsBucketKey and BackupCredentialsEndpointKey name the
+	// store the credential works against; renewal refuses to mint for another.
+	BackupCredentialsBucketKey   = "BUCKET"
+	BackupCredentialsEndpointKey = "ENDPOINT"
 	// SkipEmptyWalArchiveCheckAnnotation turns off barman-cloud-check-wal-archive,
 	// which calls HeadBucket: a prefix-scoped temporary credential cannot.
 	// The platform proves the prefix empty itself before minting.
@@ -91,12 +95,15 @@ func BackupCredentialsSecretData(creds *domain.S3Credentials) (map[string][]byte
 		BackupCredentialsSessionTokenKey: []byte(creds.SessionToken),
 		BackupCredentialsExpiresAtKey:    []byte(creds.ExpiresAt.UTC().Format(time.RFC3339)),
 		BackupCredentialsIssuedByKey:     []byte(creds.IssuedBy),
+		BackupCredentialsBucketKey:       []byte(creds.Bucket),
+		BackupCredentialsEndpointKey:     []byte(creds.Endpoint),
 	}, nil
 }
 
-// BackupKeyFingerprint names a platform key without revealing it.
-func BackupKeyFingerprint(accessKeyID string) string {
-	digest := sha256.Sum256([]byte(accessKeyID))
+// BackupKeyFingerprint names a platform key without revealing it. It covers
+// the secret too: rolling a token keeps its id but kills what it signed.
+func BackupKeyFingerprint(key *domain.S3Credentials) string {
+	digest := sha256.Sum256([]byte(key.AccessKeyID + "\x00" + key.SecretAccessKey))
 	return hex.EncodeToString(digest[:8])
 }
 

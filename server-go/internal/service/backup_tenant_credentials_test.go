@@ -144,3 +144,16 @@ func TestADockerProjectNeedsNoTemporaryCredentials(t *testing.T) {
 		t.Error("docker mode must not mint")
 	}
 }
+
+func TestARestorePlanCarriesNoStoreKey(t *testing.T) {
+	svc, _, _ := setupProvisioningTest(t)
+	withPlatformBackupKey(t, svc)
+	setOrgTier(svc, "org1", domain.Standard)
+	plan, err := svc.RestorePlan(context.Background(), &domain.DatabaseInstance{ProjectID: "src", OrgID: "org1"})
+	if err != nil {
+		t.Fatalf("RestorePlan: %v", err)
+	}
+	if plan.Backup == nil || !plan.Backup.Enabled || plan.Backup.S3 != nil {
+		t.Fatalf("plan backup %+v: backups on, and no key carried (the adapter mints its own)", plan.Backup)
+	}
+}

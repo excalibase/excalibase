@@ -214,6 +214,10 @@ func (s *ProvisioningService) RestorePlan(ctx context.Context, source *domain.Da
 	if err := s.requireBackupTarget(&req, tier); err != nil {
 		return RestorePlan{}, err
 	}
+	if req.Backup != nil {
+		// The target exists; the restore mints its own credentials from it.
+		req.Backup.S3 = nil
+	}
 	return RestorePlan{Tier: tierType, Config: tier, Backup: req.Backup}, nil
 }
 

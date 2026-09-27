@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/metrics"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -53,7 +55,8 @@ func (lab *renewalLab) project(t *testing.T, id, status string, expires time.Tim
 	}
 	data, err := k8s.BackupCredentialsSecretData(&domain.S3Credentials{
 		AccessKeyID: "old", SecretAccessKey: "old", SessionToken: "old-" + id, ExpiresAt: expires,
-		IssuedBy: k8s.BackupKeyFingerprint(platformStore().AccessKeyID),
+		IssuedBy: k8s.BackupKeyFingerprint(platformStore()),
+		Bucket:   platformStore().Bucket, Endpoint: platformStore().Endpoint,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -99,17 +102,53 @@ func TestRenewalFollowsARotatedPlatformKeyAtOnce(t *testing.T) {
 	lab := newRenewalLab(t)
 	lab.project(t, "fresh", "ACTIVE", lab.now.Add(11*time.Hour))
 	data := lab.mock.Secrets["org-fresh/"+k8s.BackupCredentialsSecretName]
-	data[k8s.BackupCredentialsIssuedByKey] = []byte(k8s.BackupKeyFingerprint("previous-platform-key"))
+	previous := platformStore()
+	previous.SecretAccessKey = "the secret before the token was rolled"
+	data[k8s.BackupCredentialsIssuedByKey] = []byte(k8s.BackupKeyFingerprint(previous))
 
 	if report := lab.renewer.RenewDue(context.Background()); report.Renewed != 1 {
 		t.Fatalf("report %+v, want the credential from the old key renewed", report)
 	}
 	renewed := lab.mock.Secrets["org-fresh/"+k8s.BackupCredentialsSecretName]
-	if string(renewed[k8s.BackupCredentialsIssuedByKey]) != k8s.BackupKeyFingerprint(platformStore().AccessKeyID) {
+	if string(renewed[k8s.BackupCredentialsIssuedByKey]) != k8s.BackupKeyFingerprint(platformStore()) {
 		t.Errorf("renewed credential names issuer %q", renewed[k8s.BackupCredentialsIssuedByKey])
 	}
 	if report := lab.renewer.RenewDue(context.Background()); report.Renewed != 0 {
 		t.Errorf("a credential from the current key was renewed again: %+v", report)
+	}
+}
+
+func TestRenewalRefusesWhenThePlatformStoreMovedAwayFromTheProject(t *testing.T) {
+	// The cluster still archives to the store its ObjectStore names; a
+	// credential for another bucket would only make it fail quietly.
+	lab := newRenewalLab(t)
+	lab.project(t, "a", "ACTIVE", lab.now.Add(time.Hour))
+	moved := platformStore()
+	moved.Bucket = "another-bucket"
+	lab.renewer.cfg.Storage = StaticBackupStorage(moved)
+
+	report := lab.renewer.RenewDue(context.Background())
+	if len(report.Failed) != 1 || !strings.Contains(report.Failed[0].Error(), "another-bucket") {
+		t.Fatalf("report %+v, want a failure naming the moved store", report)
+	}
+	if got := lab.token("a"); got != "old-a" {
+		t.Errorf("a credential for the wrong store was written: %q", got)
+	}
+}
+
+func TestExpiryIsExportedOnlyForProjectsThisLeaderSaw(t *testing.T) {
+	lab := newRenewalLab(t)
+	lab.project(t, "kept", "ACTIVE", lab.now.Add(11*time.Hour))
+	metrics.SetBackupCredentialsExpiry("vanished-project", lab.now)
+
+	lab.renewer.renewIfLeader(context.Background(), fixedLeader{leader: true})
+	exported := metrics.BackupCredentialsExpiryProjects()
+	if !slices.Contains(exported, "kept") || slices.Contains(exported, "vanished-project") {
+		t.Fatalf("exported %v, want only the projects of this pass", exported)
+	}
+	lab.renewer.renewIfLeader(context.Background(), fixedLeader{leader: false})
+	if exported := metrics.BackupCredentialsExpiryProjects(); len(exported) != 0 {
+		t.Fatalf("a follower still exports %v", exported)
 	}
 }
 

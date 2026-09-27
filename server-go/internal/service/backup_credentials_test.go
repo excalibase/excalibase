@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,7 +85,7 @@ func TestANewProjectGetsReadWriteCredentialsForItsOwnPrefixOnly(t *testing.T) {
 	if creds.Bucket != "backups" || creds.Endpoint != testR2Endpoint || creds.Region != "auto" {
 		t.Errorf("the credential must still name where it works: %+v", creds)
 	}
-	if creds.IssuedBy != k8s.BackupKeyFingerprint("platform-key") {
+	if creds.IssuedBy != k8s.BackupKeyFingerprint(platformStore()) {
 		t.Errorf("issued by %q, want the platform key's fingerprint", creds.IssuedBy)
 	}
 	if minter.parents[0].AccessKeyID != "platform-key" || minter.parents[0].Bucket != "backups" {
@@ -148,10 +149,20 @@ func TestARestoreReadsItsSourceReadOnlyForAShortTime(t *testing.T) {
 	}
 }
 
-func TestAMintFailureIsReturnedNotPapered(t *testing.T) {
-	minter := &recordingMinter{err: errors.New("signer broken")}
-	if _, err := newTestIssuer(t, minter, newFakeObjectDeleter()).ForNewProject(context.Background(), platformStore(), "proj1"); err == nil {
-		t.Fatal("a failed mint must fail the caller")
+func TestAMintFailureIsReturnedWithoutItsInternals(t *testing.T) {
+	minter := &recordingMinter{err: errors.New("assume role at http://minio.internal:9000: AccessDenied")}
+	_, err := newTestIssuer(t, minter, newFakeObjectDeleter()).ForNewProject(context.Background(), platformStore(), "proj1")
+	if !errors.Is(err, ErrBackupCredentialsUnavailable) {
+		t.Fatalf("err = %v, want ErrBackupCredentialsUnavailable", err)
+	}
+	if strings.Contains(err.Error(), "minio.internal") || strings.Contains(err.Error(), "AccessDenied") {
+		t.Errorf("the caller must not see the store's internals: %v", err)
+	}
+	objects := newFakeObjectDeleter()
+	objects.listErr = errors.New("dial tcp 10.0.0.9:443: refused")
+	_, err = newTestIssuer(t, &recordingMinter{}, objects).ForNewProject(context.Background(), platformStore(), "proj1")
+	if !errors.Is(err, ErrBackupCredentialsUnavailable) || strings.Contains(err.Error(), "10.0.0.9") {
+		t.Errorf("a failed prefix check: %v", err)
 	}
 }
 

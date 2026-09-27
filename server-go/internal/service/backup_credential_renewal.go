@@ -12,6 +12,10 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+// renewalTimeout bounds one project's renewal, so a hung store cannot stall
+// every other project's.
+const renewalTimeout = 30 * time.Second
+
 // BackupCredentialRenewerConfig wires the renewer.
 type BackupCredentialRenewerConfig struct {
 	Instances storage.InstanceStore
@@ -50,6 +54,7 @@ func NewBackupCredentialRenewer(cfg BackupCredentialRenewerConfig) *BackupCreden
 // half its lifetime left.
 func (r *BackupCredentialRenewer) RenewDue(ctx context.Context) RenewalReport {
 	var report RenewalReport
+	metrics.ResetBackupCredentialsExpiry()
 	instances, err := r.cfg.Instances.FindAll()
 	if err != nil {
 		report.Failed = append(report.Failed, fmt.Errorf("list projects: %w", err))
@@ -57,10 +62,11 @@ func (r *BackupCredentialRenewer) RenewDue(ctx context.Context) RenewalReport {
 	}
 	for _, inst := range instances {
 		if !archivesToObjectStore(inst) {
-			metrics.ForgetBackupCredentialsExpiry(inst.ProjectID)
 			continue
 		}
-		renewed, err := r.renewProject(ctx, inst)
+		projectCtx, cancel := context.WithTimeout(ctx, renewalTimeout)
+		renewed, err := r.renewProject(projectCtx, inst)
+		cancel()
 		if err != nil {
 			report.Failed = append(report.Failed, fmt.Errorf("project %s: %w", inst.ProjectID, err))
 			metrics.CountBackupCredentialRenewal(false)
@@ -94,6 +100,9 @@ func (r *BackupCredentialRenewer) renewProject(ctx context.Context, inst *domain
 	if !ok {
 		return false, ErrBackupStorageNotConfigured
 	}
+	if err := sameStore(current, store); err != nil {
+		return false, err
+	}
 	if !r.due(inst.ProjectID, current, store) {
 		return false, nil
 	}
@@ -120,10 +129,20 @@ func (r *BackupCredentialRenewer) due(projectID string, current map[string][]byt
 		return true
 	}
 	metrics.SetBackupCredentialsExpiry(projectID, expiry)
-	if string(current[k8s.BackupCredentialsIssuedByKey]) != k8s.BackupKeyFingerprint(store.AccessKeyID) {
+	if string(current[k8s.BackupCredentialsIssuedByKey]) != k8s.BackupKeyFingerprint(store) {
 		return true
 	}
 	return expiry.Sub(r.cfg.Now()) <= r.cfg.Issuer.RenewWithin()
+}
+
+// sameStore refuses to renew a project against a store its cluster does not
+// archive to: its ObjectStore still names the old bucket and endpoint.
+func sameStore(current map[string][]byte, store *domain.S3Credentials) error {
+	bucket, endpoint := string(current[k8s.BackupCredentialsBucketKey]), string(current[k8s.BackupCredentialsEndpointKey])
+	if (bucket != "" && bucket != store.Bucket) || (endpoint != "" && endpoint != store.Endpoint) {
+		return fmt.Errorf("the project archives to bucket %q at %q but the platform store is now bucket %q at %q", bucket, endpoint, store.Bucket, store.Endpoint)
+	}
+	return nil
 }
 
 // Start renews on a timer while this replica leads. The first pass runs at
@@ -148,6 +167,7 @@ func (r *BackupCredentialRenewer) Start(ctx context.Context, leader LeaderChecke
 
 func (r *BackupCredentialRenewer) renewIfLeader(ctx context.Context, leader LeaderChecker) {
 	if ok, err := leader.IsLeader(ctx); err != nil || !ok {
+		metrics.ResetBackupCredentialsExpiry()
 		if err != nil {
 			log.Printf("ERROR: backup credential renewal: leadership check: %v", err)
 		}

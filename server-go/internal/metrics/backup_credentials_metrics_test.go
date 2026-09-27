@@ -19,6 +19,14 @@ func TestBackupCredentialExpiryIsExportedPerProject(t *testing.T) {
 	}
 }
 
+func TestResetDropsEveryExportedExpiry(t *testing.T) {
+	SetBackupCredentialsExpiry("metrics-test-a", time.Unix(1, 0))
+	ResetBackupCredentialsExpiry()
+	if got := BackupCredentialsExpiryProjects(); len(got) != 0 {
+		t.Fatalf("after reset: %v", got)
+	}
+}
+
 func TestBackupCredentialRenewalsAreCountedByResult(t *testing.T) {
 	failedBefore := testutil.ToFloat64(backupCredentialRenewals.WithLabelValues("failed"))
 	renewedBefore := testutil.ToFloat64(backupCredentialRenewals.WithLabelValues("renewed"))

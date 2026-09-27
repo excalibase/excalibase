@@ -160,6 +160,34 @@ func ForgetBackupCredentialsExpiry(project string) {
 	backupCredentialsExpiry.DeleteLabelValues(project)
 }
 
+// ResetBackupCredentialsExpiry drops every project: a pass re-exports what it
+// sees, and a replica that stops leading exports nothing.
+func ResetBackupCredentialsExpiry() {
+	backupCredentialsExpiry.Reset()
+}
+
+// BackupCredentialsExpiryProjects lists the projects currently exported.
+func BackupCredentialsExpiryProjects() []string {
+	ch := make(chan prometheus.Metric, 64)
+	go func() {
+		backupCredentialsExpiry.Collect(ch)
+		close(ch)
+	}()
+	var projects []string
+	for metric := range ch {
+		var sample dto.Metric
+		if err := metric.Write(&sample); err != nil {
+			continue
+		}
+		for _, label := range sample.GetLabel() {
+			if label.GetName() == "project" {
+				projects = append(projects, label.GetValue())
+			}
+		}
+	}
+	return projects
+}
+
 // CountBackupCredentialRenewal records one renewal attempt.
 func CountBackupCredentialRenewal(renewed bool) {
 	result := "failed"

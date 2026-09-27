@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -19,6 +20,9 @@ var (
 	// ErrBackupPrefixInUse refuses to hand a project a prefix that already
 	// holds objects, such as a deleted project's retained backups.
 	ErrBackupPrefixInUse = errors.New("the project's backup prefix already holds objects")
+	// ErrBackupCredentialsUnavailable is a mint or prefix check that failed on
+	// the platform's side; the cause is logged, not returned.
+	ErrBackupCredentialsUnavailable = errors.New("backup credentials could not be issued")
 	// ErrBackupStoreChosenByPlatform refuses a request that names its own
 	// object store: where backups go is the platform's decision.
 	ErrBackupStoreChosenByPlatform = errors.New("backup storage is chosen by the platform; remove backup.s3 from the request")
@@ -90,14 +94,14 @@ func (i *BackupCredentialIssuer) mint(ctx context.Context, store *domain.S3Crede
 		Endpoint: store.Endpoint, Bucket: store.Bucket, Region: store.Region,
 	}, objectcreds.Scope{Prefix: k8s.BarmanObjectPrefix(projectID), Access: access, TTL: ttl})
 	if err != nil {
-		return nil, fmt.Errorf("mint backup credentials for %s: %w", projectID, err)
+		return nil, unavailable(projectID, "mint", err)
 	}
 	return &domain.S3Credentials{
 		AccessKeyID:     creds.AccessKeyID,
 		SecretAccessKey: creds.SecretAccessKey,
 		SessionToken:    creds.SessionToken,
 		ExpiresAt:       creds.ExpiresAt,
-		IssuedBy:        k8s.BackupKeyFingerprint(store.AccessKeyID),
+		IssuedBy:        k8s.BackupKeyFingerprint(store),
 		Bucket:          store.Bucket,
 		Region:          store.Region,
 		Endpoint:        store.Endpoint,
@@ -112,15 +116,22 @@ func (i *BackupCredentialIssuer) ensurePrefixUnused(ctx context.Context, store *
 	}
 	objects, err := i.cfg.OpenStore(ctx, store)
 	if err != nil {
-		return fmt.Errorf("open backup store: %w", err)
+		return unavailable(projectID, "open the backup store", err)
 	}
 	prefix := k8s.BarmanObjectPrefix(projectID)
 	keys, _, err := objects.ListKeys(ctx, store.Bucket, prefix, "", 1)
 	if err != nil {
-		return fmt.Errorf("check backup prefix %s: %w", prefix, err)
+		return unavailable(projectID, "check the backup prefix", err)
 	}
 	if len(keys) > 0 {
 		return fmt.Errorf("%w: %s", ErrBackupPrefixInUse, prefix)
 	}
 	return nil
+}
+
+// unavailable logs why credentials could not be issued and returns only that
+// they could not: store addresses and provider errors stay in the log.
+func unavailable(projectID, step string, cause error) error {
+	log.Printf("ERROR: backup credentials for %s: %s: %v", projectID, step, cause)
+	return fmt.Errorf("%w for %s", ErrBackupCredentialsUnavailable, projectID)
 }

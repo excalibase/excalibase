@@ -104,3 +104,24 @@ func validate(parent Parent, scope Scope, minTTL time.Duration) error {
 	}
 	return nil
 }
+
+// ValidateLifetimes refuses a lifetime the provider cannot grant, and a
+// renewal interval that would let a credential expire between two checks
+// (renewal starts at half-life).
+func ValidateLifetimes(provider string, ttl, renewEvery time.Duration) error {
+	minTTL := time.Second
+	switch provider {
+	case ProviderR2:
+	case ProviderSTS:
+		minTTL = stsMinTTL
+	default:
+		return fmt.Errorf("%w: %q", ErrUnknownProvider, provider)
+	}
+	if ttl < minTTL || ttl > MaxTTL {
+		return fmt.Errorf("credential lifetime %s outside [%s, %s] for %s", ttl, minTTL, MaxTTL, provider)
+	}
+	if renewEvery <= 0 || renewEvery >= ttl/2 {
+		return fmt.Errorf("renewal every %s cannot keep a %s credential ahead of expiry (needs less than %s)", renewEvery, ttl, ttl/2)
+	}
+	return nil
+}

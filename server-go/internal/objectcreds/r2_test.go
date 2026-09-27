@@ -81,7 +81,7 @@ func TestR2SignerMintsCredentialsScopedToOneBucketAndPrefix(t *testing.T) {
 	want := map[string]interface{}{
 		"bucket": "backups", "scope": "object-read-write",
 		"sub": testAccount, "iss": "parent-key", "aud": testAccount + ".r2.cloudflarestorage.com",
-		"iat": float64(now.Unix()), "exp": float64(now.Add(12 * time.Hour).Unix()),
+		"iat": float64(now.Add(-time.Minute).Unix()), "exp": float64(now.Add(12 * time.Hour).Unix()),
 	}
 	for k, v := range want {
 		if claims[k] != v {
@@ -139,6 +139,37 @@ func TestNewMinterKnowsOnlyTheConfiguredProviders(t *testing.T) {
 	for _, name := range []string{"", "static", "R2 "} {
 		if _, err := NewMinter(name); !errors.Is(err, ErrUnknownProvider) {
 			t.Errorf("NewMinter(%q) err = %v, want ErrUnknownProvider", name, err)
+		}
+	}
+}
+
+func TestLifetimesARenewerCanKeepAhead(t *testing.T) {
+	ok := []struct {
+		provider     string
+		ttl, renewal time.Duration
+	}{
+		{ProviderR2, 12 * time.Hour, 10 * time.Minute},
+		{ProviderR2, 4 * time.Minute, 30 * time.Second},
+		{ProviderSTS, 15 * time.Minute, time.Minute},
+	}
+	for _, c := range ok {
+		if err := ValidateLifetimes(c.provider, c.ttl, c.renewal); err != nil {
+			t.Errorf("%s ttl %s every %s: %v", c.provider, c.ttl, c.renewal, err)
+		}
+	}
+	bad := []struct {
+		provider     string
+		ttl, renewal time.Duration
+	}{
+		{ProviderR2, 12 * time.Hour, 0},                    // no renewal
+		{ProviderR2, 12 * time.Hour, 6 * time.Hour},        // checked only at half-life: expires between passes
+		{ProviderSTS, 10 * time.Minute, time.Minute},       // below what STS grants
+		{ProviderR2, 8 * 24 * time.Hour, 10 * time.Minute}, // beyond what R2 grants
+		{"static", 12 * time.Hour, 10 * time.Minute},       // unknown provider
+	}
+	for _, c := range bad {
+		if err := ValidateLifetimes(c.provider, c.ttl, c.renewal); err == nil {
+			t.Errorf("%s ttl %s every %s accepted", c.provider, c.ttl, c.renewal)
 		}
 	}
 }

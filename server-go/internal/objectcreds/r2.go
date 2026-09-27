@@ -13,7 +13,10 @@ import (
 	"time"
 )
 
-const r2HostSuffix = ".r2.cloudflarestorage.com"
+const (
+	r2HostSuffix = ".r2.cloudflarestorage.com"
+	clockSkew    = time.Minute
+)
 
 // R2Signer mints Cloudflare R2 temporary credentials by local signing: an
 // HS256 JWT signed with the parent secret is the session token, its SHA-256
@@ -55,6 +58,7 @@ func (s R2Signer) Mint(_ context.Context, parent Parent, scope Scope) (Credentia
 	}
 	issued := now().UTC().Truncate(time.Second)
 	expires := issued.Add(scope.TTL)
+	// Backdated so a platform clock slightly ahead of R2's is not refused.
 	claims := r2Claims{
 		Bucket: parent.Bucket,
 		Scope:  scope.Access,
@@ -62,7 +66,7 @@ func (s R2Signer) Mint(_ context.Context, parent Parent, scope Scope) (Credentia
 		Sub:    account,
 		Iss:    parent.AccessKeyID,
 		Aud:    host,
-		Iat:    issued.Unix(),
+		Iat:    issued.Add(-clockSkew).Unix(),
 		Exp:    expires.Unix(),
 	}
 	token, err := signHS256(claims, parent.SecretAccessKey)
