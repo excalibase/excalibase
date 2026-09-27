@@ -22,6 +22,9 @@ type KubeClient interface {
 	// A namespace stuck in Terminating still exists, so a teardown that
 	// polls this waits for the operator finalizers to finish.
 	NamespaceExists(ctx context.Context, name string) (bool, error)
+	// NamespaceDeleting reports whether the namespace is gone or terminating:
+	// its contents, and provisioning's role binding in it, are being removed.
+	NamespaceDeleting(ctx context.Context, name string) (bool, error)
 	// ListPVCs returns the names of the PersistentVolumeClaims in a
 	// namespace. Teardown waits for these: a claim outliving its pods still
 	// holds the volume, and a Terminating pod still holds its CPU request,

@@ -54,6 +54,7 @@ func TestK3sNamespaceAndSecret(t *testing.T) {
 		clientset:     cs,
 		dynamicClient: dynClient,
 		restConfig:    restCfg,
+		projectAccess: testAccess,
 	}
 
 	// Test: CreateProjectNamespace
@@ -138,7 +139,7 @@ func TestK3sWithCNPGOperator(t *testing.T) {
 	restCfg, _ := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 	cs, _ := kubernetes.NewForConfig(restCfg)
 	dynClient, _ := dynamic.NewForConfig(restCfg)
-	client := &Client{clientset: cs, dynamicClient: dynClient, restConfig: restCfg}
+	client := &Client{clientset: cs, dynamicClient: dynClient, restConfig: restCfg, projectAccess: testAccess}
 
 	// Install CNPG operator
 	t.Log("Installing CNPG operator...")

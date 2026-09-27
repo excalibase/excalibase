@@ -23,10 +23,11 @@ const (
 // Requires: minikube running, CNPG operator installed, metrics-server installed
 
 func TestIntegrationCRDApplyAndGet(t *testing.T) {
-	client, err := NewClient()
+	base, err := NewClient()
 	if err != nil {
 		t.Skipf("K8s not available: %v", err)
 	}
+	client := base.WithProjectAccess(testAccess)
 	ctx := context.Background()
 	ns := "integration-test-" + time.Now().Format("150405")
 
@@ -122,10 +123,11 @@ func verifyMetricsAndSecret(ctx context.Context, t *testing.T, client *Client, n
 }
 
 func TestIntegrationNamespaceLifecycle(t *testing.T) {
-	client, err := NewClient()
+	base, err := NewClient()
 	if err != nil {
 		t.Skipf("K8s not available: %v", err)
 	}
+	client := base.WithProjectAccess(testAccess)
 	ctx := context.Background()
 	ns := "integ-ns-test"
 

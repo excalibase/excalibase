@@ -69,6 +69,7 @@ func TestK3sHelmInstallUninstall(t *testing.T) {
 		clientset:     cs,
 		dynamicClient: dynClient,
 		restConfig:    restCfg,
+		projectAccess: testAccess,
 	}
 
 	ns := "helm-test"
@@ -163,6 +164,7 @@ func TestK3sHelmInstallWithOverrides(t *testing.T) {
 		clientset:     cs,
 		dynamicClient: dynClient,
 		restConfig:    restCfg,
+		projectAccess: testAccess,
 	}
 
 	ns := "helm-override"
@@ -225,6 +227,7 @@ func TestK3sHelmInstallBadChart(t *testing.T) {
 		clientset:     cs,
 		dynamicClient: dynClient,
 		restConfig:    restCfg,
+		projectAccess: testAccess,
 	}
 
 	// Install with non-existent chart path
