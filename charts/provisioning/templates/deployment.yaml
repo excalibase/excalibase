@@ -39,6 +39,8 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+            - name: STUDIO_URL
+              value: {{ required "studioUrl is required: the Studio origin emailed links open, e.g. https://studio.example.com" .Values.studioUrl | quote }}
             - name: STORAGE_PATH
               value: /data
             - name: DB_PATH

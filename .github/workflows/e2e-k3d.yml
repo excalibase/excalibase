@@ -99,6 +99,9 @@ jobs:
           EOF
           kubectl -n "$NS" rollout status deploy/platform-db --timeout=180s
 
+      - name: Chart requires the Studio URL
+        run: sh charts/provisioning/tests/studio-url.sh
+
       - name: Install provisioning chart (Helm)
         run: |
           helm upgrade --install provisioning charts/provisioning \
@@ -107,6 +110,7 @@ jobs:
             --set image.tag=ci \
             --set image.pullPolicy=IfNotPresent \
             --set ingress.enabled=false \
+            --set studioUrl=https://studio.excalibase.test \
             --set-string platformDB.url='postgres://platform:platform@platform-db.excalibase-platform:5432/platform?sslmode=disable'
 
       - name: Wait for provisioning rollout
