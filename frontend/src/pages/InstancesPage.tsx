@@ -4,6 +4,7 @@ import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
 import { Database, DatabaseZap, Loader2, Trash2, Eye, Sprout, Star, Crown } from 'lucide-react';
 import { useAuthStore } from '../stores/auth-store';
+import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 
 const ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
 
@@ -120,7 +121,10 @@ function renderInstancesContent(args: InstancesContentArgs) {
                   <Button
                     variant="danger"
                     size="sm"
-                    disabled={args.deprovision.isPending}
+                    disabled={args.deprovision.isPending || isDeletionProtected(inst)}
+                    title={isDeletionProtected(inst) ? DELETION_PROTECTED_REASON : 'Delete project'}
+                    aria-label={`Delete ${inst.projectId}`}
+                    data-testid={`delete-instance-${inst.projectId}`}
                     onClick={(e) => args.handleDelete(e, inst.projectId)}
                   >
                     <Trash2 className="w-4 h-4" />

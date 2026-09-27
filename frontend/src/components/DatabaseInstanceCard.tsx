@@ -7,6 +7,7 @@ import { CredentialsViewer } from './CredentialsViewer';
 import { MonitoringDashboard } from './MonitoringDashboard';
 import { ChevronDown, ChevronUp, Database, Trash2, Info, Activity, Key } from 'lucide-react';
 import { useDeprovisionDatabase } from '../hooks/useProvisioning';
+import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 
 interface DatabaseInstanceCardProps {
   readonly instance: DatabaseInstance;
@@ -67,6 +68,7 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
             variant="secondary"
             size="sm"
             onClick={() => setExpanded(!expanded)}
+            data-testid="instance-card-expand"
           >
             {expanded ? (
               <ChevronUp className="w-5 h-5" />
@@ -104,7 +106,9 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
                 variant="danger"
                 size="sm"
                 onClick={handleDelete}
-                disabled={deprovision.isPending}
+                disabled={deprovision.isPending || isDeletionProtected(instance)}
+                title={isDeletionProtected(instance) ? DELETION_PROTECTED_REASON : undefined}
+                data-testid="instance-card-delete"
               >
                 <Trash2 className="w-4 h-4 mr-2" />
                 Delete

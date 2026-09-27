@@ -9,6 +9,7 @@ import { ConnectionStrings } from '../components/ConnectionStrings';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
+import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 
 interface RollbackResult {
   name: string;
@@ -76,7 +77,7 @@ export function SettingsPage() {
   // A major that can carry DocumentDB says nothing about whether this project
   // was created with it; only the project record does.
   const documentDb = project.documentDb === true;
-  const protectedFromDeletion = project.deletionProtection === true;
+  const protectedFromDeletion = isDeletionProtected(project);
 
   const info = [
     { icon: Server, label: 'Display Name', value: project.projectName || '-' },
@@ -203,7 +204,7 @@ const excalibase = createClient({
         </p>
         <p className="text-xs text-text-secondary mb-3" data-testid="deletion-protection-state">
           {protectedFromDeletion
-            ? 'Deletion protection is on. An org owner must turn it off before the project can be deleted.'
+            ? DELETION_PROTECTED_REASON
             : 'Deletion protection is off. Any org admin can delete this project.'}
         </p>
         <div className="flex gap-2">
