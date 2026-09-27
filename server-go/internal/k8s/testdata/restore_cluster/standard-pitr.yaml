@@ -52,6 +52,8 @@ spec:
     - hostssl all auth_admin all scram-sha-256
     - hostnossl all all all reject
     - hostnossl replication all all reject
+  primaryUpdateMethod: switchover
+  primaryUpdateStrategy: unsupervised
   resources:
     limits:
       cpu: "4"

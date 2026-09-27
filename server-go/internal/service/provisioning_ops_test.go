@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -158,6 +159,34 @@ func TestUpgradeVersion(t *testing.T) {
 	spec := got.Object["spec"].(map[string]interface{})
 	if spec["imageName"] != want {
 		t.Errorf("imageName: got %v, want %v", spec["imageName"], want)
+	}
+}
+
+// CNPG refuses a switchover update that changes the image and Postgres
+// parameters together, so a minor upgrade changes the image and nothing else.
+func TestUpgradeVersionChangesOnlyTheImage(t *testing.T) {
+	svc, _, mock := setupOpsTest(t)
+	clusterObj := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
+		ProjectID: testOpsDB, Namespace: testOpsDBNS, ImageName: "excalibase/postgresql:17@sha256:old",
+		Tier:       config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2", StatementTimeout: "30s"},
+		Parameters: map[string]string{"work_mem": "16MB"},
+	})
+	before := clusterObj.DeepCopy()
+	mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, clusterObj)
+
+	if err := svc.UpgradeVersion(context.Background(), testOpsDB, "17"); err != nil {
+		t.Fatalf("UpgradeVersion: %v", err)
+	}
+	got, _ := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
+	gotSpec := got.DeepCopy().Object["spec"].(map[string]interface{})
+	wantSpec := before.Object["spec"].(map[string]interface{})
+	if gotSpec["imageName"] == wantSpec["imageName"] {
+		t.Fatal("the image must move to the catalogue's")
+	}
+	delete(gotSpec, "imageName")
+	delete(wantSpec, "imageName")
+	if !reflect.DeepEqual(gotSpec, wantSpec) {
+		t.Errorf("a minor upgrade changed more than the image:\n got %v\nwant %v", gotSpec, wantSpec)
 	}
 }
 
