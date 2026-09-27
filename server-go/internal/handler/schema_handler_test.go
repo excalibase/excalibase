@@ -126,7 +126,7 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 
 	// 3. Wire handler (testcontainers postgres has no SSL)
 	t.Setenv("SCHEMA_DB_SSLMODE", "disable")
-	h := NewSchemaHandler(v)
+	h := schemaHandlerOver(t, v, "test-proj")
 	r := chi.NewRouter()
 	r.Route(testSchemaBase, h.Routes)
 	return r
@@ -710,7 +710,7 @@ func TestSchemaHandler_VaultSealed(t *testing.T) {
 	}
 	v.Seal()
 
-	h := NewSchemaHandler(v)
+	h := schemaHandlerOver(t, v, "test-proj")
 	r := chi.NewRouter()
 	r.Route(testSchemaBase, h.Routes)
 
@@ -729,7 +729,7 @@ func TestSchemaHandler_ProjectNotFound(t *testing.T) {
 		}
 	}
 
-	h := NewSchemaHandler(v)
+	h := schemaHandlerOver(t, v, "nonexistent-proj")
 	r := chi.NewRouter()
 	r.Route(testSchemaBase, h.Routes)
 
@@ -767,5 +767,31 @@ func TestSchemaHandler_GetIndexes(t *testing.T) {
 			t.Logf("index: %s, unique: %v, columns: %v", idx.Name, idx.Unique, idx.Columns)
 		}
 		t.Error("expected PK index on id")
+	}
+}
+
+// The SQL runner answers with at most the capped rows and says it cut them.
+func TestSchemaHandler_QueryResultIsCappedAndFlagged(t *testing.T) {
+	r := setupSchemaRouter(t)
+	w := schemaRequest(r, "POST", testQueryPath, `{"query":"SELECT g FROM generate_series(1, 5000) g"}`)
+	if w.Code != 200 {
+		t.Fatalf("query: %d %s", w.Code, w.Body.String())
+	}
+	var result schema.QueryResult
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Truncated || len(result.Rows) != schema.MaxQueryRows {
+		t.Fatalf("truncated=%v rows=%d", result.Truncated, len(result.Rows))
+	}
+}
+
+// Every statement reaches the tenant through a pool whose sessions carry the
+// platform's timeouts, DDL included.
+func TestSchemaHandler_DDLRunsUnderTheSessionTimeouts(t *testing.T) {
+	r := setupSchemaRouter(t)
+	w := schemaRequest(r, "POST", "/api/schema/test-proj/query", `{"query":"SHOW lock_timeout"}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "5s") {
+		t.Fatalf("lock_timeout on the Studio pool: %d %s", w.Code, w.Body.String())
 	}
 }

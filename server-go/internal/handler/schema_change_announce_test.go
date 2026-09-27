@@ -21,7 +21,7 @@ func (r *recordingPublisher) PublishPolicyChange(_ context.Context, evt domain.P
 // did, so a table created through the API stayed invisible for half an hour.
 func TestDDLAnnouncesASchemaChange(t *testing.T) {
 	publisher := &recordingPublisher{}
-	handler := &SchemaHandler{connCache: map[string]*connEntry{}}
+	handler := &SchemaHandler{}
 	handler.SetPublisher(publisher)
 
 	router := chi.NewRouter()
@@ -59,7 +59,7 @@ func TestOnlySuccessfulWritesAnnounce(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			publisher := &recordingPublisher{}
-			handler := &SchemaHandler{connCache: map[string]*connEntry{}}
+			handler := &SchemaHandler{}
 			handler.SetPublisher(publisher)
 
 			router := chi.NewRouter()
@@ -82,7 +82,7 @@ func TestOnlySuccessfulWritesAnnounce(t *testing.T) {
 
 // Nothing wired means nothing to announce, not a panic.
 func TestAnnounceWithoutAPublisherIsQuiet(t *testing.T) {
-	handler := &SchemaHandler{connCache: map[string]*connEntry{}}
+	handler := &SchemaHandler{}
 
 	router := chi.NewRouter()
 	router.Route("/api/schema/{projectId}", func(r chi.Router) {

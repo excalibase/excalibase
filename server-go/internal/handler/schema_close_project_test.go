@@ -1,75 +1,88 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
+	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
+
+	"github.com/excalibase/provisioning-poc/internal/projectdb"
+	"github.com/go-chi/chi/v5"
 )
 
-// EXC-431: the teardown had no way to ask for the cached connection back.
-func TestCloseProjectReleasesTheCachedConnection(t *testing.T) {
-	db, err := sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	h := &SchemaHandler{connCache: map[string]*connEntry{
-		"proj-1": {db: db, created: time.Now()},
-	}}
-
-	if err := h.CloseProject("proj-1"); err != nil {
-		t.Fatalf("CloseProject: %v", err)
-	}
-	if _, present := h.connCache["proj-1"]; present {
-		t.Error("the entry must be gone from the cache, not just closed")
-	}
-	if err := db.Ping(); err == nil {
-		t.Error("the connection must be closed")
-	}
+// fakeProjectDB records what the schema handler asks of its opener.
+type fakeProjectDB struct {
+	openErr  error
+	opened   []string
+	evicted  []string
+	statuses map[string]string
 }
 
-// A project nobody queried holds nothing.
-func TestCloseProjectIsQuietWhenNothingIsHeld(t *testing.T) {
-	h := &SchemaHandler{connCache: map[string]*connEntry{}}
-
-	if err := h.CloseProject("never-queried"); err != nil {
-		t.Errorf("CloseProject on an unheld project: %v", err)
+func (f *fakeProjectDB) Open(_ context.Context, projectID string) (*sql.DB, error) {
+	f.opened = append(f.opened, projectID)
+	if f.openErr != nil {
+		return nil, f.openErr
 	}
+	return sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable")
 }
 
-// The teardown reaches this through the DeletionObserver hook.
-func TestProjectDeletingClosesTheCachedConnection(t *testing.T) {
-	db, _ := sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable")
-	h := &SchemaHandler{connCache: map[string]*connEntry{
-		"proj-1": {db: db, created: time.Now()},
-	}}
+func (f *fakeProjectDB) Evict(projectID string) { f.evicted = append(f.evicted, projectID) }
 
-	var observer interface{ ProjectDeleting(string) } = h
+func (f *fakeProjectDB) ProjectStatusChanged(projectID, status string) {
+	if f.statuses == nil {
+		f.statuses = map[string]string{}
+	}
+	f.statuses[projectID] = status
+}
+
+// EXC-431: a project claimed for teardown must not keep a pool on its database.
+func TestProjectDeletingEvictsTheProjectsPool(t *testing.T) {
+	pools := &fakeProjectDB{}
+	var observer interface{ ProjectDeleting(string) } = NewSchemaHandler(pools, time.Second)
 	observer.ProjectDeleting("proj-1")
-
-	if _, present := h.connCache["proj-1"]; present {
-		t.Error("a project claimed for teardown must not keep its connection")
-	}
-	if err := db.Ping(); err == nil {
-		t.Error("the connection must be closed")
+	if len(pools.evicted) != 1 || pools.evicted[0] != "proj-1" {
+		t.Fatalf("evicted: %v", pools.evicted)
 	}
 }
 
-// Closing one project leaves every other project's connection alone.
-func TestCloseProjectLeavesOtherProjectsConnected(t *testing.T) {
-	kept, _ := sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable")
-	closed, _ := sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable")
-	h := &SchemaHandler{connCache: map[string]*connEntry{
-		"proj-keep":  {db: kept, created: time.Now()},
-		"proj-close": {db: closed, created: time.Now()},
-	}}
+// A paused project's database is down; its pool must not hold connections.
+func TestProjectStatusChangesReachThePools(t *testing.T) {
+	pools := &fakeProjectDB{}
+	var observer interface{ ProjectStatusChanged(string, string) } = NewSchemaHandler(pools, time.Second)
+	observer.ProjectStatusChanged("proj-1", "paused")
+	if pools.statuses["proj-1"] != "paused" {
+		t.Fatalf("statuses: %v", pools.statuses)
+	}
+}
 
-	if err := h.CloseProject("proj-close"); err != nil {
-		t.Fatalf("CloseProject: %v", err)
+func TestSchemaHandlerOpensProjectsThroughTheSharedOpener(t *testing.T) {
+	pools := &fakeProjectDB{}
+	h := NewSchemaHandler(pools, time.Second)
+	if _, err := h.getDB("proj-1"); err != nil {
+		t.Fatal(err)
 	}
-	if _, present := h.connCache["proj-keep"]; !present {
-		t.Fatal("an unrelated project lost its cached connection")
+	if len(pools.opened) != 1 || pools.opened[0] != "proj-1" {
+		t.Fatalf("opened: %v", pools.opened)
 	}
-	if err := kept.Close(); err != nil {
-		t.Errorf("the kept connection should still have been open: %v", err)
+}
+
+func TestSchemaHandlerAnswersForProjectsItMayNotReach(t *testing.T) {
+	cases := []struct {
+		err  error
+		want int
+	}{
+		{fmt.Errorf("%w: proj-1 is paused", projectdb.ErrNotServable), http.StatusConflict},
+		{errors.New("unknown project proj-1"), http.StatusNotFound},
+	}
+	for _, c := range cases {
+		h := NewSchemaHandler(&fakeProjectDB{openErr: c.err}, time.Second)
+		r := chi.NewRouter()
+		r.Route("/schema", h.Routes)
+		if w := doRequest(r, "GET", "/schema/proj-1/tables", ""); w.Code != c.want {
+			t.Errorf("%v: got %d, want %d", c.err, w.Code, c.want)
+		}
 	}
 }

@@ -56,6 +56,8 @@ type QueryResult struct {
 	Command      string          `json:"command,omitempty"`
 	AffectedRows int64           `json:"affectedRows,omitempty"`
 	Error        string          `json:"error,omitempty"`
+	// Truncated says Rows stops at the runner's row or byte cap.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // --- Table CRUD types ---

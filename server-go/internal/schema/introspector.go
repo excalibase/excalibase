@@ -5,13 +5,41 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
+)
+
+// The SQL runner answers Studio, not an export: past these the result is cut
+// short and flagged, so one tenant's wide query cannot fill the control
+// plane's memory.
+const (
+	MaxQueryRows  = 1000
+	MaxQueryBytes = 5 << 20
+
+	defaultStatementTimeout = 30 * time.Second
+	// cancelGrace lets the server-side timeout answer first with its own
+	// message; the client deadline is the backstop the tenant cannot lift.
+	cancelGrace = 2 * time.Second
 )
 
 // Introspector provides PostgreSQL schema introspection.
-type Introspector struct{}
+type Introspector struct {
+	statementTimeout time.Duration
+}
 
 func NewIntrospector() *Introspector {
-	return &Introspector{}
+	return &Introspector{statementTimeout: defaultStatementTimeout}
+}
+
+// WithStatementTimeout bounds every statement the SQL runner executes.
+func (i *Introspector) WithStatementTimeout(d time.Duration) *Introspector {
+	i.statementTimeout = d
+	return i
+}
+
+// bounded gives a runner call its deadline. A statement past it is cancelled
+// on the server even if the tenant's SQL turned statement_timeout off.
+func (i *Introspector) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, i.statementTimeout+cancelGrace)
 }
 
 func (i *Introspector) GetTables(ctx context.Context, db *sql.DB, schemaName string) ([]TableInfo, error) {
@@ -99,6 +127,8 @@ func (i *Introspector) GetIndexes(ctx context.Context, db *sql.DB, schemaName, t
 }
 
 func (i *Introspector) ExecuteDDL(ctx context.Context, db *sql.DB, ddl string) DDLResult {
+	ctx, cancel := i.bounded(ctx)
+	defer cancel()
 	result, err := db.ExecContext(ctx, ddl)
 	if err != nil {
 		return DDLResult{Success: false, Error: err.Error()}
@@ -119,13 +149,16 @@ func isReadQuery(query string) bool {
 }
 
 func (i *Introspector) ExecuteQuery(ctx context.Context, db *sql.DB, query string) QueryResult {
+	ctx, cancel := i.bounded(ctx)
+	defer cancel()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("begin tx: %w", err).Error()}
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, "SET LOCAL statement_timeout = '30s'"); err != nil {
+	timeout := fmt.Sprintf("SET LOCAL statement_timeout = %d", i.statementTimeout.Milliseconds())
+	if _, err := tx.ExecContext(ctx, timeout); err != nil {
 		return QueryResult{Error: fmt.Errorf("set timeout: %w", err).Error()}
 	}
 
@@ -156,31 +189,62 @@ func (i *Introspector) executeReadQuery(ctx context.Context, tx interface {
 		columns[idx] = ColumnMeta{Name: ct.Name(), DataType: ct.DatabaseTypeName()}
 	}
 
-	var resultRows [][]interface{}
-	for rows.Next() {
-		vals := make([]interface{}, len(colTypes))
-		ptrs := make([]interface{}, len(colTypes))
-		for idx := range vals {
-			ptrs[idx] = &vals[idx]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return QueryResult{Error: fmt.Errorf("scan row: %w", err).Error()}
-		}
-		row := make([]interface{}, len(vals))
-		for idx, v := range vals {
-			if b, ok := v.([]byte); ok {
-				row[idx] = string(b)
-			} else {
-				row[idx] = v
-			}
-		}
-		resultRows = append(resultRows, row)
-	}
-	if err := rows.Err(); err != nil {
+	resultRows, truncated, err := collectRows(rows, len(colTypes))
+	if err != nil {
 		return QueryResult{Error: err.Error()}
 	}
-	tx.Commit()
-	return QueryResult{Columns: columns, Rows: resultRows}
+	// Closing drains what was not kept, so a data-modifying WITH still commits.
+	if err := rows.Close(); err != nil {
+		return QueryResult{Error: err.Error()}
+	}
+	if err := tx.Commit(); err != nil {
+		return QueryResult{Error: fmt.Errorf("commit: %w", err).Error()}
+	}
+	return QueryResult{Columns: columns, Rows: resultRows, Truncated: truncated}
+}
+
+// collectRows keeps rows until MaxQueryRows or MaxQueryBytes would be passed.
+func collectRows(rows *sql.Rows, width int) ([][]interface{}, bool, error) {
+	var kept [][]interface{}
+	held := 0
+	for rows.Next() {
+		if len(kept) == MaxQueryRows {
+			return kept, true, nil
+		}
+		row, size, err := scanRow(rows, width)
+		if err != nil {
+			return nil, false, err
+		}
+		if held+size > MaxQueryBytes {
+			return kept, true, nil
+		}
+		held += size
+		kept = append(kept, row)
+	}
+	return kept, false, rows.Err()
+}
+
+func scanRow(rows *sql.Rows, width int) ([]interface{}, int, error) {
+	vals := make([]interface{}, width)
+	ptrs := make([]interface{}, width)
+	for idx := range vals {
+		ptrs[idx] = &vals[idx]
+	}
+	if err := rows.Scan(ptrs...); err != nil {
+		return nil, 0, fmt.Errorf("scan row: %w", err)
+	}
+	size := 0
+	for idx, v := range vals {
+		if b, ok := v.([]byte); ok {
+			vals[idx] = string(b)
+			size += len(b)
+		} else if str, ok := v.(string); ok {
+			size += len(str)
+		} else {
+			size += 16
+		}
+	}
+	return vals, size, nil
 }
 
 // executeDMLQuery runs a DML/DDL statement inside tx and returns the affected-row count.

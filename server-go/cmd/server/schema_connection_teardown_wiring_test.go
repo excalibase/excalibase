@@ -18,3 +18,14 @@ func TestSchemaHandlerIsRegisteredAsADeletionObserver(t *testing.T) {
 			"which stops its database shutting down")
 	}
 }
+
+// A paused project's database is down; the schema browser's pool must hear it.
+func TestSchemaHandlerIsRegisteredAsAPauseObserver(t *testing.T) {
+	body, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(body), "pauseSvc.AddStatusObserver(deps.schemaHandler)") {
+		t.Error("a paused project keeps the schema browser's pool open against a stopped database")
+	}
+}

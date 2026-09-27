@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -277,7 +276,7 @@ func newSealedVaultSchemaRouter(t *testing.T) chi.Router {
 	v.Init(1, 1)
 	v.Seal()
 
-	h := NewSchemaHandler(v)
+	h := schemaHandlerOver(t, v, "proj1", "proj-bad", "x")
 	r := chi.NewRouter()
 	r.Route(testSchemaPath, h.Routes)
 	return r
@@ -296,7 +295,7 @@ func newUninitializedVaultSchemaRouter(t *testing.T) chi.Router {
 	// are stored. vault.Get will return ErrNotFound → handleDBError → 404.
 	v.Init(1, 1)
 
-	h := NewSchemaHandler(v)
+	h := schemaHandlerOver(t, v, "proj1", "proj-bad", "x")
 	r := chi.NewRouter()
 	r.Route(testSchemaPath, h.Routes)
 	return r
@@ -1088,7 +1087,7 @@ func newBadDBSchemaRouter(t *testing.T) chi.Router {
 		t.Fatalf("vault put: %v", err)
 	}
 
-	h := NewSchemaHandler(v)
+	h := schemaHandlerOver(t, v, "proj-bad")
 	r := chi.NewRouter()
 	r.Route(testSchemaPath, h.Routes)
 	return r
@@ -1101,51 +1100,6 @@ func TestSchemaHandleDBError_GenericPingError_Returns500(t *testing.T) {
 	w := doRequest(r, "GET", "/schema/proj-bad/tables", "")
 	if w.Code != 500 {
 		t.Errorf("handleDBError generic: got %d, want 500", w.Code)
-	}
-}
-
-// --- SchemaHandler.getDB: connection pool full branch ---
-
-func TestSchemaGetDB_PoolFull_Returns500(t *testing.T) {
-	t.Helper()
-	v, err := vault.NewWithStore(vault.NewMemoryStore())
-	if err != nil {
-		t.Fatalf(testNewVaultFmt, err)
-	}
-	v.Init(1, 1)
-
-	h := NewSchemaHandler(v)
-
-	// Manually fill the connection cache to maxConns (50).
-	// Use sql.Open with a postgres DSN so the db handle is non-nil (Open doesn't
-	// actually connect) and won't panic in the evict loop's db.Close() call.
-	h.mu.Lock()
-	for i := 0; i < maxConns; i++ {
-		key := strings.Repeat("x", i+1)
-		// sql.Open returns a non-nil *sql.DB without connecting
-		fakeDB, _ := sql.Open("postgres", "host=127.0.0.1 port=1 dbname=fake")
-		h.connCache[key] = &connEntry{db: fakeDB}
-	}
-	h.mu.Unlock()
-
-	// Store credentials for our target project — the pool check happens before
-	// using the credentials, so the request will be rejected with "pool full"
-	if err := v.Put("projects/proj-full/credentials/excalibase_app", map[string]string{
-		"host":     "127.0.0.1",
-		"port":     "5432",
-		"username": "u",
-		"password": "p",
-		"database": "d",
-	}); err != nil {
-		t.Fatalf("vault put: %v", err)
-	}
-
-	r := chi.NewRouter()
-	r.Route(testSchemaPath, h.Routes)
-
-	w := doRequest(r, "GET", "/schema/proj-full/tables", "")
-	if w.Code != 500 {
-		t.Errorf("getDB pool full: got %d, want 500", w.Code)
 	}
 }
 

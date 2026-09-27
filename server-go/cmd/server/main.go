@@ -260,6 +260,7 @@ func runServer(cfg config.AppConfig) {
 		// A paused project's database is down for as long as it stays paused;
 		// its pool must not keep connections open against it.
 		pauseSvc.AddStatusObserver(projectDB)
+		pauseSvc.AddStatusObserver(deps.schemaHandler)
 		deps.provHandler.SetPauseService(pauseSvc)
 		deps.provHandler.SetInstanceStore(store)
 	}
@@ -1087,10 +1088,17 @@ func newAlertHandler(svc *service.AlertingService, instances storage.InstanceSto
 	return h
 }
 
-// newSchemaHandler wires the instance store so the schema browser can
-// resolve a project's instance row.
-func newSchemaHandler(vc vaultclient.VaultClient, instances storage.InstanceStore) *handler.SchemaHandler {
-	h := handler.NewSchemaHandler(vc)
+// newSchemaHandler gives the schema browser pools of its own, with the same
+// session timeouts as every other tenant pool, so a long query in Studio's
+// SQL runner never holds a slot the function scheduler needs.
+func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instances storage.InstanceStore) *handler.SchemaHandler {
+	pools := projectdb.NewOpener(instances, vc, projectdb.OverridesFromEnv(), projectdb.PoolLimits{
+		MaxOpenConns:     cfg.ProjectDBMaxOpenConns,
+		MaxPools:         cfg.ProjectDBMaxPools,
+		StatementTimeout: cfg.ProjectDBStatementTimeout,
+		LockTimeout:      cfg.ProjectDBLockTimeout,
+	})
+	h := handler.NewSchemaHandler(pools, cfg.ProjectDBStatementTimeout)
 	h.SetInstanceStore(instances)
 	return h
 }
@@ -1230,7 +1238,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		svcAcctHandler:     handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
 		orgHandler:         newOrgHandler(sqlStore, store),
 		vaultHandler:       vaultHandler,
-		schemaHandler:      newSchemaHandler(vc, store),
+		schemaHandler:      newSchemaHandler(cfg, vc, store),
 		realtimeHandler:    realtimeHandler,
 		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies(), store),
 		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants(), store, cfg.ExposureEnforced),
