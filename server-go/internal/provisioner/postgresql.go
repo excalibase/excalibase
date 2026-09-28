@@ -937,7 +937,7 @@ func (p *PostgreSQLProvisioner) RemoveDatabase(ctx context.Context, namespace, p
 	if err := p.client.DeleteCRD(ctx, k8s.ObjectStoreGVR, namespace, k8s.BackupObjectStoreName(projectID)); err != nil {
 		return fmt.Errorf("delete backup object store: %w", err)
 	}
-	for _, secret := range []string{k8s.BackupCredentialsSecretName, k8s.DocumentDBCredentialSecretName(projectID)} {
+	for _, secret := range []string{k8s.BackupCredentialsSecretName, k8s.DocumentDBCredentialSecretName(projectID), watcherTLSSecretName(projectID)} {
 		if err := p.client.DeleteSecret(ctx, namespace, secret); err != nil {
 			return err
 		}

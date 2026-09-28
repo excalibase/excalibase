@@ -215,3 +215,21 @@ func TestACAWithoutItsKeyIsRefused(t *testing.T) {
 		t.Fatalf("report %+v", report)
 	}
 }
+
+// EXC-426: a project without a database, even one whose failed add recorded
+// an engine, has no role certificates to renew.
+func TestAProjectWithoutADatabaseHasNoCertificatesToRenew(t *testing.T) {
+	h := newRenewalHarness(t, "ACTIVE")
+	inst, _ := h.store.FindByProjectID(renewProject)
+	inst.NoDatabase = true
+	if err := h.store.Delete(renewProject); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.Create(inst); err != nil {
+		t.Fatal(err)
+	}
+	h.now = h.now.Add(tenantcert.Validity)
+	if report := h.renewer.RenewDue(context.Background()); report.Renewed != 0 || len(report.Failed) != 0 {
+		t.Fatalf("report %+v", report)
+	}
+}

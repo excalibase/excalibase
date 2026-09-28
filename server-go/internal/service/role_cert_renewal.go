@@ -71,7 +71,7 @@ func (r *RoleCertificateRenewer) RenewDue(ctx context.Context) RenewalReport {
 // holdsRoleCertificates is a Kubernetes Postgres project past registration
 // whose teardown has not started.
 func holdsRoleCertificates(inst *domain.DatabaseInstance) bool {
-	return inst.DeploymentMode != domain.ModeDocker && inst.DBType == domain.PostgreSQL &&
+	return inst.DeploymentMode != domain.ModeDocker && inst.DBType == domain.PostgreSQL && !inst.NoDatabase &&
 		!domain.IsDeletionStatus(inst.Status) && !domain.IsBuildingStatus(inst.Status) &&
 		inst.Status != string(domain.StatusRestoring) && inst.Status != string(domain.StageFailed)
 }
