@@ -6,13 +6,15 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
 const pinnedWatcher = "excalibase/excalibase-watcher-go:1.0.0"
 
 func watcherSpecForTest() WatcherSpec {
 	return WatcherSpec{Namespace: "org1-proj", ProjectID: "proj", DBName: "app",
-		Username: "cdc_watcher", Password: "secret", NatsUser: "proj-watcher"}
+		Username: "cdc_watcher", NatsUser: "proj-watcher",
+		ClientCert: tenantcert.Material{Cert: "CERT-PEM", Key: "KEY-PEM", RootCert: "CA-PEM"}}
 }
 
 // EXC-346: every tenant's watcher ran :latest, which now means "newest stable

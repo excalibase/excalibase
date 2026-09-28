@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
+	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
 const primaryPodSuffix = "-postgres-1"
@@ -752,14 +754,15 @@ type WatcherSpec struct {
 	Namespace string
 	ProjectID string
 	DBName    string
-	// Username/Password are the cdc_watcher Postgres role.
+	// Username is the cdc_watcher Postgres role.
 	Username string
-	Password string
 	// NatsUser/NatsPassword are the project-scoped bus credential minted by
 	// the control plane (EXC-324). Blank leaves the watcher unauthenticated,
 	// which only works on a NATS server without auth_callout.
 	NatsUser     string
 	NatsPassword string
+	// ClientCert is cdc_watcher's login; pg_hba refuses it a password.
+	ClientCert tenantcert.Material
 }
 
 // WatcherComponentLabel marks a pod as a tenant CDC watcher: the platform
@@ -785,14 +788,16 @@ func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, spec WatcherS
 	if err != nil {
 		return fmt.Errorf("WATCHER_IMAGE: %w", err)
 	}
+	if err := p.storeWatcherCertificate(ctx, spec); err != nil {
+		return err
+	}
 	namespace, projectID, dbName := spec.Namespace, spec.ProjectID, spec.DBName
-	username, password := spec.Username, spec.Password
 	values := map[string]interface{}{
 		"postgres": map[string]interface{}{
 			"enabled":           true,
-			"url":               fmt.Sprintf("postgres://%s-postgres-rw.%s.svc.cluster.local:5432/%s?sslmode=require&replication=database", projectID, namespace, dbName),
-			"username":          username,
-			"password":          password,
+			"url":               watcherReplicationURL(projectID, namespace, dbName),
+			"username":          spec.Username,
+			"password":          "",
 			"slotName":          "cdc_watcher",
 			"publicationName":   "cdc_watcher_pub",
 			"createSlot":        true,
@@ -824,6 +829,7 @@ func (p *PostgreSQLProvisioner) DeployWatcher(ctx context.Context, spec WatcherS
 			"pullPolicy": "IfNotPresent",
 		},
 	}
+	maps.Copy(values, watcherTLSValues(spec))
 	if err := p.client.InstallHelmChart(ctx, namespace, watcherReleaseName, p.watcherChartPath, values); err != nil {
 		log.Printf("WARN: watcher deployment failed for %s: %v", projectID, err)
 		return err

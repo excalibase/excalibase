@@ -23,6 +23,15 @@ const (
 	hbaHostSSL = "hostssl"
 )
 
+const (
+	authRoleName    = "auth_admin"
+	watcherRoleName = "cdc_watcher"
+)
+
+// PlatformCertRoles are the roles the platform itself logs in as. None of
+// them can log in with a password over the network.
+var PlatformCertRoles = []string{appRoleName, authRoleName, watcherRoleName}
+
 // plaintextRejects close CNPG's catch-all to unencrypted logins. "all" as a
 // database does not match replication, so that needs a line of its own.
 var plaintextRejects = []string{
@@ -40,14 +49,29 @@ func hbaConnectionType(requireTLS bool) string {
 	return hbaHost
 }
 
-func networkLogins(requireTLS bool) []interface{} {
-	connectionType := hbaConnectionType(requireTLS)
+// platformCertLogins make the platform's own roles prove themselves with a
+// certificate signed by the cluster's client CA, the way CNPG's
+// streaming_replica does (EXC-410). The rejects follow so neither a password
+// over TLS nor plaintext reaches the operator's catch-all for these roles.
+// They are "host" lines, matching TLS and plaintext alike, and the TLS switch
+// never rewrites them.
+func platformCertLogins() []interface{} {
 	lines := []interface{}{
-		connectionType + " replication cdc_watcher all scram-sha-256",
-		connectionType + " all app all scram-sha-256",
-		connectionType + " all " + appRoleName + " all scram-sha-256",
-		connectionType + " all auth_admin all scram-sha-256",
+		hbaHostSSL + " all " + appRoleName + " all cert",
+		hbaHostSSL + " all " + authRoleName + " all cert",
+		hbaHostSSL + " all " + watcherRoleName + " all cert",
+		hbaHostSSL + " replication " + watcherRoleName + " all cert",
 	}
+	for _, role := range PlatformCertRoles {
+		lines = append(lines,
+			hbaHost+" all "+role+" all reject",
+			hbaHost+" replication "+role+" all reject")
+	}
+	return lines
+}
+
+func networkLogins(requireTLS bool) []interface{} {
+	lines := append(platformCertLogins(), hbaConnectionType(requireTLS)+" all app all scram-sha-256")
 	if requireTLS {
 		for _, reject := range plaintextRejects {
 			lines = append(lines, reject)
@@ -56,13 +80,14 @@ func networkLogins(requireTLS bool) []interface{} {
 	return lines
 }
 
-// isNetworkLogin is a host or hostssl line that is not the loopback trust and
-// not a reject: narrowing a reject to hostssl would let plaintext through it.
+// isNetworkLogin is a host or hostssl line that is not the loopback trust, not
+// a reject (narrowing one to hostssl would let plaintext through it) and not a
+// certificate login (cert is only valid on hostssl).
 func isNetworkLogin(fields []string) bool {
 	if len(fields) < 4 || (fields[0] != hbaHost && fields[0] != hbaHostSSL) {
 		return false
 	}
-	if fields[len(fields)-1] == "reject" {
+	if method := fields[len(fields)-1]; method == "reject" || method == "cert" {
 		return false
 	}
 	address := fields[3]

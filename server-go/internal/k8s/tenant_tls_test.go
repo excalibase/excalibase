@@ -20,10 +20,17 @@ func isLoopbackLine(line string) bool {
 
 func TestEveryNetworkLoginRequiresTLSByDefault(t *testing.T) {
 	want := []string{
-		"hostssl replication cdc_watcher all scram-sha-256",
+		"hostssl all excalibase_app all cert",
+		"hostssl all auth_admin all cert",
+		"hostssl all cdc_watcher all cert",
+		"hostssl replication cdc_watcher all cert",
+		"host all excalibase_app all reject",
+		"host replication excalibase_app all reject",
+		"host all auth_admin all reject",
+		"host replication auth_admin all reject",
+		"host all cdc_watcher all reject",
+		"host replication cdc_watcher all reject",
 		"hostssl all app all scram-sha-256",
-		"hostssl all excalibase_app all scram-sha-256",
-		"hostssl all auth_admin all scram-sha-256",
 		"hostnossl all all all reject",
 		"hostnossl replication all all reject",
 	}
@@ -36,7 +43,7 @@ func TestAllowingPlaintextAcceptsUnencryptedLogins(t *testing.T) {
 	opts := plainTLSOpts()
 	opts.AllowPlaintext = true
 	for _, line := range hbaLines(t, opts) {
-		if !strings.HasPrefix(line, "host ") {
+		if !strings.HasPrefix(line, "host ") && !strings.HasSuffix(line, " cert") {
 			t.Errorf("with plaintext allowed, %q should be a host line", line)
 		}
 	}
@@ -105,7 +112,11 @@ func TestSetClusterRequireTLSRewritesOnlyTheNetworkLines(t *testing.T) {
 	off := clusterHBA(t, cluster)
 	var want []string
 	for _, line := range before {
-		if !slices.Contains(plaintextRejects, line) {
+		switch {
+		case slices.Contains(plaintextRejects, line):
+		case strings.HasSuffix(line, " cert"):
+			want = append(want, line)
+		default:
 			want = append(want, strings.Replace(line, "hostssl ", "host ", 1))
 		}
 	}

@@ -481,6 +481,7 @@ func TestDescribeFailsWhenTheClusterCAIsMissing(t *testing.T) {
 		t.Fatalf("enable: %v", err)
 	}
 	delete(h.kube.Secrets, endpointNamespace+"/"+endpointProject+"-postgres-ca")
+	h.kube.NoClusterCA = true
 	if _, err := h.svc.Describe(ctx, endpointProject); err == nil {
 		t.Fatal("a verify-full connection string with no CA is not something to hand a customer")
 	}
