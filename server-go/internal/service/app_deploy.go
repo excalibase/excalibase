@@ -129,6 +129,14 @@ func (s *AppDeployService) confirmPullAuth(ctx context.Context, projectID, names
 	return errPullAuthChanged
 }
 
+// publicURL is where a public app is served; an internal service (EXC-525) has none.
+func (s *AppDeployService) publicURL(app *apphost.App) (string, error) {
+	if app.Internal {
+		return "", nil
+	}
+	return s.render.Route.Public().URL(app.Name, app.ProjectID)
+}
+
 func (s *AppDeployService) SetDomainSync(sync func(ctx context.Context, namespace string, app *apphost.App) error) {
 	s.domainSync = sync
 }
@@ -193,7 +201,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	target := cfg.ToApp(app.ID, app.ProjectID, app.Name)
 	target.Disk = app.Disk
 
-	url, routeErr := s.render.Route.Public().URL(app.Name, app.ProjectID)
+	url, routeErr := s.publicURL(target)
 	deploy := &apphost.Deploy{
 		ID:        uuid.NewString(),
 		AppID:     app.ID,
@@ -276,7 +284,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		return deploy, nil, nil
 	}
 	if s.domainSync != nil {
-		if err := s.domainSync(ctx, namespace, app); err != nil {
+		if err := s.domainSync(ctx, namespace, target); err != nil {
 			s.fail(ctx, deploy, fmt.Errorf("route the app's custom domains: %w", err), namespace, name)
 			return deploy, nil, nil
 		}

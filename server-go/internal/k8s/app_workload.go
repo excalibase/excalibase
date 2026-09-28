@@ -74,10 +74,12 @@ type AppWorkload struct {
 	// referenced from the Deployment by key; nil when the app has none.
 	EnvSecret *corev1.Secret
 	// PullSecret authenticates the image pull; nil for a public image.
-	PullSecret    *corev1.Secret
-	EgressPolicy  *unstructured.Unstructured
-	Service       *corev1.Service
+	PullSecret   *corev1.Secret
+	EgressPolicy *unstructured.Unstructured
+	Service      *corev1.Service
+	// Ingress is nil exactly when Internal: an internal service has no route (EXC-525).
 	Ingress       *networkingv1.Ingress
+	Internal      bool
 	IngressPolicy *unstructured.Unstructured
 	// Disk is the app's persistent volume claim; nil when it has no disk.
 	Disk *corev1.PersistentVolumeClaim
@@ -178,7 +180,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 	}
 	return &AppWorkload{
 		Deployment: deployment, EnvSecret: envSecret, PullSecret: pullSecret, EgressPolicy: policy,
-		Service: route.service, Ingress: route.ingress, IngressPolicy: route.policy, Disk: disk,
+		Service: route.service, Ingress: route.ingress, IngressPolicy: route.policy, Internal: app.Internal, Disk: disk,
 	}, nil
 }
 
@@ -498,7 +500,10 @@ func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.R
 // appContainerPorts names every port, since the project's private network
 // policy admits ports by name (EXC-524, EXC-525).
 func appContainerPorts(app *apphost.App) []corev1.ContainerPort {
-	ports := []corev1.ContainerPort{{Name: appServicePortName, ContainerPort: int32(app.Port), Protocol: corev1.ProtocolTCP}}
+	ports := []corev1.ContainerPort{}
+	if !app.Internal {
+		ports = append(ports, corev1.ContainerPort{Name: appServicePortName, ContainerPort: int32(app.Port), Protocol: corev1.ProtocolTCP})
+	}
 	for slot, internal := range app.InternalPorts {
 		ports = append(ports, corev1.ContainerPort{
 			Name: internalPortName(slot), ContainerPort: int32(internal.Port), Protocol: corev1.ProtocolTCP,
@@ -520,8 +525,17 @@ func appLifecycle() *corev1.Lifecycle {
 const appMinReadySeconds = 10
 
 // appReadinessProbe checks the declared port when no health path is given, never an invented path.
+// appProbePort is the HTTP port, or an internal service's first internal port;
+// validation guarantees an internal service has one.
+func appProbePort(app *apphost.App) int {
+	if app.Internal {
+		return app.InternalPorts[0].Port
+	}
+	return app.Port
+}
+
 func appReadinessProbe(app *apphost.App) *corev1.Probe {
-	handler := corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(app.Port)}}
+	handler := corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(appProbePort(app))}}
 	if app.HealthCheckPath != "" {
 		handler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: app.HealthCheckPath, Port: intstr.FromInt(app.Port)}}
 	}

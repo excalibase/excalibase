@@ -70,12 +70,24 @@ func (c *Client) ApplyAppWorkload(ctx context.Context, namespace string, workloa
 	if err := c.applyAppService(ctx, namespace, workload.Service); err != nil {
 		return err
 	}
+	if workload.Ingress == nil {
+		return c.removeAppIngress(ctx, namespace, workload.Deployment.Name)
+	}
 	return c.applyAppIngress(ctx, namespace, workload.Ingress)
+}
+
+// removeAppIngress takes away the route a public app had once it is deployed as an internal service.
+func (c *Client) removeAppIngress(ctx context.Context, namespace, name string) error {
+	err := c.clientset.NetworkingV1().Ingresses(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("remove app ingress: %w", err)
+	}
+	return nil
 }
 
 func (w *AppWorkload) complete() bool {
 	return w != nil && w.Deployment != nil && w.EgressPolicy != nil &&
-		w.Service != nil && w.Ingress != nil && w.IngressPolicy != nil
+		w.Service != nil && w.IngressPolicy != nil && (w.Ingress != nil) != w.Internal
 }
 
 func (c *Client) applyAppDeployment(ctx context.Context, namespace string, desired *appsv1.Deployment) (*appsv1.Deployment, error) {

@@ -50,3 +50,23 @@ func cloneInternalPorts(ports []InternalPort) []InternalPort {
 	}
 	return append([]InternalPort{}, ports...)
 }
+
+// validateExposure: a public web app has an HTTP port; an internal service has
+// none, no HTTP health path, and at least one internal port to be reached on.
+func (a *App) validateExposure() error {
+	if !a.Internal {
+		if a.Port < 1 || a.Port > 65535 {
+			return errors.New("port must be between 1 and 65535")
+		}
+		return nil
+	}
+	switch {
+	case a.Port != 0:
+		return errors.New("an internal service has no HTTP port; declare its internal ports instead")
+	case a.HealthCheckPath != "":
+		return errors.New("an internal service has no HTTP health check; it is checked on its first internal port")
+	case len(a.InternalPorts) == 0:
+		return errors.New("an internal service needs at least one internal port")
+	}
+	return nil
+}

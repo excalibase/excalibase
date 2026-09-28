@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -54,5 +55,43 @@ func TestAppUpdateReplacesOrKeepsTheInternalPorts(t *testing.T) {
 	w = doAppRequestWithVersion(t, r, http.MethodPatch, path, map[string]any{"internalPorts": []map[string]any{}}, 3)
 	if got := decodeApp(t, w).InternalPorts; len(got) != 0 {
 		t.Fatalf("an empty list must clear the ports, got %+v", got)
+	}
+}
+
+// An internal service (EXC-525) is created without an HTTP port and has no URL.
+func TestAppCreateInternalServiceHasNoURL(t *testing.T) {
+	r, _ := setupAppRouter(t)
+	body := validAppBody()
+	delete(body, "port")
+	delete(body, "healthCheckPath")
+	body["internal"] = true
+	body["internalPorts"] = []map[string]any{{"port": 6379, "protocol": "TCP"}}
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	app := decodeApp(t, w)
+	if !app.Internal || app.Port != 0 {
+		t.Fatalf("stored %+v", app)
+	}
+	if strings.Contains(w.Body.String(), `"url"`) {
+		t.Errorf("an internal service has no URL: %s", w.Body)
+	}
+}
+
+func TestAppUpdateTurnsAPublicAppIntoAnInternalService(t *testing.T) {
+	r, _ := setupAppRouter(t)
+	created := createAppForTest(t, r)
+	path := "/api/projects/" + appTestProject + "/apps/" + created.ID + "/"
+	w := doAppRequest(t, r, http.MethodPatch, path, map[string]any{
+		"internal": true, "port": 0, "healthCheckPath": "",
+		"internalPorts": []map[string]any{{"port": 6379, "protocol": "TCP"}},
+	})
+	if w.Code != http.StatusOK || !decodeApp(t, w).Internal {
+		t.Fatalf("update: %d %s", w.Code, w.Body)
+	}
+	w = doAppRequestWithVersion(t, r, http.MethodPatch, path, map[string]any{"internalPorts": []map[string]any{}}, 2)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("an internal service without ports must be refused: %d %s", w.Code, w.Body)
 	}
 }

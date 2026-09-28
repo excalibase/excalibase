@@ -16,6 +16,9 @@ import (
 // ErrDomainNotPointed refuses a domain whose CNAME does not name the app's own hostname.
 var ErrDomainNotPointed = errors.New("the domain's CNAME does not point at the app")
 
+// ErrDomainOnInternalService refuses a custom domain for an app with no public route (EXC-525).
+var ErrDomainOnInternalService = errors.New("an internal service has no public route, so it cannot serve a custom domain")
+
 // OperationDomain names the lease a custom-domain change takes on its app.
 const OperationDomain ProjectOperation = "custom domain change"
 
@@ -54,6 +57,9 @@ func (s *AppDomainService) Add(ctx context.Context, projectID, appID, hostname s
 	app, err := s.leases.lookupApp(projectID, appID)
 	if err != nil {
 		return nil, err
+	}
+	if app.Internal {
+		return nil, ErrDomainOnInternalService
 	}
 	host, err := apphost.NormalizeCustomDomain(hostname, s.route.Domain)
 	if err != nil {
@@ -200,7 +206,7 @@ func (s *AppDomainService) SyncApp(ctx context.Context, namespace string, app *a
 	}
 	hosts := []string{}
 	for _, domain := range domains {
-		if apphost.DomainRoutable(domain.Status) {
+		if apphost.DomainRoutable(domain.Status) && !app.Internal {
 			hosts = append(hosts, domain.Hostname)
 		}
 	}

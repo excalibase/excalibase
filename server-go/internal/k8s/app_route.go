@@ -62,6 +62,9 @@ func buildAppRoute(namespace string, app *apphost.App, opts AppRouteOptions) (*a
 	if err := opts.validate(); err != nil {
 		return nil, err
 	}
+	if app.Internal {
+		return buildInternalServiceRoute(namespace, app)
+	}
 	host, err := opts.Public().Hostname(app.Name, app.ProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrRenderApp, err)
@@ -75,6 +78,22 @@ func buildAppRoute(namespace string, app *apphost.App, opts AppRouteOptions) (*a
 		ingress: buildAppIngress(namespace, app, host, opts),
 		policy:  policy,
 	}, nil
+}
+
+// buildInternalServiceRoute gives an internal service (EXC-525) its Service and
+// a fence admitting only the node's readiness probe; no Ingress, no edge.
+// The project's private network policy is what lets sibling apps in.
+func buildInternalServiceRoute(namespace string, app *apphost.App) (*appRoute, error) {
+	probe := []ciliumPortRule{{Ports: []ciliumPort{{Port: strconv.Itoa(appProbePort(app)), Protocol: protocolTCP}}}}
+	spec := ciliumPolicySpec{
+		EndpointSelector: metav1.LabelSelector{MatchLabels: appSelectorLabels(app)},
+		Ingress:          []ciliumIngressRule{{FromEntities: []string{hostEntity}, ToPorts: probe}},
+	}
+	policy, err := newCiliumPolicy(namespace, AppIngressPolicyName(app.Name), app, spec)
+	if err != nil {
+		return nil, err
+	}
+	return &appRoute{service: buildAppService(namespace, app), policy: policy}, nil
 }
 
 func buildAppService(namespace string, app *apphost.App) *corev1.Service {
@@ -91,12 +110,15 @@ func buildAppService(namespace string, app *apphost.App) *corev1.Service {
 // appServicePorts: port 80 is the HTTP port the edge and http://<name> use;
 // each internal port keeps its own number, so <name>:<port> works in the project.
 func appServicePorts(app *apphost.App) []corev1.ServicePort {
-	ports := []corev1.ServicePort{{
-		Name:       appServicePortName,
-		Port:       appServicePort,
-		TargetPort: intstr.FromInt(app.Port),
-		Protocol:   corev1.ProtocolTCP,
-	}}
+	ports := []corev1.ServicePort{}
+	if !app.Internal {
+		ports = append(ports, corev1.ServicePort{
+			Name:       appServicePortName,
+			Port:       appServicePort,
+			TargetPort: intstr.FromInt(app.Port),
+			Protocol:   corev1.ProtocolTCP,
+		})
+	}
 	for slot, internal := range app.InternalPorts {
 		ports = append(ports, corev1.ServicePort{
 			Name:       internalPortName(slot),

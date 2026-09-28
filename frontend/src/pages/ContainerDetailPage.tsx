@@ -95,13 +95,14 @@ function describeVar(v: EnvVar): string {
 
 // The Service is named after the app, so the project's apps use these (EXC-524, EXC-525).
 function internalAddresses(app: App): string {
-  return [`http://${app.name}`, ...(app.internalPorts ?? []).map((p) => `${app.name}:${p.port}`)].join(', ');
+  const tcp = (app.internalPorts ?? []).map((p) => `${app.name}:${p.port}`);
+  return (app.internal ? tcp : [`http://${app.name}`, ...tcp]).join(', ');
 }
 
 function Settings({ app }: { readonly app: App }) {
   const size = describeTier(app.tier);
   const rows: Array<[string, string]> = [
-    ['Port', String(app.port)],
+    ['Port', app.internal ? 'None (internal service, no public URL)' : String(app.port)],
     ['Inside the project', internalAddresses(app)],
     ['Copies', app.replicas === 0 ? '0 (stopped)' : String(app.replicas)],
     ['Size', `${size.label}: ${size.detail}`],

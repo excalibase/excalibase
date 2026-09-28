@@ -61,6 +61,8 @@ export interface App {
   image: string;
   env: EnvVar[];
   port: number;
+  // An internal service (EXC-525) has no HTTP port (0) and no public URL.
+  internal?: boolean;
   // Raw TCP ports only this project's apps reach, with its private network on (EXC-525).
   internalPorts?: InternalPort[];
   healthCheckPath?: string;
@@ -100,6 +102,7 @@ export interface AppInput {
   name: string;
   image: string;
   port: number;
+  internal: boolean;
   internalPorts: InternalPort[];
   replicas: number;
   healthCheckPath: string;

@@ -49,3 +49,46 @@ func TestDeployConfigCarriesTheInternalPorts(t *testing.T) {
 		t.Fatalf("ToApp lost the internal ports: %+v", got)
 	}
 }
+
+// An internal service has no HTTP port and no public route; it is reached only
+// on its internal ports over the project's private network (EXC-525).
+func TestValidateInternalService(t *testing.T) {
+	internal := func() *apphost.App {
+		app := validApp()
+		app.Internal = true
+		app.Port = 0
+		app.HealthCheckPath = ""
+		app.InternalPorts = []apphost.InternalPort{tcp(6379)}
+		return app
+	}
+	if err := internal().Validate(); err != nil {
+		t.Fatalf("a valid internal service was refused: %v", err)
+	}
+	refused := map[string]func(*apphost.App){
+		"no internal port":    func(a *apphost.App) { a.InternalPorts = nil },
+		"an HTTP port":        func(a *apphost.App) { a.Port = 8080 },
+		"an HTTP health path": func(a *apphost.App) { a.HealthCheckPath = "/healthz" },
+	}
+	for name, change := range refused {
+		app := internal()
+		change(app)
+		if err := app.Validate(); err == nil {
+			t.Errorf("%s must be refused", name)
+		}
+	}
+	public := validApp()
+	public.Port = 0
+	if err := public.Validate(); err == nil {
+		t.Error("a public web app still needs its HTTP port")
+	}
+}
+
+func TestDeployConfigCarriesWhetherTheAppIsInternal(t *testing.T) {
+	app := validApp()
+	app.Internal, app.Port, app.HealthCheckPath = true, 0, ""
+	app.InternalPorts = []apphost.InternalPort{tcp(6379)}
+	cfg := apphost.ConfigFromApp(app)
+	if !cfg.Internal || !cfg.ToApp(app.ID, app.ProjectID, app.Name).Internal {
+		t.Fatal("a redeploy must run the internal service it froze")
+	}
+}

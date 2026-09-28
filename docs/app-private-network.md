@@ -27,4 +27,4 @@ An app may declare up to 8 internal ports (`"internalPorts": [{"port": 6379, "pr
 
 Internal ports are reachable only from the same project's apps while the private network is on: the edge fence and the Ingress name only the HTTP port, and the private network policy admits the port names only from the project's app pods.
 
-Known gap: every app still needs an HTTP port routed through the edge. A TCP-only service (Redis, Kafka) must declare some HTTP port as well; an internal-only app with no public route is a follow-up.
+An app can instead be an **internal service** (`"internal": true`, Studio: "Internal service"): no HTTP port, no health path, at least one internal port. It gets no Ingress and no URL, its own fence admits only the node's readiness probe on its first internal port, and a custom domain is refused for it. Deploying a public app as an internal service removes the route it had. It is reachable only by the project's apps, with the private network on, at `<app name>:<port>` (e.g. `cache:6379`).
