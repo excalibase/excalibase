@@ -28,6 +28,7 @@ func setupDiskAppRouter(t *testing.T, limits apphost.DiskLimits) (chi.Router, *f
 	t.Helper()
 	store := newFakeAppStore()
 	h := NewAppHandler(store, newFakeSources("storefront_db"), testAppRoute)
+	h.SetAppLimits(fakeAppLimits{limit: testAppLimit})
 	if limits != nil {
 		h.SetDiskLimits(limits)
 	}

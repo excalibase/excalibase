@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -47,9 +48,12 @@ type tierConfigDTO struct {
 	MaxStorageSize string `json:"maxStorageSize"`
 	// MaxAppDiskSize is the largest disk one app may have (EXC-523).
 	MaxAppDiskSize string `json:"maxAppDiskSize"`
-	Memory         string `json:"memory"`
-	CPU            string `json:"cpu"`
-	BackupEnabled  bool   `json:"backupEnabled"`
+	// MaxApps is how many apps one project may hold (EXC-524); required, so
+	// an omitted field is never read as "no apps".
+	MaxApps       *int   `json:"maxApps"`
+	Memory        string `json:"memory"`
+	CPU           string `json:"cpu"`
+	BackupEnabled bool   `json:"backupEnabled"`
 	// AutoPauseAfterDays: idle days before an ACTIVE project is auto-paused
 	// (warning one day earlier). 0 = never.
 	AutoPauseAfterDays int `json:"autoPauseAfterDays"`
@@ -63,6 +67,7 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		StorageSize:    tc.StorageSize,
 		MaxStorageSize: tc.MaxStorageSize,
 		MaxAppDiskSize: tc.MaxAppDiskSize,
+		MaxApps:        &tc.MaxApps,
 		Memory:         tc.Memory,
 		CPU:            tc.CPU,
 		BackupEnabled:  tc.BackupEnabled,
@@ -104,6 +109,7 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		StorageSize:    dto.StorageSize,
 		MaxStorageSize: dto.MaxStorageSize,
 		MaxAppDiskSize: dto.MaxAppDiskSize,
+		MaxApps:        requiredCount(dto.MaxApps),
 		Memory:         dto.Memory,
 		CPU:            dto.CPU,
 		BackupEnabled:  dto.BackupEnabled,
@@ -123,6 +129,19 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, toTierDTO(tier, tc))
 }
+
+// requiredCount reads an omitted count as -1, which validation refuses, so an
+// absent field is never taken as zero.
+func requiredCount(value *int) int {
+	if value == nil {
+		return -1
+	}
+	return *value
+}
+
+// maxAppsPerProjectCeiling bounds an admin's edit; a project's namespace quota
+// and capacity admission still decide what actually runs.
+const maxAppsPerProjectCeiling = 1000
 
 // validateTierConfig rejects specs that would produce an invalid CNPG cluster.
 // Quantity strings (cpu/memory/storage) are required and non-empty; instances
@@ -146,6 +165,9 @@ func validateTierConfig(tc config.TierConfig) error {
 	}
 	if err := validateMaxStorage(tc); err != nil {
 		return err
+	}
+	if tc.MaxApps < 0 || tc.MaxApps > maxAppsPerProjectCeiling {
+		return fmt.Errorf("maxApps is required, between 0 and %d (0 offers no apps)", maxAppsPerProjectCeiling)
 	}
 	if _, err := apphost.PlanDiskGiB(tc.MaxAppDiskSize); err != nil {
 		return errors.New("maxAppDiskSize must be a whole number of gibibytes such as 20Gi (0Gi offers no app disks)")

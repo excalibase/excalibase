@@ -46,7 +46,7 @@ func seedSecretApp(t *testing.T, store *fakeAppStore) {
 		Tier: domain.Standard, Status: apphost.StatusCreated,
 		Env: []apphost.EnvVar{{Name: "MODE", Kind: apphost.KindLiteral, Value: &value}},
 	}
-	if err := store.Create(app); err != nil {
+	if err := store.Create(app, testAppLimit); err != nil {
 		t.Fatalf("seed app: %v", err)
 	}
 }

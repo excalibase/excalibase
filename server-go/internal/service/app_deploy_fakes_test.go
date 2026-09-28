@@ -27,7 +27,7 @@ func newFakeAppStoreForDeploy(app *apphost.App) *fakeAppStoreForDeploy {
 	return &fakeAppStoreForDeploy{apps: map[string]*apphost.App{app.ProjectID + "/" + app.ID: app}}
 }
 
-func (f *fakeAppStoreForDeploy) Create(*apphost.App) error { return errors.New("not used") }
+func (f *fakeAppStoreForDeploy) Create(*apphost.App, int) error { return errors.New("not used") }
 
 func (f *fakeAppStoreForDeploy) Get(projectID, id string) (*apphost.App, error) {
 	f.mu.Lock()

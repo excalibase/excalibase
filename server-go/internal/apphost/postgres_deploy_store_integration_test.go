@@ -46,7 +46,7 @@ func TestPGDeployStore_CreateAssignsRevision(t *testing.T) {
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 
 	app := sampleApp("proj_deploy_rt", "app_deploy_rt", "storefront")
-	if err := appStore.Create(app); err != nil {
+	if err := appStore.Create(app, 1); err != nil {
 		t.Fatalf("create app: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestPGDeployStore_CreateSupersedesEarlierPendingOrRolling(t *testing.T) {
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 
 	app := sampleApp("proj_deploy_supersede", "app_deploy_supersede", "storefront")
-	if err := appStore.Create(app); err != nil {
+	if err := appStore.Create(app, 1); err != nil {
 		t.Fatalf("create app: %v", err)
 	}
 
@@ -136,7 +136,7 @@ func TestPGDeployStore_GetLatest_NoDeploysIsNil(t *testing.T) {
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 
 	app := sampleApp("proj_deploy_empty", "app_deploy_empty", "storefront")
-	if err := appStore.Create(app); err != nil {
+	if err := appStore.Create(app, 1); err != nil {
 		t.Fatalf("create app: %v", err)
 	}
 
@@ -171,7 +171,7 @@ func TestPGDeployStore_Create_RejectsNonPendingStatus(t *testing.T) {
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 
 	app := sampleApp("proj_deploy_badstatus", "app_deploy_badstatus", "storefront")
-	if err := appStore.Create(app); err != nil {
+	if err := appStore.Create(app, 1); err != nil {
 		t.Fatalf("create app: %v", err)
 	}
 
@@ -187,7 +187,7 @@ func TestPGDeployStore_ConfigAndRedeployOfRoundTrip(t *testing.T) {
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 
 	app := sampleApp("proj_deploy_config", "app_deploy_config", "storefront")
-	if err := appStore.Create(app); err != nil {
+	if err := appStore.Create(app, 1); err != nil {
 		t.Fatalf("create app: %v", err)
 	}
 
@@ -233,11 +233,11 @@ func TestPGDeployStore_Get_CrossAppAndCrossProjectAreNotFound(t *testing.T) {
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 
 	appA := sampleApp("proj_deploy_get_a", "app_deploy_get_a", "storefront")
-	if err := appStore.Create(appA); err != nil {
+	if err := appStore.Create(appA, 1); err != nil {
 		t.Fatalf("create app a: %v", err)
 	}
 	appB := sampleApp("proj_deploy_get_b", "app_deploy_get_b", "storefront")
-	if err := appStore.Create(appB); err != nil {
+	if err := appStore.Create(appB, 1); err != nil {
 		t.Fatalf("create app b: %v", err)
 	}
 
@@ -297,7 +297,7 @@ func TestPGDeployStore_FinishSetsTheAppStatus(t *testing.T) {
 	appStore := newPGAppStore(t)
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 	app := sampleApp("proj_deploy_finish", "app_deploy_finish", "storefront")
-	if err := appStore.Create(app); err != nil {
+	if err := appStore.Create(app, 1); err != nil {
 		t.Fatalf("create app: %v", err)
 	}
 	deploy := sampleDeploy(app.ProjectID, app.ID, "dev-1")
@@ -334,7 +334,7 @@ func TestPGDeployStore_FinishOfASupersededDeployLeavesTheApp(t *testing.T) {
 	appStore := newPGAppStore(t)
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 	app := sampleApp("proj_deploy_late", "app_deploy_late", "storefront")
-	if err := appStore.Create(app); err != nil {
+	if err := appStore.Create(app, 1); err != nil {
 		t.Fatalf("create app: %v", err)
 	}
 	first := sampleDeploy(app.ProjectID, app.ID, "dev-1")
@@ -363,7 +363,7 @@ func TestPGDeployStore_FinishWithNoAppStatusLeavesTheApp(t *testing.T) {
 	appStore := newPGAppStore(t)
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 	app := sampleApp("proj_deploy_unobserved", "app_deploy_unobserved", "storefront")
-	if err := appStore.Create(app); err != nil {
+	if err := appStore.Create(app, 1); err != nil {
 		t.Fatalf("create app: %v", err)
 	}
 	deploy := sampleDeploy(app.ProjectID, app.ID, "dev-1")
@@ -394,7 +394,7 @@ func TestPGDeployStore_ListUnfinished(t *testing.T) {
 	appStore := newPGAppStore(t)
 	deployStore := apphost.NewPostgresDeployStore(sharedDB)
 	app := sampleApp("proj_deploy_unfinished", "app_deploy_unfinished", "storefront")
-	if err := appStore.Create(app); err != nil {
+	if err := appStore.Create(app, 1); err != nil {
 		t.Fatalf("create app: %v", err)
 	}
 	done := sampleDeploy(app.ProjectID, app.ID, "dev-1")
