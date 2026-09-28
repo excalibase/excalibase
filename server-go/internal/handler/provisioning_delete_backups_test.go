@@ -80,7 +80,7 @@ func setupDeleteBackupsRouter(t *testing.T) (chi.Router, *storage.FileSystemStor
 	r := chi.NewRouter()
 	r.Route("/api/provision", func(r chi.Router) { h.Routes(r) })
 	for _, id := range []string{"proj-1", "proj-2"} {
-		if err := store.Create(&domain.DatabaseInstance{ProjectID: id, OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeK8s, Status: "ACTIVE"}); err != nil {
+		if err := store.Create(&domain.DatabaseInstance{ProjectID: id, OrgID: "org1", DBType: domain.PostgreSQL, DeploymentMode: domain.ModeK8s, Status: string(domain.StageFailed)}); err != nil {
 			t.Fatal(err)
 		}
 	}

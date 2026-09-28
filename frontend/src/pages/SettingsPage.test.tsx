@@ -10,15 +10,16 @@ vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
-function renderSettings(deletionProtection: boolean) {
+function renderSettings(deletionProtection: boolean, extra: Record<string, unknown> = {}) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/provision/p-1') {
       return Promise.resolve({
-        data: { projectId: 'p-1', orgId: 'o-1', databaseType: 'POSTGRESQL', tier: 'FREE', status: 'ACTIVE', deletionProtection },
+        data: { projectId: 'p-1', orgId: 'o-1', databaseType: 'POSTGRESQL', tier: 'FREE', status: 'ACTIVE', deletionProtection, ...extra },
       } as never);
     }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
+  vi.mocked(api.post).mockResolvedValue({ data: { status: 'PAUSED' } } as never);
   vi.mocked(api.patch).mockResolvedValue({ data: { deletionProtection: !deletionProtection } } as never);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
@@ -53,5 +54,19 @@ describe('SettingsPage — deletion protection', () => {
     await waitFor(() =>
       expect(api.patch).toHaveBeenCalledWith('/provision/p-1/deletion-protection', { enabled: true })
     );
+  });
+
+  test('deleting says the project is kept for 7 days first', async () => {
+    renderSettings(false);
+    expect(await screen.findByTestId('deletion-grace-note')).toHaveTextContent(/7 days/);
+  });
+
+  test('a project scheduled for deletion shows when and can be cancelled', async () => {
+    renderSettings(false, { status: 'PENDING_DELETION', deletionDueAt: '2026-10-05T10:00:00Z' });
+    expect(await screen.findByTestId('deletion-scheduled')).toHaveTextContent(/scheduled for deletion/i);
+    expect(screen.queryByTestId('delete-project-btn')).toBeNull();
+
+    await userEvent.click(screen.getByTestId('cancel-deletion-btn'));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/provision/p-1/deletion/cancel'));
   });
 });

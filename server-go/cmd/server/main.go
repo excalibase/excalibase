@@ -267,7 +267,11 @@ func runServer(cfg config.AppConfig) {
 		pauseSvc.AddStatusObserver(deps.schemaHandler)
 		deps.provHandler.SetPauseService(pauseSvc)
 		deps.provHandler.SetInstanceStore(store)
+		// DELETE stops a project with the same pause before its grace period.
+		provSvc.SetDeletionPauser(pauseSvc)
 	}
+	stopDeletionSweep := startDeletionSweeper(cfg, sqlStore, provSvc)
+	defer stopDeletionSweep()
 	stopIdlePause := startIdlePauseScheduler(cfg, sqlStore, store, provSvc, pauseSvc, deps.emailSender)
 	defer stopIdlePause()
 
@@ -922,6 +926,8 @@ func buildProvisioningService(
 		provSvc.SetOperationClaimer(lifecycleClaimer)
 		// A deleted project's apps go with it, whether or not hosting is on now.
 		provSvc.SetAppPurger(apphost.NewPostgresAppStore(pg.DB()))
+		// Kept backups of a deleted project are dated for purging.
+		provSvc.SetRetainedBackupStore(pg)
 	}
 
 	if err := provSvc.SetBackupDefaults(backupDefaults(cfg)); err != nil {
@@ -1454,6 +1460,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			// Admin+ — credentials and destructive lifecycle. Pause/resume stop
 			// and restart the tenant workload, so they sit with the lifecycle tier.
 			r.With(admin).Delete("/", d.provHandler.Delete)
+			r.With(owner).Post("/deletion/cancel", d.provHandler.CancelDeletion)
 			r.With(admin).Get("/credentials", d.provHandler.GetCredentials)
 			r.With(admin).Post("/credentials/rotate", d.provHandler.RotateCredentials)
 			r.With(admin).Post("/backups/purge", d.provHandler.PurgeBackups)

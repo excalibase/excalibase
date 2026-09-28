@@ -36,7 +36,7 @@ func setupDeleteStateRouter(t *testing.T) (chi.Router, *storage.FileSystemStore,
 	r.Route("/api/provision", func(r chi.Router) { h.Routes(r) })
 	if err := store.Create(&domain.DatabaseInstance{
 		ProjectID: testDeleteProject, OrgID: "org1", DBType: domain.PostgreSQL,
-		DeploymentMode: domain.ModeK8s, Namespace: testDeleteNamespace, Status: "ACTIVE",
+		DeploymentMode: domain.ModeK8s, Namespace: testDeleteNamespace, Status: string(domain.StageFailed),
 	}); err != nil {
 		t.Fatal(err)
 	}

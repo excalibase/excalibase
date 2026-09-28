@@ -21,7 +21,7 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
   const deprovision = useDeprovisionDatabase();
 
   const handleDelete = async () => {
-    if (confirm(`Are you sure you want to delete ${instance.projectId}?`)) {
+    if (confirm(`Delete ${instance.projectId}? It is stopped now and permanently deleted after 7 days; an org owner can cancel until then.`)) {
       await deprovision.mutateAsync(instance.projectId);
     }
   };

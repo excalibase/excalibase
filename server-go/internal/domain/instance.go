@@ -106,6 +106,12 @@ type DatabaseInstance struct {
 	// started with. It is part of the deletion state, not of the request, so
 	// a retry cannot drop a purge the first attempt was told to perform.
 	DeletionDeleteBackups bool `json:"deletionDeleteBackups,omitempty"`
+	// DeletionScheduledAt and DeletionDueAt are set while the project is
+	// PENDING_DELETION: when the delete was asked for, and when the grace
+	// period ends and the sweep hard-deletes it. Plain times, so the JSON
+	// carries the zone and a browser reads the same instant.
+	DeletionScheduledAt *time.Time `json:"deletionScheduledAt,omitempty"`
+	DeletionDueAt       *time.Time `json:"deletionDueAt,omitempty"`
 
 	// Network
 	NetworkPolicyEnabled *bool `json:"networkPolicyEnabled,omitempty"`
@@ -202,6 +208,8 @@ func (inst *DatabaseInstance) Clone() *DatabaseInstance {
 	copied.LastHealthCheck = clonePtr(inst.LastHealthCheck)
 	copied.PauseLastAttemptAt = clonePtr(inst.PauseLastAttemptAt)
 	copied.PauseBackupAt = clonePtr(inst.PauseBackupAt)
+	copied.DeletionScheduledAt = clonePtr(inst.DeletionScheduledAt)
+	copied.DeletionDueAt = clonePtr(inst.DeletionDueAt)
 	copied.Parameters = maps.Clone(inst.Parameters)
 	return &copied
 }

@@ -107,8 +107,7 @@ EXISTING=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/provision/" 2>/dev/null | jq -r
 for pid in $EXISTING; do
   [ -z "$pid" ] || [ "$pid" = "null" ] && continue
   echo "    cleaning leftover $pid"
-  curl -s -X PATCH -H "$PAT_HDR" -H 'Content-Type: application/json' -d '{"enabled":false}' "$API_PROV/api/provision/$pid/deletion-protection" > /dev/null 2>&1
-  curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/provision/$pid/" > /dev/null 2>&1
+  curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/admin/projects/$pid" > /dev/null 2>&1
 done
 sleep 2
 
@@ -382,8 +381,7 @@ if [ -z "${SKIP_PROVISIONED:-}" ]; then
       else
         skip "cross-project replay" "couldn't reg in $PROJECT2_ID"
       fi
-      curl -s -X PATCH -H "$PAT_HDR" -H 'Content-Type: application/json' -d '{"enabled":false}' "$API_PROV/api/provision/$PROJECT2_ID/deletion-protection" > /dev/null 2>&1
-      curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/provision/$PROJECT2_ID/" > /dev/null 2>&1
+      curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT2_ID" > /dev/null 2>&1
     else
       skip "cross-project replay" "couldn't provision proj2: $PROV2"
     fi
@@ -460,8 +458,7 @@ curl -s --get --data-urlencode 'query={namespace=\"excalibase-platform\",app=\"g
 
   ###############################################################################
   section "F21. Deprovision — vault prefix purge"
-  curl -s -X PATCH -H "$PAT_HDR" -H 'Content-Type: application/json' -d '{"enabled":false}' "$API_PROV/api/provision/$PROJECT_ID/deletion-protection" > /dev/null 2>&1
-  curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/provision/$PROJECT_ID/" > /dev/null
+  curl -s -X DELETE -H "$PAT_HDR" "$API_PROV/api/admin/projects/$PROJECT_ID" > /dev/null
   sleep 3
   VLIST_AFTER=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/vault/secrets-list?prefix=projects/$PROJECT_ID/" 2>/dev/null)
   PATHS_LEFT=$(echo "$VLIST_AFTER" | jq '.paths | length' 2>/dev/null || echo "?")

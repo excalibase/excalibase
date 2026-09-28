@@ -155,6 +155,27 @@ type InstanceStore interface {
 	Delete(projectID string) error
 }
 
+// RetainedBackup names the backups a deleted project left behind and when
+// they are purged. It is the only record of them once the project row is gone.
+type RetainedBackup struct {
+	ProjectID      string
+	OrgID          string
+	DeploymentMode domain.DeploymentMode
+	DeletedAt      time.Time
+	PurgeAfter     time.Time
+}
+
+// RetainedBackupStore tracks deleted projects' kept backups until the sweep
+// purges them.
+type RetainedBackupStore interface {
+	// RecordRetainedBackups stores the record, replacing any earlier one for
+	// the same project.
+	RecordRetainedBackups(r RetainedBackup) error
+	// DueRetainedBackups lists the records whose purge date is at or before now.
+	DueRetainedBackups(now time.Time) ([]RetainedBackup, error)
+	DeleteRetainedBackups(projectID string) error
+}
+
 // ApplyBeginDeletionIntent builds the explicit form of the backup decision
 // passed to BeginDeletion.
 func ApplyBeginDeletionIntent(delete bool) *bool { return &delete }

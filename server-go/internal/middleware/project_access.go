@@ -22,7 +22,8 @@ const (
 // servingAllows reports whether a request may proceed against the resolved
 // project. A project the platform must not serve keeps only the surface that
 // lets its owner see what is wrong and get rid of it: reading the status,
-// retrying the DELETE, and retrying an outstanding backup purge.
+// retrying the DELETE, and retrying an outstanding backup purge. A project in
+// its deletion grace period may also have the deletion cancelled.
 //
 // Two states qualify (domain.IsNotServable). Under teardown, every other
 // operation would act on resources that are going away — a rotated credential
@@ -44,7 +45,9 @@ func servingAllows(r *http.Request, inst *domain.DatabaseInstance) bool {
 	case "/api/provision/" + id, "/api/provision/" + id + "/":
 		return r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodDelete
 	case "/api/provision/" + id + "/backups/purge":
-		return r.Method == http.MethodPost
+		return r.Method == http.MethodPost && inst.Status != string(domain.StatusPendingDeletion)
+	case "/api/provision/" + id + "/deletion/cancel":
+		return r.Method == http.MethodPost && inst.Status == string(domain.StatusPendingDeletion)
 	case "/api/projects/" + id + "/info", "/api/projects/" + id + "/info/":
 		// The data plane's read. Its handler answers 404 for a project it
 		// must not serve — stricter than this gate, and unambiguous for a

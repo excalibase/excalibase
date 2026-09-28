@@ -70,6 +70,10 @@ const (
 	// only flips it to ACTIVE once a query has answered, so a recovery that
 	// never happened is never served as a working project.
 	StatusRestoring ProvisioningStage = "RESTORING"
+	// StatusPendingDeletion marks a deleted project inside its grace period:
+	// its workload is stopped and its disk kept until DeletionDueAt, when the
+	// sweep tears it down. An Owner can cancel until then.
+	StatusPendingDeletion ProvisioningStage = "PENDING_DELETION"
 )
 
 // StatusProvisioning is the status a project holds while its provisioning
@@ -127,14 +131,18 @@ func IsActive(status string) bool {
 // The list lives here so the gate, the handlers and the data plane cannot
 // drift apart.
 func IsNotServable(status string) bool {
-	return IsDeletionStatus(status) || status == string(StatusRestoring)
+	return IsDeletionStatus(status) || status == string(StatusRestoring) ||
+		status == string(StatusPendingDeletion)
 }
 
 // NotServableReason is the fixed sentence a caller is given for a project
 // that is not servable. It names what is happening and nothing else.
 func NotServableReason(status string) string {
-	if status == string(StatusRestoring) {
+	switch status {
+	case string(StatusRestoring):
 		return "project is being restored"
+	case string(StatusPendingDeletion):
+		return "project is scheduled for deletion"
 	}
 	return "project is being deleted"
 }
@@ -153,6 +161,7 @@ const (
 	DeletionStepDeleteObjects   = "DELETE_PROJECT_OBJECTS"
 	DeletionStepDeleteApps      = "DELETE_APPS"
 	DeletionStepDeleteVault     = "DELETE_VAULT_CREDENTIALS"
+	DeletionStepRetainBackups   = "RECORD_RETAINED_BACKUPS"
 	DeletionStepDeleteRecord    = "DELETE_PROJECT_RECORD"
 )
 

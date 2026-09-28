@@ -147,6 +147,27 @@ curl -X PATCH -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json
 
 The body must name `enabled`; an empty or malformed body is refused.
 
+### Deleting a project has a 7-day grace period
+
+`DELETE /api/provision/<projectId>/` on an ACTIVE or PAUSED project does not
+tear it down. It pauses it (backup first, then the workload stops, disk kept),
+answers `202` with `status: PENDING_DELETION` and `deletionDueAt` seven days
+out, and the deletion sweep (every 15 minutes, leader replica only) runs the
+teardown below once that date passes. During the grace period the project
+still holds its org slot, is not served (credentials, data plane, functions
+refuse it), and its deletion-protection toggle is locked. An org **Owner** can
+cancel:
+
+```bash
+curl -X POST -H "Authorization: Bearer $PAT" \
+  https://<host>/api/provision/proj-abc123/deletion/cancel
+```
+
+A cancelled project is left PAUSED with deletion protection back on; resume it
+as usual. A project that holds no data (FAILED, an unconfirmed RESTORING) is
+deleted at once. The platform admin force drop (`DELETE
+/api/admin/projects/<id>`) skips the grace period.
+
 ### Deleting a project is observed, not fire-and-forget
 
 `DELETE /api/provision/<projectId>/` runs the teardown and only removes the
@@ -219,26 +240,26 @@ Deleting a project **keeps its backups** unless the request carries
 deletion starts, so a retry cannot drop a purge that was already confirmed;
 asking to keep backups after confirming a purge answers `409`.
 
-When backups are kept, the `200` response carries the object-store prefix they
-remain under:
+Kept backups are purged **14 days after the hard delete** by the deletion
+sweep, from a `retained_backups` record written during the teardown (project,
+deployment mode, purge date). A failed purge keeps its record and is retried
+on the next sweep. `confirmDeleteBackups: true` remains the immediate-erasure
+path. When backups are kept on an immediate delete, the `200` response carries
+the object-store prefix they remain under:
 
 ```json
 {"projectId":"proj-abc123","status":"DELETED",
  "retainedBackupPrefix":"backups/proj-abc123/"}
 ```
 
-**Record that prefix.** The platform has no endpoint that lists or purges the
-backups of a project whose record is gone — `POST .../backups/purge` needs the
-row, and the row is deleted with the project. Retained objects are reachable
-only with object-store credentials, by prefix:
+No endpoint lists the backups of a project whose record is gone —
+`POST .../backups/purge` needs the row. Until the sweep purges them, retained
+objects are reachable only with object-store credentials, by prefix:
 
 ```bash
 aws s3 ls "s3://$BUCKET/backups/proj-abc123/" --endpoint-url "$R2_ENDPOINT"
 aws s3 rm --recursive "s3://$BUCKET/backups/proj-abc123/" --endpoint-url "$R2_ENDPOINT"
 ```
-
-Whether the platform should instead keep a tombstone so an owner can find and
-purge their own retained backups is an open product question — today it cannot.
 
 ### Incomplete multipart uploads (operator requirement)
 

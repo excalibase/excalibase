@@ -69,6 +69,11 @@ type ProvisioningService struct {
 	// backupPurger deletes a project's backup objects on request at
 	// deprovision time. nil means confirmDeleteBackups is refused.
 	backupPurger *BackupPurger
+	// deletionPauser stops a project for its deletion grace period.
+	deletionPauser DeletionPauser
+	// retainedBackups dates the kept backups of deleted projects for purging.
+	retainedBackups storage.RetainedBackupStore
+	deletionNow     func() time.Time
 
 	// endpoints frees the project's public database endpoint. Nil when the
 	// platform offers none, and the teardown then carries no such step.
@@ -766,6 +771,9 @@ type DeprovisionOptions struct {
 	// never drop a purge someone already confirmed. A caller that explicitly
 	// asks to keep backups over a confirmed purge is refused.
 	DeleteBackups *bool
+	// dueAt, set only by the deletion sweep, makes the teardown proceed only
+	// if the row it re-reads under the lease is still due at that time.
+	dueAt *time.Time
 }
 
 // DeleteBackupsOption builds the explicit form of the option.
@@ -863,6 +871,19 @@ func (s *ProvisioningService) DeprovisionWithOptions(ctx context.Context, projec
 		return fmt.Errorf("%w (%s)", ErrProjectOperationRunning, projectID)
 	}
 	defer release()
+	// Re-read under the lease: a cancel that won the race has turned
+	// protection back on.
+	if inst, err = s.store.FindByProjectID(projectID); err != nil || inst == nil {
+		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+	}
+	if !domain.IsDeletionStatus(inst.Status) && isProtected(inst) {
+		return fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
+	}
+	// The sweep listed this project before taking the lease; a cancel or a
+	// fresh schedule since then means it is not due any more.
+	if opts.dueAt != nil && !deletionDue(inst, *opts.dueAt) {
+		return fmt.Errorf("%w: %s", ErrDeletionNotDue, projectID)
+	}
 
 	deleteBackups, err := s.store.BeginDeletion(projectID, opts.DeleteBackups)
 	if err != nil {
@@ -972,6 +993,10 @@ func (s *ProvisioningService) deletionSteps(deleteBackups bool) []deletionStep {
 	// The app rows go once the namespace their workloads ran in is gone.
 	if s.appPurger != nil {
 		steps = append(steps, deletionStep{domain.DeletionStepDeleteApps, s.purgeProjectApps})
+	}
+	// Kept backups outlive the row, so they are dated for purging before it goes.
+	if !deleteBackups && s.retainedBackups != nil {
+		steps = append(steps, deletionStep{domain.DeletionStepRetainBackups, s.recordRetainedBackups})
 	}
 	return append(steps,
 		deletionStep{domain.DeletionStepDeleteVault, s.deleteVaultCredentials},
@@ -1148,8 +1173,11 @@ func (s *ProvisioningService) GetInstancesByOwner(ownerID string) ([]*domain.Dat
 // notServableErr picks the sentinel that matches why the project may not be
 // served, so a caller can tell a teardown from an unconfirmed restore.
 func notServableErr(status string) error {
-	if status == string(domain.StatusRestoring) {
+	switch status {
+	case string(domain.StatusRestoring):
 		return ErrProjectRestoring
+	case string(domain.StatusPendingDeletion):
+		return ErrScheduledForDeletion
 	}
 	return ErrProjectDeleting
 }
@@ -1198,8 +1226,13 @@ func (s *ProvisioningService) SetDeletionProtection(projectID string, enabled bo
 	if err != nil {
 		return err
 	}
+	if inst.Status == string(domain.StatusPendingDeletion) {
+		return fmt.Errorf("%w: %s", ErrScheduledForDeletion, projectID)
+	}
 	inst.DeletionProtection = &enabled
-	return s.store.Update(inst)
+	// Pinned to the status read, so a DELETE that scheduled the project in
+	// between is not written back over.
+	return s.store.UpdateIfStatus(inst, inst.Status)
 }
 
 // execRoleSQL executes a psql command in the appropriate container (Docker or K8s).
