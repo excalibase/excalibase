@@ -110,7 +110,6 @@ func newObservedRestore(t *testing.T) *observedRestoreFixture {
 	adapter.SetProjectRegistrar(f.reg)
 	adapter.SetDatabaseProbe(f.probe)
 	adapter.SetRestorePlanSource(enterprisePlan())
-	adapter.SetOwnerCredentials(sourceOwner{})
 	adapter.SetBackupCredentials(newTestIssuer(t, &recordingMinter{}, newFakeObjectDeleter()))
 	adapter.SetReadyPoller(provisioner.Poller{
 		Interval: time.Second,

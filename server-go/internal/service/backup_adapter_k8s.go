@@ -45,9 +45,6 @@ type K8sBackupAdapter struct {
 	// plans decides the restored project's tier and backups, exactly as they
 	// would be decided for a new project.
 	plans RestorePlanSource
-	// owners answers the source's owner password when the recovered cluster
-	// carries no credential of its own.
-	owners OwnerCredentials
 	// creds mints the restore's credentials: read-only for the source's
 	// prefix, read-write for the restored project's own.
 	creds *BackupCredentialIssuer
@@ -55,9 +52,6 @@ type K8sBackupAdapter struct {
 
 // SetBackupCredentials wires the issuer; without one a restore is refused.
 func (a *K8sBackupAdapter) SetBackupCredentials(i *BackupCredentialIssuer) { a.creds = i }
-
-// SetOwnerCredentials wires where a source project's owner password is read.
-func (a *K8sBackupAdapter) SetOwnerCredentials(o OwnerCredentials) { a.owners = o }
 
 // RestorePlan is what a restored project is created with.
 type RestorePlan struct {
@@ -202,9 +196,6 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	}
 	if a.plans == nil {
 		return nil, ErrRestorePlanNotConfigured
-	}
-	if a.owners == nil {
-		return nil, fmt.Errorf("%w: restore has no owner credential source", ErrOwnerCredentialUnavailable)
 	}
 	if inst.OrgID == "" {
 		return nil, fmt.Errorf("restore source %s: %w", inst.ProjectID, k8s.ErrProjectOrgRequired)
@@ -377,7 +368,7 @@ func (a *K8sBackupAdapter) runRestore(
 		return nil, err
 	}
 	restored := a.restoredInstance(ctx, inst, req, target)
-	opts, err := a.ownerCredential(inst, restored)
+	opts, err := ownerCredential(restored)
 	if err != nil {
 		return nil, err
 	}
@@ -387,27 +378,15 @@ func (a *K8sBackupAdapter) runRestore(
 	return restored, nil
 }
 
-// ownerCredential settles the restored project's owner password. A DocumentDB
-// project's owner is also its Mongo login, so it must be the recovered
-// cluster's own credential, forced onto the role: the source's password would
-// otherwise open the copy too. Other projects fall back to the source's.
-func (a *K8sBackupAdapter) ownerCredential(src, restored *domain.DatabaseInstance) (RegistrationOptions, error) {
-	opts := RegistrationOptions{ResetRolePasswords: true}
-	if src.DocumentDB {
-		if restored.Password == "" {
-			return opts, ErrDocumentDBRestoreCredentialMissing
-		}
-		opts.ResetAdminPassword = true
-		return opts, nil
-	}
+// ownerCredential settles the restored project's owner password: the
+// recovered cluster's own, forced onto the owner role. The source's password
+// still opens the source, so it must never open the copy; without a
+// credential of its own the restore is refused.
+func ownerCredential(restored *domain.DatabaseInstance) (RegistrationOptions, error) {
 	if restored.Password == "" {
-		password, err := a.sourceOwnerPassword(src.ProjectID)
-		if err != nil {
-			return opts, err
-		}
-		restored.Password = password
+		return RegistrationOptions{}, ErrRestoreOwnerCredentialMissing
 	}
-	return opts, nil
+	return RegistrationOptions{ResetRolePasswords: true, ResetAdminPassword: true}, nil
 }
 
 // createRestoreCluster creates the target namespace, the object-store secret
@@ -523,18 +502,10 @@ func isUnrecoverableClusterPhase(phase string) bool {
 	return strings.Contains(lower, "unrecoverable") || strings.Contains(lower, "failed")
 }
 
-// sourceOwnerPassword is the source's owner password, valid in the restored
-// database because it is a copy.
-func (a *K8sBackupAdapter) sourceOwnerPassword(projectID string) (string, error) {
-	return a.owners.OwnerPassword(projectID)
-}
-
 // restoredInstance builds the project row for the restored cluster. It
 // inherits the source project's org and database name, and records the tier
-// its cluster was sized by; credentials come
-// from the CNPG-managed secret when the recovered cluster has one, otherwise
-// from the source (the restored database is a copy, so the source's owner
-// credentials are valid in it).
+// its cluster was sized by. Its owner credential is the recovered cluster's
+// own CNPG secret; the password is left empty when there is none.
 func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.DatabaseInstance, req domain.RestoreRequest, target restoreTarget) *domain.DatabaseInstance {
 	newProject, newNamespace := target.project, target.namespace
 	dbName := src.DatabaseName

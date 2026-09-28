@@ -9,11 +9,6 @@ import (
 // cannot be read from, or kept in, the vault. The vault is its only home.
 var ErrOwnerCredentialUnavailable = errors.New("the project's owner credential is not available from the vault")
 
-// OwnerCredentials answers a project's owner password.
-type OwnerCredentials interface {
-	OwnerPassword(projectID string) (string, error)
-}
-
 // OwnerPassword reads the owner password filed for the project in the vault.
 func (s *ProvisioningService) OwnerPassword(projectID string) (string, error) {
 	if s.vault == nil || s.vault.Sealed() {
