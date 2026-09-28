@@ -139,3 +139,36 @@ describe('ClusterSettingsCard', () => {
     expect(api.get).not.toHaveBeenCalled();
   });
 });
+
+describe('ClusterSettingsCard states', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('shows why the settings could not be read', async () => {
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('network down'));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ClusterSettingsCard project={project()} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('network down')).toBeInTheDocument();
+  });
+
+  test('never offers a disk above the plan', async () => {
+    const user = userEvent.setup();
+    renderCard(project());
+    await user.type(await screen.findByTestId('resize-input'), '6');
+    expect(screen.getByTestId('resize-btn')).toBeDisabled();
+  });
+
+  test('shows the reason a plan change was refused', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockRejectedValueOnce({
+      response: { data: { error: 'the platform has no room for the plan' } },
+    });
+    renderCard(project(), { ...settings, orgTier: 'STANDARD' });
+    await user.click(await screen.findByTestId('tier-apply-btn'));
+    await user.click(await screen.findByTestId('modal-confirm'));
+    expect(await screen.findByTestId('cluster-settings-error')).toHaveTextContent('no room');
+  });
+});

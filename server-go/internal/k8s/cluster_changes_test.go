@@ -198,3 +198,18 @@ func TestWithSizingOfRestoresTheSizeButKeepsTheDisk(t *testing.T) {
 		t.Error("the one-per-node rule of the failed plan was kept")
 	}
 }
+
+func TestValidateTierSizingRefusesAnIncompleteTier(t *testing.T) {
+	if err := ValidateTierSizing(config.TierConfig{Instances: 1, StorageSize: "5Gi", CPU: "1"}); !errors.Is(err, ErrTierSizingIncomplete) {
+		t.Errorf("err = %v, want ErrTierSizingIncomplete", err)
+	}
+	if err := ValidateTierSizing(config.TierConfig{Instances: 1, StorageSize: "5Gi", CPU: "1", Memory: "1Gi"}); err != nil {
+		t.Errorf("a complete tier was refused: %v", err)
+	}
+}
+
+func TestClusterStorageSizeRefusesASizeThatIsNotAQuantity(t *testing.T) {
+	if _, err := ClusterStorageSize(WithStorageSize(freeCluster(t), "lots")); err == nil {
+		t.Fatal("a size that is not a quantity was read")
+	}
+}

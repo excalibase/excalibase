@@ -457,3 +457,86 @@ func TestApplyOrgTierPutsTheSizeBackWhenTheRecordFails(t *testing.T) {
 		t.Errorf("cluster left on the unrecorded plan: %v", cluster.Object["spec"])
 	}
 }
+
+// A cluster API failure is an error, never a change reported as done.
+func TestClusterChangesReportAClusterThatCannotBeWritten(t *testing.T) {
+	for _, tc := range clusterChanges() {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store, mock := setupClusterChangeTest(t)
+			mock.UpdateCRDError = errors.New("apiserver unavailable")
+			if err := tc.run(svc); err == nil {
+				t.Fatal("a change the cluster did not take reported success")
+			}
+			if inst, _ := store.FindByProjectID(testOpsDB); len(inst.Parameters) != 0 {
+				t.Error("a change the cluster did not take was recorded")
+			}
+		})
+	}
+}
+
+func TestClusterChangesReportAMissingCluster(t *testing.T) {
+	for _, tc := range clusterChanges() {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, mock := setupClusterChangeTest(t)
+			delete(mock.CRDs, testOpsDBNS+"/"+testOpsDBPostgres)
+			if err := tc.run(svc); err == nil {
+				t.Fatal("a change on a missing cluster reported success")
+			}
+		})
+	}
+	svc, _, mock := setupClusterChangeTest(t)
+	delete(mock.CRDs, testOpsDBNS+"/"+testOpsDBPostgres)
+	if _, err := svc.ClusterSettings(context.Background(), testOpsDB); err == nil {
+		t.Error("settings of a missing cluster were answered")
+	}
+}
+
+func TestClusterSettingsAreForKubernetesProjectsOnly(t *testing.T) {
+	svc, store, _ := setupClusterChangeTest(t)
+	inst, _ := store.FindByProjectID(testOpsDB)
+	inst.DeploymentMode = domain.ModeDocker
+	if err := store.Update(inst); err != nil {
+		t.Fatalf("mark docker: %v", err)
+	}
+	if _, err := svc.ClusterSettings(context.Background(), testOpsDB); !errors.Is(err, ErrKubernetesOnly) {
+		t.Fatalf("err = %v, want ErrKubernetesOnly", err)
+	}
+	if _, err := svc.ClusterSettings(context.Background(), "missing"); err == nil {
+		t.Error("settings of a missing project were answered")
+	}
+}
+
+// The org's plan decides the tier; an unreadable one refuses, never defaults.
+func TestApplyOrgTierRefusesWhenTheOrgsPlanCannotBeRead(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	svc.SetOrgStore(nil)
+	before := opsCluster(t, mock)
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Free); !errors.Is(err, ErrOrgTierUnresolved) {
+		t.Fatalf("err = %v, want ErrOrgTierUnresolved", err)
+	}
+	if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+		t.Error("the cluster changed")
+	}
+}
+
+func TestApplyOrgTierRefusesWhenTheNodesCannotBeRead(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	mock.GetPodsError = errors.New("apiserver unavailable")
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Free); !errors.Is(err, ErrNodePlacementUnknown) {
+		t.Fatalf("err = %v, want ErrNodePlacementUnknown", err)
+	}
+	mock.GetPodsError = nil
+	mock.CapacityError = errors.New("apiserver unavailable")
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Free); !errors.Is(err, ErrNodePlacementUnknown) {
+		t.Fatalf("err = %v, want ErrNodePlacementUnknown", err)
+	}
+}
+
+func TestQuantitiesRefuseWhatIsNotAQuantity(t *testing.T) {
+	if _, _, err := quantities("lots", "1Gi"); err == nil {
+		t.Error("a CPU that is not a quantity was read")
+	}
+	if _, _, err := quantities("1", "lots"); err == nil {
+		t.Error("a memory that is not a quantity was read")
+	}
+}

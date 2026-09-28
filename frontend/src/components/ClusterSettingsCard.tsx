@@ -72,7 +72,7 @@ function ClusterSettingsBody({ projectId, settings }: BodyProps) {
   const current = gibibytes(settings.storageSize);
   const limit = gibibytes(settings.storageLimit);
   const wanted = Number(size);
-  const canResize = Number.isInteger(wanted) && wanted > current && !(wanted > limit);
+  const canResize = Number.isInteger(wanted) && wanted > current && wanted <= limit;
   const failed = [resize, tier, tune].find((change) => change.isError);
   const busy = resize.isPending || tier.isPending || tune.isPending;
 
