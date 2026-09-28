@@ -1,3 +1,4 @@
+import { isValidAppName } from './appName';
 import type { App, Deploy, DeployStatus } from '../../api/apps';
 import type { TierType } from '../../types';
 
@@ -115,7 +116,6 @@ export function plainFailureReason(raw?: string): string {
   return match ? match[1] : 'The deploy failed.';
 }
 
-const APP_NAME = /^[a-z0-9][a-z0-9-]{1,49}$/;
 
 export function suggestAppName(image: string): string {
   const withoutDigest = image.split('@')[0];
@@ -126,7 +126,7 @@ export function suggestAppName(image: string): string {
     .replaceAll(/[^a-z0-9]+/g, '-')
     .replaceAll(/^-+|-+$/g, '')
     .slice(0, 50);
-  return APP_NAME.test(name) ? name : '';
+  return isValidAppName(name) ? name : '';
 }
 
 export function formatWhen(iso?: string): string {

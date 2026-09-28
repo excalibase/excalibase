@@ -154,6 +154,21 @@ func TestValidateName(t *testing.T) {
 	}
 }
 
+// The name is the app's DNS name inside its project (EXC-524), so it must be
+// a Service name and must never take one the platform keeps in the namespace.
+func TestValidateNameIsAServiceNameThePlatformDoesNotHold(t *testing.T) {
+	for _, name := range []string{"9web", "web-", "proj-abc123-postgres-rw", "proj-x", "deno-runtime"} {
+		if err := apphost.ValidateName(name); err == nil {
+			t.Errorf("name %q must be refused", name)
+		}
+	}
+	for _, name := range []string{"web", "redis", "a1", "my-api-2", "project", "deno"} {
+		if err := apphost.ValidateName(name); err != nil {
+			t.Errorf("name %q must be accepted: %v", name, err)
+		}
+	}
+}
+
 func TestValidateIdentifiers(t *testing.T) {
 	app := validApp()
 	app.ID = "../etc"

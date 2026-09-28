@@ -46,3 +46,24 @@ func TestAppRowsSitOnTheAuthoringRung(t *testing.T) {
 		}
 	}
 }
+
+// Opening app-to-app traffic widens what every app in the project accepts, so
+// it sits on the admin rung like the public database port (EXC-524).
+func TestAppNetworkRowsReadAsViewerAndWriteAsAdmin(t *testing.T) {
+	index, err := Index()
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	for key, role := range map[Key]string{
+		{Method: http.MethodGet, Pattern: "/api/projects/{projectId}/app-network/"}: domain.OrgRoleViewer,
+		{Method: http.MethodPut, Pattern: "/api/projects/{projectId}/app-network/"}: domain.OrgRoleAdmin,
+	} {
+		row, ok := index[key]
+		if !ok {
+			t.Fatalf("%s has no policy row", key)
+		}
+		if row.MinRole != role || row.Param != ParamProject || row.Owner != OwnerProjectAccess || row.Auth != AuthSession {
+			t.Errorf("%s: row %+v, want %s bound to the project", key, row, role)
+		}
+	}
+}

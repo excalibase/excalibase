@@ -26,7 +26,7 @@ func TestSyncAppDomains_RoutesEachHostWithItsOwnCertificate(t *testing.T) {
 		t.Fatalf("ingress: %v", err)
 	}
 	rule := ingress.Spec.Rules[0]
-	if rule.Host != "shop.example.com" || rule.HTTP.Paths[0].Backend.Service.Name != AppObjectName(app.Name) {
+	if rule.Host != "shop.example.com" || rule.HTTP.Paths[0].Backend.Service.Name != AppServiceName(app.Name) {
 		t.Fatalf("rule = %+v", rule)
 	}
 	if len(ingress.Spec.TLS) != 0 {

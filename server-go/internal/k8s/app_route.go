@@ -44,6 +44,11 @@ func (o AppRouteOptions) validate() error {
 	return nil
 }
 
+// AppServiceName is the app's own name, so its project's apps reach it as
+// http://<name> and <name>:<port> (EXC-524); apphost.ValidateName keeps it off
+// every Service name the platform uses in the namespace.
+func AppServiceName(appName string) string { return appName }
+
 // AppIngressPolicyName is the name of the fence admitting only the ingress controller.
 func AppIngressPolicyName(appName string) string { return appObjectPrefix + appName + "-ingress" }
 
@@ -74,7 +79,7 @@ func buildAppRoute(namespace string, app *apphost.App, opts AppRouteOptions) (*a
 
 func buildAppService(namespace string, app *apphost.App) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: AppObjectName(app.Name), Namespace: namespace, Labels: appLabels(app)},
+		ObjectMeta: metav1.ObjectMeta{Name: AppServiceName(app.Name), Namespace: namespace, Labels: appLabels(app)},
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
 			Selector: appSelectorLabels(app),
@@ -102,7 +107,7 @@ func buildAppIngress(namespace string, app *apphost.App, host string, opts AppRo
 						Path:     "/",
 						PathType: &prefix,
 						Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
-							Name: AppObjectName(app.Name),
+							Name: AppServiceName(app.Name),
 							Port: networkingv1.ServiceBackendPort{Number: appServicePort},
 						}},
 					}},

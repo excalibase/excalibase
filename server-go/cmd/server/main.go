@@ -777,6 +777,8 @@ type handlerDeps struct {
 	// appDomainSvc and appDomainHandler are nil while custom domains are off.
 	appDomainSvc     *service.AppDomainService
 	appDomainHandler *handler.AppDomainHandler
+	// appNetworkHandler turns the project's private network between apps on and off (EXC-524).
+	appNetworkHandler *handler.AppNetworkHandler
 	// rlMailSend bounds the routes that make the platform send mail. It is far
 	// tighter than rlAuthed because the cost of overuse is not our CPU, it is
 	// the sending domain's reputation.
@@ -1369,10 +1371,11 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		registryCredHandler: newRegistryCredentialHandler(registryCreds),
 		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
 			apphost.NewPostgresAppStore(sqlStore.DB()), store, k8sClient)),
-		appDomainSvc:     appDomainSvc,
-		appDomainHandler: newAppDomainHandler(appDomainSvc),
-		tierHandler:      tierHandler,
-		pgCatalogHandler: handler.NewPostgresCatalogHandler(),
+		appDomainSvc:      appDomainSvc,
+		appDomainHandler:  newAppDomainHandler(appDomainSvc),
+		appNetworkHandler: newAppNetworkHandler(sqlStore, store, k8sClient, a.claimer),
+		tierHandler:       tierHandler,
+		pgCatalogHandler:  handler.NewPostgresCatalogHandler(),
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
 			store:           store,
@@ -1761,6 +1764,18 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				}
 			})
 		})
+		// Private network between the project's apps (EXC-524): any member
+		// reads it; opening app-to-app traffic is an admin decision.
+		if d.appNetworkHandler != nil {
+			r.Route("/api/projects/{projectId}/app-network", func(r chi.Router) {
+				r.Use(custommw.TenantContext)
+				r.Use(auth.RequireAuth)
+				r.Use(custommw.RequireProjectAccess(store, sqlStore))
+				r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
+				r.Use(d.activity)
+				d.appNetworkHandler.Routes(r)
+			})
+		}
 		r.Route("/api/projects/{projectId}/registry-credentials", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)

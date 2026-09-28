@@ -180,3 +180,21 @@ func TestMockClient_Domains(t *testing.T) {
 		t.Fatal("want the scripted error")
 	}
 }
+
+func TestMockClient_AppPrivateNetwork(t *testing.T) {
+	m := NewMockClient()
+	ctx := context.Background()
+	if err := m.SetAppPrivateNetwork(ctx, "ns1", true); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if open, err := m.AppPrivateNetworkOpen(ctx, "ns1"); err != nil || !open {
+		t.Fatalf("open = %v, %v", open, err)
+	}
+	m.AppPrivateNetworkErr = errors.New("refused")
+	if err := m.SetAppPrivateNetwork(ctx, "ns1", false); err == nil {
+		t.Error("the scripted error must be returned")
+	}
+	if _, err := m.AppPrivateNetworkOpen(ctx, "ns1"); err == nil {
+		t.Error("the scripted error must be returned on read")
+	}
+}

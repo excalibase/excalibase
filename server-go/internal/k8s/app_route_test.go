@@ -44,7 +44,7 @@ func renderWithRoute(t *testing.T, route AppRouteOptions) *AppWorkload {
 func TestRenderAppServiceSelectsTheAppOnPort80(t *testing.T) {
 	workload := mustRender(t, minimalApp(), newResolver())
 	service := workload.Service
-	if service.Name != AppObjectName("web") || service.Namespace != testNamespace {
+	if service.Name != "web" || service.Name != AppServiceName("web") || service.Namespace != testNamespace {
 		t.Errorf("service is %s/%s", service.Namespace, service.Name)
 	}
 	if service.Spec.Type != corev1.ServiceTypeClusterIP {
@@ -81,7 +81,7 @@ func TestRenderAppIngressRoutesTheHostnameToTheService(t *testing.T) {
 		t.Fatalf("ingress paths = %+v, want / as a prefix", paths)
 	}
 	backend := paths[0].Backend.Service
-	if backend.Name != AppObjectName("web") || backend.Port.Number != 80 {
+	if backend.Name != AppServiceName("web") || backend.Port.Number != 80 {
 		t.Errorf("backend = %+v, want the app service on 80", backend)
 	}
 }
@@ -211,7 +211,7 @@ func TestApplyAppWorkload_CreatesThenUpdatesTheRoute(t *testing.T) {
 		t.Fatalf("first apply: %v", err)
 	}
 	services := c.clientset.CoreV1().Services(testNamespace)
-	created, err := services.Get(ctx, AppObjectName("web"), metav1.GetOptions{})
+	created, err := services.Get(ctx, AppServiceName("web"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("service should exist: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestApplyAppWorkload_CreatesThenUpdatesTheRoute(t *testing.T) {
 	if err := c.ApplyAppWorkload(ctx, testNamespace, updated); err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
-	service, err := services.Get(ctx, AppObjectName("web"), metav1.GetOptions{})
+	service, err := services.Get(ctx, AppServiceName("web"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("service should still exist: %v", err)
 	}
@@ -350,4 +350,26 @@ func isIngressPolicyAction(action ktesting.Action) bool {
 		return typed.GetObject().(*unstructured.Unstructured).GetName() == AppIngressPolicyName("web")
 	}
 	return false
+}
+
+// The Service is named after the app so its project reaches it as http://<name>
+// (EXC-524); a Service of that name the app does not own is never taken over.
+func TestApplyAppWorkload_RefusesAServiceItDoesNotOwn(t *testing.T) {
+	for name, labels := range map[string]map[string]string{
+		"a platform service": {"app": "deno-runtime"},
+		"another app's":      appLabels(&apphost.App{ID: "app-other", ProjectID: "proj-abc", Name: "web", Tier: "FREE"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			foreign := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: testNamespace, Labels: labels}}
+			c := newFakeClient(foreign)
+			err := c.ApplyAppWorkload(context.Background(), testNamespace, mustRender(t, minimalApp(), newResolver()))
+			if err == nil {
+				t.Fatal("apply must refuse a Service the app does not own")
+			}
+			held, getErr := c.clientset.CoreV1().Services(testNamespace).Get(context.Background(), "web", metav1.GetOptions{})
+			if getErr != nil || !maps.Equal(held.Labels, labels) {
+				t.Errorf("the foreign Service was changed: %v %v", held, getErr)
+			}
+		})
+	}
 }

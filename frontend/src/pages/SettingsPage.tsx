@@ -9,6 +9,7 @@ import { ConnectionStrings } from '../components/ConnectionStrings';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
 import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
 import { PublicPortCard } from '../components/PublicPortCard';
+import { AppNetworkSection } from '../components/AppNetworkCard';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
@@ -154,6 +155,8 @@ const excalibase = createClient({
         <PublicPortCard projectId={project.projectId} status={project.status} />
       </div>
       </>)}
+
+      <AppNetworkSection projectId={project.projectId} status={project.status} />
 
       <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden mb-8">
         {info.map(({ icon: Icon, label, value }) => (

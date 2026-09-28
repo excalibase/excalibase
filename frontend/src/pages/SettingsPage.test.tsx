@@ -10,8 +10,13 @@ vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
-function renderSettings(deletionProtection: boolean, extra: Record<string, unknown> = {}) {
+function renderSettings(
+  deletionProtection: boolean,
+  extra: Record<string, unknown> = {},
+  otherGets: Record<string, unknown> = {},
+) {
   vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url in otherGets) return Promise.resolve({ data: otherGets[url] } as never);
     if (url === '/provision/p-1') {
       return Promise.resolve({
         data: { projectId: 'p-1', orgId: 'o-1', databaseType: 'POSTGRESQL', tier: 'FREE', status: 'ACTIVE', deletionProtection, ...extra },
@@ -91,5 +96,25 @@ describe('SettingsPage — public database port', () => {
   test('offers the public database port control next to the connection strings', async () => {
     renderSettings(false);
     expect(await screen.findByTestId('public-port-card')).toBeInTheDocument();
+  });
+});
+
+describe('SettingsPage — private network between apps', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const gets = (appHosting: boolean) => ({
+    '/config': { deploymentMode: 'cloud', appHosting },
+    '/projects/p-1/app-network': { projectId: 'p-1', privateNetwork: false, applied: false, canChange: true },
+  });
+
+  test('offers the setting when the installation hosts apps', async () => {
+    renderSettings(false, {}, gets(true));
+    expect(await screen.findByTestId('app-network-card')).toBeInTheDocument();
+  });
+
+  test('says nothing about app networking when apps are not hosted', async () => {
+    renderSettings(false, {}, gets(false));
+    expect(await screen.findByTestId('public-port-card')).toBeInTheDocument();
+    expect(screen.queryByTestId('app-network-card')).not.toBeInTheDocument();
   });
 });

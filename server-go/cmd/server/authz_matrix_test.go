@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -134,6 +135,8 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 			service.NewAppDeployService(apphost.NewPostgresAppStore(offlineDB(t)), apphost.NewPostgresDeployStore(offlineDB(t)),
 				mock, instances, nil, k8s.AppRenderOptions{}),
 			apphost.Route{}, k8s.AppDomainOptions{})),
+		appNetworkHandler: handler.NewAppNetworkHandler(service.NewAppNetworkService(
+			matrixAppNetworkSettings{}, instances, mock, nil)),
 		rlUnauth:    custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
 		rlAuthed:    custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
@@ -380,3 +383,11 @@ func TestPermissionRouteScopeMatrix(t *testing.T) {
 		}
 	}
 }
+
+// matrixAppNetworkSettings reads every project as off; the matrix only asserts gates.
+type matrixAppNetworkSettings struct{}
+
+func (matrixAppNetworkSettings) GetAppPrivateNetwork(context.Context, string) (bool, error) {
+	return false, nil
+}
+func (matrixAppNetworkSettings) SetAppPrivateNetwork(context.Context, string, bool) error { return nil }
