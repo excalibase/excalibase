@@ -8,10 +8,10 @@ test.describe('Navigation & Layout', () => {
     await mockSchemaEndpoints(page);
   });
 
-  test('project home renders instance detail', async ({ page }) => {
+  test('project home lists the project services', async ({ page }) => {
     await page.goto('/project/test-project');
-    // Should show instance detail (home page of project)
-    await page.waitForLoadState('networkidle');
+    await expect(page.getByTestId('project-overview')).toBeVisible();
+    await expect(page.getByTestId('service-database')).toBeVisible();
   });
 
   test('database section navigation works', async ({ page }) => {

@@ -169,8 +169,8 @@ function PostgresSection({ projectId, credentials, endpoint, shownPassword }: Se
         </>
       ) : (
         <p className="text-xs text-text-tertiary" data-testid="conn-postgres-public-absent">
-          This project publishes no public port. Use the internal address, or open a port in the database endpoint
-          settings.
+          This project publishes no public port. Use the internal address, or ask an admin to open one under Public
+          database port.
         </p>
       )}
     </div>

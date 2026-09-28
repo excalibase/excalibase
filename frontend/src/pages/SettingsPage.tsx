@@ -8,6 +8,7 @@ import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { ConnectionStrings } from '../components/ConnectionStrings';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
 import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
+import { PublicPortCard } from '../components/PublicPortCard';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
@@ -131,6 +132,10 @@ const excalibase = createClient({
 
       <div className="mb-8">
         <ConnectionStrings projectId={project.projectId} documentDb={documentDb} endpoint={endpoint.data} />
+      </div>
+
+      <div className="mb-8">
+        <PublicPortCard projectId={project.projectId} status={project.status} />
       </div>
 
       <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden mb-8">

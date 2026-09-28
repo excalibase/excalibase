@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 
 // A project's database endpoint, as GET /api/projects/{projectId}/db-endpoint
@@ -73,11 +73,13 @@ function mongoOf(wire: ProjectEndpointWire): ProjectMongoEndpoint | undefined {
   };
 }
 
-export const getProjectEndpoint = async (projectId: string): Promise<ProjectEndpoint> => {
-  const wire = (await api.get<ProjectEndpointWire>(`/projects/${projectId}/db-endpoint`)).data;
+function fromWire(wire: ProjectEndpointWire): ProjectEndpoint {
   const mongo = mongoOf(wire);
   return mongo ? { ...wire, mongo } : wire;
-};
+}
+
+export const getProjectEndpoint = async (projectId: string): Promise<ProjectEndpoint> =>
+  fromWire((await api.get<ProjectEndpointWire>(`/projects/${projectId}/db-endpoint`)).data);
 
 // useProjectEndpoint reads one project's endpoint. A failure is not retried
 // and not surfaced as an error: the pages that use it fall back to the
@@ -91,3 +93,20 @@ export const useProjectEndpoint = (projectId: string | undefined) =>
     retry: false,
     staleTime: 30_000,
   });
+
+// Opening the port is an Admin decision; the server refuses anyone else.
+export const setProjectEndpointPublic = async (
+  projectId: string,
+  publicEnabled: boolean,
+): Promise<ProjectEndpoint> =>
+  fromWire(
+    (await api.put<ProjectEndpointWire>(`/projects/${projectId}/db-endpoint`, { publicEnabled })).data,
+  );
+
+export const useSetProjectEndpointPublic = (projectId: string) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (publicEnabled: boolean) => setProjectEndpointPublic(projectId, publicEnabled),
+    onSuccess: (endpoint) => queryClient.setQueryData(['project-endpoint', projectId], endpoint),
+  });
+};

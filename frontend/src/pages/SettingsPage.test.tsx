@@ -84,3 +84,12 @@ describe('SettingsPage — engine', () => {
     expect(await screen.findByText('PostgreSQL')).toBeInTheDocument();
   });
 });
+
+describe('SettingsPage — public database port', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('offers the public database port control next to the connection strings', async () => {
+    renderSettings(false);
+    expect(await screen.findByTestId('public-port-card')).toBeInTheDocument();
+  });
+});

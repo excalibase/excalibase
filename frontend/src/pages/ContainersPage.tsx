@@ -78,9 +78,8 @@ function EmptyState({ projectId }: { readonly projectId: string }) {
 }
 
 function ContainersList({ projectId }: { readonly projectId: string }) {
-  const { data: apps, isLoading, error } = useApps(projectId);
+  const { data: apps, error } = useApps(projectId);
 
-  if (isLoading) return <Spinner />;
   if (error) {
     return (
       <div role="alert" className="text-sm text-red-400 py-6">
@@ -88,7 +87,9 @@ function ContainersList({ projectId }: { readonly projectId: string }) {
       </div>
     );
   }
-  if (!apps || apps.length === 0) return <EmptyState projectId={projectId} />;
+  // A paused retry is neither loading nor failed; only a real answer is empty.
+  if (!apps) return <Spinner />;
+  if (apps.length === 0) return <EmptyState projectId={projectId} />;
   return (
     <div className="space-y-2" data-testid="containers-list">
       {apps.map((app) => (
