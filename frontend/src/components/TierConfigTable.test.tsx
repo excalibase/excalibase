@@ -14,6 +14,7 @@ const standard = {
   storageSize: '50Gi',
   maxStorageSize: '500Gi',
   maxAppDiskSize: '20Gi',
+  maxApps: 5,
   memory: '4Gi',
   cpu: '2',
   backupEnabled: true,
@@ -68,6 +69,22 @@ describe('TierConfigTable', () => {
         '/admin/tiers/STANDARD',
         expect.objectContaining({ maxStorageSize: '500Gi', maxAppDiskSize: '40Gi' }),
       ),
+    );
+  });
+
+  // How many containers one project may hold on the plan (EXC-524).
+  test('edits and saves the app count with the rest of the plan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable();
+
+    const count = await screen.findByLabelText('Max apps for STANDARD');
+    await user.clear(count);
+    await user.type(count, '8');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/admin/tiers/STANDARD', expect.objectContaining({ maxApps: 8, maxAppDiskSize: '20Gi' })),
     );
   });
 });

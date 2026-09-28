@@ -42,7 +42,7 @@ func newFakeAppStore() *fakeAppStore {
 
 func appKey(projectID, id string) string { return projectID + "/" + id }
 
-func (f *fakeAppStore) Create(app *apphost.App) error {
+func (f *fakeAppStore) Create(app *apphost.App, maxApps int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failWith != nil {
@@ -61,8 +61,8 @@ func (f *fakeAppStore) Create(app *apphost.App) error {
 			return apphost.ErrAppNameTaken
 		}
 	}
-	if held >= apphost.MaxAppsPerProject {
-		return apphost.ErrAppLimitReached
+	if held >= maxApps {
+		return apphost.AppLimitError{Limit: maxApps}
 	}
 	app.Version = 1
 	f.apps[appKey(app.ProjectID, app.ID)] = *app
@@ -170,6 +170,16 @@ func (f *fakeSources) HasSource(_ string, kind apphost.SourceKind, name string) 
 	return kind == apphost.SourceDatabase && f.names[name], nil
 }
 
+// testAppLimit is FREE's default (EXC-524).
+const testAppLimit = 2
+
+type fakeAppLimits struct {
+	limit int
+	err   error
+}
+
+func (f fakeAppLimits) MaxApps(context.Context, string) (int, error) { return f.limit, f.err }
+
 func setupAppRouter(t *testing.T) (chi.Router, *fakeAppStore) {
 	r, store, _ := setupAppRouterWithSources(t, newFakeSources("storefront_db"))
 	return r, store
@@ -179,6 +189,7 @@ func setupAppRouterWithSources(t *testing.T, sources *fakeSources) (chi.Router, 
 	t.Helper()
 	store := newFakeAppStore()
 	h := NewAppHandler(store, sources, testAppRoute)
+	h.SetAppLimits(fakeAppLimits{limit: testAppLimit})
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
 	return r, store, sources
@@ -519,16 +530,40 @@ func TestAppCreateRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
-// One app per project, reported as a conflict rather than a validation error.
-func TestAppCreateSecondAppIsAConflict(t *testing.T) {
+// The plan's app count (EXC-524) is a conflict naming the limit, not a validation error.
+func TestAppCreateBeyondThePlanIsAConflictNamingTheLimit(t *testing.T) {
 	r, _ := setupAppRouter(t)
 	createAppForTest(t, r)
-
 	body := validAppBody()
 	body["name"] = "second"
+	if w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", body); w.Code != http.StatusCreated {
+		t.Fatalf("second app: got %d, body=%s", w.Code, w.Body.String())
+	}
+	body["name"] = "third"
 	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", body)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("got %d, want 409, body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "2 apps") {
+		t.Fatalf("got %d, want 409 naming the limit of 2, body=%s", w.Code, w.Body.String())
+	}
+}
+
+// No fallback: an app limit that cannot be read refuses the create.
+func TestAppCreateRefusesWhenThePlanLimitCannotBeRead(t *testing.T) {
+	store := newFakeAppStore()
+	for name, limits := range map[string]apphost.AppLimits{
+		"unwired":    nil,
+		"unreadable": fakeAppLimits{err: errors.New("tier store down")},
+	} {
+		h := NewAppHandler(store, newFakeSources("storefront_db"), testAppRoute)
+		h.SetAppLimits(limits)
+		r := chi.NewRouter()
+		r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
+		w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", validAppBody())
+		if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "tier store down") {
+			t.Errorf("%s: got %d %s, want 500 without detail", name, w.Code, w.Body.String())
+		}
+		if len(store.apps) != 0 {
+			t.Errorf("%s: an app was stored without a limit", name)
+		}
 	}
 }
 
@@ -964,6 +999,7 @@ func TestAppResponsesCarryTheURL(t *testing.T) {
 func TestAppResponseOmitsAnUnroutableURL(t *testing.T) {
 	store := newFakeAppStore()
 	h := NewAppHandler(store, newFakeSources("storefront_db"), apphost.Route{})
+	h.SetAppLimits(fakeAppLimits{limit: testAppLimit})
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
 	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", validAppBody())
@@ -1012,3 +1048,34 @@ func TestProjectSourceLookupTierIsTheOrganisationsPlan(t *testing.T) {
 		t.Fatal("no plan source must refuse, not fall back to the project row")
 	}
 }
+
+// After a downgrade the project keeps every app it has; only new ones are refused.
+func TestAppCreateAfterADowngradeKeepsTheAppsAndRefusesNewOnes(t *testing.T) {
+	store := newFakeAppStore()
+	limits := &downgradableLimits{limit: 5}
+	h := NewAppHandler(store, newFakeSources("storefront_db"), testAppRoute)
+	h.SetAppLimits(limits)
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
+	for _, name := range []string{"one", "two", "three"} {
+		body := validAppBody()
+		body["name"] = name
+		if w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", body); w.Code != http.StatusCreated {
+			t.Fatalf("%s: %d %s", name, w.Code, w.Body)
+		}
+	}
+	limits.limit = 2
+	body := validAppBody()
+	body["name"] = "four"
+	if w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", body); w.Code != http.StatusConflict {
+		t.Fatalf("a create above the new plan: %d, want 409", w.Code)
+	}
+	w := doAppRequest(t, r, http.MethodGet, "/api/projects/"+appTestProject+"/apps/", nil)
+	if w.Code != http.StatusOK || strings.Count(w.Body.String(), `"projectId"`) != 3 {
+		t.Fatalf("the three existing apps must remain: %s", w.Body)
+	}
+}
+
+type downgradableLimits struct{ limit int }
+
+func (d *downgradableLimits) MaxApps(context.Context, string) (int, error) { return d.limit, nil }

@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,7 +42,12 @@ type AppHandler struct {
 	route   apphost.Route
 	// disks caps an app's disk by its organisation's plan; unset, no disk is accepted.
 	disks apphost.DiskLimits
+	// limits caps the project's app count by its plan; unset, no app is created.
+	limits apphost.AppLimits
 }
+
+// SetAppLimits wires the plan's app count (EXC-524).
+func (h *AppHandler) SetAppLimits(limits apphost.AppLimits) { h.limits = limits }
 
 // SetDiskLimits wires the plan cap an app's disk is held to (EXC-523).
 func (h *AppHandler) SetDiskLimits(disks apphost.DiskLimits) { h.disks = disks }
@@ -250,7 +256,11 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		h.writeReferenceError(w, err)
 		return
 	}
-	if err := h.store.Create(app); err != nil {
+	maxApps, ok := h.planAppLimit(w, r, app.ProjectID)
+	if !ok {
+		return
+	}
+	if err := h.store.Create(app, maxApps); err != nil {
 		h.writeStoreError(w, err)
 		return
 	}
@@ -359,6 +369,22 @@ func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 		disk := *req.Disk
 		app.Disk = &disk
 	}
+}
+
+// planAppLimit reads how many apps the organisation's plan allows; a limit
+// that cannot be read refuses the create rather than admitting it unchecked.
+func (h *AppHandler) planAppLimit(w http.ResponseWriter, r *http.Request, projectID string) (int, bool) {
+	if h.limits == nil {
+		httpError(w, "could not read the plan's app limit", http.StatusInternalServerError)
+		return 0, false
+	}
+	limit, err := h.limits.MaxApps(r.Context(), projectID)
+	if err != nil {
+		log.Printf("app limit for %s: %v", projectID, err)
+		httpError(w, "could not read the plan's app limit", http.StatusInternalServerError)
+		return 0, false
+	}
+	return limit, true
 }
 
 // diskWithinPlan refuses a disk above the organisation's plan, and one whose

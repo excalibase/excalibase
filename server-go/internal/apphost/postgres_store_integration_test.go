@@ -87,7 +87,7 @@ func TestPGAppStore_CreateGetRoundTrip(t *testing.T) {
 	s := newPGAppStore(t)
 	app := sampleApp("proj_itest_rt", "app_rt", "storefront")
 
-	if err := s.Create(app); err != nil {
+	if err := s.Create(app, 1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if app.Version != 1 {
@@ -128,30 +128,34 @@ func TestPGAppStore_GetMissingIsNil(t *testing.T) {
 	}
 }
 
-// One app per project is a rule enforced in SQL, not a read-then-write: two
+// The plan's app limit (EXC-524) is enforced in SQL, not a read-then-write:
 // concurrent creates must not both find the same free slot.
-func TestPGAppStore_OneAppPerProject(t *testing.T) {
+func TestPGAppStore_PlanAppLimit(t *testing.T) {
 	s := newPGAppStore(t)
 	projectID := "proj_itest_limit"
 
-	if err := s.Create(sampleApp(projectID, "app_first", "first")); err != nil {
+	if err := s.Create(sampleApp(projectID, "app_first", "first"), 2); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	err := s.Create(sampleApp(projectID, "app_second", "second"))
-	if !errors.Is(err, apphost.ErrAppLimitReached) {
-		t.Fatalf("second create must report the limit, got %v", err)
+	if err := s.Create(sampleApp(projectID, "app_second", "second"), 2); err != nil {
+		t.Fatalf("second create: %v", err)
+	}
+	err := s.Create(sampleApp(projectID, "app_third", "third"), 2)
+	var limitErr apphost.AppLimitError
+	if !errors.Is(err, apphost.ErrAppLimitReached) || !errors.As(err, &limitErr) || limitErr.Limit != 2 {
+		t.Fatalf("third create must report the limit of 2, got %v", err)
 	}
 
 	apps, err := s.List(projectID)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(apps) != 1 {
-		t.Fatalf("project must hold exactly one app, got %d", len(apps))
+	if len(apps) != 2 {
+		t.Fatalf("project must hold exactly two apps, got %d", len(apps))
 	}
 }
 
-func TestPGAppStore_ConcurrentCreatesAdmitOne(t *testing.T) {
+func TestPGAppStore_ConcurrentCreatesAdmitThePlansLimit(t *testing.T) {
 	s := newPGAppStore(t)
 	projectID := "proj_itest_race"
 
@@ -162,7 +166,7 @@ func TestPGAppStore_ConcurrentCreatesAdmitOne(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			errs[i] = s.Create(sampleApp(projectID, fmt.Sprintf("app_r%d", i), fmt.Sprintf("racer-%d", i)))
+			errs[i] = s.Create(sampleApp(projectID, fmt.Sprintf("app_r%d", i), fmt.Sprintf("racer-%d", i)), 2)
 		}(i)
 	}
 	wg.Wait()
@@ -177,18 +181,18 @@ func TestPGAppStore_ConcurrentCreatesAdmitOne(t *testing.T) {
 			t.Fatalf("attempt %d failed for an unexpected reason: %v", i, err)
 		}
 	}
-	if admitted != 1 {
-		t.Fatalf("exactly one concurrent create may be admitted, got %d", admitted)
+	if admitted != 2 {
+		t.Fatalf("exactly the plan's two concurrent creates may be admitted, got %d", admitted)
 	}
 }
 
 // A name is unique per project so two projects may both call their app "api".
 func TestPGAppStore_NameIsUniquePerProjectOnly(t *testing.T) {
 	s := newPGAppStore(t)
-	if err := s.Create(sampleApp("proj_itest_n1", "app_n1", "api")); err != nil {
+	if err := s.Create(sampleApp("proj_itest_n1", "app_n1", "api"), 1); err != nil {
 		t.Fatalf("first project: %v", err)
 	}
-	if err := s.Create(sampleApp("proj_itest_n2", "app_n2", "api")); err != nil {
+	if err := s.Create(sampleApp("proj_itest_n2", "app_n2", "api"), 1); err != nil {
 		t.Fatalf("a second project must be free to reuse the name: %v", err)
 	}
 }
@@ -204,7 +208,7 @@ func TestPGAppStore_UpdateEnvRemovesAndKeepsEmptyValues(t *testing.T) {
 		{Name: "KEEP", Kind: apphost.KindLiteral, Value: &keep},
 		{Name: "DROP", Kind: apphost.KindLiteral, Value: &drop},
 	}
-	if err := s.Create(app); err != nil {
+	if err := s.Create(app, 1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -248,7 +252,7 @@ func TestPGAppStore_SecretRefRoundTrips(t *testing.T) {
 			SourceKind: apphost.SourceDatabase, SourceName: "store_db", Variable: "DATABASE_URL",
 		}},
 	}
-	if err := s.Create(app); err != nil {
+	if err := s.Create(app, 1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	got, err := s.Get(projectID, "app_secret")
@@ -273,7 +277,7 @@ func TestPGAppStore_StoresStoppedApp(t *testing.T) {
 	app := sampleApp("proj_itest_stop", "app_stop", "stopped")
 	app.Replicas = 0
 	app.Status = apphost.StatusFor(0)
-	if err := s.Create(app); err != nil {
+	if err := s.Create(app, 1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	got, err := s.Get("proj_itest_stop", "app_stop")
@@ -296,7 +300,7 @@ func TestPGAppStore_UpdateMissingIsNotFound(t *testing.T) {
 func TestPGAppStore_Delete(t *testing.T) {
 	s := newPGAppStore(t)
 	projectID := "proj_itest_del"
-	if err := s.Create(sampleApp(projectID, "app_del", "deleteme")); err != nil {
+	if err := s.Create(sampleApp(projectID, "app_del", "deleteme"), 1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, err := s.Transition(projectID, "app_del", []string{apphost.StatusCreated}, apphost.StatusDeleting); err != nil {
@@ -316,7 +320,7 @@ func TestPGAppStore_Delete(t *testing.T) {
 		t.Fatalf("deleting an absent app must report not found, got %v", err)
 	}
 	// The slot is freed, so the project may hold an app again.
-	if err := s.Create(sampleApp(projectID, "app_del2", "replacement")); err != nil {
+	if err := s.Create(sampleApp(projectID, "app_del2", "replacement"), 1); err != nil {
 		t.Fatalf("deleting must free the project's slot: %v", err)
 	}
 }
@@ -325,7 +329,7 @@ func TestPGAppStore_Delete(t *testing.T) {
 // project's id, whatever app id is named.
 func TestPGAppStore_ScopedToTheProject(t *testing.T) {
 	s := newPGAppStore(t)
-	if err := s.Create(sampleApp("proj_itest_owner", "app_owned", "owned")); err != nil {
+	if err := s.Create(sampleApp("proj_itest_owner", "app_owned", "owned"), 1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	got, err := s.Get("proj_itest_intruder", "app_owned")
@@ -352,7 +356,7 @@ func TestPGAppStore_RefusesInvalidApp(t *testing.T) {
 	s := newPGAppStore(t)
 	app := sampleApp("proj_itest_bad", "app_bad", "bad")
 	app.Image = "nginx"
-	if err := s.Create(app); err == nil {
+	if err := s.Create(app, 1); err == nil {
 		t.Fatal("an unparseable image reference must be refused by the store")
 	}
 }
@@ -364,7 +368,7 @@ func TestPGAppStore_UpdateRefusesAStaleVersion(t *testing.T) {
 	s := newPGAppStore(t)
 	projectID := "proj_itest_stale"
 	app := sampleApp(projectID, "app_stale", "stale")
-	if err := s.Create(app); err != nil {
+	if err := s.Create(app, 1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -405,7 +409,7 @@ func TestPGAppStore_UpdateKeepsTheObservedStatus(t *testing.T) {
 	s := newPGAppStore(t)
 	projectID := "proj_itest_observed"
 	app := sampleApp(projectID, "app_observed", "observed")
-	if err := s.Create(app); err != nil {
+	if err := s.Create(app, 1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	stale, err := s.Get(projectID, "app_observed")

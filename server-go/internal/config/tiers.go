@@ -16,9 +16,12 @@ type TierConfig struct {
 	// MaxAppDiskSize is the largest disk one app may have, in whole
 	// gibibytes; "0Gi" offers none (EXC-523). An admin edits it with the plan.
 	MaxAppDiskSize string
-	Memory         string
-	CPU            string
-	BackupEnabled  bool
+	// MaxApps is how many apps one project may hold; 0 offers none (EXC-524).
+	// Existing apps above it after a downgrade are kept; only new ones are refused.
+	MaxApps       int
+	Memory        string
+	CPU           string
+	BackupEnabled bool
 	// StatementTimeout caps how long a single query may run before Postgres
 	// cancels it — the direct guard against a runaway query on a shared box.
 	// Empty = no timeout (unbounded). Higher tiers get more headroom.
@@ -45,6 +48,7 @@ var tiers = map[domain.TierType]TierConfig{
 		StorageSize:        "5Gi",
 		MaxStorageSize:     "5Gi",
 		MaxAppDiskSize:     "1Gi",
+		MaxApps:            2,
 		Memory:             "512Mi",
 		CPU:                "0.5",
 		BackupEnabled:      true,
@@ -57,6 +61,7 @@ var tiers = map[domain.TierType]TierConfig{
 		StorageSize:      "50Gi",
 		MaxStorageSize:   "500Gi",
 		MaxAppDiskSize:   "20Gi",
+		MaxApps:          5,
 		Memory:           "4Gi",
 		CPU:              "2",
 		BackupEnabled:    true,
@@ -68,6 +73,7 @@ var tiers = map[domain.TierType]TierConfig{
 		StorageSize:      "500Gi",
 		MaxStorageSize:   "2Ti",
 		MaxAppDiskSize:   "100Gi",
+		MaxApps:          20,
 		Memory:           "16Gi",
 		CPU:              "4",
 		BackupEnabled:    true,

@@ -11,7 +11,7 @@ import (
 	"github.com/lib/pq"
 )
 
-// appLimitLockSpace namespaces the per-project advisory lock the one-app rule
+// appLimitLockSpace namespaces the per-project advisory lock the app limit
 // is enforced under. Postgres keeps two-integer advisory locks in a key space
 // of their own, separate from the single-bigint locks the schedulers lead on,
 // so this cannot collide with them. It differs from the org project-limit
@@ -47,7 +47,7 @@ func NewPostgresAppStore(db *sql.DB) *PostgresAppStore {
 // transaction, on rollback too), so the second create blocks until the first
 // row is committed and visible, then counts it. Locking on a value rather than
 // a row means a project with no app yet is serialized just the same.
-func (s *PostgresAppStore) Create(app *App) error {
+func (s *PostgresAppStore) Create(app *App, maxApps int) error {
 	now := time.Now().UTC()
 	app.Version = 1
 	app.CreatedAt = now
@@ -72,8 +72,8 @@ func (s *PostgresAppStore) Create(app *App) error {
 		Scan(&held); err != nil {
 		return fmt.Errorf("count project apps: %w", err)
 	}
-	if held >= MaxAppsPerProject {
-		return ErrAppLimitReached
+	if held >= maxApps {
+		return AppLimitError{Limit: maxApps}
 	}
 
 	blob, err := json.Marshal(app)

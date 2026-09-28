@@ -14,7 +14,7 @@ func createdApp(t *testing.T, projectID, appID string) (*apphost.PostgresAppStor
 	t.Helper()
 	s := newPGAppStore(t)
 	app := sampleApp(projectID, appID, "life")
-	if err := s.Create(app); err != nil {
+	if err := s.Create(app, 1); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	return s, app

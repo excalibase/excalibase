@@ -104,3 +104,17 @@ func TestTiersCapAnAppsDisk(t *testing.T) {
 		}
 	}
 }
+
+// Owner decision 2026-09-29 (EXC-524): apps per project by plan, editable by a platform admin.
+func TestTiersCapAppsPerProject(t *testing.T) {
+	want := map[domain.TierType]int{domain.Free: 2, domain.Standard: 5, domain.Enterprise: 20}
+	for tier, limit := range want {
+		tc, err := GetTierConfig(tier)
+		if err != nil {
+			t.Fatalf("%s: %v", tier, err)
+		}
+		if tc.MaxApps != limit {
+			t.Errorf("%s: max apps %d, want %d", tier, tc.MaxApps, limit)
+		}
+	}
+}

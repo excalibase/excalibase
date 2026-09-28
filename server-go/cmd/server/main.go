@@ -1188,10 +1188,13 @@ func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instance
 	return h
 }
 
-func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore, disks apphost.DiskLimits) *handler.AppHandler {
+func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore,
+	disks apphost.DiskLimits, tiers service.TierConfigSource) *handler.AppHandler {
+	plans := service.NewOrgPlanTiers(store, sqlStore)
 	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
-		handler.NewProjectSourceLookup(store, service.NewOrgPlanTiers(store, sqlStore)), appRoute(cfg).Public())
+		handler.NewProjectSourceLookup(store, plans), appRoute(cfg).Public())
 	h.SetDiskLimits(disks)
+	h.SetAppLimits(service.NewAppLimits(plans, tiers))
 	return h
 }
 
@@ -1345,7 +1348,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:     realtimeHandler,
 		rlsPolicyHandler:    handler.NewRlsPolicyHandler(sqlStore.RlsPolicies(), store),
 		tableGrantHandler:   handler.NewTableGrantHandler(sqlStore.TableGrants(), store, cfg.ExposureEnforced),
-		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits),
+		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeploySvc:        appDeploySvc,
 		appDeployHandler:    handler.NewAppDeployHandler(appDeploySvc),

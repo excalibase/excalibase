@@ -61,7 +61,7 @@ func TestTierHandler_Update_PersistsAndEchoes(t *testing.T) {
 	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
 	h := NewTierHandler(store)
 
-	body := `{"maxProjects":5,"instances":1,"storageSize":"50Gi","maxStorageSize":"500Gi","maxAppDiskSize":"20Gi","memory":"4Gi","cpu":"2","backupEnabled":true}`
+	body := `{"maxProjects":5,"instances":1,"storageSize":"50Gi","maxStorageSize":"500Gi","maxAppDiskSize":"20Gi","maxApps":5,"memory":"4Gi","cpu":"2","backupEnabled":true}`
 	rec := httptest.NewRecorder()
 	h.Update(rec, newTierReqWithParam("PUT", body, string(domain.Standard)))
 
@@ -112,7 +112,7 @@ func TestTierHandler_Update_AutoPauseAfterDaysRoundTrips(t *testing.T) {
 	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
 	h := NewTierHandler(store)
 
-	body := `{"maxProjects":1,"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","memory":"512Mi","cpu":"0.5","autoPauseAfterDays":3}`
+	body := `{"maxProjects":1,"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.5","autoPauseAfterDays":3}`
 	rec := httptest.NewRecorder()
 	h.Update(rec, newTierReqWithParam("PUT", body, string(domain.Free)))
 	if rec.Code != http.StatusOK {
@@ -171,7 +171,7 @@ func TestTierHandler_Update_MaxStorageSize(t *testing.T) {
 	}
 	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
 	rec := httptest.NewRecorder()
-	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", `{"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","memory":"512Mi","cpu":"0.5"}`, string(domain.Free)))
+	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", `{"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.5"}`, string(domain.Free)))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"maxStorageSize":"5Gi"`) {
 		t.Errorf("a fixed disk (max = start) was refused: %d %s", rec.Code, rec.Body.String())
 	}
@@ -180,7 +180,7 @@ func TestTierHandler_Update_MaxStorageSize(t *testing.T) {
 // A plan's app-disk cap is the largest disk one app may have (EXC-523):
 // required, whole gibibytes, and 0Gi when the plan offers no app disks.
 func TestTierHandler_Update_MaxAppDiskSize(t *testing.T) {
-	base := `"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","memory":"512Mi","cpu":"0.5"`
+	base := `"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxApps":2,"memory":"512Mi","cpu":"0.5"`
 	for name, field := range map[string]string{
 		"missing":             ``,
 		"not whole gibibytes": `,"maxAppDiskSize":"1.5Gi"`,
@@ -204,5 +204,32 @@ func TestTierHandler_Update_MaxAppDiskSize(t *testing.T) {
 	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", "{"+base+`,"maxAppDiskSize":"0Gi"}`, string(domain.Free)))
 	if rec.Code != http.StatusOK || store.m[domain.Free].MaxAppDiskSize != "0Gi" || !strings.Contains(rec.Body.String(), `"maxAppDiskSize":"0Gi"`) {
 		t.Errorf("a plan with no app disks was refused: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTierHandler_Update_MaxApps(t *testing.T) {
+	base := `"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","memory":"512Mi","cpu":"0.5"`
+	for name, field := range map[string]string{
+		"missing":  ``,
+		"negative": `,"maxApps":-1`,
+		"too many": `,"maxApps":1001`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+			rec := httptest.NewRecorder()
+			NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", "{"+base+field+"}", string(domain.Free)))
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "maxApps") {
+				t.Errorf("got %d %s, want 400 naming maxApps", rec.Code, rec.Body.String())
+			}
+			if len(store.m) != 0 {
+				t.Error("a refused spec was stored")
+			}
+		})
+	}
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+	rec := httptest.NewRecorder()
+	NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", "{"+base+`,"maxApps":0}`, string(domain.Free)))
+	if rec.Code != http.StatusOK || store.m[domain.Free].MaxApps != 0 || !strings.Contains(rec.Body.String(), `"maxApps":0`) {
+		t.Errorf("a plan with no apps was refused: %d %s", rec.Code, rec.Body.String())
 	}
 }

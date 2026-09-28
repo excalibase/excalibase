@@ -7,6 +7,10 @@ An org admin or owner can turn it on per project (Studio: project Settings, "Pri
 - every app in the project reaches every other app in the same project by its name: `http://<app name>` (Service port 80, forwarded to the app's HTTP port);
 - nothing else gains access: apps in other projects (even with their own setting on), the project's database, other pods in the namespace, the platform and the internet are still refused.
 
+## Apps per project
+
+How many apps one project may hold is set per plan (owner decision 2026-09-29): FREE 2, STANDARD 5, ENTERPRISE 20. They are defaults in the tier configuration that a platform admin can edit (`maxApps`, 0 offers none). A create above the limit is refused with 409 naming it. A downgrade or a restore never deletes apps: the project keeps them and new ones are refused until it is under the limit. Every app still passes the plan's CPU/memory admission at deploy (EXC-388).
+
 ## How it is enforced
 
 One CiliumNetworkPolicy, `apps-private-network`, exists in the project namespace only while the setting is on. It selects app pods (`excalibase.io/component=app`), admits ingress only from app pods of the same namespace on the named container port `http`, and allows egress only to app pods of the same namespace. Turning it off deletes the policy, so the per-app policies are exactly what they are without the feature.

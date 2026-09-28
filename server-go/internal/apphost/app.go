@@ -33,10 +33,6 @@ import (
 // Limits on the resource model. Replicas are capped platform-wide as well as
 // per tier (config.AppTierConfig.MaxReplicas); the tighter of the two wins.
 const (
-	// MaxAppsPerProject is one for now. It is a rule, not a schema
-	// constraint — apps are a collection keyed by app id so raising it is a
-	// change to this constant, not a migration.
-	MaxAppsPerProject = 1
 	// MaxReplicas is 3 in v1. Zero replicas is legal and means the app is
 	// intentionally stopped.
 	MaxReplicas = 3

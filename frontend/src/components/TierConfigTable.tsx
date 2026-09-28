@@ -18,7 +18,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
 
   const toInput = (t: TierConfig): TierConfigInput => ({
     maxProjects: t.maxProjects, instances: t.instances, storageSize: t.storageSize, maxStorageSize: t.maxStorageSize,
-    maxAppDiskSize: t.maxAppDiskSize,
+    maxAppDiskSize: t.maxAppDiskSize, maxApps: t.maxApps,
     memory: t.memory, cpu: t.cpu, backupEnabled: t.backupEnabled,
     autoPauseAfterDays: t.autoPauseAfterDays ?? 0,
   });
@@ -31,7 +31,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     if (d == null) return false;
     return (
       d.cpu !== t.cpu || d.memory !== t.memory || d.storageSize !== t.storageSize || d.maxStorageSize !== t.maxStorageSize ||
-      d.maxAppDiskSize !== t.maxAppDiskSize ||
+      d.maxAppDiskSize !== t.maxAppDiskSize || d.maxApps !== t.maxApps ||
       d.maxProjects !== t.maxProjects || d.instances !== t.instances || d.backupEnabled !== t.backupEnabled ||
       d.autoPauseAfterDays !== (t.autoPauseAfterDays ?? 0)
     );
@@ -72,6 +72,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
               <th className="text-left px-4 py-3 font-medium">Storage</th>
               <th className="text-left px-4 py-3 font-medium" title="The most a project may grow its disk to">Max storage</th>
               <th className="text-left px-4 py-3 font-medium" title="The largest disk one container may have (0Gi = none)">Max app disk</th>
+              <th className="text-left px-4 py-3 font-medium" title="How many containers one project may hold (0 = none)">Max apps</th>
               <th className="text-left px-4 py-3 font-medium">Instances</th>
               <th className="text-left px-4 py-3 font-medium">Max projects</th>
               <th className="text-left px-4 py-3 font-medium">Backup</th>
@@ -90,6 +91,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                   <td className="px-4 py-3"><QtyInput value={d.storageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { storageSize: v })} placeholder="50Gi" /></td>
                   <td className="px-4 py-3"><QtyInput value={d.maxStorageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { maxStorageSize: v })} placeholder="500Gi" /></td>
                   <td className="px-4 py-3"><QtyInput value={d.maxAppDiskSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { maxAppDiskSize: v })} placeholder="20Gi" /></td>
+                  <td className="px-4 py-3"><NumInput label={`Max apps for ${t.tier}`} value={d.maxApps} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxApps: v })} /></td>
                   <td className="px-4 py-3"><NumInput value={d.instances} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { instances: v })} /></td>
                   <td className="px-4 py-3"><NumInput value={d.maxProjects} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxProjects: v })} /></td>
                   <td className="px-4 py-3">
@@ -135,10 +137,11 @@ function QtyInput({ value, onChange, disabled, placeholder }: { readonly value: 
   );
 }
 
-function NumInput({ value, onChange, disabled, min }: { readonly value: number; readonly onChange: (v: number) => void; readonly disabled?: boolean; readonly min?: number }) {
+function NumInput({ value, onChange, disabled, min, label }: { readonly value: number; readonly onChange: (v: number) => void; readonly disabled?: boolean; readonly min?: number; readonly label?: string }) {
   return (
     <input
       type="number"
+      aria-label={label}
       value={value}
       min={min}
       disabled={disabled}

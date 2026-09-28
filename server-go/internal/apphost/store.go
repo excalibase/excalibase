@@ -1,6 +1,10 @@
 package apphost
 
-import "errors"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
 
 // Store is the persistence contract for customer applications.
 var (
@@ -8,10 +12,10 @@ var (
 	// not hold. Reads report absence as a nil app instead, so a caller never
 	// has to tell "gone" from "failed" by parsing an error.
 	ErrAppNotFound = errors.New("app not found")
-	// ErrAppLimitReached is returned when the project already holds as many
-	// apps as it may (MaxAppsPerProject). It is decided inside the writing
-	// transaction, never by a read the caller made first.
-	ErrAppLimitReached = errors.New("project already has an app")
+	// ErrAppLimitReached is returned, as an AppLimitError, when the project
+	// already holds as many apps as its plan allows. It is decided inside the
+	// writing transaction, never by a read the caller made first.
+	ErrAppLimitReached = errors.New("the project holds as many apps as its plan allows")
 	// ErrAppNameTaken is returned when the project already holds an app of
 	// that name. Names are unique per project only.
 	ErrAppNameTaken = errors.New("app name already used in this project")
@@ -30,9 +34,9 @@ var (
 // ever reachable through the project that owns it, so a caller holding one
 // project's id can never read or write another's row.
 type Store interface {
-	// Create stores a new app, refusing when the project's app limit is
-	// already taken or the name is already used in the project.
-	Create(app *App) error
+	// Create stores a new app, refusing when the project already holds
+	// maxApps apps (its plan's limit, EXC-524) or the name is already used.
+	Create(app *App, maxApps int) error
 	// Get returns nil (no error) when the project holds no such app.
 	Get(projectID, id string) (*App, error)
 	// List returns the project's apps (empty slice, not nil, when none).
@@ -55,3 +59,18 @@ type Store interface {
 
 // Compile-time check.
 var _ Store = (*PostgresAppStore)(nil)
+
+// AppLimitError names the plan's limit the create ran into.
+type AppLimitError struct{ Limit int }
+
+func (e AppLimitError) Error() string {
+	return fmt.Sprintf("the project already has %d apps, the most its plan allows; delete one or move the organisation to a larger plan", e.Limit)
+}
+
+func (e AppLimitError) Is(target error) bool { return target == ErrAppLimitReached }
+
+// AppLimits answers how many apps a project may hold under its organisation's
+// current plan (EXC-524). A downgrade never deletes apps; it refuses new ones.
+type AppLimits interface {
+	MaxApps(ctx context.Context, projectID string) (int, error)
+}
