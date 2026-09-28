@@ -132,6 +132,7 @@ describe('AppForm', () => {
         name: 'nginx',
         image: 'nginx:1.27',
         port: 8080,
+        internal: false,
         internalPorts: [],
         replicas: 1,
         healthCheckPath: '',
@@ -341,5 +342,27 @@ describe('AppForm', () => {
         input: expect.objectContaining({ disk: { mountPath: '/data', size: '500Mi' } }),
       }),
     );
+  });
+
+  // EXC-525: the choice between a public web app and an internal service.
+  test('an internal service hides the HTTP port and health check and sends its internal port', async () => {
+    const { onSubmit, user } = renderForm();
+    await user.type(screen.getByTestId('app-image'), 'redis:7.4');
+    await user.click(screen.getByTestId('app-exposure-internal'));
+    expect(screen.queryByTestId('app-port')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('app-health')).not.toBeInTheDocument();
+    await user.type(screen.getByTestId('app-internal-ports'), '6379');
+    await user.click(screen.getByTestId('app-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ internal: true, port: 0, internalPorts: [{ port: 6379, protocol: 'TCP' }] }),
+      }),
+    );
+  });
+
+  test('a public web app is the default', () => {
+    renderForm();
+    expect(screen.getByTestId('app-exposure-public')).toBeChecked();
+    expect(screen.getByTestId('app-port')).toBeInTheDocument();
   });
 });

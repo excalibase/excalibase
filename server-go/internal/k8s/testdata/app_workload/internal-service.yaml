@@ -1,0 +1,194 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    excalibase.io/app-deploy: dep-7
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: cache
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: free
+  name: app-cache
+  namespace: org1-proj-abc
+spec:
+  minReadySeconds: 10
+  replicas: 1
+  selector:
+    matchLabels:
+      excalibase.io/app: app-01H
+      excalibase.io/component: app
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        excalibase.io/app-config-hash: d380aa0ac509fe2b
+      labels:
+        app.kubernetes.io/component: app
+        app.kubernetes.io/managed-by: excalibase-provisioning
+        app.kubernetes.io/name: cache
+        excalibase.io/app: app-01H
+        excalibase.io/component: app
+        excalibase.io/project: proj-abc
+        excalibase.io/tier: free
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - image: ghcr.io/acme/web:1.4.2
+        imagePullPolicy: Always
+        lifecycle:
+          preStop:
+            sleep:
+              seconds: 10
+        name: cache
+        ports:
+        - containerPort: 6379
+          name: internal-1
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          tcpSocket:
+            port: 6379
+          timeoutSeconds: 3
+        resources:
+          limits:
+            cpu: 250m
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - CHOWN
+            - DAC_OVERRIDE
+            - FOWNER
+            - FSETID
+            - SETUID
+            - SETGID
+            - SETPCAP
+            - SETFCAP
+            - KILL
+            - NET_BIND_SERVICE
+            - SYS_CHROOT
+            - MKNOD
+            - AUDIT_WRITE
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+      runtimeClassName: gvisor
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+status: {}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: cache
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: free
+  name: app-cache-egress
+  namespace: org1-proj-abc
+spec:
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+        k8s:k8s-app: kube-dns
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: UDP
+      - port: "53"
+        protocol: TCP
+  - toEntities:
+    - world
+  egressDeny:
+  - toCIDRSet:
+    - cidr: 169.254.0.0/16
+    - cidr: 10.0.0.0/8
+    - cidr: 172.16.0.0/12
+    - cidr: 192.168.0.0/16
+    - cidr: 100.64.0.0/10
+    - cidr: 127.0.0.0/8
+    - cidr: 0.0.0.0/8
+    - cidr: 224.0.0.0/4
+    - cidr: 240.0.0.0/4
+  - toEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: "25"
+        protocol: TCP
+  endpointSelector:
+    matchLabels:
+      excalibase.io/app: app-01H
+      excalibase.io/component: app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: cache
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: free
+  name: cache
+  namespace: org1-proj-abc
+spec:
+  ports:
+  - name: internal-1
+    port: 6379
+    protocol: TCP
+    targetPort: 6379
+  selector:
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+  type: ClusterIP
+status:
+  loadBalancer: {}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: cache
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: free
+  name: app-cache-ingress
+  namespace: org1-proj-abc
+spec:
+  endpointSelector:
+    matchLabels:
+      excalibase.io/app: app-01H
+      excalibase.io/component: app
+  ingress:
+  - fromEntities:
+    - host
+    toPorts:
+    - ports:
+      - port: "6379"
+        protocol: TCP

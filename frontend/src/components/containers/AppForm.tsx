@@ -132,6 +132,50 @@ function DiskFields({ values, errors, onChange }: DiskFieldsProps) {
   );
 }
 
+// ExposureChoice picks a public web app (a URL through the edge) or an internal
+// service reached only by this project's apps (EXC-525).
+function ExposureChoice({
+  internal,
+  onChange,
+}: {
+  readonly internal: boolean;
+  readonly onChange: (internal: boolean) => void;
+}) {
+  const option = (value: boolean, label: string, hint: string, testId: string) => (
+    <label className="flex items-start gap-2 text-sm text-text-primary">
+      <input
+        type="radio"
+        name="app-exposure"
+        checked={internal === value}
+        onChange={() => onChange(value)}
+        data-testid={testId}
+        className="mt-1"
+      />
+      <span>
+        {label}
+        <span className="block text-xs text-text-tertiary">{hint}</span>
+      </span>
+    </label>
+  );
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium text-text-primary mb-1">Kind</legend>
+      {option(
+        false,
+        'Public web app',
+        'Gets a URL; serves HTTP through the edge.',
+        'app-exposure-public',
+      )}
+      {option(
+        true,
+        'Internal service',
+        "No URL. Reached only by this project's apps on its internal ports (e.g. Redis 6379), with the private network on.",
+        'app-exposure-internal',
+      )}
+    </fieldset>
+  );
+}
+
 export function AppForm({
   tier,
   databaseName,
@@ -195,29 +239,36 @@ export function AppForm({
             data-testid="app-name"
           />
         </Field>
+        <ExposureChoice internal={values.internal} onChange={(internal) => set({ internal })} />
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Port"
-            htmlFor="app-port"
-            error={errors.port}
-            hint="The port your app listens on for HTTP."
-          >
-            <input
-              id="app-port"
-              type="number"
-              min={1}
-              max={65535}
-              value={values.port}
-              onChange={(e) => set({ port: e.target.value })}
-              className={inputClass}
-              data-testid="app-port"
-            />
-          </Field>
+          {!values.internal && (
+            <Field
+              label="Port"
+              htmlFor="app-port"
+              error={errors.port}
+              hint="The port your app listens on for HTTP."
+            >
+              <input
+                id="app-port"
+                type="number"
+                min={1}
+                max={65535}
+                value={values.port}
+                onChange={(e) => set({ port: e.target.value })}
+                className={inputClass}
+                data-testid="app-port"
+              />
+            </Field>
+          )}
           <Field
             label="Internal TCP ports"
             htmlFor="app-internal-ports"
             error={errors.internalPorts}
-            hint="Optional, e.g. 6379. Reachable only by this project's apps, with its private network on; never from the internet."
+            hint={
+              values.internal
+                ? "Required, e.g. 6379. Reachable only by this project's apps, with its private network on; never from the internet."
+                : "Optional, e.g. 6379. Reachable only by this project's apps, with its private network on; never from the internet."
+            }
           >
             <input
               id="app-internal-ports"
@@ -252,21 +303,23 @@ export function AppForm({
         <Field label="Size" hint="Set by the project's plan. Change the plan to change the size.">
           <SizePicker tier={tier} />
         </Field>
-        <Field
-          label="Health check path (optional)"
-          htmlFor="app-health"
-          error={errors.healthCheckPath}
-          hint="A path that answers when the app is ready, for example /healthz."
-        >
-          <input
-            id="app-health"
-            value={values.healthCheckPath}
-            onChange={(e) => set({ healthCheckPath: e.target.value })}
-            placeholder="/healthz"
-            className={cn(inputClass, 'font-mono')}
-            data-testid="app-health"
-          />
-        </Field>
+        {!values.internal && (
+          <Field
+            label="Health check path (optional)"
+            htmlFor="app-health"
+            error={errors.healthCheckPath}
+            hint="A path that answers when the app is ready, for example /healthz."
+          >
+            <input
+              id="app-health"
+              value={values.healthCheckPath}
+              onChange={(e) => set({ healthCheckPath: e.target.value })}
+              placeholder="/healthz"
+              className={cn(inputClass, 'font-mono')}
+              data-testid="app-health"
+            />
+          </Field>
+        )}
       </div>
 
       <DiskFields

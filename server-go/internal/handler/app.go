@@ -69,6 +69,9 @@ type appResponse struct {
 
 // present leaves the URL out when the app has no hostname; its deploy is what reports why.
 func (h *AppHandler) present(app *apphost.App) appResponse {
+	if app.Internal {
+		return appResponse{App: app}
+	}
 	url, err := h.route.URL(app.Name, app.ProjectID)
 	if err != nil {
 		return appResponse{App: app}
@@ -153,6 +156,8 @@ type appCreateRequest struct {
 	Disk            *apphost.AppDisk `json:"disk"`
 	// InternalPorts are optional raw TCP ports for the project's own apps (EXC-525).
 	InternalPorts []apphost.InternalPort `json:"internalPorts"`
+	// Internal makes the app a service with no HTTP port and no public route.
+	Internal bool `json:"internal"`
 }
 
 // appUpdateRequest is the partial-update body. Every field is a pointer so an
@@ -169,6 +174,7 @@ type appUpdateRequest struct {
 	// grows through POST .../disk, and null or absent leaves it as it is.
 	Disk          *apphost.AppDisk        `json:"disk"`
 	InternalPorts *[]apphost.InternalPort `json:"internalPorts"`
+	Internal      *bool                   `json:"internal"`
 }
 
 func (h *AppHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -219,8 +225,8 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
-	if req.Port == nil {
-		httpError(w, "port is required (1-65535)", http.StatusBadRequest)
+	if req.Port == nil && !req.Internal {
+		httpError(w, "port is required (1-65535) for a public web app", http.StatusBadRequest)
 		return
 	}
 	if req.Replicas == nil {
@@ -240,7 +246,8 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Name:            strings.TrimSpace(req.Name),
 		Image:           req.Image,
 		Env:             normalizeEnv(req.Env),
-		Port:            *req.Port,
+		Port:            portOrNone(req.Port),
+		Internal:        req.Internal,
 		InternalPorts:   emptyAsNil(req.InternalPorts),
 		HealthCheckPath: req.HealthCheckPath,
 		Replicas:        *req.Replicas,
@@ -370,6 +377,9 @@ func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 	if req.InternalPorts != nil {
 		app.InternalPorts = emptyAsNil(*req.InternalPorts)
 	}
+	if req.Internal != nil {
+		app.Internal = *req.Internal
+	}
 	if req.Disk != nil {
 		generation := 0
 		if app.Disk != nil {
@@ -434,6 +444,14 @@ func (h *AppHandler) diskWithinPlan(w http.ResponseWriter, r *http.Request, proj
 		return false
 	}
 	return true
+}
+
+// portOrNone: an internal service sends no HTTP port; validation decides whether that is allowed.
+func portOrNone(port *int) int {
+	if port == nil {
+		return 0
+	}
+	return *port
 }
 
 // emptyAsNil stores "no internal ports" one way, so the record reads the same however it was cleared.

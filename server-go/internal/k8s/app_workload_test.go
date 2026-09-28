@@ -779,9 +779,13 @@ func workloadYAML(t *testing.T, workload *AppWorkload) string {
 	}
 	service := workload.Service.DeepCopy()
 	service.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}
-	ingress := workload.Ingress.DeepCopy()
-	ingress.TypeMeta = metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"}
-	objects = append(objects, workload.EgressPolicy.Object, service, ingress, workload.IngressPolicy.Object)
+	objects = append(objects, workload.EgressPolicy.Object, service)
+	if workload.Ingress != nil {
+		ingress := workload.Ingress.DeepCopy()
+		ingress.TypeMeta = metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"}
+		objects = append(objects, ingress)
+	}
+	objects = append(objects, workload.IngressPolicy.Object)
 	if workload.Disk != nil {
 		disk := workload.Disk.DeepCopy()
 		disk.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"}

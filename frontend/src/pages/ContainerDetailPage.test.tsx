@@ -170,6 +170,13 @@ describe('ContainerDetailPage', () => {
     expect(screen.getByTestId('app-internal-address')).toHaveTextContent('web:6379');
   });
 
+  test('an internal service shows only its internal addresses', async () => {
+    renderPage({ app: { internal: true, port: 0, internalPorts: [{ port: 6379, protocol: 'TCP' }] }, deploys: [] });
+    expect(await screen.findByTestId('app-internal-address')).toHaveTextContent('web:6379');
+    expect(screen.getByTestId('app-internal-address')).not.toHaveTextContent('http://web');
+    expect(screen.getByText(/internal service/i)).toBeInTheDocument();
+  });
+
   test('pause stops a running container and shows it paused', async () => {
     const { user } = renderPage({ app: { status: 'ACTIVE' }, deploys: [deploy({})] });
     await user.click(await screen.findByTestId('pause-button'));

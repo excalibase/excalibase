@@ -31,6 +31,9 @@ const (
 	netQueueImage    = "nats:2.10-alpine"
 	netQueueHTTPPort = 8222
 	netQueueTCPPort  = 4222
+	// An internal-only Redis: no HTTP port, no route (EXC-525).
+	netCacheImage = "redis:7.4-alpine"
+	netCachePort  = 6379
 )
 
 var netRoute = AppRouteOptions{Domain: "apps.test", IngressClass: "haproxy", IngressFromNamespace: netEdge}
@@ -65,12 +68,17 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 	lab.deployNetApp(t, netProject, web)
 	lab.deployNetApp(t, netProject, api)
 	lab.deployNetApp(t, netProject, queue)
+	cache := netApp("app-net-cache", "proj-neta", "cache")
+	cache.Image, cache.Port, cache.Internal = netCacheImage, 0, true
+	cache.InternalPorts = []apphost.InternalPort{{Port: netCachePort, Protocol: apphost.ProtocolTCP}}
+	lab.deployNetApp(t, netProject, cache)
 	lab.deployNetApp(t, netOtherProject, foreign)
 	lab.startNetFencePods(t)
 	runPod(lab.ctx, t, lab.cs, netEdge, "edge", nil, []string{"/bin/sleep", "3600"})
 	queuePodIP := lab.appPodIP(t, netProject, queue)
 	queueTCP := net.JoinHostPort(queuePodIP, strconv.Itoa(netQueueTCPPort))
 	queueHTTP := net.JoinHostPort(queuePodIP, strconv.Itoa(netQueueHTTPPort))
+	cacheTCP := net.JoinHostPort(lab.appPodIP(t, netProject, cache), strconv.Itoa(netCachePort))
 
 	fromWeb := func(host string, port int) error { return lab.dialFromApp(netProject, web, host, port) }
 	fromAPI := func(host string, port int) error { return lab.dialFromApp(netProject, api, host, port) }
@@ -81,6 +89,13 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 		refusedFor(t, "web to api by name", func() error { return fromWeb("api", appServicePort) })
 		refusedFor(t, "api to web by name", func() error { return fromAPI("web", appServicePort) })
 		refusedFor(t, "web to queue's internal TCP port", func() error { return fromWeb("queue", netQueueTCPPort) })
+	})
+	t.Run("an internal service has no route and the edge never reaches it", func(t *testing.T) {
+		if _, err := lab.cs.NetworkingV1().Ingresses(netProject).Get(lab.ctx, AppObjectName(cache.Name), metav1.GetOptions{}); err == nil {
+			t.Error("an internal service must have no Ingress")
+		}
+		refusedFor(t, "the edge to the internal Redis", func() error { return lab.agnhostConnect(netEdge, "edge", cacheTCP) })
+		refusedFor(t, "web to cache:6379 with the network off", func() error { return fromWeb("cache", netCachePort) })
 	})
 	t.Run("the edge reaches the HTTP port and never an internal port", func(t *testing.T) {
 		eventually(t, "the edge reaches queue's HTTP port", time.Minute, func() bool {
@@ -104,6 +119,15 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 		if err != nil || !strings.HasPrefix(greeting, "INFO ") {
 			t.Fatalf("queue:4222 must answer with the NATS greeting, got %q (%v)", greeting, err)
 		}
+	})
+	t.Run("on: the web app reaches the internal Redis by name", func(t *testing.T) {
+		eventually(t, "web reaches cache:6379", time.Minute, func() bool { return fromWeb("cache", netCachePort) == nil })
+		reply, err := lab.pingRedisFromApp(netProject, web, "cache", netCachePort)
+		if err != nil || !strings.HasPrefix(reply, "+PONG") {
+			t.Fatalf("cache:6379 must answer PING with +PONG, got %q (%v)", reply, err)
+		}
+		refusedFor(t, "the edge to the internal Redis, network on", func() error { return lab.agnhostConnect(netEdge, "edge", cacheTCP) })
+		refusedFor(t, "another project's pod to the internal Redis", func() error { return lab.agnhostConnect(netOtherProject, podIntruder, cacheTCP) })
 	})
 	t.Run("on: the internal port stays closed to everything else", func(t *testing.T) {
 		refusedFor(t, "the edge to queue's internal port", func() error { return lab.agnhostConnect(netEdge, "edge", queueTCP) })
@@ -142,6 +166,16 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 		refusedFor(t, "web to api by name", func() error { return fromWeb("api", appServicePort) })
 		refusedFor(t, "web to queue's internal TCP port", func() error { return fromWeb("queue", netQueueTCPPort) })
 	})
+}
+
+// pingRedisFromApp speaks the Redis protocol from inside the app's container.
+func (lab *egressLab) pingRedisFromApp(namespace string, app *apphost.App, host string, port int) (string, error) {
+	pod, err := lab.firstAppPod(namespace, app)
+	if err != nil {
+		return "", err
+	}
+	script := fmt.Sprintf("exec 3<>/dev/tcp/%s/%d; printf 'PING\\r\\n' >&3; read -t 3 line <&3; printf '%%s' \"$line\"", host, port)
+	return lab.client.ExecInPod(lab.ctx, namespace, pod, app.Name, []string{"timeout", "5", "bash", "-c", script})
 }
 
 // readFromApp reads the first line a TCP service sends, from inside the app's container.

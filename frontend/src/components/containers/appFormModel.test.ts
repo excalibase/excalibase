@@ -36,3 +36,29 @@ describe('internal TCP ports (EXC-525)', () => {
     expect(initialValues(app as never).internalPorts).toBe('4222');
   });
 });
+
+describe('internal service (EXC-525)', () => {
+  const service = { ...base, internal: true, port: '', healthCheckPath: '', internalPorts: '6379' };
+  test('needs no HTTP port but at least one internal port', () => {
+    const errors = validateAppForm(service, 3);
+    expect(errors.port).toBeUndefined();
+    expect(errors.internalPorts).toBeUndefined();
+    expect(validateAppForm({ ...service, internalPorts: '' }, 3).internalPorts).toBeDefined();
+  });
+  test('submits no HTTP port and no health path', () => {
+    const input = toAppSubmission({ ...service, healthCheckPath: '/stale' }).input;
+    expect(input.internal).toBe(true);
+    expect(input.port).toBe(0);
+    expect(input.healthCheckPath).toBe('');
+    expect(input.internalPorts).toEqual([{ port: 6379, protocol: 'TCP' }]);
+  });
+  test('a public web app is sent as not internal', () => {
+    expect(toAppSubmission({ ...base, internalPorts: '' }).input.internal).toBe(false);
+  });
+  test('an edited internal service starts as one', () => {
+    const app = { name: 'cache', image: 'redis:7', port: 0, internal: true, replicas: 1, env: [], internalPorts: [{ port: 6379, protocol: 'TCP' as const }] };
+    const values = initialValues(app as never);
+    expect(values.internal).toBe(true);
+    expect(values.port).toBe('');
+  });
+});

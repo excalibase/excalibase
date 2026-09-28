@@ -20,6 +20,8 @@ export interface AppFormValues {
   name: string;
   image: string;
   port: string;
+  // An internal service (EXC-525): no HTTP port, no public URL, reached on its internal ports.
+  internal: boolean;
   // Comma-separated TCP port numbers (EXC-525); empty means none.
   internalPorts: string;
   replicas: string;
@@ -86,7 +88,8 @@ export const initialValues = (app?: App): AppFormValues =>
     ? {
         name: app.name,
         image: app.image,
-        port: String(app.port),
+        port: app.internal ? '' : String(app.port),
+        internal: app.internal === true,
         internalPorts: (app.internalPorts ?? []).map((p) => p.port).join(', '),
         replicas: String(app.replicas),
         healthCheckPath: app.healthCheckPath ?? '',
@@ -100,6 +103,7 @@ export const initialValues = (app?: App): AppFormValues =>
         name: '',
         image: '',
         port: String(DEFAULT_PORT),
+        internal: false,
         internalPorts: '',
         replicas: String(DEFAULT_REPLICAS),
         healthCheckPath: '',
@@ -219,10 +223,7 @@ export function validateAppForm(
     errors.name =
       'Use 2 to 50 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit. Names starting with proj- are reserved.';
   }
-  if (!wholeNumberIn(values.port, 1, 65535))
-    errors.port = 'Port must be a whole number between 1 and 65535.';
-  const internal = internalPortsError(values.internalPorts, values.port);
-  if (internal) errors.internalPorts = internal;
+  Object.assign(errors, exposureErrors(values));
   if (!wholeNumberIn(values.replicas, 0, maxReplicas)) {
     errors.replicas = `Choose between 0 and ${maxReplicas} copies.`;
   }
@@ -253,6 +254,20 @@ function internalPortsError(raw: string, httpPort: string): string | undefined {
   return undefined;
 }
 
+// A public web app needs its HTTP port; an internal service needs an internal port instead.
+function exposureErrors(values: AppFormValues): AppFormErrors {
+  const errors: AppFormErrors = {};
+  if (!values.internal && !wholeNumberIn(values.port, 1, 65535)) {
+    errors.port = 'Port must be a whole number between 1 and 65535.';
+  }
+  const internal = internalPortsError(values.internalPorts, values.internal ? '' : values.port);
+  if (internal) errors.internalPorts = internal;
+  else if (values.internal && parseInternalPorts(values.internalPorts).length === 0) {
+    errors.internalPorts = 'An internal service needs at least one internal port, for example 6379.';
+  }
+  return errors;
+}
+
 export const hasErrors = (errors: AppFormErrors) => Object.keys(errors).length > 0;
 
 function toEnvVar(row: EnvRow, databaseName?: string): EnvVar | undefined {
@@ -280,10 +295,11 @@ export const toAppSubmission = (values: AppFormValues, databaseName?: string): A
   input: {
     name: values.name,
     image: values.image,
-    port: Number(values.port),
+    port: values.internal ? 0 : Number(values.port),
+    internal: values.internal,
     internalPorts: parseInternalPorts(values.internalPorts).map((part) => ({ port: Number(part), protocol: 'TCP' as const })),
     replicas: Number(values.replicas),
-    healthCheckPath: values.healthCheckPath,
+    healthCheckPath: values.internal ? '' : values.healthCheckPath,
     env: values.env.flatMap((row) => toEnvVar(row, databaseName) ?? []),
     ...(values.diskEnabled
       ? { disk: { mountPath: values.diskMountPath, size: submittedDiskSize(values) } }

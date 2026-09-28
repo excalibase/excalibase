@@ -426,3 +426,23 @@ func TestVerifyDomain_EdgeCases(t *testing.T) {
 		t.Fatalf("list missing app: %v", err)
 	}
 }
+
+// An internal service has no route, so it takes no custom domain and a
+// deploy as one unroutes any it had (EXC-525).
+func TestDomains_AnInternalServiceHasNone(t *testing.T) {
+	f := newDomainFixture(t)
+	verified(t, f, "shop.example.com")
+	f.app.Internal, f.app.Port, f.app.HealthCheckPath = true, 0, ""
+	f.app.InternalPorts = []apphost.InternalPort{{Port: 6379, Protocol: apphost.ProtocolTCP}}
+	if _, err := f.svc.Add(context.Background(), f.app.ProjectID, f.app.ID, "cache.example.com"); !errors.Is(err, ErrDomainOnInternalService) {
+		t.Fatalf("Add on an internal service: %v", err)
+	}
+	f.kube.DomainHosts = map[string][]string{testDeployNamespace + "/" + f.app.ID: {"shop.example.com"}}
+	f.deploys.SetDomainSync(f.svc.SyncApp)
+	if _, err := f.deploys.DeployApp(context.Background(), f.app.ProjectID, f.app.ID, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.hostsSynced()) != 0 {
+		t.Fatalf("an internal service still routes %v", f.hostsSynced())
+	}
+}

@@ -130,7 +130,8 @@ func writeDomainError(w http.ResponseWriter, err error) {
 	case errors.Is(err, apphost.ErrDomainNotFound), errors.Is(err, apphost.ErrAppNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, apphost.ErrDomainLimit), errors.Is(err, apphost.ErrDomainExists), errors.Is(err, storage.ErrProjectBusy),
-		errors.Is(err, apphost.ErrDomainClaimed), errors.Is(err, service.ErrDomainNotPointed):
+		errors.Is(err, apphost.ErrDomainClaimed), errors.Is(err, service.ErrDomainNotPointed),
+		errors.Is(err, service.ErrDomainOnInternalService):
 		httpError(w, err.Error(), http.StatusConflict)
 	default:
 		httpError(w, safeError(err), http.StatusInternalServerError)
