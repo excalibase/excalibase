@@ -16,6 +16,7 @@ import {
   DEPLOY_STATUS,
   appDisplayStatus,
   describeTier,
+  diskStopReason,
   formatWhen,
   plainFailureReason,
 } from '../components/containers/appCopy';
@@ -64,6 +65,22 @@ function CurrentDeploy({ deploy }: { readonly deploy?: Deploy }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function DiskStopBanner({ reason }: { readonly reason?: string }) {
+  if (!reason) return null;
+  return (
+    <div
+      role="status"
+      className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-400 space-y-1"
+      data-testid="disk-stopped-banner"
+    >
+      <p className="font-medium">
+        This container was stopped because its disk holds more than the plan allows.
+      </p>
+      <p className="text-xs">{reason}</p>
     </div>
   );
 }
@@ -212,6 +229,7 @@ function Detail({
           )}
         </div>
       )}
+      <DiskStopBanner reason={diskStopReason(app, newest)} />
       <CurrentDeploy deploy={newest} />
       <div className="grid gap-6 lg:grid-cols-2 mb-6">
         <section className="space-y-2">

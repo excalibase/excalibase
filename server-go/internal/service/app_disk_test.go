@@ -16,11 +16,13 @@ import (
 
 // fixedDiskLimit answers every project with one plan cap.
 type fixedDiskLimit struct {
-	maxGiB int
-	err    error
+	maxBytes int64
+	err      error
 }
 
-func (l fixedDiskLimit) MaxDiskGiB(context.Context, string) (int, error) { return l.maxGiB, l.err }
+func (l fixedDiskLimit) MaxDiskBytes(context.Context, string) (int64, error) {
+	return l.maxBytes, l.err
+}
 
 func sampleDiskApp() *apphost.App {
 	app := sampleDeployApp()
@@ -29,10 +31,10 @@ func sampleDiskApp() *apphost.App {
 	return app
 }
 
-func newDiskDeployService(t *testing.T, app *apphost.App, maxGiB int) (*AppDeployService, *fakeDeployStore, *k8s.MockClient) {
+func newDiskDeployService(t *testing.T, app *apphost.App, maxGiB int64) (*AppDeployService, *fakeDeployStore, *k8s.MockClient) {
 	t.Helper()
 	svc, deploys, kube := newDeployTestService(t, app)
-	svc.SetDiskLimits(fixedDiskLimit{maxGiB: maxGiB})
+	svc.SetDiskLimits(fixedDiskLimit{maxBytes: maxGiB << 30})
 	svc.render.DiskStorageClass = "local-path"
 	return svc, deploys, kube
 }
@@ -60,19 +62,20 @@ func TestDeployApp_MountsTheAppsDiskOnTheTenantStorageClass(t *testing.T) {
 	}
 }
 
-func TestDeployApp_RefusesADiskAboveThePlan(t *testing.T) {
+// A plan with no app disks cannot hold one at any size: nothing is applied.
+func TestDeployApp_RefusesADiskOnAPlanWithNoDisks(t *testing.T) {
 	app := sampleDiskApp()
-	svc, _, kube := newDiskDeployService(t, app, 4)
+	svc, _, kube := newDiskDeployService(t, app, 0)
 
 	deploy, err := svc.DeployApp(context.Background(), app.ProjectID, app.ID, "dev-1")
 	if err != nil {
 		t.Fatalf("DeployApp: %v", err)
 	}
-	if deploy.Status != apphost.DeployStatusFailed || !strings.Contains(deploy.FailureReason, "plan allows up to 4Gi") {
-		t.Fatalf("got %q %q, want a failed deploy naming the plan's cap", deploy.Status, deploy.FailureReason)
+	if deploy.Status != apphost.DeployStatusFailed || !strings.Contains(deploy.FailureReason, "offers no app disks") {
+		t.Fatalf("got %q %q, want a failed deploy saying the plan offers no disks", deploy.Status, deploy.FailureReason)
 	}
 	if len(kube.AppWorkloads) != 0 {
-		t.Error("nothing may be applied for a disk above the plan")
+		t.Error("nothing may be applied for a disk the plan does not allow")
 	}
 }
 
@@ -178,7 +181,7 @@ func diskLifecycleFixture(t *testing.T) *lifecycleFixture {
 	f.app.Disk = &apphost.AppDisk{MountPath: "/data", Size: "5Gi"}
 	f.app.Version = 3
 	setStoredApp(f.svc, f.app)
-	f.svc.SetDiskLimits(fixedDiskLimit{maxGiB: 20})
+	f.svc.SetDiskLimits(fixedDiskLimit{maxBytes: 20 << 30})
 	return f
 }
 
@@ -200,10 +203,10 @@ func TestDeleteApp_ADiskNeedsAnExplicitConfirmation(t *testing.T) {
 	}
 }
 
-func TestGrowAppDisk_GrowsTheClaimThenTheRecord(t *testing.T) {
+func TestResizeAppDisk_GrowsTheClaimThenTheRecord(t *testing.T) {
 	f := diskLifecycleFixture(t)
 
-	app, err := f.svc.GrowAppDisk(context.Background(), f.app.ProjectID, f.app.ID, "8Gi")
+	app, err := f.svc.ResizeAppDisk(context.Background(), f.app.ProjectID, f.app.ID, "8Gi")
 	if err != nil {
 		t.Fatalf("GrowAppDisk: %v", err)
 	}
@@ -217,11 +220,11 @@ func TestGrowAppDisk_GrowsTheClaimThenTheRecord(t *testing.T) {
 }
 
 // Not deployed yet: the record is the disk, and the first deploy creates it at that size.
-func TestGrowAppDisk_BeforeTheFirstDeployGrowsTheRecordOnly(t *testing.T) {
+func TestResizeAppDisk_BeforeTheFirstDeployGrowsTheRecordOnly(t *testing.T) {
 	f := diskLifecycleFixture(t)
 	f.kube.AppDiskGrowErr = k8s.ErrAppDiskNotCreated
 
-	if _, err := f.svc.GrowAppDisk(context.Background(), f.app.ProjectID, f.app.ID, "8Gi"); err != nil {
+	if _, err := f.svc.ResizeAppDisk(context.Background(), f.app.ProjectID, f.app.ID, "8Gi"); err != nil {
 		t.Fatalf("GrowAppDisk: %v", err)
 	}
 	if stored, _ := f.apps.Get(f.app.ProjectID, f.app.ID); stored.Disk.Size != "8Gi" {
@@ -229,16 +232,15 @@ func TestGrowAppDisk_BeforeTheFirstDeployGrowsTheRecordOnly(t *testing.T) {
 	}
 }
 
-func TestGrowAppDisk_Refusals(t *testing.T) {
+func TestResizeAppDisk_GrowRefusals(t *testing.T) {
 	cases := map[string]struct {
 		size    string
 		setup   func(*lifecycleFixture)
 		wantErr error
 	}{
-		"not whole gibibytes": {size: "7.5Gi", wantErr: apphost.ErrInvalidDisk},
-		"the same size":       {size: "5Gi", wantErr: ErrAppDiskShrink},
-		"smaller":             {size: "4Gi", wantErr: ErrAppDiskShrink},
-		"above the plan":      {size: "21Gi", wantErr: apphost.ErrDiskAbovePlan},
+		"not a size":     {size: "7.5Gi", wantErr: apphost.ErrInvalidDisk},
+		"the same size":  {size: "5Gi", wantErr: ErrAppDiskSameSize},
+		"above the plan": {size: "21Gi", wantErr: apphost.ErrDiskAbovePlan},
 		"no disk": {size: "8Gi", wantErr: ErrAppHasNoDisk, setup: func(f *lifecycleFixture) {
 			f.app.Disk = nil
 			setStoredApp(f.svc, f.app)
@@ -257,7 +259,7 @@ func TestGrowAppDisk_Refusals(t *testing.T) {
 				tc.setup(f)
 			}
 			before, _ := f.apps.Get(f.app.ProjectID, f.app.ID)
-			if _, err := f.svc.GrowAppDisk(context.Background(), f.app.ProjectID, f.app.ID, tc.size); !errors.Is(err, tc.wantErr) {
+			if _, err := f.svc.ResizeAppDisk(context.Background(), f.app.ProjectID, f.app.ID, tc.size); !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
 			after, _ := f.apps.Get(f.app.ProjectID, f.app.ID)
@@ -268,14 +270,14 @@ func TestGrowAppDisk_Refusals(t *testing.T) {
 	}
 }
 
-func TestGrowAppDisk_HoldsTheAppsLease(t *testing.T) {
+func TestResizeAppDisk_HoldsTheAppsLease(t *testing.T) {
 	f := diskLifecycleFixture(t)
 	release, err := f.svc.holdApp(context.Background(), f.app.ProjectID, f.app.ID, OperationPause)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
-	if _, err := f.svc.GrowAppDisk(context.Background(), f.app.ProjectID, f.app.ID, "8Gi"); !errors.Is(err, ErrProjectOperationRunning) {
+	if _, err := f.svc.ResizeAppDisk(context.Background(), f.app.ProjectID, f.app.ID, "8Gi"); !errors.Is(err, ErrProjectOperationRunning) {
 		t.Fatalf("err = %v, want ErrProjectOperationRunning", err)
 	}
 }
@@ -293,8 +295,8 @@ func (f fixedTierConfigs) TierConfig(_ context.Context, tier domain.TierType) (c
 func TestAppDiskLimits_ReadTheOrganisationsPlan(t *testing.T) {
 	limits := NewAppDiskLimits(fixedPlan{tier: domain.Standard},
 		fixedTierConfigs{domain.Standard: {MaxAppDiskSize: "20Gi"}, domain.Free: {MaxAppDiskSize: "1Gi"}})
-	if got, err := limits.MaxDiskGiB(context.Background(), "p1"); err != nil || got != 20 {
-		t.Fatalf("MaxDiskGiB = %d, %v; want 20", got, err)
+	if got, err := limits.MaxDiskBytes(context.Background(), "p1"); err != nil || got != 20<<30 {
+		t.Fatalf("MaxDiskBytes = %d, %v; want 20Gi", got, err)
 	}
 	for name, limits := range map[string]apphost.DiskLimits{
 		"no plan":            NewAppDiskLimits(fixedPlan{err: ErrOrgTierUnresolved}, fixedTierConfigs{}),
@@ -302,7 +304,7 @@ func TestAppDiskLimits_ReadTheOrganisationsPlan(t *testing.T) {
 		"an unreadable cap":  NewAppDiskLimits(fixedPlan{tier: domain.Free}, fixedTierConfigs{domain.Free: {MaxAppDiskSize: "lots"}}),
 		"no tier config set": NewAppDiskLimits(fixedPlan{tier: domain.Free}, nil),
 	} {
-		if _, err := limits.MaxDiskGiB(context.Background(), "p1"); !errors.Is(err, ErrOrgTierUnresolved) {
+		if _, err := limits.MaxDiskBytes(context.Background(), "p1"); !errors.Is(err, ErrOrgTierUnresolved) {
 			t.Errorf("%s: err = %v, want ErrOrgTierUnresolved", name, err)
 		}
 	}

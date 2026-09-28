@@ -79,7 +79,7 @@ func TestK3sAppDiskUnderGVisor(t *testing.T) {
 		if class.AllowVolumeExpansion != nil && *class.AllowVolumeExpansion {
 			t.Fatalf("fixture: %s allows expansion here; the refusal cannot be exercised", liveDiskStorageClass)
 		}
-		if err := g.client.GrowAppDisk(context.Background(), namespace, app.ID, "2Gi"); !errors.Is(err, ErrAppDiskNotExpandable) {
+		if err := g.client.GrowAppDisk(context.Background(), namespace, app.ID, 0, "2Gi"); !errors.Is(err, ErrAppDiskNotExpandable) {
 			t.Fatalf("grow: got %v, want ErrAppDiskNotExpandable", err)
 		}
 		g.assertProof(t, namespace, app, "after a refused grow")
@@ -166,7 +166,7 @@ func podReady(pod corev1.Pod) bool {
 
 func (g *gvisorCluster) boundVolume(t *testing.T, namespace string, app *apphost.App) string {
 	t.Helper()
-	claim, err := g.clientset.CoreV1().PersistentVolumeClaims(namespace).Get(context.Background(), AppDiskClaimName(app.ID), metav1.GetOptions{})
+	claim, err := g.clientset.CoreV1().PersistentVolumeClaims(namespace).Get(context.Background(), AppDiskClaimName(app.ID, 0), metav1.GetOptions{})
 	if err != nil || claim.Spec.VolumeName == "" {
 		t.Fatalf("the disk is not bound: %v", err)
 	}

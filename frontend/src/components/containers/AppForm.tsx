@@ -95,7 +95,8 @@ function DiskFields({ values, errors, onChange }: DiskFieldsProps) {
         Files written to the disk survive restarts, redeploys and pauses. A container with a disk
         runs one copy, and each deploy stops the old copy before starting the new one, so the
         container is briefly unavailable (usually under a minute). Deleting the container deletes
-        the disk. The size is capped by the project's plan and can only grow.
+        the disk. The size is capped by the project's plan and is changed later from the container
+        page.
       </p>
       {values.diskEnabled && (
         <div className="grid gap-4 sm:grid-cols-2">
@@ -109,14 +110,14 @@ function DiskFields({ values, errors, onChange }: DiskFieldsProps) {
             />
           </Field>
           <Field
-            label="Size (GiB)"
+            label={values.diskAttached ? 'Size' : 'Size (GiB)'}
             htmlFor="app-disk-size"
             error={errors.diskSize}
-            hint={values.diskAttached ? 'Grow the disk from the container page.' : undefined}
+            hint={values.diskAttached ? 'Resize the disk from the container page.' : undefined}
           >
             <input
               id="app-disk-size"
-              type="number"
+              type={values.diskAttached ? 'text' : 'number'}
               min={1}
               value={values.diskSize}
               disabled={values.diskAttached}

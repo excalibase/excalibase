@@ -233,3 +233,22 @@ func TestTierHandler_Update_MaxApps(t *testing.T) {
 		t.Errorf("a plan with no apps was refused: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// A plan edit re-runs the app disk rule on every app the plan now caps lower.
+func TestTierHandler_Update_TellsThePlatformThePlanChanged(t *testing.T) {
+	store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+	h := NewTierHandler(store)
+	changed := 0
+	h.SetPlanChangeHook(func() { changed++ })
+	body := `{"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"500Mi","maxApps":2,"memory":"512Mi","cpu":"0.5"}`
+	rec := httptest.NewRecorder()
+	h.Update(rec, newTierReqWithParam("PUT", body, string(domain.Free)))
+	if rec.Code != http.StatusOK || changed != 1 {
+		t.Fatalf("got %d %s, hook ran %d times; want 200 and one run", rec.Code, rec.Body.String(), changed)
+	}
+	rec = httptest.NewRecorder()
+	h.Update(rec, newTierReqWithParam("PUT", `{"instances":0}`, string(domain.Free)))
+	if rec.Code != http.StatusBadRequest || changed != 1 {
+		t.Fatalf("a refused edit ran the hook: %d, %d", rec.Code, changed)
+	}
+}

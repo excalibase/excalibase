@@ -55,8 +55,11 @@ func TestCreateProjectNamespace_AppliesQuota(t *testing.T) {
 	if pods.Value() != 20 {
 		t.Errorf("pods quota = %d, want 20", pods.Value())
 	}
-	if _, ok := q.Spec.Hard["persistentvolumeclaims"]; !ok {
-		t.Error("quota must cap persistentvolumeclaims")
+	// ENTERPRISE's 5 instances plus one app disk, plus the new volume a disk
+	// is copied onto while it is lowered to a smaller plan.
+	claims := q.Spec.Hard["persistentvolumeclaims"]
+	if claims.Value() != 7 {
+		t.Errorf("persistentvolumeclaims quota = %d, want 7", claims.Value())
 	}
 	// Must NOT gate on cpu/memory requests — that would reject CNPG's
 	// no-request maintenance pods.

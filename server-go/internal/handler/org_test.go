@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -67,6 +68,7 @@ func setupOrgRouterWithInstances(t *testing.T, isCloud bool) (chi.Router, *pgsto
 	orgHandler := NewOrgHandler(store, store)
 	orgHandler.SetNodePlacement(&fakeNodes{nodes: 5})
 	orgHandler.SetInstanceStore(instances)
+	orgHandler.SetPlanChangeHook(func() { orgPlanChanges.Add(1) })
 	r := chi.NewRouter()
 	r.Route(testOrgsPath, func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler {
@@ -337,10 +339,19 @@ func TestUpdateOrg_InvalidTier(t *testing.T) {
 	}
 }
 
+// orgPlanChanges counts the plan-change hook's runs across the org router tests.
+var orgPlanChanges atomic.Int64
+
 func TestUpdateOrg_PlatformAdminSetsTheTier(t *testing.T) {
 	r, store := setupOrgRouter(t)
 	addPlatformAdmin(t, store)
 	org := createOrgAs(t, r, "up-org", testAliceID)
+	before := orgPlanChanges.Load()
+	defer func() {
+		if orgPlanChanges.Load() != before+1 {
+			t.Errorf("the plan change ran the hook %d times, want once", orgPlanChanges.Load()-before)
+		}
+	}()
 
 	w2 := orgRequest(r, "PATCH", testOrgsSlash+org.ID, `{"tier":"STANDARD"}`, testPlatformAdminID)
 	if w2.Code != http.StatusOK {

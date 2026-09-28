@@ -36,6 +36,28 @@ export interface ClusterCapacity {
   >;
 }
 
+// StorageBudget mirrors /api/admin/storage: volume reservations against the
+// share of the node's storage they may take. enabled=false is an unmetered install.
+export interface StorageBudget {
+  enabled: boolean;
+  capacityBytes: number;
+  percent: number;
+  budgetBytes: number;
+  allocatedBytes: number;
+  tenantBytes: number;
+  platformBytes: number;
+  pendingBytes: number;
+  freeBytes: number;
+  usedPercent: number;
+}
+
+export const useStorageBudget = () =>
+  useQuery({
+    queryKey: ['admin', 'storage'],
+    queryFn: async () => (await api.get<StorageBudget>('/admin/storage')).data,
+    staleTime: 30_000,
+  });
+
 export const useAdminProjects = () =>
   useQuery({
     queryKey: ['admin', 'projects'],

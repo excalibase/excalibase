@@ -35,8 +35,23 @@ export interface EnvVar {
 // One persistent disk a container keeps across restarts, redeploys and pauses.
 export interface AppDisk {
   mountPath: string;
-  // Whole gibibytes, such as "10Gi"; it only grows.
+  // Whole mebibytes or gibibytes, such as "500Mi" or "10Gi".
   size: string;
+  generation?: number;
+}
+
+// A measurement of the disk. usedBytes and filesystemBytes are absent until a
+// deploy has created it.
+export interface AppDiskStatus {
+  mountPath: string;
+  size: string;
+  sizeBytes: number;
+  usedBytes?: number;
+  filesystemBytes?: number;
+  planMax: string;
+  planMaxBytes: number;
+  overPlan: boolean;
+  measuredAt?: string;
 }
 
 export interface App {
@@ -136,6 +151,7 @@ const appsKey = (projectId: string) => ['apps', projectId] as const;
 const appKey = (projectId: string, appId: string) => ['apps', projectId, appId] as const;
 const deploysKey = (projectId: string, appId: string) =>
   ['apps', projectId, appId, 'deploys'] as const;
+const diskKey = (projectId: string, appId: string) => ['apps', projectId, appId, 'disk'] as const;
 
 export const listApps = async (projectId: string): Promise<App[]> =>
   (await api.get<App[]>(`${appsBase(projectId)}/`)).data;
@@ -225,7 +241,11 @@ export const deleteApp = async (
   await api.delete(`${appsBase(projectId)}/${appId}`);
 };
 
-export const growAppDisk = async (
+export const getAppDisk = async (projectId: string, appId: string): Promise<AppDiskStatus> =>
+  (await api.get<AppDiskStatus>(`${appsBase(projectId)}/${appId}/disk`)).data;
+
+// Grows, or lowers a stopped app's disk; the server holds it to the plan cap.
+export const resizeAppDisk = async (
   projectId: string,
   appId: string,
   size: string,
@@ -316,10 +336,20 @@ export const useResumeApp = (projectId: string, appId: string) =>
 export const useDeleteApp = (projectId: string, appId: string, confirmDeleteDisk: boolean) =>
   useLifecycle(projectId, appId, (project, app) => deleteApp(project, app, confirmDeleteDisk));
 
-export const useGrowAppDisk = (projectId: string, appId: string) => {
+// Each read runs a probe on the cluster, so it is fetched once and on Refresh.
+export const useAppDisk = (projectId: string, appId: string) =>
+  useQuery({
+    queryKey: diskKey(projectId, appId),
+    queryFn: () => getAppDisk(projectId, appId),
+    enabled: !!projectId && !!appId,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+export const useResizeAppDisk = (projectId: string, appId: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (size: string) => growAppDisk(projectId, appId, size),
+    mutationFn: (size: string) => resizeAppDisk(projectId, appId, size),
     onSettled: () => qc.invalidateQueries({ queryKey: appsKey(projectId) }),
   });
 };

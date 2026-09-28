@@ -24,6 +24,8 @@ type OrgHandler struct {
 	orgStore      storage.OrgStore
 	userStore     storage.UserStore
 	instanceStore storage.InstanceStore // optional; used to confirm a project belongs to the URL org
+	// planChanged is told when an org's plan changes; it must not block the response.
+	planChanged func()
 	// nodes checks a new plan's instances fit the platform; a plan change
 	// is refused while it is unset.
 	nodes NodePlacement
@@ -31,6 +33,10 @@ type OrgHandler struct {
 
 // SetNodePlacement wires the check a plan change must pass.
 func (h *OrgHandler) SetNodePlacement(nodes NodePlacement) { h.nodes = nodes }
+
+// SetPlanChangeHook runs after an org's plan changes: a lower plan re-runs the
+// app disk rule on its apps (EXC-523).
+func (h *OrgHandler) SetPlanChangeHook(hook func()) { h.planChanged = hook }
 
 func NewOrgHandler(orgStore storage.OrgStore, userStore storage.UserStore) *OrgHandler {
 	return &OrgHandler{orgStore: orgStore, userStore: userStore}
@@ -237,6 +243,9 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 	if err := h.orgStore.UpdateOrg(r.Context(), org); err != nil {
 		httpError(w, "failed to update org", http.StatusInternalServerError)
 		return
+	}
+	if req.Tier != nil && h.planChanged != nil {
+		h.planChanged()
 	}
 	writeJSON(w, org)
 }

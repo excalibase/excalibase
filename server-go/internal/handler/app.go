@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"net/http"
 	"strconv"
@@ -44,6 +45,7 @@ type AppHandler struct {
 	disks apphost.DiskLimits
 	// limits caps the project's app count by its plan; unset, no app is created.
 	limits apphost.AppLimits
+	budget *storagebudget.Budget
 }
 
 // SetAppLimits wires the plan's app count (EXC-524).
@@ -51,6 +53,9 @@ func (h *AppHandler) SetAppLimits(limits apphost.AppLimits) { h.limits = limits 
 
 // SetDiskLimits wires the plan cap an app's disk is held to (EXC-523).
 func (h *AppHandler) SetDiskLimits(disks apphost.DiskLimits) { h.disks = disks }
+
+// SetStorageBudget refuses, when it is asked for, a disk the platform's storage cannot hold.
+func (h *AppHandler) SetStorageBudget(budget *storagebudget.Budget) { h.budget = budget }
 
 func NewAppHandler(store apphost.Store, project apphost.ProjectFacts, route apphost.Route) *AppHandler {
 	return &AppHandler{store: store, project: project, route: route}
@@ -239,7 +244,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		InternalPorts:   emptyAsNil(req.InternalPorts),
 		HealthCheckPath: req.HealthCheckPath,
 		Replicas:        *req.Replicas,
-		Disk:            req.Disk,
+		Disk:            callerDisk(req.Disk, 0),
 		Tier:            tier,
 		Status:          apphost.StatusFor(*req.Replicas),
 	}
@@ -366,8 +371,11 @@ func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 		app.InternalPorts = emptyAsNil(*req.InternalPorts)
 	}
 	if req.Disk != nil {
-		disk := *req.Disk
-		app.Disk = &disk
+		generation := 0
+		if app.Disk != nil {
+			generation = app.Disk.Generation
+		}
+		app.Disk = callerDisk(req.Disk, generation)
 	}
 }
 
@@ -387,6 +395,15 @@ func (h *AppHandler) planAppLimit(w http.ResponseWriter, r *http.Request, projec
 	return limit, true
 }
 
+// callerDisk takes only what a caller may say about a disk; the generation,
+// which names the volume holding it, stays the platform's.
+func callerDisk(requested *apphost.AppDisk, generation int) *apphost.AppDisk {
+	if requested == nil {
+		return nil
+	}
+	return &apphost.AppDisk{MountPath: requested.MountPath, Size: requested.Size, Generation: generation}
+}
+
 // diskWithinPlan refuses a disk above the organisation's plan, and one whose
 // cap cannot be read: a disk is never admitted unchecked.
 func (h *AppHandler) diskWithinPlan(w http.ResponseWriter, r *http.Request, projectID string, disk *apphost.AppDisk) bool {
@@ -397,13 +414,23 @@ func (h *AppHandler) diskWithinPlan(w http.ResponseWriter, r *http.Request, proj
 		httpError(w, "could not read the plan's app disk limit", http.StatusInternalServerError)
 		return false
 	}
-	limit, err := h.disks.MaxDiskGiB(r.Context(), projectID)
+	limit, err := h.disks.MaxDiskBytes(r.Context(), projectID)
 	if err != nil {
 		httpError(w, "could not read the plan's app disk limit", http.StatusInternalServerError)
 		return false
 	}
 	if err := apphost.CheckDiskWithinPlan(disk, limit); err != nil {
 		httpError(w, err.Error(), http.StatusConflict)
+		return false
+	}
+	size, _ := disk.Bytes()
+	if err := h.budget.Check(r.Context(), size, "an app disk ("+disk.Size+")"); err != nil {
+		if errors.Is(err, storagebudget.ErrExceeded) {
+			httpError(w, err.Error(), http.StatusConflict)
+			return false
+		}
+		log.Printf("app disk: storage budget: %v", err)
+		httpError(w, "could not read the platform's storage budget", http.StatusInternalServerError)
 		return false
 	}
 	return true

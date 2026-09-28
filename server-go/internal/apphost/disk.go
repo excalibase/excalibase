@@ -17,11 +17,23 @@ import (
 type AppDisk struct {
 	// MountPath is where the container sees the disk.
 	MountPath string `json:"mountPath"`
-	// Size is a whole number of gibibytes, such as "10Gi". It only grows.
+	// Size is a whole number of mebibytes or gibibytes, such as "500Mi" or
+	// "10Gi". On sized tenant storage it is a hard limit: a write past it fails.
 	Size string `json:"size"`
+	// Generation is the platform's, never the caller's: it counts the moves of
+	// the disk onto a smaller volume and names the volume that holds it now.
+	Generation int `json:"generation,omitempty"`
 }
 
-const maxMountPathLength = 256
+const (
+	maxMountPathLength = 256
+	mebibyte           = int64(1) << 20
+	gibibyte           = int64(1) << 30
+	// MinDiskBytes is the smallest disk: below it a filesystem is mostly its own overhead.
+	MinDiskBytes = 64 * mebibyte
+	// MaxDiskGeneration bounds how many times one disk may have been lowered.
+	MaxDiskGeneration = 999999
+)
 
 var (
 	// ErrInvalidDisk refuses a disk the renderer could not mount as data.
@@ -29,9 +41,9 @@ var (
 	// ErrDiskAbovePlan refuses a disk larger than the organisation's plan allows.
 	ErrDiskAbovePlan = errors.New("the disk is larger than the plan allows")
 
-	wholeDiskGiB     = regexp.MustCompile(`^[1-9][0-9]{0,4}Gi$`)
-	wholePlanDiskGiB = regexp.MustCompile(`^(0|[1-9][0-9]{0,5})Gi$`)
-	validMountPath   = regexp.MustCompile(`^/[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
+	diskSize       = regexp.MustCompile(`^(?:([1-9][0-9]{0,6})Mi|([1-9][0-9]{0,4})Gi)$`)
+	planDiskSize   = regexp.MustCompile(`^(?:(0|[1-9][0-9]{0,6})Mi|(0|[1-9][0-9]{0,5})Gi)$`)
+	validMountPath = regexp.MustCompile(`^/[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 
 	// systemDirectories hold the image itself; a disk over one hides it.
 	systemDirectories = map[string]bool{
@@ -42,33 +54,60 @@ var (
 	kernelFilesystems = []string{"/proc", "/sys", "/dev"}
 )
 
-// GiB is the disk's size in gibibytes.
-func (d AppDisk) GiB() (int, error) {
-	if !wholeDiskGiB.MatchString(d.Size) {
-		return 0, fmt.Errorf("%w: size must be a whole number of gibibytes from 1Gi to 99999Gi, such as 10Gi", ErrInvalidDisk)
+// Bytes is the disk's size in bytes.
+func (d AppDisk) Bytes() (int64, error) {
+	bytes, ok := sizeBytes(diskSize, d.Size)
+	if !ok || bytes < MinDiskBytes {
+		return 0, fmt.Errorf("%w: size must be a whole number of mebibytes from 64Mi or of gibibytes up to 99999Gi, such as 500Mi or 10Gi", ErrInvalidDisk)
 	}
-	return strconv.Atoi(strings.TrimSuffix(d.Size, "Gi"))
+	return bytes, nil
 }
 
-// PlanDiskGiB reads a plan's app-disk cap; 0Gi means the plan offers none.
-func PlanDiskGiB(size string) (int, error) {
-	if !wholePlanDiskGiB.MatchString(size) {
-		return 0, fmt.Errorf("the plan's app disk cap %q is not a whole number of gibibytes", size)
+// PlanDiskBytes reads a plan's app-disk cap; 0Gi (or 0Mi) means the plan offers none.
+func PlanDiskBytes(size string) (int64, error) {
+	bytes, ok := sizeBytes(planDiskSize, size)
+	if !ok || (bytes > 0 && bytes < MinDiskBytes) {
+		return 0, fmt.Errorf("the plan's app disk cap %q is not 0Gi or a whole number of mebibytes from 64Mi or of gibibytes", size)
 	}
-	return strconv.Atoi(strings.TrimSuffix(size, "Gi"))
+	return bytes, nil
 }
 
-// CheckDiskWithinPlan refuses a disk above the plan's cap in gibibytes.
-func CheckDiskWithinPlan(disk *AppDisk, maxGiB int) error {
+func sizeBytes(pattern *regexp.Regexp, size string) (int64, bool) {
+	match := pattern.FindStringSubmatch(size)
+	if match == nil {
+		return 0, false
+	}
+	if match[1] != "" {
+		value, err := strconv.ParseInt(match[1], 10, 64)
+		return value * mebibyte, err == nil
+	}
+	value, err := strconv.ParseInt(match[2], 10, 64)
+	return value * gibibyte, err == nil
+}
+
+// FormatDiskSize writes bytes as whole gibibytes when they are, otherwise as
+// mebibytes rounded up, so a usage is never shown smaller than it is.
+func FormatDiskSize(bytes int64) string {
+	if bytes > 0 && bytes%gibibyte == 0 {
+		return strconv.FormatInt(bytes/gibibyte, 10) + "Gi"
+	}
+	return strconv.FormatInt((bytes+mebibyte-1)/mebibyte, 10) + "Mi"
+}
+
+// CheckDiskWithinPlan refuses a disk above the plan's cap in bytes.
+func CheckDiskWithinPlan(disk *AppDisk, maxBytes int64) error {
 	if disk == nil {
 		return nil
 	}
-	size, err := disk.GiB()
+	size, err := disk.Bytes()
 	if err != nil {
 		return err
 	}
-	if size > maxGiB {
-		return fmt.Errorf("%w: the plan allows up to %dGi and the disk is %s", ErrDiskAbovePlan, maxGiB, disk.Size)
+	if maxBytes < MinDiskBytes {
+		return fmt.Errorf("%w: the plan offers no app disks", ErrDiskAbovePlan)
+	}
+	if size > maxBytes {
+		return fmt.Errorf("%w: the plan allows up to %s and the disk is %s", ErrDiskAbovePlan, FormatDiskSize(maxBytes), disk.Size)
 	}
 	return nil
 }
@@ -77,8 +116,11 @@ func validateDisk(disk *AppDisk, replicas int) error {
 	if disk == nil {
 		return nil
 	}
-	if _, err := disk.GiB(); err != nil {
+	if _, err := disk.Bytes(); err != nil {
 		return err
+	}
+	if disk.Generation < 0 || disk.Generation > MaxDiskGeneration {
+		return fmt.Errorf("%w: generation %d is out of range", ErrInvalidDisk, disk.Generation)
 	}
 	if err := validateMountPath(disk.MountPath); err != nil {
 		return err
@@ -104,8 +146,8 @@ func validateMountPath(mountPath string) error {
 	return nil
 }
 
-// DiskLimits answers the largest disk, in gibibytes, one app of a project may
+// DiskLimits answers the largest disk, in bytes, one app of a project may
 // have: its organisation's current plan's cap.
 type DiskLimits interface {
-	MaxDiskGiB(ctx context.Context, projectID string) (int, error)
+	MaxDiskBytes(ctx context.Context, projectID string) (int64, error)
 }

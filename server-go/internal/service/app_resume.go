@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
@@ -14,6 +15,9 @@ import (
 )
 
 var resumeRefusals = []error{ErrAppOverPlan, ErrOrgTierUnresolved, ErrAppCapacity, ErrAppNoSandboxNode, k8s.ErrAppNotPaused, k8s.ErrAppNotDeployed}
+
+// diskRefusals leave a resume undone: the app stays as it was, on its old disk.
+var diskRefusals = []error{ErrAppDiskUsageAbovePlan, apphost.ErrDiskAbovePlan, ErrOrgTierUnresolved, k8s.ErrAppDiskJob, storagebudget.ErrExceeded}
 
 // resumeSize is what a resume brings back: the paused copies at the plan's size now.
 type resumeSize struct {

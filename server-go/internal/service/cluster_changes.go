@@ -149,9 +149,26 @@ func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, size
 	if err := s.k8sClient.ClusterVolumesExpandable(ctx, inst.Namespace, cluster.GetName()); err != nil {
 		return err
 	}
-	return s.growDisk(ctx, inst, size, func() error {
-		return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithStorageSize(cluster, size))
+	grown := k8s.WithStorageSize(cluster, size)
+	return s.reserveClusterChange(ctx, cluster, grown, "growing the database's disk to "+size, func() error {
+		return s.growDisk(ctx, inst, size, func() error {
+			return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, grown)
+		})
 	})
+}
+
+// reserveClusterChange holds the storage a cluster change adds to the
+// platform's budget while it is applied, so it is never overcommitted.
+func (s *ProvisioningService) reserveClusterChange(ctx context.Context, current, next *unstructured.Unstructured, what string, apply func() error) error {
+	before, err := clusterBytes(current)
+	if err != nil {
+		return err
+	}
+	after, err := clusterBytes(next)
+	if err != nil {
+		return err
+	}
+	return s.storageBudget.Reserve(ctx, after-before, what, apply)
 }
 
 // growDisk records size as the project's disk, then asks the cluster for it,
@@ -217,8 +234,11 @@ func (s *ProvisioningService) ApplyOrgTier(ctx context.Context, projectID string
 	if err := s.requireRoomForPlan(ctx, inst, cluster, plan); err != nil {
 		return err
 	}
-	if err := s.growDisk(ctx, inst, disk, func() error {
-		return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithTier(cluster, plan, disk))
+	retiered := k8s.WithTier(cluster, plan, disk)
+	if err := s.reserveClusterChange(ctx, cluster, retiered, "moving the database onto the "+string(orgTier)+" plan", func() error {
+		return s.growDisk(ctx, inst, disk, func() error {
+			return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, retiered)
+		})
 	}); err != nil {
 		return fmt.Errorf("apply the %s plan to the cluster: %w", orgTier, err)
 	}

@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"net/http"
 
@@ -121,7 +122,7 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// it. Asked here as well as in the service so an async restore is refused
 	// at submission rather than by a job that fails minutes later.
 	if err := h.svc.EnsureOrgProjectCapacity(r.Context(), inst); err != nil {
-		if errors.Is(err, service.ErrRestoreDiskAbovePlan) {
+		if errors.Is(err, service.ErrRestoreDiskAbovePlan) || errors.Is(err, storagebudget.ErrExceeded) {
 			httpError(w, safeError(err), http.StatusConflict)
 			return
 		}

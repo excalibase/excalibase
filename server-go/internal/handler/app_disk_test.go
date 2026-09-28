@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,11 +19,13 @@ import (
 )
 
 type fakeDiskLimits struct {
-	maxGiB int
-	err    error
+	maxBytes int64
+	err      error
 }
 
-func (f fakeDiskLimits) MaxDiskGiB(context.Context, string) (int, error) { return f.maxGiB, f.err }
+func (f fakeDiskLimits) MaxDiskBytes(context.Context, string) (int64, error) {
+	return f.maxBytes, f.err
+}
 
 func setupDiskAppRouter(t *testing.T, limits apphost.DiskLimits) (chi.Router, *fakeAppStore) {
 	t.Helper()
@@ -44,7 +47,7 @@ func diskAppBody(size string) map[string]any {
 }
 
 func TestAppCreateWithADiskWithinThePlan(t *testing.T) {
-	r, store := setupDiskAppRouter(t, fakeDiskLimits{maxGiB: 20})
+	r, store := setupDiskAppRouter(t, fakeDiskLimits{maxBytes: 20 << 30})
 	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", diskAppBody("20Gi"))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
@@ -59,7 +62,7 @@ func TestAppCreateWithADiskWithinThePlan(t *testing.T) {
 }
 
 func TestAppCreateRefusesADiskAboveThePlan(t *testing.T) {
-	r, store := setupDiskAppRouter(t, fakeDiskLimits{maxGiB: 20})
+	r, store := setupDiskAppRouter(t, fakeDiskLimits{maxBytes: 20 << 30})
 	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", diskAppBody("21Gi"))
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "20Gi") {
 		t.Fatalf("got %d %s, want 409 naming the plan's cap", w.Code, w.Body.String())
@@ -88,7 +91,7 @@ func TestAppCreateRefusesADiskItCannotCheck(t *testing.T) {
 }
 
 func TestAppCreateRefusesABadDisk(t *testing.T) {
-	r, _ := setupDiskAppRouter(t, fakeDiskLimits{maxGiB: 20})
+	r, _ := setupDiskAppRouter(t, fakeDiskLimits{maxBytes: 20 << 30})
 	for name, mutate := range map[string]func(map[string]any){
 		"system directory": func(b map[string]any) { b["disk"] = map[string]any{"mountPath": "/etc", "size": "1Gi"} },
 		"fractional size":  func(b map[string]any) { b["disk"] = map[string]any{"mountPath": "/data", "size": "1.5Gi"} },
@@ -103,7 +106,7 @@ func TestAppCreateRefusesABadDisk(t *testing.T) {
 }
 
 func TestAppUpdateAttachesADiskWithinThePlan(t *testing.T) {
-	r, _ := setupDiskAppRouter(t, fakeDiskLimits{maxGiB: 5})
+	r, _ := setupDiskAppRouter(t, fakeDiskLimits{maxBytes: 5 << 30})
 	app := createAppForTest(t, r)
 	path := "/api/projects/" + appTestProject + "/apps/" + app.ID + "/"
 
@@ -123,7 +126,7 @@ func TestAppUpdateAttachesADiskWithinThePlan(t *testing.T) {
 // Once attached, only the mount path changes through an edit: the size grows
 // through its own route, and there is no detaching short of deleting the app.
 func TestAppUpdateOfAnAttachedDisk(t *testing.T) {
-	r, _ := setupDiskAppRouter(t, fakeDiskLimits{maxGiB: 20})
+	r, _ := setupDiskAppRouter(t, fakeDiskLimits{maxBytes: 20 << 30})
 	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", diskAppBody("5Gi"))
 	app := decodeApp(t, w)
 	path := "/api/projects/" + appTestProject + "/apps/" + app.ID + "/"
@@ -149,6 +152,7 @@ type diskDeployer struct {
 	confirmed []bool
 	grown     []string
 	growErr   error
+	statusErr error
 	deleteErr error
 }
 
@@ -157,7 +161,16 @@ func (d *diskDeployer) DeleteApp(_ context.Context, projectID, appID string, con
 	return d.deleteErr
 }
 
-func (d *diskDeployer) GrowAppDisk(_ context.Context, projectID, appID, size string) (*apphost.App, error) {
+func (d *diskDeployer) AppDiskStatus(_ context.Context, projectID, appID string) (*service.AppDiskReport, error) {
+	if d.statusErr != nil {
+		return nil, d.statusErr
+	}
+	used, fs := int64(100<<20), int64(990<<20)
+	return &service.AppDiskReport{MountPath: "/data", Size: "1Gi", SizeBytes: 1 << 30, UsedBytes: &used,
+		FilesystemBytes: &fs, PlanMax: "1Gi", PlanMaxBytes: 1 << 30}, nil
+}
+
+func (d *diskDeployer) ResizeAppDisk(_ context.Context, projectID, appID, size string) (*apphost.App, error) {
 	d.grown = append(d.grown, size)
 	if d.growErr != nil {
 		return nil, d.growErr
@@ -170,7 +183,8 @@ func diskLifecycleRouter(deployer AppDeployer) chi.Router {
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/apps/{appId}", func(r chi.Router) {
 		r.Delete("/", h.Delete)
-		r.Post("/disk", h.GrowDisk)
+		r.Post("/disk", h.ResizeDisk)
+		r.Get("/disk", h.DiskStatus)
 	})
 	return r
 }
@@ -207,7 +221,7 @@ func TestAppDelete_ReadsTheDiskConfirmation(t *testing.T) {
 	}
 }
 
-func TestAppGrowDisk(t *testing.T) {
+func TestAppResizeDisk(t *testing.T) {
 	deployer := &diskDeployer{fakeAppDeployer: newFakeAppDeployer()}
 	r := diskLifecycleRouter(deployer)
 	w := doBodyRequest(r, http.MethodPost, diskAppPath+"disk", `{"size":"8Gi"}`)
@@ -220,21 +234,107 @@ func TestAppGrowDisk(t *testing.T) {
 		}
 	}
 	cases := map[error]int{
-		fmt.Errorf("%w: bad", apphost.ErrInvalidDisk):              http.StatusBadRequest,
-		fmt.Errorf("%w: 5Gi", service.ErrAppDiskShrink):            http.StatusBadRequest,
-		fmt.Errorf("%w: up to 20Gi", apphost.ErrDiskAbovePlan):     http.StatusConflict,
-		service.ErrAppHasNoDisk:                                    http.StatusConflict,
-		fmt.Errorf("%w: local-path", k8s.ErrAppDiskNotExpandable):  http.StatusConflict,
-		service.ErrProjectOperationRunning:                         http.StatusConflict,
-		apphost.ErrAppNotFound:                                     http.StatusNotFound,
-		fmt.Errorf("%w: store down", service.ErrOrgTierUnresolved): http.StatusInternalServerError,
-		errors.New("pq: connection refused 10.0.0.1"):              http.StatusInternalServerError,
+		fmt.Errorf("%w: bad", apphost.ErrInvalidDisk):                  http.StatusBadRequest,
+		fmt.Errorf("%w: 5Gi", service.ErrAppDiskSameSize):              http.StatusBadRequest,
+		fmt.Errorf("%w: it holds 600Mi", service.ErrAppDiskBelowUsage): http.StatusConflict,
+		service.ErrAppDiskLowerNeedsStop:                               http.StatusConflict,
+		fmt.Errorf("%w: cp: No space left", k8s.ErrAppDiskJob):         http.StatusBadGateway,
+		fmt.Errorf("%w: up to 20Gi", apphost.ErrDiskAbovePlan):         http.StatusConflict,
+		service.ErrAppHasNoDisk:                                        http.StatusConflict,
+		fmt.Errorf("%w: local-path", k8s.ErrAppDiskNotExpandable):      http.StatusConflict,
+		service.ErrProjectOperationRunning:                             http.StatusConflict,
+		apphost.ErrAppNotFound:                                         http.StatusNotFound,
+		fmt.Errorf("%w: store down", service.ErrOrgTierUnresolved):     http.StatusInternalServerError,
+		errors.New("pq: connection refused 10.0.0.1"):                  http.StatusInternalServerError,
 	}
 	for err, want := range cases {
 		deployer.growErr = err
 		w := doBodyRequest(r, http.MethodPost, diskAppPath+"disk", `{"size":"8Gi"}`)
 		if w.Code != want || strings.Contains(w.Body.String(), "10.0.0.1") {
 			t.Errorf("%v: got %d %s, want %d", err, w.Code, w.Body.String(), want)
+		}
+	}
+}
+
+func TestAppDiskStatus(t *testing.T) {
+	deployer := &diskDeployer{fakeAppDeployer: newFakeAppDeployer()}
+	r := diskLifecycleRouter(deployer)
+	w := doBodyRequest(r, http.MethodGet, diskAppPath+"disk", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d %s", w.Code, w.Body.String())
+	}
+	for _, field := range []string{`"usedBytes":104857600`, `"sizeBytes":1073741824`, `"planMax":"1Gi"`, `"filesystemBytes":1038090240`} {
+		if !strings.Contains(w.Body.String(), field) {
+			t.Errorf("body %s lacks %s", w.Body.String(), field)
+		}
+	}
+	for err, want := range map[error]int{
+		service.ErrAppHasNoDisk:                              http.StatusConflict,
+		service.ErrProjectOperationRunning:                   http.StatusConflict,
+		apphost.ErrAppNotFound:                               http.StatusNotFound,
+		fmt.Errorf("%w: probe timed out", k8s.ErrAppDiskJob): http.StatusBadGateway,
+		errors.New("pq: connection refused 10.0.0.1"):        http.StatusInternalServerError,
+	} {
+		deployer.statusErr = err
+		w := doBodyRequest(r, http.MethodGet, diskAppPath+"disk", "")
+		if w.Code != want || strings.Contains(w.Body.String(), "10.0.0.1") {
+			t.Errorf("%v: got %d %s, want %d", err, w.Code, w.Body.String(), want)
+		}
+	}
+}
+
+type fullStorage struct{}
+
+func (fullStorage) Capacity(context.Context) (int64, error) { return 100 << 30, nil }
+func (fullStorage) StorageAllocated(context.Context) (k8s.StorageAllocation, error) {
+	return k8s.StorageAllocation{TenantBytes: 78 << 30}, nil
+}
+
+// A disk the platform's storage budget cannot hold is refused when it is
+// asked for, before the app is stored, and a disk (or none) that fits is not.
+func TestAppCreateRefusesADiskAboveThePlatformBudget(t *testing.T) {
+	store := newFakeAppStore()
+	h := NewAppHandler(store, newFakeSources("storefront_db"), testAppRoute)
+	h.SetAppLimits(fakeAppLimits{limit: testAppLimit})
+	h.SetDiskLimits(fakeDiskLimits{maxBytes: 20 << 30})
+	h.SetStorageBudget(storagebudget.New(fullStorage{}, 80))
+	r := chi.NewRouter()
+	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })
+
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", diskAppBody("3Gi"))
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "storage budget") {
+		t.Fatalf("got %d %s, want 409 naming the storage budget", w.Code, w.Body.String())
+	}
+	if len(store.apps) != 0 {
+		t.Fatal("a refused app was stored")
+	}
+	if w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", diskAppBody("2Gi")); w.Code != http.StatusCreated {
+		t.Fatalf("a 2Gi disk within the budget: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The generation names the volume that holds the disk; it is the platform's.
+// A caller naming one is ignored on create, and an edit keeps the stored one.
+func TestAppDiskGenerationIsNeverTheCallers(t *testing.T) {
+	r, store := setupDiskAppRouter(t, fakeDiskLimits{maxBytes: 20 << 30})
+	body := validAppBody()
+	body["disk"] = map[string]any{"mountPath": "/data", "size": "5Gi", "generation": 7}
+	w := doAppRequest(t, r, http.MethodPost, "/api/projects/"+appTestProject+"/apps/", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	app := decodeApp(t, w)
+	if stored := store.apps[appKey(appTestProject, app.ID)]; stored.Disk.Generation != 0 {
+		t.Fatalf("created at generation %d, want 0", stored.Disk.Generation)
+	}
+	store.apps[appKey(appTestProject, app.ID)].Disk.Generation = 2
+	path := "/api/projects/" + appTestProject + "/apps/" + app.ID + "/"
+	for i, disk := range []map[string]any{{"mountPath": "/data", "size": "5Gi"}, {"mountPath": "/srv", "size": "5Gi", "generation": 0}} {
+		if w := doAppRequestWithVersion(t, r, http.MethodPatch, path, map[string]any{"disk": disk}, i+1); w.Code != http.StatusOK {
+			t.Fatalf("edit: %d %s", w.Code, w.Body.String())
+		}
+		if got := store.apps[appKey(appTestProject, app.ID)].Disk.Generation; got != 2 {
+			t.Fatalf("after an edit naming %v the generation is %d, want 2 kept", disk, got)
 		}
 	}
 }

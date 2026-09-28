@@ -27,7 +27,7 @@ export interface AppFormValues {
   env: EnvRow[];
   diskEnabled: boolean;
   diskMountPath: string;
-  // Whole GiB, as typed.
+  // Whole GiB as typed for a new disk; an attached disk's stored size, such as "500Mi".
   diskSize: string;
   // The container already has a disk: it stays, and its size grows on the container page.
   diskAttached: boolean;
@@ -93,7 +93,7 @@ export const initialValues = (app?: App): AppFormValues =>
         env: app.env.map(rowFromVar),
         diskEnabled: app.disk !== undefined,
         diskMountPath: app.disk?.mountPath ?? DEFAULT_DISK_MOUNT,
-        diskSize: app.disk ? app.disk.size.replace(/Gi$/, '') : DEFAULT_DISK_GIB,
+        diskSize: app.disk?.size ?? DEFAULT_DISK_GIB,
         diskAttached: app.disk !== undefined,
       }
     : {
@@ -272,6 +272,10 @@ function toEnvVar(row: EnvRow, databaseName?: string): EnvVar | undefined {
   return { name: row.name, kind: 'literal', value: row.value };
 }
 
+// An attached disk is resized on the container page, so the form sends it back unchanged.
+const submittedDiskSize = (values: AppFormValues): string =>
+  values.diskAttached ? values.diskSize : `${Number(values.diskSize)}Gi`;
+
 export const toAppSubmission = (values: AppFormValues, databaseName?: string): AppSubmission => ({
   input: {
     name: values.name,
@@ -282,7 +286,7 @@ export const toAppSubmission = (values: AppFormValues, databaseName?: string): A
     healthCheckPath: values.healthCheckPath,
     env: values.env.flatMap((row) => toEnvVar(row, databaseName) ?? []),
     ...(values.diskEnabled
-      ? { disk: { mountPath: values.diskMountPath, size: `${Number(values.diskSize)}Gi` } }
+      ? { disk: { mountPath: values.diskMountPath, size: submittedDiskSize(values) } }
       : {}),
   },
   secrets: values.env

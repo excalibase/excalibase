@@ -40,6 +40,10 @@ type Client struct {
 	projectAccess ProjectAccess
 	accessPoll    time.Duration
 	accessTimeout time.Duration
+	// storage holds every volume this client creates or grows to the platform's budget.
+	storage StorageReserver
+	// diskExec runs df in a running app; nil is ExecInPod (tests replace it).
+	diskExec func(ctx context.Context, namespace, pod, container string, cmd []string) (string, error)
 }
 
 // ClientOptions configures how NewClientWith builds a K8s client. All fields
@@ -207,7 +211,7 @@ func (c *Client) ensureNamespaceQuota(ctx context.Context, namespace string) err
 		Spec: corev1.ResourceQuotaSpec{
 			Hard: corev1.ResourceList{
 				corev1.ResourcePods:                   resource.MustParse("20"),
-				corev1.ResourcePersistentVolumeClaims: resource.MustParse("6"),
+				corev1.ResourcePersistentVolumeClaims: resource.MustParse("7"),
 				corev1.ResourceServices:               resource.MustParse("15"),
 			},
 		},
@@ -383,6 +387,13 @@ func (c *Client) ListPVCs(ctx context.Context, namespace string) ([]string, erro
 
 // ApplyCRD creates or updates an unstructured CRD resource.
 func (c *Client) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error {
+	if gvr == CNPGClusterGVR && c.storage != nil {
+		return c.applyClusterWithinBudget(ctx, namespace, obj)
+	}
+	return c.applyCRD(ctx, gvr, namespace, obj)
+}
+
+func (c *Client) applyCRD(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) error {
 	_, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Create(ctx, obj, metav1.CreateOptions{})
 	if err != nil && strings.Contains(err.Error(), "already exists") {
 		_, err = c.dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, obj, metav1.UpdateOptions{})

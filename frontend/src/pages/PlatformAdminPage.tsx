@@ -7,6 +7,7 @@ import { listMyOrgs } from '../api/orgs';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { TierConfigTable } from '../components/TierConfigTable';
+import { StorageBudgetCard } from '../components/StorageBudgetCard';
 import { SignInProviders } from '../components/SignInProviders';
 import { Loader2, Trash2, ShieldAlert, Cpu, MemoryStick } from 'lucide-react';
 
@@ -26,6 +27,7 @@ export function PlatformAdminPage() {
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <CapacityWidget />
+      <StorageBudgetCard />
       <TierConfigTable canMutate={canMutate} />
       <ProjectsTable canMutate={canMutate} />
       <OrgsTable canMutate={canMutate} />

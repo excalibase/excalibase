@@ -31,8 +31,11 @@ func (s *ProvisioningService) RequireRestoreDiskFits(ctx context.Context, source
 	if err != nil {
 		return err
 	}
-	_, err = restoreDisk(source, tier)
-	return err
+	disk, err := restoreDisk(source, tier)
+	if err != nil {
+		return err
+	}
+	return s.RequireStorageForDatabase(ctx, tier.Instances, disk)
 }
 
 // restoreDisk is the disk a project restored from source gets on tier: the

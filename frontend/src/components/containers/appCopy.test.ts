@@ -1,5 +1,12 @@
 import { describe, test, expect } from 'vitest';
-import { appDisplayStatus, describeTier, plainFailureReason, suggestAppName } from './appCopy';
+import {
+  appDisplayStatus,
+  describeTier,
+  diskStopReason,
+  isAppRunning,
+  plainFailureReason,
+  suggestAppName,
+} from './appCopy';
 import type { App, Deploy } from '../../api/apps';
 
 describe('plainFailureReason', () => {
@@ -28,6 +35,10 @@ describe('plainFailureReason', () => {
     [
       'render app workload: resolve secret for "API_KEY": no value is stored',
       /has no value stored/i,
+    ],
+    [
+      "the app's disk holds more than the plan allows: it holds 1200Mi and the plan allows 1Gi; the app was stopped",
+      /disk holds more than the plan allows.*stopped/i,
     ],
     [
       'render app workload: "API_KEY" is a secret and no resolver was given',
@@ -68,6 +79,40 @@ describe('appDisplayStatus', () => {
     [{ replicas: 1, status: 'DELETING' } as App, withStatus('succeeded'), 'Deleting'],
   ])('%#', (a, d, label) => {
     expect(appDisplayStatus(a, d).label).toBe(label);
+  });
+});
+
+describe('diskStopReason', () => {
+  const reason =
+    "the app's disk holds more than the plan allows: it holds 1200Mi and the plan allows 1Gi; the app was stopped";
+  const paused = { status: 'PAUSED' } as App;
+  const failed = (failureReason?: string) => ({ status: 'failed', failureReason }) as Deploy;
+
+  test('names why a stopped app was stopped for its disk', () => {
+    expect(diskStopReason(paused, failed(reason))).toBe(reason);
+  });
+
+  test.each([
+    [{ status: 'ACTIVE' } as App, failed(reason)],
+    [paused, failed('app rollout: web CrashLoopBackOff')],
+    [paused, { status: 'succeeded', failureReason: reason } as Deploy],
+    [paused, undefined],
+  ])('is absent otherwise %#', (a, d) => {
+    expect(diskStopReason(a, d)).toBeUndefined();
+  });
+});
+
+describe('isAppRunning', () => {
+  test.each([
+    ['ACTIVE', true],
+    ['PAUSING', true],
+    ['RESUMING', true],
+    ['DELETING', true],
+    ['PAUSED', false],
+    ['FAILED', false],
+    ['PROVISIONING', false],
+  ])('%s is running: %s', (status, running) => {
+    expect(isAppRunning({ status } as App)).toBe(running);
   });
 });
 

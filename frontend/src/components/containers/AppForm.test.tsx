@@ -326,6 +326,20 @@ describe('AppForm', () => {
     expect(screen.getByTestId('app-disk-enabled')).toBeChecked();
     expect(screen.getByTestId('app-disk-enabled')).toBeDisabled();
     expect(screen.getByTestId('app-disk-size')).toBeDisabled();
-    expect(screen.getByTestId('app-disk-size')).toHaveValue(5);
+    expect(screen.getByTestId('app-disk-size')).toHaveValue('5Gi');
+  });
+
+  test('saving keeps an attached disk sized in Mi exactly as it is', async () => {
+    const { onSubmit, user } = renderForm({
+      initial: { ...existingApp, replicas: 1, disk: { mountPath: '/data', size: '500Mi' } },
+      submitLabel: 'Save',
+    });
+    expect(screen.getByTestId('app-disk-size')).toHaveValue('500Mi');
+    await user.click(screen.getByTestId('app-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ disk: { mountPath: '/data', size: '500Mi' } }),
+      }),
+    );
   });
 });

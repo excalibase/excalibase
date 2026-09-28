@@ -85,6 +85,9 @@ func table(deps Deps) map[string][]Dependency {
 		// The app handler is always constructed; the flag only decides
 		// whether its routes are mounted.
 		"APP_HOSTING_ENABLED": {},
+		// Checked at start-up against the cluster itself (verifyTenantStorage),
+		// which refuses to start rather than run without it.
+		"TENANT_STORAGE_REQUIRE_SIZED": {},
 	}
 }
 

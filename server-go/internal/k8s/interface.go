@@ -122,7 +122,23 @@ type KubeClient interface {
 	DeleteAppWorkload(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	PruneAppWorkload(ctx context.Context, namespace, appID, keepName string, timeout time.Duration) error
 	// GrowAppDisk grows the app's disk claim; ErrAppDiskNotCreated when no deploy has made it yet.
-	GrowAppDisk(ctx context.Context, namespace, appID, size string) error
+	GrowAppDisk(ctx context.Context, namespace, appID string, generation int, size string) error
+	// AppDiskUsage reads how much of the app's disk is used; ErrAppDiskNotCreated when there is none yet.
+	AppDiskUsage(ctx context.Context, namespace, appID string, disk apphost.AppDisk, opts DiskJobOptions) (AppDiskUsage, error)
+	// CreateAppDisk makes the app's disk before its first deploy and opens its root to any user.
+	CreateAppDisk(ctx context.Context, namespace string, app *apphost.App, storageClass string, opts DiskJobOptions) error
+	// CopyAppDisk copies a stopped app's disk onto a new claim for to, a later generation.
+	CopyAppDisk(ctx context.Context, namespace string, app *apphost.App, to apphost.AppDisk, storageClass string, opts DiskJobOptions) error
+	// DeleteOtherAppDisks removes every claim of the app except generation keep.
+	DeleteOtherAppDisks(ctx context.Context, namespace, appID string, keep int, timeout time.Duration) error
+	// RepointAppDisk mounts claim in the app's Deployments, so a resume starts on it.
+	RepointAppDisk(ctx context.Context, namespace, appID, claim string) error
+	// StorageAllocated is what every volume in the cluster reserves (the storage budget).
+	StorageAllocated(ctx context.Context) (StorageAllocation, error)
+	// LVMVolumeGroupBytes is the size of an LVM volume group across the nodes.
+	LVMVolumeGroupBytes(ctx context.Context, namespace, volumeGroup string) (int64, error)
+	// RequireSizedStorageClass refuses a class that does not hold volumes to their size.
+	RequireSizedStorageClass(ctx context.Context, name string, provisioners []string) error
 	DeleteRegistryPullSecrets(ctx context.Context, namespace, registry string) error
 	AppLogs(ctx context.Context, namespace, appID string, opts AppLogOptions) (AppLogPage, error)
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)
