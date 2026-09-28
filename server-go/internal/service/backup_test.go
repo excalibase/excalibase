@@ -147,7 +147,9 @@ func TestRestoreFromBackupNotFound(t *testing.T) {
 
 func TestRestoreFromBackupPITR(t *testing.T) {
 	svc, _ := setupBackupTest(t)
-	targetTime := &domain.FlexTime{Time: time.Now().Add(-1 * time.Hour)}
+	targetTime := &domain.ZonedTime{Time: time.Now().Add(-1 * time.Hour)}
+	guard := &recordingGuard{}
+	svc.adapters[domain.ModeK8s].(*K8sBackupAdapter).SetRestoreTargetGuard(guard)
 
 	resp, err := svc.RestoreFromBackup(context.Background(), "bk-db", domain.RestoreRequest{
 		NewProjectName: "bk-db-pitr", TargetProjectID: "bk-db-pitr",
@@ -158,5 +160,8 @@ func TestRestoreFromBackupPITR(t *testing.T) {
 	}
 	if resp.ProjectID != "bk-db-pitr" {
 		t.Errorf("projectId: got %s", resp.ProjectID)
+	}
+	if len(guard.targets) != 1 || !guard.targets[0].Equal(targetTime.Time) {
+		t.Errorf("a point-in-time restore must prove its target first, got %v", guard.targets)
 	}
 }

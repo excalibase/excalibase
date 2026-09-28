@@ -26,6 +26,7 @@ type MockClient struct {
 	CRDs            map[string]*unstructured.Unstructured
 	Secrets         map[string]map[string][]byte
 	Pods            map[string][]corev1.Pod
+	PodLogs         map[string]string   // key: "namespace/pod" → log tail
 	PVCs            map[string][]string // namespace → PersistentVolumeClaim names
 	// StuckNamespaces model a namespace whose deletion is accepted but never
 	// completes — a finalizer or a Terminating pod holds it. DeleteNamespace
@@ -165,6 +166,7 @@ func NewMockClient() *MockClient {
 		CRDs:            make(map[string]*unstructured.Unstructured),
 		Secrets:         make(map[string]map[string][]byte),
 		Pods:            make(map[string][]corev1.Pod),
+		PodLogs:         make(map[string]string),
 		PVCs:            make(map[string][]string),
 		StuckNamespaces: make(map[string]bool),
 		PodReady:        make(map[string]bool),
@@ -452,6 +454,16 @@ func (m *MockClient) GetPods(ctx context.Context, namespace, labelSelector strin
 		return nil, m.GetPodsError
 	}
 	return m.Pods[namespace], nil
+}
+
+func (m *MockClient) PodLogTail(ctx context.Context, namespace, pod, container string, lines int64) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "PodLogTail:"+namespace+"/"+pod)
+	if out, ok := m.PodLogs[namespace+"/"+pod]; ok {
+		return out, nil
+	}
+	return "", fmt.Errorf("no log: %s/%s", namespace, pod)
 }
 
 func (m *MockClient) IsPodReady(ctx context.Context, namespace, name string) (bool, error) {

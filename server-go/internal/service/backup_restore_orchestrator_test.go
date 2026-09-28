@@ -277,7 +277,7 @@ func TestOrchestrator_TargetKindPersisted(t *testing.T) {
 func TestOrchestrator_StepsReceiveTheWholeRequest(t *testing.T) {
 	jobs := newFakeJobs()
 	orch := NewRestoreOrchestrator(RestoreOrchestratorConfig{Jobs: jobs})
-	at := &domain.FlexTime{Time: time.Date(2026, 9, 26, 22, 40, 0, 0, time.UTC)}
+	at := &domain.ZonedTime{Time: time.Date(2026, 9, 26, 22, 40, 0, 0, time.UTC)}
 	req := domain.RestoreRequest{NewProjectName: "p", TargetProjectID: "p", BackupID: "b1", TargetTime: at}
 	seen := make(chan domain.RestoreRequest, 1)
 	orch.SetSteps([]RestoreStep{{Name: "restore", Run: func(_ context.Context, j *domain.RestoreJob) error {
@@ -300,7 +300,7 @@ func TestOrchestrator_RejectsTwoTargets(t *testing.T) {
 	now := time.Now()
 	_, err := orch.Start(context.Background(), &domain.DatabaseInstance{ProjectID: "src"}, domain.RestoreRequest{
 		NewProjectName: "dst", TargetProjectID: "dst",
-		TargetTime: &domain.FlexTime{Time: now},
+		TargetTime: &domain.ZonedTime{Time: now},
 		TargetXID:  "12345",
 	})
 	if err == nil {

@@ -104,7 +104,7 @@ func TestLiveBackupsRunThroughTheBarmanCloudPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse target time: %v", err)
 	}
-	pitr := lab.restore(t, "bkppitr"+lab.suffix, domain.RestoreRequest{TargetTime: &domain.FlexTime{Time: at}})
+	pitr := lab.restore(t, "bkppitr"+lab.suffix, domain.RestoreRequest{TargetTime: &domain.ZonedTime{Time: at}})
 	if got := lab.checksums(t, pitr); got != beforeLoss {
 		t.Fatalf("point-in-time restore: got %v, want the rows before the loss %v", got, beforeLoss)
 	}

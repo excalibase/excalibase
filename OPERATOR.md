@@ -612,6 +612,13 @@ curl -H "Authorization: Bearer $PAT" \
 
 `RestoreRequest` accepts at most one of `targetTime`, `targetXid`,
 `targetLsn`, `targetName`; absence of all four restores to latest.
+`targetTime` must be RFC 3339 with a zone (`Z` or `+07:00`) and keeps its
+microseconds; a zone-less time is refused with 400. Before a Kubernetes
+point-in-time restore creates anything, a running source commits after the
+target, switches WAL and waits (2 min) until that segment is archived; a
+target later than the source's clock, or WAL that does not archive in time,
+fails the job with the reason. A recovery that still ends before the target
+fails the restore (`recovery ended before targetTime was reached`).
 Multi-replica platforms only fire scheduled backups from the lease
 holder (Postgres `pg_try_advisory_lock`).
 

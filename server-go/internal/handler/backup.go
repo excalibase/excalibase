@@ -93,6 +93,10 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	var req domain.RestoreRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if errors.Is(err, domain.ErrTargetTimeFormat) {
+			httpError(w, domain.ErrTargetTimeFormat.Error(), http.StatusBadRequest)
+			return
+		}
 		httpError(w, "invalid request", http.StatusBadRequest)
 		return
 	}

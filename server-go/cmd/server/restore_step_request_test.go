@@ -8,7 +8,7 @@ import (
 )
 
 func TestRestoreStepRequestIsTheSubmittedOne(t *testing.T) {
-	at := &domain.FlexTime{Time: time.Date(2026, 9, 26, 22, 40, 0, 0, time.UTC)}
+	at := &domain.ZonedTime{Time: time.Date(2026, 9, 26, 22, 40, 0, 0, time.UTC)}
 	job := &domain.RestoreJob{
 		NewProjectID: "proj-new", NewProjectName: "copy", TargetKind: "time",
 		Request: domain.RestoreRequest{NewProjectName: "copy", TargetProjectID: "proj-new", BackupID: "b1", TargetTime: at},
