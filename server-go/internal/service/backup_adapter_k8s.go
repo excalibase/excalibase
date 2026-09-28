@@ -561,6 +561,7 @@ func (a *K8sBackupAdapter) restoredInstance(ctx context.Context, src *domain.Dat
 		PostgresVersion:       src.PostgresVersion,
 		DocumentDB:            src.DocumentDB,
 		StorageClass:          src.StorageClass,
+		StorageSize:           target.plan.Config.StorageSize,
 		Parameters:            maps.Clone(src.Parameters),
 		RestoredFromProjectID: src.ProjectID,
 		RestoredFromBackupID:  req.BackupID,

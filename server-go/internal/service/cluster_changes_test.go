@@ -25,6 +25,9 @@ func setupClusterChangeTest(t *testing.T) (*ProvisioningService, *storage.FileSy
 	mock.Capacity = threeNodes()
 	seedCluster(t, mock, config.TierConfig{Instances: 1, StorageSize: "2Gi", Memory: "512Mi", CPU: "0.5", StatementTimeout: "15s"},
 		map[string]string{"work_mem": "4MB"})
+	if err := store.UpdateStorageSizeIfStatus(testOpsDB, "2Gi", "ACTIVE"); err != nil {
+		t.Fatalf("record disk: %v", err)
+	}
 	return svc, store, mock
 }
 

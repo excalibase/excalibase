@@ -149,7 +149,7 @@ func TestARestorePlanCarriesNoStoreKey(t *testing.T) {
 	svc, _, _ := setupProvisioningTest(t)
 	withPlatformBackupKey(t, svc)
 	setOrgTier(svc, "org1", domain.Standard)
-	plan, err := svc.RestorePlan(context.Background(), &domain.DatabaseInstance{ProjectID: "src", OrgID: "org1"})
+	plan, err := svc.RestorePlan(context.Background(), &domain.DatabaseInstance{ProjectID: "src", OrgID: "org1", StorageSize: "50Gi"})
 	if err != nil {
 		t.Fatalf("RestorePlan: %v", err)
 	}

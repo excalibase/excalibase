@@ -298,3 +298,7 @@ func TestEnsureOrgProjectCapacity_UnknownTierFails(t *testing.T) {
 		t.Fatalf("an unknown tier is not a reached limit: %v", err)
 	}
 }
+
+func (unlimitedCapacity) RequireRestoreDiskFits(context.Context, *domain.DatabaseInstance) error {
+	return nil
+}

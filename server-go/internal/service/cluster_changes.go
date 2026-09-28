@@ -149,7 +149,29 @@ func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, size
 	if err := s.k8sClient.ClusterVolumesExpandable(ctx, inst.Namespace, cluster.GetName()); err != nil {
 		return err
 	}
-	return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithStorageSize(cluster, size))
+	return s.growDisk(ctx, inst, size, func() error {
+		return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithStorageSize(cluster, size))
+	})
+}
+
+// growDisk records size as the project's disk, then asks the cluster for it,
+// putting the record back if the cluster refuses. Recorded first because a
+// record smaller than the disk would size a restore too small (EXC-492).
+func (s *ProvisioningService) growDisk(ctx context.Context, inst *domain.DatabaseInstance, size string, apply func() error) error {
+	recorder, ok := s.store.(storage.ProjectDiskStore)
+	if !ok {
+		return errors.New("the project store cannot record the disk size")
+	}
+	if err := recorder.UpdateStorageSizeIfStatus(inst.ProjectID, size, inst.Status); err != nil {
+		return fmt.Errorf("record the disk: %w", err)
+	}
+	if err := apply(); err != nil {
+		if revert := recorder.UpdateStorageSizeIfStatus(inst.ProjectID, inst.StorageSize, inst.Status); revert != nil {
+			return errors.Join(err, fmt.Errorf("put the recorded disk back: %w", revert))
+		}
+		return err
+	}
+	return nil
 }
 
 // ApplyOrgTier moves the project's cluster onto its organization's plan: the
@@ -195,7 +217,9 @@ func (s *ProvisioningService) ApplyOrgTier(ctx context.Context, projectID string
 	if err := s.requireRoomForPlan(ctx, inst, cluster, plan); err != nil {
 		return err
 	}
-	if err := s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithTier(cluster, plan, disk)); err != nil {
+	if err := s.growDisk(ctx, inst, disk, func() error {
+		return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithTier(cluster, plan, disk))
+	}); err != nil {
 		return fmt.Errorf("apply the %s plan to the cluster: %w", orgTier, err)
 	}
 	previousTier := inst.Tier

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -246,5 +247,44 @@ func TestProvision_UnreadableOrgTierAnswers500WithoutInternals(t *testing.T) {
 	}
 	if len(store.insts) != 0 {
 		t.Fatalf("nothing may be created: %v", store.insts)
+	}
+}
+
+func (unlimitedCapacity) RequireRestoreDiskFits(context.Context, *domain.DatabaseInstance) error {
+	return nil
+}
+
+// tooSmallPlan refuses every restore's disk, as a target plan smaller than the
+// source's recorded disk does.
+type tooSmallPlan struct{ unlimitedCapacity }
+
+func (tooSmallPlan) RequireRestoreDiskFits(context.Context, *domain.DatabaseInstance) error {
+	return fmt.Errorf("%w: the FREE plan allows up to 5Gi and the source's disk is 80Gi", service.ErrRestoreDiskAbovePlan)
+}
+
+// A source whose disk the target plan cannot hold is refused at submission,
+// before a project id is allocated or a job is filed (EXC-492).
+func TestRestoreOfADiskLargerThanThePlanIsAConflict(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := storage.NewFileSystemStore(dir)
+	backupSvc := service.NewBackupService(store, k8s.NewMockClient(), dir, testBackupStorage())
+	backupSvc.SetBackupCredentials(testBackupCredentials(t))
+	backupSvc.SetOrgProjectCapacity(tooSmallPlan{})
+	store.Create(&domain.DatabaseInstance{ProjectID: "p1", OrgID: "o", DeploymentMode: domain.ModeK8s, Status: "ACTIVE", StorageSize: "80Gi"})
+	jobs := &fakeRestoreJobStoreForHandler{}
+	h := NewBackupHandler(backupSvc)
+	h.SetRestoreOrchestrator(service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{Jobs: jobs}))
+	r := chi.NewRouter()
+	r.Route("/api/provision/{projectId}/backup", func(r chi.Router) { h.Routes(r) })
+
+	req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(`{"newProjectName":"dst"}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "80Gi") {
+		t.Fatalf("got %d %s, want 409 naming the disk", w.Code, w.Body.String())
+	}
+	all, _ := store.FindAll()
+	if len(all) != 1 {
+		t.Errorf("%d projects registered, want only the source", len(all))
 	}
 }

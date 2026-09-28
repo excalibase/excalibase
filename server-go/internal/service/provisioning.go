@@ -211,6 +211,11 @@ func (s *ProvisioningService) RestorePlan(ctx context.Context, source *domain.Da
 	if err != nil {
 		return RestorePlan{}, err
 	}
+	// The restored cluster gets the source's disk, which may have grown past
+	// the plan's start; Config carries it so the cluster is rendered at it.
+	if tier.StorageSize, err = restoreDisk(source, tier); err != nil {
+		return RestorePlan{}, err
+	}
 	if err := s.RequireNodeSpread(ctx, tierType, tier); err != nil {
 		return RestorePlan{}, err
 	}
@@ -502,6 +507,7 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		// it that way (EXC-409). The major has already been checked capable.
 		DocumentDB:   req.DocumentDB,
 		StorageClass: req.StorageClass,
+		StorageSize:  tier.StorageSize,
 		Parameters:   maps.Clone(req.Parameters),
 		Status:       "PROVISIONING",
 		CurrentStage: domain.StageValidating,

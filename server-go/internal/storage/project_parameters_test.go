@@ -38,3 +38,45 @@ func TestFileSystemUpdateParametersIfStatus(t *testing.T) {
 		t.Errorf("missing project: got %v, want ErrProjectNotFound", err)
 	}
 }
+
+// The disk a project runs on is recorded at creation and changed only by a
+// resize or a tier change, never by a general update (EXC-492).
+func TestFileSystemStorageSizeIsWrittenOnlyByItsOwnUpdate(t *testing.T) {
+	store, err := NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	live := restoringProject()
+	live.Status = "ACTIVE"
+	live.StorageSize = "50Gi"
+	if err := store.Create(live); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	moved := live.Clone()
+	moved.StorageSize = "1Gi"
+	if err := store.Update(moved); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if got, _ := store.FindByProjectID("target-x"); got.StorageSize != "50Gi" {
+		t.Errorf("a general update changed the disk to %q", got.StorageSize)
+	}
+	if err := store.UpdateStorageSizeIfStatus("target-x", "80Gi", "ACTIVE"); err != nil {
+		t.Fatalf("UpdateStorageSizeIfStatus: %v", err)
+	}
+	if got, _ := store.FindByProjectID("target-x"); got.StorageSize != "80Gi" {
+		t.Errorf("disk = %q, want 80Gi", got.StorageSize)
+	}
+	if err := store.UpdateStorageSizeIfStatus("target-x", "90Gi", "PAUSED"); !errors.Is(err, ErrProjectStatusChanged) {
+		t.Errorf("a moved row: got %v, want ErrProjectStatusChanged", err)
+	}
+}
+
+func TestFileSystemUpdateStorageSizeIfStatusRefusesAMissingRow(t *testing.T) {
+	store, err := NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if err := store.UpdateStorageSizeIfStatus("missing", "5Gi", "ACTIVE"); !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("got %v, want ErrProjectNotFound", err)
+	}
+}

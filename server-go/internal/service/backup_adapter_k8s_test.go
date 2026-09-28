@@ -28,7 +28,7 @@ func r2Storage() *domain.S3Credentials {
 }
 
 func sourceInstance() *domain.DatabaseInstance {
-	return &domain.DatabaseInstance{ProjectID: "src", OrgID: "org", Namespace: "org-src", Status: "ACTIVE", PostgresVersion: "17"}
+	return &domain.DatabaseInstance{ProjectID: "src", OrgID: "org", Namespace: "org-src", Status: "ACTIVE", PostgresVersion: "17", StorageSize: "5Gi"}
 }
 
 func restoredBarmanStore(t *testing.T, mock *k8s.MockClient) map[string]interface{} {

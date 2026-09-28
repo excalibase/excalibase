@@ -87,6 +87,10 @@ type DatabaseInstance struct {
 	// reads them back so the restored cluster is the project's own.
 	StorageClass string            `json:"storageClass,omitempty"`
 	Parameters   map[string]string `json:"parameters,omitempty"`
+	// StorageSize is the disk the project's cluster asks for: the plan's
+	// starting disk, then whatever a resize or tier change grew it to. A
+	// restore sizes the new cluster from it (EXC-492).
+	StorageSize string `json:"storageSize,omitempty"`
 
 	// Status
 	Status        string            `json:"status"`
