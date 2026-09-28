@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"net/http"
 
@@ -132,7 +133,7 @@ func clusterChangeStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, service.ErrStorageAbovePlan), errors.Is(err, service.ErrTierNotOrgPlan),
 		errors.Is(err, service.ErrDiskAbovePlanMax), errors.Is(err, service.ErrTierParametersOutOfBounds),
-		errors.Is(err, service.ErrPlanDoesNotFit),
+		errors.Is(err, service.ErrPlanDoesNotFit), errors.Is(err, storagebudget.ErrExceeded),
 		errors.Is(err, k8s.ErrVolumeExpansionUnsupported), errors.As(err, &nodes):
 		return http.StatusConflict
 	case errors.Is(err, service.ErrNodePlacementUnknown):

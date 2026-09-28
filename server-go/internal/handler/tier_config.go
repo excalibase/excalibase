@@ -24,6 +24,8 @@ type TierHandler struct {
 	// nodes checks a multi-instance spec fits the platform; such a spec is
 	// refused while it is unset.
 	nodes NodePlacement
+	// planChanged is told of every edit; it must not block the response.
+	planChanged func()
 }
 
 // SetNodePlacement wires the check a multi-instance spec must pass.
@@ -32,6 +34,10 @@ func (h *TierHandler) SetNodePlacement(nodes NodePlacement) { h.nodes = nodes }
 func NewTierHandler(store storage.TierConfigStore) *TierHandler {
 	return &TierHandler{store: store}
 }
+
+// SetPlanChangeHook runs after a plan is edited: an edit that lowers a cap
+// re-runs the app disk rule on the apps it now caps (EXC-523).
+func (h *TierHandler) SetPlanChangeHook(hook func()) { h.planChanged = hook }
 
 // Routes mounts the tier-config endpoints (intended under /api/admin/tiers).
 func (h *TierHandler) Routes(r chi.Router) {
@@ -127,6 +133,9 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "update tier: "+safeError(err), http.StatusInternalServerError)
 		return
 	}
+	if h.planChanged != nil {
+		h.planChanged()
+	}
 	writeJSON(w, toTierDTO(tier, tc))
 }
 
@@ -169,7 +178,7 @@ func validateTierConfig(tc config.TierConfig) error {
 	if tc.MaxApps < 0 || tc.MaxApps > maxAppsPerProjectCeiling {
 		return fmt.Errorf("maxApps is required, between 0 and %d (0 offers no apps)", maxAppsPerProjectCeiling)
 	}
-	if _, err := apphost.PlanDiskGiB(tc.MaxAppDiskSize); err != nil {
+	if _, err := apphost.PlanDiskBytes(tc.MaxAppDiskSize); err != nil {
 		return errors.New("maxAppDiskSize must be a whole number of gibibytes such as 20Gi (0Gi offers no app disks)")
 	}
 	return nil

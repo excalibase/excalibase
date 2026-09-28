@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"io"
 	"log"
 	"net/http"
@@ -24,7 +25,8 @@ type AppDeployer interface {
 	PauseApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
 	ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error)
 	DeleteApp(ctx context.Context, projectID, appID string, confirmDeleteDisk bool) error
-	GrowAppDisk(ctx context.Context, projectID, appID, size string) (*apphost.App, error)
+	ResizeAppDisk(ctx context.Context, projectID, appID, size string) (*apphost.App, error)
+	AppDiskStatus(ctx context.Context, projectID, appID string) (*service.AppDiskReport, error)
 }
 
 type AppDeployHandler struct {
@@ -149,28 +151,43 @@ func (h *AppDeployHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type appDiskGrowBody struct {
+type appDiskResizeBody struct {
 	Size string `json:"size"`
 }
 
-// GrowDisk grows the app's disk, in whole GiB, up to its plan's cap.
-func (h *AppDeployHandler) GrowDisk(w http.ResponseWriter, r *http.Request) {
+// ResizeDisk grows the app's disk up to its plan's cap, or lowers a stopped
+// app's disk to any size at or above what it holds (whole Mi or Gi).
+func (h *AppDeployHandler) ResizeDisk(w http.ResponseWriter, r *http.Request) {
 	projectID, appID, ok := h.appPath(w, r)
 	if !ok {
 		return
 	}
-	var body appDiskGrowBody
+	var body appDiskResizeBody
 	r.Body = http.MaxBytesReader(w, r.Body, maxAppDiskBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Size == "" {
-		httpError(w, "the body must name the new size, such as {\"size\":\"10Gi\"}", http.StatusBadRequest)
+		httpError(w, "the body must name the new size, such as {\"size\":\"10Gi\"} or {\"size\":\"500Mi\"}", http.StatusBadRequest)
 		return
 	}
-	app, err := h.deploys.GrowAppDisk(r.Context(), projectID, appID, body.Size)
+	app, err := h.deploys.ResizeAppDisk(r.Context(), projectID, appID, body.Size)
 	if err != nil {
 		h.writeDiskError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"id": app.ID, "disk": app.Disk})
+}
+
+// DiskStatus measures the app's disk: what it holds against its size and the plan's cap.
+func (h *AppDeployHandler) DiskStatus(w http.ResponseWriter, r *http.Request) {
+	projectID, appID, ok := h.appPath(w, r)
+	if !ok {
+		return
+	}
+	report, err := h.deploys.AppDiskStatus(r.Context(), projectID, appID)
+	if err != nil {
+		h.writeDiskError(w, err)
+		return
+	}
+	writeJSON(w, report)
 }
 
 const maxAppDiskBodyBytes = 1024
@@ -189,17 +206,22 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, into any) error 
 
 func (h *AppDeployHandler) writeDiskError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, apphost.ErrInvalidDisk), errors.Is(err, service.ErrAppDiskShrink):
+	case errors.Is(err, apphost.ErrInvalidDisk), errors.Is(err, service.ErrAppDiskSameSize):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, apphost.ErrDiskAbovePlan), errors.Is(err, service.ErrAppHasNoDisk),
-		errors.Is(err, k8s.ErrAppDiskNotExpandable):
+		errors.Is(err, k8s.ErrAppDiskNotExpandable), errors.Is(err, service.ErrAppDiskBelowUsage),
+		errors.Is(err, service.ErrAppDiskLowerNeedsStop), errors.Is(err, service.ErrAppDiskUsageAbovePlan),
+		errors.Is(err, storagebudget.ErrExceeded), errors.Is(err, k8s.ErrAppDiskUsageUnavailable):
 		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, k8s.ErrAppDiskJob):
+		log.Printf("app disk: %v", err)
+		httpError(w, err.Error(), http.StatusBadGateway)
 	case errors.Is(err, apphost.ErrAppNotFound), errors.Is(err, storage.ErrProjectBusy),
 		errors.Is(err, service.ErrOrgTierUnresolved):
 		h.writeError(w, err)
 	default:
-		log.Printf("app disk grow: %v", err)
-		httpError(w, "growing the disk did not complete; retry the request", http.StatusInternalServerError)
+		log.Printf("app disk: %v", err)
+		httpError(w, "the disk operation did not complete; retry the request", http.StatusInternalServerError)
 	}
 }
 
@@ -229,8 +251,12 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, err.Error()+"; retry to finish", http.StatusGatewayTimeout)
 	case errors.Is(err, k8s.ErrAppRollout):
 		httpError(w, err.Error(), http.StatusBadGateway)
-	case errors.Is(err, service.ErrAppOverPlan), errors.Is(err, service.ErrAppDiskDeleteUnconfirmed):
+	case errors.Is(err, service.ErrAppOverPlan), errors.Is(err, service.ErrAppDiskDeleteUnconfirmed),
+		errors.Is(err, service.ErrAppDiskUsageAbovePlan), errors.Is(err, apphost.ErrDiskAbovePlan),
+		errors.Is(err, storagebudget.ErrExceeded):
 		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, k8s.ErrAppDiskJob):
+		httpError(w, err.Error(), http.StatusBadGateway)
 	case errors.Is(err, service.ErrOrgTierUnresolved):
 		httpError(w, service.ErrOrgTierUnresolved.Error(), http.StatusInternalServerError)
 	case errors.Is(err, service.ErrAppCapacity):

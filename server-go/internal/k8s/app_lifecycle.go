@@ -300,7 +300,9 @@ func (c *Client) appLeftovers(namespace string, opts metav1.ListOptions) []owned
 	services := c.clientset.CoreV1().Services(namespace)
 	secrets := c.clientset.CoreV1().Secrets(namespace)
 	policies := c.dynamicClient.Resource(CiliumNetworkPolicyGVR).Namespace(namespace)
-	// A cluster without cert-manager has no certificates to list, and none to leave behind.
+	// A cluster without cert-manager has no certificates to list, and none to
+	// leave behind; nor does one where custom domains are off, since the
+	// tenant role grants Certificates only with them.
 	certs := c.dynamicClient.Resource(CertificateGVR).Namespace(namespace)
 	return []ownedKind{
 		{"service", func(ctx context.Context) ([]string, error) {
@@ -321,7 +323,7 @@ func (c *Client) appLeftovers(namespace string, opts metav1.ListOptions) []owned
 		}, func(ctx context.Context, name string) error { return secrets.Delete(ctx, name, metav1.DeleteOptions{}) }},
 		{"certificate", func(ctx context.Context) ([]string, error) {
 			list, err := certs.List(ctx, opts)
-			if apierrors.IsNotFound(err) {
+			if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 				return nil, nil
 			}
 			if err != nil {

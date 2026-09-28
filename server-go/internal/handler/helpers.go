@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"net/http"
 	"regexp"
@@ -123,6 +124,8 @@ func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 	switch {
 	case errors.As(err, &limitErr):
 		httpError(w, limitErr.Error(), http.StatusConflict)
+	case errors.Is(err, storagebudget.ErrExceeded):
+		httpError(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, service.ErrProjectStoreUnavailable):
 		log.Printf("project creation refused: %v", err)
 		httpError(w, service.ErrProjectStoreUnavailable.Error(), http.StatusInternalServerError)

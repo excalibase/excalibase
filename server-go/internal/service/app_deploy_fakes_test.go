@@ -43,7 +43,18 @@ func (f *fakeAppStoreForDeploy) Get(projectID, id string) (*apphost.App, error) 
 	return &copied, nil
 }
 
-func (f *fakeAppStoreForDeploy) List(string) ([]*apphost.App, error) { return nil, nil }
+func (f *fakeAppStoreForDeploy) List(projectID string) ([]*apphost.App, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []*apphost.App{}
+	for _, app := range f.apps {
+		if app.ProjectID == projectID {
+			copied := *app
+			out = append(out, &copied)
+		}
+	}
+	return out, nil
+}
 func (f *fakeAppStoreForDeploy) Update(app *apphost.App, expectedVersion int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -56,6 +67,8 @@ func (f *fakeAppStoreForDeploy) Update(app *apphost.App, expectedVersion int) er
 	}
 	copied := *app
 	copied.Version = expectedVersion + 1
+	// As the store's contract says: an update never moves the status.
+	copied.Status = stored.Status
 	f.apps[app.ProjectID+"/"+app.ID] = &copied
 	app.Version = copied.Version
 	return nil

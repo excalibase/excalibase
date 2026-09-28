@@ -82,12 +82,12 @@ func TestLiveAppDisk(t *testing.T) {
 		lab.expectProof(t, namespace, app)
 	})
 	t.Run("growing past the plan and growing on local-path are refused", func(t *testing.T) {
-		if _, err := svc.GrowAppDisk(lab.ctx, app.ProjectID, app.ID, "2Gi"); !errors.Is(err, apphost.ErrDiskAbovePlan) {
+		if _, err := svc.ResizeAppDisk(lab.ctx, app.ProjectID, app.ID, "2Gi"); !errors.Is(err, apphost.ErrDiskAbovePlan) {
 			t.Fatalf("above the plan: got %v, want ErrDiskAbovePlan", err)
 		}
 		svc.SetDiskLimits(NewAppDiskLimits(NewOrgPlanTiers(lab.instances, orgs),
 			fixedTierConfigs{domain.Free: config.TierConfig{MaxAppDiskSize: "5Gi"}}))
-		_, err := svc.GrowAppDisk(lab.ctx, app.ProjectID, app.ID, "2Gi")
+		_, err := svc.ResizeAppDisk(lab.ctx, app.ProjectID, app.ID, "2Gi")
 		if !errors.Is(err, k8s.ErrAppDiskNotExpandable) {
 			t.Fatalf("on local-path: got %v, want ErrAppDiskNotExpandable", err)
 		}

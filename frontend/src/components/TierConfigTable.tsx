@@ -3,6 +3,10 @@ import { Loader2, Save } from 'lucide-react';
 import { Button } from './Button';
 import { useTiers, useUpdateTier, sortTiers, type TierConfig, type TierConfigInput } from '../api/tiers';
 
+// The server takes the app disk cap in whole Mi or whole Gi; "0Gi" offers no app disks.
+const APP_DISK_CAP = /^\d+(Mi|Gi)$/;
+const APP_DISK_CAP_HELP = 'The largest disk one container may have, in whole Mi or Gi such as 500Mi or 20Gi (0Gi = none)';
+
 // TierConfigTable is the platform-admin editor for the tier_configs table.
 // Tier specs (CPU/RAM/storage/maxProjects/instances/backup) are now DB-backed,
 // so edits here take effect on the next provision/scale with no redeploy.
@@ -71,7 +75,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
               <th className="text-left px-4 py-3 font-medium">Memory</th>
               <th className="text-left px-4 py-3 font-medium">Storage</th>
               <th className="text-left px-4 py-3 font-medium" title="The most a project may grow its disk to">Max storage</th>
-              <th className="text-left px-4 py-3 font-medium" title="The largest disk one container may have (0Gi = none)">Max app disk</th>
+              <th className="text-left px-4 py-3 font-medium" title={APP_DISK_CAP_HELP}>Max app disk</th>
               <th className="text-left px-4 py-3 font-medium" title="How many containers one project may hold (0 = none)">Max apps</th>
               <th className="text-left px-4 py-3 font-medium">Instances</th>
               <th className="text-left px-4 py-3 font-medium">Max projects</th>
@@ -83,6 +87,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
           <tbody>
             {sortTiers(tiers ?? []).map((t) => {
               const d = draft[t.tier] ?? toInput(t);
+              const capValid = APP_DISK_CAP.test(d.maxAppDiskSize);
               return (
                 <tr key={t.tier} className="border-b border-border-primary last:border-b-0">
                   <td className="px-6 py-3 font-medium uppercase text-xs">{t.tier}</td>
@@ -90,7 +95,12 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                   <td className="px-4 py-3"><QtyInput value={d.memory} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { memory: v })} placeholder="4Gi" /></td>
                   <td className="px-4 py-3"><QtyInput value={d.storageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { storageSize: v })} placeholder="50Gi" /></td>
                   <td className="px-4 py-3"><QtyInput value={d.maxStorageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { maxStorageSize: v })} placeholder="500Gi" /></td>
-                  <td className="px-4 py-3"><QtyInput value={d.maxAppDiskSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { maxAppDiskSize: v })} placeholder="20Gi" /></td>
+                  <td className="px-4 py-3">
+                    <QtyInput value={d.maxAppDiskSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { maxAppDiskSize: v })} placeholder="500Mi" />
+                    {!capValid && (
+                      <p className="mt-1 text-xs text-red-400" data-testid={`app-disk-cap-error-${t.tier}`}>Whole Mi or whole Gi</p>
+                    )}
+                  </td>
                   <td className="px-4 py-3"><NumInput label={`Max apps for ${t.tier}`} value={d.maxApps} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxApps: v })} /></td>
                   <td className="px-4 py-3"><NumInput value={d.instances} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { instances: v })} /></td>
                   <td className="px-4 py-3"><NumInput value={d.maxProjects} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxProjects: v })} /></td>
@@ -107,7 +117,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                   <td className="px-4 py-3 text-right">
                     <Button
                       size="sm"
-                      disabled={!canMutate || !isDirty(t) || update.isPending}
+                      disabled={!canMutate || !isDirty(t) || !capValid || update.isPending}
                       onClick={() => save(t)}
                     >
                       <Save className="w-3.5 h-3.5 mr-1" />

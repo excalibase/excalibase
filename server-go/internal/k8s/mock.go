@@ -138,6 +138,25 @@ type MockClient struct {
 	// AppDiskGrown records "namespace/appID=size" per GrowAppDisk call that succeeded.
 	AppDiskGrown   []string
 	AppDiskGrowErr error
+	// AppDiskUsages answers AppDiskUsage by "namespace/appID"; a missing entry is ErrAppDiskNotCreated.
+	AppDiskUsages   map[string]AppDiskUsage
+	AppDiskUsageErr error
+	// AppDiskCopies records "namespace/appID->size@generation" per CopyAppDisk that succeeded.
+	AppDiskCopies  []string
+	AppDiskCopyErr error
+	// AppDiskCreateErr fails CreateAppDisk.
+	AppDiskCreateErr error
+	AppDiskPruned    []string
+	AppDiskPruneErr  error
+	// AppDiskRepointed records "namespace/appID=claim" per RepointAppDisk.
+	AppDiskRepointed []string
+	// Storage is what StorageAllocated answers; StorageErr fails it.
+	Storage    StorageAllocation
+	StorageErr error
+	// VolumeGroupBytes answers LVMVolumeGroupBytes; 0 is ErrStorageCapacityUnknown.
+	VolumeGroupBytes int64
+	// SizedClassErr answers RequireSizedStorageClass.
+	SizedClassErr error
 	// PullSecretsDeleted records "namespace/registry" per DeleteRegistryPullSecrets call.
 	PullSecretsDeleted   []string
 	PullSecretsDeleteErr error
@@ -795,7 +814,53 @@ func (m *MockClient) PruneAppWorkload(ctx context.Context, namespace, appID, kee
 	return m.AppPruneErr
 }
 
-func (m *MockClient) GrowAppDisk(ctx context.Context, namespace, appID, size string) error {
+func (m *MockClient) AppDiskUsage(ctx context.Context, namespace, appID string, disk apphost.AppDisk, opts DiskJobOptions) (AppDiskUsage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "AppDiskUsage:"+namespace+"/"+appID)
+	if m.AppDiskUsageErr != nil {
+		return AppDiskUsage{}, m.AppDiskUsageErr
+	}
+	usage, ok := m.AppDiskUsages[namespace+"/"+appID]
+	if !ok {
+		return AppDiskUsage{}, ErrAppDiskNotCreated
+	}
+	return usage, nil
+}
+
+func (m *MockClient) CopyAppDisk(ctx context.Context, namespace string, app *apphost.App, to apphost.AppDisk, storageClass string, opts DiskJobOptions) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record := fmt.Sprintf("%s/%s->%s@%d", namespace, app.ID, to.Size, to.Generation)
+	m.Calls = append(m.Calls, "CopyAppDisk:"+record)
+	if m.AppDiskCopyErr != nil {
+		return m.AppDiskCopyErr
+	}
+	m.AppDiskCopies = append(m.AppDiskCopies, record)
+	return nil
+}
+
+func (m *MockClient) DeleteOtherAppDisks(ctx context.Context, namespace, appID string, keep int, timeout time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record := fmt.Sprintf("%s/%s@%d", namespace, appID, keep)
+	m.Calls = append(m.Calls, "DeleteOtherAppDisks:"+record)
+	if m.AppDiskPruneErr != nil {
+		return m.AppDiskPruneErr
+	}
+	m.AppDiskPruned = append(m.AppDiskPruned, record)
+	return nil
+}
+
+func (m *MockClient) RepointAppDisk(ctx context.Context, namespace, appID, claim string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "RepointAppDisk:"+namespace+"/"+appID+"="+claim)
+	m.AppDiskRepointed = append(m.AppDiskRepointed, namespace+"/"+appID+"="+claim)
+	return nil
+}
+
+func (m *MockClient) GrowAppDisk(ctx context.Context, namespace, appID string, generation int, size string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "GrowAppDisk:"+namespace+"/"+appID+"="+size)
@@ -925,4 +990,37 @@ func (m *MockClient) AppPrivateNetworkOpen(ctx context.Context, namespace string
 		return false, m.AppPrivateNetworkErr
 	}
 	return m.AppPrivateNetwork[namespace], nil
+}
+
+func (m *MockClient) StorageAllocated(ctx context.Context) (StorageAllocation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.Storage, m.StorageErr
+}
+
+// AddStorage records an allocation the way a created claim or cluster would appear.
+func (m *MockClient) AddStorage(tenantBytes int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Storage.TenantBytes += tenantBytes
+}
+
+func (m *MockClient) LVMVolumeGroupBytes(ctx context.Context, namespace, volumeGroup string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.VolumeGroupBytes <= 0 {
+		return 0, ErrStorageCapacityUnknown
+	}
+	return m.VolumeGroupBytes, nil
+}
+
+func (m *MockClient) RequireSizedStorageClass(ctx context.Context, name string, provisioners []string) error {
+	return m.SizedClassErr
+}
+
+func (m *MockClient) CreateAppDisk(ctx context.Context, namespace string, app *apphost.App, storageClass string, opts DiskJobOptions) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "CreateAppDisk:"+namespace+"/"+app.ID)
+	return m.AppDiskCreateErr
 }

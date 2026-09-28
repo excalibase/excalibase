@@ -122,6 +122,17 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, acto
 	if err != nil {
 		return nil, s.putBack(projectID, appID, apphost.StatusResuming, app.Status, err, resumeRefusals...)
 	}
+	// A disk above the plan is lowered before the app comes back, or the resume is refused.
+	fitted, err := s.fitDiskToPlan(ctx, namespace, app)
+	if err != nil {
+		return nil, s.putBack(projectID, appID, apphost.StatusResuming, app.Status, err, diskRefusals...)
+	}
+	app = fitted
+	if app.Disk != nil {
+		if err := s.kube.RepointAppDisk(ctx, namespace, appID, k8s.AppDiskClaimName(appID, app.Disk.Generation)); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.recordResize(app, size, actor); err != nil {
 		return nil, err
 	}

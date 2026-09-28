@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"net/http"
 	"os"
@@ -120,6 +121,15 @@ func runServer(cfg config.AppConfig) {
 	bootstrapDefaultOrgIfNeeded(cfg, sqlStore)
 
 	k8sClient := buildK8sClient(cfg)
+	storageBudget, err := buildStorageBudget(cfg, k8sClient)
+	if err != nil {
+		log.Fatalf("storage budget: %v", err)
+	}
+	if err := verifyTenantStorage(context.Background(), cfg, k8sClient, storageBudget); err != nil {
+		log.Fatalf("tenant storage: %v", err)
+	}
+	holdClientToBudget(k8sClient, storageBudget)
+	startStorageMetrics(context.Background(), storageBudget)
 	if err := verifyAppRuntime(context.Background(), cfg, k8sClient); err != nil {
 		log.Fatalf("app hosting: %v", err)
 	}
@@ -145,6 +155,7 @@ func runServer(cfg config.AppConfig) {
 	// it does not read the platform database per request; this tells it the
 	// moment a project is claimed for teardown.
 	provSvc.AddDeletionObserver(fnHandler)
+	provSvc.SetStorageBudget(storageBudget)
 	// A project claimed for teardown must not keep an open pool on a database
 	// that is going away.
 	provSvc.AddDeletionObserver(projectDB)
@@ -161,6 +172,7 @@ func runServer(cfg config.AppConfig) {
 		pgStore:      pgStore,
 		dockerClient: dockerClientRef,
 		claimer:      lifecycleClaimer,
+		budget:       storageBudget,
 	})
 	deps.fnHandler = fnHandler
 	// The schema browser holds one connection per project for ten minutes.
@@ -731,6 +743,7 @@ type handlerDeps struct {
 	rlsPolicyHandler  *handler.RlsPolicyHandler
 	tableGrantHandler *handler.TableGrantHandler
 	appHandler        *handler.AppHandler
+	storageBudgetH    *handler.StorageBudgetHandler
 	appDeploySvc      *service.AppDeployService
 	appDeployHandler  *handler.AppDeployHandler
 	appSecretHandler  *handler.AppSecretHandler
@@ -1070,6 +1083,8 @@ type handlerDepsArgs struct {
 	dockerClient provisioner.DockerClient // optional, for Docker-mode backup adapter
 	// claimer is the cross-replica lifecycle lease; nil keeps the in-process one.
 	claimer service.ProjectOperationClaimer
+	// budget holds every volume to the platform's storage budget; nil is unmetered.
+	budget *storagebudget.Budget
 }
 
 // buildBackupService wires the BackupService with the right adapter
@@ -1158,10 +1173,11 @@ func buildBackupService(
 // newOrgHandler builds the org handler and wires the instance store so the
 // project-member endpoints can verify a project belongs to the URL's org
 // before operating on it (prevents cross-org project-member enumeration).
-func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceStore, nodes handler.NodePlacement) *handler.OrgHandler {
+func newOrgHandler(sqlStore storage.PlatformStore, instances storage.InstanceStore, nodes handler.NodePlacement, planChanged func()) *handler.OrgHandler {
 	h := handler.NewOrgHandler(sqlStore, sqlStore)
 	h.SetInstanceStore(instances)
 	h.SetNodePlacement(nodes)
+	h.SetPlanChangeHook(planChanged)
 	return h
 }
 
@@ -1189,12 +1205,13 @@ func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instance
 }
 
 func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore,
-	disks apphost.DiskLimits, tiers service.TierConfigSource) *handler.AppHandler {
+	disks apphost.DiskLimits, tiers service.TierConfigSource, budget *storagebudget.Budget) *handler.AppHandler {
 	plans := service.NewOrgPlanTiers(store, sqlStore)
 	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
 		handler.NewProjectSourceLookup(store, plans), appRoute(cfg).Public())
 	h.SetDiskLimits(disks)
 	h.SetAppLimits(service.NewAppLimits(plans, tiers))
+	h.SetStorageBudget(budget)
 	return h
 }
 
@@ -1214,6 +1231,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
 	appDiskLimits := service.NewAppDiskLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc)
 	appDeploySvc.SetDiskLimits(appDiskLimits)
+	appDeploySvc.SetDiskJobs(k8s.DiskJobOptions{Image: cfg.AppDiskToolsImage, RuntimeClass: cfg.AppRuntimeClass, Timeout: appDiskJobTimeout})
 	appDeploySvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
 	appDomainSvc := buildAppDomainService(cfg, sqlStore.DB(), k8sClient, store, appDeploySvc)
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
@@ -1277,6 +1295,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	adminHandler := handler.NewAdminHandler(provSvc, store, sqlStore, sqlStore, k8sClient, cfg.LokiURL, promClient)
 	tierHandler := handler.NewTierHandler(sqlStore)
 	tierHandler.SetNodePlacement(provSvc)
+	enforceDiskCaps := func() { go appDeploySvc.EnforceDiskCaps(context.WithoutCancel(context.Background())) }
+	tierHandler.SetPlanChangeHook(enforceDiskCaps)
 
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
 	authHandler.SetOrgStore(sqlStore)
@@ -1342,13 +1362,14 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		oauthHandler:        buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
 		ssoHandler:          buildSSOProvidersHandler(cfg, vc, sqlStore),
 		svcAcctHandler:      handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
-		orgHandler:          newOrgHandler(sqlStore, store, provSvc),
+		orgHandler:          newOrgHandler(sqlStore, store, provSvc, enforceDiskCaps),
 		vaultHandler:        vaultHandler,
 		schemaHandler:       newSchemaHandler(cfg, vc, store),
 		realtimeHandler:     realtimeHandler,
 		rlsPolicyHandler:    handler.NewRlsPolicyHandler(sqlStore.RlsPolicies(), store),
 		tableGrantHandler:   handler.NewTableGrantHandler(sqlStore.TableGrants(), store, cfg.ExposureEnforced),
-		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc),
+		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget),
+		storageBudgetH:      handler.NewStorageBudgetHandler(a.budget),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeploySvc:        appDeploySvc,
 		appDeployHandler:    handler.NewAppDeployHandler(appDeploySvc),
@@ -1639,6 +1660,7 @@ func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 			r.Use(auth.RequirePermission(auth.PermViewAny))
 			d.tierHandler.Routes(r)
 		})
+		r.With(auth.RequirePermission(auth.PermViewAny)).Get("/storage", d.storageBudgetH.Report)
 		r.Route("/service-accounts", func(r chi.Router) { d.svcAcctHandler.Routes(r) })
 		// Studio sign-in providers: the OAuth client decides who can sign in,
 		// so only an unnarrowed platform-admin credential may change it.
@@ -1732,7 +1754,8 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.With(dev).Delete("/", d.appDeployHandler.Delete)
 				r.With(dev).Post("/pause", d.appDeployHandler.Pause)
 				r.With(dev).Post("/resume", d.appDeployHandler.Resume)
-				r.With(dev).Post("/disk", d.appDeployHandler.GrowDisk)
+				r.With(dev).Post("/disk", d.appDeployHandler.ResizeDisk)
+				r.With(dev).Get("/disk", d.appDeployHandler.DiskStatus)
 				r.With(dev).Post("/deploy", d.appDeployHandler.Deploy)
 				r.Get("/deploys", d.appDeployHandler.ListDeploys)
 				r.Get("/logs", d.appLogHandler.Logs)

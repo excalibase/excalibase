@@ -297,6 +297,18 @@ type AppConfig struct {
 	// TenantStorageClasses are the further classes a request may name.
 	TenantStorageClass   string
 	TenantStorageClasses []string
+	// TenantStorageRequireSized: tenant disks must be on a class from one of
+	// TenantSizedProvisioners, which make volumes of exactly their size.
+	TenantStorageRequireSized bool
+	TenantSizedProvisioners   []string
+	// AppDiskToolsImage runs the app-disk usage probe and lowering copy.
+	AppDiskToolsImage string
+	// StorageBudgetPercent is the share of the storage every volume together
+	// may take; the storage is the LVM volume group's size, or StorageNodeCapacity.
+	StorageBudgetPercent  int
+	StorageNodeCapacity   string
+	StorageLVMNamespace   string
+	StorageLVMVolumeGroup string
 	// AppDomainIssuer is the ACME ClusterIssuer custom domains get certificates
 	// from; empty turns custom domains off.
 	AppDomainIssuer string
@@ -331,10 +343,19 @@ func (c AppConfig) Validate() error {
 	if err := c.validateTenantStorageClasses(); err != nil {
 		return err
 	}
+	if err := c.validateTenantStorage(); err != nil {
+		return err
+	}
 	return c.validateAppRoute()
 }
 
 func Load() AppConfig {
+	cfg := load()
+	loadTenantStorage(&cfg)
+	return cfg
+}
+
+func load() AppConfig {
 	deploymentMode := envOr("DEPLOYMENT_MODE", "selfhosted")
 	return AppConfig{
 		AutoPauseEnabled:         envBool("EXCALIBASE_AUTOPAUSE_ENABLED", deploymentMode == "cloud"),
@@ -530,6 +551,7 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "DOCKER_TLS_VERIFY", Field: "DockerTLSVerify", Enabled: c.DockerTLSVerify},
 		{Env: exposureEnvKey, Field: "ExposureEnforced", Enabled: c.ExposureEnforced},
 		{Env: "APP_HOSTING_ENABLED", Field: "AppHostingEnabled", Enabled: c.AppHostingEnabled},
+		{Env: "TENANT_STORAGE_REQUIRE_SIZED", Field: "TenantStorageRequireSized", Enabled: c.TenantStorageRequireSized},
 	}
 }
 

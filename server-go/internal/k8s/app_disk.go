@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,8 +31,15 @@ var (
 	ErrAppDiskNotCreated = errors.New("the app's disk has not been created yet")
 )
 
-// AppDiskClaimName is keyed by the app id, so a rename keeps the same disk.
-func AppDiskClaimName(appID string) string { return appDiskPrefix + appID }
+// AppDiskClaimName is keyed by the app id, so a rename keeps the same disk,
+// and by the disk's generation: a disk moved onto a smaller volume lives in a
+// new claim, since a claim cannot shrink.
+func AppDiskClaimName(appID string, generation int) string {
+	if generation == 0 {
+		return appDiskPrefix + appID
+	}
+	return appDiskPrefix + appID + "-g" + strconv.Itoa(generation)
+}
 
 // appDiskLabels leave out the app's name: the claim outlives any one name.
 func appDiskLabels(app *apphost.App) map[string]string {
@@ -47,15 +55,20 @@ func buildAppDisk(namespace string, app *apphost.App, storageClass string) (*cor
 	if app.Disk == nil {
 		return nil, nil
 	}
-	size, err := resource.ParseQuantity(app.Disk.Size)
+	return buildAppDiskClaim(namespace, app, *app.Disk, storageClass)
+}
+
+func buildAppDiskClaim(namespace string, app *apphost.App, disk apphost.AppDisk, storageClass string) (*corev1.PersistentVolumeClaim, error) {
+	size, err := resource.ParseQuantity(disk.Size)
 	if err != nil {
-		return nil, fmt.Errorf("%w: disk size %q: %w", ErrRenderApp, app.Disk.Size, err)
+		return nil, fmt.Errorf("%w: disk size %q: %w", ErrRenderApp, disk.Size, err)
 	}
-	if problems := validation.IsDNS1123Subdomain(AppDiskClaimName(app.ID)); len(problems) > 0 {
+	name := AppDiskClaimName(app.ID, disk.Generation)
+	if problems := validation.IsDNS1123Subdomain(name); len(problems) > 0 {
 		return nil, fmt.Errorf("%w: app id %q cannot name a disk: %s", ErrRenderApp, app.ID, strings.Join(problems, "; "))
 	}
 	claim := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: AppDiskClaimName(app.ID), Namespace: namespace, Labels: appDiskLabels(app)},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: appDiskLabels(app)},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
@@ -86,6 +99,12 @@ func mountAppDisk(deployment *appsv1.Deployment, claim *corev1.PersistentVolumeC
 // ensureAppDisk creates the claim once and never changes it: growing is
 // GrowAppDisk's job and a volume cannot shrink.
 func (c *Client) ensureAppDisk(ctx context.Context, namespace string, desired *corev1.PersistentVolumeClaim) error {
+	return c.ensureAppDiskReplacing(ctx, namespace, desired, 0)
+}
+
+// ensureAppDiskReplacing reserves only what the new claim adds beyond
+// replacedBytes, the volume it replaces.
+func (c *Client) ensureAppDiskReplacing(ctx context.Context, namespace string, desired *corev1.PersistentVolumeClaim, replacedBytes int64) error {
 	claims := c.clientset.CoreV1().PersistentVolumeClaims(namespace)
 	_, err := claims.Get(ctx, desired.Name, metav1.GetOptions{})
 	if err == nil {
@@ -94,21 +113,24 @@ func (c *Client) ensureAppDisk(ctx context.Context, namespace string, desired *c
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("read app disk: %w", err)
 	}
-	if _, err := claims.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create app disk: %w", err)
-	}
-	return nil
+	size := desired.Spec.Resources.Requests[corev1.ResourceStorage]
+	return c.reserve(ctx, size.Value()-replacedBytes, "the app disk "+desired.Name+" ("+size.String()+")", func() error {
+		if _, err := claims.Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create app disk: %w", err)
+		}
+		return nil
+	})
 }
 
 // GrowAppDisk asks the app's claim for size, once its storage class is known
 // to allow expansion; the caller has checked size is larger and within the plan.
-func (c *Client) GrowAppDisk(ctx context.Context, namespace, appID, size string) error {
+func (c *Client) GrowAppDisk(ctx context.Context, namespace, appID string, generation int, size string) error {
 	quantity, err := resource.ParseQuantity(size)
 	if err != nil {
 		return fmt.Errorf("disk size %q: %w", size, err)
 	}
 	claims := c.clientset.CoreV1().PersistentVolumeClaims(namespace)
-	name := AppDiskClaimName(appID)
+	name := AppDiskClaimName(appID, generation)
 	claim, err := claims.Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return ErrAppDiskNotCreated
@@ -125,16 +147,19 @@ func (c *Client) GrowAppDisk(ctx context.Context, namespace, appID, size string)
 		}
 		return err
 	}
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		current, err := claims.Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("read app disk: %w", err)
-		}
-		current.Spec.Resources.Requests[corev1.ResourceStorage] = quantity
-		if _, err := claims.Update(ctx, current, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("grow app disk: %w", err)
-		}
-		return nil
+	held := claimBytes(claim)
+	return c.reserve(ctx, quantity.Value()-held, "growing the app disk "+name+" to "+size, func() error {
+		return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			current, err := claims.Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return fmt.Errorf("read app disk: %w", err)
+			}
+			current.Spec.Resources.Requests[corev1.ResourceStorage] = quantity
+			if _, err := claims.Update(ctx, current, metav1.UpdateOptions{}); err != nil {
+				return fmt.Errorf("grow app disk: %w", err)
+			}
+			return nil
+		})
 	})
 }
 

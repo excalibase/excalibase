@@ -39,14 +39,15 @@ func TestValidateRefusesADiskMountPathThatIsNotADataDirectory(t *testing.T) {
 	}
 }
 
-// Sizes are whole gibibytes, as a database disk's are (EXC-492).
-func TestValidateDiskSizeIsWholeGibibytes(t *testing.T) {
-	for _, size := range []string{"1Gi", "20Gi", "100Gi"} {
+// Sizes are whole mebibytes or gibibytes: a disk lowered to fit a smaller
+// plan (the owner's downgrade rule) may land on, say, 500Mi.
+func TestValidateDiskSizeIsWholeMebibytesOrGibibytes(t *testing.T) {
+	for _, size := range []string{"64Mi", "500Mi", "1Gi", "20Gi", "100Gi"} {
 		if err := withDisk("/data", size).Validate(); err != nil {
 			t.Errorf("size %q refused: %v", size, err)
 		}
 	}
-	for _, size := range []string{"", "0Gi", "01Gi", "1.5Gi", "512Mi", "1G", "1Ti", "-1Gi", "1000000Gi"} {
+	for _, size := range []string{"", "0Gi", "0Mi", "63Mi", "01Gi", "1.5Gi", "1G", "1Ti", "-1Gi", "1000000Gi", "10000000Mi", "1Ki"} {
 		if err := withDisk("/data", size).Validate(); err == nil {
 			t.Errorf("size %q accepted", size)
 		}
@@ -70,24 +71,30 @@ func TestValidateAnAppWithADiskRunsAtMostOneCopy(t *testing.T) {
 	}
 }
 
-func TestDiskGiB(t *testing.T) {
-	disk := apphost.AppDisk{MountPath: "/data", Size: "20Gi"}
-	if got, err := disk.GiB(); err != nil || got != 20 {
-		t.Fatalf("GiB() = %d, %v; want 20", got, err)
+func TestDiskBytes(t *testing.T) {
+	for size, want := range map[string]int64{"20Gi": 20 << 30, "500Mi": 500 << 20} {
+		disk := apphost.AppDisk{MountPath: "/data", Size: size}
+		if got, err := disk.Bytes(); err != nil || got != want {
+			t.Errorf("Bytes(%q) = %d, %v; want %d", size, got, err, want)
+		}
 	}
-	if _, err := (apphost.AppDisk{Size: "1.5Gi"}).GiB(); err == nil {
+	if _, err := (apphost.AppDisk{Size: "1.5Gi"}).Bytes(); err == nil {
 		t.Fatal("an unreadable size must be an error")
 	}
 }
 
 func TestCheckDiskWithinPlan(t *testing.T) {
 	disk := &apphost.AppDisk{MountPath: "/data", Size: "20Gi"}
-	if err := apphost.CheckDiskWithinPlan(disk, 20); err != nil {
+	if err := apphost.CheckDiskWithinPlan(disk, 20<<30); err != nil {
 		t.Fatalf("at the plan's cap: %v", err)
 	}
-	err := apphost.CheckDiskWithinPlan(disk, 19)
+	err := apphost.CheckDiskWithinPlan(disk, 19<<30)
 	if !errors.Is(err, apphost.ErrDiskAbovePlan) || !strings.Contains(err.Error(), "19Gi") {
 		t.Fatalf("over the cap: got %v, want ErrDiskAbovePlan naming 19Gi", err)
+	}
+	err = apphost.CheckDiskWithinPlan(&apphost.AppDisk{MountPath: "/data", Size: "1Gi"}, 500<<20)
+	if !errors.Is(err, apphost.ErrDiskAbovePlan) || !strings.Contains(err.Error(), "500Mi") {
+		t.Fatalf("over a mebibyte cap: got %v, want ErrDiskAbovePlan naming 500Mi", err)
 	}
 	if err := apphost.CheckDiskWithinPlan(disk, 0); !errors.Is(err, apphost.ErrDiskAbovePlan) {
 		t.Fatalf("a plan with no app disks: got %v, want ErrDiskAbovePlan", err)
@@ -97,15 +104,43 @@ func TestCheckDiskWithinPlan(t *testing.T) {
 	}
 }
 
-func TestPlanDiskGiBReadsWholeGibibytes(t *testing.T) {
-	for size, want := range map[string]int{"0Gi": 0, "1Gi": 1, "100Gi": 100} {
-		if got, err := apphost.PlanDiskGiB(size); err != nil || got != want {
-			t.Errorf("PlanDiskGiB(%q) = %d, %v; want %d", size, got, err, want)
+func TestPlanDiskBytesReadsWholeMebibytesOrGibibytes(t *testing.T) {
+	for size, want := range map[string]int64{"0Gi": 0, "0Mi": 0, "1Gi": 1 << 30, "100Gi": 100 << 30, "500Mi": 500 << 20} {
+		if got, err := apphost.PlanDiskBytes(size); err != nil || got != want {
+			t.Errorf("PlanDiskBytes(%q) = %d, %v; want %d", size, got, err, want)
 		}
 	}
-	for _, size := range []string{"", "1.5Gi", "1Ti", "512Mi", "abc"} {
-		if _, err := apphost.PlanDiskGiB(size); err == nil {
-			t.Errorf("PlanDiskGiB(%q) accepted", size)
+	for _, size := range []string{"", "1.5Gi", "1Ti", "63Mi", "abc", "1G"} {
+		if _, err := apphost.PlanDiskBytes(size); err == nil {
+			t.Errorf("PlanDiskBytes(%q) accepted", size)
+		}
+	}
+}
+
+// Sizes are shown the way they are written: whole gibibytes when they are,
+// otherwise mebibytes rounded up, so a usage never reads smaller than it is.
+func TestFormatDiskSize(t *testing.T) {
+	for bytes, want := range map[int64]string{
+		0: "0Mi", 1: "1Mi", 100 << 20: "100Mi", (100 << 20) + 1: "101Mi", 1 << 30: "1Gi", 1536 << 20: "1536Mi", 20 << 30: "20Gi",
+	} {
+		if got := apphost.FormatDiskSize(bytes); got != want {
+			t.Errorf("FormatDiskSize(%d) = %q, want %q", bytes, got, want)
+		}
+	}
+}
+
+// The generation is the platform's: which volume holds the disk after it was
+// moved onto a smaller one. A caller cannot name another volume through it.
+func TestValidateDiskGeneration(t *testing.T) {
+	app := withDisk("/data", "1Gi")
+	app.Disk.Generation = 3
+	if err := app.Validate(); err != nil {
+		t.Fatalf("generation 3 refused: %v", err)
+	}
+	for _, generation := range []int{-1, 1000000} {
+		app.Disk.Generation = generation
+		if err := app.Validate(); err == nil {
+			t.Errorf("generation %d accepted", generation)
 		}
 	}
 }

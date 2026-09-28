@@ -67,6 +67,8 @@ export default defineConfig({
         'src/components/PublicPortCard.tsx',
         'src/pages/AddDatabasePage.tsx',
         'src/components/DatabaseRequired.tsx',
+        'src/components/StorageBudgetCard.tsx',
+        'src/utils/diskSize.ts',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

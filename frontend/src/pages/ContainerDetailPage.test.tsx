@@ -46,6 +46,21 @@ const deploy = (overrides: Partial<Deploy>): Deploy => ({
   ...overrides,
 });
 
+const GI = 1024 ** 3;
+
+const diskStatus = (current: App) => {
+  const sizeBytes = Number(current.disk?.size.replace(/Gi$/, '')) * GI;
+  return {
+    mountPath: '/data',
+    size: current.disk?.size,
+    sizeBytes,
+    usedBytes: GI / 2,
+    planMax: '20Gi',
+    planMaxBytes: 20 * GI,
+    overPlan: false,
+  };
+};
+
 interface Scenario {
   app?: Partial<App>;
   deploys: Deploy[];
@@ -67,6 +82,8 @@ function renderPage(scenario: Scenario) {
     if (url === '/projects/proj-1/apps/app-1/domains/')
       return Promise.resolve({ data: [] } as never);
     if (url === '/projects/proj-1/apps/app-1') return Promise.resolve({ data: state.app } as never);
+    if (url === '/projects/proj-1/apps/app-1/disk')
+      return Promise.resolve({ data: diskStatus(state.app) } as never);
     if (url === '/projects/proj-1/apps/app-1/logs')
       return Promise.resolve({
         data: { lines: [{ pod: 'web-1', time: '2026-09-21T10:00:00Z', text: 'ready' }] },
@@ -309,7 +326,8 @@ describe('ContainerDetailPage', () => {
     });
     const disk = await screen.findByTestId('app-disk');
     expect(disk).toHaveTextContent('/data');
-    expect(disk).toHaveTextContent('5 GiB');
+    expect(disk).toHaveTextContent('5Gi');
+    expect(await screen.findByTestId('disk-usage')).toHaveTextContent('512Mi used of 5Gi');
     expect(disk).toHaveTextContent(/briefly unavailable/i);
   });
 
@@ -319,19 +337,40 @@ describe('ContainerDetailPage', () => {
     expect(screen.queryByTestId('app-disk')).not.toBeInTheDocument();
   });
 
-  test('grows the disk to a larger whole number of GiB', async () => {
+  test('grows the disk and shows the new size', async () => {
     const { user } = renderPage({
       app: { status: 'ACTIVE', disk: { mountPath: '/data', size: '5Gi' } },
       deploys: [deploy({})],
     });
-    const size = await screen.findByTestId('disk-grow-size');
+    const size = await screen.findByTestId('disk-resize-size');
     await user.clear(size);
     await user.type(size, '8');
-    await user.click(screen.getByTestId('disk-grow'));
+    await user.click(screen.getByTestId('disk-resize'));
     await waitFor(() =>
       expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/disk', { size: '8Gi' }),
     );
-    await waitFor(() => expect(screen.getByTestId('app-disk')).toHaveTextContent('8 GiB'));
+    await waitFor(() => expect(screen.getByTestId('disk-usage')).toHaveTextContent('of 8Gi'));
+  });
+
+  test('a container stopped because its disk holds more than the plan allows says why', async () => {
+    const reason =
+      "the app's disk holds more than the plan allows: it holds 1200Mi and the plan allows 1Gi; the app was stopped. Free space on the disk or move the organization to a larger plan, then deploy again";
+    renderPage({
+      app: { status: 'PAUSED', disk: { mountPath: '/data', size: '5Gi' } },
+      deploys: [deploy({ status: 'failed', failureReason: reason })],
+    });
+    const banner = await screen.findByTestId('disk-stopped-banner');
+    expect(banner).toHaveTextContent(reason);
+    expect(banner).toHaveTextContent(/stopped/i);
+  });
+
+  test('an ordinary failed deploy of a paused container shows no disk banner', async () => {
+    renderPage({
+      app: { status: 'PAUSED' },
+      deploys: [deploy({ status: 'failed', failureReason: 'app rollout: web CrashLoopBackOff' })],
+    });
+    await screen.findByTestId('current-deploy-reason');
+    expect(screen.queryByTestId('disk-stopped-banner')).not.toBeInTheDocument();
   });
 
   test('deleting a container with a disk asks for its name and erases the disk', async () => {

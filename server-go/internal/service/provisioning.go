@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"log"
 	"maps"
 	"sync"
@@ -23,6 +24,8 @@ import (
 const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
+	// storageBudget holds every database volume to the platform's share of its storage.
+	storageBudget  *storagebudget.Budget
 	store          storage.InstanceStore
 	orgStore       storage.OrgStore        // org slug lookup; provisioning refuses without it
 	tierStore      storage.TierConfigStore // optional; DB-backed tier specs, falls back to config defaults
@@ -528,6 +531,9 @@ func (s *ProvisioningService) admitDatabase(ctx context.Context, req *domain.Pro
 	}
 
 	if err := s.RequireNodeSpread(ctx, tierType, tier); err != nil {
+		return nil, "", err
+	}
+	if err := s.RequireStorageForDatabase(ctx, tier.Instances, tier.StorageSize); err != nil {
 		return nil, "", err
 	}
 	if s.k8sClient != nil {

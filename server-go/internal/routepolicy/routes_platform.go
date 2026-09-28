@@ -96,6 +96,7 @@ var platformRows = []Row{
 	{Methods: del, Pattern: "/api/admin/projects/{projectId}", Auth: AuthSession, Permission: permDelete, Owner: OwnerPlatformRole, Unrestricted: true, Note: "cross-tenant force drop; a non-admin is refused before the project id is looked at, and a narrowed PAT may not destroy a tenant it was never scoped to"},
 	{Methods: del, Pattern: "/api/admin/orgs/{orgId}", Auth: AuthSession, Permission: permManageOrgs, Owner: OwnerPlatformRole},
 	{Methods: get, Pattern: "/api/admin/tiers/", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole},
+	{Methods: get, Pattern: "/api/admin/storage", Auth: AuthSession, Permission: permViewAny, Owner: OwnerPlatformRole, Note: "the platform storage budget: capacity, the share volumes may take and what they reserve; no tenant names"},
 	{Methods: put, Pattern: "/api/admin/tiers/{tier}", Auth: AuthSession, Permission: permManageSetup, Owner: OwnerPlatformRole},
 	{Methods: get, Pattern: "/api/admin/service-accounts/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
 	{Methods: get, Pattern: "/api/admin/sso-providers/", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Note: "client secrets are reported as set or not, never returned"},

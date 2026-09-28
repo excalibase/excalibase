@@ -3,6 +3,10 @@ package k8s
 import (
 	"context"
 	"errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -38,8 +42,8 @@ func TestRenderAppWorkloadGivesADiskItsOwnClaim(t *testing.T) {
 	if claim == nil {
 		t.Fatal("an app with a disk must render a claim")
 	}
-	if claim.Name != AppDiskClaimName("app-01h") || claim.Namespace != testNamespace {
-		t.Errorf("claim %s/%s, want %s/%s", claim.Namespace, claim.Name, testNamespace, AppDiskClaimName("app-01h"))
+	if claim.Name != AppDiskClaimName("app-01h", 0) || claim.Namespace != testNamespace {
+		t.Errorf("claim %s/%s, want %s/%s", claim.Namespace, claim.Name, testNamespace, AppDiskClaimName("app-01h", 0))
 	}
 	if len(claim.Spec.AccessModes) != 1 || claim.Spec.AccessModes[0] != corev1.ReadWriteOnce {
 		t.Errorf("access modes = %v, want ReadWriteOnce only", claim.Spec.AccessModes)
@@ -117,7 +121,7 @@ func TestApplyAppWorkload_CreatesTheDiskBeforeTheDeployment(t *testing.T) {
 	ctx := context.Background()
 	app := diskApp()
 	deployedApp(t, c, app)
-	claim, err := clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(ctx, AppDiskClaimName(app.ID), metav1.GetOptions{})
+	claim, err := clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(ctx, AppDiskClaimName(app.ID, 0), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("the disk must exist: %v", err)
 	}
@@ -142,13 +146,13 @@ func TestApplyAppWorkload_LeavesAnExistingDiskAsItIs(t *testing.T) {
 	app := diskApp()
 	deployedApp(t, c, app)
 	claims := clientset.CoreV1().PersistentVolumeClaims(testNamespace)
-	grown, _ := claims.Get(ctx, AppDiskClaimName(app.ID), metav1.GetOptions{})
+	grown, _ := claims.Get(ctx, AppDiskClaimName(app.ID, 0), metav1.GetOptions{})
 	grown.Spec.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("9Gi")
 	if _, err := claims.Update(ctx, grown, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	deployedApp(t, c, app)
-	after, _ := claims.Get(ctx, AppDiskClaimName(app.ID), metav1.GetOptions{})
+	after, _ := claims.Get(ctx, AppDiskClaimName(app.ID, 0), metav1.GetOptions{})
 	if got := after.Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "9Gi" {
 		t.Errorf("a redeploy changed the disk to %s", got.String())
 	}
@@ -161,7 +165,7 @@ func TestPruneAppWorkload_KeepsTheDisk(t *testing.T) {
 	if err := c.PruneAppWorkload(context.Background(), testNamespace, app.ID, "renamed", shortWait); err != nil {
 		t.Fatalf("prune: %v", err)
 	}
-	if _, err := clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(app.ID), metav1.GetOptions{}); err != nil {
+	if _, err := clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(app.ID, 0), metav1.GetOptions{}); err != nil {
 		t.Fatalf("a rename must keep the disk: %v", err)
 	}
 }
@@ -178,7 +182,7 @@ func TestDeleteAppWorkload_DeletesTheDiskAfterThePods(t *testing.T) {
 	if err := c.DeleteAppWorkload(ctx, testNamespace, app.ID, shortWait); !errors.Is(err, ErrAppPodsRemain) {
 		t.Fatalf("err = %v, want ErrAppPodsRemain", err)
 	}
-	if _, err := claims.Get(ctx, AppDiskClaimName(app.ID), metav1.GetOptions{}); err != nil {
+	if _, err := claims.Get(ctx, AppDiskClaimName(app.ID, 0), metav1.GetOptions{}); err != nil {
 		t.Fatalf("the disk must stay while a pod may still write to it: %v", err)
 	}
 	if err := clientset.CoreV1().Pods(testNamespace).Delete(ctx, "web-1", metav1.DeleteOptions{}); err != nil {
@@ -187,7 +191,7 @@ func TestDeleteAppWorkload_DeletesTheDiskAfterThePods(t *testing.T) {
 	if err := c.DeleteAppWorkload(ctx, testNamespace, app.ID, shortWait); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if _, err := claims.Get(ctx, AppDiskClaimName(app.ID), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := claims.Get(ctx, AppDiskClaimName(app.ID, 0), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("the disk must be deleted with the app, got %v", err)
 	}
 }
@@ -202,7 +206,7 @@ func TestDeleteAppWorkload_LeavesAnotherAppsDisk(t *testing.T) {
 	if err := c.DeleteAppWorkload(context.Background(), testNamespace, app.ID, shortWait); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(other.ID), metav1.GetOptions{}); err != nil {
+	if _, err := clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(other.ID, 0), metav1.GetOptions{}); err != nil {
 		t.Fatalf("another app's disk must stay: %v", err)
 	}
 }
@@ -228,10 +232,10 @@ func deployedDiskOn(t *testing.T, class string, expandable bool) (*Client, *apph
 
 func TestGrowAppDisk_AsksTheClaimForTheNewSize(t *testing.T) {
 	c, app := deployedDiskOn(t, "expandable", true)
-	if err := c.GrowAppDisk(context.Background(), testNamespace, app.ID, "8Gi"); err != nil {
+	if err := c.GrowAppDisk(context.Background(), testNamespace, app.ID, 0, "8Gi"); err != nil {
 		t.Fatalf("grow: %v", err)
 	}
-	claim, _ := c.clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(app.ID), metav1.GetOptions{})
+	claim, _ := c.clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(app.ID, 0), metav1.GetOptions{})
 	if got := claim.Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "8Gi" {
 		t.Fatalf("requested %s, want 8Gi", got.String())
 	}
@@ -239,11 +243,11 @@ func TestGrowAppDisk_AsksTheClaimForTheNewSize(t *testing.T) {
 
 func TestGrowAppDisk_RefusesAClassThatCannotExpand(t *testing.T) {
 	c, app := deployedDiskOn(t, "fixed", false)
-	err := c.GrowAppDisk(context.Background(), testNamespace, app.ID, "8Gi")
+	err := c.GrowAppDisk(context.Background(), testNamespace, app.ID, 0, "8Gi")
 	if !errors.Is(err, ErrAppDiskNotExpandable) {
 		t.Fatalf("err = %v, want ErrAppDiskNotExpandable", err)
 	}
-	claim, _ := c.clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(app.ID), metav1.GetOptions{})
+	claim, _ := c.clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(app.ID, 0), metav1.GetOptions{})
 	if got := claim.Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "5Gi" {
 		t.Fatalf("a refused grow changed the claim to %s", got.String())
 	}
@@ -253,18 +257,18 @@ func TestGrowAppDisk_ADiskOnTheDefaultClassIsNotAssumedExpandable(t *testing.T) 
 	c, clientset := newLifecycleFakeClient()
 	app := diskApp()
 	deployedApp(t, c, app)
-	claim, _ := clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(app.ID), metav1.GetOptions{})
+	claim, _ := clientset.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), AppDiskClaimName(app.ID, 0), metav1.GetOptions{})
 	if claim.Spec.StorageClassName != nil {
 		t.Fatal("fixture: the claim should name no class")
 	}
-	if err := c.GrowAppDisk(context.Background(), testNamespace, app.ID, "8Gi"); !errors.Is(err, ErrAppDiskNotExpandable) {
+	if err := c.GrowAppDisk(context.Background(), testNamespace, app.ID, 0, "8Gi"); !errors.Is(err, ErrAppDiskNotExpandable) {
 		t.Fatalf("err = %v, want ErrAppDiskNotExpandable", err)
 	}
 }
 
 func TestGrowAppDisk_NoClaimYet(t *testing.T) {
 	c, _ := newLifecycleFakeClient()
-	if err := c.GrowAppDisk(context.Background(), testNamespace, "app-01h", "8Gi"); !errors.Is(err, ErrAppDiskNotCreated) {
+	if err := c.GrowAppDisk(context.Background(), testNamespace, "app-01h", 0, "8Gi"); !errors.Is(err, ErrAppDiskNotCreated) {
 		t.Fatalf("err = %v, want ErrAppDiskNotCreated", err)
 	}
 }
@@ -285,4 +289,22 @@ func indexOf(items []string, want string) int {
 		}
 	}
 	return len(items)
+}
+
+// Without custom domains provisioning has no right to Certificates, so it
+// never made one: a refused list is nothing to prune, not a failed deploy.
+func TestPruneAppWorkload_WithoutRightsToCertificatesPrunesTheRest(t *testing.T) {
+	c, _ := newLifecycleFakeClient()
+	app := diskApp()
+	deployedApp(t, c, app)
+	dyn := c.dynamicClient.(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("list", "certificates", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "cert-manager.io", Resource: "certificates"}, "", errors.New("no rule"))
+	})
+	if err := c.PruneAppWorkload(context.Background(), testNamespace, app.ID, "renamed", shortWait); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if err := c.DeleteAppWorkload(context.Background(), testNamespace, app.ID, shortWait); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
 }

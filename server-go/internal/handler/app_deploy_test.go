@@ -93,7 +93,11 @@ func (f *fakeAppDeployer) DeleteApp(_ context.Context, projectID, appID string, 
 	return err
 }
 
-func (f *fakeAppDeployer) GrowAppDisk(context.Context, string, string, string) (*apphost.App, error) {
+func (f *fakeAppDeployer) ResizeAppDisk(context.Context, string, string, string) (*apphost.App, error) {
+	return nil, errors.New("not used")
+}
+
+func (f *fakeAppDeployer) AppDiskStatus(context.Context, string, string) (*service.AppDiskReport, error) {
 	return nil, errors.New("not used")
 }
 

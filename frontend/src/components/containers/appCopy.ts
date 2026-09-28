@@ -66,9 +66,27 @@ export function appDisplayStatus(app: App, lastDeploy?: Deploy): { label: string
   }
 }
 
+const DISK_OVER_PLAN = /disk holds more than the plan allows/;
+const DISK_STOP = /disk holds more than the plan allows|the app was stopped/;
+// Mirrors the server: a disk is only made smaller while nothing writes to it.
+const RUNNING = new Set(['ACTIVE', 'PAUSING', 'RESUMING', 'DELETING']);
+
+export const isAppRunning = (app: App): boolean => RUNNING.has(app.status);
+
+// The failed deploy's reason when it stopped the app because its disk no longer fits the plan.
+export function diskStopReason(app: App, lastDeploy?: Deploy): string | undefined {
+  if (app.status !== 'PAUSED' || lastDeploy?.status !== 'failed') return undefined;
+  const reason = lastDeploy.failureReason;
+  return reason && DISK_STOP.test(reason) ? reason : undefined;
+}
+
 // Ordered: the first matching rule wins, so the specific pod reasons come
 // before the broader "resolve" rules.
 const FAILURE_RULES: Array<[RegExp, string]> = [
+  [
+    DISK_OVER_PLAN,
+    "The container's disk holds more than the plan allows, so it was stopped. Free space on the disk or move the organization to a larger plan, then deploy again.",
+  ],
   [
     /ImagePullBackOff|ErrImagePull/,
     'The image could not be pulled. Check the image name and tag, and that the registry allows it to be pulled.',

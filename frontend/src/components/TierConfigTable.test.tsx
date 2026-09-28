@@ -87,4 +87,38 @@ describe('TierConfigTable', () => {
       expect(api.put).toHaveBeenCalledWith('/admin/tiers/STANDARD', expect.objectContaining({ maxApps: 8, maxAppDiskSize: '20Gi' })),
     );
   });
+
+  // Small plans may cap app disks in mebibytes (EXC-523).
+  test('saves an app disk cap in Mi and explains the accepted units', async () => {
+    const user = userEvent.setup();
+    renderTable();
+
+    const cap = await screen.findByDisplayValue('20Gi');
+    await user.clear(cap);
+    await user.type(cap, '500Mi');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({ maxAppDiskSize: '500Mi' }),
+      ),
+    );
+    expect(screen.getByRole('columnheader', { name: /max app disk/i })).toHaveAttribute(
+      'title',
+      expect.stringMatching(/Mi.*Gi.*0Gi = none/),
+    );
+  });
+
+  test('an app disk cap that is not whole Mi or Gi is not saved', async () => {
+    const user = userEvent.setup();
+    renderTable();
+
+    const cap = await screen.findByDisplayValue('20Gi');
+    await user.clear(cap);
+    await user.type(cap, '1.5GB');
+
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
+    expect(screen.getByTestId('app-disk-cap-error-STANDARD')).toHaveTextContent(/Mi or.*Gi/);
+  });
 });

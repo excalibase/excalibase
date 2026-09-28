@@ -48,6 +48,8 @@ type AppDeployService struct {
 	headroomPercent int
 	// diskLimits caps an app's disk by its organisation's plan.
 	diskLimits apphost.DiskLimits
+	// diskJobs runs the disk usage probe and the copy that lowers a disk.
+	diskJobs k8s.DiskJobOptions
 	// domainSync routes the app's custom domains under the name it is deployed as.
 	domainSync func(ctx context.Context, namespace string, app *apphost.App) error
 	// async lets tests run the rollout wait inline instead of in a goroutine.
@@ -55,6 +57,8 @@ type AppDeployService struct {
 
 	mu     sync.Mutex
 	active map[string]*activeRollout // keyed by app id
+	// enforcing lets one plan-change sweep run at a time.
+	enforcing sync.Mutex
 }
 
 func NewAppDeployService(
@@ -131,7 +135,7 @@ func (s *AppDeployService) SetDomainSync(sync func(ctx context.Context, namespac
 
 func (s *AppDeployService) DeployApp(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, error) {
 	return s.underLease(ctx, projectID, appID, func(app *apphost.App) (*apphost.Deploy, func(), error) {
-		return s.rollout(ctx, app, apphost.ConfigFromApp(app), actor, "")
+		return s.rollout(context.WithoutCancel(ctx), app, apphost.ConfigFromApp(app), actor, "")
 	})
 }
 
@@ -147,7 +151,7 @@ func (s *AppDeployService) RedeployApp(ctx context.Context, projectID, appID, de
 		if source == nil {
 			return nil, nil, apphost.ErrDeployNotFound
 		}
-		return s.rollout(ctx, app, source.Config, actor, source.ID)
+		return s.rollout(context.WithoutCancel(ctx), app, source.Config, actor, source.ID)
 	})
 }
 
@@ -165,6 +169,8 @@ func (s *AppDeployService) underLease(ctx context.Context, projectID, appID stri
 		release()
 		return nil, err
 	}
+	// Once the lease is held the deploy finishes even if the caller hangs up:
+	// a disk move inside it must not stop half way.
 	deploy, startWatch, err := apply(app)
 	release()
 	if startWatch != nil {
@@ -227,10 +233,6 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		s.fail(ctx, deploy, routeErr, namespace, name)
 		return deploy, nil, nil
 	}
-	if err := s.checkDiskWithinPlan(ctx, target); err != nil {
-		s.fail(ctx, deploy, err, namespace, name)
-		return deploy, nil, nil
-	}
 	if err := s.admit(ctx, namespace, deploy, tier, cfg.Replicas); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
@@ -242,6 +244,16 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}
+	fitted, err := s.fitDiskToPlan(ctx, namespace, app)
+	if errors.Is(err, ErrAppDiskUsageAbovePlan) {
+		s.stopOverPlan(ctx, deploy, namespace, name, err)
+		return deploy, nil, nil
+	}
+	if err != nil {
+		s.fail(ctx, deploy, err, namespace, name)
+		return deploy, nil, nil
+	}
+	target.Disk = fitted.Disk
 	workload, err := k8s.RenderAppWorkload(namespace, target, s.resolver, render)
 	if err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
@@ -249,6 +261,10 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	}
 	if err := s.releaseDiskFromEarlierNames(ctx, namespace, target); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
+		return deploy, nil, nil
+	}
+	if err := s.kube.CreateAppDisk(ctx, namespace, target, s.render.DiskStorageClass, s.diskJobs); err != nil {
+		s.fail(ctx, deploy, fmt.Errorf("create the app's disk: %w", err), namespace, name)
 		return deploy, nil, nil
 	}
 	if err := s.kube.ApplyAppWorkload(ctx, namespace, workload); err != nil {
