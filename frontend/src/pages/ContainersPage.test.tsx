@@ -1,6 +1,6 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ContainersPage } from './ContainersPage';
 import { api } from '../api/client';
@@ -114,5 +114,32 @@ describe('ContainersPage', () => {
     renderPage({ appHosting: false });
     expect(await screen.findByTestId('containers-unavailable')).toBeInTheDocument();
     expect(api.get).not.toHaveBeenCalledWith('/projects/proj-1/apps/');
+  });
+});
+
+describe('ContainersPage while a retry is paused', () => {
+  afterEach(() => focusManager.setFocused(undefined));
+
+  test('a paused retry is not mistaken for a project with no containers', async () => {
+    focusManager.setFocused(false);
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === '/config')
+        return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting: true } } as never);
+      if (url === '/projects/proj-1/registry-credentials/') return Promise.resolve({ data: [] } as never);
+      return Promise.reject(new Error('network down'));
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 0 } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/project/proj-1/containers']}>
+          <Routes>
+            <Route path="/project/:projectId/containers" element={<ContainersPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/projects/proj-1/apps/'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByTestId('containers-empty')).toBeNull();
   });
 });

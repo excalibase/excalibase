@@ -27,6 +27,7 @@ import {
   FileJson,
   UserCog,
   Container,
+  LayoutDashboard,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -53,7 +54,7 @@ export interface NavCapabilities {
 }
 
 export const PROJECT_NAV: NavSection[] = [
-  { key: 'home', label: 'Home', icon: Home, to: '' },
+  { key: 'home', label: 'Overview', icon: Home, to: '' },
   { key: 'sql', label: 'SQL Editor', icon: Terminal, to: 'sql' },
   { key: 'schema', label: 'Schema', icon: GitBranch, to: 'schema' },
   {
@@ -61,6 +62,7 @@ export const PROJECT_NAV: NavSection[] = [
     label: 'Databases',
     icon: Database,
     children: [
+      { label: 'Overview', icon: LayoutDashboard, to: 'database/overview' },
       { label: 'Tables', icon: Table2, to: 'database/tables' },
       { label: 'Functions', icon: Code, to: 'database/functions' },
       { label: 'Extensions', icon: Package, to: 'database/extensions' },

@@ -71,7 +71,7 @@ export function InstanceDetailPage() {
             data-testid="deprovision-btn"
           >
             <Trash2 className="w-4 h-4 mr-1.5" />
-            Deprovision
+            Delete project
           </Button>
           {isDeletionProtected(instance) && (
             <p className="text-xs text-text-tertiary max-w-xs text-right">{DELETION_PROTECTED_REASON}</p>

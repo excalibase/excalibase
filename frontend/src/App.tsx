@@ -16,6 +16,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ de
 const OrgsPage = lazy(() => import('./pages/OrgsPage').then(m => ({ default: m.OrgsPage })));
 const OrgDetailPage = lazy(() => import('./pages/OrgDetailPage').then(m => ({ default: m.OrgDetailPage })));
 const InstancesPage = lazy(() => import('./pages/InstancesPage').then(m => ({ default: m.InstancesPage })));
+const ProjectOverviewPage = lazy(() => import('./pages/ProjectOverviewPage').then(m => ({ default: m.ProjectOverviewPage })));
 const InstanceDetailPage = lazy(() => import('./pages/InstanceDetailPage').then(m => ({ default: m.InstanceDetailPage })));
 const ProvisionPage = lazy(() => import('./pages/ProvisionPage').then(m => ({ default: m.ProvisionPage })));
 const SqlEditorPage = lazy(() => import('./pages/SqlEditorPage').then(m => ({ default: m.SqlEditorPage })));
@@ -93,10 +94,11 @@ export default function App() {
 
           {/* Project-scoped pages */}
           <Route path="/project/:projectId" element={<ProjectLayout />}>
-            <Route index element={<InstanceDetailPage />} />
+            <Route index element={<ProjectOverviewPage />} />
             <Route path="sql" element={<SqlEditorPage />} />
             <Route path="schema" element={<SchemaDesignerPage />} />
             {/* Database */}
+            <Route path="database/overview" element={<InstanceDetailPage />} />
             <Route path="database/tables" element={<TablesPage />} />
             <Route path="database/functions" element={<FunctionsPage />} />
             <Route path="database/extensions" element={<ExtensionsPage />} />
