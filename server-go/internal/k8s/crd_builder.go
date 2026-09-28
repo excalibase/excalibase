@@ -134,6 +134,21 @@ func applyTierSizing(spec map[string]interface{}, tier config.TierConfig, storag
 	if tier.Instances > 1 {
 		spec["affinity"] = oneInstancePerNode()
 	}
+	applyUpdatePolicy(spec, tier.Instances)
+}
+
+// applyUpdatePolicy decides how an image update (a minor upgrade) reaches the
+// primary once the standbys run it. With standbys the operator switches over
+// to an updated one, so clients only reconnect; a single instance has nothing
+// to switch to and restarts in place, which is a brief outage (EXC-493).
+// Unsupervised: the operator finishes the update without a manual step.
+func applyUpdatePolicy(spec map[string]interface{}, instances int) {
+	spec["primaryUpdateStrategy"] = "unsupervised"
+	if instances > 1 {
+		spec["primaryUpdateMethod"] = "switchover"
+		return
+	}
+	spec["primaryUpdateMethod"] = "restart"
 }
 
 // oneInstancePerNode makes a node loss cost at most one instance. Required,

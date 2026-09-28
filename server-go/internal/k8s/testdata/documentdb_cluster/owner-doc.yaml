@@ -59,6 +59,8 @@ spec:
     - pg_cron
     - pg_documentdb_core
     - pg_documentdb
+  primaryUpdateMethod: restart
+  primaryUpdateStrategy: unsupervised
   resources:
     limits:
       cpu: "0.5"

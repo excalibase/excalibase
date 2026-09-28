@@ -73,7 +73,7 @@ func TestLiveStandardIsRefusedOnASingleNode(t *testing.T) {
 // left, so this run's store credentials and projects start clean.
 func (lab *documentDBLab) freshNamespaces(t *testing.T, names ...string) {
 	t.Helper()
-	lab.kubectl(t, append([]string{"delete", "namespace", "--ignore-not-found", "--wait=true", "--timeout=300s"}, names...)...)
+	lab.kubectl(t, append([]string{"delete", "namespace", "--ignore-not-found", "--wait=true", "--timeout=900s"}, names...)...)
 }
 
 func namespaceCount(t *testing.T, lab *documentDBLab) int {

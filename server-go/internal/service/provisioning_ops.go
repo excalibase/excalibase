@@ -53,7 +53,9 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 	spec := existing.Object["spec"].(map[string]interface{})
 	spec["imageName"] = image
 
-	return s.k8sClient.ApplyCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, existing)
+	// The fetched object carries its resourceVersion, which a create-first
+	// apply is refused for; an update keeps the concurrency check.
+	return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, existing)
 }
 
 // GetLogs returns the last N lines of the project's postgres pod log.
