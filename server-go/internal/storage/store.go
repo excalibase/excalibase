@@ -105,6 +105,13 @@ type ProjectParametersStore interface {
 	UpdateParametersIfStatus(projectID string, parameters map[string]string, expected string) error
 }
 
+// ProjectDiskStore records the disk a project's cluster asks for (EXC-492).
+// A general Update never changes it; only a resize or a tier change does,
+// and only while the row still holds expected.
+type ProjectDiskStore interface {
+	UpdateStorageSizeIfStatus(projectID, size, expected string) error
+}
+
 // InstanceStore persists database instance metadata and credentials.
 type InstanceStore interface {
 	// Create registers a new project. Returns ErrProjectExists when the

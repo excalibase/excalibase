@@ -92,6 +92,7 @@ func (s *FileSystemStore) Update(inst *domain.DatabaseInstance) error {
 	}
 	updated := inst.Clone()
 	updated.OrgID = existing.OrgID
+	updated.StorageSize = existing.StorageSize
 	return s.write(updated)
 }
 
@@ -163,6 +164,7 @@ func (s *FileSystemStore) UpdateIfStatus(instance *domain.DatabaseInstance, expe
 	}
 	updated := instance.Clone()
 	updated.OrgID = stored.OrgID
+	updated.StorageSize = stored.StorageSize
 	return s.write(updated)
 }
 
@@ -185,6 +187,26 @@ func (s *FileSystemStore) UpdateParametersIfStatus(projectID string, parameters 
 	tuned := stored.Clone()
 	tuned.Parameters = maps.Clone(parameters)
 	return s.write(tuned)
+}
+
+// UpdateStorageSizeIfStatus records the project's disk. See ProjectDiskStore.
+func (s *FileSystemStore) UpdateStorageSizeIfStatus(projectID, size, expected string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.cache[projectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	if err := CheckUpdatable(stored); err != nil {
+		return err
+	}
+	if stored.Status != expected {
+		return fmt.Errorf("%w: %s is %s, expected %s", ErrProjectStatusChanged, projectID, stored.Status, expected)
+	}
+	grown := stored.Clone()
+	grown.StorageSize = size
+	return s.write(grown)
 }
 
 // RecordPauseAttempt counts a pause attempt. See InstanceStore.

@@ -82,3 +82,28 @@ func TestInstances_UpdateParametersIfStatusRewritesOnlyTheParameters(t *testing.
 		t.Fatalf("err = %v, want ErrProjectNotFound", err)
 	}
 }
+
+func TestInstances_StorageSizeIsWrittenOnlyByItsOwnUpdate(t *testing.T) {
+	store := testStore(t)
+	inst := instanceRow("proj-settings4", "org-set")
+	inst.StorageSize = "50Gi"
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	inst.StorageSize = "1Gi"
+	if err := store.Update(inst); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got, _ := store.FindByProjectID(inst.ProjectID); got.StorageSize != "50Gi" {
+		t.Errorf("a general update changed the disk to %q", got.StorageSize)
+	}
+	if err := store.UpdateStorageSizeIfStatus(inst.ProjectID, "80Gi", inst.Status); err != nil {
+		t.Fatalf("UpdateStorageSizeIfStatus: %v", err)
+	}
+	if got, _ := store.FindByProjectID(inst.ProjectID); got.StorageSize != "80Gi" {
+		t.Errorf("disk = %q, want 80Gi", got.StorageSize)
+	}
+	if err := store.UpdateStorageSizeIfStatus(inst.ProjectID, "90Gi", "PAUSED"); !errors.Is(err, storage.ErrProjectStatusChanged) {
+		t.Errorf("a moved row: got %v, want ErrProjectStatusChanged", err)
+	}
+}

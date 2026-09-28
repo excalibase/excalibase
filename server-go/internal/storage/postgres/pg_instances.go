@@ -52,8 +52,8 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 			pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 			created_at, updated_at, last_health_check,
 			storage_class, parameters,
-			deletion_scheduled_at, deletion_due_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56)`,
+			deletion_scheduled_at, deletion_due_at, storage_size
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username,
@@ -71,7 +71,7 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 		inst.StorageClass, parameters,
-		inst.DeletionScheduledAt, inst.DeletionDueAt,
+		inst.DeletionScheduledAt, inst.DeletionDueAt, inst.StorageSize,
 	)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && string(pqErr.Code) == uniqueViolation {
@@ -120,6 +120,29 @@ func (s *Store) UpdateParametersIfStatus(projectID string, parameters map[string
 		projectID, encoded, expected, pq.Array(deletionStatuses))
 	if err != nil {
 		return fmt.Errorf("update project parameters: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return s.explainRefusedUpdate(projectID, expected)
+	}
+	return nil
+}
+
+// UpdateStorageSizeIfStatus records the project's disk. See
+// storage.ProjectDiskStore.
+func (s *Store) UpdateStorageSizeIfStatus(projectID, size, expected string) error {
+	if expected == "" {
+		return fmt.Errorf("%w: no expected status given for %s", storage.ErrProjectStatusChanged, projectID)
+	}
+	res, err := s.db.Exec(`
+		UPDATE database_instances SET storage_size = $2, updated_at = now()
+		WHERE project_id = $1 AND status = $3 AND status <> ALL($4)`,
+		projectID, size, expected, pq.Array(deletionStatuses))
+	if err != nil {
+		return fmt.Errorf("update project disk: %w", err)
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
@@ -399,7 +422,7 @@ const pgInstanceColumns = `
 	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 	created_at, updated_at, last_health_check,
 	storage_class, parameters,
-	deletion_scheduled_at, deletion_due_at`
+	deletion_scheduled_at, deletion_due_at, storage_size`
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
 	row := s.db.QueryRow(`SELECT`+pgInstanceColumns+`
@@ -535,7 +558,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&pauseAttempts, &pauseLastAttemptAt, &pauseBackupID, &pauseBackupAt,
 		&createdAt, &updatedAt, &lastHealth,
 		&inst.StorageClass, &parameters,
-		&deletionScheduledAt, &deletionDueAt,
+		&deletionScheduledAt, &deletionDueAt, &inst.StorageSize,
 	)
 	if err != nil {
 		return nil, err

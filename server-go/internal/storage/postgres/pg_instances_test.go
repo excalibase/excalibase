@@ -94,8 +94,8 @@ func TestInstance_UnsupportedDeploymentMode_IsRefused(t *testing.T) {
 	store := testStore(t)
 
 	_, err := store.DB().Exec(`
-		INSERT INTO database_instances (project_id, org_id, database_type, deployment_mode, status)
-		VALUES ('mode-external', 'org1', 'POSTGRESQL', 'byoc', 'ACTIVE')`)
+		INSERT INTO database_instances (project_id, org_id, database_type, deployment_mode, status, storage_size)
+		VALUES ('mode-external', 'org1', 'POSTGRESQL', 'byoc', 'ACTIVE', '5Gi')`)
 	if err == nil {
 		t.Fatal("the deployment_mode constraint must refuse a mode the platform does not operate")
 	}
@@ -105,8 +105,8 @@ func TestInstance_UnsupportedDeploymentMode_IsRefused(t *testing.T) {
 		t.Fatalf("drop constraint: %v", err)
 	}
 	if _, err := store.DB().Exec(`
-		INSERT INTO database_instances (project_id, org_id, database_type, deployment_mode, status)
-		VALUES ('mode-external', 'org1', 'POSTGRESQL', 'byoc', 'ACTIVE')`); err != nil {
+		INSERT INTO database_instances (project_id, org_id, database_type, deployment_mode, status, storage_size)
+		VALUES ('mode-external', 'org1', 'POSTGRESQL', 'byoc', 'ACTIVE', '5Gi')`); err != nil {
 		t.Fatalf("seed pre-constraint row: %v", err)
 	}
 

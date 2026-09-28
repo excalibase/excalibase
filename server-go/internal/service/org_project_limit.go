@@ -35,6 +35,9 @@ var ErrProjectStoreUnavailable = errors.New("the project could not be registered
 // this narrow surface so a restore is metered exactly like a provision.
 type OrgProjectCapacity interface {
 	EnsureOrgCanTakeProject(ctx context.Context, orgID string) error
+	// RequireRestoreDiskFits refuses a restore whose source disk the
+	// organisation's plan cannot hold (EXC-492).
+	RequireRestoreDiskFits(ctx context.Context, source *domain.DatabaseInstance) error
 }
 
 // EnsureOrgCanTakeProject is EnsureOrgProjectCapacity at the organisation's

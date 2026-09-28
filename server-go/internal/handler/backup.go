@@ -121,6 +121,10 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// it. Asked here as well as in the service so an async restore is refused
 	// at submission rather than by a job that fails minutes later.
 	if err := h.svc.EnsureOrgProjectCapacity(r.Context(), inst); err != nil {
+		if errors.Is(err, service.ErrRestoreDiskAbovePlan) {
+			httpError(w, safeError(err), http.StatusConflict)
+			return
+		}
 		if !writeProjectCreationError(w, err) {
 			httpError(w, safeError(err), http.StatusInternalServerError)
 		}

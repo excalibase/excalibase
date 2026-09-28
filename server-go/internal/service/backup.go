@@ -283,7 +283,10 @@ func (s *BackupService) EnsureOrgProjectCapacity(ctx context.Context, source *do
 	if s.capacity == nil {
 		return ErrOrgCapacityNotConfigured
 	}
-	return s.capacity.EnsureOrgCanTakeProject(ctx, source.OrgID)
+	if err := s.capacity.EnsureOrgCanTakeProject(ctx, source.OrgID); err != nil {
+		return err
+	}
+	return s.capacity.RequireRestoreDiskFits(ctx, source)
 }
 
 // AllocateProjectID reserves the id a restore will register its new project
