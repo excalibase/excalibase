@@ -1,0 +1,374 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"maps"
+	"strings"
+	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/storage"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+// setupClusterChangeTest is an ACTIVE FREE project in a FREE org whose
+// cluster asks for 2Gi, below the plan's 5Gi, with one tenant setting.
+func setupClusterChangeTest(t *testing.T) (*ProvisioningService, *storage.FileSystemStore, *k8s.MockClient) {
+	t.Helper()
+	svc, store, mock := setupOpsTest(t)
+	svc.SetOrgStore(testOrgs())
+	seedCluster(t, mock, config.TierConfig{Instances: 1, StorageSize: "2Gi", Memory: "512Mi", CPU: "0.5", StatementTimeout: "15s"},
+		map[string]string{"work_mem": "4MB"})
+	return svc, store, mock
+}
+
+func seedCluster(t *testing.T, mock *k8s.MockClient, tier config.TierConfig, params map[string]string) {
+	t.Helper()
+	cluster := k8s.BuildPostgreSQLCluster(k8s.PostgreSQLClusterOpts{
+		ProjectID: testOpsDB, Namespace: testOpsDBNS, Tier: tier, Parameters: params,
+	})
+	if err := mock.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, cluster); err != nil {
+		t.Fatalf("seed cluster: %v", err)
+	}
+}
+
+func opsCluster(t *testing.T, mock *k8s.MockClient) *unstructured.Unstructured {
+	t.Helper()
+	cluster, err := mock.GetCRD(context.Background(), k8s.CNPGClusterGVR, testOpsDBNS, testOpsDBPostgres)
+	if err != nil {
+		t.Fatalf("read cluster: %v", err)
+	}
+	return cluster.DeepCopy()
+}
+
+func clusterField(t *testing.T, cluster *unstructured.Unstructured, fields ...string) string {
+	t.Helper()
+	value, _, _ := unstructured.NestedFieldNoCopy(cluster.Object, append([]string{"spec"}, fields...)...)
+	text, _ := value.(string)
+	return text
+}
+
+func threeNodes() k8s.ClusterCapacity {
+	nodes := make([]k8s.NodeCapacity, 3)
+	for i := range nodes {
+		nodes[i] = k8s.NodeCapacity{Name: "node", AllocatableCPUMilli: 8000, AllocatableMemBytes: 32 << 30}
+	}
+	return k8s.ClusterCapacity{Nodes: nodes}
+}
+
+type clusterChange struct {
+	name string
+	op   ProjectOperation
+	run  func(*ProvisioningService) error
+}
+
+func clusterChanges() []clusterChange {
+	ctx := context.Background()
+	return []clusterChange{
+		{"resize", OperationResize, func(s *ProvisioningService) error { return s.ResizeStorage(ctx, testOpsDB, "4Gi") }},
+		{"tier", OperationTierChange, func(s *ProvisioningService) error { return s.ApplyOrgTier(ctx, testOpsDB, domain.Free) }},
+		{"tune", OperationTune, func(s *ProvisioningService) error {
+			return s.TuneParameters(ctx, testOpsDB, map[string]string{"work_mem": "8MB"})
+		}},
+	}
+}
+
+func TestClusterChangesTakeAndReleaseTheProjectLease(t *testing.T) {
+	for _, tc := range clusterChanges() {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, _ := setupClusterChangeTest(t)
+			claimer := &countingClaimer{}
+			svc.SetOperationClaimer(claimer)
+			if err := tc.run(svc); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			if claimer.claims != 1 || claimer.releases != 1 || claimer.heldNames[0] != tc.op {
+				t.Fatalf("claims=%d releases=%d held=%v, want one %q lease given back", claimer.claims, claimer.releases, claimer.heldNames, tc.op)
+			}
+		})
+	}
+}
+
+func TestClusterChangesAreRefusedWhileAnotherOperationHoldsTheProject(t *testing.T) {
+	for _, tc := range clusterChanges() {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store, mock := setupClusterChangeTest(t)
+			svc.SetOperationClaimer(&heldClaimer{})
+			before := opsCluster(t, mock)
+			err := tc.run(svc)
+			if !errors.Is(err, ErrProjectOperationRunning) || !errors.Is(err, storage.ErrProjectBusy) {
+				t.Fatalf("err = %v, want the project-busy refusal", err)
+			}
+			if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+				t.Error("the cluster changed while another operation held the project")
+			}
+			if inst, _ := store.FindByProjectID(testOpsDB); len(inst.Parameters) != 0 || inst.Tier != domain.Free {
+				t.Error("the project row changed while another operation held the project")
+			}
+		})
+	}
+}
+
+// PENDING_DELETION is the EXC-473 grace period: stopped, and not to be grown.
+func TestClusterChangesNeedAnActiveProject(t *testing.T) {
+	statuses := []string{string(domain.StatusPaused), string(domain.StatusPendingDeletion), string(domain.StatusDeleting), string(domain.StatusRestoring), "FAILED"}
+	for _, tc := range clusterChanges() {
+		for _, status := range statuses {
+			t.Run(tc.name+"/"+status, func(t *testing.T) {
+				svc, store, mock := setupClusterChangeTest(t)
+				markStatus(t, store, status)
+				before := opsCluster(t, mock)
+				err := tc.run(svc)
+				if !errors.Is(err, ErrProjectNotActive) {
+					t.Fatalf("err = %v, want ErrProjectNotActive", err)
+				}
+				if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+					t.Errorf("the cluster of a %s project was changed", status)
+				}
+			})
+		}
+	}
+}
+
+func TestClusterChangesAreForKubernetesProjectsOnly(t *testing.T) {
+	for _, tc := range clusterChanges() {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store, _ := setupClusterChangeTest(t)
+			inst, _ := store.FindByProjectID(testOpsDB)
+			inst.DeploymentMode = domain.ModeDocker
+			if err := store.Update(inst); err != nil {
+				t.Fatalf("mark docker: %v", err)
+			}
+			if err := tc.run(svc); !errors.Is(err, ErrKubernetesOnly) {
+				t.Fatalf("err = %v, want ErrKubernetesOnly", err)
+			}
+		})
+	}
+}
+
+func TestResizeStorageGrowsTheClustersVolume(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	if err := svc.ResizeStorage(context.Background(), testOpsDB, "5Gi"); err != nil {
+		t.Fatalf("ResizeStorage: %v", err)
+	}
+	if got := clusterField(t, opsCluster(t, mock), "storage", "size"); got != "5Gi" {
+		t.Errorf("storage size = %q, want 5Gi", got)
+	}
+}
+
+func TestResizeStorageRefusals(t *testing.T) {
+	cases := []struct {
+		name, size string
+		want       error
+	}{
+		{"shrink", "1Gi", ErrStorageShrink},
+		{"same size", "2Gi", ErrStorageShrink},
+		{"above the plan", "6Gi", ErrStorageAbovePlan},
+		{"not whole gibibytes", "2500Mi", ErrInvalidStorageSize},
+		{"decimal units", "3GB", ErrInvalidStorageSize},
+		{"zero", "0Gi", ErrInvalidStorageSize},
+		{"negative", "-3Gi", ErrInvalidStorageSize},
+		{"empty", "", ErrInvalidStorageSize},
+		{"leading zero", "03Gi", ErrInvalidStorageSize},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, mock := setupClusterChangeTest(t)
+			before := opsCluster(t, mock)
+			if err := svc.ResizeStorage(context.Background(), testOpsDB, tc.size); !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+				t.Error("a refused resize changed the cluster")
+			}
+		})
+	}
+}
+
+// A volume CloudNativePG could not grow would leave the cluster asking for a
+// size it can never have, and the spec cannot be shrunk back.
+func TestResizeStorageIsRefusedWhenTheVolumesCannotGrow(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	mock.VolumeExpansionError = k8s.ErrVolumeExpansionUnsupported
+	before := opsCluster(t, mock)
+	if err := svc.ResizeStorage(context.Background(), testOpsDB, "4Gi"); !errors.Is(err, k8s.ErrVolumeExpansionUnsupported) {
+		t.Fatalf("err = %v, want ErrVolumeExpansionUnsupported", err)
+	}
+	if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+		t.Error("the cluster changed although its volumes cannot grow")
+	}
+}
+
+func TestTuneParametersAppliesAndRecordsTheTenantSettings(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	want := map[string]string{"work_mem": "8MB", "jit": "off"}
+	if err := svc.TuneParameters(context.Background(), testOpsDB, want); err != nil {
+		t.Fatalf("TuneParameters: %v", err)
+	}
+	cluster := opsCluster(t, mock)
+	if got := k8s.TenantParameters(cluster); !maps.Equal(got, want) {
+		t.Errorf("cluster tenant parameters = %v, want %v", got, want)
+	}
+	if clusterField(t, cluster, "postgresql", "parameters", "statement_timeout") != "15s" {
+		t.Error("the tier's statement guard was lost")
+	}
+	if inst, _ := store.FindByProjectID(testOpsDB); !maps.Equal(inst.Parameters, want) {
+		t.Errorf("recorded parameters = %v, want %v", inst.Parameters, want)
+	}
+}
+
+func TestTuneParametersWithNoneResetsToTheDefaults(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	if err := svc.TuneParameters(context.Background(), testOpsDB, map[string]string{}); err != nil {
+		t.Fatalf("TuneParameters: %v", err)
+	}
+	if got := k8s.TenantParameters(opsCluster(t, mock)); len(got) != 0 {
+		t.Errorf("tenant parameters = %v, want none", got)
+	}
+}
+
+func TestTuneParametersRefusesWhatIsNotTheTenants(t *testing.T) {
+	cases := map[string]map[string]string{
+		"superuser-only library":    {"shared_preload_libraries": "pg_stat_statements"},
+		"archive command":           {"archive_command": "curl evil"},
+		"the tier's timeout":        {"statement_timeout": "0"},
+		"connection limit":          {"max_connections": "1000"},
+		"above the tier's memory":   {"work_mem": "64MB"},
+		"one bad among good":        {"jit": "off", "log_min_duration_statement": "0"},
+		"not a value it takes":      {"jit": "maybe"},
+		"file-reading setting":      {"ssl_key_file": "/etc/passwd"},
+		"a library loaded per role": {"session_preload_libraries": "x"},
+	}
+	for name, params := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, store, mock := setupClusterChangeTest(t)
+			before := opsCluster(t, mock)
+			if err := svc.TuneParameters(context.Background(), testOpsDB, params); !errors.Is(err, config.ErrTenantParameter) {
+				t.Fatalf("err = %v, want ErrTenantParameter", err)
+			}
+			if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+				t.Error("a refused tuning changed the cluster")
+			}
+			if inst, _ := store.FindByProjectID(testOpsDB); len(inst.Parameters) != 0 {
+				t.Error("a refused tuning was recorded")
+			}
+		})
+	}
+}
+
+// failingParameterStore records nothing, so the cluster must be put back.
+type failingParameterStore struct{ *storage.FileSystemStore }
+
+func (failingParameterStore) UpdateParametersIfStatus(string, map[string]string, string) error {
+	return errors.New("platform database unavailable")
+}
+
+func TestTuneParametersPutsTheClusterBackWhenTheRecordFails(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	svc.store = failingParameterStore{store}
+	if err := svc.TuneParameters(context.Background(), testOpsDB, map[string]string{"work_mem": "8MB"}); err == nil {
+		t.Fatal("a tuning that could not be recorded reported success")
+	}
+	if got := k8s.TenantParameters(opsCluster(t, mock)); got["work_mem"] != "4MB" {
+		t.Errorf("tenant parameters = %v, want the previous work_mem=4MB back", got)
+	}
+}
+
+func TestApplyOrgTierRefusesATierThatIsNotTheOrgsPlan(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	before := opsCluster(t, mock)
+	err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Enterprise)
+	if !errors.Is(err, ErrTierNotOrgPlan) || !strings.Contains(err.Error(), string(domain.Free)) {
+		t.Fatalf("err = %v, want ErrTierNotOrgPlan naming the org's plan", err)
+	}
+	if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+		t.Error("the cluster changed")
+	}
+	if inst, _ := store.FindByProjectID(testOpsDB); inst.Tier != domain.Free {
+		t.Error("the project's tier changed")
+	}
+}
+
+func TestApplyOrgTierMovesTheClusterOntoTheOrgsPlan(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	setOrgTier(svc, "org1", domain.Standard)
+	mock.Capacity = threeNodes()
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Standard); err != nil {
+		t.Fatalf("ApplyOrgTier: %v", err)
+	}
+	cluster := opsCluster(t, mock)
+	instances, _, _ := unstructured.NestedInt64(cluster.Object, "spec", "instances")
+	if instances != 3 || clusterField(t, cluster, "resources", "limits", "memory") != "4Gi" ||
+		clusterField(t, cluster, "storage", "size") != "50Gi" ||
+		clusterField(t, cluster, "postgresql", "parameters", "statement_timeout") != "30s" {
+		t.Errorf("cluster not on the STANDARD plan: %v", cluster.Object["spec"])
+	}
+	if k8s.TenantParameters(cluster)["work_mem"] != "4MB" {
+		t.Error("the tenant's settings were lost")
+	}
+	if inst, _ := store.FindByProjectID(testOpsDB); inst.Tier != domain.Standard {
+		t.Errorf("project tier = %s, want STANDARD", inst.Tier)
+	}
+}
+
+func TestApplyOrgTierRefusals(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(*ProvisioningService, *k8s.MockClient, *testing.T)
+		want  func(error) bool
+	}{
+		{"fewer nodes than instances", func(s *ProvisioningService, m *k8s.MockClient, _ *testing.T) {
+			setOrgTier(s, "org1", domain.Standard)
+			m.Capacity = k8s.ClusterCapacity{Nodes: threeNodes().Nodes[:1]}
+		}, func(err error) bool { var nodes *NotEnoughNodesError; return errors.As(err, &nodes) }},
+		{"a larger disk its volumes cannot grow to", func(s *ProvisioningService, m *k8s.MockClient, _ *testing.T) {
+			setOrgTier(s, "org1", domain.Standard)
+			m.Capacity = threeNodes()
+			m.VolumeExpansionError = k8s.ErrVolumeExpansionUnsupported
+		}, func(err error) bool { return errors.Is(err, k8s.ErrVolumeExpansionUnsupported) }},
+		{"a plan whose disk is below the current one", func(_ *ProvisioningService, m *k8s.MockClient, t *testing.T) {
+			seedCluster(t, m, config.TierConfig{Instances: 1, StorageSize: "50Gi", Memory: "512Mi", CPU: "0.5"}, nil)
+		}, func(err error) bool { return errors.Is(err, ErrTierDiskBelowCurrent) }},
+		{"tenant settings beyond the new plan's bounds", func(_ *ProvisioningService, m *k8s.MockClient, t *testing.T) {
+			seedCluster(t, m, config.TierConfig{Instances: 1, StorageSize: "2Gi", Memory: "512Mi", CPU: "0.5"},
+				map[string]string{"work_mem": "256MB"})
+		}, func(err error) bool { return errors.Is(err, ErrTierParametersOutOfBounds) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store, mock := setupClusterChangeTest(t)
+			tc.setup(svc, mock, t)
+			before := opsCluster(t, mock)
+			org, _ := svc.orgTier(context.Background(), "org1")
+			err := svc.ApplyOrgTier(context.Background(), testOpsDB, org)
+			if !tc.want(err) {
+				t.Fatalf("err = %v", err)
+			}
+			if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+				t.Error("a refused tier change changed the cluster")
+			}
+			if inst, _ := store.FindByProjectID(testOpsDB); inst.Tier != domain.Free {
+				t.Error("a refused tier change changed the project's tier")
+			}
+		})
+	}
+}
+
+func TestClusterSettingsReportTheClusterAndThePlan(t *testing.T) {
+	svc, _, _ := setupClusterChangeTest(t)
+	setOrgTier(svc, "org1", domain.Standard)
+	got, err := svc.ClusterSettings(context.Background(), testOpsDB)
+	if err != nil {
+		t.Fatalf("ClusterSettings: %v", err)
+	}
+	if got.Tier != domain.Free || got.OrgTier != domain.Standard || got.StorageSize != "2Gi" || got.StorageLimit != "5Gi" ||
+		got.Instances != 1 || got.Memory != "512Mi" || got.CPU != "0.5" || got.Parameters["work_mem"] != "4MB" {
+		t.Errorf("settings = %+v", got)
+	}
+	if len(got.TunableParameters) == 0 || !config.TenantTunableParameter(got.TunableParameters[0]) {
+		t.Errorf("tunable parameters = %v", got.TunableParameters)
+	}
+}

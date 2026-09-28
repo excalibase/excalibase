@@ -52,6 +52,8 @@ type MockClient struct {
 	NamespaceExistsError  error                             // if non-nil, NamespaceExists returns this error
 	GetPodsError          error                             // if non-nil, GetPods returns this error
 	ListPVCsError         error                             // if non-nil, ListPVCs returns this error
+	// VolumeExpansionError is what ClusterVolumesExpandable returns; nil means expandable.
+	VolumeExpansionError error
 
 	// Wildcards — used when tests don't know the generated project ID upfront.
 	WildcardPodReady bool // IsPodReady returns true for any pod not in PodReady
@@ -849,4 +851,11 @@ func (m *MockClient) UninstallHelmChart(ctx context.Context, namespace, releaseN
 	}
 	delete(m.HelmReleases, namespace+"/"+releaseName)
 	return nil
+}
+
+func (m *MockClient) ClusterVolumesExpandable(ctx context.Context, namespace, clusterName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "ClusterVolumesExpandable:"+namespace+"/"+clusterName)
+	return m.VolumeExpansionError
 }

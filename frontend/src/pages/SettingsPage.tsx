@@ -7,6 +7,7 @@ import { useCancelDeletion, useDeprovisionDatabase, usePauseProject, useResumePr
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { ConnectionStrings } from '../components/ConnectionStrings';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
+import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
@@ -157,6 +158,10 @@ const excalibase = createClient({
 
       <div className="mb-8">
         <MinorUpgradeCard project={project} />
+      </div>
+
+      <div className="mb-8">
+        <ClusterSettingsCard project={project} />
       </div>
 
       {/* Pause / Resume — pre-pause backup runs automatically (see backend). */}

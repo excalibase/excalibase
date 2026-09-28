@@ -41,6 +41,11 @@ type KubeClient interface {
 	// deleted — a namespace removed under a live Cluster wedges the
 	// operator's finalizers.
 	CRDExists(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (bool, error)
+	// ClusterVolumesExpandable returns nil only when the named CNPG cluster
+	// has volumes and every one sits on a storage class allowing expansion;
+	// otherwise an error wrapping ErrVolumeExpansionUnsupported, or the
+	// lookup's own error.
+	ClusterVolumesExpandable(ctx context.Context, namespace, clusterName string) error
 	GetPods(ctx context.Context, namespace string, labelSelector string) ([]corev1.Pod, error)
 	IsPodReady(ctx context.Context, namespace, name string) (bool, error)
 	GetSecret(ctx context.Context, namespace, name string) (map[string][]byte, error)

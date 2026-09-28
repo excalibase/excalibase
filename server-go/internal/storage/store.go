@@ -99,6 +99,13 @@ type LeaderLock interface {
 }
 
 // InstanceStore persists database instance metadata and credentials.
+// ProjectParametersStore records the tenant Postgres settings a project runs
+// with (EXC-492). It is the only write that changes them after creation, and
+// like UpdateIfStatus it lands only while the row still holds expected.
+type ProjectParametersStore interface {
+	UpdateParametersIfStatus(projectID string, parameters map[string]string, expected string) error
+}
+
 type InstanceStore interface {
 	// Create registers a new project. Returns ErrProjectExists when the
 	// project id is taken.

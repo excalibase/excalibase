@@ -104,6 +104,33 @@ func (s *Store) UpdateIfStatus(inst *domain.DatabaseInstance, expected string) e
 	return s.update(inst, expected)
 }
 
+// UpdateParametersIfStatus rewrites the recorded tenant parameters. See
+// storage.ProjectParametersStore.
+func (s *Store) UpdateParametersIfStatus(projectID string, parameters map[string]string, expected string) error {
+	if expected == "" {
+		return fmt.Errorf("%w: no expected status given for %s", storage.ErrProjectStatusChanged, projectID)
+	}
+	encoded, err := encodeParameters(parameters)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.Exec(`
+		UPDATE database_instances SET parameters = $2, updated_at = now()
+		WHERE project_id = $1 AND status = $3 AND status <> ALL($4)`,
+		projectID, encoded, expected, pq.Array(deletionStatuses))
+	if err != nil {
+		return fmt.Errorf("update project parameters: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return s.explainRefusedUpdate(projectID, expected)
+	}
+	return nil
+}
+
 // update writes the row. expectedStatus empty means "any status the door
 // allows"; a non-empty one additionally pins the write to that status.
 func (s *Store) update(inst *domain.DatabaseInstance, expectedStatus string) error {
