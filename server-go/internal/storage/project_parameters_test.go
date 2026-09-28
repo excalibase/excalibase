@@ -70,3 +70,13 @@ func TestFileSystemStorageSizeIsWrittenOnlyByItsOwnUpdate(t *testing.T) {
 		t.Errorf("a moved row: got %v, want ErrProjectStatusChanged", err)
 	}
 }
+
+func TestFileSystemUpdateStorageSizeIfStatusRefusesAMissingRow(t *testing.T) {
+	store, err := NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if err := store.UpdateStorageSizeIfStatus("missing", "5Gi", "ACTIVE"); !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("got %v, want ErrProjectNotFound", err)
+	}
+}

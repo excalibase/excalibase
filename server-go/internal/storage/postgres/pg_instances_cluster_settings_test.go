@@ -107,3 +107,13 @@ func TestInstances_StorageSizeIsWrittenOnlyByItsOwnUpdate(t *testing.T) {
 		t.Errorf("a moved row: got %v, want ErrProjectStatusChanged", err)
 	}
 }
+
+func TestInstances_UpdateStorageSizeIfStatusRefusesAMissingOrUnnamedRow(t *testing.T) {
+	store := testStore(t)
+	if err := store.UpdateStorageSizeIfStatus("proj-missing", "5Gi", "ACTIVE"); !errors.Is(err, storage.ErrProjectNotFound) {
+		t.Errorf("missing: got %v, want ErrProjectNotFound", err)
+	}
+	if err := store.UpdateStorageSizeIfStatus("proj-missing", "5Gi", ""); !errors.Is(err, storage.ErrProjectStatusChanged) {
+		t.Errorf("no expected status: got %v, want ErrProjectStatusChanged", err)
+	}
+}

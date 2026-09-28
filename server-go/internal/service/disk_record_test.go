@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -137,4 +138,97 @@ func newRestoredInstance(t *testing.T, plans *fakeRestorePlans) *domain.Database
 		t.Fatalf("registered %d projects, want 1", len(reg.calls))
 	}
 	return reg.calls[0]
+}
+
+func TestRequireRestoreDiskFits(t *testing.T) {
+	svc, _, _ := setupProvisioningTest(t)
+	setOrgTier(svc, "org", domain.Standard)
+	src := sourceInstance()
+	src.StorageSize = "80Gi"
+	if err := svc.RequireRestoreDiskFits(context.Background(), src); err != nil {
+		t.Fatalf("an 80Gi source on STANDARD was refused: %v", err)
+	}
+	setOrgTier(svc, "org", domain.Free)
+	if err := svc.RequireRestoreDiskFits(context.Background(), src); !errors.Is(err, ErrRestoreDiskAbovePlan) {
+		t.Fatalf("err = %v, want ErrRestoreDiskAbovePlan", err)
+	}
+	svc.SetTierStore(erroringTierStore{})
+	if err := svc.RequireRestoreDiskFits(context.Background(), src); !errors.Is(err, ErrTierConfigUnavailable) {
+		t.Fatalf("err = %v, want ErrTierConfigUnavailable", err)
+	}
+	svc.SetOrgStore(nil)
+	if err := svc.RequireRestoreDiskFits(context.Background(), src); !errors.Is(err, ErrOrgTierUnresolved) {
+		t.Fatalf("err = %v, want ErrOrgTierUnresolved", err)
+	}
+}
+
+// A plan whose disk sizes cannot be read sizes nothing.
+func TestRestoreDiskRefusesAnUnreadablePlan(t *testing.T) {
+	src := sourceInstance()
+	for _, plan := range []config.TierConfig{
+		{StorageSize: "lots", MaxStorageSize: "5Gi"},
+		{StorageSize: "5Gi", MaxStorageSize: "lots"},
+	} {
+		if _, err := restoreDisk(src, plan); err == nil || errors.Is(err, ErrRestoreDiskAbovePlan) {
+			t.Errorf("plan %+v: err = %v, want a plan error", plan, err)
+		}
+	}
+}
+
+// storeWithoutDisk cannot record a disk at all.
+type storeWithoutDisk struct{ storage.InstanceStore }
+
+func TestResizeStorageRefusesAStoreThatCannotRecordTheDisk(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	svc.store = storeWithoutDisk{store}
+	before := opsCluster(t, mock)
+	if err := svc.ResizeStorage(context.Background(), testOpsDB, "4Gi"); err == nil {
+		t.Fatal("a resize that could not be recorded reported success")
+	}
+	if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+		t.Error("the cluster grew without a record")
+	}
+}
+
+// failingDiskStore records nothing, so the cluster is never asked.
+type failingDiskStore struct{ *storage.FileSystemStore }
+
+func (failingDiskStore) UpdateStorageSizeIfStatus(string, string, string) error {
+	return errors.New("platform database unavailable")
+}
+
+func TestResizeStorageDoesNotGrowAnUnrecordedDisk(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	svc.store = failingDiskStore{store}
+	before := opsCluster(t, mock)
+	if err := svc.ResizeStorage(context.Background(), testOpsDB, "4Gi"); err == nil {
+		t.Fatal("a resize that could not be recorded reported success")
+	}
+	if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+		t.Error("the cluster grew without a record")
+	}
+}
+
+// revertFailingDiskStore records the growth but cannot put it back.
+type revertFailingDiskStore struct {
+	*storage.FileSystemStore
+	calls int
+}
+
+func (s *revertFailingDiskStore) UpdateStorageSizeIfStatus(projectID, size, expected string) error {
+	s.calls++
+	if s.calls > 1 {
+		return errors.New("platform database unavailable")
+	}
+	return s.FileSystemStore.UpdateStorageSizeIfStatus(projectID, size, expected)
+}
+
+func TestResizeStorageReportsARecordItCouldNotPutBack(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	svc.store = &revertFailingDiskStore{FileSystemStore: store}
+	mock.UpdateCRDError = errors.New("apiserver unavailable")
+	err := svc.ResizeStorage(context.Background(), testOpsDB, "4Gi")
+	if err == nil || !strings.Contains(err.Error(), "put the recorded disk back") {
+		t.Fatalf("err = %v, want it to say the record could not be put back", err)
+	}
 }
