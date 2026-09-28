@@ -36,8 +36,12 @@ func mongoUsersRouter(t *testing.T, documentDB bool) chi.Router {
 	_ = kube.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, "org1-doc-proj", &unstructured.Unstructured{Object: map[string]interface{}{
 		"kind":     "Cluster",
 		"metadata": map[string]interface{}{"name": "doc-proj-postgres"},
-		"status":   map[string]interface{}{"currentPrimary": "doc-proj-postgres-1"},
+		"spec": map[string]interface{}{"postgresql": map[string]interface{}{
+			"pg_ident": []interface{}{"local postgres documentdb", "local postgres owner"},
+		}},
+		"status": map[string]interface{}{"currentPrimary": "doc-proj-postgres-1"},
 	}})
+	kube.ExecOutput["org1-doc-proj/doc-proj-postgres-1"] = "t"
 	svc := service.NewProvisioningService(store, provisioner.NewFactory(), kube)
 	svc.SetVault(newFakeVault())
 	h := NewProvisioningHandler(svc, &adminOrgStore{})

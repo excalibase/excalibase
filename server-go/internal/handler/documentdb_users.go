@@ -81,7 +81,6 @@ func writeMongoUserError(w http.ResponseWriter, err error) {
 		{service.ErrMongoUserExists, http.StatusConflict},
 		{service.ErrMongoUserLimit, http.StatusConflict},
 		{service.ErrNotDocumentDBProject, http.StatusConflict},
-		{service.ErrMongoUsersNeedNewerPostgres, http.StatusConflict},
 		{service.ErrMongoUsersUnavailable, http.StatusServiceUnavailable},
 	} {
 		if errors.Is(err, refusal.err) {

@@ -74,9 +74,6 @@ func TestDocumentDBPeerMapsOnlyTheGatewayRoles(t *testing.T) {
 		"local postgres documentdb",
 		"local postgres owner_doc",
 		"local postgres excalibase_app",
-		// DocumentDB connects back over the socket as the acting user; the
-		// "+" group form needs Postgres 16 (EXC-427).
-		"local postgres +excalibase_mongo_users",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("pg_ident:\n got %q\nwant %q", got, want)

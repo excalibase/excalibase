@@ -91,6 +91,8 @@ type ProvisioningService struct {
 	// Credential rotation refuses to run without it: an unverified password
 	// is not evidence of anything.
 	credVerifier RoleCredentialVerifier
+	// mongoIdentWait bounds the wait for a Mongo user's peer line to load (EXC-427).
+	mongoIdentWait identWait
 
 	// deletionClaimer grants one teardown at a time per project. Lazily set
 	// to the in-process claimer; multi-replica deployments wire the
