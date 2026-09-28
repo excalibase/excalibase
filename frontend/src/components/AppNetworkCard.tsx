@@ -3,6 +3,7 @@ import { Loader2, Lock, Network } from 'lucide-react';
 import { useAppNetwork, useSetAppNetwork } from '../api/appNetwork';
 import { refusalMessage } from '../api/clusterSettings';
 import { Button } from './Button';
+import { useAppHostingEnabled } from '../hooks/useDeploymentMode';
 
 interface AppNetworkCardProps {
   readonly projectId: string;
@@ -110,6 +111,17 @@ export function AppNetworkCard({ projectId, status }: AppNetworkCardProps) {
           {refusalMessage(change.error)}
         </p>
       )}
+    </div>
+  );
+}
+
+// AppNetworkSection shows the card only where the installation hosts apps.
+export function AppNetworkSection({ projectId, status }: AppNetworkCardProps) {
+  const { enabled } = useAppHostingEnabled();
+  if (!enabled) return null;
+  return (
+    <div className="mb-8">
+      <AppNetworkCard projectId={projectId} status={status} />
     </div>
   );
 }

@@ -147,3 +147,82 @@ func TestAppNetwork_DescribeReportsTheObservedPolicy(t *testing.T) {
 		t.Fatalf("view = %+v, want on but not applied", view)
 	}
 }
+
+type stubClaimer struct {
+	claimed bool
+	err     error
+}
+
+func (c stubClaimer) Claim(context.Context, string, ProjectOperation) (func(), bool, error) {
+	return func() {}, c.claimed, c.err
+}
+
+// closeFails lets opening succeed while every close is refused.
+type closeFails struct{ *k8s.MockClient }
+
+func (c closeFails) SetAppPrivateNetwork(ctx context.Context, namespace string, open bool) error {
+	if !open {
+		return errors.New("delete refused")
+	}
+	return c.MockClient.SetAppPrivateNetwork(ctx, namespace, open)
+}
+
+type failingProjects struct{}
+
+func (failingProjects) FindByProjectID(string) (*domain.DatabaseInstance, error) {
+	return nil, errors.New("db down")
+}
+
+func activeProjects() fakeAppNetworkProjects {
+	return fakeAppNetworkProjects{netTestProject: {ProjectID: netTestProject, Namespace: netTestNamespace,
+		Status: string(domain.StatusActive), DeploymentMode: domain.ModeK8s}}
+}
+
+func TestAppNetwork_ABusyProjectIsRefused(t *testing.T) {
+	settings := &fakeAppNetworkSettings{values: map[string]bool{}}
+	busy := NewAppNetworkService(settings, activeProjects(), k8s.NewMockClient(), stubClaimer{claimed: false})
+	if _, err := busy.Set(context.Background(), netTestProject, true); !errors.Is(err, ErrProjectOperationRunning) {
+		t.Fatalf("err = %v, want ErrProjectOperationRunning", err)
+	}
+	broken := NewAppNetworkService(settings, activeProjects(), k8s.NewMockClient(), stubClaimer{err: errors.New("lease store down")})
+	if _, err := broken.Set(context.Background(), netTestProject, true); err == nil {
+		t.Fatal("a failed claim must fail the change")
+	}
+}
+
+func TestAppNetwork_AFailedCloseRecordsNothing(t *testing.T) {
+	settings := &fakeAppNetworkSettings{values: map[string]bool{netTestProject: true}}
+	svc := NewAppNetworkService(settings, activeProjects(), closeFails{k8s.NewMockClient()}, nil)
+	if _, err := svc.Set(context.Background(), netTestProject, false); err == nil {
+		t.Fatal("a refused close must fail the change")
+	}
+	if !settings.values[netTestProject] {
+		t.Fatal("off was recorded although the policy is still there")
+	}
+}
+
+// When neither the write nor the compensating close works, both failures are reported.
+func TestAppNetwork_AFailedWriteAndCloseReportBoth(t *testing.T) {
+	settings := &fakeAppNetworkSettings{values: map[string]bool{}, setErr: errors.New("db down")}
+	svc := NewAppNetworkService(settings, activeProjects(), closeFails{k8s.NewMockClient()}, nil)
+	_, err := svc.Set(context.Background(), netTestProject, true)
+	if err == nil || !errors.Is(err, settings.setErr) {
+		t.Fatalf("err = %v, want the write failure and the close failure", err)
+	}
+}
+
+func TestAppNetwork_ReadFailuresAreReported(t *testing.T) {
+	settings := &fakeAppNetworkSettings{values: map[string]bool{}, getErr: errors.New("db down")}
+	if _, err := NewAppNetworkService(settings, activeProjects(), k8s.NewMockClient(), nil).Describe(context.Background(), netTestProject); err == nil {
+		t.Error("a failed setting read must fail the view")
+	}
+	kube := k8s.NewMockClient()
+	kube.AppPrivateNetworkErr = errors.New("api down")
+	fine := &fakeAppNetworkSettings{values: map[string]bool{}}
+	if _, err := NewAppNetworkService(fine, activeProjects(), kube, nil).Describe(context.Background(), netTestProject); err == nil {
+		t.Error("a failed cluster read must fail the view")
+	}
+	if _, err := NewAppNetworkService(fine, failingProjects{}, k8s.NewMockClient(), nil).Describe(context.Background(), netTestProject); err == nil {
+		t.Error("a failed project lookup must fail the view")
+	}
+}

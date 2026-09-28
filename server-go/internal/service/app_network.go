@@ -18,8 +18,8 @@ var (
 	ErrAppNetworkUnsupported     = errors.New("this project's apps do not run on Kubernetes, so there is no network to open")
 )
 
-// AppNetworkProjects finds the project a setting belongs to.
-type AppNetworkProjects interface {
+// AppNetworkProjectFinder finds the project a setting belongs to.
+type AppNetworkProjectFinder interface {
 	FindByProjectID(projectID string) (*domain.DatabaseInstance, error)
 }
 
@@ -36,12 +36,12 @@ type AppNetworkView struct {
 // write never leaves the network open under a setting that says off.
 type AppNetworkService struct {
 	settings storage.ProjectAppNetworkStore
-	projects AppNetworkProjects
+	projects AppNetworkProjectFinder
 	kube     k8s.KubeClient
 	claimer  ProjectOperationClaimer
 }
 
-func NewAppNetworkService(settings storage.ProjectAppNetworkStore, projects AppNetworkProjects,
+func NewAppNetworkService(settings storage.ProjectAppNetworkStore, projects AppNetworkProjectFinder,
 	kube k8s.KubeClient, claimer ProjectOperationClaimer) *AppNetworkService {
 	return &AppNetworkService{settings: settings, projects: projects, kube: kube, claimer: claimerOrInProcess(claimer)}
 }

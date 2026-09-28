@@ -140,3 +140,35 @@ func TestSetAppPrivateNetwork_ErrorsPropagate(t *testing.T) {
 		})
 	}
 }
+
+// Only what the cluster holds afterwards counts: an apply that does not stick
+// and a delete that leaves the policy behind are both failures.
+func TestSetAppPrivateNetwork_ReadsTheResultBack(t *testing.T) {
+	fake := func(c *Client) interface {
+		PrependReactor(string, string, ktesting.ReactionFunc)
+	} {
+		return c.dynamicClient.(interface {
+			PrependReactor(string, string, ktesting.ReactionFunc)
+		})
+	}
+	ctx := context.Background()
+
+	vanishing := newFakeClient()
+	fake(vanishing).PrependReactor("create", "ciliumnetworkpolicies", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+	if err := vanishing.SetAppPrivateNetwork(ctx, testNamespace, true); err == nil {
+		t.Error("an apply the cluster did not keep must fail")
+	}
+
+	sticky := newFakeClient()
+	if err := sticky.SetAppPrivateNetwork(ctx, testNamespace, true); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	fake(sticky).PrependReactor("delete", "ciliumnetworkpolicies", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+	if err := sticky.SetAppPrivateNetwork(ctx, testNamespace, false); err == nil {
+		t.Error("a delete that left the policy behind must fail")
+	}
+}

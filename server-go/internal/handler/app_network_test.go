@@ -136,3 +136,10 @@ func TestAppNetworkRefusesAnInvalidProjectID(t *testing.T) {
 		t.Fatalf("status %d", w.Code)
 	}
 }
+
+func TestAppNetworkGetReportsAFailedRead(t *testing.T) {
+	w := callAppNetwork(appNetworkRouter(&fakeAppNetwork{err: errors.New("api down")}, adminAccess), http.MethodGet, "")
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502", w.Code)
+	}
+}
