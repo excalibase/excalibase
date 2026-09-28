@@ -332,9 +332,9 @@ func TestApplyOrgTierRefusals(t *testing.T) {
 			m.Capacity = threeNodes()
 			m.VolumeExpansionError = k8s.ErrVolumeExpansionUnsupported
 		}, func(err error) bool { return errors.Is(err, k8s.ErrVolumeExpansionUnsupported) }},
-		{"a plan whose disk is below the current one", func(_ *ProvisioningService, m *k8s.MockClient, t *testing.T) {
+		{"a disk larger than the plan's maximum", func(_ *ProvisioningService, m *k8s.MockClient, t *testing.T) {
 			seedCluster(t, m, config.TierConfig{Instances: 1, StorageSize: "50Gi", Memory: "512Mi", CPU: "0.5"}, nil)
-		}, func(err error) bool { return errors.Is(err, ErrTierDiskBelowCurrent) }},
+		}, func(err error) bool { return errors.Is(err, ErrDiskAbovePlanMax) }},
 		{"tenant settings beyond the new plan's bounds", func(_ *ProvisioningService, m *k8s.MockClient, t *testing.T) {
 			seedCluster(t, m, config.TierConfig{Instances: 1, StorageSize: "2Gi", Memory: "512Mi", CPU: "0.5"},
 				map[string]string{"work_mem": "256MB"})
@@ -367,7 +367,7 @@ func TestClusterSettingsReportTheClusterAndThePlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClusterSettings: %v", err)
 	}
-	if got.Tier != domain.Free || got.OrgTier != domain.Standard || got.StorageSize != "2Gi" || got.StorageLimit != "5Gi" ||
+	if got.Tier != domain.Free || got.OrgTier != domain.Standard || got.StorageSize != "2Gi" || got.StorageStart != "5Gi" || got.StorageLimit != "5Gi" ||
 		got.Instances != 1 || got.Memory != "512Mi" || got.CPU != "0.5" || got.Parameters["work_mem"] != "4MB" {
 		t.Errorf("settings = %+v", got)
 	}
@@ -538,5 +538,82 @@ func TestQuantitiesRefuseWhatIsNotAQuantity(t *testing.T) {
 	}
 	if _, _, err := quantities("1", "lots"); err == nil {
 		t.Error("a memory that is not a quantity was read")
+	}
+}
+
+// setStandardProject puts the project on STANDARD in a STANDARD org with a
+// cluster of the given disk.
+func setStandardProject(t *testing.T, svc *ProvisioningService, store *storage.FileSystemStore, mock *k8s.MockClient, disk string) {
+	t.Helper()
+	setOrgTier(svc, "org1", domain.Standard)
+	inst, _ := store.FindByProjectID(testOpsDB)
+	inst.Tier = domain.Standard
+	if err := store.Update(inst); err != nil {
+		t.Fatalf("mark standard: %v", err)
+	}
+	seedCluster(t, mock, config.TierConfig{Instances: 3, StorageSize: disk, Memory: "4Gi", CPU: "2", StatementTimeout: "30s"}, nil)
+}
+
+// A plan's disk may grow past where it starts, up to the plan's maximum.
+func TestResizeStorageGrowsUpToThePlansMaximum(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	setStandardProject(t, svc, store, mock, "50Gi")
+	if err := svc.ResizeStorage(context.Background(), testOpsDB, "500Gi"); err != nil {
+		t.Fatalf("ResizeStorage to the maximum: %v", err)
+	}
+	if got := clusterField(t, opsCluster(t, mock), "storage", "size"); got != "500Gi" {
+		t.Errorf("storage = %q, want 500Gi", got)
+	}
+	err := svc.ResizeStorage(context.Background(), testOpsDB, "501Gi")
+	if !errors.Is(err, ErrStorageAbovePlan) || !strings.Contains(err.Error(), "500Gi") {
+		t.Fatalf("err = %v, want ErrStorageAbovePlan naming 500Gi", err)
+	}
+}
+
+// Free's disk is fixed: its maximum is the disk it starts with.
+func TestResizeStorageOnFreeIsRefusedAtItsFixedDisk(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	seedCluster(t, mock, config.TierConfig{Instances: 1, StorageSize: "5Gi", Memory: "512Mi", CPU: "0.5"}, nil)
+	if err := svc.ResizeStorage(context.Background(), testOpsDB, "6Gi"); !errors.Is(err, ErrStorageAbovePlan) {
+		t.Fatalf("err = %v, want ErrStorageAbovePlan", err)
+	}
+}
+
+// A disk grown past the plan's start is kept on a plan change that allows it.
+func TestApplyOrgTierKeepsAGrownDiskWithinThePlan(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	setStandardProject(t, svc, store, mock, "80Gi")
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Standard); err != nil {
+		t.Fatalf("ApplyOrgTier: %v", err)
+	}
+	if got := clusterField(t, opsCluster(t, mock), "storage", "size"); got != "80Gi" {
+		t.Errorf("storage = %q, want the grown 80Gi kept", got)
+	}
+}
+
+func TestClusterSettingsReportTheDiskTheDatabasesUse(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	cluster := opsCluster(t, mock)
+	_ = unstructured.SetNestedField(cluster.Object, testOpsDBPostgres+"-1", "status", "currentPrimary")
+	mock.CRDs[testOpsDBNS+"/"+testOpsDBPostgres] = cluster
+	mock.ExecOutput[testOpsDBNS+"/"+testOpsDBPostgres+"-1"] = "123456789\n"
+	got, err := svc.ClusterSettings(context.Background(), testOpsDB)
+	if err != nil {
+		t.Fatalf("ClusterSettings: %v", err)
+	}
+	if got.StorageUsedBytes == nil || *got.StorageUsedBytes != 123456789 {
+		t.Errorf("used = %v, want 123456789", got.StorageUsedBytes)
+	}
+}
+
+// Usage is shown, never guessed: an unreadable size is reported as unknown.
+func TestClusterSettingsReportUnknownUsageAsAbsent(t *testing.T) {
+	svc, _, _ := setupClusterChangeTest(t)
+	got, err := svc.ClusterSettings(context.Background(), testOpsDB)
+	if err != nil {
+		t.Fatalf("ClusterSettings: %v", err)
+	}
+	if got.StorageUsedBytes != nil {
+		t.Errorf("used = %d, want unknown", *got.StorageUsedBytes)
 	}
 }

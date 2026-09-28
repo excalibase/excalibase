@@ -11,6 +11,8 @@ export interface TierConfig {
   maxProjects: number;
   instances: number;
   storageSize: string;
+  // The most a project on the plan may grow its disk to; storageSize is where it starts.
+  maxStorageSize: string;
   memory: string;
   cpu: string;
   backupEnabled: boolean;

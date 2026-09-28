@@ -87,7 +87,7 @@ func TestWithTenantParametersReplacesOnlyTheTenantsSettings(t *testing.T) {
 func TestWithTierResizesAndSpreadsACopyAndKeepsTheStorageClass(t *testing.T) {
 	cluster := freeCluster(t)
 	standard := config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2", StatementTimeout: "30s"}
-	moved := WithTier(cluster, standard)
+	moved := WithTier(cluster, standard, "50Gi")
 
 	instances, _, _ := unstructured.NestedInt64(moved.Object, "spec", "instances")
 	if instances != 3 {
@@ -121,7 +121,7 @@ func TestWithTierToOneInstanceDropsTheSpreadRule(t *testing.T) {
 	opts := clusterOpts("p1", "org-p1")
 	spread := BuildPostgreSQLCluster(opts)
 	free := config.TierConfig{Instances: 1, StorageSize: "500Gi", Memory: "512Mi", CPU: "0.5", StatementTimeout: "15s"}
-	moved := WithTier(spread, free)
+	moved := WithTier(spread, free, "500Gi")
 	if _, found, _ := unstructured.NestedMap(moved.Object, "spec", "affinity"); found {
 		t.Error("a single-instance cluster kept the one-per-node rule")
 	}
@@ -182,7 +182,7 @@ func TestClusterVolumesExpandable(t *testing.T) {
 // but not the disk: a volume that grew cannot be asked to shrink.
 func TestWithSizingOfRestoresTheSizeButKeepsTheDisk(t *testing.T) {
 	before := freeCluster(t)
-	moved := WithTier(before, config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2", StatementTimeout: "30s"})
+	moved := WithTier(before, config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2", StatementTimeout: "30s"}, "50Gi")
 	back := WithSizingOf(moved, before)
 
 	if got := specString(t, back, "storage", "size"); got != "50Gi" {
@@ -211,5 +211,13 @@ func TestValidateTierSizingRefusesAnIncompleteTier(t *testing.T) {
 func TestClusterStorageSizeRefusesASizeThatIsNotAQuantity(t *testing.T) {
 	if _, err := ClusterStorageSize(WithStorageSize(freeCluster(t), "lots")); err == nil {
 		t.Fatal("a size that is not a quantity was read")
+	}
+}
+
+// A disk already grown past the plan's start stays as it is.
+func TestWithTierPutsTheClusterOnTheGivenDisk(t *testing.T) {
+	standard := config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2"}
+	if got := specString(t, WithTier(freeCluster(t), standard, "80Gi"), "storage", "size"); got != "80Gi" {
+		t.Errorf("storage = %q, want 80Gi", got)
 	}
 }

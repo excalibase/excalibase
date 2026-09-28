@@ -100,6 +100,11 @@ func (a *ProjectAccess) RoleAtLeast(minRole string) bool {
 	return a.Member != nil && auth.OrgRoleAtLeast(a.Member.Role, minRole)
 }
 
+// WithProjectAccess carries access on ctx, as RequireProjectAccess does.
+func WithProjectAccess(ctx context.Context, access *ProjectAccess) context.Context {
+	return context.WithValue(ctx, projectAccessKey, access)
+}
+
 // ProjectAccessFromContext returns the access resolved by RequireProjectAccess
 // for this request, or nil when the gate did not run.
 func ProjectAccessFromContext(ctx context.Context) *ProjectAccess {
@@ -163,7 +168,7 @@ func RequireProjectAccess(instStore storage.InstanceStore, orgStore storage.OrgS
 				http.Error(w, errBodyScope, http.StatusForbidden)
 				return
 			}
-			ctx := context.WithValue(r.Context(), projectAccessKey, access)
+			ctx := WithProjectAccess(r.Context(), access)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

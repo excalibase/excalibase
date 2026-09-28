@@ -17,7 +17,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
   const [draft, setDraft] = useState<Record<string, TierConfigInput>>({});
 
   const toInput = (t: TierConfig): TierConfigInput => ({
-    maxProjects: t.maxProjects, instances: t.instances, storageSize: t.storageSize,
+    maxProjects: t.maxProjects, instances: t.instances, storageSize: t.storageSize, maxStorageSize: t.maxStorageSize,
     memory: t.memory, cpu: t.cpu, backupEnabled: t.backupEnabled,
     autoPauseAfterDays: t.autoPauseAfterDays ?? 0,
   });
@@ -29,7 +29,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     const d = draft[t.tier];
     if (d == null) return false;
     return (
-      d.cpu !== t.cpu || d.memory !== t.memory || d.storageSize !== t.storageSize ||
+      d.cpu !== t.cpu || d.memory !== t.memory || d.storageSize !== t.storageSize || d.maxStorageSize !== t.maxStorageSize ||
       d.maxProjects !== t.maxProjects || d.instances !== t.instances || d.backupEnabled !== t.backupEnabled ||
       d.autoPauseAfterDays !== (t.autoPauseAfterDays ?? 0)
     );
@@ -68,6 +68,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
               <th className="text-left px-4 py-3 font-medium">vCPU</th>
               <th className="text-left px-4 py-3 font-medium">Memory</th>
               <th className="text-left px-4 py-3 font-medium">Storage</th>
+              <th className="text-left px-4 py-3 font-medium" title="The most a project may grow its disk to">Max storage</th>
               <th className="text-left px-4 py-3 font-medium">Instances</th>
               <th className="text-left px-4 py-3 font-medium">Max projects</th>
               <th className="text-left px-4 py-3 font-medium">Backup</th>
@@ -84,6 +85,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                   <td className="px-4 py-3"><QtyInput value={d.cpu} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { cpu: v })} placeholder="0.5" /></td>
                   <td className="px-4 py-3"><QtyInput value={d.memory} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { memory: v })} placeholder="4Gi" /></td>
                   <td className="px-4 py-3"><QtyInput value={d.storageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { storageSize: v })} placeholder="50Gi" /></td>
+                  <td className="px-4 py-3"><QtyInput value={d.maxStorageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { maxStorageSize: v })} placeholder="500Gi" /></td>
                   <td className="px-4 py-3"><NumInput value={d.instances} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { instances: v })} /></td>
                   <td className="px-4 py-3"><NumInput value={d.maxProjects} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxProjects: v })} /></td>
                   <td className="px-4 py-3">

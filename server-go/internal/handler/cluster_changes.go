@@ -9,6 +9,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/go-chi/chi/v5"
 )
@@ -88,7 +89,11 @@ func (h *ProvisioningHandler) writeClusterSettings(w http.ResponseWriter, r *htt
 		writeClusterChangeError(w, projectID, "cluster settings read", err)
 		return
 	}
-	writeJSON(w, settings)
+	access := custommw.ProjectAccessFromContext(r.Context())
+	writeJSON(w, struct {
+		*service.ClusterSettings
+		CanChange bool `json:"canChange"`
+	}{settings, access != nil && access.RoleAtLeast(domain.OrgRoleAdmin)})
 }
 
 func decodeStrict(w http.ResponseWriter, r *http.Request, into interface{}) bool {
@@ -126,7 +131,7 @@ func clusterChangeStatus(err error) int {
 		errors.Is(err, config.ErrTenantParameter), errors.Is(err, service.ErrKubernetesOnly):
 		return http.StatusBadRequest
 	case errors.Is(err, service.ErrStorageAbovePlan), errors.Is(err, service.ErrTierNotOrgPlan),
-		errors.Is(err, service.ErrTierDiskBelowCurrent), errors.Is(err, service.ErrTierParametersOutOfBounds),
+		errors.Is(err, service.ErrDiskAbovePlanMax), errors.Is(err, service.ErrTierParametersOutOfBounds),
 		errors.Is(err, service.ErrPlanDoesNotFit),
 		errors.Is(err, k8s.ErrVolumeExpansionUnsupported), errors.As(err, &nodes):
 		return http.StatusConflict

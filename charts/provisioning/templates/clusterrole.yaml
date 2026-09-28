@@ -11,6 +11,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/exec", "pods/log"]
     verbs: ["get", "list", "create"]
+  # A disk resize reads the project's volumes and their storage class (EXC-492)
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get"]
   # Secrets (credentials)
   - apiGroups: [""]
     resources: ["secrets"]

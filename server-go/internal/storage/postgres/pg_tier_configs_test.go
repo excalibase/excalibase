@@ -38,6 +38,10 @@ func TestTierConfigs_SeededDefaults(t *testing.T) {
 		if stored.Instances != builtin.Instances {
 			t.Errorf("%s: stored instances %d, built-in %d", tier, stored.Instances, builtin.Instances)
 		}
+		// Each plan's growth ceiling, as the built-in catalogue says (EXC-492).
+		if stored.MaxStorageSize != builtin.MaxStorageSize {
+			t.Errorf("%s: stored max disk %q, built-in %q", tier, stored.MaxStorageSize, builtin.MaxStorageSize)
+		}
 	}
 }
 
@@ -45,7 +49,7 @@ func TestTierConfigs_UpsertRoundTrip(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	want := config.TierConfig{MaxProjects: 10, Instances: 3, StorageSize: "100Gi", Memory: "8Gi", CPU: "4", BackupEnabled: true}
+	want := config.TierConfig{MaxProjects: 10, Instances: 3, StorageSize: "100Gi", MaxStorageSize: "300Gi", Memory: "8Gi", CPU: "4", BackupEnabled: true}
 	if err := store.UpsertTierConfig(ctx, domain.Standard, want); err != nil {
 		t.Fatalf("UpsertTierConfig: %v", err)
 	}

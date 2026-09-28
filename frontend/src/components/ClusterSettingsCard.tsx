@@ -10,6 +10,7 @@ import {
   type ClusterSettings,
 } from '../api/clusterSettings';
 import type { DatabaseInstance } from '../types';
+import { formatBytes } from '../utils/formatBytes';
 
 interface ClusterSettingsCardProps {
   readonly project: DatabaseInstance;
@@ -20,10 +21,11 @@ const buttonClass =
 const inputClass =
   'px-2 py-1 text-xs rounded border border-border-primary bg-surface-primary text-text-primary';
 
-// gibibytes reads a size the control plane wrote as whole Gi ("5Gi").
+// gibibytes reads a size the control plane wrote in whole Gi or Ti ("5Gi", "2Ti").
 function gibibytes(size: string): number {
-  const match = /^(\d+)Gi$/.exec(size);
-  return match ? Number(match[1]) : Number.NaN;
+  const match = /^(\d+)(Gi|Ti)$/.exec(size);
+  if (!match) return Number.NaN;
+  return Number(match[1]) * (match[2] === 'Ti' ? 1024 : 1);
 }
 
 // ClusterSettingsCard lets an admin grow the disk, move the database onto the
@@ -79,51 +81,60 @@ function ClusterSettingsBody({ projectId, settings }: BodyProps) {
   return (
     <div className="space-y-4 text-xs text-text-secondary">
       <p>
-        Disk:{' '}
-        <span className="text-text-primary font-medium">
-          {settings.storageSize} of {settings.storageLimit}
-        </span>{' '}
-        the plan allows. {settings.instances} {settings.instances === 1 ? 'instance' : 'instances'},{' '}
-        {settings.cpu} CPU and {settings.memory} memory each. A disk can grow but never shrink.
+        {settings.storageUsedBytes == null
+          ? 'Databases used: unknown'
+          : `${formatBytes(settings.storageUsedBytes)} used by the databases`}
+        {' · '}
+        <span className="text-text-primary font-medium">disk {settings.storageSize}</span>
+        {' · '}
+        {current < limit
+          ? `grows up to ${settings.storageLimit} on this plan`
+          : `fixed at ${settings.storageLimit} on this plan`}
+        . {settings.instances} {settings.instances === 1 ? 'instance' : 'instances'}, {settings.cpu}{' '}
+        CPU and {settings.memory} memory each. A disk can grow but never shrink.
       </p>
-      <div className="flex items-center gap-2">
-        <input
-          type="number"
-          min={current + 1}
-          max={limit}
-          value={size}
-          onChange={(event) => setSize(event.target.value)}
-          placeholder={`${current + 1}`}
-          aria-label="New disk size in GiB"
-          data-testid="resize-input"
-          className={`${inputClass} w-20`}
-        />
-        <span>GiB</span>
-        <button
-          type="button"
-          className={buttonClass}
-          disabled={!canResize || busy}
-          onClick={() => setConfirming('resize')}
-          data-testid="resize-btn"
-        >
-          Grow disk
-        </button>
-      </div>
+      {settings.canChange && current < limit && (
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={current + 1}
+            max={limit}
+            value={size}
+            onChange={(event) => setSize(event.target.value)}
+            placeholder={`${current + 1}`}
+            aria-label="New disk size in GiB"
+            data-testid="resize-input"
+            className={`${inputClass} w-20`}
+          />
+          <span>GiB</span>
+          <button
+            type="button"
+            className={buttonClass}
+            disabled={!canResize || busy}
+            onClick={() => setConfirming('resize')}
+            data-testid="resize-btn"
+          >
+            Grow disk
+          </button>
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <span>
           Plan: <span className="text-text-primary font-medium">{settings.tier}</span>; organization
           plan: <span className="text-text-primary font-medium">{settings.orgTier}</span>.
         </span>
-        <button
-          type="button"
-          className={buttonClass}
-          disabled={settings.tier === settings.orgTier || busy}
-          onClick={() => setConfirming('tier')}
-          data-testid="tier-apply-btn"
-        >
-          Move onto {settings.orgTier}
-        </button>
+        {settings.canChange && (
+          <button
+            type="button"
+            className={buttonClass}
+            disabled={settings.tier === settings.orgTier || busy}
+            onClick={() => setConfirming('tier')}
+            data-testid="tier-apply-btn"
+          >
+            Move onto {settings.orgTier}
+          </button>
+        )}
       </div>
 
       <ParametersForm
@@ -197,24 +208,30 @@ function ParametersForm({ settings, busy, onSave }: ParametersFormProps) {
             data-testid={`param-${name}`}
           >
             <span className="font-mono">{name}</span>
-            <input
-              type="text"
-              value={values[name] ?? ''}
-              onChange={(event) => setValues({ ...values, [name]: event.target.value })}
-              className={`${inputClass} w-32`}
-            />
+            {settings.canChange ? (
+              <input
+                type="text"
+                value={values[name] ?? ''}
+                onChange={(event) => setValues({ ...values, [name]: event.target.value })}
+                className={`${inputClass} w-32`}
+              />
+            ) : (
+              <span className="font-mono text-text-primary">{values[name] ?? 'default'}</span>
+            )}
           </label>
         ))}
       </div>
-      <button
-        type="button"
-        className={`${buttonClass} mt-2`}
-        disabled={busy}
-        onClick={save}
-        data-testid="params-save-btn"
-      >
-        Save settings
-      </button>
+      {settings.canChange && (
+        <button
+          type="button"
+          className={`${buttonClass} mt-2`}
+          disabled={busy}
+          onClick={save}
+          data-testid="params-save-btn"
+        >
+          Save settings
+        </button>
+      )}
     </div>
   );
 }
