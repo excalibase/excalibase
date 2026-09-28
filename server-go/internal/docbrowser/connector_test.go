@@ -103,7 +103,7 @@ func newConnectorFixture(t *testing.T) *connectorFixture {
 			DocumentDB: true, Status: "ACTIVE", DeploymentMode: domain.ModeK8s,
 		}},
 		vault: &fakeVault{creds: map[string]map[string]string{
-			"projects/" + connProject + "/credentials/excalibase_app": {"username": "excalibase_app", "password": "app-secret"},
+			"projects/" + connProject + "/credentials/docbrowser": {"username": "excalibase_docbrowser", "password": "app-secret"},
 		}},
 		cluster: &fakeCluster{
 			address: connAddress,
@@ -136,7 +136,7 @@ func TestConnectorDialsTheGatewayAsTheAppRoleOverVerifiedTLS(t *testing.T) {
 	if strings.Join(opts.Hosts, ",") != connAddress+":10260" {
 		t.Errorf("hosts: %v", opts.Hosts)
 	}
-	if opts.Auth == nil || opts.Auth.Username != "excalibase_app" || opts.Auth.Password != "app-secret" || opts.Auth.AuthMechanism != "SCRAM-SHA-256" {
+	if opts.Auth == nil || opts.Auth.Username != "excalibase_docbrowser" || opts.Auth.Password != "app-secret" || opts.Auth.AuthMechanism != "SCRAM-SHA-256" {
 		t.Errorf("auth: %+v", opts.Auth)
 	}
 	assertVerifiedTLS(t, opts.TLSConfig)
@@ -180,7 +180,7 @@ func TestConnectorReusesTheClientUntilSomethingChanges(t *testing.T) {
 	if len(f.dialed) != 1 {
 		t.Fatalf("dialled %d times for an unchanged project", len(f.dialed))
 	}
-	f.vault.creds["projects/"+connProject+"/credentials/excalibase_app"]["password"] = "rotated"
+	f.vault.creds["projects/"+connProject+"/credentials/docbrowser"]["password"] = "rotated"
 	if _, err := c.Store(ctx, connProject); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestConnectorKeepsABoundedNumberOfClients(t *testing.T) {
 		inst := *f.projects.inst
 		inst.ProjectID, inst.Namespace = id, "ns-"+id
 		c.projects = fakeProjects{inst: &inst}
-		f.vault.creds["projects/"+id+"/credentials/excalibase_app"] = map[string]string{"username": "u", "password": "p"}
+		f.vault.creds["projects/"+id+"/credentials/docbrowser"] = map[string]string{"username": "u", "password": "p"}
 		f.cluster.secrets["ns-"+id+"/"+id+"-postgres-ca"] = map[string][]byte{"ca.crt": testCAPEM(t)}
 		if _, err := c.Store(context.Background(), id); err != nil {
 			t.Fatal(err)
@@ -249,7 +249,7 @@ func TestConnectorFailsRatherThanGuessing(t *testing.T) {
 		"lookup error":  func(f *connectorFixture) { f.projects.err = errors.New("db down") },
 		"no credential": func(f *connectorFixture) { f.vault.creds = map[string]map[string]string{} },
 		"empty password": func(f *connectorFixture) {
-			f.vault.creds["projects/"+connProject+"/credentials/excalibase_app"]["password"] = ""
+			f.vault.creds["projects/"+connProject+"/credentials/docbrowser"]["password"] = ""
 		},
 		"no host":      func(f *connectorFixture) { f.projects.inst.Host = "" },
 		"no ca secret": func(f *connectorFixture) { f.cluster.secrets = map[string]map[string][]byte{} },

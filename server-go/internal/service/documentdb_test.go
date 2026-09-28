@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -35,10 +36,31 @@ func documentDBProject() *domain.DatabaseInstance {
 // documentDBService builds a service whose only capability is executing SQL.
 func documentDBService(t *testing.T, kube k8s.KubeClient) *ProvisioningService {
 	t.Helper()
+	if mock, ok := kube.(*k8s.MockClient); ok {
+		seedDocumentDBCluster(t, mock)
+	}
 	svc := NewProvisioningService(documentDBStore(t), provisioner.NewFactory(), kube)
 	svc.SetOrgStore(testOrgs())
 	svc.SetVault(newFakeVault())
+	svc.mongoIdentWait = identWait{timeout: 50 * time.Millisecond, interval: time.Millisecond}
 	return svc
+}
+
+// seedDocumentDBCluster gives the mock the project's Cluster and a primary
+// that reports a new peer line loaded, as the document browser login needs.
+func seedDocumentDBCluster(t *testing.T, kube *k8s.MockClient) {
+	t.Helper()
+	inst := documentDBProject()
+	cluster := mongoCluster()
+	cluster.SetName(inst.ProjectID + "-postgres")
+	cluster.SetNamespace(inst.Namespace)
+	if err := kube.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, inst.Namespace, cluster); err != nil {
+		t.Fatal(err)
+	}
+	key := inst.Namespace + "/" + inst.ProjectID + "-postgres-1"
+	if _, set := kube.ExecOutput[key]; !set {
+		kube.ExecOutput[key] = "t\n"
+	}
 }
 
 // documentDBStore is an empty project store on disk, discarded with the test.
@@ -264,7 +286,12 @@ func TestEnableDocumentDBGrantsTheProjectsOwnCredentialMongoAccess(t *testing.T)
 		t.Fatalf("enableDocumentDB: %v", err)
 	}
 
-	granted := appRoleGrants(kube)
+	var granted []string
+	for _, cmd := range execCommandsMentioning(kube, "GRANT documentdb_admin_role TO") {
+		if !strings.Contains(cmd, `TO "documentdb"`) {
+			granted = append(granted, cmd)
+		}
+	}
 	if len(granted) != 1 {
 		t.Fatalf("the project's grant ran %d times: %v", len(granted), kube.ExecCommands)
 	}
@@ -275,47 +302,22 @@ func TestEnableDocumentDBGrantsTheProjectsOwnCredentialMongoAccess(t *testing.T)
 	}
 }
 
-// Studio's document browser reaches the gateway as the platform's own app
-// role, so that role needs the same membership the owner has.
-func TestEnableDocumentDBGrantsThePlatformAppRoleMongoAccess(t *testing.T) {
+// excalibase_app logs in by certificate only (EXC-410); it gets no DocumentDB
+// membership, on a new project or a restored one.
+func TestNeitherANewNorARestoredProjectGrantsThePlatformAppRole(t *testing.T) {
 	kube := k8s.NewMockClient()
 	svc := documentDBService(t, kube)
 	inst := documentDBProject()
 	inst.Username = "owner_doc"
 
-	if err := svc.enableDocumentDB(context.Background(), inst, idleContext()); err != nil {
-		t.Fatalf("enableDocumentDB: %v", err)
-	}
-
-	granted := appRoleGrants(kube)
-	if len(granted) != 1 {
-		t.Fatalf("the project's grant ran %d times: %v", len(granted), kube.ExecCommands)
-	}
-	for _, want := range []string{`"owner_doc"`, `"excalibase_app"`} {
-		if !strings.Contains(granted[0], want) {
-			t.Errorf("the grant is missing %s: %s", want, granted[0])
-		}
-	}
-	if len(execCommandsMentioning(kube, `documentdb_admin_role TO "documentdb"`)) != 1 {
-		t.Errorf("the gateway role's grant must converge too: %v", kube.ExecCommands)
-	}
-}
-
-// A restore registers the project through the same path, so an existing
-// DocumentDB project brought back gets the app role's membership too.
-func TestRestoredDocumentDBProjectGrantsThePlatformAppRole(t *testing.T) {
-	kube := k8s.NewMockClient()
-	svc := documentDBService(t, kube)
-	inst := documentDBProject()
-
-	err := svc.RegisterProject(context.Background(), inst, RegistrationOptions{Unverified: true})
-	if err != nil {
+	if err := svc.RegisterProject(context.Background(), inst, RegistrationOptions{Unverified: true}); err != nil {
 		t.Fatalf("RegisterProject: %v", err)
 	}
-
-	granted := appRoleGrants(kube)
-	if len(granted) != 1 || !strings.Contains(granted[0], "documentdb_admin_role") {
-		t.Errorf("restored project: app role grant missing: %v", granted)
+	if granted := appRoleGrants(kube); len(granted) != 0 {
+		t.Errorf("excalibase_app granted DocumentDB access: %v", granted)
+	}
+	if len(execCommandsMentioning(kube, `documentdb_admin_role TO "documentdb"`)) != 1 {
+		t.Errorf("the gateway role's grant must converge: %v", kube.ExecCommands)
 	}
 }
 

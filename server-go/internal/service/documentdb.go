@@ -82,7 +82,14 @@ func (s *ProvisioningService) enableDocumentDB(ctx context.Context, inst *domain
 			return pc.Fail(fmt.Errorf("enable %s in %s: %w", config.DocumentDBExtension, inst.ProjectID, err))
 		}
 	}
-	return s.grantDocumentDBAccess(ctx, inst, primaryPod, pc)
+	if err := s.grantDocumentDBAccess(ctx, inst, primaryPod, pc); err != nil {
+		return err
+	}
+	// Studio's document browser is Kubernetes-only.
+	if s.k8sClient == nil {
+		return nil
+	}
+	return s.createDocBrowserLogin(ctx, inst, primaryPod, pc)
 }
 
 // grantDocumentDBAccess lets the project's own credential use the MongoDB
@@ -108,8 +115,7 @@ func (s *ProvisioningService) grantDocumentDBAccess(
 	ctx context.Context, inst *domain.DatabaseInstance, primaryPod string, pc *provisioner.ProvisionContext,
 ) error {
 	pc.SetStep(documentDBGrantStep)
-	cmd := documentDBPsql(config.DocumentDBDatabase,
-		documentDBGrantSQL(inst.Username, roleApp))
+	cmd := documentDBPsql(config.DocumentDBDatabase, documentDBGrantSQL(inst.Username))
 	if err := s.execRoleSQL(ctx, inst.Namespace, primaryPod, cmd); err != nil {
 		return pc.Fail(fmt.Errorf("grant %s access to %s in %s: %w",
 			config.DocumentDBExtension, inst.Username, inst.ProjectID, err))
@@ -117,9 +123,9 @@ func (s *ProvisioningService) grantDocumentDBAccess(
 	return nil
 }
 
-// documentDBGrantSQL makes the owner and the platform's app role DocumentDB
-// users; Studio's document browser connects as the latter. The membership
-// carries no user management: that needs CREATEROLE, which neither role has.
+// documentDBGrantSQL makes the owner a DocumentDB user. The platform's roles
+// are not: Studio's document browser has its own login (EXC-410). The
+// membership carries no user management: that needs CREATEROLE.
 // GRANT is idempotent, so a retried provision converges.
 func documentDBGrantSQL(roles ...string) string {
 	quoted := make([]string, 0, len(roles))

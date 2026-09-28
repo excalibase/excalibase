@@ -2048,7 +2048,7 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 }
 
 // buildDocumentBrowser wires the document browser, which reaches a project's
-// gateway as excalibase_app from vault. It needs Kubernetes to find the
+// gateway as its own Mongo login from vault. It needs Kubernetes to find the
 // gateway and the cluster CA, so a deployment without one mounts nothing.
 func buildDocumentBrowser(k8sClient k8s.KubeClient, vc vaultclient.VaultClient, store storage.InstanceStore) *handler.DocumentBrowserHandler {
 	if k8sClient == nil || vc == nil {
