@@ -27,6 +27,10 @@ const (
 	netAppImage     = "nginxinc/nginx-unprivileged:1.27"
 	netAppPort      = 8080
 	netDBPort       = 5432
+	// NATS serves HTTP monitoring on 8222 and its client protocol on 4222 (EXC-525).
+	netQueueImage    = "nats:2.10-alpine"
+	netQueueHTTPPort = 8222
+	netQueueTCPPort  = 4222
 )
 
 var netRoute = AppRouteOptions{Domain: "apps.test", IngressClass: "haproxy", IngressFromNamespace: netEdge}
@@ -55,10 +59,18 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 	web := netApp("app-net-web", "proj-neta", "web")
 	api := netApp("app-net-api", "proj-neta", "api")
 	foreign := netApp("app-net-foreign", "proj-netb", "api")
+	queue := netApp("app-net-queue", "proj-neta", "queue")
+	queue.Image, queue.Port = netQueueImage, netQueueHTTPPort
+	queue.InternalPorts = []apphost.InternalPort{{Port: netQueueTCPPort, Protocol: apphost.ProtocolTCP}}
 	lab.deployNetApp(t, netProject, web)
 	lab.deployNetApp(t, netProject, api)
+	lab.deployNetApp(t, netProject, queue)
 	lab.deployNetApp(t, netOtherProject, foreign)
 	lab.startNetFencePods(t)
+	runPod(lab.ctx, t, lab.cs, netEdge, "edge", nil, []string{"/bin/sleep", "3600"})
+	queuePodIP := lab.appPodIP(t, netProject, queue)
+	queueTCP := net.JoinHostPort(queuePodIP, strconv.Itoa(netQueueTCPPort))
+	queueHTTP := net.JoinHostPort(queuePodIP, strconv.Itoa(netQueueHTTPPort))
 
 	fromWeb := func(host string, port int) error { return lab.dialFromApp(netProject, web, host, port) }
 	fromAPI := func(host string, port int) error { return lab.dialFromApp(netProject, api, host, port) }
@@ -68,6 +80,13 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 	t.Run("off by default: apps in one project cannot reach each other", func(t *testing.T) {
 		refusedFor(t, "web to api by name", func() error { return fromWeb("api", appServicePort) })
 		refusedFor(t, "api to web by name", func() error { return fromAPI("web", appServicePort) })
+		refusedFor(t, "web to queue's internal TCP port", func() error { return fromWeb("queue", netQueueTCPPort) })
+	})
+	t.Run("the edge reaches the HTTP port and never an internal port", func(t *testing.T) {
+		eventually(t, "the edge reaches queue's HTTP port", time.Minute, func() bool {
+			return lab.agnhostConnect(netEdge, "edge", queueHTTP) == nil
+		})
+		refusedFor(t, "the edge to queue's internal port", func() error { return lab.agnhostConnect(netEdge, "edge", queueTCP) })
 	})
 
 	for _, ns := range []string{netProject, netOtherProject} {
@@ -78,6 +97,24 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 	t.Run("on: apps reach each other by name on the HTTP port", func(t *testing.T) {
 		eventually(t, "web reaches http://api", time.Minute, func() bool { return fromWeb("api", appServicePort) == nil })
 		eventually(t, "api reaches http://web", time.Minute, func() bool { return fromAPI("web", appServicePort) == nil })
+	})
+	t.Run("on: apps reach an internal TCP port by name and speak its protocol", func(t *testing.T) {
+		eventually(t, "web reaches queue:4222", time.Minute, func() bool { return fromWeb("queue", netQueueTCPPort) == nil })
+		greeting, err := lab.readFromApp(netProject, web, "queue", netQueueTCPPort)
+		if err != nil || !strings.HasPrefix(greeting, "INFO ") {
+			t.Fatalf("queue:4222 must answer with the NATS greeting, got %q (%v)", greeting, err)
+		}
+	})
+	t.Run("on: the internal port stays closed to everything else", func(t *testing.T) {
+		refusedFor(t, "the edge to queue's internal port", func() error { return lab.agnhostConnect(netEdge, "edge", queueTCP) })
+		for _, probe := range []struct{ desc, ns, pod string }{
+			{"another project's pod", netOtherProject, podIntruder},
+			{"a non-app pod in the same project", netProject, podNeighbour},
+			{"the project's database pod", netProject, podDatabase},
+			{"the platform", netPlatform, podPlatform},
+		} {
+			refusedFor(t, probe.desc+" to the internal port", func() error { return lab.agnhostConnect(probe.ns, probe.pod, queueTCP) })
+		}
 	})
 	t.Run("on: nothing else gains access to the apps", func(t *testing.T) {
 		refusedFor(t, "an app in another project, both switched on", func() error { return fromWeb(foreignHost, appServicePort) })
@@ -103,7 +140,18 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 	}
 	t.Run("off again: the apps are closed to each other", func(t *testing.T) {
 		refusedFor(t, "web to api by name", func() error { return fromWeb("api", appServicePort) })
+		refusedFor(t, "web to queue's internal TCP port", func() error { return fromWeb("queue", netQueueTCPPort) })
 	})
+}
+
+// readFromApp reads the first line a TCP service sends, from inside the app's container.
+func (lab *egressLab) readFromApp(namespace string, app *apphost.App, host string, port int) (string, error) {
+	pod, err := lab.firstAppPod(namespace, app)
+	if err != nil {
+		return "", err
+	}
+	script := fmt.Sprintf("exec 3<>/dev/tcp/%s/%d; read -t 3 line <&3; printf '%%s' \"$line\"", host, port)
+	return lab.client.ExecInPod(lab.ctx, namespace, pod, app.Name, []string{"timeout", "5", "bash", "-c", script})
 }
 
 func (lab *egressLab) deployNetApp(t *testing.T, namespace string, app *apphost.App) {

@@ -3,11 +3,14 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 )
 
 // AppPrivateNetworkPolicyName is the project's opt-in (EXC-524): while it
@@ -53,10 +56,19 @@ func buildAppPrivateNetworkPolicy(namespace string) (*unstructured.Unstructured,
 	return policy, nil
 }
 
-// appPrivatePorts are the container port names an app may be reached on from its project.
+// appPrivatePorts are the container port names an app may be reached on from
+// its project: the HTTP port and every internal port slot (EXC-525).
 func appPrivatePorts() []ciliumPort {
-	return []ciliumPort{{Port: appServicePortName, Protocol: protocolTCP}}
+	ports := []ciliumPort{{Port: appServicePortName, Protocol: protocolTCP}}
+	for slot := range apphost.MaxInternalPorts {
+		ports = append(ports, ciliumPort{Port: internalPortName(slot), Protocol: protocolTCP})
+	}
+	return ports
 }
+
+// internalPortName names the app's slot-th internal port; slots, not numbers,
+// so one static policy covers every app's ports.
+func internalPortName(slot int) string { return "internal-" + strconv.Itoa(slot+1) }
 
 // SetAppPrivateNetwork opens or closes app-to-app traffic in the namespace
 // and reads the result back, so a caller records only what the cluster holds.

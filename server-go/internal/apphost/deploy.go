@@ -60,6 +60,7 @@ type DeployConfig struct {
 	Image           string          `json:"image"`
 	Env             []EnvVar        `json:"env"`
 	Port            int             `json:"port"`
+	InternalPorts   []InternalPort  `json:"internalPorts,omitempty"`
 	HealthCheckPath string          `json:"healthCheckPath,omitempty"`
 	Replicas        int             `json:"replicas"`
 	Tier            domain.TierType `json:"tier"`
@@ -75,6 +76,7 @@ func ConfigFromApp(app *App) DeployConfig {
 		Image:           app.Image,
 		Env:             env,
 		Port:            app.Port,
+		InternalPorts:   cloneInternalPorts(app.InternalPorts),
 		HealthCheckPath: app.HealthCheckPath,
 		Replicas:        app.Replicas,
 		Tier:            app.Tier,
@@ -90,6 +92,7 @@ func (c DeployConfig) ToApp(id, projectID, name string) *App {
 		Image:           c.Image,
 		Env:             c.Env,
 		Port:            c.Port,
+		InternalPorts:   cloneInternalPorts(c.InternalPorts),
 		HealthCheckPath: c.HealthCheckPath,
 		Replicas:        c.Replicas,
 		Tier:            c.Tier,

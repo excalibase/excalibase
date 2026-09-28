@@ -213,6 +213,21 @@ export function AppForm({
             />
           </Field>
           <Field
+            label="Internal TCP ports"
+            htmlFor="app-internal-ports"
+            error={errors.internalPorts}
+            hint="Optional, e.g. 6379. Reachable only by this project's apps, with its private network on; never from the internet."
+          >
+            <input
+              id="app-internal-ports"
+              value={values.internalPorts}
+              onChange={(e) => set({ internalPorts: e.target.value })}
+              placeholder="6379, 9092"
+              className={inputClass}
+              data-testid="app-internal-ports"
+            />
+          </Field>
+          <Field
             label="Copies"
             htmlFor="app-replicas"
             error={errors.replicas}

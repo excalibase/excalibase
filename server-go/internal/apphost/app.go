@@ -274,6 +274,8 @@ type App struct {
 	Env []EnvVar `json:"env"`
 	// Port is the single HTTP port the container exposes.
 	Port int `json:"port"`
+	// InternalPorts are raw TCP ports reachable only by the project's own apps (EXC-525).
+	InternalPorts []InternalPort `json:"internalPorts,omitempty"`
 	// HealthCheckPath is optional and must start with '/' when set.
 	HealthCheckPath string `json:"healthCheckPath,omitempty"`
 	// Replicas is 0-3; zero means intentionally stopped.
@@ -411,6 +413,9 @@ func (a *App) Validate() error {
 	}
 	if a.Port < 1 || a.Port > 65535 {
 		return errors.New("port must be between 1 and 65535")
+	}
+	if err := validateInternalPorts(a.Port, a.InternalPorts); err != nil {
+		return err
 	}
 	if err := validateHealthCheckPath(a.HealthCheckPath); err != nil {
 		return err

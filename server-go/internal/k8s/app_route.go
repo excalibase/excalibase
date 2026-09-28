@@ -83,14 +83,29 @@ func buildAppService(namespace string, app *apphost.App) *corev1.Service {
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
 			Selector: appSelectorLabels(app),
-			Ports: []corev1.ServicePort{{
-				Name:       appServicePortName,
-				Port:       appServicePort,
-				TargetPort: intstr.FromInt(app.Port),
-				Protocol:   corev1.ProtocolTCP,
-			}},
+			Ports:    appServicePorts(app),
 		},
 	}
+}
+
+// appServicePorts: port 80 is the HTTP port the edge and http://<name> use;
+// each internal port keeps its own number, so <name>:<port> works in the project.
+func appServicePorts(app *apphost.App) []corev1.ServicePort {
+	ports := []corev1.ServicePort{{
+		Name:       appServicePortName,
+		Port:       appServicePort,
+		TargetPort: intstr.FromInt(app.Port),
+		Protocol:   corev1.ProtocolTCP,
+	}}
+	for slot, internal := range app.InternalPorts {
+		ports = append(ports, corev1.ServicePort{
+			Name:       internalPortName(slot),
+			Port:       int32(internal.Port),
+			TargetPort: intstr.FromInt(internal.Port),
+			Protocol:   corev1.ProtocolTCP,
+		})
+	}
+	return ports
 }
 
 func buildAppIngress(namespace string, app *apphost.App, host string, opts AppRouteOptions) *networkingv1.Ingress {

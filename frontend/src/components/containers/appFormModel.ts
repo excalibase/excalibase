@@ -20,6 +20,8 @@ export interface AppFormValues {
   name: string;
   image: string;
   port: string;
+  // Comma-separated TCP port numbers (EXC-525); empty means none.
+  internalPorts: string;
   replicas: string;
   healthCheckPath: string;
   env: EnvRow[];
@@ -33,7 +35,14 @@ export interface AppFormValues {
 
 export type AppFormErrors = Partial<
   Record<
-    'name' | 'image' | 'port' | 'replicas' | 'healthCheckPath' | 'diskMountPath' | 'diskSize',
+    | 'name'
+    | 'image'
+    | 'port'
+    | 'internalPorts'
+    | 'replicas'
+    | 'healthCheckPath'
+    | 'diskMountPath'
+    | 'diskSize',
     string
   >
 > & {
@@ -78,6 +87,7 @@ export const initialValues = (app?: App): AppFormValues =>
         name: app.name,
         image: app.image,
         port: String(app.port),
+        internalPorts: (app.internalPorts ?? []).map((p) => p.port).join(', '),
         replicas: String(app.replicas),
         healthCheckPath: app.healthCheckPath ?? '',
         env: app.env.map(rowFromVar),
@@ -90,6 +100,7 @@ export const initialValues = (app?: App): AppFormValues =>
         name: '',
         image: '',
         port: String(DEFAULT_PORT),
+        internalPorts: '',
         replicas: String(DEFAULT_REPLICAS),
         healthCheckPath: '',
         env: [],
@@ -210,6 +221,8 @@ export function validateAppForm(
   }
   if (!wholeNumberIn(values.port, 1, 65535))
     errors.port = 'Port must be a whole number between 1 and 65535.';
+  const internal = internalPortsError(values.internalPorts, values.port);
+  if (internal) errors.internalPorts = internal;
   if (!wholeNumberIn(values.replicas, 0, maxReplicas)) {
     errors.replicas = `Choose between 0 and ${maxReplicas} copies.`;
   }
@@ -221,6 +234,23 @@ export function validateAppForm(
   const env = envErrors(values.env, databaseName);
   if (Object.keys(env).length > 0) errors.env = env;
   return errors;
+}
+
+// The server's rules (EXC-525): at most 8, each 1024-65535, never the HTTP port, no repeats.
+export const MAX_INTERNAL_PORTS = 8;
+
+const parseInternalPorts = (raw: string): string[] =>
+  raw.trim() === '' ? [] : raw.split(',').map((part) => part.trim());
+
+function internalPortsError(raw: string, httpPort: string): string | undefined {
+  const parts = parseInternalPorts(raw);
+  if (parts.length > MAX_INTERNAL_PORTS) return `Declare at most ${MAX_INTERNAL_PORTS} internal ports.`;
+  if (parts.some((part) => !wholeNumberIn(part, 1024, 65535))) {
+    return 'Internal ports are whole numbers between 1024 and 65535, separated by commas.';
+  }
+  if (parts.includes(httpPort.trim())) return 'An internal port cannot be the HTTP port.';
+  if (new Set(parts.map(Number)).size !== parts.length) return 'Each internal port may be listed once.';
+  return undefined;
 }
 
 export const hasErrors = (errors: AppFormErrors) => Object.keys(errors).length > 0;
@@ -247,6 +277,7 @@ export const toAppSubmission = (values: AppFormValues, databaseName?: string): A
     name: values.name,
     image: values.image,
     port: Number(values.port),
+    internalPorts: parseInternalPorts(values.internalPorts).map((part) => ({ port: Number(part), protocol: 'TCP' as const })),
     replicas: Number(values.replicas),
     healthCheckPath: values.healthCheckPath,
     env: values.env.flatMap((row) => toEnvVar(row, databaseName) ?? []),

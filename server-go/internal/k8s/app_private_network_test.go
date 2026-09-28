@@ -66,15 +66,14 @@ func TestAppPrivateNetworkPolicySelectsOnlyThisNamespacesApps(t *testing.T) {
 
 // The ports are named, so one static policy admits each app's own HTTP port
 // without being re-rendered per app.
-func TestAppPrivateNetworkPolicyAdmitsTheNamedHTTPPortOnly(t *testing.T) {
+func TestAppPrivateNetworkPolicyAdmitsTheNamedHTTPPort(t *testing.T) {
 	policy, err := buildAppPrivateNetworkPolicy(testNamespace)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	spec := privateNetworkSpec(t, policy)
-	want := []ciliumPortRule{{Ports: []ciliumPort{{Port: appServicePortName, Protocol: protocolTCP}}}}
-	if !reflect.DeepEqual(spec.Ingress[0].ToPorts, want) {
-		t.Errorf("ingress ports = %+v, want %+v", spec.Ingress[0].ToPorts, want)
+	if len(spec.Ingress[0].ToPorts) != 1 || spec.Ingress[0].ToPorts[0].Ports[0] != (ciliumPort{Port: appServicePortName, Protocol: protocolTCP}) {
+		t.Errorf("ingress ports = %+v, want the named http port first", spec.Ingress[0].ToPorts)
 	}
 }
 

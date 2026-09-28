@@ -25,3 +25,19 @@ spec:
     - ports:
       - port: http
         protocol: TCP
+      - port: internal-1
+        protocol: TCP
+      - port: internal-2
+        protocol: TCP
+      - port: internal-3
+        protocol: TCP
+      - port: internal-4
+        protocol: TCP
+      - port: internal-5
+        protocol: TCP
+      - port: internal-6
+        protocol: TCP
+      - port: internal-7
+        protocol: TCP
+      - port: internal-8
+        protocol: TCP

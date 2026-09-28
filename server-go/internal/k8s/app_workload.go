@@ -486,17 +486,25 @@ func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.R
 		// Used exactly as recorded; EXC-386 fills App.ResolvedDigest once one exists.
 		Image:           app.Image,
 		ImagePullPolicy: corev1.PullAlways,
-		Ports: []corev1.ContainerPort{{
-			Name:          "http",
-			ContainerPort: int32(app.Port),
-			Protocol:      corev1.ProtocolTCP,
-		}},
+		Ports:           appContainerPorts(app),
 		Env:             env,
 		Resources:       resources,
 		ReadinessProbe:  appReadinessProbe(app),
 		Lifecycle:       appLifecycle(),
 		SecurityContext: containerSecurityContext(),
 	}
+}
+
+// appContainerPorts names every port, since the project's private network
+// policy admits ports by name (EXC-524, EXC-525).
+func appContainerPorts(app *apphost.App) []corev1.ContainerPort {
+	ports := []corev1.ContainerPort{{Name: appServicePortName, ContainerPort: int32(app.Port), Protocol: corev1.ProtocolTCP}}
+	for slot, internal := range app.InternalPorts {
+		ports = append(ports, corev1.ContainerPort{
+			Name: internalPortName(slot), ContainerPort: int32(internal.Port), Protocol: corev1.ProtocolTCP,
+		})
+	}
+	return ports
 }
 
 // appDrainSeconds keeps a stopping pod serving until the ingress controller has
