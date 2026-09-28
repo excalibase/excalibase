@@ -22,6 +22,10 @@ var provisionRows = []Row{
 	{Methods: post, Pattern: "/api/provision/{projectId}/pause", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
 	{Methods: post, Pattern: "/api/provision/{projectId}/resume", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin},
 	{Methods: post, Pattern: "/api/provision/{projectId}/upgrade", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "restarts the tenant database onto the newest patch of its own major"},
+	{Methods: get, Pattern: "/api/provision/{projectId}/cluster", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "the database's disk, size, plan and tunable settings; no secrets"},
+	{Methods: post, Pattern: "/api/provision/{projectId}/storage", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "grows the tenant database's disk, up to its plan"},
+	{Methods: post, Pattern: "/api/provision/{projectId}/tier", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "moves the tenant database onto its org's plan; only a platform admin changes the plan"},
+	{Methods: put, Pattern: "/api/provision/{projectId}/parameters", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "allowlisted Postgres settings within the plan's bounds"},
 
 	{Methods: get, Pattern: "/api/provision/{projectId}/metrics/current", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},
 	{Methods: get, Pattern: "/api/provision/{projectId}/metrics/history", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer},

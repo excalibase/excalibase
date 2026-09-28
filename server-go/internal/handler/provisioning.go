@@ -82,6 +82,10 @@ func (h *ProvisioningHandler) Routes(r chi.Router) {
 		r.Post("/pause", h.Pause)
 		r.Post("/resume", h.Resume)
 		r.Post("/upgrade", h.UpgradeMinorVersion)
+		r.Get("/cluster", h.GetClusterSettings)
+		r.Post("/storage", h.ResizeStorage)
+		r.Post("/tier", h.ChangeTier)
+		r.Put("/parameters", h.TuneParameters)
 	})
 }
 

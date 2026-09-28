@@ -1449,6 +1449,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			r.Get("/", d.provHandler.GetStatus)
 			r.Get("/logs", d.provHandler.GetLogs)
 			r.Get("/maintenance-window", d.provHandler.GetMaintenanceWindow)
+			r.Get("/cluster", d.provHandler.GetClusterSettings)
 
 			// Developer+ — a routine write.
 			r.With(dev).Put("/maintenance-window", d.provHandler.SetMaintenanceWindow)
@@ -1466,6 +1467,10 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			r.With(admin).Post("/pause", d.provHandler.Pause)
 			r.With(admin).Post("/resume", d.provHandler.Resume)
 			r.With(admin).Post("/upgrade", d.provHandler.UpgradeMinorVersion)
+			// Admin+ — resizing, re-tiering and tuning a running database (EXC-492).
+			r.With(admin).Post("/storage", d.provHandler.ResizeStorage)
+			r.With(admin).Post("/tier", d.provHandler.ChangeTier)
+			r.With(admin).Put("/parameters", d.provHandler.TuneParameters)
 
 			// Read-only subtrees — any member.
 			r.Route("/metrics", func(r chi.Router) { d.metricsHandler.Routes(r) })

@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -163,6 +164,27 @@ func (s *FileSystemStore) UpdateIfStatus(instance *domain.DatabaseInstance, expe
 	updated := instance.Clone()
 	updated.OrgID = stored.OrgID
 	return s.write(updated)
+}
+
+// UpdateParametersIfStatus rewrites the recorded tenant parameters. See
+// ProjectParametersStore.
+func (s *FileSystemStore) UpdateParametersIfStatus(projectID string, parameters map[string]string, expected string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.cache[projectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	if err := CheckUpdatable(stored); err != nil {
+		return err
+	}
+	if stored.Status != expected {
+		return fmt.Errorf("%w: %s is %s, expected %s", ErrProjectStatusChanged, projectID, stored.Status, expected)
+	}
+	tuned := stored.Clone()
+	tuned.Parameters = maps.Clone(parameters)
+	return s.write(tuned)
 }
 
 // RecordPauseAttempt counts a pause attempt. See InstanceStore.

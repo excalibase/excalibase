@@ -157,3 +157,13 @@ func durationWithin(low, high time.Duration) parameterRule {
 		return nil
 	}
 }
+
+// TenantTunableParameterNames lists, sorted, every setting a tenant may choose.
+func TenantTunableParameterNames() []string {
+	names := make([]string, 0, len(tenantParameters))
+	for name := range tenantParameters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
