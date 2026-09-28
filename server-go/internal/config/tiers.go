@@ -7,12 +7,15 @@ import (
 )
 
 type TierConfig struct {
-	MaxProjects   int
-	Instances     int
-	StorageSize   string
-	Memory        string
-	CPU           string
-	BackupEnabled bool
+	MaxProjects int
+	Instances   int
+	StorageSize string
+	// MaxStorageSize is the largest disk a project on the tier may grow to;
+	// StorageSize is the disk it starts with (EXC-492).
+	MaxStorageSize string
+	Memory         string
+	CPU            string
+	BackupEnabled  bool
 	// StatementTimeout caps how long a single query may run before Postgres
 	// cancels it — the direct guard against a runaway query on a shared box.
 	// Empty = no timeout (unbounded). Higher tiers get more headroom.
@@ -37,6 +40,7 @@ var tiers = map[domain.TierType]TierConfig{
 		MaxProjects:        1,
 		Instances:          1,
 		StorageSize:        "5Gi",
+		MaxStorageSize:     "5Gi",
 		Memory:             "512Mi",
 		CPU:                "0.5",
 		BackupEnabled:      true,
@@ -47,6 +51,7 @@ var tiers = map[domain.TierType]TierConfig{
 		MaxProjects:      5,
 		Instances:        3,
 		StorageSize:      "50Gi",
+		MaxStorageSize:   "500Gi",
 		Memory:           "4Gi",
 		CPU:              "2",
 		BackupEnabled:    true,
@@ -56,6 +61,7 @@ var tiers = map[domain.TierType]TierConfig{
 		MaxProjects:      0, // unlimited
 		Instances:        5,
 		StorageSize:      "500Gi",
+		MaxStorageSize:   "2Ti",
 		Memory:           "16Gi",
 		CPU:              "4",
 		BackupEnabled:    true,

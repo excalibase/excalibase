@@ -71,3 +71,22 @@ func TestEveryBuiltInTierIsBackedUp(t *testing.T) {
 		}
 	}
 }
+
+// Owner decision 2026-09-28: each plan has a disk it starts with and a disk it
+// may grow to. Free is fixed.
+func TestTiersHaveAStartingAndAMaximumDisk(t *testing.T) {
+	want := map[domain.TierType][2]string{
+		domain.Free:       {"5Gi", "5Gi"},
+		domain.Standard:   {"50Gi", "500Gi"},
+		domain.Enterprise: {"500Gi", "2Ti"},
+	}
+	for tier, sizes := range want {
+		tc, err := GetTierConfig(tier)
+		if err != nil {
+			t.Fatalf("%s: %v", tier, err)
+		}
+		if tc.StorageSize != sizes[0] || tc.MaxStorageSize != sizes[1] {
+			t.Errorf("%s: start %q max %q, want %q %q", tier, tc.StorageSize, tc.MaxStorageSize, sizes[0], sizes[1])
+		}
+	}
+}

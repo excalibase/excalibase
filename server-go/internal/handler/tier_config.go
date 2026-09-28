@@ -11,6 +11,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // TierHandler exposes the platform's tier-config table. Listing is available to
@@ -37,13 +38,15 @@ func (h *TierHandler) Routes(r chi.Router) {
 }
 
 type tierConfigDTO struct {
-	Tier          domain.TierType `json:"tier"`
-	MaxProjects   int             `json:"maxProjects"`
-	Instances     int             `json:"instances"`
-	StorageSize   string          `json:"storageSize"`
-	Memory        string          `json:"memory"`
-	CPU           string          `json:"cpu"`
-	BackupEnabled bool            `json:"backupEnabled"`
+	Tier        domain.TierType `json:"tier"`
+	MaxProjects int             `json:"maxProjects"`
+	Instances   int             `json:"instances"`
+	StorageSize string          `json:"storageSize"`
+	// MaxStorageSize is the disk a project may grow to (EXC-492).
+	MaxStorageSize string `json:"maxStorageSize"`
+	Memory         string `json:"memory"`
+	CPU            string `json:"cpu"`
+	BackupEnabled  bool   `json:"backupEnabled"`
 	// AutoPauseAfterDays: idle days before an ACTIVE project is auto-paused
 	// (warning one day earlier). 0 = never.
 	AutoPauseAfterDays int `json:"autoPauseAfterDays"`
@@ -51,13 +54,14 @@ type tierConfigDTO struct {
 
 func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 	return tierConfigDTO{
-		Tier:          tier,
-		MaxProjects:   tc.MaxProjects,
-		Instances:     tc.Instances,
-		StorageSize:   tc.StorageSize,
-		Memory:        tc.Memory,
-		CPU:           tc.CPU,
-		BackupEnabled: tc.BackupEnabled,
+		Tier:           tier,
+		MaxProjects:    tc.MaxProjects,
+		Instances:      tc.Instances,
+		StorageSize:    tc.StorageSize,
+		MaxStorageSize: tc.MaxStorageSize,
+		Memory:         tc.Memory,
+		CPU:            tc.CPU,
+		BackupEnabled:  tc.BackupEnabled,
 
 		AutoPauseAfterDays: tc.AutoPauseAfterDays,
 	}
@@ -91,12 +95,13 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tc := config.TierConfig{
-		MaxProjects:   dto.MaxProjects,
-		Instances:     dto.Instances,
-		StorageSize:   dto.StorageSize,
-		Memory:        dto.Memory,
-		CPU:           dto.CPU,
-		BackupEnabled: dto.BackupEnabled,
+		MaxProjects:    dto.MaxProjects,
+		Instances:      dto.Instances,
+		StorageSize:    dto.StorageSize,
+		MaxStorageSize: dto.MaxStorageSize,
+		Memory:         dto.Memory,
+		CPU:            dto.CPU,
+		BackupEnabled:  dto.BackupEnabled,
 
 		AutoPauseAfterDays: dto.AutoPauseAfterDays,
 	}
@@ -133,6 +138,20 @@ func validateTierConfig(tc config.TierConfig) error {
 	}
 	if _, err := tc.SlotWALKeepSize(); err != nil {
 		return errors.New("storageSize must be a storage quantity such as 5Gi")
+	}
+	return validateMaxStorage(tc)
+}
+
+// validateMaxStorage requires the disk a project may grow to, no smaller than
+// the disk it starts with.
+func validateMaxStorage(tc config.TierConfig) error {
+	limit, err := resource.ParseQuantity(tc.MaxStorageSize)
+	if err != nil {
+		return errors.New("maxStorageSize must be a storage quantity such as 500Gi")
+	}
+	start, err := resource.ParseQuantity(tc.StorageSize)
+	if err != nil || limit.Cmp(start) < 0 {
+		return errors.New("maxStorageSize must be at least storageSize")
 	}
 	return nil
 }

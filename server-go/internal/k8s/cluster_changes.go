@@ -52,9 +52,9 @@ func WithStorageSize(cluster *unstructured.Unstructured, size string) *unstructu
 }
 
 // WithTier is a copy of the cluster sized, spread and guarded for tier, the
-// way a new cluster of that tier is. Its storage class and tenant settings
-// are kept. The caller has checked the tier's disk is not below the current.
-func WithTier(cluster *unstructured.Unstructured, tier config.TierConfig) *unstructured.Unstructured {
+// way a new cluster of that tier is, on a disk of disk. Its storage class and
+// tenant settings are kept. The caller has checked disk is within the tier.
+func WithTier(cluster *unstructured.Unstructured, tier config.TierConfig, disk string) *unstructured.Unstructured {
 	changed := cluster.DeepCopy()
 	spec, _, _ := unstructured.NestedMap(changed.Object, "spec")
 	if spec == nil {
@@ -63,6 +63,7 @@ func WithTier(cluster *unstructured.Unstructured, tier config.TierConfig) *unstr
 	storageClass, _, _ := unstructured.NestedString(spec, "storage", "storageClass")
 	delete(spec, "affinity")
 	applyTierSizing(spec, tier, storageClass)
+	_ = unstructured.SetNestedField(spec, disk, "storage", "size")
 	params := postgresParameters(spec)
 	maps.Copy(params, tierPlatformParameters(tier))
 	setPostgresParameters(spec, params)

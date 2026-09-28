@@ -5,15 +5,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ClusterSettingsCard } from './ClusterSettingsCard';
 import { api } from '../api/client';
 import type { DatabaseInstance } from '../types';
+import type { ClusterSettings } from '../api/clusterSettings';
 
 vi.mock('../api/client', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }));
 
-const settings = {
+const settings: ClusterSettings = {
   projectId: 'p-1',
   tier: 'FREE',
   orgTier: 'FREE',
   storageSize: '2Gi',
+  storageStart: '5Gi',
   storageLimit: '5Gi',
+  storageUsedBytes: 1073741824,
+  canChange: true,
   instances: 1,
   cpu: '0.5',
   memory: '512Mi',
@@ -43,7 +47,9 @@ describe('ClusterSettingsCard', () => {
   test('shows the disk against the plan and the size the cluster runs', async () => {
     renderCard(project());
     const card = await screen.findByTestId('cluster-settings-card');
-    await waitFor(() => expect(card).toHaveTextContent('2Gi of 5Gi'));
+    await waitFor(() => expect(card).toHaveTextContent('1.00 GB used'));
+    expect(card).toHaveTextContent('disk 2Gi');
+    expect(card).toHaveTextContent('grows up to 5Gi');
     expect(card).toHaveTextContent('1 instance');
     expect(card).toHaveTextContent('512Mi');
   });
@@ -63,7 +69,9 @@ describe('ClusterSettingsCard', () => {
     await waitFor(() =>
       expect(api.post).toHaveBeenCalledWith('/provision/p-1/storage', { size: '4Gi' }),
     );
-    expect(await screen.findByTestId('cluster-settings-card')).toHaveTextContent('4Gi of 5Gi');
+    await waitFor(() =>
+      expect(screen.getByTestId('cluster-settings-card')).toHaveTextContent('disk 4Gi'),
+    );
   });
 
   test('never offers a size at or below the current disk', async () => {
@@ -170,5 +178,51 @@ describe('ClusterSettingsCard states', () => {
     await user.click(await screen.findByTestId('tier-apply-btn'));
     await user.click(await screen.findByTestId('modal-confirm'));
     expect(await screen.findByTestId('cluster-settings-error')).toHaveTextContent('no room');
+  });
+});
+
+describe('ClusterSettingsCard limits and roles', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // Enterprise grows to 2Ti: the ceiling is read in TiB as well as GiB.
+  test('offers growth up to a maximum given in TiB', async () => {
+    const user = userEvent.setup();
+    renderCard(project(), {
+      ...settings,
+      storageSize: '500Gi',
+      storageStart: '500Gi',
+      storageLimit: '2Ti',
+    });
+    await user.type(await screen.findByTestId('resize-input'), '2048');
+    expect(screen.getByTestId('resize-btn')).toBeEnabled();
+    await user.clear(screen.getByTestId('resize-input'));
+    await user.type(screen.getByTestId('resize-input'), '2049');
+    expect(screen.getByTestId('resize-btn')).toBeDisabled();
+  });
+
+  test('says a disk that cannot grow is fixed', async () => {
+    renderCard(project(), { ...settings, storageSize: '5Gi' });
+    await waitFor(() =>
+      expect(screen.getByTestId('cluster-settings-card')).toHaveTextContent('fixed'),
+    );
+  });
+
+  test('says when the space used could not be read', async () => {
+    renderCard(project(), { ...settings, storageUsedBytes: null });
+    await waitFor(() =>
+      expect(screen.getByTestId('cluster-settings-card')).toHaveTextContent('used: unknown'),
+    );
+  });
+
+  // Changing size, plan or settings is for admins; others only read.
+  test('hides every change from a caller who may not make it', async () => {
+    renderCard(project(), { ...settings, canChange: false, orgTier: 'STANDARD' });
+    await waitFor(() =>
+      expect(screen.getByTestId('cluster-settings-card')).toHaveTextContent('disk 2Gi'),
+    );
+    expect(screen.queryByTestId('resize-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tier-apply-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('params-save-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('param-work_mem')).toHaveTextContent('4MB');
   });
 });

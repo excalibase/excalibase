@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Store) ListTierConfigs(ctx context.Context) (map[domain.TierType]config.TierConfig, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT tier, max_projects, instances, storage_size, memory, cpu, backup_enabled, auto_pause_after_days FROM tier_configs`)
+	rows, err := s.db.QueryContext(ctx, `SELECT tier, max_projects, instances, storage_size, max_storage_size, memory, cpu, backup_enabled, auto_pause_after_days FROM tier_configs`)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,7 @@ func (s *Store) ListTierConfigs(ctx context.Context) (map[domain.TierType]config
 
 func (s *Store) GetTierConfig(ctx context.Context, tier domain.TierType) (config.TierConfig, bool, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT tier, max_projects, instances, storage_size, memory, cpu, backup_enabled, auto_pause_after_days FROM tier_configs WHERE tier = $1`, tier)
+		`SELECT tier, max_projects, instances, storage_size, max_storage_size, memory, cpu, backup_enabled, auto_pause_after_days FROM tier_configs WHERE tier = $1`, tier)
 	_, tc, err := scanTierConfig(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return config.TierConfig{}, false, nil
@@ -42,18 +42,19 @@ func (s *Store) GetTierConfig(ctx context.Context, tier domain.TierType) (config
 
 func (s *Store) UpsertTierConfig(ctx context.Context, tier domain.TierType, tc config.TierConfig) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tier_configs (tier, max_projects, instances, storage_size, memory, cpu, backup_enabled, auto_pause_after_days, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+		`INSERT INTO tier_configs (tier, max_projects, instances, storage_size, memory, cpu, backup_enabled, auto_pause_after_days, max_storage_size, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 		 ON CONFLICT (tier) DO UPDATE SET
 		    max_projects          = EXCLUDED.max_projects,
 		    instances             = EXCLUDED.instances,
 		    storage_size          = EXCLUDED.storage_size,
+		    max_storage_size      = EXCLUDED.max_storage_size,
 		    memory                = EXCLUDED.memory,
 		    cpu                   = EXCLUDED.cpu,
 		    backup_enabled        = EXCLUDED.backup_enabled,
 		    auto_pause_after_days = EXCLUDED.auto_pause_after_days,
 		    updated_at            = NOW()`,
-		tier, tc.MaxProjects, tc.Instances, tc.StorageSize, tc.Memory, tc.CPU, tc.BackupEnabled, tc.AutoPauseAfterDays)
+		tier, tc.MaxProjects, tc.Instances, tc.StorageSize, tc.Memory, tc.CPU, tc.BackupEnabled, tc.AutoPauseAfterDays, tc.MaxStorageSize)
 	return err
 }
 
@@ -62,6 +63,6 @@ type tierRowScanner interface{ Scan(dest ...any) error }
 func scanTierConfig(r tierRowScanner) (domain.TierType, config.TierConfig, error) {
 	var tier domain.TierType
 	var tc config.TierConfig
-	err := r.Scan(&tier, &tc.MaxProjects, &tc.Instances, &tc.StorageSize, &tc.Memory, &tc.CPU, &tc.BackupEnabled, &tc.AutoPauseAfterDays)
+	err := r.Scan(&tier, &tc.MaxProjects, &tc.Instances, &tc.StorageSize, &tc.MaxStorageSize, &tc.Memory, &tc.CPU, &tc.BackupEnabled, &tc.AutoPauseAfterDays)
 	return tier, tc, err
 }

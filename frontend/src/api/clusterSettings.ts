@@ -8,7 +8,13 @@ export interface ClusterSettings {
   tier: string;
   orgTier: string;
   storageSize: string;
+  // The disk the plan starts with, and the most it may grow to.
+  storageStart: string;
   storageLimit: string;
+  // What the databases take on disk; null when it could not be read.
+  storageUsedBytes: number | null;
+  // Whether the caller may change size, plan or settings (Admin and up).
+  canChange: boolean;
   instances: number;
   cpu: string;
   memory: string;

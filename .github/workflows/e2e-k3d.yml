@@ -107,6 +107,9 @@ jobs:
       - name: Chart serves the edge on its own listener
         run: sh charts/provisioning/tests/public-listener.sh
 
+      - name: Chart lets provisioning check a volume can grow
+        run: sh charts/provisioning/tests/disk-resize-rbac.sh
+
       - name: Install provisioning chart (Helm)
         run: |
           helm upgrade --install provisioning charts/provisioning \

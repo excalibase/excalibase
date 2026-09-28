@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -228,5 +230,41 @@ func TestChangeTierAppliesTheOrgsPlan(t *testing.T) {
 	}
 	if f.storageSize(t) != "5Gi" {
 		t.Errorf("disk = %s, want the FREE plan's 5Gi", f.storageSize(t))
+	}
+}
+
+// Studio hides the changes from a caller who may not make them; the server
+// still refuses them (route policy), this only says so up front.
+func TestGetClusterSettingsSaysWhetherTheCallerMayChangeThem(t *testing.T) {
+	f := newClusterChangeFixture(t)
+	for _, tc := range []struct {
+		name   string
+		access *custommw.ProjectAccess
+		want   bool
+	}{
+		{"viewer", &custommw.ProjectAccess{Member: &domain.OrgMember{Role: domain.OrgRoleViewer}}, false},
+		{"developer", &custommw.ProjectAccess{Member: &domain.OrgMember{Role: domain.OrgRoleDeveloper}}, false},
+		{"admin", &custommw.ProjectAccess{Member: &domain.OrgMember{Role: domain.OrgRoleAdmin}}, true},
+		{"platform admin", &custommw.ProjectAccess{PlatformAdmin: true}, true},
+		{"no resolved access", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", clusterChangeProject+"/cluster", nil)
+			if tc.access != nil {
+				req = req.WithContext(custommw.WithProjectAccess(req.Context(), tc.access))
+			}
+			w := httptest.NewRecorder()
+			f.router.ServeHTTP(w, req)
+			var got struct {
+				CanChange   bool   `json:"canChange"`
+				StorageSize string `json:"storageSize"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.StorageSize == "" {
+				t.Fatalf("decode %s: %v", w.Body.String(), err)
+			}
+			if got.CanChange != tc.want {
+				t.Errorf("canChange = %v, want %v", got.CanChange, tc.want)
+			}
+		})
 	}
 }

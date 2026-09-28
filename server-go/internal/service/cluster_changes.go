@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -35,9 +38,9 @@ var (
 	// ErrTierNotOrgPlan refuses a tier other than the organization's plan: a
 	// project's tier follows its organization (EXC-470).
 	ErrTierNotOrgPlan = errors.New("a project's tier follows its organization's plan")
-	// ErrTierDiskBelowCurrent refuses a plan whose disk is smaller than the
+	// ErrDiskAbovePlanMax refuses a plan whose maximum disk is below the
 	// project's current one, since the disk cannot shrink.
-	ErrTierDiskBelowCurrent = errors.New("the plan's disk is smaller than the project's current disk, which cannot shrink")
+	ErrDiskAbovePlanMax = errors.New("the project's disk is larger than the plan allows, and a disk cannot shrink")
 	// ErrTierParametersOutOfBounds refuses a plan the project's Postgres
 	// settings do not fit; they have to be lowered first.
 	ErrTierParametersOutOfBounds = errors.New("the project's Postgres settings are outside the plan's bounds; lower them first")
@@ -48,11 +51,16 @@ var (
 
 // ClusterSettings is what an admin sees before resizing, re-tiering or tuning.
 type ClusterSettings struct {
-	ProjectID         string            `json:"projectId"`
-	Tier              domain.TierType   `json:"tier"`
-	OrgTier           domain.TierType   `json:"orgTier"`
-	StorageSize       string            `json:"storageSize"`
+	ProjectID   string          `json:"projectId"`
+	Tier        domain.TierType `json:"tier"`
+	OrgTier     domain.TierType `json:"orgTier"`
+	StorageSize string          `json:"storageSize"`
+	// StorageStart is the disk the plan starts with, StorageLimit the most it
+	// may grow to; StorageUsedBytes is what the databases take, absent when
+	// it could not be read.
+	StorageStart      string            `json:"storageStart"`
 	StorageLimit      string            `json:"storageLimit"`
+	StorageUsedBytes  *int64            `json:"storageUsedBytes"`
 	Instances         int64             `json:"instances"`
 	CPU               string            `json:"cpu"`
 	Memory            string            `json:"memory"`
@@ -93,8 +101,9 @@ func (s *ProvisioningService) ClusterSettings(ctx context.Context, projectID str
 	memory, _, _ := unstructured.NestedString(cluster.Object, "spec", "resources", "limits", "memory")
 	return &ClusterSettings{
 		ProjectID: projectID, Tier: inst.Tier, OrgTier: orgTier,
-		StorageSize: size.String(), StorageLimit: tier.StorageSize,
-		Instances: instances, CPU: cpu, Memory: memory,
+		StorageSize: size.String(), StorageStart: tier.StorageSize, StorageLimit: tier.MaxStorageSize,
+		StorageUsedBytes: s.databasesSize(ctx, inst, cluster),
+		Instances:        instances, CPU: cpu, Memory: memory,
 		Parameters:        k8s.TenantParameters(cluster),
 		TunableParameters: config.TenantTunableParameterNames(),
 	}, nil
@@ -119,9 +128,9 @@ func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, size
 	if err != nil {
 		return err
 	}
-	limit, err := resource.ParseQuantity(tier.StorageSize)
+	limit, err := resource.ParseQuantity(tier.MaxStorageSize)
 	if err != nil {
-		return fmt.Errorf("tier %s storage %q: %w", inst.Tier, tier.StorageSize, err)
+		return fmt.Errorf("tier %s maximum disk %q: %w", inst.Tier, tier.MaxStorageSize, err)
 	}
 	cluster, err := s.projectCluster(ctx, inst)
 	if err != nil {
@@ -135,7 +144,7 @@ func (s *ProvisioningService) ResizeStorage(ctx context.Context, projectID, size
 		return fmt.Errorf("%w: the disk is %s and %s is not larger", ErrStorageShrink, current.String(), size)
 	}
 	if requested.Cmp(limit) > 0 {
-		return fmt.Errorf("%w: the %s plan allows up to %s", ErrStorageAbovePlan, inst.Tier, tier.StorageSize)
+		return fmt.Errorf("%w: the %s plan allows up to %s", ErrStorageAbovePlan, inst.Tier, tier.MaxStorageSize)
 	}
 	if err := s.k8sClient.ClusterVolumesExpandable(ctx, inst.Namespace, cluster.GetName()); err != nil {
 		return err
@@ -176,7 +185,8 @@ func (s *ProvisioningService) ApplyOrgTier(ctx context.Context, projectID string
 	if err := config.ValidateTenantParameters(k8s.TenantParameters(cluster), plan); err != nil {
 		return fmt.Errorf("%w: %v", ErrTierParametersOutOfBounds, err)
 	}
-	if err := s.requireDiskFits(ctx, inst, cluster, plan); err != nil {
+	disk, err := s.planDisk(ctx, inst, cluster, plan)
+	if err != nil {
 		return err
 	}
 	if err := s.RequireNodeCount(ctx, orgTier, plan.Instances); err != nil {
@@ -185,7 +195,7 @@ func (s *ProvisioningService) ApplyOrgTier(ctx context.Context, projectID string
 	if err := s.requireRoomForPlan(ctx, inst, cluster, plan); err != nil {
 		return err
 	}
-	if err := s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithTier(cluster, plan)); err != nil {
+	if err := s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithTier(cluster, plan, disk)); err != nil {
 		return fmt.Errorf("apply the %s plan to the cluster: %w", orgTier, err)
 	}
 	previousTier := inst.Tier
@@ -216,25 +226,53 @@ func (s *ProvisioningService) restoreSizing(ctx context.Context, inst *domain.Da
 // revertTimeout bounds putting a cluster back after a change failed to record.
 const revertTimeout = 30 * time.Second
 
-// requireDiskFits refuses a plan whose disk is below the current one, and a
-// larger one the cluster's volumes cannot grow to.
-func (s *ProvisioningService) requireDiskFits(ctx context.Context, inst *domain.DatabaseInstance,
-	cluster *unstructured.Unstructured, plan config.TierConfig) error {
+// planDisk is the disk the cluster gets on the plan: its current one when that
+// is within the plan, grown to the plan's start when below it. A disk above the
+// plan's maximum is refused, as is growth the volumes cannot take.
+func (s *ProvisioningService) planDisk(ctx context.Context, inst *domain.DatabaseInstance,
+	cluster *unstructured.Unstructured, plan config.TierConfig) (string, error) {
 	current, err := k8s.ClusterStorageSize(cluster)
 	if err != nil {
-		return err
+		return "", err
 	}
-	planned, err := resource.ParseQuantity(plan.StorageSize)
+	start, err := resource.ParseQuantity(plan.StorageSize)
 	if err != nil {
-		return fmt.Errorf("plan storage %q: %w", plan.StorageSize, err)
+		return "", fmt.Errorf("plan disk %q: %w", plan.StorageSize, err)
 	}
-	switch planned.Cmp(current) {
-	case -1:
-		return fmt.Errorf("%w: the plan gives %s and the disk is %s", ErrTierDiskBelowCurrent, plan.StorageSize, current.String())
-	case 1:
-		return s.k8sClient.ClusterVolumesExpandable(ctx, inst.Namespace, cluster.GetName())
+	limit, err := resource.ParseQuantity(plan.MaxStorageSize)
+	if err != nil {
+		return "", fmt.Errorf("plan maximum disk %q: %w", plan.MaxStorageSize, err)
 	}
-	return nil
+	if current.Cmp(limit) > 0 {
+		return "", fmt.Errorf("%w: the plan allows up to %s and the disk is %s", ErrDiskAbovePlanMax, plan.MaxStorageSize, current.String())
+	}
+	if current.Cmp(start) >= 0 {
+		return current.String(), nil
+	}
+	if err := s.k8sClient.ClusterVolumesExpandable(ctx, inst.Namespace, cluster.GetName()); err != nil {
+		return "", err
+	}
+	return plan.StorageSize, nil
+}
+
+// databasesSize is what the project's databases take on disk, read on the
+// primary; nil when it cannot be read, which is shown as unknown.
+func (s *ProvisioningService) databasesSize(ctx context.Context, inst *domain.DatabaseInstance, cluster *unstructured.Unstructured) *int64 {
+	primary, _, _ := unstructured.NestedString(cluster.Object, "status", "currentPrimary")
+	if primary == "" {
+		return nil
+	}
+	out, err := s.k8sClient.ExecInPod(ctx, inst.Namespace, primary, "postgres",
+		[]string{"psql", "-U", "postgres", "-tAc", "SELECT sum(pg_database_size(datname)) FROM pg_database"})
+	if err != nil {
+		log.Printf("WARN: read database size for %s: %v", inst.ProjectID, err)
+		return nil
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &size
 }
 
 // requireRoomForPlan refuses a plan unless enough untainted nodes have room
