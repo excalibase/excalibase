@@ -423,7 +423,6 @@ type OperatorInstallRequest struct {
 type OperatorStatus struct {
 	PostgreSQL bool `json:"postgresql"`
 	MySQL      bool `json:"mysql"`
-	MongoDB    bool `json:"mongodb"`
 }
 
 // SetupStatusResponse is what the unauthenticated GET /api/setup/status

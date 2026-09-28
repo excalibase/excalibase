@@ -9,6 +9,9 @@ interface PostgresVersionPickerProps {
   readonly onVersionChange: (version: string) => void;
   readonly documentDb: boolean;
   readonly onDocumentDbChange: (documentDb: boolean) => void;
+  // Set when the customer picked the DocumentDB engine card: only majors that
+  // can carry the extension are offered and DocumentDB is not optional.
+  readonly documentDbOnly?: boolean;
 }
 
 function versionTileClass(disabled: boolean, selected: boolean): string {
@@ -40,9 +43,10 @@ export function PostgresVersionPicker({
   onVersionChange,
   documentDb,
   onDocumentDbChange,
+  documentDbOnly = false,
 }: PostgresVersionPickerProps) {
   const selected = findMajor(catalog, version);
-  const blockedReason = documentDbBlockedReason(version, selected);
+  const majors = (catalog?.majors ?? []).filter((entry) => !documentDbOnly || entry.documentDb);
 
   return (
     <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4" data-testid="pg-version-section">
@@ -67,7 +71,7 @@ export function PostgresVersionPicker({
 
       {!isLoading && error == null && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="pg-version-selector">
-          {(catalog?.majors ?? []).map((entry) => (
+          {majors.map((entry) => (
             <button
               key={entry.major}
               type="button"
@@ -86,33 +90,70 @@ export function PostgresVersionPicker({
         </div>
       )}
 
-      <div className="border-t border-border-primary pt-4" data-testid="documentdb-section">
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={documentDb}
-            disabled={blockedReason !== null}
-            data-testid="documentdb-toggle"
-            onChange={(e) => onDocumentDbChange(e.target.checked)}
-            className="mt-0.5 w-4 h-4 accent-accent-primary disabled:cursor-not-allowed"
-          />
-          <span>
-            <span className="block text-sm font-medium text-text-primary">DocumentDB (MongoDB-compatible API)</span>
-            <span className="block text-xs text-text-tertiary mt-0.5">
-              Adds the DocumentDB extension, so Mongo clients reach this project&apos;s database as well as Postgres
-              clients do — one database, one credential, two protocols.
-            </span>
-            <span className="block text-xs text-text-tertiary mt-0.5" data-testid="documentdb-permanence">
-              Chosen once, here: a project created without DocumentDB cannot be added later.
-            </span>
+      {documentDbOnly ? (
+        <DocumentDbIncluded />
+      ) : (
+        <DocumentDbOption
+          documentDb={documentDb}
+          onDocumentDbChange={onDocumentDbChange}
+          blockedReason={documentDbBlockedReason(version, selected)}
+        />
+      )}
+    </div>
+  );
+}
+
+const PERMANENCE = 'Chosen once, here: a project created without DocumentDB cannot be added later.';
+
+interface DocumentDbOptionProps {
+  readonly documentDb: boolean;
+  readonly onDocumentDbChange: (documentDb: boolean) => void;
+  readonly blockedReason: string | null;
+}
+
+function DocumentDbOption({ documentDb, onDocumentDbChange, blockedReason }: DocumentDbOptionProps) {
+  return (
+    <div className="border-t border-border-primary pt-4" data-testid="documentdb-section">
+      <label className="flex items-start gap-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={documentDb}
+          disabled={blockedReason !== null}
+          data-testid="documentdb-toggle"
+          onChange={(e) => onDocumentDbChange(e.target.checked)}
+          className="mt-0.5 w-4 h-4 accent-accent-primary disabled:cursor-not-allowed"
+        />
+        <span>
+          <span className="block text-sm font-medium text-text-primary">DocumentDB (MongoDB-compatible API)</span>
+          <span className="block text-xs text-text-tertiary mt-0.5">
+            Adds the DocumentDB extension, so Mongo clients reach this project&apos;s database as well as Postgres
+            clients do — one database, one credential, two protocols.
           </span>
-        </label>
-        {blockedReason && (
-          <p className="text-xs text-amber-400 mt-2 pl-7" data-testid="documentdb-reason">
-            {blockedReason}
-          </p>
-        )}
-      </div>
+          <span className="block text-xs text-text-tertiary mt-0.5" data-testid="documentdb-permanence">
+            {PERMANENCE}
+          </span>
+        </span>
+      </label>
+      {blockedReason && (
+        <p className="text-xs text-amber-400 mt-2 pl-7" data-testid="documentdb-reason">
+          {blockedReason}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DocumentDbIncluded() {
+  return (
+    <div className="border-t border-border-primary pt-4" data-testid="documentdb-included">
+      <p className="text-sm font-medium text-text-primary">DocumentDB is included</p>
+      <p className="text-xs text-text-tertiary mt-0.5">
+        MongoDB drivers connect over the MongoDB wire protocol and Postgres clients over SQL — one database, one
+        credential, two protocols. Only versions that can carry DocumentDB are listed.
+      </p>
+      <p className="text-xs text-text-tertiary mt-0.5" data-testid="documentdb-permanence">
+        {PERMANENCE}
+      </p>
     </div>
   );
 }

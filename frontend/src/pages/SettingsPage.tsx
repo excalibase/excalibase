@@ -11,6 +11,7 @@ import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
+import { engineLabel } from '../utils/engine';
 
 interface RollbackResult {
   name: string;
@@ -83,7 +84,7 @@ export function SettingsPage() {
 
   const info = [
     { icon: Server, label: 'Display Name', value: project.projectName || '-' },
-    { icon: Database, label: 'Database Type', value: project.databaseType },
+    { icon: Database, label: 'Database Type', value: engineLabel(project) },
     { icon: Shield, label: 'Tier', value: project.tier },
     { icon: Database, label: 'PostgreSQL Version', value: project.postgresVersion || '-' },
     { icon: Server, label: 'Namespace', value: project.namespace },

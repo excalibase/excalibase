@@ -179,3 +179,107 @@ describe('ProvisionPage — plan', () => {
     expect(vi.mocked(api.post).mock.calls[0][1]).not.toHaveProperty('tier');
   });
 });
+
+// DocumentDB is also offered as its own engine card. It creates exactly what
+// the PostgreSQL card's tick box creates: a Postgres project on a major the
+// catalogue marks DocumentDB-capable, with documentDb set.
+describe('ProvisionPage — DocumentDB engine card', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('offers DocumentDB (MongoDB-compatible) and no MongoDB placeholder', async () => {
+    renderPage();
+    await screen.findByTestId('pg-version-14');
+
+    expect(screen.getByTestId('engine-DOCUMENTDB')).toBeEnabled();
+    expect(screen.getByTestId('engine-DOCUMENTDB')).toHaveTextContent('DocumentDB (MongoDB-compatible)');
+    expect(screen.queryByText(/^MongoDB$/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('engine-MONGODB')).not.toBeInTheDocument();
+  });
+
+  test('offers only the majors the catalogue marks DocumentDB-capable, none pre-selected', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pg-version-14');
+
+    await user.click(screen.getByTestId('engine-DOCUMENTDB'));
+
+    expect(screen.queryByTestId('pg-version-14')).not.toBeInTheDocument();
+    for (const major of ['15', '16', '17']) {
+      expect(screen.getByTestId(`pg-version-${major}`)).toHaveAttribute('aria-pressed', 'false');
+    }
+    expect(screen.getByTestId('pg-version-17')).toBeDisabled();
+    expect(screen.getByTestId('provision-submit')).toBeDisabled();
+  });
+
+  test('replaces the tick box with a statement that DocumentDB is included for good', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pg-version-14');
+
+    await user.click(screen.getByTestId('engine-DOCUMENTDB'));
+
+    expect(screen.queryByTestId('documentdb-toggle')).not.toBeInTheDocument();
+    expect(screen.getByTestId('documentdb-included')).toBeInTheDocument();
+    expect(screen.getByTestId('documentdb-permanence')).toHaveTextContent(/cannot be/i);
+  });
+
+  test('sends the same request the PostgreSQL tick box sends', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pg-version-16');
+
+    await user.type(screen.getByLabelText('Project Name'), 'docs');
+    await user.click(screen.getByTestId('engine-DOCUMENTDB'));
+    await user.click(screen.getByTestId('pg-version-16'));
+    await user.click(screen.getByTestId('provision-submit'));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][1]).toEqual({
+      projectName: 'docs',
+      orgId: 'org-1',
+      databaseType: 'POSTGRESQL',
+      postgresVersion: '16',
+      documentDb: true,
+    });
+  });
+
+  test('drops a chosen major that cannot carry DocumentDB instead of sending it', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pg-version-14');
+
+    await user.click(screen.getByTestId('pg-version-14'));
+    await user.click(screen.getByTestId('engine-DOCUMENTDB'));
+
+    expect(screen.getByTestId('provision-submit')).toBeDisabled();
+  });
+
+  test('keeps a capable major when switching to the card', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pg-version-15');
+
+    await user.click(screen.getByTestId('pg-version-15'));
+    await user.click(screen.getByTestId('engine-DOCUMENTDB'));
+
+    expect(screen.getByTestId('pg-version-15')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('going back to PostgreSQL offers every major again with DocumentDB off', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pg-version-15');
+
+    await user.type(screen.getByLabelText('Project Name'), 'plain');
+    await user.click(screen.getByTestId('engine-DOCUMENTDB'));
+    await user.click(screen.getByTestId('pg-version-15'));
+    await user.click(screen.getByTestId('engine-POSTGRESQL'));
+
+    expect(screen.getByTestId('pg-version-14')).toBeInTheDocument();
+    expect(screen.getByTestId('documentdb-toggle')).not.toBeChecked();
+
+    await user.click(screen.getByTestId('provision-submit'));
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][1]).toMatchObject({ postgresVersion: '15', documentDb: false });
+  });
+});

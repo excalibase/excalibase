@@ -5,6 +5,7 @@ import { Button } from '../components/Button';
 import { Database, DatabaseZap, Loader2, Trash2, Eye, Sprout, Star, Crown } from 'lucide-react';
 import { useAuthStore } from '../stores/auth-store';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
+import { engineIcon, engineLabel } from '../utils/engine';
 
 const ADMIN_ROLES = new Set(['platform_admin', 'platform_operator']);
 
@@ -94,11 +95,11 @@ function renderInstancesContent(args: InstancesContentArgs) {
           >
             <td className="px-6 py-4">
               <div className="flex items-center gap-2">
-                <span className="text-lg">{dbIcon(inst.databaseType)}</span>
+                <span className="text-lg">{engineIcon(inst)}</span>
                 <span className="font-medium text-text-primary">{inst.projectId}</span>
               </div>
             </td>
-            <td className="px-6 py-4 text-text-secondary">{inst.databaseType}</td>
+            <td className="px-6 py-4 text-text-secondary">{engineLabel(inst)}</td>
             <td className="px-6 py-4">
               <TierBadge tier={inst.tier} />
             </td>
@@ -137,13 +138,6 @@ function renderInstancesContent(args: InstancesContentArgs) {
       </tbody>
     </table>
   );
-}
-
-function dbIcon(type: string) {
-  if (type === 'POSTGRESQL') return '🐘';
-  if (type === 'MYSQL')      return '🐬';
-  if (type === 'MONGODB')    return '🍃';
-  return '🗄️';
 }
 
 const TIER_CONFIG: Record<string, { style: string; icon: React.ElementType; label: string }> = {

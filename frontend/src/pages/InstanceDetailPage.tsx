@@ -9,6 +9,7 @@ import { CredentialsViewer } from '../components/CredentialsViewer';
 import { Button } from '../components/Button';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { ArrowLeft, Cpu, Database, HardDrive, Users, Loader2, Trash2, RefreshCw, Archive, FileText } from 'lucide-react';
+import { engineLabel } from '../utils/engine';
 
 type Tab = 'overview' | 'credentials' | 'backups' | 'logs';
 
@@ -57,7 +58,7 @@ export function InstanceDetailPage() {
               <StatusBadge stage={instance.currentStage} />
             </div>
             <p className="text-sm text-text-tertiary mt-0.5">
-              {instance.databaseType} · {instance.tier} · {instance.namespace}
+              {engineLabel(instance)} · {instance.tier} · {instance.namespace}
             </p>
           </div>
         </div>

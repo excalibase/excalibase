@@ -106,7 +106,6 @@ export function ProvisioningForm({ onClose }: ProvisioningFormProps) {
             >
               <option value={DatabaseType.POSTGRESQL}>PostgreSQL</option>
               <option value={DatabaseType.MYSQL} disabled>MySQL (coming soon)</option>
-              <option value={DatabaseType.MONGODB} disabled>MongoDB (coming soon)</option>
             </select>
           </div>
 

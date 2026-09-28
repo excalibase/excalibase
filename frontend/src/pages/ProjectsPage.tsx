@@ -4,6 +4,7 @@ import { Database, Loader2, FolderOpen } from 'lucide-react';
 import { api } from '../api/client';
 import type { DatabaseInstance } from '../types';
 import { cn } from '../utils/cn';
+import { engineLabel } from '../utils/engine';
 
 const statusColors: Record<string, string> = {
   ACTIVE: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
@@ -14,7 +15,6 @@ const statusColors: Record<string, string> = {
 const dbTypeColors: Record<string, string> = {
   POSTGRESQL: 'text-blue-400',
   MYSQL: 'text-orange-400',
-  MONGODB: 'text-green-400',
 };
 
 export function ProjectsPage() {
@@ -70,7 +70,7 @@ export function ProjectsPage() {
           >
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-2">
-                <Database className={cn('w-5 h-5', dbTypeColors[project.databaseType] || 'text-text-secondary')} />
+                <Database className={cn('w-5 h-5', (project.documentDb ? 'text-green-400' : dbTypeColors[project.databaseType]) || 'text-text-secondary')} />
                 <span className="font-semibold text-text-primary group-hover:text-purple-400 transition-colors">
                   {project.projectId}
                 </span>
@@ -88,7 +88,7 @@ export function ProjectsPage() {
             <div className="space-y-1.5 text-sm">
               <div className="flex justify-between">
                 <span className="text-text-tertiary">Type</span>
-                <span className="text-text-secondary">{project.databaseType}</span>
+                <span className="text-text-secondary">{engineLabel(project)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-text-tertiary">Tier</span>

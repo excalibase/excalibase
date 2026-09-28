@@ -6,7 +6,6 @@ type DatabaseType string
 const (
 	PostgreSQL DatabaseType = "POSTGRESQL"
 	MySQL      DatabaseType = "MYSQL"
-	MongoDB    DatabaseType = "MONGODB"
 )
 
 // TierType represents resource tiers.

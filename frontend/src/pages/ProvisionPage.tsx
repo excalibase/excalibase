@@ -8,6 +8,7 @@ import { listMyOrgs, type Org } from '../api/orgs';
 import { useTiers, type TierConfig } from '../api/tiers';
 import { usePostgresCatalog, findMajor, type PostgresMajor } from '../api/postgresCatalog';
 import { PostgresVersionPicker } from '../components/PostgresVersionPicker';
+import { DOCUMENTDB_LABEL } from '../utils/engine';
 
 type DeployMode = 'k8s' | 'docker';
 
@@ -22,10 +23,15 @@ const DEPLOY_MODES = [
   { mode: 'docker' as DeployMode, icon: Server, label: 'Docker', desc: 'Docker container (coming soon)', disabled: true },
 ];
 
-const DB_TYPES = [
-  { type: DatabaseType.POSTGRESQL, icon: '🐘', label: 'PostgreSQL', desc: 'CloudNativePG operator', disabled: false },
-  { type: DatabaseType.MYSQL,      icon: '🐬', label: 'MySQL',      desc: 'Coming soon',            disabled: true  },
-  { type: DatabaseType.MONGODB,    icon: '🍃', label: 'MongoDB',    desc: 'Coming soon',            disabled: true  },
+// The engine card is a Studio choice, not a wire type: DOCUMENTDB creates a
+// PostgreSQL project with documentDb set — the same request the PostgreSQL
+// card's tick box sends.
+type Engine = 'POSTGRESQL' | 'DOCUMENTDB' | 'MYSQL';
+
+const ENGINES: readonly { engine: Engine; icon: string; label: string; desc: string; disabled: boolean }[] = [
+  { engine: 'POSTGRESQL', icon: '🐘', label: 'PostgreSQL',      desc: 'CloudNativePG operator',             disabled: false },
+  { engine: 'DOCUMENTDB', icon: '🍃', label: DOCUMENTDB_LABEL, desc: 'MongoDB wire protocol on PostgreSQL', disabled: false },
+  { engine: 'MYSQL',      icon: '🐬', label: 'MySQL',           desc: 'Coming soon',                        disabled: true  },
 ];
 
 function tierLabel(tier: string): string {
@@ -50,7 +56,7 @@ export function ProvisionPage() {
   const [deployMode, setDeployMode] = useState<DeployMode>('k8s');
   const [projectName, setProjectName] = useState('');
   const [orgId, setOrgId] = useState('');
-  const [dbType, setDbType] = useState<DatabaseType>(DatabaseType.POSTGRESQL);
+  const [engine, setEngine] = useState<Engine>('POSTGRESQL');
   // No default major, on purpose: see PostgresVersionPicker.
   const [postgresVersion, setPostgresVersion] = useState('');
   const [documentDb, setDocumentDb] = useState(false);
@@ -64,6 +70,16 @@ export function ProvisionPage() {
     const entry: PostgresMajor | undefined = findMajor(catalog.data, version);
     if (!entry?.documentDb) setDocumentDb(false);
   };
+
+  // Switching engine never carries a hidden choice across: DocumentDB starts
+  // off on the PostgreSQL card, and a major that cannot carry DocumentDB is
+  // dropped on the DocumentDB card.
+  const chooseEngine = (next: Engine) => {
+    setEngine(next);
+    setDocumentDb(false);
+    if (next === 'DOCUMENTDB' && !findMajor(catalog.data, postgresVersion)?.documentDb) setPostgresVersion('');
+  };
+  const isDocumentDbEngine = engine === 'DOCUMENTDB';
 
   // The organisation's plan decides the project's tier; the form only shows it.
   const { data: tierConfigs } = useTiers();
@@ -85,9 +101,9 @@ export function ProvisionPage() {
     const result = await provision.mutateAsync({
       projectName,
       orgId,
-      databaseType: dbType,
+      databaseType: isDocumentDbEngine ? DatabaseType.POSTGRESQL : engine,
       postgresVersion,
-      documentDb,
+      documentDb: isDocumentDbEngine || documentDb,
     });
     navigate(`/project/${result.projectId}`);
   };
@@ -154,9 +170,10 @@ export function ProvisionPage() {
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
               <h2 className="font-semibold text-text-primary">Database Engine</h2>
               <div className="grid grid-cols-3 gap-3">
-                {DB_TYPES.map(({ type, icon, label, desc, disabled }) => (
-                  <button key={type} type="button" onClick={() => !disabled && setDbType(type)} disabled={disabled}
-                    className={`p-4 rounded-xl border-2 text-left transition-all ${optionTileClass(disabled, dbType === type)}`}
+                {ENGINES.map(({ engine: option, icon, label, desc, disabled }) => (
+                  <button key={option} type="button" onClick={() => !disabled && chooseEngine(option)} disabled={disabled}
+                    data-testid={`engine-${option}`} aria-pressed={engine === option}
+                    className={`p-4 rounded-xl border-2 text-left transition-all ${optionTileClass(disabled, engine === option)}`}
                   >
                     <div className="text-3xl mb-2">{icon}</div>
                     <p className="font-semibold text-text-primary text-sm">{label}</p>
@@ -174,6 +191,7 @@ export function ProvisionPage() {
               onVersionChange={chooseVersion}
               documentDb={documentDb}
               onDocumentDbChange={setDocumentDb}
+              documentDbOnly={isDocumentDbEngine}
             />
 
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">

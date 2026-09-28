@@ -4,6 +4,7 @@ import { StatusBadge } from '../components/shared/StatusBadge';
 import { MetricCard } from '../components/shared/MetricCard';
 import { Database, DatabaseZap, CheckCircle, Loader2, XCircle } from 'lucide-react';
 import { Button } from '../components/Button';
+import { engineIcon, engineLabel } from '../utils/engine';
 
 export function DashboardPage() {
   const { data: instances = [], isLoading } = useInstances();
@@ -65,7 +66,7 @@ export function DashboardPage() {
                   onClick={() => navigate(`/project/${inst.projectId}`)}
                 >
                   <td className="px-6 py-3 font-medium text-text-primary">{inst.projectId}</td>
-                  <td className="px-6 py-3 text-text-secondary">{dbIcon(inst.databaseType)} {inst.databaseType}</td>
+                  <td className="px-6 py-3 text-text-secondary">{engineIcon(inst)} {engineLabel(inst)}</td>
                   <td className="px-6 py-3">
                     <span className="px-2 py-0.5 rounded text-xs bg-bg-tertiary text-text-secondary border border-border-primary">{inst.tier}</span>
                   </td>
@@ -79,11 +80,4 @@ export function DashboardPage() {
       </div>
     </div>
   );
-}
-
-function dbIcon(type: string) {
-  if (type === 'POSTGRESQL') return '🐘';
-  if (type === 'MYSQL')      return '🐬';
-  if (type === 'MONGODB')    return '🍃';
-  return '🗄️';
 }
