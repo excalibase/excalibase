@@ -250,3 +250,38 @@ func TestK8sPointInTimeRestoreWithoutAGuardIsRefused(t *testing.T) {
 		t.Fatalf("err: got %v, want ErrRestoreTargetGuardNotConfigured", err)
 	}
 }
+
+func TestArchiveGuardRefusesAnAnswerItCannotRead(t *testing.T) {
+	db := &sourceDatabase{MockClient: k8s.NewMockClient(), targetPassed: "t", segment: "not-a-segment"}
+	runningSource(db.MockClient, "src-postgres-1", nil)
+	db.PodReady["org-src/src-postgres-1"] = true
+
+	err := newTestArchiveGuard(db, time.Minute).EnsureRecoverable(context.Background(), sourceInstance(), drillTarget)
+	if err == nil || errors.Is(err, ErrRestoreTargetNotArchived) {
+		t.Fatalf("an unreadable WAL switch answer must refuse on its own, got %v", err)
+	}
+}
+
+// failingArchiverRead answers the clock check and the switch, then cannot
+// read pg_stat_archiver.
+type failingArchiverRead struct{ *sourceDatabase }
+
+func (f failingArchiverRead) ExecInPod(ctx context.Context, namespace, pod, container string, cmd []string) (string, error) {
+	if strings.Contains(strings.Join(cmd, " "), "pg_stat_archiver") {
+		return "", errors.New("connection lost")
+	}
+	return f.sourceDatabase.ExecInPod(ctx, namespace, pod, container, cmd)
+}
+
+func TestArchiveGuardRefusesWhenTheArchiverCannotBeRead(t *testing.T) {
+	db := &sourceDatabase{MockClient: k8s.NewMockClient(), targetPassed: "t", segment: "000000010000000000000006"}
+	runningSource(db.MockClient, "src-postgres-1", nil)
+	db.PodReady["org-src/src-postgres-1"] = true
+	guard := NewArchivedWALGuard(failingArchiverRead{db})
+	guard.poller = steppingPoller(time.Minute)
+
+	err := guard.EnsureRecoverable(context.Background(), sourceInstance(), drillTarget)
+	if err == nil || errors.Is(err, ErrRestoreTargetNotArchived) {
+		t.Fatalf("an unreadable archiver must refuse with its own reason, got %v", err)
+	}
+}

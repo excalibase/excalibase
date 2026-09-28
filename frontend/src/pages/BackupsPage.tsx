@@ -171,22 +171,14 @@ export function BackupsPage() {
 
               <Button
                 disabled={!restoreForm.newProjectName.trim() || restore.isPending || !projectId}
-                onClick={() => {
-                  let targetTime: string | undefined;
-                  try {
-                    targetTime = toZonedInstant(restoreForm.targetTime);
-                  } catch (e: unknown) {
-                    showToast(e instanceof Error ? e.message : String(e), false);
-                    return;
-                  }
-                  restore.mutate(
-                    { ...restoreForm, targetTime },
-                    { onError: (e: unknown) => {
-                      const msg = e instanceof Error ? e.message : String(e);
-                      showToast(msg || 'Restore failed', false);
-                    } }
-                  );
-                }}
+                onClick={() => restore.mutate(
+                  // datetime-local only yields a valid local time or ''.
+                  { ...restoreForm, targetTime: toZonedInstant(restoreForm.targetTime) },
+                  { onError: (e: unknown) => {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    showToast(msg || 'Restore failed', false);
+                  } }
+                )}
               >
                 <RotateCcw className="w-4 h-4 mr-2" />
                 {restore.isPending && 'Initiating restore…'}

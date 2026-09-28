@@ -54,3 +54,23 @@ func TestK8sRestoreKeepsWaitingOnAnotherRecoveryFailure(t *testing.T) {
 		t.Fatalf("Restore: %v", err)
 	}
 }
+
+func TestK8sRestoreKeepsWaitingWhenRecoveryPodsCannotBeRead(t *testing.T) {
+	cases := map[string]func(*k8s.MockClient){
+		"pods not listable": func(m *k8s.MockClient) { m.GetPodsError = errors.New("apiserver unavailable") },
+		"log not readable": func(m *k8s.MockClient) {
+			failedRecoveryPod(m, "")
+			delete(m.PodLogs, "org-dst/"+recoveryPod)
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			mock := k8s.NewMockClient()
+			setup(mock)
+			adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
+			if _, err := adapter.Restore(context.Background(), sourceInstance(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"}); err != nil {
+				t.Fatalf("Restore: %v", err)
+			}
+		})
+	}
+}
