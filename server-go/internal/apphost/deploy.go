@@ -49,6 +49,8 @@ type DeploySpec struct {
 	// AppName is the name the workload was rendered under, so a resumed watch
 	// follows it even after the app has been renamed.
 	AppName string `json:"appName,omitempty"`
+	// Disk is the app's disk this deploy mounted, if it had one.
+	Disk *AppDisk `json:"disk,omitempty"`
 }
 
 // DeployConfig is the full app config a deploy froze and rolled out: literal

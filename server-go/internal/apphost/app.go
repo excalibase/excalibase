@@ -278,6 +278,8 @@ type App struct {
 	HealthCheckPath string `json:"healthCheckPath,omitempty"`
 	// Replicas is 0-3; zero means intentionally stopped.
 	Replicas int `json:"replicas"`
+	// Disk is the app's one persistent volume, when it has one (EXC-523).
+	Disk *AppDisk `json:"disk,omitempty"`
 	// Tier resolves to cpu/memory through config.GetAppTierConfig.
 	Tier   domain.TierType `json:"tier"`
 	Status string          `json:"status"`
@@ -414,6 +416,9 @@ func (a *App) Validate() error {
 		return err
 	}
 	if err := a.validateReplicas(); err != nil {
+		return err
+	}
+	if err := validateDisk(a.Disk, a.Replicas); err != nil {
 		return err
 	}
 	if err := validateEnv(a.ProjectID, a.ID, a.Env); err != nil {

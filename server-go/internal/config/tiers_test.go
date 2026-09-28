@@ -90,3 +90,17 @@ func TestTiersHaveAStartingAndAMaximumDisk(t *testing.T) {
 		}
 	}
 }
+
+// EXC-523 defaults, editable by a platform admin with the rest of the plan.
+func TestTiersCapAnAppsDisk(t *testing.T) {
+	want := map[domain.TierType]string{domain.Free: "1Gi", domain.Standard: "20Gi", domain.Enterprise: "100Gi"}
+	for tier, size := range want {
+		tc, err := GetTierConfig(tier)
+		if err != nil {
+			t.Fatalf("%s: %v", tier, err)
+		}
+		if tc.MaxAppDiskSize != size {
+			t.Errorf("%s: app disk cap %q, want %q", tier, tc.MaxAppDiskSize, size)
+		}
+	}
+}

@@ -131,6 +131,9 @@ type MockClient struct {
 	AppPodsGoneErr error
 	AppDeleteErr   error
 	AppPruneErr    error
+	// AppDiskGrown records "namespace/appID=size" per GrowAppDisk call that succeeded.
+	AppDiskGrown   []string
+	AppDiskGrowErr error
 	// PullSecretsDeleted records "namespace/registry" per DeleteRegistryPullSecrets call.
 	PullSecretsDeleted   []string
 	PullSecretsDeleteErr error
@@ -786,6 +789,17 @@ func (m *MockClient) PruneAppWorkload(ctx context.Context, namespace, appID, kee
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "PruneAppWorkload:"+namespace+"/"+appID+"!="+keepName)
 	return m.AppPruneErr
+}
+
+func (m *MockClient) GrowAppDisk(ctx context.Context, namespace, appID, size string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "GrowAppDisk:"+namespace+"/"+appID+"="+size)
+	if m.AppDiskGrowErr != nil {
+		return m.AppDiskGrowErr
+	}
+	m.AppDiskGrown = append(m.AppDiskGrown, namespace+"/"+appID+"="+size)
+	return nil
 }
 
 func (m *MockClient) DeleteRegistryPullSecrets(ctx context.Context, namespace, registry string) error {

@@ -2,7 +2,10 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -20,7 +23,8 @@ type AppDeployer interface {
 	ListDeploys(projectID, appID string, limit int) ([]*apphost.Deploy, error)
 	PauseApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
 	ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error)
-	DeleteApp(ctx context.Context, projectID, appID string) error
+	DeleteApp(ctx context.Context, projectID, appID string, confirmDeleteDisk bool) error
+	GrowAppDisk(ctx context.Context, projectID, appID, size string) (*apphost.App, error)
 }
 
 type AppDeployHandler struct {
@@ -121,17 +125,82 @@ func (h *AppDeployHandler) Resume(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// appDeleteBody is the optional DELETE body; an app with a disk is deleted
+// only with confirmDeleteDisk, since its data goes with it.
+type appDeleteBody struct {
+	ConfirmDeleteDisk bool `json:"confirmDeleteDisk"`
+}
+
 // Delete answers once the app's pods are gone and the app is forgotten, not when the deletion was asked for.
 func (h *AppDeployHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	projectID, appID, ok := h.appPath(w, r)
 	if !ok {
 		return
 	}
-	if err := h.deploys.DeleteApp(r.Context(), projectID, appID); err != nil {
+	var body appDeleteBody
+	if err := decodeOptionalJSON(w, r, &body); err != nil {
+		httpError(w, errInvalidJSON, http.StatusBadRequest)
+		return
+	}
+	if err := h.deploys.DeleteApp(r.Context(), projectID, appID, body.ConfirmDeleteDisk); err != nil {
 		h.writeError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type appDiskGrowBody struct {
+	Size string `json:"size"`
+}
+
+// GrowDisk grows the app's disk, in whole GiB, up to its plan's cap.
+func (h *AppDeployHandler) GrowDisk(w http.ResponseWriter, r *http.Request) {
+	projectID, appID, ok := h.appPath(w, r)
+	if !ok {
+		return
+	}
+	var body appDiskGrowBody
+	r.Body = http.MaxBytesReader(w, r.Body, maxAppDiskBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Size == "" {
+		httpError(w, "the body must name the new size, such as {\"size\":\"10Gi\"}", http.StatusBadRequest)
+		return
+	}
+	app, err := h.deploys.GrowAppDisk(r.Context(), projectID, appID, body.Size)
+	if err != nil {
+		h.writeDiskError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"id": app.ID, "disk": app.Disk})
+}
+
+const maxAppDiskBodyBytes = 1024
+
+// decodeOptionalJSON reads a small optional body: empty is the zero value, malformed is an error.
+func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, into any) error {
+	if r.Body == nil {
+		return nil
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAppDiskBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(into); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
+func (h *AppDeployHandler) writeDiskError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, apphost.ErrInvalidDisk), errors.Is(err, service.ErrAppDiskShrink):
+		httpError(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, apphost.ErrDiskAbovePlan), errors.Is(err, service.ErrAppHasNoDisk),
+		errors.Is(err, k8s.ErrAppDiskNotExpandable):
+		httpError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, apphost.ErrAppNotFound), errors.Is(err, storage.ErrProjectBusy),
+		errors.Is(err, service.ErrOrgTierUnresolved):
+		h.writeError(w, err)
+	default:
+		log.Printf("app disk grow: %v", err)
+		httpError(w, "growing the disk did not complete; retry the request", http.StatusInternalServerError)
+	}
 }
 
 func (h *AppDeployHandler) lifecycle(w http.ResponseWriter, r *http.Request,
@@ -160,7 +229,7 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 		httpError(w, err.Error()+"; retry to finish", http.StatusGatewayTimeout)
 	case errors.Is(err, k8s.ErrAppRollout):
 		httpError(w, err.Error(), http.StatusBadGateway)
-	case errors.Is(err, service.ErrAppOverPlan):
+	case errors.Is(err, service.ErrAppOverPlan), errors.Is(err, service.ErrAppDiskDeleteUnconfirmed):
 		httpError(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, service.ErrOrgTierUnresolved):
 		httpError(w, service.ErrOrgTierUnresolved.Error(), http.StatusInternalServerError)

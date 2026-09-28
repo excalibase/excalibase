@@ -13,6 +13,8 @@ export interface TierConfig {
   storageSize: string;
   // The most a project on the plan may grow its disk to; storageSize is where it starts.
   maxStorageSize: string;
+  // The largest disk one container may have on the plan; 0Gi offers none.
+  maxAppDiskSize: string;
   memory: string;
   cpu: string;
   backupEnabled: boolean;

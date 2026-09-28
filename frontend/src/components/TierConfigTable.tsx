@@ -18,6 +18,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
 
   const toInput = (t: TierConfig): TierConfigInput => ({
     maxProjects: t.maxProjects, instances: t.instances, storageSize: t.storageSize, maxStorageSize: t.maxStorageSize,
+    maxAppDiskSize: t.maxAppDiskSize,
     memory: t.memory, cpu: t.cpu, backupEnabled: t.backupEnabled,
     autoPauseAfterDays: t.autoPauseAfterDays ?? 0,
   });
@@ -30,6 +31,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
     if (d == null) return false;
     return (
       d.cpu !== t.cpu || d.memory !== t.memory || d.storageSize !== t.storageSize || d.maxStorageSize !== t.maxStorageSize ||
+      d.maxAppDiskSize !== t.maxAppDiskSize ||
       d.maxProjects !== t.maxProjects || d.instances !== t.instances || d.backupEnabled !== t.backupEnabled ||
       d.autoPauseAfterDays !== (t.autoPauseAfterDays ?? 0)
     );
@@ -69,6 +71,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
               <th className="text-left px-4 py-3 font-medium">Memory</th>
               <th className="text-left px-4 py-3 font-medium">Storage</th>
               <th className="text-left px-4 py-3 font-medium" title="The most a project may grow its disk to">Max storage</th>
+              <th className="text-left px-4 py-3 font-medium" title="The largest disk one container may have (0Gi = none)">Max app disk</th>
               <th className="text-left px-4 py-3 font-medium">Instances</th>
               <th className="text-left px-4 py-3 font-medium">Max projects</th>
               <th className="text-left px-4 py-3 font-medium">Backup</th>
@@ -86,6 +89,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
                   <td className="px-4 py-3"><QtyInput value={d.memory} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { memory: v })} placeholder="4Gi" /></td>
                   <td className="px-4 py-3"><QtyInput value={d.storageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { storageSize: v })} placeholder="50Gi" /></td>
                   <td className="px-4 py-3"><QtyInput value={d.maxStorageSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { maxStorageSize: v })} placeholder="500Gi" /></td>
+                  <td className="px-4 py-3"><QtyInput value={d.maxAppDiskSize} disabled={!canMutate} onChange={(v) => setField(t.tier, d, { maxAppDiskSize: v })} placeholder="20Gi" /></td>
                   <td className="px-4 py-3"><NumInput value={d.instances} disabled={!canMutate} min={1} onChange={(v) => setField(t.tier, d, { instances: v })} /></td>
                   <td className="px-4 py-3"><NumInput value={d.maxProjects} disabled={!canMutate} min={0} onChange={(v) => setField(t.tier, d, { maxProjects: v })} /></td>
                   <td className="px-4 py-3">

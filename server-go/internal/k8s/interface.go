@@ -121,6 +121,8 @@ type KubeClient interface {
 	WaitForAppPodsGone(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	DeleteAppWorkload(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	PruneAppWorkload(ctx context.Context, namespace, appID, keepName string, timeout time.Duration) error
+	// GrowAppDisk grows the app's disk claim; ErrAppDiskNotCreated when no deploy has made it yet.
+	GrowAppDisk(ctx context.Context, namespace, appID, size string) error
 	DeleteRegistryPullSecrets(ctx context.Context, namespace, registry string) error
 	AppLogs(ctx context.Context, namespace, appID string, opts AppLogOptions) (AppLogPage, error)
 	RuntimeClassExists(ctx context.Context, name string) (bool, error)

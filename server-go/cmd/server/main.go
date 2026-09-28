@@ -1214,6 +1214,13 @@ func newSchemaHandler(cfg config.AppConfig, vc vaultclient.VaultClient, instance
 	return h
 }
 
+func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore storage.PlatformStore, disks apphost.DiskLimits) *handler.AppHandler {
+	h := handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
+		handler.NewProjectSourceLookup(store, service.NewOrgPlanTiers(store, sqlStore)), appRoute(cfg).Public())
+	h.SetDiskLimits(disks)
+	return h
+}
+
 func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	cfg, store, sqlStore := a.cfg, a.store, a.sqlStore
 	k8sClient, vc, localVault := a.k8sClient, a.vc, a.localVault
@@ -1224,9 +1231,12 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
 		k8sClient, store, service.NewAppEnvResolver(vc, store), k8s.AppRenderOptions{
 			RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Route: appRoute(cfg),
+			DiskStorageClass: cfg.TenantStorageClass,
 		})
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
+	appDiskLimits := service.NewAppDiskLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc)
+	appDeploySvc.SetDiskLimits(appDiskLimits)
 	appDeploySvc.SetCapacityHeadroom(cfg.CapacityHeadroomPercent)
 	appDomainSvc := buildAppDomainService(cfg, sqlStore.DB(), k8sClient, store, appDeploySvc)
 	backupSvc := buildBackupService(a.cfg, store, sqlStore, k8sClient, a.dockerClient, provSvc)
@@ -1327,33 +1337,32 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	registryCreds := registryCredentials(vc, store, k8sClient)
 	withRegistryCredentials(appDeploySvc, registryCreds)
 	return &handlerDeps{
-		provHandler:        provHandler,
-		sdkKeysHandler:     handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
-		metricsHandler:     handler.NewMetricsHandler(metricsSvc),
-		backupHandler:      handler.NewBackupHandler(backupSvc),
-		perfHandler:        handler.NewPerformanceHandler(perfSvc),
-		auditHandler:       handler.NewAuditHandler(auditSvc),
-		snapshotHandler:    handler.NewSnapshotHandler(snapshotSvc),
-		migrationHandler:   handler.NewMigrationHandler(migrationSvc),
-		alertHandler:       newAlertHandler(alertSvc, store, sqlStore),
-		setupHandler:       handler.NewSetupHandler(setupSvc),
-		pgHandler:          handler.NewParameterGroupHandler(pgStore),
-		emailTokensHandler: emailTokensHandler,
-		storageHandler:     storageHandler,
-		documentsHandler:   buildDocumentBrowser(k8sClient, vc, store),
-		adminHandler:       adminHandler,
-		authHandler:        authHandler,
-		oauthHandler:       buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
-		ssoHandler:         buildSSOProvidersHandler(cfg, vc, sqlStore),
-		svcAcctHandler:     handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
-		orgHandler:         newOrgHandler(sqlStore, store, provSvc),
-		vaultHandler:       vaultHandler,
-		schemaHandler:      newSchemaHandler(cfg, vc, store),
-		realtimeHandler:    realtimeHandler,
-		rlsPolicyHandler:   handler.NewRlsPolicyHandler(sqlStore.RlsPolicies(), store),
-		tableGrantHandler:  handler.NewTableGrantHandler(sqlStore.TableGrants(), store, cfg.ExposureEnforced),
-		appHandler: handler.NewAppHandler(apphost.NewPostgresAppStore(sqlStore.DB()),
-			handler.NewProjectSourceLookup(store, service.NewOrgPlanTiers(store, sqlStore)), appRoute(cfg).Public()),
+		provHandler:         provHandler,
+		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
+		metricsHandler:      handler.NewMetricsHandler(metricsSvc),
+		backupHandler:       handler.NewBackupHandler(backupSvc),
+		perfHandler:         handler.NewPerformanceHandler(perfSvc),
+		auditHandler:        handler.NewAuditHandler(auditSvc),
+		snapshotHandler:     handler.NewSnapshotHandler(snapshotSvc),
+		migrationHandler:    handler.NewMigrationHandler(migrationSvc),
+		alertHandler:        newAlertHandler(alertSvc, store, sqlStore),
+		setupHandler:        handler.NewSetupHandler(setupSvc),
+		pgHandler:           handler.NewParameterGroupHandler(pgStore),
+		emailTokensHandler:  emailTokensHandler,
+		storageHandler:      storageHandler,
+		documentsHandler:    buildDocumentBrowser(k8sClient, vc, store),
+		adminHandler:        adminHandler,
+		authHandler:         authHandler,
+		oauthHandler:        buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
+		ssoHandler:          buildSSOProvidersHandler(cfg, vc, sqlStore),
+		svcAcctHandler:      handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
+		orgHandler:          newOrgHandler(sqlStore, store, provSvc),
+		vaultHandler:        vaultHandler,
+		schemaHandler:       newSchemaHandler(cfg, vc, store),
+		realtimeHandler:     realtimeHandler,
+		rlsPolicyHandler:    handler.NewRlsPolicyHandler(sqlStore.RlsPolicies(), store),
+		tableGrantHandler:   handler.NewTableGrantHandler(sqlStore.TableGrants(), store, cfg.ExposureEnforced),
+		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeploySvc:        appDeploySvc,
 		appDeployHandler:    handler.NewAppDeployHandler(appDeploySvc),
@@ -1736,6 +1745,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.With(dev).Delete("/", d.appDeployHandler.Delete)
 				r.With(dev).Post("/pause", d.appDeployHandler.Pause)
 				r.With(dev).Post("/resume", d.appDeployHandler.Resume)
+				r.With(dev).Post("/disk", d.appDeployHandler.GrowDisk)
 				r.With(dev).Post("/deploy", d.appDeployHandler.Deploy)
 				r.Get("/deploys", d.appDeployHandler.ListDeploys)
 				r.Get("/logs", d.appLogHandler.Logs)

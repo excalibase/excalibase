@@ -8,9 +8,10 @@ var appRows = []Row{
 	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "the app is read as (projectId, appId)"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: patch, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "changes the image, env, port and replicas the next deploy would run"},
-	{Methods: del, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "tears the workload down and waits for its pods to be gone before the app is forgotten"},
+	{Methods: del, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "tears the workload down and waits for its pods to be gone before the app is forgotten; an app with a disk needs confirmDeleteDisk"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/pause", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "scales the app to zero; its config and deploy history stay"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/resume", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/disk", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "grows the app's disk up to its plan's cap; the same rung that attaches one"},
 
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/deploy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/logs", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "reads only the pods labelled with this app's id in this project's namespace; viewer, like the project's and a function's logs"},

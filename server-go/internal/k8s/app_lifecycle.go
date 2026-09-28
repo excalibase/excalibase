@@ -221,8 +221,13 @@ func waitUntilNoneLeft(ctx context.Context, timeout time.Duration, list func(con
 
 // DeleteAppWorkload takes the route away first and the network fence last, so
 // no pod of the app is ever reachable or unfenced while it is still running.
+// The app's disk goes last of all, once no pod can write to it.
 func (c *Client) DeleteAppWorkload(ctx context.Context, namespace, appID string, timeout time.Duration) error {
-	return c.deleteAppObjects(ctx, namespace, appOwnedSelector(appID), timeout)
+	deadline := time.Now().Add(timeout)
+	if err := c.deleteAppObjects(ctx, namespace, appOwnedSelector(appID), timeout); err != nil {
+		return err
+	}
+	return c.deleteAppDisks(ctx, namespace, appOwnedSelector(appID), max(time.Until(deadline), time.Millisecond))
 }
 
 // PruneAppWorkload deletes, in the same order, whatever the app still runs

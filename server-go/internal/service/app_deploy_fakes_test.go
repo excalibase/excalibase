@@ -44,7 +44,22 @@ func (f *fakeAppStoreForDeploy) Get(projectID, id string) (*apphost.App, error) 
 }
 
 func (f *fakeAppStoreForDeploy) List(string) ([]*apphost.App, error) { return nil, nil }
-func (f *fakeAppStoreForDeploy) Update(*apphost.App, int) error      { return errors.New("not used") }
+func (f *fakeAppStoreForDeploy) Update(app *apphost.App, expectedVersion int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.apps[app.ProjectID+"/"+app.ID]
+	if !ok {
+		return apphost.ErrAppNotFound
+	}
+	if stored.Version != expectedVersion {
+		return apphost.ErrAppVersionConflict
+	}
+	copied := *app
+	copied.Version = expectedVersion + 1
+	f.apps[app.ProjectID+"/"+app.ID] = &copied
+	app.Version = copied.Version
+	return nil
+}
 
 func (f *fakeAppStoreForDeploy) Transition(projectID, id string, from []string, to string) (*apphost.App, error) {
 	f.mu.Lock()

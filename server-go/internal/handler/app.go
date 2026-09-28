@@ -39,7 +39,12 @@ type AppHandler struct {
 	store   apphost.Store
 	project apphost.ProjectFacts
 	route   apphost.Route
+	// disks caps an app's disk by its organisation's plan; unset, no disk is accepted.
+	disks apphost.DiskLimits
 }
+
+// SetDiskLimits wires the plan cap an app's disk is held to (EXC-523).
+func (h *AppHandler) SetDiskLimits(disks apphost.DiskLimits) { h.disks = disks }
 
 func NewAppHandler(store apphost.Store, project apphost.ProjectFacts, route apphost.Route) *AppHandler {
 	return &AppHandler{store: store, project: project, route: route}
@@ -134,6 +139,7 @@ type appCreateRequest struct {
 	Port            *int             `json:"port"`
 	HealthCheckPath string           `json:"healthCheckPath"`
 	Replicas        *int             `json:"replicas"`
+	Disk            *apphost.AppDisk `json:"disk"`
 }
 
 // appUpdateRequest is the partial-update body. Every field is a pointer so an
@@ -146,6 +152,9 @@ type appUpdateRequest struct {
 	Port            *int              `json:"port"`
 	HealthCheckPath *string           `json:"healthCheckPath"`
 	Replicas        *int              `json:"replicas"`
+	// Disk attaches a disk, or moves an attached one's mount path; its size
+	// grows through POST .../disk, and null or absent leaves it as it is.
+	Disk *apphost.AppDisk `json:"disk"`
 }
 
 func (h *AppHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -220,11 +229,15 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Port:            *req.Port,
 		HealthCheckPath: req.HealthCheckPath,
 		Replicas:        *req.Replicas,
+		Disk:            req.Disk,
 		Tier:            tier,
 		Status:          apphost.StatusFor(*req.Replicas),
 	}
 	if err := app.Validate(); err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !h.diskWithinPlan(w, r, app.ProjectID, app.Disk) {
 		return
 	}
 	// A reference to a source the project does not have is fatal: it is never
@@ -276,6 +289,11 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
+	attaching := existing.Disk == nil && req.Disk != nil
+	if existing.Disk != nil && req.Disk != nil && req.Disk.Size != existing.Disk.Size {
+		httpError(w, "a disk's size changes only by growing it with POST .../disk", http.StatusBadRequest)
+		return
+	}
 	applyAppUpdate(existing, req)
 	// The tier follows the project, so an app never keeps an envelope the
 	// project has moved off.
@@ -287,6 +305,9 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 	existing.Tier = tier
 	if err := existing.Validate(); err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if attaching && !h.diskWithinPlan(w, r, projectID, existing.Disk) {
 		return
 	}
 	if err := apphost.ValidateReferences(existing, h.project); err != nil {
@@ -327,6 +348,32 @@ func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 	if req.Replicas != nil {
 		app.Replicas = *req.Replicas
 	}
+	if req.Disk != nil {
+		disk := *req.Disk
+		app.Disk = &disk
+	}
+}
+
+// diskWithinPlan refuses a disk above the organisation's plan, and one whose
+// cap cannot be read: a disk is never admitted unchecked.
+func (h *AppHandler) diskWithinPlan(w http.ResponseWriter, r *http.Request, projectID string, disk *apphost.AppDisk) bool {
+	if disk == nil {
+		return true
+	}
+	if h.disks == nil {
+		httpError(w, "could not read the plan's app disk limit", http.StatusInternalServerError)
+		return false
+	}
+	limit, err := h.disks.MaxDiskGiB(r.Context(), projectID)
+	if err != nil {
+		httpError(w, "could not read the plan's app disk limit", http.StatusInternalServerError)
+		return false
+	}
+	if err := apphost.CheckDiskWithinPlan(disk, limit); err != nil {
+		httpError(w, err.Error(), http.StatusConflict)
+		return false
+	}
+	return true
 }
 
 // normalizeEnv returns a non-nil slice so an emptied env set is stored as an

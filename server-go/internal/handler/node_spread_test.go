@@ -98,7 +98,7 @@ func TestTierHandler_Update_RefusesMoreInstancesThanNodes(t *testing.T) {
 	h := NewTierHandler(store)
 	nodes := &fakeNodes{nodes: 3}
 	h.SetNodePlacement(nodes)
-	body := `{"instances":5,"cpu":"2","memory":"4Gi","storageSize":"50Gi","maxStorageSize":"500Gi"}`
+	body := `{"instances":5,"cpu":"2","memory":"4Gi","storageSize":"50Gi","maxStorageSize":"500Gi","maxAppDiskSize":"20Gi"}`
 
 	rec := httptest.NewRecorder()
 	h.Update(rec, newTierReqWithParam("PUT", body, "STANDARD"))
