@@ -776,6 +776,11 @@ func (h *FunctionHandler) applyExtractedSchema(w http.ResponseWriter, r *http.Re
 	db, dbErr := h.projectDBFn(r.Context(), projectID)
 	if dbErr != nil {
 		_ = h.store.Delete(projectID, fn.ID)
+		if errors.Is(dbErr, domain.ErrNoDatabase) {
+			// The function declares tables, and there is no database to hold them.
+			httpError(w, domain.ErrNoDatabase.Error(), http.StatusConflict)
+			return false
+		}
 		httpError(w, "failed to open project db for migration: "+safeError(dbErr), http.StatusBadGateway)
 		return false
 	}

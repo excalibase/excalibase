@@ -112,6 +112,22 @@ type ProjectDiskStore interface {
 	UpdateStorageSizeIfStatus(projectID, size, expected string) error
 }
 
+// ProjectDatabaseStore records a database being added to a project that was
+// created without one (EXC-426). The database's create-time choices are fixed
+// once it exists, so both writes refuse a project that already has one.
+type ProjectDatabaseStore interface {
+	// RecordDatabaseChoices writes what the new database is created with —
+	// DocumentDB, storage class, parameters and disk — while the row holds
+	// expected and still has no database. ErrProjectHasDatabase otherwise.
+	RecordDatabaseChoices(inst *domain.DatabaseInstance, expected string) error
+	// MarkDatabaseAdded records that the project now has its database. It is
+	// one-way: ErrProjectHasDatabase when the project already has one.
+	MarkDatabaseAdded(projectID string) error
+}
+
+// ErrProjectHasDatabase refuses adding a database to a project that has one.
+var ErrProjectHasDatabase = errors.New("project already has a database")
+
 // InstanceStore persists database instance metadata and credentials.
 type InstanceStore interface {
 	// Create registers a new project. Returns ErrProjectExists when the

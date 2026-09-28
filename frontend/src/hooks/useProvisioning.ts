@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { api } from '../api/client';
 import { useSSE } from './useSSE';
-import type { DatabaseInstance, ProvisioningRequest, CredentialsResponse, BackupConfig, BackupInfo } from '../types';
+import type { DatabaseInstance, DatabaseSettings, ProvisioningRequest, CredentialsResponse, BackupConfig, BackupInfo } from '../types';
 
 export const useInstances = () => {
   return useQuery({
@@ -256,5 +256,23 @@ export const useLogs = (projectId: string, lines: number = 100) => {
     },
     enabled: !!projectId,
     refetchInterval: 15000,
+  });
+};
+
+// Adds the database to a project created without one. The answer is the
+// project as the add left it: with its database, or still without one and
+// the failure named, so the caller can show it and let the admin retry.
+export const useAddDatabase = (projectId: string) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (settings: DatabaseSettings) => {
+      const response = await api.post<DatabaseInstance>(`/provision/${projectId}/database`, settings);
+      return response.data;
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['instances'] });
+      queryClient.invalidateQueries({ queryKey: ['instance', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+    },
   });
 };

@@ -30,9 +30,7 @@ export const ProvisioningStage = {
 
 export type ProvisioningStage = typeof ProvisioningStage[keyof typeof ProvisioningStage];
 
-export interface ProvisioningRequest {
-  projectName: string;
-  orgId: string;
+export interface DatabaseSettings {
   databaseType: DatabaseType;
   // The PostgreSQL major, in the catalogue's spelling. Required: the API has
   // no default and refuses a request that names none.
@@ -41,6 +39,12 @@ export interface ProvisioningRequest {
   // the image a cluster runs is fixed when it is provisioned.
   documentDb?: boolean;
 }
+
+// A project is created either with its database or without one
+// (noDatabase), in which case it names no database settings at all.
+export type ProvisioningRequest =
+  | ({ projectName: string; orgId: string; noDatabase?: false } & DatabaseSettings)
+  | { projectName: string; orgId: string; noDatabase: true };
 
 export interface DatabaseInstance {
   id: number;
@@ -54,6 +58,12 @@ export interface DatabaseInstance {
   postgresVersion?: string;
   // Whether this project was created with the DocumentDB extension.
   documentDb?: boolean;
+  // True for a project created without a database (only containers,
+  // functions and storage); a database can be added later.
+  noDatabase?: boolean;
+  // Whether this caller may add a database now. Decided by the server
+  // (Admin and up, on a running project without one).
+  canAddDatabase?: boolean;
   namespace: string;
   host: string;
   port: number;

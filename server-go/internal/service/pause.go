@@ -233,6 +233,10 @@ func (s *PauseService) Pause(ctx context.Context, projectID, reason string) erro
 	if err != nil || inst == nil {
 		return fmt.Errorf("project not found: %s", projectID)
 	}
+	if inst.NoDatabase {
+		// Pause and resume stop and start the database; there is none.
+		return fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
+	}
 	pauser, ok := s.pausers[inst.DeploymentMode]
 	if !ok {
 		return ErrPauseUnsupported
@@ -463,6 +467,10 @@ func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 	inst, err := s.instances.FindByProjectID(projectID)
 	if err != nil || inst == nil {
 		return fmt.Errorf("project not found: %s", projectID)
+	}
+	if inst.NoDatabase {
+		// Pause and resume stop and start the database; there is none.
+		return fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
 	}
 	pauser, ok := s.pausers[inst.DeploymentMode]
 	if !ok {

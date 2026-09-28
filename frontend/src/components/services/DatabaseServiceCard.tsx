@@ -6,6 +6,7 @@ import { apiErrorMessage } from '../../api/apps';
 import { ToneBadge, secondaryButton } from '../containers/ContainerBits';
 import { engineLabel } from '../../utils/engine';
 import { databaseServiceStatus } from './serviceStatus';
+import type { DatabaseInstance } from '../../types';
 import { AccessNote, ServiceCard } from './ServiceCard';
 
 function DatabaseAccess({ projectId }: { readonly projectId: string }) {
@@ -34,6 +35,30 @@ function DatabaseAccess({ projectId }: { readonly projectId: string }) {
   );
 }
 
+// A project created without a database (EXC-426). The add control shows only
+// when the server says this caller may use it; the route decides regardless.
+function NoDatabase({ project }: { readonly project: DatabaseInstance }) {
+  return (
+    <>
+      <p data-testid="service-database-empty" className="text-sm text-text-secondary">
+        This project has no database. Add one to get a managed PostgreSQL (or DocumentDB) database with its
+        GraphQL and REST API, sized by your organization&apos;s plan.
+        {!project.canAddDatabase && ' Only an org admin or owner can add one.'}
+      </p>
+      {project.failureReason && (
+        <p className="text-xs text-red-400 break-words">Last attempt failed: {project.failureReason}</p>
+      )}
+      {project.canAddDatabase && (
+        <div>
+          <Link to={`/project/${project.projectId}/database/add`} className={secondaryButton}>
+            Add database
+          </Link>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function DatabaseServiceCard({ projectId }: { readonly projectId: string }) {
   const { data: project, error } = useInstance(projectId);
   const status = project ? databaseServiceStatus(project) : undefined;
@@ -52,7 +77,8 @@ export function DatabaseServiceCard({ projectId }: { readonly projectId: string 
           {apiErrorMessage(error, 'Could not load the database')}
         </p>
       )}
-      {project && (
+      {project?.noDatabase && <NoDatabase project={project} />}
+      {project && !project.noDatabase && (
         <>
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <div>

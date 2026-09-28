@@ -373,6 +373,8 @@ func (h *SchemaHandler) handleDBError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, projectdb.ErrNotServable):
 		httpError(w, "project is not running", http.StatusConflict)
+	case errors.Is(err, domain.ErrNoDatabase):
+		httpError(w, domain.ErrNoDatabase.Error(), http.StatusConflict)
 	case strings.Contains(msg, "unknown project"):
 		httpError(w, "project not found", http.StatusNotFound)
 	case strings.Contains(msg, "sealed"):

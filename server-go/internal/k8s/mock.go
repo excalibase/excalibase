@@ -514,6 +514,14 @@ func (m *MockClient) CreateSecret(ctx context.Context, namespace, name string, d
 	return nil
 }
 
+func (m *MockClient) DeleteSecret(ctx context.Context, namespace, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "DeleteSecret:"+namespace+"/"+name)
+	delete(m.Secrets, namespace+"/"+name)
+	return nil
+}
+
 func (m *MockClient) UpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -83,7 +83,7 @@ func (r *BackupCredentialRenewer) RenewDue(ctx context.Context) RenewalReport {
 // archivesToObjectStore is a Kubernetes project with backups whose teardown
 // has not started.
 func archivesToObjectStore(inst *domain.DatabaseInstance) bool {
-	return inst.DeploymentMode != domain.ModeDocker &&
+	return inst.DeploymentMode != domain.ModeDocker && !inst.NoDatabase &&
 		inst.BackupEnabled != nil && *inst.BackupEnabled &&
 		!domain.IsDeletionStatus(inst.Status) && inst.Status != string(domain.StageFailed)
 }

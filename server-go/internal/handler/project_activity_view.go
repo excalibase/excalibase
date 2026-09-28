@@ -17,6 +17,10 @@ type projectView struct {
 	LastSeenAt *domain.FlexTime `json:"lastSeenAt,omitempty"`
 	// IdleWarnedAt is set while an idle-pause warning is outstanding.
 	IdleWarnedAt *domain.FlexTime `json:"idleWarnedAt,omitempty"`
+	// CanAddDatabase says whether this caller may add a database to the
+	// project now (EXC-426). The Studio shows the control only on true; the
+	// route's own Admin rule still decides.
+	CanAddDatabase bool `json:"canAddDatabase"`
 }
 
 // SetActivityStore wires the last-seen lookup. Optional: without it the
@@ -24,9 +28,9 @@ type projectView struct {
 func (h *ProvisioningHandler) SetActivityStore(s storage.ProjectActivityStore) { h.activity = s }
 
 // projectResponse decorates one instance with its last-seen marker.
-func (h *ProvisioningHandler) projectResponse(ctx context.Context, inst *domain.DatabaseInstance) any {
+func (h *ProvisioningHandler) projectResponse(ctx context.Context, inst *domain.DatabaseInstance) projectView {
 	if h.activity == nil {
-		return inst
+		return projectView{DatabaseInstance: inst}
 	}
 	activity, ok, err := h.activity.GetProjectActivity(ctx, inst.ProjectID)
 	if err != nil {

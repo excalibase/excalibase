@@ -21,8 +21,11 @@ const DATABASE_STATUS: Record<string, ServiceStatus> = {
 };
 
 export function databaseServiceStatus(
-  project: Pick<DatabaseInstance, 'status' | 'currentStage'>,
+  project: Pick<DatabaseInstance, 'status' | 'currentStage' | 'noDatabase'>,
 ): ServiceStatus {
+  // A project created without a database (EXC-426) is running; it just has
+  // no database service to report on.
+  if (project.noDatabase && project.status === 'ACTIVE') return { label: 'No database', tone: 'neutral' };
   if (project.currentStage === 'FAILED') return DATABASE_STATUS.FAILED;
   return DATABASE_STATUS[project.status] ?? { label: project.status, tone: 'neutral' };
 }

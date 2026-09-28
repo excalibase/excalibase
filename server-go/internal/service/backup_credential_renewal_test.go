@@ -160,6 +160,8 @@ func TestRenewalSkipsWhatDoesNotArchive(t *testing.T) {
 	_ = lab.store.Create(&domain.DatabaseInstance{ProjectID: "nobackup", OrgID: "org", Namespace: "org-nobackup", Status: "ACTIVE", DeploymentMode: domain.ModeK8s, BackupEnabled: &disabled})
 	enabled := true
 	_ = lab.store.Create(&domain.DatabaseInstance{ProjectID: "docker", OrgID: "org", Namespace: "org-docker", Status: "ACTIVE", DeploymentMode: domain.ModeDocker, BackupEnabled: &enabled})
+	// EXC-426: a project without a database archives nothing.
+	_ = lab.store.Create(&domain.DatabaseInstance{ProjectID: "apps", OrgID: "org", Namespace: "org-apps", Status: "ACTIVE", DeploymentMode: domain.ModeK8s, BackupEnabled: &enabled, NoDatabase: true})
 
 	report := lab.renewer.RenewDue(context.Background())
 	if len(report.Failed) != 0 || report.Renewed != 0 {

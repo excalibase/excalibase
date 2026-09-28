@@ -80,6 +80,17 @@ func projectIDForSecretPrefix(prefix string) string {
 // The lookup costs one indexed read by primary key, and these services hold
 // the result on a cache TTL rather than fetching per request, so this is not
 // on a per-request hot path.
+// isDatabaseLogin reports whether path is one of the database logins the
+// platform files for a project; other secrets under credentials/ (JWT keys)
+// are not the database's.
+func isDatabaseLogin(path, projectID string) bool {
+	switch strings.TrimPrefix(path, "projects/"+projectID+"/credentials/") {
+	case "admin", "auth_admin", "excalibase_app", "cdc_watcher":
+		return true
+	}
+	return false
+}
+
 func (h *VaultHandler) refuseSecretOfUnservableProject(w http.ResponseWriter, path string) bool {
 	if h.instances == nil {
 		return false
@@ -95,6 +106,13 @@ func (h *VaultHandler) refuseSecretOfUnservableProject(w http.ResponseWriter, pa
 	}
 	if inst == nil || domain.IsNotServable(inst.Status) {
 		httpError(w, errSecretNotFound, http.StatusNotFound)
+		return true
+	}
+	// A project created without a database has no database credentials
+	// (EXC-426). The engine and auth pass the 409 on as the project's state
+	// rather than treating the project as unknown.
+	if inst.NoDatabase && isDatabaseLogin(path, projectID) {
+		httpError(w, domain.ErrNoDatabase.Error(), http.StatusConflict)
 		return true
 	}
 	return false

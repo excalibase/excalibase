@@ -33,6 +33,15 @@ type ProvisioningRequest struct {
 	// majors the catalogue marks as DocumentDB-capable accept it; creating the
 	// extension in the database is EXC-409.
 	DocumentDB bool `json:"documentDb,omitempty"`
+	// NoDatabase creates the project without a database (EXC-426): its
+	// namespace and quota only. None of the database fields may be set with
+	// it, and a database is added later with POST .../database.
+	NoDatabase bool `json:"noDatabase,omitempty"`
+	// IntoExistingNamespace builds the database inside the namespace the
+	// project already has, so a rollback removes the database's resources
+	// one by one and never the namespace holding the project's apps. Set by
+	// the add-database path only; never read from a caller.
+	IntoExistingNamespace bool `json:"-"`
 }
 
 type BackupSettings struct {
@@ -88,6 +97,7 @@ type ProvisioningResponse struct {
 	FailureStep   string            `json:"failureStep,omitempty"`
 	RollbackLog   string            `json:"rollbackLog,omitempty"`
 	CreatedAt     *FlexTime         `json:"createdAt,omitempty"`
+	NoDatabase    bool              `json:"noDatabase"`
 }
 
 // --- Credentials ---

@@ -70,7 +70,7 @@ func (r *AppEnvResolver) databaseLogin(projectID, databaseName string) (database
 		log.Printf("app env: look up project %s: %v", projectID, err)
 		return databaseLogin{}, errors.New("could not look up the project's database")
 	}
-	if inst == nil || inst.DatabaseName == "" {
+	if inst == nil || inst.NoDatabase || inst.DatabaseName == "" {
 		return databaseLogin{}, errors.New("the project has no database")
 	}
 	if inst.DatabaseName != databaseName {

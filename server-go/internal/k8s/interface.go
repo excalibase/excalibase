@@ -52,6 +52,8 @@ type KubeClient interface {
 	PodLogTail(ctx context.Context, namespace, pod, container string, lines int64) (string, error)
 	GetSecret(ctx context.Context, namespace, name string) (map[string][]byte, error)
 	CreateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
+	// DeleteSecret removes a Secret; one that is already gone is not an error.
+	DeleteSecret(ctx context.Context, namespace, name string) error
 	// UpdateSecret replaces an existing Secret's data; a missing Secret is an error.
 	UpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
 	ExecInPod(ctx context.Context, namespace, pod, container string, cmd []string) (string, error)

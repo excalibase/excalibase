@@ -93,6 +93,7 @@ func (s *FileSystemStore) Update(inst *domain.DatabaseInstance) error {
 	updated := inst.Clone()
 	updated.OrgID = existing.OrgID
 	updated.StorageSize = existing.StorageSize
+	updated.NoDatabase = existing.NoDatabase
 	return s.write(updated)
 }
 
@@ -165,6 +166,7 @@ func (s *FileSystemStore) UpdateIfStatus(instance *domain.DatabaseInstance, expe
 	updated := instance.Clone()
 	updated.OrgID = stored.OrgID
 	updated.StorageSize = stored.StorageSize
+	updated.NoDatabase = stored.NoDatabase
 	return s.write(updated)
 }
 
@@ -392,4 +394,36 @@ func derefInt(p *int) int {
 		return 0
 	}
 	return *p
+}
+
+// RecordDatabaseChoices writes a new database's create-time choices. See
+// ProjectDatabaseStore.
+func (s *FileSystemStore) RecordDatabaseChoices(inst *domain.DatabaseInstance, expected string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, ok := s.cache[inst.ProjectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	updated, err := ApplyDatabaseChoices(stored, inst, expected)
+	if err != nil {
+		return err
+	}
+	return s.write(updated)
+}
+
+// MarkDatabaseAdded records that the project now has its database. See
+// ProjectDatabaseStore.
+func (s *FileSystemStore) MarkDatabaseAdded(projectID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, ok := s.cache[projectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	updated, err := ApplyDatabaseAdded(stored)
+	if err != nil {
+		return err
+	}
+	return s.write(updated)
 }

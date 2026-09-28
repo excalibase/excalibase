@@ -418,13 +418,9 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 
 func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.ProvisioningRequest, projectID, namespace string, pc *ProvisionContext) error {
 	pc.SetStage(domain.StageNamespaceCreation)
-	pc.SetStep("create namespace")
-	if err := p.client.CreateProjectNamespace(ctx, namespace, req.OrgID); err != nil {
-		return pc.Fail(fmt.Errorf("create namespace: %w", err))
+	if err := p.ensureNamespace(ctx, req, namespace, pc); err != nil {
+		return err
 	}
-	pc.RegisterCleanup("delete namespace "+namespace, func(ctx context.Context) error {
-		return p.client.DeleteNamespace(ctx, namespace)
-	})
 	if err := p.createBackupStore(ctx, req, projectID, namespace, pc); err != nil {
 		return pc.Fail(err)
 	}
@@ -434,6 +430,37 @@ func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.P
 	if err := EnsureDocumentDBCredential(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
 		return pc.Fail(err)
 	}
+	return nil
+}
+
+// ensureNamespace creates the project's namespace, or, for a database added
+// to a project that already has one, checks it is there. A missing namespace
+// is a failure, never a reason to create one the project's quota and fence
+// were not set up with.
+func (p *PostgreSQLProvisioner) ensureNamespace(ctx context.Context, req domain.ProvisioningRequest, namespace string, pc *ProvisionContext) error {
+	if req.IntoExistingNamespace {
+		pc.SetStep("find namespace")
+		exists, err := p.client.NamespaceExists(ctx, namespace)
+		if err != nil {
+			return pc.Fail(fmt.Errorf("find namespace: %w", err))
+		}
+		if !exists {
+			return pc.Fail(fmt.Errorf("the project's namespace %s does not exist", namespace))
+		}
+		// The namespace holds the project's apps, so a rollback never deletes
+		// it: it removes the database's own resources, whichever were made.
+		pc.RegisterCleanup("remove database from namespace "+namespace, func(ctx context.Context) error {
+			return p.RemoveDatabase(ctx, namespace, req.ProjectName)
+		})
+		return nil
+	}
+	pc.SetStep("create namespace")
+	if err := p.client.CreateProjectNamespace(ctx, namespace, req.OrgID); err != nil {
+		return pc.Fail(fmt.Errorf("create namespace: %w", err))
+	}
+	pc.RegisterCleanup("delete namespace "+namespace, func(ctx context.Context) error {
+		return p.client.DeleteNamespace(ctx, namespace)
+	})
 	return nil
 }
 
@@ -886,4 +913,34 @@ func (p *PostgreSQLProvisioner) extractCredentials(ctx context.Context, namespac
 		Password:     string(secretData["password"]),
 		SSLMode:      "require",
 	}, nil
+}
+
+// RemoveDatabase deletes a project's database from a namespace it shares with
+// the project's apps (EXC-426): the watcher, the backup schedule, the cluster
+// (waited out, with its volumes), the object store and the Secrets and
+// Service the provisioner made beside it. Every step is idempotent, so it
+// serves both a failed add's rollback and the recovery of an interrupted one.
+func (p *PostgreSQLProvisioner) RemoveDatabase(ctx context.Context, namespace, projectID string) error {
+	if err := p.client.UninstallHelmChart(ctx, namespace, watcherReleaseName); err != nil {
+		return fmt.Errorf("stop tenant watcher: %w", err)
+	}
+	if err := p.client.DeleteCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, projectID+clusterNameSuffix+"-backup"); err != nil {
+		return fmt.Errorf("delete scheduled backup: %w", err)
+	}
+	cluster := projectID + clusterNameSuffix
+	if err := p.deleteClusterAndWait(ctx, namespace, cluster); err != nil {
+		return err
+	}
+	if err := p.client.ForceDeleteClusterPods(ctx, namespace, cluster); err != nil {
+		return err
+	}
+	if err := p.client.DeleteCRD(ctx, k8s.ObjectStoreGVR, namespace, k8s.BackupObjectStoreName(projectID)); err != nil {
+		return fmt.Errorf("delete backup object store: %w", err)
+	}
+	for _, secret := range []string{k8s.BackupCredentialsSecretName, k8s.DocumentDBCredentialSecretName(projectID), watcherTLSSecretName(projectID)} {
+		if err := p.client.DeleteSecret(ctx, namespace, secret); err != nil {
+			return err
+		}
+	}
+	return p.client.DeletePublicDBService(ctx, namespace, k8s.DocumentDBServiceName(projectID))
 }

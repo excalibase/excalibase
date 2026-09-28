@@ -110,9 +110,18 @@ func isGateRefusal(body string) bool {
 // subset a given deployment enables.
 func policyRouter(t *testing.T) (*policyHarness, []principal) {
 	t.Helper()
+	return policyRouterWith(t, func(*domain.DatabaseInstance) {})
+}
+
+// policyRouterWith is policyRouter with org A's project shaped by shape
+// before every request.
+func policyRouterWith(t *testing.T, shape func(*domain.DatabaseInstance)) (*policyHarness, []principal) {
+	t.Helper()
 	instances := fakestore.NewInstances()
 	seedProjects := func() {
-		instances.Items[matrixProjectA] = &domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"}
+		projectA := &domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"}
+		shape(projectA)
+		instances.Items[matrixProjectA] = projectA
 		instances.Items[matrixProjectB] = &domain.DatabaseInstance{ProjectID: matrixProjectB, OrgID: matrixOrgB, Status: "ACTIVE"}
 	}
 	seedProjects()
