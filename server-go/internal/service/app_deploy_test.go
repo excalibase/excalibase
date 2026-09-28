@@ -49,6 +49,7 @@ func newDeployTestService(t *testing.T, app *apphost.App) (*AppDeployService, *f
 	kube.Capacity = roomyCluster
 	svc := NewAppDeployService(appStore, deployStore, kube, instances, nil, testDeployRender)
 	svc.SetPlanTiers(fixedPlan{tier: app.Tier})
+	svc.SetNamespaceQuotaTiers(quotaTestTiers)
 	svc.async = func(f func()) { f() }
 	return svc, deployStore, kube
 }

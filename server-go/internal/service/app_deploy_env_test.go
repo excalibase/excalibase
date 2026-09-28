@@ -49,6 +49,7 @@ func envDeployFixture(t *testing.T) (*AppDeployService, *fakeDeployStore, *k8s.M
 	svc := NewAppDeployService(newFakeAppStoreForDeploy(app), deployStore, kube, instances,
 		NewAppEnvResolver(vault, instances), testDeployRender)
 	svc.SetPlanTiers(fixedPlan{tier: app.Tier})
+	svc.SetNamespaceQuotaTiers(quotaTestTiers)
 	svc.async = func(f func()) { f() }
 	return svc, deployStore, kube, vault, app
 }

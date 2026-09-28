@@ -1229,6 +1229,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		})
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
+	appDeploySvc.SetNamespaceQuotaTiers(provSvc)
 	appDiskLimits := service.NewAppDiskLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc)
 	appDeploySvc.SetDiskLimits(appDiskLimits)
 	appDeploySvc.SetDiskJobs(k8s.DiskJobOptions{Image: cfg.AppDiskToolsImage, RuntimeClass: cfg.AppRuntimeClass, Timeout: appDiskJobTimeout})

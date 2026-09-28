@@ -55,6 +55,7 @@ func newLifecycleFixture(t *testing.T, status string) *lifecycleFixture {
 	kube.PausedReplicas = 1
 	svc := NewAppDeployService(apps, deploys, kube, instances, nil, testDeployRender)
 	svc.SetPlanTiers(fixedPlan{tier: app.Tier})
+	svc.SetNamespaceQuotaTiers(quotaTestTiers)
 	svc.async = func(f func()) { f() }
 	purger := &fakeSecretPurger{}
 	svc.SetSecretPurger(purger)

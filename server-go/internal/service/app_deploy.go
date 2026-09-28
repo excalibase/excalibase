@@ -46,6 +46,8 @@ type AppDeployService struct {
 	registries      RegistryCredentialFinder
 	plans           PlanTiers
 	headroomPercent int
+	// quotaTiers sizes the namespace quota from the plan (EXC-524).
+	quotaTiers TierConfigSource
 	// diskLimits caps an app's disk by its organisation's plan.
 	diskLimits apphost.DiskLimits
 	// diskJobs runs the disk usage probe and the copy that lowers a disk.
@@ -239,6 +241,10 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	name := k8s.AppObjectName(app.Name)
 	if routeErr != nil {
 		s.fail(ctx, deploy, routeErr, namespace, name)
+		return deploy, nil, nil
+	}
+	if err := s.syncNamespaceQuota(ctx, namespace, app.ProjectID, tierType, tier); err != nil {
+		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}
 	if err := s.admit(ctx, namespace, deploy, tier, cfg.Replicas); err != nil {

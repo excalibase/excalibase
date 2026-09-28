@@ -17,7 +17,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -202,21 +201,7 @@ func (c *Client) CreateProjectNamespace(ctx context.Context, name, orgID string)
 // don't declare requests. Generous limits: a healthy tenant runs ~3-5 pods
 // (Postgres + watcher + deno), so 20 leaves ample headroom for CNPG jobs.
 func (c *Client) ensureNamespaceQuota(ctx context.Context, namespace string) error {
-	quota := &corev1.ResourceQuota{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "namespace-quota",
-			Namespace: namespace,
-			Labels:    map[string]string{componentLabelKey: "quota"},
-		},
-		Spec: corev1.ResourceQuotaSpec{
-			Hard: corev1.ResourceList{
-				corev1.ResourcePods:                   resource.MustParse("20"),
-				corev1.ResourcePersistentVolumeClaims: resource.MustParse("7"),
-				corev1.ResourceServices:               resource.MustParse("15"),
-			},
-		},
-	}
-	_, err := c.clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{})
+	_, err := c.clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, buildNamespaceQuota(namespace, DefaultNamespaceQuota), metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create namespace quota: %w", err)
 	}
