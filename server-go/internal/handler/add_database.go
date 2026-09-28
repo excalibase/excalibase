@@ -34,17 +34,16 @@ func writeAddDatabaseError(w http.ResponseWriter, projectID string, err error) {
 	switch {
 	case errors.Is(err, storage.ErrProjectHasDatabase):
 		httpError(w, storage.ErrProjectHasDatabase.Error(), http.StatusConflict)
-	case errors.Is(err, service.ErrAddDatabaseRequest), errors.Is(err, service.ErrNoDatabaseNeedsKubernetes):
+	case errors.Is(err, service.ErrAddDatabaseRequest), errors.Is(err, service.ErrNoDatabaseNeedsKubernetes),
+		errors.Is(err, service.ErrDatabaseRequestInvalid):
 		httpError(w, safeError(err), http.StatusBadRequest)
 	case errors.Is(err, service.ErrProjectNotFound):
 		httpError(w, "project not found", http.StatusNotFound)
-	case unsettledOr(err, 0) != 0:
+	case unsettledOr(err, 0) != 0, errors.Is(err, storage.ErrProjectDeleting):
 		httpError(w, safeError(err), http.StatusConflict)
 	case writeProjectCreationError(w, err):
 	default:
-		// Everything else is a refusal of the settings asked for: an unknown
-		// major, DocumentDB on a major without it, parameters beyond the plan.
-		log.Printf("add database to %s refused: %v", projectID, err)
-		httpError(w, safeError(err), http.StatusBadRequest)
+		log.Printf("ERROR: add database to %s: %v", projectID, err)
+		httpError(w, "the database could not be added", http.StatusInternalServerError)
 	}
 }

@@ -8,9 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/pkg/vault"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // EXC-426: a project is a container of services, and a database is one of
@@ -30,6 +33,10 @@ var (
 	// ErrAddDatabaseRequest refuses an add-database request that carries
 	// project fields or asks for no database.
 	ErrAddDatabaseRequest = errors.New("adding a database takes only database settings")
+	// ErrDatabaseRequestInvalid wraps a refusal of the database settings asked
+	// for: an unknown major, DocumentDB where it is unavailable, parameters
+	// beyond the plan.
+	ErrDatabaseRequestInvalid = errors.New("invalid database settings")
 )
 
 // OperationAddDatabase is the lease an add-database holds for its whole build.
@@ -85,11 +92,13 @@ func (s *ProvisioningService) provisionWithoutDatabase(ctx context.Context, req 
 		return nil, err
 	}
 	if err := s.k8sClient.CreateProjectNamespace(ctx, inst.Namespace, inst.OrgID); err != nil {
-		return s.failProjectWithoutDatabase(ctx, inst, "create namespace", err), nil
+		// A namespace that already existed is not this request's to remove.
+		created := !apierrors.IsAlreadyExists(err)
+		return s.failProjectWithoutDatabase(ctx, inst, "create namespace", err, created), nil
 	}
 	markProjectActive(inst)
 	if err := s.store.Update(inst); err != nil {
-		return s.failProjectWithoutDatabase(ctx, inst, "record project", err), nil
+		return s.failProjectWithoutDatabase(ctx, inst, "record project", err, true), nil
 	}
 	s.announceProject(ctx, inst)
 	return projectResponse(inst), nil
@@ -97,10 +106,12 @@ func (s *ProvisioningService) provisionWithoutDatabase(ctx context.Context, req 
 
 // failProjectWithoutDatabase removes the namespace a failed create made and
 // leaves the row FAILED, the way a failed provision does.
-func (s *ProvisioningService) failProjectWithoutDatabase(ctx context.Context, inst *domain.DatabaseInstance, step string, cause error) *domain.ProvisioningResponse {
+func (s *ProvisioningService) failProjectWithoutDatabase(ctx context.Context, inst *domain.DatabaseInstance, step string, cause error, removeNamespace bool) *domain.ProvisioningResponse {
 	log.Printf("project %s without a database failed at %s: %v", inst.ProjectID, step, cause)
-	if err := s.k8sClient.DeleteNamespace(context.WithoutCancel(ctx), inst.Namespace); err != nil {
-		log.Printf("WARN: remove namespace %s of failed project: %v", inst.Namespace, err)
+	if removeNamespace {
+		if err := s.k8sClient.DeleteNamespace(context.WithoutCancel(ctx), inst.Namespace); err != nil {
+			log.Printf("WARN: remove namespace %s of failed project: %v", inst.Namespace, err)
+		}
 	}
 	inst.Status = string(domain.StageFailed)
 	inst.CurrentStage = domain.StageFailed
@@ -142,7 +153,7 @@ func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string,
 		return nil, ErrAddDatabaseRequest
 	}
 	if err := validateDatabaseRequest(req); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrDatabaseRequestInvalid, err)
 	}
 	databases, ok := s.store.(storage.ProjectDatabaseStore)
 	if !ok {
@@ -163,6 +174,9 @@ func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string,
 	start := time.Now()
 	tier, err := s.databaseTier(ctx, &req, inst.Tier)
 	if err != nil {
+		if errors.Is(err, config.ErrTenantParameter) || errors.Is(err, ErrBackupStoreChosenByPlatform) {
+			return nil, fmt.Errorf("%w: %w", ErrDatabaseRequestInvalid, err)
+		}
 		return nil, err
 	}
 	prov, major, err := s.admitDatabase(ctx, &req, inst.Tier, tier, projectID)
@@ -193,6 +207,7 @@ func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string,
 func (s *ProvisioningService) handleAddDatabaseFailure(ctx context.Context, inst *domain.DatabaseInstance,
 	req domain.ProvisioningRequest, err error, pc *provisioner.ProvisionContext) *domain.ProvisioningResponse {
 	s.recordProvisionFailure(ctx, inst, req, err, pc)
+	s.purgeFailedAddBackups(ctx, inst)
 	inst.Status = string(domain.StatusActive)
 	inst.CurrentStage = domain.StageCompleted
 	inst.CurrentStep = ""
@@ -204,4 +219,102 @@ func (s *ProvisioningService) handleAddDatabaseFailure(ctx context.Context, inst
 	// reads this flag and must not look for a secret the rollback removed.
 	inst.BackupEnabled, inst.BackupSchedule, inst.BackupRetentionDays = nil, "", nil
 	return s.saveProvisionFailure(inst)
+}
+
+// purgeFailedAddBackups clears what the failed database archived. The cluster
+// starts archiving as soon as its primary is up, and a later add is admitted
+// only onto an empty backup prefix; the project id is fixed, so without this
+// one failure after the pods came up would block every retry.
+func (s *ProvisioningService) purgeFailedAddBackups(ctx context.Context, inst *domain.DatabaseInstance) {
+	if inst.BackupEnabled == nil || !*inst.BackupEnabled {
+		return
+	}
+	if s.backupPurger == nil {
+		inst.FailureReason += "; its backup files were not removed (no backup purger), so a retry will be refused"
+		return
+	}
+	if _, err := s.backupPurger.Purge(ctx, inst); err != nil && !errors.Is(err, ErrNoBackupsForMode) {
+		log.Printf("ERROR: purge backups of the failed database add of %s: %v", inst.ProjectID, err)
+		inst.FailureReason += "; its backup files could not be removed, so a retry will be refused"
+	}
+}
+
+// RecoverInterruptedDatabaseAdds finishes what a process that died mid-add
+// left: a project without a database still marked PROVISIONING, whose lease
+// nobody holds. Its database resources are removed, its backup prefix and
+// database credentials cleared, and it returns to ACTIVE without a database
+// with the interruption recorded, so the add can be retried. Run at start.
+func (s *ProvisioningService) RecoverInterruptedDatabaseAdds(ctx context.Context) []string {
+	all, err := s.store.FindAll()
+	if err != nil {
+		log.Printf("ERROR: list projects to recover interrupted database adds: %v", err)
+		return nil
+	}
+	var recovered []string
+	for _, inst := range all {
+		if !inst.NoDatabase || inst.Status != string(domain.StatusProvisioning) {
+			continue
+		}
+		if err := s.recoverInterruptedAdd(ctx, inst.ProjectID); err != nil {
+			log.Printf("ERROR: recover interrupted database add of %s: %v", inst.ProjectID, err)
+			continue
+		}
+		recovered = append(recovered, inst.ProjectID)
+	}
+	return recovered
+}
+
+func (s *ProvisioningService) recoverInterruptedAdd(ctx context.Context, projectID string) error {
+	inst, release, err := s.holdProject(ctx, projectID, OperationAddDatabase, requireBuilding)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if !inst.NoDatabase {
+		return nil
+	}
+	if inst.DeploymentMode == domain.ModeK8s {
+		pg, err := s.postgresProvisioner()
+		if err != nil {
+			return err
+		}
+		if err := pg.RemoveDatabase(ctx, inst.Namespace, inst.ProjectID); err != nil {
+			return err
+		}
+	}
+	if err := s.deleteDatabaseCredentials(inst.ProjectID); err != nil {
+		return err
+	}
+	inst.FailureReason = "the database add was interrupted; its resources were removed"
+	inst.FailureStage, inst.FailureStep = inst.CurrentStage, inst.CurrentStep
+	s.purgeFailedAddBackups(ctx, inst)
+	inst.Status = string(domain.StatusActive)
+	inst.CurrentStage = domain.StageCompleted
+	inst.CurrentStep = ""
+	inst.Host, inst.ReadOnlyHost, inst.DatabaseName, inst.Username, inst.SSLMode = "", "", "", "", ""
+	inst.Port = nil
+	inst.BackupEnabled, inst.BackupSchedule, inst.BackupRetentionDays = nil, "", nil
+	return s.store.UpdateIfStatus(inst, string(domain.StatusProvisioning))
+}
+
+// requireBuilding admits only a project whose build is recorded in flight.
+func requireBuilding(projectID, status string) error {
+	if status != string(domain.StatusProvisioning) {
+		return fmt.Errorf("project %s is %s: %w", projectID, status, storage.ErrProjectStatusChanged)
+	}
+	return nil
+}
+
+// deleteDatabaseCredentials removes the database logins filed for a project,
+// and nothing else it keeps in the vault.
+func (s *ProvisioningService) deleteDatabaseCredentials(projectID string) error {
+	if s.vault == nil {
+		return nil
+	}
+	for _, role := range []string{roleAdmin, roleAuthAdmin, roleApp, roleWatcher} {
+		if err := s.vault.Delete(vaultCredentialPath(projectID, role)); err != nil && !errors.Is(err, vault.ErrNotFound) {
+			return fmt.Errorf("delete %s credential: %w", role, err)
+		}
+	}
+	return nil
 }

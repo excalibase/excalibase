@@ -276,3 +276,63 @@ func unprotect(t *testing.T, store storage.InstanceStore, projectID string) {
 		t.Fatal(err)
 	}
 }
+
+// A failed add purges what its cluster archived: the project id is fixed and
+// an add is admitted only onto an empty backup prefix, so leftovers would
+// block every retry.
+func TestAFailedDatabaseAddClearsWhatItArchived(t *testing.T) {
+	svc, _, mock := setupProvisioningTest(t)
+	created := createWithoutDatabase(t, svc)
+	deleter := newFakeObjectDeleter(created.ProjectID + "/cloud/wals/0001/000000010000000000000001.gz")
+	svc.SetBackupPurger(newTestPurger(deleter))
+	mock.CRDError = errors.New("cluster rejected")
+
+	resp, err := svc.AddDatabase(context.Background(), created.ProjectID, addPostgres())
+	if err != nil || !resp.NoDatabase {
+		t.Fatalf("add: %+v %v", resp, err)
+	}
+	if len(deleter.deleteCalls) == 0 {
+		t.Fatal("the failed add left its archived files behind")
+	}
+}
+
+// A process that died mid-add leaves the project PROVISIONING without a
+// database. Recovery removes what was built and returns it to ACTIVE.
+func TestAnInterruptedDatabaseAddIsRecovered(t *testing.T) {
+	svc, store, mock := setupProvisioningTest(t)
+	vault := svc.vault.(*fakeVault)
+	created := createWithoutDatabase(t, svc)
+	row, _ := store.FindByProjectID(created.ProjectID)
+	row.Status = string(domain.StatusProvisioning)
+	row.CurrentStage = domain.StageWaitingForReady
+	_ = store.Update(row)
+	vault.data["projects/"+created.ProjectID+"/credentials/excalibase_app"] = map[string]string{"password": "x"}
+	vault.data["projects/"+created.ProjectID+"/credentials/jwt_keys/anon_token"] = map[string]string{"k": "v"}
+
+	recovered := svc.RecoverInterruptedDatabaseAdds(context.Background())
+	if !slices.Contains(recovered, created.ProjectID) {
+		t.Fatalf("recovered %v", recovered)
+	}
+	row, _ = store.FindByProjectID(created.ProjectID)
+	if row.Status != "ACTIVE" || !row.NoDatabase || !strings.Contains(row.FailureReason, "interrupted") {
+		t.Fatalf("row %+v", row)
+	}
+	if _, ok := vault.data["projects/"+created.ProjectID+"/credentials/excalibase_app"]; ok {
+		t.Fatal("the interrupted add's database login survived")
+	}
+	if _, ok := vault.data["projects/"+created.ProjectID+"/credentials/jwt_keys/anon_token"]; !ok {
+		t.Fatal("recovery removed a secret that is not a database login")
+	}
+	if !slices.ContainsFunc(mock.Calls, func(c string) bool {
+		return strings.HasPrefix(c, "DeleteCRD:"+row.Namespace+"/"+created.ProjectID+"-postgres")
+	}) {
+		t.Fatal("the cluster was not removed")
+	}
+	if slices.ContainsFunc(mock.Calls, func(c string) bool { return strings.HasPrefix(c, "DeleteNamespace:") }) {
+		t.Fatal("recovery deleted the project's namespace")
+	}
+	// A project not in a build is left alone.
+	if again := svc.RecoverInterruptedDatabaseAdds(context.Background()); len(again) != 0 {
+		t.Fatalf("recovered again: %v", again)
+	}
+}

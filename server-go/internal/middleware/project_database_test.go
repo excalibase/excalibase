@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -53,5 +54,18 @@ func TestRequireProjectDatabaseFailsClosedWithoutAnAnswer(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/projects/proj-d/x", nil))
 	if w.Code == http.StatusOK {
 		t.Fatal("a request passed with no store to ask")
+	}
+}
+
+func TestRequireProjectDatabaseAnswers503WhenTheStoreCannotSay(t *testing.T) {
+	instances := fakestore.NewInstances()
+	instances.Err = errors.New("platform db down")
+	r := chi.NewRouter()
+	r.With(RequireProjectDatabase(instances)).Get("/api/projects/{projectId}/x",
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/projects/proj-d/x", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("got %d, want 503", w.Code)
 	}
 }

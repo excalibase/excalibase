@@ -19,4 +19,10 @@ func TestVaultSecretRouteSaysAProjectHasNoDatabase(t *testing.T) {
 			t.Errorf("%s: got %d %s, want 409 project has no database", role, w.Code, w.Body.String())
 		}
 	}
+
+	// Secrets that are not database logins are answered as before.
+	instances.Items["proj-1"].NoDatabase = true
+	if w := getVaultSecret(t, h, "projects/proj-1/credentials/jwt_keys/anon_token"); w.Code == http.StatusConflict {
+		t.Errorf("a non-database secret was refused as a database login: %d", w.Code)
+	}
 }

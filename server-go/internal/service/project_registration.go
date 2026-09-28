@@ -231,8 +231,6 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 		adminPassword:  inst.Password,
 		resetPasswords: opts.ResetRolePasswords,
 		resetAdmin:     opts.ResetAdminPassword,
-
-		inExistingNamespace: opts.AddingDatabase,
 	}
 	canExecSQL := (s.k8sClient != nil) || (s.dockerClient != nil)
 	if !canExecSQL {
@@ -291,9 +289,6 @@ type projectRoleSpec struct {
 	adminPassword  string
 	resetPasswords bool
 	resetAdmin     bool
-	// inExistingNamespace is a database added to a project's namespace: a
-	// rollback removes the watcher itself, since the namespace stays.
-	inExistingNamespace bool
 }
 
 // createProjectRoles executes the role SQL in the project's database and files
@@ -452,11 +447,6 @@ func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRol
 	}
 	if err := pg.DeployWatcher(ctx, watcherSpec); err != nil {
 		log.Printf("WARN: watcher deployment for %s: %v", spec.projectID, err)
-	}
-	if spec.inExistingNamespace {
-		pc.RegisterCleanup("stop watcher", func(ctx context.Context) error {
-			return pg.StopReplication(ctx, spec.namespace, spec.projectID)
-		})
 	}
 	return nil
 }

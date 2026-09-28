@@ -2,6 +2,7 @@ import { Link, Outlet, useParams } from 'react-router-dom';
 import { Database, Loader2 } from 'lucide-react';
 import { useInstance } from '../hooks/useProvisioning';
 import { secondaryButton } from './containers/ContainerBits';
+import { apiErrorMessage } from '../api/apps';
 
 // Wraps the pages that work on the project's database (EXC-426). A project
 // created without one gets a plain statement and the way to add one, instead
@@ -9,8 +10,15 @@ import { secondaryButton } from './containers/ContainerBits';
 // refuses those calls with 409 regardless; this only saves the round trip.
 export function DatabaseRequired() {
   const { projectId = '' } = useParams<{ projectId: string }>();
-  const { data: project } = useInstance(projectId);
+  const { data: project, error } = useInstance(projectId);
 
+  if (error && !project) {
+    return (
+      <p role="alert" className="py-16 text-center text-sm text-red-400">
+        {apiErrorMessage(error, 'Could not load the project')}
+      </p>
+    );
+  }
   if (!project) {
     return (
       <div className="flex justify-center py-16">

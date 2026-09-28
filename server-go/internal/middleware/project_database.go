@@ -24,7 +24,12 @@ func RequireProjectDatabase(instances storage.InstanceStore) func(http.Handler) 
 				return
 			}
 			inst, err := instances.FindByProjectID(chi.URLParam(r, "projectId"))
-			if err != nil || inst == nil {
+			if err != nil {
+				// An unanswered read is not "has a database".
+				http.Error(w, `{"error":"service unavailable"}`, http.StatusServiceUnavailable)
+				return
+			}
+			if inst == nil {
 				http.Error(w, errBodyProjectNotFound, http.StatusNotFound)
 				return
 			}

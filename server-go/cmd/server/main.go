@@ -965,6 +965,14 @@ func buildProvisioningService(
 	// provSvc.BackupStorage() — the same source backups are written with.
 	provSvc.SetBackupPurger(service.NewBackupPurger(provSvc, dockerBackupKeyPrefix,
 		service.AWSObjectDeleterFactory(backupUsePathStyle())))
+	// A database add that a dead process left half built is rolled back so
+	// the project is usable and the add can be retried (EXC-426). Each one
+	// takes the project's lease, so a live add on another replica is left.
+	go func() {
+		if ids := provSvc.RecoverInterruptedDatabaseAdds(context.Background()); len(ids) > 0 {
+			log.Printf("recovered interrupted database adds: %v", ids)
+		}
+	}()
 	if name := os.Getenv("REALTIME_PUBLICATION_NAME"); name != "" {
 		provSvc.SetPublicationName(name)
 	}

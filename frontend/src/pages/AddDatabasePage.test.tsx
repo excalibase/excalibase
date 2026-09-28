@@ -147,4 +147,10 @@ describe('DatabaseRequired', () => {
     renderAt('/project/proj-1/sql');
     expect(await screen.findByText('sql editor')).toBeInTheDocument();
   });
+
+  test('a project that cannot be read says so instead of spinning', async () => {
+    vi.mocked(api.get).mockRejectedValue({ response: { data: { error: 'project not found' } } });
+    renderAt('/project/proj-1/sql');
+    expect(await screen.findByRole('alert')).toHaveTextContent('project not found');
+  });
 });
