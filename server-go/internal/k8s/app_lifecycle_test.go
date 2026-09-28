@@ -375,7 +375,7 @@ func TestPruneAppWorkload_RemovesOnlyWhatAnEarlierNameLeft(t *testing.T) {
 	}
 	for kind, err := range map[string]error{
 		"old deployment": getErr(clientset.AppsV1().Deployments(testNamespace).Get(ctx, AppObjectName(old.Name), metav1.GetOptions{})),
-		"old service":    getErr(clientset.CoreV1().Services(testNamespace).Get(ctx, AppObjectName(old.Name), metav1.GetOptions{})),
+		"old service":    getErr(clientset.CoreV1().Services(testNamespace).Get(ctx, AppServiceName(old.Name), metav1.GetOptions{})),
 		"old env secret": getErr(clientset.CoreV1().Secrets(testNamespace).Get(ctx, AppEnvSecretName(old.Name), metav1.GetOptions{})),
 	} {
 		if !apierrors.IsNotFound(err) {

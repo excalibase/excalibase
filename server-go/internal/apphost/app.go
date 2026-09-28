@@ -291,9 +291,9 @@ type App struct {
 }
 
 var (
-	// validName — the per-project app name: lowercase, hyphen-separated, and
-	// short enough to survive being part of a DNS label downstream.
-	validName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,49}$`)
+	// validName — the per-project app name, which is also its Service's DNS
+	// name in the project (EXC-524): a DNS-1035 label, so it starts with a letter.
+	validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,48}[a-z0-9]$`)
 	// validID — the generated app id, safe in a URL path.
 	validID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 	// validProjectID matches the ids the platform generates and the ones
@@ -447,11 +447,21 @@ func (a *App) validateReplicas() error {
 	return nil
 }
 
-// ValidateName checks the per-project app name.
+// platformServicePrefix starts every Service the platform names after the
+// project (its database, gateway and public endpoints); reservedNames are the rest.
+const platformServicePrefix = "proj-"
+
+var reservedNames = map[string]bool{"deno-runtime": true}
+
+// ValidateName checks the per-project app name. It is the app's Service name
+// in the project namespace, so it may not take one the platform keeps there.
 func ValidateName(name string) error {
 	if len(name) < minNameLength || len(name) > MaxNameLength || !validName.MatchString(name) {
-		return fmt.Errorf("invalid app name: must be %d-%d lowercase alphanumeric or hyphen characters, starting with a letter or digit",
+		return fmt.Errorf("invalid app name: must be %d-%d lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit",
 			minNameLength, MaxNameLength)
+	}
+	if strings.HasPrefix(name, platformServicePrefix) || reservedNames[name] {
+		return fmt.Errorf("invalid app name: %q is reserved for the platform's own services", name)
 	}
 	return nil
 }

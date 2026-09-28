@@ -1,3 +1,4 @@
+import { isValidAppName } from './appName';
 import type { App, AppSubmission, EnvVar, SecretRef, VarKind } from '../../api/apps';
 
 export interface EnvRow {
@@ -98,7 +99,6 @@ export const initialValues = (app?: App): AppFormValues =>
         diskAttached: false,
       };
 
-const APP_NAME = /^[a-z0-9][a-z0-9-]{1,49}$/;
 const ENV_NAME = /^[A-Za-z_]\w*$/;
 const HEALTH_PATH = /^\/[\w.~/%:@!$&'()*+,;=-]*$/;
 
@@ -204,9 +204,9 @@ export function validateAppForm(
   const errors: AppFormErrors = {};
   const image = imageError(values.image);
   if (image) errors.image = image;
-  if (!APP_NAME.test(values.name)) {
+  if (!isValidAppName(values.name)) {
     errors.name =
-      'Use 2 to 50 lowercase letters, digits or hyphens, starting with a letter or digit.';
+      'Use 2 to 50 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit. Names starting with proj- are reserved.';
   }
   if (!wholeNumberIn(values.port, 1, 65535))
     errors.port = 'Port must be a whole number between 1 and 65535.';

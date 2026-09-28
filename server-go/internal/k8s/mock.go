@@ -115,6 +115,10 @@ type MockClient struct {
 	Capacity      ClusterCapacity
 	CapacityError error
 
+	// AppPrivateNetwork is the opt-in policy's presence per namespace.
+	AppPrivateNetwork    map[string]bool
+	AppPrivateNetworkErr error
+
 	AppWorkloads        map[string]*AppWorkload // keyed "namespace/deploymentName"
 	ApplyAppWorkloadErr error
 
@@ -898,4 +902,27 @@ func (m *MockClient) ClusterVolumesExpandable(ctx context.Context, namespace, cl
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "ClusterVolumesExpandable:"+namespace+"/"+clusterName)
 	return m.VolumeExpansionError
+}
+
+func (m *MockClient) SetAppPrivateNetwork(ctx context.Context, namespace string, open bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, fmt.Sprintf("SetAppPrivateNetwork:%s/%t", namespace, open))
+	if m.AppPrivateNetworkErr != nil {
+		return m.AppPrivateNetworkErr
+	}
+	if m.AppPrivateNetwork == nil {
+		m.AppPrivateNetwork = map[string]bool{}
+	}
+	m.AppPrivateNetwork[namespace] = open
+	return nil
+}
+
+func (m *MockClient) AppPrivateNetworkOpen(ctx context.Context, namespace string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.AppPrivateNetworkErr != nil {
+		return false, m.AppPrivateNetworkErr
+	}
+	return m.AppPrivateNetwork[namespace], nil
 }

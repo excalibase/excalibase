@@ -9,6 +9,8 @@ import { ConnectionStrings } from '../components/ConnectionStrings';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
 import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
 import { PublicPortCard } from '../components/PublicPortCard';
+import { AppNetworkCard } from '../components/AppNetworkCard';
+import { useAppHostingEnabled } from '../hooks/useDeploymentMode';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
@@ -88,6 +90,7 @@ export function SettingsPage() {
   // card falls back to the in-cluster details rather than guessing. A project
   // without a database has no endpoint to read.
   const endpoint = useProjectEndpoint(project && !project.noDatabase ? projectId : undefined);
+  const appHosting = useAppHostingEnabled();
 
   if (isLoading || !project) {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
@@ -154,6 +157,12 @@ const excalibase = createClient({
         <PublicPortCard projectId={project.projectId} status={project.status} />
       </div>
       </>)}
+
+      {appHosting.enabled && (
+        <div className="mb-8">
+          <AppNetworkCard projectId={project.projectId} status={project.status} />
+        </div>
+      )}
 
       <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden mb-8">
         {info.map(({ icon: Icon, label, value }) => (

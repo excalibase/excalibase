@@ -1,0 +1,27 @@
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    excalibase.io/component: app-private-network
+  name: apps-private-network
+  namespace: org1-proj
+spec:
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        excalibase.io/component: app
+        k8s:io.kubernetes.pod.namespace: org1-proj
+  endpointSelector:
+    matchLabels:
+      excalibase.io/component: app
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        excalibase.io/component: app
+        k8s:io.kubernetes.pod.namespace: org1-proj
+    toPorts:
+    - ports:
+      - port: http
+        protocol: TCP

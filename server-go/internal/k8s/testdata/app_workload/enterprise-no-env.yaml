@@ -152,7 +152,7 @@ metadata:
     excalibase.io/component: app
     excalibase.io/project: proj-abc
     excalibase.io/tier: enterprise
-  name: app-web
+  name: web
   namespace: org1-proj-abc
 spec:
   ports:
@@ -188,7 +188,7 @@ spec:
       paths:
       - backend:
           service:
-            name: app-web
+            name: web
             port:
               number: 80
         path: /

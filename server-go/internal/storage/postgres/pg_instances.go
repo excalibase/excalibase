@@ -471,6 +471,7 @@ var projectOwnedTables = []string{
 	"column_policies",
 	"table_grants",
 	"project_cors_settings",
+	"project_app_network",
 	"edge_function_settings",
 	"edge_functions",
 	"edge_shared_files",

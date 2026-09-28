@@ -178,6 +178,9 @@ func (c *Client) applyAppService(ctx context.Context, namespace string, desired 
 	if err != nil {
 		return fmt.Errorf("read app service: %w", err)
 	}
+	if !sameAppOwner(existing.Labels, desired.Labels) {
+		return fmt.Errorf("service %s/%s belongs to something other than this app; refusing to take it over", namespace, desired.Name)
+	}
 	updated := existing.DeepCopy()
 	updated.Labels = desired.Labels
 	updated.Spec.Type = desired.Spec.Type
@@ -187,6 +190,12 @@ func (c *Client) applyAppService(ctx context.Context, namespace string, desired 
 		return fmt.Errorf("update app service: %w", err)
 	}
 	return nil
+}
+
+// sameAppOwner: the Service is named after the app, so only one this app rendered may be updated.
+func sameAppOwner(existing, desired map[string]string) bool {
+	const appKey, managedKey = "excalibase.io/app", "app.kubernetes.io/managed-by"
+	return existing[managedKey] == appManagedByValue && existing[appKey] != "" && existing[appKey] == desired[appKey]
 }
 
 func (c *Client) applyAppIngress(ctx context.Context, namespace string, desired *networkingv1.Ingress) error {

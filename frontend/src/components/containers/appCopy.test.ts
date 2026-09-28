@@ -78,6 +78,8 @@ describe('suggestAppName', () => {
     ['localhost:5000/api@sha256:abc', 'api'],
     ['', ''],
     ['x:1', ''],
+    ['acme/9lives:1', ''],
+    ['acme/proj-tool:1', ''],
   ])('%s → %s', (image, name) => {
     expect(suggestAppName(image)).toBe(name);
   });

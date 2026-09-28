@@ -132,6 +132,8 @@ type KubeClient interface {
 	SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts AppDomainOptions) error
 	AppDomainCertificate(ctx context.Context, namespace, appName, host string) (CertificateState, error)
 	ClusterIssuerReady(ctx context.Context, name string) error
+	SetAppPrivateNetwork(ctx context.Context, namespace string, open bool) error
+	AppPrivateNetworkOpen(ctx context.Context, namespace string) (bool, error)
 }
 
 // ClusterCapacity holds aggregate cluster resource state. All values are in
