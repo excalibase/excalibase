@@ -24,6 +24,7 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
   const [confirming, setConfirming] = useState(false);
   const active = status === 'ACTIVE';
   const current = endpoint.data;
+  const canChange = current?.canChange === true;
 
   const toggle = () => {
     if (!current) return;
@@ -80,20 +81,27 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
               </>
             )}
           </p>
-          <Button
-            size="sm"
-            variant={current.publicEnabled ? 'secondary' : 'primary'}
-            disabled={!active || change.isPending || confirming}
-            onClick={toggle}
-            data-testid="public-port-toggle"
-          >
-            {current.publicEnabled ? 'Close public port' : 'Open public port'}
-          </Button>
+          {canChange && (
+            <Button
+              size="sm"
+              variant={current.publicEnabled ? 'secondary' : 'primary'}
+              disabled={!active || change.isPending || confirming}
+              onClick={toggle}
+              data-testid="public-port-toggle"
+            >
+              {current.publicEnabled ? 'Close public port' : 'Open public port'}
+            </Button>
+          )}
         </div>
       )}
-      {current && !active && (
+      {current && canChange && !active && (
         <p className="text-xs text-text-tertiary mt-2">
           The project must be active before its port can change.
+        </p>
+      )}
+      {current && !canChange && (
+        <p className="text-xs text-text-tertiary mt-2" data-testid="public-port-admin-only">
+          Only an org admin or owner can open or close the public port.
         </p>
       )}
       {confirming && (

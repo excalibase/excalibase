@@ -54,6 +54,9 @@ export interface ProjectEndpoint {
   caCertificate: string;
   internal: ProjectEndpointInternal;
   mongo?: ProjectMongoEndpoint;
+  // Whether this caller may open or close the public port (Admin and up).
+  // Only an explicit true shows the control; the server refuses writes anyway.
+  canChange?: boolean;
 }
 
 // The wire shape carries the Mongo half as flat fields beside the Postgres ones.

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -93,6 +95,9 @@ type dbEndpointResponse struct {
 	// for a project that is not a published DocumentDB project.
 	MongoPort      int   `json:"mongoPort,omitempty"`
 	MongoAvailable *bool `json:"mongoAvailable,omitempty"`
+	// canChange says whether this caller may open or close the port (Admin
+	// and up, the route's write policy), so Studio shows the control only to them.
+	CanChange bool `json:"canChange"`
 }
 
 // dbEndpointRequest is the PUT body. Both fields are optional: a body that
@@ -114,7 +119,7 @@ func (h *ProvisioningHandler) GetDBEndpoint(w http.ResponseWriter, r *http.Reque
 		writeDBEndpointError(w, err)
 		return
 	}
-	writeJSON(w, dbEndpointResponseFor(view))
+	writeJSON(w, dbEndpointResponseFor(view, callerMayChangeDBEndpoint(r)))
 }
 
 // PutDBEndpoint serves PUT /api/projects/{projectId}/db-endpoint with body
@@ -139,7 +144,7 @@ func (h *ProvisioningHandler) PutDBEndpoint(w http.ResponseWriter, r *http.Reque
 		writeDBEndpointError(w, err)
 		return
 	}
-	writeJSON(w, dbEndpointResponseFor(view))
+	writeJSON(w, dbEndpointResponseFor(view, callerMayChangeDBEndpoint(r)))
 }
 
 // applyDBEndpoint writes whichever settings the body named, and reads the
@@ -204,8 +209,15 @@ func writeDBEndpointError(w http.ResponseWriter, err error) {
 	}
 }
 
-func dbEndpointResponseFor(view service.DBEndpointView) dbEndpointResponse {
+// callerMayChangeDBEndpoint mirrors the route's write policy for display only.
+func callerMayChangeDBEndpoint(r *http.Request) bool {
+	access := custommw.ProjectAccessFromContext(r.Context())
+	return access != nil && access.RoleAtLeast(domain.OrgRoleAdmin)
+}
+
+func dbEndpointResponseFor(view service.DBEndpointView, canChange bool) dbEndpointResponse {
 	return dbEndpointResponse{
+		CanChange:     canChange,
 		ProjectID:     view.ProjectID,
 		PublicEnabled: view.Enabled,
 		Available:     view.Available,

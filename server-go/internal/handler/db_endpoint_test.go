@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/domain"
+	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -189,5 +191,39 @@ func TestDBEndpointRefusesAnInvalidProjectId(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+// Studio shows the open/close control only to a caller who may use it; the
+// route still refuses writes below Admin, this only says so up front.
+func TestDBEndpointSaysWhetherTheCallerMayChangeIt(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		access *custommw.ProjectAccess
+		want   bool
+	}{
+		{"viewer", &custommw.ProjectAccess{Member: &domain.OrgMember{Role: domain.OrgRoleViewer}}, false},
+		{"developer", &custommw.ProjectAccess{Member: &domain.OrgMember{Role: domain.OrgRoleDeveloper}}, false},
+		{"admin", &custommw.ProjectAccess{Member: &domain.OrgMember{Role: domain.OrgRoleAdmin}}, true},
+		{"owner", &custommw.ProjectAccess{Member: &domain.OrgMember{Role: domain.OrgRoleOwner}}, true},
+		{"platform admin", &custommw.ProjectAccess{PlatformAdmin: true}, true},
+		{"no resolved access", nil, false},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPut} {
+			t.Run(tc.name+" "+method, func(t *testing.T) {
+				req := httptest.NewRequest(method, "/api/projects/proj-abc/db-endpoint/", strings.NewReader(`{}`))
+				if tc.access != nil {
+					req = req.WithContext(custommw.WithProjectAccess(req.Context(), tc.access))
+				}
+				w := httptest.NewRecorder()
+				dbEndpointRouter(&fakeDBEndpoints{view: service.DBEndpointView{ProjectID: "proj-abc"}}).ServeHTTP(w, req)
+				if w.Code != http.StatusOK {
+					t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+				}
+				if got := decodeDBEndpoint(t, w)["canChange"]; got != tc.want {
+					t.Errorf("canChange = %v, want %v", got, tc.want)
+				}
+			})
+		}
 	}
 }
