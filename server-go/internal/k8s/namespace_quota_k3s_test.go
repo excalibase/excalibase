@@ -34,6 +34,19 @@ func TestK3sNamespaceQuotaFollowsThePlan(t *testing.T) {
 		_, err := lab.cs.CoreV1().PersistentVolumeClaims(ns).Create(lab.ctx, pvc, metav1.CreateOptions{})
 		return err
 	}
+	// Admission enforces a quota only once its controller has observed it.
+	quotaObserved := func(pvcs int) {
+		t.Helper()
+		eventually(t, fmt.Sprintf("the quota controller observes %d claims allowed", pvcs), time.Minute, func() bool {
+			q, err := lab.cs.CoreV1().ResourceQuotas(ns).Get(lab.ctx, namespaceQuotaName, metav1.GetOptions{})
+			if err != nil {
+				return false
+			}
+			hard, ok := q.Status.Hard[corev1.ResourcePersistentVolumeClaims]
+			return ok && hard.Value() == int64(pvcs)
+		})
+	}
+	quotaObserved(DefaultNamespaceQuota.PVCs)
 	for i := range DefaultNamespaceQuota.PVCs {
 		if err := claim(i); err != nil {
 			t.Fatalf("claim %d under the default quota: %v", i, err)
@@ -47,7 +60,7 @@ func TestK3sNamespaceQuotaFollowsThePlan(t *testing.T) {
 	if err := lab.client.EnsureNamespaceQuota(lab.ctx, ns, enterprise); err != nil {
 		t.Fatalf("size the quota for ENTERPRISE: %v", err)
 	}
-	// The quota controller recomputes usage after an update; admission follows.
+	quotaObserved(enterprise.PVCs)
 	deadline := time.Now().Add(time.Minute)
 	next := DefaultNamespaceQuota.PVCs
 	for next < 5+20 {
