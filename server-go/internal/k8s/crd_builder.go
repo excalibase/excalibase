@@ -242,7 +242,8 @@ func clusterOwner(opts PostgreSQLClusterOpts) string {
 // own Mongo users are then refused every other login (EXC-427).
 func documentDBLoopbackTrust(opts PostgreSQLClusterOpts) []interface{} {
 	mongoUsers := "+" + config.DocumentDBMongoUsersGroup
-	roles := []string{config.DocumentDBGatewayRole, clusterOwner(opts), appRoleName, mongoUsers}
+	// No platform role: the gateway would open a session for its password (EXC-410).
+	roles := []string{config.DocumentDBGatewayRole, clusterOwner(opts), mongoUsers}
 	lines := make([]interface{}, 0, 2*len(roles)+1)
 	for _, role := range roles {
 		lines = append(lines,
@@ -272,7 +273,7 @@ const (
 // the superuser, connect over the socket as the roles DocumentDB's own
 // connect-backs use: its background worker, and the roles clients act as.
 func documentDBPeerIdentities(opts PostgreSQLClusterOpts) []interface{} {
-	roles := []string{"documentdb_bg_worker_role", config.DocumentDBGatewayRole, clusterOwner(opts), appRoleName}
+	roles := []string{"documentdb_bg_worker_role", config.DocumentDBGatewayRole, clusterOwner(opts)}
 	lines := make([]interface{}, 0, len(roles))
 	for _, role := range roles {
 		lines = append(lines, "local postgres "+role)

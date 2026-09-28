@@ -123,3 +123,46 @@ func TestTheTLSSwitchLeavesCertificateRulesAlone(t *testing.T) {
 		}
 	}
 }
+
+// The DocumentDB gateway checks a Mongo password itself and then opens the
+// session over loopback as that user. No platform role may be trusted there,
+// or its password would still log in on the public Mongo port (EXC-410).
+func TestNoPlatformRoleIsTrustedOnTheGatewayLoopback(t *testing.T) {
+	lines := hbaLines(t, documentDBOpts("owner_doc"))
+	for _, role := range platformRoles {
+		for _, line := range lines {
+			fields := strings.Fields(line)
+			if isLoopbackLine(line) && fields[2] == role {
+				t.Errorf("%s is trusted on loopback: %q", role, line)
+			}
+		}
+		if got := methodOf(firstLoopbackRuleFor(lines, role)); got != "reject" {
+			t.Errorf("%s over the gateway loopback: %q, want reject", role, got)
+		}
+	}
+}
+
+func TestNoPlatformRoleIsMappedForTheExtensionsSocket(t *testing.T) {
+	for _, line := range documentDBPeerIdentities(documentDBOpts("owner_doc")) {
+		for _, role := range platformRoles {
+			if strings.HasSuffix(line.(string), " "+role) {
+				t.Errorf("%s is peer-mapped: %q", role, line)
+			}
+		}
+	}
+}
+
+// firstLoopbackRuleFor is the line a plaintext loopback login by role meets first.
+func firstLoopbackRuleFor(lines []string, role string) string {
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 5 || fields[0] == "hostssl" || fields[1] == "replication" {
+			continue
+		}
+		address := fields[3]
+		if (fields[2] == "all" || fields[2] == role) && (address == "all" || address == "127.0.0.1/32") {
+			return line
+		}
+	}
+	return "(operator catch-all)"
+}

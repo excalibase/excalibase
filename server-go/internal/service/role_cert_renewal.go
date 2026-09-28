@@ -154,4 +154,3 @@ func (r *RoleCertificateRenewer) renewIfLeader(ctx context.Context, leader Leade
 		log.Printf("role certificate renewal: renewed %d project(s)", report.Renewed)
 	}
 }
-

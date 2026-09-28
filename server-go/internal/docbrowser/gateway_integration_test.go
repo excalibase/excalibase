@@ -72,15 +72,15 @@ func superuserSQL(ctx context.Context, t *testing.T, container testcontainers.Co
 	}
 }
 
-// appRoleClient creates excalibase_app the way provisioning does — a plain
+// appRoleClient creates the document browser login as a plain
 // LOGIN role — grants it what provisioning grants, and connects as it. The
 // container's certificate is self-signed for localhost, so verification is off
 // here only; the connector's own TLS is covered by its unit tests.
 func appRoleClient(ctx context.Context, t *testing.T, container testcontainers.Container) *mongo.Client {
 	t.Helper()
-	superuserSQL(ctx, t, container, "CREATE ROLE excalibase_app WITH LOGIN PASSWORD '"+appPassword+"'")
+	superuserSQL(ctx, t, container, "CREATE ROLE excalibase_docbrowser WITH LOGIN PASSWORD '"+appPassword+"'")
 	superuserSQL(ctx, t, container, "CREATE ROLE owner_doc WITH LOGIN PASSWORD 'Owner-Pass-1234'")
-	superuserSQL(ctx, t, container, `GRANT documentdb_admin_role TO "owner_doc", "excalibase_app"`)
+	superuserSQL(ctx, t, container, `GRANT documentdb_admin_role TO "owner_doc", "excalibase_docbrowser"`)
 
 	host, err := container.Host(ctx)
 	if err != nil {
@@ -93,7 +93,7 @@ func appRoleClient(ctx context.Context, t *testing.T, container testcontainers.C
 	client, err := mongo.Connect(options.Client().
 		SetHosts([]string{fmt.Sprintf("%s:%s", host, port.Port())}).
 		SetDirect(true).
-		SetAuth(options.Credential{AuthMechanism: authMechanism, Username: "excalibase_app", Password: appPassword}).
+		SetAuth(options.Credential{AuthMechanism: authMechanism, Username: "excalibase_docbrowser", Password: appPassword}).
 		SetTLSConfig(&tls.Config{InsecureSkipVerify: true}). //nolint:gosec // test container's self-signed certificate
 		SetTimeout(30 * time.Second))
 	if err != nil {

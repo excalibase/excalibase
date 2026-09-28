@@ -34,7 +34,6 @@ func TestAMongoUserGetsItsOwnPeerLine(t *testing.T) {
 		"local postgres documentdb_bg_worker_role",
 		"local postgres documentdb",
 		"local postgres owner_doc",
-		"local postgres excalibase_app",
 		"local postgres reporting",
 	}
 	if !slices.Equal(lines, want) {
@@ -69,7 +68,7 @@ func TestRemovingAUserLeavesEveryOtherLine(t *testing.T) {
 	}
 	lines, _, _ := unstructuredStrings(removed.Object, "spec", "postgresql", "pg_ident")
 	if slices.Contains(lines, "local postgres reporting") || !slices.Contains(lines, "local postgres writer") ||
-		!slices.Contains(lines, "local postgres excalibase_app") {
+		!slices.Contains(lines, "local postgres owner_doc") {
 		t.Errorf("after remove: %q", lines)
 	}
 	if _, updated, _ := WithMongoUserIdent(removed, "reporting", false); updated {

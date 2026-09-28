@@ -24,7 +24,9 @@ import (
 var ErrGatewayNotReady = errors.New("the DocumentDB gateway is not serving yet")
 
 const (
-	appRole            = "excalibase_app"
+	// loginCredential is the document browser's own Mongo login (EXC-410);
+	// the platform's Postgres roles log in by certificate and are refused here.
+	loginCredential    = "docbrowser"
 	authMechanism      = "SCRAM-SHA-256"
 	caKey              = "ca.crt"
 	defaultMaxClients  = 32
@@ -62,7 +64,7 @@ type cachedClient struct {
 	used        time.Time
 }
 
-// GatewayConnector opens a project's gateway as the platform's app role,
+// GatewayConnector opens a project's gateway as the document browser's login,
 // verifying the gateway against the project's cluster CA. Clients are cached
 // per project and replaced when the credential or the primary changes.
 type GatewayConnector struct {
@@ -126,12 +128,12 @@ func (c *GatewayConnector) resolve(ctx context.Context, projectID string) (gatew
 	if err != nil {
 		return gatewayTarget{}, err
 	}
-	creds, err := c.credentials.Get(fmt.Sprintf("projects/%s/credentials/%s", projectID, appRole))
+	creds, err := c.credentials.Get(fmt.Sprintf("projects/%s/credentials/%s", projectID, loginCredential))
 	if err != nil {
-		return gatewayTarget{}, fmt.Errorf("read the %s credential of %s: %w", appRole, projectID, err)
+		return gatewayTarget{}, fmt.Errorf("read the %s credential of %s: %w", loginCredential, projectID, err)
 	}
 	if creds["username"] == "" || creds["password"] == "" {
-		return gatewayTarget{}, fmt.Errorf("the %s credential of %s is incomplete", appRole, projectID)
+		return gatewayTarget{}, fmt.Errorf("the %s credential of %s is incomplete", loginCredential, projectID)
 	}
 	address, err := c.cluster.DocumentDBGatewayAddress(ctx, inst.Namespace, projectID+"-postgres-rw")
 	if errors.Is(err, k8s.ErrDocumentDBGatewayNotReady) {

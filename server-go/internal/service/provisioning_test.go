@@ -758,6 +758,7 @@ func TestProvision_NamespaceUsesGeneratedRef(t *testing.T) {
 type fakeVault struct {
 	data    map[string]map[string]string
 	deletes []string
+	putErr  error
 }
 
 func newFakeVault() *fakeVault { return &fakeVault{data: map[string]map[string]string{}} }
@@ -768,7 +769,13 @@ func (f *fakeVault) Get(p string) (map[string]string, error) {
 	}
 	return nil, errors.New("not found")
 }
-func (f *fakeVault) Put(p string, d map[string]string) error { f.data[p] = d; return nil }
+func (f *fakeVault) Put(p string, d map[string]string) error {
+	if f.putErr != nil {
+		return f.putErr
+	}
+	f.data[p] = d
+	return nil
+}
 func (f *fakeVault) Delete(p string) error {
 	f.deletes = append(f.deletes, p)
 	delete(f.data, p)

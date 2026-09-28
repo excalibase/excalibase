@@ -41,8 +41,6 @@ func TestDocumentDBTrustsTheGatewayRolesOnLoopbackOnly(t *testing.T) {
 		"host all documentdb ::1/128 trust",
 		"host all owner_doc 127.0.0.1/32 trust",
 		"host all owner_doc ::1/128 trust",
-		"host all excalibase_app 127.0.0.1/32 trust",
-		"host all excalibase_app ::1/128 trust",
 		"host all +excalibase_mongo_users 127.0.0.1/32 trust",
 		"host all +excalibase_mongo_users ::1/128 trust",
 	}

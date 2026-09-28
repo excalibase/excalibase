@@ -73,7 +73,6 @@ func TestDocumentDBPeerMapsOnlyTheGatewayRoles(t *testing.T) {
 		"local postgres documentdb_bg_worker_role",
 		"local postgres documentdb",
 		"local postgres owner_doc",
-		"local postgres excalibase_app",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("pg_ident:\n got %q\nwant %q", got, want)
