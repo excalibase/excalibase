@@ -36,6 +36,9 @@ const (
 
 	errBodyCapability = `{"error":"token is not permitted to call this endpoint"}`
 
+	currentSegmentName = "."
+	parentSegmentName  = ".."
+
 	vaultInitRoute       = "/api/vault/init"
 	vaultUnsealRoute     = "/api/vault/unseal"
 	serviceAccountsRoute = "/api/admin/service-accounts"
@@ -129,6 +132,19 @@ func normalizePath(rawPath string) string {
 	return path.Clean(rawPath)
 }
 
+// hasDotSegment reports a "." or ".." path segment. The gate inspects the
+// cleaned path but the router matches the path as sent, so a dot segment
+// could be authorized as one route and served by another. No service
+// legitimately sends one.
+func hasDotSegment(rawPath string) bool {
+	for _, segment := range strings.Split(rawPath, "/") {
+		if segment == currentSegmentName || segment == parentSegmentName {
+			return true
+		}
+	}
+	return false
+}
+
 // CapabilityGate refuses any request a capability token is not permitted to
 // make. Requests authenticated by an ordinary PAT, a session, or no token at
 // all pass straight through — this layer adds no gate for them; the existing
@@ -148,7 +164,7 @@ func CapabilityGate(next http.Handler) http.Handler {
 		// wildcard — so an escaped path would be authorized as one secret and
 		// served as another. No path a service legitimately reads needs an
 		// escape, so refuse the whole class instead of picking a form.
-		if r.URL.RawPath != "" {
+		if r.URL.RawPath != "" || hasDotSegment(r.URL.Path) {
 			http.Error(w, errBodyCapability, http.StatusForbidden)
 			return
 		}
@@ -197,7 +213,7 @@ func UnlessGrantedCapability(guard func(http.Handler) http.Handler) func(http.Ha
 		guarded := guard(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := auth.GetToken(r.Context())
-			if auth.IsCapabilityToken(token) {
+			if auth.IsCapabilityToken(token) && !hasDotSegment(r.URL.Path) && r.URL.RawPath == "" {
 				if want, ok := RequiredCapability(r.Method, r.URL.Path); ok && auth.TokenGrants(token, want) {
 					next.ServeHTTP(w, r)
 					return

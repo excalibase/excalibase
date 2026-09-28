@@ -264,6 +264,9 @@ func (h *VaultHandler) Status(w http.ResponseWriter, r *http.Request) {
 		"shares":      s.Shares,
 		"progress":    s.Progress,
 		"type":        s.Type,
+		// The bootstrap Job checks this before init on a KMS install, so a
+		// provisioning not using KMS never hands out a plaintext share (EXC-485).
+		"kmsUnseal": h.kms != nil,
 	})
 }
 

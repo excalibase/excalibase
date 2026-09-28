@@ -119,3 +119,24 @@ func TestUnlessGrantedCapability(t *testing.T) {
 		t.Fatalf("a human PAT must still meet the guard: %d", code)
 	}
 }
+
+// The router matches the path as sent while the gate used to inspect it
+// cleaned, so a path that climbs out of one route and into another was
+// authorized as the second and served by the first.
+func TestCapabilityGateRefusesDotSegments(t *testing.T) {
+	token := &domain.AccessToken{Name: "svc-bootstrap", Permissions: permsBootstrap}
+	for _, route := range []struct{ method, path string }{
+		{http.MethodDelete, "/api/projects/p/storage/buckets/b/objects/../../../../../../auth/tokens/x"},
+		{http.MethodPost, "/api/projects/p/storage/tus/../../../../auth/tokens"},
+		{http.MethodGet, "/api/vault/secrets/../secrets/pki/signing/private"},
+		{http.MethodGet, "/api/vault/secrets/./pki/signing/private"},
+	} {
+		if _, reached := serveWithToken(t, token, route.method, route.path); reached {
+			t.Errorf("%s %s reached the handler", route.method, route.path)
+		}
+	}
+	// A trailing slash is not a dot segment and keeps working.
+	if _, reached := serveWithToken(t, &domain.AccessToken{Permissions: permsGraphql}, http.MethodGet, "/api/projects/p1/info/"); !reached {
+		t.Error("trailing slash refused")
+	}
+}

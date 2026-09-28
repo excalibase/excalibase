@@ -29,11 +29,11 @@ const (
 // value retires every token the principal held before. That is also how the
 // token is revoked — replace the Secret and restart provisioning.
 //
-// raw == "" means the deployment does not use a bootstrap principal and
-// nothing is done.
+// raw == "" means the deployment does not use a bootstrap principal: any
+// token it held before is retired, so a removed Secret leaves nothing working.
 func AdoptBootstrapServiceToken(ctx context.Context, users storage.UserStore, tokens storage.TokenStore, raw string, permissions []string) error {
 	if raw == "" {
-		return nil
+		return retireBootstrapTokens(ctx, users, tokens)
 	}
 	if len(raw) < MinSetupTokenLength {
 		return fmt.Errorf("the bootstrap service token must be at least %d characters, got %d", MinSetupTokenLength, len(raw))
@@ -97,7 +97,7 @@ func adoptToken(ctx context.Context, tokens storage.TokenStore, userID, hash, pr
 			return fmt.Errorf("retire %s token: %w", BootstrapServiceName, err)
 		}
 	}
-	if current {
+	if current || hash == "" {
 		return nil
 	}
 	now := time.Now()
@@ -109,4 +109,15 @@ func adoptToken(ctx context.Context, tokens storage.TokenStore, userID, hash, pr
 		Permissions: permissions,
 		CreatedAt:   &now,
 	})
+}
+
+func retireBootstrapTokens(ctx context.Context, users storage.UserStore, tokens storage.TokenStore) error {
+	principal, err := users.FindUserByUsername(ctx, BootstrapServiceName)
+	if err != nil && !errors.Is(err, storage.ErrUserNotFound) {
+		return fmt.Errorf("look up %s: %w", BootstrapServiceName, err)
+	}
+	if principal == nil || !principal.IsService() {
+		return nil
+	}
+	return adoptToken(ctx, tokens, principal.ID, "", "", nil)
 }

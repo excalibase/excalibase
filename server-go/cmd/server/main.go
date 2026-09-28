@@ -1284,6 +1284,11 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler.SetEmailVerifier(emailVerifier)
 	logFirstAdminSetupToken(sqlStore)
 	adoptBootstrapServiceToken(cfg, sqlStore)
+	ceilings, err := config.LoadServiceTokenCeilings()
+	if err != nil {
+		log.Fatalf("service token ceilings: %v", err)
+	}
+	authHandler.SetServiceTokenCeilings(ceilings)
 
 	var vaultHandler *handler.VaultHandler
 	if localVault != nil {

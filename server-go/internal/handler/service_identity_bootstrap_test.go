@@ -11,8 +11,9 @@ import (
 // svc-bootstrap (EXC-485) replaces the platform admin password in the chart's
 // bootstrap Job and token-rotation CronJob. These tests pin what its token
 // reaches through the real gate and handlers: the tokens of the principals it
-// is granted, with at most the permissions it holds itself — and nothing that
-// would turn it back into an admin credential.
+// is granted, each within that principal's configured ceiling — and nothing
+// that would turn it back into an admin credential. It holds none of those
+// permissions itself.
 const (
 	svcBootstrapName = "svc-bootstrap"
 	svcOtherName     = "svc-other"
@@ -27,7 +28,10 @@ func bootstrapFixture(t *testing.T) (*identityFixture, string) {
 	f := newIdentityFixture(t)
 	raw := f.mintCapability(t, svcBootstrapName, []string{
 		manage(svcAuthName), manage(svcGraphqlName), permVaultInit,
-		permVaultSigning, permProjectInfo, permPolicies,
+	})
+	f.auth.SetServiceTokenCeilings(map[string][]string{
+		svcAuthName:    {permVaultSigning, permProjectInfo},
+		svcGraphqlName: {permPolicies, permProjectInfo},
 	})
 	return f, raw
 }
@@ -101,8 +105,14 @@ func TestBootstrapTokenCannotMintAnythingWider(t *testing.T) {
 
 func TestBootstrapTokenListsRotatesAndRevokesOnlyManagedTokens(t *testing.T) {
 	f, raw := bootstrapFixture(t)
-	svcAuthToken := f.mintCapability(t, svcAuthName, []string{permPolicies})
+	svcAuthToken := f.mintCapability(t, svcAuthName, []string{permProjectInfo})
 	otherToken := f.mintCapability(t, svcOtherName, []string{permPolicies})
+	// A token an admin minted beyond the ceiling is not the bootstrap's to rotate:
+	// rotation hands back its secret.
+	widened := f.mintCapability(t, svcGraphqlName, []string{"vault:read:projects/*/credentials/admin"})
+	if w := f.do(http.MethodPost, routeAuthTokens+"/"+auth.HashToken(widened)+rotateSuffix, raw, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("rotate a token beyond the ceiling: "+bodyFmt, w.Code, w.Body.String())
+	}
 
 	if w := f.do(http.MethodGet, routeServiceAccounts+"/"+svcAuthName+"/tokens", raw, ""); w.Code != http.StatusOK {
 		t.Fatalf("list svc-auth tokens: "+bodyFmt, w.Code, w.Body.String())
@@ -128,5 +138,24 @@ func TestBootstrapTokenListsRotatesAndRevokesOnlyManagedTokens(t *testing.T) {
 	rotated := decodeBody(t, w.Body.String())["token"].(string)
 	if w := f.do(http.MethodDelete, tokenPath(rotated), raw, ""); w.Code != http.StatusOK {
 		t.Fatalf("revoke svc-auth: "+bodyFmt, w.Code, w.Body.String())
+	}
+}
+
+func TestBootstrapTokenMintsNothingWithoutAConfiguredCeiling(t *testing.T) {
+	f, raw := bootstrapFixture(t)
+	f.auth.SetServiceTokenCeilings(nil)
+	svcAuth := f.createServiceAccount(t, svcAuthName)
+	if code := f.mintAs(t, raw, svcAuth.ID, []string{permProjectInfo}); code == http.StatusCreated {
+		t.Fatal("minted with no ceiling configured")
+	}
+}
+
+// An upgrade that narrows a principal's list leaves its stored token outside
+// the new ceiling. The bootstrap must still be able to retire it.
+func TestBootstrapTokenRevokesATokenBeyondTheCeiling(t *testing.T) {
+	f, raw := bootstrapFixture(t)
+	drifted := f.mintCapability(t, svcAuthName, []string{permPolicies})
+	if w := f.do(http.MethodDelete, routeAuthTokens+"/"+auth.HashToken(drifted), raw, ""); w.Code != http.StatusOK {
+		t.Fatalf("revoke a drifted token: "+bodyFmt, w.Code, w.Body.String())
 	}
 }

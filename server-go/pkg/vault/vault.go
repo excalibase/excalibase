@@ -81,11 +81,18 @@ func (v *Vault) Close() error {
 }
 
 func (v *Vault) Initialized() bool {
+	initialized, _ := v.CheckInitialized()
+	return initialized
+}
+
+// CheckInitialized is Initialized that reports a store failure instead of
+// reading it as "not initialized" — for callers that must not guess.
+func (v *Vault) CheckInitialized() (bool, error) {
 	barrier, _, err := v.store.GetBarrier()
 	if err != nil {
-		return false
+		return false, err
 	}
-	return barrier != nil
+	return barrier != nil, nil
 }
 
 func (v *Vault) Sealed() bool {

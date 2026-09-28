@@ -32,6 +32,7 @@ const (
 // real gate rather than a handler in isolation.
 type identityFixture struct {
 	r     chi.Router
+	auth  *AuthHandler
 	us    *mockUserStore
 	ts    *mockTokenStore
 	audit *mockAudit
@@ -67,7 +68,7 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 		svcHandler.Routes(r)
 	})
 
-	f := &identityFixture{r: r, us: us, ts: ts, audit: audit}
+	f := &identityFixture{r: r, auth: authHandler, us: us, ts: ts, audit: audit}
 	f.admin = f.mintPAT("admin-pat", adminUserID)
 	f.human = f.mintPAT("human-pat", humanUserID)
 	return f

@@ -96,3 +96,26 @@ func TestVaultRekeyIsRefusedUnderKMS(t *testing.T) {
 		t.Fatalf("rekey under KMS: %d, want 409 — it would hand out a plaintext share and orphan the stored ciphertext", w.Code)
 	}
 }
+
+// Bootstrap refuses to init a KMS install whose provisioning is not using KMS:
+// such an init would hand back a plaintext share it must not store, and leave
+// a vault nobody can unseal.
+func TestVaultStatusReportsKMSUnseal(t *testing.T) {
+	h, _ := kmsVaultHandler(t, prefixEncrypter{})
+	w := httptest.NewRecorder()
+	h.Status(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["kmsUnseal"] != true {
+		t.Fatalf("status = %v, want kmsUnseal true", body)
+	}
+	plain := NewVaultHandler(h.v)
+	w = httptest.NewRecorder()
+	plain.Status(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["kmsUnseal"] != false {
+		t.Fatalf("plaintext status = %v, want kmsUnseal false", body)
+	}
+}

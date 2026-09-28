@@ -144,3 +144,17 @@ func TestUnsealAtBootLeavesAnUninitializedVaultToBootstrap(t *testing.T) {
 		t.Fatalf("an uninitialized vault is bootstrap's to initialize: %v", err)
 	}
 }
+
+// brokenStoreVault reads as unknown: the store could not be asked.
+type brokenStoreVault struct{ *vault.Vault }
+
+func (brokenStoreVault) CheckInitialized() (bool, error) { return false, errors.New("db down") }
+
+func TestUnsealAtBootRefusesWhenItCannotTellWhetherTheVaultIsInitialized(t *testing.T) {
+	c := &xorCipher{}
+	v := newTestVault(t)
+	ct := initWrapped(t, v, c)
+	if err := UnsealAtBoot(context.Background(), brokenStoreVault{v}, c, ct); err == nil {
+		t.Fatal("a platform DB error at boot must refuse start, not skip the unseal")
+	}
+}

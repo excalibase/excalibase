@@ -140,6 +140,22 @@ func TestAdoptBootstrapServiceTokenRefusals(t *testing.T) {
 	}
 }
 
+// Removing the token from the deployment retires the one adopted before:
+// otherwise the old value would keep working with no Secret to replace it.
+func TestAdoptBootstrapServiceTokenRetiresTheTokenWhenUnset(t *testing.T) {
+	users, tokens := fakestore.NewUsers(), newMemTokens()
+	ctx := context.Background()
+	if err := AdoptBootstrapServiceToken(ctx, users, tokens, testBootstrapToken, testBootstrapPermissions); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if err := AdoptBootstrapServiceToken(ctx, users, tokens, "", nil); err != nil {
+		t.Fatalf("unset: %v", err)
+	}
+	if len(tokens.byHash) != 0 {
+		t.Fatal("the previously adopted token must be retired")
+	}
+}
+
 func TestAdoptBootstrapServiceTokenIsANoOpWhenUnset(t *testing.T) {
 	users, tokens := fakestore.NewUsers(), newMemTokens()
 	if err := AdoptBootstrapServiceToken(context.Background(), users, tokens, "", nil); err != nil {

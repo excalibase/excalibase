@@ -107,7 +107,7 @@ func UnsealKeyFromCiphertext(ctx context.Context, d Decrypter, ciphertextB64 str
 
 // Sealable is the part of the vault boot-time unsealing needs.
 type Sealable interface {
-	Initialized() bool
+	CheckInitialized() (bool, error)
 	Sealed() bool
 	Unseal(shareHex string) (*vault.UnsealProgress, error)
 }
@@ -118,7 +118,11 @@ type Sealable interface {
 // not open this vault all refuse boot. An uninitialized vault is left alone —
 // the bootstrap Job initializes it.
 func UnsealAtBoot(ctx context.Context, v Sealable, d Decrypter, ciphertextB64 string) error {
-	if !v.Initialized() || !v.Sealed() {
+	initialized, err := v.CheckInitialized()
+	if err != nil {
+		return fmt.Errorf("cannot tell whether the vault is initialized: %w", err)
+	}
+	if !initialized || !v.Sealed() {
 		return nil
 	}
 	if ciphertextB64 == "" {

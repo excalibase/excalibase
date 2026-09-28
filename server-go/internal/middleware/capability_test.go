@@ -222,9 +222,11 @@ func TestCapabilityGateNormalizesThePath(t *testing.T) {
 	if code, _ := serveWithToken(t, token, http.MethodGet, "/api/vault/secrets/pki/signing/../other"); code != http.StatusForbidden {
 		t.Fatalf("traversal out of the granted subtree = %d, want 403", code)
 	}
-	// A redundant segment that resolves back inside it is still the same read.
-	if code, _ := serveWithToken(t, token, http.MethodGet, "/api/vault/secrets/pki/./signing/private"); code != http.StatusOK {
-		t.Fatalf("normalized in-subtree read = %d, want 200", code)
+	// Even a dot segment that resolves back inside it is refused: the router
+	// serves the path as sent, not the cleaned one the gate would authorize
+	// (EXC-485).
+	if code, _ := serveWithToken(t, token, http.MethodGet, "/api/vault/secrets/pki/./signing/private"); code != http.StatusForbidden {
+		t.Fatalf("dot segment inside the subtree = %d, want 403", code)
 	}
 }
 

@@ -63,3 +63,22 @@ func TestInitWrappedRefusesAWrapperThatDropsShares(t *testing.T) {
 		t.Fatal("vault must stay uninitialized")
 	}
 }
+
+// failingStore answers every barrier read with an error, as a platform DB
+// that is down at boot does.
+type failingStore struct{ VaultStore }
+
+func (failingStore) GetBarrier() ([]byte, []byte, error) {
+	return nil, nil, errors.New("connection refused")
+}
+
+func TestCheckInitializedReportsAStoreFailure(t *testing.T) {
+	v := &Vault{store: failingStore{NewMemoryStore()}}
+	if _, err := v.CheckInitialized(); err == nil {
+		t.Fatal("a store error must not read as 'not initialized'")
+	}
+	ok := tempVault(t)
+	if initialized, err := ok.CheckInitialized(); err != nil || initialized {
+		t.Fatalf("fresh vault: initialized=%v err=%v", initialized, err)
+	}
+}

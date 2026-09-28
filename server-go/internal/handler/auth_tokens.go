@@ -189,9 +189,28 @@ func restrictCapabilityMint(caller *domain.AccessToken, req createTokenRequest) 
 	return &refusal{http.StatusForbidden, "a restricted token may not mint a service account token"}
 }
 
+// SetServiceTokenCeilings sets, per service principal, the widest permission
+// list a service token that manages it may mint or rotate (EXC-485).
+func (h *AuthHandler) SetServiceTokenCeilings(ceilings map[string][]string) {
+	h.ceilings = ceilings
+}
+
+// withinCeiling reports whether every permission is delegable and covered by
+// the principal's ceiling.
+func (h *AuthHandler) withinCeiling(principal string, permissions []string) bool {
+	ceiling := &domain.AccessToken{Permissions: h.ceilings[principal]}
+	for _, raw := range permissions {
+		wanted, err := auth.ParseCapability(raw)
+		if err != nil || !auth.Delegable(wanted) || !auth.TokenGrants(ceiling, wanted) {
+			return false
+		}
+	}
+	return len(permissions) > 0
+}
+
 // bindDelegatedMint is the only way a capability token mints anything
 // (EXC-485): a token for a service principal it manages, carrying only
-// permissions it holds itself and may pass on. Anything else — above all a
+// permissions within that principal's configured ceiling. Anything else — above all a
 // plain PAT for itself, which would be a platform_admin credential with no
 // permission list — is refused. Non-capability callers are not affected.
 func (h *AuthHandler) bindDelegatedMint(ctx context.Context, caller *domain.AccessToken, req createTokenRequest) *refusal {
@@ -206,26 +225,36 @@ func (h *AuthHandler) bindDelegatedMint(ctx context.Context, caller *domain.Acce
 	if !subject.IsService() || !auth.TokenGrants(caller, auth.ManageServiceTokensCapability(subject.Username)) {
 		return forbidden
 	}
-	for _, raw := range req.Permissions {
-		wanted, err := auth.ParseCapability(raw)
-		if err != nil {
-			return &refusal{http.StatusBadRequest, "invalid permission " + raw}
-		}
-		if !auth.Delegable(wanted) || !auth.TokenGrants(caller, wanted) {
-			return forbidden
-		}
+	if !h.withinCeiling(subject.Username, req.Permissions) {
+		return forbidden
 	}
 	return nil
 }
 
-// managesOwner reports whether the capability token caller manages the
-// service principal that owns tok.
-func (h *AuthHandler) managesOwner(ctx context.Context, caller, tok *domain.AccessToken) bool {
+// managedOwner returns the service principal owning tok when the capability
+// token caller manages it, or nil.
+func (h *AuthHandler) managedOwner(ctx context.Context, caller, tok *domain.AccessToken) *domain.User {
 	if !auth.IsCapabilityToken(caller) || h.userStore == nil {
-		return false
+		return nil
 	}
 	owner, _ := h.userStore.FindUserByID(ctx, tok.UserID)
-	return owner.IsService() && auth.TokenGrants(caller, auth.ManageServiceTokensCapability(owner.Username))
+	if !owner.IsService() || !auth.TokenGrants(caller, auth.ManageServiceTokensCapability(owner.Username)) {
+		return nil
+	}
+	return owner
+}
+
+// managesOwner reports whether caller may revoke tok. Revoking only removes
+// authority, so a drifted token outside the ceiling can still be retired.
+func (h *AuthHandler) managesOwner(ctx context.Context, caller, tok *domain.AccessToken) bool {
+	return h.managedOwner(ctx, caller, tok) != nil
+}
+
+// mayRotateManaged reports whether caller may rotate tok: rotation hands back
+// a fresh secret, so tok must also stay within its principal's ceiling.
+func (h *AuthHandler) mayRotateManaged(ctx context.Context, caller, tok *domain.AccessToken) bool {
+	owner := h.managedOwner(ctx, caller, tok)
+	return owner != nil && h.withinCeiling(owner.Username, tok.Permissions)
 }
 
 // restrictCapabilityRotation applies the same rule to rotation, which returns
@@ -360,7 +389,7 @@ func (h *AuthHandler) RotateToken(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err.message, err.status)
 		return
 	}
-	if err := restrictCapabilityRotation(caller, tok, h.managesOwner(r.Context(), caller, tok)); err != nil {
+	if err := restrictCapabilityRotation(caller, tok, h.mayRotateManaged(r.Context(), caller, tok)); err != nil {
 		httpError(w, err.message, err.status)
 		return
 	}
