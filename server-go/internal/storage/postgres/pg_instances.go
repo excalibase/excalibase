@@ -52,8 +52,8 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 			pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 			created_at, updated_at, last_health_check,
 			storage_class, parameters,
-			deletion_scheduled_at, deletion_due_at, storage_size
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57)`,
+			deletion_scheduled_at, deletion_due_at, storage_size, no_database
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58)`,
 		inst.ProjectID, inst.ProjectName, inst.OrgID, inst.OwnerID, inst.DBType, inst.Tier, inst.Namespace,
 		mode,
 		inst.Host, inst.ReadOnlyHost, inst.Port, inst.DatabaseName, inst.Username,
@@ -71,7 +71,7 @@ func insertInstance(q execQuerier, inst *domain.DatabaseInstance) error {
 		inst.PauseBackupID, flexTimePtr(inst.PauseBackupAt),
 		flexTimePtr(inst.CreatedAt), flexTimePtr(inst.UpdatedAt), flexTimePtr(inst.LastHealthCheck),
 		inst.StorageClass, parameters,
-		inst.DeletionScheduledAt, inst.DeletionDueAt, inst.StorageSize,
+		inst.DeletionScheduledAt, inst.DeletionDueAt, inst.StorageSize, inst.NoDatabase,
 	)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && string(pqErr.Code) == uniqueViolation {
@@ -422,7 +422,7 @@ const pgInstanceColumns = `
 	pause_attempts, pause_last_attempt_at, pause_backup_id, pause_backup_at,
 	created_at, updated_at, last_health_check,
 	storage_class, parameters,
-	deletion_scheduled_at, deletion_due_at, storage_size`
+	deletion_scheduled_at, deletion_due_at, storage_size, no_database`
 
 func (s *Store) FindByProjectID(projectID string) (*domain.DatabaseInstance, error) {
 	row := s.db.QueryRow(`SELECT`+pgInstanceColumns+`
@@ -558,7 +558,7 @@ func scanInstanceFrom(s scanner) (*domain.DatabaseInstance, error) {
 		&pauseAttempts, &pauseLastAttemptAt, &pauseBackupID, &pauseBackupAt,
 		&createdAt, &updatedAt, &lastHealth,
 		&inst.StorageClass, &parameters,
-		&deletionScheduledAt, &deletionDueAt, &inst.StorageSize,
+		&deletionScheduledAt, &deletionDueAt, &inst.StorageSize, &inst.NoDatabase,
 	)
 	if err != nil {
 		return nil, err

@@ -46,6 +46,12 @@ type DatabaseInstance struct {
 	Tier           TierType       `json:"tier"`
 	DeploymentMode DeploymentMode `json:"deploymentMode,omitempty"`
 	Namespace      string         `json:"namespace"`
+	// NoDatabase marks a project created without a database (EXC-426): its
+	// namespace, quota and apps are the project, and no cluster, credential
+	// or watcher exists for it. Adding a database later is the only way it
+	// turns false; nothing turns it back. Always serialised so a caller is
+	// told "no database" rather than left to infer it from empty fields.
+	NoDatabase bool `json:"noDatabase"`
 
 	// Connection
 	Host         string `json:"host,omitempty"`

@@ -286,6 +286,9 @@ func (p *PostgreSQLProvisioner) createBackupStore(ctx context.Context, req domai
 	if err := p.client.CreateSecret(ctx, namespace, k8s.BackupCredentialsSecretName, data); err != nil {
 		return fmt.Errorf("create backup secret: %w", err)
 	}
+	p.undoInExistingNamespace(req, pc, "delete backup secret", func(ctx context.Context) error {
+		return p.client.DeleteSecret(ctx, namespace, k8s.BackupCredentialsSecretName)
+	})
 	pc.SetStep("create backup object store")
 	store, err := k8s.BuildBackupObjectStore(projectID, namespace, backup.Store(), backup.RetentionDays)
 	if err != nil {
@@ -294,7 +297,21 @@ func (p *PostgreSQLProvisioner) createBackupStore(ctx context.Context, req domai
 	if err := p.client.ApplyCRD(ctx, k8s.ObjectStoreGVR, namespace, store); err != nil {
 		return fmt.Errorf("create backup object store (is the Barman Cloud plugin installed?): %w", err)
 	}
+	p.undoInExistingNamespace(req, pc, "delete backup object store", func(ctx context.Context) error {
+		return p.client.DeleteCRD(ctx, k8s.ObjectStoreGVR, namespace, store.GetName())
+	})
 	return nil
+}
+
+// undoInExistingNamespace registers the compensation for one resource a
+// database add created inside a project's existing namespace (EXC-426). A
+// fresh project needs none: its rollback deletes the namespace, and with it
+// everything built inside. An existing namespace holds the project's apps,
+// so it is never deleted and each database resource is removed on its own.
+func (p *PostgreSQLProvisioner) undoInExistingNamespace(req domain.ProvisioningRequest, pc *ProvisionContext, name string, fn CleanupFunc) {
+	if req.IntoExistingNamespace {
+		pc.RegisterCleanup(name, fn)
+	}
 }
 
 func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, cb StageCallback) (*ProvisioningResult, error) {
@@ -384,6 +401,11 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 	if err := EnsureDocumentDBService(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
 		return nil, pc.Fail(err)
 	}
+	if req.DocumentDB {
+		p.undoInExistingNamespace(req, pc, "delete documentdb gateway service", func(ctx context.Context) error {
+			return p.client.DeletePublicDBService(ctx, namespace, k8s.DocumentDBServiceName(projectID))
+		})
+	}
 
 	// Stage 5: Credentials
 	pc.SetStage(domain.StageCredentialGeneration)
@@ -418,13 +440,9 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 
 func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.ProvisioningRequest, projectID, namespace string, pc *ProvisionContext) error {
 	pc.SetStage(domain.StageNamespaceCreation)
-	pc.SetStep("create namespace")
-	if err := p.client.CreateProjectNamespace(ctx, namespace, req.OrgID); err != nil {
-		return pc.Fail(fmt.Errorf("create namespace: %w", err))
+	if err := p.ensureNamespace(ctx, req, namespace, pc); err != nil {
+		return err
 	}
-	pc.RegisterCleanup("delete namespace "+namespace, func(ctx context.Context) error {
-		return p.client.DeleteNamespace(ctx, namespace)
-	})
 	if err := p.createBackupStore(ctx, req, projectID, namespace, pc); err != nil {
 		return pc.Fail(err)
 	}
@@ -434,6 +452,38 @@ func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.P
 	if err := EnsureDocumentDBCredential(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
 		return pc.Fail(err)
 	}
+	p.undoInExistingNamespace(req, pc, "delete documentdb credential", func(ctx context.Context) error {
+		if !req.DocumentDB {
+			return nil
+		}
+		return p.client.DeleteSecret(ctx, namespace, k8s.DocumentDBCredentialSecretName(projectID))
+	})
+	return nil
+}
+
+// ensureNamespace creates the project's namespace, or, for a database added
+// to a project that already has one, checks it is there. A missing namespace
+// is a failure, never a reason to create one the project's quota and fence
+// were not set up with.
+func (p *PostgreSQLProvisioner) ensureNamespace(ctx context.Context, req domain.ProvisioningRequest, namespace string, pc *ProvisionContext) error {
+	if req.IntoExistingNamespace {
+		pc.SetStep("find namespace")
+		exists, err := p.client.NamespaceExists(ctx, namespace)
+		if err != nil {
+			return pc.Fail(fmt.Errorf("find namespace: %w", err))
+		}
+		if !exists {
+			return pc.Fail(fmt.Errorf("the project's namespace %s does not exist", namespace))
+		}
+		return nil
+	}
+	pc.SetStep("create namespace")
+	if err := p.client.CreateProjectNamespace(ctx, namespace, req.OrgID); err != nil {
+		return pc.Fail(fmt.Errorf("create namespace: %w", err))
+	}
+	pc.RegisterCleanup("delete namespace "+namespace, func(ctx context.Context) error {
+		return p.client.DeleteNamespace(ctx, namespace)
+	})
 	return nil
 }
 
@@ -471,6 +521,13 @@ func (p *PostgreSQLProvisioner) stageCRD(ctx context.Context, req domain.Provisi
 	if err := p.client.ApplyCRD(ctx, k8s.CNPGClusterGVR, namespace, cluster); err != nil {
 		return pc.Fail(fmt.Errorf("deploy cluster CRD: %w", err))
 	}
+	p.undoInExistingNamespace(req, pc, "delete database cluster", func(ctx context.Context) error {
+		name := projectID + clusterNameSuffix
+		if err := p.deleteClusterAndWait(ctx, namespace, name); err != nil {
+			return err
+		}
+		return p.client.ForceDeleteClusterPods(ctx, namespace, name)
+	})
 	return nil
 }
 
@@ -501,6 +558,9 @@ func (p *PostgreSQLProvisioner) stageBackup(ctx context.Context, req domain.Prov
 	if err := p.client.ApplyCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, backup); err != nil {
 		return pc.Fail(fmt.Errorf("configure backup: %w", err))
 	}
+	p.undoInExistingNamespace(req, pc, "delete scheduled backup", func(ctx context.Context) error {
+		return p.client.DeleteCRD(ctx, k8s.CNPGScheduledBackupGVR, namespace, backup.GetName())
+	})
 	return nil
 }
 

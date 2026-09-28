@@ -19,7 +19,7 @@ func schemaRead(pattern string) Row {
 	return Row{
 		Methods: get, Pattern: "/api/schema/{projectId}" + pattern,
 		Auth: AuthSession, Param: ParamProject,
-		Owner: OwnerProjectAccess, MinRole: roleViewer,
+		Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true,
 	}
 }
 
@@ -30,7 +30,7 @@ func schemaWrite(method, pattern string) Row {
 	return Row{
 		Methods: []string{method}, Pattern: "/api/schema/{projectId}" + pattern,
 		Auth: AuthSession, Param: ParamProject,
-		Owner: OwnerProjectAccess, MinRole: roleDeveloper,
+		Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true,
 	}
 }
 

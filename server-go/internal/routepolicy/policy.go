@@ -126,6 +126,11 @@ type Row struct {
 	// ServiceOnly marks a route that ONLY a capability token may call, so a
 	// studio session or an ordinary PAT is refused.
 	ServiceOnly bool
+	// Database marks a route that works on the project's database. For a
+	// project created without one it answers 409 "project has no database"
+	// (middleware.RequireProjectDatabase), never a crash against a cluster
+	// or credential that does not exist (EXC-426).
+	Database bool
 	// Note records the non-obvious reason for this row's contract.
 	Note string
 }

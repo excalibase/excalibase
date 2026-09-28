@@ -1471,15 +1471,18 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			owner := custommw.RequireProjectRole(domain.OrgRoleOwner, store, sqlStore)
 			admin := custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore)
 			dev := custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)
+			// Every route below that works on the project's database answers
+			// 409 for a project created without one (EXC-426).
+			db := custommw.RequireProjectDatabase(store)
 
 			// Reads — any member.
 			r.Get("/", d.provHandler.GetStatus)
-			r.Get("/logs", d.provHandler.GetLogs)
-			r.Get("/maintenance-window", d.provHandler.GetMaintenanceWindow)
-			r.Get("/cluster", d.provHandler.GetClusterSettings)
+			r.With(db).Get("/logs", d.provHandler.GetLogs)
+			r.With(db).Get("/maintenance-window", d.provHandler.GetMaintenanceWindow)
+			r.With(db).Get("/cluster", d.provHandler.GetClusterSettings)
 
 			// Developer+ — a routine write.
-			r.With(dev).Put("/maintenance-window", d.provHandler.SetMaintenanceWindow)
+			r.With(dev, db).Put("/maintenance-window", d.provHandler.SetMaintenanceWindow)
 
 			// Owner — turning protection off is what makes a project deletable.
 			r.With(owner).Patch("/deletion-protection", d.provHandler.SetDeletionProtection)
@@ -1488,26 +1491,31 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			// and restart the tenant workload, so they sit with the lifecycle tier.
 			r.With(admin).Delete("/", d.provHandler.Delete)
 			r.With(owner).Post("/deletion/cancel", d.provHandler.CancelDeletion)
-			r.With(admin).Get("/credentials", d.provHandler.GetCredentials)
-			r.With(admin).Post("/credentials/rotate", d.provHandler.RotateCredentials)
+			r.With(admin, db).Get("/credentials", d.provHandler.GetCredentials)
+			r.With(admin, db).Post("/credentials/rotate", d.provHandler.RotateCredentials)
 			// A DocumentDB project's own Mongo users hand out passwords (EXC-427).
-			r.With(admin).Route("/documentdb/users", d.provHandler.MongoUserRoutes)
+			r.With(admin, db).Route("/documentdb/users", d.provHandler.MongoUserRoutes)
 			r.With(admin).Post("/backups/purge", d.provHandler.PurgeBackups)
-			r.With(admin).Post("/pause", d.provHandler.Pause)
-			r.With(admin).Post("/resume", d.provHandler.Resume)
-			r.With(admin).Post("/upgrade", d.provHandler.UpgradeMinorVersion)
+			// Pausing stops the database; a project without one has nothing to pause.
+			r.With(admin, db).Post("/pause", d.provHandler.Pause)
+			r.With(admin, db).Post("/resume", d.provHandler.Resume)
+			r.With(admin, db).Post("/upgrade", d.provHandler.UpgradeMinorVersion)
 			// Admin+ — resizing, re-tiering and tuning a running database (EXC-492).
-			r.With(admin).Post("/storage", d.provHandler.ResizeStorage)
-			r.With(admin).Post("/tier", d.provHandler.ChangeTier)
-			r.With(admin).Put("/parameters", d.provHandler.TuneParameters)
+			r.With(admin, db).Post("/storage", d.provHandler.ResizeStorage)
+			r.With(admin, db).Post("/tier", d.provHandler.ChangeTier)
+			r.With(admin, db).Put("/parameters", d.provHandler.TuneParameters)
+			// Admin+ — adding the database to a project created without one;
+			// it creates a cluster the same way creating a project does.
+			r.With(admin).Post("/database", d.provHandler.AddDatabase)
 
 			// Read-only subtrees — any member.
-			r.Route("/metrics", func(r chi.Router) { d.metricsHandler.Routes(r) })
-			r.Route("/performance", func(r chi.Router) { d.perfHandler.Routes(r) })
+			r.With(db).Route("/metrics", func(r chi.Router) { d.metricsHandler.Routes(r) })
+			r.With(db).Route("/performance", func(r chi.Router) { d.perfHandler.Routes(r) })
 
 			// Developer+ subtrees — schema/data-plane authoring.
 			r.Group(func(r chi.Router) {
 				r.Use(dev)
+				r.Use(db)
 				r.Route("/audit", func(r chi.Router) { d.auditHandler.Routes(r) })
 				r.Route("/migrations", func(r chi.Router) { d.migrationHandler.Routes(r) })
 				r.Route("/rls-policies", func(r chi.Router) { d.rlsPolicyHandler.RlsRoutes(r) })
@@ -1519,6 +1527,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			// restore are destructive/exfil; kept Admin-only as the safe default).
 			r.Group(func(r chi.Router) {
 				r.Use(admin)
+				r.Use(db)
 				r.Route("/backup", func(r chi.Router) { d.backupHandler.Routes(r) })
 				r.Route("/snapshot", func(r chi.Router) { d.snapshotHandler.Routes(r) })
 			})
@@ -1652,6 +1661,7 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		// Viewers may browse (GET); DDL / /query / row writes require Developer+ (RBAC gate).
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
+		r.Use(custommw.RequireProjectDatabase(store))
 		r.Use(d.activity)
 		r.Use(d.schemaHandler.AnnounceSchemaChange)
 		d.schemaHandler.RoutesInner(r)
@@ -1749,7 +1759,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(d.activity)
-		r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
+		r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore), custommw.RequireProjectDatabase(store)).Post("/apply", d.fnHandler.ApplySchemaFromStore)
 	})
 	r.Route("/api/projects/{projectId}/info", func(r chi.Router) {
 		r.Use(custommw.TenantContext)
@@ -1790,6 +1800,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleAdmin, store, sqlStore))
+		r.Use(custommw.RequireProjectDatabase(store))
 		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetDBEndpoint)
 		r.Put("/", d.provHandler.PutDBEndpoint)
@@ -1816,6 +1827,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		// mount enforced membership and nothing else, which let a Viewer call
 		// /disable-all (EXC-395).
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
+		r.Use(custommw.RequireProjectDatabase(store))
 		r.Use(d.activity)
 		d.realtimeHandler.Routes(r)
 	})
@@ -1828,6 +1840,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Use(auth.RequireAuth)
 			r.Use(custommw.RequireProjectAccess(store, sqlStore))
 			r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
+			r.Use(custommw.RequireProjectDatabase(store))
 			r.Use(d.activity)
 			d.documentsHandler.Routes(r)
 		})

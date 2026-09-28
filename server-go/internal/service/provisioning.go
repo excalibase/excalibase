@@ -332,6 +332,9 @@ func (s *ProvisioningService) CapacityHeadroom() int {
 }
 
 func (s *ProvisioningService) Provision(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
+	if req.NoDatabase {
+		return s.provisionWithoutDatabase(ctx, req)
+	}
 	// Pass req by pointer so prepareProvisioning's defaults (e.g. R2
 	// backup config injected when req.Backup is nil) propagate to the
 	// downstream prov.Provision call. Otherwise the mutated copy is
@@ -353,7 +356,21 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	if err := s.createProjectRow(ctx, inst, inst.Tier); err != nil {
 		return nil, err
 	}
+	return s.buildDatabase(ctx, start, inst, req, prov, tier, s.handleProvisionFailure, RegistrationOptions{})
+}
 
+// provisionFailureHandler records a failed database build on the row and
+// answers the caller. Creating a project and adding a database to one differ
+// only in what the row becomes afterwards.
+type provisionFailureHandler func(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
+	err error, pc *provisioner.ProvisionContext) *domain.ProvisioningResponse
+
+// buildDatabase runs the provisioning pipeline for a project whose row is
+// already written: the cluster, then registration. It is the one path a
+// database comes into being by, whether with its project or added later.
+func (s *ProvisioningService) buildDatabase(ctx context.Context, start time.Time, inst *domain.DatabaseInstance,
+	req domain.ProvisioningRequest, prov provisioner.DatabaseProvisioner, tier config.TierConfig,
+	fail provisionFailureHandler, opts RegistrationOptions) (*domain.ProvisioningResponse, error) {
 	// A teardown that claims the project mid-build owns it from that moment.
 	// The pipeline must stop rather than keep creating resources the
 	// teardown has already looked for and not found: it cancels the
@@ -394,17 +411,17 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	}
 	// A cancelled context outranks whatever the provisioner reported: the
 	// project stopped being ours to build, so nothing it produced may be
-	// registered. handleProvisionFailure runs the compensations.
+	// registered. The failure handler runs the compensations.
 	if cause := context.Cause(ctx); cause != nil && isProjectGone(cause) {
 		metrics.ObserveProvision(start, cause)
-		return s.handleProvisionFailure(context.WithoutCancel(ctx), inst, req, cause, pc), nil
+		return fail(context.WithoutCancel(ctx), inst, req, cause, pc), nil
 	}
 	if provErr != nil {
 		metrics.ObserveProvision(start, provErr)
-		return s.handleProvisionFailure(context.WithoutCancel(ctx), inst, req, provErr, pc), nil
+		return fail(context.WithoutCancel(ctx), inst, req, provErr, pc), nil
 	}
 
-	resp, ferr := s.finalizeProvisioning(ctx, inst, req, result, pc)
+	resp, ferr := s.finalizeProvisioning(ctx, inst, req, result, pc, fail, opts)
 	metrics.ObserveProvision(start, ferr)
 	return resp, ferr
 }
@@ -414,30 +431,17 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 	if err := validateProvisioningRequest(*req); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
-	if req.Backup != nil && req.Backup.S3 != nil {
-		return nil, nil, config.TierConfig{}, ErrBackupStoreChosenByPlatform
-	}
-	storageClass, err := s.storageClasses.Resolve(req.StorageClass)
+	tierType, err := s.orgTier(ctx, req.OrgID)
 	if err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
-	req.StorageClass = storageClass
-
-	tierType, err := s.orgTier(ctx, req.OrgID)
+	tier, err := s.databaseTier(ctx, req, tierType)
 	if err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 
 	projectRef, err := s.generateUniqueProjectRef()
 	if err != nil {
-		return nil, nil, config.TierConfig{}, err
-	}
-
-	tier, err := s.tierConfig(ctx, tierType)
-	if err != nil {
-		return nil, nil, config.TierConfig{}, err
-	}
-	if err := config.ValidateTenantParameters(req.Parameters, tier); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 
@@ -449,78 +453,118 @@ func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *doma
 		return nil, nil, config.TierConfig{}, err
 	}
 
-	s.applyBackupDefaults(req, tier)
-
-	if err := s.enforceBackupTierPolicy(req, tierType, tier); err != nil {
-		return nil, nil, config.TierConfig{}, err
-	}
-	if err := s.settleBackupSchedule(req); err != nil {
-		return nil, nil, config.TierConfig{}, err
-	}
-	if err := s.requireBackupTarget(req, tier); err != nil {
-		return nil, nil, config.TierConfig{}, err
-	}
-	if err := s.issueBackupCredentials(ctx, req, projectRef); err != nil {
-		return nil, nil, config.TierConfig{}, err
-	}
-
-	if err := s.RequireNodeSpread(ctx, tierType, tier); err != nil {
-		return nil, nil, config.TierConfig{}, err
-	}
-	if s.k8sClient != nil {
-		if err := s.checkClusterCapacity(tier); err != nil {
-			return nil, nil, config.TierConfig{}, err
-		}
-	}
-
-	prov, ok := s.factory.Get(req.DBType)
-	if !ok {
-		return nil, nil, config.TierConfig{}, fmt.Errorf("unsupported database type: %s", req.DBType)
-	}
-
-	// Recorded, not recomputed later: the image a project runs is chosen from
-	// this major once, and restore has to land the data back on the same one.
-	major, err := canonicalPostgresMajor(req.PostgresVersion)
+	prov, major, err := s.admitDatabase(ctx, req, tierType, tier, projectRef)
 	if err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 
 	now := &domain.FlexTime{Time: time.Now()}
 	namespace := fmt.Sprintf("%s-%s", req.OrgID, projectRef)
-	mode := s.defaultDeploymentMode
-	if mode == "" {
-		mode = domain.ModeK8s
-	}
 	inst := &domain.DatabaseInstance{
-		ProjectID:       projectRef,
-		ProjectName:     req.ProjectName,
-		OrgID:           req.OrgID,
-		OwnerID:         req.OwnerID,
-		DBType:          req.DBType,
-		Tier:            tierType,
-		DeploymentMode:  mode,
-		Namespace:       namespace,
-		PostgresVersion: major,
-		// Recorded here and nowhere else. The cluster's preloaded libraries
-		// are fixed when it is provisioned, so the choice cannot be revisited
-		// later and the store leaves the column out of every UPDATE to keep
-		// it that way (EXC-409). The major has already been checked capable.
-		DocumentDB:   req.DocumentDB,
-		StorageClass: req.StorageClass,
-		StorageSize:  tier.StorageSize,
-		Parameters:   maps.Clone(req.Parameters),
-		Status:       "PROVISIONING",
-		CurrentStage: domain.StageValidating,
-		CreatedAt:    now,
+		ProjectID:      projectRef,
+		ProjectName:    req.ProjectName,
+		OrgID:          req.OrgID,
+		OwnerID:        req.OwnerID,
+		Tier:           tierType,
+		DeploymentMode: s.deploymentMode(),
+		Namespace:      namespace,
+		Status:         "PROVISIONING",
+		CurrentStage:   domain.StageValidating,
+		CreatedAt:      now,
+	}
+	applyDatabaseChoices(inst, *req, tier, major)
+	return inst, prov, tier, nil
+}
+
+// deploymentMode is the mode new projects are created in.
+func (s *ProvisioningService) deploymentMode() domain.DeploymentMode {
+	if s.defaultDeploymentMode == "" {
+		return domain.ModeK8s
+	}
+	return s.defaultDeploymentMode
+}
+
+// databaseTier resolves the storage class and the plan a new database is
+// sized from, and checks the requested settings fit that plan.
+func (s *ProvisioningService) databaseTier(ctx context.Context, req *domain.ProvisioningRequest, tierType domain.TierType) (config.TierConfig, error) {
+	if req.Backup != nil && req.Backup.S3 != nil {
+		return config.TierConfig{}, ErrBackupStoreChosenByPlatform
+	}
+	storageClass, err := s.storageClasses.Resolve(req.StorageClass)
+	if err != nil {
+		return config.TierConfig{}, err
+	}
+	req.StorageClass = storageClass
+	tier, err := s.tierConfig(ctx, tierType)
+	if err != nil {
+		return config.TierConfig{}, err
+	}
+	if err := config.ValidateTenantParameters(req.Parameters, tier); err != nil {
+		return config.TierConfig{}, err
+	}
+	return tier, nil
+}
+
+// admitDatabase settles the backups a new database gets and refuses one the
+// cluster cannot place, then picks its provisioner and major. Creating a
+// project and adding a database to one are admitted by the same rules.
+func (s *ProvisioningService) admitDatabase(ctx context.Context, req *domain.ProvisioningRequest, tierType domain.TierType,
+	tier config.TierConfig, projectRef string) (provisioner.DatabaseProvisioner, string, error) {
+	s.applyBackupDefaults(req, tier)
+
+	if err := s.enforceBackupTierPolicy(req, tierType, tier); err != nil {
+		return nil, "", err
+	}
+	if err := s.settleBackupSchedule(req); err != nil {
+		return nil, "", err
+	}
+	if err := s.requireBackupTarget(req, tier); err != nil {
+		return nil, "", err
+	}
+	if err := s.issueBackupCredentials(ctx, req, projectRef); err != nil {
+		return nil, "", err
 	}
 
+	if err := s.RequireNodeSpread(ctx, tierType, tier); err != nil {
+		return nil, "", err
+	}
+	if s.k8sClient != nil {
+		if err := s.checkClusterCapacity(tier); err != nil {
+			return nil, "", err
+		}
+	}
+
+	prov, ok := s.factory.Get(req.DBType)
+	if !ok {
+		return nil, "", fmt.Errorf("unsupported database type: %s", req.DBType)
+	}
+
+	// Recorded, not recomputed later: the image a project runs is chosen from
+	// this major once, and restore has to land the data back on the same one.
+	major, err := canonicalPostgresMajor(req.PostgresVersion)
+	if err != nil {
+		return nil, "", err
+	}
+	return prov, major, nil
+}
+
+// applyDatabaseChoices stamps what the database is created with onto the row.
+func applyDatabaseChoices(inst *domain.DatabaseInstance, req domain.ProvisioningRequest, tier config.TierConfig, major string) {
+	inst.DBType = req.DBType
+	inst.PostgresVersion = major
+	// Recorded here and nowhere else. The cluster's preloaded libraries
+	// are fixed when it is provisioned, so the choice cannot be revisited
+	// later and the store leaves the column out of every UPDATE to keep
+	// it that way (EXC-409). The major has already been checked capable.
+	inst.DocumentDB = req.DocumentDB
+	inst.StorageClass = req.StorageClass
+	inst.StorageSize = tier.StorageSize
+	inst.Parameters = maps.Clone(req.Parameters)
 	if req.Backup != nil {
 		inst.BackupEnabled = boolPtr(req.Backup.Enabled)
 		inst.BackupSchedule = req.Backup.Schedule
 		inst.BackupRetentionDays = intPtr(req.Backup.Retention)
 	}
-
-	return inst, prov, tier, nil
 }
 
 // generateUniqueProjectRef returns a project id no registered project holds.
@@ -649,6 +693,21 @@ func (s *ProvisioningService) handleProvisionFailure(
 	err error,
 	pc *provisioner.ProvisionContext,
 ) *domain.ProvisioningResponse {
+	s.recordProvisionFailure(ctx, inst, req, err, pc)
+	inst.Status = "FAILED"
+	inst.CurrentStage = domain.StageFailed
+	return s.saveProvisionFailure(inst)
+}
+
+// recordProvisionFailure captures the failing stage and step and runs every
+// registered compensation, newest first, keeping the log on the row.
+func (s *ProvisioningService) recordProvisionFailure(
+	ctx context.Context,
+	inst *domain.DatabaseInstance,
+	req domain.ProvisioningRequest,
+	err error,
+	pc *provisioner.ProvisionContext,
+) {
 	var se *provisioner.StageError
 	if errors.As(err, &se) {
 		inst.FailureStage = se.Stage
@@ -674,8 +733,10 @@ func (s *ProvisioningService) handleProvisionFailure(
 		log.Printf("WARN: marshal rollback log: %v", jerr)
 	}
 
-	inst.Status = "FAILED"
-	inst.CurrentStage = domain.StageFailed
+}
+
+// saveProvisionFailure persists the failed row and answers with it.
+func (s *ProvisioningService) saveProvisionFailure(inst *domain.DatabaseInstance) *domain.ProvisioningResponse {
 	if saveErr := s.store.Update(inst); saveErr != nil {
 		// A refusal here is the expected outcome when a teardown claimed the
 		// project: the row is its to write now, and the compensations above
@@ -686,8 +747,9 @@ func (s *ProvisioningService) handleProvisionFailure(
 	return &domain.ProvisioningResponse{
 		ProjectID:     inst.ProjectID,
 		ProjectName:   inst.ProjectName,
-		Status:        "FAILED",
-		CurrentStage:  domain.StageFailed,
+		Status:        inst.Status,
+		CurrentStage:  inst.CurrentStage,
+		NoDatabase:    inst.NoDatabase,
 		Namespace:     inst.Namespace,
 		FailureReason: inst.FailureReason,
 		FailureStage:  inst.FailureStage,
@@ -700,12 +762,14 @@ func (s *ProvisioningService) handleProvisionFailure(
 // finalizeProvisioning stamps the provisioner's connection details onto the
 // instance and hands it to the shared registration path — the same one a
 // restore ends with.
-func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest, result *provisioner.ProvisioningResult, pc *provisioner.ProvisionContext) (*domain.ProvisioningResponse, error) {
+func (s *ProvisioningService) finalizeProvisioning(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest,
+	result *provisioner.ProvisioningResult, pc *provisioner.ProvisionContext, fail provisionFailureHandler, opts RegistrationOptions) (*domain.ProvisioningResponse, error) {
 	applyProvisioningResult(inst, req, result)
 
-	opts := RegistrationOptions{Context: pc, RowAlreadyCreated: true}
+	opts.Context = pc
+	opts.RowAlreadyCreated = true
 	if err := s.RegisterProject(ctx, inst, opts); err != nil {
-		return s.handleProvisionFailure(ctx, inst, req, err, pc), nil
+		return fail(ctx, inst, req, err, pc), nil
 	}
 
 	return &domain.ProvisioningResponse{
@@ -1043,11 +1107,30 @@ func (s *ProvisioningService) revokeNatsCredentials(ctx context.Context, inst *d
 // deleteDatabaseResources hands teardown to the provisioner, which returns
 // only once its resources are observed gone.
 func (s *ProvisioningService) deleteDatabaseResources(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if inst.NoDatabase {
+		return s.deleteProjectNamespace(ctx, inst)
+	}
 	prov, ok := s.factory.Get(inst.DBType)
 	if !ok {
 		return fmt.Errorf("no provisioner for database type %s", inst.DBType)
 	}
 	return prov.Deprovision(ctx, inst.Namespace, inst.ProjectID)
+}
+
+// deleteProjectNamespace tears down a project created without a database:
+// its namespace and whatever apps ran there. A database that was being added
+// when the teardown claimed the project lives in the same namespace and goes
+// with it. The Postgres provisioner owns namespace teardown and its wait;
+// every step of it is idempotent against a namespace with no cluster.
+func (s *ProvisioningService) deleteProjectNamespace(ctx context.Context, inst *domain.DatabaseInstance) error {
+	if inst.DeploymentMode != domain.ModeK8s {
+		return nil
+	}
+	pg, err := s.postgresProvisioner()
+	if err != nil {
+		return err
+	}
+	return pg.Deprovision(ctx, inst.Namespace, inst.ProjectID)
 }
 
 // purgeBackups deletes the project's backup objects. A failure converts the
@@ -1200,6 +1283,9 @@ func (s *ProvisioningService) GetCredentials(projectID string) (*domain.Credenti
 	// may never have recovered.
 	if domain.IsNotServable(inst.Status) {
 		return nil, fmt.Errorf("%w: %s", notServableErr(inst.Status), projectID)
+	}
+	if inst.NoDatabase {
+		return nil, fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
 	}
 
 	password, err := s.OwnerPassword(projectID)

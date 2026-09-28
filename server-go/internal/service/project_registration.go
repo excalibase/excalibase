@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
@@ -70,6 +71,10 @@ type RegistrationOptions struct {
 	// the credentials this registration filed, so a restore that recovered
 	// nothing never surfaces as a usable project (EXC-401).
 	Unverified bool
+	// AddingDatabase registers a database added to a project created without
+	// one: once the row is ACTIVE again the project is recorded as having its
+	// database, and a failure to record that fails the registration (EXC-426).
+	AddingDatabase bool
 }
 
 // SetActivityRecorder wires the last-seen writer. Optional: without it a newly
@@ -118,6 +123,9 @@ func (s *ProvisioningService) RegisterProject(ctx context.Context, inst *domain.
 	if err := s.persistProjectRow(ctx, inst, opts); err != nil {
 		return rollbackIfOwned(ctx, pc, owned, fmt.Errorf("persist project row: %w", err))
 	}
+	if err := s.markDatabaseAdded(inst, opts); err != nil {
+		return rollbackIfOwned(ctx, pc, owned, err)
+	}
 	s.announceProject(ctx, inst)
 	return nil
 }
@@ -140,6 +148,24 @@ func (s *ProvisioningService) persistProjectRow(ctx context.Context, inst *domai
 	}
 	inst.Tier = tier
 	return s.createProjectRow(ctx, inst, tier)
+}
+
+// markDatabaseAdded records that a project created without a database now
+// has one. It runs after the row is ACTIVE, so the database routes open only
+// once there is a registered database behind them.
+func (s *ProvisioningService) markDatabaseAdded(inst *domain.DatabaseInstance, opts RegistrationOptions) error {
+	if !opts.AddingDatabase {
+		return nil
+	}
+	databases, ok := s.store.(storage.ProjectDatabaseStore)
+	if !ok {
+		return errors.New("this platform's store cannot add a database to a project")
+	}
+	if err := databases.MarkDatabaseAdded(inst.ProjectID); err != nil {
+		return fmt.Errorf("record the added database: %w", err)
+	}
+	inst.NoDatabase = false
+	return nil
 }
 
 // rollbackIfOwned runs the compensations RegisterProject registered itself.
@@ -205,6 +231,8 @@ func (s *ProvisioningService) setupProjectCredentials(ctx context.Context, inst 
 		adminPassword:  inst.Password,
 		resetPasswords: opts.ResetRolePasswords,
 		resetAdmin:     opts.ResetAdminPassword,
+
+		inExistingNamespace: opts.AddingDatabase,
 	}
 	canExecSQL := (s.k8sClient != nil) || (s.dockerClient != nil)
 	if !canExecSQL {
@@ -263,6 +291,9 @@ type projectRoleSpec struct {
 	adminPassword  string
 	resetPasswords bool
 	resetAdmin     bool
+	// inExistingNamespace is a database added to a project's namespace: a
+	// rollback removes the watcher itself, since the namespace stays.
+	inExistingNamespace bool
 }
 
 // createProjectRoles executes the role SQL in the project's database and files
@@ -421,6 +452,11 @@ func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRol
 	}
 	if err := pg.DeployWatcher(ctx, watcherSpec); err != nil {
 		log.Printf("WARN: watcher deployment for %s: %v", spec.projectID, err)
+	}
+	if spec.inExistingNamespace {
+		pc.RegisterCleanup("stop watcher", func(ctx context.Context) error {
+			return pg.StopReplication(ctx, spec.namespace, spec.projectID)
+		})
 	}
 	return nil
 }

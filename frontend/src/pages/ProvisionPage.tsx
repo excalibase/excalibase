@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useProvisionDatabase } from '../hooks/useProvisioning';
 import { DatabaseType } from '../types';
 import { Button } from '../components/Button';
-import { Database, Loader2, Server, Cloud } from 'lucide-react';
+import { Box, Database, Loader2, Server, Cloud } from 'lucide-react';
 import { listMyOrgs, type Org } from '../api/orgs';
 import { useTiers, type TierConfig } from '../api/tiers';
 import { usePostgresCatalog, findMajor, type PostgresMajor } from '../api/postgresCatalog';
@@ -25,13 +25,15 @@ const DEPLOY_MODES = [
 
 // The engine card is a Studio choice, not a wire type: DOCUMENTDB creates a
 // PostgreSQL project with documentDb set — the same request the PostgreSQL
-// card's tick box sends.
-type Engine = 'POSTGRESQL' | 'DOCUMENTDB' | 'MYSQL';
+// card's tick box sends. NONE creates the project without a database
+// (EXC-426); one can be added from the project overview later.
+type Engine = 'POSTGRESQL' | 'DOCUMENTDB' | 'MYSQL' | 'NONE';
 
 const ENGINES: readonly { engine: Engine; icon: string; label: string; desc: string; disabled: boolean }[] = [
   { engine: 'POSTGRESQL', icon: '🐘', label: 'PostgreSQL',      desc: 'CloudNativePG operator',             disabled: false },
   { engine: 'DOCUMENTDB', icon: '🍃', label: DOCUMENTDB_LABEL, desc: 'MongoDB wire protocol on PostgreSQL', disabled: false },
   { engine: 'MYSQL',      icon: '🐬', label: 'MySQL',           desc: 'Coming soon',                        disabled: true  },
+  { engine: 'NONE',       icon: '📦', label: 'No database',     desc: 'Containers, functions and storage',  disabled: false },
 ];
 
 function tierLabel(tier: string): string {
@@ -80,6 +82,7 @@ export function ProvisionPage() {
     if (next === 'DOCUMENTDB' && !findMajor(catalog.data, postgresVersion)?.documentDb) setPostgresVersion('');
   };
   const isDocumentDbEngine = engine === 'DOCUMENTDB';
+  const withoutDatabase = engine === 'NONE';
 
   // The organisation's plan decides the project's tier; the form only shows it.
   const { data: tierConfigs } = useTiers();
@@ -98,13 +101,17 @@ export function ProvisionPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const result = await provision.mutateAsync({
-      projectName,
-      orgId,
-      databaseType: isDocumentDbEngine ? DatabaseType.POSTGRESQL : engine,
-      postgresVersion,
-      documentDb: isDocumentDbEngine || documentDb,
-    });
+    const result = await provision.mutateAsync(
+      withoutDatabase
+        ? { projectName, orgId, noDatabase: true }
+        : {
+            projectName,
+            orgId,
+            databaseType: isDocumentDbEngine ? DatabaseType.POSTGRESQL : (engine as DatabaseType),
+            postgresVersion,
+            documentDb: isDocumentDbEngine || documentDb,
+          },
+    );
     navigate(`/project/${result.projectId}`);
   };
 
@@ -169,7 +176,7 @@ export function ProvisionPage() {
           <>
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
               <h2 className="font-semibold text-text-primary">Database Engine</h2>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {ENGINES.map(({ engine: option, icon, label, desc, disabled }) => (
                   <button key={option} type="button" onClick={() => !disabled && chooseEngine(option)} disabled={disabled}
                     data-testid={`engine-${option}`} aria-pressed={engine === option}
@@ -183,16 +190,23 @@ export function ProvisionPage() {
               </div>
             </div>
 
-            <PostgresVersionPicker
-              catalog={catalog.data}
-              isLoading={catalog.isLoading}
-              error={catalog.error}
-              version={postgresVersion}
-              onVersionChange={chooseVersion}
-              documentDb={documentDb}
-              onDocumentDbChange={setDocumentDb}
-              documentDbOnly={isDocumentDbEngine}
-            />
+            {withoutDatabase ? (
+              <p data-testid="no-database-note" className="text-sm text-text-secondary">
+                The project starts with no database: run containers, functions and storage in it, and add a database
+                later from the project overview. It counts toward your organization&apos;s projects either way.
+              </p>
+            ) : (
+              <PostgresVersionPicker
+                catalog={catalog.data}
+                isLoading={catalog.isLoading}
+                error={catalog.error}
+                version={postgresVersion}
+                onVersionChange={chooseVersion}
+                documentDb={documentDb}
+                onDocumentDbChange={setDocumentDb}
+                documentDbOnly={isDocumentDbEngine}
+              />
+            )}
 
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
               <h2 className="font-semibold text-text-primary">Plan</h2>
@@ -226,11 +240,11 @@ export function ProvisionPage() {
             type="submit"
             className="flex-1"
             data-testid="provision-submit"
-            disabled={isPending || !orgId || !postgresVersion}
+            disabled={isPending || !orgId || (!withoutDatabase && !postgresVersion)}
           >
-            {isPending
-              ? <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Provisioning...</>
-              : <><Database className="w-4 h-4 mr-2 inline" /> Provision Database</>}
+            {isPending && <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Provisioning...</>}
+            {!isPending && withoutDatabase && <><Box className="w-4 h-4 mr-2 inline" /> Create project</>}
+            {!isPending && !withoutDatabase && <><Database className="w-4 h-4 mr-2 inline" /> Provision Database</>}
           </Button>
         </div>
       </form>

@@ -102,6 +102,11 @@ func (s *ProvisioningService) ScheduleDeletion(ctx context.Context, projectID st
 	if opts.DeleteBackups != nil && *opts.DeleteBackups && s.backupPurger == nil {
 		return nil, ErrBackupPurgeNotConfigured
 	}
+	if inst.NoDatabase {
+		// Nothing to stop: the grace period keeps the project's files, apps
+		// and settings, and the project leaves it the way it went in.
+		return s.markPendingDeletion(ctx, projectID, opts)
+	}
 	if s.deletionPauser == nil {
 		return nil, ErrDeletionGraceUnavailable
 	}
@@ -115,6 +120,16 @@ func (s *ProvisioningService) ScheduleDeletion(ctx context.Context, projectID st
 		return nil, fmt.Errorf("%w: %w", ErrDeletionStopFailed, err)
 	}
 	return s.markPendingDeletion(ctx, projectID, opts)
+}
+
+// settledStatus is the status a project holds while its deletion is pending
+// or once it is cancelled: PAUSED for a project whose database was stopped,
+// ACTIVE for one that had no database to stop.
+func settledStatus(inst *domain.DatabaseInstance) string {
+	if inst.NoDatabase {
+		return string(domain.StatusActive)
+	}
+	return string(domain.StatusPaused)
 }
 
 // holdLifecycle takes the per-project lease deletion, pause and resume share.
@@ -139,7 +154,8 @@ func (s *ProvisioningService) markPendingDeletion(ctx context.Context, projectID
 	if err != nil || inst == nil {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
 	}
-	if inst.Status != string(domain.StatusPaused) {
+	settled := settledStatus(inst)
+	if inst.Status != settled {
 		return nil, fmt.Errorf("%w: %s is %s after the pause", storage.ErrProjectStatusChanged, projectID, inst.Status)
 	}
 	if isProtected(inst) {
@@ -155,7 +171,7 @@ func (s *ProvisioningService) markPendingDeletion(ctx context.Context, projectID
 	dueAt := now.Add(DeletionGracePeriod).UTC()
 	inst.DeletionDueAt = &dueAt
 	inst.UpdatedAt = &domain.FlexTime{Time: now}
-	if err := s.store.UpdateIfStatus(inst, string(domain.StatusPaused)); err != nil {
+	if err := s.store.UpdateIfStatus(inst, settled); err != nil {
 		return nil, err
 	}
 	log.Printf("action=schedule_deletion project=%s due=%s delete_backups=%t",
@@ -208,8 +224,11 @@ func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID stri
 	if inst.Status != string(domain.StatusPendingDeletion) {
 		return fmt.Errorf("%w: %s is %s", ErrNotScheduledForDeletion, projectID, inst.Status)
 	}
-	inst.Status = string(domain.StatusPaused)
-	inst.CurrentStage = domain.StatusPaused
+	inst.Status = settledStatus(inst)
+	inst.CurrentStage = domain.ProvisioningStage(inst.Status)
+	if inst.NoDatabase {
+		inst.CurrentStage = domain.StageCompleted
+	}
 	inst.DeletionScheduledAt = nil
 	inst.DeletionDueAt = nil
 	inst.DeletionDeleteBackups = false

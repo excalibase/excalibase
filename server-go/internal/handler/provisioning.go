@@ -293,7 +293,11 @@ func (h *ProvisioningHandler) GetStatus(w http.ResponseWriter, r *http.Request) 
 		httpError(w, safeError(err), http.StatusNotFound)
 		return
 	}
-	writeJSON(w, h.projectResponse(r.Context(), inst))
+	view := h.projectResponse(r.Context(), inst)
+	access := custommw.ProjectAccessFromContext(r.Context())
+	view.CanAddDatabase = inst.NoDatabase && domain.IsActive(inst.Status) &&
+		access != nil && access.RoleAtLeast(domain.OrgRoleAdmin)
+	writeJSON(w, view)
 }
 
 // deprovisionBody is the optional JSON body of DELETE /{projectId}.

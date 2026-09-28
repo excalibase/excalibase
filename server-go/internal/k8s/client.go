@@ -482,6 +482,15 @@ func (c *Client) CreateSecret(ctx context.Context, namespace, name string, data 
 	return err
 }
 
+// DeleteSecret removes a Secret. See KubeClient.
+func (c *Client) DeleteSecret(ctx context.Context, namespace, name string) error {
+	err := c.clientset.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete secret %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
 // UpdateSecret replaces an existing Secret's data, keeping its metadata.
 func (c *Client) UpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
 	secret, err := c.clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})

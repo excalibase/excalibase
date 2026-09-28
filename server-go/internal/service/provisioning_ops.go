@@ -228,6 +228,14 @@ var orgIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 // before any side effect. Fails return plain errors (not StageError) because no
 // project record exists yet — callers surface them as 400 Bad Request.
 func validateProvisioningRequest(req domain.ProvisioningRequest) error {
+	if err := validateProjectIdentity(req); err != nil {
+		return err
+	}
+	return validateDatabaseRequest(req)
+}
+
+// validateProjectIdentity checks the project's name and organisation.
+func validateProjectIdentity(req domain.ProvisioningRequest) error {
 	name := strings.TrimSpace(req.ProjectName)
 	if name == "" {
 		return fmt.Errorf("project name is required")
@@ -246,7 +254,11 @@ func validateProvisioningRequest(req domain.ProvisioningRequest) error {
 	if !orgIDPattern.MatchString(org) {
 		return fmt.Errorf("org id must contain only lowercase letters, digits, hyphen, or underscore")
 	}
+	return nil
+}
 
+// validateDatabaseRequest checks the settings a database is created with.
+func validateDatabaseRequest(req domain.ProvisioningRequest) error {
 	// EXC-408: the major is required and is checked against the image
 	// catalogue. There is deliberately no default: silently provisioning on a
 	// major the caller did not ask for is how a project ends up on bits nobody

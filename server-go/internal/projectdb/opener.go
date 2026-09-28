@@ -357,6 +357,9 @@ func (o *Opener) checkServable(projectID string) error {
 	if !domain.IsActive(inst.Status) {
 		return fmt.Errorf("%w: %s is %s", ErrNotServable, projectID, inst.Status)
 	}
+	if inst.NoDatabase {
+		return fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
+	}
 	return nil
 }
 
@@ -373,7 +376,7 @@ func (o *Opener) ServableProjectIDs(_ context.Context) ([]string, error) {
 	}
 	ids := make([]string, 0, len(insts))
 	for _, inst := range insts {
-		if inst == nil || !domain.IsActive(inst.Status) {
+		if inst == nil || !domain.IsActive(inst.Status) || inst.NoDatabase {
 			continue
 		}
 		ids = append(ids, inst.ProjectID)

@@ -262,9 +262,9 @@ func (s *IdlePauseScheduler) sweepOne(ctx context.Context, inst *domain.Database
 	if !ok {
 		return
 	}
-	if domain.IsNotServable(inst.Status) {
-		// A teardown owns it, or its restore was never confirmed. Neither is
-		// a project the sweep may pause.
+	if domain.IsNotServable(inst.Status) || inst.NoDatabase {
+		// A teardown owns it, or its restore was never confirmed, or it has
+		// no database to stop. None is a project the sweep may pause.
 		return
 	}
 	if inst.Status == string(domain.StatusPausing) {

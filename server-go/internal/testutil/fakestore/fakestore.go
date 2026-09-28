@@ -67,6 +67,7 @@ func (s *Instances) Update(inst *domain.DatabaseInstance) error {
 	}
 	updated := inst.Clone()
 	updated.OrgID = existing.OrgID
+	updated.NoDatabase = existing.NoDatabase
 	s.Items[inst.ProjectID] = updated
 	return nil
 }
@@ -101,6 +102,7 @@ func (s *Instances) UpdateIfStatus(inst *domain.DatabaseInstance, expected strin
 	}
 	updated := inst.Clone()
 	updated.OrgID = existing.OrgID
+	updated.NoDatabase = existing.NoDatabase
 	s.Items[inst.ProjectID] = updated
 	return nil
 }
@@ -384,5 +386,34 @@ func (s *RetainedBackups) DueRetainedBackups(now time.Time) ([]storage.RetainedB
 // DeleteRetainedBackups removes the project's record.
 func (s *RetainedBackups) DeleteRetainedBackups(projectID string) error {
 	delete(s.Items, projectID)
+	return nil
+}
+
+// RecordDatabaseChoices writes a new database's create-time choices onto a
+// project that has none yet.
+func (s *Instances) RecordDatabaseChoices(inst *domain.DatabaseInstance, expected string) error {
+	existing, ok := s.Items[inst.ProjectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	updated, err := storage.ApplyDatabaseChoices(existing, inst, expected)
+	if err != nil {
+		return err
+	}
+	s.Items[inst.ProjectID] = updated
+	return nil
+}
+
+// MarkDatabaseAdded records that the project now has its database.
+func (s *Instances) MarkDatabaseAdded(projectID string) error {
+	existing, ok := s.Items[projectID]
+	if !ok {
+		return storage.ErrProjectNotFound
+	}
+	updated, err := storage.ApplyDatabaseAdded(existing)
+	if err != nil {
+		return err
+	}
+	s.Items[projectID] = updated
 	return nil
 }

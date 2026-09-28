@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Server, Database, Shield, Clock, Trash2, Copy, Check, AlertTriangle, PauseCircle, PlayCircle } from 'lucide-react';
 import { useState } from 'react';
@@ -75,11 +75,6 @@ export function SettingsPage() {
   const cancelDeletion = useCancelDeletion();
   const pauseProject = usePauseProject();
   const resumeProject = useResumeProject();
-  // The public host, port, TLS posture and cluster CA all come from the
-  // control plane. A failed read leaves this undefined, and the connection
-  // card falls back to the in-cluster details rather than guessing.
-  const endpoint = useProjectEndpoint(projectId);
-
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', projectId],
     queryFn: async () => {
@@ -88,6 +83,11 @@ export function SettingsPage() {
     },
     enabled: !!projectId,
   });
+  // The public host, port, TLS posture and cluster CA all come from the
+  // control plane. A failed read leaves this undefined, and the connection
+  // card falls back to the in-cluster details rather than guessing. A project
+  // without a database has no endpoint to read.
+  const endpoint = useProjectEndpoint(project && !project.noDatabase ? projectId : undefined);
 
   if (isLoading || !project) {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
@@ -99,6 +99,7 @@ export function SettingsPage() {
   const protectedFromDeletion = isDeletionProtected(project);
 
   const info = projectInfo(project);
+  const noDatabase = project.noDatabase === true;
 
   const authEndpoint = `https://auth.excalibase.io/${project.orgId}/${project.projectId}`;
   const graphqlEndpoint = `https://api.excalibase.io/${project.orgId}/${project.projectId}/graphql`;
@@ -115,6 +116,21 @@ const excalibase = createClient({
 
       {project.status === 'FAILED' && <ProvisionFailedBanner project={project} />}
 
+      {noDatabase && (
+        <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8" data-testid="settings-no-database">
+          <p className="text-sm text-text-secondary">
+            This project has no database, so it has no connection details, public port, backups or database
+            settings.{' '}
+            {project.canAddDatabase && (
+              <Link to={`/project/${project.projectId}/database/add`} className="text-purple-400 hover:underline">
+                Add a database
+              </Link>
+            )}
+          </p>
+        </div>
+      )}
+
+      {!noDatabase && (<>
       <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8" data-testid="connect-section">
         <h4 className="text-sm font-medium text-text-primary mb-3">Connect to your project</h4>
         <div className="space-y-3">
@@ -137,6 +153,7 @@ const excalibase = createClient({
       <div className="mb-8">
         <PublicPortCard projectId={project.projectId} status={project.status} />
       </div>
+      </>)}
 
       <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden mb-8">
         {info.map(({ icon: Icon, label, value }) => (
@@ -148,6 +165,7 @@ const excalibase = createClient({
         ))}
       </div>
 
+      {!noDatabase && (<>
       <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8">
         <h4 className="text-sm font-medium text-text-primary mb-2">Backup Configuration</h4>
         <div className="grid grid-cols-3 gap-4 text-sm">
@@ -212,6 +230,7 @@ const excalibase = createClient({
           </>
         )}
       </div>
+      </>)}
 
       <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4">
         <h4 className="text-sm font-medium text-red-400 mb-2">Danger Zone</h4>
@@ -219,8 +238,10 @@ const excalibase = createClient({
           <div data-testid="deletion-scheduled">
             <p className="text-xs text-text-secondary mb-3">
               This project is scheduled for deletion on{' '}
-              {project.deletionDueAt ? new Date(project.deletionDueAt).toLocaleString() : 'its due date'}. Its database is
-              stopped and its data kept until then. An org owner can cancel; the project is then left paused.
+              {project.deletionDueAt ? new Date(project.deletionDueAt).toLocaleString() : 'its due date'}.{' '}
+              {noDatabase
+                ? 'Its files and containers are kept until then. An org owner can cancel; the project then carries on as before.'
+                : 'Its database is stopped and its data kept until then. An org owner can cancel; the project is then left paused.'}
             </p>
             <button
               onClick={() => projectId && cancelDeletion.mutate(projectId)}
@@ -234,8 +255,9 @@ const excalibase = createClient({
         ) : (
           <>
             <p className="text-xs text-text-secondary mb-3" data-testid="deletion-grace-note">
-              Deleting stops this project now and permanently removes its data 7 days later. Until then an org owner can
-              cancel. Kept backups are purged 14 days after that.
+              {noDatabase
+                ? 'Deleting schedules this project for permanent removal, with its files and containers, 7 days later. Until then an org owner can cancel.'
+                : 'Deleting stops this project now and permanently removes its data 7 days later. Until then an org owner can cancel. Kept backups are purged 14 days after that.'}
             </p>
             <p className="text-xs text-text-secondary mb-3" data-testid="deletion-protection-state">
               {protectedFromDeletion
