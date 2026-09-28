@@ -12,8 +12,10 @@ import (
 // Capability tokens (EXC-365) are the credentials the platform's own services
 // authenticate with. Unlike a human PAT they are default-deny: the table below
 // is the complete list of requests a capability token may make, and everything
-// else — every write, every route not named here — is refused with 403 whatever
-// the owning service principal's platform role would otherwise permit.
+// else — every route not named here — is refused with 403 whatever the owning
+// service principal's platform role would otherwise permit. The writes named
+// here are the email relay, and the vault init/unseal and service-token
+// management calls of the svc-bootstrap principal (EXC-485).
 //
 // Adding a route here widens what every existing service token can reach, so
 // each entry names the narrowest capability that makes the call work.
@@ -33,12 +35,22 @@ const (
 	capActionSend       = "send"
 
 	errBodyCapability = `{"error":"token is not permitted to call this endpoint"}`
+
+	vaultInitRoute       = "/api/vault/init"
+	vaultUnsealRoute     = "/api/vault/unseal"
+	serviceAccountsRoute = "/api/admin/service-accounts"
+	tokensRoute          = "/api/auth/tokens"
 )
 
 var (
 	// projectInfoRoute is GET /api/projects/{projectId}/info — the engine's
 	// per-project connection details and CORS origins.
 	projectInfoRoute = regexp.MustCompile(`^/api/projects/[^/]+/info$`)
+	// serviceAccountTokensRoute is GET /api/admin/service-accounts/{name}/tokens.
+	serviceAccountTokensRoute = regexp.MustCompile(`^/api/admin/service-accounts/([^/]+)/tokens$`)
+	// tokenByHashRoute and tokenRotateRoute name one token by its hash.
+	tokenByHashRoute = regexp.MustCompile(`^/api/auth/tokens/[^/]+$`)
+	tokenRotateRoute = regexp.MustCompile(`^/api/auth/tokens/[^/]+/rotate$`)
 	// policyRoute is the policy read surface the engine polls. table-grants
 	// (EXC-370) is part of it: the engine fetches the exposure list in the
 	// same round as the two policy sets and enforces them together, so a
@@ -58,6 +70,13 @@ func RequiredCapability(method, rawPath string) (auth.Capability, bool) {
 	if method == http.MethodPost && cleaned == emailRelayRoute {
 		return EmailRelayCapability(), true
 	}
+	// The vault lifecycle calls the bootstrap Job makes (EXC-485).
+	if method == http.MethodPost && cleaned == vaultInitRoute {
+		return auth.VaultInitCapability(), true
+	}
+	if method == http.MethodPost && cleaned == vaultUnsealRoute {
+		return auth.VaultUnsealCapability(), true
+	}
 	if method != http.MethodGet && method != http.MethodHead {
 		return auth.Capability{}, false
 	}
@@ -73,7 +92,26 @@ func RequiredCapability(method, rawPath string) (auth.Capability, bool) {
 	if policyRoute.MatchString(cleaned) {
 		return auth.Capability{Resource: capResourcePolicies, Action: capActionRead}, true
 	}
+	if m := serviceAccountTokensRoute.FindStringSubmatch(cleaned); m != nil {
+		return auth.ManageServiceTokensCapability(m[1]), true
+	}
 	return auth.Capability{}, false
+}
+
+// RequiresServiceTokenManager reports whether the request is one of the token
+// management calls whose subject is named in the body or by a token hash:
+// creating a service principal, minting a token, revoking or rotating one.
+// The gate admits them for a token that manages any service principal's
+// tokens; the handler then binds the subject to one the token names.
+func RequiresServiceTokenManager(method, rawPath string) bool {
+	cleaned := normalizePath(rawPath)
+	switch method {
+	case http.MethodPost:
+		return cleaned == serviceAccountsRoute || cleaned == tokensRoute || tokenRotateRoute.MatchString(cleaned)
+	case http.MethodDelete:
+		return tokenByHashRoute.MatchString(cleaned)
+	}
+	return false
 }
 
 // EmailRelayCapability is the capability POST /internal/email/send demands.
@@ -118,6 +156,10 @@ func CapabilityGate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if RequiresServiceTokenManager(r.Method, r.URL.Path) && auth.TokenManagesServiceTokens(token) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		want, ok := RequiredCapability(r.Method, r.URL.Path)
 		if !ok || !auth.TokenGrants(token, want) {
 			http.Error(w, errBodyCapability, http.StatusForbidden)
@@ -141,6 +183,27 @@ func RequireCapability(want auth.Capability) func(http.Handler) http.Handler {
 				return
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// UnlessGrantedCapability wraps a guard so that a capability token whose list
+// grants the capability this request needs passes without it. Mounted where a
+// route family is otherwise reserved for unrestricted human credentials but
+// one or two calls in it belong to a service (the vault lifecycle calls the
+// bootstrap Job makes, EXC-485). Every other caller still meets the guard.
+func UnlessGrantedCapability(guard func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		guarded := guard(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := auth.GetToken(r.Context())
+			if auth.IsCapabilityToken(token) {
+				if want, ok := RequiredCapability(r.Method, r.URL.Path); ok && auth.TokenGrants(token, want) {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			guarded.ServeHTTP(w, r)
 		})
 	}
 }

@@ -116,6 +116,19 @@ func (v *Vault) Status() Status {
 }
 
 func (v *Vault) Init(shares, threshold int) (*InitResult, error) {
+	return v.InitWrapped(shares, threshold, func(plain []string) ([]string, error) { return plain, nil })
+}
+
+// ShareWrapper protects freshly generated unseal shares before they leave the
+// vault, e.g. by encrypting them under a KMS key. It must return one wrapped
+// value per share.
+type ShareWrapper func(shares []string) ([]string, error)
+
+// InitWrapped initializes the vault and returns the shares as wrap produced
+// them. The shares are wrapped before anything is persisted: if wrapping fails
+// the vault stays uninitialized, because an initialized vault whose only share
+// was lost could never be unsealed again.
+func (v *Vault) InitWrapped(shares, threshold int, wrap ShareWrapper) (*InitResult, error) {
 	if v.Initialized() {
 		return nil, ErrAlreadyInit
 	}
@@ -127,13 +140,19 @@ func (v *Vault) Init(shares, threshold int) (*InitResult, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if err := v.storeBarrierMeta(encryptedBarrier, shares, threshold); err != nil {
-		return nil, err
-	}
-
 	hexShares, err := splitMEKToHex(mek, shares, threshold)
 	if err != nil {
+		return nil, err
+	}
+	wrapped, err := wrap(hexShares)
+	if err != nil {
+		return nil, fmt.Errorf("wrap unseal shares: %w", err)
+	}
+	if len(wrapped) != len(hexShares) {
+		return nil, fmt.Errorf("wrap unseal shares: got %d wrapped shares for %d", len(wrapped), len(hexShares))
+	}
+
+	if err := v.storeBarrierMeta(encryptedBarrier, shares, threshold); err != nil {
 		return nil, err
 	}
 
@@ -148,7 +167,7 @@ func (v *Vault) Init(shares, threshold int) (*InitResult, error) {
 	}
 
 	return &InitResult{
-		Shares:    hexShares,
+		Shares:    wrapped,
 		Threshold: threshold,
 	}, nil
 }

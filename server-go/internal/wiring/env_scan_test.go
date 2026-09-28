@@ -38,13 +38,13 @@ var envReadAllowList = map[string]string{
 	// Operator tunables and one-off CLI subcommands in the entrypoint. None
 	// of them selects a provider or enables a subsystem; the switches that
 	// do were moved into internal/config.
-	"cmd/server/main.go": "tunables (STORAGE_REAP_GRACE, DELETION_WAIT_TIMEOUT, REALTIME_PUBLICATION_NAME, BACKUP_S3_PATH_STYLE), the unseal material and the kms-encrypt-unseal CLI",
+	"cmd/server/main.go": "tunables (STORAGE_REAP_GRACE, DELETION_WAIT_TIMEOUT, REALTIME_PUBLICATION_NAME, BACKUP_S3_PATH_STYLE), the unseal material, and the one-time SETUP_TOKEN and BOOTSTRAP_SERVICE_TOKEN secrets",
 
 	// Seal material read by the vault at the moment it unseals, and the KMS
 	// client's own SDK endpoint override. Both are secrets or SDK plumbing
 	// rather than feature switches, and pkg/** is a standalone library.
 	"pkg/vault/vault.go":     "VAULT_UNSEAL_KEY at unseal time",
-	"pkg/kmsseal/kmsseal.go": "KMS endpoint override and the wrapped unseal material",
+	"pkg/kmsseal/kmsseal.go": "the KMS SDK endpoint override",
 }
 
 var envReadPattern = regexp.MustCompile(`os\.(Getenv|LookupEnv)\(`)

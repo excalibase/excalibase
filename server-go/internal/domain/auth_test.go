@@ -26,3 +26,14 @@ func TestUserIsService(t *testing.T) {
 		})
 	}
 }
+
+func TestHumanUsersDropsServicePrincipals(t *testing.T) {
+	human := &User{ID: "h", Kind: UserKindHuman}
+	legacy := &User{ID: "l"}
+	service := &User{ID: "s", Kind: UserKindService}
+
+	got := HumanUsers([]*User{service, human, legacy})
+	if len(got) != 2 || got[0] != human || got[1] != legacy {
+		t.Fatalf("HumanUsers = %v, want [human legacy]", got)
+	}
+}

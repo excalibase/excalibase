@@ -14,7 +14,7 @@ import (
 func (s *Store) HasPlatformAdmin(ctx context.Context) (bool, error) {
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM users WHERE role = 'platform_admin')`).Scan(&exists)
+		`SELECT EXISTS(SELECT 1 FROM users WHERE role = 'platform_admin' AND kind <> 'service')`).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check platform admin: %w", err)
 	}

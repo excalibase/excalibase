@@ -24,9 +24,9 @@ operations (PATs, capacity, logs, drop project, revoke org) live in
 [ ] Secret resend-creds    (api-key)
 [ ] values-prod.yaml copied and edited: image tags, hosts, cors.origins, admin ingress
 [ ] helm upgrade --install platform ... -f values-prod.yaml   (NO --wait on first install)
-[ ] kubectl wait job/platform-bootstrap complete; read admin-pass + provisioning-pat
-[ ] Log in as admin, create a real platform_admin, mint an operator PAT     -> §3.4
-[ ] Replace the 12h provisioning-pat with a durable service PAT, restart auth+graphql -> §3.4
+[ ] AWS KMS key + credential with only kms:Encrypt/kms:Decrypt on it    -> §3.3.1
+[ ] kubectl wait job/platform-bootstrap complete
+[ ] Claim the first admin with the platform-setup-token, mint an operator PAT -> §3.4
 [ ] PUT /api/admin/tiers/{FREE,STANDARD,ENTERPRISE} for your node sizes     -> §3.5
 [ ] provisioning.registrationMode=invite before exposing the admin host     -> §3.6
 [ ] Run tests/e2e-restore-drill.sh once against the live cluster             -> §4.2
@@ -146,11 +146,12 @@ typo does not stop the pod, it silently degrades the feature.
 | `resend-creds` | `api-key` | `RESEND_API_KEY`; requires `email.provider: resend` | you, before install |
 | `deno-runtime-secret` | `secret` | `DENO_RUNTIME_SECRET` / `RUNTIME_SECRET` on every per-project Deno pod | chart, first install only (`helm.sh/resource-policy: keep`, `lookup`-preserved) |
 | `platform-setup-token` | `token` | `SETUP_TOKEN` on provisioning — the one-time first-admin registration token (EXC-451) | chart, first install only (`lookup`-preserved, same pattern as `deno-runtime-secret`) |
-| `platform-bootstrap` | `provisioning-pat`, `unseal-key`, `admin-pass` | vault auto-unseal, auth/graphql service PAT, first admin password | `platform-bootstrap` Job |
+| `platform-bootstrap-token` | `token` | `BOOTSTRAP_SERVICE_TOKEN` on provisioning, `BOOTSTRAP_TOKEN` on the bootstrap Job and rotation CronJob — the svc-bootstrap capability token (EXC-485) | chart, first install only (`lookup`-preserved) |
+| `platform-bootstrap` | `unseal-key-ciphertext` (awskms) or `unseal-key` (plaintext, development only), `auth-token`, `graphql-token` | KMS-wrapped vault unseal key, auth/graphql service tokens. No admin password is stored anywhere | `platform-bootstrap` Job |
 | `platform-db-app` | `uri`, `username`, `password` | `PLATFORM_DB_URL` | CNPG operator |
 | `excalibase-api-tls`, `excalibase-admin-tls` | TLS | ingress | cert-manager |
 | `ses-creds` | — | AWS SES; **not used** in this target | leave absent |
-| `vault.kmsUnseal.credentialsSecret` | `access_key_id`, `secret_access_key` | KMS envelope unseal; **deferred**, leave `vault.kmsUnseal.enabled: false` | — |
+| `vault.unseal.awskms.credentialsSecret` | `access_key_id`, `secret_access_key` | AWS KMS vault unseal (§3.3.1); IAM policy: `kms:Encrypt` + `kms:Decrypt` on `vault.unseal.awskms.keyArn` only. Omit when the pod has an AWS identity | you, before install |
 
 ```bash
 # .github/workflows/aio-e2e.yml, step "Create namespace + R2/Resend secrets"
@@ -194,7 +195,7 @@ Copy `charts/platform-aio/values-prod.yaml` and edit:
 | `cors.origins`, `cors.secureCookies` | admin host origin, `"true"` | |
 | `platformDb.instances` | `3` (multi-node) or `1` | §5.5 for the PDB consequence |
 | `alerting.enabled`, `alerting.webhookUrl` | `true`, your receiver | §4.7 |
-| `vault.kmsUnseal.enabled` | `false` | deferred; no AWS |
+| `vault.unseal.provider`, `vault.unseal.awskms.keyArn`, `.region`, `.credentialsSecret` | `awskms`, your key ARN, its region, the Secret above | required; `plaintext` is refused unless `vault.unseal.devPlaintext: true` (development only) |
 
 Resource requests/limits for provisioning, auth, graphql and studio are
 hard-coded in their templates; the `resources:` blocks in `values-prod.yaml`
@@ -250,65 +251,56 @@ What the `platform-bootstrap` Job does (`templates/bootstrap-job.yaml`,
 post-install **and** post-upgrade hook, idempotent):
 
 1. waits for provisioning `/healthz`;
-2. first run: `POST /api/auth/register` user `admin` (email
-   `admin@excalibase.local`, random password), with `setupToken` set to the
-   `platform-setup-token` Secret's value — provisioning was started with that
-   same value as `SETUP_TOKEN`, so it accepts it and promotes this one
-   registration to `platform_admin` (EXC-451; `server-go/internal/handler/auth.go`,
-   `server-go/internal/auth/setup_token.go`); logs in to obtain a PAT;
-3. `POST /api/vault/init` with `{"shares":1,"threshold":1}`, then
-   `POST /api/vault/unseal`; on every later run it re-unseals if
-   `GET /api/vault/status` reports `sealed: true`;
-4. seeds the ES256 signing keypair at `pki/signing/{private,public}` if absent;
-5. upserts the `platform-bootstrap` Secret (`provisioning-pat`, `unseal-key`,
-   `admin-pass`).
+2. authenticates as the `svc-bootstrap` service principal with the token in
+   the `platform-bootstrap-token` Secret. Provisioning adopted that token at
+   start (`BOOTSTRAP_SERVICE_TOKEN`, `server-go/internal/auth/bootstrap_service.go`);
+   it may only create and mint/rotate/revoke the tokens of `svc-auth` and
+   `svc-graphql` (within its own permissions) and initialise the vault
+   (EXC-485). It never registers or logs in as an admin;
+3. ensures `svc-auth` and `svc-graphql` hold valid capability tokens;
+4. first run: `POST /api/vault/init` with `{"shares":1,"threshold":1}`. With
+   `vault.unseal.provider: awskms` provisioning encrypts the share with KMS
+   before it leaves the process and returns only the ciphertext, which the Job
+   merge-patches into `platform-bootstrap` as `unseal-key-ciphertext` at once.
+   Provisioning decrypts it at every start and exits when the vault is
+   initialised but the ciphertext is missing or will not decrypt; the Job
+   never unseals. Vault init also seeds the ES256 signing keypair;
+5. merge-patches the service tokens into `platform-bootstrap`. Fields are
+   patched, never replaced; a stored `admin-pass` or a plaintext `unseal-key`
+   is deleted.
 
 Auth and graphql mount `platform-bootstrap` (`templates/auth.yaml`,
 `templates/graphql.yaml`) and stay in `CreateContainerConfigError` until step
 5 has run. That is expected on a first install.
 
-### 3.4 First admin and operator PAT
+### 3.3.1 AWS KMS for the vault unseal key
+
+Create a symmetric KMS key (`SYMMETRIC_DEFAULT`, encrypt/decrypt) and an IAM
+identity whose policy allows only `kms:Encrypt` and `kms:Decrypt` on that key
+ARN. Either give the provisioning pod that identity, or store its access key:
 
 ```bash
-# OPERATOR.md §1
-kubectl -n excalibase-platform get secret platform-bootstrap \
-  -o jsonpath='{.data.admin-pass}' | base64 -d ; echo
-# scripts/install-all.sh
-kubectl -n excalibase-platform get secret platform-bootstrap \
-  -o jsonpath='{.data.provisioning-pat}' | base64 -d ; echo
+kubectl -n excalibase-platform create secret generic vault-kms \
+  --from-literal=access_key_id=... --from-literal=secret_access_key=...
+# values: vault.unseal.awskms.keyArn=<arn> .region=<region> .credentialsSecret=vault-kms
 ```
 
-Then, at `https://<admin host>/login` as `admin`:
+Losing the key (or the permission) means the vault cannot be opened again:
+never schedule the key for deletion.
 
-1. Create a real platform admin (Studio `/admin`, or
-   `POST /api/auth/users` with `{"username","email","password","role":"platform_admin"}` —
-   requires `PermManageUsers`, `server-go/cmd/server/main.go`).
-2. Mint an operator PAT with an expiry (`POST /api/auth/tokens`,
-   `{"name":"ops","expiresIn":"30d"}`; default 90d, max 365d — OPERATOR.md §1.1).
-3. **Replace the service token now.** The Job obtains `provisioning-pat` from
-   `POST /api/auth/login`, which issues a `session`-scoped token with a
-   **12-hour** TTL (`sessionTokenTTL` in `server-go/internal/handler/auth.go`).
-   auth reads it at startup to fetch the signing key
-   (`excalibase-auth/cmd/server/main.go`), graphql uses it per request for
-   tenant credentials and RLS policies (`templates/graphql.yaml`). Twelve
-   hours after install, end-user register answers 503 and graphql cannot
-   resolve tenants — the outage and the fix are recorded in
-   `excalibase-service/aio-e2e/k8s-dataplane/README.md` ("Deployment
-   prerequisite discovered"). As the **real** platform admin from step 1
-   (tokens die with their owner, so not the bootstrap `admin`):
+### 3.4 First admin and operator PAT
 
-   ```bash
-   # OPERATOR.md §1.1 — durable PAT for the services; "never" only if you rotate on a schedule
-   NEW=$(curl -sf -X POST -H "Authorization: Bearer $ADMIN_PAT" -H 'Content-Type: application/json' \
-     -d '{"name":"platform-services","expiresIn":"365d"}' https://<admin host>/api/auth/tokens | jq -r .token)
-   kubectl -n excalibase-platform get secret platform-bootstrap -o json \
-     | jq --arg v "$(printf '%s' "$NEW" | base64 -w0)" '.data["provisioning-pat"]=$v' \
-     | kubectl apply -f -
-   kubectl -n excalibase-platform rollout restart deploy/auth deploy/graphql
-   ```
+No admin account is created and no admin password is stored by the chart
+(EXC-485). Claim the first admin once with the one-time setup token (EXC-451):
 
-4. Only then delete or rotate the bootstrap `admin` user. Diary the PAT
-   expiry (§4.4).
+```bash
+kubectl -n excalibase-platform get secret platform-setup-token -o jsonpath='{.data.token}' | base64 -d ; echo
+```
+
+Open `https://<admin host>/setup`, register with that token and a password of
+your own, then mint an operator PAT with an expiry (`POST /api/auth/tokens`,
+`{"name":"ops","expiresIn":"30d"}`; default 90d, max 365d — OPERATOR.md §1.1).
+The token works once; a second registration with it is an ordinary user.
 
 ### 3.5 Tiers
 
@@ -322,8 +314,7 @@ Resize for your nodes through the admin API (`PUT /api/admin/tiers/{tier}`,
 `PermManageSetup`; `server-go/internal/handler/tier_config.go`):
 
 ```bash
-# .github/workflows/aio-e2e.yml "Size FREE tier for the 2-vCPU runner"
-PAT=$(kubectl get secret platform-bootstrap -n excalibase-platform -o jsonpath='{.data.provisioning-pat}' | base64 -d)
+# .github/workflows/aio-e2e.yml "Size FREE tier for the 2-vCPU runner"; PAT = your operator PAT (§3.4)
 curl -sf -X PUT https://<admin host>/api/admin/tiers/FREE \
   -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' \
   -d '{"maxProjects":1,"instances":1,"storageSize":"5Gi","memory":"512Mi","cpu":"0.25","backupEnabled":true,"autoPauseAfterDays":7}'
@@ -568,28 +559,17 @@ kubectl -n excalibase-platform get job platform-bootstrap -o jsonpath='{.status}
 
 ### 5.3 Vault sealed after a restart
 
-Provisioning auto-unseals at boot from `VAULT_UNSEAL_KEY`, mounted from
-`platform-bootstrap` (`optional: true`, `templates/provisioning.yaml`;
-`server-go/pkg/vault/vault.go`). If the Secret or the key is missing the
-pod is up but every credential lookup fails.
+With `vault.unseal.provider: awskms` provisioning unseals itself at start
+from `VAULT_UNSEAL_KEY_CIPHERTEXT` (`platform-bootstrap`/`unseal-key-ciphertext`)
+through KMS (`server-go/pkg/kmsseal`). When the vault is initialised and the
+ciphertext is missing, corrupted, or KMS refuses to decrypt it, provisioning
+does not start; its log names the reason (`vault unseal: ...`). Check the KMS
+key state, the credential's `kms:Decrypt` permission and the Secret key, then
+restart provisioning. There is no manual plaintext unseal path in this mode,
+and rekey is refused.
 
-```bash
-curl -s https://<admin host>/api/vault/status | jq       # {"initialized":true,"sealed":true}
-# Option A: re-run the hook (re-unseals, idempotent)
-helm upgrade platform ./charts/platform-aio -n excalibase-platform -f my-values-prod.yaml
-# Option B: manual
-UNSEAL=$(kubectl -n excalibase-platform get secret platform-bootstrap -o jsonpath='{.data.unseal-key}' | base64 -d)
-curl -X POST -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' \
-  -d "{\"key\":\"$UNSEAL\"}" https://<admin host>/api/vault/unseal
-```
-
-`GET /api/vault/status` is unauthenticated; `init` and `unseal` require a
-PAT (`server-go/internal/handler/vault.go`). If option A leaves the vault
-sealed, the token in the Secret has expired (§3.4 step 3): use option B
-with a fresh admin PAT, then replace the Secret value. Anyone who can read
-`platform-bootstrap` can unseal the vault — restrict RBAC on that Secret
-(NOTES.txt). KMS envelope unseal (`vault.kmsUnseal.*`,
-`server-go/pkg/kmsseal`) removes the plaintext key but needs AWS KMS; deferred.
+With the development `plaintext` provider provisioning unseals from
+`VAULT_UNSEAL_KEY`; re-running the hook (`helm upgrade`) also unseals.
 
 ### 5.4 `helm install --wait` deadlock on a first install
 

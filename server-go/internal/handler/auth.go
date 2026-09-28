@@ -116,7 +116,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	isFirstUser := len(allUsers) == 0
+	isFirstUser := len(domain.HumanUsers(allUsers)) == 0
 
 	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, req.Email, isFirstUser)
 	if status != 0 {
@@ -586,5 +586,5 @@ func (h *AuthHandler) GetSetupStatus(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "failed to read users", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]bool{"hasAdmin": len(users) > 0})
+	writeJSON(w, map[string]bool{"hasAdmin": len(domain.HumanUsers(users)) > 0})
 }

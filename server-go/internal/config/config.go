@@ -47,11 +47,17 @@ type AppConfig struct {
 	DenoRuntimeImage  string
 	VaultURL          string
 	VaultPAT          string
-	DeploymentMode    string // "selfhosted" (default) or "cloud"
-	PublicBaseURL     string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
-	StudioURL         string // Studio origin that emailed verification and reset links open
-	AuthInternalURL   string // excalibase-auth inside the platform network; SDK key management calls it
-	RegistrationMode  string // "open" (default) or "invite" — invite closes open studio signup
+	// VaultUnseal is how the in-process vault unseals at boot; main loads and
+	// validates it with LoadVaultUnseal (EXC-485).
+	VaultUnseal VaultUnseal
+	// BootstrapServicePermissions is the capability list of the svc-bootstrap
+	// token; the token itself is read by main at adoption (EXC-485).
+	BootstrapServicePermissions []string
+	DeploymentMode              string // "selfhosted" (default) or "cloud"
+	PublicBaseURL               string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
+	StudioURL                   string // Studio origin that emailed verification and reset links open
+	AuthInternalURL             string // excalibase-auth inside the platform network; SDK key management calls it
+	RegistrationMode            string // "open" (default) or "invite" — invite closes open studio signup
 	// PublicPort serves the edge only; Port serves in-cluster callers and
 	// never believes X-Forwarded-For.
 	PublicPort string
@@ -356,6 +362,7 @@ func Load() AppConfig {
 
 		JWTRequireAud:                  envBool("JWT_REQUIRE_AUD", true),
 		JWTAudPrefix:                   envOr("AUTH_AUD_PREFIX", "excalibase:"),
+		BootstrapServicePermissions:    ParseBootstrapServicePermissions(os.Getenv("BOOTSTRAP_SERVICE_PERMISSIONS")),
 		CORSOrigins:                    parseCORSOrigins(envOr("CORS_ORIGINS", "https://app.excalibase.io")),
 		WatcherChartPath:               envOr("WATCHER_CHART_PATH", "/charts/excalibase-watcher"),
 		WatcherImage:                   os.Getenv("WATCHER_IMAGE"),

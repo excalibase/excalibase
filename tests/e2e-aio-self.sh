@@ -40,10 +40,10 @@ fail()  { red   "  ✗ $1: $2"; FAIL=$((FAIL+1)); }
 skip()  { yellow "  ⊘ $1: $2"; SKIP=$((SKIP+1)); }
 section(){ echo ""; cyan "=== $* ==="; }
 
-# Login fresh — the bootstrap PAT row may be stale across redeploys but
-# admin-pass is durable.
-ADMIN_PASS=$(kubectl -n excalibase-platform get secret platform-bootstrap -o jsonpath='{.data.admin-pass}' | base64 -d 2>/dev/null)
-if [ -z "$ADMIN_PASS" ]; then red "BOOTSTRAP secret missing admin-pass — is the AIO deployed?"; exit 1; fi
+# The chart stores no admin password (EXC-485): pass the one you chose when
+# claiming the first admin (excalibase-service scripts/claim-first-admin.sh).
+ADMIN_PASS=${ADMIN_PASSWORD:-$( [ -n "${ADMIN_PASSWORD_FILE:-}" ] && cat "$ADMIN_PASSWORD_FILE" )}
+if [ -z "$ADMIN_PASS" ]; then red "set ADMIN_PASSWORD or ADMIN_PASSWORD_FILE to the platform admin's password"; exit 1; fi
 
 BOOT_LOGIN=$(curl -s -X POST "$API_PROV/api/auth/login" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}")

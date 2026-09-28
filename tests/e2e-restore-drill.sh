@@ -63,8 +63,9 @@ fi
 
 # ---------- auth ----------
 section "auth"
-ADMIN_PASS=$(kubectl -n $NS get secret platform-bootstrap -o jsonpath='{.data.admin-pass}' | base64 -d 2>/dev/null)
-[ -z "$ADMIN_PASS" ] && { fail "bootstrap secret" "admin-pass empty"; exit 1; }
+# The chart stores no admin password (EXC-485): the caller supplies it.
+ADMIN_PASS=${ADMIN_PASSWORD:-$( [ -n "${ADMIN_PASSWORD_FILE:-}" ] && cat "$ADMIN_PASSWORD_FILE" )}
+[ -z "$ADMIN_PASS" ] && { fail "admin password" "set ADMIN_PASSWORD or ADMIN_PASSWORD_FILE"; exit 1; }
 TOKEN=$(curl -sf -X POST "$API/api/auth/login" -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASS\"}" | jq -r .token)
 [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ] && { fail "login" "no token"; exit 1; }
