@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -41,18 +43,43 @@ func newMongoUsersHarness(t *testing.T) *mongoUsersHarness {
 		t.Fatalf("seed project: %v", err)
 	}
 	kube := k8s.NewMockClient()
-	cluster := &unstructured.Unstructured{Object: map[string]interface{}{
-		"kind":     "Cluster",
-		"metadata": map[string]interface{}{"name": mongoProject + "-postgres", "namespace": mongoNamespace},
-		"status":   map[string]interface{}{"currentPrimary": mongoProject + "-postgres-2"},
-	}}
-	if err := kube.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, mongoNamespace, cluster); err != nil {
+	if err := kube.ApplyCRD(context.Background(), k8s.CNPGClusterGVR, mongoNamespace, mongoCluster()); err != nil {
 		t.Fatalf("seed cluster: %v", err)
 	}
+	// The primary reports the new peer line loaded.
+	kube.ExecOutput[mongoPrimary] = "t\n"
 	vault := newFakeVault()
 	svc := NewProvisioningService(store, provisioner.NewFactory(), kube)
 	svc.SetVault(vault)
+	svc.mongoIdentWait = identWait{timeout: 50 * time.Millisecond, interval: time.Millisecond}
 	return &mongoUsersHarness{svc: svc, store: store, vault: vault, kube: kube}
+}
+
+// mongoCluster is a DocumentDB cluster as CNPG holds it: the platform's peer
+// lines and a primary that is not instance 1.
+func mongoCluster() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"kind":     "Cluster",
+		"metadata": map[string]interface{}{"name": mongoProject + "-postgres", "namespace": mongoNamespace},
+		"spec": map[string]interface{}{
+			"bootstrap": map[string]interface{}{"initdb": map[string]interface{}{"owner": mongoOwner}},
+			"postgresql": map[string]interface{}{"pg_ident": []interface{}{
+				"local postgres documentdb_bg_worker_role", "local postgres documentdb",
+				"local postgres " + mongoOwner, "local postgres excalibase_app",
+			}},
+		},
+		"status": map[string]interface{}{"currentPrimary": mongoProject + "-postgres-2"},
+	}}
+}
+
+func (h *mongoUsersHarness) peerLines(t *testing.T) []string {
+	t.Helper()
+	cluster, err := h.kube.GetCRD(context.Background(), k8s.CNPGClusterGVR, mongoNamespace, mongoProject+"-postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, _, _ := unstructured.NestedStringSlice(cluster.Object, "spec", "postgresql", "pg_ident")
+	return lines
 }
 
 // stdinSQL decodes every hex literal in the recorded stdin payloads, so a
@@ -218,6 +245,9 @@ func TestCreateMongoUserRefusesANameTheProjectAlreadyHas(t *testing.T) {
 func TestCreateMongoUserIsCappedPerProject(t *testing.T) {
 	h := newMongoUsersHarness(t)
 	ctx := context.Background()
+	if MaxMongoUsersPerProject != 100 {
+		t.Fatalf("cap is %d; the owner set 100", MaxMongoUsersPerProject)
+	}
 	for i := range MaxMongoUsersPerProject {
 		if _, err := h.svc.CreateMongoUser(ctx, mongoProject, fmt.Sprintf("user_%02d", i), MongoRoleRead); err != nil {
 			t.Fatalf("create %d: %v", i, err)
@@ -418,20 +448,96 @@ func containsCall(calls []string, want string) bool {
 	return false
 }
 
-// pg_ident matches a group only from Postgres 16, and DocumentDB connects back
-// through it as the acting user, so an older major is refused outright.
-func TestMongoUsersNeedPostgres16(t *testing.T) {
+// DocumentDB is offered on 15 to 17, and a per-user peer line works on all.
+func TestMongoUsersWorkOnPostgres15(t *testing.T) {
 	h := newMongoUsersHarness(t)
 	inst, _ := h.store.FindByProjectID(mongoProject)
 	inst.PostgresVersion = "15"
 	if err := h.store.Update(inst); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.CreateMongoUser(context.Background(), mongoProject, "reporting", MongoRoleRead); !errors.Is(err, ErrMongoUsersNeedNewerPostgres) {
-		t.Fatalf("postgres 15: got %v, want ErrMongoUsersNeedNewerPostgres", err)
+	if _, err := h.svc.CreateMongoUser(context.Background(), mongoProject, "reporting", MongoRoleRead); err != nil {
+		t.Fatalf("postgres 15: %v", err)
 	}
-	if len(h.kube.ExecStdin) != 0 {
-		t.Error("SQL ran on a major that cannot serve Mongo users")
+	if !slices.Contains(h.peerLines(t), "local postgres reporting") {
+		t.Errorf("no peer line: %q", h.peerLines(t))
+	}
+}
+
+// DocumentDB connects back over the socket as the user; without its peer
+// line every Mongo command fails. The line goes in with the user, the create
+// waits until the primary has loaded it, and it leaves with the user.
+func TestAMongoUsersPeerLineComesAndGoesWithIt(t *testing.T) {
+	h := newMongoUsersHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.CreateMongoUser(ctx, mongoProject, "reporting", MongoRoleRead); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(h.peerLines(t), "local postgres reporting") {
+		t.Fatalf("created without a peer line: %q", h.peerLines(t))
+	}
+	if !strings.Contains(h.stdinSQL(), "pg_ident_file_mappings") || !strings.Contains(h.stdinSQL(), "pg_reload_conf()") {
+		t.Error("the create did not wait for the primary to load the line")
+	}
+	if !slices.Contains(h.peerLines(t), "local postgres "+mongoOwner) {
+		t.Error("a platform peer line was lost")
+	}
+	if err := h.svc.DeleteMongoUser(ctx, mongoProject, "reporting"); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(h.peerLines(t), "local postgres reporting") {
+		t.Errorf("peer line left behind: %q", h.peerLines(t))
+	}
+}
+
+func TestAPeerLineThatNeverLoadsUndoesTheCreate(t *testing.T) {
+	h := newMongoUsersHarness(t)
+	h.kube.ExecOutput[mongoPrimary] = "f\n"
+	if _, err := h.svc.CreateMongoUser(context.Background(), mongoProject, "reporting", MongoRoleRead); err == nil {
+		t.Fatal("a user whose peer line never loaded was reported as created")
+	}
+	expectUndone(t, h)
+}
+
+func TestAClusterThatRefusesThePeerLineUndoesTheCreate(t *testing.T) {
+	h := newMongoUsersHarness(t)
+	h.kube.UpdateCRDError = errors.New("conflict")
+	if _, err := h.svc.CreateMongoUser(context.Background(), mongoProject, "reporting", MongoRoleRead); err == nil {
+		t.Fatal("reported as created")
+	}
+	expectUndone(t, h)
+}
+
+func expectUndone(t *testing.T, h *mongoUsersHarness) {
+	t.Helper()
+	last := h.kube.ExecStdin[len(h.kube.ExecStdin)-1]
+	if !strings.Contains(last, "DROP ROLE") {
+		t.Errorf("the role was not dropped: %q", last)
+	}
+	if slices.Contains(h.peerLines(t), "local postgres reporting") {
+		t.Errorf("peer line left behind: %q", h.peerLines(t))
+	}
+	if len(h.vault.data) != 0 {
+		t.Errorf("vault kept a record: %v", h.vault.data)
+	}
+}
+
+func TestADeleteWhosePeerLineCannotBeRemovedKeepsTheRecordForARetry(t *testing.T) {
+	h := newMongoUsersHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.CreateMongoUser(ctx, mongoProject, "reporting", MongoRoleRead); err != nil {
+		t.Fatal(err)
+	}
+	h.kube.UpdateCRDError = errors.New("conflict")
+	if err := h.svc.DeleteMongoUser(ctx, mongoProject, "reporting"); err == nil {
+		t.Fatal("reported as deleted")
+	}
+	if _, ok := h.vault.data["projects/"+mongoProject+"/mongo-users/reporting"]; !ok {
+		t.Error("record gone although the peer line stayed")
+	}
+	h.kube.UpdateCRDError = nil
+	if err := h.svc.DeleteMongoUser(ctx, mongoProject, "reporting"); err != nil {
+		t.Fatalf("retry: %v", err)
 	}
 }
 
@@ -633,6 +739,7 @@ func (s *secondExecFails) ExecInPodStdin(ctx context.Context, namespace, pod, co
 func TestAFailedCompensationStillFailsTheCreate(t *testing.T) {
 	h := newMongoUsersHarness(t)
 	svc := NewProvisioningService(h.store, provisioner.NewFactory(), &secondExecFails{MockClient: h.kube})
+	svc.mongoIdentWait = h.svc.mongoIdentWait
 	svc.SetVault(failingPutVault{h.vault})
 	if _, err := svc.CreateMongoUser(context.Background(), mongoProject, "reporting", MongoRoleRead); err == nil {
 		t.Fatal("an unrecorded user was reported as created")

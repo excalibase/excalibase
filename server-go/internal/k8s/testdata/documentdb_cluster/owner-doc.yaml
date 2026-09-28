@@ -67,7 +67,6 @@ spec:
     - local postgres documentdb
     - local postgres owner_doc
     - local postgres excalibase_app
-    - local postgres +excalibase_mongo_users
     shared_preload_libraries:
     - pg_cron
     - pg_documentdb_core

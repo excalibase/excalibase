@@ -273,13 +273,12 @@ const (
 // connect-backs use: its background worker, and the roles clients act as.
 func documentDBPeerIdentities(opts PostgreSQLClusterOpts) []interface{} {
 	roles := []string{"documentdb_bg_worker_role", config.DocumentDBGatewayRole, clusterOwner(opts), appRoleName}
-	lines := make([]interface{}, 0, len(roles)+1)
+	lines := make([]interface{}, 0, len(roles))
 	for _, role := range roles {
 		lines = append(lines, "local postgres "+role)
 	}
-	// A project's Mongo users (EXC-427). The "+" group form needs Postgres 16;
-	// on 15 it matches nothing and Mongo users are refused.
-	return append(lines, "local postgres +"+config.DocumentDBMongoUsersGroup)
+	// A project's own Mongo users are added one line each (WithMongoUserIdent).
+	return lines
 }
 
 // serverAltDNSNames adds the gateway Service's names for a DocumentDB project,

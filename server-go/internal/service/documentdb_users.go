@@ -12,7 +12,6 @@ import (
 	"log"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -44,14 +43,10 @@ const (
 	MongoRoleRead      MongoUserRole = "read"
 )
 
-// MaxMongoUsersPerProject caps a project's own users. Each one gets its own
-// gateway connection pool against the tier's max_connections.
-const MaxMongoUsersPerProject = 10
-
-// minMongoUsersMajor is the first Postgres whose pg_ident accepts a "+group":
-// DocumentDB connects back over the socket as the acting user, and the group
-// line is how a Mongo user is mapped there.
-const minMongoUsersMajor = 16
+// MaxMongoUsersPerProject caps a project's own users (owner decision, in line
+// with hosted Mongo services). The gateway opens a user's connection pool only
+// while that user is connected, against the tier's max_connections.
+const MaxMongoUsersPerProject = 100
 
 // OperationMongoUsers holds the project lease so the cap and the name check
 // see every concurrent change.
@@ -66,14 +61,13 @@ const (
 )
 
 var (
-	ErrInvalidMongoUsername        = errors.New("invalid Mongo user name: use 3-63 lowercase letters, digits or underscores, starting with a letter, and not a reserved name")
-	ErrInvalidMongoUserRole        = errors.New(`invalid Mongo user role: use "readWrite" or "read"`)
-	ErrNotDocumentDBProject        = errors.New("only projects created with DocumentDB have Mongo users")
-	ErrMongoUserExists             = errors.New("a user with this name already exists in the project")
-	ErrMongoUserNotFound           = errors.New("no such Mongo user in this project")
-	ErrMongoUserLimit              = fmt.Errorf("a project can have at most %d Mongo users", MaxMongoUsersPerProject)
-	ErrMongoUsersNeedNewerPostgres = fmt.Errorf("this project runs a Postgres major older than %d, which cannot serve Mongo users", minMongoUsersMajor)
-	ErrMongoUsersUnavailable       = errors.New("the platform needs its Kubernetes client and an unsealed vault to manage Mongo users")
+	ErrInvalidMongoUsername  = errors.New("invalid Mongo user name: use 3-63 lowercase letters, digits or underscores, starting with a letter, and not a reserved name")
+	ErrInvalidMongoUserRole  = errors.New(`invalid Mongo user role: use "readWrite" or "read"`)
+	ErrNotDocumentDBProject  = errors.New("only projects created with DocumentDB have Mongo users")
+	ErrMongoUserExists       = errors.New("a user with this name already exists in the project")
+	ErrMongoUserNotFound     = errors.New("no such Mongo user in this project")
+	ErrMongoUserLimit        = fmt.Errorf("a project can have at most %d Mongo users", MaxMongoUsersPerProject)
+	ErrMongoUsersUnavailable = errors.New("the platform needs its Kubernetes client and an unsealed vault to manage Mongo users")
 )
 
 var mongoUsernamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{2,62}$`)
@@ -180,15 +174,17 @@ func (s *ProvisioningService) CreateMongoUser(ctx context.Context, projectID, us
 		}
 		return nil, fmt.Errorf("create Mongo user %s in %s: %w", username, projectID, err)
 	}
+	if err := s.mapMongoUser(ctx, inst, primary, username); err != nil {
+		s.undoMongoUser(ctx, inst, primary, username)
+		return nil, fmt.Errorf("map Mongo user %s in %s: %w", username, projectID, err)
+	}
 	record := map[string]string{
 		"username": username, "role": string(role), "password": password,
 		"createdAt": time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := s.vault.Put(mongoUserVaultPath(projectID, username), record); err != nil {
 		// Unrecorded, the user would be one nobody could list, rotate or delete.
-		if dropErr := s.execMongoUserSQL(ctx, inst, primary, dropMongoUserSQL(username)); dropErr != nil {
-			log.Printf("Mongo user %s in %s: drop after failed vault write: %v", username, projectID, dropErr)
-		}
+		s.undoMongoUser(ctx, inst, primary, username)
 		return nil, fmt.Errorf("record Mongo user %s in %s: %w", username, projectID, err)
 	}
 	log.Printf("Mongo user %s (%s) created in %s", username, role, projectID)
@@ -234,9 +230,9 @@ func (s *ProvisioningService) RotateMongoUser(ctx context.Context, projectID, us
 	return &MongoUserCredential{Username: username, Role: MongoUserRole(record["role"]), Password: password}, nil
 }
 
-// DeleteMongoUser ends the user's sessions, drops the role and forgets it.
-// The role goes first: a vault record without a role is retried by the same
-// call, a role without a record would be invisible.
+// DeleteMongoUser ends the user's sessions, drops the role, removes its peer
+// line and forgets it. The vault record goes last: while it exists the same
+// call can be retried, a role or line without a record would be invisible.
 func (s *ProvisioningService) DeleteMongoUser(ctx context.Context, projectID, username string) error {
 	if err := ValidateMongoUsername(username); err != nil {
 		return ErrMongoUserNotFound
@@ -256,6 +252,9 @@ func (s *ProvisioningService) DeleteMongoUser(ctx context.Context, projectID, us
 	}
 	if err := s.execMongoUserSQL(ctx, inst, primary, dropMongoUserSQL(username)); err != nil {
 		return fmt.Errorf("drop Mongo user %s in %s: %w", username, projectID, err)
+	}
+	if err := s.setMongoUserPeerLine(ctx, inst, username, false); err != nil {
+		return fmt.Errorf("unmap Mongo user %s in %s: %w", username, projectID, err)
 	}
 	if err := s.vault.Delete(mongoUserVaultPath(projectID, username)); err != nil {
 		return fmt.Errorf("forget Mongo user %s in %s: %w", username, projectID, err)
@@ -283,10 +282,6 @@ func (s *ProvisioningService) holdMongoUsers(ctx context.Context, projectID stri
 	if !inst.DocumentDB {
 		release()
 		return nil, nil, ErrNotDocumentDBProject
-	}
-	if major, err := strconv.Atoi(inst.PostgresVersion); err != nil || major < minMongoUsersMajor {
-		release()
-		return nil, nil, ErrMongoUsersNeedNewerPostgres
 	}
 	return inst, release, nil
 }

@@ -55,6 +55,8 @@ type documentDBLab struct {
 	kubeconfig string
 	cs         kubernetes.Interface
 	client     *k8s.Client
+	// major is the Postgres major the lab project runs.
+	major string
 }
 
 // Run with: go test ./internal/service/ -tags=live -run TestLiveDocumentDBOnLatestCNPG -v -count=1 -timeout 30m
@@ -282,9 +284,14 @@ func (lab *documentDBLab) installOperators(t *testing.T) {
 // provision runs the platform's own provisioner, so the cluster is exactly what a DocumentDB project gets.
 func (lab *documentDBLab) provision(t *testing.T) *provisioner.ProvisioningResult {
 	t.Helper()
+	return lab.provisionMajor(t, "17")
+}
+
+func (lab *documentDBLab) provisionMajor(t *testing.T, major string) *provisioner.ProvisioningResult {
+	t.Helper()
 	req := domain.ProvisioningRequest{
 		ProjectName: documentDBLiveName, OrgID: documentDBLiveOrg, DBType: domain.PostgreSQL,
-		PostgresVersion: "17", DatabaseName: "appdb", MasterUsername: documentDBLiveOwner, DocumentDB: true,
+		PostgresVersion: major, DatabaseName: "appdb", MasterUsername: documentDBLiveOwner, DocumentDB: true,
 	}
 	tier := config.TierConfig{Instances: 1, StorageSize: "1Gi", Memory: "1Gi", CPU: "0.5"}
 	creds, err := provisioner.NewPostgreSQLProvisioner(lab.client, "").
@@ -314,6 +321,11 @@ func podHasContainer(pod *corev1.Pod, name string) bool {
 // enable runs the service's own DocumentDB step, after the app role project registration creates first.
 func (lab *documentDBLab) enable(t *testing.T, creds *provisioner.ProvisioningResult) {
 	t.Helper()
+	lab.enableMajor(t, creds, "17")
+}
+
+func (lab *documentDBLab) enableMajor(t *testing.T, creds *provisioner.ProvisioningResult, major string) {
+	t.Helper()
 	_, err := lab.client.ExecInPod(lab.ctx, documentDBLiveNS, documentDBLiveName+"-postgres-1", "postgres",
 		[]string{"psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-c",
 			"CREATE ROLE excalibase_app LOGIN PASSWORD '" + documentDBLiveAppPW + "'"})
@@ -322,7 +334,7 @@ func (lab *documentDBLab) enable(t *testing.T, creds *provisioner.ProvisioningRe
 	}
 	inst := &domain.DatabaseInstance{
 		ProjectID: documentDBLiveName, Namespace: documentDBLiveNS, DatabaseName: creds.DatabaseName,
-		Username: creds.Username, PostgresVersion: "17", DocumentDB: true, DeploymentMode: domain.ModeK8s,
+		Username: creds.Username, PostgresVersion: major, DocumentDB: true, DeploymentMode: domain.ModeK8s,
 	}
 	svc := NewProvisioningService(documentDBStore(t), provisioner.NewFactory(), lab.client)
 	if err := svc.enableDocumentDB(lab.ctx, inst, idleContext()); err != nil {

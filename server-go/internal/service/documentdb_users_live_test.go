@@ -17,12 +17,17 @@ import (
 // they were given, cannot log in over SQL, and stop working when rotated,
 // deleted, or carried into a newly registered (restored) cluster.
 //
-// Run with: go test ./internal/service/ -tags=live -run TestLiveMongoUsers -v -count=1 -timeout 30m
-func TestLiveMongoUsers(t *testing.T) {
+// Run with: go test ./internal/service/ -tags=live -run TestLiveMongoUsers -v -count=1 -timeout 60m
+func TestLiveMongoUsersOnPostgres15(t *testing.T) { liveMongoUsers(t, "15") }
+
+func TestLiveMongoUsersOnPostgres17(t *testing.T) { liveMongoUsers(t, "17") }
+
+func liveMongoUsers(t *testing.T, major string) {
 	lab := startDocumentDBLab(t)
 	lab.installOperators(t)
-	creds := lab.provision(t)
-	lab.enable(t, creds)
+	creds := lab.provisionMajor(t, major)
+	lab.enableMajor(t, creds, major)
+	lab.major = major
 	lab.exposeGateway(t)
 	lab.startMongoClient(t)
 
@@ -33,6 +38,7 @@ func TestLiveMongoUsers(t *testing.T) {
 	})
 	svc := lab.mongoUsersService(t, creds)
 	ctx := lab.ctx
+	started := lab.postmasterStart(t)
 	writer, err := svc.CreateMongoUser(ctx, documentDBLiveName, "app_writer", MongoRoleReadWrite)
 	if err != nil {
 		t.Fatalf("create read-write user: %v", err)
@@ -42,6 +48,11 @@ func TestLiveMongoUsers(t *testing.T) {
 		t.Fatalf("create read-only user: %v", err)
 	}
 
+	// CNPG applies each user's peer line by reload: the server never restarted.
+	if now := lab.postmasterStart(t); now != started {
+		t.Fatalf("postgres restarted while users were mapped: %s -> %s", started, now)
+	}
+	t.Logf("postgres %s, no restart across two peer-map changes (started %s)", major, started)
 	expectMongo(t, lab, writer.Username, writer.Password, mongoProbeScript, "inserted=true found=exc-454/1", "read-write insert+find")
 	expectMongo(t, lab, reader.Username, reader.Password, mongoFindScript, "found=exc-454", "read-only find")
 	refuseMongo(t, lab, reader.Username, reader.Password,
@@ -65,6 +76,9 @@ func TestLiveMongoUsers(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 	refuseMongo(t, lab, writer.Username, writer.Password, mongoFindScript, "found=", "a deleted user")
+	if lines := lab.peerLines(t); strings.Contains(lines, "app_writer") || !strings.Contains(lines, "reporting") {
+		t.Fatalf("peer lines after delete: %s", lines)
+	}
 	expectMongo(t, lab, creds.Username, creds.Password, mongoFindScript, "found=exc-454", "the owner after a user was deleted (data kept)")
 
 	// A restored cluster arrives with the source's users; registering it drops them.
@@ -80,7 +94,7 @@ func TestLiveMongoUsers(t *testing.T) {
 func (lab *documentDBLab) instance(creds *provisioner.ProvisioningResult) *domain.DatabaseInstance {
 	return &domain.DatabaseInstance{
 		ProjectID: documentDBLiveName, OrgID: documentDBLiveOrg, Namespace: documentDBLiveNS,
-		DatabaseName: creds.DatabaseName, Username: creds.Username, PostgresVersion: "17",
+		DatabaseName: creds.DatabaseName, Username: creds.Username, PostgresVersion: lab.major,
 		DocumentDB: true, DeploymentMode: domain.ModeK8s, DBType: domain.PostgreSQL, Status: "ACTIVE",
 	}
 }
@@ -150,4 +164,24 @@ func (lab *documentDBLab) dumpPodLogs(t *testing.T) {
 			&corev1.PodLogOptions{Container: container, TailLines: &tail}).DoRaw(lab.ctx)
 		t.Logf("---- %s logs (err=%v) ----\n%s", container, err, raw)
 	}
+}
+
+func (lab *documentDBLab) postmasterStart(t *testing.T) string {
+	t.Helper()
+	out, err := lab.client.ExecInPod(lab.ctx, documentDBLiveNS, documentDBLiveName+"-postgres-1", "postgres",
+		[]string{"psql", "-U", "postgres", "-tAc", "SELECT pg_postmaster_start_time()"})
+	if err != nil {
+		t.Fatalf("postmaster start: %v", err)
+	}
+	return strings.TrimSpace(out)
+}
+
+func (lab *documentDBLab) peerLines(t *testing.T) string {
+	t.Helper()
+	out, err := lab.client.ExecInPod(lab.ctx, documentDBLiveNS, documentDBLiveName+"-postgres-1", "postgres",
+		[]string{"psql", "-U", "postgres", "-tAc", "SELECT string_agg(pg_username, ',') FROM pg_ident_file_mappings"})
+	if err != nil {
+		t.Fatalf("peer lines: %v", err)
+	}
+	return strings.TrimSpace(out)
 }

@@ -20,7 +20,7 @@ function mockServer(documentDb = true) {
     if (url === usersPath) {
       return reply({
         users: [{ username: 'reporting', role: 'read', createdAt: '2026-09-28T01:00:00Z' }],
-        limit: 10,
+        limit: 100,
       });
     }
     if (url === '/projects/proj-doc/db-endpoint') {
@@ -61,7 +61,7 @@ describe('MongoUsersPage', () => {
     const row = await screen.findByTestId('mongo-user-reporting');
     expect(row).toHaveTextContent('reporting');
     expect(row).toHaveTextContent(/read-only/i);
-    expect(screen.getByText(/1 of 10/)).toBeInTheDocument();
+    expect(screen.getByText(/1 of 100/)).toBeInTheDocument();
   });
 
   test('a new user is shown once with a connection string', async () => {
