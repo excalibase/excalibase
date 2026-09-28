@@ -147,6 +147,12 @@ describe('ContainerDetailPage', () => {
     vi.mocked(api.delete).mockReset();
   });
 
+  test('shows the addresses the project\'s own apps reach it at', async () => {
+    renderPage({ app: { internalPorts: [{ port: 6379, protocol: 'TCP' }] }, deploys: [] });
+    expect(await screen.findByTestId('app-internal-address')).toHaveTextContent('http://web');
+    expect(screen.getByTestId('app-internal-address')).toHaveTextContent('web:6379');
+  });
+
   test('pause stops a running container and shows it paused', async () => {
     const { user } = renderPage({ app: { status: 'ACTIVE' }, deploys: [deploy({})] });
     await user.click(await screen.findByTestId('pause-button'));

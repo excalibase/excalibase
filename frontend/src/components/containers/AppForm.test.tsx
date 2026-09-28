@@ -132,6 +132,7 @@ describe('AppForm', () => {
         name: 'nginx',
         image: 'nginx:1.27',
         port: 8080,
+        internalPorts: [],
         replicas: 1,
         healthCheckPath: '',
         env: [

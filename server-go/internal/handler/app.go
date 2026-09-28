@@ -140,6 +140,8 @@ type appCreateRequest struct {
 	HealthCheckPath string           `json:"healthCheckPath"`
 	Replicas        *int             `json:"replicas"`
 	Disk            *apphost.AppDisk `json:"disk"`
+	// InternalPorts are optional raw TCP ports for the project's own apps (EXC-525).
+	InternalPorts []apphost.InternalPort `json:"internalPorts"`
 }
 
 // appUpdateRequest is the partial-update body. Every field is a pointer so an
@@ -154,7 +156,8 @@ type appUpdateRequest struct {
 	Replicas        *int              `json:"replicas"`
 	// Disk attaches a disk, or moves an attached one's mount path; its size
 	// grows through POST .../disk, and null or absent leaves it as it is.
-	Disk *apphost.AppDisk `json:"disk"`
+	Disk          *apphost.AppDisk        `json:"disk"`
+	InternalPorts *[]apphost.InternalPort `json:"internalPorts"`
 }
 
 func (h *AppHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +230,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Image:           req.Image,
 		Env:             normalizeEnv(req.Env),
 		Port:            *req.Port,
+		InternalPorts:   emptyAsNil(req.InternalPorts),
 		HealthCheckPath: req.HealthCheckPath,
 		Replicas:        *req.Replicas,
 		Disk:            req.Disk,
@@ -348,6 +352,9 @@ func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 	if req.Replicas != nil {
 		app.Replicas = *req.Replicas
 	}
+	if req.InternalPorts != nil {
+		app.InternalPorts = emptyAsNil(*req.InternalPorts)
+	}
 	if req.Disk != nil {
 		disk := *req.Disk
 		app.Disk = &disk
@@ -374,6 +381,14 @@ func (h *AppHandler) diskWithinPlan(w http.ResponseWriter, r *http.Request, proj
 		return false
 	}
 	return true
+}
+
+// emptyAsNil stores "no internal ports" one way, so the record reads the same however it was cleared.
+func emptyAsNil(ports []apphost.InternalPort) []apphost.InternalPort {
+	if len(ports) == 0 {
+		return nil
+	}
+	return ports
 }
 
 // normalizeEnv returns a non-nil slice so an emptied env set is stored as an

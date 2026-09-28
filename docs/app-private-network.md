@@ -16,3 +16,11 @@ The cluster is changed first and the setting recorded after, so the setting neve
 ## Names
 
 Each app's Service is named after the app. App names are DNS labels (start with a letter, end with a letter or digit, 2-50 characters) and may not start with `proj-` or be `deno-runtime`: those are the Service names the platform keeps in the namespace (database `-rw`/`-ro`/`-r`, DocumentDB gateway, public endpoints, function runtime). Provisioning also refuses to update a Service of that name that the app did not render.
+
+## Internal TCP ports (EXC-525)
+
+An app may declare up to 8 internal ports (`"internalPorts": [{"port": 6379, "protocol": "TCP"}]`; Studio: "Internal TCP ports"). Each is TCP only, between 1024 and 65535, never the app's HTTP port, and listed once. Each becomes a named container port (`internal-1` ... `internal-8`) and a Service port under its own number, so the project's apps reach it at `<app name>:<port>`.
+
+Internal ports are reachable only from the same project's apps while the private network is on: the edge fence and the Ingress name only the HTTP port, and the private network policy admits the port names only from the project's app pods.
+
+Known gap: every app still needs an HTTP port routed through the edge. A TCP-only service (Redis, Kafka) must declare some HTTP port as well; an internal-only app with no public route is a follow-up.

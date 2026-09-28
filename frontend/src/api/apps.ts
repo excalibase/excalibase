@@ -46,6 +46,8 @@ export interface App {
   image: string;
   env: EnvVar[];
   port: number;
+  // Raw TCP ports only this project's apps reach, with its private network on (EXC-525).
+  internalPorts?: InternalPort[];
   healthCheckPath?: string;
   replicas: number;
   disk?: AppDisk;
@@ -74,10 +76,16 @@ export interface Deploy {
   finishedAt?: string;
 }
 
+export interface InternalPort {
+  port: number;
+  protocol: 'TCP';
+}
+
 export interface AppInput {
   name: string;
   image: string;
   port: number;
+  internalPorts: InternalPort[];
   replicas: number;
   healthCheckPath: string;
   env: EnvVar[];

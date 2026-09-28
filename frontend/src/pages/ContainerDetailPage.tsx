@@ -76,10 +76,16 @@ function describeVar(v: EnvVar): string {
   return MASK;
 }
 
+// The Service is named after the app, so the project's apps use these (EXC-524, EXC-525).
+function internalAddresses(app: App): string {
+  return [`http://${app.name}`, ...(app.internalPorts ?? []).map((p) => `${app.name}:${p.port}`)].join(', ');
+}
+
 function Settings({ app }: { readonly app: App }) {
   const size = describeTier(app.tier);
   const rows: Array<[string, string]> = [
     ['Port', String(app.port)],
+    ['Inside the project', internalAddresses(app)],
     ['Copies', app.replicas === 0 ? '0 (stopped)' : String(app.replicas)],
     ['Size', `${size.label}: ${size.detail}`],
     ['Health check', app.healthCheckPath || 'None'],
@@ -89,7 +95,12 @@ function Settings({ app }: { readonly app: App }) {
       {rows.map(([label, value]) => (
         <div key={label} className="flex gap-4 px-4 py-2.5 text-sm">
           <dt className="w-32 text-text-tertiary flex-shrink-0">{label}</dt>
-          <dd className="text-text-primary">{value}</dd>
+          <dd
+            className="text-text-primary"
+            data-testid={label === 'Inside the project' ? 'app-internal-address' : undefined}
+          >
+            {value}
+          </dd>
         </div>
       ))}
     </dl>

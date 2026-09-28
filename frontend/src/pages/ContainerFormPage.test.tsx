@@ -80,10 +80,24 @@ describe('ContainerFormPage', () => {
       name: 'nginx',
       image: 'nginx:1.27',
       port: 8080,
+      internalPorts: [],
       replicas: 1,
       healthCheckPath: '',
       env: [],
     });
+  });
+
+  test('declares internal TCP ports for the project\'s own apps', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { ...existing, id: 'app-9' } } as never);
+    const user = renderAt('/project/proj-1/containers/new');
+    await user.type(await screen.findByTestId('app-image'), 'nats:2.10');
+    await user.type(screen.getByTestId('app-internal-ports'), '4222');
+    await user.click(screen.getByTestId('app-submit'));
+    expect(await screen.findByTestId('detail')).toBeInTheDocument();
+    expect(api.post).toHaveBeenCalledWith(
+      '/projects/proj-1/apps/',
+      expect.objectContaining({ internalPorts: [{ port: 4222, protocol: 'TCP' }] }),
+    );
   });
 
   test('shows why the server refused the container', async () => {
