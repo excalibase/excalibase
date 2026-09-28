@@ -22,4 +22,9 @@ describe('engineIcon', () => {
       engineIcon({ databaseType: 'POSTGRESQL' })
     );
   });
+
+  test('keeps the marks of the other engines and a neutral one for the unknown', () => {
+    expect(engineIcon({ databaseType: 'MYSQL' })).toBe('🐬');
+    expect(engineIcon({ databaseType: 'SOMETHING' })).toBe('🗄️');
+  });
 });

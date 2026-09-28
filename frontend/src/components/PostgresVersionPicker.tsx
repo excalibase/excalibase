@@ -31,6 +31,11 @@ function documentDbBlockedReason(version: string, entry: PostgresMajor | undefin
   return entry.documentDbUnavailableReason ?? `DocumentDB is not available on PostgreSQL ${version}.`;
 }
 
+function majorStatus(entry: PostgresMajor): string {
+  if (!entry.available) return 'Not published yet';
+  return entry.documentDb ? 'DocumentDB available' : 'PostgreSQL only';
+}
+
 // PostgresVersionPicker collects the one choice the platform will not make for
 // the customer. There is deliberately no pre-selected major: the version their
 // data lives on for the life of the project is theirs to pick, and a default
@@ -83,7 +88,7 @@ export function PostgresVersionPicker({
             >
               <p className="font-semibold text-text-primary text-sm">PostgreSQL {entry.major}</p>
               <p className="text-xs text-text-tertiary mt-0.5">
-                {entry.available ? (entry.documentDb ? 'DocumentDB available' : 'PostgreSQL only') : 'Not published yet'}
+                {majorStatus(entry)}
               </p>
             </button>
           ))}
@@ -114,8 +119,10 @@ interface DocumentDbOptionProps {
 function DocumentDbOption({ documentDb, onDocumentDbChange, blockedReason }: DocumentDbOptionProps) {
   return (
     <div className="border-t border-border-primary pt-4" data-testid="documentdb-section">
-      <label className="flex items-start gap-3 cursor-pointer">
+      <label htmlFor="documentdb-toggle" className="flex items-start gap-3 cursor-pointer">
         <input
+          id="documentdb-toggle"
+          aria-label="DocumentDB (MongoDB-compatible API)"
           type="checkbox"
           checked={documentDb}
           disabled={blockedReason !== null}

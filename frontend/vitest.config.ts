@@ -59,6 +59,9 @@ export default defineConfig({
         'src/pages/InstanceDetailPage.tsx',
         'src/components/DatabaseInstanceCard.tsx',
         'src/pages/SettingsPage.tsx',
+        'src/pages/ProvisionPage.tsx',
+        'src/pages/DashboardPage.tsx',
+        'src/utils/engine.ts',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

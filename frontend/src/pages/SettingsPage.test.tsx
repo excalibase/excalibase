@@ -70,3 +70,17 @@ describe('SettingsPage — deletion protection', () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith('/provision/p-1/deletion/cancel'));
   });
 });
+
+describe('SettingsPage — engine', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('names a DocumentDB project as DocumentDB (MongoDB-compatible)', async () => {
+    renderSettings(false, { documentDb: true });
+    expect(await screen.findByText('DocumentDB (MongoDB-compatible)')).toBeInTheDocument();
+  });
+
+  test('names a plain project PostgreSQL', async () => {
+    renderSettings(false);
+    expect(await screen.findByText('PostgreSQL')).toBeInTheDocument();
+  });
+});
