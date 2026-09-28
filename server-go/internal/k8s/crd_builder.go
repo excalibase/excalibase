@@ -238,17 +238,22 @@ func clusterOwner(opts PostgreSQLClusterOpts) string {
 
 // documentDBLoopbackTrust lets the gateway, which only does passwordless local
 // logins, reach Postgres as itself and as the roles clients authenticate as.
-// Loopback only: nothing outside the pod matches these lines.
+// Loopback only: nothing outside the pod matches these lines. The project's
+// own Mongo users are then refused every other login (EXC-427).
 func documentDBLoopbackTrust(opts PostgreSQLClusterOpts) []interface{} {
-	roles := []string{config.DocumentDBGatewayRole, clusterOwner(opts), appRoleName}
-	lines := make([]interface{}, 0, 2*len(roles))
+	mongoUsers := "+" + config.DocumentDBMongoUsersGroup
+	roles := []string{config.DocumentDBGatewayRole, clusterOwner(opts), appRoleName, mongoUsers}
+	lines := make([]interface{}, 0, 2*len(roles)+1)
 	for _, role := range roles {
 		lines = append(lines,
 			"host all "+role+" 127.0.0.1/32 trust",
 			"host all "+role+" ::1/128 trust")
 	}
-	return lines
+	return append(lines, mongoUsersNetworkReject)
 }
+
+// mongoUsersNetworkReject is "host", matching TLS and plaintext alike.
+var mongoUsersNetworkReject = "host all +" + config.DocumentDBMongoUsersGroup + " all reject"
 
 // CNPG fixes unix_socket_directories here; local connections get its peer mapping.
 const cnpgSocketDirectory = "/controller/run"
@@ -268,11 +273,13 @@ const (
 // connect-backs use: its background worker, and the roles clients act as.
 func documentDBPeerIdentities(opts PostgreSQLClusterOpts) []interface{} {
 	roles := []string{"documentdb_bg_worker_role", config.DocumentDBGatewayRole, clusterOwner(opts), appRoleName}
-	lines := make([]interface{}, 0, len(roles))
+	lines := make([]interface{}, 0, len(roles)+1)
 	for _, role := range roles {
 		lines = append(lines, "local postgres "+role)
 	}
-	return lines
+	// A project's Mongo users (EXC-427). The "+" group form needs Postgres 16;
+	// on 15 it matches nothing and Mongo users are refused.
+	return append(lines, "local postgres +"+config.DocumentDBMongoUsersGroup)
 }
 
 // serverAltDNSNames adds the gateway Service's names for a DocumentDB project,

@@ -139,7 +139,7 @@ func TestPublishPostgresCatalogForTestKeepsEveryOtherField(t *testing.T) {
 // extension is what it serves, so both are created before any pod exists.
 func TestDocumentDBBootstrapSQLReadiesTheGatewayRole(t *testing.T) {
 	statements := DocumentDBBootstrapSQL()
-	if len(statements) != 3 {
+	if len(statements) != 4 {
 		t.Fatalf("bootstrap statements: got %v", statements)
 	}
 	for _, want := range []string{"CREATE EXTENSION IF NOT EXISTS documentdb", "CASCADE"} {
@@ -173,5 +173,22 @@ func TestDocumentDBBootstrapSQLSurvivesTheInitdbJob(t *testing.T) {
 	statements[0] = "tampered"
 	if DocumentDBBootstrapSQL()[0] == "tampered" {
 		t.Fatal("a caller's write leaked into the next read")
+	}
+}
+
+// Mongo users a project creates (EXC-427) are members of one group role, which
+// pg_hba trusts on loopback for the gateway and refuses everywhere else. The
+// group exists before the first pod so those lines never name a missing role.
+func TestDocumentDBBootstrapSQLCreatesTheMongoUsersGroup(t *testing.T) {
+	statements := DocumentDBBootstrapSQL()
+	group := statements[3]
+	for _, want := range []string{"IF NOT EXISTS", "rolname = '" + DocumentDBMongoUsersGroup + "'",
+		`CREATE ROLE "` + DocumentDBMongoUsersGroup + `" NOLOGIN`} {
+		if !strings.Contains(group, want) {
+			t.Errorf("group statement %q is missing %q", group, want)
+		}
+	}
+	if DocumentDBMongoUsersGroup != "excalibase_mongo_users" {
+		t.Errorf("group role renamed: %s", DocumentDBMongoUsersGroup)
 	}
 }

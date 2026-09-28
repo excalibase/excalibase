@@ -42,6 +42,12 @@ const DocumentDBDatabase = "postgres"
 // loopback without a password before any client authenticates.
 const DocumentDBGatewayRole = "documentdb"
 
+// DocumentDBMongoUsersGroup is the NOLOGIN group every Mongo user a project
+// creates belongs to (EXC-427). pg_hba names it to trust those users on
+// loopback, where the gateway connects as them, and to refuse them everywhere
+// else, so they are Mongo-only.
+const DocumentDBMongoUsersGroup = "excalibase_mongo_users"
+
 // DocumentDBBootstrapSQL creates what the gateway needs the moment it starts:
 // the extension it serves, then its login role, never a superuser, as a
 // DocumentDB user. All are idempotent, so the provisioning step can run them again to converge. The
@@ -52,6 +58,8 @@ func DocumentDBBootstrapSQL() []string {
 		"DO $role$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + DocumentDBGatewayRole +
 			"') THEN CREATE ROLE \"" + DocumentDBGatewayRole + "\" LOGIN; END IF; END $role$",
 		"GRANT " + DocumentDBExtension + "_admin_role TO \"" + DocumentDBGatewayRole + "\"",
+		"DO $role$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + DocumentDBMongoUsersGroup +
+			"') THEN CREATE ROLE \"" + DocumentDBMongoUsersGroup + "\" NOLOGIN; END IF; END $role$",
 	}
 }
 

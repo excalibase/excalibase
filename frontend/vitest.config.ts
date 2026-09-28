@@ -31,6 +31,8 @@ export default defineConfig({
         'src/components/MinorUpgradeCard.tsx',
         'src/components/documents/**/*.{ts,tsx}',
         'src/pages/DocumentsPage.tsx',
+        'src/pages/MongoUsersPage.tsx',
+        'src/api/mongoUsers.ts',
         'src/api/documents.ts',
         'src/utils/mongoQuery.ts',
         'src/utils/extendedJson.ts',

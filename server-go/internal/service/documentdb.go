@@ -73,7 +73,10 @@ func (s *ProvisioningService) enableDocumentDB(ctx context.Context, inst *domain
 	// The cluster's initdb already ran these; running them again converges a
 	// cluster bootstrapped some other way, and the confirmation is what the
 	// project's claim rests on.
-	for _, statement := range append(config.DocumentDBBootstrapSQL(), documentDBConfirmSQL()) {
+	// A new project has no Mongo users of its own; a restored cluster brings
+	// the source's, with the source's passwords, and they go here (EXC-427).
+	statements := append(config.DocumentDBBootstrapSQL(), documentDBConfirmSQL(), dropAllMongoUsersSQL())
+	for _, statement := range statements {
 		cmd := documentDBPsql(config.DocumentDBDatabase, statement)
 		if err := s.execRoleSQL(ctx, inst.Namespace, primaryPod, cmd); err != nil {
 			return pc.Fail(fmt.Errorf("enable %s in %s: %w", config.DocumentDBExtension, inst.ProjectID, err))
