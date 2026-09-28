@@ -56,9 +56,13 @@ func networkLogins(requireTLS bool) []interface{} {
 	return lines
 }
 
-// isNetworkLogin is a host or hostssl line that is not the loopback trust.
+// isNetworkLogin is a host or hostssl line that is not the loopback trust and
+// not a reject: narrowing a reject to hostssl would let plaintext through it.
 func isNetworkLogin(fields []string) bool {
 	if len(fields) < 4 || (fields[0] != hbaHost && fields[0] != hbaHostSSL) {
+		return false
+	}
+	if fields[len(fields)-1] == "reject" {
 		return false
 	}
 	address := fields[3]

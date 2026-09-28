@@ -13,6 +13,8 @@ spec:
       - DO $role$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'documentdb')
         THEN CREATE ROLE "documentdb" LOGIN; END IF; END $role$
       - GRANT documentdb_admin_role TO "documentdb"
+      - DO $role$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'excalibase_mongo_users')
+        THEN CREATE ROLE "excalibase_mongo_users" NOLOGIN; END IF; END $role$
   certificates:
     serverAltDNSNames:
     - proj-hba00001-documentdb
@@ -44,6 +46,9 @@ spec:
     - host all owner_doc ::1/128 trust
     - host all excalibase_app 127.0.0.1/32 trust
     - host all excalibase_app ::1/128 trust
+    - host all +excalibase_mongo_users 127.0.0.1/32 trust
+    - host all +excalibase_mongo_users ::1/128 trust
+    - host all +excalibase_mongo_users all reject
     - hostssl replication cdc_watcher all scram-sha-256
     - hostssl all app all scram-sha-256
     - hostssl all excalibase_app all scram-sha-256
@@ -55,6 +60,7 @@ spec:
     - local postgres documentdb
     - local postgres owner_doc
     - local postgres excalibase_app
+    - local postgres +excalibase_mongo_users
     shared_preload_libraries:
     - pg_cron
     - pg_documentdb_core

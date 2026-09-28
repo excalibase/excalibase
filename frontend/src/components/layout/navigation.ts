@@ -25,6 +25,7 @@ import {
   FileText,
   FolderOpen,
   FileJson,
+  UserCog,
   Container,
   type LucideIcon,
 } from 'lucide-react';
@@ -70,6 +71,7 @@ export const PROJECT_NAV: NavSection[] = [
       { label: 'Types', icon: Hash, to: 'database/types' },
       { label: 'Advisors', icon: AlertTriangle, to: 'database/advisors' },
       { label: 'Documents', icon: FileJson, to: 'database/documents', documentDbOnly: true },
+      { label: 'Mongo Users', icon: UserCog, to: 'database/mongo-users', documentDbOnly: true },
     ],
   },
   { key: 'containers', label: 'Containers', icon: Container, to: 'containers', requires: 'appHosting' },

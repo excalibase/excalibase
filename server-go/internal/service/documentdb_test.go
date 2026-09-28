@@ -384,11 +384,11 @@ func TestEnableDocumentDBCreatesTheGatewayLoginRole(t *testing.T) {
 		t.Fatalf("enableDocumentDB: %v", err)
 	}
 
-	created := execCommandsMentioning(kube, "CREATE ROLE")
+	created := execCommandsMentioning(kube, `CREATE ROLE "documentdb"`)
 	if len(created) != 1 {
 		t.Fatalf("CREATE ROLE ran %d times: %v", len(created), kube.ExecCommands)
 	}
-	for _, want := range []string{`"documentdb"`, "LOGIN", "IF NOT EXISTS", "-d postgres"} {
+	for _, want := range []string{"LOGIN", "IF NOT EXISTS", "-d postgres"} {
 		if !strings.Contains(created[0], want) {
 			t.Errorf("role creation %q is missing %q", created[0], want)
 		}

@@ -1463,6 +1463,8 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			r.With(owner).Post("/deletion/cancel", d.provHandler.CancelDeletion)
 			r.With(admin).Get("/credentials", d.provHandler.GetCredentials)
 			r.With(admin).Post("/credentials/rotate", d.provHandler.RotateCredentials)
+			// A DocumentDB project's own Mongo users hand out passwords (EXC-427).
+			r.With(admin).Route("/documentdb/users", d.provHandler.MongoUserRoutes)
 			r.With(admin).Post("/backups/purge", d.provHandler.PurgeBackups)
 			r.With(admin).Post("/pause", d.provHandler.Pause)
 			r.With(admin).Post("/resume", d.provHandler.Resume)

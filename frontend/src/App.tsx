@@ -41,6 +41,7 @@ const SetupPage = lazy(() => import('./pages/SetupPage').then(m => ({ default: m
 const SchemaDesignerPage = lazy(() => import('./pages/SchemaDesignerPage').then(m => ({ default: m.SchemaDesignerPage })));
 const TriggersPage = lazy(() => import('./pages/TriggersPage').then(m => ({ default: m.TriggersPage })));
 const DocumentsPage = lazy(() => import('./pages/DocumentsPage').then(m => ({ default: m.DocumentsPage })));
+const MongoUsersPage = lazy(() => import('./pages/MongoUsersPage').then(m => ({ default: m.MongoUsersPage })));
 const IndexesPage = lazy(() => import('./pages/IndexesPage').then(m => ({ default: m.IndexesPage })));
 const TypesPage = lazy(() => import('./pages/TypesPage').then(m => ({ default: m.TypesPage })));
 const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ default: m.AdvisorsPage })));
@@ -106,6 +107,7 @@ export default function App() {
             <Route path="database/types" element={<TypesPage />} />
             <Route path="database/advisors" element={<AdvisorsPage />} />
             <Route path="database/documents" element={<DocumentsPage />} />
+            <Route path="database/mongo-users" element={<MongoUsersPage />} />
             {/* Containers */}
             <Route path="containers" element={<ContainersPage />} />
             <Route path="containers/new" element={<ContainerFormPage />} />

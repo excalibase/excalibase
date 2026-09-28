@@ -105,7 +105,7 @@ func TestSetClusterRequireTLSRewritesOnlyTheNetworkLines(t *testing.T) {
 	off := clusterHBA(t, cluster)
 	var want []string
 	for _, line := range before {
-		if !strings.HasSuffix(line, " reject") {
+		if !slices.Contains(plaintextRejects, line) {
 			want = append(want, strings.Replace(line, "hostssl ", "host ", 1))
 		}
 	}
@@ -148,5 +148,23 @@ func TestSetClusterRequireTLSRefusesAClusterWithNoRules(t *testing.T) {
 	cluster := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{}}}
 	if err := SetClusterRequireTLS(cluster, true); err == nil {
 		t.Fatal("a cluster with no pg_hba must be refused, not left to the operator's defaults")
+	}
+}
+
+// The Mongo user reject is not a login: the TLS switch neither narrows it to
+// hostssl (which would let a plaintext attempt fall through) nor drops it.
+func TestTheTLSSwitchLeavesTheMongoUserRejectAlone(t *testing.T) {
+	const reject = "host all +excalibase_mongo_users all reject"
+	cluster := BuildPostgreSQLCluster(documentDBOpts("owner_doc"))
+	for _, requireTLS := range []bool{false, true} {
+		if err := SetClusterRequireTLS(cluster, requireTLS); err != nil {
+			t.Fatalf("SetClusterRequireTLS(%v): %v", requireTLS, err)
+		}
+		if !slices.Contains(clusterHBA(t, cluster), reject) {
+			t.Errorf("requireTLS=%v lost or rewrote the Mongo user reject: %q", requireTLS, clusterHBA(t, cluster))
+		}
+	}
+	if !ClusterRequiresTLS(cluster) {
+		t.Error("the reject line stopped the cluster counting as requiring TLS")
 	}
 }
