@@ -2,11 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/pbkdf2"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -18,13 +13,17 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
+	"github.com/excalibase/provisioning-poc/internal/pgscram"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // Mongo users a DocumentDB project creates for itself (EXC-427).
 //
-// The platform creates them; the project's own roles cannot (no CREATEROLE,
-// no ADMIN OPTION), so the platform's record is the full list. Each user is a
+// The platform creates them. The owner cannot: on Postgres 16+ its
+// CREATEROLE reaches only roles it created, and neither it nor excalibase's
+// role functions can grant the Mongo users group or a DocumentDB role,
+// so the platform's record is the full list. Each user is a
 // LOGIN role in the project's cluster, a member of the Mongo users group that
 // pg_hba trusts only on loopback for the gateway and refuses everywhere else,
 // plus one DocumentDB role: documentdb_admin_role for read-write (upstream's
@@ -54,8 +53,6 @@ const OperationMongoUsers ProjectOperation = "Mongo user change"
 
 const (
 	mongoUserPasswordLength = 32
-	scramIterations         = 4096
-	scramSaltLength         = 16
 	// terminateWaitMillis bounds how long a delete waits for the user's sessions to end.
 	terminateWaitMillis = 5000
 )
@@ -72,16 +69,14 @@ var (
 
 var mongoUsernamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{2,62}$`)
 
-// reservedMongoUsernames are the platform's own roles and names a client or
-// operator would read as privileged.
-var reservedMongoUsernames = []string{
-	"postgres", "app", roleApp, roleAuthAdmin, roleWatcher, roleAdmin, "root",
-	config.DocumentDBGatewayRole, "streaming_replica", "public", "none",
+// mongoOnlyReservedUsernames are names a client or operator would read as
+// privileged, on top of the roles every project database reserves
+// (pgroles.IsReserved).
+var mongoOnlyReservedUsernames = []string{
+	"app", roleAdmin, "root", "public", "none",
 	"anon", "authenticated", "service_role", "authenticator",
 	"current_user", "current_role", "session_user", "user",
 }
-
-var reservedMongoUsernamePrefixes = []string{"pg_", "documentdb", "excalibase", "cnpg"}
 
 // MongoUser is what a listing shows: never the password.
 type MongoUser struct {
@@ -100,13 +95,8 @@ type MongoUserCredential struct {
 // ValidateMongoUsername refuses anything but a plain lowercase identifier
 // that is not reserved. Statements still quote it; this keeps names readable.
 func ValidateMongoUsername(name string) error {
-	if !mongoUsernamePattern.MatchString(name) || slices.Contains(reservedMongoUsernames, name) {
+	if !mongoUsernamePattern.MatchString(name) || pgroles.IsReserved(name) || slices.Contains(mongoOnlyReservedUsernames, name) {
 		return ErrInvalidMongoUsername
-	}
-	for _, prefix := range reservedMongoUsernamePrefixes {
-		if strings.HasPrefix(name, prefix) {
-			return ErrInvalidMongoUsername
-		}
 	}
 	return nil
 }
@@ -364,7 +354,7 @@ func (s *ProvisioningService) currentPrimary(ctx context.Context, inst *domain.D
 func (s *ProvisioningService) execMongoUserSQL(ctx context.Context, inst *domain.DatabaseInstance, primary, statement string) error {
 	_, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, primary, "postgres",
 		[]string{"psql", "-U", "postgres", "-d", config.DocumentDBDatabase, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"},
-		statement+"\n")
+		pgroles.PinnedSearchPath+statement+"\n")
 	return err
 }
 
@@ -430,31 +420,7 @@ func dropAllMongoUsersSQL() string {
 		dropMongoUserBody + " END LOOP; END $$"
 }
 
-// newScramVerifier salts with crypto/rand, which does not fail (it crashes
-// the program rather than return an error since Go 1.24).
+// newScramVerifier is the SCRAM verifier the database stores in place of the password.
 func newScramVerifier(password string) (string, error) {
-	salt := make([]byte, scramSaltLength)
-	rand.Read(salt)
-	return scramSHA256Verifier(password, salt)
-}
-
-// scramSHA256Verifier is the value Postgres stores for a SCRAM-SHA-256
-// password (RFC 5802/7677), in its own format. The password is ASCII, for
-// which SASLprep changes nothing.
-func scramSHA256Verifier(password string, salt []byte) (string, error) {
-	salted, err := pbkdf2.Key(sha256.New, password, salt, scramIterations, sha256.Size)
-	if err != nil {
-		return "", fmt.Errorf("derive SCRAM key: %w", err)
-	}
-	clientKey := hmacSHA256(salted, "Client Key")
-	storedKey := sha256.Sum256(clientKey)
-	serverKey := hmacSHA256(salted, "Server Key")
-	encode := base64.StdEncoding.EncodeToString
-	return fmt.Sprintf("SCRAM-SHA-256$%d:%s$%s:%s", scramIterations, encode(salt), encode(storedKey[:]), encode(serverKey)), nil
-}
-
-func hmacSHA256(key []byte, message string) []byte {
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(message))
-	return mac.Sum(nil)
+	return pgscram.Verifier(password)
 }

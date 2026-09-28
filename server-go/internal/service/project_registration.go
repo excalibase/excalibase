@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
@@ -346,17 +347,26 @@ func (s *ProvisioningService) fileOwnerCredential(spec projectRoleSpec, pc *prov
 	return nil
 }
 
-// execProjectRoleSQL runs the create-if-absent role SQL, followed by the
-// password reset when the cluster arrived with roles already in it.
+// execProjectRoleSQL runs the role SQL in the project's database.
 func (s *ProvisioningService) execProjectRoleSQL(ctx context.Context, spec projectRoleSpec, creds projectRoleCredentials) error {
-	roleSQL := BuildProjectRoleSQL(creds.authPassword, creds.appPassword, creds.watcherPassword,
-		spec.databaseName, s.publicationName)
+	primaryPod := spec.projectID + primaryPodSuffix
+	cmd := []string{"psql", "-U", "postgres", "-d", spec.databaseName, "-c", projectRoleSQL(spec, creds, s.publicationName)}
+	return s.execRoleSQL(ctx, spec.namespace, primaryPod, cmd)
+}
+
+// projectRoleSQL pins the search_path and refuses platform role names a
+// customer took, then runs the create-if-absent platform role SQL, the owner's
+// own role management, then the password reset when the cluster
+// arrived with roles already in it. Roles the owner created are left as the
+// backup had them.
+func projectRoleSQL(spec projectRoleSpec, creds projectRoleCredentials, publicationName string) string {
+	roleSQL := pgroles.PinnedSearchPath + pgroles.SquatGuardSQL() +
+		BuildProjectRoleSQL(creds.authPassword, creds.appPassword, creds.watcherPassword, spec.databaseName, publicationName) +
+		pgroles.CustomerRoleSQL(spec.adminUsername)
 	if spec.resetPasswords {
 		roleSQL += BuildProjectRoleResetSQL(resetTargets(spec, creds))
 	}
-	primaryPod := spec.projectID + primaryPodSuffix
-	cmd := []string{"psql", "-U", "postgres", "-d", spec.databaseName, "-c", roleSQL}
-	return s.execRoleSQL(ctx, spec.namespace, primaryPod, cmd)
+	return roleSQL
 }
 
 // resetTargets lists the roles whose password must be forced to the value the

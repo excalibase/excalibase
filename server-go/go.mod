@@ -37,6 +37,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/localstack v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	github.com/tus/tusd/v2 v2.10.0
+	github.com/xdg-go/stringprep v1.0.4
 	go.mongodb.org/mongo-driver/v2 v2.9.1
 	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.55.0
@@ -174,7 +175,6 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
-	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect

@@ -48,6 +48,10 @@ const DocumentDBGatewayRole = "documentdb"
 // else, so they are Mongo-only.
 const DocumentDBMongoUsersGroup = "excalibase_mongo_users"
 
+// DocumentDBBrowserLogin is the Mongo user Studio's document browser logs in
+// as, a member of DocumentDBMongoUsersGroup like a project's own.
+const DocumentDBBrowserLogin = "excalibase_docbrowser"
+
 // DocumentDBBootstrapSQL creates what the gateway needs the moment it starts:
 // the extension it serves, then its login role, never a superuser, as a
 // DocumentDB user. All are idempotent, so the provisioning step can run them again to converge. The
