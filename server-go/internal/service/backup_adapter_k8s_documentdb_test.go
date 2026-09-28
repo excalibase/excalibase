@@ -17,8 +17,6 @@ import (
 // same cluster a new one gets, recovered from its backups, with credentials
 // of its own.
 
-const restoredOwnerPassword = "restored-cluster-password"
-
 func documentDBSource() *domain.DatabaseInstance {
 	src := sourceInstance()
 	src.DocumentDB = true
@@ -26,16 +24,12 @@ func documentDBSource() *domain.DatabaseInstance {
 	return src
 }
 
-// documentDBRestoreAdapter is a ready adapter whose recovered cluster has its
-// own owner credential, as CNPG writes one for every cluster it bootstraps.
+// documentDBRestoreAdapter is a ready adapter whose plan backs the restored
+// project up, so its cluster names both plugins.
 func documentDBRestoreAdapter(t *testing.T, mock *k8s.MockClient, reg *fakeRegistrar) *K8sBackupAdapter {
 	t.Helper()
 	adapter := newRestoreReadyAdapter(t, mock, reg)
 	adapter.SetRestorePlanSource(backedUpEnterprisePlan())
-	mock.Secrets["org-dst/dst-postgres-app"] = map[string][]byte{
-		"username": []byte("app"),
-		"password": []byte(restoredOwnerPassword),
-	}
 	return adapter
 }
 
@@ -137,52 +131,6 @@ func TestK8sRestoreOfDocumentDBProjectExposesTheGateway(t *testing.T) {
 	}
 }
 
-// The restored project is recorded as DocumentDB, and its owner credential is
-// the recovered cluster's own, forced onto the owner role so the source's
-// password opens nothing.
-func TestK8sRestoreOfDocumentDBProjectRegistersItWithNewCredentials(t *testing.T) {
-	mock := k8s.NewMockClient()
-	reg := &fakeRegistrar{}
-	restoreDocumentDB(t, documentDBRestoreAdapter(t, mock, reg))
-
-	if len(reg.calls) != 1 {
-		t.Fatalf("registrations: %d", len(reg.calls))
-	}
-	restored, opts := reg.calls[0], reg.opts[0]
-	if !restored.DocumentDB {
-		t.Error("the restored project must be recorded as DocumentDB")
-	}
-	if restored.Password != restoredOwnerPassword || restored.Password == "source-owner-password" {
-		t.Errorf("owner password: got %q, want the recovered cluster's own", restored.Password)
-	}
-	if !opts.ResetRolePasswords || !opts.ResetAdminPassword {
-		t.Errorf("every role, the owner included, must get a new password: %+v", opts)
-	}
-}
-
-// Without a credential of its own the restore would have to hand out the
-// source's, which still opens the source; it is refused instead.
-func TestK8sRestoreOfDocumentDBProjectRefusesTheSourcesCredential(t *testing.T) {
-	mock := k8s.NewMockClient()
-	reg := &fakeRegistrar{}
-	adapter := newRestoreReadyAdapter(t, mock, reg)
-	adapter.SetRestorePlanSource(backedUpEnterprisePlan())
-
-	_, err := adapter.Restore(context.Background(), documentDBSource(), domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst"})
-	if !errors.Is(err, ErrRestoreNotObserved) {
-		t.Fatalf("err: got %v, want the restore refused", err)
-	}
-	if !slices.Contains(mock.Calls, "ApplyCRD:org-dst/dst-postgres") {
-		t.Fatalf("the refusal must come from the missing credential, not earlier: %v", mock.Calls)
-	}
-	if len(reg.calls) != 0 {
-		t.Errorf("nothing may be registered: %v", reg.calls)
-	}
-	if mock.Namespaces["org-dst"] {
-		t.Errorf("the restore's namespace must be compensated away: %v", mock.Namespaces)
-	}
-}
-
 // A source whose major cannot carry DocumentDB is refused before anything
 // exists, rather than recovered into a cluster that cannot load it.
 func TestK8sRestoreOfDocumentDBProjectRefusesAMajorWithoutDocumentDB(t *testing.T) {
@@ -197,5 +145,15 @@ func TestK8sRestoreOfDocumentDBProjectRefusesAMajorWithoutDocumentDB(t *testing.
 	}
 	if len(mock.Namespaces) != 0 || len(mock.CRDs) != 0 {
 		t.Errorf("nothing may be created: ns=%v crds=%v", mock.Namespaces, mock.CRDs)
+	}
+}
+
+func TestK8sRestoreOfDocumentDBProjectIsRecordedAsDocumentDB(t *testing.T) {
+	mock := k8s.NewMockClient()
+	reg := &fakeRegistrar{}
+	restoreDocumentDB(t, documentDBRestoreAdapter(t, mock, reg))
+
+	if len(reg.calls) != 1 || !reg.calls[0].DocumentDB {
+		t.Errorf("the restored project must be recorded as DocumentDB: %+v", reg.calls)
 	}
 }

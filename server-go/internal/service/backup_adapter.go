@@ -63,10 +63,10 @@ var ErrUnsupportedBackupMode = errors.New("backup not supported for this deploym
 // mode, which runs no DocumentDB gateway to restore into.
 var ErrDocumentDBRestoreNeedsKubernetes = errors.New("restoring a DocumentDB project needs Kubernetes: docker mode runs no DocumentDB gateway")
 
-// ErrDocumentDBRestoreCredentialMissing refuses a DocumentDB restore whose
-// recovered cluster has no owner credential of its own. The only other one is
-// the source's, which still opens the source.
-var ErrDocumentDBRestoreCredentialMissing = errors.New("restore: the recovered DocumentDB cluster has no owner credential of its own")
+// ErrRestoreOwnerCredentialMissing refuses a restore whose recovered cluster
+// has no owner credential of its own. The only other one is the source's,
+// which still opens the source.
+var ErrRestoreOwnerCredentialMissing = errors.New("restore: the recovered cluster has no owner credential of its own")
 
 // resolveAdapter looks up the adapter for an instance's mode, treating
 // the empty string as ModeK8s for legacy rows that pre-date the

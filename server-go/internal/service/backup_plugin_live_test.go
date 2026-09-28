@@ -414,11 +414,6 @@ func (lab *backupLab) expectScheduledBackupCompleted(t *testing.T, project strin
 	t.Logf("%s: first scheduled backup completed (%+v)", project, refs)
 }
 
-// sourceOwnerPassword stands in for the vault, which files the owner password the provisioner returned.
-type sourceOwnerPassword string
-
-func (p sourceOwnerPassword) OwnerPassword(string) (string, error) { return string(p), nil }
-
 type psqlProbe struct{ lab *backupLab }
 
 func (p psqlProbe) Probe(ctx context.Context, projectID string) error {
@@ -432,7 +427,6 @@ func (lab *backupLab) restore(t *testing.T, project string, req domain.RestoreRe
 	lab.adapter.SetInstanceStore(lab.instances)
 	lab.adapter.SetProjectRegistrar(&fakeRegistrar{store: lab.instances})
 	lab.adapter.SetDatabaseProbe(psqlProbe{lab: lab})
-	lab.adapter.SetOwnerCredentials(sourceOwnerPassword(lab.source.Password))
 	lab.adapter.SetRestorePlanSource(&fakeRestorePlans{plan: RestorePlan{
 		Tier: domain.Free, Config: backupLiveTier(),
 		Backup: &domain.BackupSettings{Enabled: true, Schedule: backupLiveSchedule, Retention: 7},

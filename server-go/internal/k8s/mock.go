@@ -95,6 +95,10 @@ type MockClient struct {
 	PublicDBIngress      map[string][]int
 	PublicDBIngressError error
 
+	// OmitClusterAppSecret models an operator that writes no owner Secret
+	// for a Cluster it bootstraps.
+	OmitClusterAppSecret bool
+
 	// CreateSecretError fails every secret write, so a test can assert what
 	// a provision does when the cluster refuses one.
 	UpdateSecretError error
@@ -357,11 +361,30 @@ func (m *MockClient) ApplyCRD(ctx context.Context, gvr schema.GroupVersionResour
 		return m.CRDError
 	}
 	m.CRDs[namespace+"/"+obj.GetName()] = obj
+	if obj.GetKind() == "Cluster" {
+		m.writeClusterAppSecret(namespace, obj.GetName())
+	}
 	if m.AutoReconcileClusters && obj.GetKind() == "Cluster" {
 		markClusterHealthy(obj)
 	}
 	return nil
 }
+
+// writeClusterAppSecret writes the owner Secret CNPG creates for every Cluster
+// it bootstraps, unless the test models an operator that wrote none.
+func (m *MockClient) writeClusterAppSecret(namespace, cluster string) {
+	key := namespace + "/" + cluster + "-app"
+	if m.OmitClusterAppSecret {
+		return
+	}
+	if _, ok := m.Secrets[key]; ok {
+		return
+	}
+	m.Secrets[key] = map[string][]byte{"username": []byte("app"), "password": []byte(ClusterAppPassword(cluster))}
+}
+
+// ClusterAppPassword is the owner password the mock's operator gives a Cluster.
+func ClusterAppPassword(cluster string) string { return "operator-generated-" + cluster }
 
 // markClusterHealthy writes the status a reconciled CNPG Cluster carries.
 // Callers that observe readiness read this; without it an applied Cluster

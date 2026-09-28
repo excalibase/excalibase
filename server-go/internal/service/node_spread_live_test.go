@@ -145,7 +145,6 @@ func (lab *backupLab) restoreWithPlans(t *testing.T, project string, plans Resto
 	lab.adapter.SetInstanceStore(store)
 	lab.adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
 	lab.adapter.SetDatabaseProbe(psqlProbe{lab: lab})
-	lab.adapter.SetOwnerCredentials(sourceOwnerPassword(lab.source.Password))
 	lab.adapter.SetRestorePlanSource(plans)
 	req.NewProjectName, req.TargetProjectID = project, project
 	started := time.Now()
