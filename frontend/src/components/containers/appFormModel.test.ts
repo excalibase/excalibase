@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest';
-import { validateAppForm } from './appFormModel';
+import { initialValues, validateAppForm } from './appFormModel';
 
-const base = { name: 'web', image: 'nginx:1.27', port: '8080', replicas: '1', healthCheckPath: '', env: [] };
+const base = { ...initialValues(), name: 'web', image: 'nginx:1.27' };
 
 // The name is the app's address inside its project (EXC-524), so it must be a
 // Service name the platform does not already use.
