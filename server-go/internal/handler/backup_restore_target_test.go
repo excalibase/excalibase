@@ -125,3 +125,22 @@ func TestBackupHandler_Restore_FailsWhenNoProjectIDCanBeAllocated(t *testing.T) 
 		t.Error("the response must not leak the store failure")
 	}
 }
+
+// A zone-less targetTime is refused with the reason, before any job is filed:
+// the platform does not guess which zone the caller meant.
+func TestBackupHandler_Restore_RefusesATargetTimeWithoutAZone(t *testing.T) {
+	r, _ := setupBackupHandlerWithStore(t)
+
+	body := `{"newProjectName":"copy","targetTime":"2026-09-28T02:18:06.782"}`
+	req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400 (body=%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "time zone") {
+		t.Errorf("the refusal must say why, got %s", w.Body.String())
+	}
+}

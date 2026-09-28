@@ -48,6 +48,9 @@ type K8sBackupAdapter struct {
 	// creds mints the restore's credentials: read-only for the source's
 	// prefix, read-write for the restored project's own.
 	creds *BackupCredentialIssuer
+	// targetGuard proves a point-in-time target recoverable before anything
+	// is created; without one such a restore is refused.
+	targetGuard RestoreTargetGuard
 }
 
 // SetBackupCredentials wires the issuer; without one a restore is refused.
@@ -91,11 +94,15 @@ const (
 // implements it); nil means restores fail with ErrBackupStorageNotConfigured.
 func NewK8sBackupAdapter(client k8s.KubeClient, storage BackupStorageSource) *K8sBackupAdapter {
 	return &K8sBackupAdapter{
-		k8sClient: client,
-		storage:   storage,
-		poller:    provisioner.NewPoller(defaultRestoreReadyPoll, defaultRestoreReadyTimeout),
+		k8sClient:   client,
+		storage:     storage,
+		poller:      provisioner.NewPoller(defaultRestoreReadyPoll, defaultRestoreReadyTimeout),
+		targetGuard: NewArchivedWALGuard(client),
 	}
 }
+
+// SetRestoreTargetGuard replaces the point-in-time target check.
+func (a *K8sBackupAdapter) SetRestoreTargetGuard(g RestoreTargetGuard) { a.targetGuard = g }
 
 // SetPublicDomainSuffix names the suffix public endpoint names hang off.
 func (a *K8sBackupAdapter) SetPublicDomainSuffix(suffix string) { a.publicDomainSuffix = suffix }
@@ -223,6 +230,9 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 	if err != nil {
 		return nil, err
 	}
+	if err := a.ensureTargetRecoverable(ctx, inst, req); err != nil {
+		return nil, err
+	}
 	target := restoreTarget{store: store, plan: plan, project: newProject, namespace: fmt.Sprintf("%s-%s", inst.OrgID, newProject)}
 	if err := a.issueRestoreCredentials(ctx, inst.ProjectID, &target); err != nil {
 		return nil, fmt.Errorf("restore %s: %w", inst.ProjectID, err)
@@ -248,6 +258,18 @@ func (a *K8sBackupAdapter) Restore(ctx context.Context, inst *domain.DatabaseIns
 		DatabaseName: restored.DatabaseName,
 		CreatedAt:    restored.CreatedAt,
 	}, nil
+}
+
+// ensureTargetRecoverable refuses a point-in-time target whose WAL is not
+// archived, so a recovery cannot end before it.
+func (a *K8sBackupAdapter) ensureTargetRecoverable(ctx context.Context, inst *domain.DatabaseInstance, req domain.RestoreRequest) error {
+	if req.TargetTime == nil {
+		return nil
+	}
+	if a.targetGuard == nil {
+		return ErrRestoreTargetGuardNotConfigured
+	}
+	return a.targetGuard.EnsureRecoverable(ctx, inst, req.TargetTime.Time)
 }
 
 // issueRestoreCredentials mints, before anything is created, what the
@@ -482,7 +504,7 @@ func (a *K8sBackupAdapter) waitForRecoveredCluster(ctx context.Context, namespac
 		primary, _, _ := unstructured.NestedString(obj.Object, "status", "currentPrimary")
 		ready, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyInstances")
 		if primary == "" || ready < 1 {
-			return false, nil
+			return false, a.recoveryMissedTarget(ctx, namespace, cluster)
 		}
 		podReady, err := a.k8sClient.IsPodReady(ctx, namespace, primary)
 		if err != nil {

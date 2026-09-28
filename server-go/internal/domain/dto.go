@@ -239,7 +239,7 @@ type RestoreJob struct {
 func (r RestoreRequest) RestoreTargetKind() (kind, value string) {
 	switch {
 	case r.TargetTime != nil:
-		return "time", r.TargetTime.Time.Format("2006-01-02T15:04:05Z")
+		return "time", r.TargetTime.RecoveryTime()
 	case r.TargetXID != "":
 		return "xid", r.TargetXID
 	case r.TargetLSN != "":
@@ -257,11 +257,11 @@ func (r RestoreRequest) RestoreTargetKind() (kind, value string) {
 // may be set; absence of all four means "restore to latest". Validate()
 // enforces the single-target rule so handlers can fail fast.
 type RestoreRequest struct {
-	BackupID   string    `json:"backupId,omitempty"`
-	TargetTime *FlexTime `json:"targetTime,omitempty"`
-	TargetXID  string    `json:"targetXid,omitempty"`
-	TargetLSN  string    `json:"targetLsn,omitempty"`
-	TargetName string    `json:"targetName,omitempty"`
+	BackupID   string     `json:"backupId,omitempty"`
+	TargetTime *ZonedTime `json:"targetTime,omitempty"`
+	TargetXID  string     `json:"targetXid,omitempty"`
+	TargetLSN  string     `json:"targetLsn,omitempty"`
+	TargetName string     `json:"targetName,omitempty"`
 	// NewProjectName is the display name for the restored project. It is
 	// the only naming the caller controls.
 	NewProjectName string `json:"newProjectName,omitempty"`
@@ -307,7 +307,7 @@ func (r RestoreRequest) Validate() error {
 func (r RestoreRequest) RecoveryTarget() map[string]interface{} {
 	switch {
 	case r.TargetTime != nil:
-		return map[string]interface{}{"targetTime": r.TargetTime.Time.Format("2006-01-02T15:04:05Z")}
+		return map[string]interface{}{"targetTime": r.TargetTime.RecoveryTime()}
 	case r.TargetXID != "":
 		return map[string]interface{}{"targetXID": r.TargetXID}
 	case r.TargetLSN != "":

@@ -171,29 +171,34 @@ test.describe('Backups page', () => {
     await expect(submit).toBeEnabled();
   });
 
-  test('restore in PITR mode toggles indicator + sends targetTime', async ({ page }) => {
-    await mockBackupList(page, { backups: sampleBackups, backupEnabled: true, schedule: '', retentionDays: 0 });
-    const captured: { body?: unknown } = {};
-    await mockRestore(page, { capture: captured });
+  test.describe('in a browser at +07:00', () => {
+    test.use({ timezoneId: 'Asia/Ho_Chi_Minh' });
 
-    await page.goto(BACKUPS_URL);
-    await page.getByRole('button', { name: /Restore \/ PITR/i }).click();
+    test('restore in PITR mode toggles indicator + sends targetTime', async ({ page }) => {
+      await mockBackupList(page, { backups: sampleBackups, backupEnabled: true, schedule: '', retentionDays: 0 });
+      const captured: { body?: unknown } = {};
+      await mockRestore(page, { capture: captured });
 
-    await page.getByLabel(/New Instance Name/i).fill('restored-db');
-    await page.getByLabel(/Target Time \(PITR\)/i).fill('2026-05-04T03:30');
+      await page.goto(BACKUPS_URL);
+      await page.getByRole('button', { name: /Restore \/ PITR/i }).click();
 
-    await expect(page.getByText('Point-in-Time Recovery mode enabled')).toBeVisible();
-    await expect(page.getByRole('button', { name: /Restore to Point in Time/i })).toBeEnabled();
+      await page.getByLabel(/New Instance Name/i).fill('restored-db');
+      await page.getByLabel(/Target Time \(PITR\)/i).fill('2026-05-04T03:30');
 
-    await page.getByRole('button', { name: /Restore to Point in Time/i }).click();
-    await expect(page.getByText('Restore initiated')).toBeVisible();
+      await expect(page.getByText('Point-in-Time Recovery mode enabled')).toBeVisible();
+      await expect(page.getByRole('button', { name: /Restore to Point in Time/i })).toBeEnabled();
 
-    // The body the studio actually sends — pin that the display name
-    // and targetTime survive the form correctly. The project id is
-    // generated server-side and only comes back on the response.
-    const body = captured.body as { newProjectName?: string; targetTime?: string } | undefined;
-    expect(body?.newProjectName).toBe('restored-db');
-    expect(body?.targetTime).toBe('2026-05-04T03:30');
+      await page.getByRole('button', { name: /Restore to Point in Time/i }).click();
+      await expect(page.getByText('Restore initiated')).toBeVisible();
+
+      // The body the studio actually sends — pin that the display name
+      // and targetTime survive the form correctly. The project id is
+      // generated server-side and only comes back on the response.
+      const body = captured.body as { newProjectName?: string; targetTime?: string } | undefined;
+      expect(body?.newProjectName).toBe('restored-db');
+      // The browser's local time (Asia/Ho_Chi_Minh here) goes out as a zoned instant.
+      expect(body?.targetTime).toBe('2026-05-03T20:30:00.000Z');
+    });
   });
 
   test('full restore (no targetTime) sends correct payload and shows success', async ({ page }) => {

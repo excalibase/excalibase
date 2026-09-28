@@ -14,12 +14,12 @@ func TestRestoreTargetKind(t *testing.T) {
 		kind, want string
 	}{
 		{"latest", RestoreRequest{}, "latest", ""},
-		{"time", RestoreRequest{TargetTime: &FlexTime{Time: ts}}, "time", "2026-01-02T03:04:05Z"},
+		{"time", RestoreRequest{TargetTime: &ZonedTime{Time: ts}}, "time", "2026-01-02T03:04:05.000000Z"},
 		{"xid", RestoreRequest{TargetXID: "100"}, "xid", "100"},
 		{"lsn", RestoreRequest{TargetLSN: "0/ABCDEF"}, "lsn", "0/ABCDEF"},
 		{"name", RestoreRequest{TargetName: "snap1"}, "name", "snap1"},
 		{"backup", RestoreRequest{BackupID: "b1"}, "backup", "b1"},
-		{"backup then time", RestoreRequest{BackupID: "b1", TargetTime: &FlexTime{Time: ts}}, "time", "2026-01-02T03:04:05Z"},
+		{"backup then time", RestoreRequest{BackupID: "b1", TargetTime: &ZonedTime{Time: ts}}, "time", "2026-01-02T03:04:05.000000Z"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -32,7 +32,7 @@ func TestRestoreTargetKind(t *testing.T) {
 }
 
 func TestRestoreRequestValidate(t *testing.T) {
-	ts := &FlexTime{Time: time.Now()}
+	ts := &ZonedTime{Time: time.Now()}
 	cases := []struct {
 		name    string
 		r       RestoreRequest
@@ -63,7 +63,7 @@ func TestRestoreRecoveryTarget(t *testing.T) {
 		r        RestoreRequest
 		key, val string
 	}{
-		{"time", RestoreRequest{TargetTime: &FlexTime{Time: ts}}, "targetTime", "2026-01-02T03:04:05Z"},
+		{"time", RestoreRequest{TargetTime: &ZonedTime{Time: ts}}, "targetTime", "2026-01-02T03:04:05.000000Z"},
 		{"xid", RestoreRequest{TargetXID: "7"}, "targetXID", "7"},
 		{"lsn", RestoreRequest{TargetLSN: "0/1"}, "targetLSN", "0/1"},
 		{"name", RestoreRequest{TargetName: "s"}, "targetName", "s"},

@@ -512,7 +512,7 @@ func TestBuildRecoveryTar_AllTargetKinds(t *testing.T) {
 		req      domain.RestoreRequest
 		wantSubs []string // substrings expected in postgresql.auto.conf
 	}{
-		{"time", domain.RestoreRequest{TargetTime: &domain.FlexTime{Time: now}}, []string{"recovery_target_time = '2026-05-06 12:00:00.000000'", "recovery_target_action = 'promote'"}},
+		{"time", domain.RestoreRequest{TargetTime: &domain.ZonedTime{Time: now}}, []string{"recovery_target_time = '2026-05-06 12:00:00.000000+00'", "recovery_target_action = 'promote'"}},
 		{"xid", domain.RestoreRequest{TargetXID: "12345"}, []string{"recovery_target_xid = '12345'", "recovery_target_action"}},
 		{"lsn", domain.RestoreRequest{TargetLSN: "0/1500000"}, []string{"recovery_target_lsn = '0/1500000'", "recovery_target_action"}},
 		{"name", domain.RestoreRequest{TargetName: "before_bad"}, []string{"recovery_target_name = 'before_bad'", "recovery_target_action"}},
@@ -584,7 +584,7 @@ func TestDockerAdapter_Restore_WithTargetTime_WritesRecoveryTar(t *testing.T) {
 	target := time.Now().UTC().Add(-1 * time.Hour)
 	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{
 		NewProjectName: "dk-pitr", TargetProjectID: "dk-pitr",
-		TargetTime: &domain.FlexTime{Time: target},
+		TargetTime: &domain.ZonedTime{Time: target},
 	})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)

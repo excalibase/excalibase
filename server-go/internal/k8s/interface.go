@@ -48,6 +48,8 @@ type KubeClient interface {
 	ClusterVolumesExpandable(ctx context.Context, namespace, clusterName string) error
 	GetPods(ctx context.Context, namespace string, labelSelector string) ([]corev1.Pod, error)
 	IsPodReady(ctx context.Context, namespace, name string) (bool, error)
+	// PodLogTail is the last lines of one container's log.
+	PodLogTail(ctx context.Context, namespace, pod, container string, lines int64) (string, error)
 	GetSecret(ctx context.Context, namespace, name string) (map[string][]byte, error)
 	CreateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error
 	// UpdateSecret replaces an existing Secret's data; a missing Secret is an error.

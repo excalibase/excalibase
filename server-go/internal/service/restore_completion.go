@@ -86,5 +86,9 @@ func failRestore(ctx context.Context, pc *provisioner.ProvisionContext, projectI
 	}
 	results := pc.Rollback(ctx)
 	log.Printf("restore %s failed: %v; compensations: %+v", projectID, err, results)
+	// Missing the target is the caller's to know: it changes what to ask for.
+	if errors.Is(err, ErrRestoreTargetNotReached) {
+		return ErrRestoreTargetNotReached
+	}
 	return ErrRestoreNotObserved
 }

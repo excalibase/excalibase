@@ -260,6 +260,6 @@ func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) { //NOSONAR seque
 			t.Fatalf("parse commit_ts %q: %v", row1CommitTS, err)
 		}
 		target := base.Add(500 * time.Millisecond)
-		runVariant(t, "time", domain.RestoreRequest{TargetTime: &domain.FlexTime{Time: target}})
+		runVariant(t, "time", domain.RestoreRequest{TargetTime: &domain.ZonedTime{Time: target}})
 	})
 }

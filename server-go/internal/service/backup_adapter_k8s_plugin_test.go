@@ -95,14 +95,15 @@ func TestK8sRestoreByBackupIDAndTimeReplaysToTheTime(t *testing.T) {
 	mock := k8s.NewMockClient()
 	withSourceBackup(mock, cnpgBackup(sourceBackupName, "src-postgres", "completed", "20260926T223600"))
 	adapter := newRestoreReadyAdapter(t, mock, &fakeRegistrar{})
-	at := &domain.FlexTime{Time: time.Date(2026, 9, 26, 22, 40, 0, 0, time.UTC)}
+	adapter.SetRestoreTargetGuard(&recordingGuard{})
+	at := &domain.ZonedTime{Time: time.Date(2026, 9, 26, 22, 40, 0, 0, time.UTC)}
 
 	if _, err := adapter.Restore(context.Background(), sourceInstance(),
 		domain.RestoreRequest{NewProjectName: "dst", TargetProjectID: "dst", BackupID: sourceBackupName, TargetTime: at}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	target := recoveryTargetOf(t, mock)
-	if target["backupID"] != "20260926T223600" || target["targetTime"] != "2026-09-26T22:40:00Z" || len(target) != 2 {
+	if target["backupID"] != "20260926T223600" || target["targetTime"] != "2026-09-26T22:40:00.000000Z" || len(target) != 2 {
 		t.Errorf("got %v", target)
 	}
 }

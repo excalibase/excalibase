@@ -3,6 +3,7 @@ import { useListBackups, useTriggerBackup, useRestoreFromBackup, type RestoreReq
 import { useInstanceContext } from '../context/InstanceContext';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
+import { toZonedInstant } from '../utils/zonedInstant';
 import { Archive, RefreshCw, RotateCcw, Clock, type LucideIcon } from 'lucide-react';
 
 type Tab = 'backups' | 'restore';
@@ -145,6 +146,7 @@ export function BackupsPage() {
                   <input
                     id="restore-target-time"
                     type="datetime-local"
+                    step={1}
                     value={restoreForm.targetTime ?? ''}
                     onChange={(e) => setRestoreForm({ ...restoreForm, targetTime: e.target.value })}
                     className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent-primary"
@@ -169,13 +171,22 @@ export function BackupsPage() {
 
               <Button
                 disabled={!restoreForm.newProjectName.trim() || restore.isPending || !projectId}
-                onClick={() => restore.mutate(
-                  { ...restoreForm, targetTime: restoreForm.targetTime?.trim() || undefined },
-                  { onError: (e: unknown) => {
-                    const msg = e instanceof Error ? e.message : String(e);
-                    showToast(msg || 'Restore failed', false);
-                  } }
-                )}
+                onClick={() => {
+                  let targetTime: string | undefined;
+                  try {
+                    targetTime = toZonedInstant(restoreForm.targetTime);
+                  } catch (e: unknown) {
+                    showToast(e instanceof Error ? e.message : String(e), false);
+                    return;
+                  }
+                  restore.mutate(
+                    { ...restoreForm, targetTime },
+                    { onError: (e: unknown) => {
+                      const msg = e instanceof Error ? e.message : String(e);
+                      showToast(msg || 'Restore failed', false);
+                    } }
+                  );
+                }}
               >
                 <RotateCcw className="w-4 h-4 mr-2" />
                 {restore.isPending && 'Initiating restore…'}

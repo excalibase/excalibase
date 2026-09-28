@@ -850,8 +850,9 @@ func buildRecoveryTar(req domain.RestoreRequest) []byte {
 		// Microsecond precision matches pg_xact_commit_timestamp's
 		// resolution. Without it, recovery_target_time gets
 		// interpreted as the start of the second, which can land
-		// BEFORE a target commit that happened within that second.
-		directives = fmt.Sprintf("recovery_target_time = '%s'\n", req.TargetTime.Time.UTC().Format("2006-01-02 15:04:05.000000"))
+		// BEFORE a target commit that happened within that second. The zone
+		// is explicit so the server's TimeZone setting cannot move it.
+		directives = fmt.Sprintf("recovery_target_time = '%s+00'\n", req.TargetTime.Time.UTC().Format("2006-01-02 15:04:05.000000"))
 	case req.TargetXID != "":
 		directives = fmt.Sprintf("recovery_target_xid = '%s'\n", req.TargetXID)
 	case req.TargetLSN != "":

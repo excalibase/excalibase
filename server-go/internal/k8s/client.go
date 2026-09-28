@@ -437,6 +437,15 @@ func (c *Client) GetPods(ctx context.Context, namespace string, labelSelector st
 	return list.Items, nil
 }
 
+// PodLogTail is the last lines of one container's log.
+func (c *Client) PodLogTail(ctx context.Context, namespace, pod, container string, lines int64) (string, error) {
+	raw, err := c.clientset.CoreV1().Pods(namespace).GetLogs(pod, &corev1.PodLogOptions{Container: container, TailLines: &lines}).DoRaw(ctx)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
 // IsPodReady checks if a pod has phase=Running and all containers ready.
 func (c *Client) IsPodReady(ctx context.Context, namespace, name string) (bool, error) {
 	pod, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
