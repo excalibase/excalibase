@@ -70,5 +70,6 @@ func closedPortCreds() map[string]string {
 	return map[string]string{
 		"host": "127.0.0.1", "port": "1",
 		"username": "excalibase_app", "password": "pw", "database": "app",
+		"sslcert": "CERT-PEM", "sslkey": "KEY-PEM", "sslrootcert": "CA-PEM",
 	}
 }

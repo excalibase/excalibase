@@ -46,10 +46,17 @@ spec:
       statement_timeout: 60s
       work_mem: 64MB
     pg_hba:
-    - hostssl replication cdc_watcher all scram-sha-256
+    - hostssl all excalibase_app all cert
+    - hostssl all auth_admin all cert
+    - hostssl all cdc_watcher all cert
+    - hostssl replication cdc_watcher all cert
+    - host all excalibase_app all reject
+    - host replication excalibase_app all reject
+    - host all auth_admin all reject
+    - host replication auth_admin all reject
+    - host all cdc_watcher all reject
+    - host replication cdc_watcher all reject
     - hostssl all app all scram-sha-256
-    - hostssl all excalibase_app all scram-sha-256
-    - hostssl all auth_admin all scram-sha-256
     - hostnossl all all all reject
     - hostnossl replication all all reject
   primaryUpdateMethod: switchover

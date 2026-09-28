@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
 
@@ -760,5 +762,28 @@ func TestTenantRoleVerifierFallsBackToTheProjectSSLMode(t *testing.T) {
 	}
 	if v.overrides.sslmode != "" {
 		t.Error("the fallback must not be written back onto the verifier")
+	}
+}
+
+// A platform role that logs in with its certificate has no password to rotate
+// (EXC-410): pg_hba refuses it one, so proving a new one could only fail.
+func TestRotateCredentialsLeavesCertificateRolesAlone(t *testing.T) {
+	h := newRotationHarness(t)
+	for _, path := range []string{rotAuthCurrent, rotAppCurrent} {
+		record := h.vault.data[path]
+		record[tenantcert.FieldCert] = "CERT-PEM"
+		record[tenantcert.FieldKey] = "KEY-PEM"
+		record[tenantcert.FieldRootCert] = "CA-PEM"
+	}
+	before := maps.Clone(h.vault.data[rotAppCurrent])
+
+	if _, err := h.svc.RotateCredentials(context.Background(), rotProject); err != nil {
+		t.Fatalf("RotateCredentials: %v", err)
+	}
+	if order := rotatedRoleOrder(t, h.kube.ExecStdin); len(order) != 1 {
+		t.Errorf("only the owner has a password to rotate, got %v", order)
+	}
+	if !maps.Equal(h.vault.data[rotAppCurrent], before) {
+		t.Error("the certificate role's record was rewritten")
 	}
 }

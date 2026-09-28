@@ -243,10 +243,7 @@ func TestRestartReplicationRedeploysTheWatcher(t *testing.T) {
 	h.svc.factory = provisioner.NewFactory(pg)
 	h.svc.SetNatsCredentialMinter(NewNatsCredentialMinter(newFakeNatsCredStore()))
 	inst := restoredInstance()
-	if err := h.vault.Put("projects/"+inst.ProjectID+"/credentials/"+roleWatcher,
-		map[string]string{"password": "watcher-pw"}); err != nil {
-		t.Fatalf("seed watcher credentials: %v", err)
-	}
+	seedWatcherRecord(t, h, inst.ProjectID)
 
 	if err := h.svc.RestartReplication(context.Background(), inst); err != nil {
 		t.Fatalf("RestartReplication: %v", err)

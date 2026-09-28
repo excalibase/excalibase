@@ -14,6 +14,7 @@ func TestMigration_TenantDSNUsesAppRole(t *testing.T) {
 		"host": "db.internal", "port": "5432",
 		"username": "excalibase_app", "password": "s3cr3t",
 		"database": "app",
+		"sslcert":  "CERT-PEM", "sslkey": "KEY-PEM", "sslrootcert": "CA-PEM",
 	}
 	dsn, err := buildTenantDSN(creds, dsnOverrides{})
 	if err != nil {
@@ -26,8 +27,8 @@ func TestMigration_TenantDSNUsesAppRole(t *testing.T) {
 	if strings.Contains(dsn, "user='postgres'") {
 		t.Errorf("migration must NOT connect as the postgres superuser (SEC-C2); got %q", dsn)
 	}
-	if !strings.Contains(dsn, "sslmode='require'") {
-		t.Errorf("default sslmode should be require; got %q", dsn)
+	if !strings.Contains(dsn, "sslmode='verify-full'") {
+		t.Errorf("default sslmode should be verify-full with the role's certificate; got %q", dsn)
 	}
 }
 

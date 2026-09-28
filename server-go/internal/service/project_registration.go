@@ -10,6 +10,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
+	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
 // Role names the platform creates in every project database. They are also
@@ -279,6 +280,12 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, spec proje
 		return pc.Fail(err)
 	}
 
+	pc.SetStep("issue platform role certificates")
+	certificates, err := s.issueRoleCertificates(ctx, spec.namespace, spec.projectID)
+	if err != nil {
+		return pc.Fail(err)
+	}
+
 	passwords := map[string]string{
 		roleAuthAdmin: creds.authPassword,
 		roleApp:       creds.appPassword,
@@ -286,13 +293,17 @@ func (s *ProvisioningService) createProjectRoles(ctx context.Context, spec proje
 	}
 	for _, role := range []string{roleAuthAdmin, roleApp, roleWatcher} {
 		pc.SetStep("store " + role + " credentials")
-		if err := s.putRoleCredentials(spec, role, role, passwords[role], pc); err != nil {
+		record := specCredentialRecord(spec, role, passwords[role])
+		if material, ok := certificates[role]; ok {
+			record = material.AddTo(record)
+		}
+		if err := s.putCredentialRecord(spec.projectID, role, record, pc); err != nil {
 			return pc.Fail(err)
 		}
 	}
 
 	log.Printf("Created project roles for %s and stored in vault", spec.projectID)
-	return s.deployWatcher(ctx, spec, pc, creds.watcherPassword)
+	return s.deployWatcher(ctx, spec, pc, certificates[roleWatcher])
 }
 
 // fileOwnerCredential files the owner credential in vault under a project id
@@ -302,7 +313,8 @@ func (s *ProvisioningService) fileOwnerCredential(spec projectRoleSpec, pc *prov
 		return pc.Fail(err)
 	}
 	pc.SetStep("store admin credentials")
-	if err := s.putRoleCredentials(spec, roleAdmin, spec.adminUsername, spec.adminPassword, pc); err != nil {
+	record := specCredentialRecord(spec, spec.adminUsername, spec.adminPassword)
+	if err := s.putCredentialRecord(spec.projectID, roleAdmin, record, pc); err != nil {
 		return pc.Fail(err)
 	}
 	return nil
@@ -351,18 +363,22 @@ func (s *ProvisioningService) assertNoStoredCredentials(projectID string) error 
 	return nil
 }
 
-// putRoleCredentials writes one role's connection details to vault and
-// registers its deletion as a compensation.
-func (s *ProvisioningService) putRoleCredentials(spec projectRoleSpec, role, username, password string, pc *provisioner.ProvisionContext) error {
-	path := vaultCredentialPath(spec.projectID, role)
-	creds := map[string]string{
+// specCredentialRecord is one role's connection details as vault files them.
+func specCredentialRecord(spec projectRoleSpec, username, password string) map[string]string {
+	return map[string]string{
 		"host":     spec.host,
 		"port":     strconv.Itoa(spec.port),
 		"database": spec.databaseName,
 		"username": username,
 		"password": password,
 	}
-	if err := s.vault.Put(path, creds); err != nil {
+}
+
+// putCredentialRecord writes one role's record to vault and registers its
+// deletion as a compensation.
+func (s *ProvisioningService) putCredentialRecord(projectID, role string, record map[string]string, pc *provisioner.ProvisionContext) error {
+	path := vaultCredentialPath(projectID, role)
+	if err := s.vault.Put(path, record); err != nil {
 		return fmt.Errorf("vault put %s: %w", role, err)
 	}
 	pc.RegisterCleanup("delete vault "+path, func(context.Context) error {
@@ -376,7 +392,7 @@ func (s *ProvisioningService) putRoleCredentials(spec projectRoleSpec, role, use
 // realtime still works — but minting its NATS bus identity is not: a watcher
 // started without one is unauthenticated against auth_callout (EXC-324), so
 // that failure fails registration instead of deploying a broken watcher.
-func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRoleSpec, pc *provisioner.ProvisionContext, watcherPass string) error {
+func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRoleSpec, pc *provisioner.ProvisionContext, watcherCert tenantcert.Material) error {
 	if s.factory == nil {
 		return nil
 	}
@@ -399,9 +415,9 @@ func (s *ProvisioningService) deployWatcher(ctx context.Context, spec projectRol
 		ProjectID:    spec.projectID,
 		DBName:       spec.databaseName,
 		Username:     roleWatcher,
-		Password:     watcherPass,
 		NatsUser:     natsUser,
 		NatsPassword: natsPass,
+		ClientCert:   watcherCert,
 	}
 	if err := pg.DeployWatcher(ctx, watcherSpec); err != nil {
 		log.Printf("WARN: watcher deployment for %s: %v", spec.projectID, err)
@@ -434,6 +450,10 @@ func (s *ProvisioningService) RestartReplication(ctx context.Context, inst *doma
 	if err != nil {
 		return fmt.Errorf("read %s credentials: %w", roleWatcher, err)
 	}
+	watcherCert, err := tenantcert.FromRecord(creds)
+	if err != nil {
+		return fmt.Errorf("%s: %w", roleWatcher, err)
+	}
 	natsUser, natsPass, err := s.natsCreds.MintTenantWatcher(ctx, inst.ProjectID)
 	if err != nil {
 		return fmt.Errorf("mint watcher nats credential: %w", err)
@@ -443,9 +463,9 @@ func (s *ProvisioningService) RestartReplication(ctx context.Context, inst *doma
 		ProjectID:    inst.ProjectID,
 		DBName:       inst.DatabaseName,
 		Username:     roleWatcher,
-		Password:     creds["password"],
 		NatsUser:     natsUser,
 		NatsPassword: natsPass,
+		ClientCert:   watcherCert,
 	})
 }
 

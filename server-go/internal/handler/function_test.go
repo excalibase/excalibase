@@ -372,13 +372,18 @@ func TestFunctionHandler_Secrets_RejectsReservedKey(t *testing.T) {
 func TestFunctionHandler_BuiltinEnv_WiresDBURLFromVault(t *testing.T) {
 	store := edgefn.NewFunctionStore(t.TempDir())
 	v := newFakeVault()
-	// Seed app credentials the way createProjectRoles does
-	v.data["projects/proj_p1/credentials/excalibase_app"] = map[string]string{
+	// A function is the customer's code: it gets the customer's own role.
+	// excalibase_app logs in by certificate only and is never handed out.
+	v.data["projects/proj_p1/credentials/admin"] = map[string]string{
 		"host":     "proj_p1-postgres-rw.default-proj_p1.svc.cluster.local",
 		"port":     "5432",
 		"database": "app",
-		"username": "excalibase_app",
+		"username": "app",
 		"password": "p4ssw0rd",
+	}
+	v.data["projects/proj_p1/credentials/excalibase_app"] = map[string]string{
+		"host": "proj_p1-postgres-rw.default-proj_p1.svc.cluster.local", "port": "5432",
+		"database": "app", "username": "excalibase_app", "password": "platform-only",
 	}
 	secrets := edgefn.NewSecretsStore(v)
 	runtime, scripts := mockFnRuntime(t)
@@ -413,7 +418,7 @@ func TestFunctionHandler_BuiltinEnv_WiresDBURLFromVault(t *testing.T) {
 		t.Fatalf("deploy not recorded in mock runtime")
 	}
 	got := deploy.Secrets["EXCALIBASE_DB_URL"]
-	want := "postgres://excalibase_app:p4ssw0rd@proj_p1-postgres-rw.default-proj_p1.svc.cluster.local:5432/app?sslmode=require"
+	want := "postgres://app:p4ssw0rd@proj_p1-postgres-rw.default-proj_p1.svc.cluster.local:5432/app?sslmode=require"
 	if got != want {
 		t.Errorf("EXCALIBASE_DB_URL:\n got:  %q\n want: %q", got, want)
 	}

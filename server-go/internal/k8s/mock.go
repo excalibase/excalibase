@@ -63,7 +63,10 @@ type MockClient struct {
 	// ready rather than to exercise the wait itself.
 	AutoReconcileClusters bool
 	WildcardSecret        map[string][]byte // GetSecret returns this if name not in Secrets
-	WildcardExecError     error             // ExecInPod returns this for any pod not in ExecError
+	// NoClusterCA stops GetSecret serving MockClusterCA for an unseeded
+	// "<cluster>-ca" Secret, as when the operator has not issued one.
+	NoClusterCA       bool
+	WildcardExecError error // ExecInPod returns this for any pod not in ExecError
 
 	// DenoRuntimes — set of namespaces where EnsureDenoRuntime has been called.
 	DenoRuntimes map[string]bool
@@ -490,6 +493,9 @@ func (m *MockClient) GetSecret(ctx context.Context, namespace, name string) (map
 	key := namespace + "/" + name
 	if data, ok := m.Secrets[key]; ok {
 		return data, nil
+	}
+	if isClusterCASecret(name) && !m.NoClusterCA {
+		return MockClusterCA(), nil
 	}
 	if m.WildcardSecret != nil {
 		return m.WildcardSecret, nil
