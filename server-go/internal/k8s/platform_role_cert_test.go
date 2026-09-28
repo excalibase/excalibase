@@ -8,25 +8,28 @@ import (
 
 var platformRoles = []string{"excalibase_app", "auth_admin", "cdc_watcher"}
 
+type loginAttempt struct {
+	role, database string
+	overTLS        bool
+}
+
+// matches reports whether a pg_hba line applies to the attempt.
+func (a loginAttempt) matches(fields []string) bool {
+	connType, db, user := fields[0], fields[1], fields[2]
+	transportOK := connType == "host" || (connType == "hostssl") == a.overTLS
+	databaseOK := db == a.database || (db == "all" && a.database != "replication")
+	return transportOK && databaseOK && (user == "all" || user == a.role)
+}
+
 // firstRuleFor is the line pg_hba would pick for a network login by role to
 // database kind ("all" or "replication"), skipping the in-pod loopback trust.
 func firstRuleFor(lines []string, role, database string, overTLS bool) string {
+	attempt := loginAttempt{role: role, database: database, overTLS: overTLS}
 	for _, line := range lines {
 		fields := strings.Fields(line)
-		if len(fields) < 5 || isLoopbackLine(line) {
-			continue
+		if len(fields) >= 5 && !isLoopbackLine(line) && attempt.matches(fields) {
+			return line
 		}
-		connType, db, user := fields[0], fields[1], fields[2]
-		if connType == "hostssl" && !overTLS || connType == "hostnossl" && overTLS {
-			continue
-		}
-		if db != "all" && db != database || db == "all" && database == "replication" {
-			continue
-		}
-		if user != "all" && user != role {
-			continue
-		}
-		return line
 	}
 	return "(operator catch-all)"
 }
@@ -39,22 +42,27 @@ func methodOf(line string) string {
 // The public port reaches Postgres SNATed, so a password is only as strong as
 // its secrecy. A platform role proves itself with a certificate its cluster CA
 // signed; every other network login by it is refused before CNPG's catch-all.
+func assertCertificateOnly(t *testing.T, lines []string, role string) {
+	t.Helper()
+	for _, database := range []string{"all", "replication"} {
+		if got := methodOf(firstRuleFor(lines, role, database, false)); got != "reject" {
+			t.Errorf("%s plaintext to %s: method %q, want reject (%q)", role, database, got, lines)
+		}
+		tlsRule := firstRuleFor(lines, role, database, true)
+		if got := methodOf(tlsRule); got != "cert" && got != "reject" {
+			t.Errorf("%s over TLS to %s is admitted by %q, want cert or reject", role, database, tlsRule)
+		}
+	}
+	if got := methodOf(firstRuleFor(lines, role, "all", true)); got != "cert" {
+		t.Errorf("%s cannot log in with its certificate: %q", role, got)
+	}
+}
+
 func TestAPlatformRoleLogsInOnlyWithACertificate(t *testing.T) {
 	for _, opts := range []PostgreSQLClusterOpts{plainTLSOpts(), documentDBOpts("owner_doc")} {
 		lines := hbaLines(t, opts)
 		for _, role := range platformRoles {
-			for _, database := range []string{"all", "replication"} {
-				if got := methodOf(firstRuleFor(lines, role, database, false)); got != "reject" {
-					t.Errorf("%s plaintext to %s: method %q, want reject (%q)", role, database, got, lines)
-				}
-				tlsRule := firstRuleFor(lines, role, database, true)
-				if got := methodOf(tlsRule); got != "cert" && got != "reject" {
-					t.Errorf("%s over TLS to %s is admitted by %q, want cert or reject", role, database, tlsRule)
-				}
-			}
-			if got := methodOf(firstRuleFor(lines, role, "all", true)); got != "cert" {
-				t.Errorf("%s cannot log in with its certificate: %q", role, got)
-			}
+			assertCertificateOnly(t, lines, role)
 		}
 	}
 }

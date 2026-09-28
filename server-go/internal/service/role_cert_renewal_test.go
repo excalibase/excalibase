@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"encoding/pem"
 	"testing"
 	"time"
@@ -143,6 +144,74 @@ func TestADockerProjectHasNoCertificatesToRenew(t *testing.T) {
 	}
 	h.now = h.now.Add(tenantcert.Validity)
 	if report := h.renewer.RenewDue(context.Background()); report.Renewed != 0 || len(report.Failed) != 0 {
+		t.Fatalf("report %+v", report)
+	}
+}
+
+func dueHarness(t *testing.T) *renewalHarness {
+	t.Helper()
+	h := newRenewalHarness(t, "ACTIVE")
+	h.now = h.now.Add(tenantcert.Validity)
+	return h
+}
+
+func TestOnlyTheLeaderRenewsRoleCertificates(t *testing.T) {
+	for name, leader := range map[string]LeaderChecker{"follower": followerLeadership{}, "broken": brokenLeadership{}} {
+		t.Run(name, func(t *testing.T) {
+			h := dueHarness(t)
+			before := h.vault.data[vaultCredentialPath(renewProject, roleApp)][tenantcert.FieldCert]
+			h.renewer.renewIfLeader(context.Background(), leader)
+			if h.vault.data[vaultCredentialPath(renewProject, roleApp)][tenantcert.FieldCert] != before {
+				t.Error("a replica that does not lead renewed")
+			}
+		})
+	}
+	h := dueHarness(t)
+	h.renewer.renewIfLeader(context.Background(), leaderLeadership{})
+	if len(h.restarted) != 1 {
+		t.Error("the leader did not renew")
+	}
+}
+
+func TestStartRenewsAtOnceAndStops(t *testing.T) {
+	h := dueHarness(t)
+	done := make(chan struct{})
+	h.renewer.cfg.RestartReplication = func(context.Context, *domain.DatabaseInstance) error {
+		close(done)
+		return nil
+	}
+	stop := h.renewer.Start(context.Background(), leaderLeadership{}, time.Hour)
+	defer stop()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first pass did not run at start")
+	}
+}
+
+func TestAWatcherThatCannotBeRedeployedIsReported(t *testing.T) {
+	h := dueHarness(t)
+	h.renewer.cfg.RestartReplication = func(context.Context, *domain.DatabaseInstance) error {
+		return errors.New("helm unavailable")
+	}
+	if report := h.renewer.RenewDue(context.Background()); len(report.Failed) != 1 {
+		t.Fatalf("report %+v", report)
+	}
+}
+
+func TestAnUnreadableRecordIsReported(t *testing.T) {
+	h := dueHarness(t)
+	delete(h.vault.data, vaultCredentialPath(renewProject, roleAuthAdmin))
+	if report := h.renewer.RenewDue(context.Background()); len(report.Failed) != 1 {
+		t.Fatalf("report %+v", report)
+	}
+}
+
+func TestACAWithoutItsKeyIsRefused(t *testing.T) {
+	h := dueHarness(t)
+	h.kube.Secrets["ns-renew/"+renewProject+"-postgres-ca"] = map[string][]byte{"ca.crt": []byte("PEM")}
+	report := h.renewer.RenewDue(context.Background())
+	if len(report.Failed) != 1 || !errors.Is(report.Failed[0], tenantcert.ErrInvalidCA) {
 		t.Fatalf("report %+v", report)
 	}
 }

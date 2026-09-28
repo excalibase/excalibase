@@ -2,8 +2,12 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
@@ -95,5 +99,25 @@ func TestTheWatcherIsNotDeployedWithoutACertificate(t *testing.T) {
 	}
 	if len(mock.HelmReleases) != 0 {
 		t.Error("the chart was installed anyway")
+	}
+}
+
+func TestAnExistingCertificateSecretIsReplaced(t *testing.T) {
+	mock := k8s.NewMockClient()
+	mock.Secrets[watcherTLSSecret] = map[string][]byte{"tls.crt": []byte("OLD")}
+	mock.CreateSecretError = apierrors.NewAlreadyExists(schema.GroupResource{Resource: "secrets"}, "proj-cdc-watcher-tls")
+	deployTestWatcher(t, mock, watcherSpecForTest())
+	if string(mock.Secrets[watcherTLSSecret]["tls.crt"]) != "CERT-PEM" {
+		t.Error("the existing secret was not updated")
+	}
+}
+
+func TestAFailedCertificateSecretStopsTheDeploy(t *testing.T) {
+	mock := k8s.NewMockClient()
+	mock.CreateSecretError = errors.New("forbidden")
+	prov := NewPostgreSQLProvisioner(mock, watcherChartDir)
+	prov.SetWatcherImage(pinnedWatcher)
+	if err := prov.DeployWatcher(context.Background(), watcherSpecForTest()); err == nil || len(mock.HelmReleases) != 0 {
+		t.Fatalf("err = %v, releases = %d", err, len(mock.HelmReleases))
 	}
 }

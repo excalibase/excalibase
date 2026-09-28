@@ -174,3 +174,48 @@ func TestRenewalIsDueNearExpiryOrWhenTheCAChanged(t *testing.T) {
 		t.Error("a record with no certificate must be issued one")
 	}
 }
+
+func TestACAKeptAsPKCS8IsAccepted(t *testing.T) {
+	ca := cnpgStyleCA(t)
+	block, _ := pem.Decode(ca.KeyPEM)
+	key, _ := x509.ParseECPrivateKey(block.Bytes)
+	der, _ := x509.MarshalPKCS8PrivateKey(key)
+	ca.KeyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	if _, err := Issue(ca, "excalibase_app", now); err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+}
+
+func TestAnUnusableCAIsRefused(t *testing.T) {
+	ca := cnpgStyleCA(t)
+	leaf, _ := Issue(ca, "excalibase_app", now)
+	cases := map[string]CA{
+		"not a CA":      {CertPEM: []byte(leaf.Cert), KeyPEM: []byte(leaf.Key)},
+		"garbled cert":  {CertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("x")}), KeyPEM: ca.KeyPEM},
+		"garbled key":   {CertPEM: ca.CertPEM, KeyPEM: pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: []byte("x")})},
+		"garbled pkcs8": {CertPEM: ca.CertPEM, KeyPEM: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("x")})},
+	}
+	for name, bad := range cases {
+		if _, err := Issue(bad, "excalibase_app", now); !errors.Is(err, ErrInvalidCA) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
+func TestAnUnreadableCertificateIsRenewed(t *testing.T) {
+	ca := cnpgStyleCA(t)
+	record := Material{Cert: "not PEM", Key: "k", RootCert: string(ca.CertPEM)}.AddTo(nil)
+	if !RenewalDue(record, string(ca.CertPEM), now) {
+		t.Error("a record whose certificate cannot be read was kept")
+	}
+	record[FieldCert] = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("x")}))
+	if !RenewalDue(record, string(ca.CertPEM), now) {
+		t.Error("a record whose certificate does not parse was kept")
+	}
+}
+
+func TestIsPlatformRole(t *testing.T) {
+	if !IsPlatformRole("cdc_watcher") || IsPlatformRole("app") {
+		t.Error("IsPlatformRole misclassifies")
+	}
+}

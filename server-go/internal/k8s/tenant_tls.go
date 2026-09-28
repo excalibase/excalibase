@@ -25,10 +25,7 @@ const (
 	hbaHostSSL = "hostssl"
 )
 
-const (
-	authRoleName    = "auth_admin"
-	watcherRoleName = "cdc_watcher"
-)
+const watcherRoleName = "cdc_watcher"
 
 // PlatformCertRoles are the roles pg_hba admits by certificate only.
 var PlatformCertRoles = tenantcert.PlatformRoles
@@ -57,18 +54,21 @@ func hbaConnectionType(requireTLS bool) string {
 // They are "host" lines, matching TLS and plaintext alike, and the TLS switch
 // never rewrites them.
 func platformCertLogins() []interface{} {
-	lines := []interface{}{
-		hbaHostSSL + " all " + appRoleName + " all cert",
-		hbaHostSSL + " all " + authRoleName + " all cert",
-		hbaHostSSL + " all " + watcherRoleName + " all cert",
-		hbaHostSSL + " replication " + watcherRoleName + " all cert",
+	lines := make([]interface{}, 0, 3*len(PlatformCertRoles)+1)
+	for _, role := range PlatformCertRoles {
+		lines = append(lines, certLogin("all", role))
 	}
+	lines = append(lines, certLogin("replication", watcherRoleName))
 	for _, role := range PlatformCertRoles {
 		lines = append(lines,
 			hbaHost+" all "+role+" all reject",
 			hbaHost+" replication "+role+" all reject")
 	}
 	return lines
+}
+
+func certLogin(database, role string) string {
+	return hbaHostSSL + " " + database + " " + role + " all cert"
 }
 
 func networkLogins(requireTLS bool) []interface{} {
