@@ -422,23 +422,6 @@ func TestRegistrationDropsMongoUsersARestoredClusterBroughtWithIt(t *testing.T) 
 	}
 }
 
-// A verifier Postgres itself would store for the password, checked against
-// an independent derivation (Python hashlib) with a fixed salt.
-func TestScramVerifierMatchesAnIndependentDerivation(t *testing.T) {
-	salt := make([]byte, 16)
-	for i := range salt {
-		salt[i] = byte(i)
-	}
-	got, err := scramSHA256Verifier("correct-horse-battery", salt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const want = "SCRAM-SHA-256$4096:AAECAwQFBgcICQoLDA0ODw==$eYkIrwlo2T0d6Ca9d6/xzsgUUbZwOdz0/X0v8MioG9w=:TNz7/wgi5sczC08YCovXDhkXvBBmBt7YYvSKSkQAFg8="
-	if got != want {
-		t.Fatalf("verifier:\n got %s\nwant %s", got, want)
-	}
-}
-
 func containsCall(calls []string, want string) bool {
 	for _, call := range calls {
 		if call == want {

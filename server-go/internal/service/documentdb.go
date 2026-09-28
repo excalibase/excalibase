@@ -8,6 +8,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 )
@@ -125,7 +126,9 @@ func (s *ProvisioningService) grantDocumentDBAccess(
 
 // documentDBGrantSQL makes the owner a DocumentDB user. The platform's roles
 // are not: Studio's document browser has its own login (EXC-410). The
-// membership carries no user management: that needs CREATEROLE.
+// membership carries no user management: a Mongo createUser has to grant a
+// DocumentDB role, which needs ADMIN OPTION on it, and the owner has none,
+// even with the CREATEROLE it holds on Postgres 16+.
 // GRANT is idempotent, so a retried provision converges.
 func documentDBGrantSQL(roles ...string) string {
 	quoted := make([]string, 0, len(roles))
@@ -140,7 +143,7 @@ func documentDBGrantSQL(roles ...string) string {
 // reports a failed statement and still exits zero, so every check downstream
 // would be reading a success that never happened.
 func documentDBPsql(database, statement string) []string {
-	return []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database, "-c", statement}
+	return []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database, "-c", pgroles.PinnedSearchPath + statement}
 }
 
 // documentDBConfirmSQL asks the database what it actually holds and raises

@@ -44,6 +44,7 @@ func TestIntegration_CreateRoleStoresAHostilePasswordVerbatim(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = superDB.Close() })
 	superDB.SetMaxOpenConns(1)
+	installCustomerRoleFunctions(t, superDB)
 	if _, err := superDB.ExecContext(ctx, "SET standard_conforming_strings = off"); err != nil {
 		t.Fatalf("set standard_conforming_strings: %v", err)
 	}

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
@@ -276,7 +277,7 @@ func (s *ProvisioningService) resumePendingPassword(pendingPath string, filed bo
 // client puts every argument into the exec request's URL, where the API
 // server records it in its audit log.
 func (s *ProvisioningService) alterRolePassword(ctx context.Context, inst *domain.DatabaseInstance, username, password string) error {
-	sqlText := alterRolePasswordSQL(username, password) + "\n"
+	sqlText := pgroles.PinnedSearchPath + alterRolePasswordSQL(username, password) + "\n"
 	_, err := s.k8sClient.ExecInPodStdin(ctx, inst.Namespace, inst.ProjectID+"-postgres-1", "postgres",
 		[]string{"psql", "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"}, sqlText)
 	if err != nil {

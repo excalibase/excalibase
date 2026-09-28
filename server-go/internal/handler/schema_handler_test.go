@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -67,11 +68,14 @@ func setupSchemaRouter(t *testing.T) chi.Router {
 	defer superDB.Close()
 
 	_, err = superDB.ExecContext(ctx, `
-		CREATE ROLE excalibase_app WITH LOGIN PASSWORD 'apppass' CREATEROLE;
+		CREATE ROLE excalibase_app WITH LOGIN PASSWORD 'apppass';
 		GRANT ALL ON SCHEMA public TO excalibase_app;
 		ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO excalibase_app;
 		ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO excalibase_app;
-	`)
+		CREATE ROLE app_owner LOGIN;
+		CREATE SCHEMA excalibase;
+		GRANT USAGE ON SCHEMA excalibase TO excalibase_app;
+	`+pgroles.CustomerRoleSQL("app_owner"))
 	if err != nil {
 		t.Fatalf("create role: %v", err)
 	}
@@ -548,6 +552,30 @@ func TestSchemaHandler_DropRole(t *testing.T) {
 	w := schemaRequest(r, "DELETE", "/api/schema/test-proj/roles/drop_me", "")
 	if w.Code != 200 {
 		t.Fatalf("drop role: %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSchemaHandler_RolesRefusePlatformRoles(t *testing.T) {
+	r := setupSchemaRouter(t)
+
+	for _, name := range []string{"cdc_watcher", "excalibase_mongo_users", "excalibase_docbrowser", "documentdb_admin_role", "pg_monitor"} {
+		w := schemaRequest(r, "POST", testRolesPath, fmt.Sprintf(`{"name":%q,"login":true}`, name))
+		if w.Code != http.StatusForbidden {
+			t.Errorf("create %s: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	for _, name := range []string{"excalibase_app", "app_owner"} {
+		w := schemaRequest(r, "DELETE", testRolesPath+"/"+name, "")
+		if w.Code != http.StatusForbidden {
+			t.Errorf("drop %s: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	w := schemaRequest(r, "POST", testRolesPath, `{"name":"twice","login":false}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	if w = schemaRequest(r, "POST", testRolesPath, `{"name":"twice","login":false}`); w.Code != http.StatusConflict {
+		t.Errorf("create twice: %d %s", w.Code, w.Body.String())
 	}
 }
 

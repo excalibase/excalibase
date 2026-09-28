@@ -2,10 +2,12 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/go-chi/chi/v5"
+	"github.com/lib/pq"
 )
 
 const (
@@ -45,7 +47,7 @@ func (h *SchemaHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.introspector.CreateRole(r.Context(), db, req); err != nil {
-		schemaError(w, err, http.StatusInternalServerError)
+		schemaError(w, err, roleErrorStatus(err))
 		return
 	}
 	w.Header().Set(hdrContentType, mimeJSON)
@@ -61,10 +63,30 @@ func (h *SchemaHandler) DropRole(w http.ResponseWriter, r *http.Request) {
 	}
 	roleName := chi.URLParam(r, "roleName")
 	if err := h.introspector.DropRole(r.Context(), db, roleName); err != nil {
-		schemaError(w, err, http.StatusInternalServerError)
+		schemaError(w, err, roleErrorStatus(err))
 		return
 	}
 	writeJSON(w, map[string]string{"status": "dropped"})
+}
+
+// roleErrorStatus tells a refusal (a platform role, or one the project did
+// not create) and a name already taken apart from a failure.
+func roleErrorStatus(err error) int {
+	if errors.Is(err, schema.ErrProtectedRole) {
+		return http.StatusForbidden
+	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		switch pqErr.Code {
+		case "42501", "42939": // insufficient_privilege, reserved_name
+			return http.StatusForbidden
+		case "42710", "2BP01": // duplicate_object, dependent_objects_still_exist
+			return http.StatusConflict
+		case "42602": // invalid_name
+			return http.StatusBadRequest
+		}
+	}
+	return http.StatusInternalServerError
 }
 
 // --- Extensions ---

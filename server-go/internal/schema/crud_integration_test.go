@@ -348,8 +348,9 @@ func TestIntegration_DropColumn(t *testing.T) {
 // --- Roles ---
 
 func TestIntegration_Roles(t *testing.T) {
-	superDB, _, cleanup := setupPG(t)
+	superDB, appDB, cleanup := setupPG(t)
 	defer cleanup()
+	installCustomerRoleFunctions(t, superDB)
 
 	introspector := NewIntrospector()
 	ctx := context.Background()
@@ -363,20 +364,58 @@ func TestIntegration_Roles(t *testing.T) {
 		assertExpectedRolesPresent(t, roles)
 	})
 
-	t.Run("create and drop role", func(t *testing.T) {
+	// Studio runs as excalibase_app, which has no CREATEROLE on any major.
+	t.Run("create and drop role as the platform app role", func(t *testing.T) {
 		pwd := testutil.FixturePassword("schema-role")
-		if err := introspector.CreateRole(ctx, superDB, CreateRoleRequest{
+		if err := introspector.CreateRole(ctx, appDB, CreateRoleRequest{
 			Name: "test_role", Password: &pwd, Login: true,
 		}); err != nil {
 			t.Fatalf("CreateRole: %v", err)
 		}
 		assertRoleLogin(t, introspector, superDB, ctx, "test_role", true)
+		var stored string
+		if err := superDB.QueryRowContext(ctx, "SELECT left(rolpassword, 14) FROM pg_authid WHERE rolname = 'test_role'").Scan(&stored); err != nil || stored != "SCRAM-SHA-256$" {
+			t.Fatalf("stored password %q (%v)", stored, err)
+		}
 
-		if err := introspector.DropRole(ctx, superDB, "test_role"); err != nil {
+		if err := introspector.DropRole(ctx, appDB, "test_role"); err != nil {
 			t.Fatalf("DropRole: %v", err)
 		}
 		assertRoleAbsent(t, introspector, superDB, ctx, "test_role")
 	})
+
+	t.Run("a Mongo user or a role the owner did not create cannot be dropped", func(t *testing.T) {
+		assertOnlyOwnedRolesDrop(t, introspector, superDB, appDB)
+	})
+}
+
+func assertOnlyOwnedRolesDrop(t *testing.T, introspector *Introspector, superDB, appDB *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := superDB.ExecContext(ctx, `CREATE ROLE excalibase_mongo_users NOLOGIN;
+		CREATE ROLE mongo_reader LOGIN IN ROLE excalibase_mongo_users; CREATE ROLE someone_else LOGIN`); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	for _, name := range []string{"mongo_reader", "someone_else", testOwner} {
+		if err := introspector.DropRole(ctx, appDB, name); err == nil {
+			t.Errorf("dropped %s", name)
+		}
+	}
+	roles, _ := introspector.GetRoles(ctx, superDB)
+	assertRolesPresent(t, roles, "mongo_reader", "someone_else", testOwner)
+}
+
+func assertRolesPresent(t *testing.T, roles []RoleInfo, names ...string) {
+	t.Helper()
+	present := map[string]bool{}
+	for _, r := range roles {
+		present[r.Name] = true
+	}
+	for _, name := range names {
+		if !present[name] {
+			t.Errorf("role %s is gone", name)
+		}
+	}
 }
 
 // assertSystemRolesExcluded verifies known system roles are absent from the list.

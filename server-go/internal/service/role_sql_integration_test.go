@@ -44,8 +44,13 @@ type rolePostgres struct {
 
 func startRolePostgres(t *testing.T) *rolePostgres {
 	t.Helper()
+	return startRolePostgresImage(t, "postgres:16-alpine")
+}
+
+func startRolePostgresImage(t *testing.T, image string) *rolePostgres {
+	t.Helper()
 	ctx := context.Background()
-	pg, err := postgres.Run(ctx, "postgres:16-alpine",
+	pg, err := postgres.Run(ctx, image,
 		postgres.WithDatabase("app"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("p"),
@@ -82,6 +87,20 @@ func (p *rolePostgres) psql(t *testing.T, sqlText string) {
 		body, _ := io.ReadAll(out)
 		t.Fatalf("psql exit %d: %s", code, body)
 	}
+}
+
+// psqlErr runs sqlText like psql, returning a failure instead of stopping the test.
+func (p *rolePostgres) psqlErr(sqlText string) error {
+	code, out, err := p.container.Exec(context.Background(),
+		[]string{"psql", "-U", "postgres", "-d", "app", "-v", "ON_ERROR_STOP=1", "-c", sqlText}, tcexec.Multiplexed())
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		body, _ := io.ReadAll(out)
+		return fmt.Errorf("psql exit %d: %s", code, body)
+	}
+	return nil
 }
 
 func (p *rolePostgres) connect(t *testing.T, user, password string) *sql.DB {

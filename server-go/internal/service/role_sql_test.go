@@ -3,6 +3,8 @@ package service
 import (
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/pgroles"
 )
 
 // TestBuildProjectRoleSQL_CreatesCdcWatcherRoleWithReplication asserts the
@@ -157,5 +159,20 @@ func TestBuildProjectRoleSQL_WatcherWritesOnlyItsOwnSchema(t *testing.T) {
 	}
 	if strings.Contains(sql, `SCHEMA public TO "cdc_watcher"`) {
 		t.Error("cdc_watcher must not be granted anything on public")
+	}
+}
+
+// Every registration, restore included, installs the customer role
+// functions for the project's owner, before any password reset.
+func TestProjectRoleSQL_InstallsTheCustomerRoleFunctionsForTheOwner(t *testing.T) {
+	spec := projectRoleSpec{databaseName: "app", adminUsername: "owner_x", resetPasswords: true}
+	creds := projectRoleCredentials{authPassword: "a", appPassword: "b", watcherPassword: "c"}
+	sql := projectRoleSQL(spec, creds, "pub")
+	functions := strings.Index(sql, pgroles.CustomerRoleSQL("owner_x"))
+	if functions < 0 {
+		t.Fatal("the customer role functions are not installed")
+	}
+	if reset := strings.Index(sql, "ALTER ROLE %I WITH LOGIN PASSWORD"); reset < functions {
+		t.Fatalf("the password reset runs before the functions are installed (%d < %d)", reset, functions)
 	}
 }

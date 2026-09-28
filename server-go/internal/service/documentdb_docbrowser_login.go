@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 )
@@ -13,7 +14,7 @@ import (
 // the gateway's loopback only; the platform's Postgres roles log in by
 // certificate and are refused there. The "excalibase" prefix is reserved, so
 // no customer can create, rotate or delete it.
-const DocBrowserLogin = "excalibase_docbrowser"
+const DocBrowserLogin = config.DocumentDBBrowserLogin
 
 const docBrowserStep = "create document browser login"
 
