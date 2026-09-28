@@ -27,12 +27,6 @@ func main() {
 	corsOrigins := envOr("CORS_ORIGINS", "*")
 	accessTokens := parseTokens(os.Getenv("VAULT_ACCESS_TOKENS"))
 
-	// KMS-wrapped unseal: if VAULT_UNSEAL_KEY_CIPHERTEXT is set, decrypt it into
-	// VAULT_UNSEAL_KEY so the auto-unseal below works with no plaintext key stored.
-	if err := kmsseal.ResolveUnsealKeyEnv(context.Background()); err != nil {
-		log.Fatalf("KMS unseal-key resolve: %v", err)
-	}
-
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatalf("Failed to connect Postgres: %v", err)
@@ -45,6 +39,10 @@ func main() {
 	}
 	defer v.Close()
 	log.Println("Using PostgreSQL vault store")
+
+	if err := unsealAtBoot(v); err != nil {
+		log.Fatalf("vault unseal: %v", err)
+	}
 
 	// Auto-unseal
 	if unsealKey := os.Getenv("VAULT_UNSEAL_KEY"); unsealKey != "" && v.Initialized() && v.Sealed() {
@@ -94,6 +92,24 @@ func vaultDBURL() (string, error) {
 		return "", errors.New("VAULT_DB_URL is required (Postgres connection string for the vault store)")
 	}
 	return url, nil
+}
+
+// unsealAtBoot opens the vault from a KMS-wrapped unseal key when one is
+// configured, and refuses to start rather than run sealed when it cannot.
+// Mixing it with a plaintext VAULT_UNSEAL_KEY is refused: no fallback.
+func unsealAtBoot(v *vault.Vault) error {
+	ciphertext := os.Getenv("VAULT_UNSEAL_KEY_CIPHERTEXT")
+	if ciphertext == "" {
+		return nil
+	}
+	if os.Getenv("VAULT_UNSEAL_KEY") != "" {
+		return errors.New("set either VAULT_UNSEAL_KEY_CIPHERTEXT or VAULT_UNSEAL_KEY, not both")
+	}
+	client, err := kmsseal.NewClient(context.Background())
+	if err != nil {
+		return err
+	}
+	return kmsseal.UnsealAtBoot(context.Background(), v, client, ciphertext)
 }
 
 func envOr(key, fallback string) string {

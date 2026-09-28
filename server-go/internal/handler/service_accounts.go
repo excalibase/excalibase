@@ -61,7 +61,7 @@ func (h *ServiceAccountHandler) Routes(r chi.Router) {
 	r.Use(auth.RequirePermission(auth.PermManageUsers))
 	r.Get("/", h.List)
 	r.Get("/{name}/tokens", h.ListTokens)
-	r.With(auth.RequireUnrestrictedCredential).Post("/", h.Create)
+	r.With(unlessServiceTokenManager(auth.RequireUnrestrictedCredential)).Post("/", h.Create)
 	r.With(auth.RequireUnrestrictedCredential).Delete("/{name}", h.Delete)
 }
 
@@ -79,6 +79,11 @@ func (h *ServiceAccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(req.Name)
 	if !serviceAccountName.MatchString(name) {
 		httpError(w, "name must be a lowercase slug of 2-40 characters", http.StatusBadRequest)
+		return
+	}
+	if token := auth.GetToken(r.Context()); auth.IsCapabilityToken(token) &&
+		!auth.TokenGrants(token, auth.ManageServiceTokensCapability(name)) {
+		httpError(w, "this token may not create that service account", http.StatusForbidden)
 		return
 	}
 	existing, _ := h.userStore.FindUserByUsername(r.Context(), name)
@@ -235,4 +240,20 @@ func (h *ServiceAccountHandler) audit(r *http.Request, action string, user *doma
 		entry.UserID = actor.ID
 	}
 	_ = h.auditLog.LogAudit(r.Context(), entry)
+}
+
+// unlessServiceTokenManager lets a capability token that manages service
+// tokens past guard; Create then binds it to a principal it manages (EXC-485).
+// Every other caller still meets guard.
+func unlessServiceTokenManager(guard func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		guarded := guard(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if auth.TokenManagesServiceTokens(auth.GetToken(r.Context())) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			guarded.ServeHTTP(w, r)
+		})
+	}
 }

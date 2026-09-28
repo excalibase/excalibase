@@ -35,12 +35,12 @@ After the rollout finishes:
 ```bash
 kubectl -n excalibase-platform get pods                # all pods Running
 kubectl -n excalibase-platform get cluster             # CNPG status: "Cluster in healthy state"
-kubectl -n excalibase-platform get secret platform-bootstrap -o jsonpath='{.data.admin-pass}' | base64 -d ; echo
+kubectl -n excalibase-platform get secret platform-setup-token -o jsonpath='{.data.token}' | base64 -d ; echo
 ```
 
-The last command prints the **bootstrap admin password**. Log in once at `https://<your-host>/login` (username `admin`), then immediately:
-1. Mint a PAT for CI/scripts (Settings → Personal access tokens, or the API below).
-2. Rotate or delete the bootstrap admin user (`/admin`) once a real platform_admin user exists.
+The last command prints the **one-time setup token**. No admin account or password is created or stored by the chart (EXC-485): open `https://<your-host>/setup`, register the first admin with that token and a password of your own, then mint a PAT for CI/scripts (Settings → Personal access tokens, or the API below). The token works once.
+
+The vault unseal key is kept under AWS KMS (`vault.unseal.provider: awskms`, see docs/deployment/production-k8s-runbook.md §3.3.1); only its ciphertext is stored, and provisioning refuses to start when it cannot decrypt it.
 
 **Studio needs HTTPS.** Its only credential is the `excali_session` cookie, which is `HttpOnly`, `Secure` and `SameSite=Strict`, so a browser stores it only over HTTPS or on `http://localhost`. Plain HTTP on any other address signs nobody in. Writes that ride the cookie must come from `STUDIO_URL`'s origin (or an origin listed explicitly in `CORS_ORIGINS`), so open Studio at exactly that address. `CORS_ORIGINS=*` lets any page call the API with a bearer token but never with the cookie.
 

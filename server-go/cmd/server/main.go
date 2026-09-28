@@ -53,12 +53,14 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
 	}
-	// KMS-wrapped unseal: when VAULT_UNSEAL_KEY_CIPHERTEXT is set, decrypt it into
-	// VAULT_UNSEAL_KEY before the embedded vault's env-based auto-unseal runs, so no
-	// plaintext unseal key is stored anywhere. No-op when unset (legacy plaintext).
-	if err := kmsseal.ResolveUnsealKeyEnv(context.Background()); err != nil {
-		log.Fatalf("KMS unseal-key resolve: %v", err)
+	unseal, err := config.LoadVaultUnseal()
+	if err == nil {
+		err = unseal.CheckDeployment(cfg.ProvisionerMode, cfg.VaultURL)
 	}
+	if err != nil {
+		log.Fatalf("vault unseal configuration: %v", err)
+	}
+	cfg.VaultUnseal = unseal
 	runServer(cfg)
 }
 
@@ -74,44 +76,11 @@ func handleCLIArgs() bool {
 	case "recover-instances":
 		recoverInstancesCLI()
 		return true
-	case "kms-encrypt-unseal":
-		kmsEncryptUnsealCLI()
-		return true
 	case "help", "--help", "-h":
 		printHelp()
 		return true
 	}
 	return false
-}
-
-// kmsEncryptUnsealCLI wraps a plaintext unseal key under a KMS key and prints the
-// base64 ciphertext to store in platform-bootstrap/unseal-key-ciphertext. One-time
-// operator step for KMS-envelope auto-unseal (kmsUnseal.enabled). Reads KMS_KEY_ID
-// + VAULT_UNSEAL_KEY (or args), honours AWS_ENDPOINT_URL_KMS (floci in CI).
-func kmsEncryptUnsealCLI() {
-	keyID := os.Getenv("KMS_KEY_ID")
-	if len(os.Args) > 2 && os.Args[2] != "" {
-		keyID = os.Args[2]
-	}
-	unseal := os.Getenv("VAULT_UNSEAL_KEY")
-	if len(os.Args) > 3 && os.Args[3] != "" {
-		unseal = os.Args[3]
-	}
-	if keyID == "" || unseal == "" {
-		fmt.Fprintln(os.Stderr, "usage: kms-encrypt-unseal <kms-key-id> <unseal-key>  (or KMS_KEY_ID + VAULT_UNSEAL_KEY env)")
-		os.Exit(2)
-	}
-	c, err := kmsseal.NewClient(context.Background())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "kms client: %v\n", err)
-		os.Exit(1)
-	}
-	ct, err := kmsseal.EncryptUnsealKey(context.Background(), c, keyID, unseal)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "encrypt: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println(ct)
 }
 
 // printHelp prints CLI usage information.
@@ -122,7 +91,6 @@ func printHelp() {
 	fmt.Println("  (none)              Start the HTTP server")
 	fmt.Println("  reset-password      Reset admin password (vault-gated)")
 	fmt.Println("  recover-instances   Re-discover K8s clusters into SQLite (vault-gated)")
-	fmt.Println("  kms-encrypt-unseal  Wrap the unseal key under KMS → base64 ciphertext")
 	fmt.Println("  help                Show this help")
 }
 
@@ -146,7 +114,7 @@ func runServer(cfg config.AppConfig) {
 		log.Fatalf("parameter-group store: %v", err)
 	}
 
-	vc, localVault, vaultCleanup := buildVault(cfg, sqlStore)
+	vc, localVault, unsealKMS, vaultCleanup := buildVault(cfg, sqlStore)
 	defer vaultCleanup()
 
 	bootstrapDefaultOrgIfNeeded(cfg, sqlStore)
@@ -188,6 +156,7 @@ func runServer(cfg config.AppConfig) {
 		k8sClient:    k8sClient,
 		vc:           vc,
 		localVault:   localVault,
+		unsealKMS:    unsealKMS,
 		provSvc:      provSvc,
 		pgStore:      pgStore,
 		dockerClient: dockerClientRef,
@@ -1087,12 +1056,15 @@ func backupDefaults(cfg config.AppConfig) *service.BackupDefaults {
 }
 
 type handlerDepsArgs struct {
-	cfg          config.AppConfig
-	store        storage.InstanceStore
-	sqlStore     storage.PlatformStore
-	k8sClient    k8s.KubeClient
-	vc           vaultclient.VaultClient
-	localVault   *vault.Vault
+	cfg        config.AppConfig
+	store      storage.InstanceStore
+	sqlStore   storage.PlatformStore
+	k8sClient  k8s.KubeClient
+	vc         vaultclient.VaultClient
+	localVault *vault.Vault
+	// unsealKMS wraps the unseal share at init; nil unless the vault is
+	// KMS-unsealed (EXC-485).
+	unsealKMS    kmsseal.Encrypter
 	provSvc      *service.ProvisioningService
 	pgStore      storage.ParameterGroupStore
 	dockerClient provisioner.DockerClient // optional, for Docker-mode backup adapter
@@ -1311,6 +1283,12 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler.SetSetupTokenStore(sqlStore)
 	authHandler.SetEmailVerifier(emailVerifier)
 	logFirstAdminSetupToken(sqlStore)
+	adoptBootstrapServiceToken(cfg, sqlStore)
+	ceilings, err := config.LoadServiceTokenCeilings()
+	if err != nil {
+		log.Fatalf("service token ceilings: %v", err)
+	}
+	authHandler.SetServiceTokenCeilings(ceilings)
 
 	var vaultHandler *handler.VaultHandler
 	if localVault != nil {
@@ -1321,6 +1299,9 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		// A human caller's read is bound to the project the path names, which
 		// needs the membership lookup as well as the project row (EXC-418).
 		vaultHandler.SetOrgStore(sqlStore)
+		if a.unsealKMS != nil {
+			vaultHandler.SetUnsealKMS(a.unsealKMS, cfg.VaultUnseal.KMSKeyID)
+		}
 	}
 
 	realtimeHandler := handler.NewRealtimeHandler(sqlStore, sqlStore, vc)
@@ -1976,11 +1957,12 @@ func buildPlatformStore(cfg config.AppConfig) storage.PlatformStore {
 
 // buildVault selects the vault backend (remote HTTP, or in-process Shamir on
 // the Postgres platform store) and returns the client, the local instance (nil
-// for HTTP), and a cleanup function that closes the local vault if any.
-func buildVault(cfg config.AppConfig, sqlStore storage.PlatformStore) (vaultclient.VaultClient, *vault.Vault, func()) {
+// for HTTP), the KMS client that wraps its unseal share (nil unless awskms),
+// and a cleanup function that closes the local vault if any.
+func buildVault(cfg config.AppConfig, sqlStore storage.PlatformStore) (vaultclient.VaultClient, *vault.Vault, kmsseal.Encrypter, func()) {
 	if cfg.VaultURL != "" {
 		log.Printf("Using remote vault at %s", cfg.VaultURL)
-		return vaultclient.NewHTTPClient(cfg.VaultURL, cfg.VaultPAT), nil, func() {
+		return vaultclient.NewHTTPClient(cfg.VaultURL, cfg.VaultPAT), nil, nil, func() {
 			// no-op cleanup: remote HTTP vault has no local handle to close.
 		}
 	}
@@ -1999,7 +1981,34 @@ func buildVault(cfg config.AppConfig, sqlStore storage.PlatformStore) (vaultclie
 		log.Fatalf("Failed to init vault (postgres): %v", err)
 	}
 	log.Printf("Using PostgreSQL vault store (auto-init/unseal at boot: %v)", autoReady)
-	return localVault, localVault, func() { localVault.Close() }
+	var unsealKMS kmsseal.Encrypter
+	if cfg.VaultUnseal.UsesKMS() {
+		unsealKMS = unsealWithKMS(localVault, cfg.VaultUnseal)
+	}
+	return localVault, localVault, unsealKMS, func() { localVault.Close() }
+}
+
+// unsealWithKMS opens the vault from its KMS-wrapped unseal key and stops the
+// process when it cannot: provisioning never serves with a sealed vault it was
+// told how to open (EXC-485).
+func unsealWithKMS(localVault *vault.Vault, unseal config.VaultUnseal) *kmsseal.Client {
+	ctx := context.Background()
+	client, err := kmsseal.NewClient(ctx)
+	if err != nil {
+		log.Fatalf("vault unseal: KMS client: %v", err)
+	}
+	if err := kmsseal.UnsealAtBoot(ctx, localVault, client, unseal.Ciphertext); err != nil {
+		log.Fatalf("vault unseal: %v", err)
+	}
+	switch {
+	case !localVault.Initialized() && unseal.Ciphertext != "":
+		log.Printf("WARN: VAULT_UNSEAL_KEY_CIPHERTEXT is set but the vault is not initialized; the bootstrap Job will initialize it and replace the ciphertext")
+	case !localVault.Initialized():
+		log.Printf("Vault not initialized yet; unseal key will be kept under KMS")
+	default:
+		log.Printf("Vault unsealed from its KMS-wrapped unseal key")
+	}
+	return client
 }
 
 // logFirstAdminSetupToken establishes the one-time first-admin setup token
@@ -2026,6 +2035,17 @@ func logFirstAdminSetupToken(sqlStore storage.PlatformStore) {
 	log.Println("================================")
 }
 
+// adoptBootstrapServiceToken gives svc-bootstrap the token the chart generated
+// into a Secret (BOOTSTRAP_SERVICE_TOKEN), so the bootstrap Job and the
+// token-rotation CronJob never need the platform admin's password (EXC-485).
+func adoptBootstrapServiceToken(cfg config.AppConfig, sqlStore storage.PlatformStore) {
+	err := auth.AdoptBootstrapServiceToken(context.Background(), sqlStore, sqlStore,
+		os.Getenv("BOOTSTRAP_SERVICE_TOKEN"), cfg.BootstrapServicePermissions)
+	if err != nil {
+		log.Fatalf("Failed to adopt the bootstrap service token: %v", err)
+	}
+}
+
 // bootstrapDefaultOrgIfNeeded creates the default org for self-hosted mode
 // once at least one user exists. Cloud mode skips this — orgs are minted via
 // the org API.
@@ -2033,7 +2053,8 @@ func bootstrapDefaultOrgIfNeeded(cfg config.AppConfig, sqlStore storage.Platform
 	if cfg.IsCloud() {
 		return
 	}
-	users, _ := sqlStore.FindAllUsers(context.Background())
+	all, _ := sqlStore.FindAllUsers(context.Background())
+	users := domain.HumanUsers(all)
 	if len(users) == 0 {
 		return
 	}

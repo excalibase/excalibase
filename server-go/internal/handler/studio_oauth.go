@@ -293,7 +293,7 @@ func (h *StudioOAuthHandler) checkSignUp(ctx context.Context, address, inviteHas
 	if err != nil {
 		return err
 	}
-	if len(users) == 0 {
+	if len(domain.HumanUsers(users)) == 0 {
 		return signInRefusal("setup_required")
 	}
 	if inviteHash == "" {

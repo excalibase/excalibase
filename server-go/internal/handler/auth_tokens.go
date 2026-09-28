@@ -119,6 +119,10 @@ func (h *AuthHandler) decodeCreateToken(w http.ResponseWriter, r *http.Request, 
 		httpError(w, err.message, err.status)
 		return tokenSpec{}, false
 	}
+	if err := h.bindDelegatedMint(r.Context(), caller, req); err != nil {
+		httpError(w, err.message, err.status)
+		return tokenSpec{}, false
+	}
 	spec := tokenSpec{userID: user.ID, name: req.Name, scopes: scopes, projectID: req.ProjectID, lifetime: lifetime}
 	if err := h.resolveTokenSubject(r, user, req, &spec); err != nil {
 		httpError(w, err.message, err.status)
@@ -173,6 +177,9 @@ func restrictToCallerToken(caller *domain.AccessToken, projectID, scopes string)
 // Only a session or an unrestricted token — the user acting with their full
 // authority — may open that door, whatever their role allows.
 func restrictCapabilityMint(caller *domain.AccessToken, req createTokenRequest) *refusal {
+	if auth.IsCapabilityToken(caller) {
+		return nil // bound by bindDelegatedMint
+	}
 	if req.UserID == "" && len(req.Permissions) == 0 {
 		return nil
 	}
@@ -182,15 +189,84 @@ func restrictCapabilityMint(caller *domain.AccessToken, req createTokenRequest) 
 	return &refusal{http.StatusForbidden, "a restricted token may not mint a service account token"}
 }
 
+// SetServiceTokenCeilings sets, per service principal, the widest permission
+// list a service token that manages it may mint or rotate (EXC-485).
+func (h *AuthHandler) SetServiceTokenCeilings(ceilings map[string][]string) {
+	h.ceilings = ceilings
+}
+
+// withinCeiling reports whether every permission is delegable and covered by
+// the principal's ceiling.
+func (h *AuthHandler) withinCeiling(principal string, permissions []string) bool {
+	ceiling := &domain.AccessToken{Permissions: h.ceilings[principal]}
+	for _, raw := range permissions {
+		wanted, err := auth.ParseCapability(raw)
+		if err != nil || !auth.Delegable(wanted) || !auth.TokenGrants(ceiling, wanted) {
+			return false
+		}
+	}
+	return len(permissions) > 0
+}
+
+// bindDelegatedMint is the only way a capability token mints anything
+// (EXC-485): a token for a service principal it manages, carrying only
+// permissions within that principal's configured ceiling. Anything else — above all a
+// plain PAT for itself, which would be a platform_admin credential with no
+// permission list — is refused. Non-capability callers are not affected.
+func (h *AuthHandler) bindDelegatedMint(ctx context.Context, caller *domain.AccessToken, req createTokenRequest) *refusal {
+	if !auth.IsCapabilityToken(caller) {
+		return nil
+	}
+	forbidden := &refusal{http.StatusForbidden, "a service token may only mint tokens for a service principal it manages, within its own permissions"}
+	if req.UserID == "" || req.ProjectID != "" || len(req.Permissions) == 0 {
+		return forbidden
+	}
+	subject, _ := h.userStore.FindUserByID(ctx, req.UserID)
+	if !subject.IsService() || !auth.TokenGrants(caller, auth.ManageServiceTokensCapability(subject.Username)) {
+		return forbidden
+	}
+	if !h.withinCeiling(subject.Username, req.Permissions) {
+		return forbidden
+	}
+	return nil
+}
+
+// managedOwner returns the service principal owning tok when the capability
+// token caller manages it, or nil.
+func (h *AuthHandler) managedOwner(ctx context.Context, caller, tok *domain.AccessToken) *domain.User {
+	if !auth.IsCapabilityToken(caller) || h.userStore == nil {
+		return nil
+	}
+	owner, _ := h.userStore.FindUserByID(ctx, tok.UserID)
+	if !owner.IsService() || !auth.TokenGrants(caller, auth.ManageServiceTokensCapability(owner.Username)) {
+		return nil
+	}
+	return owner
+}
+
+// managesOwner reports whether caller may revoke tok. Revoking only removes
+// authority, so a drifted token outside the ceiling can still be retired.
+func (h *AuthHandler) managesOwner(ctx context.Context, caller, tok *domain.AccessToken) bool {
+	return h.managedOwner(ctx, caller, tok) != nil
+}
+
+// mayRotateManaged reports whether caller may rotate tok: rotation hands back
+// a fresh secret, so tok must also stay within its principal's ceiling.
+func (h *AuthHandler) mayRotateManaged(ctx context.Context, caller, tok *domain.AccessToken) bool {
+	owner := h.managedOwner(ctx, caller, tok)
+	return owner != nil && h.withinCeiling(owner.Username, tok.Permissions)
+}
+
 // restrictCapabilityRotation applies the same rule to rotation, which returns
 // a fresh secret for an existing token and is therefore a mint of the same
 // authority under another name. A capability token may rotate itself — it
-// gains nothing it did not already hold — and nothing else. (In production
-// middleware.CapabilityGate refuses every non-GET a capability token makes,
-// so today it cannot reach even self-rotation; this keeps the rule true if
-// the gate ever widens.)
-func restrictCapabilityRotation(caller, subject *domain.AccessToken) *refusal {
+// gains nothing it did not already hold — or the token of a service principal
+// it manages (managed, EXC-485) — and nothing else.
+func restrictCapabilityRotation(caller, subject *domain.AccessToken, managed bool) *refusal {
 	if caller != nil && subject != nil && caller.TokenHash == subject.TokenHash {
+		return nil
+	}
+	if managed {
 		return nil
 	}
 	if auth.IsCapabilityToken(caller) {
@@ -313,7 +389,7 @@ func (h *AuthHandler) RotateToken(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err.message, err.status)
 		return
 	}
-	if err := restrictCapabilityRotation(caller, tok); err != nil {
+	if err := restrictCapabilityRotation(caller, tok, h.mayRotateManaged(r.Context(), caller, tok)); err != nil {
 		httpError(w, err.message, err.status)
 		return
 	}
@@ -360,6 +436,16 @@ func (h *AuthHandler) tokenForCaller(w http.ResponseWriter, r *http.Request, all
 		return nil, false
 	}
 	owner := tok.UserID == caller.ID
+	callerToken := auth.GetToken(r.Context())
+	if auth.IsCapabilityToken(callerToken) && !owner {
+		// A service token acts only on the tokens of the principals it
+		// manages, whatever role its own principal carries (EXC-485).
+		if !h.managesOwner(r.Context(), callerToken, tok) {
+			httpError(w, "forbidden", http.StatusForbidden)
+			return nil, false
+		}
+		return tok, true
+	}
 	admin := (allowAdmin || h.ownedByService(r.Context(), tok)) && auth.HasPermission(caller.Role, auth.PermManageUsers)
 	if !owner && !admin {
 		httpError(w, "forbidden", http.StatusForbidden)

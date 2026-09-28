@@ -191,6 +191,58 @@ func IsCapabilityToken(t *domain.AccessToken) bool {
 	return t != nil && len(t.Permissions) > 0
 }
 
+// Capabilities that administer the platform's own credentials (EXC-485). The
+// bootstrap service principal holds them; they are never delegated to a token
+// it mints, so a service token can never mint or unseal anything itself.
+const (
+	resourceServiceTokens = "service-tokens"
+	actionManage          = "manage"
+	resourceVault         = "vault"
+	actionVaultInit       = "init"
+	actionVaultUnseal     = "unseal"
+)
+
+// ManageServiceTokensCapability lets a token create the named service
+// principal and mint, list, rotate and revoke its tokens.
+func ManageServiceTokensCapability(principal string) Capability {
+	return Capability{Resource: resourceServiceTokens, Action: actionManage, Selector: principal}
+}
+
+// VaultInitCapability and VaultUnsealCapability authorize the two vault
+// lifecycle calls the bootstrap Job makes.
+func VaultInitCapability() Capability {
+	return Capability{Resource: resourceVault, Action: actionVaultInit}
+}
+
+func VaultUnsealCapability() Capability {
+	return Capability{Resource: resourceVault, Action: actionVaultUnseal}
+}
+
+// TokenManagesServiceTokens reports whether the capability token may manage
+// the tokens of at least one service principal. Routes whose principal is
+// named in the request body admit on this, and the handler binds the name.
+func TokenManagesServiceTokens(t *domain.AccessToken) bool {
+	if !IsCapabilityToken(t) {
+		return false
+	}
+	for _, raw := range t.Permissions {
+		granted, err := ParseCapability(raw)
+		if err == nil && granted.Resource == resourceServiceTokens && granted.Action == actionManage {
+			return true
+		}
+	}
+	return false
+}
+
+// Delegable reports whether a token holding c may put c on a token it mints.
+// Management and vault lifecycle capabilities are never passed on.
+func Delegable(c Capability) bool {
+	if c.Resource == resourceServiceTokens {
+		return false
+	}
+	return c.Resource != resourceVault || (c.Action != actionVaultInit && c.Action != actionVaultUnseal)
+}
+
 // TokenGrants reports whether the capability token lists a permission that
 // covers want. Entries that no longer parse are ignored so one bad row can
 // neither open the gate nor close it on the others.

@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/pkg/kmsseal"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
 	"github.com/go-chi/chi/v5"
 )
@@ -28,6 +29,10 @@ type VaultHandler struct {
 	// the read, so every project secret is refused rather than served.
 	instances storage.InstanceStore
 	orgs      storage.OrgStore
+	// kms, when set, wraps the unseal share at init so the plaintext never
+	// leaves this process (EXC-485).
+	kms      kmsseal.Encrypter
+	kmsKeyID string
 }
 
 func NewVaultHandler(v *vault.Vault) *VaultHandler {
@@ -37,6 +42,14 @@ func NewVaultHandler(v *vault.Vault) *VaultHandler {
 // SetInstanceStore wires the project lookup the secret route consults before
 // handing out a project's credentials.
 func (h *VaultHandler) SetInstanceStore(s storage.InstanceStore) { h.instances = s }
+
+// SetUnsealKMS makes init return the unseal share only as a KMS ciphertext
+// under keyID, and refuses rekey, whose plaintext shares would orphan the
+// stored ciphertext.
+func (h *VaultHandler) SetUnsealKMS(enc kmsseal.Encrypter, keyID string) {
+	h.kms = enc
+	h.kmsKeyID = keyID
+}
 
 // SetOrgStore wires the membership lookup the project binding on secret reads
 // consults.
@@ -223,7 +236,11 @@ func (h *VaultHandler) Routes(r chi.Router) {
 		// satisfied it and could seal, rekey or overwrite platform-wide key
 		// material. Reads stay open — the service principals fetch one named
 		// secret with a capability token (EXC-395).
-		r.Use(auth.RequireUnrestrictedCredentialForWrites)
+		//
+		// The one exception is a capability token granted the exact lifecycle
+		// call: the bootstrap Job's svc-bootstrap token initializes the vault
+		// (vault:init) without an admin session (EXC-485).
+		r.Use(custommw.UnlessGrantedCapability(auth.RequireUnrestrictedCredentialForWrites))
 		r.Post("/init", h.Init)
 		r.Post("/unseal", h.Unseal)
 		r.Post("/seal", h.Seal)
@@ -247,6 +264,9 @@ func (h *VaultHandler) Status(w http.ResponseWriter, r *http.Request) {
 		"shares":      s.Shares,
 		"progress":    s.Progress,
 		"type":        s.Type,
+		// The bootstrap Job checks this before init on a KMS install, so a
+		// provisioning not using KMS never hands out a plaintext share (EXC-485).
+		"kmsUnseal": h.kms != nil,
 	})
 }
 
@@ -266,6 +286,10 @@ func (h *VaultHandler) Init(w http.ResponseWriter, r *http.Request) {
 		body.Threshold = 3
 	}
 
+	if h.kms != nil {
+		h.initWrapped(w, r, body.Shares, body.Threshold)
+		return
+	}
 	result, err := h.v.Init(body.Shares, body.Threshold)
 	if err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
@@ -275,6 +299,31 @@ func (h *VaultHandler) Init(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{
 		"shares":    result.Shares,
 		"threshold": result.Threshold,
+	})
+}
+
+// initWrapped initializes a KMS-unsealed vault. Boot unseals from exactly one
+// ciphertext, so only a 1-of-1 split is accepted, and the response carries
+// the wrapped share alone.
+func (h *VaultHandler) initWrapped(w http.ResponseWriter, r *http.Request, shares, threshold int) {
+	if shares != 1 || threshold != 1 {
+		httpError(w, "a KMS-unsealed vault is initialized with one share and threshold 1", http.StatusBadRequest)
+		return
+	}
+	if h.v.Initialized() {
+		httpError(w, safeError(vault.ErrAlreadyInit), http.StatusBadRequest)
+		return
+	}
+	result, err := h.v.InitWrapped(1, 1, kmsseal.ShareWrapper(r.Context(), h.kms, h.kmsKeyID))
+	if err != nil {
+		log.Printf("ERROR: vault init under KMS: %v", err)
+		httpError(w, "vault init failed: the unseal key could not be encrypted with KMS", http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"shares":        []string{},
+		"wrappedShares": result.Shares,
+		"threshold":     result.Threshold,
 	})
 }
 
@@ -306,6 +355,10 @@ func (h *VaultHandler) Seal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *VaultHandler) Rekey(w http.ResponseWriter, r *http.Request) {
+	if h.kms != nil {
+		httpError(w, "rekey is not available while the unseal key is kept under KMS", http.StatusConflict)
+		return
+	}
 	var body struct {
 		Shares    int `json:"shares"`
 		Threshold int `json:"threshold"`

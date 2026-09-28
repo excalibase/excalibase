@@ -27,8 +27,11 @@ type AuthHandler struct {
 	auditLog      auditWriter           // optional — records PAT rotations
 	inviteOnly    bool                  // when true, only an invite token (or the first admin) may register
 	setupTokens   storage.SetupTokenStore
-	verifier      *EmailVerifier
-	loginGuard    *loginguard.Guard
+	// ceilings bound what a service token may mint or rotate for each
+	// principal it manages (EXC-485); a principal without one gets nothing.
+	ceilings   map[string][]string
+	verifier   *EmailVerifier
+	loginGuard *loginguard.Guard
 }
 
 // Five guesses per account per quarter hour, whatever address they come from.
@@ -116,7 +119,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	isFirstUser := len(allUsers) == 0
+	isFirstUser := len(domain.HumanUsers(allUsers)) == 0
 
 	inviteHash, status, msg := h.checkRegistrationInvite(r.Context(), req.InviteToken, req.Email, isFirstUser)
 	if status != 0 {
@@ -586,5 +589,5 @@ func (h *AuthHandler) GetSetupStatus(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "failed to read users", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]bool{"hasAdmin": len(users) > 0})
+	writeJSON(w, map[string]bool{"hasAdmin": len(domain.HumanUsers(users)) > 0})
 }

@@ -32,6 +32,7 @@ const (
 // real gate rather than a handler in isolation.
 type identityFixture struct {
 	r     chi.Router
+	auth  *AuthHandler
 	us    *mockUserStore
 	ts    *mockTokenStore
 	audit *mockAudit
@@ -59,6 +60,7 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 		r.With(auth.RequireAuth).Route(routeTokens, func(r chi.Router) {
 			r.Post("/", authHandler.CreateToken)
 			r.Post("/{tokenHash}"+rotateSuffix, authHandler.RotateToken)
+			r.Delete("/{tokenHash}", authHandler.RevokeToken)
 		})
 	})
 	r.Route("/api/admin/service-accounts", func(r chi.Router) {
@@ -66,7 +68,7 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 		svcHandler.Routes(r)
 	})
 
-	f := &identityFixture{r: r, us: us, ts: ts, audit: audit}
+	f := &identityFixture{r: r, auth: authHandler, us: us, ts: ts, audit: audit}
 	f.admin = f.mintPAT("admin-pat", adminUserID)
 	f.human = f.mintPAT("human-pat", humanUserID)
 	return f
@@ -705,10 +707,8 @@ func TestServiceAccountLifecycleNeedsAnUnrestrictedCredential(t *testing.T) {
 }
 
 // TestCapabilityTokenCannotRotateItself records what the gate actually does:
-// CapabilityGate allows a capability token only the GET routes its permission
-// list names, so rotation — a POST — never reaches the handler. Nothing in
-// the platform self-rotates; the runbook rotates service tokens with an
-// operator credential (§4.4).
+// a capability token that manages no service tokens never reaches rotation —
+// a POST the gate admits only for service-token managers (EXC-485).
 func TestCapabilityTokenCannotRotateItself(t *testing.T) {
 	f := newIdentityFixture(t)
 	raw := f.mintCapability(t, svcGraphqlName, []string{permPolicies})

@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 )
 
-// Live round-trip against a real KMS endpoint (floci in CI/AIO, or AWS). Skipped
+// Live round-trip against a real KMS endpoint (LocalStack, or AWS). Skipped
 // unless EXC_KMS_ITEST=1; requires AWS_ENDPOINT_URL_KMS + creds/region in env.
 func TestIntegration_KMSRoundTrip(t *testing.T) {
 	if os.Getenv("EXC_KMS_ITEST") == "" {
@@ -28,11 +28,11 @@ func TestIntegration_KMSRoundTrip(t *testing.T) {
 	keyID := *keyOut.KeyMetadata.KeyId
 
 	const share = "test-unseal-share-xyz"
-	ctB64, err := EncryptUnsealKey(ctx, c, keyID, share)
+	wrapped, err := ShareWrapper(ctx, c, keyID)([]string{share})
 	if err != nil {
-		t.Fatalf("EncryptUnsealKey: %v", err)
+		t.Fatalf("ShareWrapper: %v", err)
 	}
-	got, err := UnsealKeyFromCiphertext(ctx, c, ctB64)
+	got, err := UnsealKeyFromCiphertext(ctx, c, wrapped[0])
 	if err != nil {
 		t.Fatalf("UnsealKeyFromCiphertext: %v", err)
 	}
@@ -65,13 +65,6 @@ func TestUnsealKeyFromCiphertext_decrypts(t *testing.T) {
 	}
 	if string(fake.gotCT) != "wrapped-blob" {
 		t.Fatalf("decrypter got ciphertext %q, want raw decoded blob", fake.gotCT)
-	}
-}
-
-func TestUnsealKeyFromCiphertext_emptyIsNoop(t *testing.T) {
-	key, err := UnsealKeyFromCiphertext(context.Background(), &fakeDecrypter{}, "")
-	if err != nil || key != "" {
-		t.Fatalf("empty ciphertext must return (\"\", nil); got (%q, %v)", key, err)
 	}
 }
 

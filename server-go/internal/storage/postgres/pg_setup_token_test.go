@@ -189,3 +189,27 @@ func TestCreateFirstAdmin_InsertUserFails_TokenNotBurned(t *testing.T) {
 		t.Fatalf("token should still be usable after the rollback: %v", err)
 	}
 }
+
+// Service principals carry the platform_admin role but are not people. The
+// bootstrap principal exists before anyone registers (EXC-485), so it must not
+// read as "an admin exists" — that would skip the setup token and leave the
+// platform with no way to claim its first admin.
+func TestHasPlatformAdmin_IgnoresServicePrincipals(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	service := newSetupTokenAdmin("svc-bootstrap-1")
+	service.Username = "svc-bootstrap"
+	service.Kind = domain.UserKindService
+	if err := store.CreateUser(ctx, service); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	has, err := store.HasPlatformAdmin(ctx)
+	if err != nil {
+		t.Fatalf("HasPlatformAdmin: %v", err)
+	}
+	if has {
+		t.Fatal("a service principal must not count as the platform admin")
+	}
+}

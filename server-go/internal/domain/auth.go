@@ -25,6 +25,20 @@ type User struct {
 	UpdatedAt       *time.Time `json:"updatedAt,omitempty"`
 }
 
+// HumanUsers returns the users that are people, dropping service principals.
+// "Is this the first account?" and "is there an admin yet?" are questions
+// about people: the platform's own service principals exist before anyone
+// has registered.
+func HumanUsers(users []*User) []*User {
+	humans := make([]*User, 0, len(users))
+	for _, u := range users {
+		if !u.IsService() {
+			humans = append(humans, u)
+		}
+	}
+	return humans
+}
+
 // IsService reports whether the user is a service principal.
 func (u *User) IsService() bool {
 	return u != nil && u.Kind == UserKindService

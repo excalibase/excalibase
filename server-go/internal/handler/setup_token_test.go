@@ -31,7 +31,7 @@ func (s *mockSetupTokenStore) HasPlatformAdmin(ctx context.Context) (bool, error
 		return false, err
 	}
 	for _, u := range users {
-		if u.Role == "platform_admin" {
+		if u.Role == "platform_admin" && !u.IsService() {
 			return true, nil
 		}
 	}
