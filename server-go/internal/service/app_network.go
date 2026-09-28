@@ -46,6 +46,17 @@ func NewAppNetworkService(settings storage.ProjectAppNetworkStore, projects AppN
 	return &AppNetworkService{settings: settings, projects: projects, kube: kube, claimer: claimerOrInProcess(claimer)}
 }
 
+// AppNetworkServiceFor builds the service only when the platform store can
+// record the setting and a cluster client exists; otherwise there is none.
+func AppNetworkServiceFor(platform any, projects AppNetworkProjectFinder,
+	kube k8s.KubeClient, claimer ProjectOperationClaimer) (*AppNetworkService, bool) {
+	settings, ok := platform.(storage.ProjectAppNetworkStore)
+	if !ok || kube == nil || projects == nil {
+		return nil, false
+	}
+	return NewAppNetworkService(settings, projects, kube, claimer), true
+}
+
 func (s *AppNetworkService) Describe(ctx context.Context, projectID string) (AppNetworkView, error) {
 	inst, err := s.project(projectID)
 	if err != nil {

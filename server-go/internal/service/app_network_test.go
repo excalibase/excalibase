@@ -226,3 +226,17 @@ func TestAppNetwork_ReadFailuresAreReported(t *testing.T) {
 		t.Error("a failed project lookup must fail the view")
 	}
 }
+
+// No fallback: without a place to record the setting there is no service.
+func TestAppNetworkServiceFor(t *testing.T) {
+	settings := &fakeAppNetworkSettings{values: map[string]bool{}}
+	if _, ok := AppNetworkServiceFor(struct{}{}, activeProjects(), k8s.NewMockClient(), nil); ok {
+		t.Error("a store that cannot record the setting must mean no service")
+	}
+	if _, ok := AppNetworkServiceFor(settings, activeProjects(), nil, nil); ok {
+		t.Error("no cluster client must mean no service")
+	}
+	if svc, ok := AppNetworkServiceFor(settings, activeProjects(), k8s.NewMockClient(), nil); !ok || svc == nil {
+		t.Error("a store and a cluster must build the service")
+	}
+}

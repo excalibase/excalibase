@@ -13,10 +13,10 @@ import (
 // (EXC-524). Without the Postgres platform store the route is not mounted.
 func newAppNetworkHandler(sqlStore storage.PlatformStore, projects storage.InstanceStore,
 	kube k8s.KubeClient, claimer service.ProjectOperationClaimer) *handler.AppNetworkHandler {
-	settings, ok := sqlStore.(storage.ProjectAppNetworkStore)
-	if !ok || kube == nil {
+	svc, ok := service.AppNetworkServiceFor(sqlStore, projects, kube, claimer)
+	if !ok {
 		log.Println("WARN: no Postgres platform store or cluster client — the app private network API is unavailable")
 		return nil
 	}
-	return handler.NewAppNetworkHandler(service.NewAppNetworkService(settings, projects, kube, claimer))
+	return handler.NewAppNetworkHandler(svc)
 }
