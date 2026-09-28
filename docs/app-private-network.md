@@ -9,7 +9,7 @@ An org admin or owner can turn it on per project (Studio: project Settings, "Pri
 
 ## Apps per project
 
-How many apps one project may hold is set per plan (owner decision 2026-09-29): FREE 2, STANDARD 5, ENTERPRISE 20. They are defaults in the tier configuration that a platform admin can edit (`maxApps`, 0 offers none). A create above the limit is refused with 409 naming it. A downgrade or a restore never deletes apps: the project keeps them and new ones are refused until it is under the limit. Every app still passes the plan's CPU/memory admission at deploy (EXC-388).
+How many apps one project may hold is set per plan (owner decision 2026-09-29): FREE 2, STANDARD 5, ENTERPRISE 20. They are defaults in the tier configuration that a platform admin can edit (`maxApps`, 0 offers none). A create above the limit is refused with 409 naming it. A downgrade or a restore never deletes apps: the project keeps them and new ones are refused until it is under the limit. Every app still passes the plan's CPU/memory admission at deploy (EXC-388). Each deploy also sizes the project namespace's object quota from the plan (pods: 20 + apps × (max replicas + 2); PVCs: at least 7, database instances + 2 per app for its disk and the copy made while lowering it; Services: 15 + apps, where apps is the plan's count or the apps held if more), so the quota never refuses what the plan allows; storage bytes stay governed by the plan caps and the storage budget.
 
 ## How it is enforced
 

@@ -149,6 +149,7 @@ type KubeClient interface {
 	AppDomainCertificate(ctx context.Context, namespace, appName, host string) (CertificateState, error)
 	ClusterIssuerReady(ctx context.Context, name string) error
 	SetAppPrivateNetwork(ctx context.Context, namespace string, open bool) error
+	EnsureNamespaceQuota(ctx context.Context, namespace string, quota NamespaceQuota) error
 	AppPrivateNetworkOpen(ctx context.Context, namespace string) (bool, error)
 }
 

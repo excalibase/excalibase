@@ -317,7 +317,7 @@ Resize for your nodes through the admin API (`PUT /api/admin/tiers/{tier}`,
 # .github/workflows/aio-e2e.yml "Size FREE tier for the 2-vCPU runner"; PAT = your operator PAT (§3.4)
 curl -sf -X PUT https://<admin host>/api/admin/tiers/FREE \
   -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' \
-  -d '{"maxProjects":1,"instances":1,"storageSize":"5Gi","memory":"512Mi","cpu":"0.25","backupEnabled":true,"autoPauseAfterDays":7}'
+  -d '{"maxProjects":1,"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2,"memory":"512Mi","cpu":"0.25","backupEnabled":true,"autoPauseAfterDays":7}'
 curl -sf -H "Authorization: Bearer $PAT" https://<admin host>/api/tiers | jq
 ```
 

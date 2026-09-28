@@ -115,6 +115,10 @@ type MockClient struct {
 	Capacity      ClusterCapacity
 	CapacityError error
 
+	// NamespaceQuotas records the last quota ensured per namespace.
+	NamespaceQuotas   map[string]NamespaceQuota
+	NamespaceQuotaErr error
+
 	// AppPrivateNetwork is the opt-in policy's presence per namespace.
 	AppPrivateNetwork    map[string]bool
 	AppPrivateNetworkErr error
@@ -1023,4 +1027,17 @@ func (m *MockClient) CreateAppDisk(ctx context.Context, namespace string, app *a
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "CreateAppDisk:"+namespace+"/"+app.ID)
 	return m.AppDiskCreateErr
+}
+
+func (m *MockClient) EnsureNamespaceQuota(ctx context.Context, namespace string, quota NamespaceQuota) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.NamespaceQuotaErr != nil {
+		return m.NamespaceQuotaErr
+	}
+	if m.NamespaceQuotas == nil {
+		m.NamespaceQuotas = map[string]NamespaceQuota{}
+	}
+	m.NamespaceQuotas[namespace] = quota
+	return nil
 }

@@ -26,6 +26,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
@@ -232,6 +233,8 @@ func (lab *appLiveLab) newService(apps *fakeAppStoreForDeploy, deploys *fakeDepl
 	orgs.AddOrg("org1", domain.Free)
 	svc := NewAppDeployService(apps, deploys, lab.client, lab.instances, nil, lab.render())
 	svc.SetPlanTiers(NewOrgPlanTiers(lab.instances, orgs))
+	free, _ := config.GetTierConfig(domain.Free)
+	svc.SetNamespaceQuotaTiers(fixedTierConfigs{domain.Free: free})
 	return svc
 }
 
