@@ -1,8 +1,7 @@
 // Use const objects instead of enums for erasableSyntaxOnly compatibility
 export const DatabaseType = {
   POSTGRESQL: 'POSTGRESQL',
-  MYSQL: 'MYSQL',
-  MONGODB: 'MONGODB'
+  MYSQL: 'MYSQL'
 } as const;
 
 export type DatabaseType = typeof DatabaseType[keyof typeof DatabaseType];

@@ -14,7 +14,6 @@ func TestDatabaseTypeSerialization(t *testing.T) {
 	}{
 		{PostgreSQL, `"POSTGRESQL"`},
 		{MySQL, `"MYSQL"`},
-		{MongoDB, `"MONGODB"`},
 	}
 	for _, tt := range tests {
 		b, err := json.Marshal(tt.dt)

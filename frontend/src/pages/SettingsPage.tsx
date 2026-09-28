@@ -11,6 +11,7 @@ import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
+import { engineLabel } from '../utils/engine';
 
 interface RollbackResult {
   name: string;
@@ -50,6 +51,21 @@ function CopyField({ label, value }: CopyFieldProps) {
   );
 }
 
+function projectInfo(project: DatabaseInstance) {
+  return [
+    { icon: Server, label: 'Display Name', value: project.projectName || '-' },
+    { icon: Database, label: 'Database Type', value: engineLabel(project) },
+    { icon: Shield, label: 'Tier', value: project.tier },
+    { icon: Database, label: 'PostgreSQL Version', value: project.postgresVersion || '-' },
+    { icon: Server, label: 'Namespace', value: project.namespace },
+    { icon: Server, label: 'Host', value: project.host || '-' },
+    { icon: Server, label: 'Port', value: project.port || '-' },
+    { icon: Database, label: 'Database Name', value: project.databaseName || '-' },
+    { icon: Clock, label: 'Created', value: project.createdAt ? new Date(project.createdAt).toLocaleString() : '-' },
+    { icon: Clock, label: 'Updated', value: project.updatedAt ? new Date(project.updatedAt).toLocaleString() : '-' },
+  ];
+}
+
 export function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [showDelete, setShowDelete] = useState(false);
@@ -81,18 +97,7 @@ export function SettingsPage() {
   const documentDb = project.documentDb === true;
   const protectedFromDeletion = isDeletionProtected(project);
 
-  const info = [
-    { icon: Server, label: 'Display Name', value: project.projectName || '-' },
-    { icon: Database, label: 'Database Type', value: project.databaseType },
-    { icon: Shield, label: 'Tier', value: project.tier },
-    { icon: Database, label: 'PostgreSQL Version', value: project.postgresVersion || '-' },
-    { icon: Server, label: 'Namespace', value: project.namespace },
-    { icon: Server, label: 'Host', value: project.host || '-' },
-    { icon: Server, label: 'Port', value: project.port || '-' },
-    { icon: Database, label: 'Database Name', value: project.databaseName || '-' },
-    { icon: Clock, label: 'Created', value: project.createdAt ? new Date(project.createdAt).toLocaleString() : '-' },
-    { icon: Clock, label: 'Updated', value: project.updatedAt ? new Date(project.updatedAt).toLocaleString() : '-' },
-  ];
+  const info = projectInfo(project);
 
   const authEndpoint = `https://auth.excalibase.io/${project.orgId}/${project.projectId}`;
   const graphqlEndpoint = `https://api.excalibase.io/${project.orgId}/${project.projectId}/graphql`;

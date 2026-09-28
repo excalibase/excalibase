@@ -8,6 +8,7 @@ import { MonitoringDashboard } from './MonitoringDashboard';
 import { ChevronDown, ChevronUp, Database, Trash2, Info, Activity, Key } from 'lucide-react';
 import { useDeprovisionDatabase } from '../hooks/useProvisioning';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
+import { engineLabel } from '../utils/engine';
 
 interface DatabaseInstanceCardProps {
   readonly instance: DatabaseInstance;
@@ -58,7 +59,7 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
               {instance.projectId}
             </h3>
             <p className="text-sm text-text-secondary">
-              {instance.databaseType} · {instance.tier} · {instance.namespace}
+              {engineLabel(instance)} · {instance.tier} · {instance.namespace}
             </p>
           </div>
         </div>

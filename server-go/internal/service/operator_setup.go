@@ -26,7 +26,6 @@ func NewOperatorSetupService(k8sClient k8s.KubeClient) *OperatorSetupService {
 var operatorURLs = map[domain.DatabaseType]string{
 	domain.PostgreSQL: "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml",
 	domain.MySQL:      "https://raw.githubusercontent.com/planetscale/vitess-operator/main/deploy/operator.yaml",
-	domain.MongoDB:    "https://raw.githubusercontent.com/mongodb/mongodb-kubernetes-operator/master/config/manager/manager.yaml",
 }
 
 var operatorDeployments = map[domain.DatabaseType]struct {
@@ -35,7 +34,6 @@ var operatorDeployments = map[domain.DatabaseType]struct {
 }{
 	domain.PostgreSQL: {name: "cnpg-controller-manager", namespace: "cnpg-system"},
 	domain.MySQL:      {name: "vitess-operator", namespace: "vitess"},
-	domain.MongoDB:    {name: "mongodb-kubernetes-operator", namespace: "mongodb"},
 }
 
 func (s *OperatorSetupService) InstallOperator(ctx context.Context, dbType domain.DatabaseType) error {
@@ -69,7 +67,6 @@ func (s *OperatorSetupService) GetStatus(ctx context.Context) domain.OperatorSta
 	return domain.OperatorStatus{
 		PostgreSQL: s.IsOperatorInstalled(ctx, domain.PostgreSQL),
 		MySQL:      s.IsOperatorInstalled(ctx, domain.MySQL),
-		MongoDB:    s.IsOperatorInstalled(ctx, domain.MongoDB),
 	}
 }
 

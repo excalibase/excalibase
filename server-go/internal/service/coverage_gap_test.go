@@ -56,6 +56,23 @@ func TestOperatorSetup_InstallOperator_UnsupportedType(t *testing.T) {
 	}
 }
 
+// MongoDB-compatible projects are DocumentDB on Postgres; a separate MongoDB
+// operator is nothing the platform provisions, so installing one is refused
+// before anything is applied to the cluster.
+func TestOperatorSetup_InstallOperator_RefusesMongoDB(t *testing.T) {
+	mock := k8s.NewMockClient()
+	svc := NewOperatorSetupService(mock)
+
+	if err := svc.InstallOperator(context.Background(), domain.DatabaseType("MONGODB")); err == nil {
+		t.Fatal("expected MONGODB to be refused")
+	}
+	for _, call := range mock.Calls {
+		if strings.HasPrefix(call, testApplyManifestPrefix) {
+			t.Errorf("nothing may be applied for MONGODB, got %v", mock.Calls)
+		}
+	}
+}
+
 func TestOperatorSetup_IsOperatorInstalled_AllTypes(t *testing.T) {
 	mock := k8s.NewMockClient()
 	svc := NewOperatorSetupService(mock)
@@ -68,9 +85,6 @@ func TestOperatorSetup_IsOperatorInstalled_AllTypes(t *testing.T) {
 	if !svc.IsOperatorInstalled(ctx, domain.MySQL) {
 		t.Error("mysql should be reported installed by mock")
 	}
-	if !svc.IsOperatorInstalled(ctx, domain.MongoDB) {
-		t.Error("mongo should be reported installed by mock")
-	}
 	// Unknown type → false (no entry in operatorDeployments map)
 	if svc.IsOperatorInstalled(ctx, domain.DatabaseType("nope")) {
 		t.Error("unknown type should not be reported installed")
@@ -82,7 +96,7 @@ func TestOperatorSetup_GetStatus(t *testing.T) {
 	svc := NewOperatorSetupService(mock)
 
 	status := svc.GetStatus(context.Background())
-	if !status.PostgreSQL || !status.MySQL || !status.MongoDB {
+	if !status.PostgreSQL || !status.MySQL {
 		t.Errorf("all installed under mock, got %+v", status)
 	}
 }
