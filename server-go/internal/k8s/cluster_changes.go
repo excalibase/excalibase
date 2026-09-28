@@ -167,3 +167,24 @@ func (c *Client) storageClassExpandable(ctx context.Context, name string) error 
 // ValidateTierSizing refuses a tier that does not say how large a cluster is
 // or what it may use.
 func ValidateTierSizing(tier config.TierConfig) error { return validateTierSizing(tier) }
+
+// sizingFields are what WithTier changes apart from the disk.
+var sizingFields = []string{"instances", "resources", "affinity", "primaryUpdateStrategy", "primaryUpdateMethod"}
+
+// WithSizingOf is a copy of cluster with previous's instances, resources,
+// spread, update policy and Postgres settings. The disk is left as it is: a
+// volume that grew cannot be asked to shrink.
+func WithSizingOf(cluster, previous *unstructured.Unstructured) *unstructured.Unstructured {
+	changed := cluster.DeepCopy()
+	for _, field := range sizingFields {
+		value, found, _ := unstructured.NestedFieldCopy(previous.Object, "spec", field)
+		if found {
+			_ = unstructured.SetNestedField(changed.Object, value, "spec", field)
+		} else {
+			unstructured.RemoveNestedField(changed.Object, "spec", field)
+		}
+	}
+	params, _, _ := unstructured.NestedMap(previous.Object, "spec", "postgresql", "parameters")
+	_ = unstructured.SetNestedMap(changed.Object, params, "spec", "postgresql", "parameters")
+	return changed
+}

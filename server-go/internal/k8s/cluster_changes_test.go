@@ -177,3 +177,24 @@ func TestClusterVolumesExpandable(t *testing.T) {
 		})
 	}
 }
+
+// Putting a failed tier change back restores the size, spread and settings,
+// but not the disk: a volume that grew cannot be asked to shrink.
+func TestWithSizingOfRestoresTheSizeButKeepsTheDisk(t *testing.T) {
+	before := freeCluster(t)
+	moved := WithTier(before, config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2", StatementTimeout: "30s"})
+	back := WithSizingOf(moved, before)
+
+	if got := specString(t, back, "storage", "size"); got != "50Gi" {
+		t.Errorf("storage = %q, want the grown 50Gi kept", got)
+	}
+	instances, _, _ := unstructured.NestedInt64(back.Object, "spec", "instances")
+	if instances != 1 || specString(t, back, "resources", "limits", "memory") != "512Mi" ||
+		specString(t, back, "postgresql", "parameters", "statement_timeout") != "15s" ||
+		specString(t, back, "primaryUpdateMethod") != "restart" {
+		t.Errorf("size not put back: %v", back.Object["spec"])
+	}
+	if _, found, _ := unstructured.NestedMap(back.Object, "spec", "affinity"); found {
+		t.Error("the one-per-node rule of the failed plan was kept")
+	}
+}

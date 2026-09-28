@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -20,6 +22,7 @@ func setupClusterChangeTest(t *testing.T) (*ProvisioningService, *storage.FileSy
 	t.Helper()
 	svc, store, mock := setupOpsTest(t)
 	svc.SetOrgStore(testOrgs())
+	mock.Capacity = threeNodes()
 	seedCluster(t, mock, config.TierConfig{Instances: 1, StorageSize: "2Gi", Memory: "512Mi", CPU: "0.5", StatementTimeout: "15s"},
 		map[string]string{"work_mem": "4MB"})
 	return svc, store, mock
@@ -370,5 +373,87 @@ func TestClusterSettingsReportTheClusterAndThePlan(t *testing.T) {
 	}
 	if len(got.TunableParameters) == 0 || !config.TenantTunableParameter(got.TunableParameters[0]) {
 		t.Errorf("tunable parameters = %v", got.TunableParameters)
+	}
+}
+
+// fullNodes are three nodes with no CPU or memory left for anything.
+func fullNodes() k8s.ClusterCapacity {
+	capacity := threeNodes()
+	for i := range capacity.Nodes {
+		capacity.Nodes[i].Name = fmt.Sprintf("n%d", i+1)
+		capacity.Nodes[i].RequestedCPUMilli = capacity.Nodes[i].AllocatableCPUMilli
+		capacity.Nodes[i].RequestedMemBytes = capacity.Nodes[i].AllocatableMemBytes
+	}
+	return capacity
+}
+
+// A bigger plan that no node has room for would leave the restarted instance
+// Pending: the database would be down, not resized.
+func TestApplyOrgTierIsRefusedWhenNoNodeHasRoomForThePlan(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	seedCluster(t, mock, config.TierConfig{Instances: 1, StorageSize: "2Gi", Memory: "256Mi", CPU: "0.25"}, nil)
+	mock.Capacity = fullNodes()
+	before := opsCluster(t, mock)
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Free); !errors.Is(err, ErrPlanDoesNotFit) {
+		t.Fatalf("err = %v, want ErrPlanDoesNotFit", err)
+	}
+	if !equalUnstructured(before.Object, opsCluster(t, mock).Object) {
+		t.Error("the cluster changed although the plan does not fit")
+	}
+	if inst, _ := store.FindByProjectID(testOpsDB); inst.Tier != domain.Free {
+		t.Error("the project's tier changed")
+	}
+}
+
+// The node an instance already runs on only needs room for the growth: its
+// current requests are already counted there.
+func TestApplyOrgTierCountsOnlyTheGrowthOnTheInstancesOwnNode(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	seedCluster(t, mock, config.TierConfig{Instances: 1, StorageSize: "2Gi", Memory: "256Mi", CPU: "0.25"}, nil)
+	capacity := fullNodes()
+	capacity.Nodes[1].RequestedCPUMilli -= 300
+	capacity.Nodes[1].RequestedMemBytes -= 300 << 20
+	mock.Capacity = capacity
+	mock.Pods[testOpsDBNS] = []corev1.Pod{{Spec: corev1.PodSpec{NodeName: "n2"}}}
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Free); err != nil {
+		t.Fatalf("ApplyOrgTier: %v", err)
+	}
+	if got := clusterField(t, opsCluster(t, mock), "resources", "requests", "memory"); got != "512Mi" {
+		t.Errorf("memory request = %q, want the FREE plan's 512Mi", got)
+	}
+}
+
+// A plan no larger than what runs needs no new room, even on a full node.
+func TestApplyOrgTierToASmallerSizeNeedsNoRoom(t *testing.T) {
+	svc, _, mock := setupClusterChangeTest(t)
+	seedCluster(t, mock, config.TierConfig{Instances: 1, StorageSize: "2Gi", Memory: "1Gi", CPU: "1"}, nil)
+	mock.Capacity = fullNodes()
+	mock.Pods[testOpsDBNS] = []corev1.Pod{{Spec: corev1.PodSpec{NodeName: "n1"}}}
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Free); err != nil {
+		t.Fatalf("ApplyOrgTier: %v", err)
+	}
+}
+
+// failingStatusStore refuses the row write a tier change ends with.
+type failingStatusStore struct{ *storage.FileSystemStore }
+
+func (failingStatusStore) UpdateIfStatus(*domain.DatabaseInstance, string) error {
+	return errors.New("platform database unavailable")
+}
+
+// The row's tier bounds tuning and resizing, so a cluster left on a plan the
+// row does not record would be tuned against the wrong plan.
+func TestApplyOrgTierPutsTheSizeBackWhenTheRecordFails(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	setOrgTier(svc, "org1", domain.Standard)
+	svc.store = failingStatusStore{store}
+	if err := svc.ApplyOrgTier(context.Background(), testOpsDB, domain.Standard); err == nil {
+		t.Fatal("a tier change that could not be recorded reported success")
+	}
+	cluster := opsCluster(t, mock)
+	instances, _, _ := unstructured.NestedInt64(cluster.Object, "spec", "instances")
+	if instances != 1 || clusterField(t, cluster, "resources", "limits", "memory") != "512Mi" ||
+		clusterField(t, cluster, "postgresql", "parameters", "statement_timeout") != "15s" {
+		t.Errorf("cluster left on the unrecorded plan: %v", cluster.Object["spec"])
 	}
 }

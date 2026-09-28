@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -40,6 +41,9 @@ var (
 	// ErrTierParametersOutOfBounds refuses a plan the project's Postgres
 	// settings do not fit; they have to be lowered first.
 	ErrTierParametersOutOfBounds = errors.New("the project's Postgres settings are outside the plan's bounds; lower them first")
+	// ErrPlanDoesNotFit refuses a plan whose instances would not all find a
+	// node with room: a restarted instance left Pending is a database down.
+	ErrPlanDoesNotFit = errors.New("the platform has no room for the plan's size right now")
 )
 
 // ClusterSettings is what an admin sees before resizing, re-tiering or tuning.
@@ -178,15 +182,39 @@ func (s *ProvisioningService) ApplyOrgTier(ctx context.Context, projectID string
 	if err := s.RequireNodeCount(ctx, orgTier, plan.Instances); err != nil {
 		return err
 	}
+	if err := s.requireRoomForPlan(ctx, inst, cluster, plan); err != nil {
+		return err
+	}
 	if err := s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithTier(cluster, plan)); err != nil {
 		return fmt.Errorf("apply the %s plan to the cluster: %w", orgTier, err)
 	}
+	previousTier := inst.Tier
 	inst.Tier = orgTier
 	if err := s.store.UpdateIfStatus(inst, inst.Status); err != nil {
-		return fmt.Errorf("the cluster is on the %s plan but the project record was not updated; repeat the change: %w", orgTier, err)
+		inst.Tier = previousTier
+		return errors.Join(fmt.Errorf("record the %s plan: %w", orgTier, err), s.restoreSizing(ctx, inst, cluster))
 	}
 	return nil
 }
+
+// restoreSizing puts back the size a tier change replaced when the change
+// could not be recorded, so tuning and resizing, which the recorded tier
+// bounds, match the cluster. It outlives a caller that gave up.
+func (s *ProvisioningService) restoreSizing(ctx context.Context, inst *domain.DatabaseInstance, previous *unstructured.Unstructured) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revertTimeout)
+	defer cancel()
+	current, err := s.projectCluster(ctx, inst)
+	if err != nil {
+		return fmt.Errorf("put the previous size back: %w", err)
+	}
+	if err := s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, k8s.WithSizingOf(current, previous)); err != nil {
+		return fmt.Errorf("put the previous size back: %w", err)
+	}
+	return nil
+}
+
+// revertTimeout bounds putting a cluster back after a change failed to record.
+const revertTimeout = 30 * time.Second
 
 // requireDiskFits refuses a plan whose disk is below the current one, and a
 // larger one the cluster's volumes cannot grow to.
@@ -207,6 +235,74 @@ func (s *ProvisioningService) requireDiskFits(ctx context.Context, inst *domain.
 		return s.k8sClient.ClusterVolumesExpandable(ctx, inst.Namespace, cluster.GetName())
 	}
 	return nil
+}
+
+// requireRoomForPlan refuses a plan unless enough untainted nodes have room
+// for an instance of its size. A node already running one of the cluster's
+// instances needs room only for the growth; its current requests are counted.
+func (s *ProvisioningService) requireRoomForPlan(ctx context.Context, inst *domain.DatabaseInstance,
+	cluster *unstructured.Unstructured, plan config.TierConfig) error {
+	wantCPU, wantMemory, err := quantities(plan.CPU, plan.Memory)
+	if err != nil {
+		return fmt.Errorf("plan size: %w", err)
+	}
+	cpu, _, _ := unstructured.NestedString(cluster.Object, "spec", "resources", "requests", "cpu")
+	memory, _, _ := unstructured.NestedString(cluster.Object, "spec", "resources", "requests", "memory")
+	hasCPU, hasMemory, err := quantities(cpu, memory)
+	if err != nil {
+		hasCPU, hasMemory = 0, 0
+	}
+	hosts, err := s.instanceNodes(ctx, inst.Namespace, cluster.GetName())
+	if err != nil {
+		return err
+	}
+	capacity, err := s.k8sClient.GetClusterCapacity(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrNodePlacementUnknown, err)
+	}
+	roomy := 0
+	for _, node := range capacity.Nodes {
+		needCPU, needMemory := wantCPU, wantMemory
+		if hosts[node.Name] {
+			needCPU, needMemory = max(0, wantCPU-hasCPU), max(0, wantMemory-hasMemory)
+		}
+		fits := needCPU == 0 && needMemory == 0 && hosts[node.Name]
+		if !node.Tainted && (fits || node.Fits(needCPU, needMemory, s.capacityHeadroomPercent)) {
+			roomy++
+		}
+	}
+	if roomy < plan.Instances {
+		return fmt.Errorf("%w: %d of the %d instances would find a node", ErrPlanDoesNotFit, roomy, plan.Instances)
+	}
+	return nil
+}
+
+// instanceNodes names the nodes the cluster's instances run on now.
+func (s *ProvisioningService) instanceNodes(ctx context.Context, namespace, clusterName string) (map[string]bool, error) {
+	pods, err := s.k8sClient.GetPods(ctx, namespace, "cnpg.io/cluster="+clusterName+",cnpg.io/podRole=instance")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNodePlacementUnknown, err)
+	}
+	nodes := map[string]bool{}
+	for _, pod := range pods {
+		if pod.Spec.NodeName != "" {
+			nodes[pod.Spec.NodeName] = true
+		}
+	}
+	return nodes, nil
+}
+
+// quantities reads a CPU and a memory quantity as millicores and bytes.
+func quantities(cpu, memory string) (int64, int64, error) {
+	cpuQuantity, err := resource.ParseQuantity(cpu)
+	if err != nil {
+		return 0, 0, fmt.Errorf("cpu %q: %w", cpu, err)
+	}
+	memoryQuantity, err := resource.ParseQuantity(memory)
+	if err != nil {
+		return 0, 0, fmt.Errorf("memory %q: %w", memory, err)
+	}
+	return cpuQuantity.MilliValue(), memoryQuantity.Value(), nil
 }
 
 // TuneParameters sets the project's tenant Postgres settings to exactly
@@ -249,6 +345,8 @@ func (s *ProvisioningService) TuneParameters(ctx context.Context, projectID stri
 // restoreTenantParameters puts back the settings a tuning replaced when the
 // tuning could not be recorded, so the record and the cluster agree.
 func (s *ProvisioningService) restoreTenantParameters(ctx context.Context, inst *domain.DatabaseInstance, previous map[string]string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), revertTimeout)
+	defer cancel()
 	cluster, err := s.projectCluster(ctx, inst)
 	if err != nil {
 		return fmt.Errorf("put the previous settings back: %w", err)

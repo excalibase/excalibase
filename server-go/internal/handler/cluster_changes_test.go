@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -53,6 +54,7 @@ func newClusterChangeFixture(t *testing.T) *clusterChangeFixture {
 	}
 	orgs := fakestore.NewOrgs()
 	orgs.AddOrg("org1", domain.Free)
+	mock.Capacity = k8s.ClusterCapacity{Nodes: []k8s.NodeCapacity{{Name: "roomy", AllocatableCPUMilli: 8000, AllocatableMemBytes: 32 << 30}}}
 	svc := service.NewProvisioningService(store, provisioner.NewFactory(), mock)
 	svc.SetOrgStore(orgs)
 	h := NewProvisioningHandler(svc, &adminOrgStore{})
@@ -118,13 +120,19 @@ func TestClusterChangeRefusalsAnswerWithTheirStatus(t *testing.T) {
 		{name: "unknown field", method: "POST", path: "/storage", body: `{"size":"4Gi","storageClass":"x"}`, want: 400},
 		{name: "not json", method: "POST", path: "/storage", body: `{`, want: 400},
 		{name: "volumes cannot grow", method: "POST", path: "/storage", body: `{"size":"4Gi"}`, want: 409, says: "cannot be expanded",
-			setup: func(f *clusterChangeFixture) { f.mock.VolumeExpansionError = k8s.ErrVolumeExpansionUnsupported }},
+			setup: func(f *clusterChangeFixture) {
+				f.mock.VolumeExpansionError = fmt.Errorf("%w: storage class \"secret-class\" does not allow volume expansion", k8s.ErrVolumeExpansionUnsupported)
+			}},
 		{name: "not the org's plan", method: "POST", path: "/tier", body: `{"tier":"ENTERPRISE"}`, want: 409, says: "FREE"},
 		{name: "no such tier", method: "POST", path: "/tier", body: `{"tier":"GOLD"}`, want: 400},
 		{name: "too few nodes", method: "POST", path: "/tier", body: `{"tier":"STANDARD"}`, want: 409, says: "node",
 			setup: func(f *clusterChangeFixture) {
 				f.orgs.AddOrg("org1", domain.Standard)
 				f.mock.Capacity = k8s.ClusterCapacity{Nodes: []k8s.NodeCapacity{{Name: "one"}}}
+			}},
+		{name: "no room for the plan", method: "POST", path: "/tier", body: `{"tier":"FREE"}`, want: 409, says: "no room",
+			setup: func(f *clusterChangeFixture) {
+				f.mock.Capacity = k8s.ClusterCapacity{Nodes: []k8s.NodeCapacity{{Name: "full", AllocatableCPUMilli: 1000, RequestedCPUMilli: 1000}}}
 			}},
 		{name: "platform parameter", method: "PUT", path: "/parameters", body: `{"parameters":{"archive_command":"sh"}}`, want: 400, says: "set by the platform"},
 		{name: "out of bounds", method: "PUT", path: "/parameters", body: `{"parameters":{"work_mem":"1GB"}}`, want: 400},
@@ -139,6 +147,9 @@ func TestClusterChangeRefusalsAnswerWithTheirStatus(t *testing.T) {
 			w := doRequest(f.router, tc.method, clusterChangeProject+tc.path, tc.body)
 			if w.Code != tc.want || !strings.Contains(w.Body.String(), tc.says) {
 				t.Fatalf("got %d %s, want %d saying %q", w.Code, w.Body.String(), tc.want, tc.says)
+			}
+			if strings.Contains(w.Body.String(), "secret-class") {
+				t.Error("the refusal named the platform's storage class")
 			}
 			if f.storageSize(t) != "2Gi" {
 				t.Error("a refused change resized the disk")

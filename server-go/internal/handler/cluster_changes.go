@@ -110,6 +110,12 @@ func writeClusterChangeError(w http.ResponseWriter, projectID, what string, err 
 		httpError(w, errClusterChangeFailed, status)
 		return
 	}
+	if errors.Is(err, k8s.ErrVolumeExpansionUnsupported) {
+		// Which volume and storage class are the platform's business.
+		log.Printf("INFO: %s refused for project %s: %v", what, projectID, err)
+		httpError(w, k8s.ErrVolumeExpansionUnsupported.Error()+" on this platform", status)
+		return
+	}
 	httpError(w, safeError(err), status)
 }
 
@@ -121,6 +127,7 @@ func clusterChangeStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, service.ErrStorageAbovePlan), errors.Is(err, service.ErrTierNotOrgPlan),
 		errors.Is(err, service.ErrTierDiskBelowCurrent), errors.Is(err, service.ErrTierParametersOutOfBounds),
+		errors.Is(err, service.ErrPlanDoesNotFit),
 		errors.Is(err, k8s.ErrVolumeExpansionUnsupported), errors.As(err, &nodes):
 		return http.StatusConflict
 	case errors.Is(err, service.ErrNodePlacementUnknown):
