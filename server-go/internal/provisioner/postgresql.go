@@ -160,7 +160,7 @@ func (p *PostgreSQLProvisioner) provisionNamespace(ctx context.Context, req doma
 	}
 	// Before the cluster: the gateway container's env reads this Secret, and
 	// a pod whose env cannot be resolved does not start (EXC-409).
-	return ensureDocumentDBCredential(ctx, p.client, namespace, projectID, req.DocumentDB)
+	return EnsureDocumentDBCredential(ctx, p.client, namespace, projectID, req.DocumentDB)
 }
 
 func (p *PostgreSQLProvisioner) provisionCRD(ctx context.Context, req domain.ProvisioningRequest, tier config.TierConfig, projectID, namespace string) error {
@@ -321,7 +321,7 @@ func (p *PostgreSQLProvisioner) Provision(ctx context.Context, req domain.Provis
 	if err := p.waitForAllPods(ctx, tier, projectID, namespace); err != nil {
 		return nil, err
 	}
-	if err := ensureDocumentDBService(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
+	if err := EnsureDocumentDBService(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
 		return nil, err
 	}
 
@@ -379,7 +379,7 @@ func (p *PostgreSQLProvisioner) ProvisionWithRollback(ctx context.Context, req d
 		return nil, err
 	}
 	pc.SetStep("create documentdb gateway service")
-	if err := ensureDocumentDBService(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
+	if err := EnsureDocumentDBService(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
 		return nil, pc.Fail(err)
 	}
 
@@ -429,7 +429,7 @@ func (p *PostgreSQLProvisioner) stageNamespace(ctx context.Context, req domain.P
 	// Before the cluster: the gateway container's env reads this Secret, and
 	// a pod whose env cannot be resolved does not start (EXC-409).
 	pc.SetStep("create documentdb credential")
-	if err := ensureDocumentDBCredential(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
+	if err := EnsureDocumentDBCredential(ctx, p.client, namespace, projectID, req.DocumentDB); err != nil {
 		return pc.Fail(err)
 	}
 	return nil

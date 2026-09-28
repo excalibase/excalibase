@@ -107,12 +107,10 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "project not found", http.StatusNotFound)
 		return
 	}
-	// EXC-409, owner decision: a restored cluster carries none of the
-	// DocumentDB setup (preload, gateway plugin, gateway credentials,
-	// project flag), so it is refused here, before a job is filed or a
-	// project id is allocated.
-	if inst.DocumentDB {
-		httpError(w, service.ErrDocumentDBRestoreNotSupported.Error(), http.StatusConflict)
+	// Docker mode cannot restore a DocumentDB project; refused before a job
+	// is filed or a project id is allocated.
+	if inst.DocumentDB && inst.DeploymentMode == domain.ModeDocker {
+		httpError(w, service.ErrDocumentDBRestoreNeedsKubernetes.Error(), http.StatusConflict)
 		return
 	}
 	// A restore creates a project, so the organisation must have a slot for

@@ -28,9 +28,9 @@ import (
 // credentials to keep in step, and would put a password in a Kubernetes Secret
 // that nothing else could rotate.
 
-// ensureDocumentDBCredential writes the empty Secret the gateway's environment
+// EnsureDocumentDBCredential writes the empty Secret the gateway's environment
 // references. Projects without DocumentDB get nothing: they have no gateway.
-func ensureDocumentDBCredential(ctx context.Context, client k8s.KubeClient, namespace, projectID string, documentDB bool) error {
+func EnsureDocumentDBCredential(ctx context.Context, client k8s.KubeClient, namespace, projectID string, documentDB bool) error {
 	if !documentDB {
 		return nil
 	}
@@ -46,9 +46,9 @@ func ensureDocumentDBCredential(ctx context.Context, client k8s.KubeClient, name
 	return nil
 }
 
-// ensureDocumentDBService runs after the pods are ready, because the selector
+// EnsureDocumentDBService runs after the pods are ready, because the selector
 // is copied from the operator's read-write Service.
-func ensureDocumentDBService(ctx context.Context, client k8s.KubeClient, namespace, projectID string, documentDB bool) error {
+func EnsureDocumentDBService(ctx context.Context, client k8s.KubeClient, namespace, projectID string, documentDB bool) error {
 	if !documentDB {
 		return nil
 	}

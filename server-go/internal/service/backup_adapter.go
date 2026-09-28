@@ -59,13 +59,14 @@ const defaultRestoreDatabase = "app"
 // backup surface (operator owns it).
 var ErrUnsupportedBackupMode = errors.New("backup not supported for this deployment mode")
 
-// ErrDocumentDBRestoreNotSupported is returned when a restore is asked for a
-// DocumentDB project. The recovered cluster from a plain CNPG/pg_basebackup
-// restore carries none of the DocumentDB setup (preload, gateway plugin,
-// gateway credentials, the project's DocumentDB flag), so it would come back
-// half-working. Refused before anything is created, until that setup is
-// carried through a restore.
-var ErrDocumentDBRestoreNotSupported = errors.New("restoring a DocumentDB project is not supported yet")
+// ErrDocumentDBRestoreNeedsKubernetes refuses a DocumentDB restore in docker
+// mode, which runs no DocumentDB gateway to restore into.
+var ErrDocumentDBRestoreNeedsKubernetes = errors.New("restoring a DocumentDB project needs Kubernetes: docker mode runs no DocumentDB gateway")
+
+// ErrDocumentDBRestoreCredentialMissing refuses a DocumentDB restore whose
+// recovered cluster has no owner credential of its own. The only other one is
+// the source's, which still opens the source.
+var ErrDocumentDBRestoreCredentialMissing = errors.New("restore: the recovered DocumentDB cluster has no owner credential of its own")
 
 // resolveAdapter looks up the adapter for an instance's mode, treating
 // the empty string as ModeK8s for legacy rows that pre-date the
