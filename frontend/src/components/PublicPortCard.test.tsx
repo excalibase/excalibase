@@ -17,6 +17,7 @@ const closed = {
   port: 0,
   requireTls: true,
   internal: {},
+  canChange: true,
 };
 const open = {
   ...closed,
@@ -99,5 +100,19 @@ describe('PublicPortCard', () => {
     renderCard(closed, 'PAUSED');
     expect(await screen.findByTestId('public-port-toggle')).toBeDisabled();
     expect(screen.getByTestId('public-port-card')).toHaveTextContent(/must be active/i);
+  });
+
+  test('a caller who may not change the port sees its state but no control', async () => {
+    renderCard({ ...open, canChange: false });
+    expect(await screen.findByTestId('public-port-state')).toHaveTextContent('p-1.db.example.com:30001');
+    expect(screen.queryByTestId('public-port-toggle')).toBeNull();
+    expect(screen.getByTestId('public-port-card')).toHaveTextContent(/org admin/i);
+  });
+
+  test('a caller the server does not vouch for sees no control', async () => {
+    const { canChange: _omitted, ...unknown } = closed;
+    renderCard(unknown);
+    expect(await screen.findByTestId('public-port-state')).toHaveTextContent(/private/i);
+    expect(screen.queryByTestId('public-port-toggle')).toBeNull();
   });
 });
