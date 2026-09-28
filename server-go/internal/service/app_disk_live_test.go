@@ -68,6 +68,10 @@ func TestLiveAppDisk(t *testing.T) {
 		lab.expectClaims(t, namespace, 1)
 	})
 	t.Run("a pause and a resume keep the file", func(t *testing.T) {
+		// The fake deploy store records the app status a deploy observed; the real store writes it to the app row.
+		apps.mu.Lock()
+		apps.apps[app.ProjectID+"/"+app.ID].Status = deploys.appStatusOf(app.ID)
+		apps.mu.Unlock()
 		if _, err := svc.PauseApp(lab.ctx, app.ProjectID, app.ID); err != nil {
 			t.Fatalf("pause: %v", err)
 		}
