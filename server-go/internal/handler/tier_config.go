@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -44,6 +45,8 @@ type tierConfigDTO struct {
 	StorageSize string          `json:"storageSize"`
 	// MaxStorageSize is the disk a project may grow to (EXC-492).
 	MaxStorageSize string `json:"maxStorageSize"`
+	// MaxAppDiskSize is the largest disk one app may have (EXC-523).
+	MaxAppDiskSize string `json:"maxAppDiskSize"`
 	Memory         string `json:"memory"`
 	CPU            string `json:"cpu"`
 	BackupEnabled  bool   `json:"backupEnabled"`
@@ -59,6 +62,7 @@ func toTierDTO(tier domain.TierType, tc config.TierConfig) tierConfigDTO {
 		Instances:      tc.Instances,
 		StorageSize:    tc.StorageSize,
 		MaxStorageSize: tc.MaxStorageSize,
+		MaxAppDiskSize: tc.MaxAppDiskSize,
 		Memory:         tc.Memory,
 		CPU:            tc.CPU,
 		BackupEnabled:  tc.BackupEnabled,
@@ -99,6 +103,7 @@ func (h *TierHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Instances:      dto.Instances,
 		StorageSize:    dto.StorageSize,
 		MaxStorageSize: dto.MaxStorageSize,
+		MaxAppDiskSize: dto.MaxAppDiskSize,
 		Memory:         dto.Memory,
 		CPU:            dto.CPU,
 		BackupEnabled:  dto.BackupEnabled,
@@ -139,7 +144,13 @@ func validateTierConfig(tc config.TierConfig) error {
 	if _, err := tc.SlotWALKeepSize(); err != nil {
 		return errors.New("storageSize must be a storage quantity such as 5Gi")
 	}
-	return validateMaxStorage(tc)
+	if err := validateMaxStorage(tc); err != nil {
+		return err
+	}
+	if _, err := apphost.PlanDiskGiB(tc.MaxAppDiskSize); err != nil {
+		return errors.New("maxAppDiskSize must be a whole number of gibibytes such as 20Gi (0Gi offers no app disks)")
+	}
+	return nil
 }
 
 // validateMaxStorage requires the disk a project may grow to, no smaller than

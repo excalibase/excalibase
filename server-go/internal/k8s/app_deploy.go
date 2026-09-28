@@ -53,6 +53,11 @@ func (c *Client) ApplyAppWorkload(ctx context.Context, namespace string, workloa
 			return err
 		}
 	}
+	if workload.Disk != nil {
+		if err := c.ensureAppDisk(ctx, namespace, workload.Disk); err != nil {
+			return err
+		}
+	}
 	deployment, err := c.applyAppDeployment(ctx, namespace, workload.Deployment)
 	if err != nil {
 		return err

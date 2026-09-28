@@ -88,9 +88,13 @@ func (f *fakeAppDeployer) ResumeApp(_ context.Context, projectID, appID, actor s
 	return f.lifecycle("resume", projectID, appID, apphost.StatusRunning)
 }
 
-func (f *fakeAppDeployer) DeleteApp(_ context.Context, projectID, appID string) error {
+func (f *fakeAppDeployer) DeleteApp(_ context.Context, projectID, appID string, _ bool) error {
 	_, err := f.lifecycle("delete", projectID, appID, "")
 	return err
+}
+
+func (f *fakeAppDeployer) GrowAppDisk(context.Context, string, string, string) (*apphost.App, error) {
+	return nil, errors.New("not used")
 }
 
 func setupAppDeployRouter(t *testing.T, deployer *fakeAppDeployer) chi.Router {

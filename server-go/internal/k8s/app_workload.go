@@ -79,6 +79,8 @@ type AppWorkload struct {
 	Service       *corev1.Service
 	Ingress       *networkingv1.Ingress
 	IngressPolicy *unstructured.Unstructured
+	// Disk is the app's persistent volume claim; nil when it has no disk.
+	Disk *corev1.PersistentVolumeClaim
 }
 
 // credentialBearingVariables must never resolve to a plain value: a
@@ -103,6 +105,9 @@ type AppRenderOptions struct {
 	DeployID string
 	// PullAuth is the credential for the image's registry, when the project has one.
 	PullAuth *RegistryAuth
+	// DiskStorageClass is the tenant storage class an app disk is made on;
+	// empty is the cluster's default, as for a database.
+	DiskStorageClass string
 }
 
 // AppObjectName is the name the app's Deployment holds in the project namespace.
@@ -149,6 +154,13 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 		deployment.Spec.Template.Annotations[appEnvRevisionAnnotation] = opts.EnvRevision
 	}
 	deployment.Annotations = map[string]string{appDeployAnnotation: opts.DeployID}
+	disk, err := buildAppDisk(namespace, app, opts.DiskStorageClass)
+	if err != nil {
+		return nil, err
+	}
+	if disk != nil {
+		mountAppDisk(deployment, disk, app.Disk.MountPath)
+	}
 	pullSecret, err := buildAppPullSecret(namespace, app, opts.PullAuth)
 	if err != nil {
 		return nil, err
@@ -166,7 +178,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 	}
 	return &AppWorkload{
 		Deployment: deployment, EnvSecret: envSecret, PullSecret: pullSecret, EgressPolicy: policy,
-		Service: route.service, Ingress: route.ingress, IngressPolicy: route.policy,
+		Service: route.service, Ingress: route.ingress, IngressPolicy: route.policy, Disk: disk,
 	}, nil
 }
 

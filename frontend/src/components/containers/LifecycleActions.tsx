@@ -19,9 +19,13 @@ export function LifecycleActions({ app, deployed, onError }: LifecycleActionsPro
   const navigate = useNavigate();
   const pause = usePauseApp(app.projectId, app.id);
   const resume = useResumeApp(app.projectId, app.id);
-  const remove = useDeleteApp(app.projectId, app.id);
+  const hasDisk = app.disk !== undefined;
+  const remove = useDeleteApp(app.projectId, app.id, hasDisk);
   const [confirming, setConfirming] = useState(false);
+  // Erasing a disk takes the same typed confirmation as deleting a project.
+  const [typedName, setTypedName] = useState('');
   const busy = pause.isPending || resume.isPending || remove.isPending;
+  const confirmed = !hasDisk || typedName === app.name;
 
   const confirmDelete = () =>
     remove.mutate(undefined, {
@@ -56,12 +60,23 @@ export function LifecycleActions({ app, deployed, onError }: LifecycleActionsPro
       {confirming ? (
         <span className="flex items-center gap-2 text-sm">
           <span className="text-text-secondary" data-testid="delete-confirm-text">
-            This stops the container and removes it with its history and secret values.
+            {hasDisk
+              ? `This stops the container and removes it with its history, secret values and its disk: every file on the disk is erased. Type ${app.name} to confirm.`
+              : 'This stops the container and removes it with its history and secret values.'}
           </span>
+          {hasDisk && (
+            <input
+              value={typedName}
+              onChange={(e) => setTypedName(e.target.value)}
+              aria-label="Type the container name to confirm"
+              className="w-32 px-2 py-1 rounded-md bg-bg-tertiary border border-border-primary text-text-primary"
+              data-testid="delete-confirm-name"
+            />
+          )}
           <button
             type="button"
             onClick={confirmDelete}
-            disabled={busy}
+            disabled={busy || !confirmed}
             className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm hover:bg-red-500 disabled:opacity-50"
             data-testid="delete-confirm"
           >
@@ -69,7 +84,10 @@ export function LifecycleActions({ app, deployed, onError }: LifecycleActionsPro
           </button>
           <button
             type="button"
-            onClick={() => setConfirming(false)}
+            onClick={() => {
+              setConfirming(false);
+              setTypedName('');
+            }}
             className={secondaryButton}
             data-testid="delete-cancel"
           >

@@ -46,6 +46,8 @@ type AppDeployService struct {
 	registries      RegistryCredentialFinder
 	plans           PlanTiers
 	headroomPercent int
+	// diskLimits caps an app's disk by its organisation's plan.
+	diskLimits apphost.DiskLimits
 	// domainSync routes the app's custom domains under the name it is deployed as.
 	domainSync func(ctx context.Context, namespace string, app *apphost.App) error
 	// async lets tests run the rollout wait inline instead of in a goroutine.
@@ -181,6 +183,9 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		return nil, nil, err
 	}
 	cfg.Tier = tierType
+	// The disk is the app's, not the frozen config's: every deploy mounts the current one.
+	target := cfg.ToApp(app.ID, app.ProjectID, app.Name)
+	target.Disk = app.Disk
 
 	url, routeErr := s.render.Route.Public().URL(app.Name, app.ProjectID)
 	deploy := &apphost.Deploy{
@@ -199,6 +204,7 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 			},
 			URL:     url,
 			AppName: app.Name,
+			Disk:    app.Disk,
 		},
 		Config:     cfg,
 		RedeployOf: redeployOf,
@@ -221,6 +227,10 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		s.fail(ctx, deploy, routeErr, namespace, name)
 		return deploy, nil, nil
 	}
+	if err := s.checkDiskWithinPlan(ctx, target); err != nil {
+		s.fail(ctx, deploy, err, namespace, name)
+		return deploy, nil, nil
+	}
 	if err := s.admit(ctx, namespace, deploy, tier, cfg.Replicas); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
@@ -232,8 +242,12 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}
-	workload, err := k8s.RenderAppWorkload(namespace, cfg.ToApp(app.ID, app.ProjectID, app.Name), s.resolver, render)
+	workload, err := k8s.RenderAppWorkload(namespace, target, s.resolver, render)
 	if err != nil {
+		s.fail(ctx, deploy, err, namespace, name)
+		return deploy, nil, nil
+	}
+	if err := s.releaseDiskFromEarlierNames(ctx, namespace, target); err != nil {
 		s.fail(ctx, deploy, err, namespace, name)
 		return deploy, nil, nil
 	}
@@ -254,6 +268,19 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 	s.setStatus(deploy, apphost.DeployStatusRolling, "", nil)
 	watched := *deploy
 	return deploy, func() { s.watch(ctx, watched, namespace, app.Name) }, nil
+}
+
+// releaseDiskFromEarlierNames stops what a renamed app still runs under an
+// earlier name before the new workload is applied: that pod holds the disk,
+// and the new one could never mount it while it runs.
+func (s *AppDeployService) releaseDiskFromEarlierNames(ctx context.Context, namespace string, app *apphost.App) error {
+	if app.Disk == nil {
+		return nil
+	}
+	if err := s.kube.PruneAppWorkload(ctx, namespace, app.ID, app.Name, s.stopTimeout); err != nil {
+		return fmt.Errorf("stop what the app ran under an earlier name, which holds its disk: %w", err)
+	}
+	return nil
 }
 
 // watch waits out the rollout on its own copy of the deploy, so the one handed

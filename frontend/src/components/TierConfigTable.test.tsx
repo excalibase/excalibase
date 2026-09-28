@@ -13,6 +13,7 @@ const standard = {
   instances: 3,
   storageSize: '50Gi',
   maxStorageSize: '500Gi',
+  maxAppDiskSize: '20Gi',
   memory: '4Gi',
   cpu: '2',
   backupEnabled: true,
@@ -47,6 +48,25 @@ describe('TierConfigTable', () => {
       expect(api.put).toHaveBeenCalledWith(
         '/admin/tiers/STANDARD',
         expect.objectContaining({ storageSize: '50Gi', maxStorageSize: '1Ti' }),
+      ),
+    );
+  });
+
+  // The largest disk one container may have on the plan (EXC-523).
+  test('edits and saves the app disk cap with the rest of the plan', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: standard } as never);
+    renderTable();
+
+    const cap = await screen.findByDisplayValue('20Gi');
+    await user.clear(cap);
+    await user.type(cap, '40Gi');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/admin/tiers/STANDARD',
+        expect.objectContaining({ maxStorageSize: '500Gi', maxAppDiskSize: '40Gi' }),
       ),
     );
   });

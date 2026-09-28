@@ -24,6 +24,7 @@ import { AppDomains } from '../components/containers/AppDomains';
 import { useCustomDomainsEnabled } from '../hooks/useDeploymentMode';
 import { LifecycleActions } from '../components/containers/LifecycleActions';
 import { AppLogs } from '../components/containers/AppLogs';
+import { AppDiskCard } from '../components/containers/AppDiskCard';
 import {
   ContainersHeader,
   HostingGate,
@@ -211,6 +212,11 @@ function Detail({
           <Variables env={app.env} />
         </section>
       </div>
+      {app.disk && (
+        <div className="mb-6">
+          <AppDiskCard app={{ ...app, disk: app.disk }} />
+        </div>
+      )}
       <div className="mb-6">
         <AppLogs projectId={projectId} appId={appId} />
       </div>

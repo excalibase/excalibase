@@ -140,9 +140,10 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, acto
 }
 
 // DeleteApp tears the workload down, waits until none of its pods is left,
-// removes its secret values and only then forgets the app. Anything that fails
-// leaves it DELETING, and deleting again carries on from there.
-func (s *AppDeployService) DeleteApp(ctx context.Context, projectID, appID string) error {
+// removes its disk and secret values and only then forgets the app. An app
+// with a disk is deleted only when confirmDeleteDisk says its data may go.
+// Anything that fails leaves it DELETING, and deleting again carries on from there.
+func (s *AppDeployService) DeleteApp(ctx context.Context, projectID, appID string, confirmDeleteDisk bool) error {
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdApp(ctx, projectID, appID, OperationDeletion)
 	if err != nil {
@@ -150,8 +151,12 @@ func (s *AppDeployService) DeleteApp(ctx context.Context, projectID, appID strin
 	}
 	defer release()
 
-	if _, err := s.lookupApp(projectID, appID); err != nil {
+	app, err := s.lookupApp(projectID, appID)
+	if err != nil {
 		return err
+	}
+	if app.Disk != nil && !confirmDeleteDisk {
+		return ErrAppDiskDeleteUnconfirmed
 	}
 	if _, err := s.apps.Transition(projectID, appID, apphost.AllStatuses(), apphost.StatusDeleting); err != nil {
 		return err

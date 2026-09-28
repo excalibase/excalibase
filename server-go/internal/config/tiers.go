@@ -13,6 +13,9 @@ type TierConfig struct {
 	// MaxStorageSize is the largest disk a project on the tier may grow to;
 	// StorageSize is the disk it starts with (EXC-492).
 	MaxStorageSize string
+	// MaxAppDiskSize is the largest disk one app may have, in whole
+	// gibibytes; "0Gi" offers none (EXC-523). An admin edits it with the plan.
+	MaxAppDiskSize string
 	Memory         string
 	CPU            string
 	BackupEnabled  bool
@@ -41,6 +44,7 @@ var tiers = map[domain.TierType]TierConfig{
 		Instances:          1,
 		StorageSize:        "5Gi",
 		MaxStorageSize:     "5Gi",
+		MaxAppDiskSize:     "1Gi",
 		Memory:             "512Mi",
 		CPU:                "0.5",
 		BackupEnabled:      true,
@@ -52,6 +56,7 @@ var tiers = map[domain.TierType]TierConfig{
 		Instances:        3,
 		StorageSize:      "50Gi",
 		MaxStorageSize:   "500Gi",
+		MaxAppDiskSize:   "20Gi",
 		Memory:           "4Gi",
 		CPU:              "2",
 		BackupEnabled:    true,
@@ -62,6 +67,7 @@ var tiers = map[domain.TierType]TierConfig{
 		Instances:        5,
 		StorageSize:      "500Gi",
 		MaxStorageSize:   "2Ti",
+		MaxAppDiskSize:   "100Gi",
 		Memory:           "16Gi",
 		CPU:              "4",
 		BackupEnabled:    true,

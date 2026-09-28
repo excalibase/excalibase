@@ -782,6 +782,11 @@ func workloadYAML(t *testing.T, workload *AppWorkload) string {
 	ingress := workload.Ingress.DeepCopy()
 	ingress.TypeMeta = metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"}
 	objects = append(objects, workload.EgressPolicy.Object, service, ingress, workload.IngressPolicy.Object)
+	if workload.Disk != nil {
+		disk := workload.Disk.DeepCopy()
+		disk.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"}
+		objects = append(objects, disk)
+	}
 
 	var out strings.Builder
 	for _, obj := range objects {
@@ -810,10 +815,17 @@ func TestAppWorkloadGoldenManifests(t *testing.T) {
 		"full-standard":     fullApp(),
 		"stopped":           stopped,
 		"enterprise-no-env": enterprise,
+		"disk-free":         withGoldenDisk(minimalApp()),
 	}
 	for name, app := range cases {
 		t.Run(name, func(t *testing.T) { assertGolden(t, name, renderYAML(t, app)) })
 	}
+}
+
+func withGoldenDisk(app *apphost.App) *apphost.App {
+	app.ID = "app-01h"
+	app.Disk = &apphost.AppDisk{MountPath: "/var/lib/redis", Size: "1Gi"}
+	return app
 }
 
 func assertGolden(t *testing.T, name, got string) {

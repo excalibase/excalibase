@@ -71,6 +71,66 @@ function SizePicker({ tier }: { readonly tier?: TierType }) {
   );
 }
 
+interface DiskFieldsProps {
+  readonly values: AppFormValues;
+  readonly errors: AppFormErrors;
+  readonly onChange: (patch: Partial<AppFormValues>) => void;
+}
+
+function DiskFields({ values, errors, onChange }: DiskFieldsProps) {
+  return (
+    <div className="bg-surface-card border border-border-primary rounded-lg p-5 space-y-4">
+      <label className="flex items-center gap-2 text-sm font-medium text-text-primary">
+        <input
+          type="checkbox"
+          checked={values.diskEnabled}
+          disabled={values.diskAttached}
+          onChange={(e) => onChange({ diskEnabled: e.target.checked })}
+          className="h-4 w-4 accent-purple-500"
+          data-testid="app-disk-enabled"
+        />
+        Persistent disk
+      </label>
+      <p className="text-xs text-text-tertiary" data-testid="app-disk-note">
+        Files written to the disk survive restarts, redeploys and pauses. A container with a disk
+        runs one copy, and each deploy stops the old copy before starting the new one, so the
+        container is briefly unavailable (usually under a minute). Deleting the container deletes
+        the disk. The size is capped by the project's plan and can only grow.
+      </p>
+      {values.diskEnabled && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Mount path" htmlFor="app-disk-mount" error={errors.diskMountPath}>
+            <input
+              id="app-disk-mount"
+              value={values.diskMountPath}
+              onChange={(e) => onChange({ diskMountPath: e.target.value })}
+              className={cn(inputClass, 'font-mono')}
+              data-testid="app-disk-mount"
+            />
+          </Field>
+          <Field
+            label="Size (GiB)"
+            htmlFor="app-disk-size"
+            error={errors.diskSize}
+            hint={values.diskAttached ? 'Grow the disk from the container page.' : undefined}
+          >
+            <input
+              id="app-disk-size"
+              type="number"
+              min={1}
+              value={values.diskSize}
+              disabled={values.diskAttached}
+              onChange={(e) => onChange({ diskSize: e.target.value })}
+              className={inputClass}
+              data-testid="app-disk-size"
+            />
+          </Field>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AppForm({
   tier,
   databaseName,
@@ -84,7 +144,8 @@ export function AppForm({
   const [values, setValues] = useState<AppFormValues>(() => initialValues(initial));
   const [nameTouched, setNameTouched] = useState(initial !== undefined);
   const [errors, setErrors] = useState<AppFormErrors>({});
-  const maxReplicas = tier ? describeTier(tier).maxReplicas : 1;
+  const planReplicas = tier ? describeTier(tier).maxReplicas : 1;
+  const maxReplicas = values.diskEnabled ? Math.min(planReplicas, 1) : planReplicas;
 
   const set = (patch: Partial<AppFormValues>) => setValues((current) => ({ ...current, ...patch }));
 
@@ -191,6 +252,16 @@ export function AppForm({
           />
         </Field>
       </div>
+
+      <DiskFields
+        values={values}
+        errors={errors}
+        onChange={(patch) =>
+          set(
+            patch.diskEnabled && Number(values.replicas) > 1 ? { ...patch, replicas: '1' } : patch,
+          )
+        }
+      />
 
       <div className="bg-surface-card border border-border-primary rounded-lg p-5 space-y-3">
         <div>

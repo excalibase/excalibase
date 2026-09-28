@@ -22,16 +22,27 @@ export interface AppFormValues {
   replicas: string;
   healthCheckPath: string;
   env: EnvRow[];
+  diskEnabled: boolean;
+  diskMountPath: string;
+  // Whole GiB, as typed.
+  diskSize: string;
+  // The container already has a disk: it stays, and its size grows on the container page.
+  diskAttached: boolean;
 }
 
 export type AppFormErrors = Partial<
-  Record<'name' | 'image' | 'port' | 'replicas' | 'healthCheckPath', string>
+  Record<
+    'name' | 'image' | 'port' | 'replicas' | 'healthCheckPath' | 'diskMountPath' | 'diskSize',
+    string
+  >
 > & {
   env?: Record<number, string>;
 };
 
 export const DEFAULT_PORT = 8080;
 export const DEFAULT_REPLICAS = 1;
+export const DEFAULT_DISK_MOUNT = '/data';
+export const DEFAULT_DISK_GIB = '1';
 
 export const MAX_SECRET_BYTES = 8 * 1024;
 
@@ -69,6 +80,10 @@ export const initialValues = (app?: App): AppFormValues =>
         replicas: String(app.replicas),
         healthCheckPath: app.healthCheckPath ?? '',
         env: app.env.map(rowFromVar),
+        diskEnabled: app.disk !== undefined,
+        diskMountPath: app.disk?.mountPath ?? DEFAULT_DISK_MOUNT,
+        diskSize: app.disk ? app.disk.size.replace(/Gi$/, '') : DEFAULT_DISK_GIB,
+        diskAttached: app.disk !== undefined,
       }
     : {
         name: '',
@@ -77,6 +92,10 @@ export const initialValues = (app?: App): AppFormValues =>
         replicas: String(DEFAULT_REPLICAS),
         healthCheckPath: '',
         env: [],
+        diskEnabled: false,
+        diskMountPath: DEFAULT_DISK_MOUNT,
+        diskSize: DEFAULT_DISK_GIB,
+        diskAttached: false,
       };
 
 const APP_NAME = /^[a-z0-9][a-z0-9-]{1,49}$/;
@@ -92,6 +111,51 @@ function imageError(image: string): string | undefined {
     return 'Add a tag or digest to the image, for example nginx:1.27. The latest tag is never assumed.';
   }
   return undefined;
+}
+
+const MOUNT_PATH = /^\/[\w.@+-][\w.@+/-]*$/;
+const SYSTEM_DIRECTORIES = new Set([
+  '/bin',
+  '/boot',
+  '/etc',
+  '/lib',
+  '/lib32',
+  '/lib64',
+  '/run',
+  '/sbin',
+  '/usr',
+  '/var',
+  '/var/run',
+]);
+const KERNEL_FILESYSTEMS = ['/proc', '/sys', '/dev'];
+
+// Mirrors the server's rules, which still decide.
+function mountPathError(path: string): string | undefined {
+  const clean = MOUNT_PATH.test(path) && !path.endsWith('/') && !/\/\.{1,2}(\/|$)|\/\//.test(path);
+  if (!clean || path.length > 256) {
+    return 'Use an absolute path of letters, digits and . _ - @ +, such as /data.';
+  }
+  if (SYSTEM_DIRECTORIES.has(path)) {
+    return `${path} holds the image's own files; mount the disk at a data directory such as /data.`;
+  }
+  if (KERNEL_FILESYSTEMS.some((root) => path === root || path.startsWith(`${root}/`))) {
+    return `${path} belongs to the container runtime; mount the disk at a data directory such as /data.`;
+  }
+  return undefined;
+}
+
+function diskErrors(values: AppFormValues): AppFormErrors {
+  if (!values.diskEnabled) return {};
+  const errors: AppFormErrors = {};
+  const mount = mountPathError(values.diskMountPath);
+  if (mount) errors.diskMountPath = mount;
+  if (!values.diskAttached && !wholeNumberIn(values.diskSize, 1, 99999)) {
+    errors.diskSize = 'The size must be a whole number of GiB, 1 or more.';
+  }
+  if (!wholeNumberIn(values.replicas, 0, 1)) {
+    errors.replicas = 'A container with a disk runs one copy: choose 0 or 1.';
+  }
+  return errors;
 }
 
 function wholeNumberIn(raw: string, min: number, max: number): boolean {
@@ -153,6 +217,7 @@ export function validateAppForm(
     errors.healthCheckPath =
       'The health check path must start with / and contain no spaces, ? or #.';
   }
+  Object.assign(errors, diskErrors(values));
   const env = envErrors(values.env, databaseName);
   if (Object.keys(env).length > 0) errors.env = env;
   return errors;
@@ -185,6 +250,9 @@ export const toAppSubmission = (values: AppFormValues, databaseName?: string): A
     replicas: Number(values.replicas),
     healthCheckPath: values.healthCheckPath,
     env: values.env.flatMap((row) => toEnvVar(row, databaseName) ?? []),
+    ...(values.diskEnabled
+      ? { disk: { mountPath: values.diskMountPath, size: `${Number(values.diskSize)}Gi` } }
+      : {}),
   },
   secrets: values.env
     .filter((row) => row.kind === 'secret' && needsSecretValue(row))

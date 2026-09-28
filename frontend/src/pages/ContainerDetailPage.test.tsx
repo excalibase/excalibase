@@ -83,7 +83,12 @@ function renderPage(scenario: Scenario) {
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
   vi.mocked(api.delete).mockResolvedValue({ status: 204 } as never);
-  vi.mocked(api.post).mockImplementation((url: string) => {
+  vi.mocked(api.post).mockImplementation((url: string, body?: unknown) => {
+    if (url === '/projects/proj-1/apps/app-1/disk') {
+      const size = (body as { size: string }).size;
+      state.app = { ...state.app, disk: { mountPath: '/data', size } };
+      return Promise.resolve({ data: { id: 'app-1', disk: state.app.disk } } as never);
+    }
     const lifecycle = url.match(/\/apps\/app-1\/(pause|resume)$/);
     if (lifecycle) {
       state.app = { ...state.app, status: lifecycle[1] === 'pause' ? 'PAUSED' : 'ACTIVE' };
@@ -289,5 +294,54 @@ describe('ContainerDetailPage', () => {
     expect(screen.queryByText(/stripe/)).not.toBeInTheDocument();
     expect(screen.getByTestId('env-view-DATABASE_URL')).toHaveTextContent(/database appdb/i);
     expect(screen.getByTestId('env-view-API_KEY')).toHaveTextContent(/secret/i);
+  });
+
+  test('a container with a disk shows it and warns that a redeploy is briefly unavailable', async () => {
+    renderPage({
+      app: { status: 'ACTIVE', disk: { mountPath: '/data', size: '5Gi' } },
+      deploys: [deploy({})],
+    });
+    const disk = await screen.findByTestId('app-disk');
+    expect(disk).toHaveTextContent('/data');
+    expect(disk).toHaveTextContent('5 GiB');
+    expect(disk).toHaveTextContent(/briefly unavailable/i);
+  });
+
+  test('a container without a disk shows no disk card', async () => {
+    renderPage({ app: { status: 'ACTIVE' }, deploys: [deploy({})] });
+    await screen.findByTestId('delete-button');
+    expect(screen.queryByTestId('app-disk')).not.toBeInTheDocument();
+  });
+
+  test('grows the disk to a larger whole number of GiB', async () => {
+    const { user } = renderPage({
+      app: { status: 'ACTIVE', disk: { mountPath: '/data', size: '5Gi' } },
+      deploys: [deploy({})],
+    });
+    const size = await screen.findByTestId('disk-grow-size');
+    await user.clear(size);
+    await user.type(size, '8');
+    await user.click(screen.getByTestId('disk-grow'));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/disk', { size: '8Gi' }),
+    );
+    await waitFor(() => expect(screen.getByTestId('app-disk')).toHaveTextContent('8 GiB'));
+  });
+
+  test('deleting a container with a disk asks for its name and erases the disk', async () => {
+    const { user } = renderPage({
+      app: { status: 'ACTIVE', disk: { mountPath: '/data', size: '5Gi' } },
+      deploys: [deploy({})],
+    });
+    await user.click(await screen.findByTestId('delete-button'));
+    expect(screen.getByTestId('delete-confirm-text')).toHaveTextContent(/disk/i);
+    expect(screen.getByTestId('delete-confirm')).toBeDisabled();
+    await user.type(screen.getByTestId('delete-confirm-name'), 'web');
+    await user.click(screen.getByTestId('delete-confirm'));
+    await waitFor(() =>
+      expect(api.delete).toHaveBeenCalledWith('/projects/proj-1/apps/app-1', {
+        data: { confirmDeleteDisk: true },
+      }),
+    );
   });
 });

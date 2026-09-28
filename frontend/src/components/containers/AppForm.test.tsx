@@ -269,4 +269,62 @@ describe('AppForm', () => {
     renderForm({ serverError: 'project already has an app' });
     expect(screen.getByRole('alert')).toHaveTextContent('project already has an app');
   });
+
+  test('a persistent disk is sent with its mount path and size, and caps copies at one', async () => {
+    const { onSubmit, user } = renderForm();
+    await user.type(screen.getByTestId('app-image'), 'redis:7.4');
+    await user.click(screen.getByTestId('app-disk-enabled'));
+    expect(screen.getByTestId('app-disk-note')).toHaveTextContent(/one copy/i);
+    expect(screen.getByTestId('app-disk-note')).toHaveTextContent(/briefly unavailable/i);
+    expect(screen.getByTestId('app-disk-mount')).toHaveValue('/data');
+    const copies = Array.from(
+      (screen.getByTestId('app-replicas') as HTMLSelectElement).options,
+    ).map((o) => o.value);
+    expect(copies).toEqual(['0', '1']);
+    await user.clear(screen.getByTestId('app-disk-mount'));
+    await user.type(screen.getByTestId('app-disk-mount'), '/var/lib/redis');
+    await user.clear(screen.getByTestId('app-disk-size'));
+    await user.type(screen.getByTestId('app-disk-size'), '5');
+    await user.click(screen.getByTestId('app-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          replicas: 1,
+          disk: { mountPath: '/var/lib/redis', size: '5Gi' },
+        }),
+      }),
+    );
+  });
+
+  test('without a disk nothing about one is sent', async () => {
+    const { onSubmit, user } = renderForm();
+    await user.type(screen.getByTestId('app-image'), 'nginx:1.27');
+    await user.click(screen.getByTestId('app-submit'));
+    expect(onSubmit.mock.calls[0][0].input).not.toHaveProperty('disk');
+  });
+
+  test('refuses a disk over a system directory and a size that is not whole GiB', async () => {
+    const { onSubmit, user } = renderForm();
+    await user.type(screen.getByTestId('app-image'), 'redis:7.4');
+    await user.click(screen.getByTestId('app-disk-enabled'));
+    await user.clear(screen.getByTestId('app-disk-mount'));
+    await user.type(screen.getByTestId('app-disk-mount'), '/etc');
+    await user.clear(screen.getByTestId('app-disk-size'));
+    await user.type(screen.getByTestId('app-disk-size'), '0');
+    await user.click(screen.getByTestId('app-submit'));
+    expect(screen.getByText(/mount the disk at a data directory/i)).toBeInTheDocument();
+    expect(screen.getByText(/whole number of GiB/i)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  test('an attached disk stays attached; its size grows on the container page', () => {
+    renderForm({
+      initial: { ...existingApp, replicas: 1, disk: { mountPath: '/data', size: '5Gi' } },
+      submitLabel: 'Save',
+    });
+    expect(screen.getByTestId('app-disk-enabled')).toBeChecked();
+    expect(screen.getByTestId('app-disk-enabled')).toBeDisabled();
+    expect(screen.getByTestId('app-disk-size')).toBeDisabled();
+    expect(screen.getByTestId('app-disk-size')).toHaveValue(5);
+  });
 });

@@ -255,7 +255,7 @@ func TestResumeApp_RunningIsANoOpAndBusyIsRefused(t *testing.T) {
 func TestDeleteApp_TearsDownThenForgets(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusRunning)
 
-	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID); err != nil {
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); err != nil {
 		t.Fatalf("DeleteApp: %v", err)
 	}
 	if !f.kube.AppDeleted[f.key()] {
@@ -273,7 +273,7 @@ func TestDeleteApp_AFailedTeardownKeepsTheRow(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusRunning)
 	f.kube.AppDeleteErr = fmt.Errorf("%w after 3m: web-1", k8s.ErrAppPodsRemain)
 
-	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID); !errors.Is(err, k8s.ErrAppPodsRemain) {
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); !errors.Is(err, k8s.ErrAppPodsRemain) {
 		t.Fatalf("err = %v", err)
 	}
 	if f.status() != apphost.StatusDeleting {
@@ -284,7 +284,7 @@ func TestDeleteApp_AFailedTeardownKeepsTheRow(t *testing.T) {
 	}
 
 	f.kube.AppDeleteErr = nil
-	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID); err != nil {
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if got, _ := f.apps.Get(f.app.ProjectID, f.app.ID); got != nil {
@@ -296,7 +296,7 @@ func TestDeleteApp_AFailedPurgeKeepsTheRow(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusRunning)
 	f.purger.err = errors.New("vault down")
 
-	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID); err == nil {
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); err == nil {
 		t.Fatal("want the purge failure")
 	}
 	if got, _ := f.apps.Get(f.app.ProjectID, f.app.ID); got == nil {
@@ -308,7 +308,7 @@ func TestDeleteApp_NoNamespaceHasNoWorkloadToWaitFor(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusCreated)
 	f.svc.instances = fakestore.NewInstances()
 
-	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID); err != nil {
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); err != nil {
 		t.Fatalf("DeleteApp: %v", err)
 	}
 	if len(f.kube.Calls) != 0 {
@@ -318,7 +318,7 @@ func TestDeleteApp_NoNamespaceHasNoWorkloadToWaitFor(t *testing.T) {
 
 func TestDeleteApp_MissingApp(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusRunning)
-	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, "nope"); !errors.Is(err, apphost.ErrAppNotFound) {
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, "nope", false); !errors.Is(err, apphost.ErrAppNotFound) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -326,7 +326,7 @@ func TestDeleteApp_MissingApp(t *testing.T) {
 func TestDeleteApp_WithoutAPurgerStillDeletes(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusRunning)
 	f.svc.SetSecretPurger(nil)
-	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID); err != nil {
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); err != nil {
 		t.Fatalf("DeleteApp: %v", err)
 	}
 }
@@ -373,7 +373,7 @@ func TestSetOperationClaimer_IsTheLeaseEveryOperationTakes(t *testing.T) {
 		t.Fatalf("claim: %v %v", claimed, err)
 	}
 	defer release()
-	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID); !errors.Is(err, ErrProjectOperationRunning) {
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); !errors.Is(err, ErrProjectOperationRunning) {
 		t.Fatalf("err = %v, want ErrProjectOperationRunning", err)
 	}
 }

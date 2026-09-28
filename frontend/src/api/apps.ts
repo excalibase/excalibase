@@ -32,6 +32,13 @@ export interface EnvVar {
   secret?: SecretRef;
 }
 
+// One persistent disk a container keeps across restarts, redeploys and pauses.
+export interface AppDisk {
+  mountPath: string;
+  // Whole gibibytes, such as "10Gi"; it only grows.
+  size: string;
+}
+
 export interface App {
   id: string;
   projectId: string;
@@ -41,6 +48,7 @@ export interface App {
   port: number;
   healthCheckPath?: string;
   replicas: number;
+  disk?: AppDisk;
   tier: TierType;
   status: string;
   version: number;
@@ -73,6 +81,7 @@ export interface AppInput {
   replicas: number;
   healthCheckPath: string;
   env: EnvVar[];
+  disk?: AppDisk;
 }
 
 export interface SecretValue {
@@ -194,10 +203,27 @@ export const pauseApp = async (projectId: string, appId: string): Promise<AppLif
 export const resumeApp = async (projectId: string, appId: string): Promise<AppLifecycleResult> =>
   (await api.post<AppLifecycleResult>(`${appsBase(projectId)}/${appId}/resume`)).data;
 
-// Answers once the container's pods are gone and it is forgotten.
-export const deleteApp = async (projectId: string, appId: string): Promise<void> => {
+// Answers once the container's pods are gone and it is forgotten. A container
+// with a disk is only deleted with the explicit confirmation that erases it.
+export const deleteApp = async (
+  projectId: string,
+  appId: string,
+  confirmDeleteDisk = false,
+): Promise<void> => {
+  if (confirmDeleteDisk) {
+    await api.delete(`${appsBase(projectId)}/${appId}`, { data: { confirmDeleteDisk: true } });
+    return;
+  }
   await api.delete(`${appsBase(projectId)}/${appId}`);
 };
+
+export const growAppDisk = async (
+  projectId: string,
+  appId: string,
+  size: string,
+): Promise<{ id: string; disk: AppDisk }> =>
+  (await api.post<{ id: string; disk: AppDisk }>(`${appsBase(projectId)}/${appId}/disk`, { size }))
+    .data;
 
 export const useApps = (projectId: string, enabled = true) =>
   useQuery({
@@ -279,5 +305,13 @@ export const usePauseApp = (projectId: string, appId: string) =>
 export const useResumeApp = (projectId: string, appId: string) =>
   useLifecycle(projectId, appId, resumeApp);
 
-export const useDeleteApp = (projectId: string, appId: string) =>
-  useLifecycle(projectId, appId, deleteApp);
+export const useDeleteApp = (projectId: string, appId: string, confirmDeleteDisk: boolean) =>
+  useLifecycle(projectId, appId, (project, app) => deleteApp(project, app, confirmDeleteDisk));
+
+export const useGrowAppDisk = (projectId: string, appId: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (size: string) => growAppDisk(projectId, appId, size),
+    onSettled: () => qc.invalidateQueries({ queryKey: appsKey(projectId) }),
+  });
+};
