@@ -100,6 +100,11 @@ func (lab *gatewayLab) startCluster(t *testing.T) {
 		Namespace: gatewayLabNamespace,
 		Tier:      config.TierConfig{Instances: 2, StorageSize: "1Gi", Memory: "256Mi", CPU: "0.25"},
 	})
+	// The lab has one node, where the required one-instance-per-node rule (EXC-475) leaves the
+	// second instance Pending; the rule itself is pinned by crd_builder_spread_test.
+	if err := unstructured.SetNestedField(cluster.Object, "preferred", "spec", "affinity", "podAntiAffinityType"); err != nil {
+		t.Fatalf("relax the spread for one node: %v", err)
+	}
 	eventually(t, "cluster accepted by the operator webhook", 2*time.Minute, func() bool {
 		return lab.client.ApplyCRD(lab.ctx, CNPGClusterGVR, gatewayLabNamespace, cluster) == nil
 	})
