@@ -88,6 +88,7 @@ func fullRouter(t *testing.T) (chi.Router, *storage.FileSystemStore, *k8s.MockCl
 	// the k8s exec mock used to behave, without needing a live Postgres.
 	migVault.data["projects/test-db/credentials/excalibase_app"] = map[string]string{
 		"host": "127.0.0.1", "port": "1", "username": "excalibase_app", "password": "x", "database": "app",
+		"sslcert": "CERT-PEM", "sslkey": "KEY-PEM", "sslrootcert": "CA-PEM",
 	}
 	migrationSvc := service.NewMigrationService(store, migVault, dir)
 	alertSvc := service.NewAlertingService(dir)

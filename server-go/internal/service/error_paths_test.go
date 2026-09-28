@@ -116,6 +116,7 @@ func TestMigrationWhenSQLFails(t *testing.T) {
 	vault.Put("projects/fail-sql/credentials/excalibase_app", map[string]string{
 		"host": "127.0.0.1", "port": "1", "username": "excalibase_app",
 		"password": "x", "database": "app",
+		"sslcert": "CERT-PEM", "sslkey": "KEY-PEM", "sslrootcert": "CA-PEM",
 	})
 
 	svc := NewMigrationService(store, vault, dir)

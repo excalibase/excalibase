@@ -500,8 +500,10 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) (str
 //   - URL          — function's public invoke base (for calling sibling fns)
 //   - PROJECT_ID   — the opaque project ref
 //   - ORG_SLUG     — the owning org's slug, omitted if not resolvable
-//   - DB_URL       — postgres DSN for the project's database (excalibase_app
-//     role). Sourced from vault at projects/{projectId}/credentials/excalibase_app.
+//   - DB_URL       — postgres DSN for the project's database as the customer's
+//     own role, from vault at projects/{projectId}/credentials/admin. The
+//     platform's roles log in by certificate only and are never handed to
+//     customer code (EXC-410).
 //     Absent if vault is sealed or the role doesn't exist.
 //   - ANON_KEY     — JWT for the anon role from
 //     projects/{projectId}/credentials/jwt_keys/anon_token.
@@ -540,13 +542,13 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[
 	return env
 }
 
-// buildDBEnv returns EXCALIBASE_DB_URL for a project with app credentials in
+// buildDBEnv returns EXCALIBASE_DB_URL for a project with owner credentials in
 // vault. Missing credentials yield no entries.
 func (h *FunctionHandler) buildDBEnv(projectID string) map[string]string {
 	if h.vault == nil {
 		return nil
 	}
-	path := fmt.Sprintf("projects/%s/credentials/excalibase_app", projectID)
+	path := fmt.Sprintf("projects/%s/credentials/admin", projectID)
 	creds, err := h.vault.Get(path)
 	if err != nil || creds == nil {
 		return nil

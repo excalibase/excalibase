@@ -18,6 +18,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 	"github.com/excalibase/provisioning-poc/internal/vaultclient"
 
 	// lib/pq registers the "postgres" driver used by every pool this package
@@ -68,7 +69,9 @@ func dsnField(key, value string) string {
 // tenant's credentials, so the mode has to be stated.
 var ErrTransportSecurityUnstated = errors.New("a host override must state its ssl mode")
 
-// DSNFor composes a lib/pq connection string from vault credentials.
+// DSNFor composes a lib/pq connection string from vault credentials. A
+// platform role logs in with its client certificate (EXC-410) whenever TLS is
+// on; a record without one is refused rather than tried with its password.
 func DSNFor(creds map[string]string, o Overrides) (string, error) {
 	host, port := creds["host"], creds["port"]
 	if o.Host != "" {
@@ -90,9 +93,36 @@ func DSNFor(creds map[string]string, o Overrides) (string, error) {
 		dsnField("user", creds["username"]),
 		dsnField("password", creds["password"]),
 		dsnField("dbname", creds["database"]),
-		dsnField("sslmode", sslmode),
 	}
-	return strings.Join(fields, " "), nil
+	if sslmode == "disable" || !tenantcert.IsPlatformRole(creds["username"]) {
+		return strings.Join(append(fields, dsnField("sslmode", sslmode)), " "), nil
+	}
+	certFields, err := clientCertFields(creds, o.Host != "")
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(append(fields, certFields...), " "), nil
+}
+
+// clientCertFields passes the certificate inline. A host override is a
+// port-forward whose name the server certificate does not carry, so it
+// verifies the CA only.
+func clientCertFields(creds map[string]string, hostOverridden bool) ([]string, error) {
+	material, err := tenantcert.FromRecord(creds)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", creds["username"], err)
+	}
+	sslmode := "verify-full"
+	if hostOverridden {
+		sslmode = "verify-ca"
+	}
+	return []string{
+		dsnField("sslmode", sslmode),
+		dsnField("sslinline", "true"),
+		dsnField("sslcert", material.Cert),
+		dsnField("sslkey", material.Key),
+		dsnField("sslrootcert", material.RootCert),
+	}, nil
 }
 
 // PoolLimits bound what the cache costs. A pool holds connections on the
@@ -116,6 +146,9 @@ type PoolLimits struct {
 	// bound the tenant cannot outlast has to be set on the session.
 	StatementTimeout time.Duration
 	LockTimeout      time.Duration
+	// MaxPoolAge bounds how long a pool keeps the credential it was opened
+	// with; a renewed client certificate is picked up on the next reopen.
+	MaxPoolAge time.Duration
 }
 
 // Defaults chosen so one replica's worst case stays small: 64 pools x 2
@@ -131,9 +164,15 @@ const (
 	// platform, not a query; a lock not granted in 5s is one being held.
 	defaultStatementTimeout = 30 * time.Second
 	defaultLockTimeout      = 5 * time.Second
+	defaultMaxPoolAge       = time.Hour
+	// retireGrace lets a statement already handed the old pool finish.
+	retireGrace = time.Minute
 )
 
 func (l PoolLimits) withDefaults() PoolLimits {
+	if l.MaxPoolAge <= 0 {
+		l.MaxPoolAge = defaultMaxPoolAge
+	}
 	if l.MaxOpenConns <= 0 {
 		l.MaxOpenConns = defaultMaxOpenConns
 	}
@@ -186,6 +225,7 @@ type Opener struct {
 // the cache can evict the least recently used one.
 type pool struct {
 	db       *sql.DB
+	opened   time.Time
 	lastUsed time.Time
 }
 
@@ -213,8 +253,12 @@ func (o *Opener) Open(_ context.Context, projectID string) (*sql.DB, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if p, ok := o.pools[projectID]; ok {
-		p.lastUsed = o.now()
-		return p.db, nil
+		if o.now().Sub(p.opened) < o.limits.MaxPoolAge {
+			p.lastUsed = o.now()
+			return p.db, nil
+		}
+		delete(o.pools, projectID)
+		time.AfterFunc(retireGrace, func() { _ = p.db.Close() })
 	}
 	creds, err := o.vault.Get(fmt.Sprintf("projects/%s/credentials/%s", projectID, appRole))
 	if err != nil {
@@ -233,7 +277,7 @@ func (o *Opener) Open(_ context.Context, projectID string) (*sql.DB, error) {
 	db.SetConnMaxIdleTime(o.limits.ConnMaxIdleTime)
 	db.SetConnMaxLifetime(o.limits.ConnMaxLifetime)
 	o.evictOldestLocked()
-	o.pools[projectID] = &pool{db: db, lastUsed: o.now()}
+	o.pools[projectID] = &pool{db: db, opened: o.now(), lastUsed: o.now()}
 	return db, nil
 }
 

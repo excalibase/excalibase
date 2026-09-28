@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"math/big"
+	"slices"
 	"time"
 )
 
@@ -27,6 +28,15 @@ const (
 	FieldKey      = "sslkey"
 	FieldRootCert = "sslrootcert"
 )
+
+// PlatformRoles are the roles the platform itself logs in as. pg_hba refuses
+// each of them a password over the network.
+var PlatformRoles = []string{"excalibase_app", "auth_admin", "cdc_watcher"}
+
+// IsPlatformRole reports whether username is one of PlatformRoles.
+func IsPlatformRole(username string) bool {
+	return slices.Contains(PlatformRoles, username)
+}
 
 const (
 	// Validity matches the lifetime CNPG gives its own certificates.

@@ -287,6 +287,8 @@ func runServer(cfg config.AppConfig) {
 	defer stopAppRollouts()
 	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
 	defer stopCredentialRenewal()
+	stopRoleCertRenewal := startRoleCertificateRenewer(cfg, sqlStore, store, k8sClient, vc, provSvc)
+	defer stopRoleCertRenewal()
 	stopDomainSweep := startAppDomainSweeper(cfg, sqlStore, deps.appDomainSvc)
 	defer stopDomainSweep()
 
@@ -421,6 +423,31 @@ func startBackupCredentialRenewer(cfg config.AppConfig, sqlStore storage.Platfor
 		cfg.BackupCredentialsRenewInterval, cfg.BackupCredentialsTTL)
 	return renewer.Start(context.Background(), service.NewLeadership(lock), cfg.BackupCredentialsRenewInterval)
 }
+
+// startRoleCertificateRenewer keeps the platform roles' client certificates
+// ahead of expiry (EXC-410); one replica renews at a time.
+func startRoleCertificateRenewer(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore,
+	k8sClient k8s.KubeClient, vc vaultclient.VaultClient, provSvc *service.ProvisioningService) func() {
+	if k8sClient == nil || vc == nil || cfg.ProvisionerMode == "docker" {
+		return func() {
+			// no Kubernetes project logs in with a client certificate
+		}
+	}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() && sqlStore != nil {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), roleCertRenewLockID)
+	}
+	renewer := service.NewRoleCertificateRenewer(service.RoleCertificateRenewerConfig{
+		Instances: store, Kube: k8sClient, Vault: vc, RestartReplication: provSvc.RestartReplication,
+	})
+	log.Printf("Role certificate renewal started (every %s)", roleCertRenewInterval)
+	return renewer.Start(context.Background(), service.NewLeadership(lock), roleCertRenewInterval)
+}
+
+const (
+	roleCertRenewLockID   int64 = 0x7263_6572_7431_0410
+	roleCertRenewInterval       = 6 * time.Hour
+)
 
 // backupCredentialRenewLockID is the advisory lock the renewer leads on.
 const backupCredentialRenewLockID int64 = 0x0b4c_2e76_e476_91d3

@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
 // A tenant database requires TLS for every login that arrives over the
@@ -28,9 +30,8 @@ const (
 	watcherRoleName = "cdc_watcher"
 )
 
-// PlatformCertRoles are the roles the platform itself logs in as. None of
-// them can log in with a password over the network.
-var PlatformCertRoles = []string{appRoleName, authRoleName, watcherRoleName}
+// PlatformCertRoles are the roles pg_hba admits by certificate only.
+var PlatformCertRoles = tenantcert.PlatformRoles
 
 // plaintextRejects close CNPG's catch-all to unencrypted logins. "all" as a
 // database does not match replication, so that needs a line of its own.

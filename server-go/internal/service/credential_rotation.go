@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 )
 
 // rotatedPasswordLength is the length of a rotated role password.
@@ -89,11 +90,33 @@ func (s *ProvisioningService) RotateCredentials(ctx context.Context, projectID s
 		return nil, err
 	}
 	for _, target := range rotationTargets(inst, filed) {
+		authenticatesByCertificate, err := s.authenticatesByCertificate(projectID, target.role)
+		if err != nil {
+			return nil, err
+		}
+		if authenticatesByCertificate {
+			continue
+		}
 		if err := s.rotateRoleCredential(ctx, inst, target, filed); err != nil {
 			return nil, fmt.Errorf("rotate %s credential: %w", target.role, err)
 		}
 	}
 	return s.GetCredentials(projectID)
+}
+
+// authenticatesByCertificate reports whether a platform role's record carries
+// the client certificate pg_hba admits it by (EXC-410). Such a role has no
+// password to rotate; its certificate is renewed instead.
+func (s *ProvisioningService) authenticatesByCertificate(projectID, role string) (bool, error) {
+	if role == roleAdmin {
+		return false, nil
+	}
+	record, err := s.vault.Get(vaultCredentialPath(projectID, role))
+	if err != nil {
+		return false, fmt.Errorf("read %s credential: %w", role, err)
+	}
+	_, err = tenantcert.FromRecord(record)
+	return err == nil, nil
 }
 
 // rotationTargets lists the roles to replace, in the order they are replaced.

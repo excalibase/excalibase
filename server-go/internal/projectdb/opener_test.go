@@ -38,6 +38,7 @@ func appCreds() map[string]map[string]string {
 		"projects/proj_a/credentials/excalibase_app": {
 			"host": "db.internal", "port": "5432",
 			"username": "excalibase_app", "password": "pw", "database": "proj_a",
+			"sslcert": "CERT-PEM", "sslkey": "KEY-PEM", "sslrootcert": "CA-PEM",
 		},
 	}
 }
@@ -131,6 +132,7 @@ func TestServableProjectIDs_SkipsProjectsThatMayNotBeServed(t *testing.T) {
 
 func TestDSN_UsesOverridesAndDefaults(t *testing.T) {
 	creds := appCreds()["projects/proj_a/credentials/excalibase_app"]
+	creds["username"] = "app"
 	def, err := DSNFor(creds, Overrides{})
 	if err != nil {
 		t.Fatalf("default DSN: %v", err)
