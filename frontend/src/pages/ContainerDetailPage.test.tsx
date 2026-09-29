@@ -177,6 +177,11 @@ describe('ContainerDetailPage', () => {
     expect(screen.getByText(/internal service/i)).toBeInTheDocument();
   });
 
+  test('shows the arguments a container is started with, as written', async () => {
+    renderPage({ app: { args: ['--requirepass', '$(REDIS_PASSWORD)'] }, deploys: [] });
+    expect(await screen.findByText('--requirepass $(REDIS_PASSWORD)')).toBeInTheDocument();
+  });
+
   test('pause stops a running container and shows it paused', async () => {
     const { user } = renderPage({ app: { status: 'ACTIVE' }, deploys: [deploy({})] });
     await user.click(await screen.findByTestId('pause-button'));

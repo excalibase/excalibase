@@ -761,6 +761,8 @@ type handlerDeps struct {
 	appDomainHandler *handler.AppDomainHandler
 	// appNetworkHandler turns the project's private network between apps on and off (EXC-524).
 	appNetworkHandler *handler.AppNetworkHandler
+	// appTemplateHandler lists and deploys the built-in templates (EXC-526).
+	appTemplateHandler *handler.AppTemplateHandler
 	// rlMailSend bounds the routes that make the platform send mail. It is far
 	// tighter than rlAuthed because the cost of overuse is not our CPU, it is
 	// the sending domain's reputation.
@@ -1344,6 +1346,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 
 	registryCreds := registryCredentials(vc, store, k8sClient)
 	withRegistryCredentials(appDeploySvc, registryCreds)
+	appNetworkSvc := newAppNetworkService(sqlStore, store, k8sClient, a.claimer)
 	return &handlerDeps{
 		provHandler:         provHandler,
 		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
@@ -1380,9 +1383,13 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 			apphost.NewPostgresAppStore(sqlStore.DB()), store, k8sClient)),
 		appDomainSvc:      appDomainSvc,
 		appDomainHandler:  newAppDomainHandler(appDomainSvc),
-		appNetworkHandler: newAppNetworkHandler(sqlStore, store, k8sClient, a.claimer),
-		tierHandler:       tierHandler,
-		pgCatalogHandler:  handler.NewPostgresCatalogHandler(),
+		appNetworkHandler: newAppNetworkHandler(appNetworkSvc),
+		appTemplateHandler: newAppTemplateHandler(appTemplateArgs{
+			sqlStore: sqlStore, projects: store, deployer: appDeploySvc, tiers: provSvc, disks: appDiskLimits,
+			budget: a.budget, network: appNetworkSvc, vault: vc, claimer: a.claimer,
+		}),
+		tierHandler:      tierHandler,
+		pgCatalogHandler: handler.NewPostgresCatalogHandler(),
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
 			store:           store,
@@ -1785,6 +1792,17 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				d.appNetworkHandler.Routes(r)
 			})
 		}
+		// Templates (EXC-526): any member reads them; deploy is Developer+, and
+		// the handler asks for Admin+ when the deploy opens the private network.
+		r.Route("/api/projects/{projectId}/app-templates", func(r chi.Router) {
+			r.Use(custommw.TenantContext)
+			r.Use(auth.RequireAuth)
+			r.Use(custommw.RequireProjectAccess(store, sqlStore))
+			r.Use(d.activity)
+			d.appTemplateHandler.ReadRoutes(r)
+			r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).
+				Post("/{templateId}/deploy", d.appTemplateHandler.Deploy)
+		})
 		r.Route("/api/projects/{projectId}/registry-credentials", func(r chi.Router) {
 			r.Use(custommw.TenantContext)
 			r.Use(auth.RequireAuth)

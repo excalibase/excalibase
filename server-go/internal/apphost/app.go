@@ -277,6 +277,8 @@ type App struct {
 	InternalPorts []InternalPort `json:"internalPorts,omitempty"`
 	// HealthCheckPath is optional and must start with '/' when set.
 	HealthCheckPath string `json:"healthCheckPath,omitempty"`
+	// Args replace the image's CMD; $(NAME) names one of the app's variables (EXC-526).
+	Args []string `json:"args,omitempty"`
 	// Replicas is 0-3; zero means intentionally stopped.
 	Replicas int `json:"replicas"`
 	// Disk is the app's one persistent volume, when it has one (EXC-523).
@@ -417,6 +419,9 @@ func (a *App) Validate() error {
 		return err
 	}
 	if err := validateHealthCheckPath(a.HealthCheckPath); err != nil {
+		return err
+	}
+	if err := validateArgs(a.Args); err != nil {
 		return err
 	}
 	if err := a.validateReplicas(); err != nil {

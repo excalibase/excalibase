@@ -1,0 +1,19 @@
+# A public web app connected to the project's own database. The web image is a
+# placeholder (nginx-unprivileged 1.27): replace it with your own image.
+format: excalibase.template/v1
+id: web-postgres
+name: Web app + project database
+summary: A public web app with DATABASE_URL pointing at this project's database.
+description: >-
+  One public web app on its own URL (placeholder image nginx-unprivileged 1.27
+  on port 8080; swap in your own image). It gets DATABASE_URL, resolved when it
+  deploys to this project's database over the cluster network. Needs the
+  project to have a database that is ready. Does not need the private network.
+apps:
+  - name: web
+    image: nginxinc/nginx-unprivileged@sha256:f9dfa9c20b2b0b7c5cc830374f22f23dee3f750b6c5291ca7e0330b5c88e6403
+    port: 8080
+    replicas: 1
+    env:
+      - name: DATABASE_URL
+        value: "${{ db.DATABASE_URL }}"

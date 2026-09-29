@@ -63,6 +63,7 @@ type DeployConfig struct {
 	Internal        bool            `json:"internal,omitempty"`
 	InternalPorts   []InternalPort  `json:"internalPorts,omitempty"`
 	HealthCheckPath string          `json:"healthCheckPath,omitempty"`
+	Args            []string        `json:"args,omitempty"`
 	Replicas        int             `json:"replicas"`
 	Tier            domain.TierType `json:"tier"`
 }
@@ -80,6 +81,7 @@ func ConfigFromApp(app *App) DeployConfig {
 		Internal:        app.Internal,
 		InternalPorts:   cloneInternalPorts(app.InternalPorts),
 		HealthCheckPath: app.HealthCheckPath,
+		Args:            cloneArgs(app.Args),
 		Replicas:        app.Replicas,
 		Tier:            app.Tier,
 	}
@@ -97,6 +99,7 @@ func (c DeployConfig) ToApp(id, projectID, name string) *App {
 		Internal:        c.Internal,
 		InternalPorts:   cloneInternalPorts(c.InternalPorts),
 		HealthCheckPath: c.HealthCheckPath,
+		Args:            cloneArgs(c.Args),
 		Replicas:        c.Replicas,
 		Tier:            c.Tier,
 		Status:          StatusFor(c.Replicas),

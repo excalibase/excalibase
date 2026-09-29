@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration || live
 
 // Package pgstore provides an integration-test helper that spins up a
 // throwaway Postgres container and returns a migrated *postgres.Store.

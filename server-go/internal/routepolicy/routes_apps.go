@@ -23,6 +23,10 @@ var appRows = []Row{
 	{Methods: get, Pattern: "/api/projects/{projectId}/app-network/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "whether the project's apps may reach each other; mounted only with the Postgres platform store"},
 	{Methods: put, Pattern: "/api/projects/{projectId}/app-network/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Note: "opening app-to-app traffic in the project is an admin decision"},
 
+	{Methods: get, Pattern: "/api/projects/{projectId}/app-templates/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "the built-in templates and what each costs this project's plan; no secret value exists before a deploy"},
+	{Methods: get, Pattern: "/api/projects/{projectId}/app-templates/{templateId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "one template with its source document"},
+	{Methods: post, Pattern: "/api/projects/{projectId}/app-templates/{templateId}/deploy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "creates and deploys the template's apps all or nothing; a template that turns on the private network also needs admin, checked in the handler as PUT app-network is"},
+
 	{Methods: get, Pattern: "/api/projects/{projectId}/registry-credentials/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Note: "names the registries that have a credential; never a username or a password"},
 	{Methods: put, Pattern: "/api/projects/{projectId}/registry-credentials/{registry}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "write-only: stores the credential in the project vault; no route returns it"},
 	{Methods: del, Pattern: "/api/projects/{projectId}/registry-credentials/{registry}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "also deletes the pull secrets rendered from it"},

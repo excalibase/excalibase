@@ -51,6 +51,7 @@ const AdvisorsPage = lazy(() => import('./pages/AdvisorsPage').then(m => ({ defa
 const LogExplorerPage = lazy(() => import('./pages/LogExplorerPage').then(m => ({ default: m.LogExplorerPage })));
 const PlatformAdminPage = lazy(() => import('./pages/PlatformAdminPage').then(m => ({ default: m.PlatformAdminPage })));
 const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ default: m.ContainersPage })));
+const ContainerTemplatesPage = lazy(() => import('./pages/ContainerTemplatesPage').then(m => ({ default: m.ContainerTemplatesPage })));
 const ContainerFormPage = lazy(() => import('./pages/ContainerFormPage').then(m => ({ default: m.ContainerFormPage })));
 const ContainerDetailPage = lazy(() => import('./pages/ContainerDetailPage').then(m => ({ default: m.ContainerDetailPage })));
 const SdkKeysPage = lazy(() => import('./pages/SdkKeysPage').then(m => ({ default: m.SdkKeysPage })));
@@ -136,6 +137,7 @@ export default function App() {
             {/* Containers */}
             <Route path="containers" element={<ContainersPage />} />
             <Route path="containers/new" element={<ContainerFormPage />} />
+            <Route path="containers/templates" element={<ContainerTemplatesPage />} />
             <Route path="containers/:appId" element={<ContainerDetailPage />} />
             <Route path="containers/:appId/edit" element={<ContainerFormPage />} />
             {/* Edge Functions */}

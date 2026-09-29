@@ -66,6 +66,8 @@ export interface App {
   // Raw TCP ports only this project's apps reach, with its private network on (EXC-525).
   internalPorts?: InternalPort[];
   healthCheckPath?: string;
+  // Replace the image's CMD; $(NAME) is filled from the app's variables (EXC-526).
+  args?: string[];
   replicas: number;
   disk?: AppDisk;
   tier: TierType;

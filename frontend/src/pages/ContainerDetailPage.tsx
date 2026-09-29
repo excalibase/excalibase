@@ -108,6 +108,7 @@ function Settings({ app }: { readonly app: App }) {
     ['Size', `${size.label}: ${size.detail}`],
     ['Health check', app.healthCheckPath || 'None'],
   ];
+  if (app.args && app.args.length > 0) rows.push(['Arguments', app.args.join(' ')]);
   return (
     <dl className="bg-surface-card border border-border-primary rounded-lg divide-y divide-border-primary">
       {rows.map(([label, value]) => (

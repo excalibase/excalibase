@@ -9,6 +9,8 @@ import (
 // apps only, never to the edge. The range starts above the well-known ports,
 // so the Service's HTTP port 80 can never be taken.
 const (
+	// ServiceHTTPPort is where a public app's Service serves its HTTP port inside the project.
+	ServiceHTTPPort  = 80
 	MaxInternalPorts = 8
 	MinInternalPort  = 1024
 	MaxInternalPort  = 65535

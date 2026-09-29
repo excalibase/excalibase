@@ -158,6 +158,8 @@ type appCreateRequest struct {
 	InternalPorts []apphost.InternalPort `json:"internalPorts"`
 	// Internal makes the app a service with no HTTP port and no public route.
 	Internal bool `json:"internal"`
+	// Args replace the image's CMD (EXC-526); optional.
+	Args []string `json:"args"`
 }
 
 // appUpdateRequest is the partial-update body. Every field is a pointer so an
@@ -175,6 +177,7 @@ type appUpdateRequest struct {
 	Disk          *apphost.AppDisk        `json:"disk"`
 	InternalPorts *[]apphost.InternalPort `json:"internalPorts"`
 	Internal      *bool                   `json:"internal"`
+	Args          *[]string               `json:"args"`
 }
 
 func (h *AppHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -250,6 +253,7 @@ func (h *AppHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Internal:        req.Internal,
 		InternalPorts:   emptyAsNil(req.InternalPorts),
 		HealthCheckPath: req.HealthCheckPath,
+		Args:            emptyArgsAsNil(req.Args),
 		Replicas:        *req.Replicas,
 		Disk:            callerDisk(req.Disk, 0),
 		Tier:            tier,
@@ -380,6 +384,9 @@ func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 	if req.Internal != nil {
 		app.Internal = *req.Internal
 	}
+	if req.Args != nil {
+		app.Args = emptyArgsAsNil(*req.Args)
+	}
 	if req.Disk != nil {
 		generation := 0
 		if app.Disk != nil {
@@ -460,6 +467,14 @@ func emptyAsNil(ports []apphost.InternalPort) []apphost.InternalPort {
 		return nil
 	}
 	return ports
+}
+
+// emptyArgsAsNil stores "the image's own command" one way.
+func emptyArgsAsNil(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	return args
 }
 
 // normalizeEnv returns a non-nil slice so an emptied env set is stored as an

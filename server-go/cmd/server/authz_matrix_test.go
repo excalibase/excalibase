@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
+	"github.com/excalibase/provisioning-poc/internal/apptemplate"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -137,10 +138,11 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 			apphost.Route{}, k8s.AppDomainOptions{})),
 		appNetworkHandler: handler.NewAppNetworkHandler(service.NewAppNetworkService(
 			matrixAppNetworkSettings{}, instances, mock, nil)),
-		rlUnauth:    custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
-		rlAuthed:    custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
-		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
-		rlMailSend:  custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		appTemplateHandler: matrixTemplateHandler(t, instances),
+		rlUnauth:           custommw.RateLimit(custommw.PerIP, 1000, time.Minute),
+		rlAuthed:           custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		rlDataPlane:        custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
+		rlMailSend:         custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),
@@ -391,3 +393,17 @@ func (matrixAppNetworkSettings) GetAppPrivateNetwork(context.Context, string) (b
 	return false, nil
 }
 func (matrixAppNetworkSettings) SetAppPrivateNetwork(context.Context, string, bool) error { return nil }
+
+// matrixTemplateHandler reads apps from a database that never connects, so a
+// request the gate lets through fails inside the handler, never as a refusal.
+func matrixTemplateHandler(t *testing.T, instances *fakestore.Instances) *handler.AppTemplateHandler {
+	t.Helper()
+	catalog, err := apptemplate.Builtins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans := service.NewOrgPlanTiers(instances, fakestore.NewOrgs())
+	return handler.NewAppTemplateHandler(service.NewAppTemplateService(catalog, service.AppTemplateDeps{
+		Apps: apphost.NewPostgresAppStore(offlineDB(t)), Projects: instances, Plans: plans,
+	}))
+}

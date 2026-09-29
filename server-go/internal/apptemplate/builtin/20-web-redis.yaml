@@ -1,0 +1,40 @@
+# A public web app beside an internal Redis. The web image is a placeholder
+# (nginx-unprivileged 1.27): replace it with your own image after deploying;
+# the REDIS_* variables stay.
+format: excalibase.template/v1
+id: web-redis
+name: Web app + Redis starter
+summary: A public web app with a private Redis it reaches by name, password generated for you.
+description: >-
+  Two apps. web is a public web app on its own URL (placeholder image
+  nginx-unprivileged 1.27 on port 8080; swap in your own image). redis is an
+  internal service with a 1Gi disk that only this project's apps reach, at
+  redis:6379. web gets REDIS_HOST, REDIS_PORT, REDIS_PASSWORD and REDIS_URL;
+  the password is generated when you deploy and stored only as a secret of
+  each app. Turns on the project's private network.
+apps:
+  - name: redis
+    image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    internal: true
+    internalPorts: [6379]
+    replicas: 1
+    args: ["--requirepass", "$(REDIS_PASSWORD)", "--appendonly", "yes", "--dir", "/data"]
+    disk:
+      mountPath: /data
+      size: 1Gi
+    env:
+      - name: REDIS_PASSWORD
+        value: "${{ secret(32) }}"
+  - name: web
+    image: nginxinc/nginx-unprivileged@sha256:f9dfa9c20b2b0b7c5cc830374f22f23dee3f750b6c5291ca7e0330b5c88e6403
+    port: 8080
+    replicas: 1
+    env:
+      - name: REDIS_HOST
+        value: "${{ apps.redis.host }}"
+      - name: REDIS_PORT
+        value: "${{ apps.redis.port }}"
+      - name: REDIS_PASSWORD
+        value: "${{ apps.redis.env.REDIS_PASSWORD }}"
+      - name: REDIS_URL
+        value: "redis://:${{ apps.redis.env.REDIS_PASSWORD }}@${{ apps.redis.host }}:${{ apps.redis.port }}/0"
