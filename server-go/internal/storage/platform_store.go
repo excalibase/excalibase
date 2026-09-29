@@ -60,4 +60,9 @@ type PlatformStore interface {
 	// exposure list excalibase-graphql caches next to the policies.
 	// See EXC-370.
 	TableGrants() TableGrantStore
+
+	// Permissions returns the PermissionStore behind
+	// /api/provision/{p}/permissions, tracked-functions and
+	// function-permissions (EXC-370 step C).
+	Permissions() PermissionStore
 }

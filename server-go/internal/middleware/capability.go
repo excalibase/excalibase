@@ -60,6 +60,9 @@ var (
 	// grant that covers one without the other leaves the engine with half a
 	// policy set and no way to answer a query.
 	policyRoute = regexp.MustCompile(`^/api/provision/[^/]+/(rls-policies|column-policies|table-grants)(/[^/]+)?$`)
+	// permissionDocumentRoute is the engine's one read of a project's API
+	// permissions (EXC-370); nothing below it is readable with a capability.
+	permissionDocumentRoute = regexp.MustCompile(`^/api/provision/[^/]+/permissions$`)
 )
 
 // RequiredCapability returns the capability a request must be granted before a
@@ -92,7 +95,7 @@ func RequiredCapability(method, rawPath string) (auth.Capability, bool) {
 	if projectInfoRoute.MatchString(cleaned) {
 		return auth.Capability{Resource: capResourceProjects, Action: capActionInfo, Selector: capActionRead}, true
 	}
-	if policyRoute.MatchString(cleaned) {
+	if policyRoute.MatchString(cleaned) || permissionDocumentRoute.MatchString(cleaned) {
 		return auth.Capability{Resource: capResourcePolicies, Action: capActionRead}, true
 	}
 	if m := serviceAccountTokensRoute.FindStringSubmatch(cleaned); m != nil {

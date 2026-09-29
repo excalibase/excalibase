@@ -14,6 +14,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/handler"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
@@ -32,7 +33,8 @@ import (
 //
 // Sources of the inventory:
 //   engine   excalibase-graphql   ProvisioningPolicyProvider (rls-policies,
-//            column-policies, table-grants), ProvisioningProjectCorsProvider
+//            column-policies, table-grants, and the EXC-370 permission
+//            document), ProvisioningProjectCorsProvider
 //            (project info), VaultCredentialService (excalibase_app creds)
 //   auth     excalibase-auth      cmd/server/main.go (signing key),
 //            internal/pool/manager.go (auth_admin creds, project info)
@@ -77,6 +79,7 @@ var platformCalls = []serviceCall{
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/rls-policies/", "policies:read", "engine ProvisioningPolicyProvider"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/column-policies/", "policies:read", "engine ProvisioningPolicyProvider"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/table-grants/", "policies:read", "engine ProvisioningPolicyProvider"},
+	{svcGraphql, http.MethodGet, "/api/provision/proj-a/permissions/", "policies:read", "engine permission document (EXC-370)"},
 	{svcGraphql, http.MethodGet, "/api/projects/proj-a/info", "projects:info:read", "engine ProvisioningProjectCorsProvider"},
 	{svcGraphql, http.MethodGet, "/api/vault/secrets/projects/proj-a/credentials/excalibase_app", "vault:read:projects/proj-a/credentials/excalibase_app", "engine VaultCredentialService"},
 
@@ -101,12 +104,20 @@ var forbiddenCalls = []serviceCall{
 	{svcGraphql, http.MethodPatch, "/api/provision/proj-a/table-grants/g-1", "", "editing a grant"},
 	{svcGraphql, http.MethodDelete, "/api/provision/proj-a/table-grants/g-1", "", "deleting a grant"},
 	{svcGraphql, http.MethodPost, "/api/provision/proj-a/rls-policies/", "", "writing a row policy"},
+	{svcGraphql, http.MethodPut, "/api/provision/proj-a/permissions/tables/public.orders/roles/user/select", "", "writing a permission"},
+	{svcGraphql, http.MethodDelete, "/api/provision/proj-a/permissions/tables/public.orders/roles/user/select", "", "deleting a permission"},
+	{svcGraphql, http.MethodGet, "/api/provision/proj-a/permissions/tables/public.orders/roles/user/select", "", "anything below the document"},
+	{svcGraphql, http.MethodPost, "/api/provision/proj-a/tracked-functions/", "", "tracking a function"},
+	{svcGraphql, http.MethodDelete, "/api/provision/proj-a/tracked-functions/public.search_orders", "", "untracking a function"},
+	{svcGraphql, http.MethodPut, "/api/provision/proj-a/function-permissions/public.search_orders/roles/user", "", "granting a function"},
+	{svcGraphql, http.MethodDelete, "/api/provision/proj-a/function-permissions/public.search_orders/roles/user", "", "revoking a function"},
 	{svcGraphql, http.MethodPost, "/internal/email/send", "", "sending platform mail"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/credentials", "", "the project's own credentials"},
 
 	{svcAuth, http.MethodGet, "/api/vault/secrets/projects/proj-a/credentials/excalibase_app", "", "the engine's role"},
 	{svcAuth, http.MethodGet, "/api/provision/proj-a/rls-policies/", "", "the policy surface"},
 	{svcAuth, http.MethodGet, "/api/provision/proj-a/table-grants/", "", "the exposure surface"},
+	{svcAuth, http.MethodGet, "/api/provision/proj-a/permissions/", "", "the permission document"},
 	{svcAuth, http.MethodPost, "/api/auth/tokens", "", "minting further tokens"},
 	{svcAuth, http.MethodGet, "/api/admin/projects", "", "the platform admin surface"},
 }
@@ -187,6 +198,15 @@ func (emptyPolicyStore) GetColumn(context.Context, string, string) (*domain.Colu
 func (emptyPolicyStore) UpsertColumn(context.Context, *domain.ColumnPolicy) error { return nil }
 func (emptyPolicyStore) DeleteColumn(context.Context, string, string) error       { return nil }
 
+// emptyPermissionStore is a storage.PermissionStore holding nothing, so the
+// permission routes answer instead of panicking on a nil dependency.
+type emptyPermissionStore struct{ storage.PermissionStore }
+
+func (emptyPermissionStore) Document(_ context.Context, projectID string) (*domain.PermissionDocument, error) {
+	return &domain.PermissionDocument{ProjectID: projectID, Tables: []domain.TablePermissions{},
+		Functions: []domain.TrackedFunction{}, FunctionPermissions: []domain.FunctionPermission{}}, nil
+}
+
 // contractRouter builds the production router with every dependency the
 // inventory touches wired — vault seeded, exposure store, mail relay — and
 // returns the raw bearer token of each service principal.
@@ -236,6 +256,7 @@ func contractRouterWithProjectStatus(t *testing.T, status string) (http.Handler,
 	deps.vaultHandler.SetInstanceStore(instances)
 	deps.tableGrantHandler = handler.NewTableGrantHandler(grants, instances, true)
 	deps.rlsPolicyHandler = handler.NewRlsPolicyHandler(emptyPolicyStore{}, instances)
+	deps.permissionHandler = handler.NewPermissionHandler(emptyPermissionStore{}, instances, nil)
 	deps.internalEmail = handler.NewInternalEmailHandler(&countingSender{})
 	cfg := config.AppConfig{DeploymentMode: "selfhosted"}
 	return buildRouter(cfg, platform, instances, deps), who, grants
@@ -299,5 +320,22 @@ func TestServicesGetNoCredentialsForAProjectThatIsNotServable(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// EXC-370: the engine reads the permission document with policies:read; the
+// document answers 404 for a project the platform does not know, so the
+// engine refuses it instead of caching an empty set.
+func TestEngineTokenReadsThePermissionDocument(t *testing.T) {
+	router, who, _ := contractRouter(t)
+	for projectID, want := range map[string]int{contractProject: http.StatusOK, "proj-unknown": http.StatusNotFound} {
+		call := serviceCall{caller: svcGraphql, method: http.MethodGet, path: "/api/provision/" + projectID + "/permissions/"}
+		w := contractRequest(router, call, who[svcGraphql])
+		if w.Code != want {
+			t.Fatalf("%s: got %d, want %d: %s", projectID, w.Code, want, w.Body.String())
+		}
+		if want == http.StatusOK && !strings.Contains(w.Body.String(), `"tables":[]`) {
+			t.Fatalf("document body %s", w.Body.String())
+		}
 	}
 }
