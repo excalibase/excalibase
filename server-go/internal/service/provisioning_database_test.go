@@ -336,3 +336,30 @@ func TestAnInterruptedDatabaseAddIsRecovered(t *testing.T) {
 		t.Fatalf("recovered again: %v", again)
 	}
 }
+
+// EXC-524: a new project, and one that gains a database, is sized from its plan
+// at once, not only at its first app deploy.
+func TestAProjectIsSizedFromItsPlanWhenCreatedAndWhenADatabaseIsAdded(t *testing.T) {
+	svc, _, _ := setupProvisioningTest(t)
+	sized := []string{}
+	svc.SetProjectQuotaSync(func(_ context.Context, projectID string) error {
+		sized = append(sized, projectID)
+		return nil
+	})
+	created := createWithoutDatabase(t, svc)
+	if _, err := svc.AddDatabase(context.Background(), created.ProjectID, addPostgres()); err != nil {
+		t.Fatalf("add database: %v", err)
+	}
+	if !slices.Equal(sized, []string{created.ProjectID, created.ProjectID}) {
+		t.Fatalf("sized %v, want the project at creation and at the database add", sized)
+	}
+}
+
+// A sizing failure leaves the namespace at its safe floor and the project up; the next change retries it.
+func TestAProjectIsCreatedEvenWhenItsQuotaCannotBeSizedYet(t *testing.T) {
+	svc, _, _ := setupProvisioningTest(t)
+	svc.SetProjectQuotaSync(func(context.Context, string) error { return errors.New("tier store down") })
+	if resp := createWithoutDatabase(t, svc); resp.Status != "ACTIVE" {
+		t.Fatalf("status %s", resp.Status)
+	}
+}

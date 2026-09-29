@@ -1230,6 +1230,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)
 	appDeploySvc.SetPlanTiers(service.NewOrgPlanTiers(store, sqlStore))
 	appDeploySvc.SetNamespaceQuotaTiers(provSvc)
+	provSvc.SetProjectQuotaSync(appDeploySvc.SyncProjectQuota)
 	appDiskLimits := service.NewAppDiskLimits(service.NewOrgPlanTiers(store, sqlStore), provSvc)
 	appDeploySvc.SetDiskLimits(appDiskLimits)
 	appDeploySvc.SetDiskJobs(k8s.DiskJobOptions{Image: cfg.AppDiskToolsImage, RuntimeClass: cfg.AppRuntimeClass, Timeout: appDiskJobTimeout})
@@ -1296,8 +1297,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	adminHandler := handler.NewAdminHandler(provSvc, store, sqlStore, sqlStore, k8sClient, cfg.LokiURL, promClient)
 	tierHandler := handler.NewTierHandler(sqlStore)
 	tierHandler.SetNodePlacement(provSvc)
-	enforceDiskCaps := func() { go appDeploySvc.EnforceDiskCaps(context.WithoutCancel(context.Background())) }
-	tierHandler.SetPlanChangeHook(enforceDiskCaps)
+	planChanged := onPlanChange(appDeploySvc)
+	tierHandler.SetPlanChangeHook(planChanged)
 
 	authHandler := handler.NewAuthHandler(sqlStore, sqlStore)
 	authHandler.SetOrgStore(sqlStore)
@@ -1363,7 +1364,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		oauthHandler:        buildStudioOAuthHandler(cfg, vc, sqlStore, authHandler),
 		ssoHandler:          buildSSOProvidersHandler(cfg, vc, sqlStore),
 		svcAcctHandler:      handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
-		orgHandler:          newOrgHandler(sqlStore, store, provSvc, enforceDiskCaps),
+		orgHandler:          newOrgHandler(sqlStore, store, provSvc, planChanged),
 		vaultHandler:        vaultHandler,
 		schemaHandler:       newSchemaHandler(cfg, vc, store),
 		realtimeHandler:     realtimeHandler,

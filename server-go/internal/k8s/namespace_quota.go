@@ -63,8 +63,15 @@ func buildNamespaceQuota(namespace string, q NamespaceQuota) *corev1.ResourceQuo
 	}
 }
 
-// EnsureNamespaceQuota converges the namespace's quota to q, creating it if absent.
+// EnsureNamespaceQuota converges the namespace's quota to q, creating it if
+// absent, but never below what the namespace already holds: a downgrade
+// refuses new objects and keeps the running ones.
 func (c *Client) EnsureNamespaceQuota(ctx context.Context, namespace string, q NamespaceQuota) error {
+	used, err := c.namespaceUsage(ctx, namespace)
+	if err != nil {
+		return err
+	}
+	q = NamespaceQuota{Pods: max(q.Pods, used.Pods), PVCs: max(q.PVCs, used.PVCs), Services: max(q.Services, used.Services)}
 	quotas := c.clientset.CoreV1().ResourceQuotas(namespace)
 	existing, err := quotas.Get(ctx, namespaceQuotaName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -98,4 +105,28 @@ func sameHard(a, b corev1.ResourceList) bool {
 		}
 	}
 	return true
+}
+
+// namespaceUsage counts what the quota counts: pods not yet finished, every claim and Service.
+func (c *Client) namespaceUsage(ctx context.Context, namespace string) (NamespaceQuota, error) {
+	core := c.clientset.CoreV1()
+	pods, err := core.Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return NamespaceQuota{}, fmt.Errorf("count the namespace's pods: %w", err)
+	}
+	claims, err := core.PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return NamespaceQuota{}, fmt.Errorf("count the namespace's claims: %w", err)
+	}
+	services, err := core.Services(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return NamespaceQuota{}, fmt.Errorf("count the namespace's services: %w", err)
+	}
+	running := 0
+	for _, pod := range pods.Items {
+		if pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
+			running++
+		}
+	}
+	return NamespaceQuota{Pods: running, PVCs: len(claims.Items), Services: len(services.Items)}, nil
 }

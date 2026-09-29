@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -86,6 +87,49 @@ func TestEnsureNamespaceQuota_ErrorsPropagate(t *testing.T) {
 		})
 		if err := c.EnsureNamespaceQuota(ctx, "org1-proj-q", NamespaceQuota{Pods: 99, PVCs: 99, Services: 99}); err == nil {
 			t.Errorf("a refused %s must fail", verb)
+		}
+	}
+}
+
+// A quota is never set below what the namespace already holds, so a downgrade
+// refuses new objects and keeps the running ones (EXC-524).
+func TestEnsureNamespaceQuota_NeverBelowCurrentUsage(t *testing.T) {
+	const ns = "org1-proj-used"
+	objects := []runtime.Object{}
+	for i := range 10 {
+		objects = append(objects,
+			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("claim-%d", i), Namespace: ns}},
+			&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("svc-%d", i), Namespace: ns}},
+		)
+	}
+	for i := range 30 {
+		phase := corev1.PodRunning
+		if i%10 == 0 {
+			phase = corev1.PodSucceeded // finished pods are not counted by the quota
+		}
+		objects = append(objects, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("pod-%d", i), Namespace: ns}, Status: corev1.PodStatus{Phase: phase}})
+	}
+	c := newFakeClient(objects...)
+	if err := c.EnsureNamespaceQuota(context.Background(), ns, DefaultNamespaceQuota); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	hard := quotaHard(t, c, ns)
+	pods, pvcs, services := hard[corev1.ResourcePods], hard[corev1.ResourcePersistentVolumeClaims], hard[corev1.ResourceServices]
+	if pods.Value() != 27 || pvcs.Value() != 10 || services.Value() != 15 {
+		t.Fatalf("quota = pods %d pvcs %d services %d, want 27/10/15 (usage above the plan kept)", pods.Value(), pvcs.Value(), services.Value())
+	}
+}
+
+func TestEnsureNamespaceQuota_AFailedUsageReadChangesNothing(t *testing.T) {
+	for _, resource := range []string{"pods", "persistentvolumeclaims", "services"} {
+		c := newFakeClient()
+		c.clientset.(interface {
+			PrependReactor(string, string, ktesting.ReactionFunc)
+		}).PrependReactor("list", resource, func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("list refused")
+		})
+		if err := c.EnsureNamespaceQuota(context.Background(), "org1-proj-q", DefaultNamespaceQuota); err == nil {
+			t.Errorf("%s: a quota sized without knowing the usage must be refused", resource)
 		}
 	}
 }

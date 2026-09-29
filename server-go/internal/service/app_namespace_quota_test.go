@@ -9,6 +9,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 )
 
 var quotaTestTiers = fixedTierConfigs{
@@ -74,4 +75,57 @@ func TestDeployApp_FailsWhenTheQuotaCannotBeSized(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The quota follows the plan without any app deploy (EXC-524): a database-only
+// or brand-new project is sized as soon as its plan is known or changes.
+func TestSyncProjectQuota_FollowsThePlanWithoutADeploy(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+	store := svc.apps.(*fakeAppStoreForDeploy)
+	delete(store.apps, app.ProjectID+"/"+app.ID)
+	plan := &switchablePlan{tier: domain.Free}
+	svc.SetPlanTiers(plan)
+	if err := svc.SyncProjectQuota(context.Background(), app.ProjectID); err != nil {
+		t.Fatalf("sync on FREE: %v", err)
+	}
+	free := kube.NamespaceQuotas[testDeployNamespace]
+	plan.tier = domain.Enterprise
+	svc.SyncAllProjectQuotas(context.Background())
+	enterprise := kube.NamespaceQuotas[testDeployNamespace]
+	appTier, _ := config.GetAppTierConfig(domain.Enterprise)
+	want := k8s.NamespaceQuotaForPlan(k8s.PlanQuotaInputs{DBInstances: 5, Apps: 20, AppMaxReplicas: appTier.MaxReplicas})
+	if enterprise != want || enterprise.PVCs <= free.PVCs {
+		t.Fatalf("FREE %+v then ENTERPRISE %+v, want %+v", free, enterprise, want)
+	}
+}
+
+func TestSyncProjectQuota_SkipsWhatHasNoNamespace(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, kube := newDeployTestService(t, app)
+	svc.instances.(*fakestore.Instances).Items[app.ProjectID].Namespace = ""
+	if err := svc.SyncProjectQuota(context.Background(), app.ProjectID); err != nil {
+		t.Fatalf("a project with no namespace has no quota to size: %v", err)
+	}
+	if err := svc.SyncProjectQuota(context.Background(), "proj-missing"); err == nil {
+		t.Fatal("an unknown project must be reported")
+	}
+	if len(kube.NamespaceQuotas) != 0 {
+		t.Fatalf("nothing may be sized: %v", kube.NamespaceQuotas)
+	}
+}
+
+func TestSyncProjectQuota_AnUnreadablePlanIsAnError(t *testing.T) {
+	app := sampleDeployApp()
+	svc, _, _ := newDeployTestService(t, app)
+	svc.SetPlanTiers(fixedPlan{err: ErrOrgTierUnresolved})
+	if err := svc.SyncProjectQuota(context.Background(), app.ProjectID); !errors.Is(err, ErrOrgTierUnresolved) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+type switchablePlan struct{ tier domain.TierType }
+
+func (p *switchablePlan) ProjectPlanTier(context.Context, string) (domain.TierType, error) {
+	return p.tier, nil
 }
