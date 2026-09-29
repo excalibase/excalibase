@@ -269,6 +269,13 @@ func (s *ProvisioningService) announceProject(ctx context.Context, inst *domain.
 	if s.activity != nil {
 		s.activity.Record(ctx, inst.ProjectID, activitySourceFor(inst))
 	}
+	// The namespace already has the safe floor quota; a failure here is retried
+	// by the next plan change or app deploy rather than failing a live project.
+	if s.quotaSync != nil {
+		if err := s.quotaSync(ctx, inst.ProjectID); err != nil {
+			log.Printf("WARN: size the namespace quota of %s from its plan: %v", inst.ProjectID, err)
+		}
+	}
 }
 
 func activitySourceFor(inst *domain.DatabaseInstance) domain.ActivitySource {

@@ -25,9 +25,11 @@ const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
 	// storageBudget holds every database volume to the platform's share of its storage.
-	storageBudget  *storagebudget.Budget
-	store          storage.InstanceStore
-	orgStore       storage.OrgStore        // org slug lookup; provisioning refuses without it
+	storageBudget *storagebudget.Budget
+	store         storage.InstanceStore
+	orgStore      storage.OrgStore // org slug lookup; provisioning refuses without it
+	// quotaSync sizes a new project's namespace quota from its plan (EXC-524).
+	quotaSync      func(ctx context.Context, projectID string) error
 	tierStore      storage.TierConfigStore // optional; DB-backed tier specs, falls back to config defaults
 	factory        *provisioner.Factory
 	vault          vaultclient.VaultClient  // optional
@@ -158,6 +160,12 @@ func (s *ProvisioningService) SetOrgStore(os storage.OrgStore) {
 // SetTierStore wires the DB-backed tier-config source. Once wired it is the
 // only source: a tier it cannot answer for is refused, never sized from the
 // built-in catalogue. Unset, the built-in catalogue is the source.
+// SetProjectQuotaSync wires the plan-sized namespace quota a project gets when
+// it is created, restored or gains a database (EXC-524).
+func (s *ProvisioningService) SetProjectQuotaSync(sync func(ctx context.Context, projectID string) error) {
+	s.quotaSync = sync
+}
+
 func (s *ProvisioningService) SetTierStore(ts storage.TierConfigStore) {
 	s.tierStore = ts
 }
