@@ -96,12 +96,13 @@ describe('TablesPage API exposure', () => {
     );
     expect(api.post).toHaveBeenCalledWith(
       '/provision/p1/table-grants/',
-      expect.objectContaining({ resource: 'public.customers', role: 'authenticated' }),
+      expect.objectContaining({ resource: 'public.customers', role: 'user' }),
     );
+    expect(api.post).toHaveBeenCalledTimes(2);
   });
 
   test('clicking a reachable table takes it back out of the API', async () => {
-    renderPage([grant('g1', 'public.orders', 'anon'), grant('g2', 'public.orders', 'authenticated')]);
+    renderPage([grant('g1', 'public.orders', 'anon'), grant('g2', 'public.orders', 'user')]);
     const user = userEvent.setup();
 
     const orders = await screen.findByTestId('exposure-toggle-orders');

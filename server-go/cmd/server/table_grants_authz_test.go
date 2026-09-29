@@ -22,7 +22,7 @@ func TestEngineTokenReadsTableGrants(t *testing.T) {
 	seeded := domain.TableGrant{
 		ID: "g-1", ProjectID: contractProject, Resource: "public.customer",
 		Operations: []domain.Operation{domain.OpSelect},
-		Role:       domain.GrantRoleAuthenticated, Enabled: true,
+		Role:       domain.GrantRoleUser, Enabled: true,
 	}
 	if err := grants.UpsertGrant(context.Background(), &seeded); err != nil {
 		t.Fatalf("UpsertGrant: %v", err)

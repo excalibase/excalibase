@@ -17,8 +17,8 @@ import { onMutationError } from '../utils/mutationHelpers';
  * database directly and never consult a grant.
  */
 
-/** The only roles a grant may name: an end user is signed in, or is not. */
-export const END_USER_ROLES = ['anon', 'authenticated'] as const;
+/** The roles the engine runs an end user as: signed out (anon) or signed in (user). */
+export const END_USER_ROLES = ['anon', 'user'] as const;
 export type EndUserRole = (typeof END_USER_ROLES)[number];
 
 /**
