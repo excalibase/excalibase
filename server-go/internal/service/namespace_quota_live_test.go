@@ -171,4 +171,3 @@ func (lab *appLiveLab) waitRunning(t *testing.T, want int) {
 	}
 	t.Fatalf("%d pods running, want %d", running, want)
 }
-
