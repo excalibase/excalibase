@@ -23,6 +23,7 @@ const (
 	// use and audience, and the engine's "excalibase:" audience check and
 	// access-only token_use check both refuse it.
 	tokenUseKeyAdmin       = "key_admin"
+	tokenUseUserAdmin      = "user_admin"
 	keyAdminAudiencePrefix = "excalibase-auth:"
 	keyAdminIssuer         = "excalibase"
 	keyAdminSubject        = "svc-provisioning"
@@ -33,7 +34,7 @@ type secretReader interface {
 	Get(path string) (map[string]string, error)
 }
 
-// Signer mints key-admin tokens with the platform signing key.
+// Signer mints key-admin and user-admin tokens with the platform signing key.
 type Signer struct {
 	vault secretReader
 	now   func() time.Time
@@ -46,6 +47,21 @@ func NewSigner(vault secretReader) *Signer {
 // Sign returns a token that lets its bearer manage projectID's api keys at
 // the auth service for one minute.
 func (s *Signer) Sign(projectID, orgSlug string) (string, error) {
+	return s.mint(projectID, orgSlug, tokenUseKeyAdmin, nil)
+}
+
+// SignUserAdmin returns a one-minute token that lets its bearer list
+// projectID's end users and set their roles at the auth service. actor is the
+// platform user on whose behalf the call is made; auth refuses a token
+// without one, and so does this signer.
+func (s *Signer) SignUserAdmin(projectID, orgSlug, actor string) (string, error) {
+	if actor == "" {
+		return "", errors.New("a user-admin token must name its actor")
+	}
+	return s.mint(projectID, orgSlug, tokenUseUserAdmin, jwt.MapClaims{"actor": actor})
+}
+
+func (s *Signer) mint(projectID, orgSlug, use string, extra jwt.MapClaims) (string, error) {
 	key, err := s.signingKey()
 	if err != nil {
 		return "", err
@@ -55,17 +71,21 @@ func (s *Signer) Sign(projectID, orgSlug string) (string, error) {
 		return "", fmt.Errorf("token id: %w", err)
 	}
 	now := s.now()
-	return jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
+	claims := jwt.MapClaims{
 		"iss":       keyAdminIssuer,
 		"sub":       keyAdminSubject,
 		"aud":       []string{keyAdminAudiencePrefix + projectID},
 		"projectId": projectID,
 		"orgSlug":   orgSlug,
-		"token_use": tokenUseKeyAdmin,
+		"token_use": use,
 		"jti":       hex.EncodeToString(jti),
 		"iat":       now.Unix(),
 		"exp":       now.Add(keyAdminLifetime).Unix(),
-	}).SignedString(key)
+	}
+	for name, value := range extra {
+		claims[name] = value
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodES256, claims).SignedString(key)
 }
 
 func (s *Signer) signingKey() (*ecdsa.PrivateKey, error) {

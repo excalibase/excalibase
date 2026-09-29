@@ -257,7 +257,7 @@ Environment variables:
 - `PUBLIC_PORT` — required; the listener only the edge reaches (differs from `PORT`, which serves in-cluster callers and ignores X-Forwarded-For)
 - `TRUSTED_PROXY_CIDRS` — required; the edge addresses whose X-Forwarded-For the public listener believes
 - `STUDIO_URL` — required; Studio origin that emailed verification and password-reset links open
-- `AUTH_INTERNAL_URL` — excalibase-auth inside the platform network; `/api/projects/{id}/sdk-keys` relays to it with a 60-second key-admin token signed by the vault PKI key
+- `AUTH_INTERNAL_URL` — excalibase-auth inside the platform network; `/api/projects/{id}/sdk-keys` relays to it with a 60-second key-admin token signed by the vault PKI key; `/api/projects/{id}/end-users` (Admin) relays to it with a 60-second user-admin token naming the Studio user as `actor`, and audits every role change
 
 **Storage**
 - `DB_PATH` — SQLite path (self-hosted only, default: ../provisioning-data/excalibase.db)

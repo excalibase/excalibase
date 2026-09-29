@@ -249,3 +249,45 @@ func TestClientRefusesAMalformedAuthURL(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// A user-admin token lets Studio set an end user's role at auth, so it names
+// the platform user who asked and lives no longer than a key-admin token.
+func TestSignerMintsAUserAdminTokenNamingTheActor(t *testing.T) {
+	key, vault := newSigningKey(t)
+	signer := NewSigner(vault)
+	raw, err := signer.SignUserAdmin("proj-a", "acme", "user-42")
+	if err != nil {
+		t.Fatalf("SignUserAdmin: %v", err)
+	}
+	claims := parse(t, key, raw)
+	if claims["token_use"] != "user_admin" || claims["actor"] != "user-42" || claims["projectId"] != "proj-a" ||
+		claims["orgSlug"] != "acme" || claims["iss"] != "excalibase" || claims["sub"] != "svc-provisioning" {
+		t.Fatalf("claims: %v", claims)
+	}
+	aud, _ := claims.GetAudience()
+	if !slices.Equal([]string(aud), []string{"excalibase-auth:proj-a"}) {
+		t.Fatalf("aud = %v", aud)
+	}
+	iat, _ := claims.GetIssuedAt()
+	exp, _ := claims.GetExpirationTime()
+	if lifetime := exp.Sub(iat.Time); lifetime <= 0 || lifetime > time.Minute {
+		t.Fatalf("lifetime = %v", lifetime)
+	}
+	again, _ := signer.SignUserAdmin("proj-a", "acme", "user-42")
+	if parse(t, key, again)["jti"] == claims["jti"] {
+		t.Fatal("expected a fresh token id per token")
+	}
+}
+
+func TestSignerRefusesAUserAdminTokenWithoutAnActor(t *testing.T) {
+	_, vault := newSigningKey(t)
+	if _, err := NewSigner(vault).SignUserAdmin("proj-a", "acme", ""); err == nil {
+		t.Fatal("signed a user-admin token that names no one")
+	}
+}
+
+func TestSignerFailsAUserAdminTokenWithoutTheSigningKey(t *testing.T) {
+	if _, err := NewSigner(mapVault{}).SignUserAdmin("proj-a", "acme", "user-42"); err == nil {
+		t.Fatal("signed without a key")
+	}
+}
