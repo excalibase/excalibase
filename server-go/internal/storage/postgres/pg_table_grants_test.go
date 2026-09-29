@@ -4,7 +4,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -24,7 +26,7 @@ func TestTableGrants_UpsertListGet(t *testing.T) {
 	store := NewTableGrants(testStore(t))
 	ctx := context.Background()
 
-	in := fixtureGrant("g1", "proj-a", "public.orders", "authenticated",
+	in := fixtureGrant("g1", "proj-a", "public.orders", domain.GrantRoleUser,
 		domain.OpSelect, domain.OpInsert)
 	if err := store.UpsertGrant(ctx, in); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -34,7 +36,7 @@ func TestTableGrants_UpsertListGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.Resource != "public.orders" || got.Role != "authenticated" || !got.Enabled {
+	if got.Resource != "public.orders" || got.Role != domain.GrantRoleUser || !got.Enabled {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 	if len(got.Operations) != 2 {
@@ -137,19 +139,74 @@ func TestTableGrants_PerProjectExposureSettingIsGone(t *testing.T) {
 
 // The schema itself refuses a role outside the end-user vocabulary, so a grant
 // naming 'admin' or '*' cannot reach storage even past the API validator.
-func TestTableGrants_StorageRefusesARoleOutsideTheEndUserRoles(t *testing.T) {
+func TestTableGrants_StorageRefusesAMalformedOrServiceRole(t *testing.T) {
 	store := NewTableGrants(testStore(t))
 	ctx := context.Background()
 
-	for _, role := range []string{"*", "user", "admin", "service_role"} {
-		err := store.UpsertGrant(ctx, fixtureGrant("g-"+role, "proj-a", "public.orders", role))
+	for i, role := range []string{"*", "service", "authenticated;x", "Admin", "9role", ""} {
+		err := store.UpsertGrant(ctx, fixtureGrant(fmt.Sprintf("bad-%d", i), "proj-a", "public.orders", role))
 		if err == nil {
 			t.Errorf("role %q was stored; the schema must refuse it", role)
 		}
 	}
-	for _, role := range []string{domain.GrantRoleAnon, domain.GrantRoleAuthenticated} {
+	for _, role := range []string{domain.GrantRoleAnon, domain.GrantRoleUser, "editor"} {
 		if err := store.UpsertGrant(ctx, fixtureGrant("ok-"+role, "proj-a", "public.orders", role)); err != nil {
 			t.Errorf("role %q must be storable: %v", role, err)
 		}
+	}
+}
+
+const (
+	migrationBeforeGrantRoles = 63
+	migrationGrantRoles       = 64
+)
+
+func grantRole(t *testing.T, store *Store, id string) (string, bool) {
+	t.Helper()
+	var role string
+	err := store.DB().QueryRow(`SELECT role_name FROM table_grants WHERE id = $1`, id).Scan(&role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false
+	}
+	if err != nil {
+		t.Fatalf("read grant %s: %v", id, err)
+	}
+	return role, true
+}
+
+// authenticated was the signed-in end user; the engine now runs that caller as user.
+func TestTableGrants_MigrationRenamesAuthenticatedToUserAndBack(t *testing.T) {
+	store := testStore(t)
+	if err := store.m.Migrate(migrationBeforeGrantRoles); err != nil {
+		t.Fatalf("migrate down to %d: %v", migrationBeforeGrantRoles, err)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO table_grants (id, project_id, resource, operations, role_name)
+		VALUES ('g-anon', 'p', 'public.orders', '{SELECT}', 'anon'),
+		       ('g-auth', 'p', 'public.orders', '{SELECT}', 'authenticated')`); err != nil {
+		t.Fatalf("seed old-vocabulary grants: %v", err)
+	}
+
+	if err := store.m.Migrate(migrationGrantRoles); err != nil {
+		t.Fatalf("migrate up to %d: %v", migrationGrantRoles, err)
+	}
+	if role, _ := grantRole(t, store, "g-auth"); role != domain.GrantRoleUser {
+		t.Errorf("authenticated grant migrated to %q, want %q", role, domain.GrantRoleUser)
+	}
+	if role, _ := grantRole(t, store, "g-anon"); role != domain.GrantRoleAnon {
+		t.Errorf("anon grant migrated to %q, want anon", role)
+	}
+	if _, err := store.DB().Exec(`INSERT INTO table_grants (id, project_id, resource, operations, role_name)
+		VALUES ('g-custom', 'p', 'public.orders', '{SELECT}', 'editor')`); err != nil {
+		t.Fatalf("a custom role must be storable after the migration: %v", err)
+	}
+
+	if err := store.m.Migrate(migrationBeforeGrantRoles); err != nil {
+		t.Fatalf("migrate back down to %d: %v", migrationBeforeGrantRoles, err)
+	}
+	if role, _ := grantRole(t, store, "g-auth"); role != "authenticated" {
+		t.Errorf("down migration left the user grant as %q, want authenticated", role)
+	}
+	if _, found := grantRole(t, store, "g-custom"); found {
+		t.Error("down migration must drop grants the old vocabulary cannot express")
 	}
 }

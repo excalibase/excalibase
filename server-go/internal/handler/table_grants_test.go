@@ -146,7 +146,7 @@ func validGrant() map[string]any {
 	return map[string]any{
 		"resource":   "public.orders",
 		"operations": []string{"SELECT"},
-		"role":       "authenticated",
+		"role":       "user",
 		"enabled":    true,
 	}
 }
@@ -239,22 +239,18 @@ func TestTableGrants_NoHTTPRouteCanSetEnforcement(t *testing.T) {
 	}
 }
 
-// Grants name end users: anon (not signed in) and authenticated (signed in).
-// Any other role is refused with a message that says where it belongs —
-// arbitrary roles are an RLS policy concern, not an exposure one.
-func TestTableGrants_Create_RefusesAnyRoleButAnonAndAuthenticated(t *testing.T) {
+// A grant names the role the token runs as: anon, user or a custom role.
+// Anything that is not a plain lower-case role name is refused.
+func TestTableGrants_Create_RefusesAMalformedRole(t *testing.T) {
 	r, store, bus := setupGrantRouter(t)
 
-	for _, role := range []string{"user", "*", "admin", "service_role", "Anon ", "", "postgres"} {
+	for _, role := range []string{"*", "Anon ", "", "Admin", "9role", "_role", "role-name", "a.b", "authenticated;drop",
+		"r" + strings.Repeat("x", 63)} {
 		body := validGrant()
 		body["role"] = role
 		w := doGrantRequest(t, r, "POST", "/api/provision/proj-a/table-grants/", body)
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("role %q = %d, want 400: %s", role, w.Code, w.Body.String())
-			continue
-		}
-		if !strings.Contains(w.Body.String(), "anon") || !strings.Contains(w.Body.String(), "authenticated") {
-			t.Errorf("role %q: message must name the two accepted roles, got %s", role, w.Body.String())
 		}
 	}
 	if len(store.grants) != 0 {
@@ -265,10 +261,29 @@ func TestTableGrants_Create_RefusesAnyRoleButAnonAndAuthenticated(t *testing.T) 
 	}
 }
 
-func TestTableGrants_Create_AcceptsTheTwoEndUserRoles(t *testing.T) {
+// service bypasses exposure, so a grant to it would do nothing; say so.
+func TestTableGrants_Create_RefusesTheServiceRole(t *testing.T) {
+	r, store, _ := setupGrantRouter(t)
+
+	body := validGrant()
+	body["role"] = "service"
+	w := doGrantRequest(t, r, "POST", "/api/provision/proj-a/table-grants/", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("role service = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "service") || !strings.Contains(w.Body.String(), "bypass") {
+		t.Errorf("message must say service bypasses exposure, got %s", w.Body.String())
+	}
+	if len(store.grants) != 0 {
+		t.Errorf("a refused grant must not be stored: %+v", store.grants)
+	}
+}
+
+func TestTableGrants_Create_AcceptsAnonUserAndCustomRoles(t *testing.T) {
 	r, _, _ := setupGrantRouter(t)
 
-	for _, role := range []string{domain.GrantRoleAnon, domain.GrantRoleAuthenticated} {
+	for _, role := range []string{domain.GrantRoleAnon, domain.GrantRoleUser, "editor", "billing_admin",
+		"r" + strings.Repeat("x", 62)} {
 		body := validGrant()
 		body["role"] = role
 		if w := doGrantRequest(t, r, "POST", "/api/provision/proj-a/table-grants/", body); w.Code != http.StatusCreated {
@@ -278,7 +293,7 @@ func TestTableGrants_Create_AcceptsTheTwoEndUserRoles(t *testing.T) {
 }
 
 // A PATCH must not be a way round the role rule the POST enforces.
-func TestTableGrants_Update_RefusesARoleOutsideTheEndUserRoles(t *testing.T) {
+func TestTableGrants_Update_RefusesTheServiceRole(t *testing.T) {
 	r, store, _ := setupGrantRouter(t)
 
 	created := doGrantRequest(t, r, "POST", "/api/provision/proj-a/table-grants/", validGrant())
@@ -288,11 +303,11 @@ func TestTableGrants_Update_RefusesARoleOutsideTheEndUserRoles(t *testing.T) {
 	}
 
 	w := doGrantRequest(t, r, "PATCH", "/api/provision/proj-a/table-grants/"+grant.ID,
-		map[string]any{"role": "service_role"})
+		map[string]any{"role": "service"})
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("patching the role to service_role = %d, want 400: %s", w.Code, w.Body.String())
+		t.Fatalf("patching the role to service = %d, want 400: %s", w.Code, w.Body.String())
 	}
-	if store.grants[grant.ID].Role != domain.GrantRoleAuthenticated {
+	if store.grants[grant.ID].Role != domain.GrantRoleUser {
 		t.Fatalf("stored role changed to %q despite the refusal", store.grants[grant.ID].Role)
 	}
 }

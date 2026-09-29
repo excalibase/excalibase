@@ -76,6 +76,10 @@ describe('isTableExposed', () => {
 });
 
 describe('useSetTableExposed', () => {
+  test('the end-user roles are the ones the engine runs callers as', () => {
+    expect(END_USER_ROLES).toEqual(['anon', 'user']);
+  });
+
   test('exposing a table grants both end-user roles', async () => {
     vi.mocked(api.get).mockResolvedValue({ data: grantSet() } as never);
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
@@ -99,7 +103,7 @@ describe('useSetTableExposed', () => {
     const current = grantSet({
       grants: [
         { id: 'g-anon', projectId: 'p1', resource: 'public.orders', operations: ['SELECT'], role: 'anon', enabled: true },
-        { id: 'g-auth', projectId: 'p1', resource: 'public.orders', operations: ['SELECT'], role: 'authenticated', enabled: true },
+        { id: 'g-auth', projectId: 'p1', resource: 'public.orders', operations: ['SELECT'], role: 'user', enabled: true },
         { id: 'g-other', projectId: 'p1', resource: 'public.customers', operations: ['SELECT'], role: 'anon', enabled: true },
       ],
     });
@@ -132,7 +136,7 @@ describe('useSetTableExposed', () => {
 
     await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
     expect(api.post).toHaveBeenCalledWith('/provision/p1/table-grants/', expect.objectContaining({
-      role: 'authenticated',
+      role: 'user',
     }));
   });
 });

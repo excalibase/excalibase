@@ -245,19 +245,24 @@ func validateGrantResource(resource string) error {
 	return nil
 }
 
-// errGrantRole names the only two roles an exposure grant may target and says
-// where anything else belongs, so an operator reaching for "admin" or a
-// tenant-specific role is pointed at RLS instead of at a wider grant.
-var errGrantRole = errors.New(`role must be "` + domain.GrantRoleAnon + `" or "` +
-	domain.GrantRoleAuthenticated + `"; exposure decides what end users can reach, ` +
-	`and any other role belongs in an RLS policy`)
+var validGrantRole = regexp.MustCompile(domain.GrantRolePattern)
 
-// validateGrantRole accepts exactly anon or authenticated. It is deliberately
-// an exact match: no trimming, no case folding, no "*". A grant the operator
-// cannot read literally off the row is a grant they cannot audit.
+var (
+	errGrantRoleFormat = errors.New(`role must be "` + domain.GrantRoleAnon + `", "` +
+		domain.GrantRoleUser + `" or a custom role name (lower-case letters, digits and ` +
+		`underscores, starting with a letter, at most 63 characters)`)
+	errGrantRoleService = errors.New(`role "` + domain.GrantRoleService +
+		`" bypasses exposure, so a grant to it has no effect`)
+)
+
+// validateGrantRole is an exact match: no trimming, no case folding, no "*".
+// A grant the operator cannot read literally off the row is one they cannot audit.
 func validateGrantRole(role string) error {
-	if role == domain.GrantRoleAnon || role == domain.GrantRoleAuthenticated {
-		return nil
+	if role == domain.GrantRoleService {
+		return errGrantRoleService
 	}
-	return errGrantRole
+	if !validGrantRole.MatchString(role) {
+		return errGrantRoleFormat
+	}
+	return nil
 }

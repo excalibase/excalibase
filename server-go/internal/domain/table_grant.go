@@ -2,23 +2,21 @@ package domain
 
 import "time"
 
-// The only two roles an exposure grant may name (EXC-400). Exposure decides
-// what an END USER of the tenant's API can reach, and an end user is either
-// signed in or not. Anything finer — per-tenant, per-plan, per-department —
-// is a row-level security policy, which is where a claim-driven rule belongs;
-// putting it here would make the reachable schema itself depend on a free-form
-// claim, and a schema that varies by claim is one an operator cannot read off
-// the page in front of them.
+// A grant names the role the engine runs the caller as (EXC-370): anon with
+// no session, user for a signed-in end user, or a custom role carried in the
+// token. Which rows that role sees stays with RLS.
 const (
-	// GrantRoleAnon is a caller with no session: no token, or a token the
-	// engine could not verify.
+	// GrantRoleAnon is a caller with no token or a publishable-key token.
 	GrantRoleAnon = "anon"
-	// GrantRoleAuthenticated is any caller holding a valid end-user token.
-	GrantRoleAuthenticated = "authenticated"
+	// GrantRoleUser is a signed-in end user running as the account's role.
+	GrantRoleUser = "user"
+	// GrantRoleService bypasses exposure, so no grant may name it.
+	GrantRoleService = "service"
 )
 
-// GrantRoles lists the accepted roles in the order they are offered.
-var GrantRoles = []string{GrantRoleAnon, GrantRoleAuthenticated}
+// GrantRolePattern is the shape of a grantable role name; the migration's
+// CHECK constraint enforces the same pattern.
+const GrantRolePattern = `^[a-z][a-z0-9_]{0,62}$`
 
 // TableGrant is one entry of a project's exposure list (EXC-370): permission
 // for Role to run Operations against Resource through the generated
@@ -29,7 +27,7 @@ type TableGrant struct {
 	ProjectID  string      `json:"projectId"`
 	Resource   string      `json:"resource"` // schema-qualified table or function
 	Operations []Operation `json:"operations"`
-	Role       string      `json:"role"` // GrantRoleAnon or GrantRoleAuthenticated
+	Role       string      `json:"role"` // anon, user or a custom role; never service
 	Enabled    bool        `json:"enabled"`
 	CreatedAt  *time.Time  `json:"createdAt,omitempty"`
 	UpdatedAt  *time.Time  `json:"updatedAt,omitempty"`
