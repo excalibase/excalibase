@@ -1,0 +1,25 @@
+# Redis 7.4 (alpine) as an internal service: no public route, reached by the
+# project's own apps on redis:6379 once the private network is on.
+format: excalibase.template/v1
+id: redis
+name: Redis
+summary: Redis 7.4 as an internal service with a password and a 1Gi disk.
+description: >-
+  One internal app named redis, reachable only by this project's apps at
+  redis:6379 over the project's private network. Data is kept on a 1Gi disk
+  (append-only file), so it survives restarts and redeploys. The password is
+  generated when you deploy, kept in the app's secret REDIS_PASSWORD, and never
+  shown in the template. Image redis:7.4-alpine, pinned by digest.
+apps:
+  - name: redis
+    image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    internal: true
+    internalPorts: [6379]
+    replicas: 1
+    args: ["--requirepass", "$(REDIS_PASSWORD)", "--appendonly", "yes", "--dir", "/data"]
+    disk:
+      mountPath: /data
+      size: 1Gi
+    env:
+      - name: REDIS_PASSWORD
+        value: "${{ secret(32) }}"

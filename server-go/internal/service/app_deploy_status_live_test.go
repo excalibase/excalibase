@@ -49,12 +49,13 @@ const (
 var appLiveRoute = k8s.AppRouteOptions{Domain: "apps.test", IngressClass: "haproxy", IngressFromNamespace: appLiveHAProxyNS}
 
 type appLiveLab struct {
-	ctx       context.Context
-	container *k3s.K3sContainer
-	cs        kubernetes.Interface
-	client    *k8s.Client
-	nodeIP    string
-	instances *fakestore.Instances
+	ctx          context.Context
+	runtimeClass string
+	container    *k3s.K3sContainer
+	cs           kubernetes.Interface
+	client       *k8s.Client
+	nodeIP       string
+	instances    *fakestore.Instances
 }
 
 // Run with: go test ./internal/service/ -tags=live -run TestLiveAppStatusFollowsTheRollout -v -count=1 -timeout 40m
@@ -108,11 +109,18 @@ func TestLiveAppStatusFollowsTheRollout(t *testing.T) {
 }
 
 func startAppLiveLab(t *testing.T) *appLiveLab {
+	return startAppLiveLabWith(t, appLiveRuntimeClass, "runc")
+}
+
+// startAppLiveLabWith runs apps under the given runtime class; extra customizes the k3s node (e.g. gVisor's files).
+func startAppLiveLabWith(t *testing.T, runtimeClass, handler string, extra ...testcontainers.ContainerCustomizer) *appLiveLab {
 	t.Helper()
-	lab := &appLiveLab{ctx: context.Background(), instances: fakestore.NewInstances()}
-	container, err := k3s.Run(lab.ctx, appLiveK3s,
+	lab := &appLiveLab{ctx: context.Background(), runtimeClass: runtimeClass, instances: fakestore.NewInstances()}
+	options := append([]testcontainers.ContainerCustomizer{
 		testcontainers.WithCmdArgs("--flannel-backend=none", "--disable-network-policy", "--disable=traefik"),
-		testcontainers.WithWaitStrategyAndDeadline(3*time.Minute, wait.ForLog("k3s is up and running").WithStartupTimeout(3*time.Minute)))
+		testcontainers.WithWaitStrategyAndDeadline(3*time.Minute, wait.ForLog("k3s is up and running").WithStartupTimeout(3*time.Minute)),
+	}, extra...)
+	container, err := k3s.Run(lab.ctx, appLiveK3s, options...)
 	testcontainers.CleanupContainer(t, container)
 	if err != nil {
 		t.Fatalf("k3s start: %v", err)
@@ -125,8 +133,8 @@ func startAppLiveLab(t *testing.T) *appLiveLab {
 	lab.connect(t)
 	lab.installCilium(t)
 	lab.installHAProxy(t)
-	runtimeClass := &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: appLiveRuntimeClass}, Handler: "runc"}
-	if _, err := lab.cs.NodeV1().RuntimeClasses().Create(lab.ctx, runtimeClass, metav1.CreateOptions{}); err != nil {
+	class := &nodev1.RuntimeClass{ObjectMeta: metav1.ObjectMeta{Name: runtimeClass}, Handler: handler}
+	if _, err := lab.cs.NodeV1().RuntimeClasses().Create(lab.ctx, class, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create runtime class: %v", err)
 	}
 	return lab
@@ -208,7 +216,7 @@ func (lab *appLiveLab) namespace(t *testing.T, name string) {
 }
 
 func (lab *appLiveLab) render() k8s.AppRenderOptions {
-	return k8s.AppRenderOptions{RuntimeClass: appLiveRuntimeClass, Route: appLiveRoute}
+	return k8s.AppRenderOptions{RuntimeClass: lab.runtimeClass, Route: appLiveRoute}
 }
 
 // app gives each case a project and namespace of its own.

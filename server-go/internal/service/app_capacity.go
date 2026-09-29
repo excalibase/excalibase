@@ -124,6 +124,15 @@ func (s *AppDeployService) admit(ctx context.Context, namespace string, deploy *
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
 	}
+	return s.clusterHolds(ctx, placement, podNeed{cpu: needCPU, mem: needMem, perCPU: perCPU, perMem: perMem},
+		reservedCPU, reservedMem, "app "+deploy.AppID)
+}
+
+type podNeed struct{ cpu, mem, perCPU, perMem int64 }
+
+// clusterHolds is the room check every admission ends in; anything the cluster cannot answer refuses.
+func (s *AppDeployService) clusterHolds(ctx context.Context, placement k8s.RuntimePlacement, need podNeed,
+	reservedCPU, reservedMem int64, who string) error {
 	capacity, err := s.kube.GetClusterCapacity(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
@@ -135,14 +144,48 @@ func (s *AppDeployService) admit(ctx context.Context, namespace string, deploy *
 		return fmt.Errorf("%w (runtime class %q)", ErrAppNoSandboxNode, s.render.RuntimeClass)
 	}
 	capacity.HeadroomPercent = s.headroomPercent
-	if capacity.FreeCPUMilli()-reservedCPU < needCPU || capacity.FreeMemBytes()-reservedMem < needMem ||
-		!anyNodeFits(capacity, placement.NodeSelector, perCPU, perMem) {
-		log.Printf("INFO: app %s refused: need %dm/%d (one pod %dm/%d) free %dm/%d reserved %dm/%d headroom %d%%",
-			deploy.AppID, needCPU, needMem, perCPU, perMem, capacity.FreeCPUMilli(), capacity.FreeMemBytes(),
+	if capacity.FreeCPUMilli()-reservedCPU < need.cpu || capacity.FreeMemBytes()-reservedMem < need.mem ||
+		!anyNodeFits(capacity, placement.NodeSelector, need.perCPU, need.perMem) {
+		log.Printf("INFO: %s refused: need %dm/%d (one pod %dm/%d) free %dm/%d reserved %dm/%d headroom %d%%",
+			who, need.cpu, need.mem, need.perCPU, need.perMem, capacity.FreeCPUMilli(), capacity.FreeMemBytes(),
 			reservedCPU, reservedMem, capacity.HeadroomPercent)
 		return ErrAppCapacity
 	}
 	return nil
+}
+
+// AdmitNewApps asks whether apps not yet created, with these replica counts,
+// fit together at the project's plan size (EXC-526): a template is refused
+// before anything is made, rather than half deployed.
+func (s *AppDeployService) AdmitNewApps(ctx context.Context, projectID string, replicas []int) error {
+	total := 0
+	for _, count := range replicas {
+		if _, _, err := s.planTier(ctx, projectID, count); err != nil {
+			return err
+		}
+		total += count
+	}
+	if total == 0 {
+		return nil
+	}
+	_, tier, err := s.planTier(ctx, projectID, 0)
+	if err != nil {
+		return err
+	}
+	placement, err := s.kube.RuntimeClassPlacement(ctx, s.render.RuntimeClass)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
+	}
+	podCPU, podMem, err := requestFootprint(tier.CPURequest, tier.MemoryRequest, placement)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
+	}
+	reservedCPU, reservedMem, err := s.reservedByOtherRollouts(&apphost.Deploy{}, placement)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrAppCapacity, err)
+	}
+	need := podNeed{cpu: int64(total) * podCPU, mem: int64(total) * podMem, perCPU: podCPU, perMem: podMem}
+	return s.clusterHolds(ctx, placement, need, reservedCPU, reservedMem, "new apps of project "+projectID)
 }
 
 func rolloutNeed(live k8s.AppPods, replicas int, podCPU, podMem int64) (needCPU, needMem, perCPU, perMem int64) {

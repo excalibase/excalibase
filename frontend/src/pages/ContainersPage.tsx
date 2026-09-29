@@ -1,5 +1,5 @@
 import { Link, useParams } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { LayoutTemplate, Plus } from 'lucide-react';
 import { useApps, useDeploys, apiErrorMessage, type App } from '../api/apps';
 import { useAppHostingEnabled } from '../hooks/useDeploymentMode';
 import { appDisplayStatus, formatWhen } from '../components/containers/appCopy';
@@ -10,6 +10,7 @@ import {
   Spinner,
   ToneBadge,
   primaryButton,
+  secondaryButton,
 } from '../components/containers/ContainerBits';
 
 const LIST_POLL_MS = 5000;
@@ -70,9 +71,14 @@ function EmptyState({ projectId }: { readonly projectId: string }) {
         size your project's plan includes, so there is nothing extra to choose. You only need an
         image and the port it listens on.
       </p>
-      <Link to={`/project/${projectId}/containers/new`} className={`${primaryButton} mt-5`}>
-        <Plus className="w-4 h-4" /> New container
-      </Link>
+      <div className="mt-5 flex justify-center gap-2">
+        <Link to={`/project/${projectId}/containers/new`} className={primaryButton}>
+          <Plus className="w-4 h-4" /> New container
+        </Link>
+        <Link to={`/project/${projectId}/containers/templates`} className={secondaryButton}>
+          <LayoutTemplate className="w-4 h-4" /> Start from a template
+        </Link>
+      </div>
     </div>
   );
 }
@@ -109,13 +115,22 @@ export function ContainersPage() {
         subtitle="Run your own container image next to this project's database."
         actions={
           enabled && (
-            <Link
-              to={`/project/${projectId}/containers/new`}
-              className={primaryButton}
-              data-testid="containers-new"
-            >
-              <Plus className="w-4 h-4" /> New
-            </Link>
+            <>
+              <Link
+                to={`/project/${projectId}/containers/templates`}
+                className={secondaryButton}
+                data-testid="containers-templates"
+              >
+                <LayoutTemplate className="w-4 h-4" /> Templates
+              </Link>
+              <Link
+                to={`/project/${projectId}/containers/new`}
+                className={primaryButton}
+                data-testid="containers-new"
+              >
+                <Plus className="w-4 h-4" /> New
+              </Link>
+            </>
           )
         }
       />

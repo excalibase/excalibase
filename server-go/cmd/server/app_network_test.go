@@ -9,8 +9,9 @@ import (
 )
 
 func TestAppNetworkHandlerIsNotMountedWithoutItsStore(t *testing.T) {
-	if newAppNetworkHandler(nil, fakestore.NewInstances(), k8s.NewMockClient(), nil) != nil {
-		t.Error("no platform store must mean no handler")
+	svc := newAppNetworkService(nil, fakestore.NewInstances(), k8s.NewMockClient(), nil)
+	if svc != nil || newAppNetworkHandler(svc) != nil {
+		t.Error("no platform store must mean no service and no handler")
 	}
 }
 

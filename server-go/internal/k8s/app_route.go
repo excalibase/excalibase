@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	appServicePort     = 80
+	appServicePort     = apphost.ServiceHTTPPort
 	appServicePortName = "http"
 )
 

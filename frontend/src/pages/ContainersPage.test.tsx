@@ -69,6 +69,14 @@ describe('ContainersPage', () => {
     vi.mocked(api.get).mockReset();
   });
 
+  test('offers the templates gallery beside a new container', async () => {
+    renderPage();
+    expect(await screen.findByTestId('containers-templates')).toHaveAttribute(
+      'href',
+      '/project/proj-1/containers/templates',
+    );
+  });
+
   test('lists each container with its status, image and last deploy', async () => {
     renderPage();
     const row = await screen.findByTestId('container-row-app-1');

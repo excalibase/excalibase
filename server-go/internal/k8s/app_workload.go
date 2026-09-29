@@ -488,6 +488,8 @@ func buildAppContainer(app *apphost.App, env []corev1.EnvVar, resources corev1.R
 		// Used exactly as recorded; EXC-386 fills App.ResolvedDigest once one exists.
 		Image:           app.Image,
 		ImagePullPolicy: corev1.PullAlways,
+		// Args only: the image's entrypoint always runs; $(NAME) is filled from Env by the kubelet.
+		Args:            slices.Clone(app.Args),
 		Ports:           appContainerPorts(app),
 		Env:             env,
 		Resources:       resources,
