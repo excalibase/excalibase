@@ -74,7 +74,11 @@ export const useProvisionDatabase = () => {
 
   return useMutation({
     mutationFn: async (request: ProvisioningRequest) => {
-      const response = await api.post<DatabaseInstance>('/provision', request);
+      // A build outlasts one request: the answer comes once the project exists
+      // (PROVISIONING) and the project page follows its status to ACTIVE or FAILED.
+      const response = await api.post<DatabaseInstance>('/provision', request, {
+        headers: { Prefer: 'respond-async' },
+      });
       return response.data;
     },
     onSuccess: () => {

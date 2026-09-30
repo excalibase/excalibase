@@ -196,3 +196,19 @@ func TestCORS_PreflightAllowsIfMatch(t *testing.T) {
 		t.Errorf("Allow-Headers: got %q, want it to include If-Match", got)
 	}
 }
+
+// Studio asks for an asynchronous project create with Prefer: respond-async.
+func TestCORS_PreflightAllowsPrefer(t *testing.T) {
+	handler := CORS([]string{testOrigin})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodOptions, testAPIPath, nil)
+	req.Header.Set("Origin", testOrigin)
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "prefer")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if got := rr.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Prefer") {
+		t.Errorf("Allow-Headers: got %q, want it to include Prefer", got)
+	}
+}
