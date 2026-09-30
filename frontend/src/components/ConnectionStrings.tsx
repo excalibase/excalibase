@@ -81,9 +81,13 @@ interface StringRowProps {
 function StringRow({ testId, label, shown, copied }: StringRowProps) {
   const [justCopied, setJustCopied] = useState(false);
   const onCopy = () => {
-    navigator.clipboard.writeText(copied);
-    setJustCopied(true);
-    setTimeout(() => setJustCopied(false), 1500);
+    navigator.clipboard.writeText(copied).then(
+      () => {
+        setJustCopied(true);
+        setTimeout(() => setJustCopied(false), 1500);
+      },
+      () => setJustCopied(false),
+    );
   };
   return (
     <div>
