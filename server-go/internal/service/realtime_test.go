@@ -220,3 +220,65 @@ func TestRealtimeService_AppRoleCannotAlterThePublicationDirectly(t *testing.T) 
 		}
 	}
 }
+
+func replicaIdentity(t *testing.T, db *sql.DB, schemaName, table string) string {
+	t.Helper()
+	var identity string
+	err := db.QueryRow(`SELECT c.relreplident::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND c.relname = $2`, schemaName, table).Scan(&identity)
+	if err != nil {
+		t.Fatalf("replica identity of %s.%s: %v", schemaName, table, err)
+	}
+	return identity
+}
+
+// TestRealtimeService_EnabledTablesPublishCompleteOldRows asserts enabling a
+// table sets REPLICA IDENTITY FULL (f), so a delete carries the whole old row,
+// and disabling it restores DEFAULT (d); other tables are left as they were.
+func TestRealtimeService_EnabledTablesPublishCompleteOldRows(t *testing.T) {
+	db := realtimeTestDB(t)
+	svc := NewRealtimeService(db)
+	ctx := context.Background()
+	if _, err := db.Exec(`CREATE TABLE public."MixedCase" (id int PRIMARY KEY)`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	for _, table := range []string{"posts", "MixedCase"} {
+		if err := svc.EnableTable(ctx, "public", table); err != nil {
+			t.Fatalf("EnableTable %s: %v", table, err)
+		}
+		if err := svc.EnableTable(ctx, "public", table); err != nil {
+			t.Fatalf("second EnableTable %s: %v", table, err)
+		}
+		if got := replicaIdentity(t, db, "public", table); got != "f" {
+			t.Errorf("public.%s replica identity = %q after enable, want f", table, got)
+		}
+	}
+	if got := replicaIdentity(t, db, "public", "comments"); got != "d" {
+		t.Errorf("public.comments replica identity = %q, want d (never enabled)", got)
+	}
+
+	if err := svc.DisableTable(ctx, "public", "posts"); err != nil {
+		t.Fatalf("DisableTable: %v", err)
+	}
+	if got := replicaIdentity(t, db, "public", "posts"); got != "d" {
+		t.Errorf("public.posts replica identity = %q after disable, want d", got)
+	}
+}
+
+// TestRealtimeService_RefusedTablesKeepTheirReplicaIdentity asserts the
+// function still touches only user tables: a refused auth or platform table
+// is neither published nor altered.
+func TestRealtimeService_RefusedTablesKeepTheirReplicaIdentity(t *testing.T) {
+	db := realtimeTestDB(t)
+	svc := NewRealtimeService(db)
+
+	for _, ref := range [][2]string{{"auth", "users"}, {"excalibase", "jobs"}} {
+		if err := svc.EnableTable(context.Background(), ref[0], ref[1]); err == nil {
+			t.Errorf("%s.%s must not be publishable", ref[0], ref[1])
+		}
+		if got := replicaIdentity(t, db, ref[0], ref[1]); got != "d" {
+			t.Errorf("%s.%s replica identity = %q, want d (untouched)", ref[0], ref[1], got)
+		}
+	}
+}
