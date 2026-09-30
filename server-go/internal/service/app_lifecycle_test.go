@@ -175,6 +175,7 @@ func TestPauseApp_RefusedWhileAnotherOperationHoldsTheApp(t *testing.T) {
 	}
 	defer release()
 	f.svc.deployLeaseWait = 0
+	f.svc.lifecycleLeaseWait = 0
 
 	if _, err := f.svc.PauseApp(context.Background(), f.app.ProjectID, f.app.ID); !errors.Is(err, ErrProjectOperationRunning) {
 		t.Fatalf("err = %v, want ErrProjectOperationRunning", err)
@@ -374,6 +375,7 @@ func TestSetOperationClaimer_IsTheLeaseEveryOperationTakes(t *testing.T) {
 		t.Fatalf("claim: %v %v", claimed, err)
 	}
 	defer release()
+	f.svc.lifecycleLeaseWait = 0
 	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); !errors.Is(err, ErrProjectOperationRunning) {
 		t.Fatalf("err = %v, want ErrProjectOperationRunning", err)
 	}
