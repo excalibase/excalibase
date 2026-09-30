@@ -54,7 +54,7 @@ describe('ProvisionPage — no database', () => {
 
     await user.click(screen.getByTestId('provision-submit'));
     await waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith('/provision', { projectName: 'apps', orgId: 'org-1', noDatabase: true }),
+      expect(api.post).toHaveBeenCalledWith('/provision', { projectName: 'apps', orgId: 'org-1', noDatabase: true }, expect.anything()),
     );
     expect(navigate).toHaveBeenCalledWith('/project/p-1');
   });

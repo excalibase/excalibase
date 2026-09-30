@@ -275,15 +275,36 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	resp, err := h.svc.Provision(r.Context(), req)
+	// A caller that prefers not to wait (RFC 7240) is answered 202 once the
+	// project exists and follows the build through GET /{projectId}.
+	async := prefersRespondAsync(r)
+	create := h.svc.Provision
+	if async {
+		create = h.svc.ProvisionInBackground
+	}
+	resp, err := create(r.Context(), req)
 	if err != nil {
 		if !writeProjectCreationError(w, err) {
 			httpError(w, safeError(err), http.StatusBadRequest)
 		}
 		return
 	}
-
+	if async && resp.Status == domain.StatusProvisioning {
+		writeJSONStatus(w, http.StatusAccepted, resp)
+		return
+	}
 	writeJSON(w, resp)
+}
+
+func prefersRespondAsync(r *http.Request) bool {
+	for _, value := range r.Header.Values("Prefer") {
+		for _, pref := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(pref), "respond-async") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (h *ProvisioningHandler) GetStatus(w http.ResponseWriter, r *http.Request) {

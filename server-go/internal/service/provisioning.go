@@ -24,6 +24,8 @@ import (
 const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
+	// runInBackground starts an accepted project build; nil runs it on its own goroutine.
+	runInBackground func(func())
 	// storageBudget holds every database volume to the platform's share of its storage.
 	storageBudget *storagebudget.Budget
 	store         storage.InstanceStore
@@ -348,6 +350,59 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	if req.NoDatabase {
 		return s.provisionWithoutDatabase(ctx, req)
 	}
+	admitted, err := s.admitProject(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return admitted.build(ctx)
+}
+
+// ProvisionInBackground admits the project as Provision does and answers as
+// soon as its row exists, PROVISIONING; the build then runs detached from the
+// request, and its outcome — ACTIVE, or FAILED with the reason — is on the
+// project's status. A build takes longer than a browser waits for one request.
+func (s *ProvisioningService) ProvisionInBackground(ctx context.Context, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
+	if req.NoDatabase {
+		return s.provisionWithoutDatabase(ctx, req)
+	}
+	admitted, err := s.admitProject(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	accepted := acceptedResponse(admitted.inst)
+	buildCtx := context.WithoutCancel(ctx)
+	run := s.runInBackground
+	if run == nil {
+		run = func(f func()) { go f() }
+	}
+	run(func() {
+		if _, err := admitted.build(buildCtx); err != nil {
+			log.Printf("provisioning of %s did not finish: %v", accepted.ProjectID, err)
+		}
+	})
+	return accepted, nil
+}
+
+// SetBackgroundRunner replaces how accepted builds are started (tests).
+func (s *ProvisioningService) SetBackgroundRunner(run func(func())) { s.runInBackground = run }
+
+// admittedProject is a project whose row exists and whose database is still to be built.
+type admittedProject struct {
+	svc   *ProvisioningService
+	start time.Time
+	inst  *domain.DatabaseInstance
+	req   domain.ProvisioningRequest
+	prov  provisioner.DatabaseProvisioner
+	tier  config.TierConfig
+}
+
+func (a *admittedProject) build(ctx context.Context) (*domain.ProvisioningResponse, error) {
+	return a.svc.buildDatabase(ctx, a.start, a.inst, a.req, a.prov, a.tier, a.svc.handleProvisionFailure, RegistrationOptions{})
+}
+
+// admitProject validates the request and creates the project's row, which is
+// what admits it to the organisation, before any cluster resource exists.
+func (s *ProvisioningService) admitProject(ctx context.Context, req domain.ProvisioningRequest) (*admittedProject, error) {
 	// Pass req by pointer so prepareProvisioning's defaults (e.g. R2
 	// backup config injected when req.Backup is nil) propagate to the
 	// downstream prov.Provision call. Otherwise the mutated copy is
@@ -364,12 +419,22 @@ func (s *ProvisioningService) Provision(ctx context.Context, req domain.Provisio
 	// The user's display name is preserved on inst.ProjectName.
 	req.ProjectName = inst.ProjectID
 
-	// The row is the project's slot: creating it is what admits the project
-	// to the organisation, and it happens before any cluster resource exists.
 	if err := s.createProjectRow(ctx, inst, inst.Tier); err != nil {
 		return nil, err
 	}
-	return s.buildDatabase(ctx, start, inst, req, prov, tier, s.handleProvisionFailure, RegistrationOptions{})
+	return &admittedProject{svc: s, start: start, inst: inst, req: req, prov: prov, tier: tier}, nil
+}
+
+// acceptedResponse is the project as it stands when its build is accepted.
+func acceptedResponse(inst *domain.DatabaseInstance) *domain.ProvisioningResponse {
+	return &domain.ProvisioningResponse{
+		ProjectID:    inst.ProjectID,
+		ProjectName:  inst.ProjectName,
+		Status:       inst.Status,
+		CurrentStage: inst.CurrentStage,
+		Namespace:    inst.Namespace,
+		CreatedAt:    inst.CreatedAt,
+	}
 }
 
 // provisionFailureHandler records a failed database build on the row and

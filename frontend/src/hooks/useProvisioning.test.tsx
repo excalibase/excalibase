@@ -62,7 +62,19 @@ describe('useProvisioning hooks', () => {
     const { result } = renderHook(() => useProvisionDatabase(), { wrapper: Wrapper });
     result.current.mutate({ projectName: 'p', orgId: 'o', databaseType: 'POSTGRESQL', postgresVersion: '16' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(api.post).toHaveBeenCalledWith('/provision', expect.objectContaining({ projectName: 'p' }));
+    expect(api.post).toHaveBeenCalledWith('/provision', expect.objectContaining({ projectName: 'p' }), expect.anything());
+  });
+
+  // A build takes longer than one request may wait: Studio asks to be answered
+  // once the project exists and follows its status on the project page.
+  test('useProvisionDatabase asks not to wait for the build', async () => {
+    vi.mocked(api.post).mockResolvedValueOnce({ data: { projectId: 'proj-1', status: 'PROVISIONING' } } as never);
+    const { Wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvisionDatabase(), { wrapper: Wrapper });
+    result.current.mutate({ projectName: 'p', orgId: 'o', databaseType: 'POSTGRESQL', postgresVersion: '16' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(api.post).toHaveBeenCalledWith('/provision', expect.anything(), { headers: { Prefer: 'respond-async' } });
+    expect(result.current.data).toEqual({ projectId: 'proj-1', status: 'PROVISIONING' });
   });
 
   test('useDeprovisionDatabase DELETEs', async () => {
