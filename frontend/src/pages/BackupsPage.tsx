@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useListBackups, useTriggerBackup, useRestoreFromBackup, type RestoreRequest } from '../hooks/useProvisioning';
-import { useInstanceContext } from '../context/InstanceContext';
+import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
 import { toZonedInstant } from '../utils/zonedInstant';
@@ -9,7 +9,7 @@ import { Archive, RefreshCw, RotateCcw, Clock, type LucideIcon } from 'lucide-re
 type Tab = 'backups' | 'restore';
 
 export function BackupsPage() {
-  const { projectId } = useInstanceContext();
+  const projectId = useRouteProjectId();
   const [tab, setTab] = useState<Tab>('backups');
 
   const { data: backupData, isLoading } = useListBackups(projectId);

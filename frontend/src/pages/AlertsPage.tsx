@@ -1,7 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
-import { useInstances } from '../hooks/useProvisioning';
-import { useInstanceContext } from '../context/InstanceContext';
+import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { api } from '../api/client';
 import { Bell, AlertTriangle, Info, XCircle } from 'lucide-react';
 
@@ -16,17 +14,6 @@ interface Alert {
   threshold: number;
   firedAt: string;
   resolvedAt?: string;
-}
-
-function useAlerts() {
-  return useQuery({
-    queryKey: ['alerts'],
-    queryFn: async () => {
-      const res = await api.get<Alert[]>('/alerts');
-      return res.data;
-    },
-    refetchInterval: 30000,
-  });
 }
 
 function useProjectAlerts(projectId: string) {
@@ -52,35 +39,13 @@ function severityBadge(s: string) {
   return 'bg-blue-900/30 text-blue-400 border-blue-400/30';
 }
 
+// The alerts of the project in the URL; other projects' alerts are on their own pages.
 export function AlertsPage() {
-  const { data: instances = [] } = useInstances();
-  const { projectId: ctxProjectId } = useInstanceContext();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const projectId = selectedId ?? ctxProjectId;
-
-  const { data: allAlerts = [], isLoading: loadingAll } = useAlerts();
-  const { data: projectAlerts = [] } = useProjectAlerts(projectId);
-
-  const alerts = projectId ? projectAlerts : allAlerts;
-  const isLoading = loadingAll;
+  const projectId = useRouteProjectId();
+  const { data: alerts = [], isLoading } = useProjectAlerts(projectId);
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center gap-3">
-        <label htmlFor="alert-instance-filter" className="text-sm text-text-secondary font-medium">Filter by instance:</label>
-        <select
-          id="alert-instance-filter"
-          value={selectedId ?? ctxProjectId}
-          onChange={(e) => setSelectedId(e.target.value)}
-          className="px-3 py-2 bg-surface-card border border-border-primary rounded-lg text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent-primary"
-        >
-          <option value="">All instances</option>
-          {instances.map((i) => (
-            <option key={i.projectId} value={i.projectId}>{i.projectId}</option>
-          ))}
-        </select>
-      </div>
-
       <div className="bg-surface-card border border-border-primary rounded-xl overflow-hidden">
         {renderAlertsBody(isLoading, alerts)}
       </div>
@@ -88,7 +53,7 @@ export function AlertsPage() {
   );
 }
 
-function renderAlertsBody(isLoading: boolean, alerts: ReturnType<typeof useAlerts>['data']): React.ReactNode {
+function renderAlertsBody(isLoading: boolean, alerts: Alert[] | undefined): React.ReactNode {
   if (isLoading) return <div className="text-center py-16 text-text-secondary">Loading alerts...</div>;
   const items = alerts ?? [];
   if (items.length === 0) {

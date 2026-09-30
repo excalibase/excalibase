@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useInstanceContext } from '../context/InstanceContext';
+import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { useMigrations, useApplyMigration, type MigrationRequest } from '../hooks/useMigrations';
 import { CheckCircle, XCircle, Clock, ArrowUpDown, Plus, X } from 'lucide-react';
 
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );`;
 
 export function MigrationsPage() {
-  const { projectId } = useInstanceContext();
+  const projectId = useRouteProjectId();
 
   const { data: migrations = [], isLoading } = useMigrations(projectId);
   const { mutate: apply, isPending, reset } = useApplyMigration(projectId);
