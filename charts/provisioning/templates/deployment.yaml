@@ -47,6 +47,11 @@ spec:
               value: {{ required "trustedProxyCIDRs is required: the ingress controller's pod CIDR, the only peers whose X-Forwarded-For is believed" .Values.trustedProxyCIDRs | quote }}
             - name: STUDIO_URL
               value: {{ required "studioUrl is required: the Studio origin emailed links open, e.g. https://studio.example.com" .Values.studioUrl | quote }}
+            - name: SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "setupToken.existingSecret is required: a Secret holding the one-time first-admin token (openssl rand -hex 32); provisioning refuses to start without it" .Values.setupToken.existingSecret }}
+                  key: {{ .Values.setupToken.existingSecretKey | default "token" }}
             - name: STORAGE_PATH
               value: /data
             - name: DB_PATH

@@ -55,6 +55,14 @@ studioUrl: ""
 # X-Forwarded-For the public listener believes. No default.
 trustedProxyCIDRs: ""
 
+# Required. The Secret holding the one-time first-admin setup token (EXC-451),
+# at least 32 characters, e.g.
+#   kubectl create secret generic first-admin-token --from-literal=token="$(openssl rand -hex 32)"
+# Register the first admin with it; provisioning refuses to start without it.
+setupToken:
+  existingSecret: ""
+  existingSecretKey: "token"
+
 env:
   PORT: "24005"
   LOG_LEVEL: "info"

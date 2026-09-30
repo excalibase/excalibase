@@ -110,6 +110,13 @@ jobs:
       - name: Chart lets provisioning check a volume can grow
         run: sh charts/provisioning/tests/disk-resize-rbac.sh
 
+      - name: Chart requires the first-admin setup token
+        run: sh charts/provisioning/tests/setup-token.sh
+
+      - name: First-admin setup token Secret
+        run: |
+          kubectl -n "$NS" create secret generic first-admin-token --from-literal=token="$(openssl rand -hex 32)"
+
       - name: Install provisioning chart (Helm)
         run: |
           helm upgrade --install provisioning charts/provisioning \
@@ -120,6 +127,7 @@ jobs:
             --set ingress.enabled=false \
             --set studioUrl=https://studio.excalibase.test \
             --set trustedProxyCIDRs=10.42.0.0/16 \
+            --set setupToken.existingSecret=first-admin-token \
             --set-string platformDB.url='postgres://platform:platform@platform-db.excalibase-platform:5432/platform?sslmode=disable'
 
       - name: Wait for provisioning rollout
