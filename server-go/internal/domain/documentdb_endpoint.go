@@ -76,6 +76,9 @@ func MongoConnectionString(host string, port int, user string, requireTLS bool) 
 		RawQuery: url.Values{
 			"tls":           []string{strconv.FormatBool(requireTLS)},
 			"authMechanism": []string{documentDBAuthMechanism},
+			// One gateway, not a replica set: discovery would follow the
+			// member address it reports, which only the cluster can reach.
+			"directConnection": []string{"true"},
 		}.Encode(),
 	}
 	return uri.String()

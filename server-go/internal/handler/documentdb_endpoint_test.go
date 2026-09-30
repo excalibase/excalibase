@@ -58,14 +58,15 @@ func documentDBView() service.DBEndpointView {
 		Connection: service.DBEndpointConnectionStrings{
 			RequireTLS:          "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=verify-full",
 			AllowPlaintext:      "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=prefer",
-			MongoRequireTLS:     "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&tls=true",
-			MongoAllowPlaintext: "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&tls=false",
+			MongoRequireTLS:     "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&directConnection=true&tls=true",
+			MongoAllowPlaintext: "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&directConnection=true&tls=false",
 		},
 		Internal: service.DBEndpointInternal{
 			Host: "proj-abc1234567-postgres-rw.ns.svc.cluster.local", Port: 5432,
 			ConnectionString:      "postgresql://appowner@proj-abc1234567-postgres-rw.ns.svc.cluster.local:5432/appdb?sslmode=prefer",
+			MongoHost:             "proj-abc1234567-documentdb.ns.svc.cluster.local",
 			MongoPort:             10260,
-			MongoConnectionString: "mongodb://appowner@proj-abc1234567-postgres-rw.ns.svc.cluster.local:10260/?authMechanism=SCRAM-SHA-256&tls=true",
+			MongoConnectionString: "mongodb://appowner@proj-abc1234567-documentdb.ns.svc.cluster.local:10260/?authMechanism=SCRAM-SHA-256&directConnection=true&tls=true",
 		},
 	}
 }
@@ -84,15 +85,15 @@ func TestDBEndpointResponseCarriesTheMongoPort(t *testing.T) {
 func TestDBEndpointResponseCarriesTheMongoConnectionStrings(t *testing.T) {
 	body := endpointBody(t, documentDBView())
 
-	strings_, ok := body["connectionStrings"].(map[string]any)
+	connection, ok := body["connectionStrings"].(map[string]any)
 	if !ok {
 		t.Fatalf("connectionStrings: %v", body["connectionStrings"])
 	}
-	mongoTLS, _ := strings_["mongoRequireTls"].(string)
+	mongoTLS, _ := connection["mongoRequireTls"].(string)
 	if !strings.Contains(mongoTLS, "tls=true") || !strings.HasPrefix(mongoTLS, "mongodb://") {
 		t.Errorf("mongoRequireTls: %q", mongoTLS)
 	}
-	mongoPlain, _ := strings_["mongoAllowPlaintext"].(string)
+	mongoPlain, _ := connection["mongoAllowPlaintext"].(string)
 	if !strings.Contains(mongoPlain, "tls=false") {
 		t.Errorf("mongoAllowPlaintext: %q", mongoPlain)
 	}
@@ -109,6 +110,10 @@ func TestDBEndpointResponseCarriesTheInternalMongoAddress(t *testing.T) {
 	}
 	if got, ok := internal["mongoPort"].(float64); !ok || int(got) != 10260 {
 		t.Errorf("internal mongoPort: got %v", internal["mongoPort"])
+	}
+	// The gateway has its own Service: the Postgres host does not serve its port.
+	if got, _ := internal["mongoHost"].(string); got != "proj-abc1234567-documentdb.ns.svc.cluster.local" {
+		t.Errorf("internal mongoHost: %q", got)
 	}
 	if got, _ := internal["mongoConnectionString"].(string); !strings.HasPrefix(got, "mongodb://") {
 		t.Errorf("internal mongoConnectionString: %q", got)
@@ -130,9 +135,9 @@ func TestDBEndpointResponseOmitsMongoForAnOrdinaryProject(t *testing.T) {
 			t.Errorf("an ordinary project's response carries %s: %v", key, body[key])
 		}
 	}
-	strings_ := body["connectionStrings"].(map[string]any)
+	connection := body["connectionStrings"].(map[string]any)
 	for _, key := range []string{"mongoRequireTls", "mongoAllowPlaintext"} {
-		if _, present := strings_[key]; present {
+		if _, present := connection[key]; present {
 			t.Errorf("an ordinary project's response carries %s", key)
 		}
 	}

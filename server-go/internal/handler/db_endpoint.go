@@ -63,6 +63,7 @@ type dbEndpointInternal struct {
 	// from. It is reported whether or not the project publishes publicly:
 	// an app this platform hosts beside the database reaches it inside the
 	// cluster with no public port at all.
+	MongoHost             string `json:"mongoHost,omitempty"`
 	MongoPort             int    `json:"mongoPort,omitempty"`
 	MongoConnectionString string `json:"mongoConnectionString,omitempty"`
 }
@@ -237,6 +238,7 @@ func dbEndpointResponseFor(view service.DBEndpointView, canChange bool) dbEndpoi
 			Host:                  view.Internal.Host,
 			Port:                  view.Internal.Port,
 			ConnectionString:      view.Internal.ConnectionString,
+			MongoHost:             view.Internal.MongoHost,
 			MongoPort:             view.Internal.MongoPort,
 			MongoConnectionString: view.Internal.MongoConnectionString,
 		},

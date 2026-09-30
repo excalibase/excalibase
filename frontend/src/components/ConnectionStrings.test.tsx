@@ -168,8 +168,16 @@ describe('ConnectionStrings — DocumentDB', () => {
   test('authenticates the way the gateway was proven to accept', async () => {
     renderStrings({ documentDb: true, endpoint: WITH_MONGO });
     const uri = await screen.findByTestId('conn-mongo-public');
-    expect(uri).toHaveTextContent('@p-1.db.excalibase.io:27018/?tls=true&authMechanism=SCRAM-SHA-256');
+    expect(uri).toHaveTextContent('@p-1.db.excalibase.io:27018/?tls=true&authMechanism=SCRAM-SHA-256&directConnection=true');
     expect(uri).not.toHaveTextContent('authSource');
+  });
+
+  // The gateway is one server, not a replica set: without directConnection a
+  // driver follows the member address the gateway reports and cannot reach it.
+  test('connects directly to the one gateway, internal and public', async () => {
+    renderStrings({ documentDb: true, endpoint: WITH_MONGO });
+    expect(await screen.findByTestId('conn-mongo-public')).toHaveTextContent('directConnection=true');
+    expect(screen.getByTestId('conn-mongo-internal')).toHaveTextContent('directConnection=true');
   });
 
   test('shows the internal Mongo address too, over TLS', async () => {

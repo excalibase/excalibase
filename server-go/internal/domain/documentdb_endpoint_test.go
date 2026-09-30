@@ -51,6 +51,19 @@ func TestMongoConnectionStringNamesTheAuthenticationMechanism(t *testing.T) {
 	}
 }
 
+// The gateway is a single server that answers hello as a replica set member
+// named by an address only the cluster knows. A driver left to discover the
+// topology follows that address and is refused, so the string pins the one
+// server it was given.
+func TestMongoConnectionStringConnectsDirectlyToTheGateway(t *testing.T) {
+	for _, tls := range []bool{true, false} {
+		uri := MongoConnectionString("proj-a.db.example.com", 30111, "documentdb_admin", tls)
+		if !strings.Contains(uri, "directConnection=true") {
+			t.Errorf("tls=%v: the string lets the driver discover a topology: %q", tls, uri)
+		}
+	}
+}
+
 // Like the Postgres string, it names the user and leaves the secret out: the
 // endpoint API is a Developer-level surface and the password is handed out
 // only by the Admin-level credentials endpoint.

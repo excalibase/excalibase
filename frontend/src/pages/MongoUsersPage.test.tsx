@@ -25,7 +25,7 @@ function mockServer(documentDb = true) {
     }
     if (url === '/projects/proj-doc/db-endpoint') {
       return reply({
-        internal: { host: 'proj-doc-documentdb.ns.svc', port: 5432, mongoPort: 10260 },
+        internal: { host: 'proj-doc-postgres-rw.ns.svc', port: 5432, mongoHost: 'proj-doc-documentdb.ns.svc', mongoPort: 10260 },
         publicEnabled: false,
       });
     }
@@ -83,7 +83,7 @@ describe('MongoUsersPage', () => {
     const shown = await screen.findByTestId('new-mongo-user');
     expect(shown).toHaveTextContent('pw-shown-once');
     expect(shown).toHaveTextContent(
-      'mongodb://writer:pw-shown-once@proj-doc-documentdb.ns.svc:10260/?tls=true&authMechanism=SCRAM-SHA-256',
+      'mongodb://writer:pw-shown-once@proj-doc-documentdb.ns.svc:10260/?tls=true&authMechanism=SCRAM-SHA-256&directConnection=true',
     );
     await u.click(within(shown).getByRole('button', { name: /i have saved it/i }));
     expect(screen.queryByText(/pw-shown-once/)).not.toBeInTheDocument();
@@ -199,7 +199,7 @@ describe('MongoUsersPage failures and the public address', () => {
               requireTls: true,
               mongoPort: 30002,
               mongoAvailable: true,
-              internal: { host: 'proj-doc-documentdb.ns.svc', port: 5432, mongoPort: 10260 },
+              internal: { host: 'proj-doc-postgres-rw.ns.svc', port: 5432, mongoHost: 'proj-doc-documentdb.ns.svc', mongoPort: 10260 },
             },
           } as never)
         : base(url),
@@ -214,7 +214,7 @@ describe('MongoUsersPage failures and the public address', () => {
     await u.click(screen.getByRole('button', { name: /create user/i }));
     const shown = await screen.findByTestId('new-mongo-user');
     expect(shown).toHaveTextContent(
-      'mongodb://svc:pw-public@db.example.test:30002/?tls=true&authMechanism=SCRAM-SHA-256',
+      'mongodb://svc:pw-public@db.example.test:30002/?tls=true&authMechanism=SCRAM-SHA-256&directConnection=true',
     );
   });
 });

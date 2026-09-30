@@ -63,7 +63,8 @@ export interface ProjectEndpoint {
 interface ProjectEndpointWire extends Omit<ProjectEndpoint, 'mongo'> {
   mongoPort?: number;
   mongoAvailable?: boolean;
-  internal: ProjectEndpointInternal & { mongoPort?: number };
+  // mongoHost is the gateway's own Service: the Postgres host does not serve its port.
+  internal: ProjectEndpointInternal & { mongoHost?: string; mongoPort?: number };
 }
 
 function mongoOf(wire: ProjectEndpointWire): ProjectMongoEndpoint | undefined {
@@ -72,7 +73,9 @@ function mongoOf(wire: ProjectEndpointWire): ProjectMongoEndpoint | undefined {
   return {
     available: wire.mongoAvailable === true,
     ...(wire.mongoPort ? { port: wire.mongoPort } : {}),
-    ...(internalPort ? { internal: { host: wire.internal.host, port: internalPort } } : {}),
+    ...(internalPort && wire.internal.mongoHost
+      ? { internal: { host: wire.internal.mongoHost, port: internalPort } }
+      : {}),
   };
 }
 
