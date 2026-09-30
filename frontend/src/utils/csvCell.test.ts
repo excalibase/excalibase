@@ -22,3 +22,17 @@ describe('csvCell', () => {
     expect(csvCell({ a: 1 })).toBe('"{""a"":1}"');
   });
 });
+
+describe('csvCell values', () => {
+  it('writes numbers, booleans and big integers as text', () => {
+    expect(csvCell(7)).toBe('"7"');
+    expect(csvCell(false)).toBe('"false"');
+    expect(csvCell(BigInt(9))).toBe('"9"');
+  });
+
+  it('writes an unserialisable value as an empty cell', () => {
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    expect(csvCell(loop)).toBe('""');
+  });
+});

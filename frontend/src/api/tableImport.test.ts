@@ -114,4 +114,59 @@ describe('tableImport api', () => {
     expect(built.hasHeader).toBe(true);
     expect(built.primaryKey).toBeUndefined();
   });
+
+  it('imports a Google Sheet as JSON with its options', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { rows: 1 } });
+    await importTable(
+      'p1',
+      { kind: 'sheets', url: 'https://docs.google.com/spreadsheets/d/x' },
+      options,
+    );
+    expect(api.post).toHaveBeenCalledWith(
+      '/schema/p1/import',
+      { sheetsUrl: 'https://docs.google.com/spreadsheets/d/x', options },
+      expect.any(Object),
+    );
+    const config = vi.mocked(api.post).mock.calls[0][2] as {
+      onUploadProgress: (e: { loaded: number; total?: number }) => void;
+    };
+    expect(() => config.onUploadProgress({ loaded: 1 })).not.toThrow();
+  });
+
+  it('a preview sends a file with its read settings', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { columns: [], rows: [] } });
+    const file = new File(['a\n'], 'a.csv');
+    await previewImport('p1', { kind: 'file', file }, { hasHeader: true });
+    const form = vi.mocked(api.post).mock.calls[0][1] as FormData;
+    expect([...form.keys()]).toEqual(['hasHeader', 'file']);
+  });
+
+  it('an unknown failure still has a message', () => {
+    expect(importErrorOf('weird')).toEqual({ message: 'The import failed', rowErrors: [] });
+    expect(importErrorOf({ response: { data: { error: 'no rows' } } })).toEqual({
+      message: 'no rows',
+      rowErrors: [],
+    });
+  });
+
+  it('a chosen primary key is kept for a create and dropped for an append', () => {
+    const preview: ImportPreview = {
+      format: 'csv',
+      hasHeader: false,
+      rows: [],
+      sampledRows: 0,
+      columns: [{ source: 0, sourceName: '', name: 'column_1', type: 'text' }],
+      limits: { maxBytes: 1, maxXlsxBytes: 1, maxRows: 1, maxColumns: 1 },
+    };
+    const target = {
+      schema: 'public',
+      table: 't',
+      mode: 'create' as const,
+      primaryKey: 'code',
+      columns: [{ include: true, name: 'code', type: 'text' as const }],
+    };
+    expect(toImportOptions(preview, target).primaryKey).toBe('code');
+    expect(toImportOptions(preview, { ...target, mode: 'append' }).primaryKey).toBeUndefined();
+    expect(toImportOptions(preview, { ...target, columns: [] }).columns).toEqual([]);
+  });
 });

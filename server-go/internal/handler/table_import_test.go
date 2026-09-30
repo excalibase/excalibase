@@ -536,3 +536,77 @@ func TestImportStatus_SheetDownloadFailuresAreBadGateway(t *testing.T) {
 		t.Fatal("an oversized body is not reported as too large")
 	}
 }
+
+func sheetsRequestFor(t *testing.T, path string, extra map[string]any) *http.Request {
+	t.Helper()
+	body := map[string]any{"sheetsUrl": "https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit", "hasHeader": true}
+	for k, v := range extra {
+		body[k] = v
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func TestImportSheets_RefusalsAndOddAnswers(t *testing.T) {
+	f := newImportFixture(t)
+	f.sheets.body = string(xlsxBytes(t))
+	if rec := f.do(sheetsRequestFor(t, previewPath(), nil)); rec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("a sheet answering a workbook: status %d", rec.Code)
+	}
+	f.sheets.err = fmt.Errorf("%w: reset", tableimport.ErrSheetDownload)
+	if rec := f.do(sheetsRequestFor(t, previewPath(), nil)); rec.Code != http.StatusBadGateway {
+		t.Errorf("download failure: status %d", rec.Code)
+	}
+	f.handler.sheets = nil
+	if rec := f.do(sheetsRequestFor(t, previewPath(), nil)); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("no fetcher: status %d", rec.Code)
+	}
+	bad := json.RawMessage(`{"schema":"pg_catalog","table":"t","mode":"create","columns":[{"source":0,"name":"a","type":"text"}]}`)
+	if rec := f.do(sheetsRequestFor(t, importPath(), map[string]any{"options": bad})); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad options: status %d", rec.Code)
+	}
+	req := httptest.NewRequest(http.MethodPost, previewPath(), strings.NewReader("{not json"))
+	req.Header.Set("Content-Type", "application/json")
+	if rec := f.do(req); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad json: status %d", rec.Code)
+	}
+}
+
+func TestImport_DamagedWorkbooksAreRefused(t *testing.T) {
+	f := newImportFixture(t)
+	for _, body := range []string{"PK\x03\x04not really a zip", "PK\x03\x04" + strings.Repeat("\x00", 64)} {
+		rec := f.do(multipartRequest(t, previewPath(), formPart{name: "file", filename: "x.xlsx", body: body}))
+		if rec.Code < 400 || rec.Code >= 500 {
+			t.Errorf("damaged workbook: status %d: %s", rec.Code, rec.Body)
+		}
+	}
+	rec := f.do(multipartRequest(t, previewPath(), formPart{name: "sheet", body: "Nope"}, formPart{name: "file", filename: "b.xlsx", body: string(xlsxBytes(t))}))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("missing sheet: status %d", rec.Code)
+	}
+	opts := `{"schema":"public","table":"t","mode":"create","hasHeader":true,"columns":[{"source":0,"name":"a","type":"text"}]}`
+	rec = f.do(multipartRequest(t, importPath(), formPart{name: "options", body: opts}, formPart{name: "file", filename: "e.csv", body: ""}))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("empty file: status %d", rec.Code)
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("client went away") }
+
+func TestSpool_AReadFailureLeavesNoFile(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	if _, _, err := spool(failingReader{}, 10); err == nil {
+		t.Fatal("a failed read was spooled")
+	}
+	if entries, _ := os.ReadDir(tmp); len(entries) != 0 {
+		t.Fatalf("left behind: %v", entries)
+	}
+	if uploadError(errors.New("x"), "fallback").Error() != "fallback" {
+		t.Fatal("fallback message lost")
+	}
+}
