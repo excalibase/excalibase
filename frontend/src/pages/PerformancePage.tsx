@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useInstanceContext } from '../context/InstanceContext';
+import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { usePerformanceSummary, useTopQueries, useWaitEvents, useEnablePerformanceInsights } from '../hooks/usePerformance';
 import { Zap, Clock, Database, AlertCircle, Settings, CheckCircle, type LucideIcon } from 'lucide-react';
 import { formatBytes } from '../utils/formatBytes';
@@ -33,7 +33,7 @@ function isStatStatementsMissing(err: unknown): boolean {
 }
 
 export function PerformancePage() {
-  const { projectId } = useInstanceContext();
+  const projectId = useRouteProjectId();
   const [tab, setTab] = useState<Tab>('summary');
 
   const { data: summary, isLoading: summaryLoading, isError: summaryError, error: summaryErr } = usePerformanceSummary(projectId);

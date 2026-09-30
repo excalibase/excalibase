@@ -1,5 +1,5 @@
 import { useCurrentMetrics, useMetricsHistory } from '../hooks/useMetrics';
-import { useInstanceContext } from '../context/InstanceContext';
+import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { MetricCard } from '../components/shared/MetricCard';
 import { Cpu, Server, HardDrive, Network, Zap, Timer, Loader2, AlertTriangle } from 'lucide-react';
 import {
@@ -26,7 +26,7 @@ function UsageBar({ value, max, color }: UsageBarProps) {
 }
 
 export function MetricsPage() {
-  const { projectId } = useInstanceContext();
+  const projectId = useRouteProjectId();
 
   const { data: current, isLoading } = useCurrentMetrics(projectId);
   const { data: history } = useMetricsHistory(projectId, 30);

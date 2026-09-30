@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSnapshots, useExportSnapshot, useDeleteSnapshot } from '../hooks/useSnapshots';
-import { useInstanceContext } from '../context/InstanceContext';
+import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { Camera, Download, Trash2, Plus, FileText } from 'lucide-react';
 import { formatBytes } from '../utils/formatBytes';
 
@@ -11,7 +11,7 @@ function getSnapshotType(schemaOnly: boolean, dataOnly: boolean): string {
 }
 
 export function SnapshotsPage() {
-  const { projectId } = useInstanceContext();
+  const projectId = useRouteProjectId();
 
   const { data: snapshots = [], isLoading } = useSnapshots(projectId);
   const exportSnap = useExportSnapshot(projectId);

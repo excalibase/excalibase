@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { InstanceProvider } from '../../context/InstanceContext';
 import { IconRail } from './IconRail';
 import { SubNav } from './SubNav';
 import { ProjectHeader } from './ProjectHeader';
@@ -46,9 +45,5 @@ function deriveSection(pathname: string): string | null {
 }
 
 export function ProjectLayout() {
-  return (
-    <InstanceProvider>
-      <ProjectLayoutInner />
-    </InstanceProvider>
-  );
+  return <ProjectLayoutInner />;
 }

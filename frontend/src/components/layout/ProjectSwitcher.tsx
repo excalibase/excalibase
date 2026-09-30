@@ -1,11 +1,22 @@
 import { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Database } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useInstances } from '../../hooks/useProvisioning';
-import { useInstanceContext } from '../../context/InstanceContext';
+import { useRouteProjectId } from '../../hooks/useRouteProjectId';
 import { cn } from '../../utils/cn';
 
+// The same page of another project: picking one navigates there, it never
+// re-targets the page that is open.
+export function projectPath(pathname: string, from: string, to: string): string {
+  const prefix = `/project/${from}`;
+  const rest = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : '';
+  return `/project/${to}${rest}`;
+}
+
 export function ProjectSwitcher() {
-  const { projectId, setProjectId } = useInstanceContext();
+  const projectId = useRouteProjectId();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { data: instances = [] } = useInstances();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -42,7 +53,7 @@ export function ProjectSwitcher() {
             instances.map((inst) => (
               <button
                 key={inst.projectId}
-                onClick={() => { setProjectId(inst.projectId); setOpen(false); }}
+                onClick={() => { setOpen(false); navigate(projectPath(pathname, projectId, inst.projectId)); }}
                 className={cn(
                   'w-full text-left px-3 py-2 text-sm transition-colors flex items-center gap-2',
                   inst.projectId === projectId

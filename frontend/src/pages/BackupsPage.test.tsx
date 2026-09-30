@@ -4,7 +4,7 @@ import { BackupsPage } from './BackupsPage';
 
 const restoreMutate = vi.fn();
 
-vi.mock('../context/InstanceContext', () => ({ useInstanceContext: () => ({ projectId: 'p1' }) }));
+vi.mock('../hooks/useRouteProjectId', () => ({ useRouteProjectId: () => 'p1' }));
 vi.mock('../hooks/useProvisioning', () => ({
   useListBackups: () => ({ data: { backups: [], backupEnabled: true, schedule: '', retentionDays: 0 }, isLoading: false }),
   useTriggerBackup: () => ({ mutate: vi.fn(), isPending: false }),
