@@ -85,15 +85,15 @@ func TestDBEndpointResponseCarriesTheMongoPort(t *testing.T) {
 func TestDBEndpointResponseCarriesTheMongoConnectionStrings(t *testing.T) {
 	body := endpointBody(t, documentDBView())
 
-	strings_, ok := body["connectionStrings"].(map[string]any)
+	connection, ok := body["connectionStrings"].(map[string]any)
 	if !ok {
 		t.Fatalf("connectionStrings: %v", body["connectionStrings"])
 	}
-	mongoTLS, _ := strings_["mongoRequireTls"].(string)
+	mongoTLS, _ := connection["mongoRequireTls"].(string)
 	if !strings.Contains(mongoTLS, "tls=true") || !strings.HasPrefix(mongoTLS, "mongodb://") {
 		t.Errorf("mongoRequireTls: %q", mongoTLS)
 	}
-	mongoPlain, _ := strings_["mongoAllowPlaintext"].(string)
+	mongoPlain, _ := connection["mongoAllowPlaintext"].(string)
 	if !strings.Contains(mongoPlain, "tls=false") {
 		t.Errorf("mongoAllowPlaintext: %q", mongoPlain)
 	}
@@ -135,9 +135,9 @@ func TestDBEndpointResponseOmitsMongoForAnOrdinaryProject(t *testing.T) {
 			t.Errorf("an ordinary project's response carries %s: %v", key, body[key])
 		}
 	}
-	strings_ := body["connectionStrings"].(map[string]any)
+	connection := body["connectionStrings"].(map[string]any)
 	for _, key := range []string{"mongoRequireTls", "mongoAllowPlaintext"} {
-		if _, present := strings_[key]; present {
+		if _, present := connection[key]; present {
 			t.Errorf("an ordinary project's response carries %s", key)
 		}
 	}
