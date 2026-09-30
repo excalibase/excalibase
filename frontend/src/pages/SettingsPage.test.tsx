@@ -32,6 +32,7 @@ function renderSettings(
       <MemoryRouter initialEntries={['/project/p-1/settings']}>
         <Routes>
           <Route path="/project/:projectId/settings" element={<SettingsPage />} />
+          <Route path="/instances" element={<div data-testid="projects-list-page" />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
@@ -116,5 +117,50 @@ describe('SettingsPage — private network between apps', () => {
     renderSettings(false, {}, gets(false));
     expect(await screen.findByTestId('public-port-card')).toBeInTheDocument();
     expect(screen.queryByTestId('app-network-card')).not.toBeInTheDocument();
+  });
+});
+
+describe('SettingsPage — after a deletion', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // /projects is not a route: landing there left a blank page.
+  test('a confirmed deletion lands on the projects list', async () => {
+    renderSettings(false);
+    vi.mocked(api.delete).mockResolvedValue({ data: { projectId: 'p-1', status: 'PENDING_DELETION' } } as never);
+    await userEvent.click(await screen.findByTestId('delete-project-btn'));
+    await userEvent.type(screen.getByTestId('confirm-input'), 'p-1');
+    await userEvent.click(screen.getByTestId('modal-confirm'));
+
+    await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/provision/p-1'));
+    expect(await screen.findByTestId('projects-list-page')).toBeInTheDocument();
+  });
+});
+
+describe('SettingsPage — lifecycle', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('an active project can be paused', async () => {
+    renderSettings(false);
+    await userEvent.click(await screen.findByTestId('pause-project-btn'));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/provision/p-1/pause', { reason: 'manual' }));
+  });
+
+  test('a paused project says so and can be resumed', async () => {
+    renderSettings(false, { status: 'PAUSED', pauseReason: 'idle', lastActiveAt: '2026-09-30T10:00:00Z' });
+    expect(await screen.findByTestId('lifecycle-section')).toHaveTextContent(/paused \(idle\)/);
+    await userEvent.click(screen.getByTestId('resume-project-btn'));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/provision/p-1/resume'));
+  });
+
+  test('copying the project ref puts it on the clipboard', async () => {
+    renderSettings(false);
+    const button = await screen.findByRole('button', { name: 'Copy Project Ref' });
+    const written: string[] = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: (text: string) => { written.push(text); return Promise.resolve(); } },
+    });
+    await userEvent.click(button);
+    expect(written).toEqual(['p-1']);
   });
 });

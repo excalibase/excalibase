@@ -1,4 +1,4 @@
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Server, Database, Shield, Clock, Trash2, Copy, Check, AlertTriangle, PauseCircle, PlayCircle } from 'lucide-react';
 import { useState } from 'react';
@@ -29,9 +29,13 @@ interface CopyFieldProps {
 function CopyField({ label, value }: CopyFieldProps) {
   const [copied, setCopied] = useState(false);
   const onCopy = () => {
-    navigator.clipboard.writeText(value);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    navigator.clipboard.writeText(value).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => setCopied(false),
+    );
   };
   return (
     <div>
@@ -70,12 +74,9 @@ function projectInfo(project: DatabaseInstance) {
 
 export function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
   const [showDelete, setShowDelete] = useState(false);
   const deprovision = useDeprovisionDatabase();
-  const setProtection = useSetDeletionProtection();
-  const cancelDeletion = useCancelDeletion();
-  const pauseProject = usePauseProject();
-  const resumeProject = useResumeProject();
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', projectId],
     queryFn: async () => {
@@ -195,107 +196,21 @@ const excalibase = createClient({
         <ClusterSettingsCard project={project} />
       </div>
 
-      {/* Pause / Resume — pre-pause backup runs automatically (see backend). */}
-      <div className="rounded-lg border border-border-primary bg-surface-card p-4" data-testid="lifecycle-section">
-        <h4 className="text-sm font-medium text-text-primary mb-2">Lifecycle</h4>
-        {project.status === 'PAUSED' ? (
-          <>
-            <p className="text-xs text-text-secondary mb-3">
-              This project is paused {project.pauseReason ? `(${project.pauseReason})` : ''}. Click Resume to bring it back online.
-              {project.lastActiveAt && (
-                <> Last active: {new Date(project.lastActiveAt).toLocaleString()}.</>
-              )}
-            </p>
-            <button
-              onClick={() => projectId && resumeProject.mutate(projectId)}
-              disabled={resumeProject.isPending}
-              className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-              data-testid="resume-project-btn"
-            >
-              {resumeProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
-              Resume Project
-            </button>
-          </>
-        ) : (
-          <>
-            <p className="text-xs text-text-secondary mb-3">
-              Pause stops the database workload after taking a backup. Data persists; you can Resume anytime.
-            </p>
-            <button
-              onClick={() => projectId && pauseProject.mutate({ projectId })}
-              disabled={pauseProject.isPending || project.status !== 'ACTIVE'}
-              className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-              data-testid="pause-project-btn"
-            >
-              {pauseProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PauseCircle className="w-4 h-4" />}
-              Pause Project
-            </button>
-          </>
-        )}
-      </div>
+      <LifecycleSection project={project} />
       </>)}
 
-      <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4">
-        <h4 className="text-sm font-medium text-red-400 mb-2">Danger Zone</h4>
-        {project.status === 'PENDING_DELETION' ? (
-          <div data-testid="deletion-scheduled">
-            <p className="text-xs text-text-secondary mb-3">
-              This project is scheduled for deletion on{' '}
-              {project.deletionDueAt ? new Date(project.deletionDueAt).toLocaleString() : 'its due date'}.{' '}
-              {noDatabase
-                ? 'Its files and containers are kept until then. An org owner can cancel; the project then carries on as before.'
-                : 'Its database is stopped and its data kept until then. An org owner can cancel; the project is then left paused.'}
-            </p>
-            <button
-              onClick={() => projectId && cancelDeletion.mutate(projectId)}
-              disabled={cancelDeletion.isPending}
-              className="flex items-center gap-2 px-4 py-2 border border-red-500/40 text-red-400 hover:bg-red-500/10 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-              data-testid="cancel-deletion-btn"
-            >
-              <Shield className="w-4 h-4" /> Cancel deletion
-            </button>
-          </div>
-        ) : (
-          <>
-            <p className="text-xs text-text-secondary mb-3" data-testid="deletion-grace-note">
-              {noDatabase
-                ? 'Deleting schedules this project for permanent removal, with its files and containers, 7 days later. Until then an org owner can cancel.'
-                : 'Deleting stops this project now and permanently removes its data 7 days later. Until then an org owner can cancel. Kept backups are purged 14 days after that.'}
-            </p>
-            <p className="text-xs text-text-secondary mb-3" data-testid="deletion-protection-state">
-              {protectedFromDeletion
-                ? DELETION_PROTECTED_REASON
-                : 'Deletion protection is off. Any org admin can delete this project.'}
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => projectId && setProtection.mutate({ projectId, enabled: !protectedFromDeletion })}
-                disabled={setProtection.isPending}
-                className="flex items-center gap-2 px-4 py-2 border border-red-500/40 text-red-400 hover:bg-red-500/10 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                data-testid="deletion-protection-btn"
-              >
-                <Shield className="w-4 h-4" />
-                {protectedFromDeletion ? 'Turn off deletion protection' : 'Turn on deletion protection'}
-              </button>
-              <button
-                onClick={() => setShowDelete(true)}
-                disabled={protectedFromDeletion}
-                className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                data-testid="delete-project-btn"
-              >
-                <Trash2 className="w-4 h-4" /> Delete Project
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+      <DangerZone
+        project={project}
+        protectedFromDeletion={protectedFromDeletion}
+        onDelete={() => setShowDelete(true)}
+      />
 
       <ConfirmModal
         open={showDelete}
         onClose={() => setShowDelete(false)}
         onConfirm={() => {
           if (projectId) deprovision.mutate(projectId, {
-            onSuccess: () => { globalThis.location.href = '/projects'; },
+            onSuccess: () => navigate('/instances'),
           });
         }}
         title="Delete Project"
@@ -305,6 +220,119 @@ const excalibase = createClient({
         destructive
         loading={deprovision.isPending}
       />
+    </div>
+  );
+}
+
+// Pause and resume; the pre-pause backup runs on the server.
+function LifecycleSection({ project }: { readonly project: DatabaseInstance }) {
+  const pauseProject = usePauseProject();
+  const resumeProject = useResumeProject();
+  return (
+    <div className="rounded-lg border border-border-primary bg-surface-card p-4" data-testid="lifecycle-section">
+      <h4 className="text-sm font-medium text-text-primary mb-2">Lifecycle</h4>
+      {project.status === 'PAUSED' ? (
+        <>
+          <p className="text-xs text-text-secondary mb-3">
+            This project is paused {project.pauseReason ? `(${project.pauseReason})` : ''}. Click Resume to bring it back online.
+            {project.lastActiveAt && (
+              <> Last active: {new Date(project.lastActiveAt).toLocaleString()}.</>
+            )}
+          </p>
+          <button
+            onClick={() => resumeProject.mutate(project.projectId)}
+            disabled={resumeProject.isPending}
+            className="flex items-center gap-2 px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+            data-testid="resume-project-btn"
+          >
+            {resumeProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
+            Resume Project
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-text-secondary mb-3">
+            Pause stops the database workload after taking a backup. Data persists; you can Resume anytime.
+          </p>
+          <button
+            onClick={() => pauseProject.mutate({ projectId: project.projectId })}
+            disabled={pauseProject.isPending || project.status !== 'ACTIVE'}
+            className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+            data-testid="pause-project-btn"
+          >
+            {pauseProject.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <PauseCircle className="w-4 h-4" />}
+            Pause Project
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface DangerZoneProps {
+  readonly project: DatabaseInstance;
+  readonly protectedFromDeletion: boolean;
+  readonly onDelete: () => void;
+}
+
+// Deletion protection, deletion and its 7-day grace.
+function DangerZone({ project, protectedFromDeletion, onDelete }: DangerZoneProps) {
+  const setProtection = useSetDeletionProtection();
+  const cancelDeletion = useCancelDeletion();
+  return (
+    <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4">
+      <h4 className="text-sm font-medium text-red-400 mb-2">Danger Zone</h4>
+      {project.status === 'PENDING_DELETION' ? (
+        <div data-testid="deletion-scheduled">
+          <p className="text-xs text-text-secondary mb-3">
+            This project is scheduled for deletion on{' '}
+            {project.deletionDueAt ? new Date(project.deletionDueAt).toLocaleString() : 'its due date'}.{' '}
+            {project.noDatabase === true
+              ? 'Its files and containers are kept until then. An org owner can cancel; the project then carries on as before.'
+              : 'Its database is stopped and its data kept until then. An org owner can cancel; the project is then left paused.'}
+          </p>
+          <button
+            onClick={() => cancelDeletion.mutate(project.projectId)}
+            disabled={cancelDeletion.isPending}
+            className="flex items-center gap-2 px-4 py-2 border border-red-500/40 text-red-400 hover:bg-red-500/10 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+            data-testid="cancel-deletion-btn"
+          >
+            <Shield className="w-4 h-4" /> Cancel deletion
+          </button>
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-text-secondary mb-3" data-testid="deletion-grace-note">
+            {project.noDatabase === true
+              ? 'Deleting schedules this project for permanent removal, with its files and containers, 7 days later. Until then an org owner can cancel.'
+              : 'Deleting stops this project now and permanently removes its data 7 days later. Until then an org owner can cancel. Kept backups are purged 14 days after that.'}
+          </p>
+          <p className="text-xs text-text-secondary mb-3" data-testid="deletion-protection-state">
+            {protectedFromDeletion
+              ? DELETION_PROTECTED_REASON
+              : 'Deletion protection is off. Any org admin can delete this project.'}
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setProtection.mutate({ projectId: project.projectId, enabled: !protectedFromDeletion })}
+              disabled={setProtection.isPending}
+              className="flex items-center gap-2 px-4 py-2 border border-red-500/40 text-red-400 hover:bg-red-500/10 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+              data-testid="deletion-protection-btn"
+            >
+              <Shield className="w-4 h-4" />
+              {protectedFromDeletion ? 'Turn off deletion protection' : 'Turn on deletion protection'}
+            </button>
+            <button
+              onClick={onDelete}
+              disabled={protectedFromDeletion}
+              className="flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              data-testid="delete-project-btn"
+            >
+              <Trash2 className="w-4 h-4" /> Delete Project
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

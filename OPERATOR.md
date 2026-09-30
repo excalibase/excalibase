@@ -44,6 +44,8 @@ The vault unseal key is kept under AWS KMS (`vault.unseal.provider: awskms`, see
 
 **Studio needs HTTPS.** Its only credential is the `excali_session` cookie, which is `HttpOnly`, `Secure` and `SameSite=Strict`, so a browser stores it only over HTTPS or on `http://localhost`. Plain HTTP on any other address signs nobody in. Writes that ride the cookie must come from `STUDIO_URL`'s origin (or an origin listed explicitly in `CORS_ORIGINS`), so open Studio at exactly that address. `CORS_ORIGINS=*` lets any page call the API with a bearer token but never with the cookie.
 
+**Studio is reached through the edge on Kubernetes.** The admin ingress routes `/api` to provisioning's edge listener and everything else to the Studio Service; open Studio at that host. Studio's own `/api` proxy (in `frontend/nginx.conf`) serves the docker all-in-one only: on Kubernetes its `provisioning` upstream does not resolve (nginx's runtime resolver ignores the pod's DNS search list), and the platform NetworkPolicy admits only the edge on provisioning's edge listener, whose `X-Forwarded-For` it trusts. So a port-forward to the Studio Service alone answers 502 on `/api`; that is by design, not a second way in. For local access forward both Services and route `/api` to provisioning's public port, as `demo/stack/studio-proxy.cjs` in excalibase-service does.
+
 ### 1.1. Personal access tokens: expiry and rotation
 
 Every PAT expires. The default lifetime is **90 days**; `expiresIn` accepts `<n>d` or a Go duration up to **365d**. Only an explicit `"expiresIn":"never"` mints a non-expiring token — reserve that for break-glass automation and rotate it on a schedule. Login session tokens are separate and always expire after 12h.
