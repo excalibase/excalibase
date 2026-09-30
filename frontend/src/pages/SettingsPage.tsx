@@ -1,4 +1,4 @@
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Server, Database, Shield, Clock, Trash2, Copy, Check, AlertTriangle, PauseCircle, PlayCircle } from 'lucide-react';
 import { useState } from 'react';
@@ -70,6 +70,7 @@ function projectInfo(project: DatabaseInstance) {
 
 export function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
   const [showDelete, setShowDelete] = useState(false);
   const deprovision = useDeprovisionDatabase();
   const setProtection = useSetDeletionProtection();
@@ -295,7 +296,7 @@ const excalibase = createClient({
         onClose={() => setShowDelete(false)}
         onConfirm={() => {
           if (projectId) deprovision.mutate(projectId, {
-            onSuccess: () => { globalThis.location.href = '/projects'; },
+            onSuccess: () => navigate('/instances'),
           });
         }}
         title="Delete Project"
