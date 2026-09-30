@@ -129,6 +129,9 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		appHandler:          handler.NewAppHandler(apphost.NewPostgresAppStore(offlineDB(t)), handler.NewProjectSourceLookup(instances, service.NewOrgPlanTiers(instances, fakestore.NewOrgs())), apphost.Route{}),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(offlineDB(t)), nil),
 		registryCredHandler: handler.NewRegistryCredentialHandler(nil),
+		// No auth service: past the gates the end-user routes answer 503,
+		// which is not a gate refusal.
+		endUsersHandler: handler.NewEndUsersHandler(nil, instances, nil, nil),
 		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
 			apphost.NewPostgresAppStore(offlineDB(t)), instances, k8s.NewMockClient())),
 		appDomainHandler: handler.NewAppDomainHandler(service.NewAppDomainService(apphost.NewPostgresAppStore(offlineDB(t)),

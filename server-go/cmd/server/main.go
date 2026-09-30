@@ -22,6 +22,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/email"
+	"github.com/excalibase/provisioning-poc/internal/endusers"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/metrics"
@@ -720,6 +721,7 @@ func functionCronLock(cfg config.AppConfig, sqlStore storage.PlatformStore) stor
 type handlerDeps struct {
 	provHandler        *handler.ProvisioningHandler
 	sdkKeysHandler     *handler.SDKKeysHandler
+	endUsersHandler    *handler.EndUsersHandler
 	metricsHandler     *handler.MetricsHandler
 	backupHandler      *handler.BackupHandler
 	perfHandler        *handler.PerformanceHandler
@@ -1396,6 +1398,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	return &handlerDeps{
 		provHandler:         provHandler,
 		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
+		endUsersHandler:     handler.NewEndUsersHandler(buildEndUserManager(cfg, vc), store, sqlStore, sqlStore),
 		metricsHandler:      handler.NewMetricsHandler(metricsSvc),
 		backupHandler:       handler.NewBackupHandler(backupSvc),
 		perfHandler:         handler.NewPerformanceHandler(perfSvc),
@@ -1764,6 +1767,16 @@ func buildSDKKeyManager(cfg config.AppConfig, vc vaultclient.VaultClient) handle
 	return sdkkeys.NewClient(cfg.AuthInternalURL, sdkkeys.NewSigner(vc), &http.Client{Timeout: 15 * time.Second})
 }
 
+// buildEndUserManager reaches excalibase-auth with a user-admin token naming
+// the Studio user. Without an auth URL or a vault the end-user routes answer 503.
+func buildEndUserManager(cfg config.AppConfig, vc vaultclient.VaultClient) handler.EndUserManager {
+	if cfg.AuthInternalURL == "" || vc == nil {
+		log.Println("WARN: AUTH_INTERNAL_URL or vault not set — end-user role management is unavailable")
+		return nil
+	}
+	return endusers.NewClient(cfg.AuthInternalURL, sdkkeys.NewSigner(vc), &http.Client{Timeout: 15 * time.Second})
+}
+
 // mountProjectScopedRoutes mounts every /api/projects/{projectId}/* subtree.
 func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
 	r.Route("/api/projects/{projectId}/functions", func(r chi.Router) {
@@ -1890,6 +1903,16 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		d.sdkKeysHandler.Routes(r)
+	})
+	// End users and their roles (EXC-370): who a project's app users run as
+	// is a project admin's decision, and every change is audited.
+	r.Route("/api/projects/{projectId}/end-users", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(custommw.RequireProjectRole(domain.OrgRoleAdmin, store, sqlStore))
+		r.Use(d.activity)
+		d.endUsersHandler.Routes(r)
 	})
 	r.Route("/api/projects/{projectId}/cors", func(r chi.Router) {
 		r.Use(custommw.TenantContext)

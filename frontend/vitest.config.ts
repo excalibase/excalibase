@@ -54,6 +54,7 @@ export default defineConfig({
         'src/pages/ContainerDetailPage.tsx',
         'src/pages/SdkKeysPage.tsx',
         'src/api/sdkKeys.ts',
+        'src/api/endUsers.ts',
         'src/utils/deletionProtection.ts',
         'src/pages/InstancesPage.tsx',
         'src/pages/InstanceDetailPage.tsx',
