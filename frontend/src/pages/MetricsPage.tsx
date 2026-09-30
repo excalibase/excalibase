@@ -31,11 +31,12 @@ export function MetricsPage() {
   const { data: current, isLoading } = useCurrentMetrics(projectId);
   const { data: history } = useMetricsHistory(projectId, 30);
 
-  const chartData = history?.metrics.filter(m => m.metricsAvailable).map((m) => ({
+  // A new project has no history yet: the server sends metrics: null.
+  const chartData = (history?.metrics ?? []).filter(m => m.metricsAvailable).map((m) => ({
     time: new Date(m.timestamp).toLocaleTimeString(),
     cpu: Math.round(m.cpuUsagePercent ?? 0),
     memory: Math.round(m.memoryUsagePercent ?? 0),
-  })) ?? [];
+  }));
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">

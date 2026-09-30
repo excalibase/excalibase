@@ -18,6 +18,7 @@ const URL_PROJECT = 'proj-inurl0001';
 const OTHER_PROJECT = 'proj-first0001';
 
 const calls: { method: string; url: string }[] = [];
+let historyAnswer: unknown = { metrics: [] };
 
 function answer(url: string): unknown {
   if (url === '/provision') {
@@ -26,7 +27,7 @@ function answer(url: string): unknown {
       { projectId: URL_PROJECT, tier: 'FREE', status: 'ACTIVE' },
     ];
   }
-  if (url.includes('/metrics/history')) return { metrics: [] };
+  if (url.includes('/metrics/history')) return historyAnswer;
   if (url.endsWith('/backup/list')) return { backups: [], backupEnabled: true, schedule: '', retentionDays: 0 };
   if (/\/(snapshot|migrations|top-queries|wait-events)/.test(url) || url.startsWith('/alerts')) return [];
   return {};
@@ -42,6 +43,7 @@ vi.mock('../api/client', () => {
 
 beforeEach(() => {
   calls.length = 0;
+  historyAnswer = { metrics: [] };
 });
 
 function LocationProbe() {
@@ -104,6 +106,15 @@ describe('project pages act on the project in the URL', () => {
   test('Metrics reads the URL project', async () => {
     renderAt('monitoring/metrics', <MetricsPage />);
     await expectOnlyUrlProject(new RegExp(`^GET /provision/${URL_PROJECT}/metrics/current$`));
+  });
+
+  // A new project has no history yet; the server sends metrics: null.
+  test('Metrics renders a project with no history yet', async () => {
+    historyAnswer = { metrics: null };
+    renderAt('monitoring/metrics', <MetricsPage />);
+    await expectOnlyUrlProject(new RegExp(`^GET /provision/${URL_PROJECT}/metrics/history`));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(screen.getByTestId('project-switcher')).toHaveTextContent(URL_PROJECT);
   });
 
   test('Performance reads the URL project', async () => {
