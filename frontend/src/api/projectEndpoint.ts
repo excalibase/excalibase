@@ -49,8 +49,8 @@ export interface ProjectEndpoint {
   database: string;
   username: string;
   connectionStrings: ProjectEndpointConnectionStrings;
-  // The cluster CA, so full verification works. Empty unless the endpoint is
-  // actually up.
+  // The cluster CA, so full verification works, internal or public. Empty
+  // while the database is not running.
   caCertificate: string;
   internal: ProjectEndpointInternal;
   mongo?: ProjectMongoEndpoint;

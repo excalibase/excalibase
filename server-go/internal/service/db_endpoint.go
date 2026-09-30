@@ -76,16 +76,16 @@ type PublicEndpointReconciler interface {
 
 var _ PublicEndpointReconciler = (*DBEndpointService)(nil)
 
-// DBEndpointProjects is the slice of the instance store this service needs:
+// DBEndpointProjectFinder is the slice of the instance store this service needs:
 // a project's namespace, lifecycle status and database identity.
-type DBEndpointProjects interface {
+type DBEndpointProjectFinder interface {
 	FindByProjectID(projectID string) (*domain.DatabaseInstance, error)
 }
 
 // DBEndpointServiceConfig wires the service.
 type DBEndpointServiceConfig struct {
 	Endpoints    storage.DatabaseEndpointStore
-	Instances    DBEndpointProjects
+	Instances    DBEndpointProjectFinder
 	Kube         k8s.KubeClient
 	DomainSuffix string
 	Ports        domain.PortRange
@@ -99,7 +99,7 @@ type DBEndpointServiceConfig struct {
 // database endpoint.
 type DBEndpointService struct {
 	endpoints    storage.DatabaseEndpointStore
-	instances    DBEndpointProjects
+	instances    DBEndpointProjectFinder
 	kube         k8s.KubeClient
 	domainSuffix string
 	ports        domain.PortRange
@@ -604,7 +604,9 @@ func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInsta
 	if err := s.addMongoEndpoint(ctx, inst, host, &view); err != nil {
 		return DBEndpointView{}, err
 	}
-	if available {
+	// Every network login needs TLS, the in-cluster one too, so the CA goes
+	// with any running database, published or not.
+	if available || servableNow(inst.Status) {
 		ca, err := s.clusterCA(ctx, inst)
 		if err != nil {
 			return DBEndpointView{}, err
