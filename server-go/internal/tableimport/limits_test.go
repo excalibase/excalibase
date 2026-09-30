@@ -25,7 +25,7 @@ func TestForTier_EveryPlanHasLimitsAndWorkbooksStaySmall(t *testing.T) {
 }
 
 func TestErrorMessages(t *testing.T) {
-	if got := (&RowErrors{}).Error(); got == "" {
+	if (&RowErrors{}).Error() == "" {
 		t.Error("empty RowErrors message")
 	}
 	got := (&RowErrors{Errors: []RowError{{Line: 4, Message: "bad"}}}).Error()

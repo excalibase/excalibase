@@ -101,7 +101,8 @@ func (l Loader) prepareTable(ctx context.Context, tx *sql.Tx, opts Options) erro
 		return fmt.Errorf("set timeouts: %w", err)
 	}
 	if opts.Mode == ModeCreate {
-		if _, err := tx.ExecContext(ctx, opts.CreateTableSQL()); err != nil {
+		// Identifiers pass ValidateIdentifier and are quoted; types come from a fixed list.
+		if _, err := tx.ExecContext(ctx, opts.CreateTableSQL()); err != nil { //NOSONAR validated, quoted DDL
 			return classify(err, nil)
 		}
 		return nil

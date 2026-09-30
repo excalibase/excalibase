@@ -25,7 +25,7 @@ func TestClassify(t *testing.T) {
 	if !errors.As(classify(&pq.Error{Code: "3F000"}, nil), &fileErr) {
 		t.Error("missing schema is not a file error")
 	}
-	if got := classify(&pq.Error{Code: "XX000", Message: "boom"}, nil); got == nil {
+	if classify(&pq.Error{Code: "XX000", Message: "boom"}, nil) == nil {
 		t.Error("an internal error vanished")
 	}
 	plain := errors.New("net")
