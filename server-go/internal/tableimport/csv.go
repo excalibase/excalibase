@@ -11,9 +11,9 @@ import (
 	"unicode/utf8"
 )
 
-// Source yields a file's records in order with the line each began on;
+// RecordReader yields a file's records in order with the line each began on;
 // io.EOF ends it.
-type Source interface {
+type RecordReader interface {
 	Next() (record []string, line int, err error)
 }
 
@@ -51,7 +51,7 @@ type csvRecords struct {
 
 // NewCSVSource parses delimited text under lim. The file cap is enforced as
 // the body streams, so an oversized upload fails without being stored.
-func NewCSVSource(r io.Reader, delimiter rune, lim Limits) (Source, error) {
+func NewCSVSource(r io.Reader, delimiter rune, lim Limits) (RecordReader, error) {
 	// The record allowance covers bufio's read-ahead on top of the record.
 	limited := &capReader{r: r, max: lim.MaxBytes, recordMax: int64(lim.MaxRecordBytes) + 64<<10}
 	buffered := bufio.NewReader(limited)

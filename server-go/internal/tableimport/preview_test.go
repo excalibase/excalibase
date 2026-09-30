@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func csvSource(t *testing.T, body string) Source {
+func csvSource(t *testing.T, body string) RecordReader {
 	t.Helper()
 	src, err := NewCSVSource(strings.NewReader(body), ',', testLimits())
 	if err != nil {

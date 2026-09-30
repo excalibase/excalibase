@@ -22,11 +22,11 @@ type projectImportTarget struct {
 }
 
 // NewImportTarget shares this handler's pools with the table import.
-func (h *SchemaHandler) NewImportTarget(loader tableimport.Loader) ImportTarget {
+func (h *SchemaHandler) NewImportTarget(loader tableimport.Loader) TableLoader {
 	return &projectImportTarget{pools: h.pools, instances: h.instances, loader: loader}
 }
 
-func (t *projectImportTarget) Load(ctx context.Context, projectID string, opts tableimport.Options, src tableimport.Source, estimatedBytes int64) (tableimport.Result, error) {
+func (t *projectImportTarget) Load(ctx context.Context, projectID string, opts tableimport.Options, src tableimport.RecordReader, estimatedBytes int64) (tableimport.Result, error) {
 	if !isValidID(projectID) {
 		return tableimport.Result{}, badRequest("invalid project id")
 	}

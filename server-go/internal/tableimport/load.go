@@ -33,7 +33,7 @@ type Result struct {
 
 // Load reads src to the end. Row errors are gathered (up to MaxRowErrors)
 // and refuse the whole load; nothing is committed unless every row fits.
-func (l Loader) Load(ctx context.Context, db *sql.DB, opts Options, src Source) (Result, error) {
+func (l Loader) Load(ctx context.Context, db *sql.DB, opts Options, src RecordReader) (Result, error) {
 	header, width, err := l.readHeader(src, opts)
 	if err != nil {
 		return Result{}, err
@@ -66,7 +66,7 @@ func (l Loader) chunkRows() int {
 
 // readHeader consumes the header (or peeks the first data row) to learn the
 // width rows are checked against.
-func (l Loader) readHeader(src Source, opts Options) (*pendingRow, int, error) {
+func (l Loader) readHeader(src RecordReader, opts Options) (*pendingRow, int, error) {
 	record, line, err := src.Next()
 	if errors.Is(err, io.EOF) {
 		return nil, 0, ErrEmptyFile
@@ -95,9 +95,9 @@ func maxSource(opts Options) int {
 }
 
 func (l Loader) prepareTable(ctx context.Context, tx *sql.Tx, opts Options) error {
-	settings := fmt.Sprintf("SET LOCAL statement_timeout = %d; SET LOCAL lock_timeout = %d",
-		l.StatementTimeout.Milliseconds(), l.LockTimeout.Milliseconds())
-	if _, err := tx.ExecContext(ctx, settings); err != nil {
+	// set_config(..., true) is SET LOCAL: it ends with the transaction.
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)",
+		strconv.FormatInt(l.StatementTimeout.Milliseconds(), 10), strconv.FormatInt(l.LockTimeout.Milliseconds(), 10)); err != nil {
 		return fmt.Errorf("set timeouts: %w", err)
 	}
 	if opts.Mode == ModeCreate {
@@ -142,7 +142,7 @@ func checkAppendTarget(ctx context.Context, tx *sql.Tx, opts Options) error {
 	return nil
 }
 
-func (l Loader) copyRows(ctx context.Context, batch *copyBatch, src Source, conv converter, first *pendingRow) (int, error) {
+func (l Loader) copyRows(ctx context.Context, batch *copyBatch, src RecordReader, conv converter, first *pendingRow) (int, error) {
 	var rowErrors []RowError
 	loaded := 0
 	next := func() ([]string, int, error) {

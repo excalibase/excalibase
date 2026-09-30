@@ -171,4 +171,101 @@ describe('ImportTablePanel', () => {
     await userEvent.click(screen.getByTestId('import-preview-btn'));
     expect(await screen.findByTestId('import-error')).toHaveTextContent('not a CSV');
   });
+
+  test('changing how the file is read previews it again', async () => {
+    renderPanel();
+    await uploadAndPreview();
+    await userEvent.selectOptions(screen.getByTestId('import-delimiter'), ';');
+    await waitFor(() =>
+      expect(importApi.previewImport).toHaveBeenLastCalledWith(
+        'p1',
+        expect.objectContaining({ kind: 'file' }),
+        { hasHeader: true, delimiter: ';' },
+      ),
+    );
+    await userEvent.click(screen.getByTestId('import-has-header'));
+    await waitFor(() =>
+      expect(importApi.previewImport).toHaveBeenLastCalledWith(
+        'p1',
+        expect.anything(),
+        expect.objectContaining({ hasHeader: false }),
+      ),
+    );
+  });
+
+  test('a workbook offers its sheets', async () => {
+    vi.mocked(importApi.previewImport).mockResolvedValue({
+      ...preview,
+      format: 'xlsx',
+      delimiter: undefined,
+      sheets: ['Stock', 'Other'],
+      sheet: 'Stock',
+    });
+    renderPanel();
+    await uploadAndPreview();
+    expect(screen.queryByTestId('import-delimiter')).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByTestId('import-sheet'), 'Other');
+    await waitFor(() =>
+      expect(importApi.previewImport).toHaveBeenLastCalledWith(
+        'p1',
+        expect.anything(),
+        expect.objectContaining({ sheet: 'Other' }),
+      ),
+    );
+  });
+
+  test('append skips a column, names the table and grants nothing', async () => {
+    vi.mocked(importApi.importTable).mockResolvedValue({
+      schema: 'public',
+      table: 'existing',
+      mode: 'append',
+      rows: 2,
+    });
+    renderPanel();
+    await uploadAndPreview();
+    await userEvent.selectOptions(screen.getByTestId('import-mode'), 'append');
+    expect(screen.queryByTestId('import-grant-anon')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('import-primary-key')).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByTestId('import-table-name'), 'existing');
+    await userEvent.click(screen.getByTestId('import-col-include-1'));
+    await userEvent.click(screen.getByTestId('import-submit'));
+    await screen.findByTestId('import-result');
+    expect(importApi.importTable).toHaveBeenCalledWith(
+      'p1',
+      expect.anything(),
+      expect.objectContaining({
+        mode: 'append',
+        table: 'existing',
+        columns: [{ source: 0, name: 'full_name', type: 'text' }],
+      }),
+      expect.any(Function),
+    );
+    expect(importApi.grantSelect).not.toHaveBeenCalled();
+  });
+
+  test('a chosen primary key and schema are sent', async () => {
+    vi.mocked(importApi.importTable).mockResolvedValue({
+      schema: 'sales',
+      table: 'my_people',
+      mode: 'create',
+      rows: 2,
+    });
+    renderPanel();
+    await uploadAndPreview();
+    await userEvent.clear(screen.getByTestId('import-schema'));
+    await userEvent.type(screen.getByTestId('import-schema'), 'sales');
+    await userEvent.selectOptions(screen.getByTestId('import-primary-key'), 'full_name');
+    await userEvent.click(screen.getByTestId('import-grant-anon'));
+    await userEvent.click(screen.getByTestId('import-submit'));
+    await screen.findByTestId('import-result');
+    expect(importApi.importTable).toHaveBeenCalledWith(
+      'p1',
+      expect.anything(),
+      expect.objectContaining({ schema: 'sales', primaryKey: 'full_name' }),
+      expect.any(Function),
+    );
+    expect(importApi.grantSelect).toHaveBeenCalledWith('p1', 'sales', 'my_people', 'anon');
+    expect(screen.getByTestId('import-result')).toHaveTextContent(/anon/);
+    await userEvent.click(screen.getByTestId('import-done'));
+  });
 });

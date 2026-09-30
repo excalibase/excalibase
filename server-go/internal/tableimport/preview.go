@@ -40,7 +40,7 @@ type PreviewResult struct {
 }
 
 // Preview reads up to sampleRows data rows and suggests names and types.
-func Preview(src Source, opts PreviewOptions) (PreviewResult, error) {
+func Preview(src RecordReader, opts PreviewOptions) (PreviewResult, error) {
 	var header []string
 	var sample [][]string
 	width, held := 0, 0

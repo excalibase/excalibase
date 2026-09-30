@@ -48,23 +48,23 @@ const (
 	formFieldOptions = "options"
 )
 
-// ImportTarget loads rows into a project's database.
-type ImportTarget interface {
-	Load(ctx context.Context, projectID string, opts tableimport.Options, src tableimport.Source, estimatedBytes int64) (tableimport.Result, error)
+// TableLoader loads rows into a project's database.
+type TableLoader interface {
+	Load(ctx context.Context, projectID string, opts tableimport.Options, src tableimport.RecordReader, estimatedBytes int64) (tableimport.Result, error)
 }
 
 // ImportLimits is a project's import allowance, from its plan.
 type ImportLimits func(ctx context.Context, projectID string) (tableimport.Limits, error)
 
-// SheetsSource downloads a Google Sheet's CSV export.
-type SheetsSource interface {
+// SheetFetcher downloads a Google Sheet's CSV export.
+type SheetFetcher interface {
 	Fetch(ctx context.Context, ref tableimport.SheetRef, maxBytes int64) (io.ReadCloser, error)
 }
 
 type TableImportHandler struct {
-	target ImportTarget
+	target TableLoader
 	limits ImportLimits
-	sheets SheetsSource
+	sheets SheetFetcher
 	audit  auditWriter
 	slots  chan struct{}
 	// busy holds the projects with an import or preview running, so one
@@ -73,7 +73,7 @@ type TableImportHandler struct {
 	busy map[string]bool
 }
 
-func NewTableImportHandler(target ImportTarget, limits ImportLimits, sheets SheetsSource, audit auditWriter) *TableImportHandler {
+func NewTableImportHandler(target TableLoader, limits ImportLimits, sheets SheetFetcher, audit auditWriter) *TableImportHandler {
 	return &TableImportHandler{target: target, limits: limits, sheets: sheets, audit: audit,
 		slots: make(chan struct{}, importSlots), busy: map[string]bool{}}
 }
@@ -121,7 +121,7 @@ type sheetsRequest struct {
 
 // openedSource is a parsed file ready to be read row by row.
 type openedSource struct {
-	src       tableimport.Source
+	src       tableimport.RecordReader
 	format    tableimport.Format
 	delimiter rune
 	sheets    []string
@@ -378,11 +378,11 @@ func openFile(body io.Reader, lim tableimport.Limits, settings readSettings, spo
 	if format == tableimport.FormatXLSX {
 		return spoolAndOpen(buffered, lim.MaxXLSXBytes, lim, settings)
 	}
-	return openCSV(buffered, head, 0, func() {}, lim, settings)
+	return openCSV(buffered, head, 0, keepOpen, lim, settings)
 }
 
-func spoolAndOpen(body io.Reader, max int64, lim tableimport.Limits, settings readSettings) (*openedSource, error) {
-	file, size, err := spool(body, max)
+func spoolAndOpen(body io.Reader, limit int64, lim tableimport.Limits, settings readSettings) (*openedSource, error) {
+	file, size, err := spool(body, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -392,6 +392,11 @@ func spoolAndOpen(body io.Reader, max int64, lim tableimport.Limits, settings re
 		return nil, err
 	}
 	return opened, nil
+}
+
+// keepOpen is the close of a streamed body, which its owner closes.
+func keepOpen() {
+	// nothing is spooled, so nothing is left to remove
 }
 
 // openSpooled opens a file already on disk; its close removes it.
@@ -432,18 +437,18 @@ func openCSV(body io.Reader, head []byte, size int64, closeFn func(), lim tablei
 	return &openedSource{src: src, format: tableimport.FormatCSV, delimiter: delimiter, origin: sourceUpload, size: size, close: closeFn}, nil
 }
 
-// spool copies body to a private temp file (0600), refusing past max.
-func spool(body io.Reader, max int64) (*os.File, int64, error) {
+// spool copies body to a private temp file (0600), refusing past limit.
+func spool(body io.Reader, limit int64) (*os.File, int64, error) {
 	file, err := os.CreateTemp("", spoolPattern+"*")
 	if err != nil {
 		return nil, 0, fmt.Errorf("spool upload: %w", err)
 	}
-	written, err := io.Copy(file, io.LimitReader(body, max+1))
+	written, err := io.Copy(file, io.LimitReader(body, limit+1))
 	if err != nil {
 		discard(file)
 		return nil, 0, uploadError(err, "the file could not be read")
 	}
-	if written > max {
+	if written > limit {
 		discard(file)
 		return nil, 0, tableimport.ErrFileTooLarge
 	}

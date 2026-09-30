@@ -43,7 +43,7 @@ export function ImportMapping({
 
       <div className="grid grid-cols-2 gap-2">
         <label className="text-xs text-text-secondary">
-          Mode
+          <span>Mode</span>
           <select
             value={target.mode}
             onChange={(e) =>
@@ -57,7 +57,7 @@ export function ImportMapping({
           </select>
         </label>
         <label className="text-xs text-text-secondary">
-          Schema
+          <span>Schema</span>
           <input
             value={target.schema}
             onChange={(e) => onTargetChange({ ...target, schema: e.target.value })}
@@ -68,7 +68,7 @@ export function ImportMapping({
       </div>
 
       <label className="block text-xs text-text-secondary">
-        Table
+        <span>Table</span>
         {target.mode === 'append' ? (
           <select
             value={target.table}
@@ -137,7 +137,7 @@ export function ImportMapping({
 
       {target.mode === 'create' && (
         <label className="block text-xs text-text-secondary">
-          Primary key
+          <span>Primary key</span>
           <select
             value={target.primaryKey}
             onChange={(e) => onTargetChange({ ...target, primaryKey: e.target.value })}
@@ -173,11 +173,11 @@ function ReadSettings({
           onChange={(e) => onReadChange({ hasHeader: e.target.checked })}
           data-testid="import-has-header"
         />
-        First row is a header
+        <span>First row is a header</span>
       </label>
       {preview.format === 'csv' && (
         <label className="flex items-center gap-1">
-          Separator
+          <span>Separator</span>
           <select
             value={preview.delimiter ?? ','}
             onChange={(e) => onReadChange({ delimiter: e.target.value })}
@@ -193,7 +193,7 @@ function ReadSettings({
       )}
       {preview.sheets && preview.sheets.length > 1 && (
         <label className="flex items-center gap-1">
-          Sheet
+          <span>Sheet</span>
           <select
             value={preview.sheet}
             onChange={(e) => onReadChange({ sheet: e.target.value })}
@@ -210,6 +210,12 @@ function ReadSettings({
       )}
     </div>
   );
+}
+
+// Preview rows have no identity of their own; their line in the file is one.
+function shownRows(preview: ImportPreview): Array<{ id: string; cells: string[] }> {
+  const offset = preview.hasHeader ? 2 : 1;
+  return preview.rows.slice(0, SHOWN_ROWS).map((cells, n) => ({ id: `line-${n + offset}`, cells }));
 }
 
 // Cells are rendered as text by React; a formula is shown, never run.
@@ -234,11 +240,11 @@ function PreviewRows({ preview }: { readonly preview: ImportPreview }) {
             </tr>
           </thead>
           <tbody>
-            {preview.rows.slice(0, SHOWN_ROWS).map((row, r) => (
-              <tr key={r} className="border-t border-border-primary">
+            {shownRows(preview).map((row) => (
+              <tr key={row.id} className="border-t border-border-primary">
                 {preview.columns.map((c) => (
                   <td key={c.source} className="px-2 py-1 whitespace-nowrap max-w-[12rem] truncate">
-                    {row[c.source] ?? ''}
+                    {row.cells[c.source] ?? ''}
                   </td>
                 ))}
               </tr>

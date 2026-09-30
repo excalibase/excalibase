@@ -33,13 +33,20 @@ const buttonClass =
 // A suggestion only: the server validates every name again.
 function tableNameFrom(source: ImportSource): string {
   if (source.kind !== 'file') return 'imported_sheet';
-  const base = source.file.name
-    .replace(/\.[^.]*$/, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, '_')
-    .replace(/^_+|_+$/g, '');
+  const name = source.file.name;
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const base = trimUnderscores(stem.toLowerCase().replace(/[^a-z0-9_]+/g, '_'));
   if (!base) return 'imported';
   return (/^\d/.test(base) ? `t_${base}` : base).slice(0, 63);
+}
+
+function trimUnderscores(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === '_') start++;
+  while (end > start && value[end - 1] === '_') end--;
+  return value.slice(start, end);
 }
 
 function chosenSource(
@@ -118,7 +125,7 @@ export function ImportTablePanel({ open, onClose, projectId }: ImportTablePanelP
       setSettings(next);
       setPreview(answer);
       setTarget((prev) =>
-        prev && prev.columns.length === answer.columns.length
+        prev?.columns.length === answer.columns.length
           ? prev
           : initialTarget(answer, prev?.table ?? tableNameFrom(source)),
       );
@@ -144,7 +151,7 @@ export function ImportTablePanel({ open, onClose, projectId }: ImportTablePanelP
       );
       const roles =
         target.mode === 'create' ? (Object.keys(grants) as Role[]).filter((r) => grants[r]) : [];
-      for (const role of roles) await grantSelect(projectId, done.schema, done.table, role);
+      await Promise.all(roles.map((role) => grantSelect(projectId, done.schema, done.table, role)));
       setGranted(roles);
       setResult(done);
       setStep('result');
@@ -264,7 +271,7 @@ function SourceStep({
       </div>
       {kind === 'file' ? (
         <label className="block text-sm text-text-secondary">
-          CSV, TSV or XLSX file
+          <span>CSV, TSV or XLSX file</span>
           <input
             type="file"
             accept=".csv,.tsv,.txt,.xlsx"
@@ -275,7 +282,9 @@ function SourceStep({
         </label>
       ) : (
         <label className="block text-sm text-text-secondary">
-          Sheet link (shared as &quot;anyone with the link&quot; or published to the web)
+          <span>
+            Sheet link (shared as &quot;anyone with the link&quot; or published to the web)
+          </span>
           <input
             value={sheetsUrl}
             onChange={(e) => setSheetsUrl(e.target.value)}
@@ -291,7 +300,7 @@ function SourceStep({
           checked={hasHeader}
           onChange={(e) => setHasHeader(e.target.checked)}
         />
-        First row is a header
+        <span>First row is a header</span>
       </label>
     </div>
   );

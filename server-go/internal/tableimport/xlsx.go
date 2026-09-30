@@ -132,7 +132,7 @@ func (w *Workbook) Sheets() []string { return w.sheets }
 func (w *Workbook) Close() error { return w.file.Close() }
 
 // Source reads one sheet; "" is the first.
-func (w *Workbook) Source(sheet string) (Source, error) {
+func (w *Workbook) Source(sheet string) (RecordReader, error) {
 	if sheet == "" {
 		sheet = w.sheets[0]
 	}

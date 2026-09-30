@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -31,7 +32,7 @@ type fakeImportTarget struct {
 	loadErr error
 }
 
-func (f *fakeImportTarget) Load(_ context.Context, projectID string, opts tableimport.Options, src tableimport.Source, estimated int64) (tableimport.Result, error) {
+func (f *fakeImportTarget) Load(_ context.Context, projectID string, opts tableimport.Options, src tableimport.RecordReader, estimated int64) (tableimport.Result, error) {
 	f.calls++
 	f.opts, f.bytes = opts, estimated
 	for {
@@ -475,5 +476,63 @@ func TestSweepSpoolFiles_RemovesLeftovers(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 || entries[0].Name() != "other" {
 		t.Fatalf("entries = %v", entries)
+	}
+}
+
+func TestImport_RequestShapeIsChecked(t *testing.T) {
+	f := newImportFixture(t)
+	rec := f.do(multipartRequest(t, previewPath(), formPart{name: "delimiter", body: "x"}, formPart{name: "file", filename: "a.csv", body: "a;b\n1;2\n"}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown delimiter: status %d", rec.Code)
+	}
+	rec = f.do(multipartRequest(t, previewPath(), formPart{name: "delimiter", body: ";"}, formPart{name: "file", filename: "a.csv", body: "a;b\n1;2\n"}))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"delimiter":";"`) {
+		t.Errorf("semicolon: status %d %s", rec.Code, rec.Body)
+	}
+	rec = f.do(multipartRequest(t, previewPath(), formPart{name: "file", filename: "a.tsv", body: "a\tb\n1\t2\n"}))
+	if !strings.Contains(rec.Body.String(), `"delimiter":"tab"`) {
+		t.Errorf("tab: %s", rec.Body)
+	}
+	req := httptest.NewRequest(http.MethodPost, previewPath(), strings.NewReader("a,b"))
+	req.Header.Set("Content-Type", "text/csv")
+	if rec := f.do(req); rec.Code != http.StatusBadRequest {
+		t.Errorf("raw body: status %d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodPost, importPath(), strings.NewReader(`{"sheetsUrl":"https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"}`))
+	req.Header.Set("Content-Type", "application/json")
+	if rec := f.do(req); rec.Code != http.StatusBadRequest {
+		t.Errorf("sheet import without options: status %d", rec.Code)
+	}
+	rec = f.do(multipartRequest(t, previewPath(), formPart{name: "hasHeader", body: "true"}))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("no file: status %d", rec.Code)
+	}
+}
+
+func TestImport_AWorkbookOverItsOwnCapIsRefused(t *testing.T) {
+	f := newImportFixture(t)
+	f.handler.limits = func(context.Context, string) (tableimport.Limits, error) {
+		lim := smallImportLimits()
+		lim.MaxXLSXBytes = 1024
+		return lim, nil
+	}
+	opts := `{"schema":"public","table":"stock","mode":"create","hasHeader":true,"columns":[{"source":0,"name":"sku","type":"text"}]}`
+	rec := f.do(multipartRequest(t, importPath(), formPart{name: "options", body: opts}, formPart{name: "file", filename: "b.xlsx", body: string(xlsxBytes(t))}))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	rec = f.do(multipartRequest(t, previewPath(), formPart{name: "file", filename: "b.xlsx", body: string(xlsxBytes(t))}))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("preview status %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestImportStatus_SheetDownloadFailuresAreBadGateway(t *testing.T) {
+	status, known := importStatus(fmt.Errorf("%w: timeout", tableimport.ErrSheetDownload))
+	if status != http.StatusBadGateway || !known {
+		t.Fatalf("status %d", status)
+	}
+	if importErrorMessage(&http.MaxBytesError{Limit: 1}) != tableimport.ErrFileTooLarge.Error() {
+		t.Fatal("an oversized body is not reported as too large")
 	}
 }

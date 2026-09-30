@@ -14,7 +14,7 @@ func testLimits() Limits {
 	}
 }
 
-func readAll(t *testing.T, src Source) ([][]string, error) {
+func readAll(t *testing.T, src RecordReader) ([][]string, error) {
 	t.Helper()
 	var out [][]string
 	for {

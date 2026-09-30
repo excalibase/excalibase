@@ -143,13 +143,23 @@ func refuseInternalAddress(_, address string, _ syscall.RawConn) error {
 // NAT, IETF/benchmark/reserved IPv4, and the NAT64 and 6to4 prefixes that
 // carry an IPv4 address, internal ones included.
 var internalPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("64:ff9b::/96"),
-	netip.MustParsePrefix("64:ff9b:1::/48"),
-	netip.MustParsePrefix("2002::/16"),
+	v4Prefix(100, 64, 0, 0, 10),
+	v4Prefix(192, 0, 0, 0, 24),
+	v4Prefix(198, 18, 0, 0, 15),
+	v4Prefix(240, 0, 0, 0, 4),
+	v6Prefix([]byte{0x00, 0x64, 0xff, 0x9b}, 96),
+	v6Prefix([]byte{0x00, 0x64, 0xff, 0x9b, 0x00, 0x01}, 48),
+	v6Prefix([]byte{0x20, 0x02}, 16),
+}
+
+func v4Prefix(a, b, c, d byte, bits int) netip.Prefix {
+	return netip.PrefixFrom(netip.AddrFrom4([4]byte{a, b, c, d}), bits)
+}
+
+func v6Prefix(lead []byte, bits int) netip.Prefix {
+	var addr [16]byte
+	copy(addr[:], lead)
+	return netip.PrefixFrom(netip.AddrFrom16(addr), bits)
 }
 
 func isPublicAddress(host string) bool {
