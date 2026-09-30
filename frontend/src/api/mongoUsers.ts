@@ -34,7 +34,7 @@ export function mongoUserUri(
   port: number,
   tls: boolean,
 ): string {
-  return `mongodb://${username}:${encodeURIComponent(password)}@${host}:${port}/?tls=${tls}&authMechanism=SCRAM-SHA-256`;
+  return `mongodb://${username}:${encodeURIComponent(password)}@${host}:${port}/?tls=${tls}&authMechanism=SCRAM-SHA-256&directConnection=true`;
 }
 
 const usersPath = (projectId: string) => `/provision/${projectId}/documentdb/users`;

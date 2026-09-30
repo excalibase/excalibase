@@ -33,8 +33,10 @@ function postgresUri(credentials: CredentialsResponse, target: Target, password:
 
 // The shape the control plane renders and the gateway was proven to accept.
 // TLS is spelled the way a driver reads it — `tls`, never libpq's `sslmode`.
+// directConnection: the gateway is one server, and topology discovery would
+// follow a member address only the cluster can reach.
 function mongoUri(credentials: CredentialsResponse, target: Target, password: string, tls: boolean): string {
-  return `mongodb://${credentials.username}:${password}@${target.host}:${target.port}/?tls=${tls}&authMechanism=SCRAM-SHA-256`;
+  return `mongodb://${credentials.username}:${password}@${target.host}:${target.port}/?tls=${tls}&authMechanism=SCRAM-SHA-256&directConnection=true`;
 }
 
 // internalTarget is where a workload inside the cluster connects. It is shown
