@@ -64,8 +64,9 @@ func documentDBView() service.DBEndpointView {
 		Internal: service.DBEndpointInternal{
 			Host: "proj-abc1234567-postgres-rw.ns.svc.cluster.local", Port: 5432,
 			ConnectionString:      "postgresql://appowner@proj-abc1234567-postgres-rw.ns.svc.cluster.local:5432/appdb?sslmode=prefer",
+			MongoHost:             "proj-abc1234567-documentdb.ns.svc.cluster.local",
 			MongoPort:             10260,
-			MongoConnectionString: "mongodb://appowner@proj-abc1234567-postgres-rw.ns.svc.cluster.local:10260/?authMechanism=SCRAM-SHA-256&directConnection=true&tls=true",
+			MongoConnectionString: "mongodb://appowner@proj-abc1234567-documentdb.ns.svc.cluster.local:10260/?authMechanism=SCRAM-SHA-256&directConnection=true&tls=true",
 		},
 	}
 }
@@ -109,6 +110,10 @@ func TestDBEndpointResponseCarriesTheInternalMongoAddress(t *testing.T) {
 	}
 	if got, ok := internal["mongoPort"].(float64); !ok || int(got) != 10260 {
 		t.Errorf("internal mongoPort: got %v", internal["mongoPort"])
+	}
+	// The gateway has its own Service: the Postgres host does not serve its port.
+	if got, _ := internal["mongoHost"].(string); got != "proj-abc1234567-documentdb.ns.svc.cluster.local" {
+		t.Errorf("internal mongoHost: %q", got)
 	}
 	if got, _ := internal["mongoConnectionString"].(string); !strings.HasPrefix(got, "mongodb://") {
 		t.Errorf("internal mongoConnectionString: %q", got)

@@ -25,7 +25,7 @@ function mockServer(documentDb = true) {
     }
     if (url === '/projects/proj-doc/db-endpoint') {
       return reply({
-        internal: { host: 'proj-doc-documentdb.ns.svc', port: 5432, mongoPort: 10260 },
+        internal: { host: 'proj-doc-postgres-rw.ns.svc', port: 5432, mongoHost: 'proj-doc-documentdb.ns.svc', mongoPort: 10260 },
         publicEnabled: false,
       });
     }
@@ -199,7 +199,7 @@ describe('MongoUsersPage failures and the public address', () => {
               requireTls: true,
               mongoPort: 30002,
               mongoAvailable: true,
-              internal: { host: 'proj-doc-documentdb.ns.svc', port: 5432, mongoPort: 10260 },
+              internal: { host: 'proj-doc-postgres-rw.ns.svc', port: 5432, mongoHost: 'proj-doc-documentdb.ns.svc', mongoPort: 10260 },
             },
           } as never)
         : base(url),

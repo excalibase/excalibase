@@ -139,6 +139,8 @@ type DBEndpointInternal struct {
 	// project's gateway, which serves the MongoDB wire protocol from a
 	// container beside Postgres in the same pod (EXC-409). They are zero and
 	// empty for every other project.
+	// MongoHost is the gateway's own Service; the Postgres host does not serve its port.
+	MongoHost             string
 	MongoPort             int
 	MongoConnectionString string
 }
@@ -642,9 +644,10 @@ func (s *DBEndpointService) addMongoEndpoint(
 	if !inst.DocumentDB {
 		return nil
 	}
+	view.Internal.MongoHost = k8s.DocumentDBServiceHost(inst.ProjectID, inst.Namespace)
 	view.Internal.MongoPort = config.DocumentDBGatewayPort
 	view.Internal.MongoConnectionString = domain.MongoConnectionString(
-		k8s.DocumentDBServiceHost(inst.ProjectID, inst.Namespace), config.DocumentDBGatewayPort, inst.Username, true)
+		view.Internal.MongoHost, config.DocumentDBGatewayPort, inst.Username, true)
 
 	port, err := s.mongoPort(ctx, inst)
 	if err != nil {
