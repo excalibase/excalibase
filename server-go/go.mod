@@ -38,6 +38,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	github.com/tus/tusd/v2 v2.10.0
 	github.com/xdg-go/stringprep v1.0.4
+	github.com/xuri/excelize/v2 v2.11.0
 	go.mongodb.org/mongo-driver/v2 v2.9.1
 	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.56.0
@@ -180,7 +181,6 @@ require (
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
 	github.com/xuri/efp v0.0.1 // indirect
-	github.com/xuri/excelize/v2 v2.11.0 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
