@@ -190,40 +190,50 @@ func (l Loader) maxRowErrors() int {
 	return l.MaxRowErrors
 }
 
-// copyBatch streams rows into COPY statements of chunkRows rows each and
-// remembers which file line each row of the open chunk came from.
+// copyBatch buffers up to chunkRows rows (or chunkBytes) and writes them in
+// one COPY statement. A COPY is open only inside flush: a row refused while
+// reading never leaves one open under the transaction's rollback.
 type copyBatch struct {
 	tx        *sql.Tx
 	opts      Options
 	chunkRows int
-	stmt      *sql.Stmt
+	rows      [][]any
 	lines     []int
+	bytes     int
 }
 
+// chunkBytes bounds the rows held in memory between two COPY statements.
+const chunkBytes = 4 << 20
+
 func (b *copyBatch) add(ctx context.Context, values []any, line int) error {
-	if b.stmt == nil {
-		stmt, err := b.tx.PrepareContext(ctx, pq.CopyInSchema(b.opts.Schema, b.opts.Table, b.opts.ColumnNames()...))
-		if err != nil {
-			return classify(err, nil)
-		}
-		b.stmt, b.lines = stmt, b.lines[:0]
-	}
+	b.rows = append(b.rows, values)
 	b.lines = append(b.lines, line)
-	if _, err := b.stmt.ExecContext(ctx, values...); err != nil {
-		return classify(err, b.lines)
+	for _, v := range values {
+		if s, ok := v.(string); ok {
+			b.bytes += len(s)
+		}
 	}
-	if len(b.lines) >= b.chunkRows {
+	if len(b.rows) >= b.chunkRows || b.bytes >= chunkBytes {
 		return b.flush(ctx)
 	}
 	return nil
 }
 
 func (b *copyBatch) flush(ctx context.Context) error {
-	if b.stmt == nil {
+	if len(b.rows) == 0 {
 		return nil
 	}
-	stmt := b.stmt
-	b.stmt = nil
+	defer func() { b.rows, b.lines, b.bytes = b.rows[:0], b.lines[:0], 0 }()
+	stmt, err := b.tx.PrepareContext(ctx, pq.CopyInSchema(b.opts.Schema, b.opts.Table, b.opts.ColumnNames()...))
+	if err != nil {
+		return classify(err, nil)
+	}
+	for _, values := range b.rows {
+		if _, err := stmt.ExecContext(ctx, values...); err != nil {
+			_ = stmt.Close()
+			return classify(err, b.lines)
+		}
+	}
 	if _, err := stmt.ExecContext(ctx); err != nil {
 		_ = stmt.Close()
 		return classify(err, b.lines)
