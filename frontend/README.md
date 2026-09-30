@@ -65,7 +65,7 @@ go build -o excalibase-server ./cmd/server/
 PORT=24005 STORAGE_PATH=../provisioning-data CORS_ORIGINS=http://localhost:5173 ./excalibase-server
 ```
 
-On first run, the studio will redirect to `/setup` to initialize the vault and create the first platform_admin. The setup wizard's admin step needs a one-time setup token, printed to the server's log at startup ("First-admin setup token: ...").
+On first run, the studio will redirect to `/setup` to initialize the vault and create the first platform_admin. The setup wizard's admin step needs the one-time setup token: the server's `SETUP_TOKEN` (required on Kubernetes), or, on a docker provisioner started without it, the one printed to the server's log ("First-admin setup token: ...").
 
 ## Project Structure
 

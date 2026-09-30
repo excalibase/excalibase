@@ -117,9 +117,10 @@ curl -s -X POST http://localhost:24005/api/vault/unseal \
   -H "Content-Type: application/json" \
   -d '{"share": "<share-hex>"}'
 
-# Register the first admin — the server prints a one-time setup token to its
-# log on first start ("First-admin setup token: ..."); it's required here and
-# burned on use (EXC-451)
+# Register the first admin with the one-time setup token (EXC-451), burned on
+# use: SETUP_TOKEN, which Kubernetes requires (provisioning refuses to start
+# without it until an admin exists); only the docker provisioner started
+# without SETUP_TOKEN prints a generated one to its log ("First-admin setup token: ...")
 curl -s -X POST http://localhost:24005/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "<password>", "email": "admin@example.com", "setupToken": "<token from the server log>"}'
@@ -169,7 +170,7 @@ Every route with a project in its path binds that project to the caller before t
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/auth/register` | No | Public registration; the first registrant becomes platform_admin, but only with a valid one-time `setupToken` (printed to the server log at startup, or supplied via `SETUP_TOKEN`) — EXC-451 |
+| POST | `/api/auth/register` | No | Public registration; the first registrant becomes platform_admin, but only with a valid one-time `setupToken` (`SETUP_TOKEN`, required on Kubernetes; a docker provisioner started without it prints a generated one to its log) — EXC-451 |
 | POST | `/api/auth/login` | No | Login (argon2id), returns bearer token |
 | GET | `/api/auth/setup-status` | No | `{hasAdmin}` — used by the setup wizard |
 | GET | `/api/auth/me` | Yes | Current user info |

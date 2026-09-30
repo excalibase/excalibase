@@ -7,7 +7,7 @@
 set -eu
 
 CHART=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-BASE="--set studioUrl=https://studio.example.test"
+BASE="--set studioUrl=https://studio.example.test --set setupToken.existingSecret=first-admin-token"
 
 if out=$(helm template t "$CHART" $BASE 2>&1); then
   echo "rendered without trustedProxyCIDRs" >&2

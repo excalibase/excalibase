@@ -9,7 +9,7 @@ set -eu
 CHART=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
 
-helm template t "$CHART" --set studioUrl=https://studio.example.test --set trustedProxyCIDRs=10.42.0.0/16 | python3 -c '
+helm template t "$CHART" --set studioUrl=https://studio.example.test --set trustedProxyCIDRs=10.42.0.0/16 --set setupToken.existingSecret=first-admin-token | python3 -c '
 import sys, yaml
 role = next(d for d in yaml.safe_load_all(sys.stdin) if d and d.get("kind") == "ClusterRole" and d["metadata"]["name"] == "excalibase-provisioning")
 def verbs(group, resource):

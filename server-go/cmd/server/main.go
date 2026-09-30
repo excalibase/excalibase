@@ -1357,7 +1357,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler.SetInviteOnly(cfg.RegistrationMode == "invite")
 	authHandler.SetSetupTokenStore(sqlStore)
 	authHandler.SetEmailVerifier(emailVerifier)
-	logFirstAdminSetupToken(sqlStore)
+	setUpFirstAdminToken(cfg, sqlStore)
 	adoptBootstrapServiceToken(cfg, sqlStore)
 	ceilings, err := config.LoadServiceTokenCeilings()
 	if err != nil {
@@ -2130,28 +2130,13 @@ func unsealWithKMS(localVault *vault.Vault, unseal config.VaultUnseal) *kmsseal.
 	return client
 }
 
-// logFirstAdminSetupToken establishes the one-time first-admin setup token
-// (EXC-451) when the platform has no admin yet.
-//
-// SETUP_TOKEN, when set, is an operator-supplied token — the platform-aio
-// chart's bootstrap Job generates one into a Secret and passes it here so it
-// can register the first admin non-interactively; that token is adopted
-// (hash stored) but deliberately never logged, since the operator already
-// has it. Left unset, a fresh token is generated and printed exactly once,
-// here — never persisted in the clear, only its hash, so losing this log
-// line means generating a replacement.
-func logFirstAdminSetupToken(sqlStore storage.PlatformStore) {
-	raw, err := auth.BootstrapSetupToken(context.Background(), sqlStore, os.Getenv("SETUP_TOKEN"))
+// setUpFirstAdminToken fails the start when the one-time first-admin token
+// cannot be set up; see establishFirstAdminSetupToken.
+func setUpFirstAdminToken(cfg config.AppConfig, sqlStore storage.PlatformStore) {
+	err := establishFirstAdminSetupToken(context.Background(), cfg, sqlStore, os.Getenv("SETUP_TOKEN"), log.Printf)
 	if err != nil {
 		log.Fatalf("Failed to bootstrap first-admin setup token: %v", err)
 	}
-	if raw == "" {
-		return // admin already exists, or an operator-supplied token was adopted silently
-	}
-	log.Println("=== FIRST-ADMIN SETUP TOKEN ===")
-	log.Printf("First-admin setup token: %s", raw)
-	log.Println("Use it once in POST /api/auth/register as \"setupToken\" to create the platform admin.")
-	log.Println("================================")
 }
 
 // adoptBootstrapServiceToken gives svc-bootstrap the token the chart generated
