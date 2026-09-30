@@ -125,7 +125,8 @@ function CredentialField({ testId, label, value }: { readonly testId: string; re
 
 // Full verification needs the certificate authority as a file on the client,
 // not a value inside the URI — which is why it sits beside the Mongo string
-// as well as the Postgres one.
+// as well as the Postgres one. Every login needs TLS, in-cluster ones too, so
+// it is offered whether or not the project publishes a port.
 function CertificateAuthority({ projectId, pem }: { readonly projectId: string; readonly pem: string }) {
   if (!pem) return null;
   const href = `data:application/x-pem-file;base64,${btoa(pem)}`;
@@ -163,16 +164,14 @@ function PostgresSection({ projectId, credentials, endpoint, shownPassword }: Se
       <h5 className="text-sm font-medium text-text-primary">PostgreSQL</h5>
       <StringRow testId="conn-postgres-internal" label="Internal — from inside the cluster" {...row(internal, internalMode)} />
       {external ? (
-        <>
-          <StringRow testId="conn-postgres-public" label="Public — from outside the cluster" {...row(external, publicMode)} />
-          <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />
-        </>
+        <StringRow testId="conn-postgres-public" label="Public — from outside the cluster" {...row(external, publicMode)} />
       ) : (
         <p className="text-xs text-text-tertiary" data-testid="conn-postgres-public-absent">
           This project publishes no public port. Use the internal address, or ask an admin to open one under Public
           database port.
         </p>
       )}
+      <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />
     </div>
   );
 }
@@ -192,15 +191,13 @@ function MongoSection({ projectId, credentials, endpoint, shownPassword }: Secti
         <StringRow testId="conn-mongo-internal" label="Internal — from inside the cluster" {...row(internal, true)} />
       )}
       {external && (
-        <>
-          <StringRow
-            testId="conn-mongo-public"
-            label="Public — from outside the cluster"
-            {...row(external, endpoint?.requireTls ?? true)}
-          />
-          <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />
-        </>
+        <StringRow
+          testId="conn-mongo-public"
+          label="Public — from outside the cluster"
+          {...row(external, endpoint?.requireTls ?? true)}
+        />
       )}
+      {(internal || external) && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}
       {!external && (!internal || endpoint?.mongo?.port) && (
         <p className="text-xs text-text-tertiary" data-testid="conn-mongo-unavailable">
           This project carries DocumentDB, but its MongoDB endpoint is not answering yet — it starts after the database

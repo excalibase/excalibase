@@ -611,3 +611,34 @@ func TestSetPublicRefusesAnUnknownProject(t *testing.T) {
 		}
 	}
 }
+
+// Every network login needs TLS, the in-cluster one included, so the CA that
+// verifies it is handed over whether or not the project publishes a port.
+func TestTheCAIsHandedOverForAProjectWithNoPublicPort(t *testing.T) {
+	h := newEndpointHarness(t, "ACTIVE")
+	view, err := h.svc.Describe(context.Background(), endpointProject)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if view.Enabled || view.Available {
+		t.Fatalf("the project must be private for this case: %+v", view)
+	}
+	if view.CACertificate == "" {
+		t.Fatal("a private project's in-cluster TLS needs the CA and the API must hand it over")
+	}
+}
+
+// A project whose database is not running has nothing to verify, and its CA
+// may not exist yet: the view is still served, without one.
+func TestAProjectThatIsNotRunningIsDescribedWithoutACA(t *testing.T) {
+	h := newEndpointHarness(t, "PROVISIONING")
+	h.kube.NoClusterCA = true
+	delete(h.kube.Secrets, endpointNamespace+"/"+endpointProject+"-postgres-ca")
+	view, err := h.svc.Describe(context.Background(), endpointProject)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if view.CACertificate != "" {
+		t.Fatalf("CA = %q, want none", view.CACertificate)
+	}
+}

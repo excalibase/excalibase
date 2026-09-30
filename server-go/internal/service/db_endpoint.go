@@ -604,7 +604,9 @@ func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInsta
 	if err := s.addMongoEndpoint(ctx, inst, host, &view); err != nil {
 		return DBEndpointView{}, err
 	}
-	if available {
+	// Every network login needs TLS, the in-cluster one too, so the CA goes
+	// with any running database, published or not.
+	if available || servableNow(inst.Status) {
 		ca, err := s.clusterCA(ctx, inst)
 		if err != nil {
 			return DBEndpointView{}, err

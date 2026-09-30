@@ -224,6 +224,17 @@ describe('ConnectionStrings — certificate authority', () => {
     expect(links[0]).toHaveAttribute('download', 'p-1-ca.crt');
   });
 
+  // In-cluster logins need TLS too, so a private project still gets its CA.
+  test('offers the CA beside the internal strings of a project with no public port', async () => {
+    renderStrings({
+      documentDb: true,
+      endpoint: { ...WITH_MONGO, publicEnabled: false, available: false, port: 0, mongo: { available: false, internal: WITH_MONGO.mongo!.internal } },
+    });
+    await screen.findByTestId('conn-mongo-internal');
+    expect(screen.queryByTestId('conn-postgres-public')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('conn-ca-download')).toHaveLength(2);
+  });
+
   test('offers no download while the endpoint publishes no CA', async () => {
     renderStrings();
     await screen.findByTestId('conn-postgres-internal');
