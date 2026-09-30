@@ -176,3 +176,20 @@ func TestProjectRoleSQL_InstallsTheCustomerRoleFunctionsForTheOwner(t *testing.T
 		t.Fatalf("the password reset runs before the functions are installed (%d < %d)", reset, functions)
 	}
 }
+
+// TestBuildProjectRoleSQL_RealtimeTablesPublishCompleteOldRows asserts the
+// realtime function sets REPLICA IDENTITY FULL on the table it publishes and
+// DEFAULT on the one it stops publishing: a delete is judged against each
+// subscriber's permission, which needs every column of the old row.
+func TestBuildProjectRoleSQL_RealtimeTablesPublishCompleteOldRows(t *testing.T) {
+	sql := BuildProjectRoleSQL("authPass", "appPass", "watcherPass", "app", "cdc_watcher_pub")
+
+	for _, want := range []string{
+		"EXECUTE format('ALTER TABLE %I.%I REPLICA IDENTITY FULL', target_schema, target_table)",
+		"EXECUTE format('ALTER TABLE %I.%I REPLICA IDENTITY DEFAULT', target_schema, target_table)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("expected %q; sql:\n%s", want, sql)
+		}
+	}
+}

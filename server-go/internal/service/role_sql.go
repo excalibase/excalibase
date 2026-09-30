@@ -144,6 +144,9 @@ ALTER PUBLICATION %s OWNER TO CURRENT_USER;
 -- table, and user tables belong to the project owner role. Rather than let
 -- excalibase_app act as that owner, this function does the one thing needed:
 -- toggle a user table in this publication. Platform and system schemas stay out.
+-- A published table logs complete old rows (REPLICA IDENTITY FULL): realtime
+-- judges each delete against the subscriber's permission, which reads columns
+-- outside the key. Unpublishing restores the default.
 CREATE OR REPLACE FUNCTION excalibase.set_realtime_table(target_schema text, target_table text, publish boolean)
 RETURNS void
 LANGUAGE plpgsql
@@ -153,9 +156,10 @@ AS $fn$
 DECLARE
   target_publication CONSTANT text := %s;
   target_relation oid;
+  current_identity "char";
   is_member boolean;
 BEGIN
-  SELECT c.oid INTO target_relation
+  SELECT c.oid, c.relreplident INTO target_relation, current_identity
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname = target_schema AND c.relname = target_table AND c.relkind = 'r'
     AND %s;
@@ -171,6 +175,11 @@ BEGIN
     EXECUTE format('ALTER PUBLICATION %%I ADD TABLE %%I.%%I', target_publication, target_schema, target_table);
   ELSIF NOT publish AND is_member THEN
     EXECUTE format('ALTER PUBLICATION %%I DROP TABLE %%I.%%I', target_publication, target_schema, target_table);
+  END IF;
+  IF publish AND current_identity <> 'f' THEN
+    EXECUTE format('ALTER TABLE %%I.%%I REPLICA IDENTITY FULL', target_schema, target_table);
+  ELSIF NOT publish AND current_identity <> 'd' THEN
+    EXECUTE format('ALTER TABLE %%I.%%I REPLICA IDENTITY DEFAULT', target_schema, target_table);
   END IF;
 END
 $fn$;
