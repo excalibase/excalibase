@@ -744,6 +744,8 @@ type handlerDeps struct {
 	schemaHandler    *handler.SchemaHandler
 	realtimeHandler  *handler.RealtimeHandler
 	fnHandler        *handler.FunctionHandler
+	// tableImportHandler loads CSV, XLSX and Google Sheets into a table (EXC-368).
+	tableImportHandler *handler.TableImportHandler
 	// permissionHandler serves permissions, tracked functions and function
 	// permissions (EXC-370 step C).
 	permissionHandler *handler.PermissionHandler
@@ -1363,6 +1365,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	registryCreds := registryCredentials(vc, store, k8sClient)
 	withRegistryCredentials(appDeploySvc, registryCreds)
 	appNetworkSvc := newAppNetworkService(sqlStore, store, k8sClient, a.claimer)
+	schemaHandler := newSchemaHandler(cfg, vc, store)
 	return &handlerDeps{
 		provHandler:         provHandler,
 		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
@@ -1386,7 +1389,8 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		svcAcctHandler:      handler.NewServiceAccountHandler(sqlStore, sqlStore, sqlStore),
 		orgHandler:          newOrgHandler(sqlStore, store, provSvc, planChanged),
 		vaultHandler:        vaultHandler,
-		schemaHandler:       newSchemaHandler(cfg, vc, store),
+		schemaHandler:       schemaHandler,
+		tableImportHandler:  newTableImportHandler(cfg, schemaHandler, store, sqlStore),
 		realtimeHandler:     realtimeHandler,
 		permissionHandler:   newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget),
@@ -1714,8 +1718,13 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		r.Use(custommw.RequireProjectDatabase(store))
 		r.Use(d.activity)
-		r.Use(d.schemaHandler.AnnounceSchemaChange)
-		d.schemaHandler.RoutesInner(r)
+		// A preview writes nothing, so it announces no schema change.
+		r.Post("/import/preview", d.tableImportHandler.Preview)
+		r.Group(func(r chi.Router) {
+			r.Use(d.schemaHandler.AnnounceSchemaChange)
+			d.schemaHandler.RoutesInner(r)
+			r.Post("/import", d.tableImportHandler.Import)
+		})
 	})
 }
 
