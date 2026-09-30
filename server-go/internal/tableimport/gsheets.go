@@ -139,15 +139,34 @@ func refuseInternalAddress(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
+// Global-unicast ranges that still lead inside or nowhere public: carrier-grade
+// NAT, IETF/benchmark/reserved IPv4, and the NAT64 and 6to4 prefixes that
+// carry an IPv4 address, internal ones included.
+var internalPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2002::/16"),
+}
+
 func isPublicAddress(host string) bool {
 	addr, err := netip.ParseAddr(host)
 	if err != nil {
 		return false
 	}
 	addr = addr.Unmap()
-	cgnat := netip.MustParsePrefix("100.64.0.0/10")
-	return addr.IsGlobalUnicast() && !addr.IsPrivate() && !addr.IsLoopback() &&
-		!addr.IsLinkLocalUnicast() && !cgnat.Contains(addr)
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		return false
+	}
+	for _, prefix := range internalPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
 }
 
 func checkRedirect(req *http.Request, via []*http.Request) error {

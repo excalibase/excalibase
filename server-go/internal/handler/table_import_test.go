@@ -409,3 +409,71 @@ func TestImport_FromAGoogleSheet(t *testing.T) {
 		t.Fatalf("audit = %s", f.audit.entries[0].Details)
 	}
 }
+
+// closingSheets fails any read after Close, like a real response body.
+type closingSheets struct{ body string }
+
+type closeTrackingBody struct {
+	r      io.Reader
+	closed bool
+}
+
+func (b *closeTrackingBody) Read(p []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read on closed body")
+	}
+	return b.r.Read(p)
+}
+func (b *closeTrackingBody) Close() error { b.closed = true; return nil }
+
+func (c closingSheets) Fetch(context.Context, tableimport.SheetRef, int64) (io.ReadCloser, error) {
+	return &closeTrackingBody{r: strings.NewReader(c.body)}, nil
+}
+
+// A sheet larger than one read buffer is still previewed from an open body.
+func TestImportPreview_ALargeSheetIsReadBeforeItsBodyCloses(t *testing.T) {
+	f := newImportFixture(t)
+	f.handler.sheets = closingSheets{body: "a,b\n" + strings.Repeat("1,"+strings.Repeat("y", 200)+"\n", 60)}
+	body, _ := json.Marshal(map[string]any{"sheetsUrl": "https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit", "hasHeader": true})
+	req := httptest.NewRequest(http.MethodPost, previewPath(), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if rec := f.do(req); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+}
+
+// Fields after the options cannot change how the file is read.
+func TestImport_FieldsAfterTheOptionsAreIgnored(t *testing.T) {
+	f := newImportFixture(t)
+	rec := f.do(multipartRequest(t, importPath(),
+		formPart{name: "options", body: validImportOptions},
+		formPart{name: "delimiter", body: ";"},
+		formPart{name: "file", filename: "a.csv", body: "Name,Age\nann,31\n"}))
+	if rec.Code != http.StatusCreated || len(f.target.rows[1]) != 2 {
+		t.Fatalf("status %d rows %q", rec.Code, f.target.rows)
+	}
+}
+
+// One project cannot hold every import slot of a replica.
+func TestImport_OneImportPerProjectAtATime(t *testing.T) {
+	f := newImportFixture(t)
+	if !f.handler.claimProject(importProject) {
+		t.Fatal("first claim refused")
+	}
+	rec := f.do(multipartRequest(t, importPath(), formPart{name: "options", body: validImportOptions}, formPart{name: "file", filename: "a.csv", body: "a\n"}))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status %d", rec.Code)
+	}
+	f.handler.releaseProject(importProject)
+}
+
+func TestSweepSpoolFiles_RemovesLeftovers(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(dir+"/excalibase-import-123", []byte("x"), 0o600)
+	_ = os.WriteFile(dir+"/other", []byte("x"), 0o600)
+	SweepImportSpool(dir)
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "other" {
+		t.Fatalf("entries = %v", entries)
+	}
+}

@@ -31,7 +31,7 @@ func baseLimits(maxBytes int64, maxRows int) Limits {
 	return Limits{
 		MaxBytes:         maxBytes,
 		MaxXLSXBytes:     20 * mib,
-		MaxUnzippedBytes: 150 * mib,
+		MaxUnzippedBytes: 100 * mib,
 		MaxRows:          maxRows,
 		MaxColumns:       500,
 		MaxCellBytes:     256 << 10,

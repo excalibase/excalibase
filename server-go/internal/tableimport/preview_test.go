@@ -124,3 +124,22 @@ func TestCheckDiskHeadroom(t *testing.T) {
 		t.Fatalf("an unknown disk size must not refuse: %v", err)
 	}
 }
+
+// Sampling stops at a byte budget and echoes cells cut short, so wide rows
+// cannot fill the control plane's memory or the response.
+func TestPreview_SamplingIsBoundedByBytes(t *testing.T) {
+	lim := testLimits()
+	lim.MaxBytes, lim.MaxCellBytes, lim.MaxRecordBytes = 64<<20, 1<<20, 2<<20
+	cell := strings.Repeat("x", 512<<10)
+	src, _ := NewCSVSource(strings.NewReader("a\n"+strings.Repeat(cell+"\n", 40)), ',', lim)
+	result, err := Preview(src, PreviewOptions{HasHeader: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SampledRows*len(cell) > previewByteBudget+len(cell) {
+		t.Fatalf("sampled %d rows of %d bytes", result.SampledRows, len(cell))
+	}
+	if len(result.Rows[0][0]) > maxPreviewCell+len("…") {
+		t.Fatalf("preview cell is %d bytes", len(result.Rows[0][0]))
+	}
+}

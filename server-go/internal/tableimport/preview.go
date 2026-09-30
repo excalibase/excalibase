@@ -12,6 +12,10 @@ const (
 	// sampleRows is how many rows type inference looks at.
 	sampleRows = 1000
 	maxEchoed  = 80
+	// previewByteBudget bounds what sampling holds in memory, and
+	// maxPreviewCell what one shown cell may carry back to the browser.
+	previewByteBudget = 8 << 20
+	maxPreviewCell    = 200
 )
 
 // PreviewOptions shape how the first rows are read.
@@ -39,8 +43,8 @@ type PreviewResult struct {
 func Preview(src Source, opts PreviewOptions) (PreviewResult, error) {
 	var header []string
 	var sample [][]string
-	width := 0
-	for len(sample) < sampleRows {
+	width, held := 0, 0
+	for len(sample) < sampleRows && held < previewByteBudget {
 		record, _, err := src.Next()
 		if errors.Is(err, io.EOF) {
 			break
@@ -55,6 +59,9 @@ func Preview(src Source, opts PreviewOptions) (PreviewResult, error) {
 		}
 		sample = append(sample, record)
 		width = max(width, len(record))
+		for _, cell := range record {
+			held += len(cell)
+		}
 	}
 	if width == 0 {
 		return PreviewResult{}, ErrEmptyFile
@@ -75,11 +82,20 @@ func buildPreview(header []string, sample [][]string, width int, opts PreviewOpt
 	for i := range columns {
 		columns[i] = PreviewColumn{Source: i, SourceName: padded[i], Name: names[i], Type: types[i]}
 	}
-	shown := sample
-	if len(shown) > PreviewRows {
-		shown = shown[:PreviewRows]
+	return PreviewResult{Columns: columns, Rows: shownRows(sample), SampledRows: len(sample)}
+}
+
+// shownRows copies the first rows with long cells cut short.
+func shownRows(sample [][]string) [][]string {
+	shown := make([][]string, 0, min(len(sample), PreviewRows))
+	for _, record := range sample[:min(len(sample), PreviewRows)] {
+		row := make([]string, len(record))
+		for i, cell := range record {
+			row[i] = cutRunes(cell, maxPreviewCell)
+		}
+		shown = append(shown, row)
 	}
-	return PreviewResult{Columns: columns, Rows: shown, SampledRows: len(sample)}
+	return shown
 }
 
 // converter turns a record into COPY values for the chosen columns.
@@ -114,11 +130,14 @@ func (c converter) convert(record []string, line int) ([]any, *RowError) {
 	return values, nil
 }
 
-func echo(value string) string {
-	if len(value) <= maxEchoed {
+func echo(value string) string { return cutRunes(value, maxEchoed) }
+
+// cutRunes shortens value to at most limit bytes, marker included, on a rune boundary.
+func cutRunes(value string, limit int) string {
+	if len(value) <= limit {
 		return value
 	}
-	cut := maxEchoed - len("…")
+	cut := limit - len("…")
 	for cut > 0 && value[cut]&0xC0 == 0x80 {
 		cut--
 	}

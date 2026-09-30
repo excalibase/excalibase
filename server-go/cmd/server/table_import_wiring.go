@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -15,6 +16,8 @@ import (
 // under the platform statement and lock timeouts, sized by the org's plan.
 func newTableImportHandler(cfg config.AppConfig, schemaHandler *handler.SchemaHandler,
 	store storage.InstanceStore, sqlStore storage.PlatformStore) *handler.TableImportHandler {
+	// A process killed mid-import leaves its spool file behind.
+	handler.SweepImportSpool(os.TempDir())
 	loader := tableimport.Loader{
 		StatementTimeout: cfg.ProjectDBStatementTimeout,
 		LockTimeout:      cfg.ProjectDBLockTimeout,

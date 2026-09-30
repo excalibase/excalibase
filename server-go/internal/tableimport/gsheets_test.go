@@ -102,7 +102,7 @@ func TestRedirectPolicy_SignInPageMeansNotPublic(t *testing.T) {
 
 func TestPublicAddress_RefusesInternalAddresses(t *testing.T) {
 	for _, ip := range []string{"127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254",
-		"100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "224.0.0.1"} {
+		"100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "224.0.0.1", "64:ff9b::a00:1", "64:ff9b:1::a00:1", "2002:a00:1::1", "198.18.0.1", "240.0.0.1", "192.0.0.8"} {
 		if isPublicAddress(ip) {
 			t.Errorf("%s counted as public", ip)
 		}

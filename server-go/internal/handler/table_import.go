@@ -12,6 +12,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -34,6 +36,9 @@ const (
 	// parsed in memory, and the control plane runs in 512 MiB.
 	importSlots    = 2
 	importDeadline = 15 * time.Minute
+	// uploadDeadline is how long the whole request body may take to arrive.
+	uploadDeadline = 10 * time.Minute
+	spoolPattern   = "excalibase-import-"
 	// multipartSlack covers the form's boundaries and the options part.
 	multipartSlack   = 1 << 20
 	maxOptionsBytes  = 256 << 10
@@ -62,10 +67,41 @@ type TableImportHandler struct {
 	sheets SheetsSource
 	audit  auditWriter
 	slots  chan struct{}
+	// busy holds the projects with an import or preview running, so one
+	// project cannot hold every slot of the replica.
+	mu   sync.Mutex
+	busy map[string]bool
 }
 
 func NewTableImportHandler(target ImportTarget, limits ImportLimits, sheets SheetsSource, audit auditWriter) *TableImportHandler {
-	return &TableImportHandler{target: target, limits: limits, sheets: sheets, audit: audit, slots: make(chan struct{}, importSlots)}
+	return &TableImportHandler{target: target, limits: limits, sheets: sheets, audit: audit,
+		slots: make(chan struct{}, importSlots), busy: map[string]bool{}}
+}
+
+func (h *TableImportHandler) claimProject(projectID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.busy[projectID] {
+		return false
+	}
+	h.busy[projectID] = true
+	return true
+}
+
+func (h *TableImportHandler) releaseProject(projectID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.busy, projectID)
+}
+
+// SweepImportSpool removes spool files a crashed process left in dir.
+func SweepImportSpool(dir string) {
+	leftovers, _ := filepath.Glob(filepath.Join(dir, spoolPattern+"*"))
+	for _, path := range leftovers {
+		if err := os.Remove(path); err != nil {
+			log.Printf("WARN: remove import spool %s: %v", path, err)
+		}
+	}
 }
 
 // readSettings are what the reader needs to find rows: which sheet, which
@@ -106,17 +142,30 @@ type previewResponse struct {
 	Limits    tableimport.Limits `json:"limits"`
 }
 
-func (h *TableImportHandler) acquire(w http.ResponseWriter) bool {
+// acquire takes a replica slot and the project's own claim, and bounds how
+// long the upload may take to arrive, so a trickled body cannot hold them.
+func (h *TableImportHandler) acquire(w http.ResponseWriter, r *http.Request) bool {
+	projectID := chi.URLParam(r, "projectId")
+	if !h.claimProject(projectID) {
+		httpError(w, "an import into this project is already running; try again when it finishes", http.StatusTooManyRequests)
+		return false
+	}
 	select {
 	case h.slots <- struct{}{}:
-		return true
 	default:
+		h.releaseProject(projectID)
 		httpError(w, "another import is running; try again in a moment", http.StatusTooManyRequests)
 		return false
 	}
+	// Not every writer supports deadlines (tests' recorders); the edge's own timeout still applies then.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(uploadDeadline))
+	return true
 }
 
-func (h *TableImportHandler) release() { <-h.slots }
+func (h *TableImportHandler) release(r *http.Request) {
+	<-h.slots
+	h.releaseProject(chi.URLParam(r, "projectId"))
+}
 
 func (h *TableImportHandler) projectLimits(w http.ResponseWriter, r *http.Request) (tableimport.Limits, bool) {
 	lim, err := h.limits(r.Context(), chi.URLParam(r, "projectId"))
@@ -131,10 +180,10 @@ func (h *TableImportHandler) projectLimits(w http.ResponseWriter, r *http.Reques
 // Preview answers the first rows with suggested names and types.
 func (h *TableImportHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	lim, ok := h.projectLimits(w, r)
-	if !ok || !h.acquire(w) {
+	if !ok || !h.acquire(w, r) {
 		return
 	}
-	defer h.release()
+	defer h.release(r)
 	r.Body = http.MaxBytesReader(w, r.Body, lim.MaxBytes+multipartSlack)
 	opened, settings, _, err := h.openRequest(r, lim, false)
 	if err != nil {
@@ -156,10 +205,10 @@ func (h *TableImportHandler) Preview(w http.ResponseWriter, r *http.Request) {
 // Import validates the chosen options and loads the whole file.
 func (h *TableImportHandler) Import(w http.ResponseWriter, r *http.Request) {
 	lim, ok := h.projectLimits(w, r)
-	if !ok || !h.acquire(w) {
+	if !ok || !h.acquire(w, r) {
 		return
 	}
-	defer h.release()
+	defer h.release(r)
 	r.Body = http.MaxBytesReader(w, r.Body, lim.MaxBytes+multipartSlack)
 	opened, _, opts, err := h.openRequest(r, lim, true)
 	if err != nil {
@@ -225,15 +274,19 @@ func (h *TableImportHandler) openSheets(r *http.Request, lim tableimport.Limits,
 	if err != nil {
 		return nil, settings, nil, err
 	}
-	defer body.Close()
 	opened, err := openFile(body, lim, settings, needOptions)
 	if err != nil {
+		body.Close()
 		return nil, settings, nil, err
 	}
 	if opened.format != tableimport.FormatCSV {
 		opened.close()
+		body.Close()
 		return nil, settings, nil, tableimport.ErrUnsupportedFormat
 	}
+	// A streamed preview still reads from the body; close it with the source.
+	closeFile := opened.close
+	opened.close = func() { closeFile(); body.Close() }
 	opened.origin = sourceSheets
 	return opened, settings, req.Options, nil
 }
@@ -281,6 +334,9 @@ func readField(part *multipart.Part, settings *readSettings, opts **tableimport.
 	value, err := io.ReadAll(io.LimitReader(part, maxOptionsBytes))
 	if err != nil {
 		return uploadError(err, "the form could not be read")
+	}
+	if *opts != nil && part.FormName() != formFieldOptions {
+		return nil // the validated options already say how to read the file
 	}
 	switch part.FormName() {
 	case "hasHeader":
@@ -378,7 +434,7 @@ func openCSV(body io.Reader, head []byte, size int64, closeFn func(), lim tablei
 
 // spool copies body to a private temp file (0600), refusing past max.
 func spool(body io.Reader, max int64) (*os.File, int64, error) {
-	file, err := os.CreateTemp("", "excalibase-import-*")
+	file, err := os.CreateTemp("", spoolPattern+"*")
 	if err != nil {
 		return nil, 0, fmt.Errorf("spool upload: %w", err)
 	}

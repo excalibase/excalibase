@@ -222,3 +222,30 @@ func TestIntegration_TheStatementTimeoutBoundsTheLoad(t *testing.T) {
 		t.Fatalf("err = %v after %s", err, time.Since(start))
 	}
 }
+
+// A load refused mid-COPY leaves the pooled connection usable (or discarded),
+// never stuck in COPY or holding the rolled-back rows.
+func TestIntegration_ThePoolWorksAfterARefusedLoad(t *testing.T) {
+	superDB, appDB := startTenant(t)
+	appDB.SetMaxOpenConns(1)
+	body := "d\n2026-01-01\n2026-01-02\nnot a date\n"
+	opts := Options{Schema: "public", Table: "after", Mode: ModeCreate, HasHeader: true,
+		Columns: []ColumnSpec{{Source: 0, Name: "d", Type: TypeDate}}}
+	loader := testLoader()
+	loader.ChunkRows = 100
+	if _, err := loader.Load(context.Background(), appDB, opts, csvSource(t, body)); err == nil {
+		t.Fatal("a bad date was loaded")
+	}
+	var one int
+	if err := appDB.QueryRow("SELECT 1").Scan(&one); err != nil || one != 1 {
+		t.Fatalf("pool after a refused load: %v", err)
+	}
+	if _, err := loader.Load(context.Background(), appDB, opts, csvSource(t, "d\n2026-01-01\n")); err != nil {
+		t.Fatalf("a good load after a refused one: %v", err)
+	}
+	var count int
+	_ = superDB.QueryRow("SELECT count(*) FROM public.after").Scan(&count)
+	if count != 1 {
+		t.Fatalf("count = %d", count)
+	}
+}
