@@ -28,9 +28,11 @@ import (
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 	"github.com/excalibase/provisioning-poc/internal/objectcreds"
+	"github.com/excalibase/provisioning-poc/internal/permissions"
 	"github.com/excalibase/provisioning-poc/internal/projectdb"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/scheduler"
+	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/sdkkeys"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
@@ -173,6 +175,7 @@ func runServer(cfg config.AppConfig) {
 		dockerClient: dockerClientRef,
 		claimer:      lifecycleClaimer,
 		budget:       storageBudget,
+		projectDB:    projectDB,
 	})
 	deps.fnHandler = fnHandler
 	// The schema browser holds one connection per project for ten minutes.
@@ -204,11 +207,13 @@ func runServer(cfg config.AppConfig) {
 		// Grant + enforcement writes ride the same subject so the engine
 		// evicts cached policies and grants together (EXC-370).
 		deps.tableGrantHandler.SetPublisher(policyPub)
+		deps.permissionHandler.SetPublisher(policyPub)
 		// DDL reshapes the schema the engine caches for thirty minutes, so it
 		// rides the same subject (EXC-437).
 		deps.schemaHandler.SetPublisher(policyPub)
 		provSvc.SetProjectEventPublisher(policyPub)
 	}
+	startLegacyPermissionMigration(cfg, sqlStore, projectDB, policyPub)
 
 	scheduler, schedulerStop := startBackupScheduler(cfg, sqlStore, deps.backupHandler)
 	defer schedulerStop()
@@ -742,6 +747,9 @@ type handlerDeps struct {
 	fnHandler         *handler.FunctionHandler
 	rlsPolicyHandler  *handler.RlsPolicyHandler
 	tableGrantHandler *handler.TableGrantHandler
+	// permissionHandler serves permissions, tracked functions and function
+	// permissions (EXC-370 step C).
+	permissionHandler *handler.PermissionHandler
 	appHandler        *handler.AppHandler
 	storageBudgetH    *handler.StorageBudgetHandler
 	appDeploySvc      *service.AppDeployService
@@ -776,6 +784,42 @@ type handlerDeps struct {
 	// storageSvc is nil when R2 is not configured; the reaper is started
 	// from it after the handlers are built.
 	storageSvc *storagesvc.Service
+}
+
+// newPermissionHandler serves API permissions; tracking a function reads its
+// live definition from the project database.
+func newPermissionHandler(cfg config.AppConfig, sqlStore storage.PlatformStore, projects handler.ProjectFinder,
+	projectDB permissions.ProjectPools) *handler.PermissionHandler {
+	live := permissions.NewProjectDatabase(projectDB,
+		schema.NewIntrospector().WithStatementTimeout(cfg.ProjectDBStatementTimeout))
+	return handler.NewPermissionHandler(sqlStore.Permissions(), projects, live)
+}
+
+// legacyPermissionMigrationTimeout bounds the startup fold of legacy policies.
+const legacyPermissionMigrationTimeout = 10 * time.Minute
+
+// startLegacyPermissionMigration folds every project's table grants, row
+// policies and column policies into API permissions once (EXC-370). It needs
+// each project's live tables, so it runs in the background and a project
+// whose database is down is retried at the next start.
+func startLegacyPermissionMigration(cfg config.AppConfig, sqlStore storage.PlatformStore,
+	projectDB permissions.ProjectPools, publisher permissions.ChangePublisher) {
+	live := permissions.NewProjectDatabase(projectDB,
+		schema.NewIntrospector().WithStatementTimeout(cfg.ProjectDBStatementTimeout))
+	migrator := permissions.NewLegacyMigrator(sqlStore.Permissions(), sqlStore.TableGrants(), sqlStore.RlsPolicies(),
+		live, publisher)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), legacyPermissionMigrationTimeout)
+		defer cancel()
+		migrated, err := migrator.Run(ctx)
+		if err != nil {
+			log.Printf("WARN: legacy permission migration: %v", err)
+			return
+		}
+		if migrated > 0 {
+			log.Printf("legacy permission migration: %d projects folded into permissions", migrated)
+		}
+	}()
 }
 
 // startFunctionReplayer boots the EXC-337 cold-start replay loop: it polls
@@ -1087,6 +1131,8 @@ type handlerDepsArgs struct {
 	claimer service.ProjectOperationClaimer
 	// budget holds every volume to the platform's storage budget; nil is unmetered.
 	budget *storagebudget.Budget
+	// projectDB reaches tenant databases; tracking a function reads its live definition.
+	projectDB permissions.ProjectPools
 }
 
 // buildBackupService wires the BackupService with the right adapter
@@ -1373,6 +1419,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		realtimeHandler:     realtimeHandler,
 		rlsPolicyHandler:    handler.NewRlsPolicyHandler(sqlStore.RlsPolicies(), store),
 		tableGrantHandler:   handler.NewTableGrantHandler(sqlStore.TableGrants(), store, cfg.ExposureEnforced),
+		permissionHandler:   newPermissionHandler(cfg, sqlStore, store, a.projectDB),
 		appHandler:          newAppHandler(cfg, store, sqlStore, appDiskLimits, provSvc, a.budget),
 		storageBudgetH:      handler.NewStorageBudgetHandler(a.budget),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
@@ -1555,6 +1602,9 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 				r.Route("/rls-policies", func(r chi.Router) { d.rlsPolicyHandler.RlsRoutes(r) })
 				r.Route("/column-policies", func(r chi.Router) { d.rlsPolicyHandler.ColumnRoutes(r) })
 				r.Route("/table-grants", func(r chi.Router) { d.tableGrantHandler.Routes(r) })
+				r.Route("/permissions", d.permissionHandler.PermissionRoutes)
+				r.Route("/tracked-functions", d.permissionHandler.TrackedFunctionRoutes)
+				r.Route("/function-permissions", d.permissionHandler.FunctionPermissionRoutes)
 			})
 
 			// Admin+ subtrees — backup/restore and full-DB snapshots (dump +

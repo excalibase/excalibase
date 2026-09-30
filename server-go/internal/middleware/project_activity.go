@@ -65,6 +65,11 @@ var activitySourceBySegment = []struct {
 	segment string
 	source  domain.ActivitySource
 }{
+	// Listed first: their paths carry a table, function or role name that
+	// could otherwise spell another segment ("storage", "backup").
+	{"permissions", SourcePolicyFetch},
+	{"tracked-functions", SourcePolicyFetch},
+	{"function-permissions", SourcePolicyFetch},
 	{"rls-policies", SourcePolicyFetch},
 	{"column-policies", SourcePolicyFetch},
 	{"table-grants", SourcePolicyFetch},

@@ -59,6 +59,13 @@ var provisionRows = []Row{
 	{Methods: post, Pattern: "/api/provision/{projectId}/table-grants/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
 	{Methods: patch, Pattern: "/api/provision/{projectId}/table-grants/{grantId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
 	{Methods: del, Pattern: "/api/provision/{projectId}/table-grants/{grantId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
+	{Methods: get, Pattern: "/api/provision/{projectId}/permissions/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Capability: "policies:read", Note: "the engine reads the whole permission set in one document", Database: true},
+	{Methods: put, Pattern: "/api/provision/{projectId}/permissions/tables/{table}/roles/{role}/{operation}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
+	{Methods: del, Pattern: "/api/provision/{projectId}/permissions/tables/{table}/roles/{role}/{operation}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
+	{Methods: post, Pattern: "/api/provision/{projectId}/tracked-functions/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "reads the function's live definition from the project database", Database: true},
+	{Methods: del, Pattern: "/api/provision/{projectId}/tracked-functions/{function}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
+	{Methods: put, Pattern: "/api/provision/{projectId}/function-permissions/{function}/roles/{role}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
+	{Methods: del, Pattern: "/api/provision/{projectId}/function-permissions/{function}/roles/{role}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true},
 
 	{Methods: post, Pattern: "/api/provision/{projectId}/backup/trigger", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true},
 	{Methods: get, Pattern: "/api/provision/{projectId}/backup/list", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleAdmin, Database: true},

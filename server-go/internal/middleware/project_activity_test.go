@@ -118,3 +118,18 @@ func TestActivitySource_ClassifiesByPath(t *testing.T) {
 		}
 	}
 }
+
+// A permission path carries a role or table name that may spell another
+// segment; the permission segments are matched first.
+func TestActivitySource_PermissionPathsArePolicyFetches(t *testing.T) {
+	for _, path := range []string{
+		"/api/provision/p1/permissions/",
+		"/api/provision/p1/permissions/tables/public.orders/roles/storage/select",
+		"/api/provision/p1/tracked-functions/",
+		"/api/provision/p1/function-permissions/public.f/roles/backup",
+	} {
+		if got := ActivitySource(path); got != SourcePolicyFetch {
+			t.Errorf("%s classified as %q, want %q", path, got, SourcePolicyFetch)
+		}
+	}
+}
