@@ -64,8 +64,21 @@ func DocumentDBBootstrapSQL() []string {
 		"GRANT " + DocumentDBExtension + "_admin_role TO \"" + DocumentDBGatewayRole + "\"",
 		"DO $role$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + DocumentDBMongoUsersGroup +
 			"') THEN CREATE ROLE \"" + DocumentDBMongoUsersGroup + "\" NOLOGIN; END IF; END $role$",
+		documentDBRewindGrantSQL,
 	}
 }
+
+// documentDBRewindGrantSQL lets CloudNativePG's pg_rewind, which connects as
+// streaming_replica, run in a DocumentDB database (EXC-532). DocumentDB's
+// hooks look up its own schemas on every statement, so without USAGE on them
+// the old primary of a switchover or failover is never rewound and never
+// rejoins. USAGE is lookup only: no table, sequence or function is granted.
+// The role is CloudNativePG's and is skipped if it does not exist yet; the
+// provisioning step runs this again once it does.
+const documentDBRewindGrantSQL = "DO $role$ DECLARE s text; BEGIN " +
+	"IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'streaming_replica') THEN " +
+	"FOR s IN SELECT nspname FROM pg_namespace WHERE nspname LIKE 'documentdb%' LOOP " +
+	"EXECUTE format('GRANT USAGE ON SCHEMA %I TO streaming_replica', s); END LOOP; END IF; END $role$"
 
 // documentDBPreloadLibraries is the shared_preload_libraries list DocumentDB
 // needs. It is upstream's own, produced by scripts/preload_libraries.sh for a

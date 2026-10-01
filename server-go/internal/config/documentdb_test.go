@@ -139,7 +139,7 @@ func TestPublishPostgresCatalogForTestKeepsEveryOtherField(t *testing.T) {
 // extension is what it serves, so both are created before any pod exists.
 func TestDocumentDBBootstrapSQLReadiesTheGatewayRole(t *testing.T) {
 	statements := DocumentDBBootstrapSQL()
-	if len(statements) != 4 {
+	if len(statements) != 5 {
 		t.Fatalf("bootstrap statements: got %v", statements)
 	}
 	for _, want := range []string{"CREATE EXTENSION IF NOT EXISTS documentdb", "CASCADE"} {
@@ -190,5 +190,29 @@ func TestDocumentDBBootstrapSQLCreatesTheMongoUsersGroup(t *testing.T) {
 	}
 	if DocumentDBMongoUsersGroup != "excalibase_mongo_users" {
 		t.Errorf("group role renamed: %s", DocumentDBMongoUsersGroup)
+	}
+}
+
+// EXC-532: after a switchover or failover CloudNativePG rewinds the old
+// primary with pg_rewind, connecting as streaming_replica. DocumentDB's hooks
+// read its own schemas on every statement, so without USAGE on them pg_rewind
+// fails ("permission denied for schema documentdb_core") and the old primary
+// never rejoins. The grant names no table or function, only lookup.
+func TestDocumentDBBootstrapSQLLetsPgRewindRunAsTheReplicationRole(t *testing.T) {
+	grant := DocumentDBBootstrapSQL()[4]
+	for _, want := range []string{
+		"rolname = 'streaming_replica'",
+		"nspname LIKE 'documentdb%'",
+		"GRANT USAGE ON SCHEMA %I TO streaming_replica",
+		"$role$",
+	} {
+		if !strings.Contains(grant, want) {
+			t.Errorf("rewind grant %q is missing %q", grant, want)
+		}
+	}
+	for _, forbidden := range []string{"ALL PRIVILEGES", "GRANT EXECUTE", "GRANT CREATE", "GRANT SELECT", "GRANT USAGE, "} {
+		if strings.Contains(strings.ToUpper(grant), forbidden) {
+			t.Errorf("the rewind grant must be USAGE only: %s", grant)
+		}
 	}
 }
