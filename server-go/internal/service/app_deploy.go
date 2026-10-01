@@ -40,8 +40,11 @@ type AppDeployService struct {
 	stopTimeout time.Duration
 	// deployLeaseWait is how long a deploy queues behind another operation on the app.
 	deployLeaseWait time.Duration
-	claimer         ProjectOperationClaimer
-	secrets         AppSecretPurger
+	// lifecycleLeaseWait is how long a pause, resume or deletion queues behind
+	// another operation, such as the disk measurement Studio runs after each one.
+	lifecycleLeaseWait time.Duration
+	claimer            ProjectOperationClaimer
+	secrets            AppSecretPurger
 	// registries reads the pull credential for the image's registry; nil when no vault is configured.
 	registries      RegistryCredentialFinder
 	plans           PlanTiers
@@ -73,13 +76,14 @@ func NewAppDeployService(
 ) *AppDeployService {
 	return &AppDeployService{
 		apps: apps, deploys: deploys, kube: kube, instances: instances, resolver: resolver,
-		render:          render,
-		timeout:         defaultAppRolloutTimeout,
-		stopTimeout:     defaultAppStopTimeout,
-		deployLeaseWait: defaultDeployLeaseWait,
-		claimer:         newInProcessOperationClaimer(),
-		async:           func(f func()) { go f() },
-		active:          make(map[string]*activeRollout),
+		render:             render,
+		timeout:            defaultAppRolloutTimeout,
+		stopTimeout:        defaultAppStopTimeout,
+		deployLeaseWait:    defaultDeployLeaseWait,
+		lifecycleLeaseWait: defaultLifecycleLeaseWait,
+		claimer:            newInProcessOperationClaimer(),
+		async:              func(f func()) { go f() },
+		active:             make(map[string]*activeRollout),
 	}
 }
 

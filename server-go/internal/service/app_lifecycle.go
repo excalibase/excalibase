@@ -16,6 +16,9 @@ const defaultAppStopTimeout = 3 * time.Minute
 const (
 	defaultDeployLeaseWait = 30 * time.Second
 	deployLeaseRetry       = 200 * time.Millisecond
+	// defaultLifecycleLeaseWait outlasts a disk measurement, whose probe Job
+	// is bounded at two minutes.
+	defaultLifecycleLeaseWait = 3 * time.Minute
 )
 
 // appLeaseKey names the project too, so a caller naming another project's app id
@@ -49,9 +52,19 @@ func (s *AppDeployService) holdApp(ctx context.Context, projectID, appID string,
 // holdAppForDeploy waits briefly for the lease, so a deploy made while an
 // earlier one is still being applied is queued behind it rather than refused.
 func (s *AppDeployService) holdAppForDeploy(ctx context.Context, projectID, appID string) (func(), error) {
-	deadline := time.Now().Add(s.deployLeaseWait)
+	return s.holdAppQueued(ctx, projectID, appID, OperationDeploy, s.deployLeaseWait)
+}
+
+// holdAppForLifecycle queues a pause, resume or deletion behind whatever holds
+// the app, so a short read such as a disk measurement does not refuse it.
+func (s *AppDeployService) holdAppForLifecycle(ctx context.Context, projectID, appID string, op ProjectOperation) (func(), error) {
+	return s.holdAppQueued(ctx, projectID, appID, op, s.lifecycleLeaseWait)
+}
+
+func (s *AppDeployService) holdAppQueued(ctx context.Context, projectID, appID string, op ProjectOperation, wait time.Duration) (func(), error) {
+	deadline := time.Now().Add(wait)
 	for {
-		release, err := s.holdApp(ctx, projectID, appID, OperationDeploy)
+		release, err := s.holdApp(ctx, projectID, appID, op)
 		if !errors.Is(err, ErrProjectOperationRunning) || time.Now().After(deadline) {
 			return release, err
 		}
@@ -67,7 +80,7 @@ func (s *AppDeployService) holdAppForDeploy(ctx context.Context, projectID, appI
 // left. A pause that stops part way stays PAUSING and is finished by pausing again.
 func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string) (*apphost.App, error) {
 	ctx = context.WithoutCancel(ctx)
-	release, err := s.holdApp(ctx, projectID, appID, OperationPause)
+	release, err := s.holdAppForLifecycle(ctx, projectID, appID, OperationPause)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +113,7 @@ func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string
 // it RESUMING, for a retry.
 func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error) {
 	ctx = context.WithoutCancel(ctx)
-	release, err := s.holdApp(ctx, projectID, appID, OperationResume)
+	release, err := s.holdAppForLifecycle(ctx, projectID, appID, OperationResume)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +169,7 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, acto
 // Anything that fails leaves it DELETING, and deleting again carries on from there.
 func (s *AppDeployService) DeleteApp(ctx context.Context, projectID, appID string, confirmDeleteDisk bool) error {
 	ctx = context.WithoutCancel(ctx)
-	release, err := s.holdApp(ctx, projectID, appID, OperationDeletion)
+	release, err := s.holdAppForLifecycle(ctx, projectID, appID, OperationDeletion)
 	if err != nil {
 		return err
 	}
