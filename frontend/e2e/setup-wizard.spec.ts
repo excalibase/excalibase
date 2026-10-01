@@ -102,7 +102,9 @@ async function mockSetupAPIs(page: Page, initial: MockState) {
 }
 
 test.describe('Setup wizard', () => {
-  test('redirects fresh install to /setup with init form visible', async ({ page }) => {
+  // The admin registers first: vault init and unseal need an operator's
+  // credential, so the vault steps come only once an admin exists.
+  test('redirects fresh install to /setup with the admin form first', async ({ page }) => {
     await mockSetupAPIs(page, {
       initialized: false,
       sealed: true,
@@ -114,7 +116,8 @@ test.describe('Setup wizard', () => {
 
     await page.goto('/');
     await expect(page).toHaveURL(/\/setup$/);
-    await expect(page.getByTestId('vault-setup-init')).toBeVisible();
+    await expect(page.getByTestId('vault-setup-admin')).toBeVisible();
+    await expect(page.getByTestId('vault-setup-init')).toHaveCount(0);
   });
 
   test('init step displays shares once and gates continue on confirmation', async ({ page }) => {
@@ -124,7 +127,7 @@ test.describe('Setup wizard', () => {
       threshold: 0,
       shares: 0,
       progress: 0,
-      hasAdmin: false,
+      hasAdmin: true,
     });
 
     await page.goto('/setup');
@@ -144,20 +147,21 @@ test.describe('Setup wizard', () => {
     await expect(continueBtn).toBeEnabled();
   });
 
-  test('unseal step accepts shares and advances to admin step on completion', async ({ page }) => {
+  test('unseal step accepts shares and leaves the wizard on completion', async ({ page }) => {
     await mockSetupAPIs(page, {
       initialized: true,
       sealed: true,
       threshold: 3,
       shares: 5,
       progress: 0,
-      hasAdmin: false,
+      hasAdmin: true,
     });
 
     await page.goto('/setup');
     await expect(page.getByTestId('vault-setup-unseal')).toBeVisible();
 
-    // Submit 3 shares — last one flips sealed→false and reveals admin step.
+    // Submit 3 shares — the last one flips sealed→false, and with the admin
+    // already registered the guard sends the operator out of /setup.
     // Wait for the input to clear between submissions instead of an arbitrary
     // timeout, so the test stays deterministic on slow CI.
     for (let i = 0; i < 3; i++) {
@@ -168,7 +172,7 @@ test.describe('Setup wizard', () => {
       }
     }
 
-    await expect(page.getByTestId('vault-setup-admin')).toBeVisible();
+    await expect(page).not.toHaveURL(/\/setup$/);
   });
 
   test('admin step creates user and redirects to dashboard', async ({ page }) => {
