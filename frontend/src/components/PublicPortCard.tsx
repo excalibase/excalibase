@@ -23,7 +23,8 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
   const change = useSetProjectEndpointPublic(projectId);
   const [confirming, setConfirming] = useState(false);
   const active = status === 'ACTIVE';
-  const current = endpoint.data;
+  const offered = endpoint.data?.publicOffered !== false;
+  const current = offered ? endpoint.data : undefined;
   const canChange = current?.canChange === true;
 
   const toggle = () => {
@@ -51,9 +52,9 @@ export function PublicPortCard({ projectId, status }: PublicPortCardProps) {
       <p className="text-xs text-text-secondary mb-3">{PRIVATE_DEFAULT}</p>
 
       {endpoint.isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-      {endpoint.isError && (
+      {(endpoint.isError || !offered) && (
         <p className="text-xs text-text-tertiary" data-testid="public-port-unavailable">
-          {notOffered(endpoint.error)
+          {!offered || notOffered(endpoint.error)
             ? 'This installation does not offer public database ports.'
             : `The public port could not be read: ${refusalMessage(endpoint.error)}`}
         </p>

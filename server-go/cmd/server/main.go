@@ -2172,17 +2172,18 @@ func buildDocumentBrowser(k8sClient k8s.KubeClient, vc vaultclient.VaultClient, 
 	return handler.NewDocumentBrowserHandler(docbrowser.NewService(connector, docbrowser.Options{}))
 }
 
-// buildDBEndpointService wires a project's public database endpoint (EXC-410):
-// the port allocator in the platform database and the per-project
-// LoadBalancer Service that publishes it.
+// buildDBEndpointService wires a project's database endpoint (EXC-410):
+// the in-cluster address and CA every project has, and — with an endpoint
+// domain configured — the port allocator in the platform database and the
+// per-project LoadBalancer Service that publishes it. Without a domain it
+// describes the in-cluster half only and refuses to publish (EXC-528).
 //
-// It returns nil when the platform offers no public endpoints — no endpoint
-// domain configured, a provisioner with no Kubernetes behind it, or a
+// It returns nil for a provisioner with no Kubernetes behind it, or a
 // platform store that cannot hold the allocator. Callers then carry no
 // endpoint step at all, rather than one that is present and fails.
 func buildDBEndpointService(cfg config.AppConfig, sqlStore storage.PlatformStore, instances storage.InstanceStore,
 	k8sClient k8s.KubeClient, claimer service.ProjectOperationClaimer) *service.DBEndpointService {
-	if cfg.DBEndpointDomain == "" || cfg.ProvisionerMode != "k8s" {
+	if cfg.ProvisionerMode != "k8s" {
 		return nil
 	}
 	endpoints, ok := sqlStore.(storage.DatabaseEndpointStore)

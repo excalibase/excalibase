@@ -438,25 +438,6 @@ func TestEnableOnAPausedProjectRecordsTheChoiceWithoutAService(t *testing.T) {
 	}
 }
 
-func TestDescribeRefusesWhenNoEndpointDomainIsConfigured(t *testing.T) {
-	window, err := domain.NewPortRange(30000, 30099)
-	if err != nil {
-		t.Fatalf("NewPortRange: %v", err)
-	}
-	inst := endpointInstance("ACTIVE")
-	svc := NewDBEndpointService(DBEndpointServiceConfig{
-		Endpoints:   newFakeEndpointStore(),
-		Instances:   &stubInstanceLookup{inst: inst},
-		Kube:        k8s.NewMockClient(),
-		Ports:       window,
-		Quarantine:  time.Hour,
-		SharedIPKey: "excalibase-db-edge",
-	})
-	if _, err := svc.Describe(context.Background(), endpointProject); !errors.Is(err, ErrDBEndpointNotConfigured) {
-		t.Fatalf("error = %v, want ErrDBEndpointNotConfigured", err)
-	}
-}
-
 func TestDescribeRefusesADeploymentModeWithNoLoadBalancer(t *testing.T) {
 	h := newEndpointHarness(t, "ACTIVE")
 	h.instance.DeploymentMode = domain.ModeDocker
