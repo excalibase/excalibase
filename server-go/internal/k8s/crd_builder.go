@@ -584,6 +584,5 @@ func scheduledBackupSpec(projectID, schedule string, immediate bool) map[string]
 	spec["schedule"] = schedule
 	spec["backupOwnerReference"] = "self"
 	spec["immediate"] = immediate
-	spec["target"] = "prefer-standby"
 	return spec
 }

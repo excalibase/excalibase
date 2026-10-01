@@ -136,8 +136,8 @@ func TestScheduledBackupTargetsCorrectCluster(t *testing.T) {
 	if cluster["name"] != "my-db-postgres" {
 		t.Errorf("cluster name should follow convention: got %v", cluster["name"])
 	}
-	if spec["target"] != "prefer-standby" {
-		t.Error("backup should prefer-standby for multi-instance clusters")
+	if spec["target"] != "primary" {
+		t.Error("a base backup runs on the primary (EXC-532)")
 	}
 }
 

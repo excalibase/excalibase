@@ -212,10 +212,15 @@ func recoverySource(projectID string) map[string]interface{} {
 	}
 }
 
+// pluginBackupSpec is every base backup the platform asks for: scheduled,
+// first and manual. It runs on the primary (owner decision 2026-10-02,
+// EXC-532): on a standby, pg_backup_start is cancelled by a recovery conflict
+// under write load and the backup fails. One instance has only a primary.
 func pluginBackupSpec(clusterName string) map[string]interface{} {
 	return map[string]interface{}{
 		"cluster":             map[string]interface{}{"name": clusterName},
 		"method":              "plugin",
 		"pluginConfiguration": map[string]interface{}{"name": BarmanCloudPluginName},
+		"target":              "primary",
 	}
 }
