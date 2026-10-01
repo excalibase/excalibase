@@ -173,7 +173,7 @@ func ValidateTierSizing(tier config.TierConfig) error { return validateTierSizin
 var sizingFields = []string{"instances", "resources", "affinity", "primaryUpdateStrategy", "primaryUpdateMethod"}
 
 // WithSizingOf is a copy of cluster with previous's instances, resources,
-// spread, update policy and Postgres settings. The disk is left as it is: a
+// spread, update policy, replication guarantee and Postgres settings. The disk is left as it is: a
 // volume that grew cannot be asked to shrink.
 func WithSizingOf(cluster, previous *unstructured.Unstructured) *unstructured.Unstructured {
 	changed := cluster.DeepCopy()
@@ -187,5 +187,10 @@ func WithSizingOf(cluster, previous *unstructured.Unstructured) *unstructured.Un
 	}
 	params, _, _ := unstructured.NestedMap(previous.Object, "spec", "postgresql", "parameters")
 	_ = unstructured.SetNestedMap(changed.Object, params, "spec", "postgresql", "parameters")
+	if sync, found, _ := unstructured.NestedMap(previous.Object, "spec", "postgresql", "synchronous"); found {
+		_ = unstructured.SetNestedMap(changed.Object, sync, "spec", "postgresql", "synchronous")
+	} else {
+		unstructured.RemoveNestedField(changed.Object, "spec", "postgresql", "synchronous")
+	}
 	return changed
 }

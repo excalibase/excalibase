@@ -221,3 +221,27 @@ func TestWithTierPutsTheClusterOnTheGivenDisk(t *testing.T) {
 		t.Errorf("storage = %q, want 80Gi", got)
 	}
 }
+
+// EXC-532: a change of plan moves the replication guarantee with the
+// instance count, both ways, and a rolled-back change puts it back.
+func TestWithTierMovesSynchronousReplicationWithTheInstanceCount(t *testing.T) {
+	standard := config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2", StatementTimeout: "30s"}
+	free := config.TierConfig{Instances: 1, StorageSize: "50Gi", Memory: "512Mi", CPU: "0.5", StatementTimeout: "15s"}
+	before := freeCluster(t)
+	up := WithTier(before, standard, "50Gi")
+	assertQuorumOfOne(t, up)
+	down := WithTier(up, free, "50Gi")
+	if sync, found := synchronousOf(t, down); found {
+		t.Errorf("one instance kept a synchronous standby: %v", sync)
+	}
+	back := WithSizingOf(up, before)
+	if sync, found := synchronousOf(t, back); found {
+		t.Errorf("rolling back to one instance kept a synchronous standby: %v", sync)
+	}
+	again := WithSizingOf(down, up)
+	assertQuorumOfOne(t, again)
+	params, _, _ := unstructured.NestedStringMap(up.Object, "spec", "postgresql", "parameters")
+	if params["work_mem"] != "4MB" {
+		t.Errorf("tenant parameters were lost: %v", params)
+	}
+}

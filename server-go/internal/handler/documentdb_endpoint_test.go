@@ -56,9 +56,9 @@ func documentDBView() service.DBEndpointView {
 		Database: "appdb", Username: "appowner",
 		MongoPort: 30222, MongoAvailable: true,
 		Connection: service.DBEndpointConnectionStrings{
-			RequireTLS:          "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=verify-full",
-			AllowPlaintext:      "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=prefer",
-			MongoRequireTLS:     "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&directConnection=true&tls=true",
+			RequireTLS:      "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=verify-full",
+			AllowPlaintext:  "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=prefer",
+			MongoRequireTLS: "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&directConnection=true&tls=true",
 		},
 		Internal: service.DBEndpointInternal{
 			Host: "proj-abc1234567-postgres-rw.ns.svc.cluster.local", Port: 5432,
