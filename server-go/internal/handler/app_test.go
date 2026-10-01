@@ -139,6 +139,18 @@ func (f *fakeAppStore) Delete(projectID, id string) error {
 	return nil
 }
 
+func (f *fakeAppStore) RecordLifecycleFailure(projectID, id string, failure *apphost.LifecycleFailure) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	app, ok := f.apps[appKey(projectID, id)]
+	if !ok {
+		return apphost.ErrAppNotFound
+	}
+	app.LifecycleFailure = failure
+	f.apps[appKey(projectID, id)] = app
+	return nil
+}
+
 // fakeSources is an apphost.SourceLookup over a known set of sources, so the
 // handler tests exercise the real refusal path without a database.
 type fakeSources struct {

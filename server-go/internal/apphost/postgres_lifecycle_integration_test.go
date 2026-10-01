@@ -159,3 +159,62 @@ func TestPGAppStore_PurgeProjectRemovesItsAppsAndHistoryOnly(t *testing.T) {
 		t.Fatal("an invalid project id must be refused")
 	}
 }
+
+// EXC-523: why the last lifecycle operation did not complete is on the app,
+// written only by the store; an edit neither erases nor forges it.
+func TestPGAppStore_LifecycleFailureIsRecordedAndKeptByEdits(t *testing.T) {
+	s, app := createdApp(t, "proj_life_fail", "app_life_fail")
+	failure := &apphost.LifecycleFailure{Operation: "pause", Reason: "the app's workload is still running",
+		At: time.Date(2026, 10, 1, 7, 0, 0, 0, time.UTC)}
+
+	if err := s.RecordLifecycleFailure(app.ProjectID, app.ID, failure); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	got, _ := s.Get(app.ProjectID, app.ID)
+	if got.LifecycleFailure == nil || *got.LifecycleFailure != *failure {
+		t.Fatalf("stored failure = %+v, want %+v", got.LifecycleFailure, failure)
+	}
+	listed, _ := s.List(app.ProjectID)
+	if len(listed) != 1 || listed[0].LifecycleFailure == nil {
+		t.Fatalf("listed = %+v, want the failure on the app", listed)
+	}
+
+	got.LifecycleFailure = nil
+	got.Image = "nginx:1.27"
+	if err := s.Update(got, got.Version); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if kept, _ := s.Get(app.ProjectID, app.ID); kept.LifecycleFailure == nil {
+		t.Fatal("an edit erased the recorded failure")
+	}
+	kept, _ := s.Get(app.ProjectID, app.ID)
+	kept.LifecycleFailure = &apphost.LifecycleFailure{Operation: "forged"}
+	if err := s.Update(kept, kept.Version); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if after, _ := s.Get(app.ProjectID, app.ID); after.LifecycleFailure.Operation != "pause" {
+		t.Fatalf("an edit replaced the failure with %+v", after.LifecycleFailure)
+	}
+
+	if err := s.RecordLifecycleFailure(app.ProjectID, app.ID, nil); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if cleared, _ := s.Get(app.ProjectID, app.ID); cleared.LifecycleFailure != nil {
+		t.Fatalf("cleared failure = %+v, want none", cleared.LifecycleFailure)
+	}
+	if err := s.RecordLifecycleFailure("proj_other", app.ID, failure); !errors.Is(err, apphost.ErrAppNotFound) {
+		t.Fatalf("another project: err = %v, want ErrAppNotFound", err)
+	}
+}
+
+func TestPGAppStore_ACreatedAppCarriesNoLifecycleFailure(t *testing.T) {
+	s := newPGAppStore(t)
+	app := sampleApp("proj_life_new", "app_life_new", "fresh")
+	app.LifecycleFailure = &apphost.LifecycleFailure{Operation: "forged"}
+	if err := s.Create(app, 1); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got, _ := s.Get(app.ProjectID, app.ID); got.LifecycleFailure != nil {
+		t.Fatalf("created app carries %+v", got.LifecycleFailure)
+	}
+}

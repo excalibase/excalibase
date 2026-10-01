@@ -113,6 +113,17 @@ func (f *fakeAppStoreForDeploy) Delete(projectID, id string) error {
 	return nil
 }
 
+func (f *fakeAppStoreForDeploy) RecordLifecycleFailure(projectID, id string, failure *apphost.LifecycleFailure) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	app, ok := f.apps[projectID+"/"+id]
+	if !ok {
+		return apphost.ErrAppNotFound
+	}
+	app.LifecycleFailure = failure
+	return nil
+}
+
 func (f *fakeAppStoreForDeploy) statusOf(projectID, id string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

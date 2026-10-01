@@ -49,6 +49,7 @@ func NewPostgresAppStore(db *sql.DB) *PostgresAppStore {
 // a row means a project with no app yet is serialized just the same.
 func (s *PostgresAppStore) Create(app *App, maxApps int) error {
 	now := time.Now().UTC()
+	app.LifecycleFailure = nil
 	app.Version = 1
 	app.CreatedAt = now
 	app.UpdatedAt = now
@@ -171,9 +172,10 @@ func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 	var version int
 	var createdAt time.Time
 	var status string
+	var failure []byte
 	err = tx.QueryRow(
-		`SELECT version, created_at, status FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
-		app.ProjectID, app.ID).Scan(&version, &createdAt, &status)
+		`SELECT version, created_at, status, doc->'lifecycleFailure' FROM apps WHERE project_id = $1 AND id = $2 FOR UPDATE`,
+		app.ProjectID, app.ID).Scan(&version, &createdAt, &status, &failure)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrAppNotFound
 	}
@@ -191,6 +193,13 @@ func (s *PostgresAppStore) Update(app *App, expectedVersion int) error {
 	app.CreatedAt = createdAt
 	// Only a finished deploy moves the status; the caller's copy may predate it.
 	app.Status = status
+	// Only RecordLifecycleFailure writes the failure.
+	app.LifecycleFailure = nil
+	if len(failure) > 0 {
+		if err := json.Unmarshal(failure, &app.LifecycleFailure); err != nil {
+			return fmt.Errorf("read app lifecycle failure: %w", err)
+		}
+	}
 	app.UpdatedAt = time.Now().UTC()
 	blob, err := json.Marshal(app)
 	if err != nil {
@@ -289,6 +298,39 @@ func (s *PostgresAppStore) Delete(projectID, id string) error {
 	default:
 		return fmt.Errorf("%w: it is %s, not being deleted", ErrAppStatusConflict, status)
 	}
+}
+
+// RecordLifecycleFailure writes or clears the failure inside the stored record
+// without touching its version: it is an outcome, not an edit.
+func (s *PostgresAppStore) RecordLifecycleFailure(projectID, id string, failure *LifecycleFailure) error {
+	if err := ValidateProjectID(projectID); err != nil {
+		return err
+	}
+	if err := ValidateID(id); err != nil {
+		return err
+	}
+	var res sql.Result
+	var err error
+	if failure == nil {
+		res, err = s.db.Exec(`UPDATE apps SET doc = doc - 'lifecycleFailure' WHERE project_id = $1 AND id = $2`,
+			projectID, id)
+	} else {
+		blob, merr := json.Marshal(failure)
+		if merr != nil {
+			return fmt.Errorf("marshal app lifecycle failure: %w", merr)
+		}
+		res, err = s.db.Exec(`UPDATE apps SET doc = jsonb_set(doc, '{lifecycleFailure}', $3::jsonb) WHERE project_id = $1 AND id = $2`,
+			projectID, id, string(blob))
+	}
+	if err != nil {
+		return fmt.Errorf("record app lifecycle failure: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("record app lifecycle failure: %w", err)
+	} else if n == 0 {
+		return ErrAppNotFound
+	}
+	return nil
 }
 
 // PurgeProjectApps removes every app of a project being deleted, with its

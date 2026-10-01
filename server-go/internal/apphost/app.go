@@ -286,11 +286,22 @@ type App struct {
 	// Tier resolves to cpu/memory through config.GetAppTierConfig.
 	Tier   domain.TierType `json:"tier"`
 	Status string          `json:"status"`
+	// LifecycleFailure is why the last pause, resume or deletion did not
+	// complete; a later one that completes clears it. Only the store writes it.
+	LifecycleFailure *LifecycleFailure `json:"lifecycleFailure,omitempty"`
 	// Version increments on every stored change, as the edge-function record
 	// does, so a caller can tell one revision of the record from another.
 	Version   int       `json:"version"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// LifecycleFailure records a pause, resume or deletion that did not complete,
+// in words safe to show the app's developers.
+type LifecycleFailure struct {
+	Operation string    `json:"operation"`
+	Reason    string    `json:"reason"`
+	At        time.Time `json:"at"`
 }
 
 var (

@@ -66,13 +66,35 @@ interface Scenario {
   deploys: Deploy[];
   // Statuses the newest deploy moves through on each successive poll.
   progression?: Array<{ status: DeployStatus; failureReason?: string }>;
+  // What successive reads of the app show once a pause, resume or deletion
+  // was accepted; 'gone' is a deleted app. Default: the operation completes.
+  afterLifecycle?: Array<Partial<App> | 'gone'>;
 }
+
+const RESPOND_ASYNC = { headers: { Prefer: 'respond-async' } };
+const LATER = '2999-01-01T00:00:00Z';
 
 function renderPage(scenario: Scenario) {
   const state = {
-    app: { ...app, ...scenario.app },
+    app: { ...app, ...scenario.app } as App,
+    gone: false,
     deploys: [...scenario.deploys],
     progression: [...(scenario.progression ?? [])],
+    after: [] as Array<Partial<App> | 'gone'>,
+  };
+  const accept = (done: Partial<App> | 'gone') => {
+    state.after = [...(scenario.afterLifecycle ?? [done])];
+    return Promise.resolve({
+      status: 202,
+      data: { id: 'app-1', status: state.app.status, acceptedAt: new Date().toISOString() },
+    } as never);
+  };
+  const readApp = () => {
+    const next = state.after.shift();
+    if (next === 'gone') state.gone = true;
+    else if (next) state.app = { ...state.app, ...next };
+    if (state.gone) return Promise.reject({ response: { status: 404, data: { error: 'not found' } } });
+    return Promise.resolve({ data: state.app } as never);
   };
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config')
@@ -81,7 +103,7 @@ function renderPage(scenario: Scenario) {
       } as never);
     if (url === '/projects/proj-1/apps/app-1/domains/')
       return Promise.resolve({ data: [] } as never);
-    if (url === '/projects/proj-1/apps/app-1') return Promise.resolve({ data: state.app } as never);
+    if (url === '/projects/proj-1/apps/app-1') return readApp();
     if (url === '/projects/proj-1/apps/app-1/disk')
       return Promise.resolve({ data: diskStatus(state.app) } as never);
     if (url === '/projects/proj-1/apps/app-1/logs')
@@ -99,7 +121,7 @@ function renderPage(scenario: Scenario) {
     }
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
-  vi.mocked(api.delete).mockResolvedValue({ status: 204 } as never);
+  vi.mocked(api.delete).mockImplementation(() => accept('gone'));
   vi.mocked(api.post).mockImplementation((url: string, body?: unknown) => {
     if (url === '/projects/proj-1/apps/app-1/disk') {
       const size = (body as { size: string }).size;
@@ -107,10 +129,7 @@ function renderPage(scenario: Scenario) {
       return Promise.resolve({ data: { id: 'app-1', disk: state.app.disk } } as never);
     }
     const lifecycle = url.match(/\/apps\/app-1\/(pause|resume)$/);
-    if (lifecycle) {
-      state.app = { ...state.app, status: lifecycle[1] === 'pause' ? 'PAUSED' : 'ACTIVE' };
-      return Promise.resolve({ data: { id: 'app-1', status: state.app.status } } as never);
-    }
+    if (lifecycle) return accept({ status: lifecycle[1] === 'pause' ? 'PAUSED' : 'ACTIVE' });
     const revision = state.deploys.length + 1;
     if (url === '/projects/proj-1/apps/app-1/deploy') {
       const created = deploy({
@@ -185,7 +204,9 @@ describe('ContainerDetailPage', () => {
   test('pause stops a running container and shows it paused', async () => {
     const { user } = renderPage({ app: { status: 'ACTIVE' }, deploys: [deploy({})] });
     await user.click(await screen.findByTestId('pause-button'));
-    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/pause'));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/pause', undefined, RESPOND_ASYNC),
+    );
     await waitFor(() => expect(screen.getByTestId('container-status')).toHaveTextContent('Paused'));
     expect(screen.queryByTestId('pause-button')).not.toBeInTheDocument();
     expect(screen.getByTestId('resume-button')).toBeInTheDocument();
@@ -195,7 +216,7 @@ describe('ContainerDetailPage', () => {
     const { user } = renderPage({ app: { status: 'PAUSED' }, deploys: [deploy({})] });
     await user.click(await screen.findByTestId('resume-button'));
     await waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/resume'),
+      expect(api.post).toHaveBeenCalledWith('/projects/proj-1/apps/app-1/resume', undefined, RESPOND_ASYNC),
     );
     await waitFor(() =>
       expect(screen.getByTestId('container-status')).toHaveTextContent('Running'),
@@ -220,8 +241,78 @@ describe('ContainerDetailPage', () => {
 
     await user.click(screen.getByTestId('delete-button'));
     await user.click(screen.getByTestId('delete-confirm'));
-    await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/projects/proj-1/apps/app-1'));
+    await waitFor(() =>
+      expect(api.delete).toHaveBeenCalledWith('/projects/proj-1/apps/app-1', RESPOND_ASYNC),
+    );
     expect(await screen.findByText('containers list')).toBeInTheDocument();
+  });
+
+  // EXC-523: a pause, resume or deletion may wait minutes for the app's lease,
+  // so Studio does not hold the request open: it follows the app instead.
+  test('a pause in progress says so until the container is paused', async () => {
+    const { user } = renderPage({
+      app: { status: 'ACTIVE' },
+      deploys: [deploy({})],
+      afterLifecycle: [{}, { status: 'PAUSING' }, { status: 'PAUSING' }, { status: 'PAUSED' }],
+    });
+    await user.click(await screen.findByTestId('pause-button'));
+    expect(await screen.findByTestId('lifecycle-pending')).toHaveTextContent(/pausing/i);
+    await waitFor(() => expect(screen.getByTestId('container-status')).toHaveTextContent('Paused'));
+    await waitFor(() => expect(screen.queryByTestId('lifecycle-pending')).not.toBeInTheDocument());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  test('a pause that did not happen names why', async () => {
+    const { user } = renderPage({
+      app: { status: 'ACTIVE' },
+      deploys: [deploy({})],
+      afterLifecycle: [
+        {},
+        {
+          lifecycleFailure: {
+            operation: 'pause',
+            reason: 'another operation on this project is running; retry when it finishes',
+            at: LATER,
+          },
+        },
+      ],
+    });
+    await user.click(await screen.findByTestId('pause-button'));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/another operation on this project is running/);
+    expect(screen.queryByTestId('lifecycle-pending')).not.toBeInTheDocument();
+    expect(screen.getByTestId('pause-button')).toBeEnabled();
+  });
+
+  test('a failure recorded before the request is not taken for its outcome', async () => {
+    const { user } = renderPage({
+      app: {
+        status: 'PAUSED',
+        lifecycleFailure: { operation: 'resume', reason: 'old failure', at: '2020-01-01T00:00:00Z' },
+      },
+      deploys: [deploy({})],
+      afterLifecycle: [{}, { status: 'RESUMING' }, { status: 'ACTIVE', lifecycleFailure: undefined }],
+    });
+    await user.click(await screen.findByTestId('resume-button'));
+    await waitFor(() => expect(screen.getByTestId('container-status')).toHaveTextContent('Running'));
+    expect(screen.queryByText(/old failure/)).not.toBeInTheDocument();
+  });
+
+  test('a deletion that did not finish stays on the page and names why', async () => {
+    const { user } = renderPage({
+      app: { status: 'ACTIVE' },
+      deploys: [deploy({})],
+      afterLifecycle: [
+        { status: 'DELETING' },
+        {
+          status: 'DELETING',
+          lifecycleFailure: { operation: 'deletion', reason: "the app's workload is still running", at: LATER },
+        },
+      ],
+    });
+    await user.click(await screen.findByTestId('delete-button'));
+    await user.click(screen.getByTestId('delete-confirm'));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/workload is still running/);
+    expect(screen.queryByText('containers list')).not.toBeInTheDocument();
   });
 
   test('a refused lifecycle action says why', async () => {
@@ -398,6 +489,7 @@ describe('ContainerDetailPage', () => {
     await waitFor(() =>
       expect(api.delete).toHaveBeenCalledWith('/projects/proj-1/apps/app-1', {
         data: { confirmDeleteDisk: true },
+        ...RESPOND_ASYNC,
       }),
     );
   });

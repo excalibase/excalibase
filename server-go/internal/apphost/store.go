@@ -55,6 +55,10 @@ type Store interface {
 	// Delete removes the app and its deploy history, only once its status is
 	// StatusDeleting: the row outlives the workload, never the other way round.
 	Delete(projectID, id string) error
+	// RecordLifecycleFailure records why the last pause, resume or deletion
+	// did not complete, or clears it with nil. Reports ErrAppNotFound when
+	// the project holds no such app.
+	RecordLifecycleFailure(projectID, id string, failure *LifecycleFailure) error
 }
 
 // Compile-time check.

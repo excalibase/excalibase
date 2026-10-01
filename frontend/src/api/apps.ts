@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import type { TierType } from '../types';
@@ -72,11 +73,21 @@ export interface App {
   disk?: AppDisk;
   tier: TierType;
   status: string;
+  // Why the last pause, resume or deletion did not complete (EXC-523).
+  lifecycleFailure?: LifecycleFailure;
   version: number;
   createdAt: string;
   updatedAt: string;
   // Not served yet; shown as soon as the API starts returning it.
   url?: string;
+}
+
+export type LifecycleOperation = 'pause' | 'resume' | 'deletion';
+
+export interface LifecycleFailure {
+  operation: string;
+  reason: string;
+  at: string;
 }
 
 export type DeployStatus = 'pending' | 'rolling' | 'succeeded' | 'failed' | 'superseded';
@@ -124,6 +135,9 @@ export interface AppSubmission {
 
 // The app was written but one of its secret values was not. Carries the app so
 // the caller can move on to editing it instead of creating it twice.
+// A pause, resume or deletion the app records as not completed.
+export class LifecycleFailedError extends Error {}
+
 export class PartialSaveError extends Error {
   readonly app: App;
   readonly secretName: string;
@@ -143,7 +157,7 @@ export const isDeployInProgress = (status: DeployStatus): boolean =>
 // The API answers refusals as {"error": "..."}; anything else is a network or
 // client failure and is reported as such.
 export function apiErrorMessage(err: unknown, fallback: string): string {
-  if (err instanceof PartialSaveError) return err.message;
+  if (err instanceof PartialSaveError || err instanceof LifecycleFailedError) return err.message;
   const response = (err as { response?: { data?: { error?: unknown } } } | null)?.response;
   const message = response?.data?.error;
   if (typeof message === 'string' && message.trim() !== '') return message;
@@ -221,30 +235,70 @@ export const redeployApp = async (
 ): Promise<Deploy> =>
   (await api.post<Deploy>(`${appsBase(projectId)}/${appId}/deploys/${deployId}/redeploy`)).data;
 
-export interface AppLifecycleResult {
+// A pause, resume or deletion may wait minutes for the app's lease and pods
+// (EXC-523), so the server answers once it has started it; acceptedAt tells a
+// failure the app records afterwards from an older one.
+export interface AppLifecycleAccepted {
   id: string;
   status: string;
+  acceptedAt: string;
 }
 
-export const pauseApp = async (projectId: string, appId: string): Promise<AppLifecycleResult> =>
-  (await api.post<AppLifecycleResult>(`${appsBase(projectId)}/${appId}/pause`)).data;
+const RESPOND_ASYNC = { headers: { Prefer: 'respond-async' } };
 
-export const resumeApp = async (projectId: string, appId: string): Promise<AppLifecycleResult> =>
-  (await api.post<AppLifecycleResult>(`${appsBase(projectId)}/${appId}/resume`)).data;
+export const pauseApp = async (projectId: string, appId: string): Promise<AppLifecycleAccepted> =>
+  (await api.post<AppLifecycleAccepted>(`${appsBase(projectId)}/${appId}/pause`, undefined, RESPOND_ASYNC)).data;
 
-// Answers once the container's pods are gone and it is forgotten. A container
-// with a disk is only deleted with the explicit confirmation that erases it.
+export const resumeApp = async (projectId: string, appId: string): Promise<AppLifecycleAccepted> =>
+  (await api.post<AppLifecycleAccepted>(`${appsBase(projectId)}/${appId}/resume`, undefined, RESPOND_ASYNC)).data;
+
+// A container with a disk is only deleted with the explicit confirmation that erases it.
 export const deleteApp = async (
   projectId: string,
   appId: string,
   confirmDeleteDisk = false,
-): Promise<void> => {
-  if (confirmDeleteDisk) {
-    await api.delete(`${appsBase(projectId)}/${appId}`, { data: { confirmDeleteDisk: true } });
-    return;
-  }
-  await api.delete(`${appsBase(projectId)}/${appId}`);
+): Promise<AppLifecycleAccepted> => {
+  const url = `${appsBase(projectId)}/${appId}`;
+  const response = confirmDeleteDisk
+    ? await api.delete<AppLifecycleAccepted>(url, { data: { confirmDeleteDisk: true }, ...RESPOND_ASYNC })
+    : await api.delete<AppLifecycleAccepted>(url, RESPOND_ASYNC);
+  return response.data;
 };
+
+// The app, or null once it is gone.
+const findApp = async (projectId: string, appId: string): Promise<App | null> => {
+  try {
+    return await getApp(projectId, appId);
+  } catch (err) {
+    if ((err as { response?: { status?: number } } | null)?.response?.status === 404) return null;
+    throw err;
+  }
+};
+
+export interface PendingLifecycle {
+  operation: LifecycleOperation;
+  acceptedAt: string;
+}
+
+export type LifecycleOutcome =
+  | { state: 'pending' }
+  | { state: 'done' }
+  | { state: 'failed'; reason: string };
+
+const LIFECYCLE_DONE: Record<LifecycleOperation, (app: App | null) => boolean> = {
+  pause: (app) => app?.status === 'PAUSED',
+  resume: (app) => app?.status === 'ACTIVE',
+  deletion: (app) => app === null,
+};
+
+// Whether the operation started at acceptedAt has finished, from the app as read.
+export function lifecycleOutcome(pending: PendingLifecycle, app: App | null): LifecycleOutcome {
+  const failure = app?.lifecycleFailure;
+  if (failure?.operation === pending.operation && Date.parse(failure.at) >= Date.parse(pending.acceptedAt)) {
+    return { state: 'failed', reason: failure.reason };
+  }
+  return LIFECYCLE_DONE[pending.operation](app) ? { state: 'done' } : { state: 'pending' };
+}
 
 export const getAppDisk = async (projectId: string, appId: string): Promise<AppDiskStatus> =>
   (await api.get<AppDiskStatus>(`${appsBase(projectId)}/${appId}/disk`)).data;
@@ -323,23 +377,52 @@ export const useRedeployApp = (projectId: string, appId: string) => {
 const useLifecycle = (
   projectId: string,
   appId: string,
-  action: (projectId: string, appId: string) => Promise<unknown>,
-) => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => action(projectId, appId),
-    onSettled: () => qc.invalidateQueries({ queryKey: appsKey(projectId) }),
+  operation: LifecycleOperation,
+  action: (projectId: string, appId: string) => Promise<AppLifecycleAccepted>,
+) =>
+  useMutation({
+    mutationFn: async (): Promise<PendingLifecycle> => ({
+      operation,
+      acceptedAt: (await action(projectId, appId)).acceptedAt,
+    }),
   });
-};
 
 export const usePauseApp = (projectId: string, appId: string) =>
-  useLifecycle(projectId, appId, pauseApp);
+  useLifecycle(projectId, appId, 'pause', pauseApp);
 
 export const useResumeApp = (projectId: string, appId: string) =>
-  useLifecycle(projectId, appId, resumeApp);
+  useLifecycle(projectId, appId, 'resume', resumeApp);
 
 export const useDeleteApp = (projectId: string, appId: string, confirmDeleteDisk: boolean) =>
-  useLifecycle(projectId, appId, (project, app) => deleteApp(project, app, confirmDeleteDisk));
+  useLifecycle(projectId, appId, 'deletion', (project, app) => deleteApp(project, app, confirmDeleteDisk));
+
+// Re-reads the project's containers, their deploys and disks.
+export const useRefreshApps = (projectId: string) => {
+  const qc = useQueryClient();
+  return useCallback(() => qc.invalidateQueries({ queryKey: appsKey(projectId) }), [qc, projectId]);
+};
+
+// Reads the app until the operation it started finishes or records why it did
+// not, keeping the page's copy of the app current meanwhile.
+export const useFollowLifecycle = (
+  projectId: string,
+  appId: string,
+  pending: PendingLifecycle | null,
+  pollMs: number,
+) => {
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: [...appKey(projectId, appId), 'lifecycle', pending?.acceptedAt],
+    queryFn: async (): Promise<LifecycleOutcome> => {
+      const app = await findApp(projectId, appId);
+      if (app) qc.setQueryData(appKey(projectId, appId), app);
+      return pending ? lifecycleOutcome(pending, app) : { state: 'done' };
+    },
+    enabled: pending !== null,
+    refetchInterval: (query) => (query.state.data?.state === 'pending' ? pollMs : false),
+    gcTime: 0,
+  });
+};
 
 // Each read runs a probe on the cluster, so it is fetched once and on Refresh.
 export const useAppDisk = (projectId: string, appId: string) =>

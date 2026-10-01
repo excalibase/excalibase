@@ -202,6 +202,7 @@ function Detail({
               app={app}
               deployed={newest !== undefined}
               onError={setLifecycleError}
+              followMs={pollIntervalMs}
             />
           </>
         }
