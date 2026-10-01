@@ -8,6 +8,8 @@ const liveUrl = process.env.STUDIO_LIVE_URL;
 
 export default defineConfig({
   testDir: './e2e',
+  // The mocked suite never reaches a real Studio: e2e/live/* runs only when pointed at one.
+  testIgnore: liveUrl ? undefined : ['live/**'],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
