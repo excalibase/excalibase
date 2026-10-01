@@ -44,7 +44,8 @@ function connectionStrings(
         cred.password,
         endpoint.host,
         mongo.port,
-        endpoint.requireTls ?? true,
+        // The gateway takes TLS only; Require TLS changes Postgres alone (EXC-530).
+        true,
       ),
     });
   }

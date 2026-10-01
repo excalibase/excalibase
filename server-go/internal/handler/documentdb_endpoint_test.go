@@ -59,7 +59,6 @@ func documentDBView() service.DBEndpointView {
 			RequireTLS:          "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=verify-full",
 			AllowPlaintext:      "postgresql://appowner@proj-abc1234567.db.example.com:30111/appdb?sslmode=prefer",
 			MongoRequireTLS:     "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&directConnection=true&tls=true",
-			MongoAllowPlaintext: "mongodb://appowner@proj-abc1234567.db.example.com:30222/?authMechanism=SCRAM-SHA-256&directConnection=true&tls=false",
 		},
 		Internal: service.DBEndpointInternal{
 			Host: "proj-abc1234567-postgres-rw.ns.svc.cluster.local", Port: 5432,
@@ -93,9 +92,9 @@ func TestDBEndpointResponseCarriesTheMongoConnectionStrings(t *testing.T) {
 	if !strings.Contains(mongoTLS, "tls=true") || !strings.HasPrefix(mongoTLS, "mongodb://") {
 		t.Errorf("mongoRequireTls: %q", mongoTLS)
 	}
-	mongoPlain, _ := connection["mongoAllowPlaintext"].(string)
-	if !strings.Contains(mongoPlain, "tls=false") {
-		t.Errorf("mongoAllowPlaintext: %q", mongoPlain)
+	// The gateway takes TLS only (EXC-530): no plaintext Mongo string exists.
+	if plain, present := connection["mongoAllowPlaintext"]; present {
+		t.Errorf("a plaintext Mongo string is offered: %v", plain)
 	}
 }
 
@@ -125,7 +124,7 @@ func TestDBEndpointResponseCarriesTheInternalMongoAddress(t *testing.T) {
 func TestDBEndpointResponseOmitsMongoForAnOrdinaryProject(t *testing.T) {
 	view := documentDBView()
 	view.MongoPort, view.MongoAvailable = 0, false
-	view.Connection.MongoRequireTLS, view.Connection.MongoAllowPlaintext = "", ""
+	view.Connection.MongoRequireTLS = ""
 	view.Internal.MongoPort, view.Internal.MongoConnectionString = 0, ""
 
 	body := endpointBody(t, view)
@@ -136,7 +135,7 @@ func TestDBEndpointResponseOmitsMongoForAnOrdinaryProject(t *testing.T) {
 		}
 	}
 	connection := body["connectionStrings"].(map[string]any)
-	for _, key := range []string{"mongoRequireTls", "mongoAllowPlaintext"} {
+	for _, key := range []string{"mongoRequireTls"} {
 		if _, present := connection[key]; present {
 			t.Errorf("an ordinary project's response carries %s", key)
 		}

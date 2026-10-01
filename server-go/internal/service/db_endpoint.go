@@ -182,11 +182,11 @@ type DBEndpointView struct {
 type DBEndpointConnectionStrings struct {
 	RequireTLS     string
 	AllowPlaintext string
-	// MongoRequireTLS and MongoAllowPlaintext are empty for a project that
-	// is not a DocumentDB project: there is nothing for a Mongo client to
-	// dial, and a string that looked like there was would be a lie.
-	MongoRequireTLS     string
-	MongoAllowPlaintext string
+	// MongoRequireTLS is empty for a project that is not a DocumentDB
+	// project: there is nothing for a Mongo client to dial, and a string that
+	// looked like there was would be a lie. There is no plaintext Mongo
+	// string: the gateway takes TLS only (EXC-530).
+	MongoRequireTLS string
 }
 
 // Describe reports the project's endpoint as it stands.
@@ -686,9 +686,7 @@ func (s *DBEndpointService) addPublicMongoEndpoint(
 		return nil
 	}
 	view.MongoPort = port
-	mongoStrings := domain.DBEndpointMongoConnectionStrings(host, port, inst.Username)
-	view.Connection.MongoRequireTLS = mongoStrings.RequireTLS
-	view.Connection.MongoAllowPlaintext = mongoStrings.AllowPlaintext
+	view.Connection.MongoRequireTLS = domain.DBEndpointMongoConnectionString(host, port, inst.Username)
 
 	ready, err := s.kube.DocumentDBGatewayReady(ctx, inst.Namespace, inst.ProjectID+primaryPodSuffix)
 	if err != nil {

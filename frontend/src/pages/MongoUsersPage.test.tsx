@@ -217,6 +217,40 @@ describe('MongoUsersPage failures and the public address', () => {
       'mongodb://svc:pw-public@db.example.test:30002/?tls=true&authMechanism=SCRAM-SHA-256&directConnection=true',
     );
   });
+
+
+  test('a public Mongo string asks for TLS even when Postgres allows plaintext (EXC-530)', async () => {
+    mockServer();
+    const base = vi.mocked(api.get).getMockImplementation()!;
+    vi.mocked(api.get).mockImplementation((url: string) =>
+      url === '/projects/proj-doc/db-endpoint'
+        ? Promise.resolve({
+            data: {
+              publicEnabled: true,
+              available: true,
+              host: 'db.example.test',
+              port: 30001,
+              requireTls: false,
+              mongoPort: 30002,
+              mongoAvailable: true,
+              internal: { host: 'proj-doc-postgres-rw.ns.svc', port: 5432, mongoHost: 'proj-doc-documentdb.ns.svc', mongoPort: 10260 },
+            },
+          } as never)
+        : base(url),
+    );
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({
+      data: { username: 'svc', role: 'read', password: 'pw-public' },
+    } as never);
+    renderAt(<MongoUsersPage />);
+    await screen.findByTestId('mongo-user-reporting');
+    await u.type(screen.getByLabelText('User name'), 'svc');
+    await u.click(screen.getByRole('button', { name: /create user/i }));
+    const shown = await screen.findByTestId('new-mongo-user');
+    expect(shown).toHaveTextContent(
+      'mongodb://svc:pw-public@db.example.test:30002/?tls=true&authMechanism=SCRAM-SHA-256&directConnection=true',
+    );
+  });
 });
 
 describe('Database sub-navigation', () => {
