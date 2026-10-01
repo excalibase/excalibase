@@ -1,0 +1,70 @@
+name: Publish the storefront demo image
+
+# Builds the storefront demo app (excalibase-sdk-js examples/storefront) into
+# excalibase/storefront-demo, the image the built-in "Storefront demo" template
+# runs (EXC-526). Run by hand with the excalibase-sdk-js commit to build; the
+# template then pins the digest this prints. Same registry and credentials as
+# cd.yml: an image the platform pulls lives where it already pulls from.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_commit:
+        description: excalibase-sdk-js commit to build (full 40-character sha on main)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Build, test and push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the commit
+        env:
+          SDK_COMMIT: ${{ inputs.sdk_commit }}
+        run: |
+          [[ "$SDK_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sdk_commit must be a full commit sha"; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          repository: excalibase/excalibase-sdk-js
+          ref: ${{ inputs.sdk_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Only a commit that is on main is built: the template must point at
+      # reviewed code.
+      - name: The commit is on main
+        env:
+          SDK_COMMIT: ${{ inputs.sdk_commit }}
+        run: |
+          git merge-base --is-ancestor "$SDK_COMMIT" origin/main || { echo "::error::$SDK_COMMIT is not on excalibase-sdk-js main"; exit 1; }
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # The Dockerfile runs the example's unit tests before it builds.
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: examples/storefront
+          push: true
+          platforms: linux/amd64
+          tags: excalibase/storefront-demo:sdk-${{ inputs.sdk_commit }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/excalibase/excalibase-sdk-js
+            org.opencontainers.image.revision=${{ inputs.sdk_commit }}
+
+      - name: Digest for the template
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          echo "image: excalibase/storefront-demo@$DIGEST" | tee -a "$GITHUB_STEP_SUMMARY"
