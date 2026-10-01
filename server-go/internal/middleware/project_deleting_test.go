@@ -35,8 +35,8 @@ func deletingProjectRouter(t *testing.T, status string) (chi.Router, string) {
 		r.Put("/maintenance-window", ok)
 		r.Post("/backup/trigger", ok)
 		r.Post("/backup/restore", ok)
-		r.Post("/rls-policies", ok)
-		r.Post("/table-grants", ok)
+		r.Put("/permissions", ok)
+		r.Post("/tracked-functions", ok)
 	})
 	r.Route("/api/projects/{projectId}", func(r chi.Router) {
 		r.Use(RequireProjectAccess(instances, orgs))
@@ -66,8 +66,8 @@ func TestDeletingProjectRefusesEveryOtherRoute(t *testing.T) {
 			{http.MethodPut, "/api/provision/" + testProject + "/maintenance-window", http.StatusConflict},
 			{http.MethodPost, "/api/provision/" + testProject + "/backup/trigger", http.StatusConflict},
 			{http.MethodPost, "/api/provision/" + testProject + "/backup/restore", http.StatusConflict},
-			{http.MethodPost, "/api/provision/" + testProject + "/rls-policies", http.StatusConflict},
-			{http.MethodPost, "/api/provision/" + testProject + "/table-grants", http.StatusConflict},
+			{http.MethodPut, "/api/provision/" + testProject + "/permissions", http.StatusConflict},
+			{http.MethodPost, "/api/provision/" + testProject + "/tracked-functions", http.StatusConflict},
 			{http.MethodPost, "/api/projects/" + testProject + "/functions", http.StatusConflict},
 			{http.MethodPut, "/api/projects/" + testProject + "/cors", http.StatusConflict},
 		}
@@ -87,7 +87,7 @@ func TestDeletingProjectRefusesEveryOtherRoute(t *testing.T) {
 // A live project is untouched by the gate.
 func TestLiveProjectIsUnaffectedByTheDeletionGate(t *testing.T) {
 	r, memberID := deletingProjectRouter(t, "ACTIVE")
-	for _, path := range []string{"/credentials/rotate", "/pause", "/rls-policies"} {
+	for _, path := range []string{"/credentials/rotate", "/pause", "/tracked-functions"} {
 		req := httptest.NewRequest(http.MethodPost, "/api/provision/"+testProject+path, nil)
 		req = req.WithContext(projectRequest(http.MethodPost, testProject, memberUser(memberID), nil).Context())
 		w := httptest.NewRecorder()

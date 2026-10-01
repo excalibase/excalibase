@@ -164,7 +164,7 @@ func optionalBoundedInt(raw string, lowest, highest int) (*int, error) {
 	return &value, nil
 }
 
-var endUserRoleName = regexp.MustCompile(domain.GrantRolePattern)
+var endUserRoleName = regexp.MustCompile(domain.PermissionRolePattern)
 
 var (
 	errRoleChangeUserID = errors.New("userId must be a positive whole number")
@@ -219,7 +219,7 @@ func validateRoleChange(change endusers.RoleChange) error {
 }
 
 func isAssignableRole(role string) bool {
-	return role != domain.GrantRoleService && endUserRoleName.MatchString(role)
+	return role != domain.PermissionRoleService && endUserRoleName.MatchString(role)
 }
 
 // roleChangeAudit is what the audit log keeps of one role change: the

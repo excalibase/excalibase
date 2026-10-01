@@ -212,65 +212,13 @@ func TestPermissions_ProjectDeletionCascades(t *testing.T) {
 	}
 }
 
-func TestPermissions_LegacyImportIsOnceAndNeverOverwrites(t *testing.T) {
-	store, perms := permissionsStore(t)
-	ctx := context.Background()
-	if _, err := store.DB().Exec(`INSERT INTO table_grants (id, project_id, resource, operations, role_name)
-		VALUES ('g1', $1, 'public.orders', '{SELECT}', 'user'), ('g2', 'no-such-project', 'public.orders', '{SELECT}', 'user')`,
-		permProject); err != nil {
-		t.Fatalf("seed grants: %v", err)
-	}
-	if _, err := store.DB().Exec(`INSERT INTO rls_policies (id, project_id, name, resource, effect, operations, rules, assignments)
-		VALUES ('p1', $1, 'p', 'orders', 'ALLOW', '{SELECT}', '[]', '[]')`, permOtherProject); err != nil {
-		t.Fatalf("seed policy: %v", err)
-	}
-	pending, err := perms.LegacyPending(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pending) != 2 || pending[0] != permProject || pending[1] != permOtherProject {
-		t.Fatalf("pending = %v, want both existing projects and not the orphaned grant", pending)
-	}
-
-	kept := `{"columns": ["id"], "filter": {}}`
-	if _, err := perms.PutPermission(ctx, tablePermission("user", "select", kept)); err != nil {
-		t.Fatal(err)
-	}
-	folded := domain.LegacyPermissionImport{
-		Permissions: []domain.TablePermission{
-			tablePermission("user", "select", `{"columns":"*","filter":{}}`),
-			tablePermission("anon", "select", `{"columns":"*","filter":{}}`),
-		},
-		Functions:           []domain.TrackedFunction{{Function: searchFunction, ExposedAs: domain.ExposeAsQuery}},
-		FunctionPermissions: []domain.FunctionPermission{{Function: searchFunction, Role: "user"}},
-	}
-	for i := 0; i < 2; i++ {
-		if err := perms.ImportLegacy(ctx, permProject, folded); err != nil {
-			t.Fatalf("import %d: %v", i, err)
-		}
-	}
-	doc := document(t, perms, permProject)
-	if len(doc.Tables) != 2 || len(doc.Functions) != 1 || len(doc.FunctionPermissions) != 1 || doc.Functions[0].InferPermissions {
-		t.Fatalf("imported document: %+v", doc)
-	}
-	for _, entry := range doc.Tables {
-		if entry.Role == "user" && !jsonEqual(t, entry.Select, []byte(kept)) {
-			t.Fatalf("import replaced a permission written through the API: %s", entry.Select)
-		}
-	}
-	pending, err = perms.LegacyPending(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pending) != 1 || pending[0] != permOtherProject {
-		t.Fatalf("pending after import = %v", pending)
-	}
-}
-
 const (
 	migrationBeforePermissions = 64
 	migrationPermissions       = 65
+	migrationLegacyDropped     = 66
 )
+
+var legacyAccessTables = []string{"rls_policies", "column_policies", "table_grants", "legacy_permissions_migrated"}
 
 func tableExists(t *testing.T, store *Store, name string) bool {
 	t.Helper()
@@ -283,17 +231,14 @@ func tableExists(t *testing.T, store *Store, name string) bool {
 
 func TestPermissions_MigrationDownAndUp(t *testing.T) {
 	store := testStore(t)
-	tables := []string{"api_permissions", "tracked_functions", "function_permissions", "permission_versions", "legacy_permissions_migrated"}
+	tables := []string{"api_permissions", "tracked_functions", "function_permissions", "permission_versions"}
 	if err := store.m.Migrate(migrationBeforePermissions); err != nil {
 		t.Fatalf("migrate down to %d: %v", migrationBeforePermissions, err)
 	}
-	for _, table := range tables {
+	for _, table := range append(tables, "legacy_permissions_migrated") {
 		if tableExists(t, store, table) {
 			t.Errorf("%s survived the down migration", table)
 		}
-	}
-	if !tableExists(t, store, "table_grants") || !tableExists(t, store, "rls_policies") {
-		t.Fatal("the down migration must leave the legacy stores alone")
 	}
 	if err := store.m.Migrate(migrationPermissions); err != nil {
 		t.Fatalf("migrate up to %d: %v", migrationPermissions, err)
@@ -301,6 +246,42 @@ func TestPermissions_MigrationDownAndUp(t *testing.T) {
 	for _, table := range tables {
 		if !tableExists(t, store, table) {
 			t.Errorf("%s missing after the up migration", table)
+		}
+	}
+}
+
+func TestPermissions_LegacyAccessStoresAreGone(t *testing.T) {
+	store := testStore(t)
+	for _, table := range legacyAccessTables {
+		if tableExists(t, store, table) {
+			t.Errorf("%s still exists; permissions are the only access store", table)
+		}
+	}
+	if !tableExists(t, store, "api_permissions") {
+		t.Fatal("dropping the legacy stores must leave permissions alone")
+	}
+}
+
+func TestPermissions_LegacyDropDownRecreatesEmptyStores(t *testing.T) {
+	store := testStore(t)
+	if err := store.m.Migrate(migrationPermissions); err != nil {
+		t.Fatalf("migrate down to %d: %v", migrationPermissions, err)
+	}
+	for _, table := range legacyAccessTables {
+		if !tableExists(t, store, table) {
+			t.Errorf("%s missing after the down migration", table)
+		}
+	}
+	if _, err := store.DB().Exec(`INSERT INTO table_grants (id, project_id, resource, operations, role_name)
+		VALUES ('g1', 'p', 'public.orders', '{SELECT}', 'service')`); err == nil {
+		t.Error("the recreated table_grants lost its role constraint")
+	}
+	if err := store.m.Migrate(migrationLegacyDropped); err != nil {
+		t.Fatalf("migrate up to %d: %v", migrationLegacyDropped, err)
+	}
+	for _, table := range legacyAccessTables {
+		if tableExists(t, store, table) {
+			t.Errorf("%s survived the up migration", table)
 		}
 	}
 }

@@ -37,7 +37,7 @@ var (
 	// columnName is a column or relationship name inside an expression, a
 	// column list or a preset.
 	columnName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,62}$`)
-	validRole  = regexp.MustCompile(domain.GrantRolePattern)
+	validRole  = regexp.MustCompile(domain.PermissionRolePattern)
 )
 
 // operationKeys lists, per operation, the keys an object may carry and
@@ -62,7 +62,7 @@ func ValidateQualifiedName(name string) error {
 // ValidateRole accepts a role a permission can name: never service, which
 // bypasses permissions altogether.
 func ValidateRole(role string) error {
-	if role == domain.GrantRoleService {
+	if role == domain.PermissionRoleService {
 		return errors.New(`role "service" bypasses permissions, so a permission for it means nothing`)
 	}
 	if !validRole.MatchString(role) {

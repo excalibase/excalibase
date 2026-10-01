@@ -50,17 +50,6 @@ type PlatformStore interface {
 	// async restore state into.
 	RestoreJobs() RestoreJobStore
 
-	// RlsPolicies returns the RlsPolicyStore that backs the
-	// /api/provision/{p}/rls-policies + column-policies endpoints
-	// excalibase-graphql consumes. See EXC-318.
-	RlsPolicies() RlsPolicyStore
-
-	// TableGrants returns the TableGrantStore that backs the
-	// /api/provision/{p}/table-grants endpoints — the deny-by-default
-	// exposure list excalibase-graphql caches next to the policies.
-	// See EXC-370.
-	TableGrants() TableGrantStore
-
 	// Permissions returns the PermissionStore behind
 	// /api/provision/{p}/permissions, tracked-functions and
 	// function-permissions (EXC-370 step C).

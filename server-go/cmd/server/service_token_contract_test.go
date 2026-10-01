@@ -5,9 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -15,7 +13,6 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/storage"
-	pgstore "github.com/excalibase/provisioning-poc/internal/storage/postgres"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/excalibase/provisioning-poc/pkg/vault"
@@ -23,8 +20,8 @@ import (
 
 // EXC-365: the capability table in internal/middleware/capability.go is a
 // hand-maintained allowlist. Nothing in the build compares it against what the
-// platform's own services actually call, so a route added later — table-grants
-// (EXC-370), the vault credential read, the mail relay — silently answers 403
+// platform's own services actually call, so a route added later — the
+// permission document (EXC-370), the vault credential read, the mail relay — silently answers 403
 // to the service that needs it and the failure only surfaces in an e2e run.
 //
 // This file is that comparison: the inventory below is every control-plane
@@ -32,9 +29,8 @@ import (
 // buildRouter with the principal's real chart permission list.
 //
 // Sources of the inventory:
-//   engine   excalibase-graphql   ProvisioningPolicyProvider (rls-policies,
-//            column-policies, table-grants, and the EXC-370 permission
-//            document), ProvisioningProjectCorsProvider
+//   engine   excalibase-graphql   the EXC-370 permission document,
+//            ProvisioningProjectCorsProvider
 //            (project info), VaultCredentialService (excalibase_app creds)
 //   auth     excalibase-auth      cmd/server/main.go (signing key),
 //            internal/pool/manager.go (auth_admin creds, project info)
@@ -76,9 +72,6 @@ type serviceCall struct {
 // platformCalls is the complete inventory: every request the platform's own
 // services make, with the capability RequiredCapability demands for it.
 var platformCalls = []serviceCall{
-	{svcGraphql, http.MethodGet, "/api/provision/proj-a/rls-policies/", "policies:read", "engine ProvisioningPolicyProvider"},
-	{svcGraphql, http.MethodGet, "/api/provision/proj-a/column-policies/", "policies:read", "engine ProvisioningPolicyProvider"},
-	{svcGraphql, http.MethodGet, "/api/provision/proj-a/table-grants/", "policies:read", "engine ProvisioningPolicyProvider"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/permissions/", "policies:read", "engine permission document (EXC-370)"},
 	{svcGraphql, http.MethodGet, "/api/projects/proj-a/info", "projects:info:read", "engine ProvisioningProjectCorsProvider"},
 	{svcGraphql, http.MethodGet, "/api/vault/secrets/projects/proj-a/credentials/excalibase_app", "vault:read:projects/proj-a/credentials/excalibase_app", "engine VaultCredentialService"},
@@ -94,16 +87,15 @@ var platformCalls = []serviceCall{
 }
 
 // forbiddenCalls are requests each principal must NOT reach: another service's
-// secrets, any write to the policy/exposure surface, and the platform's own
+// secrets, any write to the permission surface, and the platform's own
 // administrative doors.
 var forbiddenCalls = []serviceCall{
 	{svcGraphql, http.MethodGet, "/api/vault/secrets/projects/proj-a/credentials/auth_admin", "", "the auth service's role"},
 	{svcGraphql, http.MethodGet, "/api/vault/secrets/projects/proj-a/credentials/admin", "", "the project owner's role"},
 	{svcGraphql, http.MethodGet, "/api/vault/secrets/pki/signing/private", "", "the platform signing key"},
-	{svcGraphql, http.MethodPost, "/api/provision/proj-a/table-grants/", "", "granting itself exposure"},
-	{svcGraphql, http.MethodPatch, "/api/provision/proj-a/table-grants/g-1", "", "editing a grant"},
-	{svcGraphql, http.MethodDelete, "/api/provision/proj-a/table-grants/g-1", "", "deleting a grant"},
-	{svcGraphql, http.MethodPost, "/api/provision/proj-a/rls-policies/", "", "writing a row policy"},
+	{svcGraphql, http.MethodGet, "/api/provision/proj-a/rls-policies/", "", "the removed row-policy store"},
+	{svcGraphql, http.MethodGet, "/api/provision/proj-a/column-policies/", "", "the removed column-policy store"},
+	{svcGraphql, http.MethodGet, "/api/provision/proj-a/table-grants/", "", "the removed table-grant store"},
 	{svcGraphql, http.MethodPut, "/api/provision/proj-a/permissions/tables/public.orders/roles/user/select", "", "writing a permission"},
 	{svcGraphql, http.MethodDelete, "/api/provision/proj-a/permissions/tables/public.orders/roles/user/select", "", "deleting a permission"},
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/permissions/tables/public.orders/roles/user/select", "", "anything below the document"},
@@ -115,88 +107,10 @@ var forbiddenCalls = []serviceCall{
 	{svcGraphql, http.MethodGet, "/api/provision/proj-a/credentials", "", "the project's own credentials"},
 
 	{svcAuth, http.MethodGet, "/api/vault/secrets/projects/proj-a/credentials/excalibase_app", "", "the engine's role"},
-	{svcAuth, http.MethodGet, "/api/provision/proj-a/rls-policies/", "", "the policy surface"},
-	{svcAuth, http.MethodGet, "/api/provision/proj-a/table-grants/", "", "the exposure surface"},
 	{svcAuth, http.MethodGet, "/api/provision/proj-a/permissions/", "", "the permission document"},
 	{svcAuth, http.MethodPost, "/api/auth/tokens", "", "minting further tokens"},
 	{svcAuth, http.MethodGet, "/api/admin/projects", "", "the platform admin surface"},
 }
-
-// memoryGrantStore is an in-memory storage.TableGrantStore so the exposure
-// routes answer for real instead of panicking on a nil dependency.
-type memoryGrantStore struct {
-	mu     sync.Mutex
-	grants map[string]domain.TableGrant
-}
-
-func newMemoryGrantStore() *memoryGrantStore {
-	return &memoryGrantStore{grants: map[string]domain.TableGrant{}}
-}
-
-func (m *memoryGrantStore) ListGrants(_ context.Context, projectID string) ([]domain.TableGrant, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := []domain.TableGrant{}
-	for _, g := range m.grants {
-		if g.ProjectID == projectID {
-			out = append(out, g)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Resource < out[j].Resource })
-	return out, nil
-}
-
-func (m *memoryGrantStore) GetGrant(_ context.Context, projectID, id string) (*domain.TableGrant, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	g, ok := m.grants[id]
-	if !ok || g.ProjectID != projectID {
-		return nil, pgstore.ErrGrantNotFound
-	}
-	copied := g
-	return &copied, nil
-}
-
-func (m *memoryGrantStore) UpsertGrant(_ context.Context, g *domain.TableGrant) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.grants[g.ID] = *g
-	return nil
-}
-
-func (m *memoryGrantStore) DeleteGrant(_ context.Context, projectID, id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if g, ok := m.grants[id]; !ok || g.ProjectID != projectID {
-		return pgstore.ErrGrantNotFound
-	}
-	delete(m.grants, id)
-	return nil
-}
-
-// emptyPolicyStore is a storage.RlsPolicyStore holding nothing. The contract
-// asserts authorization, not policy content — the policy routes only need to
-// answer instead of panicking on a nil dependency.
-type emptyPolicyStore struct{}
-
-func (emptyPolicyStore) ListRls(context.Context, string, string) ([]domain.Policy, error) {
-	return []domain.Policy{}, nil
-}
-
-func (emptyPolicyStore) GetRls(context.Context, string, string) (*domain.Policy, error) {
-	return nil, pgstore.ErrPolicyNotFound
-}
-func (emptyPolicyStore) UpsertRls(context.Context, *domain.Policy) error { return nil }
-func (emptyPolicyStore) DeleteRls(context.Context, string, string) error { return nil }
-func (emptyPolicyStore) ListColumn(context.Context, string, string) ([]domain.ColumnPolicy, error) {
-	return []domain.ColumnPolicy{}, nil
-}
-
-func (emptyPolicyStore) GetColumn(context.Context, string, string) (*domain.ColumnPolicy, error) {
-	return nil, pgstore.ErrPolicyNotFound
-}
-func (emptyPolicyStore) UpsertColumn(context.Context, *domain.ColumnPolicy) error { return nil }
-func (emptyPolicyStore) DeleteColumn(context.Context, string, string) error       { return nil }
 
 // emptyPermissionStore is a storage.PermissionStore holding nothing, so the
 // permission routes answer instead of panicking on a nil dependency.
@@ -208,15 +122,15 @@ func (emptyPermissionStore) Document(_ context.Context, projectID string) (*doma
 }
 
 // contractRouter builds the production router with every dependency the
-// inventory touches wired — vault seeded, exposure store, mail relay — and
+// inventory touches wired — vault seeded, permission store, mail relay — and
 // returns the raw bearer token of each service principal.
-func contractRouter(t *testing.T) (http.Handler, callers, *memoryGrantStore) {
+func contractRouter(t *testing.T) (http.Handler, callers) {
 	return contractRouterWithProjectStatus(t, "ACTIVE")
 }
 
 // contractRouterWithProjectStatus is contractRouter with the contract
 // project in a chosen lifecycle state.
-func contractRouterWithProjectStatus(t *testing.T, status string) (http.Handler, callers, *memoryGrantStore) {
+func contractRouterWithProjectStatus(t *testing.T, status string) (http.Handler, callers) {
 	t.Helper()
 	localVault, err := newLocalVault(vault.NewMemoryStore(), true, filepath.Join(t.TempDir(), "unseal.key"), "")
 	if err != nil {
@@ -250,16 +164,13 @@ func contractRouterWithProjectStatus(t *testing.T, status string) (http.Handler,
 		who[name] = raw
 	}
 
-	grants := newMemoryGrantStore()
 	deps := matrixDeps(t, instances)
 	deps.vaultHandler = handler.NewVaultHandler(localVault)
 	deps.vaultHandler.SetInstanceStore(instances)
-	deps.tableGrantHandler = handler.NewTableGrantHandler(grants, instances, true)
-	deps.rlsPolicyHandler = handler.NewRlsPolicyHandler(emptyPolicyStore{}, instances)
 	deps.permissionHandler = handler.NewPermissionHandler(emptyPermissionStore{}, instances, nil)
 	deps.internalEmail = handler.NewInternalEmailHandler(&countingSender{})
 	cfg := config.AppConfig{DeploymentMode: "selfhosted"}
-	return buildRouter(cfg, platform, instances, deps), who, grants
+	return buildRouter(cfg, platform, instances, deps), who
 }
 
 func contractRequest(router http.Handler, call serviceCall, token string) *httptest.ResponseRecorder {
@@ -276,7 +187,7 @@ func contractRequest(router http.Handler, call serviceCall, token string) *httpt
 // capability gate. A route the capability table forgot answers 403 here
 // instead of in an e2e run.
 func TestPlatformServiceCallsAreAuthorized(t *testing.T) {
-	router, who, _ := contractRouter(t)
+	router, who := contractRouter(t)
 	for _, call := range platformCalls {
 		t.Run(call.caller+" "+call.method+" "+call.path, func(t *testing.T) {
 			w := contractRequest(router, call, who[call.caller])
@@ -289,7 +200,7 @@ func TestPlatformServiceCallsAreAuthorized(t *testing.T) {
 }
 
 func TestPlatformServicesAreRefusedEverythingElse(t *testing.T) {
-	router, who, _ := contractRouter(t)
+	router, who := contractRouter(t)
 	for _, call := range forbiddenCalls {
 		t.Run(call.caller+" "+call.method+" "+call.path, func(t *testing.T) {
 			w := contractRequest(router, call, who[call.caller])
@@ -309,7 +220,7 @@ func TestServicesGetNoCredentialsForAProjectThatIsNotServable(t *testing.T) {
 		"deleting":  string(domain.StatusDeleting),
 	} {
 		t.Run(name, func(t *testing.T) {
-			router, who, _ := contractRouterWithProjectStatus(t, status)
+			router, who := contractRouterWithProjectStatus(t, status)
 			for _, call := range []serviceCall{
 				{svcGraphql, http.MethodGet, "/api/vault/secrets/projects/" + contractProject + "/credentials/excalibase_app", "", ""},
 				{svcAuth, http.MethodGet, "/api/vault/secrets/projects/" + contractProject + "/credentials/auth_admin", "", ""},
@@ -327,7 +238,7 @@ func TestServicesGetNoCredentialsForAProjectThatIsNotServable(t *testing.T) {
 // document answers 404 for a project the platform does not know, so the
 // engine refuses it instead of caching an empty set.
 func TestEngineTokenReadsThePermissionDocument(t *testing.T) {
-	router, who, _ := contractRouter(t)
+	router, who := contractRouter(t)
 	for projectID, want := range map[string]int{contractProject: http.StatusOK, "proj-unknown": http.StatusNotFound} {
 		call := serviceCall{caller: svcGraphql, method: http.MethodGet, path: "/api/provision/" + projectID + "/permissions/"}
 		w := contractRequest(router, call, who[svcGraphql])

@@ -54,12 +54,6 @@ var (
 	// tokenByHashRoute and tokenRotateRoute name one token by its hash.
 	tokenByHashRoute = regexp.MustCompile(`^/api/auth/tokens/[^/]+$`)
 	tokenRotateRoute = regexp.MustCompile(`^/api/auth/tokens/[^/]+/rotate$`)
-	// policyRoute is the policy read surface the engine polls. table-grants
-	// (EXC-370) is part of it: the engine fetches the exposure list in the
-	// same round as the two policy sets and enforces them together, so a
-	// grant that covers one without the other leaves the engine with half a
-	// policy set and no way to answer a query.
-	policyRoute = regexp.MustCompile(`^/api/provision/[^/]+/(rls-policies|column-policies|table-grants)(/[^/]+)?$`)
 	// permissionDocumentRoute is the engine's one read of a project's API
 	// permissions (EXC-370); nothing below it is readable with a capability.
 	permissionDocumentRoute = regexp.MustCompile(`^/api/provision/[^/]+/permissions$`)
@@ -95,7 +89,7 @@ func RequiredCapability(method, rawPath string) (auth.Capability, bool) {
 	if projectInfoRoute.MatchString(cleaned) {
 		return auth.Capability{Resource: capResourceProjects, Action: capActionInfo, Selector: capActionRead}, true
 	}
-	if policyRoute.MatchString(cleaned) || permissionDocumentRoute.MatchString(cleaned) {
+	if permissionDocumentRoute.MatchString(cleaned) {
 		return auth.Capability{Resource: capResourcePolicies, Action: capActionRead}, true
 	}
 	if m := serviceAccountTokensRoute.FindStringSubmatch(cleaned); m != nil {

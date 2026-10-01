@@ -139,11 +139,6 @@ func (f *fakePermissionStore) DeleteFunctionPermission(_ context.Context, _, fun
 	return nil
 }
 
-func (f *fakePermissionStore) LegacyPending(context.Context) ([]string, error) { return nil, nil }
-func (f *fakePermissionStore) ImportLegacy(context.Context, string, domain.LegacyPermissionImport) error {
-	return nil
-}
-
 type fakeInspector struct {
 	details []schema.FunctionDetail
 	err     error

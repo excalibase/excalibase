@@ -32,7 +32,7 @@ func newActivityRouter(rec ActivityRecorder, status int) *chi.Mux {
 	r.Route("/api/provision/{projectId}", func(r chi.Router) {
 		r.Use(ProjectActivity(rec))
 		r.Get("/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
-		r.Get("/rls-policies/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
+		r.Get("/permissions/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
 	})
 	r.With(ProjectActivity(rec)).Get("/api/tiers", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
 	return r
@@ -55,7 +55,7 @@ func TestProjectActivity_ClassifiesDataPlanePolicyFetch(t *testing.T) {
 	r := newActivityRouter(rec, http.StatusOK)
 
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/provision/p1/rls-policies/", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/provision/p1/permissions/", nil))
 
 	if len(rec.calls) != 1 || rec.calls[0].source != SourcePolicyFetch {
 		t.Fatalf("policy fetch must be classified as data-plane activity, got %+v", rec.calls)
@@ -97,8 +97,7 @@ func TestActivitySource_ClassifiesByPath(t *testing.T) {
 	cases := map[string]domain.ActivitySource{
 		"/api/provision/p1/":                      SourceAPI,
 		"/api/provision/p1/credentials":           SourceAPI,
-		"/api/provision/p1/rls-policies/":         SourcePolicyFetch,
-		"/api/provision/p1/column-policies/":      SourcePolicyFetch,
+		"/api/provision/p1/permissions/":          SourcePolicyFetch,
 		"/api/provision/p1/backup/manual":         SourceBackup,
 		"/api/provision/p1/snapshot":              SourceBackup,
 		"/api/provision/p1/migrations":            SourceMigration,

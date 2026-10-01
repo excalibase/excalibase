@@ -459,7 +459,7 @@ func (s *Store) FindAll() ([]*domain.DatabaseInstance, error) {
 
 // projectOwnedTables hold a project's configuration, grants and credentials.
 // They are keyed by project_id without a foreign key, so removing the
-// project row alone would leave them behind — policies and grants naming a
+// project row alone would leave them behind — settings and credentials naming a
 // project id that a later project could be issued. Delete clears them in the
 // same transaction as the row, so the project is gone or it is not.
 //
@@ -467,9 +467,6 @@ func (s *Store) FindAll() ([]*domain.DatabaseInstance, error) {
 // backup_records, migration_records, restore_jobs, audit_log), which record
 // what happened rather than what the project can do.
 var projectOwnedTables = []string{
-	"rls_policies",
-	"column_policies",
-	"table_grants",
 	"project_cors_settings",
 	"project_app_network",
 	"edge_function_settings",

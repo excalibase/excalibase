@@ -30,7 +30,6 @@ test.describe('Table API permissions', () => {
     await page.goto('/project/test-project/database/tables');
     await expect(page.getByTestId('access-summary-orders')).toContainText('anon');
     await expect(page.getByTestId('access-summary-orders')).toContainText('user');
-    await expect(page.getByTestId('exposure-toggle-orders')).toHaveCount(0);
     await page.screenshot({ path: `${SHOTS_DIR}/01-tables-access-summary.png`, fullPage: true });
 
     await page.getByRole('link', { name: 'API permissions of orders' }).click();

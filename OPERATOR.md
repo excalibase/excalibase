@@ -13,7 +13,7 @@ Project-scoped routes sit on one of three rungs, decided by what the call can de
 | Rung | What it covers |
 |------|----------------|
 | **viewer** | Reads only: project status and logs, metrics, performance, project info, schema browsing, listing buckets and objects, minting a download URL, listing realtime tables, alerts. |
-| **developer** | Data-plane authoring — everything that changes what the tenant's database or edge serves and is undone by authoring it back: schema DDL, `/query` and row writes, migrations, RLS and column policies, table grants, edge functions (deploy, secrets, egress), the browser-origin allowlist, auth settings, realtime publication membership, and storage buckets and objects. A bucket is a container inside the project the way a table is, so dropping one sits with `DROP TABLE`, not with project teardown. |
+| **developer** | Data-plane authoring — everything that changes what the tenant's database or edge serves and is undone by authoring it back: schema DDL, `/query` and row writes, migrations, Postgres RLS policies, API permissions and tracked functions, edge functions (deploy, secrets, egress), the browser-origin allowlist, auth settings, realtime publication membership, and storage buckets and objects. A bucket is a container inside the project the way a table is, so dropping one sits with `DROP TABLE`, not with project teardown. |
 | **admin** | Project lifecycle and credentials — what a tenant cannot author their way back out of: delete the project, read or rotate its database credentials, deletion protection, pause and resume, backups and restores, backup purge, and full-database snapshots. |
 | **owner** | Deleting the org. Everything else admin covers. |
 
@@ -80,7 +80,7 @@ A capability token carries an explicit permission list. Each entry is `<resource
 | --- | --- |
 | `vault:read:pki/signing/*` | `GET /api/vault/secrets/pki/signing/<leaf>` — the `*` stands for exactly one path segment and never crosses a `/` |
 | `projects:info:read` | `GET /api/projects/{projectId}/info` |
-| `policies:read` | `GET /api/provision/{projectId}/rls-policies` and `/column-policies`, list or by id |
+| `policies:read` | `GET /api/provision/{projectId}/permissions/` — the whole permission document, nothing below it |
 | `email:send` | `POST /internal/email/send` — the transactional mail relay; the only write any capability may make |
 
 The list is **default-deny and absolute**: a token with a non-empty permission list may call only the endpoints its list names, and everything else — every write, every other route — answers `403`, regardless of the owning principal's platform role. `GET /api/auth/me` is always reachable so a service can validate its own credential. Tokens with an empty permission list (every human PAT and session) are untouched by this layer.
@@ -90,7 +90,7 @@ The two principals the platform ships with:
 | Principal | Permissions | Consumer |
 | --- | --- | --- |
 | `svc-auth` | `vault:read:pki/signing/*`, `projects:info:read`, `email:send` | auth service — JWKS signing key at boot, per-project info hourly, verification and reset mail |
-| `svc-graphql` | `projects:info:read`, `policies:read` | engine — project credentials + CORS, RLS/column policies every 30 s |
+| `svc-graphql` | `projects:info:read`, `policies:read` | engine — project credentials + CORS, the permission document |
 
 ```bash
 # Create (idempotent by name — safe to re-run on every upgrade)
@@ -895,7 +895,7 @@ and incident response, but a project-bound PAT still confines them.
 |---|---|---|
 | `GET /api/provision/{id}`, `/logs`, `/maintenance-window`, `/metrics/*`, `/performance/*` | Viewer | any member |
 | `PUT /api/provision/{id}/maintenance-window` | Developer | |
-| `/api/provision/{id}/audit`, `/migrations`, `/rls-policies`, `/column-policies` | Developer | |
+| `/api/provision/{id}/audit`, `/migrations`, `/permissions`, `/tracked-functions`, `/function-permissions` | Developer | |
 | `DELETE /api/provision/{id}`, `/credentials`, `/credentials/rotate`, `/deletion-protection`, `/pause`, `/resume`, `/backups/purge` | Admin | lifecycle + secrets |
 | `/api/provision/{id}/backup/*`, `/snapshot/*` | Admin | dump/restore are destructive and exfil-capable |
 | `GET /api/schema/{id}/*` | Viewer | browse |
