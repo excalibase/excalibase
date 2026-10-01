@@ -301,3 +301,24 @@ describe('ProvisionPage — DocumentDB not installed', () => {
     expect(screen.getByTestId('engine-POSTGRESQL')).toBeEnabled();
   });
 });
+
+// A failed org lookup is said, not swallowed: the form cannot be submitted
+// without an organization and the user must know why the list is empty.
+describe('ProvisionPage — organizations', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('says so when the organizations cannot be loaded', async () => {
+    renderPage();
+    vi.mocked(listMyOrgs).mockReset();
+    vi.mocked(listMyOrgs).mockRejectedValue(new Error('network down'));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <ProvisionPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId('orgs-error')).toHaveTextContent('network down');
+  });
+});

@@ -55,6 +55,7 @@ export function ProvisionPage() {
   const provision = useProvisionDatabase();
 
   const [orgs, setOrgs] = useState<Org[]>([]);
+  const [orgsError, setOrgsError] = useState('');
   const [deployMode, setDeployMode] = useState<DeployMode>('k8s');
   const [projectName, setProjectName] = useState('');
   const [orgId, setOrgId] = useState('');
@@ -97,10 +98,14 @@ export function ProvisionPage() {
   const planConfig = tierConfigs?.find((tc) => tc.tier === selectedOrg?.tier);
 
   useEffect(() => {
-    listMyOrgs().then((data) => {
-      setOrgs(data);
-      if (data.length === 1) setOrgId(data[0].id);
-    });
+    listMyOrgs()
+      .then((data) => {
+        setOrgs(data);
+        if (data.length === 1) setOrgId(data[0].id);
+      })
+      .catch((failure: unknown) => {
+        setOrgsError(failure instanceof Error ? failure.message : String(failure));
+      });
   }, []);
 
   const isPending = provision.isPending;
@@ -174,6 +179,11 @@ export function ProvisionPage() {
                   <option key={org.id} value={org.id}>{org.name} ({org.tier})</option>
                 ))}
               </select>
+              {orgsError && (
+                <p data-testid="orgs-error" className="text-xs text-color-error mt-1">
+                  Organizations could not be loaded: {orgsError}
+                </p>
+              )}
             </div>
           </div>
         </div>
