@@ -227,3 +227,24 @@ func TestDBEndpointSaysWhetherTheCallerMayChangeIt(t *testing.T) {
 		}
 	}
 }
+
+// EXC-528: Studio hides the public-port control on an installation that
+// offers none, and still gets the in-cluster half and the CA.
+func TestGetDBEndpointSaysWhetherPublicPortsAreOffered(t *testing.T) {
+	for _, offered := range []bool{true, false} {
+		view := service.DBEndpointView{ProjectID: "proj-abc", PublicOffered: offered, CACertificate: "PEM"}
+		view.Internal.MongoHost = "proj-abc-documentdb.org-proj-abc.svc.cluster.local"
+		view.Internal.MongoPort = 10260
+		w := dbEndpointCall(t, &fakeDBEndpoints{view: view}, http.MethodGet, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+		}
+		body := decodeDBEndpoint(t, w)
+		if body["publicOffered"] != offered {
+			t.Fatalf("publicOffered = %v, want %v", body["publicOffered"], offered)
+		}
+		if body["caCertificate"] != "PEM" || body["internal"].(map[string]interface{})["mongoHost"] == nil {
+			t.Fatalf("the in-cluster half must be served either way: %v", body)
+		}
+	}
+}

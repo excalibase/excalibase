@@ -38,6 +38,9 @@ export interface ProjectMongoEndpoint {
 
 export interface ProjectEndpoint {
   projectId: string;
+  // False on an installation that offers no public ports: only the
+  // in-cluster endpoint and the CA are described.
+  publicOffered?: boolean;
   // The customer's choice: false means no public Service exists at all.
   publicEnabled: boolean;
   // Observation, not choice: whether the public port is answering right now.

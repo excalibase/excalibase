@@ -78,7 +78,10 @@ type dbEndpointInternal struct {
 //	caCertificate  the cluster CA, so sslmode=verify-full works. Present
 //	               only while the endpoint is actually up
 type dbEndpointResponse struct {
-	ProjectID         string                      `json:"projectId"`
+	ProjectID string `json:"projectId"`
+	// publicOffered is false on an installation with no public database
+	// ports: only the in-cluster half and the CA are described.
+	PublicOffered     bool                        `json:"publicOffered"`
 	PublicEnabled     bool                        `json:"publicEnabled"`
 	Available         bool                        `json:"available"`
 	Host              string                      `json:"host"`
@@ -220,6 +223,7 @@ func dbEndpointResponseFor(view service.DBEndpointView, canChange bool) dbEndpoi
 	return dbEndpointResponse{
 		CanChange:     canChange,
 		ProjectID:     view.ProjectID,
+		PublicOffered: view.PublicOffered,
 		PublicEnabled: view.Enabled,
 		Available:     view.Available,
 		Host:          view.Host,

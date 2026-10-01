@@ -153,7 +153,10 @@ type DBEndpointInternal struct {
 // paused, being deleted or restoring. Both connection strings are always
 // present so the customer can see exactly what requiring TLS buys them.
 type DBEndpointView struct {
-	ProjectID     string
+	ProjectID string
+	// PublicOffered is whether this installation offers public ports at
+	// all; without an endpoint domain only the in-cluster half is described.
+	PublicOffered bool
 	Enabled       bool
 	Available     bool
 	Host          string
@@ -211,6 +214,9 @@ func (s *DBEndpointService) Describe(ctx context.Context, projectID string) (DBE
 // other way round would leave a port free to reissue while something was
 // still listening on it.
 func (s *DBEndpointService) SetPublic(ctx context.Context, projectID string, public bool) (DBEndpointView, error) {
+	if !s.publicOffered() {
+		return DBEndpointView{}, ErrDBEndpointNotConfigured
+	}
 	inst, err := s.project(projectID)
 	if err != nil {
 		return DBEndpointView{}, err
@@ -256,6 +262,9 @@ func (s *DBEndpointService) SetPublic(ctx context.Context, projectID string, pub
 // a client is outside. It is a cluster change, so it takes the project lease
 // and needs an active project.
 func (s *DBEndpointService) SetRequireTLS(ctx context.Context, projectID string, requireTLS bool) (DBEndpointView, error) {
+	if !s.publicOffered() {
+		return DBEndpointView{}, ErrDBEndpointNotConfigured
+	}
 	if _, err := s.project(projectID); err != nil {
 		return DBEndpointView{}, err
 	}
@@ -536,7 +545,14 @@ func (s *DBEndpointService) deleteObserved(ctx context.Context, inst *domain.Dat
 // without endpoints configured is not failed by them.
 func (s *DBEndpointService) inert(inst *domain.DatabaseInstance) bool {
 	return s == nil || s.endpoints == nil || s.kube == nil ||
-		s.domainSuffix == "" || inst == nil || inst.DeploymentMode != domain.ModeK8s
+		!s.publicOffered() || inst == nil || inst.DeploymentMode != domain.ModeK8s
+}
+
+// publicOffered reports whether this installation publishes database ports
+// at all. Without an endpoint domain there is no name to publish under, and
+// only the in-cluster endpoint is described.
+func (s *DBEndpointService) publicOffered() bool {
+	return s.domainSuffix != ""
 }
 
 // project loads the project, refusing one that does not exist or that this
@@ -544,9 +560,6 @@ func (s *DBEndpointService) inert(inst *domain.DatabaseInstance) bool {
 // platform has no endpoints" and "this project cannot have one" are
 // different things for a customer to read.
 func (s *DBEndpointService) project(projectID string) (*domain.DatabaseInstance, error) {
-	if s.domainSuffix == "" {
-		return nil, ErrDBEndpointNotConfigured
-	}
 	inst, err := s.instances.FindByProjectID(projectID)
 	if err != nil {
 		return nil, fmt.Errorf("read project %s: %w", projectID, err)
@@ -569,33 +582,16 @@ func servableNow(status string) bool {
 }
 
 // view renders the endpoint for a caller, asking Kubernetes whether the
-// Service is really there rather than trusting the stored setting.
+// Service is really there rather than trusting the stored setting. The
+// in-cluster half is described whether or not the installation offers
+// public ports at all.
 func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInstance, endpoint domain.DBEndpoint) (DBEndpointView, error) {
-	host, err := domain.DBEndpointHost(inst.ProjectID, s.domainSuffix)
-	if err != nil {
-		return DBEndpointView{}, err
-	}
-	available := false
-	if endpoint.IsPublic() {
-		available, err = s.kube.PublicDBServiceExists(ctx, inst.Namespace, domain.DBEndpointServiceName(inst.ProjectID))
-		if err != nil {
-			return DBEndpointView{}, fmt.Errorf("read database endpoint state: %w", err)
-		}
-	}
-	postgresStrings := domain.DBEndpointConnectionStrings(host, endpoint.Port, inst.Username, inst.DatabaseName)
 	view := DBEndpointView{
-		ProjectID:  inst.ProjectID,
-		Enabled:    endpoint.PublicEnabled,
-		Available:  available,
-		Host:       host,
-		Port:       endpoint.Port,
-		RequireTLS: endpoint.RequireTLS,
-		Database:   inst.DatabaseName,
-		Username:   inst.Username,
-		Connection: DBEndpointConnectionStrings{
-			RequireTLS:     postgresStrings.RequireTLS,
-			AllowPlaintext: postgresStrings.AllowPlaintext,
-		},
+		ProjectID:     inst.ProjectID,
+		PublicOffered: s.publicOffered(),
+		RequireTLS:    endpoint.RequireTLS,
+		Database:      inst.DatabaseName,
+		Username:      inst.Username,
 		Internal: DBEndpointInternal{
 			Host: inst.Host,
 			Port: postgresPort,
@@ -603,12 +599,15 @@ func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInsta
 				inst.Host, postgresPort, inst.Username, inst.DatabaseName, internalSSLMode(endpoint)),
 		},
 	}
-	if err := s.addMongoEndpoint(ctx, inst, host, &view); err != nil {
-		return DBEndpointView{}, err
+	addInternalMongoEndpoint(inst, &view)
+	if s.publicOffered() {
+		if err := s.addPublicEndpoint(ctx, inst, endpoint, &view); err != nil {
+			return DBEndpointView{}, err
+		}
 	}
 	// Every network login needs TLS, the in-cluster one too, so the CA goes
 	// with any running database, published or not.
-	if available || servableNow(inst.Status) {
+	if view.Available || servableNow(inst.Status) {
 		ca, err := s.clusterCA(ctx, inst)
 		if err != nil {
 			return DBEndpointView{}, err
@@ -616,6 +615,29 @@ func (s *DBEndpointService) view(ctx context.Context, inst *domain.DatabaseInsta
 		view.CACertificate = ca
 	}
 	return view, nil
+}
+
+// addPublicEndpoint fills in the public name, port and strings.
+func (s *DBEndpointService) addPublicEndpoint(
+	ctx context.Context, inst *domain.DatabaseInstance, endpoint domain.DBEndpoint, view *DBEndpointView,
+) error {
+	host, err := domain.DBEndpointHost(inst.ProjectID, s.domainSuffix)
+	if err != nil {
+		return err
+	}
+	if endpoint.IsPublic() {
+		view.Available, err = s.kube.PublicDBServiceExists(ctx, inst.Namespace, domain.DBEndpointServiceName(inst.ProjectID))
+		if err != nil {
+			return fmt.Errorf("read database endpoint state: %w", err)
+		}
+	}
+	postgresStrings := domain.DBEndpointConnectionStrings(host, endpoint.Port, inst.Username, inst.DatabaseName)
+	view.Enabled = endpoint.PublicEnabled
+	view.Host = host
+	view.Port = endpoint.Port
+	view.Connection.RequireTLS = postgresStrings.RequireTLS
+	view.Connection.AllowPlaintext = postgresStrings.AllowPlaintext
+	return s.addPublicMongoEndpoint(ctx, inst, host, view)
 }
 
 // internalSSLMode is what an in-cluster client should use: the database
@@ -627,28 +649,35 @@ func internalSSLMode(endpoint domain.DBEndpoint) string {
 	return domain.SSLModePrefer
 }
 
-// addMongoEndpoint fills in the Mongo half for a DocumentDB project, and
-// leaves every Mongo field zero for any other.
+// addInternalMongoEndpoint fills in the gateway's in-cluster address for a
+// DocumentDB project, and leaves every Mongo field zero for any other.
 //
 // The internal address is reported whether or not the project publishes: an
 // app this platform hosts beside the database reaches the gateway inside the
 // cluster with no public port at all, and that is how it should connect.
-//
-// MongoAvailable is asked of the gateway container rather than inferred from
-// the Service. The gateway starts by waiting for Postgres and then creating
-// its Mongo user, so there is a real window in which the Service exists, the
-// port is open and a Mongo client is still refused.
-func (s *DBEndpointService) addMongoEndpoint(
-	ctx context.Context, inst *domain.DatabaseInstance, host string, view *DBEndpointView,
-) error {
+func addInternalMongoEndpoint(inst *domain.DatabaseInstance, view *DBEndpointView) {
 	if !inst.DocumentDB {
-		return nil
+		return
 	}
 	view.Internal.MongoHost = k8s.DocumentDBServiceHost(inst.ProjectID, inst.Namespace)
 	view.Internal.MongoPort = config.DocumentDBGatewayPort
 	view.Internal.MongoConnectionString = domain.MongoConnectionString(
 		view.Internal.MongoHost, config.DocumentDBGatewayPort, inst.Username, true)
+}
 
+// addPublicMongoEndpoint fills in the public Mongo port and strings of a
+// published DocumentDB project.
+//
+// MongoAvailable is asked of the gateway container rather than inferred from
+// the Service. The gateway starts by waiting for Postgres and then creating
+// its Mongo user, so there is a real window in which the Service exists, the
+// port is open and a Mongo client is still refused.
+func (s *DBEndpointService) addPublicMongoEndpoint(
+	ctx context.Context, inst *domain.DatabaseInstance, host string, view *DBEndpointView,
+) error {
+	if !inst.DocumentDB {
+		return nil
+	}
 	port, err := s.mongoPort(ctx, inst)
 	if err != nil {
 		return err

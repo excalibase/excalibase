@@ -11,6 +11,7 @@ vi.mock('../api/client', () => ({
 
 const closed = {
   projectId: 'p-1',
+  publicOffered: true,
   publicEnabled: false,
   available: false,
   host: '',
@@ -94,6 +95,15 @@ describe('PublicPortCard', () => {
     );
     expect(await screen.findByTestId('public-port-unavailable')).toBeInTheDocument();
     expect(screen.queryByTestId('public-port-toggle')).toBeNull();
+  });
+
+  test('says so, with no control, when the endpoint reports public ports are not offered', async () => {
+    renderCard({ ...closed, publicOffered: false });
+    expect(await screen.findByTestId('public-port-unavailable')).toHaveTextContent(
+      /does not offer public database ports/i,
+    );
+    expect(screen.queryByTestId('public-port-toggle')).toBeNull();
+    expect(screen.queryByTestId('public-port-state')).toBeNull();
   });
 
   test('a project that is not active cannot change its port', async () => {
