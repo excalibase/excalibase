@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Trash2, Loader2, FunctionSquare, Code2 } from 'lucide-react';
 import { useFunctions, useCreateFunction, useDropFunction } from '../hooks/useSchema';
+import { usePermissionDocument } from '../hooks/usePermissions';
+import { useProjectRole } from '../hooks/useProjectRole';
+import { FunctionApiAccess } from '../components/permissions/FunctionApiAccess';
 import { SidePanel } from '../components/ui/SidePanel';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 
@@ -16,6 +19,9 @@ export function FunctionsPage() {
   const { data: functions = [], isLoading } = useFunctions(projectId || '');
   const createFn = useCreateFunction(projectId || '');
   const dropFn = useDropFunction(projectId || '');
+  // Tracking decides whether a function is reachable through the API (EXC-370).
+  const { canDevelop } = useProjectRole(projectId || '');
+  const { data: permissionDoc } = usePermissionDocument(projectId || '', canDevelop);
 
   const [showCreate, setShowCreate] = useState(false);
   const [dropTarget, setDropTarget] = useState<{ name: string; argTypes: string } | null>(null);
@@ -73,11 +79,22 @@ export function FunctionsPage() {
               </button>
               <button
                 onClick={() => setDropTarget({ name: fn.name, argTypes: fn.argTypes })}
+                aria-label={`Drop ${fn.name}`}
                 className="p-1 text-text-tertiary hover:text-red-400 transition-colors"
               >
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>
+            {canDevelop && permissionDoc && (
+              <FunctionApiAccess
+                projectId={projectId || ''}
+                fn={fn}
+                tracked={permissionDoc.functions.find(t => t.function === `${fn.schema || 'public'}.${fn.name}`)}
+                roles={permissionDoc.functionPermissions
+                  .filter(p => p.function === `${fn.schema || 'public'}.${fn.name}`)
+                  .map(p => p.role)}
+              />
+            )}
             {expanded === fn.name && (
               <div className="px-4 pb-4 border-t border-border-primary">
                 <div className="flex items-center gap-2 py-2">

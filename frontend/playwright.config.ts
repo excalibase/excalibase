@@ -1,5 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
 
+// STUDIO_E2E_PORT moves the local dev server off 5173 when that port is taken.
+// STUDIO_LIVE_URL points the run at a real Studio (e2e/live/*): no dev server.
+const port = Number(process.env.STUDIO_E2E_PORT ?? 5173);
+const localUrl = `http://localhost:${port}`;
+const liveUrl = process.env.STUDIO_LIVE_URL;
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -8,7 +14,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: liveUrl ?? localUrl,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -18,10 +24,12 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 30000,
-  },
+  webServer: liveUrl
+    ? undefined
+    : {
+        command: `npm run dev -- --port ${port} --strictPort`,
+        url: localUrl,
+        reuseExistingServer: !process.env.CI,
+        timeout: 30000,
+      },
 });

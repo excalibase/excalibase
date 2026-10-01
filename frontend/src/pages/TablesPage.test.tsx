@@ -6,9 +6,10 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { TablesPage } from './TablesPage';
 import { api } from '../api/client';
 
-// The exposure half of this page lives in TablesPage.exposure.test.tsx. This
-// file covers the rest of what an operator does here: browse a table, read
-// and edit its rows, page and sort them, and change its shape.
+// API access (summary, permissions link, public read on create) lives in
+// TablesPage.access.test.tsx. This file covers the rest of what an operator
+// does here: browse a table, read and edit its rows, page and sort them, and
+// change its shape.
 
 vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn(), put: vi.fn() },
@@ -77,9 +78,6 @@ function renderPage() {
     }
     if (url.endsWith('/columns')) return Promise.resolve({ data: COLUMNS } as never);
     if (url.endsWith('/tables')) return Promise.resolve({ data: TABLES } as never);
-    if (url.endsWith('/table-grants/')) {
-      return Promise.resolve({ data: { projectId: 'p1', enforced: true, grants: [] } } as never);
-    }
     return Promise.resolve({ data: [] } as never);
   });
   vi.mocked(api.post).mockResolvedValue({ data: {} } as never);

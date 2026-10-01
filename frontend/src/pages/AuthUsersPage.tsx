@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Loader2, Trash2, Search, UserCheck, UserX } from 'lucide-react';
 import { useAuthUsers, useUpdateAuthUser, useDeleteAuthUser } from '../hooks/useAuthUsers';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
+import { EndUserRoles } from '../components/endusers/EndUserRoles';
 
 export function AuthUsersPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -100,6 +101,8 @@ export function AuthUsersPage() {
           </tbody>
         </table>
       </div>
+
+      <EndUserRoles projectId={projectId || ''} />
 
       <ConfirmModal
         open={!!deleteTarget}

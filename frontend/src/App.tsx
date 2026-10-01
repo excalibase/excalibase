@@ -23,6 +23,7 @@ const InstanceDetailPage = lazy(() => import('./pages/InstanceDetailPage').then(
 const ProvisionPage = lazy(() => import('./pages/ProvisionPage').then(m => ({ default: m.ProvisionPage })));
 const SqlEditorPage = lazy(() => import('./pages/SqlEditorPage').then(m => ({ default: m.SqlEditorPage })));
 const TablesPage = lazy(() => import('./pages/TablesPage').then(m => ({ default: m.TablesPage })));
+const TablePermissionsPage = lazy(() => import('./pages/TablePermissionsPage').then(m => ({ default: m.TablePermissionsPage })));
 const FunctionsPage = lazy(() => import('./pages/FunctionsPage').then(m => ({ default: m.FunctionsPage })));
 const ExtensionsPage = lazy(() => import('./pages/ExtensionsPage').then(m => ({ default: m.ExtensionsPage })));
 const RolesPage = lazy(() => import('./pages/RolesPage').then(m => ({ default: m.RolesPage })));
@@ -107,6 +108,7 @@ export default function App() {
               {/* Database */}
               <Route path="database/overview" element={<InstanceDetailPage />} />
               <Route path="database/tables" element={<TablesPage />} />
+              <Route path="database/tables/:schema/:table/permissions" element={<TablePermissionsPage />} />
               <Route path="database/functions" element={<FunctionsPage />} />
               <Route path="database/extensions" element={<ExtensionsPage />} />
               <Route path="database/roles" element={<RolesPage />} />

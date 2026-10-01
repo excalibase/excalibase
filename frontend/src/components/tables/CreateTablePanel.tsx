@@ -1,7 +1,11 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Trash2 } from 'lucide-react';
 import { SidePanel } from '../ui/SidePanel';
 import { useCreateTable } from '../../hooks/useSchema';
+import { permissionsKey } from '../../hooks/usePermissions';
+import { apiErrorMessage, putTablePermission } from '../../api/permissions';
+import { DEFAULT_ROLES, fullAccess, tableKey } from '../../utils/permissionModel';
 
 interface ColumnDraft {
   // _key is a stable identity for React keys, since column names + positions
@@ -24,40 +28,88 @@ const DEFAULT_COLUMNS: ColumnDraft[] = [
   { _key: 'col-default-id', name: 'id', type: 'serial', primaryKey: true, nullable: false, unique: false },
 ];
 
+function submitLabel(grantError: string | null, busy: boolean): string {
+  if (grantError) return 'Close';
+  return busy ? 'Creating...' : 'Create Table';
+}
+
+type ReadRole = (typeof DEFAULT_ROLES)[number];
+
+const READ_OPTIONS: ReadonlyArray<{ role: ReadRole; label: string }> = [
+  { role: 'anon', label: 'Anyone can read (anon)' },
+  { role: 'user', label: 'Signed-in users can read (user)' },
+];
+
+const NO_READ: Record<ReadRole, boolean> = { anon: false, user: false };
+
 interface CreateTablePanelProps {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly projectId: string;
+  // Developer and up may write permissions; others are not offered public read.
+  readonly canGrantRead?: boolean;
 }
 
-export function CreateTablePanel({ open, onClose, projectId }: CreateTablePanelProps) {
+export function CreateTablePanel({ open, onClose, projectId, canGrantRead = false }: CreateTablePanelProps) {
   const createTable = useCreateTable(projectId);
+  const qc = useQueryClient();
   const [newTableName, setNewTableName] = useState('');
   const [newCols, setNewCols] = useState<ColumnDraft[]>([...DEFAULT_COLUMNS]);
+  // Hasura's default: a new table is reachable by nobody until a permission says so.
+  const [readRoles, setReadRoles] = useState<Record<ReadRole, boolean>>(NO_READ);
+  const [granting, setGranting] = useState(false);
+  const [grantError, setGrantError] = useState<string | null>(null);
 
-  const handleCreate = () => {
-    if (!newTableName.trim()) return;
-    createTable.mutate(
-      {
-        name: newTableName,
-        // Strip the client-only _key before sending to the API.
-        columns: newCols.map(({ _key: _, ...c }) => ({ ...c, default: undefined })),
-      },
-      {
-        onSuccess: () => {
-          onClose();
-          setNewTableName('');
-          setNewCols([...DEFAULT_COLUMNS]);
-        },
-      },
-    );
+  const reset = () => {
+    setNewTableName('');
+    setNewCols([...DEFAULT_COLUMNS]);
+    setReadRoles(NO_READ);
+    setGrantError(null);
   };
 
   const handleClose = () => {
     onClose();
-    setNewTableName('');
-    setNewCols([...DEFAULT_COLUMNS]);
+    reset();
   };
+
+  // The table stays when a grant fails: the error says so instead of undoing it.
+  const grantRead = async (tableName: string): Promise<string[]> => {
+    const failures: string[] = [];
+    for (const { role } of READ_OPTIONS.filter((option) => canGrantRead && readRoles[option.role])) {
+      try {
+        await putTablePermission(projectId, tableKey('public', tableName), role, 'select', fullAccess('select'));
+      } catch (err) {
+        failures.push(`${role} read could not be granted (${apiErrorMessage(err, 'unknown error')})`);
+      }
+    }
+    return failures;
+  };
+
+  const handleCreate = async () => {
+    if (!newTableName.trim()) return;
+    try {
+      await createTable.mutateAsync({
+        name: newTableName,
+        // Strip the client-only _key before sending to the API.
+        columns: newCols.map(({ _key: _, ...c }) => ({ ...c, default: undefined })),
+      });
+    } catch {
+      return; // useCreateTable already reported it
+    }
+    setGranting(true);
+    const failures = await grantRead(newTableName);
+    setGranting(false);
+    qc.invalidateQueries({ queryKey: permissionsKey(projectId) });
+    if (failures.length > 0) {
+      setGrantError(
+        `Table ${newTableName} was created, but ${failures.join('; ')}. Set it on the table's permissions page.`,
+      );
+      return;
+    }
+    handleClose();
+  };
+
+  const busy = createTable.isPending || granting;
 
   return (
     <SidePanel
@@ -65,14 +117,21 @@ export function CreateTablePanel({ open, onClose, projectId }: CreateTablePanelP
       onClose={handleClose}
       title="Create Table"
       footer={
-        <button
-          onClick={handleCreate}
-          disabled={!newTableName.trim() || createTable.isPending}
-          className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-lg disabled:opacity-50"
-          data-testid="create-table-submit"
-        >
-          {createTable.isPending ? 'Creating...' : 'Create Table'}
-        </button>
+        <div className="space-y-2">
+          {grantError && (
+            <p role="alert" className="text-xs text-red-400">
+              {grantError}
+            </p>
+          )}
+          <button
+            onClick={grantError ? handleClose : handleCreate}
+            disabled={!grantError && (!newTableName.trim() || busy)}
+            className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+            data-testid="create-table-submit"
+          >
+            {submitLabel(grantError, busy)}
+          </button>
+        </div>
       }
     >
       <div className="space-y-4">
@@ -114,7 +173,7 @@ export function CreateTablePanel({ open, onClose, projectId }: CreateTablePanelP
                 placeholder="type"
               />
               {i > 0 && (
-                <button onClick={() => setNewCols(newCols.filter((_, j) => j !== i))} className="p-1 text-red-400">
+                <button onClick={() => setNewCols(newCols.filter((_, j) => j !== i))} className="p-1 text-red-400" aria-label="Remove column">
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               )}
@@ -127,6 +186,26 @@ export function CreateTablePanel({ open, onClose, projectId }: CreateTablePanelP
             + Add column
           </button>
         </div>
+        {canGrantRead && (
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium text-text-secondary mb-1">API access</legend>
+            {READ_OPTIONS.map(({ role, label }) => (
+              <label key={role} className="flex items-center gap-2 text-sm text-text-primary">
+                <input
+                  type="checkbox"
+                  checked={readRoles[role]}
+                  onChange={(e) => setReadRoles((current) => ({ ...current, [role]: e.target.checked }))}
+                  className="rounded"
+                />
+                {label}
+              </label>
+            ))}
+            <p className="text-xs text-text-tertiary">
+              Unchecked, nobody can reach it through the API (except secret service keys) until you add permissions.
+              Checked, that role may read every row and column; set finer rules on the table's permissions page.
+            </p>
+          </fieldset>
+        )}
       </div>
     </SidePanel>
   );
