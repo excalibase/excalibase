@@ -1,0 +1,40 @@
+# The storefront demo: a working store built on this project (the image is the
+# excalibase-sdk-js examples/storefront app) and a private Redis it counts
+# product views in. Its setup script configures the project afterwards.
+format: excalibase.template/v1
+id: storefront-demo
+name: Storefront demo
+summary: A working store on this project's API, with a private Redis for product views.
+description: >-
+  Two apps. storefront is a public web app (excalibase/storefront-demo on port
+  8080): a small shop whose browser code uses this project's GraphQL API,
+  end-user sign-in and realtime through @excalibase/sdk. redis is an internal
+  service with a 1Gi disk that only this project's apps reach, at redis:6379;
+  storefront counts product views in it. After deploying, run the store's setup
+  script (excalibase-sdk-js examples/storefront, or node setup/setup.mjs in the
+  image): through the platform's APIs it creates the tables and sample products,
+  the permissions for guests, customers and a custom staff role, a tracked
+  function, realtime on orders, demo accounts and a publishable key, then sets
+  the store's EXCALIBASE_* variables and redeploys it. Needs the project's
+  Postgres database. Turns on the project's private network.
+apps:
+  - name: redis
+    image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    internal: true
+    internalPorts: [6379]
+    replicas: 1
+    args: ["--requirepass", "$(REDIS_PASSWORD)", "--appendonly", "yes", "--dir", "/data"]
+    disk:
+      mountPath: /data
+      size: 1Gi
+    env:
+      - name: REDIS_PASSWORD
+        value: "${{ secret(32) }}"
+  - name: storefront
+    image: excalibase/storefront-demo@sha256:e2be5467424e302e5dab2fd463bbb8708d73db55cf87fc6f43ab9e45dd8ddc58
+    port: 8080
+    healthCheckPath: /healthz
+    replicas: 1
+    env:
+      - name: REDIS_URL
+        value: "redis://:${{ apps.redis.env.REDIS_PASSWORD }}@${{ apps.redis.host }}:${{ apps.redis.port }}/0"
