@@ -25,7 +25,7 @@ type fakeDumper struct {
 	calls int
 }
 
-func (f *fakeDumper) DumpDocuments(_ context.Context, _ string, sink docbrowser.DumpSink) error {
+func (f *fakeDumper) DumpDocuments(_ context.Context, _ string, sink docbrowser.FileWriter) error {
 	f.calls++
 	for name, content := range f.files {
 		if err := sink.WriteFile(name, func(w io.Writer) error {
@@ -168,5 +168,61 @@ func assertNoSnapshots(t *testing.T, svc *SnapshotService) {
 	}
 	if len(list) != 0 {
 		t.Fatalf("a failed export left %d snapshots listed", len(list))
+	}
+}
+
+func TestASnapshotServiceSaysWhetherItExportsDocuments(t *testing.T) {
+	without, _ := documentSnapshotService(t, true, nil)
+	with, _ := documentSnapshotService(t, true, &fakeDumper{})
+	if without.ExportsDocuments() || !with.ExportsDocuments() {
+		t.Fatal("ExportsDocuments must follow the wired dumper")
+	}
+}
+
+func TestAnExportCanNameTablesToKeepAndToLeaveOut(t *testing.T) {
+	svc, mock := documentSnapshotService(t, false, nil)
+	if _, err := svc.ExportSnapshot(context.Background(), "doc-db", domain.SnapshotExportRequest{
+		SchemaOnly: true, Tables: []string{"orders"}, ExcludeTables: []string{"audit"},
+	}); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	last := mock.ExecCommands[len(mock.ExecCommands)-1]
+	for _, want := range []string{"--schema-only", "-t orders", "-T audit"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("pg_dump = %q, missing %q", last, want)
+		}
+	}
+}
+
+// A collection that fails half-way must fail the export, not ship a tar
+// missing documents.
+type halfWrittenDumper struct{}
+
+func (halfWrittenDumper) DumpDocuments(_ context.Context, _ string, sink docbrowser.FileWriter) error {
+	return sink.WriteFile("shop/orders.bson", func(w io.Writer) error {
+		if _, err := io.WriteString(w, "partial"); err != nil {
+			return err
+		}
+		return errors.New("cursor lost")
+	})
+}
+
+func TestADocumentDBExportFailsWhenACollectionFailsHalfWay(t *testing.T) {
+	svc, _ := documentSnapshotService(t, true, halfWrittenDumper{})
+	if _, err := svc.ExportSnapshot(context.Background(), "doc-db", domain.SnapshotExportRequest{}); err == nil {
+		t.Fatal("a half-written collection must fail the export")
+	}
+	assertNoSnapshots(t, svc)
+}
+
+func TestAnExportWithoutADatabaseNameIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := storage.NewFileSystemStore(dir)
+	if err := store.Create(&domain.DatabaseInstance{ProjectID: "doc-db", Namespace: "org-doc", Status: "ACTIVE"}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewSnapshotService(store, k8s.NewMockClient(), dir)
+	if _, err := svc.ExportSnapshot(context.Background(), "doc-db", domain.SnapshotExportRequest{}); err == nil {
+		t.Fatal("an export must name the database it dumps, not guess one")
 	}
 }

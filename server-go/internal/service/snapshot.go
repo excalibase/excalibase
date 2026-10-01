@@ -27,7 +27,7 @@ type SnapshotService struct {
 // DocumentDumper writes a DocumentDB project's collections in mongodump's
 // layout (EXC-531); the document browser's gateway connector is one.
 type DocumentDumper interface {
-	DumpDocuments(ctx context.Context, projectID string, sink docbrowser.DumpSink) error
+	DumpDocuments(ctx context.Context, projectID string, sink docbrowser.FileWriter) error
 }
 
 // ErrInvalidSnapshotRequest is an export request that names no dump pg_dump

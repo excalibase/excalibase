@@ -17,8 +17,8 @@ import (
 // indexes in canonical Extended JSON. mongorestore --dir reads it, and so can
 // any BSON reader. Views carry metadata only, as mongodump writes them.
 
-// DumpSink receives one file per call; write streams its content.
-type DumpSink interface {
+// FileWriter receives one dumped file per call; write streams its content.
+type FileWriter interface {
 	WriteFile(name string, write func(io.Writer) error) error
 }
 
@@ -26,7 +26,7 @@ const viewType = "view"
 
 // DumpDocuments writes every customer collection of the project through its
 // gateway, as the document browser's login.
-func (c *GatewayConnector) DumpDocuments(ctx context.Context, projectID string, sink DumpSink) error {
+func (c *GatewayConnector) DumpDocuments(ctx context.Context, projectID string, sink FileWriter) error {
 	store, err := c.Store(ctx, projectID)
 	if err != nil {
 		return err
@@ -38,7 +38,7 @@ func (c *GatewayConnector) DumpDocuments(ctx context.Context, projectID string, 
 	return dumpDocuments(ctx, mongoStore.client, sink)
 }
 
-func dumpDocuments(ctx context.Context, client *mongo.Client, sink DumpSink) error {
+func dumpDocuments(ctx context.Context, client *mongo.Client, sink FileWriter) error {
 	databases, err := client.ListDatabaseNames(ctx, bson.D{})
 	if err != nil {
 		return fmt.Errorf("list databases: %w", err)
@@ -54,7 +54,7 @@ func dumpDocuments(ctx context.Context, client *mongo.Client, sink DumpSink) err
 	return nil
 }
 
-func dumpDatabase(ctx context.Context, database *mongo.Database, sink DumpSink) error {
+func dumpDatabase(ctx context.Context, database *mongo.Database, sink FileWriter) error {
 	specs, err := database.ListCollectionSpecifications(ctx, bson.D{})
 	if err != nil {
 		return fmt.Errorf("list collections of %s: %w", database.Name(), err)
@@ -76,7 +76,7 @@ func dumpDatabase(ctx context.Context, database *mongo.Database, sink DumpSink) 
 	return nil
 }
 
-func dumpCollection(ctx context.Context, collection *mongo.Collection, sink DumpSink) error {
+func dumpCollection(ctx context.Context, collection *mongo.Collection, sink FileWriter) error {
 	name := dumpFileName(collection.Database().Name(), collection.Name(), ".bson")
 	return sink.WriteFile(name, func(w io.Writer) error {
 		cursor, err := collection.Find(ctx, bson.D{})
@@ -96,7 +96,7 @@ func dumpCollection(ctx context.Context, collection *mongo.Collection, sink Dump
 	})
 }
 
-func dumpMetadata(ctx context.Context, collection *mongo.Collection, spec mongo.CollectionSpecification, sink DumpSink) error {
+func dumpMetadata(ctx context.Context, collection *mongo.Collection, spec mongo.CollectionSpecification, sink FileWriter) error {
 	name := dumpFileName(collection.Database().Name(), collection.Name(), ".metadata.json")
 	indexes := bson.A{}
 	if spec.Type != viewType {
