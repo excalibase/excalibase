@@ -371,16 +371,21 @@ func (s *ProvisioningService) ProvisionInBackground(ctx context.Context, req dom
 	}
 	accepted := acceptedResponse(admitted.inst)
 	buildCtx := context.WithoutCancel(ctx)
-	run := s.runInBackground
-	if run == nil {
-		run = func(f func()) { go f() }
-	}
-	run(func() {
+	s.startInBackground(func() {
 		if _, err := admitted.build(buildCtx); err != nil {
 			log.Printf("provisioning of %s did not finish: %v", accepted.ProjectID, err)
 		}
 	})
 	return accepted, nil
+}
+
+// startInBackground runs an accepted build detached from its request.
+func (s *ProvisioningService) startInBackground(f func()) {
+	if s.runInBackground != nil {
+		s.runInBackground(f)
+		return
+	}
+	go f()
 }
 
 // SetBackgroundRunner replaces how accepted builds are started (tests).
@@ -394,10 +399,12 @@ type admittedProject struct {
 	req   domain.ProvisioningRequest
 	prov  provisioner.DatabaseProvisioner
 	tier  config.TierConfig
+	fail  provisionFailureHandler
+	opts  RegistrationOptions
 }
 
 func (a *admittedProject) build(ctx context.Context) (*domain.ProvisioningResponse, error) {
-	return a.svc.buildDatabase(ctx, a.start, a.inst, a.req, a.prov, a.tier, a.svc.handleProvisionFailure, RegistrationOptions{})
+	return a.svc.buildDatabase(ctx, a.start, a.inst, a.req, a.prov, a.tier, a.fail, a.opts)
 }
 
 // admitProject validates the request and creates the project's row, which is
@@ -422,7 +429,8 @@ func (s *ProvisioningService) admitProject(ctx context.Context, req domain.Provi
 	if err := s.createProjectRow(ctx, inst, inst.Tier); err != nil {
 		return nil, err
 	}
-	return &admittedProject{svc: s, start: start, inst: inst, req: req, prov: prov, tier: tier}, nil
+	return &admittedProject{svc: s, start: start, inst: inst, req: req, prov: prov, tier: tier,
+		fail: s.handleProvisionFailure}, nil
 }
 
 // acceptedResponse is the project as it stands when its build is accepted.

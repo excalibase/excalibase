@@ -74,4 +74,14 @@ describe('ProjectOverviewPage — no database', () => {
     const card = await screen.findByTestId('service-database');
     expect(await within(card).findByText(/cluster rejected/)).toBeInTheDocument();
   });
+
+  // EXC-426: the add answers before the database is built; the card follows it.
+  test('a database being added says so instead of offering another add', async () => {
+    renderPage(noDatabaseProject({ status: 'PROVISIONING', currentStage: 'CLUSTER_CREATION', canAddDatabase: false }));
+    const card = await screen.findByTestId('service-database');
+    expect(await within(card).findByTestId('service-database-status')).toHaveTextContent('Provisioning');
+    expect(within(card).getByTestId('service-database-adding')).toHaveTextContent('being added');
+    expect(within(card).queryByTestId('service-database-empty')).not.toBeInTheDocument();
+    expect(within(card).queryByRole('link', { name: /add database/i })).not.toBeInTheDocument();
+  });
 });

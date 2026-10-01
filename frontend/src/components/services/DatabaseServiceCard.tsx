@@ -38,6 +38,14 @@ function DatabaseAccess({ projectId }: { readonly projectId: string }) {
 // A project created without a database (EXC-426). The add control shows only
 // when the server says this caller may use it; the route decides regardless.
 function NoDatabase({ project }: { readonly project: DatabaseInstance }) {
+  if (project.status === 'PROVISIONING') {
+    return (
+      <p data-testid="service-database-adding" className="text-sm text-text-secondary">
+        The database is being added. This usually takes about a minute; this card updates when it is ready
+        or names what went wrong.
+      </p>
+    );
+  }
   return (
     <>
       <p data-testid="service-database-empty" className="text-sm text-text-secondary">
