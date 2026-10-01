@@ -32,6 +32,9 @@ const INTERNAL = {
   connectionString: 'postgresql://excalibase_app@test-project-postgres-rw.org-1.svc.cluster.local:5432/app?sslmode=prefer',
 };
 
+// The gateway's own Service: the Postgres host does not serve the Mongo port.
+const MONGO_INTERNAL_HOST = 'test-project-documentdb.org-1.svc.cluster.local';
+
 async function json(page: Page, pattern: string, body: unknown) {
   await page.route(pattern, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }),
@@ -53,7 +56,7 @@ async function mockSettingsProject(page: Page, documentDb: boolean) {
     requireTls: true, database: 'app', username: 'excalibase_app',
     connectionStrings: { requireTls: '', allowPlaintext: '' },
     caCertificate: '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n',
-    internal: documentDb ? { ...INTERNAL, mongoPort: 10260 } : INTERNAL,
+    internal: documentDb ? { ...INTERNAL, mongoHost: MONGO_INTERNAL_HOST, mongoPort: 10260 } : INTERNAL,
     ...(documentDb ? { mongoPort: 30101, mongoAvailable: true } : {}),
   });
 }
@@ -95,7 +98,8 @@ test.describe('Project connection strings and minor upgrade', () => {
     await expect(page.getByTestId('connection-strings')).toBeVisible({ timeout: FIRST_RENDER });
     await expect(page.getByTestId('conn-postgres-public')).toContainText('@test-project.db.example.com:30100/app');
     await expect(page.getByTestId('conn-mongo-public')).toContainText('@test-project.db.example.com:30101/?tls=true');
-    await expect(page.getByTestId('conn-mongo-internal')).toContainText(':10260/');
+    await expect(page.getByTestId('conn-mongo-internal')).toContainText(`@${MONGO_INTERNAL_HOST}:10260/`);
+    await expect(page.getByTestId('conn-mongo-internal')).toContainText('directConnection=true');
   });
 
   test('offers nothing Mongo-shaped for a project created without DocumentDB', async ({ page }) => {
