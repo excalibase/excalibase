@@ -86,40 +86,102 @@ func isProtected(inst *domain.DatabaseInstance) bool {
 // period ends; any other project is deleted at once. It returns the scheduled
 // row, or nil when the project was deleted.
 func (s *ProvisioningService) ScheduleDeletion(ctx context.Context, projectID string, opts DeprovisionOptions) (*domain.DatabaseInstance, error) {
-	inst, err := s.store.FindByProjectID(projectID)
-	if err != nil || inst == nil {
-		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
-	}
-	if inst.Status == string(domain.StatusPendingDeletion) {
-		return s.updatePendingChoice(ctx, inst, opts)
-	}
-	if !holdsCustomerData(inst.Status) {
-		return nil, s.DeprovisionWithOptions(ctx, projectID, opts)
-	}
-	if isProtected(inst) {
-		return nil, fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
-	}
-	if opts.DeleteBackups != nil && *opts.DeleteBackups && s.backupPurger == nil {
-		return nil, ErrBackupPurgeNotConfigured
-	}
-	if inst.NoDatabase {
-		// Nothing to stop: the grace period keeps the project's files, apps
-		// and settings, and the project leaves it the way it went in.
-		return s.markPendingDeletion(ctx, projectID, opts)
-	}
-	if s.deletionPauser == nil {
-		return nil, ErrDeletionGraceUnavailable
+	answered, scheduled, err := s.admitDeletion(ctx, projectID, opts)
+	if answered || err != nil {
+		return scheduled, err
 	}
 	// The pause waits for a backup; a caller hanging up must not leave the
 	// project half paused. The pause bounds itself (EXCALIBASE_PAUSE_TIMEOUT).
 	ctx = context.WithoutCancel(ctx)
 	if err := s.deletionPauser.Pause(ctx, projectID, PauseReasonDeletion); err != nil {
-		if errors.Is(err, ErrPauseUnsupported) {
-			return nil, fmt.Errorf("%w: %w", ErrDeletionGraceUnavailable, err)
-		}
-		return nil, fmt.Errorf("%w: %w", ErrDeletionStopFailed, err)
+		return nil, deletionStopError(err)
 	}
 	return s.markPendingDeletion(ctx, projectID, opts)
+}
+
+// BackgroundPauser starts a pause and answers once it is recorded (PauseService).
+type BackgroundPauser interface {
+	StartPause(ctx context.Context, projectID, reason string, done func(error)) (bool, error)
+}
+
+// ScheduleDeletionInBackground answers DELETE without waiting for the stop
+// (EXC-473): once the pause is recorded it returns the project PAUSING, and
+// the project is marked PENDING_DELETION when the stop completes. A stop that
+// does not complete leaves the pause's failure on the project and schedules
+// nothing. A project with nothing to stop is answered as ScheduleDeletion does.
+func (s *ProvisioningService) ScheduleDeletionInBackground(ctx context.Context, projectID string, opts DeprovisionOptions) (*domain.DatabaseInstance, error) {
+	pauser, ok := s.deletionPauser.(BackgroundPauser)
+	if !ok {
+		return s.ScheduleDeletion(ctx, projectID, opts)
+	}
+	answered, scheduled, err := s.admitDeletion(ctx, projectID, opts)
+	if answered || err != nil {
+		return scheduled, err
+	}
+	ctx = context.WithoutCancel(ctx)
+	started, err := pauser.StartPause(ctx, projectID, PauseReasonDeletion, func(err error) {
+		s.finishDeletionStop(ctx, projectID, opts, err)
+	})
+	if err != nil {
+		return nil, deletionStopError(err)
+	}
+	if !started {
+		// Already stopped: nothing to wait for.
+		return s.markPendingDeletion(ctx, projectID, opts)
+	}
+	return s.store.FindByProjectID(projectID)
+}
+
+// finishDeletionStop schedules the deletion once its stop completed. The
+// stop's own failure is already on the project.
+func (s *ProvisioningService) finishDeletionStop(ctx context.Context, projectID string, opts DeprovisionOptions, stopErr error) {
+	if stopErr != nil {
+		log.Printf("action=schedule_deletion project=%s status=not_stopped err=%v", projectID, stopErr)
+		return
+	}
+	if _, err := s.markPendingDeletion(ctx, projectID, opts); err != nil {
+		log.Printf("action=schedule_deletion project=%s status=not_scheduled err=%v", projectID, err)
+	}
+}
+
+// admitDeletion answers what needs no stop: a repeated DELETE, a project
+// deleted at once, one without a database, or a refusal. answered is false
+// when the project must be stopped before it is scheduled.
+func (s *ProvisioningService) admitDeletion(ctx context.Context, projectID string, opts DeprovisionOptions) (bool, *domain.DatabaseInstance, error) {
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return true, nil, fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+	}
+	if inst.Status == string(domain.StatusPendingDeletion) {
+		scheduled, err := s.updatePendingChoice(ctx, inst, opts)
+		return true, scheduled, err
+	}
+	if !holdsCustomerData(inst.Status) {
+		return true, nil, s.DeprovisionWithOptions(ctx, projectID, opts)
+	}
+	if isProtected(inst) {
+		return true, nil, fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
+	}
+	if opts.DeleteBackups != nil && *opts.DeleteBackups && s.backupPurger == nil {
+		return true, nil, ErrBackupPurgeNotConfigured
+	}
+	if inst.NoDatabase {
+		// Nothing to stop: the grace period keeps the project's files, apps
+		// and settings, and the project leaves it the way it went in.
+		scheduled, err := s.markPendingDeletion(ctx, projectID, opts)
+		return true, scheduled, err
+	}
+	if s.deletionPauser == nil {
+		return true, nil, ErrDeletionGraceUnavailable
+	}
+	return false, nil, nil
+}
+
+func deletionStopError(err error) error {
+	if errors.Is(err, ErrPauseUnsupported) {
+		return fmt.Errorf("%w: %w", ErrDeletionGraceUnavailable, err)
+	}
+	return fmt.Errorf("%w: %w", ErrDeletionStopFailed, err)
 }
 
 // settledStatus is the status a project holds while its deletion is pending

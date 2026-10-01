@@ -155,6 +155,11 @@ func (h *ProvisioningHandler) Pause(w http.ResponseWriter, r *http.Request) {
 	if body.Reason == "" {
 		body.Reason = domain.PauseReasonManual
 	}
+	if prefersRespondAsync(r) {
+		started, err := h.pauseSvc.StartPause(r.Context(), projectID, body.Reason, nil)
+		h.writeLifecycleStarted(w, projectID, started, err)
+		return
+	}
 	if err := h.pauseSvc.Pause(r.Context(), projectID, body.Reason); err != nil {
 		h.writeLifecycleError(w, projectID, err)
 		return
@@ -183,6 +188,11 @@ func (h *ProvisioningHandler) Resume(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if prefersRespondAsync(r) {
+		started, err := h.pauseSvc.StartResume(r.Context(), projectID, nil)
+		h.writeLifecycleStarted(w, projectID, started, err)
+		return
+	}
 	if err := h.pauseSvc.Resume(r.Context(), projectID); err != nil {
 		h.writeLifecycleError(w, projectID, err)
 		return
@@ -196,6 +206,28 @@ func (h *ProvisioningHandler) Resume(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]string{"status": "ACTIVE"})
+}
+
+// writeLifecycleStarted answers a pause or resume started without waiting
+// (RFC 7240 respond-async, EXC-473): 202 with the project PAUSING or RESUMING,
+// whose status then carries the outcome; 200 when there was nothing to do.
+func (h *ProvisioningHandler) writeLifecycleStarted(w http.ResponseWriter, projectID string, started bool, err error) {
+	if err != nil {
+		h.writeLifecycleError(w, projectID, err)
+		return
+	}
+	body := map[string]interface{}{"projectId": projectID}
+	if h.instances != nil {
+		if got, _ := h.instances.FindByProjectID(projectID); got != nil {
+			body["status"] = got.Status
+			body["pauseReason"] = got.PauseReason
+		}
+	}
+	status := http.StatusOK
+	if started {
+		status = http.StatusAccepted
+	}
+	writeJSONStatus(w, status, body)
 }
 
 func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Request) {
@@ -358,7 +390,12 @@ func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// Read the row before it is removed: its backups, if the deletion is not
 	// purging them, outlive the only record that names them.
 	inst, _ := h.svc.GetInstance(projectID)
-	scheduled, err := h.svc.ScheduleDeletion(r.Context(), projectID, opts)
+	schedule := h.svc.ScheduleDeletion
+	if prefersRespondAsync(r) {
+		// The stop before the grace period takes a backup; answer once it is recorded.
+		schedule = h.svc.ScheduleDeletionInBackground
+	}
+	scheduled, err := schedule(r.Context(), projectID, opts)
 	if err != nil {
 		log.Printf("tenant=%s action=deprovision status=failed err=%v", tenant, err)
 		writeDeprovisionError(w, err)
@@ -370,7 +407,7 @@ func (h *ProvisioningHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			"projectId":     projectID,
 			"status":        scheduled.Status,
 			"deletionDueAt": scheduled.DeletionDueAt,
-			"deleteBackups": scheduled.DeletionDeleteBackups,
+			"deleteBackups": scheduled.DeletionDeleteBackups || (opts.DeleteBackups != nil && *opts.DeleteBackups),
 		})
 		return
 	}

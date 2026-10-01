@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { projectOperationMessage } from '../hooks/projectFollow';
 import { useInstances, useDeprovisionDatabase } from '../hooks/useProvisioning';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
@@ -23,7 +24,11 @@ export function InstancesPage() {
   const handleDelete = async (e: React.MouseEvent, projectId: string) => {
     e.stopPropagation();
     if (confirm(`Delete ${projectId}? It is stopped now and permanently deleted after 7 days; an org owner can cancel until then.`)) {
-      await deprovision.mutateAsync(projectId);
+      try {
+        await deprovision.mutateAsync(projectId);
+      } catch (err) {
+        alert(projectOperationMessage(err, `${projectId} was not scheduled for deletion`));
+      }
     }
   };
 

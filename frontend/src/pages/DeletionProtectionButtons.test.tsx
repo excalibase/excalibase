@@ -90,6 +90,6 @@ describe('older Studio pages honour deletion protection', () => {
     useAuthStore.setState({ user: { id: 'u', username: 'a', role: 'platform_admin' } as never, isAuthenticated: true });
     withProviders(<InstancesPage />);
     await userEvent.click(await screen.findByTestId('delete-instance-p-off'));
-    expect(api.delete).toHaveBeenCalledWith('/provision/p-off');
+    expect(api.delete).toHaveBeenCalledWith('/provision/p-off', { headers: { Prefer: 'respond-async' } });
   });
 });

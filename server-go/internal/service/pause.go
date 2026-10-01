@@ -69,6 +69,8 @@ type PauseService struct {
 	// endpoints withdraws and republishes the project's public database
 	// endpoint. Nil when the platform offers none.
 	endpoints PublicEndpointReconciler
+	// runInBackground starts a StartPause or StartResume run; nil uses a goroutine.
+	runInBackground func(func())
 
 	mu sync.Mutex
 }
@@ -222,44 +224,103 @@ func (s *PauseService) resumable(ctx context.Context, pauser provisioner.Pauser,
 func (s *PauseService) Pause(ctx context.Context, projectID, reason string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	release, err := s.hold(ctx, projectID, OperationPause)
-	if err != nil {
+	run, err := s.beginPause(ctx, projectID, reason)
+	if err != nil || run == nil {
 		return err
 	}
-	defer release()
+	return run()
+}
 
+// StartPause admits the pause and records PAUSING as Pause does, then runs
+// the rest detached from the request (EXC-473): the backup alone outlasts
+// what a browser waits for. It reports false when there is nothing to do.
+// The lease is held until the run ends; done, when given, gets its outcome,
+// which is also on the project.
+func (s *PauseService) StartPause(ctx context.Context, projectID, reason string, done func(error)) (bool, error) {
+	ctx = context.WithoutCancel(ctx)
+	run, err := s.beginPause(ctx, projectID, reason)
+	if err != nil || run == nil {
+		return false, err
+	}
+	s.startInBackground(run, done)
+	return true, nil
+}
+
+// beginPause takes the lease, admits the pause and records PAUSING. The
+// returned run finishes it and releases the lease; nil means nothing to do.
+func (s *PauseService) beginPause(ctx context.Context, projectID, reason string) (func() error, error) {
+	release, err := s.hold(ctx, projectID, OperationPause)
+	if err != nil {
+		return nil, err
+	}
+	run, err := s.admitPause(ctx, projectID, reason)
+	if err != nil || run == nil {
+		release()
+		return nil, err
+	}
+	return func() error {
+		defer release()
+		return run()
+	}, nil
+}
+
+func (s *PauseService) admitPause(ctx context.Context, projectID, reason string) (func() error, error) {
 	inst, err := s.instances.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return fmt.Errorf("project not found: %s", projectID)
+		return nil, fmt.Errorf("project not found: %s", projectID)
 	}
 	if inst.NoDatabase {
 		// Pause and resume stop and start the database; there is none.
-		return fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
+		return nil, fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
 	}
 	pauser, ok := s.pausers[inst.DeploymentMode]
 	if !ok {
-		return ErrPauseUnsupported
+		return nil, ErrPauseUnsupported
 	}
 	if domain.IsDeletionStatus(inst.Status) {
 		// The one-way door: a teardown owns the project's resources now, so
 		// the caller is told rather than quietly ignored.
-		return storage.ErrProjectDeleting
+		return nil, storage.ErrProjectDeleting
 	}
 	if !pausable(inst.Status) {
 		// PAUSED is already there; anything else is a state a pause has no
 		// business rewriting.
-		return nil
+		return nil, nil
 	}
 	if err := s.enterPausing(inst, reason); err != nil {
-		return err
+		return nil, err
 	}
+	return func() error {
+		step, err := s.runPause(ctx, pauser, inst)
+		if err != nil {
+			return s.failPause(inst, step, err)
+		}
+		return s.markPaused(inst)
+	}, nil
+}
 
-	step, err := s.runPause(ctx, pauser, inst)
-	if err != nil {
-		return s.failPause(inst, step, err)
+// SetBackgroundRunner replaces how started pauses and resumes run (tests).
+func (s *PauseService) SetBackgroundRunner(run func(func())) { s.runInBackground = run }
+
+// startInBackground runs an admitted operation after the ones this process is
+// already running, as the synchronous forms are ordered.
+func (s *PauseService) startInBackground(run func() error, done func(error)) {
+	task := func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		err := run()
+		if err != nil {
+			log.Printf("pause service: background operation did not complete: %v", err)
+		}
+		if done != nil {
+			done(err)
+		}
 	}
-	return s.markPaused(inst)
+	if s.runInBackground != nil {
+		s.runInBackground(task)
+		return
+	}
+	go task()
 }
 
 // runPause performs the ordered stages, returning the step that failed.
@@ -457,51 +518,78 @@ func clearPauseRetryBackoff(inst *domain.DatabaseInstance) {
 func (s *PauseService) Resume(ctx context.Context, projectID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	release, err := s.hold(ctx, projectID, OperationResume)
-	if err != nil {
+	run, err := s.beginResume(ctx, projectID)
+	if err != nil || run == nil {
 		return err
 	}
-	defer release()
+	return run()
+}
 
+// StartResume admits the resume and records RESUMING, then runs the rest
+// detached from the request, as StartPause does.
+func (s *PauseService) StartResume(ctx context.Context, projectID string, done func(error)) (bool, error) {
+	ctx = context.WithoutCancel(ctx)
+	run, err := s.beginResume(ctx, projectID)
+	if err != nil || run == nil {
+		return false, err
+	}
+	s.startInBackground(run, done)
+	return true, nil
+}
+
+func (s *PauseService) beginResume(ctx context.Context, projectID string) (func() error, error) {
+	release, err := s.hold(ctx, projectID, OperationResume)
+	if err != nil {
+		return nil, err
+	}
+	run, err := s.admitResume(ctx, projectID)
+	if err != nil || run == nil {
+		release()
+		return nil, err
+	}
+	return func() error {
+		defer release()
+		return run()
+	}, nil
+}
+
+func (s *PauseService) admitResume(ctx context.Context, projectID string) (func() error, error) {
 	inst, err := s.instances.FindByProjectID(projectID)
 	if err != nil || inst == nil {
-		return fmt.Errorf("project not found: %s", projectID)
+		return nil, fmt.Errorf("project not found: %s", projectID)
 	}
 	if inst.NoDatabase {
 		// Pause and resume stop and start the database; there is none.
-		return fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
+		return nil, fmt.Errorf("%w: %s", domain.ErrNoDatabase, projectID)
 	}
 	pauser, ok := s.pausers[inst.DeploymentMode]
 	if !ok {
-		return ErrPauseUnsupported
+		return nil, ErrPauseUnsupported
 	}
 	resumable, err := s.resumable(ctx, pauser, inst)
-	if err != nil {
-		return err
-	}
-	if !resumable {
-		return nil
+	if err != nil || !resumable {
+		return nil, err
 	}
 
 	inst.Status = string(domain.StatusResuming)
 	inst.CurrentStep = resumeStepStartWorkload
 	inst.FailureReason = ""
 	if err := s.persist(inst); err != nil {
-		return err
+		return nil, err
 	}
-
-	step, err := s.runResume(ctx, pauser, inst)
-	if err != nil {
-		return s.failResume(inst, step, err)
-	}
-	inst.Status = "ACTIVE"
-	inst.PauseReason = ""
-	inst.CurrentStep = ""
-	inst.FailureReason = ""
-	clearPauseRetryBackoff(inst)
-	inst.LastActiveAt = &domain.FlexTime{Time: time.Now()}
-	return s.persistFrom(inst, string(domain.StatusResuming))
+	return func() error {
+		step, err := s.runResume(ctx, pauser, inst)
+		if err != nil {
+			return s.failResume(inst, step, err)
+		}
+		inst.Status = "ACTIVE"
+		inst.PauseReason = ""
+		inst.CurrentStep = ""
+		inst.FailureReason = ""
+		clearPauseRetryBackoff(inst)
+		inst.LastActiveAt = &domain.FlexTime{Time: time.Now()}
+		return s.persistFrom(inst, string(domain.StatusResuming))
+	}, nil
 }
 
 // runResume starts the workload and, once the provisioner reports a ready
