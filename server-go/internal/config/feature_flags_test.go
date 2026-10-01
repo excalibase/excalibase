@@ -151,3 +151,12 @@ func TestParsePositiveInt_RejectsUnusableValues(t *testing.T) {
 		t.Errorf("unset: got (%d, %v), want the fallback", got, err)
 	}
 }
+
+// EXC-400: permissions always apply; there is no switch that turns them off.
+func TestFeatureFlags_HaveNoPermissionEnforcementSwitch(t *testing.T) {
+	for _, f := range (AppConfig{}).FeatureFlags() {
+		if f.Env == "EXCALIBASE_EXPOSURE_ENFORCED" {
+			t.Fatal("EXCALIBASE_EXPOSURE_ENFORCED is gone: permissions are always enforced")
+		}
+	}
+}

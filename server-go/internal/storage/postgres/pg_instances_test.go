@@ -156,9 +156,6 @@ func TestInstances_DeleteRemovesProjectOwnedRows(t *testing.T) {
 func seedProjectOwnedRows(t *testing.T, store *Store, projectID string) {
 	t.Helper()
 	statements := []string{
-		`INSERT INTO rls_policies (id, project_id, name, resource, effect, operations, rules, assignments) VALUES ($1||'-rls', $1, 'p', 'r', 'ALLOW', '{SELECT}', '[]'::jsonb, '[]'::jsonb)`,
-		`INSERT INTO column_policies (id, project_id, name, resource, columns, operations, mode, assignments) VALUES ($1||'-col', $1, 'p', 'r', '{c}', '{SELECT}', 'HIDE', '[]'::jsonb)`,
-		`INSERT INTO table_grants (id, project_id, resource, role_name, operations) VALUES ($1||'-grant', $1, 'public.r', 'anon', '{SELECT}')`,
 		`INSERT INTO project_cors_settings (project_id) VALUES ($1)`,
 		`INSERT INTO project_app_network (project_id, private_network) VALUES ($1, true)`,
 		`INSERT INTO edge_function_settings (project_id) VALUES ($1)`,

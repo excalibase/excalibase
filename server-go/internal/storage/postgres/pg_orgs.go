@@ -232,6 +232,11 @@ func (s *Store) CreatePendingInvite(ctx context.Context, invite *domain.PendingI
 
 const pendingInviteColumns = `id, org_id, email, role, invited_by, expires_at, created_at`
 
+// rowScanner is the common interface of *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
 func scanPendingInvite(row rowScanner) (*domain.PendingInvite, error) {
 	inv := &domain.PendingInvite{}
 	var expiresAt, createdAt sql.NullTime

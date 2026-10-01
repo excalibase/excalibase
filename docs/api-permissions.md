@@ -50,16 +50,8 @@ against the database; the engine refuses unknown columns.
 functions not returning rows of a served table or view are refused; `exposedAs` is `MUTATION` for
 `VOLATILE`, else `QUERY`; a `sessionArgument` must be a `json`/`jsonb` argument.
 
-## Legacy fold
+## Only store
 
-At startup the control plane folds each project's table grants, row policies and column policies
-into permissions once (`legacy_permissions_migrated` marks the project). It reads the project's
-live tables, so a project whose database is down is retried at the next start. Existing
-permissions are never replaced. Everything not carried over is logged per project:
-
-- a row policy using a time variable, `{{currentUserGroupIds}}` or a JSON-path field fails closed —
-  the permissions it would have shaped are not written;
-- policy assignments to a single user or a group are dropped (spec §9);
-- PARTIAL/HASH/CUSTOM masks were never applied, so those columns stay selectable.
-
-The legacy tables and endpoints stay until the engine switches to the document.
+Permissions are the only access store the engine enforces. The row policies, column policies,
+table grants and the `EXCALIBASE_EXPOSURE_ENFORCED` switch that came before them are gone
+(EXC-400, migration 000066): there is no route for them and no setting that turns permissions off.

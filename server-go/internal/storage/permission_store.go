@@ -29,11 +29,4 @@ type PermissionStore interface {
 	UntrackFunction(ctx context.Context, projectID, function string) error
 	PutFunctionPermission(ctx context.Context, projectID, function, role string) error
 	DeleteFunctionPermission(ctx context.Context, projectID, function, role string) error
-
-	// LegacyPending lists projects that hold table grants, row policies or
-	// column policies not yet folded into permissions.
-	LegacyPending(ctx context.Context) ([]string, error)
-	// ImportLegacy writes a project's folded permissions without replacing
-	// any that already exist, and marks the project migrated, atomically.
-	ImportLegacy(ctx context.Context, projectID string, set domain.LegacyPermissionImport) error
 }

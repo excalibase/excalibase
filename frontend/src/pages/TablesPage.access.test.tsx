@@ -79,13 +79,6 @@ describe('TablesPage API access summary', () => {
     expect(link).toHaveAttribute('href', '/project/p1/database/tables/public/orders/permissions');
   });
 
-  test('never reads or writes the old table grants', async () => {
-    renderPage();
-    await screen.findByTestId('access-summary-orders');
-    expect(screen.queryByTestId('exposure-toggle-orders')).not.toBeInTheDocument();
-    for (const call of vi.mocked(api.get).mock.calls) expect(call[0]).not.toMatch(/table-grants/);
-  });
-
   test('a viewer gets no summary and the permissions are not fetched', async () => {
     renderPage('viewer');
     await screen.findByTestId('table-item-orders');

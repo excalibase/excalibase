@@ -14,7 +14,7 @@ so the platform records the signals it does see. Every **successful** (status
 
 | Source              | Route family                                   | Who triggers it                                                    |
 |---------------------|------------------------------------------------|--------------------------------------------------------------------|
-| `policy_fetch`      | `/api/provision/{id}/rls-policies`, `column-policies` | excalibase-graphql refreshing its policy cache (30 s TTL) — only while the project serves traffic, so this is the data-plane heartbeat |
+| `policy_fetch`      | `/api/provision/{id}/permissions`, `tracked-functions`, `function-permissions` | excalibase-graphql refreshing its permission document — only while the project serves traffic, so this is the data-plane heartbeat |
 | `function_invoke`   | `/functions/v1/{id}/…`, `/internal/invoke/{id}/…` | end users calling edge functions, functions calling each other  |
 | `info`              | `/api/projects/{id}/info`                      | the auth service minting an end-user JWT                           |
 | `functions`         | `/api/projects/{id}/functions/…`               | authoring, deploying, invoking from Studio                         |

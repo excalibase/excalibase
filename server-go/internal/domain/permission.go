@@ -6,6 +6,16 @@ import "encoding/json"
 // Hasura-style. The engine reads a project's whole set as one PermissionDocument
 // from GET /api/provision/{projectId}/permissions/.
 
+// A permission names the role the engine runs the caller as: anon with no
+// session, user for a signed-in end user, or a custom role from the token.
+const (
+	// PermissionRolePattern is the shape of a role name; the migrations'
+	// CHECK constraints enforce the same pattern.
+	PermissionRolePattern = `^[a-z][a-z0-9_]{0,62}$`
+	// PermissionRoleService bypasses permissions, so none may name it.
+	PermissionRoleService = "service"
+)
+
 // The four operations a table permission is written for.
 const (
 	PermissionSelect = "select"
@@ -70,12 +80,4 @@ type PermissionDocument struct {
 	Tables              []TablePermissions   `json:"tables"`
 	Functions           []TrackedFunction    `json:"functions"`
 	FunctionPermissions []FunctionPermission `json:"functionPermissions"`
-}
-
-// LegacyPermissionImport is what folding a project's table grants, row
-// policies and column policies produces. It is written once per project.
-type LegacyPermissionImport struct {
-	Permissions         []TablePermission
-	Functions           []TrackedFunction
-	FunctionPermissions []FunctionPermission
 }

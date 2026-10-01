@@ -26,8 +26,8 @@ func TestRestoringProjectRefusesEveryRouteButStatusAndDelete(t *testing.T) {
 		{http.MethodPost, "/api/provision/" + testProject + "/resume", http.StatusConflict},
 		{http.MethodPost, "/api/provision/" + testProject + "/backup/trigger", http.StatusConflict},
 		{http.MethodPost, "/api/provision/" + testProject + "/backup/restore", http.StatusConflict},
-		{http.MethodPost, "/api/provision/" + testProject + "/rls-policies", http.StatusConflict},
-		{http.MethodPost, "/api/provision/" + testProject + "/table-grants", http.StatusConflict},
+		{http.MethodPut, "/api/provision/" + testProject + "/permissions", http.StatusConflict},
+		{http.MethodPost, "/api/provision/" + testProject + "/tracked-functions", http.StatusConflict},
 		{http.MethodPost, "/api/projects/" + testProject + "/functions", http.StatusConflict},
 		{http.MethodPut, "/api/projects/" + testProject + "/cors", http.StatusConflict},
 	}
