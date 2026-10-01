@@ -18,7 +18,7 @@ func setupSnapshotTest(t *testing.T) *SnapshotService {
 	mock := k8s.NewMockClient()
 	mock.ExecOutput["org-snap-db/snap-db-postgres-1"] = "-- pg_dump output\nCREATE TABLE..."
 	store.Create(&domain.DatabaseInstance{
-		ProjectID: testSnapDB, Namespace: "org-snap-db", Status: "ACTIVE",
+		ProjectID: testSnapDB, Namespace: "org-snap-db", Status: "ACTIVE", DatabaseName: "app",
 	})
 	return NewSnapshotService(store, mock, dir)
 }

@@ -1,15 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 
+// A snapshot as the server lists it. A DocumentDB project's snapshot is a tar
+// holding the database dump and every collection in mongodump's layout.
 export interface SnapshotInfo {
-  snapshotId: string;
+  id: string;
   projectId: string;
-  sizeBytes: number;
+  size: number;
   format: string;
   schemaOnly: boolean;
   dataOnly: boolean;
+  documents: boolean;
   createdAt: string;
-  downloadUrl: string;
 }
 
 export interface SnapshotExportRequest {

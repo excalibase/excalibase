@@ -150,6 +150,9 @@ type DatabaseMetrics struct {
 	AvgQueryLatencyMs *float64 `json:"averageQueryLatencyMs"`
 	SlowQueryCount    *int     `json:"slowQueryCount"`
 	DatabaseSizeGB    *int64   `json:"databaseSizeGB"`
+	// DatabaseSizeBytes is exact; a DocumentDB project counts the postgres
+	// database its documents live in as well as app (EXC-531).
+	DatabaseSizeBytes *int64 `json:"databaseSizeBytes"`
 
 	// Backup
 	LastBackupTime *FlexTime `json:"lastBackupTime"`
@@ -387,12 +390,19 @@ type SnapshotInfo struct {
 	Format    string    `json:"format"`
 	Size      int64     `json:"size"`
 	CreatedAt *FlexTime `json:"createdAt"`
-	FilePath  string    `json:"filePath,omitempty"`
+	// FilePath is where the server keeps it; never sent to a caller.
+	FilePath string `json:"-"`
+	// Documents marks a DocumentDB project's export: a tar holding the
+	// database dump and every collection in mongodump's layout (EXC-531).
+	Documents  bool `json:"documents"`
+	SchemaOnly bool `json:"schemaOnly"`
+	DataOnly   bool `json:"dataOnly"`
 }
 
 type SnapshotExportRequest struct {
-	Format        string   `json:"format,omitempty"` // custom, plain, directory, tar
+	Format        string   `json:"format,omitempty"` // custom (default) or plain
 	SchemaOnly    bool     `json:"schemaOnly"`
+	DataOnly      bool     `json:"dataOnly"`
 	Tables        []string `json:"tables,omitempty"`
 	ExcludeTables []string `json:"excludeTables,omitempty"`
 }

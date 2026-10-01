@@ -161,9 +161,9 @@ func (s *MetricsService) collectCNPGMetrics(ctx context.Context, inst *domain.Da
 		metrics.MaxConnections = intPtr(100)
 	}
 
-	// Database size
-	if v, ok := labeled["cnpg_pg_database_size_bytes{datname=\"app\"}"]; ok {
-		gb := int64(v) / (1024 * 1024 * 1024)
+	if size, ok := databaseSizeBytes(labeled, inst.DatabaseName, inst.DocumentDB); ok {
+		gb := size / (1024 * 1024 * 1024)
+		metrics.DatabaseSizeBytes = &size
 		metrics.DatabaseSizeGB = &gb
 	}
 
@@ -336,4 +336,23 @@ func (s *MetricsService) loadHistory(projectID string) []domain.DatabaseMetrics 
 	var hist []domain.DatabaseMetrics
 	json.Unmarshal(data, &hist)
 	return hist
+}
+
+// databaseSizeBytes is the customer's data on disk: the project database, and for
+// a DocumentDB project also the postgres database its documents live in. A
+// DocumentDB project without the postgres figure reports no size rather than
+// one that leaves the documents out.
+func databaseSizeBytes(labeled map[string]float64, database string, documentDB bool) (int64, bool) {
+	app, ok := labeled[`cnpg_pg_database_size_bytes{datname="`+database+`"}`]
+	if database == "" || !ok {
+		return 0, false
+	}
+	if !documentDB {
+		return int64(app), true
+	}
+	documents, ok := labeled[`cnpg_pg_database_size_bytes{datname="postgres"}`]
+	if !ok {
+		return 0, false
+	}
+	return int64(app) + int64(documents), true
 }
