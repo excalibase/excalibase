@@ -275,7 +275,7 @@ func TestTurningTheEndpointOffFreesBothPorts(t *testing.T) {
 	}
 }
 
-// The strings a Mongo client actually needs, for both TLS choices.
+// The string a Mongo client needs: TLS only, the gateway takes nothing else (EXC-530).
 func TestADocumentDBProjectIsGivenMongoConnectionStrings(t *testing.T) {
 	f := newMongoEndpointFixture(t, true)
 
@@ -287,10 +287,7 @@ func TestADocumentDBProjectIsGivenMongoConnectionStrings(t *testing.T) {
 	if !strings.Contains(view.Connection.MongoRequireTLS, "tls=true") {
 		t.Errorf("require-TLS string: %q", view.Connection.MongoRequireTLS)
 	}
-	if !strings.Contains(view.Connection.MongoAllowPlaintext, "tls=false") {
-		t.Errorf("plaintext string: %q", view.Connection.MongoAllowPlaintext)
-	}
-	// One credential, two strings: both name the project's own role, so a
+	// One credential for both protocols: the strings name the project's own role, so a
 	// customer is not handed a second identity to keep in step.
 	if !strings.Contains(view.Connection.MongoRequireTLS, f.inst.Username) {
 		t.Errorf("the Mongo string does not name the project's credential: %q", view.Connection.MongoRequireTLS)
@@ -300,5 +297,25 @@ func TestADocumentDBProjectIsGivenMongoConnectionStrings(t *testing.T) {
 	}
 	if view.Username != f.inst.Username {
 		t.Errorf("the view advertises a different username: %q", view.Username)
+	}
+}
+
+// Turning Require TLS off rewrites Postgres's pg_hba only; the gateway still
+// takes TLS alone, so the Mongo string must not change with it (EXC-530).
+func TestTheMongoStringRequiresTLSEvenWhenPostgresAllowsPlaintext(t *testing.T) {
+	f := newMongoEndpointFixture(t, true)
+	ctx := context.Background()
+	if _, err := f.svc.SetPublic(ctx, f.inst.ProjectID, true); err != nil {
+		t.Fatalf("SetPublic: %v", err)
+	}
+	if _, err := f.store.SetDatabaseEndpointRequireTLS(ctx, f.inst.ProjectID, false); err != nil {
+		t.Fatalf("SetDatabaseEndpointRequireTLS: %v", err)
+	}
+	view, err := f.svc.Describe(ctx, f.inst.ProjectID)
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if view.RequireTLS || !strings.Contains(view.Connection.MongoRequireTLS, "tls=true") {
+		t.Fatalf("require TLS %v, Mongo string %q", view.RequireTLS, view.Connection.MongoRequireTLS)
 	}
 }

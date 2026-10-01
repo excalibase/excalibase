@@ -165,6 +165,16 @@ describe('ConnectionStrings — DocumentDB', () => {
     expect(uri).not.toHaveTextContent('sslmode');
   });
 
+  // EXC-530: Require TLS off opens plaintext for Postgres only; the gateway
+  // takes TLS alone, so the Mongo string never offers plaintext.
+  test('asks for TLS on Mongo even when Postgres allows plaintext', async () => {
+    renderStrings({ documentDb: true, endpoint: { ...WITH_MONGO, requireTls: false } });
+    const uri = await screen.findByTestId('conn-mongo-public');
+    expect(uri).toHaveTextContent('tls=true');
+    expect(uri).not.toHaveTextContent('tls=false');
+    expect(screen.getByTestId('conn-postgres-public')).toHaveTextContent('sslmode=prefer');
+  });
+
   test('authenticates the way the gateway was proven to accept', async () => {
     renderStrings({ documentDb: true, endpoint: WITH_MONGO });
     const uri = await screen.findByTestId('conn-mongo-public');

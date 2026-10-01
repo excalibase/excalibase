@@ -42,14 +42,13 @@ func (h *ProvisioningHandler) SetDBEndpointService(api DBEndpointAPI) {
 type dbEndpointConnectionStrings struct {
 	RequireTLS     string `json:"requireTls"`
 	AllowPlaintext string `json:"allowPlaintext"`
-	// The Mongo pair, present only for a DocumentDB project (EXC-409). TLS
+	// The Mongo string, present only for a DocumentDB project (EXC-409). TLS
 	// is spelled tls=true rather than sslmode=, because that is what a
 	// MongoDB driver takes; a client handed libpq's spelling rejects it.
 	// Absent, not empty, for every other project: a caller must be able to
 	// tell "there is no Mongo endpoint" from "there is one I was not told
-	// how to reach".
-	MongoRequireTLS     string `json:"mongoRequireTls,omitempty"`
-	MongoAllowPlaintext string `json:"mongoAllowPlaintext,omitempty"`
+	// how to reach". There is no plaintext one: the gateway takes TLS only.
+	MongoRequireTLS string `json:"mongoRequireTls,omitempty"`
 }
 
 // dbEndpointInternal is the in-cluster endpoint, which exists for every
@@ -232,10 +231,9 @@ func dbEndpointResponseFor(view service.DBEndpointView, canChange bool) dbEndpoi
 		Database:      view.Database,
 		Username:      view.Username,
 		ConnectionStrings: dbEndpointConnectionStrings{
-			RequireTLS:          view.Connection.RequireTLS,
-			AllowPlaintext:      view.Connection.AllowPlaintext,
-			MongoRequireTLS:     view.Connection.MongoRequireTLS,
-			MongoAllowPlaintext: view.Connection.MongoAllowPlaintext,
+			RequireTLS:      view.Connection.RequireTLS,
+			AllowPlaintext:  view.Connection.AllowPlaintext,
+			MongoRequireTLS: view.Connection.MongoRequireTLS,
 		},
 		CACertificate: view.CACertificate,
 		Internal: dbEndpointInternal{

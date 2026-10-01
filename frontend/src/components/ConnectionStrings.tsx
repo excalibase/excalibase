@@ -200,7 +200,8 @@ function MongoSection({ projectId, credentials, endpoint, shownPassword }: Secti
         <StringRow
           testId="conn-mongo-public"
           label="Public — from outside the cluster"
-          {...row(external, endpoint?.requireTls ?? true)}
+          // The gateway takes TLS only; Require TLS changes Postgres alone (EXC-530).
+          {...row(external, true)}
         />
       )}
       {(internal || external) && <CertificateAuthority projectId={projectId} pem={endpoint?.caCertificate ?? ''} />}

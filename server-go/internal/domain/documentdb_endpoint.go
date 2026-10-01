@@ -84,12 +84,9 @@ func MongoConnectionString(host string, port int, user string, requireTLS bool) 
 	return uri.String()
 }
 
-// DBEndpointMongoConnectionStrings renders both TLS choices for one project's
-// Mongo endpoint, so a customer can see exactly what turning TLS off costs
-// them before they turn it off.
-func DBEndpointMongoConnectionStrings(host string, port int, user string) DBEndpointConnectionStringSet {
-	return DBEndpointConnectionStringSet{
-		RequireTLS:     MongoConnectionString(host, port, user, true),
-		AllowPlaintext: MongoConnectionString(host, port, user, false),
-	}
+// DBEndpointMongoConnectionString is the public Mongo string. It always asks
+// for TLS: the gateway takes nothing else, whatever Require TLS says for
+// Postgres (EXC-530).
+func DBEndpointMongoConnectionString(host string, port int, user string) string {
+	return MongoConnectionString(host, port, user, true)
 }

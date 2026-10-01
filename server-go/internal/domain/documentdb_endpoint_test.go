@@ -78,19 +78,13 @@ func TestMongoConnectionStringCarriesNoPassword(t *testing.T) {
 	}
 }
 
-// Both choices are rendered so a customer can see what turning TLS off costs
-// before they turn it off, exactly as the Postgres pair does.
-func TestMongoConnectionStringsRenderBothTLSChoices(t *testing.T) {
-	set := DBEndpointMongoConnectionStrings("proj-a.db.example.com", 30111, "documentdb_admin")
+// The gateway takes TLS only, whatever Require TLS says for Postgres
+// (EXC-530), so the public Mongo string always asks for it.
+func TestThePublicMongoStringAlwaysRequiresTLS(t *testing.T) {
+	uri := DBEndpointMongoConnectionString("proj-a.db.example.com", 30111, "documentdb_admin")
 
-	if !strings.Contains(set.RequireTLS, "tls=true") {
-		t.Errorf("require-TLS string: %q", set.RequireTLS)
-	}
-	if !strings.Contains(set.AllowPlaintext, "tls=false") {
-		t.Errorf("plaintext string: %q", set.AllowPlaintext)
-	}
-	if set.RequireTLS == set.AllowPlaintext {
-		t.Error("both choices render the same string")
+	if !strings.Contains(uri, "tls=true") || strings.Contains(uri, "tls=false") {
+		t.Errorf("public Mongo string: %q", uri)
 	}
 }
 
