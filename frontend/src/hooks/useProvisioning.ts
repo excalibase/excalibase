@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { api } from '../api/client';
 import { useSSE } from './useSSE';
+import { PROJECT_FOLLOW_MS, RESPOND_ASYNC, settleProject } from './projectFollow';
 import type { DatabaseInstance, DatabaseSettings, ProvisioningRequest, CredentialsResponse, BackupConfig, BackupInfo } from '../types';
 
 export const useInstances = () => {
@@ -87,12 +88,16 @@ export const useProvisionDatabase = () => {
   });
 };
 
-export const useDeprovisionDatabase = () => {
+// A project holding data is stopped (backup first) before its grace period;
+// the answer comes once the stop is recorded and the project is followed
+// until it is PENDING_DELETION, or fails with the reason the server records.
+export const useDeprovisionDatabase = (followMs = PROJECT_FOLLOW_MS) => {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (projectId: string) => {
-      await api.delete(`/provision/${projectId}`);
+      const response = await api.delete<{ status?: string }>(`/provision/${projectId}`, RESPOND_ASYNC);
+      return settleProject(projectId, 'deletion', response, followMs);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['instances'] });
@@ -132,12 +137,18 @@ interface PauseResponse {
   pauseReason?: string;
 }
 
-export const usePauseProject = () => {
+// Pause and resume answer once they are recorded (PAUSING, RESUMING) and are
+// followed until the project is PAUSED or ACTIVE, or names why not.
+export const usePauseProject = (followMs = PROJECT_FOLLOW_MS) => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ projectId, reason }: { projectId: string; reason?: string }) => {
-      const response = await api.post<PauseResponse>(`/provision/${projectId}/pause`, { reason: reason ?? 'manual' });
-      return response.data;
+      const response = await api.post<PauseResponse>(
+        `/provision/${projectId}/pause`,
+        { reason: reason ?? 'manual' },
+        RESPOND_ASYNC,
+      );
+      return settleProject(projectId, 'pause', response, followMs);
     },
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ['instances'] });
@@ -149,12 +160,12 @@ export const usePauseProject = () => {
   });
 };
 
-export const useResumeProject = () => {
+export const useResumeProject = (followMs = PROJECT_FOLLOW_MS) => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (projectId: string) => {
-      const response = await api.post<PauseResponse>(`/provision/${projectId}/resume`);
-      return response.data;
+      const response = await api.post<PauseResponse>(`/provision/${projectId}/resume`, undefined, RESPOND_ASYNC);
+      return settleProject(projectId, 'resume', response, followMs);
     },
     onSuccess: (_, projectId) => {
       queryClient.invalidateQueries({ queryKey: ['instances'] });

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { projectOperationMessage } from '../hooks/projectFollow';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useInstance, useDeprovisionDatabase, useListBackups, useTriggerBackup, useLogs } from '../hooks/useProvisioning';
 import { useCurrentMetrics } from '../hooks/useMetrics';
@@ -28,8 +29,12 @@ export function InstanceDetailPage() {
 
   const handleDelete = async () => {
     if (confirm(`Delete ${projectId}? It is stopped now and permanently deleted after 7 days; an org owner can cancel until then.`)) {
-      await deprovision.mutateAsync(projectId!);
-      navigate('/instances');
+      try {
+        await deprovision.mutateAsync(projectId!);
+        navigate('/instances');
+      } catch (err) {
+        alert(projectOperationMessage(err, `${projectId} was not scheduled for deletion`));
+      }
     }
   };
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { projectOperationMessage } from '../hooks/projectFollow';
 import type { DatabaseInstance } from '../types';
 import { Card } from './Card';
 import { Button } from './Button';
@@ -23,7 +24,11 @@ export function DatabaseInstanceCard({ instance }: DatabaseInstanceCardProps) {
 
   const handleDelete = async () => {
     if (confirm(`Delete ${instance.projectId}? It is stopped now and permanently deleted after 7 days; an org owner can cancel until then.`)) {
-      await deprovision.mutateAsync(instance.projectId);
+      try {
+        await deprovision.mutateAsync(instance.projectId);
+      } catch (err) {
+        alert(projectOperationMessage(err, `${instance.projectId} was not scheduled for deletion`));
+      }
     }
   };
 

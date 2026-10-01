@@ -83,7 +83,7 @@ describe('useProvisioning hooks', () => {
     const { result } = renderHook(() => useDeprovisionDatabase(), { wrapper: Wrapper });
     result.current.mutate('proj-1');
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(api.delete).toHaveBeenCalledWith('/provision/proj-1');
+    expect(api.delete).toHaveBeenCalledWith('/provision/proj-1', { headers: { Prefer: 'respond-async' } });
   });
 
   test('useConfigureBackup POSTs the schedule', async () => {

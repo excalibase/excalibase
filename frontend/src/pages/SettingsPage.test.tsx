@@ -10,6 +10,8 @@ vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
+const RESPOND_ASYNC = { headers: { Prefer: 'respond-async' } };
+
 function renderSettings(
   deletionProtection: boolean,
   extra: Record<string, unknown> = {},
@@ -131,7 +133,7 @@ describe('SettingsPage — after a deletion', () => {
     await userEvent.type(screen.getByTestId('confirm-input'), 'p-1');
     await userEvent.click(screen.getByTestId('modal-confirm'));
 
-    await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/provision/p-1'));
+    await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/provision/p-1', RESPOND_ASYNC));
     expect(await screen.findByTestId('projects-list-page')).toBeInTheDocument();
   });
 });
@@ -142,14 +144,16 @@ describe('SettingsPage — lifecycle', () => {
   test('an active project can be paused', async () => {
     renderSettings(false);
     await userEvent.click(await screen.findByTestId('pause-project-btn'));
-    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/provision/p-1/pause', { reason: 'manual' }));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/provision/p-1/pause', { reason: 'manual' }, RESPOND_ASYNC),
+    );
   });
 
   test('a paused project says so and can be resumed', async () => {
     renderSettings(false, { status: 'PAUSED', pauseReason: 'idle', lastActiveAt: '2026-09-30T10:00:00Z' });
     expect(await screen.findByTestId('lifecycle-section')).toHaveTextContent(/paused \(idle\)/);
     await userEvent.click(screen.getByTestId('resume-project-btn'));
-    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/provision/p-1/resume'));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/provision/p-1/resume', undefined, RESPOND_ASYNC));
   });
 
   test('copying the project ref puts it on the clipboard', async () => {
@@ -162,5 +166,37 @@ describe('SettingsPage — lifecycle', () => {
     });
     await userEvent.click(button);
     expect(written).toEqual(['p-1']);
+  });
+});
+
+// EXC-473: Studio does not hold a request open for a pause's backup or a
+// deletion's stop; it follows the project and names a failure the server records.
+describe('SettingsPage — operations followed on the project', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('a pause in progress says what it is doing', async () => {
+    renderSettings(false);
+    vi.mocked(api.post).mockReturnValue(new Promise(() => undefined) as never);
+    await userEvent.click(await screen.findByTestId('pause-project-btn'));
+    expect(await screen.findByTestId('lifecycle-pending')).toHaveTextContent(/backup/i);
+  });
+
+  test('a pause that did not complete names why', async () => {
+    const reason = 'pause cancelled: the pre-pause backup did not complete; the project is still running';
+    renderSettings(false, { failureReason: reason });
+    vi.mocked(api.post).mockResolvedValue({ status: 202, data: { projectId: 'p-1', status: 'PAUSING' } } as never);
+    await userEvent.click(await screen.findByTestId('pause-project-btn'));
+    expect(await screen.findByTestId('lifecycle-error')).toHaveTextContent(/pre-pause backup did not complete/);
+  });
+
+  test('a deletion whose stop did not complete stays on the page and names why', async () => {
+    const reason = 'pause did not complete: the project\'s database was not confirmed stopped; retry to continue';
+    renderSettings(false, { failureReason: reason });
+    vi.mocked(api.delete).mockResolvedValue({ status: 202, data: { projectId: 'p-1', status: 'PAUSING' } } as never);
+    await userEvent.click(await screen.findByTestId('delete-project-btn'));
+    await userEvent.type(screen.getByTestId('confirm-input'), 'p-1');
+    await userEvent.click(screen.getByTestId('modal-confirm'));
+    expect(await screen.findByTestId('delete-error')).toHaveTextContent(/not confirmed stopped/);
+    expect(screen.queryByTestId('projects-list-page')).not.toBeInTheDocument();
   });
 });

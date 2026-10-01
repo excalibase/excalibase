@@ -14,6 +14,7 @@ import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
 import { engineLabel } from '../utils/engine';
+import { projectOperationMessage } from '../hooks/projectFollow';
 
 interface RollbackResult {
   name: string;
@@ -203,6 +204,8 @@ const excalibase = createClient({
         project={project}
         protectedFromDeletion={protectedFromDeletion}
         onDelete={() => setShowDelete(true)}
+        deleting={deprovision.isPending}
+        deleteError={deprovision.error}
       />
 
       <ConfirmModal
@@ -211,6 +214,7 @@ const excalibase = createClient({
         onConfirm={() => {
           if (projectId) deprovision.mutate(projectId, {
             onSuccess: () => navigate('/instances'),
+            onError: () => setShowDelete(false),
           });
         }}
         title="Delete Project"
@@ -228,9 +232,22 @@ const excalibase = createClient({
 function LifecycleSection({ project }: { readonly project: DatabaseInstance }) {
   const pauseProject = usePauseProject();
   const resumeProject = useResumeProject();
+  const failure = pauseProject.error ?? resumeProject.error;
   return (
     <div className="rounded-lg border border-border-primary bg-surface-card p-4" data-testid="lifecycle-section">
       <h4 className="text-sm font-medium text-text-primary mb-2">Lifecycle</h4>
+      {(pauseProject.isPending || resumeProject.isPending) && (
+        <p className="text-xs text-text-secondary mb-3" data-testid="lifecycle-pending" role="status">
+          {pauseProject.isPending
+            ? 'Pausing: taking a backup, then stopping the database. This can take a few minutes.'
+            : 'Resuming: starting the database. This can take a few minutes.'}
+        </p>
+      )}
+      {failure && (
+        <p className="text-xs text-red-400 mb-3 break-words" data-testid="lifecycle-error" role="alert">
+          {projectOperationMessage(failure, 'The project could not be changed')}
+        </p>
+      )}
       {project.status === 'PAUSED' ? (
         <>
           <p className="text-xs text-text-secondary mb-3">
@@ -273,15 +290,27 @@ interface DangerZoneProps {
   readonly project: DatabaseInstance;
   readonly protectedFromDeletion: boolean;
   readonly onDelete: () => void;
+  readonly deleting: boolean;
+  readonly deleteError: unknown;
 }
 
 // Deletion protection, deletion and its 7-day grace.
-function DangerZone({ project, protectedFromDeletion, onDelete }: DangerZoneProps) {
+function DangerZone({ project, protectedFromDeletion, onDelete, deleting, deleteError }: DangerZoneProps) {
   const setProtection = useSetDeletionProtection();
   const cancelDeletion = useCancelDeletion();
   return (
     <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-4">
       <h4 className="text-sm font-medium text-red-400 mb-2">Danger Zone</h4>
+      {deleting && (
+        <p className="text-xs text-text-secondary mb-3" data-testid="delete-pending" role="status">
+          Stopping the project for deletion: taking a backup, then stopping the database. This can take a few minutes.
+        </p>
+      )}
+      {deleteError != null && !deleting && (
+        <p className="text-xs text-red-400 mb-3 break-words" data-testid="delete-error" role="alert">
+          The project was not scheduled for deletion: {projectOperationMessage(deleteError, 'the request was refused')}
+        </p>
+      )}
       {project.status === 'PENDING_DELETION' ? (
         <div data-testid="deletion-scheduled">
           <p className="text-xs text-text-secondary mb-3">
