@@ -274,14 +274,17 @@ export const useLogs = (projectId: string, lines: number = 100) => {
   });
 };
 
-// Adds the database to a project created without one. The answer is the
-// project as the add left it: with its database, or still without one and
-// the failure named, so the caller can show it and let the admin retry.
+// Adds the database to a project created without one. The build outlasts one
+// request, so the answer comes once the project is PROVISIONING and the project
+// page follows it; a server that still answers when done returns the project
+// as the add left it, with its database or the failure named.
 export const useAddDatabase = (projectId: string) => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (settings: DatabaseSettings) => {
-      const response = await api.post<DatabaseInstance>(`/provision/${projectId}/database`, settings);
+      const response = await api.post<DatabaseInstance>(`/provision/${projectId}/database`, settings, {
+        headers: { Prefer: 'respond-async' },
+      });
       return response.data;
     },
     onSettled: () => {

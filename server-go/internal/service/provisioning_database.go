@@ -149,28 +149,69 @@ func projectResponse(inst *domain.DatabaseInstance) *domain.ProvisioningResponse
 // project's namespace, and the project stays ACTIVE without a database, with
 // the failure recorded, so its apps keep running and the add can be retried.
 func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
-	if req.NoDatabase || req.ProjectName != "" || req.OrgID != "" {
-		return nil, ErrAddDatabaseRequest
-	}
-	if err := validateDatabaseRequest(req); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrDatabaseRequestInvalid, err)
-	}
-	databases, ok := s.store.(storage.ProjectDatabaseStore)
-	if !ok {
-		return nil, errors.New("this platform's store cannot add a database to a project")
-	}
-	inst, release, err := s.holdProject(ctx, projectID, OperationAddDatabase, requireActive)
+	add, release, err := s.admitDatabaseAdd(ctx, projectID, req)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	return add.build(ctx)
+}
+
+// AddDatabaseInBackground admits the add as AddDatabase does and answers once
+// the project is recorded as building its database (PROVISIONING); the build
+// runs on, detached from the request, holding the project's lease until it
+// ends. Its outcome is on the project: its database, or none and the failure
+// named. A process that dies mid-build is recovered at the next start.
+func (s *ProvisioningService) AddDatabaseInBackground(ctx context.Context, projectID string, req domain.ProvisioningRequest) (*domain.ProvisioningResponse, error) {
+	// The lease outlives this request, so it is not tied to the caller.
+	ctx = context.WithoutCancel(ctx)
+	add, release, err := s.admitDatabaseAdd(ctx, projectID, req)
+	if err != nil {
+		return nil, err
+	}
+	accepted := projectResponse(add.inst)
+	s.startInBackground(func() {
+		defer release()
+		if _, err := add.build(ctx); err != nil {
+			log.Printf("database add of %s did not finish: %v", projectID, err)
+		}
+	})
+	return accepted, nil
+}
+
+// admitDatabaseAdd checks the add under the project's lease and records the
+// project PROVISIONING. The caller builds the database and then releases.
+func (s *ProvisioningService) admitDatabaseAdd(ctx context.Context, projectID string, req domain.ProvisioningRequest) (*admittedProject, func(), error) {
+	if req.NoDatabase || req.ProjectName != "" || req.OrgID != "" {
+		return nil, nil, ErrAddDatabaseRequest
+	}
+	if err := validateDatabaseRequest(req); err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrDatabaseRequestInvalid, err)
+	}
+	if _, ok := s.store.(storage.ProjectDatabaseStore); !ok {
+		return nil, nil, errors.New("this platform's store cannot add a database to a project")
+	}
+	inst, release, err := s.holdProject(ctx, projectID, OperationAddDatabase, requireActive)
+	if err != nil {
+		return nil, nil, err
+	}
+	add, err := s.startDatabaseAdd(ctx, inst, req)
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return add, release, nil
+}
+
+// startDatabaseAdd admits the database onto a held project and records it
+// PROVISIONING, the failure of any earlier attempt cleared.
+func (s *ProvisioningService) startDatabaseAdd(ctx context.Context, inst *domain.DatabaseInstance, req domain.ProvisioningRequest) (*admittedProject, error) {
 	if !inst.NoDatabase {
-		return nil, fmt.Errorf("%w: %s", storage.ErrProjectHasDatabase, projectID)
+		return nil, fmt.Errorf("%w: %s", storage.ErrProjectHasDatabase, inst.ProjectID)
 	}
 	if inst.DeploymentMode != domain.ModeK8s {
 		return nil, ErrNoDatabaseNeedsKubernetes
 	}
-
 	start := time.Now()
 	tier, err := s.databaseTier(ctx, &req, inst.Tier)
 	if err != nil {
@@ -179,12 +220,12 @@ func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string,
 		}
 		return nil, err
 	}
-	prov, major, err := s.admitDatabase(ctx, &req, inst.Tier, tier, projectID)
+	prov, major, err := s.admitDatabase(ctx, &req, inst.Tier, tier, inst.ProjectID)
 	if err != nil {
 		return nil, err
 	}
 	applyDatabaseChoices(inst, req, tier, major)
-	if err := databases.RecordDatabaseChoices(inst, string(domain.StatusActive)); err != nil {
+	if err := s.store.(storage.ProjectDatabaseStore).RecordDatabaseChoices(inst, string(domain.StatusActive)); err != nil {
 		return nil, err
 	}
 	inst.Status = string(domain.StatusProvisioning)
@@ -198,8 +239,8 @@ func (s *ProvisioningService) AddDatabase(ctx context.Context, projectID string,
 	req.ProjectName = inst.ProjectID
 	req.OrgID = inst.OrgID
 	req.IntoExistingNamespace = true
-	return s.buildDatabase(ctx, start, inst, req, prov, tier, s.handleAddDatabaseFailure,
-		RegistrationOptions{AddingDatabase: true})
+	return &admittedProject{svc: s, start: start, inst: inst, req: req, prov: prov, tier: tier,
+		fail: s.handleAddDatabaseFailure, opts: RegistrationOptions{AddingDatabase: true}}, nil
 }
 
 // handleAddDatabaseFailure rolls back what the add built and returns the

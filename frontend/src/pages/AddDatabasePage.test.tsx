@@ -54,10 +54,15 @@ describe('AddDatabasePage', () => {
     vi.clearAllMocks();
   });
 
-  test('adds a PostgreSQL database with the chosen major', async () => {
+  // EXC-426: the build outlasts one request, so Studio does not wait for it:
+  // the answer comes once the project is PROVISIONING and the overview follows it.
+  test('adds a PostgreSQL database with the chosen major without waiting for the build', async () => {
     const user = userEvent.setup();
     stubProject(withoutDatabase);
-    vi.mocked(api.post).mockResolvedValue({ data: { projectId: 'proj-1', status: 'ACTIVE', noDatabase: false } } as never);
+    vi.mocked(api.post).mockResolvedValue({
+      status: 202,
+      data: { projectId: 'proj-1', status: 'PROVISIONING', noDatabase: true },
+    } as never);
     renderAt('/project/proj-1/database/add');
 
     expect(await screen.findByTestId('add-database-submit')).toBeDisabled();
@@ -65,11 +70,11 @@ describe('AddDatabasePage', () => {
     await user.click(screen.getByTestId('add-database-submit'));
 
     await waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith('/provision/proj-1/database', {
-        databaseType: 'POSTGRESQL',
-        postgresVersion: '16',
-        documentDb: false,
-      }),
+      expect(api.post).toHaveBeenCalledWith(
+        '/provision/proj-1/database',
+        { databaseType: 'POSTGRESQL', postgresVersion: '16', documentDb: false },
+        { headers: { Prefer: 'respond-async' } },
+      ),
     );
     expect(navigate).toHaveBeenCalledWith('/project/proj-1');
   });
@@ -84,11 +89,11 @@ describe('AddDatabasePage', () => {
     await user.click(await screen.findByTestId('pg-version-16'));
     await user.click(screen.getByTestId('add-database-submit'));
     await waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith('/provision/proj-1/database', {
-        databaseType: 'POSTGRESQL',
-        postgresVersion: '16',
-        documentDb: true,
-      }),
+      expect(api.post).toHaveBeenCalledWith(
+        '/provision/proj-1/database',
+        { databaseType: 'POSTGRESQL', postgresVersion: '16', documentDb: true },
+        { headers: { Prefer: 'respond-async' } },
+      ),
     );
   });
 

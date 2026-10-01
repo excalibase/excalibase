@@ -15,13 +15,24 @@ import (
 // (EXC-426). The body carries only database settings — engine, major,
 // DocumentDB, parameters, storage class — and the project's plan sizes it.
 // The answer is the project as the add left it: with its database, or still
-// without one and the failure named, so the add can be retried.
+// without one and the failure named, so the add can be retried. A caller
+// that prefers not to wait (RFC 7240, Studio) is answered 202 once the
+// project is PROVISIONING and follows the build through GET /{projectId}.
 func (h *ProvisioningHandler) AddDatabase(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProvisioningRequest
 	if !decodeStrict(w, r, &req) {
 		return
 	}
 	projectID := chi.URLParam(r, "projectId")
+	if prefersRespondAsync(r) {
+		resp, err := h.svc.AddDatabaseInBackground(r.Context(), projectID, req)
+		if err != nil {
+			writeAddDatabaseError(w, projectID, err)
+			return
+		}
+		writeJSONStatus(w, http.StatusAccepted, resp)
+		return
+	}
 	resp, err := h.svc.AddDatabase(r.Context(), projectID, req)
 	if err != nil {
 		writeAddDatabaseError(w, projectID, err)

@@ -81,7 +81,7 @@ export function AddDatabasePage() {
       postgresVersion,
       documentDb: documentDbOnly || documentDb,
     });
-    if (result.noDatabase) {
+    if (result.noDatabase && result.status !== 'PROVISIONING') {
       setFailure(result.failureReason || 'The database could not be created.');
       return;
     }
