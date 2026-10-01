@@ -178,16 +178,13 @@ test.describe('Registration', () => {
     await expect(page.getByRole('link', { name: 'Register' })).toBeVisible();
   });
 
-  test('register form submits and redirects', async ({ page }) => {
+  test('register form submits and asks to confirm the email', async ({ page }) => {
+    // Sign-up signs nobody in: the account waits for its email to be verified.
     await page.route('**/api/auth/register', (route) => {
       return route.fulfill({
         status: 201, contentType: 'application/json',
-        body: JSON.stringify({ token: 'new-token', user: { id: '99', username: 'testuser', email: 'test@test.com', role: 'user' } }),
+        body: JSON.stringify({ status: 'verification_required', email: 'test@test.com' }),
       });
-    });
-    // Mock orgs for redirect target
-    await page.route('**/api/orgs', (route) => {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
     });
 
     await page.goto('/register');
@@ -197,7 +194,9 @@ test.describe('Registration', () => {
     await page.getByPlaceholder('Choose a password').fill('Test123!');
     await page.getByRole('button', { name: 'Create Account' }).click();
 
-    await page.waitForURL('**/orgs');
+    await expect(page.getByTestId('check-email')).toContainText('test@test.com');
+    await expect(page).toHaveURL(/\/register$/);
+    expect(await page.evaluate(() => localStorage.getItem('auth_user'))).toBeNull();
   });
 
   test('register shows error on duplicate', async ({ page }) => {
