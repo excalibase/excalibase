@@ -78,7 +78,8 @@ func (s *AppDeployService) holdAppQueued(ctx context.Context, projectID, appID s
 
 // PauseApp scales the app to zero and records PAUSED only once no pod of it is
 // left. A pause that stops part way stays PAUSING and is finished by pausing again.
-func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string) (*apphost.App, error) {
+func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string) (paused *apphost.App, err error) {
+	defer func() { s.settleLifecycle(projectID, appID, OperationPause, err) }()
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdAppForLifecycle(ctx, projectID, appID, OperationPause)
 	if err != nil {
@@ -111,7 +112,8 @@ func (s *AppDeployService) PauseApp(ctx context.Context, projectID, appID string
 // ResumeApp restores what the pause stopped and records ACTIVE once it is
 // ready. A rollout that fails leaves the app FAILED; any other failure leaves
 // it RESUMING, for a retry.
-func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error) {
+func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, actor string) (resumed *apphost.App, err error) {
+	defer func() { s.settleLifecycle(projectID, appID, OperationResume, err) }()
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdAppForLifecycle(ctx, projectID, appID, OperationResume)
 	if err != nil {
@@ -167,7 +169,8 @@ func (s *AppDeployService) ResumeApp(ctx context.Context, projectID, appID, acto
 // removes its disk and secret values and only then forgets the app. An app
 // with a disk is deleted only when confirmDeleteDisk says its data may go.
 // Anything that fails leaves it DELETING, and deleting again carries on from there.
-func (s *AppDeployService) DeleteApp(ctx context.Context, projectID, appID string, confirmDeleteDisk bool) error {
+func (s *AppDeployService) DeleteApp(ctx context.Context, projectID, appID string, confirmDeleteDisk bool) (err error) {
+	defer func() { s.settleLifecycle(projectID, appID, OperationDeletion, err) }()
 	ctx = context.WithoutCancel(ctx)
 	release, err := s.holdAppForLifecycle(ctx, projectID, appID, OperationDeletion)
 	if err != nil {

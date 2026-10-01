@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -25,6 +26,9 @@ type AppDeployer interface {
 	PauseApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
 	ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error)
 	DeleteApp(ctx context.Context, projectID, appID string, confirmDeleteDisk bool) error
+	PauseAppInBackground(ctx context.Context, projectID, appID string) (*apphost.App, error)
+	ResumeAppInBackground(ctx context.Context, projectID, appID, actor string) (*apphost.App, error)
+	DeleteAppInBackground(ctx context.Context, projectID, appID string, confirmDeleteDisk bool) (*apphost.App, error)
 	ResizeAppDisk(ctx context.Context, projectID, appID, size string) (*apphost.App, error)
 	AppDiskStatus(ctx context.Context, projectID, appID string) (*service.AppDiskReport, error)
 }
@@ -118,10 +122,20 @@ func (h *AppDeployHandler) appPath(w http.ResponseWriter, r *http.Request) (stri
 }
 
 func (h *AppDeployHandler) Pause(w http.ResponseWriter, r *http.Request) {
+	if prefersRespondAsync(r) {
+		h.lifecycleAccepted(w, r, h.deploys.PauseAppInBackground)
+		return
+	}
 	h.lifecycle(w, r, h.deploys.PauseApp)
 }
 
 func (h *AppDeployHandler) Resume(w http.ResponseWriter, r *http.Request) {
+	if prefersRespondAsync(r) {
+		h.lifecycleAccepted(w, r, func(ctx context.Context, projectID, appID string) (*apphost.App, error) {
+			return h.deploys.ResumeAppInBackground(ctx, projectID, appID, actorID(r))
+		})
+		return
+	}
 	h.lifecycle(w, r, func(ctx context.Context, projectID, appID string) (*apphost.App, error) {
 		return h.deploys.ResumeApp(ctx, projectID, appID, actorID(r))
 	})
@@ -142,6 +156,12 @@ func (h *AppDeployHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	var body appDeleteBody
 	if err := decodeOptionalJSON(w, r, &body); err != nil {
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
+		return
+	}
+	if prefersRespondAsync(r) {
+		h.lifecycleAccepted(w, r, func(ctx context.Context, projectID, appID string) (*apphost.App, error) {
+			return h.deploys.DeleteAppInBackground(ctx, projectID, appID, body.ConfirmDeleteDisk)
+		})
 		return
 	}
 	if err := h.deploys.DeleteApp(r.Context(), projectID, appID, body.ConfirmDeleteDisk); err != nil {
@@ -237,6 +257,24 @@ func (h *AppDeployHandler) lifecycle(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, map[string]string{"id": app.ID, "status": app.Status})
+}
+
+// lifecycleAccepted answers 202 once the operation is started (RFC 7240
+// respond-async). acceptedAt lets the caller tell a failure the app records
+// afterwards from an older one.
+func (h *AppDeployHandler) lifecycleAccepted(w http.ResponseWriter, r *http.Request,
+	start func(context.Context, string, string) (*apphost.App, error)) {
+	projectID, appID, ok := h.appPath(w, r)
+	if !ok {
+		return
+	}
+	acceptedAt := time.Now().UTC()
+	app, err := start(r.Context(), projectID, appID)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": app.ID, "status": app.Status, "acceptedAt": acceptedAt})
 }
 
 func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {

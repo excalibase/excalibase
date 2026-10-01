@@ -93,6 +93,23 @@ func (f *fakeAppDeployer) DeleteApp(_ context.Context, projectID, appID string, 
 	return err
 }
 
+func (f *fakeAppDeployer) PauseAppInBackground(_ context.Context, projectID, appID string) (*apphost.App, error) {
+	return f.lifecycle("pause-async", projectID, appID, apphost.StatusRunning)
+}
+
+func (f *fakeAppDeployer) ResumeAppInBackground(_ context.Context, projectID, appID, actor string) (*apphost.App, error) {
+	f.resumedBy = actor
+	return f.lifecycle("resume-async", projectID, appID, apphost.StatusStopped)
+}
+
+func (f *fakeAppDeployer) DeleteAppInBackground(_ context.Context, projectID, appID string, confirmDeleteDisk bool) (*apphost.App, error) {
+	op := "delete-async"
+	if confirmDeleteDisk {
+		op += "-confirmed"
+	}
+	return f.lifecycle(op, projectID, appID, apphost.StatusRunning)
+}
+
 func (f *fakeAppDeployer) ResizeAppDisk(context.Context, string, string, string) (*apphost.App, error) {
 	return nil, errors.New("not used")
 }
