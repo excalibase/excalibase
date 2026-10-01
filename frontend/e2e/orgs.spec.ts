@@ -120,7 +120,7 @@ test.describe('Organizations', () => {
     await page.getByRole('button', { name: 'Members' }).click();
     await expect(page.getByText('Pending Invites')).toBeVisible();
     await expect(page.getByText('newguy@test.com')).toBeVisible();
-    await expect(page.getByText('Not registered yet')).toBeVisible();
+    await expect(page.getByText('Waiting for the invite link to be used')).toBeVisible();
   });
 
   test('invite member by email shows form', async ({ page }) => {
@@ -129,7 +129,7 @@ test.describe('Organizations', () => {
     await page.getByRole('button', { name: 'Invite Member' }).click();
     await expect(page.getByPlaceholder('user@example.com')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Invite', exact: true })).toBeVisible();
-    await expect(page.getByText('User must have a platform account')).toBeVisible();
+    await expect(page.getByText('anyone else gets a one-time link')).toBeVisible();
   });
 
   test('settings tab shows tier and danger zone', async ({ page }) => {
