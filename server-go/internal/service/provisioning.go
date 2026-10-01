@@ -24,6 +24,9 @@ import (
 const warnPersistFmt = "WARN: failed to persist instance state: %v"
 
 type ProvisioningService struct {
+	// documentDBEnabled is whether this installation runs the DocumentDB
+	// gateway plugin; off unless the installation says so (EXC-394).
+	documentDBEnabled bool
 	// runInBackground starts an accepted project build; nil runs it on its own goroutine.
 	runInBackground func(func())
 	// storageBudget holds every database volume to the platform's share of its storage.
@@ -314,6 +317,25 @@ func (s *ProvisioningService) issueBackupCredentials(ctx context.Context, req *d
 	return nil
 }
 
+// ErrDocumentDBNotInstalled refuses a DocumentDB project on an installation
+// that does not run the gateway plugin: its cluster would never start.
+var ErrDocumentDBNotInstalled = errors.New("DocumentDB is not installed on this platform: ask the operator to enable it (chart value documentdb.enabled)")
+
+// SetDocumentDBEnabled records whether this installation runs DocumentDB.
+func (s *ProvisioningService) SetDocumentDBEnabled(enabled bool) { s.documentDBEnabled = enabled }
+
+// DocumentDBEnabled reports whether this installation runs DocumentDB.
+func (s *ProvisioningService) DocumentDBEnabled() bool { return s.documentDBEnabled }
+
+// requireDocumentDBInstalled refuses a DocumentDB request before anything is
+// created when the installation does not run DocumentDB.
+func (s *ProvisioningService) requireDocumentDBInstalled(req domain.ProvisioningRequest) error {
+	if req.DocumentDB && !s.documentDBEnabled {
+		return ErrDocumentDBNotInstalled
+	}
+	return nil
+}
+
 // SetBackupDefaults wires the platform-wide CNPG backup target. No
 // credentials means the platform has none; partial credentials are refused.
 func (s *ProvisioningService) SetBackupDefaults(d *BackupDefaults) error {
@@ -515,6 +537,9 @@ func (s *ProvisioningService) buildDatabase(ctx context.Context, start time.Time
 // prepareProvisioning validates the request and creates the initial instance record.
 func (s *ProvisioningService) prepareProvisioning(ctx context.Context, req *domain.ProvisioningRequest) (*domain.DatabaseInstance, provisioner.DatabaseProvisioner, config.TierConfig, error) {
 	if err := validateProvisioningRequest(*req); err != nil {
+		return nil, nil, config.TierConfig{}, err
+	}
+	if err := s.requireDocumentDBInstalled(*req); err != nil {
 		return nil, nil, config.TierConfig{}, err
 	}
 	tierType, err := s.orgTier(ctx, req.OrgID)

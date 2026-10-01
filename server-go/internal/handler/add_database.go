@@ -45,6 +45,8 @@ func writeAddDatabaseError(w http.ResponseWriter, projectID string, err error) {
 	switch {
 	case errors.Is(err, storage.ErrProjectHasDatabase):
 		httpError(w, storage.ErrProjectHasDatabase.Error(), http.StatusConflict)
+	case errors.Is(err, service.ErrDocumentDBNotInstalled):
+		httpError(w, service.ErrDocumentDBNotInstalled.Error(), http.StatusConflict)
 	case errors.Is(err, service.ErrAddDatabaseRequest), errors.Is(err, service.ErrNoDatabaseNeedsKubernetes),
 		errors.Is(err, service.ErrDatabaseRequestInvalid):
 		httpError(w, safeError(err), http.StatusBadRequest)

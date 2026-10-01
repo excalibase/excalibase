@@ -188,6 +188,9 @@ func (s *ProvisioningService) admitDatabaseAdd(ctx context.Context, projectID st
 	if err := validateDatabaseRequest(req); err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrDatabaseRequestInvalid, err)
 	}
+	if err := s.requireDocumentDBInstalled(req); err != nil {
+		return nil, nil, err
+	}
 	if _, ok := s.store.(storage.ProjectDatabaseStore); !ok {
 		return nil, nil, errors.New("this platform's store cannot add a database to a project")
 	}

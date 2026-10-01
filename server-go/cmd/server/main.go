@@ -184,6 +184,7 @@ func runServer(cfg config.AppConfig) {
 	// survives, the namespace will not terminate, and the teardown times out
 	// waiting for it (EXC-431).
 	provSvc.AddDeletionObserver(deps.schemaHandler)
+	wireDocumentDBInstalled(cfg, provSvc, deps.backupHandler)
 
 	// How a customer reaches their database from outside the cluster
 	// (EXC-410). Nil when the platform offers no public endpoints, and
@@ -1404,7 +1405,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 			budget: a.budget, network: appNetworkSvc, vault: vc, claimer: a.claimer,
 		}),
 		tierHandler:      tierHandler,
-		pgCatalogHandler: handler.NewPostgresCatalogHandler(),
+		pgCatalogHandler: handler.NewPostgresCatalogHandler(cfg.DocumentDBEnabled),
 		capDeps: &capacityDeps{
 			k8sClient:       k8sClient,
 			store:           store,
@@ -2440,4 +2441,11 @@ func buildStorageService(cfg config.AppConfig, sqlStore storagesvc.BucketStore) 
 	}
 	log.Printf("INFO: R2 storage configured (endpoint=%s bucket=%s)", endpoint, bucket)
 	return storagesvc.NewService(sqlStore, r2, tierQuotas)
+}
+
+// wireDocumentDBInstalled hands the installation's DocumentDB setting to
+// provisioning and restore, which refuse DocumentDB without it (EXC-394).
+func wireDocumentDBInstalled(cfg config.AppConfig, provSvc *service.ProvisioningService, backups *handler.BackupHandler) {
+	provSvc.SetDocumentDBEnabled(cfg.DocumentDBEnabled)
+	backups.SetDocumentDBEnabled(cfg.DocumentDBEnabled)
 }

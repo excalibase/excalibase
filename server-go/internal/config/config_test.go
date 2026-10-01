@@ -223,3 +223,19 @@ func TestLoadAppRuntimeClass(t *testing.T) {
 		t.Errorf("AppRuntimeClass = %q, want gvisor-kvm", got)
 	}
 }
+
+// EXC-394: DocumentDB is offered only where the chart says it is installed.
+func TestLoadDocumentDBEnabled(t *testing.T) {
+	os.Unsetenv("DOCUMENTDB_ENABLED")
+	if Load().DocumentDBEnabled {
+		t.Error("DocumentDBEnabled must default to false")
+	}
+	t.Setenv("DOCUMENTDB_ENABLED", "true")
+	if !Load().DocumentDBEnabled {
+		t.Error("DOCUMENTDB_ENABLED=true must enable DocumentDB")
+	}
+	t.Setenv("DOCUMENTDB_ENABLED", "yes")
+	if Load().DocumentDBEnabled {
+		t.Error("only the exact value \"true\" may enable DocumentDB")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
@@ -17,7 +18,7 @@ import (
 func listCatalog(t *testing.T) postgresCatalogDTO {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	NewPostgresCatalogHandler().List(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	NewPostgresCatalogHandler(true).List(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -86,7 +87,7 @@ func TestPostgresCatalogHandler_ReportsWhetherAMajorIsProvisionable(t *testing.T
 
 func TestPostgresCatalogHandler_NeverExposesImageReferences(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewPostgresCatalogHandler().List(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	NewPostgresCatalogHandler(true).List(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	var raw map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -96,6 +97,33 @@ func TestPostgresCatalogHandler_NeverExposesImageReferences(t *testing.T) {
 			if key == "image" || key == "baseImage" {
 				t.Errorf("catalogue endpoint leaks %q to tenants", key)
 			}
+		}
+	}
+}
+
+// EXC-394: where DocumentDB is not installed no major offers it, and each
+// says why, so Studio closes the option before the customer submits.
+func TestTheCatalogueOffersNoDocumentDBWhereItIsNotInstalled(t *testing.T) {
+	for _, installed := range []bool{true, false} {
+		h := NewPostgresCatalogHandler(installed)
+		w := httptest.NewRecorder()
+		h.List(w, httptest.NewRequest(http.MethodGet, "/catalog", nil))
+		var body postgresCatalogDTO
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		offered := 0
+		for _, major := range body.Majors {
+			if major.DocumentDB {
+				offered++
+				continue
+			}
+			if !installed && !strings.Contains(major.DocumentDBUnavailableReason, "not installed") {
+				t.Errorf("major %s: reason %q", major.Major, major.DocumentDBUnavailableReason)
+			}
+		}
+		if installed && offered == 0 || !installed && offered != 0 {
+			t.Errorf("installed=%v: %d majors offer DocumentDB", installed, offered)
 		}
 	}
 }
