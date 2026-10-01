@@ -63,7 +63,9 @@ COPY --chown=deno:deno deno.json .
 COPY --chown=deno:deno server.ts .
 COPY --chown=deno:deno runtime ./runtime
 
-# Pre-cache the vendored lib's transitive npm deps (zod-to-json-schema, zod).
+# Pre-cache the vendored lib's transitive npm deps (zod-to-json-schema) and
+# zod itself, which the lib only imports as types: zod-cache.ts imports it the
+# way a function's args do (scripts/image-offline-test.sh checks it offline).
 # Without this, the first deploy on a fresh image triggers a registry fetch
 # from inside the worker, which can be slow on cold starts and (more
 # importantly) fails when ALLOWED_HOSTS locks the worker out of the public
@@ -73,7 +75,8 @@ COPY --chown=deno:deno runtime ./runtime
 # by root by default. Chown after so the `deno` user can still write
 # new cache entries at runtime when a function imports an npm: spec we
 # didn't pre-cache (e.g. a freshly-published @excalibase/server version).
-RUN deno cache server.ts /app/vendor/excalibase-server/index.mjs && \
+COPY --chown=deno:deno zod-cache.ts .
+RUN deno cache server.ts /app/vendor/excalibase-server/index.mjs zod-cache.ts && \
     chown -R deno:deno /deno-dir
 
 USER deno
