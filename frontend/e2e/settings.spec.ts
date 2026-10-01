@@ -18,8 +18,9 @@ test.describe('Settings Page', () => {
       page.getByTestId('connect-section').getByText('test-project', { exact: true }),
     ).toBeVisible();
     const settingsPage = page.getByTestId('settings-page');
-    await expect(settingsPage.getByText('POSTGRESQL')).toBeVisible();
-    await expect(settingsPage.getByText('FREE')).toBeVisible();
+    // Exact: "PostgreSQL Version" also appears on the page.
+    await expect(settingsPage.getByText('PostgreSQL', { exact: true })).toBeVisible();
+    await expect(settingsPage.getByText('FREE', { exact: true })).toBeVisible();
   });
 
   test('shows danger zone with delete button', async ({ page }) => {
