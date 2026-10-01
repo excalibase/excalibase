@@ -46,7 +46,7 @@ func TestMetricsWhenMetricsServerUnavailable(t *testing.T) {
 		ProjectID: "no-ms-db", Namespace: "ns", Status: "ACTIVE", Tier: domain.Free,
 	})
 	// CNPG metrics work
-	mock.ExecOutput["ns/no-ms-db-postgres-1"] = "cnpg_backends_total{state=\"active\"} 1\ncnpg_pg_settings_setting{name=\"max_connections\"} 100\n"
+	mock.ExecOutput["ns/no-ms-db-postgres-1"] = "HTTP/1.0 200 OK\r\n\r\ncnpg_backends_total{state=\"active\"} 1\ncnpg_pg_settings_setting{name=\"max_connections\"} 100\n"
 	// But metrics-server returns error (not installed)
 	// GetPodMetrics returns error by default for unknown namespace — this is the test
 

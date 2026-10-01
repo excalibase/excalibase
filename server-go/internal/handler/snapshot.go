@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 
@@ -33,8 +34,15 @@ func (h *SnapshotHandler) Routes(r chi.Router) {
 func (h *SnapshotHandler) Export(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	var req domain.SnapshotExportRequest
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
+		return
+	}
 	info, err := h.svc.ExportSnapshot(r.Context(), projectID, req)
+	if errors.Is(err, service.ErrInvalidSnapshotRequest) {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return

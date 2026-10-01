@@ -53,7 +53,10 @@ func (s *PerformanceService) populateSummaryMetrics(ctx context.Context, inst *d
 	summary.SlowQueryCount = s.queryInt(ctx, inst, slowQuerySQL)
 	summary.AvgQueryTimeMs = s.queryFloat(ctx, inst, avgTimeSQL)
 
-	if out, err := s.execSQL(ctx, inst, `SELECT pg_size_pretty(pg_database_size(current_database()))`); err == nil {
+	if inst.DatabaseName == "" {
+		return
+	}
+	if out, err := s.execSQL(ctx, inst, databaseSizeSQL(inst)); err == nil {
 		summary.DatabaseSize = strings.TrimSpace(extractFirstLine(out))
 	}
 }
@@ -179,4 +182,15 @@ func parseWaitEvents(out string) []domain.WaitEvent {
 		})
 	}
 	return events
+}
+
+// databaseSizeSQL sizes the customer's data: the project database, plus for
+// a DocumentDB project the postgres database its documents live in. psql
+// here connects to postgres, so current_database() would size the wrong one.
+func databaseSizeSQL(inst *domain.DatabaseInstance) string {
+	size := "pg_database_size(" + sqlTextLiteral(inst.DatabaseName) + ")"
+	if inst.DocumentDB {
+		size += " + pg_database_size('postgres')"
+	}
+	return "SELECT pg_size_pretty(" + size + ")"
 }

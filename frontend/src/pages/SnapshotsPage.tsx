@@ -3,6 +3,7 @@ import { useSnapshots, useExportSnapshot, useDeleteSnapshot } from '../hooks/use
 import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { Camera, Download, Trash2, Plus, FileText } from 'lucide-react';
 import { formatBytes } from '../utils/formatBytes';
+import { API_BASE } from '../api/base';
 
 function getSnapshotType(schemaOnly: boolean, dataOnly: boolean): string {
   if (schemaOnly) return 'Schema only';
@@ -27,7 +28,7 @@ export function SnapshotsPage() {
 
   function handleExport() {
     exportSnap.mutate(exportOpts, {
-      onSuccess: (s) => showToast(`Snapshot ${s.snapshotId} created (${formatBytes(s.sizeBytes)})`, true),
+      onSuccess: (s) => showToast(`Snapshot ${s.id} created (${formatBytes(s.size)})`, true),
       onError: (e: unknown) => {
         const msg = e instanceof Error ? e.message : String(e);
         showToast(msg || 'Export failed', false);
@@ -45,8 +46,6 @@ export function SnapshotsPage() {
       },
     });
   }
-
-  const apiBase = `http://localhost:24005/api`;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -85,7 +84,7 @@ export function SnapshotsPage() {
             className="ml-auto inline-flex items-center gap-2 px-4 py-2 bg-accent-primary hover:bg-accent-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
           >
             <Plus className="w-4 h-4" />
-            {exportSnap.isPending ? 'Exporting…' : 'Export Snapshot (pg_dump)'}
+            {exportSnap.isPending ? 'Exporting…' : 'Export Snapshot'}
           </button>
         </div>
       </div>
@@ -121,24 +120,27 @@ export function SnapshotsPage() {
             </thead>
             <tbody>
               {snapshots.map((s) => (
-                <tr key={s.snapshotId} className="border-b border-border-primary last:border-0 hover:bg-surface-hover transition-colors">
-                  <td className="px-6 py-4 font-mono text-xs text-text-primary">{s.snapshotId}</td>
+                <tr key={s.id} className="border-b border-border-primary last:border-0 hover:bg-surface-hover transition-colors">
+                  <td className="px-6 py-4 font-mono text-xs text-text-primary">{s.id}</td>
                   <td className="px-6 py-4 text-text-secondary">{s.format}</td>
                   <td className="px-6 py-4 text-text-tertiary text-xs">
                     {getSnapshotType(s.schemaOnly, s.dataOnly)}
+                    {s.documents && (
+                      <span className="block" data-testid="snapshot-documents">+ all documents (mongorestore)</span>
+                    )}
                   </td>
-                  <td className="px-6 py-4 text-text-secondary">{formatBytes(s.sizeBytes)}</td>
+                  <td className="px-6 py-4 text-text-secondary">{formatBytes(s.size)}</td>
                   <td className="px-6 py-4 text-text-tertiary">{new Date(s.createdAt).toLocaleString()}</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       <a
-                        href={`${apiBase}/provision/${projectId}/snapshot/${s.snapshotId}/download`}
+                        href={`${API_BASE}/provision/${projectId}/snapshot/${s.id}/download`}
                         className="inline-flex items-center gap-1 px-2 py-1 bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/20 rounded text-xs transition-colors"
                       >
                         <Download className="w-3 h-3" /> Download
                       </a>
                       <button
-                        onClick={() => handleDelete(s.snapshotId)}
+                        onClick={() => handleDelete(s.id)}
                         disabled={deleteSnap.isPending}
                         className="inline-flex items-center gap-1 px-2 py-1 bg-red-900/10 text-red-400 hover:bg-red-900/20 rounded text-xs transition-colors"
                       >

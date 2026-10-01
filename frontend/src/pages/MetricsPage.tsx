@@ -1,3 +1,4 @@
+import { databaseSize } from '../utils/databaseSize';
 import { useCurrentMetrics, useMetricsHistory } from '../hooks/useMetrics';
 import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { MetricCard } from '../components/shared/MetricCard';
@@ -100,7 +101,7 @@ export function MetricsPage() {
               icon={<HardDrive className="w-4 h-4" />}
               label="Storage"
               value={current.storageLimit ?? 'N/A'}
-              subtitle={current.databaseSizeGB == null ? undefined : `${current.databaseSizeGB} GB used`}
+              subtitle={databaseSize(current) === undefined ? undefined : `${databaseSize(current)} used`}
               color="text-orange-400"
             />
             <MetricCard

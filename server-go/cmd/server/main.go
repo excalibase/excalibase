@@ -1268,7 +1268,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	}
 	perfSvc := service.NewPerformanceService(store, k8sClient)
 	auditSvc := service.NewAuditService(store, k8sClient)
-	snapshotSvc := service.NewSnapshotService(store, k8sClient, cfg.StoragePath)
+	snapshotSvc := buildSnapshotService(store, k8sClient, cfg.StoragePath, buildDocumentConnector(k8sClient, vc, store))
 	migrationSvc := service.NewMigrationService(store, vc, cfg.StoragePath)
 	alertSvc := service.NewAlertingService(cfg.StoragePath)
 	setupSvc := service.NewOperatorSetupService(k8sClient)
@@ -2163,13 +2163,33 @@ func buildK8sClient(cfg config.AppConfig) k8s.KubeClient {
 // gateway as its own Mongo login from vault. It needs Kubernetes to find the
 // gateway and the cluster CA, so a deployment without one mounts nothing.
 func buildDocumentBrowser(k8sClient k8s.KubeClient, vc vaultclient.VaultClient, store storage.InstanceStore) *handler.DocumentBrowserHandler {
+	connector := buildDocumentConnector(k8sClient, vc, store)
+	if connector == nil {
+		return nil
+	}
+	return handler.NewDocumentBrowserHandler(docbrowser.NewService(connector, docbrowser.Options{}))
+}
+
+// buildDocumentConnector reaches a project's gateway as the document
+// browser's login, or is nil without Kubernetes and a vault.
+func buildDocumentConnector(k8sClient k8s.KubeClient, vc vaultclient.VaultClient, store storage.InstanceStore) *docbrowser.GatewayConnector {
 	if k8sClient == nil || vc == nil {
 		return nil
 	}
-	connector := docbrowser.NewGatewayConnector(docbrowser.GatewayConnectorConfig{
+	return docbrowser.NewGatewayConnector(docbrowser.GatewayConnectorConfig{
 		Projects: store, Credentials: vc, Cluster: k8sClient,
 	})
-	return handler.NewDocumentBrowserHandler(docbrowser.NewService(connector, docbrowser.Options{}))
+}
+
+// buildSnapshotService exports through the gateway connector when there is
+// one; without it a DocumentDB project's export is refused (EXC-531).
+func buildSnapshotService(store storage.InstanceStore, k8sClient k8s.KubeClient, storagePath string,
+	connector *docbrowser.GatewayConnector) *service.SnapshotService {
+	snapshots := service.NewSnapshotService(store, k8sClient, storagePath)
+	if connector != nil {
+		snapshots.SetDocumentDumper(connector)
+	}
+	return snapshots
 }
 
 // buildDBEndpointService wires a project's database endpoint (EXC-410):

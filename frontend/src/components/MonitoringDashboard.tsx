@@ -1,3 +1,4 @@
+import { databaseSize } from '../utils/databaseSize';
 import { useCurrentMetrics, useMetricsSSE, useMetricsHistory } from '../hooks/useMetrics';
 import { Card, CardHeader, CardTitle, CardContent } from './Card';
 import {
@@ -229,7 +230,7 @@ export function MonitoringDashboard({ projectId }: MonitoringDashboardProps) {
                 value={metrics.averageQueryLatencyMs == null ? '—' : `${metrics.averageQueryLatencyMs.toFixed(1)}ms`}
               />
               <MetricRow label="Slow Queries" value={metrics.slowQueryCount ?? '—'} />
-              <MetricRow label="DB Size" value={fmtVal(metrics.databaseSizeGB, ' GB')} />
+              <MetricRow label="DB Size" value={databaseSize(metrics) ?? '—'} />
             </div>
           </CardContent>
         </Card>

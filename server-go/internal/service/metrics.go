@@ -161,9 +161,9 @@ func (s *MetricsService) collectCNPGMetrics(ctx context.Context, inst *domain.Da
 		metrics.MaxConnections = intPtr(100)
 	}
 
-	// Database size
-	if v, ok := labeled["cnpg_pg_database_size_bytes{datname=\"app\"}"]; ok {
-		gb := int64(v) / (1024 * 1024 * 1024)
+	if size, ok := databaseSizeBytes(labeled, inst.DatabaseName, inst.DocumentDB); ok {
+		gb := size / (1024 * 1024 * 1024)
+		metrics.DatabaseSizeBytes = &size
 		metrics.DatabaseSizeGB = &gb
 	}
 
@@ -217,9 +217,32 @@ func (s *MetricsService) fetchCNPGMetrics(ctx context.Context, namespace, projec
 	return s.execMetricsFetch(ctx, namespace, pod)
 }
 
+// exporterRequest reads CNPG's exporter from inside the postgres container.
+// The tenant image is CNPG's standard image, which has bash but no python or
+// curl, so the request goes over bash's /dev/tcp.
+const exporterRequest = `exec 3<>/dev/tcp/localhost/9187 && printf 'GET /metrics HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 && cat <&3`
+
 func (s *MetricsService) execMetricsFetch(ctx context.Context, namespace, pod string) (string, error) {
-	return s.k8sClient.ExecInPod(ctx, namespace, pod, "postgres",
-		[]string{"python3", "-c", "import urllib.request; print(urllib.request.urlopen('http://[::1]:9187/metrics').read().decode())"})
+	response, err := s.k8sClient.ExecInPod(ctx, namespace, pod, "postgres", []string{"bash", "-c", exporterRequest})
+	if err != nil {
+		return "", err
+	}
+	return exporterBody(response)
+}
+
+// exporterBody is the metrics text of an HTTP/1.0 answer, or an error for
+// anything but a 200.
+func exporterBody(response string) (string, error) {
+	head, body, found := strings.Cut(response, "\r\n\r\n")
+	status, _, _ := strings.Cut(head, "\r\n")
+	fields := strings.Fields(status)
+	if !found || len(fields) < 2 || !strings.HasPrefix(fields[0], "HTTP/") {
+		return "", fmt.Errorf("the metrics exporter gave no HTTP answer")
+	}
+	if fields[1] != "200" {
+		return "", fmt.Errorf("the metrics exporter answered %s", strings.Join(fields[1:], " "))
+	}
+	return body, nil
 }
 
 func parseLabeledMetrics(raw string) map[string]float64 {
@@ -336,4 +359,23 @@ func (s *MetricsService) loadHistory(projectID string) []domain.DatabaseMetrics 
 	var hist []domain.DatabaseMetrics
 	json.Unmarshal(data, &hist)
 	return hist
+}
+
+// databaseSizeBytes is the customer's data on disk: the project database, and for
+// a DocumentDB project also the postgres database its documents live in. A
+// DocumentDB project without the postgres figure reports no size rather than
+// one that leaves the documents out.
+func databaseSizeBytes(labeled map[string]float64, database string, documentDB bool) (int64, bool) {
+	app, ok := labeled[`cnpg_pg_database_size_bytes{datname="`+database+`"}`]
+	if database == "" || !ok {
+		return 0, false
+	}
+	if !documentDB {
+		return int64(app), true
+	}
+	documents, ok := labeled[`cnpg_pg_database_size_bytes{datname="postgres"}`]
+	if !ok {
+		return 0, false
+	}
+	return int64(app) + int64(documents), true
 }

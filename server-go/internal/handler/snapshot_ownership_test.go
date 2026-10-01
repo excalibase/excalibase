@@ -24,7 +24,7 @@ func seedSnapshotProject(store *storage.FileSystemStore, mock *k8s.MockClient, p
 	namespace := "org1-" + projectID
 	store.Create(&domain.DatabaseInstance{
 		ProjectID: projectID, OrgID: "org1", DBType: domain.PostgreSQL,
-		Tier: domain.Free, Namespace: namespace, Status: "ACTIVE",
+		Tier: domain.Free, Namespace: namespace, Status: "ACTIVE", DatabaseName: "app",
 	})
 	mock.ExecOutput[namespace+"/"+projectID+"-postgres-1"] = "-- dump of " + projectID
 }
@@ -165,6 +165,18 @@ func TestSnapshotDeleteFailureIsOpaque500(t *testing.T) {
 	for _, leak := range []string{storagePath, "snapshots/", ".json"} {
 		if strings.Contains(body, leak) {
 			t.Errorf("response leaks %q: %s", leak, body)
+		}
+	}
+}
+
+// EXC-531: a request no dump can satisfy is the caller's mistake, said so.
+func TestSnapshotExportRefusesAnImpossibleRequestWith400(t *testing.T) {
+	router, store, mock := fullRouter(t)
+	seedSnapshotProject(store, mock, projectA)
+	for _, body := range []string{`{"format":"directory"}`, `{"schemaOnly":true,"dataOnly":true}`, `{"format":`} {
+		w := doRequest(router, "POST", "/api/provision/"+projectA+"/snapshot/export", body)
+		if w.Code != 400 {
+			t.Errorf("%s: got %d, want 400 (%s)", body, w.Code, w.Body.String())
 		}
 	}
 }
