@@ -86,8 +86,8 @@ var platformRows = []Row{
 	{Methods: del, Pattern: "/api/auth/users/{userId}", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole},
 	{Methods: post, Pattern: "/api/auth/users/{userId}/verify-email", Auth: AuthSession, Permission: permManageUsers, Owner: OwnerPlatformRole, Note: "an admin vouches for an address when no mail can be sent; audited"},
 
-	{Methods: get, Pattern: "/api/auth/tokens/", Auth: AuthSession, Owner: OwnerTokenSubject, Note: "lists only the caller's own tokens"},
-	{Methods: post, Pattern: "/api/auth/tokens/", Auth: AuthSession, Owner: OwnerTokenSubject, Note: "a narrowed PAT may only mint a subset of its own scopes"},
+	{Methods: get, Pattern: "/api/auth/tokens/", Auth: AuthSession, Owner: OwnerTokenSubject, Note: "lists only the caller's own personal access tokens; sessions and service tokens never appear"},
+	{Methods: post, Pattern: "/api/auth/tokens/", Auth: AuthSession, Owner: OwnerTokenSubject, Note: "a narrowed PAT may only mint a subset of its own scopes; 20 mints per user per hour; audited"},
 	{Methods: del, Pattern: "/api/auth/tokens/{tokenHash}", Auth: AuthSession, Owner: OwnerTokenSubject},
 	{Methods: post, Pattern: "/api/auth/tokens/{tokenHash}/rotate", Auth: AuthSession, Owner: OwnerTokenSubject},
 

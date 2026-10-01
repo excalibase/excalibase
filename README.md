@@ -177,8 +177,8 @@ Every route with a project in its path binds that project to the caller before t
 | GET | `/api/auth/users` | Yes (admin) | List all users |
 | POST | `/api/auth/users` | Yes (admin) | Create user |
 | DELETE | `/api/auth/users/{id}` | Yes (admin) | Delete user |
-| GET | `/api/auth/tokens` | Yes | List personal access tokens (`tokenPrefix`, `scopes`, `projectId`, `expiresAt`, `lastUsed`) |
-| POST | `/api/auth/tokens` | Yes | Create PAT — `{name, expiresIn?, projectId?, scopes?: ["read"\|"write"\|"admin"]}`; `expiresIn` is `30d`/`12h`/`never`, default `90d`, max `365d`; `projectId` confines the token to one project (404 if the caller cannot see it) |
+| GET | `/api/auth/tokens` | Yes | List the caller's personal access tokens (`id`, `tokenPrefix`, `name`, `scopes`, `projectId`, `createdAt`, `expiresAt`, `lastUsed`); sessions and service tokens are not listed |
+| POST | `/api/auth/tokens` | Yes | Create PAT — `{name, expiresIn?, projectId?, scopes?: ["read"\|"write"\|"admin"]}`; `expiresIn` is `30d`/`12h`/`never`, default `90d`, max `365d`; `projectId` confines the token to one project (404 if the caller cannot see it); 20 per user per hour |
 | POST | `/api/auth/tokens/{hash}/rotate` | Yes (owner) | Rotate PAT — `{graceSeconds?}` (0–3600, default 0); returns the new secret once, same scopes/project binding/lifetime |
 | DELETE | `/api/auth/tokens/{hash}` | Yes | Revoke PAT |
 

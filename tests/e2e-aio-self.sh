@@ -82,7 +82,8 @@ curl -sf -b "excali_session=$SESSION_TOKEN" "$API_PROV/api/auth/me" | grep -q '"
   && pass "cookie-only /me works" || fail "cookie auth" "/me rejected"
 
 TOKENS=$(curl -sf -H "$PAT_HDR" "$API_PROV/api/auth/tokens" 2>/dev/null)
-echo "$TOKENS" | jq -r '.[].scopes' 2>/dev/null | grep -q session && pass "session scope persisted" || fail "session scope" "$TOKENS"
+echo "$TOKENS" | jq -e 'type == "array"' >/dev/null 2>&1 && pass "token list readable" || fail "token list" "$TOKENS"
+echo "$TOKENS" | jq -r '.[].scopes' 2>/dev/null | grep -q session && fail "token list" "a sign-in session is listed as an access token" || pass "sessions not listed as access tokens"
 
 LOGOUT=$(curl -s -i -b "excali_session=$SESSION_TOKEN" -X POST "$API_PROV/api/auth/logout" 2>/dev/null)
 echo "$LOGOUT" | grep -qi 'Set-Cookie: excali_session=;.*Max-Age=0' && pass "logout clears cookie" || fail "logout cookie clear" "no Max-Age=0"
