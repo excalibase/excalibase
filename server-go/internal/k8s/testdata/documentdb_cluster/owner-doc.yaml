@@ -15,6 +15,10 @@ spec:
       - GRANT documentdb_admin_role TO "documentdb"
       - DO $role$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'excalibase_mongo_users')
         THEN CREATE ROLE "excalibase_mongo_users" NOLOGIN; END IF; END $role$
+      - DO $role$ DECLARE s text; BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname
+        = 'streaming_replica') THEN FOR s IN SELECT nspname FROM pg_namespace WHERE
+        nspname LIKE 'documentdb%' LOOP EXECUTE format('GRANT USAGE ON SCHEMA %I TO
+        streaming_replica', s); END LOOP; END IF; END $role$
   certificates:
     serverAltDNSNames:
     - proj-hba00001-documentdb
