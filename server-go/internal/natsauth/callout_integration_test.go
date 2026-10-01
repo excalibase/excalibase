@@ -54,13 +54,19 @@ type calloutEnv struct {
 // whether the principal was authorized.
 const handshakePingRace = "expected 'PONG', got 'PING'"
 
+// handshakeRetryBudget bounds how long connectAs keeps retrying that race.
+const handshakeRetryBudget = 20 * time.Second
+
 // connectAs dials the server with one principal's minted credential. Only the
 // handshake race above is retried; an authorization refusal is returned as-is
 // so the deny tests still observe a real denial.
 func (e *calloutEnv) connectAs(t *testing.T, principal string) (*nats.Conn, error) {
 	t.Helper()
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
+	// A slow callout on a busy runner can outlast the server's first PING more
+	// than once in a row, so the race is retried for a time, not a count.
+	deadline := time.Now().Add(handshakeRetryBudget)
+	for attempt := 1; ; attempt++ {
 		var conn *nats.Conn
 		conn, err = nats.Connect(e.url,
 			nats.UserInfo(principal, e.passwords[principal]),
@@ -71,12 +77,11 @@ func (e *calloutEnv) connectAs(t *testing.T, principal string) (*nats.Conn, erro
 			t.Cleanup(conn.Close)
 			return conn, nil
 		}
-		if !strings.Contains(err.Error(), handshakePingRace) {
+		if !strings.Contains(err.Error(), handshakePingRace) || time.Now().After(deadline) {
 			return nil, err
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
 	}
-	return nil, err
 }
 
 // mustConnectAs fails the test if the principal cannot connect at all.
