@@ -21,9 +21,20 @@ import (
 // customer needs to know which majors they may choose, which of them carry
 // DocumentDB and why the rest do not. Which image serves a major is the
 // platform's business, so the digest-pinned references stay server-side.
-type PostgresCatalogHandler struct{}
+type PostgresCatalogHandler struct {
+	// documentDBInstalled is whether this installation runs DocumentDB at all
+	// (EXC-394); without it no major offers it.
+	documentDBInstalled bool
+}
 
-func NewPostgresCatalogHandler() *PostgresCatalogHandler { return &PostgresCatalogHandler{} }
+func NewPostgresCatalogHandler(documentDBInstalled bool) *PostgresCatalogHandler {
+	return &PostgresCatalogHandler{documentDBInstalled: documentDBInstalled}
+}
+
+// documentDBNotInstalledReason is every major's reason where the installation
+// does not run DocumentDB.
+const documentDBNotInstalledReason = "DocumentDB is not installed on this platform. The operator can enable it " +
+	"(chart value documentdb.enabled)."
 
 // Routes mounts the catalogue endpoint (intended under /api/postgres).
 func (h *PostgresCatalogHandler) Routes(r chi.Router) {
@@ -79,9 +90,12 @@ func (h *PostgresCatalogHandler) List(w http.ResponseWriter, _ *http.Request) {
 		major := postgresMajorDTO{
 			Major:      entry.Major,
 			Available:  entry.Image != "",
-			DocumentDB: entry.DocumentDB,
+			DocumentDB: entry.DocumentDB && h.documentDBInstalled,
 		}
-		if !entry.DocumentDB {
+		switch {
+		case !h.documentDBInstalled:
+			major.DocumentDBUnavailableReason = documentDBNotInstalledReason
+		case !entry.DocumentDB:
 			major.DocumentDBUnavailableReason = documentDBUnavailableReason(entry.Major)
 		}
 		out.Majors = append(out.Majors, major)

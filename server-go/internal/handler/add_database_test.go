@@ -32,10 +32,11 @@ func TestAddDatabaseAnswersEachRefusal(t *testing.T) {
 		want          int
 		says          string
 	}{
-		"a project that has one": {"test-db", `{"databaseType":"POSTGRESQL","postgresVersion":"17"}`, http.StatusConflict, "already has a database"},
-		"no version":             {"apps-only", `{"databaseType":"POSTGRESQL"}`, http.StatusBadRequest, "postgres version is required"},
-		"a project field":        {"apps-only", `{"projectName":"x","databaseType":"POSTGRESQL","postgresVersion":"17"}`, http.StatusBadRequest, "only database settings"},
-		"unknown field":          {"apps-only", `{"postgresVersion":"17","bogus":1}`, http.StatusBadRequest, "invalid request body"},
+		"a project that has one":               {"test-db", `{"databaseType":"POSTGRESQL","postgresVersion":"17"}`, http.StatusConflict, "already has a database"},
+		"no version":                           {"apps-only", `{"databaseType":"POSTGRESQL"}`, http.StatusBadRequest, "postgres version is required"},
+		"a project field":                      {"apps-only", `{"projectName":"x","databaseType":"POSTGRESQL","postgresVersion":"17"}`, http.StatusBadRequest, "only database settings"},
+		"unknown field":                        {"apps-only", `{"postgresVersion":"17","bogus":1}`, http.StatusBadRequest, "invalid request body"},
+		"documentDb where it is not installed": {"apps-only", `{"databaseType":"POSTGRESQL","postgresVersion":"17","documentDb":true}`, http.StatusConflict, "DocumentDB is not installed"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

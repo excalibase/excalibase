@@ -262,6 +262,10 @@ type AppConfig struct {
 	// off self-hosted (a single operator owns their own projects).
 	AutoPauseEnabled bool
 
+	// DocumentDBEnabled is whether this installation runs the DocumentDB
+	// gateway plugin (chart value documentdb.enabled). Off unless set to
+	// "true": a DocumentDB project is refused rather than left to fail (EXC-394).
+	DocumentDBEnabled bool
 	// AppHostingEnabled mounts the customer-application routes (EXC-377).
 	// App hosting is built incrementally on main and must stay unreachable in
 	// any install until the epic is finished, so it defaults off; only the
@@ -451,6 +455,7 @@ func load() AppConfig {
 		FnReplayEnabled:                envBool("EXCALIBASE_FN_REPLAY_ENABLED", true),
 		FnReplayPollInterval:           envMillis("EXCALIBASE_FN_REPLAY_POLL_MS", defaultReplayPoll),
 		AppHostingEnabled:              envOr("APP_HOSTING_ENABLED", "") == "true",
+		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
 		AppRuntimeClass:                envOr("APP_RUNTIME_CLASS", "gvisor"),
 		AppEgressExtraDenyCIDRs:        envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),
 		AppDomain:                      os.Getenv("APP_DOMAIN"),
@@ -539,6 +544,7 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "DOCKER_DB_PUBLIC", Field: "DockerDBPublic", Enabled: c.DockerDBPublic},
 		{Env: "DOCKER_TLS_VERIFY", Field: "DockerTLSVerify", Enabled: c.DockerTLSVerify},
 		{Env: "APP_HOSTING_ENABLED", Field: "AppHostingEnabled", Enabled: c.AppHostingEnabled},
+		{Env: "DOCUMENTDB_ENABLED", Field: "DocumentDBEnabled", Enabled: c.DocumentDBEnabled},
 		{Env: "TENANT_STORAGE_REQUIRE_SIZED", Field: "TenantStorageRequireSized", Enabled: c.TenantStorageRequireSized},
 	}
 }

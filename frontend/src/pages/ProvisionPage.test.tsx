@@ -32,12 +32,12 @@ const CATALOG = {
   ],
 };
 
-function renderPage() {
+function renderPage(catalog: typeof CATALOG = CATALOG) {
   vi.mocked(listMyOrgs).mockResolvedValue([
     { id: 'org-1', name: 'Acme', slug: 'acme', tier: 'FREE', ownerId: 'u1' },
   ]);
   vi.mocked(api.get).mockImplementation((url: string) => {
-    if (url === '/postgres/catalog') return Promise.resolve({ data: CATALOG } as never);
+    if (url === '/postgres/catalog') return Promise.resolve({ data: catalog } as never);
     if (url === '/tiers') return Promise.resolve({ data: [] } as never);
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
@@ -281,5 +281,23 @@ describe('ProvisionPage — DocumentDB engine card', () => {
     await user.click(screen.getByTestId('provision-submit'));
     await waitFor(() => expect(api.post).toHaveBeenCalled());
     expect(vi.mocked(api.post).mock.calls[0][1]).toMatchObject({ postgresVersion: '15', documentDb: false });
+  });
+});
+
+// EXC-394: where the installation does not run DocumentDB, the catalogue
+// offers it on no major; the card is closed and says why, before any request.
+describe('ProvisionPage — DocumentDB not installed', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('the DocumentDB card is closed and gives the installation\'s reason', async () => {
+    const reason = 'DocumentDB is not installed on this platform. The operator can enable it (chart value documentdb.enabled).';
+    renderPage({
+      ...CATALOG,
+      majors: CATALOG.majors.map((major) => ({ ...major, documentDb: false, documentDbUnavailableReason: reason })),
+    });
+    await screen.findByTestId('pg-version-15');
+    expect(screen.getByTestId('engine-DOCUMENTDB')).toBeDisabled();
+    expect(screen.getByTestId('engine-DOCUMENTDB')).toHaveTextContent('not installed');
+    expect(screen.getByTestId('engine-POSTGRESQL')).toBeEnabled();
   });
 });

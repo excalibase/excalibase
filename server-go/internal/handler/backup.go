@@ -16,6 +16,8 @@ type BackupHandler struct {
 	svc          *service.BackupService
 	scheduler    *service.BackupScheduler     // optional; nil disables /schedule routes
 	orchestrator *service.RestoreOrchestrator // optional; nil → restore is synchronous
+	// documentDBEnabled is whether this installation runs DocumentDB (EXC-394).
+	documentDBEnabled bool
 }
 
 func NewBackupHandler(svc *service.BackupService) *BackupHandler {
@@ -32,6 +34,13 @@ func (h *BackupHandler) SetScheduler(s *service.BackupScheduler) { h.scheduler =
 // GET /restore/{jobId}. When nil, /restore behaves as it did pre-Phase
 // 3 — synchronous, returns the response shape from BackupAdapter.Restore.
 func (h *BackupHandler) SetRestoreOrchestrator(o *service.RestoreOrchestrator) { h.orchestrator = o }
+
+// SetDocumentDBEnabled records whether this installation runs DocumentDB, so a
+// DocumentDB project's restore is refused where its cluster could not start.
+func (h *BackupHandler) SetDocumentDBEnabled(enabled bool) { h.documentDBEnabled = enabled }
+
+// DocumentDBEnabled reports whether this installation runs DocumentDB.
+func (h *BackupHandler) DocumentDBEnabled() bool { return h.documentDBEnabled }
 
 // Service exposes the underlying BackupService so the platform can
 // share it across HTTP handlers and the scheduler.
@@ -116,6 +125,10 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// is filed or a project id is allocated.
 	if inst.DocumentDB && inst.DeploymentMode == domain.ModeDocker {
 		httpError(w, service.ErrDocumentDBRestoreNeedsKubernetes.Error(), http.StatusConflict)
+		return
+	}
+	if inst.DocumentDB && !h.documentDBEnabled {
+		httpError(w, service.ErrDocumentDBNotInstalled.Error(), http.StatusConflict)
 		return
 	}
 	// A restore creates a project, so the organisation must have a slot for

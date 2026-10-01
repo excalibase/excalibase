@@ -18,6 +18,12 @@ import (
 // setupBackupHandlerForDocumentDB mounts the backup routes over a project
 // in the given mode that may carry the DocumentDB flag.
 func setupBackupHandlerForDocumentDB(t *testing.T, mode domain.DeploymentMode, documentDB bool) (*chi.Mux, *fakeRestoreJobStoreForHandler, *storage.FileSystemStore) {
+	return setupBackupHandlerForDocumentDBOn(t, mode, documentDB, true)
+}
+
+// setupBackupHandlerForDocumentDBOn is the same on an installation that does
+// or does not run DocumentDB.
+func setupBackupHandlerForDocumentDBOn(t *testing.T, mode domain.DeploymentMode, documentDB, documentDBInstalled bool) (*chi.Mux, *fakeRestoreJobStoreForHandler, *storage.FileSystemStore) {
 	t.Helper()
 	dir := t.TempDir()
 	store, _ := storage.NewFileSystemStore(dir)
@@ -38,6 +44,7 @@ func setupBackupHandlerForDocumentDB(t *testing.T, mode domain.DeploymentMode, d
 
 	h := NewBackupHandler(backupSvc)
 	h.SetRestoreOrchestrator(orch)
+	h.SetDocumentDBEnabled(documentDBInstalled)
 
 	r := chi.NewRouter()
 	r.Route("/api/provision/{projectId}/backup", func(r chi.Router) { h.Routes(r) })
@@ -108,5 +115,18 @@ func TestBackupHandler_Restore_StillProceedsForPlainPostgres(t *testing.T) {
 
 	if w.Code != 200 {
 		t.Fatalf("status: got %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+// EXC-394: a DocumentDB project cannot be restored on an installation that
+// no longer runs DocumentDB; refused before a job is filed.
+func TestBackupHandler_Restore_RefusesDocumentDBWhereItIsNotInstalled(t *testing.T) {
+	r, jobs, _ := setupBackupHandlerForDocumentDBOn(t, domain.ModeK8s, true, false)
+	w := postRestore(r)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "DocumentDB is not installed") {
+		t.Fatalf("got %d %s, want 409 naming the missing DocumentDB", w.Code, w.Body.String())
+	}
+	if filedJobs(jobs) != 0 {
+		t.Fatal("a refused restore filed a job")
 	}
 }

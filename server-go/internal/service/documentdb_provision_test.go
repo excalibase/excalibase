@@ -34,6 +34,7 @@ func documentDBProvisionService(t *testing.T) (*ProvisioningService, storage.Ins
 	svc.SetOrgStore(testOrgs())
 	setOrgTier(svc, "org1", domain.Enterprise)
 	withBackupTarget(t, svc)
+	svc.SetDocumentDBEnabled(true)
 	return svc, store
 }
 

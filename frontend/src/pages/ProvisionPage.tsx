@@ -64,6 +64,13 @@ export function ProvisionPage() {
   const [documentDb, setDocumentDb] = useState(false);
 
   const catalog = usePostgresCatalog();
+  // Where no major offers DocumentDB (the installation does not run it), the
+  // card is closed with the catalogue's reason rather than left to a 409.
+  const documentDbClosed = catalog.data && !catalog.data.majors.some((entry) => entry.documentDb)
+    ? catalog.data.majors[0]?.documentDbUnavailableReason ?? 'DocumentDB is not available on this platform.'
+    : null;
+  const engines = ENGINES.map((card) =>
+    card.engine === 'DOCUMENTDB' && documentDbClosed ? { ...card, desc: documentDbClosed, disabled: true } : card);
 
   // A major that cannot carry DocumentDB clears the choice instead of leaving
   // it set and invisible, so what the form shows is what it will send.
@@ -177,7 +184,7 @@ export function ProvisionPage() {
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
               <h2 className="font-semibold text-text-primary">Database Engine</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {ENGINES.map(({ engine: option, icon, label, desc, disabled }) => (
+                {engines.map(({ engine: option, icon, label, desc, disabled }) => (
                   <button key={option} type="button" onClick={() => !disabled && chooseEngine(option)} disabled={disabled}
                     data-testid={`engine-${option}`} aria-pressed={engine === option}
                     className={`p-4 rounded-xl border-2 text-left transition-all ${optionTileClass(disabled, engine === option)}`}
