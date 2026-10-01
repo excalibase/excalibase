@@ -135,6 +135,29 @@ func applyTierSizing(spec map[string]interface{}, tier config.TierConfig, storag
 		spec["affinity"] = oneInstancePerNode()
 	}
 	applyUpdatePolicy(spec, tier.Instances)
+	applyReplicationGuarantee(spec, tier.Instances)
+}
+
+// applyReplicationGuarantee makes a multi-instance cluster acknowledge a
+// commit only once one standby has it, so losing the primary loses no
+// acknowledged write (owner decision 2026-10-01, EXC-532). Required, not
+// preferred: with no standby up, writes wait instead of going ahead
+// unprotected. A single instance has no standby to wait for.
+func applyReplicationGuarantee(spec map[string]interface{}, instances int) {
+	postgresql, _ := spec["postgresql"].(map[string]interface{})
+	if postgresql == nil {
+		postgresql = map[string]interface{}{}
+		spec["postgresql"] = postgresql
+	}
+	if instances < 2 {
+		delete(postgresql, "synchronous")
+		return
+	}
+	postgresql["synchronous"] = map[string]interface{}{
+		"method":         "any",
+		"number":         int64(1),
+		"dataDurability": "required",
+	}
 }
 
 // applyUpdatePolicy decides how an image update (a minor upgrade) reaches the

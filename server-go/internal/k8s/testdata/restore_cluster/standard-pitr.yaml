@@ -59,6 +59,10 @@ spec:
     - hostssl all app all scram-sha-256
     - hostnossl all all all reject
     - hostnossl replication all all reject
+    synchronous:
+      dataDurability: required
+      method: any
+      number: 1
   primaryUpdateMethod: switchover
   primaryUpdateStrategy: unsupervised
   resources:

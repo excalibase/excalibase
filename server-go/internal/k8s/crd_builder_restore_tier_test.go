@@ -139,3 +139,12 @@ func TestRestoreClusterGolden(t *testing.T) {
 	}
 	assertGoldenAt(t, "testdata/restore_cluster/standard-pitr.yaml", string(encoded))
 }
+
+// EXC-532: a restored paid-tier cluster carries the same guarantee as a new one.
+func TestARestoredMultiInstanceClusterReplicatesSynchronously(t *testing.T) {
+	restored, err := BuildRestoreCluster(restoreOf(fullProjectCluster()))
+	if err != nil {
+		t.Fatalf("BuildRestoreCluster: %v", err)
+	}
+	assertQuorumOfOne(t, restored)
+}
