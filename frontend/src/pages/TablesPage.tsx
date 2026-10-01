@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
-import { Plus, Trash2, Table2, Columns3, Download, RefreshCw } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
+import { Plus, Trash2, Table2, Columns3, Download, RefreshCw, ShieldCheck } from 'lucide-react';
 import {
   useTables, useColumns, useDropTable, useAddColumn, useDropColumn,
   useRows, useInsertRow, useUpdateRow, useDeleteRow,
@@ -11,8 +11,10 @@ import { SkeletonTable } from '../components/ui/Skeleton';
 import { DataGrid } from '../components/tables/DataGrid';
 import { CreateTablePanel } from '../components/tables/CreateTablePanel';
 import { ColumnSchemaView } from '../components/tables/ColumnSchemaView';
-import { ExposureToggle } from '../components/tables/ExposureToggle';
-import { useTableGrants, useSetTableExposed, isTableExposed } from '../hooks/useTableGrants';
+import { AccessSummary } from '../components/tables/AccessSummary';
+import { usePermissionDocument } from '../hooks/usePermissions';
+import { useProjectRole } from '../hooks/useProjectRole';
+import { rolesWithSelect, tableKey } from '../utils/permissionModel';
 
 // csvSafe stringifies an arbitrary cell value without falling through to
 // "[object Object]" (S6551). Used for CSV export only.
@@ -39,11 +41,11 @@ export function TablesPage() {
   const insertRow = useInsertRow(pid);
   const updateRow = useUpdateRow(pid);
   const deleteRow = useDeleteRow(pid);
-  // Which tables the project's end users can reach. Developers are not
-  // filtered: this page reads the tenant database through the control plane's
-  // own /schema routes, which never consult a grant.
-  const { data: grantSet } = useTableGrants(pid);
-  const setExposed = useSetTableExposed(pid);
+  // Which roles can read each table through the API (EXC-370). Studio itself
+  // reads the tenant database through the control plane's /schema routes,
+  // which no API permission governs. The document is Developer+ only.
+  const { canDevelop } = useProjectRole(pid);
+  const { data: permissionDoc } = usePermissionDocument(pid, canDevelop);
 
   // Pagination & sorting
   const [page, setPage] = useState(0);
@@ -163,7 +165,7 @@ export function TablesPage() {
         </div>
         <div className="flex-1 overflow-y-auto">
           {tables.map(t => {
-            const exposed = isTableExposed(grantSet, t.schema || 'public', t.name);
+            const schema = t.schema || 'public';
             return (
               <div
                 key={t.name}
@@ -178,17 +180,18 @@ export function TablesPage() {
                   <Table2 className="w-4 h-4 flex-shrink-0" />
                   <span className="truncate">{t.name}</span>
                 </button>
-                <ExposureToggle
-                  table={t.name}
-                  schema={t.schema || 'public'}
-                  exposed={exposed}
-                  pending={setExposed.isPending && setExposed.variables?.table === t.name}
-                  onToggle={() => setExposed.mutate({
-                    schema: t.schema || 'public',
-                    table: t.name,
-                    exposed: !exposed,
-                  })}
-                />
+                {canDevelop && permissionDoc && (
+                  <AccessSummary table={t.name} roles={rolesWithSelect(permissionDoc, tableKey(schema, t.name))} />
+                )}
+                <Link
+                  to={`/project/${pid}/database/tables/${schema}/${t.name}/permissions`}
+                  aria-label={`API permissions of ${t.name}`}
+                  title={`API permissions of ${schema}.${t.name}`}
+                  className="flex-shrink-0 mr-2 p-1.5 rounded-lg text-text-tertiary hover:text-purple-400 hover:bg-purple-500/10"
+                  data-testid={`permissions-link-${t.name}`}
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                </Link>
               </div>
             );
           })}
@@ -263,7 +266,7 @@ export function TablesPage() {
       </div>
 
       {/* Create Table SidePanel */}
-      <CreateTablePanel open={showCreateTable} onClose={() => setShowCreateTable(false)} projectId={pid} />
+      <CreateTablePanel open={showCreateTable} onClose={() => setShowCreateTable(false)} projectId={pid} canGrantRead={canDevelop} />
 
       {/* Add Column SidePanel */}
       <SidePanel open={showAddColumn} onClose={() => setShowAddColumn(false)} title={`Add Column to ${selectedTable}`}

@@ -175,3 +175,105 @@ export async function mockSchemaEndpoints(page: Page, projectId = 'test-project'
     { id: 1, user_id: 1, email: 'alice@test.com', expiry_date: '2027-01-01T00:00:00Z', created_at: '2026-03-01T00:00:00Z', revoked: false },
   ]);
 }
+
+/**
+ * Gives the signed-in user an org role on the project, which is how Studio
+ * decides who may edit API permissions (Developer+) and end-user roles (Admin+).
+ * Registered after mockProject, so it wins for the project read.
+ */
+export async function mockProjectRole(page: Page, role: string, projectId = 'test-project') {
+  await page.route('**/api/orgs', (route) =>
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1', role }]),
+    }),
+  );
+  await page.route(`**/api/provision/${projectId}`, (route) =>
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ projectId, orgId: 'org-1', databaseType: 'POSTGRESQL', tier: 'FREE', namespace: 'excalibase-test', status: 'COMPLETED', currentStage: 'COMPLETED', host: 'localhost', port: '5432', databaseName: 'testdb' }),
+    }),
+  );
+}
+
+export interface PermissionDocumentMock {
+  projectId: string;
+  version: number;
+  tables: Array<Record<string, unknown> & { table: string; role: string }>;
+  functions: Array<{ function: string; exposedAs: string; inferPermissions: boolean; sessionArgument: string | null }>;
+  functionPermissions: Array<{ function: string; role: string }>;
+}
+
+export interface RecordedCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/**
+ * A stateful permissions API: GET returns the document as the writes so far
+ * left it, so the page re-reads what it just saved. Every write is recorded.
+ */
+export async function mockPermissionsApi(
+  page: Page,
+  doc: PermissionDocumentMock,
+  options: { trackAnswer?: (fn: string) => { status: number; body: unknown } } = {},
+  projectId = 'test-project',
+) {
+  const calls: RecordedCall[] = [];
+  const base = `/api/provision/${projectId}`;
+  const json = (status: number, body: unknown) => ({ status, contentType: 'application/json', body: JSON.stringify(body) });
+
+  await page.route(new RegExp(`${base}/(permissions|tracked-functions|function-permissions)/`), (route) => {
+    const request = route.request();
+    const path = decodeURIComponent(new URL(request.url()).pathname);
+    const method = request.method();
+    const body = request.postData() ? JSON.parse(request.postData() as string) : undefined;
+    if (method !== 'GET') calls.push({ method, path, body });
+
+    const table = /\/permissions\/tables\/([^/]+)\/roles\/([^/]+)\/([^/]+)$/.exec(path);
+    if (table) {
+      const [, name, role, op] = table;
+      let entry = doc.tables.find((t) => t.table === name && t.role === role);
+      if (method === 'PUT') {
+        if (!entry) doc.tables.push((entry = { table: name, role }));
+        entry[op] = body;
+        doc.version += 1;
+        return route.fulfill(json(200, body));
+      }
+      if (entry) delete entry[op];
+      doc.version += 1;
+      return route.fulfill({ status: 204 });
+    }
+    if (path === `${base}/permissions/`) return route.fulfill(json(200, doc));
+    if (path === `${base}/tracked-functions/` && method === 'POST') {
+      const request = body as { function: string; inferPermissions: boolean; sessionArgument: string | null };
+      const answer = options.trackAnswer?.(request.function);
+      if (answer && answer.status >= 400) return route.fulfill(json(answer.status, answer.body));
+      const tracked = { ...request, exposedAs: 'QUERY' };
+      doc.functions.push(tracked);
+      return route.fulfill(json(201, { ...tracked, securityDefiner: false, ...(answer?.body as object) }));
+    }
+    const untrack = /\/tracked-functions\/([^/]+)$/.exec(path);
+    if (untrack && method === 'DELETE') {
+      doc.functions = doc.functions.filter((f) => f.function !== untrack[1]);
+      doc.functionPermissions = doc.functionPermissions.filter((f) => f.function !== untrack[1]);
+      return route.fulfill({ status: 204 });
+    }
+    const fnRole = /\/function-permissions\/([^/]+)\/roles\/([^/]+)$/.exec(path);
+    if (fnRole) {
+      const [, fn, role] = fnRole;
+      doc.functionPermissions = doc.functionPermissions.filter((f) => !(f.function === fn && f.role === role));
+      if (method === 'PUT') {
+        doc.functionPermissions.push({ function: fn, role });
+        return route.fulfill(json(200, { function: fn, role }));
+      }
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill(json(404, { error: 'not found' }));
+  });
+  return calls;
+}
+
+/** Where the permission specs leave their screenshots. */
+export const SHOTS_DIR = process.env.STUDIO_SHOTS_DIR ?? 'test-results/shots';
