@@ -164,6 +164,8 @@ export interface DatabaseMetrics {
   averageQueryLatencyMs: number | null;
   slowQueryCount: number | null;
   databaseSizeGB: number | null;
+  // Exact; a DocumentDB project counts its documents too.
+  databaseSizeBytes?: number | null;
 
   // Backup info
   lastBackupTime?: string;
