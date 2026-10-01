@@ -122,9 +122,8 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      # Unit tests only (vitest, no backend). The browser/UI E2E suite (Playwright,
-      # frontend/e2e — 28 specs) drives the Studio against a live backend, so it runs
-      # in the full-stack AIO e2e, not in this isolated frontend job.
+      # Unit tests only (vitest, no backend); the mocked Playwright suite runs in
+      # frontend-e2e below.
       #
       # With coverage: the lcov it writes is the only coverage data Sonar has for
       # TypeScript (sonar.javascript.lcov.reportPaths), and without it every
@@ -135,6 +134,35 @@ jobs:
         with:
           name: frontend-coverage
           path: frontend/coverage/lcov.info
+
+  frontend-e2e:
+    name: Studio E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: [changes, frontend-lint]
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true'
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # Every API call is mocked with page.route against the Vite dev server;
+      # e2e/live/** needs STUDIO_LIVE_URL and is left out of this run.
+      - run: npx playwright test
+        env:
+          CI: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14
 
   deno-test:
     name: Deno Unit (deno-server + vendored lib)
