@@ -61,3 +61,18 @@ func handlePreflight(w http.ResponseWriter, originAllowed bool) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// ExceptPathPrefix applies mw to every request whose path does not start with
+// prefix; requests under prefix go straight to the next handler.
+func ExceptPathPrefix(prefix string, mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		wrapped := mw(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, prefix) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			wrapped.ServeHTTP(w, r)
+		})
+	}
+}

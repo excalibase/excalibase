@@ -45,8 +45,11 @@ type AppConfig struct {
 	DenoRuntimeSecret string
 	DenoNamespace     string
 	DenoRuntimeImage  string
-	VaultURL          string
-	VaultPAT          string
+	// DenoProvisioningURL is provisioning's in-cluster address a project's
+	// function runtime calls for ctx.storage (EXC-518).
+	DenoProvisioningURL string
+	VaultURL            string
+	VaultPAT            string
 	// VaultUnseal is how the in-process vault unseals at boot; main loads and
 	// validates it with LoadVaultUnseal (EXC-485).
 	VaultUnseal VaultUnseal
@@ -384,6 +387,7 @@ func load() AppConfig {
 		DenoRuntimeSecret:              envOr("DENO_RUNTIME_SECRET", ""),
 		DenoNamespace:                  envOr("DENO_NAMESPACE", "serverless"),
 		DenoRuntimeImage:               envOr("DENO_RUNTIME_IMAGE", "excalibase/deno-runtime:latest"),
+		DenoProvisioningURL:            os.Getenv("DENO_PROVISIONING_URL"),
 		VaultURL:                       envOr("VAULT_URL", ""),
 		VaultPAT:                       envOr("VAULT_PAT", ""),
 		DeploymentMode:                 deploymentMode,
@@ -580,6 +584,26 @@ func (c AppConfig) CheckPublicListener() error {
 	}
 	if len(c.TrustedProxyCIDRs) == 0 {
 		return errors.New("TRUSTED_PROXY_CIDRS must name the edge: the public listener believes X-Forwarded-For only from it")
+	}
+	return nil
+}
+
+// CheckDenoProvisioningURL refuses a k8s install that runs functions without
+// naming where its per-project runtimes reach provisioning: ctx.storage would
+// fail in every project, and no address is guessed in its place.
+func (c AppConfig) CheckDenoProvisioningURL() error {
+	if c.ProvisionerMode == "docker" || c.DenoRuntimeSecret == "" {
+		return nil
+	}
+	if c.DenoProvisioningURL == "" {
+		return errors.New("DENO_PROVISIONING_URL must be set: project function runtimes call provisioning at this address")
+	}
+	parsed, err := url.Parse(c.DenoProvisioningURL)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return fmt.Errorf("DENO_PROVISIONING_URL %q is not an http(s) address", c.DenoProvisioningURL)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return fmt.Errorf("DENO_PROVISIONING_URL %q must be an address without a path or query", c.DenoProvisioningURL)
 	}
 	return nil
 }

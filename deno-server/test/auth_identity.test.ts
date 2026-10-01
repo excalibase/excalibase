@@ -47,6 +47,7 @@ Deno.test({
       });
       const res = await rt.invoke("v2identity", { args: {} }, {
         Authorization: "Bearer " + jwt,
+        "X-Excalibase-Auth-Verified": "1",
       });
       assertEquals(res.status, 200);
       const parsed = JSON.parse(res.body);
@@ -112,6 +113,7 @@ Deno.test({
       const jwt = makeUnsignedJwt({ sub: "u9", iss: "https://i" });
       const res = await rt.invoke("v2actId", { args: {} }, {
         Authorization: "Bearer " + jwt,
+        "X-Excalibase-Auth-Verified": "1",
       });
       assertEquals(res.status, 200);
       const parsed = JSON.parse(res.body);
@@ -144,6 +146,7 @@ Deno.test({
       const jwt = makeUnsignedJwt({ role: "anon" });
       const res = await rt.invoke("v2idFallback", { args: {} }, {
         Authorization: "Bearer " + jwt,
+        "X-Excalibase-Auth-Verified": "1",
       });
       assertEquals(res.status, 200);
       const parsed = JSON.parse(res.body);

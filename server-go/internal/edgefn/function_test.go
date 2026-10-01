@@ -51,6 +51,22 @@ func TestValidateID_AcceptsSingleDotForModuleDotExport(t *testing.T) {
 	}
 }
 
+// The export after the dot is a JavaScript export name, so it may be
+// camelCase: db.storage.uploadFile calls system.generateUploadUrl and
+// system.completeUpload by default (EXC-518). The module stays lowercase.
+func TestValidateID_AcceptsCamelCaseExportNames(t *testing.T) {
+	for _, id := range []string{"system.generateUploadUrl", "system.completeUpload", "images.urls", "orders.placeOrder2"} {
+		if err := ValidateID(id); err != nil {
+			t.Errorf("ValidateID(%q): unexpected error: %v", id, err)
+		}
+	}
+	for _, id := range []string{"System.generateUploadUrl", "Hello", "system.Generate$Url", "system.-x"} {
+		if err := ValidateID(id); err == nil {
+			t.Errorf("ValidateID(%q): expected error, got nil", id)
+		}
+	}
+}
+
 func TestValidateID_RejectsBadDotPlacement(t *testing.T) {
 	bad := []string{".db", "db.", "db..insert", ".", "..", "a.b.c"}
 	for _, id := range bad {

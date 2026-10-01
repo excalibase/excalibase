@@ -77,6 +77,29 @@ into the signature — and are **not** accepted on confirm: what is recorded and
 charged is what the object store reports. A confirmation that names an upload
 nobody staged, or one whose bytes have already been collected, answers `404`.
 
+### Who may upload: the function decides
+
+`ctx.storage` trusts the function that calls it; the function is the
+project's storage rule. Check the caller in it. `ctx.auth.claims` holds the
+caller's token only when the platform verified it (functions with
+`verifyJwt`, the default); for a function that skips verification it is
+`null`, so a role check there cannot be satisfied by an unsigned token.
+
+```ts
+export const generateUploadUrl = mutation({
+  args: v.object({ contentType: v.string(), size: v.number() }),
+  handler: async (ctx, { contentType, size }) => {
+    if (ctx.auth.claims?.role !== "staff") throw new Error("only staff may upload");
+    return ctx.storage.generateUploadUrl({ contentType, size });
+  },
+});
+```
+
+Function ids are `module.export`; the export may be camelCase, so the
+defaults `db.storage.uploadFile` calls, `system.generateUploadUrl` and
+`system.completeUpload`, are deployable as they are. A browser app calls them
+from an origin on the project's CORS allowlist (see `project-cors.md`).
+
 ### 1. Server: mint the signed PUT URL inside a mutation
 
 ```ts
@@ -250,8 +273,11 @@ Internal routes the Deno runtime calls (auth: `X-Excalibase-Runtime-Token`):
 | `GET`    | `/internal/storage/{projectId}/metadata/{storageId}`  | fetch metadata; 404 on missing             |
 | `DELETE` | `/internal/storage/{projectId}/{storageId}`           | remove the storage id; idempotent          |
 
-The runtime caps every call with the shared `RUNTIME_SECRET`; user
-code never holds these credentials. Public uploads still ride the
+The runtime signs every call with its project's runtime token (derived from
+the platform secret, valid for that project only); user code never holds it.
+On Kubernetes each project's runtime reaches provisioning's internal listener
+at `DENO_PROVISIONING_URL` (provisioning refuses to start without it when it
+runs functions there). Public uploads still ride the
 existing Supabase-shape `/api/projects/{projectId}/storage` routes
 unchanged.
 

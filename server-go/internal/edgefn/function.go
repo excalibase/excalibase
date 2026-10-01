@@ -107,10 +107,12 @@ const MaxFileCount = 50
 // validIDPattern — function IDs: 1-64 lowercase alphanumeric/hyphen/underscore,
 // optionally suffixed with `.<export>` to model the SDK's
 // `db.functions.<module>.<export>` namespace. Exactly one dot is allowed and
-// the export segment must itself be a non-empty alphanumeric/hyphen/underscore
-// token. Leading dots, trailing dots, adjacent dots, and chained dots are
-// rejected (TestValidateID_RejectsBadDotPlacement covers the matrix).
-var validIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_\-]*(?:\.[a-z0-9][a-z0-9_\-]*)?$`)
+// the export segment is a non-empty alphanumeric/hyphen/underscore token that
+// may be camelCase, as JavaScript export names are (the SDK's uploadFile calls
+// system.generateUploadUrl). Leading dots, trailing dots, adjacent dots, and
+// chained dots are rejected (TestValidateID_RejectsBadDotPlacement covers the
+// matrix).
+var validIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_\-]*(?:\.[a-zA-Z0-9][a-zA-Z0-9_\-]*)?$`)
 
 // validPathPattern — file paths inside a function: relative, no traversal,
 // lowercase letters, digits, hyphen, underscore, forward slash, dot.
@@ -126,7 +128,7 @@ func ValidateID(id string) error {
 		return fmt.Errorf("invalid function id: must be 1-%d characters", maxFunctionIDLength)
 	}
 	if !validIDPattern.MatchString(id) {
-		return fmt.Errorf("invalid function id: must be lowercase alphanumeric/hyphen/underscore with an optional single dot separator")
+		return fmt.Errorf("invalid function id: must be a lowercase alphanumeric/hyphen/underscore module with an optional single dot and export name")
 	}
 	return nil
 }

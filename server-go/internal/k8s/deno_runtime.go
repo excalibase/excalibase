@@ -27,7 +27,11 @@ const (
 	allowedHostsEnvName = "ALLOWED_HOSTS"
 	// egressHashAnnotation sits on the pod template so a changed allowlist
 	// changes the template and the Deployment rolls (EXC-348).
-	egressHashAnnotation = "excalibase.io/egress-hash"
+	egressHashAnnotation   = "excalibase.io/egress-hash"
+	provisioningURLEnvName = "EXCALIBASE_PROVISIONING_URL"
+	// functionsV2EnvName turns on query/mutation/action functions, the shape
+	// ctx.storage and the SDK's uploadFile are written against.
+	functionsV2EnvName = "EXCALIBASE_FUNCTIONS_V2"
 )
 
 // denoTierResources maps a project tier to Deno runtime pod resource requests
@@ -76,20 +80,74 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	return c.applyDenoEgressPolicy(ctx, namespace, spec.AllowedHosts)
 }
 
-// reconcileDenoEgress updates a live runtime when its allowlist differs from
-// the desired one. The env value is the single comparison key: it is exactly
-// what the runtime reads, so "equal env" means "already rendered".
+// reconcileDenoEgress updates a live runtime whose environment differs from
+// the desired one: the allowlist, or the runtime settings a runtime created
+// by an older provisioning lacks. The env values are the comparison key: they
+// are exactly what the runtime reads. The egress policy is re-rendered only
+// when the allowlist changed.
 func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep *appsv1.Deployment, spec DenoRuntimeSpec) error {
 	want := edgefn.EgressEnvValue(spec.AllowedHosts)
-	if currentAllowedHosts(dep) == want {
+	allowlistChanged := currentAllowedHosts(dep) != want
+	settings := runtimeSettingsEnv(spec)
+	if !allowlistChanged && hasEnv(dep, settings) {
 		return nil
 	}
 	updated := dep.DeepCopy()
 	setAllowedHosts(updated, want)
+	setEnv(updated, settings)
 	if _, err := c.clientset.AppsV1().Deployments(namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update deno deployment egress: %w", err)
+		return fmt.Errorf("update deno deployment: %w", err)
+	}
+	if !allowlistChanged {
+		return nil
 	}
 	return c.applyDenoEgressPolicy(ctx, namespace, spec.AllowedHosts)
+}
+
+// runtimeSettingsEnv is the runtime's environment besides its secret and
+// allowlist. An install that does not name provisioning's address leaves it
+// out, and ctx.storage then says so instead of calling a guessed host.
+func runtimeSettingsEnv(spec DenoRuntimeSpec) []corev1.EnvVar {
+	env := []corev1.EnvVar{{Name: functionsV2EnvName, Value: "1"}}
+	if spec.ProvisioningURL != "" {
+		env = append(env, corev1.EnvVar{Name: provisioningURLEnvName, Value: spec.ProvisioningURL})
+	}
+	return env
+}
+
+func hasEnv(dep *appsv1.Deployment, want []corev1.EnvVar) bool {
+	for _, container := range dep.Spec.Template.Spec.Containers {
+		current := map[string]string{}
+		for _, env := range container.Env {
+			current[env.Name] = env.Value
+		}
+		for _, env := range want {
+			if value, ok := current[env.Name]; !ok || value != env.Value {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// setEnv writes each variable on every container (there is one), replacing
+// an existing value of the same name.
+func setEnv(dep *appsv1.Deployment, vars []corev1.EnvVar) {
+	for ci := range dep.Spec.Template.Spec.Containers {
+		container := &dep.Spec.Template.Spec.Containers[ci]
+		for _, desired := range vars {
+			replaced := false
+			for ei := range container.Env {
+				if container.Env[ei].Name == desired.Name {
+					container.Env[ei] = desired
+					replaced = true
+				}
+			}
+			if !replaced {
+				container.Env = append(container.Env, desired)
+			}
+		}
+	}
 }
 
 func currentAllowedHosts(dep *appsv1.Deployment) string {
@@ -169,12 +227,12 @@ func buildDenoContainer(spec DenoRuntimeSpec, allowedHosts string) corev1.Contai
 		Image:           spec.Image,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Ports:           []corev1.ContainerPort{{ContainerPort: 8000, Protocol: corev1.ProtocolTCP}},
-		Env: []corev1.EnvVar{
+		Env: append([]corev1.EnvVar{
 			{Name: "RUNTIME_SECRET", Value: spec.RuntimeSecret},
 			// The project's outbound allowlist (EXC-348). Empty = no network
 			// for user code, which is the default for a new project.
 			{Name: allowedHostsEnvName, Value: allowedHosts},
-		},
+		}, runtimeSettingsEnv(spec)...),
 		Resources: denoResourceRequirements(spec.Tier),
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{

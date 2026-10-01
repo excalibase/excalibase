@@ -714,6 +714,17 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       }
     }
 
+    // __verifiedClaims — claims only from a token the gateway verified. The
+    // gateway sets X-Excalibase-Auth-Verified: 1 after checking the token's
+    // signature and project, and drops any marker the caller sent. A function
+    // that skips verification still sees the Authorization header itself,
+    // never as ctx.auth (EXC-518).
+    function __verifiedClaims(headers) {
+      const marker = headers['X-Excalibase-Auth-Verified'] || headers['x-excalibase-auth-verified'];
+      if (marker !== '1') return null;
+      return __decodeJwtClaims(headers['Authorization'] || headers['authorization'] || '');
+    }
+
     // __buildAuthCtx — Phase 12: typed ctx.auth surface mirroring Convex's
     // Auth interface. Carries the legacy raw claims plus a typed
     // getUserIdentity() helper that surfaces standard OIDC claims under
@@ -1295,8 +1306,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     async function __dispatchHttp(reqId, reqData, fnDef, txnRefId) {
       try {
         const headers = reqData.headers || {};
-        const auth = headers['Authorization'] || headers['authorization'] || '';
-        const claims = __decodeJwtClaims(auth);
+        const claims = __verifiedClaims(headers);
         // httpAction/httpRouter don't have an args envelope, so the runX
         // envelope's depth must ride alongside reqData.runDepth (the
         // gateway forwards it that way for internal invocations).
@@ -1395,8 +1405,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     async function __dispatchV2(reqId, reqData, fnDef, txnRefId) {
       try {
         const headers = reqData.headers || {};
-        const auth = headers['Authorization'] || headers['authorization'] || '';
-        const claims = __decodeJwtClaims(auth);
+        const claims = __verifiedClaims(headers);
 
         let body = {};
         if (reqData.body) {
