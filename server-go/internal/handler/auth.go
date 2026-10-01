@@ -160,7 +160,7 @@ func (h *AuthHandler) registerFirstAdmin(w http.ResponseWriter, r *http.Request,
 	if !h.joinInviteIfAny(w, r, inviteHash, user) {
 		return
 	}
-	h.issueRegistrationToken(w, r, user, now)
+	h.issueRegistrationToken(w, r, user)
 }
 
 // registerMember creates an unverified account and mails its verification
@@ -249,22 +249,12 @@ func (h *AuthHandler) createSubsequentUser(w http.ResponseWriter, r *http.Reques
 	return true
 }
 
-// issueRegistrationToken auto-logs the new user in: a bounded session token,
-// the same shape as Login issues.
-func (h *AuthHandler) issueRegistrationToken(w http.ResponseWriter, r *http.Request, user *domain.User, now time.Time) {
-	raw := auth.GenerateToken()
-	expiry := now.Add(sessionTokenTTL)
-	token := &domain.AccessToken{
-		TokenHash:   auth.HashToken(raw),
-		TokenPrefix: auth.TokenPrefix(raw),
-		UserID:      user.ID,
-		Name:        "registration",
-		Scopes:      "session",
-		CreatedAt:   &now,
-		ExpiresAt:   &expiry,
-	}
-	if err := h.tokenStore.CreateToken(r.Context(), token); err != nil {
-		// Don't 200 with a token the user can never use again — that would
+// issueRegistrationToken signs the new user in with the same session token
+// and cookie Login issues.
+func (h *AuthHandler) issueRegistrationToken(w http.ResponseWriter, r *http.Request, user *domain.User) {
+	raw, expiry, err := h.startSession(r.Context(), w, user, "registration")
+	if err != nil {
+		// Don't 201 with a token the user can never use again — that would
 		// trap them in a loop where every subsequent request 401s.
 		httpError(w, "token persistence failed", http.StatusInternalServerError)
 		return
