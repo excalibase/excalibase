@@ -13,8 +13,9 @@ Only the built-in templates exist for now. They ship inside the server binary (r
 | `redis` | `redis`: Redis 7.4 as an internal service on `redis:6379`, 1Gi disk at `/data` (append-only file), password generated on deploy | private network |
 | `web-redis` | `redis` as above, plus `web`: a public web app (placeholder image nginx-unprivileged 1.27 on 8080) with `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_URL` | private network |
 | `web-postgres` | `web`: a public web app with `DATABASE_URL` pointing at the project's database | the project's database, ready |
+| `storefront-demo` | `redis` as above, plus `storefront`: the demo store (`excalibase/storefront-demo` on 8080, health check `/healthz`) with `REDIS_URL`. Its setup script (excalibase-sdk-js `examples/storefront`, also `node setup/setup.mjs` in the image) then creates the tables, permissions, tracked function, realtime, demo accounts and publishable key through the platform's APIs, sets the store's `EXCALIBASE_*` variables and redeploys it | private network; a Postgres database for the setup |
 
-Images are pinned by digest. The web image is a placeholder: change the app's image to your own after the deploy.
+Images are pinned by digest. The `web` image is a placeholder: change the app's image to your own after the deploy. The storefront image is published by the `Publish the storefront demo image` workflow from a commit on excalibase-sdk-js main; a new build means a new digest here.
 
 ## Format (`excalibase.template/v1`)
 
