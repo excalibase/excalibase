@@ -628,7 +628,7 @@ func (m *MockClient) SetupPostgreSQLMock(projectID, namespace string, instances 
 	}
 
 	// CNPG metrics output for port 9187
-	metricsOutput := `# HELP cnpg_backends_total
+	metricsOutput := "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n" + `# HELP cnpg_backends_total
 cnpg_backends_total{state="active",datname="app"} 2
 cnpg_backends_total{state="idle",datname="app"} 1
 cnpg_pg_database_size_bytes{datname="app"} 8388608

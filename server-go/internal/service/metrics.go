@@ -217,9 +217,32 @@ func (s *MetricsService) fetchCNPGMetrics(ctx context.Context, namespace, projec
 	return s.execMetricsFetch(ctx, namespace, pod)
 }
 
+// exporterRequest reads CNPG's exporter from inside the postgres container.
+// The tenant image is CNPG's standard image, which has bash but no python or
+// curl, so the request goes over bash's /dev/tcp.
+const exporterRequest = `exec 3<>/dev/tcp/localhost/9187 && printf 'GET /metrics HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 && cat <&3`
+
 func (s *MetricsService) execMetricsFetch(ctx context.Context, namespace, pod string) (string, error) {
-	return s.k8sClient.ExecInPod(ctx, namespace, pod, "postgres",
-		[]string{"python3", "-c", "import urllib.request; print(urllib.request.urlopen('http://[::1]:9187/metrics').read().decode())"})
+	response, err := s.k8sClient.ExecInPod(ctx, namespace, pod, "postgres", []string{"bash", "-c", exporterRequest})
+	if err != nil {
+		return "", err
+	}
+	return exporterBody(response)
+}
+
+// exporterBody is the metrics text of an HTTP/1.0 answer, or an error for
+// anything but a 200.
+func exporterBody(response string) (string, error) {
+	head, body, found := strings.Cut(response, "\r\n\r\n")
+	status, _, _ := strings.Cut(head, "\r\n")
+	fields := strings.Fields(status)
+	if !found || len(fields) < 2 || !strings.HasPrefix(fields[0], "HTTP/") {
+		return "", fmt.Errorf("the metrics exporter gave no HTTP answer")
+	}
+	if fields[1] != "200" {
+		return "", fmt.Errorf("the metrics exporter answered %s", strings.Join(fields[1:], " "))
+	}
+	return body, nil
 }
 
 func parseLabeledMetrics(raw string) map[string]float64 {
