@@ -91,14 +91,10 @@ export function LifecycleActions({ app, deployed, onError, followMs = 3000 }: Li
   return (
     <>
       {pending && (
-        <span
-          className="flex items-center gap-1.5 text-sm text-text-secondary"
-          data-testid="lifecycle-pending"
-          role="status"
-        >
+        <output className="flex items-center gap-1.5 text-sm text-text-secondary" data-testid="lifecycle-pending">
           <Loader2 className="w-4 h-4 animate-spin" />
           {PENDING_TEXT[pending.operation]}… this can take a few minutes
-        </span>
+        </output>
       )}
       {deployed && PAUSABLE.has(app.status) && (
         <button
