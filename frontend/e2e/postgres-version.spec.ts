@@ -62,7 +62,8 @@ test.describe('Postgres version picker', () => {
   test.beforeEach(async ({ page }) => {
     await loginAs(page);
     await json(page, '**/api/postgres/catalog', CATALOG);
-    await json(page, '**/api/orgs', [{ id: 'org-1', name: 'Org One', slug: 'org-one' }]);
+    // Every org carries its plan: the form shows it as the project's tier.
+    await json(page, '**/api/orgs', [{ id: 'org-1', name: 'Org One', slug: 'org-one', tier: 'FREE', ownerId: '1' }]);
     await page.goto('/provision');
     await expect(page.getByTestId('pg-version-selector')).toBeVisible({ timeout: FIRST_RENDER });
   });
