@@ -250,6 +250,7 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 	// The mail budget is production's, because a test that raised it would
 	// stop asserting the one thing that route's limiter is for.
 	deps.rlMailSend = custommw.RateLimit(custommw.PerUser, 5, time.Hour)
+	deps.rlTokenCreate = newTokenCreateLimiter()
 	return deps
 }
 
@@ -597,5 +598,39 @@ func TestVerificationSendHasItsOwnSmallBudget(t *testing.T) {
 	}
 	if refusedAt == 0 {
 		t.Fatal("60 sends by one caller were all accepted")
+	}
+}
+
+// EXC-536: minting a personal access token carries its own small budget, so a
+// stolen session cannot mint credentials in bulk; listing is not charged.
+func TestTokenCreationHasItsOwnSmallBudget(t *testing.T) {
+	instances := fakestore.NewInstances()
+	platform := &fakePlatform{Orgs: fakestore.NewOrgs(), Tokens: fakestore.NewTokens()}
+	deps := policyDeps(t, instances, platform, edgefn.NewFunctionStore(t.TempDir()))
+	principals := policyPrincipals(platform)
+	router := buildRouter(config.AppConfig{DeploymentMode: "cloud"}, platform, instances, deps)
+	caller := principalNamed(t, principals, "orgDeveloper")
+
+	call := func(method string) int {
+		req := httptest.NewRequest(method, "/api/auth/tokens/", strings.NewReader(`{"name":"bulk","scopes":["read"]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+caller.token)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+	refusedAt := 0
+	for i := 1; i <= tokenCreateBudget+1 && refusedAt == 0; i++ {
+		if code := call(http.MethodPost); code == http.StatusTooManyRequests {
+			refusedAt = i
+		} else if code != http.StatusCreated {
+			t.Fatalf("mint %d answered %d", i, code)
+		}
+	}
+	if refusedAt != tokenCreateBudget+1 {
+		t.Fatalf("the mint past the budget of %d must be refused, refused at %d", tokenCreateBudget, refusedAt)
+	}
+	if code := call(http.MethodGet); code != http.StatusOK {
+		t.Fatalf("listing must not share the mint budget, got %d", code)
 	}
 }

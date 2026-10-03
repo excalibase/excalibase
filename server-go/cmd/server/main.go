@@ -774,6 +774,9 @@ type handlerDeps struct {
 	// tighter than rlAuthed because the cost of overuse is not our CPU, it is
 	// the sending domain's reputation.
 	rlMailSend func(http.Handler) http.Handler
+	// rlTokenCreate bounds personal access token minting per user (EXC-536),
+	// so a stolen session cannot mint credentials in bulk.
+	rlTokenCreate func(http.Handler) http.Handler
 	// activity marks a project as seen on every successful project-scoped
 	// call (EXC-279). Mounted after the access guards so rejected calls never
 	// count.
@@ -1418,13 +1421,14 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 			// reflects admin edits to tier_configs without a redeploy.
 			resolveTier: provSvc.TierConfig,
 		},
-		rlUnauth:    custommw.RateLimit(custommw.PerIP, 30, time.Minute),
-		rlAuthed:    custommw.RateLimit(custommw.PerUser, 600, time.Minute),
-		rlDataPlane: custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
-		rlMailSend:  custommw.RateLimit(custommw.PerUser, 5, time.Hour),
-		activity:    custommw.ProjectActivity(activityRecorder),
-		emailSender: emailSender,
-		storageSvc:  storageSvc,
+		rlUnauth:      custommw.RateLimit(custommw.PerIP, 30, time.Minute),
+		rlAuthed:      custommw.RateLimit(custommw.PerUser, 600, time.Minute),
+		rlDataPlane:   custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
+		rlMailSend:    custommw.RateLimit(custommw.PerUser, 5, time.Hour),
+		rlTokenCreate: newTokenCreateLimiter(),
+		activity:      custommw.ProjectActivity(activityRecorder),
+		emailSender:   emailSender,
+		storageSvc:    storageSvc,
 		// EXC-11: server-to-server mail relay for excalibase-auth. Its
 		// authorization is the capability gate, wired at the mount below.
 		internalEmail: handler.NewInternalEmailHandler(emailSender),
@@ -1652,6 +1656,14 @@ func buildSSOProvidersHandler(cfg config.AppConfig, vc vaultclient.VaultClient, 
 	return handler.NewSSOProvidersHandler(names, vc, cfg.StudioURL, audit)
 }
 
+// tokenCreateBudget is how many personal access tokens one user may mint per
+// hour. Install scripts mint two; nobody legitimately needs more than a few.
+const tokenCreateBudget = 20
+
+func newTokenCreateLimiter() func(http.Handler) http.Handler {
+	return custommw.RateLimit(custommw.PerUser, tokenCreateBudget, time.Hour)
+}
+
 // mountAuthRoutes mounts /api/auth (mixed public + authed).
 func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 	r.Route("/api/auth", func(r chi.Router) {
@@ -1669,7 +1681,7 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 		})
 		r.With(auth.RequireAuth, d.rlAuthed).Route("/tokens", func(r chi.Router) {
 			r.Get("/", d.authHandler.ListTokens)
-			r.Post("/", d.authHandler.CreateToken)
+			r.With(d.rlTokenCreate).Post("/", d.authHandler.CreateToken)
 			r.Delete("/{tokenHash}", d.authHandler.RevokeToken)
 			r.Post("/{tokenHash}/rotate", d.authHandler.RotateToken)
 		})

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 )
 
 const (
+	auditActionTokenCreate  = "token.create"
+	auditActionTokenRevoke  = "token.revoke"
 	auditActionTokenRotate  = "token.rotate"
 	auditResourceToken      = "access_token"
 	maxRotationGraceSeconds = 3600
@@ -53,7 +56,38 @@ func (h *AuthHandler) ListTokens(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "failed to list tokens", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, tokens)
+	writeJSON(w, personalTokenViews(tokens))
+}
+
+// personalTokenView is one personal access token as Studio lists it (EXC-536).
+// ID is the route identifier revoke and rotate take: a one-way digest of the
+// secret, never the secret itself.
+type personalTokenView struct {
+	ID          string     `json:"id"`
+	TokenPrefix string     `json:"tokenPrefix"`
+	Name        string     `json:"name"`
+	Scopes      string     `json:"scopes"`
+	ProjectID   string     `json:"projectId,omitempty"`
+	CreatedAt   *time.Time `json:"createdAt,omitempty"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+	LastUsed    *time.Time `json:"lastUsed,omitempty"`
+}
+
+// personalTokenViews drops browser sessions and capability tokens: the first
+// are sign-ins, not credentials a person manages, and the second belong to
+// service principals.
+func personalTokenViews(tokens []*domain.AccessToken) []personalTokenView {
+	views := make([]personalTokenView, 0, len(tokens))
+	for _, t := range tokens {
+		if auth.IsSessionToken(t) || auth.IsCapabilityToken(t) {
+			continue
+		}
+		views = append(views, personalTokenView{
+			ID: t.TokenHash, TokenPrefix: t.TokenPrefix, Name: t.Name, Scopes: t.Scopes,
+			ProjectID: t.ProjectID, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, LastUsed: t.LastUsed,
+		})
+	}
+	return views
 }
 
 func (h *AuthHandler) CreateToken(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +105,10 @@ func (h *AuthHandler) CreateToken(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
+	h.auditToken(r, auditActionTokenCreate, token, map[string]interface{}{
+		"name": token.Name, "scopes": token.Scopes, "projectId": token.ProjectID,
+		"permissions": token.Permissions, "expiresAt": token.ExpiresAt, "createdBy": user.ID,
+	})
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, issuedTokenResponse(raw, token))
 }
@@ -365,10 +403,21 @@ func (h *AuthHandler) RevokeToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A narrowed PAT may not revoke a broader sibling: a leaked CI token
+	// would otherwise be able to cut off its owner's other credentials.
+	if caller := auth.GetToken(r.Context()); !auth.IsCapabilityToken(caller) {
+		if err := restrictToCallerToken(caller, tok.ProjectID, tok.Scopes); err != nil {
+			httpError(w, "a token may not revoke a token broader than itself", err.status)
+			return
+		}
+	}
 	if err := h.tokenStore.DeleteToken(r.Context(), tok.TokenHash); err != nil {
 		httpError(w, "revoke failed", http.StatusInternalServerError)
 		return
 	}
+	h.auditToken(r, auditActionTokenRevoke, tok, map[string]interface{}{
+		"name": tok.Name, "revokedBy": auth.GetUser(r.Context()).ID,
+	})
 	writeJSON(w, map[string]string{"status": "revoked"})
 }
 
@@ -498,22 +547,32 @@ func (h *AuthHandler) retireToken(ctx context.Context, old *domain.AccessToken, 
 // auditRotation records the rotation best-effort. Only display prefixes are
 // written — never a hash or raw secret.
 func (h *AuthHandler) auditRotation(r *http.Request, old, fresh *domain.AccessToken, grace time.Duration) {
-	if h.auditLog == nil {
-		return
-	}
-	details, _ := json.Marshal(map[string]interface{}{
+	h.auditToken(r, auditActionTokenRotate, old, map[string]interface{}{
 		"previousPrefix": old.TokenPrefix,
 		"newPrefix":      fresh.TokenPrefix,
 		"graceSeconds":   int(grace / time.Second),
+		"rotatedBy":      auth.GetUser(r.Context()).ID,
 	})
+}
+
+// auditToken records a token event best-effort against the token's owner,
+// keyed by its display prefix — never a hash or raw secret.
+func (h *AuthHandler) auditToken(r *http.Request, action string, tok *domain.AccessToken, details map[string]interface{}) {
+	if h.auditLog == nil {
+		return
+	}
+	encoded, _ := json.Marshal(details)
 	now := time.Now()
-	_ = h.auditLog.LogAudit(r.Context(), &domain.AuditEntry{
-		UserID:     old.UserID,
-		Action:     auditActionTokenRotate,
+	err := h.auditLog.LogAudit(r.Context(), &domain.AuditEntry{
+		UserID:     tok.UserID,
+		Action:     action,
 		Resource:   auditResourceToken,
-		ResourceID: old.TokenPrefix,
-		Details:    string(details),
+		ResourceID: tok.TokenPrefix,
+		Details:    string(encoded),
 		IPAddress:  clientIP(r),
 		Timestamp:  &now,
 	})
+	if err != nil {
+		log.Printf("WARN: audit %s for token %s: %v", action, tok.TokenPrefix, err)
+	}
 }

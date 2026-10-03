@@ -48,6 +48,8 @@ The vault unseal key is kept under AWS KMS (`vault.unseal.provider: awskms`, see
 
 ### 1.1. Personal access tokens: expiry and rotation
 
+Developers manage their own tokens in Studio under **Access tokens** (create with a name, scope, optional project and expiry; the secret is shown once; revoke). The API below does the same.
+
 Every PAT expires. The default lifetime is **90 days**; `expiresIn` accepts `<n>d` or a Go duration up to **365d**. Only an explicit `"expiresIn":"never"` mints a non-expiring token — reserve that for break-glass automation and rotate it on a schedule. Login session tokens are separate and always expire after 12h.
 
 ```bash
@@ -56,7 +58,9 @@ curl -X POST -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json'
   -d '{"name":"ci-deploy","expiresIn":"30d"}' https://<host>/api/auth/tokens
 # → {"token":"excb_…","prefix":"excb_a1b2c3d","name":"ci-deploy","scopes":"","expiresAt":"2026-…"}
 
-# List — shows expiresAt and lastUsed (updated at most once a minute per token)
+# List — your personal access tokens only (no sign-in sessions, no service tokens):
+# id (the SHA-256 that revoke/rotate take), name, scopes, projectId, createdAt,
+# expiresAt and lastUsed (written at most once a minute per token)
 curl -sf -H "Authorization: Bearer $PAT" https://<host>/api/auth/tokens | jq
 
 # Rotate — same owner/name/scopes, lifetime restarts from now.
@@ -68,7 +72,7 @@ curl -X POST -H "Authorization: Bearer $OLD_PAT" -H 'Content-Type: application/j
 # → {"token":"excb_…(new)","expiresAt":"…","previousExpiresAt":"…(now+300s)", …}
 ```
 
-Only the token's owner can rotate it, with one exception: a platform admin may rotate a **service account's** token (see 1.2), because that is exactly what the rotation job does. Admins can revoke any token. Each rotation writes an `access_token` / `token.rotate` audit row carrying the display prefixes and the grace window — never the secret. An expired token is refused with `401` and `"code":"token_expired"`, so a CI job that starts failing with that code needs a rotate, not a re-login.
+Only the token's owner can rotate it, with one exception: a platform admin may rotate a **service account's** token (see 1.2), because that is exactly what the rotation job does. Admins can revoke any token from a session. A narrowed PAT (scoped or project-bound) may revoke only tokens no broader than itself. Creating, revoking and rotating write `access_token` audit rows (`token.create`, `token.revoke`, `token.rotate`) carrying the display prefix and who acted — never the secret or its hash. One user may mint at most 20 tokens an hour; past that the API answers `429`. An expired token is refused with `401` and `"code":"token_expired"`, so a CI job that starts failing with that code needs a rotate, not a re-login.
 
 ### 1.2. Service identity: service accounts and capability tokens
 

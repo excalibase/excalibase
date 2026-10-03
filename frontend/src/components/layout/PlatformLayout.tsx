@@ -1,5 +1,5 @@
-import { Outlet, NavLink } from 'react-router-dom';
-import { LayoutDashboard, Database, DatabaseZap, Building2, ShieldCheck, Sun, Moon, LogOut } from 'lucide-react';
+import { Outlet, NavLink, Link } from 'react-router-dom';
+import { LayoutDashboard, Database, DatabaseZap, Building2, ShieldCheck, KeyRound, Sun, Moon, LogOut } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { useDarkMode } from '../../hooks/useDarkMode';
 import { useAuthStore } from '../../stores/auth-store';
@@ -12,6 +12,7 @@ const ALL_NAV = [
   { icon: Building2, label: 'Organizations', to: '/orgs', cloudOnly: true, adminOnly: false },
   { icon: Database, label: 'Projects', to: '/instances', cloudOnly: false, adminOnly: false },
   { icon: DatabaseZap, label: 'Provision', to: '/provision', cloudOnly: false, adminOnly: false },
+  { icon: KeyRound, label: 'Access tokens', to: '/account/tokens', cloudOnly: false, adminOnly: false },
   { icon: ShieldCheck, label: 'Platform Admin', to: '/admin', cloudOnly: false, adminOnly: true },
 ];
 
@@ -64,7 +65,8 @@ export function PlatformLayout() {
           <h1 className="text-base font-semibold text-text-primary">Excalibase</h1>
           <div className="ml-auto flex items-center gap-2">
             {user && (
-              <span className="text-sm text-text-secondary hidden sm:inline">{user.username}</span>
+              <Link to="/account/tokens" title="Account settings"
+                className="text-sm text-text-secondary hover:text-text-primary hidden sm:inline">{user.username}</Link>
             )}
             <button
               onClick={toggle}

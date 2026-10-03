@@ -56,6 +56,7 @@ const ContainerTemplatesPage = lazy(() => import('./pages/ContainerTemplatesPage
 const ContainerFormPage = lazy(() => import('./pages/ContainerFormPage').then(m => ({ default: m.ContainerFormPage })));
 const ContainerDetailPage = lazy(() => import('./pages/ContainerDetailPage').then(m => ({ default: m.ContainerDetailPage })));
 const SdkKeysPage = lazy(() => import('./pages/SdkKeysPage').then(m => ({ default: m.SdkKeysPage })));
+const AccessTokensPage = lazy(() => import('./pages/AccessTokensPage').then(m => ({ default: m.AccessTokensPage })));
 const StoragePage = lazy(() => import('./pages/StoragePage').then(m => ({ default: m.StoragePage })));
 
 function PageLoader() {
@@ -94,6 +95,7 @@ export default function App() {
             <Route path="/instances" element={<InstancesPage />} />
             <Route path="/provision" element={<ProvisionPage />} />
             <Route path="/admin" element={<PlatformAdminPage />} />
+            <Route path="/account/tokens" element={<AccessTokensPage />} />
           </Route>
 
           {/* Project-scoped pages */}
