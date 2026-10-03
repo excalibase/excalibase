@@ -59,6 +59,10 @@ func schemaReadRows() []Row {
 func schemaWriteRows() []Row {
 	return []Row{
 		schemaWrite(http.MethodPost, "/ddl"),
+		// Table import (EXC-368): the preview writes nothing but parses an
+		// upload or fetches a sheet, so it sits with the writes.
+		schemaWrite(http.MethodPost, "/import"),
+		schemaWrite(http.MethodPost, "/import/preview"),
 		schemaWrite(http.MethodPost, "/query"),
 		schemaWrite(http.MethodPost, "/extensions"),
 		schemaWrite(http.MethodPost, "/functions"),

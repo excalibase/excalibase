@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Plus, Trash2, Table2, Columns3, Download, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Plus, Trash2, Table2, Columns3, Download, RefreshCw, ShieldCheck, Upload } from 'lucide-react';
 import {
   useTables, useColumns, useDropTable, useAddColumn, useDropColumn,
   useRows, useInsertRow, useUpdateRow, useDeleteRow,
@@ -10,24 +10,13 @@ import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import { DataGrid } from '../components/tables/DataGrid';
 import { CreateTablePanel } from '../components/tables/CreateTablePanel';
+import { ImportTablePanel } from '../components/tables/ImportTablePanel';
+import { csvCell } from '../utils/csvCell';
 import { ColumnSchemaView } from '../components/tables/ColumnSchemaView';
 import { AccessSummary } from '../components/tables/AccessSummary';
 import { usePermissionDocument } from '../hooks/usePermissions';
 import { useProjectRole } from '../hooks/useProjectRole';
 import { rolesWithSelect, tableKey } from '../utils/permissionModel';
-
-// csvSafe stringifies an arbitrary cell value without falling through to
-// "[object Object]" (S6551). Used for CSV export only.
-function csvSafe(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'string') return v;
-  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') return String(v);
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return '';
-  }
-}
 
 export function TablesPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -67,6 +56,7 @@ export function TablesPage() {
 
   // Panel / modal state
   const [showCreateTable, setShowCreateTable] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [showAddColumn, setShowAddColumn] = useState(false);
   const [showInsertRow, setShowInsertRow] = useState(false);
   const [dropTarget, setDropTarget] = useState<{ type: 'table' | 'column' | 'row'; name: string; pkCol?: string } | null>(null);
@@ -129,7 +119,7 @@ export function TablesPage() {
   const handleExportCSV = () => {
     if (!rowsData?.rows || !rowsData.columns) return;
     const header = rowsData.columns.map(c => c.name).join(',');
-    const rows = rowsData.rows.map(r => r.map(v => v === null ? '' : `"${csvSafe(v).replaceAll('"', '""')}"`).join(','));
+    const rows = rowsData.rows.map(r => r.map(csvCell).join(','));
     const csv = [header, ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${selectedTable}.csv` });
@@ -159,9 +149,14 @@ export function TablesPage() {
       <div className="w-64 flex-shrink-0 border border-border-primary rounded-lg bg-surface-card overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary">
           <span className="text-sm font-medium text-text-primary">Tables ({tables.length})</span>
-          <button onClick={() => setShowCreateTable(true)} className="p-1.5 rounded-lg text-purple-400 hover:bg-purple-500/10" data-testid="new-table-btn">
-            <Plus className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setShowImport(true)} className="p-1.5 rounded-lg text-purple-400 hover:bg-purple-500/10" data-testid="import-table-btn" title="Import CSV, Excel or Google Sheets">
+              <Upload className="w-4 h-4" />
+            </button>
+            <button onClick={() => setShowCreateTable(true)} className="p-1.5 rounded-lg text-purple-400 hover:bg-purple-500/10" data-testid="new-table-btn">
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           {tables.map(t => {
@@ -267,6 +262,7 @@ export function TablesPage() {
 
       {/* Create Table SidePanel */}
       <CreateTablePanel open={showCreateTable} onClose={() => setShowCreateTable(false)} projectId={pid} canGrantRead={canDevelop} />
+      <ImportTablePanel open={showImport} onClose={() => setShowImport(false)} projectId={pid} />
 
       {/* Add Column SidePanel */}
       <SidePanel open={showAddColumn} onClose={() => setShowAddColumn(false)} title={`Add Column to ${selectedTable}`}
