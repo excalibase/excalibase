@@ -138,6 +138,7 @@ Deno.test({
       const jwt = makeUnsignedJwt({ sub: "user-123", role: "authenticated" });
       const res = await rt.invoke("v2auth", { args: {} }, {
         Authorization: "Bearer " + jwt,
+        "X-Excalibase-Auth-Verified": "1",
       });
       assertEquals(res.status, 200);
       const parsed = JSON.parse(res.body);

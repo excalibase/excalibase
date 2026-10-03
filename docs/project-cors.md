@@ -1,10 +1,12 @@
 # Per-project CORS — the browser-origin allowlist
 
 The data plane a project exposes (`/{projectId}/graphql`,
-`/{projectId}/api/v1/*` and the WebSocket upgrades on those paths) is called
+`/{projectId}/api/v1/*`, the WebSocket upgrades on those paths, and the
+project's public functions at `/functions/v1/{projectId}/*`) is called
 straight from browsers, so it must answer CORS. It does so **per project**:
 each project carries its own list of allowed origins, stored by provisioning
-and enforced by excalibase-graphql. A project starts with **no origins** —
+and enforced by excalibase-graphql (GraphQL, REST) and by provisioning
+(functions, read on every call). A project starts with **no origins** —
 browser apps are blocked until the project opts them in.
 
 ## Set the allowlist
