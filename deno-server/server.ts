@@ -2019,7 +2019,7 @@ class FunctionRuntime {
         // the worker can reject the user's promise cleanly.
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
-        (async () => {
+        void (async () => {
           let result;
           try {
             // Phase 8.5: route through the shared mutation txn when this
@@ -2112,7 +2112,7 @@ class FunctionRuntime {
         // the gateway side already supports the route.
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
-        (async () => {
+        void (async () => {
           let result: { ok: true; data: unknown } | { ok: false; error: string; errorName?: string; issues?: unknown };
           try {
             const data = await dispatchRunX(meta.id, msg as RunXMessage);
@@ -2145,7 +2145,7 @@ class FunctionRuntime {
         // route through the pool and commit independently — Convex parity.
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
-        (async () => {
+        void (async () => {
           let result: { ok: true; data: unknown } | { ok: false; error: string };
           try {
             const sql = sqlFor(msg.txnRefId as string | undefined);
@@ -2184,7 +2184,7 @@ class FunctionRuntime {
         if (typeof rpcId !== "number") return;
         const sep = meta.id.indexOf("__");
         const projectId = sep > 0 ? meta.id.slice(0, sep) : "";
-        (async () => {
+        void (async () => {
           let result: { ok: true; data: unknown } | { ok: false; error: string };
           try {
             const data = await dispatchStorage(projectId, msg);
@@ -2968,7 +2968,7 @@ function badRequest(msg: string): Response {
 // restarted and every function must be replayed from the store (EXC-337).
 const BOOT_ID = crypto.randomUUID();
 
-async function handleHealth(): Promise<Response> {
+function handleHealth(): Response {
   return Response.json(
     {
       status: "healthy",
