@@ -13,6 +13,7 @@ interface DeployHistoryProps {
 interface RowProps {
   readonly deploy: Deploy;
   readonly isNewest: boolean;
+  readonly isServing: boolean;
   readonly confirming: boolean;
   readonly redeploying: boolean;
   readonly onAsk: () => void;
@@ -23,13 +24,16 @@ interface RowProps {
 function DeployRow({
   deploy,
   isNewest,
+  isServing,
   confirming,
   redeploying,
   onAsk,
   onCancel,
   onConfirm,
 }: RowProps) {
-  const status = DEPLOY_STATUS[deploy.status];
+  // Every rollout that finished well stays succeeded; only the newest of them still serves.
+  const status =
+    DEPLOY_STATUS[deploy.status === 'succeeded' && !isServing ? 'superseded' : deploy.status];
   return (
     <li
       className="px-4 py-3 border-b border-border-primary last:border-b-0"
@@ -88,6 +92,7 @@ function DeployRow({
 
 export function DeployHistory({ deploys, redeploying, onRedeploy }: DeployHistoryProps) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const servingId = deploys.find((deploy) => deploy.status === 'succeeded')?.id;
 
   if (deploys.length === 0) {
     return (
@@ -103,6 +108,7 @@ export function DeployHistory({ deploys, redeploying, onRedeploy }: DeployHistor
           key={deploy.id}
           deploy={deploy}
           isNewest={index === 0}
+          isServing={deploy.id === servingId}
           confirming={confirmingId === deploy.id}
           redeploying={redeploying}
           onAsk={() => setConfirmingId(deploy.id)}
