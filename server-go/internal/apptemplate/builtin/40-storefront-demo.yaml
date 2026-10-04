@@ -31,7 +31,7 @@ apps:
       - name: REDIS_PASSWORD
         value: "${{ secret(32) }}"
   - name: storefront
-    image: excalibase/storefront-demo@sha256:e5acf2e1b8026944e0cb3c4237e5f06d13e3b9f9e505698c04bf970fcd31d8d7
+    image: excalibase/storefront-demo@sha256:788a2b55caf17d125344f2977e603a9c2d662f05d809a1b112cfea22fdbb9515
     port: 8080
     healthCheckPath: /healthz
     replicas: 1
