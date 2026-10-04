@@ -20,6 +20,7 @@ export default defineConfig({
       include: [
         'src/hooks/**/*.{ts,tsx}',
         'src/components/auth/**/*.{ts,tsx}',
+        'src/components/ui/AppToaster.tsx',
         'src/pages/SetupPage.tsx',
         'src/pages/RealtimePage.tsx',
         'src/pages/TablesPage.tsx',
