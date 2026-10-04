@@ -126,10 +126,11 @@ func (h *FunctionHandler) effectiveEgressHosts(projectID string) []string {
 // allowlist; SEC-C5 keeps the master secret out of tenant pods).
 func (h *FunctionHandler) denoRuntimeSpecFor(projectID string) k8s.DenoRuntimeSpec {
 	return k8s.DenoRuntimeSpec{
-		Image:         h.runtimeImage,
-		RuntimeSecret: edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID),
-		Tier:          h.tierFor(projectID),
-		AllowedHosts:  h.effectiveEgressHosts(projectID),
+		Image:           h.runtimeImage,
+		RuntimeSecret:   edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID),
+		Tier:            h.tierFor(projectID),
+		AllowedHosts:    h.effectiveEgressHosts(projectID),
+		ProvisioningURL: h.runtimeProvisioningURL,
 	}
 }
 

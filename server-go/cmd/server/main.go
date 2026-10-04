@@ -106,6 +106,9 @@ func runServer(cfg config.AppConfig) {
 	if err := cfg.CheckPublicListener(); err != nil {
 		log.Fatal(err)
 	}
+	if err := cfg.CheckDenoProvisioningURL(); err != nil {
+		log.Fatal(err)
+	}
 	sqlStore := buildPlatformStore(cfg)
 	defer sqlStore.Close()
 
@@ -860,6 +863,7 @@ func buildFunctionHandler(
 	fnHandler := handler.NewFunctionHandler(fnStore, fnSecrets, fnClient, store, sqlStore, cfg.PublicBaseURL)
 	if cfg.ProvisionerMode != "docker" {
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
+		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
 	}
 	fnHandler.SetVault(vc)
 	// Without this resolver a deploy stores the declared schema and never
@@ -872,6 +876,13 @@ func buildFunctionHandler(
 	// EXC-11: end-user tokens must name this project in their aud claim.
 	fnHandler.SetAudienceRequirement(cfg.JWTRequireAud, cfg.JWTAudPrefix)
 	wireFunctionEgress(cfg, sqlStore, fnHandler)
+	// Public functions answer browsers from the project's own CORS allowlist;
+	// without the store no origin is granted.
+	if corsStore, ok := sqlStore.(storage.ProjectCorsStore); ok {
+		fnHandler.SetCorsStore(corsStore)
+	} else {
+		log.Println("WARN: no Postgres platform store — browsers get no CORS grant for project functions")
+	}
 	return fnHandler
 }
 
@@ -1468,7 +1479,9 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Use(middleware.Recoverer)
 	r.Use(metrics.Middleware)
 	r.Use(custommw.SecurityHeaders)
-	r.Use(custommw.CORS(cfg.CORSOrigins))
+	// A project's public functions answer CORS from that project's own
+	// allowlist (the handler does it); the Studio list is for everything else.
+	r.Use(custommw.ExceptPathPrefix("/functions/v1/", custommw.CORS(cfg.CORSOrigins)))
 	r.Use(custommw.RequireTrustedOriginForCookies(custommw.TrustedOrigins(cfg.StudioURL, cfg.CORSOrigins)))
 	r.Use(auth.ExtractAuth(sqlStore))
 	// Capability tokens (the platform's own service principals) are

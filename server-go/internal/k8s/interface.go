@@ -261,6 +261,9 @@ type DenoRuntimeSpec struct {
 	// (edgefn.ParseEgressHosts), rendered as the runtime's ALLOWED_HOSTS env
 	// and mirrored into the egress NetworkPolicy. Empty = no egress (EXC-348).
 	AllowedHosts []string
+	// ProvisioningURL is provisioning's in-cluster address, which ctx.storage
+	// and the export-metadata callback call with the project's runtime token.
+	ProvisioningURL string
 }
 
 // Verify Client implements KubeClient at compile time.

@@ -714,6 +714,17 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       }
     }
 
+    // __verifiedClaims — claims only from a token the gateway verified. The
+    // gateway sets X-Excalibase-Auth-Verified: 1 after checking the token's
+    // signature and project, and drops any marker the caller sent. A function
+    // that skips verification still sees the Authorization header itself,
+    // never as ctx.auth (EXC-518).
+    function __verifiedClaims(headers) {
+      const marker = headers['X-Excalibase-Auth-Verified'] || headers['x-excalibase-auth-verified'];
+      if (marker !== '1') return null;
+      return __decodeJwtClaims(headers['Authorization'] || headers['authorization'] || '');
+    }
+
     // __buildAuthCtx — Phase 12: typed ctx.auth surface mirroring Convex's
     // Auth interface. Carries the legacy raw claims plus a typed
     // getUserIdentity() helper that surfaces standard OIDC claims under
@@ -1295,8 +1306,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     async function __dispatchHttp(reqId, reqData, fnDef, txnRefId) {
       try {
         const headers = reqData.headers || {};
-        const auth = headers['Authorization'] || headers['authorization'] || '';
-        const claims = __decodeJwtClaims(auth);
+        const claims = __verifiedClaims(headers);
         // httpAction/httpRouter don't have an args envelope, so the runX
         // envelope's depth must ride alongside reqData.runDepth (the
         // gateway forwards it that way for internal invocations).
@@ -1395,8 +1405,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     async function __dispatchV2(reqId, reqData, fnDef, txnRefId) {
       try {
         const headers = reqData.headers || {};
-        const auth = headers['Authorization'] || headers['authorization'] || '';
-        const claims = __decodeJwtClaims(auth);
+        const claims = __verifiedClaims(headers);
 
         let body = {};
         if (reqData.body) {
@@ -2010,7 +2019,7 @@ class FunctionRuntime {
         // the worker can reject the user's promise cleanly.
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
-        (async () => {
+        void (async () => {
           let result;
           try {
             // Phase 8.5: route through the shared mutation txn when this
@@ -2103,7 +2112,7 @@ class FunctionRuntime {
         // the gateway side already supports the route.
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
-        (async () => {
+        void (async () => {
           let result: { ok: true; data: unknown } | { ok: false; error: string; errorName?: string; issues?: unknown };
           try {
             const data = await dispatchRunX(meta.id, msg as RunXMessage);
@@ -2136,7 +2145,7 @@ class FunctionRuntime {
         // route through the pool and commit independently — Convex parity.
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
-        (async () => {
+        void (async () => {
           let result: { ok: true; data: unknown } | { ok: false; error: string };
           try {
             const sql = sqlFor(msg.txnRefId as string | undefined);
@@ -2175,7 +2184,7 @@ class FunctionRuntime {
         if (typeof rpcId !== "number") return;
         const sep = meta.id.indexOf("__");
         const projectId = sep > 0 ? meta.id.slice(0, sep) : "";
-        (async () => {
+        void (async () => {
           let result: { ok: true; data: unknown } | { ok: false; error: string };
           try {
             const data = await dispatchStorage(projectId, msg);
@@ -2959,7 +2968,7 @@ function badRequest(msg: string): Response {
 // restarted and every function must be replayed from the store (EXC-337).
 const BOOT_ID = crypto.randomUUID();
 
-async function handleHealth(): Promise<Response> {
+function handleHealth(): Response {
   return Response.json(
     {
       status: "healthy",

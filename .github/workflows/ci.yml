@@ -217,6 +217,10 @@ jobs:
           ./scripts/run-tests.sh
           deno coverage cov/* --lcov --output=coverage/lcov.info
           echo "lcov source files: $(grep -c '^SF:' coverage/lcov.info)"
+      # The image itself: v2 functions and their zod load with no network,
+      # as a project runtime has none by default (EXC-518).
+      - name: Runtime image runs functions offline
+        run: sh deno-server/scripts/image-offline-test.sh
       - uses: actions/upload-artifact@v4
         with:
           name: deno-coverage

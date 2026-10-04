@@ -59,9 +59,13 @@ type FunctionHandler struct {
 	k8sClient     k8s.KubeClient
 	runtimeImage  string
 	runtimeSecret string
-	runtimeURLFn  func(namespace string) string // tests override; nil → cluster DNS
-	clientMu      sync.Mutex
-	clients       map[string]*edgefn.RuntimeClient // keyed by projectId
+	// corsStore is the per-project browser-origin allowlist (EXC-23).
+	corsStore storage.ProjectCorsStore
+	// runtimeProvisioningURL is where per-project runtimes reach provisioning.
+	runtimeProvisioningURL string
+	runtimeURLFn           func(namespace string) string // tests override; nil → cluster DNS
+	clientMu               sync.Mutex
+	clients                map[string]*edgefn.RuntimeClient // keyed by projectId
 
 	// Rate limiting for the public invoke route. Token bucket per project.
 	limiterMu     sync.Mutex
@@ -209,6 +213,12 @@ func (h *FunctionHandler) SetK8sClient(c k8s.KubeClient, image, runtimeSecret st
 	h.k8sClient = c
 	h.runtimeImage = image
 	h.runtimeSecret = runtimeSecret
+}
+
+// SetRuntimeProvisioningURL names provisioning's in-cluster address for the
+// per-project runtimes, which call it for ctx.storage (EXC-518).
+func (h *FunctionHandler) SetRuntimeProvisioningURL(url string) {
+	h.runtimeProvisioningURL = url
 }
 
 // SetVault wires the platform vault client so the handler can read project
@@ -937,7 +947,7 @@ func (h *FunctionHandler) Invoke(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errFunctionNotFound, http.StatusNotFound)
 		return
 	}
-	h.forwardToRuntime(w, r, fn, true /* stripAuth */)
+	h.forwardToRuntime(w, r, fn, authStripped)
 }
 
 // jwkCacheTTL controls how long the public key is cached before we re-fetch
@@ -1140,31 +1150,17 @@ func normalizeAudience(raw interface{}) []string {
 	}
 }
 
-// writeCORSHeaders sets permissive CORS headers for edge functions. Edge
-// functions are designed to be called from any origin (browser, mobile,
-// server-to-server) so `*` is the right default. Users can tighten this
-// per-project later.
-func writeCORSHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, apikey, x-client-info, x-excalibase-auth")
-	w.Header().Set("Access-Control-Max-Age", "86400")
-}
-
 // PublicInvoke is the Supabase-style public route /functions/v1/{projectId}/{fnId}.
 // Enforces:
-//  1. CORS — preflight + permissive headers for browser callers
+//  1. CORS — the project's browser-origin allowlist, as for its GraphQL and REST
 //  2. Per-project rate limit (returns 429 when exceeded)
 //  3. JWT presence check if the function has VerifyJwt enabled (default true)
 //  4. Forwards Authorization header to the function so user code can inspect it
 func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
-	writeCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
+	projectID := chi.URLParam(r, "projectId")
+	if h.answerCORS(w, r, projectID) {
 		return
 	}
-
-	projectID := chi.URLParam(r, "projectId")
 	fnID := chi.URLParam(r, "fnId")
 
 	if !h.allowProject(projectID) {
@@ -1191,13 +1187,15 @@ func (h *FunctionHandler) PublicInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	auth := authUnverified
 	if fn.JwtVerificationRequired() {
 		if !h.enforceJWT(w, r, projectID) {
 			return
 		}
+		auth = authVerified
 	}
 
-	h.forwardToRuntime(w, r, fn, false /* keep Authorization */)
+	h.forwardToRuntime(w, r, fn, auth)
 }
 
 // enforceJWT validates the Authorization Bearer token and sets X-Excalibase-Scope.
@@ -1263,10 +1261,28 @@ func parseContentLength(v string) (int64, error) {
 // refuse larger payloads.
 const maxInvokeBodyBytes = 1024 * 1024
 
+// authVerifiedHeader tells the runtime the gateway verified the request's
+// bearer token, so ctx.auth may be built from it. Only the gateway sets it.
+const authVerifiedHeader = "X-Excalibase-Auth-Verified"
+
+// callerAuth says what the gateway did with the caller's credentials.
+type callerAuth int
+
+const (
+	// authStripped drops Authorization and cookies: the caller is a Studio
+	// session, whose token must never reach tenant code.
+	authStripped callerAuth = iota
+	// authUnverified forwards Authorization untouched for the function's own
+	// use, but ctx.auth stays empty.
+	authUnverified
+	// authVerified forwards Authorization and marks it verified.
+	authVerified
+)
+
 // forwardToRuntime serializes the incoming HTTP request and ships it to the
 // Deno runtime via the RuntimeClient. The runtime's response is written back
 // to w with status, headers, and body intact.
-func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Request, fn *edgefn.Function, stripAuth bool) {
+func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Request, fn *edgefn.Function, auth callerAuth) {
 	// Refuse oversized requests upfront via Content-Length before reading
 	// the body into memory. Protects against naive DoS via giant POSTs.
 	if cl := r.Header.Get("Content-Length"); cl != "" {
@@ -1286,13 +1302,16 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 
 	headers := make(map[string]string, len(r.Header))
 	for k, v := range r.Header {
-		if len(v) > 0 {
+		if len(v) > 0 && !strings.EqualFold(k, authVerifiedHeader) {
 			headers[k] = v[0]
 		}
 	}
-	if stripAuth {
+	switch auth {
+	case authStripped:
 		delete(headers, "Authorization")
 		delete(headers, "Cookie")
+	case authVerified:
+		headers[authVerifiedHeader] = "1"
 	}
 
 	invokeReq := edgefn.InvokeRequest{
@@ -1649,7 +1668,7 @@ func (h *FunctionHandler) InternalInvoke(w http.ResponseWriter, r *http.Request)
 	// Internal invoke reaches both public and internal-only functions —
 	// no IsInternal short-circuit here. That's the whole point of the
 	// route: it's the trusted path the runtime uses to compose calls.
-	h.forwardToRuntime(w, r, fn, false /* keep auth headers — caller is the runtime */)
+	h.forwardToRuntime(w, r, fn, authUnverified)
 }
 
 // PublicHttpInvoke serves /functions/v1/{projectId}/http/* — the entry
@@ -1667,12 +1686,10 @@ func (h *FunctionHandler) InternalInvoke(w http.ResponseWriter, r *http.Request)
 // other internalX kinds — for consistency, even though Convex's
 // `internalAction` doesn't have an http variant.
 func (h *FunctionHandler) PublicHttpInvoke(w http.ResponseWriter, r *http.Request) {
-	writeCORSHeaders(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
+	projectID := chi.URLParam(r, "projectId")
+	if h.answerCORS(w, r, projectID) {
 		return
 	}
-	projectID := chi.URLParam(r, "projectId")
 	if err := edgefn.ValidateProjectID(projectID); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
@@ -1696,10 +1713,14 @@ func (h *FunctionHandler) PublicHttpInvoke(w http.ResponseWriter, r *http.Reques
 		if !httpFunctionMatches(fn, subPath, r.Method) {
 			continue
 		}
-		if fn.JwtVerificationRequired() && !h.enforceJWT(w, r, projectID) {
-			return
+		auth := authUnverified
+		if fn.JwtVerificationRequired() {
+			if !h.enforceJWT(w, r, projectID) {
+				return
+			}
+			auth = authVerified
 		}
-		h.forwardToRuntime(w, r, fn, false)
+		h.forwardToRuntime(w, r, fn, auth)
 		return
 	}
 	httpError(w, errFunctionNotFound, http.StatusNotFound)
