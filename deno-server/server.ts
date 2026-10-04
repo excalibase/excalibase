@@ -44,6 +44,8 @@ import { newId } from "./runtime/ids.ts";
 import { closePool, getPool } from "./runtime/pool.ts";
 import type { Sql } from "./runtime/pool.ts";
 import type { ValidatorCache } from "./runtime/validator.ts";
+import { runXFailure, runXTargetError, withoutCrashDetail } from "./runtime/invoke_errors.ts";
+import type { InvokeResponse, RunXFailure } from "./runtime/invoke_errors.ts";
 
 // ---------------------------------------------------------------------------
 // Phase 8.5 — Shared mutation transaction map.
@@ -284,13 +286,6 @@ interface InvokeRequest {
   body: string;
 }
 
-interface InvokeResponse {
-  status: number;
-  headers: Record<string, string>;
-  body: string;
-  /** The handler crashed; body holds its message, for nested callers only. */
-  failed?: boolean;
-}
 
 interface PendingRequest {
   resolve: (r: InvokeResponse) => void;
@@ -1777,17 +1772,7 @@ async function dispatchRunX(callerRuntimeID: string, msg: RunXMessage): Promise<
   if (res.status >= 200 && res.status < 300) {
     return parsed.data === undefined ? null : parsed.data;
   }
-  const err = new Error(parsed.error || `runX target returned ${res.status}`);
-  if (parsed.issues) {
-    (err as { issues?: unknown }).issues = parsed.issues;
-    err.name = "ValidationError";
-  } else if (res.status >= 400 && res.status <= 499) {
-    // The target refused: rethrown as its FunctionError so an uncaught
-    // refusal reaches the outer caller with the same status.
-    (err as { status?: number }).status = res.status;
-    err.name = "FunctionError";
-  }
-  throw err;
+  throw runXTargetError(res.status, parsed);
 }
 
 // SchedulerMessage is the envelope shape posted by a worker's
@@ -2135,21 +2120,12 @@ class FunctionRuntime {
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
         void (async () => {
-          let result: { ok: true; data: unknown } | { ok: false; error: string; errorName?: string; issues?: unknown; status?: number };
+          let result: { ok: true; data: unknown } | RunXFailure;
           try {
             const data = await dispatchRunX(meta.id, msg as RunXMessage);
             result = { ok: true, data };
           } catch (err) {
-            const issues = (err as { issues?: unknown }).issues;
-            const errorName = (err as { name?: string }).name;
-            const status = (err as { status?: unknown }).status;
-            result = {
-              ok: false,
-              error: String((err instanceof Error ? err.message : err) ?? "runX error"),
-              ...(errorName ? { errorName } : {}),
-              ...(issues ? { issues } : {}),
-              ...(typeof status === "number" ? { status } : {}),
-            };
+            result = runXFailure(err);
           }
           try {
             worker.postMessage({ type: "runXResult", rpcId, result });
@@ -3047,14 +3023,6 @@ async function handleInvoke(req: Request, id: string): Promise<Response> {
   // (`InvokeResponse { status, headers, body: '{"data":...}'}`).
   const enveloped = maybeApplyEnvelope(invokeReq, result);
   return Response.json(enveloped, { headers: JSON_HEADERS });
-}
-
-// withoutCrashDetail keeps a crashed handler's message off the wire: the
-// worker already wrote it to the function's logs.
-function withoutCrashDetail(response: InvokeResponse): InvokeResponse {
-  const { failed, ...rest } = response;
-  if (!failed) return rest;
-  return { ...rest, body: JSON.stringify({ error: "internal error" }) };
 }
 
 /**
