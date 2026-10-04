@@ -141,6 +141,13 @@ describe('tableImport api', () => {
     expect([...form.keys()]).toEqual(['hasHeader', 'file']);
   });
 
+  it('a file goes as multipart, not as the instance default JSON', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: { columns: [], rows: [] } });
+    const file = new File(['a\n'], 'a.csv');
+    await previewImport('p1', { kind: 'file', file }, { hasHeader: true });
+    expect(vi.mocked(api.post).mock.calls[0][2]).toMatchObject({ headers: { 'Content-Type': 'multipart/form-data' } });
+  });
+
   it('an unknown failure still has a message', () => {
     expect(importErrorOf('weird')).toEqual({ message: 'The import failed', rowErrors: [] });
     expect(importErrorOf({ response: { data: { error: 'no rows' } } })).toEqual({

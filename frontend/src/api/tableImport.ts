@@ -106,13 +106,19 @@ export function buildImportForm(options: ImportOptions, file: File): FormData {
   return form;
 }
 
+const MULTIPART = { 'Content-Type': 'multipart/form-data' };
+
 export async function previewImport(
   projectId: string,
   source: ImportSource,
   settings: ReadSettings,
 ): Promise<ImportPreview> {
   const url = `/schema/${projectId}/import/preview`;
-  const config = { timeout: PREVIEW_TIMEOUT_MS };
+  // The shared client defaults to JSON, which axios would turn a form into.
+  const config = {
+    timeout: PREVIEW_TIMEOUT_MS,
+    ...(source.kind === 'file' && { headers: MULTIPART }),
+  };
   const body =
     source.kind === 'file'
       ? buildPreviewForm(source.file, settings)
@@ -129,6 +135,7 @@ export async function importTable(
   const url = `/schema/${projectId}/import`;
   const config = {
     timeout: IMPORT_TIMEOUT_MS,
+    ...(source.kind === 'file' && { headers: MULTIPART }),
     onUploadProgress: (event: { loaded: number; total?: number }) => {
       if (onProgress && event.total) onProgress(Math.round((event.loaded / event.total) * 100));
     },
