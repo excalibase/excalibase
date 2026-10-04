@@ -84,12 +84,15 @@ project's storage rule. Check the caller in it. `ctx.auth.claims` holds the
 caller's token only when the platform verified it (functions with
 `verifyJwt`, the default); for a function that skips verification it is
 `null`, so a role check there cannot be satisfied by an unsigned token.
+Refuse with `FunctionError` so the caller gets `401`/`403`; any other thrown
+error answers a bare `500`.
 
 ```ts
 export const generateUploadUrl = mutation({
   args: v.object({ contentType: v.string(), size: v.number() }),
   handler: async (ctx, { contentType, size }) => {
-    if (ctx.auth.claims?.role !== "staff") throw new Error("only staff may upload");
+    if (!ctx.auth.claims) throw new FunctionError(401, "sign in to upload");
+    if (ctx.auth.claims.role !== "staff") throw new FunctionError(403, "only staff may upload");
     return ctx.storage.generateUploadUrl({ contentType, size });
   },
 });

@@ -1306,3 +1306,39 @@ func (s *inMemoryInstanceStore) RecordDeletionFailure(projectID string, status d
 	s.insts[projectID] = &failed
 	return nil
 }
+
+// EXC-518: when the runtime itself fails an invocation (worker error,
+// timeout), the caller gets a bare 500; the runtime's text stays in our log.
+func TestFunctionHandler_PublicInvoke_RuntimeFailureDoesNotLeak(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"connect 10.0.4.2:5432: password authentication failed"}`))
+	}))
+	defer failing.Close()
+	store := edgefn.NewFunctionStore(t.TempDir())
+	client := edgefn.NewRuntimeClient(failing.URL, "")
+	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
+		"proj_p1": {ProjectID: "proj_p1", OrgID: "default"},
+	}}
+	h := NewFunctionHandler(store, edgefn.NewSecretsStore(newFakeVault()), client, instStore, nil, testAPIBase)
+	f := false
+	if err := store.Save(&edgefn.Function{
+		ProjectID: "proj_p1", ID: "webhook", Name: "Webhook", VerifyJwt: &f,
+		Files:  []edgefn.File{{Path: testIndexTS, Content: testDefaultHandler}},
+		Active: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pub := chi.NewRouter()
+	pub.HandleFunc(testPublicInvokeRoute, h.PublicInvoke)
+	w := httptest.NewRecorder()
+	pub.ServeHTTP(w, httptest.NewRequest("POST", "/functions/v1/proj_p1/webhook", nil))
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", w.Code)
+	}
+	if body := w.Body.String(); strings.Contains(body, "10.0.4.2") || strings.Contains(body, "password") {
+		t.Fatalf("runtime failure leaked to the caller: %s", body)
+	}
+}

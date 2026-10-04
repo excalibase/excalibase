@@ -121,10 +121,10 @@ Deno.test({
       await rt.deploy("proj_c__recur", recurCode);
 
       const res = await rt.invoke("proj_c__recur", { args: { depth: 0 } });
-      // Either 500 or a 200 with an error body — accept both shapes but
-      // assert the depth-limit phrase is somewhere in the response.
-      const blob = res.body;
-      assertStringIncludes(blob, "depth");
+      // The depth limit fails the call; its phrase is in the function's logs.
+      assertEquals(res.status, 500);
+      const logs = await rt.raw("/logs/proj_c__recur", { headers: { "X-Runtime-Secret": rt.secret } });
+      assertStringIncludes(await logs.text(), "depth");
     } finally {
       await rt.stop();
     }

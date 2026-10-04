@@ -40,6 +40,30 @@ export const createUser = mutation({
 });
 ```
 
+## Refusing a caller
+
+Throw `FunctionError` with a 4xx status to refuse the caller; the response is
+that status with `{ "error": message }`. Any other thrown error is a crash:
+the caller gets `500 { "error": "internal error" }` and the message is
+written to the function's logs.
+
+```ts
+import { mutation, FunctionError } from "@excalibase/server";
+
+export const generateUploadUrl = mutation({
+  args: z.object({ contentType: z.string(), size: z.number() }),
+  handler: async (ctx, args) => {
+    if (!ctx.auth.claims) throw new FunctionError(401, "sign in to upload");
+    if (ctx.auth.claims.role !== "staff") throw new FunctionError(403, "only staff may upload");
+    return ctx.storage.generateUploadUrl(args);
+  },
+});
+```
+
+A refusal from a nested `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`
+keeps its status if the caller lets it propagate. Arguments that fail the
+`args` schema already answer `400`.
+
 ## Do not run locally
 
 The wrappers return inert records of the form
