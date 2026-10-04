@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.0
+
+- New `FunctionError(status, message)`: a handler refuses its caller with a
+  4xx status and `{ error: message }`. A status outside 400–499 throws a
+  `RangeError`.
+- Any other thrown error is now a bare `500 { error: "internal error" }` to
+  the caller; the message goes to the function's logs. A nested `ctx.run*`
+  caller still sees the inner message, and a nested refusal keeps its status.
+
 ## 0.12.0
 
 **Breaking** (`ctx.storage`, direct-upload flow): an upload now stages before

@@ -199,7 +199,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "v2 handler throws → 500 with error message",
+  name: "v2 handler throws → bare 500; the message stays in the function's logs",
   async fn() {
     const rt = await startRuntime({ v2Enabled: true });
     try {
@@ -211,7 +211,9 @@ Deno.test({
       await rt.deploy("v2err", fnCode);
       const res = await rt.invoke("v2err", { args: {} });
       assertEquals(res.status, 500);
-      assertStringIncludes(res.body, "boom");
+      assertEquals(JSON.parse(res.body), { error: "internal error" });
+      const logs = await rt.raw("/logs/v2err", { headers: { "X-Runtime-Secret": rt.secret } });
+      assertStringIncludes(await logs.text(), "boom");
     } finally {
       await rt.stop();
     }

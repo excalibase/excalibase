@@ -1332,7 +1332,8 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 	}
 	resp, err := client.Invoke(r.Context(), fn.RuntimeID(), invokeReq)
 	if err != nil {
-		httpError(w, safeError(err), http.StatusInternalServerError)
+		log.Printf("ERROR: invoke %s failed: %v", fn.RuntimeID(), err)
+		httpError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	writeRuntimeResponse(w, resp)

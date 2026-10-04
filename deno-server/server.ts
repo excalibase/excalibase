@@ -288,6 +288,8 @@ interface InvokeResponse {
   status: number;
   headers: Record<string, string>;
   body: string;
+  /** The handler crashed; body holds its message, for nested callers only. */
+  failed?: boolean;
 }
 
 interface PendingRequest {
@@ -719,6 +721,24 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     // signature and project, and drops any marker the caller sent. A function
     // that skips verification still sees the Authorization header itself,
     // never as ctx.auth (EXC-518).
+    // __postThrown answers a handler's throw. A FunctionError (matched by name,
+    // as the lib's class lives in the bundle) refuses with its 4xx status;
+    // anything else is a crash: logged here, and marked failed so the caller
+    // of /invoke sees a bare 500 while a nested ctx.run* caller keeps the text.
+    function __postThrown(reqId, err) {
+      const status = err && err.name === 'FunctionError' ? err.status : 0;
+      if (Number.isInteger(status) && status >= 400 && status <= 499) {
+        self.postMessage({ type: 'success', reqId, status,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ error: String(err.message) }) });
+        return;
+      }
+      console.error('function failed:', err);
+      self.postMessage({ type: 'success', reqId, status: 500, failed: true,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ error: String(err && err.message || err) }) });
+    }
+
     function __verifiedClaims(headers) {
       const marker = headers['X-Excalibase-Auth-Verified'] || headers['x-excalibase-auth-verified'];
       if (marker !== '1') return null;
@@ -1376,9 +1396,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
         try {
           res = await handler(ctx, req);
         } catch (err) {
-          self.postMessage({ type: 'success', reqId, status: 500,
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ error: String(err && err.message || err) }) });
+          __postThrown(reqId, err);
           return;
         }
         if (!(res instanceof Response)) {
@@ -1486,9 +1504,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
               body: JSON.stringify({ error: 'args validation failed', issues: err.issues }) });
             return;
           }
-          self.postMessage({ type: 'success', reqId, status: 500,
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ error: String(err && err.message || err) }) });
+          __postThrown(reqId, err);
         }
       } catch (outer) {
         self.postMessage({ type: 'error', reqId, error: String(outer && outer.message || outer) });
@@ -1561,6 +1577,7 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
           } else if (msg.result && msg.result.errorName) {
             err.name = msg.result.errorName;
           }
+          if (msg.result && typeof msg.result.status === 'number') err.status = msg.result.status;
           pending.reject(err);
         }
         return;
@@ -1764,6 +1781,11 @@ async function dispatchRunX(callerRuntimeID: string, msg: RunXMessage): Promise<
   if (parsed.issues) {
     (err as { issues?: unknown }).issues = parsed.issues;
     err.name = "ValidationError";
+  } else if (res.status >= 400 && res.status <= 499) {
+    // The target refused: rethrown as its FunctionError so an uncaught
+    // refusal reaches the outer caller with the same status.
+    (err as { status?: number }).status = res.status;
+    err.name = "FunctionError";
   }
   throw err;
 }
@@ -2113,18 +2135,20 @@ class FunctionRuntime {
         const rpcId = msg.rpcId;
         if (typeof rpcId !== "number") return;
         void (async () => {
-          let result: { ok: true; data: unknown } | { ok: false; error: string; errorName?: string; issues?: unknown };
+          let result: { ok: true; data: unknown } | { ok: false; error: string; errorName?: string; issues?: unknown; status?: number };
           try {
             const data = await dispatchRunX(meta.id, msg as RunXMessage);
             result = { ok: true, data };
           } catch (err) {
             const issues = (err as { issues?: unknown }).issues;
             const errorName = (err as { name?: string }).name;
+            const status = (err as { status?: unknown }).status;
             result = {
               ok: false,
               error: String((err instanceof Error ? err.message : err) ?? "runX error"),
               ...(errorName ? { errorName } : {}),
               ...(issues ? { issues } : {}),
+              ...(typeof status === "number" ? { status } : {}),
             };
           }
           try {
@@ -2215,6 +2239,7 @@ class FunctionRuntime {
           status: msg.status || 200,
           headers: msg.headers || {},
           body: msg.body || "",
+          ...(msg.failed === true ? { failed: true } : {}),
         });
       } else {
         metrics.invocationsError++;
@@ -3010,7 +3035,7 @@ async function handleInvoke(req: Request, id: string): Promise<Response> {
     return Response.json({ error: "payload too large" }, { status: 413, headers: JSON_HEADERS });
   }
   const invokeReq = JSON.parse(body) as InvokeRequest;
-  const result = await runtime.invoke(id, invokeReq);
+  const result = withoutCrashDetail(await runtime.invoke(id, invokeReq));
   // Phase 15b — opt-in response envelope. Graphql's Phase 15a subscription
   // registry sets `X-Excalibase-Envelope: v1` on every invocation so the
   // outer body becomes `{result, reads}`. With reads in hand, the registry
@@ -3022,6 +3047,14 @@ async function handleInvoke(req: Request, id: string): Promise<Response> {
   // (`InvokeResponse { status, headers, body: '{"data":...}'}`).
   const enveloped = maybeApplyEnvelope(invokeReq, result);
   return Response.json(enveloped, { headers: JSON_HEADERS });
+}
+
+// withoutCrashDetail keeps a crashed handler's message off the wire: the
+// worker already wrote it to the function's logs.
+function withoutCrashDetail(response: InvokeResponse): InvokeResponse {
+  const { failed, ...rest } = response;
+  if (!failed) return rest;
+  return { ...rest, body: JSON.stringify({ error: "internal error" }) };
 }
 
 /**

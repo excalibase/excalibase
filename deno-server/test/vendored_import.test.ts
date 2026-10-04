@@ -209,3 +209,32 @@ export { __default as default };
   sanitizeOps: false,
   sanitizeResources: false,
 });
+
+Deno.test({
+  name: "EXC-518 — a bundle refuses with the vendored FunctionError@0.13.0 and the caller gets its status",
+  async fn() {
+    if (!(await vendoredDistPresent())) {
+      throw new Error("vendored dist missing — see first test for setup.");
+    }
+    const rt = await startRuntime({ v2Enabled: true });
+    try {
+      const code = `import { mutation, FunctionError } from "npm:@excalibase/server@0.13.0";
+import { z } from "npm:zod@^3.22.0";
+var __default = mutation({
+  args: z.object({}).passthrough(),
+  handler: async () => { throw new FunctionError(403, "only staff may upload product images"); },
+});
+export { __default as default };
+`;
+      const deploy = await rt.deploy("vendored-refuse", code);
+      assertEquals(deploy.status, 201, `deploy failed (${deploy.status}): ${await deploy.text()}`);
+      const res = await rt.invoke("vendored-refuse", { args: {} });
+      assertEquals(res.status, 403, res.body);
+      assertEquals(JSON.parse(res.body), { error: "only staff may upload product images" });
+    } finally {
+      await rt.stop();
+    }
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});

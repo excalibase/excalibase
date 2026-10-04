@@ -16,8 +16,8 @@ export {
   isHttpAction,
   isInternalFn,
 } from "./codegen-meta";
-export { ConflictError } from "./errors";
-export type { ConflictSqlState, ConflictErrorInit } from "./errors";
+export { ConflictError, FunctionError } from "./errors";
+export type { ConflictSqlState, ConflictErrorInit, FunctionErrorStatus } from "./errors";
 export { cronJobs, isCrons, validateCronExpression } from "./crons";
 export type { CronJob, CronSchedule, Crons } from "./crons";
 export type { ScheduledId, Scheduler } from "./scheduler";
