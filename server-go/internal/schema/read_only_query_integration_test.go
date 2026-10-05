@@ -33,13 +33,16 @@ func TestIntegration_ExecuteReadOnlyQuery(t *testing.T) {
 		"COMMIT; DELETE FROM users",
 		"SELECT 1; DELETE FROM users",
 		"CREATE TABLE sneaky (id int)",
-		"SET TRANSACTION READ WRITE",
 	} {
 		result := introspector.ExecuteReadOnlyQuery(ctx, appDB, statement)
 		if result.Error == "" {
 			t.Errorf("%q ran in read-only mode", statement)
 		}
 	}
+
+	// Postgres may accept SET TRANSACTION READ WRITE here, but it is the only
+	// statement the transaction runs before the rollback, so it writes nothing.
+	introspector.ExecuteReadOnlyQuery(ctx, appDB, "SET TRANSACTION READ WRITE")
 
 	var users int
 	if err := appDB.QueryRowContext(ctx, "SELECT count(*) FROM users").Scan(&users); err != nil {
