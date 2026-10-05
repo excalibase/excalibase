@@ -84,3 +84,10 @@ Gemini CLI, `.gemini/settings.json`
 ```
 
 Add `&read_only=true` to the URL for a read-only connection.
+
+## Activity
+
+Studio's AI Tools page (project, AI Tools) creates the token, shows the setup for
+each client, and lists the project's MCP calls: tool, token name, time and result
+(`GET /api/projects/{id}/ai-activity/`, Developer+). A call made with one of your
+own tokens can be revoked from the list; another member's token id is never shown.

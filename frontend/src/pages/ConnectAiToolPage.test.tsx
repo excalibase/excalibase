@@ -11,7 +11,7 @@ vi.mock('../api/client', () => ({
 }));
 
 function renderPage() {
-  vi.mocked(api.get).mockResolvedValue({ data: [] } as never);
+  vi.mocked(api.get).mockResolvedValue({ data: { calls: [] } } as never);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -73,6 +73,12 @@ describe('Connect your AI tool', () => {
   test('read only is the default', () => {
     renderPage();
     expect(screen.getByRole('radio', { name: /read only/i })).toBeChecked();
+  });
+
+  test('shows the project\'s AI activity below the form', async () => {
+    renderPage();
+    expect(await screen.findByText(/no ai tool has called this project yet/i)).toBeInTheDocument();
+    expect(api.get).toHaveBeenCalledWith('/projects/proj-1/ai-activity/');
   });
 
   test('a refusal from the token API is shown', async () => {

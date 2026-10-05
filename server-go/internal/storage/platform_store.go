@@ -28,6 +28,7 @@ type PlatformStore interface {
 	// drifted from the implementations and isn't actually consumed.
 	LogAudit(ctx context.Context, entry *domain.AuditEntry) error
 	QueryAudit(ctx context.Context, limit int) ([]domain.AuditEntry, error)
+	QueryProjectAudit(ctx context.Context, projectID, via string, limit int) ([]domain.AuditEntry, error)
 
 	// DB exposes the underlying *sql.DB for handlers that manage their
 	// own bespoke tables (email_verifications, password_resets, etc.).

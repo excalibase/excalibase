@@ -4,6 +4,7 @@ import { Bot, Check, Copy, Loader2 } from 'lucide-react';
 import { Button } from '../components/Button';
 import { useCreateAccessToken, type CreatedAccessToken, type TokenAccess } from '../api/accessTokens';
 import { AI_TOOLS, mcpSetup, mcpUrl, type AiToolId } from '../utils/mcpConfig';
+import { AiActivityFeed } from '../components/AiActivityFeed';
 
 const FIELD = 'px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary';
 
@@ -144,6 +145,8 @@ export function ConnectAiToolPage() {
           </Button>
         </form>
       )}
+
+      <AiActivityFeed projectId={projectId} />
     </div>
   );
 }

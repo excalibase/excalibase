@@ -36,6 +36,35 @@ test.describe('Connect your AI tool', () => {
     await expect(page.getByText('excb_e2e_secret')).toHaveCount(0);
   });
 
+  test('the activity feed lists MCP calls and revokes the caller\'s token', async ({ page }) => {
+    let revoked = '';
+    await page.route('**/api/projects/test-project/ai-activity/', (route) =>
+      route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ calls: revoked ? [] : [
+          { id: 7, tool: 'execute_sql', status: 'ok', tokenName: 'Codex MCP', userId: 'me', at: '2026-10-06T01:00:00Z', mine: true, tokenId: 'hash-7' },
+          { id: 6, tool: 'apply_migration', status: 'error', httpStatus: 403, tokenName: 'Their MCP', userId: 'other', at: '2026-10-06T00:59:00Z', mine: false },
+        ] }),
+      }),
+    );
+    await page.route('**/api/auth/tokens/*', (route) => {
+      revoked = route.request().url().split('/').pop() ?? '';
+      return route.fulfill({ status: 204 });
+    });
+
+    await page.goto('/project/test-project/ai-tools');
+    const own = page.getByTestId('ai-activity-7');
+    await expect(own).toContainText('execute_sql');
+    await expect(own).toContainText('Codex MCP');
+    await expect(page.getByTestId('ai-activity-6')).toContainText('Refused (403)');
+    await expect(page.getByTestId('ai-activity-6').getByRole('button', { name: 'Revoke' })).toHaveCount(0);
+
+    await own.getByRole('button', { name: 'Revoke' }).click();
+    await page.getByTestId('confirm-modal').getByRole('button', { name: 'Revoke' }).click();
+    await expect(page.getByText(/no ai tool has called this project yet/i)).toBeVisible();
+    expect(revoked).toBe('hash-7');
+  });
+
   test('read only narrows the MCP URL', async ({ page }) => {
     await page.route('**/api/auth/tokens', (route) =>
       route.fulfill({

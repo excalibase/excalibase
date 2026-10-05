@@ -603,6 +603,36 @@ func TestAuditLogKeepsProjectTokenAndDoor(t *testing.T) {
 	}
 }
 
+func TestQueryProjectAuditListsOneProjectsCallsThroughOneDoor(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour)
+	for i, entry := range []domain.AuditEntry{
+		{ResourceID: "list_tables", ProjectID: "proj-a", TokenHash: "hash-1", Via: domain.AuditViaMCP},
+		{ResourceID: "apply_migration", ProjectID: "proj-a", TokenHash: "hash-2", Via: domain.AuditViaMCP},
+		{ResourceID: "other_project", ProjectID: "proj-b", TokenHash: "hash-1", Via: domain.AuditViaMCP},
+		{ResourceID: "studio_call", ProjectID: "proj-a"},
+	} {
+		at := base.Add(time.Duration(i) * time.Minute)
+		entry.UserID, entry.Action, entry.Resource, entry.Timestamp = "u1", "mcp.tool_call", "mcp_tool", &at
+		if err := store.LogAudit(ctx, &entry); err != nil {
+			t.Fatalf("LogAudit: %v", err)
+		}
+	}
+	entries, err := store.QueryProjectAudit(ctx, "proj-a", domain.AuditViaMCP, 10)
+	if err != nil {
+		t.Fatalf("QueryProjectAudit: %v", err)
+	}
+	if len(entries) != 2 || entries[0].ResourceID != "apply_migration" || entries[1].ResourceID != "list_tables" {
+		t.Fatalf("want proj-a's MCP calls, newest first; got %+v", entries)
+	}
+	if entries[0].TokenHash != "hash-2" || entries[0].ProjectID != "proj-a" || entries[0].Via != domain.AuditViaMCP {
+		t.Fatalf("entry fields not read back: %+v", entries[0])
+	}
+}
+
+// --- Org tests ---
+
 // --- Org tests ---
 
 func setupOrgTest(t *testing.T) (*Store, string) {

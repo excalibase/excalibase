@@ -167,6 +167,31 @@ func (s *Store) LogAudit(ctx context.Context, e *domain.AuditEntry) error {
 	return err
 }
 
+// QueryProjectAudit lists one project's audit entries written through one
+// door (domain.AuditViaMCP), newest first.
+func (s *Store) QueryProjectAudit(ctx context.Context, projectID, via string, limit int) ([]domain.AuditEntry, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, user_id, action, resource, resource_id, details, ip_address, timestamp, project_id, token_hash, via
+		 FROM audit_log WHERE project_id = $1 AND via = $2 ORDER BY timestamp DESC, id DESC LIMIT $3`,
+		projectID, via, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query project audit: %w", err)
+	}
+	defer rows.Close()
+	result := make([]domain.AuditEntry, 0)
+	for rows.Next() {
+		var e domain.AuditEntry
+		var ts time.Time
+		if err := rows.Scan(&e.ID, &e.UserID, &e.Action, &e.Resource, &e.ResourceID, &e.Details, &e.IPAddress,
+			&ts, &e.ProjectID, &e.TokenHash, &e.Via); err != nil {
+			return nil, fmt.Errorf("scan project audit: %w", err)
+		}
+		e.Timestamp = &ts
+		result = append(result, e)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) QueryAudit(ctx context.Context, limit int) ([]domain.AuditEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, user_id, action, resource, resource_id, details, ip_address, timestamp
