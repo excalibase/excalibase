@@ -42,6 +42,13 @@ type request struct {
 type dispatcher struct {
 	router http.Handler
 	caller Caller
+	// answered, when set, collects the path and status of every route reply.
+	answered *[]routeReply
+}
+
+type routeReply struct {
+	path   string
+	status int
 }
 
 func (d dispatcher) send(ctx context.Context, method, path string, query url.Values, body, out any) error {
@@ -63,6 +70,9 @@ func (d dispatcher) do(ctx context.Context, req request, out any) error {
 	}
 	if reply.status == 0 {
 		reply.status = http.StatusOK
+	}
+	if d.answered != nil {
+		*d.answered = append(*d.answered, routeReply{path: req.path, status: reply.status})
 	}
 	if reply.status < 200 || reply.status > 299 {
 		return &RouteError{Status: reply.status, Message: errorMessage(reply.body.Bytes(), reply.status)}

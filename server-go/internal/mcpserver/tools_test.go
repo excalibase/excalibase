@@ -554,6 +554,30 @@ func TestBoundConnectionListsOnlyItsProject(t *testing.T) {
 	}
 }
 
+// TestACallIsFiledUnderAProjectOnlyWhenTheProjectAnswered pins that naming a
+// project is not enough to land in its activity: a non-member's call (the
+// access gate answers 404) or a tool that reaches no project route is kept
+// without the project, so an outsider cannot write into someone's feed.
+func TestACallIsFiledUnderAProjectOnlyWhenTheProjectAnswered(t *testing.T) {
+	routes := newFakeRoutes()
+	routes.on(http.MethodGet, schemaA+"/tables", 404, `{"error":"project not found"}`)
+	routes.on(http.MethodGet, "/api/schema/"+testProjectB+"/tables", 401, `{"error":"unauthenticated"}`)
+	audit := &recordingAudit{}
+	cs := session(t, routes, audit, writeCaller())
+	callTool(t, cs, "list_tables", map[string]any{"project_id": testProjectA})
+	callTool(t, cs, "list_tables", map[string]any{"project_id": testProjectB})
+	callTool(t, cs, "get_ci_snippet", map[string]any{"project_id": testProjectA, "provider": "github-actions"})
+
+	if len(audit.entries) != 3 {
+		t.Fatalf("entries = %+v", audit.entries)
+	}
+	for _, entry := range audit.entries {
+		if entry.ProjectID != "" {
+			t.Errorf("%s was filed under %q without the project answering", entry.ResourceID, entry.ProjectID)
+		}
+	}
+}
+
 func TestEveryToolCallIsAudited(t *testing.T) {
 	routes := newFakeRoutes()
 	routes.on(http.MethodGet, schemaA+"/tables", 200, `[]`)

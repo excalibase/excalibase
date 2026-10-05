@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -47,9 +48,9 @@ func tool[In any](name, description string, level access, run func(context.Conte
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: level != writeTool},
 		}
 		mcp.AddTool(server, definition, func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
-			c := &call{dispatcher: dispatcher{router: e.router, caller: caller}, settings: e.settings}
+			c := &call{dispatcher: dispatcher{router: e.router, caller: caller, answered: &[]routeReply{}}, settings: e.settings}
 			out, err := run(ctx, c, in)
-			e.record(ctx, caller, name, c.project, err)
+			e.record(ctx, caller, name, c.answeredProject(), err)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -85,6 +86,25 @@ func (c *call) useProject(requested string) (string, error) {
 	}
 	c.project = projectID
 	return projectID, nil
+}
+
+// answeredProject is the project this call is filed under: the one it
+// resolved, and only once one of that project's routes answered past the
+// access gate (anything but 401 or 404). Naming a project is not enough, or
+// anyone could write into another project's activity.
+func (c *call) answeredProject() string {
+	if c.project == "" || c.answered == nil {
+		return ""
+	}
+	for _, reply := range *c.answered {
+		if reply.status == http.StatusUnauthorized || reply.status == http.StatusNotFound {
+			continue
+		}
+		if segments := strings.Split(reply.path, "/"); len(segments) > 3 && segments[1] == "api" && segments[3] == c.project {
+			return c.project
+		}
+	}
+	return ""
 }
 
 func (c *call) get(ctx context.Context, path string, query url.Values, out any) error {
