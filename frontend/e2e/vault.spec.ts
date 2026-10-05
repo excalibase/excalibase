@@ -59,16 +59,6 @@ function mockVaultEndpoints(page: import('@playwright/test').Page) {
   });
 }
 
-function mockVaultSealed(page: import('@playwright/test').Page) {
-  page.route('**/api/vault/status', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ initialized: true, sealed: true }),
-    })
-  );
-}
-
 test.describe('Vault Page', () => {
   test.beforeEach(async ({ page }) => {
     await loginAs(page);

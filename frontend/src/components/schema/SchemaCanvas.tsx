@@ -63,7 +63,7 @@ export function SchemaCanvas({ tables, columns, relationships, positions }: Sche
         data,
       };
     });
-  }, [tables, columns, positions, fkColumnsByTable, positionMap]);
+  }, [tables, columns, fkColumnsByTable, positionMap]);
 
   const initialEdges: Edge[] = useMemo(() => {
     return relationships.map((rel) => ({
