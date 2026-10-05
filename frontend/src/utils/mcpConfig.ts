@@ -1,6 +1,7 @@
 // Setup for the MCP clients Studio supports (EXC-544). The token lives in the
-// EXCALIBASE_TOKEN environment variable; config files only reference it, so a
-// committed .cursor/mcp.json or .gemini/settings.json carries no secret.
+// EXCALIBASE_TOKEN environment variable; the Cursor, Codex and Gemini config
+// files only reference it, so a committed .cursor/mcp.json carries no secret.
+// `claude mcp add` stores the header as the shell expanded it.
 
 export type AiToolId = 'cursor' | 'claude-code' | 'codex' | 'gemini';
 
@@ -32,7 +33,10 @@ export function mcpUrl(origin: string, projectId: string, readOnly: boolean): st
 }
 
 function exportToken(token: string): SetupStep {
-  return { label: 'Put the token in your shell environment (it is shown once)', code: `export ${TOKEN_ENV}=${token}` };
+  return {
+    label: 'Add the token to your shell profile (~/.zshrc or ~/.bashrc) and open a new terminal; it is shown once',
+    code: `export ${TOKEN_ENV}=${token}`,
+  };
 }
 
 function jsonConfig(urlKey: 'url' | 'httpUrl', url: string, authorization: string): string {
@@ -46,7 +50,7 @@ export function mcpSetup(tool: AiToolId, url: string, token: string): SetupStep[
       return [
         exportToken(token),
         {
-          label: 'Add the server',
+          label: 'Add the server (it saves the token from your environment into the Claude Code config)',
           code: `claude mcp add --transport http ${SERVER_NAME} "${url}" --header "Authorization: Bearer $${TOKEN_ENV}"`,
         },
       ];
