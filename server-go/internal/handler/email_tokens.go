@@ -392,6 +392,10 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 		httpError(w, "token + newPassword required", http.StatusBadRequest)
 		return
 	}
+	if msg := isValidPassword(body.NewPassword); msg != "" {
+		httpError(w, msg, http.StatusBadRequest)
+		return
+	}
 	hash := hashToken(body.Token)
 	row := h.db.QueryRowContext(r.Context(),
 		h.rebind(`SELECT user_id, expires_at, consumed_at FROM password_resets WHERE token_hash = ?`), hash)

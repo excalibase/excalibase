@@ -147,7 +147,7 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 
 	// ConfirmReset with a new password.
 	req = httptest.NewRequest("POST", "/reset/confirm",
-		strings.NewReader(`{"token":"`+token+`","newPassword":"brand-new-pass"}`))
+		strings.NewReader(`{"token":"`+token+`","newPassword":"Brand-new-pass9"}`))
 	w = httptest.NewRecorder()
 	h.ConfirmReset(w, req)
 	if w.Code != http.StatusOK {
@@ -156,7 +156,7 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 
 	// The stored password hash should now verify the new password.
 	updated, _ := store.FindUserByID(context.Background(), user.ID)
-	if updated == nil || !auth.CheckPassword("brand-new-pass", updated.PasswordHash) {
+	if updated == nil || !auth.CheckPassword("Brand-new-pass9", updated.PasswordHash) {
 		t.Errorf("password not updated to new value")
 	}
 	// The link reached the account's mailbox, which proves the address.
@@ -196,7 +196,7 @@ func TestEmailTokens_ResetIgnoresAddressCaseAndNamesTheUsername(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
-		strings.NewReader(`{"token":"`+token+`","newPassword":"brand-new-pass"}`)))
+		strings.NewReader(`{"token":"`+token+`","newPassword":"Brand-new-pass9"}`)))
 	var resp map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK {
 		t.Fatalf("ConfirmReset: %d %s", w.Code, w.Body.String())
@@ -292,7 +292,7 @@ func TestEmailTokens_ResetVoidsTheAccountsOtherLinks(t *testing.T) {
 	confirm := func(token string) int {
 		w := httptest.NewRecorder()
 		h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
-			strings.NewReader(`{"token":"`+token+`","newPassword":"brand-new-pass"}`)))
+			strings.NewReader(`{"token":"`+token+`","newPassword":"Brand-new-pass9"}`)))
 		return w.Code
 	}
 	older := mailLink("void@example.com")
@@ -400,7 +400,7 @@ func TestEmailTokens_ResetEndsEverySessionAndRevokesEveryAccessToken(t *testing.
 	token := tokenFromURL(sender.message().HTMLBody)
 	w := httptest.NewRecorder()
 	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
-		strings.NewReader(`{"token":"`+token+`","newPassword":"brand-new-pass"}`)))
+		strings.NewReader(`{"token":"`+token+`","newPassword":"Brand-new-pass9"}`)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("ConfirmReset: %d %s", w.Code, w.Body.String())
 	}
@@ -442,7 +442,7 @@ func TestEmailTokens_ResetRefusesWithoutASessionStore(t *testing.T) {
 	h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"n@example.com"}`)))
 	w := httptest.NewRecorder()
 	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
-		strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"brand-new-pass"}`)))
+		strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"Brand-new-pass9"}`)))
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("got %d, want 500", w.Code)
 	}
@@ -492,7 +492,7 @@ func TestEmailTokens_ResetReportsSessionsThatCouldNotBeEnded(t *testing.T) {
 			h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"s@example.com"}`)))
 			w := httptest.NewRecorder()
 			h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
-				strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"brand-new-pass"}`)))
+				strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"Brand-new-pass9"}`)))
 			if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "could not be signed out") {
 				t.Fatalf("got %d %s, want 500 naming the sessions", w.Code, w.Body.String())
 			}
@@ -536,7 +536,7 @@ func resetWithTokens(t *testing.T, failOn string) (*httptest.ResponseRecorder, [
 	h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"o@example.com"}`)))
 	w := httptest.NewRecorder()
 	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
-		strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"brand-new-pass"}`)))
+		strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"Brand-new-pass9"}`)))
 	return w, deleted
 }
 
