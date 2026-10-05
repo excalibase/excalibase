@@ -1,6 +1,7 @@
 import { describe, test, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { AppForm } from './AppForm';
 import type { App } from '../../api/apps';
 
@@ -23,20 +24,35 @@ const existingApp: App = {
 function renderForm(props: Partial<React.ComponentProps<typeof AppForm>> = {}) {
   const onSubmit = vi.fn();
   render(
-    <AppForm
-      tier="STANDARD"
-      databaseName="appdb"
-      submitLabel="Create container"
-      submitting={false}
-      onSubmit={onSubmit}
-      onCancel={() => {}}
-      {...props}
-    />,
+    <MemoryRouter>
+      <AppForm
+        tier="STANDARD"
+        databaseName="appdb"
+        submitLabel="Create container"
+        submitting={false}
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+        {...props}
+      />
+    </MemoryRouter>,
   );
   return { onSubmit, user: userEvent.setup() };
 }
 
 describe('AppForm', () => {
+  test('image help says any registry works and links to Registry credentials', () => {
+    renderForm({ registryCredentialsHref: '/project/p1/containers#registry-credentials' });
+    const field = screen.getByTestId('app-image').parentElement as HTMLElement;
+    expect(field.textContent).toContain(
+      'An image from any registry, with a tag or digest, e.g. docker.io/you/app:1.0 or ghcr.io/acme/web:1.4.0. For a private registry, add its login under Registry credentials first.',
+    );
+    expect(screen.getByRole('link', { name: 'Registry credentials' })).toHaveAttribute(
+      'href',
+      '/project/p1/containers#registry-credentials',
+    );
+    expect(screen.getByTestId('app-image')).toHaveAttribute('placeholder', 'nginx:1.27');
+  });
+
   test('starts with port 8080 and one replica', () => {
     renderForm();
     expect(screen.getByTestId('app-port')).toHaveValue(8080);
@@ -355,7 +371,11 @@ describe('AppForm', () => {
     await user.click(screen.getByTestId('app-submit'));
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
-        input: expect.objectContaining({ internal: true, port: 0, internalPorts: [{ port: 6379, protocol: 'TCP' }] }),
+        input: expect.objectContaining({
+          internal: true,
+          port: 0,
+          internalPorts: [{ port: 6379, protocol: 'TCP' }],
+        }),
       }),
     );
   });

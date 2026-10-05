@@ -43,6 +43,7 @@ function CreateForm({ projectId, tier, databaseName }: FormProps) {
         subtitle="An image, the port it listens on, and any variables it needs."
       />
       <AppForm
+        registryCredentialsHref={`/project/${projectId}/containers#registry-credentials`}
         tier={tier}
         databaseName={databaseName}
         submitLabel="Create container"
@@ -76,6 +77,7 @@ function EditForm({ projectId, app, databaseName }: FormProps & { readonly app: 
         subtitle="Changes take effect on the next deploy."
       />
       <AppForm
+        registryCredentialsHref={`/project/${projectId}/containers#registry-credentials`}
         tier={app.tier}
         databaseName={databaseName}
         initial={app}
