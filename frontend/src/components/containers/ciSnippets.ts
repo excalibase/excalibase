@@ -47,10 +47,33 @@ if [ "$code" != "202" ]; then
   exit 1
 fi
 deploy_id=$(printf '%s' "$body" | sed -n 's/^{"id":"\\([^"]*\\)".*/\\1/p')
+if [ -z "$deploy_id" ]; then
+  echo "No deploy id in: $body" >&2
+  exit 1
+fi
 echo "Deploy $deploy_id started; waiting until it is live"
 tries=0
+unanswered=0
 while [ "$tries" -lt 120 ]; do
-  state=$(curl -sS "$APP_API/deploys/$deploy_id" -H "Authorization: Bearer $EXCALIBASE_TOKEN")
+  tries=$((tries + 1))
+  answer=$(curl -sS "$APP_API/deploys/$deploy_id" -H "Authorization: Bearer $EXCALIBASE_TOKEN" \\
+    -w '\\n%{http_code}' || true)
+  code=$(printf '%s\\n' "$answer" | tail -n 1)
+  state=$(printf '%s\\n' "$answer" | sed '$d')
+  case "$code" in
+    200) unanswered=0 ;;
+    000|5??)
+      unanswered=$((unanswered + 1))
+      if [ "$unanswered" -ge 6 ]; then
+        echo "The API did not answer ($code): $state" >&2
+        exit 1
+      fi
+      sleep 5
+      continue ;;
+    *)
+      echo "Polling refused ($code): $state" >&2
+      exit 1 ;;
+  esac
   status=$(printf '%s' "$state" | sed -n 's/.*"status":"\\([a-z]*\\)".*/\\1/p')
   case "$status" in
     succeeded)
@@ -64,7 +87,6 @@ while [ "$tries" -lt 120 ]; do
       echo "Unexpected answer: $state" >&2
       exit 1 ;;
   esac
-  tries=$((tries + 1))
   sleep 5
 done
 echo "Deploy $deploy_id did not finish within 10 minutes" >&2

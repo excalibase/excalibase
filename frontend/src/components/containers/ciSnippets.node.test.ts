@@ -47,6 +47,10 @@ beforeEach(async () => {
     if (req.method === 'GET' && req.url === '/api/projects/proj-1/apps/app-1/deploys/dep-1') {
       const status = fake.statuses[Math.min(fake.polls, fake.statuses.length - 1)];
       fake.polls += 1;
+      if (status === 'unavailable') {
+        res.writeHead(503, { 'Content-Type': 'text/html' });
+        return res.end('<html>bad gateway</html>');
+      }
       return json(200, { id: 'dep-1', appId: 'app-1', status, failureReason: status === 'failed' ? 'the container never became ready' : undefined, url: 'https://web.apps.test' });
     }
     return json(404, { error: 'not found' });
@@ -93,6 +97,21 @@ describe('deployScript', () => {
     expect(fake.deploys).toEqual([{ image: `ghcr.io/acme/web@${DIGEST}`, commitSha: COMMIT }]);
     expect(fake.polls).toBe(2);
     expect(result.out).toContain('https://web.apps.test');
+  }, 30_000);
+
+  test('rides out a moment the API does not answer', async () => {
+    fake.statuses = ['unavailable', 'succeeded'];
+    const result = await run(deployScript(target()), ciEnv);
+    expect(result.code, result.out).toBe(0);
+    expect(fake.polls).toBe(2);
+  }, 30_000);
+
+  test('gives up when the API stays down', async () => {
+    fake.statuses = ['unavailable'];
+    const result = await run(deployScript(target()).replaceAll('sleep 5', 'sleep 0'), ciEnv);
+    expect(result.code).not.toBe(0);
+    expect(result.out).toContain('did not answer (503)');
+    expect(fake.polls).toBe(6);
   }, 30_000);
 
   test('fails the job when the deploy fails, with the reason', async () => {
