@@ -178,6 +178,8 @@ type appUpdateRequest struct {
 	InternalPorts *[]apphost.InternalPort `json:"internalPorts"`
 	Internal      *bool                   `json:"internal"`
 	Args          *[]string               `json:"args"`
+	// AutoDeploy lets the image watcher deploy the tag when it moves (EXC-542).
+	AutoDeploy *bool `json:"autoDeploy"`
 }
 
 func (h *AppHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +327,10 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	applyAppUpdate(existing, req)
+	if req.AutoDeploy != nil && *req.AutoDeploy && apphost.IsPinnedByDigest(existing.Image) {
+		httpError(w, "auto-deploy follows a tag, and this image is pinned by digest; name a tag such as ghcr.io/acme/web:main", http.StatusBadRequest)
+		return
+	}
 	// The tier follows the project, so an app never keeps an envelope the
 	// project has moved off.
 	tier, err := h.project.Tier(r.Context(), projectID)
@@ -365,6 +371,11 @@ func applyAppUpdate(app *apphost.App, req appUpdateRequest) {
 		// The stored digest belonged to the old image; the next deploy
 		// resolves the new one (EXC-386).
 		app.ResolvedDigest = ""
+		// What the watcher saw of the old tag says nothing of the new one.
+		app.ImageWatch = nil
+	}
+	if req.AutoDeploy != nil {
+		app.AutoDeploy = *req.AutoDeploy
 	}
 	if req.Env != nil {
 		app.Env = normalizeEnv(*req.Env)

@@ -273,6 +273,8 @@ func runServer(cfg config.AppConfig) {
 
 	stopAppRollouts := startAppRolloutSweeper(cfg, sqlStore, deps.appDeploySvc)
 	defer stopAppRollouts()
+	stopImageWatcher := startImageWatcher(cfg, sqlStore, deps.appDeploySvc)
+	defer stopImageWatcher()
 	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
 	defer stopCredentialRenewal()
 	stopRoleCertRenewal := startRoleCertificateRenewer(cfg, sqlStore, store, k8sClient, vc, provSvc)
@@ -459,6 +461,29 @@ const (
 	appRolloutSweepLockID   int64 = 0x6168_0acb_3a9d_52e1
 	appRolloutSweepInterval       = time.Minute
 )
+
+// The image watcher asks each opted-in app's registry at most every five
+// minutes plus jitter; its loop wakes every 30s to start the checks that are due.
+const (
+	appImageWatchLockID   int64 = 0x6168_0acb_1a6e_57c4
+	appImageWatchInterval       = 5 * time.Minute
+	appImageWatchTick           = 30 * time.Second
+)
+
+// startImageWatcher runs auto-deploy (EXC-542) on the leading replica.
+func startImageWatcher(cfg config.AppConfig, sqlStore storage.PlatformStore, deploys *service.AppDeployService) func() {
+	if !cfg.AppHostingEnabled || sqlStore == nil || deploys == nil {
+		return func() {
+			// no app hosting or no platform store: nothing to watch
+		}
+	}
+	var lock storage.LeaderLock = service.AlwaysLeader{}
+	if cfg.IsCloud() {
+		lock = pgstore.NewAdvisoryLock(sqlStore.DB(), appImageWatchLockID)
+	}
+	watcher := service.NewImageWatcher(apphost.NewPostgresAppStore(sqlStore.DB()), deploys, appImageWatchInterval)
+	return watcher.Start(context.Background(), service.NewLeadership(lock), appImageWatchTick)
+}
 
 // restoreSweepLockID is the advisory lock the restore sweeper leads on. It
 // must stay distinct from every other advisory lock id the platform takes.

@@ -56,6 +56,7 @@ const ContainersPage = lazy(() => import('./pages/ContainersPage').then(m => ({ 
 const ContainerTemplatesPage = lazy(() => import('./pages/ContainerTemplatesPage').then(m => ({ default: m.ContainerTemplatesPage })));
 const ContainerFormPage = lazy(() => import('./pages/ContainerFormPage').then(m => ({ default: m.ContainerFormPage })));
 const ContainerDetailPage = lazy(() => import('./pages/ContainerDetailPage').then(m => ({ default: m.ContainerDetailPage })));
+const ContainerPipelinePage = lazy(() => import('./pages/ContainerPipelinePage').then(m => ({ default: m.ContainerPipelinePage })));
 const SdkKeysPage = lazy(() => import('./pages/SdkKeysPage').then(m => ({ default: m.SdkKeysPage })));
 const AccessTokensPage = lazy(() => import('./pages/AccessTokensPage').then(m => ({ default: m.AccessTokensPage })));
 const StoragePage = lazy(() => import('./pages/StoragePage').then(m => ({ default: m.StoragePage })));
@@ -146,6 +147,7 @@ export default function App() {
             <Route path="containers/templates" element={<ContainerTemplatesPage />} />
             <Route path="containers/:appId" element={<ContainerDetailPage />} />
             <Route path="containers/:appId/edit" element={<ContainerFormPage />} />
+            <Route path="containers/:appId/pipeline" element={<ContainerPipelinePage />} />
             {/* Edge Functions */}
             <Route path="edge-functions" element={<EdgeFunctionsPage />} />
             {/* Storage */}

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Pencil, Rocket } from 'lucide-react';
+import { Pencil, Rocket, Workflow } from 'lucide-react';
 import {
   apiErrorMessage,
   isDeployInProgress,
@@ -188,6 +188,13 @@ function Detail({
               data-testid="edit-button"
             >
               <Pencil className="w-4 h-4" /> Edit
+            </Link>
+            <Link
+              to={`/project/${projectId}/containers/${appId}/pipeline`}
+              className={secondaryButton}
+              data-testid="pipeline-link"
+            >
+              <Workflow className="w-4 h-4" /> Pipeline
             </Link>
             <button
               type="button"

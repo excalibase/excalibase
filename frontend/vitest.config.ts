@@ -64,6 +64,7 @@ export default defineConfig({
         'src/pages/ContainersPage.tsx',
         'src/pages/ContainerFormPage.tsx',
         'src/pages/ContainerDetailPage.tsx',
+        'src/pages/ContainerPipelinePage.tsx',
         'src/pages/SdkKeysPage.tsx',
         'src/api/sdkKeys.ts',
         'src/pages/AccessTokensPage.tsx',

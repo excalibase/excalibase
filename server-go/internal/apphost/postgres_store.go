@@ -350,6 +350,51 @@ func (s *PostgresAppStore) PurgeProjectApps(projectID string) (int, error) {
 	return int(removed), nil
 }
 
+func (s *PostgresAppStore) ListAutoDeploy() ([]*App, error) {
+	rows, err := s.db.Query(`SELECT doc FROM apps WHERE doc @> '{"autoDeploy": true}' ORDER BY project_id, name`)
+	if err != nil {
+		return nil, fmt.Errorf("list auto-deploy apps: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*App, 0)
+	for rows.Next() {
+		var blob []byte
+		if err := rows.Scan(&blob); err != nil {
+			return nil, fmt.Errorf("scan app: %w", err)
+		}
+		app, err := decodeApp(blob)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, app)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresAppStore) RecordImageWatch(projectID, id string, watch ImageWatch) error {
+	if err := ValidateProjectID(projectID); err != nil {
+		return err
+	}
+	if err := ValidateID(id); err != nil {
+		return err
+	}
+	blob, err := json.Marshal(watch)
+	if err != nil {
+		return fmt.Errorf("marshal image watch: %w", err)
+	}
+	res, err := s.db.Exec(`UPDATE apps SET doc = jsonb_set(doc, '{imageWatch}', $3::jsonb) WHERE project_id = $1 AND id = $2`,
+		projectID, id, string(blob))
+	if err != nil {
+		return fmt.Errorf("record image watch: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("record image watch: %w", err)
+	} else if n == 0 {
+		return ErrAppNotFound
+	}
+	return nil
+}
+
 func decodeApp(blob []byte) (*App, error) {
 	var app App
 	if err := json.Unmarshal(blob, &app); err != nil {
