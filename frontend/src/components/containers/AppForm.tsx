@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import type { App, AppSubmission } from '../../api/apps';
 import type { TierType } from '../../types';
@@ -23,11 +24,12 @@ interface AppFormProps {
   readonly serverError?: string;
   readonly onSubmit: (submission: AppSubmission) => void;
   readonly onCancel: () => void;
+  readonly registryCredentialsHref?: string;
 }
 
 interface FieldProps {
   readonly label: string;
-  readonly hint?: string;
+  readonly hint?: React.ReactNode;
   readonly error?: string;
   readonly htmlFor?: string;
   readonly children: React.ReactNode;
@@ -43,6 +45,23 @@ function Field({ label, hint, error, htmlFor, children }: FieldProps) {
       {hint && !error && <p className="text-xs text-text-tertiary">{hint}</p>}
       {error && <p className="text-xs text-red-400">{error}</p>}
     </div>
+  );
+}
+
+function ImageHint({ registryCredentialsHref }: { readonly registryCredentialsHref?: string }) {
+  return (
+    <>
+      An image from any registry, with a tag or digest, e.g. docker.io/you/app:1.0 or
+      ghcr.io/acme/web:1.4.0. For a private registry, add its login under{' '}
+      {registryCredentialsHref ? (
+        <Link to={registryCredentialsHref} className="underline">
+          Registry credentials
+        </Link>
+      ) : (
+        'Registry credentials'
+      )}{' '}
+      first.
+    </>
   );
 }
 
@@ -185,6 +204,7 @@ export function AppForm({
   serverError,
   onSubmit,
   onCancel,
+  registryCredentialsHref,
 }: AppFormProps) {
   const [values, setValues] = useState<AppFormValues>(() => initialValues(initial));
   const [nameTouched, setNameTouched] = useState(initial !== undefined);
@@ -211,7 +231,7 @@ export function AppForm({
           label="Image"
           htmlFor="app-image"
           error={errors.image}
-          hint="A public registry image with a tag or digest, for example ghcr.io/acme/web:1.4.0."
+          hint={<ImageHint registryCredentialsHref={registryCredentialsHref} />}
         >
           <input
             id="app-image"

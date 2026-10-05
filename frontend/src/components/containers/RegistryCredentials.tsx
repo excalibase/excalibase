@@ -74,7 +74,7 @@ export function RegistryCredentials({ projectId }: { readonly projectId: string 
   const error = save.error ?? remove.error;
 
   return (
-    <section className="mt-8 space-y-3" data-testid="registry-credentials">
+    <section id="registry-credentials" className="mt-8 space-y-3" data-testid="registry-credentials">
       <div>
         <h4 className="text-sm font-semibold text-text-primary flex items-center gap-2">
           <KeyRound className="w-4 h-4" /> Private registries
