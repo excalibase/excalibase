@@ -67,6 +67,11 @@ func (c *Client) ApplyAppWorkload(ctx context.Context, namespace string, workloa
 			return err
 		}
 	}
+	return c.applyAppRoute(ctx, namespace, workload)
+}
+
+// applyAppRoute routes a public app; an internal service loses the route and certificate it had while public.
+func (c *Client) applyAppRoute(ctx context.Context, namespace string, workload *AppWorkload) error {
 	if err := c.applyAppService(ctx, namespace, workload.Service); err != nil {
 		return err
 	}
