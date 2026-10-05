@@ -67,13 +67,24 @@ func (c *Client) ApplyAppWorkload(ctx context.Context, namespace string, workloa
 			return err
 		}
 	}
+	return c.applyAppRoute(ctx, namespace, workload)
+}
+
+// applyAppRoute routes a public app; an internal service loses the route and certificate it had while public.
+func (c *Client) applyAppRoute(ctx context.Context, namespace string, workload *AppWorkload) error {
 	if err := c.applyAppService(ctx, namespace, workload.Service); err != nil {
 		return err
 	}
-	if workload.Ingress == nil {
-		return c.removeAppIngress(ctx, namespace, workload.Deployment.Name)
+	if workload.Ingress != nil {
+		return c.applyAppHostRoute(ctx, namespace, workload)
 	}
-	return c.applyAppIngress(ctx, namespace, workload.Ingress)
+	if err := c.removeAppIngress(ctx, namespace, workload.Deployment.Name); err != nil {
+		return err
+	}
+	if workload.dropHostCertificate {
+		return c.dropAppHostCertificate(ctx, namespace, workload.Deployment.Name)
+	}
+	return nil
 }
 
 // removeAppIngress takes away the route a public app had once it is deployed as an internal service.
@@ -224,6 +235,7 @@ func (c *Client) applyAppIngress(ctx context.Context, namespace string, desired 
 	}
 	updated := existing.DeepCopy()
 	updated.Labels = desired.Labels
+	updated.Annotations = withRedirectAnnotationsOf(existing.Annotations, desired.Annotations)
 	updated.Spec = desired.Spec
 	if _, err := ingresses.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update app ingress: %w", err)

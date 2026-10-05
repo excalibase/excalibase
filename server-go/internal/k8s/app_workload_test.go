@@ -786,6 +786,9 @@ func workloadYAML(t *testing.T, workload *AppWorkload) string {
 		objects = append(objects, ingress)
 	}
 	objects = append(objects, workload.IngressPolicy.Object)
+	if workload.HostCertificate != nil {
+		objects = append(objects, workload.HostCertificate.Object, workload.AcmeSolverPolicy.Object)
+	}
 	if workload.Disk != nil {
 		disk := workload.Disk.DeepCopy()
 		disk.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"}

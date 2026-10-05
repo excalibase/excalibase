@@ -9,12 +9,11 @@ import (
 func TestLoadAppRoute(t *testing.T) {
 	t.Setenv("APP_DOMAIN", "apps.example.com")
 	t.Setenv("APP_INGRESS_CLASS", "")
-	t.Setenv("APP_TLS_SECRET", "apps-wildcard-tls")
 	t.Setenv("APP_INGRESS_FROM_NAMESPACE", "haproxy-controller")
 	t.Setenv("APP_INGRESS_FROM_LABELS", "app.kubernetes.io/name=kubernetes-ingress, app.kubernetes.io/instance=edge")
 	cfg := Load()
-	if cfg.AppDomain != "apps.example.com" || cfg.AppTLSSecret != "apps-wildcard-tls" || cfg.AppIngressFromNamespace != "haproxy-controller" {
-		t.Errorf("route config = %q %q %q", cfg.AppDomain, cfg.AppTLSSecret, cfg.AppIngressFromNamespace)
+	if cfg.AppDomain != "apps.example.com" || cfg.AppIngressFromNamespace != "haproxy-controller" {
+		t.Errorf("route config = %q %q", cfg.AppDomain, cfg.AppIngressFromNamespace)
 	}
 	if cfg.AppIngressClass != "haproxy" {
 		t.Errorf("AppIngressClass default = %q, want haproxy", cfg.AppIngressClass)
@@ -56,7 +55,6 @@ func TestValidateAppHostingNeedsARoute(t *testing.T) {
 		"no ingress class":      {func(c *AppConfig) { c.AppIngressClass = "" }, "APP_INGRESS_CLASS"},
 		"no ingress namespace":  {func(c *AppConfig) { c.AppIngressFromNamespace = "" }, "APP_INGRESS_FROM_NAMESPACE"},
 		"bad ingress namespace": {func(c *AppConfig) { c.AppIngressFromNamespace = "Not_A_Namespace" }, "APP_INGRESS_FROM_NAMESPACE"},
-		"bad TLS secret name":   {func(c *AppConfig) { c.AppTLSSecret = "Bad Secret" }, "APP_TLS_SECRET"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

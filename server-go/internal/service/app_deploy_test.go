@@ -77,7 +77,7 @@ func (p fixedPlan) ProjectPlanTier(context.Context, string) (domain.TierType, er
 }
 
 var testDeployRender = k8s.AppRenderOptions{RuntimeClass: "gvisor", Route: k8s.AppRouteOptions{
-	Domain: "apps.example.com", IngressClass: "haproxy", TLSSecret: "apps-tls", IngressFromNamespace: "haproxy-controller",
+	Domain: "apps.example.com", IngressClass: "haproxy", Issuer: "apps-acme", IngressFromNamespace: "haproxy-controller",
 }}
 
 func TestDeployApp_RecordsTheAppURL(t *testing.T) {

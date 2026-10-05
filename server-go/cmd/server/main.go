@@ -1831,6 +1831,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)
 				if d.appDomainHandler != nil {
+					r.Get("/certificate", d.appDomainHandler.HostCertificate)
 					r.Route("/domains", func(r chi.Router) {
 						r.Get("/", d.appDomainHandler.List)
 						r.With(dev).Post("/", d.appDomainHandler.Add)

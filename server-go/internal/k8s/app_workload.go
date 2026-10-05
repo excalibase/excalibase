@@ -81,6 +81,12 @@ type AppWorkload struct {
 	Ingress       *networkingv1.Ingress
 	Internal      bool
 	IngressPolicy *unstructured.Unstructured
+	// HostCertificate is the hostname's certificate, with the policy letting
+	// the edge reach its HTTP-01 solver; nil without an issuer or a public route.
+	HostCertificate  *unstructured.Unstructured
+	AcmeSolverPolicy *unstructured.Unstructured
+	// dropHostCertificate removes the certificate a now internal service had while public.
+	dropHostCertificate bool
 	// Disk is the app's persistent volume claim; nil when it has no disk.
 	Disk *corev1.PersistentVolumeClaim
 }
@@ -181,6 +187,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 	return &AppWorkload{
 		Deployment: deployment, EnvSecret: envSecret, PullSecret: pullSecret, EgressPolicy: policy,
 		Service: route.service, Ingress: route.ingress, IngressPolicy: route.policy, Internal: app.Internal, Disk: disk,
+		HostCertificate: route.certificate, AcmeSolverPolicy: route.solverPolicy, dropHostCertificate: route.dropCertificate,
 	}, nil
 }
 

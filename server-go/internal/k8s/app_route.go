@@ -18,12 +18,13 @@ const (
 	appServicePortName = "http"
 )
 
-// AppRouteOptions are APP_DOMAIN, APP_INGRESS_CLASS, APP_TLS_SECRET and the ingress controller's identity.
+// AppRouteOptions are APP_DOMAIN, APP_INGRESS_CLASS, APP_DOMAIN_ISSUER and the ingress controller's identity.
 type AppRouteOptions struct {
 	Domain       string
 	IngressClass string
-	// TLSSecret is optional; empty serves HTTP only.
-	TLSSecret            string
+	// Issuer is the ACME ClusterIssuer each app's own hostname gets a
+	// certificate from; empty serves HTTP only.
+	Issuer               string
 	IngressFromNamespace string
 	// IngressFromLabels narrows the controller's namespace to its pods; empty admits the whole namespace.
 	IngressFromLabels map[string]string
@@ -31,7 +32,7 @@ type AppRouteOptions struct {
 
 // Public is the route as the API reports it.
 func (o AppRouteOptions) Public() apphost.Route {
-	return apphost.Route{Domain: o.Domain, TLS: o.TLSSecret != ""}
+	return apphost.Route{Domain: o.Domain, TLS: o.Issuer != ""}
 }
 
 func (o AppRouteOptions) validate() error {
@@ -53,9 +54,13 @@ func AppServiceName(appName string) string { return appName }
 func AppIngressPolicyName(appName string) string { return appObjectPrefix + appName + "-ingress" }
 
 type appRoute struct {
-	service *corev1.Service
-	ingress *networkingv1.Ingress
-	policy  *unstructured.Unstructured
+	service      *corev1.Service
+	ingress      *networkingv1.Ingress
+	policy       *unstructured.Unstructured
+	certificate  *unstructured.Unstructured
+	solverPolicy *unstructured.Unstructured
+	// dropCertificate: an internal service keeps no certificate it had while public.
+	dropCertificate bool
 }
 
 func buildAppRoute(namespace string, app *apphost.App, opts AppRouteOptions) (*appRoute, error) {
@@ -63,7 +68,12 @@ func buildAppRoute(namespace string, app *apphost.App, opts AppRouteOptions) (*a
 		return nil, err
 	}
 	if app.Internal {
-		return buildInternalServiceRoute(namespace, app)
+		route, err := buildInternalServiceRoute(namespace, app)
+		if err != nil {
+			return nil, err
+		}
+		route.dropCertificate = opts.Issuer != ""
+		return route, nil
 	}
 	host, err := opts.Public().Hostname(app.Name, app.ProjectID)
 	if err != nil {
@@ -73,11 +83,19 @@ func buildAppRoute(namespace string, app *apphost.App, opts AppRouteOptions) (*a
 	if err != nil {
 		return nil, err
 	}
-	return &appRoute{
+	route := &appRoute{
 		service: buildAppService(namespace, app),
 		ingress: buildAppIngress(namespace, app, host, opts),
 		policy:  policy,
-	}, nil
+	}
+	if opts.Issuer == "" {
+		return route, nil
+	}
+	route.certificate = buildAppHostCertificate(namespace, app, host, opts.Issuer)
+	if route.solverPolicy, err = buildAcmeSolverPolicy(namespace, opts); err != nil {
+		return nil, err
+	}
+	return route, nil
 }
 
 // buildInternalServiceRoute gives an internal service (EXC-525) its Service and
@@ -130,6 +148,7 @@ func appServicePorts(app *apphost.App) []corev1.ServicePort {
 	return ports
 }
 
+// buildAppIngress serves plain HTTP; serveTLS adds HTTPS once a certificate is issued.
 func buildAppIngress(namespace string, app *apphost.App, host string, opts AppRouteOptions) *networkingv1.Ingress {
 	class := opts.IngressClass
 	prefix := networkingv1.PathTypePrefix
@@ -151,9 +170,6 @@ func buildAppIngress(namespace string, app *apphost.App, host string, opts AppRo
 				}},
 			}},
 		},
-	}
-	if opts.TLSSecret != "" {
-		ingress.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{host}, SecretName: opts.TLSSecret}}
 	}
 	return ingress
 }

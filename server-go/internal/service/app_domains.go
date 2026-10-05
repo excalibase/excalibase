@@ -213,10 +213,61 @@ func (s *AppDomainService) SyncApp(ctx context.Context, namespace string, app *a
 	return s.kube.SyncAppDomains(ctx, namespace, app, hosts, s.opts)
 }
 
-// Sweep follows each routed domain's certificate, and once a day checks its
+// HostCertificateNone: the app's hostname has no certificate yet (never deployed), or none at all (internal).
+const HostCertificateNone = "none"
+
+// HostCertificateView is the app's own hostname's certificate, in a custom domain's status words.
+type HostCertificateView struct {
+	Hostname      string `json:"hostname,omitempty"`
+	Status        string `json:"status"`
+	FailureReason string `json:"failureReason,omitempty"`
+}
+
+// HostCertificate reports whether the app's own hostname is served over HTTPS yet.
+func (s *AppDomainService) HostCertificate(ctx context.Context, projectID, appID string) (*HostCertificateView, error) {
+	app, err := s.leases.lookupApp(projectID, appID)
+	if err != nil {
+		return nil, err
+	}
+	if app.Internal {
+		return &HostCertificateView{Status: HostCertificateNone}, nil
+	}
+	host, err := s.route.Hostname(app.Name, app.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	view := &HostCertificateView{Hostname: host, Status: HostCertificateNone}
+	inst, err := s.instances.FindByProjectID(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("look up project namespace: %w", err)
+	}
+	if inst == nil || inst.Namespace == "" {
+		return view, nil
+	}
+	state, err := s.kube.AppHostCertificate(ctx, inst.Namespace, app.Name)
+	switch {
+	case errors.Is(err, k8s.ErrNoCertificate):
+		return view, nil
+	case err != nil:
+		return nil, err
+	case state.Ready:
+		view.Status = apphost.DomainActive
+	case state.Failure != "":
+		view.Status, view.FailureReason = apphost.DomainIssueFailed, state.Failure
+	default:
+		view.Status = apphost.DomainIssuing
+	}
+	return view, nil
+}
+
+// Sweep serves each app hostname whose certificate was issued since its last
+// deploy, follows each routed domain's certificate, and once a day checks its
 // CNAME still names the app; after DomainDetachAfter failures in a row the
 // route is taken away.
 func (s *AppDomainService) Sweep(ctx context.Context) {
+	if err := s.kube.AttachIssuedAppHostCertificates(ctx); err != nil {
+		log.Printf("app hostname certificate sweep: %v", err)
+	}
 	domains, err := s.domains.ListRoutable()
 	if err != nil {
 		log.Printf("domain sweep: %v", err)

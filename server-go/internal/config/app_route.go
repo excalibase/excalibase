@@ -64,9 +64,6 @@ func (c AppConfig) validateAppRoute() error {
 			return fmt.Errorf("APP_DOMAIN_RESOLVER %q must be host:port: %w", c.AppDomainResolver, err)
 		}
 	}
-	if c.AppTLSSecret != "" {
-		settings = append(settings, routeSetting{"APP_TLS_SECRET", c.AppTLSSecret, validation.IsDNS1123Subdomain})
-	}
 	for _, setting := range settings {
 		if setting.value == "" {
 			return fmt.Errorf("APP_HOSTING_ENABLED needs %s", setting.env)

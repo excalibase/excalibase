@@ -21,7 +21,7 @@ import {
   plainFailureReason,
 } from '../components/containers/appCopy';
 import { DeployHistory } from '../components/containers/DeployHistory';
-import { AppDomains } from '../components/containers/AppDomains';
+import { AppDomains, HostCertificateBadge } from '../components/containers/AppDomains';
 import { useCustomDomainsEnabled } from '../hooks/useDeploymentMode';
 import { LifecycleActions } from '../components/containers/LifecycleActions';
 import { AppLogs } from '../components/containers/AppLogs';
@@ -208,7 +208,7 @@ function Detail({
         }
       />
       {app.url && (
-        <p className="mb-4 text-sm">
+        <p className="mb-4 text-sm flex flex-wrap items-center gap-2">
           <a
             href={app.url}
             target="_blank"
@@ -217,6 +217,7 @@ function Detail({
           >
             {app.url}
           </a>
+          {customDomains && <HostCertificateBadge projectId={projectId} appId={appId} />}
         </p>
       )}
       {actionError && (

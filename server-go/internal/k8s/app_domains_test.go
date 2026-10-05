@@ -37,9 +37,7 @@ func TestSyncAppDomains_RoutesEachHostWithItsOwnCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	ingress, _ = clientset.NetworkingV1().Ingresses(testNamespace).Get(ctx, name, metav1.GetOptions{})
-	if len(ingress.Spec.TLS) != 1 || ingress.Spec.TLS[0].SecretName != name+"-tls" || ingress.Spec.TLS[0].Hosts[0] != "shop.example.com" {
-		t.Fatalf("tls = %+v", ingress.Spec.TLS)
-	}
+	assertServesHTTPS(t, ingress.Spec.TLS, ingress.Annotations, "shop.example.com", name+"-tls")
 	cert, err := c.dynamicClient.Resource(CertificateGVR).Namespace(testNamespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("certificate: %v", err)

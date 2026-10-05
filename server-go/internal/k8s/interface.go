@@ -147,6 +147,8 @@ type KubeClient interface {
 	PausedAppReplicas(ctx context.Context, namespace, appID, appName string) (int, error)
 	SyncAppDomains(ctx context.Context, namespace string, app *apphost.App, hosts []string, opts AppDomainOptions) error
 	AppDomainCertificate(ctx context.Context, namespace, appName, host string) (CertificateState, error)
+	AttachIssuedAppHostCertificates(ctx context.Context) error
+	AppHostCertificate(ctx context.Context, namespace, appName string) (CertificateState, error)
 	ClusterIssuerReady(ctx context.Context, name string) error
 	SetAppPrivateNetwork(ctx context.Context, namespace string, open bool) error
 	EnsureNamespaceQuota(ctx context.Context, namespace string, quota NamespaceQuota) error

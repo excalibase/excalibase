@@ -24,6 +24,21 @@ export const useAppDomains = (projectId: string, appId: string, pollMs = 5000) =
       query.state.data?.some((d) => d.status === 'issuing') ? pollMs : false,
   });
 
+// The app's own hostname's certificate; 'none' until the app is deployed, and for an internal service.
+export interface HostCertificate {
+  hostname?: string;
+  status: Exclude<DomainStatus, 'pending' | 'detached'> | 'none';
+  failureReason?: string;
+}
+
+export const useAppHostCertificate = (projectId: string, appId: string, pollMs = 5000) =>
+  useQuery({
+    queryKey: ['apps', projectId, appId, 'certificate'] as const,
+    queryFn: async () =>
+      (await api.get<HostCertificate>(`/projects/${projectId}/apps/${appId}/certificate`)).data,
+    refetchInterval: (query) => (query.state.data?.status === 'issuing' ? pollMs : false),
+  });
+
 const useDomainMutation = <T>(
   projectId: string,
   appId: string,

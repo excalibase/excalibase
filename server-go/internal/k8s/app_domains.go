@@ -66,14 +66,12 @@ func appDomainLabels(app *apphost.App, host string) map[string]string {
 // buildAppDomainIngress serves the domain over TLS only once its certificate
 // exists: before that the edge would redirect the HTTP-01 challenge to HTTPS.
 func buildAppDomainIngress(namespace string, app *apphost.App, host string, opts AppDomainOptions, issued bool) *networkingv1.Ingress {
-	route := opts.Route
-	route.TLSSecret = ""
-	ingress := buildAppIngress(namespace, app, host, route)
+	ingress := buildAppIngress(namespace, app, host, opts.Route)
 	name := AppDomainObjectName(app.Name, host)
 	ingress.Name = name
 	ingress.Labels = appDomainLabels(app, host)
 	if issued {
-		ingress.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{host}, SecretName: name + "-tls"}}
+		serveTLS(ingress, host, name+"-tls")
 	}
 	return ingress
 }
@@ -81,11 +79,16 @@ func buildAppDomainIngress(namespace string, app *apphost.App, host string, opts
 func buildAppDomainCertificate(namespace string, app *apphost.App, host string, opts AppDomainOptions) *unstructured.Unstructured {
 	name := AppDomainObjectName(app.Name, host)
 	labels := appDomainLabels(app, host)
+	return buildCertificate(namespace, name, host, opts.Issuer, labels, labels)
+}
+
+// buildCertificate asks issuer for host's certificate, its key kept in name+"-tls" carrying secretLabels.
+func buildCertificate(namespace, name, host, issuer string, labels, secretLabels map[string]string) *unstructured.Unstructured {
 	spec := map[string]any{
 		"secretName":     name + "-tls",
 		"dnsNames":       []any{host},
-		"issuerRef":      map[string]any{"name": opts.Issuer, "kind": "ClusterIssuer", "group": CertificateGVR.Group},
-		"secretTemplate": map[string]any{"labels": stringMapAny(labels)},
+		"issuerRef":      map[string]any{"name": issuer, "kind": "ClusterIssuer", "group": CertificateGVR.Group},
+		"secretTemplate": map[string]any{"labels": stringMapAny(secretLabels)},
 	}
 	cert := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 	cert.SetAPIVersion(CertificateGVR.GroupVersion().String())
@@ -252,19 +255,23 @@ func (c *Client) AppDomainCertificate(ctx context.Context, namespace, appName, h
 	if err != nil {
 		return CertificateState{}, fmt.Errorf("read certificate: %w", err)
 	}
+	return certificateState(cert), nil
+}
+
+func certificateState(cert *unstructured.Unstructured) CertificateState {
 	conditions, _, _ := unstructured.NestedSlice(cert.Object, "status", "conditions")
 	state := CertificateState{}
 	for _, raw := range conditions {
 		condition, _ := raw.(map[string]any)
 		kind, status, reason, message := condition["type"], condition["status"], condition["reason"], condition["message"]
 		if kind == "Ready" && status == "True" {
-			return CertificateState{Ready: true}, nil
+			return CertificateState{Ready: true}
 		}
 		if kind == "Issuing" && status == "False" && reason == "Failed" {
 			state.Failure = fmt.Sprint(message)
 		}
 	}
-	return state, nil
+	return state
 }
 
 // ClusterIssuerReady refuses an issuer that is missing or not ready to issue.

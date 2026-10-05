@@ -69,6 +69,8 @@ interface Scenario {
   // What successive reads of the app show once a pause, resume or deletion
   // was accepted; 'gone' is a deleted app. Default: the operation completes.
   afterLifecycle?: Array<Partial<App> | 'gone'>;
+  // The app hostname's certificate; default: issued.
+  certificate?: { hostname?: string; status: string; failureReason?: string };
 }
 
 const RESPOND_ASYNC = { headers: { Prefer: 'respond-async' } };
@@ -103,6 +105,10 @@ function renderPage(scenario: Scenario) {
       } as never);
     if (url === '/projects/proj-1/apps/app-1/domains/')
       return Promise.resolve({ data: [] } as never);
+    if (url === '/projects/proj-1/apps/app-1/certificate')
+      return Promise.resolve({
+        data: scenario.certificate ?? { hostname: 'web-1.apps.example.com', status: 'active' },
+      } as never);
     if (url === '/projects/proj-1/apps/app-1') return readApp();
     if (url === '/projects/proj-1/apps/app-1/disk')
       return Promise.resolve({ data: diskStatus(state.app) } as never);
@@ -406,6 +412,23 @@ describe('ContainerDetailPage', () => {
     renderPage({ deploys: [] });
     expect(await screen.findByText('ready')).toBeInTheDocument();
     expect(screen.getByTestId('app-logs')).toHaveTextContent('web-1');
+  });
+
+  test("the app's URL carries its certificate's state", async () => {
+    const url = 'https://web-1.apps.example.com';
+    renderPage({ deploys: [], app: { url }, certificate: { status: 'issuing' } });
+    expect(await screen.findByTestId('host-certificate')).toHaveTextContent('Issuing certificate');
+    expect(screen.getByRole('link', { name: url })).toHaveAttribute('href', url);
+  });
+
+  test('a certificate that failed says why', async () => {
+    renderPage({
+      deploys: [],
+      app: { url: 'https://web-1.apps.example.com' },
+      certificate: { status: 'issue_failed', failureReason: 'acme: rate limited' },
+    });
+    expect(await screen.findByTestId('host-certificate')).toHaveTextContent('Certificate failed');
+    expect(screen.getByText('acme: rate limited')).toBeInTheDocument();
   });
 
   test('custom domains are offered when the server has an issuer', async () => {

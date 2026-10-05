@@ -26,7 +26,7 @@ const wantHost = "web-abc.apps.example.com"
 
 func tlsRoute() AppRouteOptions {
 	route := testRoute
-	route.TLSSecret = "apps-wildcard-tls"
+	route.Issuer = testIssuer
 	route.IngressFromLabels = map[string]string{"app.kubernetes.io/name": "kubernetes-ingress"}
 	return route
 }
@@ -71,7 +71,7 @@ func TestRenderAppIngressRoutesTheHostnameToTheService(t *testing.T) {
 		t.Errorf("ingress class = %v, want haproxy", ingress.Spec.IngressClassName)
 	}
 	if len(ingress.Spec.TLS) != 0 {
-		t.Errorf("no TLS secret configured, so no TLS section: %+v", ingress.Spec.TLS)
+		t.Errorf("no issuer configured, so no TLS section: %+v", ingress.Spec.TLS)
 	}
 	if len(ingress.Spec.Rules) != 1 || ingress.Spec.Rules[0].Host != wantHost {
 		t.Fatalf("ingress rules = %+v, want one rule for %s", ingress.Spec.Rules, wantHost)
@@ -83,14 +83,6 @@ func TestRenderAppIngressRoutesTheHostnameToTheService(t *testing.T) {
 	backend := paths[0].Backend.Service
 	if backend.Name != AppServiceName("web") || backend.Port.Number != 80 {
 		t.Errorf("backend = %+v, want the app service on 80", backend)
-	}
-}
-
-func TestRenderAppIngressReferencesTheWildcardSecret(t *testing.T) {
-	ingress := renderWithRoute(t, tlsRoute()).Ingress
-	want := []networkingv1.IngressTLS{{Hosts: []string{wantHost}, SecretName: "apps-wildcard-tls"}}
-	if !reflect.DeepEqual(ingress.Spec.TLS, want) {
-		t.Errorf("ingress TLS = %+v, want %+v", ingress.Spec.TLS, want)
 	}
 }
 
@@ -196,7 +188,7 @@ func TestAppRouteOptionsPublic(t *testing.T) {
 		t.Errorf("Public() = %+v", got)
 	}
 	if !tlsRoute().Public().TLS {
-		t.Error("a TLS secret must make the public route https")
+		t.Error("an issuer must make the public route https")
 	}
 }
 
