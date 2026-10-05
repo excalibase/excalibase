@@ -51,6 +51,7 @@ export default defineConfig({
         'src/pages/RegisterPage.tsx',
         'src/pages/LoginPage.tsx',
         'src/pages/ForgotPasswordPage.tsx',
+        'src/pages/ResetPasswordPage.tsx',
         'src/components/layout/AuthLayout.tsx',
         'src/pages/OAuthCompletePage.tsx',
         'src/components/SignInProviders.tsx',

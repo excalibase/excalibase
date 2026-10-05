@@ -165,6 +165,65 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	}
 }
 
+// An address typed in another case still reaches the account, and the mail and
+// the confirm answer name the username to sign in with.
+func TestEmailTokens_ResetIgnoresAddressCaseAndNamesTheUsername(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &capturingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+	h.runInBackground = func(f func()) { f() }
+	h.SetSessionStore(store)
+	user := &domain.User{ID: "user-fold", Username: "dev-3fa9c1", Email: "Dev@Fold.example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	h.SendReset(w, httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"dev@fold.example.com"}`)))
+	mail := sender.message()
+	token := tokenFromURL(mail.HTMLBody)
+	if token == "" {
+		t.Fatalf("no reset mail for the address in another case")
+	}
+	if len(mail.To) != 1 || mail.To[0] != user.Email {
+		t.Errorf("mail sent to %v, want the stored address %s", mail.To, user.Email)
+	}
+	if !strings.Contains(mail.TextBody, user.Username) {
+		t.Errorf("reset mail does not name the username: %s", mail.TextBody)
+	}
+
+	w = httptest.NewRecorder()
+	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
+		strings.NewReader(`{"token":"`+token+`","newPassword":"brand-new-pass"}`)))
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("ConfirmReset: %d %s", w.Code, w.Body.String())
+	}
+	if resp["username"] != user.Username {
+		t.Errorf("confirm answer username = %v, want %s", resp["username"], user.Username)
+	}
+}
+
+func TestEmailTokens_ResendVerifyIgnoresAddressCase(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &capturingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+	h.runInBackground = func(f func()) { f() }
+	user := &domain.User{ID: "user-resend-fold", Username: "resend-fold", Email: "Pat@Fold.example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	w := httptest.NewRecorder()
+	h.ResendVerify(w, httptest.NewRequest("POST", "/verify/resend", strings.NewReader(`{"email":"PAT@fold.example.com"}`)))
+	if tokenFromURL(sender.message().HTMLBody) == "" {
+		t.Fatal("no verification mail for the address in another case")
+	}
+}
+
 func TestEmailTokens_SendReset_UnknownEmailStill200(t *testing.T) {
 	store := pgtest.New(t)
 	h := NewEmailTokensHandler(store.DB(), email.NewNoopSender(), store, "https://app", "App")

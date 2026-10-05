@@ -376,6 +376,7 @@ type UserStore interface {
 	CreateUser(ctx context.Context, user *domain.User) error
 	FindUserByID(ctx context.Context, id string) (*domain.User, error)
 	FindUserByUsername(ctx context.Context, username string) (*domain.User, error)
+	// FindUserByEmail matches the address ignoring case.
 	FindUserByEmail(ctx context.Context, email string) (*domain.User, error)
 	FindAllUsers(ctx context.Context) ([]*domain.User, error)
 	DeleteUser(ctx context.Context, id string) error
@@ -396,7 +397,7 @@ type StudioIdentityStore interface {
 	SaveOAuthState(ctx context.Context, stateHash string, state domain.OAuthState, expiresAt time.Time) error
 	ConsumeOAuthState(ctx context.Context, stateHash string, now time.Time) (*domain.OAuthState, error)
 	FindUserByIdentity(ctx context.Context, provider, subject string) (*domain.User, error)
-	FindUserByEmailFold(ctx context.Context, email string) (*domain.User, error)
+	FindUserByEmail(ctx context.Context, email string) (*domain.User, error)
 	LinkStudioIdentity(ctx context.Context, provider, subject, userID, email string) error
 }
 

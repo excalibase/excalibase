@@ -18,10 +18,11 @@ import { mockVaultGuardReady, mockInstances } from './helpers';
  * server's cookie behaviour is covered by handler unit tests separately.
  */
 
-async function mockLogin(page: Page): Promise<{ logoutCalls: number }> {
-  const state = { logoutCalls: 0 };
-  await page.route('**/api/auth/login', (route) =>
-    route.fulfill({
+async function mockLogin(page: Page): Promise<{ logoutCalls: number; loginBodies: unknown[] }> {
+  const state = { logoutCalls: 0, loginBodies: [] as unknown[] };
+  await page.route('**/api/auth/login', (route) => {
+    state.loginBodies.push(route.request().postDataJSON());
+    return route.fulfill({
       status: 200,
       headers: {
         // Production sets HttpOnly + Secure + SameSite=Strict. Strict isn't
@@ -36,8 +37,8 @@ async function mockLogin(page: Page): Promise<{ logoutCalls: number }> {
         expiresAt: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),
         user: { id: 'u1', username: 'admin', email: 'a@b.c', role: 'platform_admin' },
       }),
-    })
-  );
+    });
+  });
   await page.route('**/api/auth/logout', (route) => {
     state.logoutCalls += 1;
     return route.fulfill({
@@ -60,7 +61,7 @@ test.describe('session cookie auth flow', () => {
     await mockInstances(page);
 
     await page.goto('/login');
-    await page.fill('input[name="username"], input[placeholder*="sername" i]', 'admin');
+    await page.getByLabel('Username or e-mail').fill('admin');
     await page.fill('input[type="password"]', 'hunter2');
     await page.click('button[type="submit"]');
 
@@ -74,6 +75,20 @@ test.describe('session cookie auth flow', () => {
     }));
     expect(stored.all).not.toContain('cookie-pat-abc');
     expect(stored.user && JSON.parse(stored.user).role).toBe('platform_admin');
+  });
+
+  test('signing in with an e-mail address sends it in the one identifier field', async ({ page }) => {
+    await mockVaultGuardReady(page);
+    const loginState = await mockLogin(page);
+    await mockInstances(page);
+
+    await page.goto('/login');
+    await page.getByLabel('Username or e-mail').fill('A@b.c');
+    await page.fill('input[type="password"]', 'hunter2');
+    await page.click('button[type="submit"]');
+    await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 5_000 });
+
+    expect(loginState.loginBodies).toEqual([{ username: 'A@b.c', password: 'hunter2' }]);
   });
 
   test('post-login the studio fires authenticated API calls', async ({ page }) => {
@@ -98,7 +113,7 @@ test.describe('session cookie auth flow', () => {
     });
 
     await page.goto('/login');
-    await page.fill('input[name="username"], input[placeholder*="sername" i]', 'admin');
+    await page.getByLabel('Username or e-mail').fill('admin');
     await page.fill('input[type="password"]', 'hunter2');
     await page.click('button[type="submit"]');
     await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 5_000 });
@@ -112,7 +127,7 @@ test.describe('session cookie auth flow', () => {
     await mockInstances(page);
 
     await page.goto('/login');
-    await page.fill('input[name="username"], input[placeholder*="sername" i]', 'admin');
+    await page.getByLabel('Username or e-mail').fill('admin');
     await page.fill('input[type="password"]', 'hunter2');
     await page.click('button[type="submit"]');
     await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 5_000 });

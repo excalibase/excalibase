@@ -86,7 +86,7 @@ describe('invite link flow', () => {
     });
     renderAt('/login?invite=tok123');
 
-    await u.type(screen.getByLabelText('Username'), 'carol');
+    await u.type(screen.getByLabelText('Username or e-mail'), 'carol');
     await u.type(screen.getByLabelText('Password'), TEST_PASSWORD_PLACEHOLDER);
     await u.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -102,7 +102,7 @@ describe('invite link flow', () => {
     });
     renderAt('/login?invite=spent');
 
-    await u.type(screen.getByLabelText('Username'), 'carol');
+    await u.type(screen.getByLabelText('Username or e-mail'), 'carol');
     await u.type(screen.getByLabelText('Password'), TEST_PASSWORD_PLACEHOLDER);
     await u.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -112,7 +112,7 @@ describe('invite link flow', () => {
   test('plain sign-in accepts nothing', async () => {
     const u = userEvent.setup();
     renderAt('/login');
-    await u.type(screen.getByLabelText('Username'), 'carol');
+    await u.type(screen.getByLabelText('Username or e-mail'), 'carol');
     await u.type(screen.getByLabelText('Password'), TEST_PASSWORD_PLACEHOLDER);
     await u.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -132,7 +132,7 @@ describe('sign-in and registration errors', () => {
     const u = userEvent.setup();
     const { unmount } = renderAt('/login');
     await u.click(screen.getByRole('button', { name: /sign in/i }));
-    expect(screen.getByText('Username and password are required')).toBeInTheDocument();
+    expect(screen.getByText('Username or e-mail and password are required')).toBeInTheDocument();
     unmount();
 
     renderAt('/register');
@@ -142,14 +142,14 @@ describe('sign-in and registration errors', () => {
   });
 
   test.each([
-    [401, undefined, 'Invalid username or password'],
+    [401, undefined, 'Invalid username, e-mail or password'],
     [500, 'boom', 'boom'],
     [500, undefined, 'Login failed. Please try again.'],
   ])('sign-in failure %i reports %s', async (status, error, shown) => {
     const u = userEvent.setup();
     vi.mocked(api.post).mockRejectedValue({ response: { status, data: error ? { error } : {} } });
     renderAt('/login?invite=tok');
-    await u.type(screen.getByLabelText('Username'), 'carol');
+    await u.type(screen.getByLabelText('Username or e-mail'), 'carol');
     await u.type(screen.getByLabelText('Password'), TEST_PASSWORD_PLACEHOLDER);
     await u.click(screen.getByRole('button', { name: /sign in/i }));
     expect(await screen.findByText(shown)).toBeInTheDocument();

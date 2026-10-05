@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -274,6 +275,20 @@ func (h *AuthHandler) issueRegistrationToken(w http.ResponseWriter, r *http.Requ
 // "Create token" UI which sets ExpiresAt=nil.
 const sessionTokenTTL = 12 * time.Hour
 
+// checkPassword is swapped in tests to count password checks.
+var checkPassword = auth.CheckPassword
+
+// dummyPasswordHash is checked when no account matches, so an unknown
+// identifier costs the same hash as a wrong password.
+var dummyPasswordHash = sync.OnceValue(func() string {
+	hash, err := auth.HashPassword(auth.GenerateToken())
+	if err != nil {
+		log.Printf("ERROR: dummy password hash: %v", err)
+	}
+	return hash
+})
+
+// Login signs in with a username or an e-mail address in the username field.
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
@@ -284,23 +299,36 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Counted before the password is checked and for unknown names alike, so
-	// the lock neither leaks which accounts exist nor races concurrent guesses.
-	if !h.loginGuard.Attempt(req.Username) {
+	user, err := h.findLoginUser(r.Context(), req.Username)
+	if err != nil {
+		log.Printf("ERROR: sign-in lookup: %v", err)
+		httpError(w, "sign-in failed", http.StatusInternalServerError)
+		return
+	}
+	// One budget per account whichever identifier names it; unknown names
+	// are counted too, so the lock neither leaks which accounts exist nor
+	// races concurrent guesses.
+	guardKey := "name:" + req.Username
+	if user != nil {
+		guardKey = "user:" + user.ID
+	}
+	if !h.loginGuard.Attempt(guardKey) {
 		w.Header().Set("Retry-After", strconv.Itoa(int(defaultLoginWindow.Seconds())))
 		httpError(w, "too many failed sign-in attempts; try again later", http.StatusTooManyRequests)
 		return
 	}
-	user, _ := h.userStore.FindUserByUsername(r.Context(), req.Username)
 	// A service principal has no password and must never hold a session: its
-	// only credential is a capability token minted by a platform admin. The
-	// refusal is indistinguishable from a wrong password so the login form
-	// does not confirm which names are service identities.
-	if user == nil || user.IsService() || !auth.CheckPassword(req.Password, user.PasswordHash) {
+	// only credential is a capability token minted by a platform admin. Every
+	// refusal hashes once and reads the same, so the form confirms nothing.
+	hash := dummyPasswordHash()
+	if user != nil && !user.IsService() {
+		hash = user.PasswordHash
+	}
+	if !checkPassword(req.Password, hash) || user == nil || user.IsService() {
 		httpError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	h.loginGuard.Succeeded(req.Username)
+	h.loginGuard.Succeeded(guardKey)
 	if user.EmailVerifiedAt == nil {
 		writeEmailNotVerified(w)
 		return
@@ -320,6 +348,32 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		"expiresAt": expiry,
 		"user":      user,
 	})
+}
+
+// findLoginUser resolves a sign-in identifier. One with "@" is an address,
+// matched ignoring case; a username that itself holds "@" still matches when
+// no address does. Both lookups always run, so the path is the same for every
+// identifier of that shape.
+func (h *AuthHandler) findLoginUser(ctx context.Context, identifier string) (*domain.User, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return nil, nil
+	}
+	if !strings.Contains(identifier, "@") {
+		return h.userStore.FindUserByUsername(ctx, identifier)
+	}
+	byEmail, err := h.userStore.FindUserByEmail(ctx, identifier)
+	if err != nil {
+		return nil, err
+	}
+	byName, err := h.userStore.FindUserByUsername(ctx, identifier)
+	if err != nil {
+		return nil, err
+	}
+	if byEmail != nil {
+		return byEmail, nil
+	}
+	return byName, nil
 }
 
 // startSession issues a session-scope PAT and sets it as the session cookie.

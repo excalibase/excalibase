@@ -214,7 +214,7 @@ func (s *Store) GetProjectMember(ctx context.Context, projectID, userID string) 
 // --- Pending Invites ---
 
 // CreatePendingInvite files the invite, replacing any earlier one for the same
-// address in the org: re-inviting issues a new link and the old one stops working.
+// address in the org, in any case: re-inviting issues a new link and the old one stops working.
 func (s *Store) CreatePendingInvite(ctx context.Context, invite *domain.PendingInvite) error {
 	if invite.TokenHash == "" || invite.ExpiresAt == nil {
 		return errors.New("pending invite needs a token hash and an expiry")
@@ -222,8 +222,8 @@ func (s *Store) CreatePendingInvite(ctx context.Context, invite *domain.PendingI
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO pending_invites (org_id, email, role, invited_by, token_hash, expires_at)
 		 VALUES ($1, $2, $3, $4, $5, $6)
-		 ON CONFLICT (org_id, email) DO UPDATE SET
-		   role = EXCLUDED.role, invited_by = EXCLUDED.invited_by,
+		 ON CONFLICT (org_id, lower(email)) DO UPDATE SET
+		   email = EXCLUDED.email, role = EXCLUDED.role, invited_by = EXCLUDED.invited_by,
 		   token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at,
 		   created_at = NOW()`,
 		invite.OrgID, invite.Email, invite.Role, invite.InvitedBy, invite.TokenHash, invite.ExpiresAt.Time)
