@@ -44,7 +44,7 @@ func projectTools() []entry {
 
 func listProjects(ctx context.Context, c *call, _ noArgs) (any, error) {
 	var projects []projectSummary
-	if err := c.get(ctx, "/api/provision/", nil, &projects); err != nil {
+	if err := c.get(ctx, provisionAPI, nil, &projects); err != nil {
 		return nil, err
 	}
 	visible := make([]projectSummary, 0, len(projects))
@@ -69,7 +69,7 @@ func getProjectInfo(ctx context.Context, c *call, in projectArg) (any, error) {
 		ProjectName string `json:"projectName"`
 		OrgSlug     string `json:"orgSlug"`
 	}
-	if err := c.get(ctx, "/api/projects/"+projectID+"/info/", nil, &info); err != nil {
+	if err := c.get(ctx, projectsAPI+projectID+"/info/", nil, &info); err != nil {
 		return nil, err
 	}
 	out := map[string]any{
@@ -98,7 +98,7 @@ func publishableKeys(ctx context.Context, c *call, projectID string) ([]sdkKey, 
 	var listed struct {
 		Keys []sdkKey `json:"keys"`
 	}
-	if err := c.get(ctx, "/api/projects/"+projectID+"/sdk-keys/", nil, &listed); err != nil {
+	if err := c.get(ctx, projectsAPI+projectID+"/sdk-keys/", nil, &listed); err != nil {
 		return []sdkKey{}, err
 	}
 	keys := make([]sdkKey, 0, len(listed.Keys))
@@ -156,7 +156,7 @@ func createPublishableKey(ctx context.Context, c *call, in createKeyArgs) (any, 
 	}
 	var created map[string]any
 	body := map[string]string{"keyType": "publishable", "name": name}
-	if err := c.send(ctx, http.MethodPost, "/api/projects/"+projectID+"/sdk-keys/", nil, body, &created); err != nil {
+	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+"/sdk-keys/", nil, body, &created); err != nil {
 		return nil, err
 	}
 	return map[string]any{"key": created, "note": "Save the plaintext now; it is not shown again."}, nil

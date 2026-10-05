@@ -65,7 +65,7 @@ func appPath(projectID, appID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "/api/projects/" + projectID + "/apps/" + app, nil
+	return projectsAPI + projectID + "/apps/" + app, nil
 }
 
 func listApps(ctx context.Context, c *call, in projectArg) (any, error) {
@@ -74,7 +74,7 @@ func listApps(ctx context.Context, c *call, in projectArg) (any, error) {
 		return nil, err
 	}
 	apps := []appView{}
-	if err := c.get(ctx, "/api/projects/"+projectID+"/apps/", nil, &apps); err != nil {
+	if err := c.get(ctx, projectsAPI+projectID+"/apps/", nil, &apps); err != nil {
 		return nil, err
 	}
 	return map[string]any{"apps": apps}, nil
@@ -159,7 +159,7 @@ func getLogs(ctx context.Context, c *call, in logArgs) (any, error) {
 func logRoute(projectID string, in logArgs, lines int) (string, url.Values, error) {
 	switch in.Source {
 	case "database":
-		return "/api/provision/" + projectID + "/logs", url.Values{"lines": {strconv.Itoa(lines)}}, nil
+		return provisionAPI + projectID + "/logs", url.Values{"lines": {strconv.Itoa(lines)}}, nil
 	case "app":
 		path, err := appPath(projectID, in.AppID)
 		query := url.Values{"tail": {strconv.Itoa(lines)}}
@@ -173,7 +173,7 @@ func logRoute(projectID string, in logArgs, lines int) (string, url.Values, erro
 		if in.Since != "" {
 			query = url.Values{"since": {in.Since}}
 		}
-		return "/api/projects/" + projectID + "/functions/" + function + "/logs", query, err
+		return projectsAPI + projectID + "/functions/" + function + "/logs", query, err
 	}
 	return "", nil, fmt.Errorf("source must be database, app or function")
 }

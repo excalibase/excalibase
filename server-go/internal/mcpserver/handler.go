@@ -32,15 +32,15 @@ type Settings struct {
 	StudioURL string
 }
 
-// AuditLog records one entry per tool call.
-type AuditLog interface {
+// AuditLogger records one entry per tool call.
+type AuditLogger interface {
 	LogAudit(ctx context.Context, entry *domain.AuditEntry) error
 }
 
 // env is what every tool call shares.
 type env struct {
 	router   http.Handler
-	audit    AuditLog
+	audit    AuditLogger
 	settings Settings
 }
 
@@ -53,7 +53,7 @@ type Handler struct {
 }
 
 // NewHandler serves MCP over router, the same router Studio calls.
-func NewHandler(router http.Handler, audit AuditLog, settings Settings) *Handler {
+func NewHandler(router http.Handler, audit AuditLogger, settings Settings) *Handler {
 	h := &Handler{env: &env{router: router, audit: audit, settings: settings}}
 	h.streamable = mcp.NewStreamableHTTPHandler(h.serverFor, &mcp.StreamableHTTPOptions{
 		Stateless:    true,

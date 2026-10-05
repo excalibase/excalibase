@@ -53,7 +53,7 @@ func listFunctions(ctx context.Context, c *call, in projectArg) (any, error) {
 		return nil, err
 	}
 	functions := []functionView{}
-	if err := c.get(ctx, "/api/projects/"+projectID+"/functions/", nil, &functions); err != nil {
+	if err := c.get(ctx, projectsAPI+projectID+"/functions/", nil, &functions); err != nil {
 		return nil, err
 	}
 	return map[string]any{
@@ -79,7 +79,7 @@ func deployFunction(ctx context.Context, c *call, in deployFunctionArgs) (any, e
 		body["verifyJwt"] = *in.VerifyJWT
 	}
 	var deployed functionView
-	if err := c.send(ctx, http.MethodPost, "/api/projects/"+projectID+"/functions/", nil, body, &deployed); err != nil {
+	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+"/functions/", nil, body, &deployed); err != nil {
 		return nil, err
 	}
 	return map[string]any{"function": deployed}, nil
@@ -94,7 +94,7 @@ func setFunctionSecret(ctx context.Context, c *call, in functionSecretArgs) (any
 		return nil, fmt.Errorf("key is required")
 	}
 	body := map[string]string{"key": in.Key, "value": in.Value}
-	if err := c.send(ctx, http.MethodPost, "/api/projects/"+projectID+"/functions/secrets", nil, body, nil); err != nil {
+	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+"/functions/secrets", nil, body, nil); err != nil {
 		return nil, err
 	}
 	return map[string]any{"key": in.Key, "set": true}, nil

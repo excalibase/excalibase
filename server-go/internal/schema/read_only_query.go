@@ -58,7 +58,8 @@ func (i *Introspector) readOnly(ctx context.Context, conn *sql.Conn, query strin
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("begin tx: %w", err).Error()}
 	}
-	defer rollback(tx)
+	// Always rolled back: nothing a read-only call runs is ever committed.
+	defer tx.Rollback()
 	timeout := fmt.Sprintf("SET LOCAL statement_timeout = %d", i.statementTimeout.Milliseconds())
 	if _, err := tx.ExecContext(ctx, timeout); err != nil {
 		return QueryResult{Error: fmt.Errorf("set timeout: %w", err).Error()}
@@ -73,12 +74,6 @@ func (i *Introspector) readOnly(ctx context.Context, conn *sql.Conn, query strin
 		return QueryResult{Error: err.Error()}
 	}
 	return readResult(rows)
-}
-
-func rollback(tx *sql.Tx) {
-	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
-		log.Printf("read-only query: rollback: %v", err)
-	}
 }
 
 // discard closes the connection instead of returning it to the pool.

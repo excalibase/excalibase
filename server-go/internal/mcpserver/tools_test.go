@@ -94,7 +94,7 @@ func readOnlyCaller() Caller {
 }
 
 // session connects an in-memory MCP client to the server a caller gets.
-func session(t *testing.T, routes http.Handler, audit AuditLog, caller Caller) *mcp.ClientSession {
+func session(t *testing.T, routes http.Handler, audit AuditLogger, caller Caller) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
 	server := newServer(&env{router: routes, audit: audit, settings: testSettings}, caller)

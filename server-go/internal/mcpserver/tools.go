@@ -59,6 +59,17 @@ func tool[In any](name, description string, level access, run func(context.Conte
 	}}
 }
 
+// The route trees tools call; a project id follows each.
+const (
+	projectsAPI  = "/api/projects/"
+	provisionAPI = "/api/provision/"
+	schemaAPI    = "/api/schema/"
+)
+
+func tablePath(projectID, table string) string {
+	return schemaAPI + projectID + "/tables/" + table
+}
+
 // catalogue is every tool the endpoint offers.
 func catalogue() []entry {
 	tools := make([]entry, 0, 24)

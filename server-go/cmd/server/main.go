@@ -808,7 +808,7 @@ type handlerDeps struct {
 	// so a stolen session cannot mint credentials in bulk.
 	rlTokenCreate func(http.Handler) http.Handler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
-	mcpAudit mcpserver.AuditLog
+	mcpAudit mcpserver.AuditLogger
 	// activity marks a project as seen on every successful project-scoped
 	// call (EXC-279). Mounted after the access guards so rejected calls never
 	// count.

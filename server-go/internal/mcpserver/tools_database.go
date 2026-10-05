@@ -51,7 +51,7 @@ func executeSQL(ctx context.Context, c *call, in sqlArgs) (any, error) {
 		return nil, err
 	}
 	var result schema.QueryResult
-	if err := c.send(ctx, http.MethodPost, "/api/schema/"+projectID+"/query", nil, map[string]string{"query": in.Query}, &result); err != nil {
+	if err := c.send(ctx, http.MethodPost, schemaAPI+projectID+"/query", nil, map[string]string{"query": in.Query}, &result); err != nil {
 		return nil, err
 	}
 	return queryOutput(result)
@@ -66,7 +66,7 @@ func executeReadOnlySQL(ctx context.Context, c *call, in sqlArgs) (any, error) {
 		return nil, fmt.Errorf("read-only SQL is limited to %d bytes", schema.MaxReadOnlySQL)
 	}
 	var result schema.QueryResult
-	if err := c.get(ctx, "/api/schema/"+projectID+"/query", url.Values{"sql": {in.Query}}, &result); err != nil {
+	if err := c.get(ctx, schemaAPI+projectID+"/query", url.Values{"sql": {in.Query}}, &result); err != nil {
 		return nil, err
 	}
 	return queryOutput(result)
@@ -92,7 +92,7 @@ func listMigrations(ctx context.Context, c *call, in projectArg) (any, error) {
 		return nil, err
 	}
 	var migrations []domain.MigrationRecord
-	if err := c.get(ctx, "/api/provision/"+projectID+"/migrations/", nil, &migrations); err != nil {
+	if err := c.get(ctx, provisionAPI+projectID+"/migrations/", nil, &migrations); err != nil {
 		return nil, err
 	}
 	if migrations == nil {
@@ -111,7 +111,7 @@ func applyMigration(ctx context.Context, c *call, in migrationArgs) (any, error)
 	}
 	request := domain.MigrationRequest{Version: in.Version, Name: in.Name, Description: in.Description, SQL: in.SQL}
 	var record domain.MigrationRecord
-	if err := c.send(ctx, http.MethodPost, "/api/provision/"+projectID+"/migrations/", nil, request, &record); err != nil {
+	if err := c.send(ctx, http.MethodPost, provisionAPI+projectID+"/migrations/", nil, request, &record); err != nil {
 		return nil, err
 	}
 	return map[string]any{"migration": record}, nil
@@ -123,7 +123,7 @@ func listPermissions(ctx context.Context, c *call, in projectArg) (any, error) {
 		return nil, err
 	}
 	var document json.RawMessage
-	if err := c.get(ctx, "/api/provision/"+projectID+"/permissions/", nil, &document); err != nil {
+	if err := c.get(ctx, provisionAPI+projectID+"/permissions/", nil, &document); err != nil {
 		return nil, err
 	}
 	return map[string]any{"permissions": document}, nil
@@ -167,5 +167,5 @@ func permissionPath(projectID string, in permissionArgs) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "/api/provision/" + projectID + "/permissions/tables/" + table + "/roles/" + role + "/" + operation, nil
+	return provisionAPI + projectID + "/permissions/tables/" + table + "/roles/" + role + "/" + operation, nil
 }

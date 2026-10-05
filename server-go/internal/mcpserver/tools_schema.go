@@ -51,7 +51,7 @@ func listTables(ctx context.Context, c *call, in schemaArgs) (any, error) {
 		return nil, err
 	}
 	var tables []schema.TableInfo
-	if err := c.get(ctx, "/api/schema/"+projectID+"/tables", in.query(), &tables); err != nil {
+	if err := c.get(ctx, schemaAPI+projectID+"/tables", in.query(), &tables); err != nil {
 		return nil, err
 	}
 	return map[string]any{"schema": in.schemaName(), "tables": tables}, nil
@@ -66,13 +66,13 @@ func describeTable(ctx context.Context, c *call, in tableArgs) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := "/api/schema/" + projectID
+	base := schemaAPI + projectID
 	var columns []schema.ColumnInfo
-	if err := c.get(ctx, base+"/tables/"+table+"/columns", in.query(), &columns); err != nil {
+	if err := c.get(ctx, tablePath(projectID, table)+"/columns", in.query(), &columns); err != nil {
 		return nil, err
 	}
 	var indexes []schema.IndexInfo
-	if err := c.get(ctx, base+"/tables/"+table+"/indexes", in.query(), &indexes); err != nil {
+	if err := c.get(ctx, tablePath(projectID, table)+"/indexes", in.query(), &indexes); err != nil {
 		return nil, err
 	}
 	var relationships []schema.RelationshipInfo
@@ -109,7 +109,7 @@ type tableColumns struct {
 // readTables lists a schema's tables and reads each one's columns.
 func readTables(ctx context.Context, c *call, projectID string, in schemaArgs, beforeColumns func() error) ([]tableColumns, error) {
 	var tables []schema.TableInfo
-	if err := c.get(ctx, "/api/schema/"+projectID+"/tables", in.query(), &tables); err != nil {
+	if err := c.get(ctx, schemaAPI+projectID+"/tables", in.query(), &tables); err != nil {
 		return nil, err
 	}
 	if len(tables) > maxTypedTables {
@@ -127,7 +127,7 @@ func readTables(ctx context.Context, c *call, projectID string, in schemaArgs, b
 			return nil, err
 		}
 		var columns []schema.ColumnInfo
-		if err := c.get(ctx, "/api/schema/"+projectID+"/tables/"+name+"/columns", in.query(), &columns); err != nil {
+		if err := c.get(ctx, tablePath(projectID, name)+"/columns", in.query(), &columns); err != nil {
 			return nil, err
 		}
 		out = append(out, tableColumns{Name: table.Name, Type: table.Type, Columns: columns})
@@ -142,7 +142,7 @@ func getGraphQLSchema(ctx context.Context, c *call, in schemaArgs) (any, error) 
 	}
 	var relationships []schema.RelationshipInfo
 	tables, err := readTables(ctx, c, projectID, in, func() error {
-		return c.get(ctx, "/api/schema/"+projectID+"/relationships", in.query(), &relationships)
+		return c.get(ctx, schemaAPI+projectID+"/relationships", in.query(), &relationships)
 	})
 	if err != nil {
 		return nil, err
