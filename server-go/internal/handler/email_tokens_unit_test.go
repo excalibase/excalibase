@@ -88,6 +88,24 @@ func TestEmailTokens_ConfirmReset_RequiresToken(t *testing.T) {
 	}
 }
 
+// A reset must not set a password that registration would refuse; the check
+// runs before the link is looked up, so a refused attempt leaves it usable.
+func TestEmailTokens_ConfirmReset_RefusesAWeakPassword(t *testing.T) {
+	h := NewEmailTokensHandler(nil, nil, nil, "https://app", "App")
+	for _, weak := range []string{"short1A", "brand-new-pass", "ALLUPPER123", "NoDigitsHere"} {
+		req := httptest.NewRequest("POST", "/reset/confirm",
+			strings.NewReader(`{"token":"tok","newPassword":"`+weak+`"}`))
+		w := httptest.NewRecorder()
+		h.ConfirmReset(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%q → 400, got %d", weak, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "password must") {
+			t.Errorf("%q: body should name the rule, got %s", weak, w.Body.String())
+		}
+	}
+}
+
 // EXC-418: /verify/send used to sit outside RequireAuth, so the token's scopes
 // never applied and a read-only credential could make the platform send mail.
 func TestEmailTokens_VerifySendMountRequiresAuth(t *testing.T) {

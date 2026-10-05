@@ -192,11 +192,23 @@ test.describe('Registration', () => {
     await page.getByPlaceholder('johndoe').fill('testuser');
     await page.getByPlaceholder('john@company.com').fill('test@test.com');
     await page.getByPlaceholder('Choose a password').fill('Test123!');
+    await page.getByLabel('Confirm password').fill('Test123!');
     await page.getByRole('button', { name: 'Create Account' }).click();
 
     await expect(page.getByTestId('check-email')).toContainText('test@test.com');
     await expect(page).toHaveURL(/\/register$/);
     expect(await page.evaluate(() => localStorage.getItem('auth_user'))).toBeNull();
+  });
+
+  test('register refuses a mistyped confirmation', async ({ page }) => {
+    await page.goto('/register');
+    await page.getByPlaceholder('Choose a password').fill('Test123!');
+    await page.getByLabel('Confirm password').fill('Test123?');
+
+    await expect(page.getByText("Passwords don't match")).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create Account' })).toBeDisabled();
+    await page.getByRole('button', { name: 'Show passwords' }).click();
+    await expect(page.getByLabel('Confirm password')).toHaveAttribute('type', 'text');
   });
 
   test('register shows error on duplicate', async ({ page }) => {
@@ -210,7 +222,8 @@ test.describe('Registration', () => {
     await page.goto('/register');
     await page.getByPlaceholder('johndoe').fill('dup');
     await page.getByPlaceholder('john@company.com').fill('dup@test.com');
-    await page.getByPlaceholder('Choose a password').fill('pass');
+    await page.getByPlaceholder('Choose a password').fill('Dup12345');
+    await page.getByLabel('Confirm password').fill('Dup12345');
     await page.getByRole('button', { name: 'Create Account' }).click();
 
     await expect(page.getByText('email already registered')).toBeVisible();

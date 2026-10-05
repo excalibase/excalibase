@@ -45,6 +45,7 @@ describe('invite link flow', () => {
     await u.type(screen.getByLabelText('Username'), 'carol');
     await u.type(screen.getByLabelText('Email'), 'carol@x.test');
     await u.type(screen.getByLabelText('Password'), TEST_PASSWORD_PLACEHOLDER);
+    await u.type(screen.getByLabelText('Confirm password'), TEST_PASSWORD_PLACEHOLDER);
     await u.click(screen.getByRole('button', { name: /create account/i }));
 
     await waitFor(() => expect(api.post).toHaveBeenCalledWith('/auth/register', {
@@ -65,6 +66,7 @@ describe('invite link flow', () => {
     await u.type(screen.getByLabelText('Username'), 'dave');
     await u.type(screen.getByLabelText('Email'), 'dave@x.test');
     await u.type(screen.getByLabelText('Password'), TEST_PASSWORD_PLACEHOLDER);
+    await u.type(screen.getByLabelText('Confirm password'), TEST_PASSWORD_PLACEHOLDER);
     await u.click(screen.getByRole('button', { name: /create account/i }));
 
     await waitFor(() => expect(api.post).toHaveBeenCalled());
@@ -136,9 +138,29 @@ describe('sign-in and registration errors', () => {
     unmount();
 
     renderAt('/register');
+    expect(screen.getByRole('button', { name: /create account/i })).toBeDisabled();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  test('a blank name with a confirmed password is refused without a request', async () => {
+    const u = userEvent.setup();
+    renderAt('/register');
+    await u.type(screen.getByLabelText('Password'), TEST_PASSWORD_PLACEHOLDER);
+    await u.type(screen.getByLabelText('Confirm password'), TEST_PASSWORD_PLACEHOLDER);
     await u.click(screen.getByRole('button', { name: /create account/i }));
     expect(screen.getByText('All fields are required')).toBeInTheDocument();
     expect(api.post).not.toHaveBeenCalled();
+  });
+
+  test('a mistyped confirmation blocks sign-up and says so', async () => {
+    const u = userEvent.setup();
+    renderAt('/register');
+    await u.type(screen.getByLabelText('Username'), 'carol');
+    await u.type(screen.getByLabelText('Email'), 'carol@x.test');
+    await u.type(screen.getByLabelText('Password'), TEST_PASSWORD_PLACEHOLDER);
+    await u.type(screen.getByLabelText('Confirm password'), `${TEST_PASSWORD_PLACEHOLDER}x`);
+    expect(screen.getByText("Passwords don't match")).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /create account/i })).toBeDisabled();
   });
 
   test.each([
@@ -168,6 +190,7 @@ describe('sign-in and registration errors', () => {
     await u.type(screen.getByLabelText('Username'), 'carol');
     await u.type(screen.getByLabelText('Email'), 'carol@x.test');
     await u.type(screen.getByLabelText('Password'), TEST_PASSWORD_PLACEHOLDER);
+    await u.type(screen.getByLabelText('Confirm password'), TEST_PASSWORD_PLACEHOLDER);
     await u.click(screen.getByRole('button', { name: /create account/i }));
     expect(await screen.findByText(shown)).toBeInTheDocument();
   });

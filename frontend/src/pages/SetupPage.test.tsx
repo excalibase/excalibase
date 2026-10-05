@@ -188,6 +188,7 @@ describe('SetupPage', () => {
     await user.type(screen.getByTestId('admin-username'), 'founder');
     await user.type(screen.getByTestId('admin-email'), 'founder@example.com');
     await user.type(screen.getByTestId('admin-password'), TEST_PASSWORD_PLACEHOLDER);
+    await user.type(screen.getByTestId('admin-password-confirm'), TEST_PASSWORD_PLACEHOLDER);
     await user.type(screen.getByTestId('admin-setup-token'), 'the-one-time-token');
 
     const submit = screen.getByTestId('admin-submit');
@@ -211,6 +212,27 @@ describe('SetupPage', () => {
       expect(JSON.stringify(localStorage)).not.toContain('pat-bootstrap');
     });
     expect(await screen.findByTestId('dashboard')).toBeInTheDocument();
+  });
+
+  test('admin form stays disabled while the confirmation differs', async () => {
+    const user = userEvent.setup();
+    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+
+    await screen.findByTestId('vault-setup-admin');
+    await user.type(screen.getByTestId('admin-username'), 'founder');
+    await user.type(screen.getByTestId('admin-email'), 'founder@example.com');
+    await user.type(screen.getByTestId('admin-password'), TEST_PASSWORD_PLACEHOLDER);
+    await user.type(screen.getByTestId('admin-password-confirm'), `${TEST_PASSWORD_PLACEHOLDER}x`);
+    await user.type(screen.getByTestId('admin-setup-token'), 'the-one-time-token');
+
+    expect(screen.getByText("Passwords don't match")).toBeInTheDocument();
+    expect(screen.getByTestId('admin-submit')).toBeDisabled();
+  });
+
+  test('admin form starts disabled before any password is chosen', async () => {
+    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    await screen.findByTestId('vault-setup-admin');
+    expect(screen.getByTestId('admin-submit')).toBeDisabled();
   });
 
   test('admin form rejects too-short username via inline error', async () => {

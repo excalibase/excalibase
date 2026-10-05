@@ -5,17 +5,9 @@ import { Lock, Loader2, Copy, Check, AlertTriangle, KeyRound, UserPlus } from 'l
 import { useVaultStatus, useInitVault, useUnsealVault } from '../hooks/useVault';
 import { useSetupStatus, useRegisterAdmin } from '../hooks/useSetup';
 import { useAuthStore } from '../stores/auth-store';
+import { NewPasswordFields, newPasswordReady, passwordProblem } from '../components/auth/NewPasswordFields';
 
 type Step = 'init' | 'shares' | 'unseal' | 'admin' | 'done';
-
-// validateAdminPassword replaces the nested ternary used inside the form's
-// `onChange` validator (S3358) with explicit checks.
-function validateAdminPassword(value: string): string | undefined {
-  if (value.length < 8) return 'Min 8 characters';
-  const hasMixedCase = /[A-Z]/.test(value) && /[a-z]/.test(value);
-  if (!hasMixedCase || !/\d/.test(value)) return 'Mixed case + at least one digit';
-  return undefined;
-}
 
 interface IssuedKeys {
   shares: string[];
@@ -23,6 +15,8 @@ interface IssuedKeys {
 }
 
 const CLIPBOARD_CLEAR_MS = 30_000;
+const SETUP_INPUT_CLASS =
+  'w-full px-3 py-2 pr-10 bg-bg-secondary border border-border-primary rounded-lg text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500';
 
 export function SetupPage() {
   const navigate = useNavigate();
@@ -38,6 +32,7 @@ export function SetupPage() {
   const [confirmedSaved, setConfirmedSaved] = useState(false);
   const [shareInput, setShareInput] = useState('');
   const [unsealError, setUnsealError] = useState<string | null>(null);
+  const [passwordConfirm, setPasswordConfirm] = useState('');
 
   const initForm = useForm({
     defaultValues: { shares: '5', threshold: '3' },
@@ -326,6 +321,7 @@ export function SetupPage() {
           onSubmit={(e) => {
             e.preventDefault();
             e.stopPropagation();
+            if (!newPasswordReady(adminForm.state.values.password, passwordConfirm)) return;
             void adminForm.handleSubmit();
           }}
         >
@@ -368,18 +364,22 @@ export function SetupPage() {
           <adminForm.Field
             name="password"
             validators={{
-              onChange: ({ value }) => validateAdminPassword(value),
+              onChange: ({ value }) => passwordProblem(value),
             }}
           >
             {(field) => (
-              <TextField
-                label="Password"
-                type="password"
-                autoComplete="new-password"
-                field={field}
-                testId="admin-password"
-                hint="Min 8 chars, mixed case, at least one digit"
-              />
+              <div className="mb-3">
+                <NewPasswordFields
+                  id="admin-password"
+                  label="Password"
+                  password={field.state.value}
+                  confirm={passwordConfirm}
+                  onPasswordChange={field.handleChange}
+                  onConfirmChange={setPasswordConfirm}
+                  testId="admin-password"
+                  inputClassName={SETUP_INPUT_CLASS}
+                />
+              </div>
             )}
           </adminForm.Field>
 
@@ -405,11 +405,11 @@ export function SetupPage() {
             <ErrorBanner message={registerMutation.error?.message ?? 'Registration failed'} />
           )}
 
-          <adminForm.Subscribe selector={(s) => [s.canSubmit, s.isSubmitting] as const}>
-            {([canSubmit, isSubmitting]) => (
+          <adminForm.Subscribe selector={(s) => [s.canSubmit, s.isSubmitting, s.values.password] as const}>
+            {([canSubmit, isSubmitting, password]) => (
               <button
                 type="submit"
-                disabled={!canSubmit || isSubmitting}
+                disabled={!canSubmit || isSubmitting || !newPasswordReady(password, passwordConfirm)}
                 className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                 data-testid="admin-submit"
               >

@@ -93,6 +93,7 @@ test.describe('Real-user studio flow (no mocks)', () => {
     await page.getByTestId('admin-username').fill(username);
     await page.getByTestId('admin-email').fill(email);
     await page.getByTestId('admin-password').fill(password);
+    await page.getByTestId('admin-password-confirm').fill(password);
 
     // Anyone can reach /setup before the operator does; only the token holder may claim it.
     await page.getByTestId('admin-setup-token').fill('not-the-setup-token');
