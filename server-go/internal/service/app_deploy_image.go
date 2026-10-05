@@ -32,17 +32,29 @@ func (s *AppDeployService) DeployImage(ctx context.Context, projectID, appID, im
 	if _, err := s.lookupApp(projectID, appID); err != nil {
 		return nil, err
 	}
+	digest, err := s.resolveImage(ctx, projectID, image)
+	if err != nil {
+		return nil, err
+	}
+	return s.deployDigest(ctx, projectID, appID, image, digest, origin)
+}
+
+// resolveImage asks the image's registry with the project's saved credential
+// for it; a credential that cannot be read is never an anonymous request.
+func (s *AppDeployService) resolveImage(ctx context.Context, projectID, image string) (string, error) {
 	if s.images == nil {
-		return nil, errNoImageResolver
+		return "", errNoImageResolver
 	}
 	cred, err := s.registryCredential(projectID, image)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	digest, err := s.images.Resolve(ctx, image, cred)
-	if err != nil {
-		return nil, err
-	}
+	return s.images.Resolve(ctx, image, cred)
+}
+
+// deployDigest records image and the digest it resolved to on the app, and
+// rolls that digest out.
+func (s *AppDeployService) deployDigest(ctx context.Context, projectID, appID, image, digest string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
 	return s.underLease(ctx, projectID, appID, func(app *apphost.App) (*apphost.Deploy, func(), error) {
 		cfg := apphost.ConfigFromApp(app)
 		cfg.Image = apphost.PinImage(image, digest)

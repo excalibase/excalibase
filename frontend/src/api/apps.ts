@@ -75,6 +75,11 @@ export interface App {
   status: string;
   // Why the last pause, resume or deletion did not complete (EXC-523).
   lifecycleFailure?: LifecycleFailure;
+  // The image watcher deploys the tag's new digest when it moves (EXC-542).
+  autoDeploy?: boolean;
+  imageWatch?: ImageWatch;
+  // The digest the last deploy by tag resolved the image to.
+  resolvedDigest?: string;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -90,14 +95,29 @@ export interface LifecycleFailure {
   at: string;
 }
 
+export interface ImageWatch {
+  digest?: string;
+  checkedAt: string;
+  error?: string;
+}
+
 export type DeployStatus = 'pending' | 'rolling' | 'succeeded' | 'failed' | 'superseded';
+
+// Where a deploy was asked for: Studio, the API (CI or a script), or the image watcher.
+export type DeploySource = 'studio' | 'api' | 'image-watcher';
 
 export interface Deploy {
   id: string;
   appId: string;
   projectId: string;
   revision: number;
+  // What ran: the reference pinned to its digest when it was deployed by tag.
   image: string;
+  // The reference as named, and the digest it resolved to.
+  imageRef?: string;
+  digest?: string;
+  source?: DeploySource;
+  commitSha?: string;
   redeployOf?: string;
   status: DeployStatus;
   failureReason?: string;
@@ -189,6 +209,18 @@ export const updateApp = async (
 ): Promise<App> =>
   (
     await api.patch<App>(`${appsBase(projectId)}/${appId}`, input, {
+      headers: { 'If-Match': String(version) },
+    })
+  ).data;
+
+export const setAutoDeploy = async (
+  projectId: string,
+  appId: string,
+  version: number,
+  autoDeploy: boolean,
+): Promise<App> =>
+  (
+    await api.patch<App>(`${appsBase(projectId)}/${appId}`, { autoDeploy }, {
       headers: { 'If-Match': String(version) },
     })
   ).data;
@@ -354,6 +386,16 @@ export const useUpdateApp = (projectId: string, appId: string) => {
   return useMutation({
     mutationFn: async ({ version, input, secrets }: AppSubmission & { version: number }) =>
       storeSecrets(projectId, await updateApp(projectId, appId, version, input), secrets),
+    onSettled: () => qc.invalidateQueries({ queryKey: appsKey(projectId) }),
+  });
+};
+
+export const useSetAutoDeploy = (projectId: string, appId: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ version, autoDeploy }: { version: number; autoDeploy: boolean }) =>
+      setAutoDeploy(projectId, appId, version, autoDeploy),
+    onSuccess: (app) => qc.setQueryData(appKey(projectId, appId), app),
     onSettled: () => qc.invalidateQueries({ queryKey: appsKey(projectId) }),
   });
 };

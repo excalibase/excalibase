@@ -202,6 +202,14 @@ describe('ContainerDetailPage', () => {
     expect(screen.getByText(/internal service/i)).toBeInTheDocument();
   });
 
+  test('links to the container\'s pipeline', async () => {
+    renderPage({ deploys: [] });
+    expect(await screen.findByTestId('pipeline-link')).toHaveAttribute(
+      'href',
+      '/project/proj-1/containers/app-1/pipeline',
+    );
+  });
+
   test('shows the arguments a container is started with, as written', async () => {
     renderPage({ app: { args: ['--requirepass', '$(REDIS_PASSWORD)'] }, deploys: [] });
     expect(await screen.findByText('--requirepass $(REDIS_PASSWORD)')).toBeInTheDocument();

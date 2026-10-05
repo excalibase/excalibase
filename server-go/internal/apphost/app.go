@@ -283,6 +283,10 @@ type App struct {
 	Replicas int `json:"replicas"`
 	// Disk is the app's one persistent volume, when it has one (EXC-523).
 	Disk *AppDisk `json:"disk,omitempty"`
+	// AutoDeploy lets the image watcher deploy the tag's new digest when it moves (EXC-542).
+	AutoDeploy bool `json:"autoDeploy,omitempty"`
+	// ImageWatch is what the watcher last saw; only the watcher writes it.
+	ImageWatch *ImageWatch `json:"imageWatch,omitempty"`
 	// Tier resolves to cpu/memory through config.GetAppTierConfig.
 	Tier   domain.TierType `json:"tier"`
 	Status string          `json:"status"`

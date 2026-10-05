@@ -24,5 +24,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests that drive a shell and a server run under Node and are typed by tsconfig.node.json.
+  "exclude": ["src/**/*.node.test.ts"]
 }
