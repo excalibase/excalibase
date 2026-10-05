@@ -115,6 +115,23 @@ func TestDeployImage_ARegistryRefusalCreatesNoDeploy(t *testing.T) {
 	}
 }
 
+func TestDeployImage_ADeployRefusedBeforeItIsRecordedLeavesTheApp(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deploys, _ := newDeployTestService(t, app)
+	svc.SetImageResolver(&stubResolver{digest: resolvedDigest})
+	svc.SetPlanTiers(fixedPlan{err: errors.New("plan unreadable")})
+
+	if _, err := svc.DeployImage(context.Background(), app.ProjectID, app.ID, "ghcr.io/acme/storefront:main", ciOrigin()); err == nil {
+		t.Fatal("want the plan error")
+	}
+	if len(deploys.deploys) != 0 {
+		t.Fatal("no deploy may be recorded")
+	}
+	if stored, _ := svc.apps.Get(app.ProjectID, app.ID); stored.Image != app.Image || stored.ResolvedDigest != "" {
+		t.Fatalf("the next plain deploy must not run an image nobody deployed: %q %q", stored.Image, stored.ResolvedDigest)
+	}
+}
+
 func TestDeployImage_RefusesBeforeAskingTheRegistry(t *testing.T) {
 	app := sampleDeployApp()
 	svc, _, _ := newDeployTestService(t, app)

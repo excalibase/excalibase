@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 )
@@ -43,13 +44,27 @@ func (s *AppDeployService) DeployImage(ctx context.Context, projectID, appID, im
 		return nil, err
 	}
 	return s.underLease(ctx, projectID, appID, func(app *apphost.App) (*apphost.Deploy, func(), error) {
-		app.Image, app.ResolvedDigest = image, digest
-		if err := s.apps.Update(app, app.Version); err != nil {
-			return nil, nil, err
-		}
 		cfg := apphost.ConfigFromApp(app)
 		cfg.Image = apphost.PinImage(image, digest)
 		meta := deployMeta{origin: origin, imageRef: image, digest: digest}
-		return s.rollout(context.WithoutCancel(ctx), app, cfg, meta)
+		deploy, startWatch, err := s.rollout(context.WithoutCancel(ctx), app, cfg, meta)
+		if err != nil {
+			return deploy, startWatch, err
+		}
+		// Only a recorded deploy moves the app to the image, so a refused one changes nothing.
+		s.recordDeployedImage(projectID, appID, image, digest)
+		return deploy, startWatch, nil
 	})
+}
+
+// recordDeployedImage runs under the app's lease, after the deploy is recorded.
+func (s *AppDeployService) recordDeployedImage(projectID, appID, image, digest string) {
+	app, err := s.lookupApp(projectID, appID)
+	if err == nil {
+		app.Image, app.ResolvedDigest = image, digest
+		err = s.apps.Update(app, app.Version)
+	}
+	if err != nil {
+		log.Printf("record image %s on app %s/%s: %v", image, projectID, appID, err)
+	}
 }
