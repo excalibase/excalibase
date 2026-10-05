@@ -6,12 +6,14 @@ import { useAuthStore, type AuthUser } from '../stores/auth-store';
 import { Button } from '../components/Button';
 import { ResendVerification } from '../components/auth/ResendVerification';
 import { ProviderButtons, ProviderRefusal } from '../components/auth/ProviderSignIn';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 interface LoginResponse {
   user: AuthUser;
 }
 
 export function LoginPage() {
+  useDocumentTitle('Login');
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
   const [searchParams] = useSearchParams();

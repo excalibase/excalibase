@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Building2, Plus, Crown, ChevronRight } from 'lucide-react';
 import { listMyOrgs, createOrg, type Org } from '../api/orgs';
 import { Button } from '../components/Button';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 const TIER_COLORS: Record<string, string> = {
   FREE: 'bg-gray-500/20 text-gray-400',
@@ -11,6 +12,7 @@ const TIER_COLORS: Record<string, string> = {
 };
 
 export function OrgsPage() {
+  useDocumentTitle('Organizations');
   const navigate = useNavigate();
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [loading, setLoading] = useState(true);

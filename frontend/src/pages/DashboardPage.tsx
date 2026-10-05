@@ -5,8 +5,10 @@ import { MetricCard } from '../components/shared/MetricCard';
 import { Database, DatabaseZap, CheckCircle, Loader2, XCircle } from 'lucide-react';
 import { Button } from '../components/Button';
 import { engineIcon, engineLabel } from '../utils/engine';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function DashboardPage() {
+  useDocumentTitle('Projects');
   const { data: instances = [], isLoading } = useInstances();
   const navigate = useNavigate();
 
