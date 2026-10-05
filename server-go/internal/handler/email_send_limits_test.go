@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -149,6 +150,27 @@ func TestConfirmRoutesAreLimitedPerClient(t *testing.T) {
 		}
 		if last != http.StatusTooManyRequests {
 			t.Errorf("%s: forty attempts from one client, last answered %d, want 429", path, last)
+		}
+	}
+}
+
+// Studio tells the caller how long the link lives, from the same lifetime the
+// link is stored with, and every address gets that same answer.
+func TestResetSendAnswersWithTheLinkLifetime(t *testing.T) {
+	r, _ := mailRouter(&countingUsers{lookups: map[string]int{}}, true)
+	for _, address := range []string{"dev@example.com", "nobody@example.com"} {
+		req := httptest.NewRequest(http.MethodPost, "/reset/send", strings.NewReader(`{"email":"`+address+`"}`))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		var answer struct {
+			Status           string `json:"status"`
+			ExpiresInMinutes int    `json:"expiresInMinutes"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil {
+			t.Fatalf("%s: decode %q: %v", address, w.Body.String(), err)
+		}
+		if answer.Status != "sent" || answer.ExpiresInMinutes != int(passwordResetLifetime.Minutes()) {
+			t.Fatalf("%s: answer = %+v", address, answer)
 		}
 	}
 }

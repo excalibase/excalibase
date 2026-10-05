@@ -141,6 +141,9 @@ func TestEmailTokens_ResetFlow(t *testing.T) {
 	if !strings.Contains(sender.message().TextBody, "https://app.example.com/reset-password?token=") {
 		t.Fatalf("reset link is not a Studio link: %s", sender.message().TextBody)
 	}
+	if !strings.Contains(sender.message().TextBody, "Expires in 60 minutes") {
+		t.Fatalf("mail does not state the link lifetime Studio shows: %s", sender.message().TextBody)
+	}
 
 	// ConfirmReset with a new password.
 	req = httptest.NewRequest("POST", "/reset/confirm",
@@ -202,6 +205,49 @@ func TestEmailTokens_ResetLinkIsClaimedOnce(t *testing.T) {
 	}
 	if ok, err := h.claimReset(context.Background(), hash); ok || err != nil {
 		t.Fatalf("second claim: ok=%v err=%v, want a plain refusal", ok, err)
+	}
+}
+
+// Once a password is reset, every other link mailed to the account is void,
+// so an older link someone else saw cannot reset it again.
+func TestEmailTokens_ResetVoidsTheAccountsOtherLinks(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &capturingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, store, "https://app.example.com", "Excalibase")
+	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+	h.SetSessionStore(store)
+	h.runInBackground = func(f func()) { f() }
+	user := &domain.User{ID: "user-void", Username: testutil.FixturePassword("vduser"), Email: "void@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	other := &domain.User{ID: "user-keep", Username: testutil.FixturePassword("kduser"), Email: "keep@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	for _, u := range []*domain.User{user, other} {
+		if err := store.CreateUser(context.Background(), u); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+	}
+	mailLink := func(address string) string {
+		h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"`+address+`"}`)))
+		return tokenFromURL(sender.message().HTMLBody)
+	}
+	confirm := func(token string) int {
+		w := httptest.NewRecorder()
+		h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
+			strings.NewReader(`{"token":"`+token+`","newPassword":"brand-new-pass"}`)))
+		return w.Code
+	}
+	older := mailLink("void@example.com")
+	newer := mailLink("void@example.com")
+	othersLink := mailLink("keep@example.com")
+
+	if code := confirm(newer); code != http.StatusOK {
+		t.Fatalf("newer link: got %d", code)
+	}
+	if code := confirm(older); code != http.StatusBadRequest {
+		t.Fatalf("older link after a reset: got %d, want 400", code)
+	}
+	if code := confirm(othersLink); code != http.StatusOK {
+		t.Fatalf("another account's link was voided: got %d", code)
 	}
 }
 

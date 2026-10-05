@@ -126,6 +126,9 @@ export function LoginPage() {
             placeholder="Enter password"
             disabled={loading}
           />
+          <div className="mt-1.5 text-right">
+            <Link to="/forgot-password" className="text-sm text-purple-400 hover:text-purple-300 transition-colors">Forgot password?</Link>
+          </div>
         </div>
       </div>
 

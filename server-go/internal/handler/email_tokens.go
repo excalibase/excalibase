@@ -63,6 +63,7 @@ const (
 	confirmsPerClient      = 30
 	confirmWindow          = time.Minute
 	backgroundMailDeadline = 30 * time.Second
+	passwordResetLifetime  = time.Hour
 )
 
 // emailTokenUsers is the slice of the user store the click-link flows need.
@@ -150,7 +151,11 @@ func (h *EmailTokensHandler) allowMailTo(address string) bool {
 // statements are plain Postgres literals.
 const (
 	insertPasswordResetSQL = `INSERT INTO password_resets (user_id, token_hash, expires_at, requested_from) VALUES ($1, $2, $3, $4)`
-	claimPasswordResetSQL  = `UPDATE password_resets SET consumed_at = $1 WHERE token_hash = $2 AND consumed_at IS NULL`
+	// Claiming one link consumes every open link of its account.
+	claimPasswordResetSQL = `UPDATE password_resets SET consumed_at = $1
+		WHERE consumed_at IS NULL
+		  AND user_id = (SELECT user_id FROM password_resets WHERE token_hash = $2 AND consumed_at IS NULL)
+		RETURNING token_hash`
 )
 
 // rebind converts SQLite-style `?` placeholders to Postgres-style `$1, $2, ...`
@@ -333,7 +338,7 @@ func (h *EmailTokensHandler) SendReset(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		h.inBackground(func(ctx context.Context) { h.sendResetLink(ctx, address, ip) })
 	}
-	writeJSON(w, map[string]string{"status": "sent"})
+	writeJSON(w, map[string]any{"status": "sent", "expiresInMinutes": int(passwordResetLifetime.Minutes())})
 }
 
 func (h *EmailTokensHandler) sendResetLink(ctx context.Context, address, ip string) {
@@ -350,7 +355,7 @@ func (h *EmailTokensHandler) sendResetLink(ctx context.Context, address, ip stri
 		log.Printf("ERROR: reset mint token for %s: %v", user.ID, err)
 		return
 	}
-	expires := time.Now().Add(time.Hour)
+	expires := time.Now().Add(passwordResetLifetime)
 	if _, err := h.db.ExecContext(ctx,
 		insertPasswordResetSQL,
 		user.ID, hash, expires.Format(time.RFC3339), ip); err != nil {
@@ -360,7 +365,7 @@ func (h *EmailTokensHandler) sendResetLink(ctx context.Context, address, ip stri
 	msg, err := email.BuildPasswordResetEmail(email.PasswordResetData{
 		UserEmail:   user.Email,
 		ResetURL:    h.studioURL + "/reset-password?" + url.Values{"token": {token}}.Encode(),
-		ExpiresMin:  60,
+		ExpiresMin:  int(passwordResetLifetime.Minutes()),
 		ProductName: h.productName,
 		IPAddress:   ip,
 	})
@@ -453,17 +458,26 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 	writeJSON(w, map[string]any{"status": "reset", "accessTokensRevoked": revoked})
 }
 
-// claimReset consumes a reset link before the password changes. Of two
-// confirms racing on one link only one claims it.
+// claimReset consumes a reset link, and every other open link of its account,
+// before the password changes. Of two confirms racing on one link only one
+// claims it.
 func (h *EmailTokensHandler) claimReset(ctx context.Context, tokenHash string) (bool, error) {
-	res, err := h.db.ExecContext(ctx,
+	rows, err := h.db.QueryContext(ctx,
 		claimPasswordResetSQL,
 		time.Now().UTC().Format(time.RFC3339), tokenHash)
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	defer rows.Close()
+	claimed := false
+	for rows.Next() {
+		var consumed string
+		if err := rows.Scan(&consumed); err != nil {
+			return false, err
+		}
+		claimed = claimed || consumed == tokenHash
+	}
+	return claimed, rows.Err()
 }
 
 // --- helpers ---

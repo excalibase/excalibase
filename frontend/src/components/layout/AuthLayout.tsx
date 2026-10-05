@@ -1,5 +1,5 @@
 import { Outlet } from 'react-router-dom';
-import { Database, Sun, Moon } from 'lucide-react';
+import { Sun, Moon } from 'lucide-react';
 import { useDarkMode } from '../../hooks/useDarkMode';
 
 export function AuthLayout() {
@@ -18,11 +18,9 @@ export function AuthLayout() {
       <div className="w-full max-w-md">
         {/* Branding */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-center mb-4">
-            <Database className="w-7 h-7 text-purple-400" />
-          </div>
+          <img src="/logo-icon.png" alt="" className="w-14 h-14 object-contain mb-4" />
           <h1 className="text-2xl font-bold text-text-primary">Excalibase</h1>
-          <p className="text-sm text-text-secondary mt-1">Database provisioning platform</p>
+          <p className="text-sm text-text-secondary mt-1">Databases, APIs and app hosting</p>
         </div>
 
         {/* Card */}
