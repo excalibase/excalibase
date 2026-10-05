@@ -150,6 +150,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),
+		mcpAudit: &discardAudit{},
 	}
 }
 

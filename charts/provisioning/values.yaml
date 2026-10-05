@@ -26,6 +26,7 @@ ingress:
     - /api/alerts
     - /api/parameter-groups
     - /api/functions
+    - /mcp
   tls:
     enabled: true
     secretName: provisioning-tls

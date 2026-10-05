@@ -582,6 +582,27 @@ func TestAuditLog(t *testing.T) {
 	}
 }
 
+func TestAuditLogKeepsProjectTokenAndDoor(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	if err := store.LogAudit(ctx, &domain.AuditEntry{
+		UserID: "u1", Action: "mcp.tool_call", Resource: "mcp_tool", ResourceID: "list_tables",
+		ProjectID: "proj-a", TokenHash: "hash-1", Via: domain.AuditViaMCP,
+	}); err != nil {
+		t.Fatalf("LogAudit: %v", err)
+	}
+	var projectID, tokenHash, via string
+	if err := store.DB().QueryRowContext(ctx,
+		`SELECT project_id, token_hash, via FROM audit_log WHERE resource_id = 'list_tables'`,
+	).Scan(&projectID, &tokenHash, &via); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if projectID != "proj-a" || tokenHash != "hash-1" || via != domain.AuditViaMCP {
+		t.Fatalf("got project=%q token=%q via=%q", projectID, tokenHash, via)
+	}
+}
+
 // --- Org tests ---
 
 func setupOrgTest(t *testing.T) (*Store, string) {
