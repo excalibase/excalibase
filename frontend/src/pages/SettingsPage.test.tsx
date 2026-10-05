@@ -77,6 +77,16 @@ describe('SettingsPage — deletion protection', () => {
     await userEvent.click(screen.getByTestId('cancel-deletion-btn'));
     await waitFor(() => expect(api.post).toHaveBeenCalledWith('/provision/p-1/deletion/cancel'));
   });
+
+  test('a restore refused because the plan is full shows why', async () => {
+    renderSettings(false, { status: 'PENDING_DELETION', deletionDueAt: '2026-10-05T10:00:00Z' });
+    const refusal =
+      'Your plan allows 1 project(s) and they are in use; delete one or move to a larger plan before restoring this project';
+    vi.mocked(api.post).mockRejectedValueOnce({ response: { status: 409, data: { error: refusal } } });
+
+    await userEvent.click(await screen.findByTestId('cancel-deletion-btn'));
+    expect(await screen.findByTestId('cancel-deletion-error')).toHaveTextContent(refusal);
+  });
 });
 
 describe('SettingsPage — engine', () => {

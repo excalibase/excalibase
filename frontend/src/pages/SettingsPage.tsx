@@ -320,6 +320,11 @@ function DangerZone({ project, protectedFromDeletion, onDelete, deleting, delete
               ? 'Its files and containers are kept until then. An org owner can cancel; the project then carries on as before.'
               : 'Its database is stopped and its data kept until then. An org owner can cancel; the project is then left paused.'}
           </p>
+          {cancelDeletion.error != null && (
+            <p className="text-xs text-red-400 mb-3 break-words" data-testid="cancel-deletion-error" role="alert">
+              {projectOperationMessage(cancelDeletion.error, 'The deletion could not be cancelled; retry the request.')}
+            </p>
+          )}
           <button
             onClick={() => cancelDeletion.mutate(project.projectId)}
             disabled={cancelDeletion.isPending}

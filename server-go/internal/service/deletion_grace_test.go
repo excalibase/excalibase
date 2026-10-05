@@ -378,3 +378,85 @@ func TestScheduleDeletionWithAnUnsupportedModeIsUnavailable(t *testing.T) {
 		t.Fatalf("got %v, want ErrDeletionGraceUnavailable", err)
 	}
 }
+
+// A project in its grace period has given its slot up: on the Free plan the
+// org can create its replacement straight away.
+func TestDeletedProjectFreesTheFreeSlotForANewOne(t *testing.T) {
+	h := newGraceHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.ScheduleDeletion(ctx, graceProject, DeprovisionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.svc.Provision(ctx, domain.ProvisioningRequest{
+		PostgresVersion: "17", ProjectName: "replacement", OrgID: "org1", DBType: domain.PostgreSQL,
+	}); err != nil {
+		t.Fatalf("a deleted project must not hold the Free slot: %v", err)
+	}
+}
+
+// Restoring a deleted project takes a slot again, so an org whose plan is
+// full is refused with what it can do about it, and the grace period stands.
+func TestCancelDeletionIsRefusedWhenThePlanIsFull(t *testing.T) {
+	h := newGraceHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.ScheduleDeletion(ctx, graceProject, DeprovisionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.Provision(ctx, domain.ProvisioningRequest{
+		PostgresVersion: "17", ProjectName: "replacement", OrgID: "org1", DBType: domain.PostgreSQL,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := h.svc.CancelDeletion(ctx, graceProject)
+	var limitErr *RestoreProjectLimitError
+	if !errors.As(err, &limitErr) || !errors.Is(err, storage.ErrOrgProjectLimitReached) {
+		t.Fatalf("CancelDeletion = %v, want *RestoreProjectLimitError", err)
+	}
+	want := "Your plan allows 1 project(s) and they are in use; delete one or move to a larger plan before restoring this project"
+	if err.Error() != want {
+		t.Fatalf("message = %q, want %q", err.Error(), want)
+	}
+	if row := h.row(t); row.Status != string(domain.StatusPendingDeletion) || row.DeletionDueAt == nil {
+		t.Fatalf("a refused restore must leave the grace period in place: %+v", row)
+	}
+}
+
+func TestCancelDeletionTakesAFreeSlot(t *testing.T) {
+	h := newGraceHarness(t)
+	ctx := context.Background()
+	setOrgTier(h.svc, "org1", domain.Standard)
+	if _, err := h.svc.ScheduleDeletion(ctx, graceProject, DeprovisionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.Provision(ctx, domain.ProvisioningRequest{
+		PostgresVersion: "17", ProjectName: "another", OrgID: "org1", DBType: domain.PostgreSQL,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.svc.CancelDeletion(ctx, graceProject); err != nil {
+		t.Fatalf("restore with a free slot: %v", err)
+	}
+	if held, _ := h.store.CountOrgProjects("org1"); held != 2 {
+		t.Fatalf("org holds %d slots, want the restored project counted again", held)
+	}
+}
+
+// A plan the org record cannot answer for refuses the restore: no default.
+func TestCancelDeletionNeedsTheOrgPlan(t *testing.T) {
+	h := newGraceHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.ScheduleDeletion(ctx, graceProject, DeprovisionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.SetOrgStore(fakestore.NewOrgs())
+
+	if err := h.svc.CancelDeletion(ctx, graceProject); !errors.Is(err, ErrOrgTierUnresolved) {
+		t.Fatalf("CancelDeletion = %v, want ErrOrgTierUnresolved", err)
+	}
+	if h.row(t).Status != string(domain.StatusPendingDeletion) {
+		t.Fatal("the grace period must stand")
+	}
+}

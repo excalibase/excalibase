@@ -162,6 +162,10 @@ func (s *e2eInstanceStore) BeginDeletion(projectID string, deleteBackups *bool) 
 	return storage.ApplyBeginDeletion(inst, deleteBackups)
 }
 
+func (s *e2eInstanceStore) UpdateIfStatusWithinOrgLimit(*domain.DatabaseInstance, string, int) error {
+	return nil
+}
+
 func (s *e2eInstanceStore) UpdateIfStatus(*domain.DatabaseInstance, string) error {
 	return nil
 }

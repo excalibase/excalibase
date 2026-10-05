@@ -77,6 +77,24 @@ func (s *FileSystemStore) CountOrgProjects(orgID string) (int, error) {
 	return CountOrgProjectSlots(s.cache, orgID), nil
 }
 
+// UpdateIfStatusWithinOrgLimit persists the write only while the row holds
+// expected and, when it takes a slot back, the org has one free. See
+// InstanceStore.
+func (s *FileSystemStore) UpdateIfStatusWithinOrgLimit(inst *domain.DatabaseInstance, expected string, maxProjects int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := AdmitOrgProjectUpdate(s.cache, inst, expected, maxProjects); err != nil {
+		return err
+	}
+	stored := s.cache[inst.ProjectID]
+	updated := inst.Clone()
+	updated.OrgID = stored.OrgID
+	updated.StorageSize = stored.StorageSize
+	updated.NoDatabase = stored.NoDatabase
+	return s.write(updated)
+}
+
 // Update persists changes to an existing project, keeping the org it was
 // created in whatever the caller put on the struct.
 func (s *FileSystemStore) Update(inst *domain.DatabaseInstance) error {

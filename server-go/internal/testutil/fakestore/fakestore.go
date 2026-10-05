@@ -108,6 +108,18 @@ func (s *Instances) UpdateIfStatus(inst *domain.DatabaseInstance, expected strin
 	return nil
 }
 
+// UpdateIfStatusWithinOrgLimit persists only while the row holds expected
+// and, when the write takes a slot back, the org has one free.
+func (s *Instances) UpdateIfStatusWithinOrgLimit(inst *domain.DatabaseInstance, expected string, maxProjects int) error {
+	if s.Err != nil {
+		return s.Err
+	}
+	if err := storage.AdmitOrgProjectUpdate(s.Items, inst, expected, maxProjects); err != nil {
+		return err
+	}
+	return s.UpdateIfStatus(inst, expected)
+}
+
 // RecordPauseAttempt counts a pause about to be tried, refusing a project
 // the platform may not serve.
 func (s *Instances) RecordPauseAttempt(projectID string, at time.Time) (int, error) {

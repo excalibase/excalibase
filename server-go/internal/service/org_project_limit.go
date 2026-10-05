@@ -25,6 +25,20 @@ func (e *OrgProjectLimitError) Error() string {
 // without depending on which store answered.
 func (e *OrgProjectLimitError) Unwrap() error { return storage.ErrOrgProjectLimitReached }
 
+// RestoreProjectLimitError refuses restoring a project in its deletion grace
+// period while every slot of the organisation's plan is in use: the deleted
+// project gave its slot up, so getting it back needs a free one.
+type RestoreProjectLimitError struct {
+	Limit int
+}
+
+func (e *RestoreProjectLimitError) Error() string {
+	return fmt.Sprintf("Your plan allows %d project(s) and they are in use; delete one or move to a larger plan before restoring this project", e.Limit)
+}
+
+// Unwrap identifies the refusal as the project limit.
+func (e *RestoreProjectLimitError) Unwrap() error { return storage.ErrOrgProjectLimitReached }
+
 // ErrProjectStoreUnavailable is returned when the platform database could not
 // say whether the organisation has room. The request fails: an unanswered
 // count is never read as free capacity.
@@ -108,6 +122,19 @@ func (s *ProvisioningService) createProjectRow(ctx context.Context, inst *domain
 	default:
 		return fmt.Errorf("%w: create instance: %v", ErrProjectStoreUnavailable, err)
 	}
+}
+
+// orgProjectLimitFor resolves the project limit of an existing project's
+// organisation from its current plan. Self-hosted installs are not metered.
+func (s *ProvisioningService) orgProjectLimitFor(ctx context.Context, orgID string) (int, error) {
+	if s.selfHostedMode {
+		return 0, nil
+	}
+	tier, err := s.orgTier(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+	return s.orgProjectLimit(ctx, tier)
 }
 
 // ErrOrgTierUnresolved refuses a project whose organisation's plan cannot be

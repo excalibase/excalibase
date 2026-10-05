@@ -47,16 +47,16 @@ func TestInstances_DeletionScheduleRoundTrips(t *testing.T) {
 	}
 }
 
-// A project in its grace period still holds its org slot.
-func TestInstances_PendingDeletionHoldsTheOrgSlot(t *testing.T) {
+// A project in its grace period gave its org slot up when it was deleted.
+func TestInstances_PendingDeletionFreesTheOrgSlot(t *testing.T) {
 	store := testStore(t)
 	inst := instanceRow("proj-grace002", "org-grace2")
 	inst.Status = string(domain.StatusPendingDeletion)
 	if err := store.Create(inst); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if n, err := store.CountOrgProjects("org-grace2"); err != nil || n != 1 {
-		t.Fatalf("count = %d, %v; want 1", n, err)
+	if n, err := store.CountOrgProjects("org-grace2"); err != nil || n != 0 {
+		t.Fatalf("count = %d, %v; want 0", n, err)
 	}
 }
 

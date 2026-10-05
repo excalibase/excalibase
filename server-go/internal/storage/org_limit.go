@@ -16,24 +16,28 @@ var ErrOrgProjectLimitReached = errors.New("organisation has reached its project
 // HoldsOrgProjectSlot reports whether a project in this status occupies one of
 // its organisation's tier project slots.
 //
-// Every status holds one except the two deletion states. A deleted project
-// keeps its row until teardown is observed complete, so counting those states
-// would keep the user out of a slot they have already given up — and a
-// teardown that is stuck (a namespace that will not finalize, backups that
-// cannot be purged) would hold that slot forever.
+// Every status holds one except deletion. A project in its 7-day grace period
+// (PENDING_DELETION) gave its slot up when it was deleted, so the org can
+// create its replacement at once; restoring it takes a slot again (see
+// AdmitOrgProjectUpdate). The teardown states keep their row until teardown is
+// observed complete, and a stuck teardown must not hold the slot forever.
 //
 // FAILED holds a slot on purpose: a failed provision leaves a project the user
 // can still see, retry or delete, and its resources may well exist. It stops
 // counting the moment the user deletes it, which is the moment they decide the
 // slot is free.
 func HoldsOrgProjectSlot(status string) bool {
-	return !domain.IsDeletionStatus(status)
+	return status != string(domain.StatusPendingDeletion) && !domain.IsDeletionStatus(status)
 }
 
 // NonSlotStatuses lists the statuses HoldsOrgProjectSlot rejects, for stores
 // that count in SQL rather than in Go.
 func NonSlotStatuses() []string {
-	return []string{string(domain.StatusDeleting), string(domain.StatusBackupsPendingDelete)}
+	return []string{
+		string(domain.StatusPendingDeletion),
+		string(domain.StatusDeleting),
+		string(domain.StatusBackupsPendingDelete),
+	}
 }
 
 // CheckOrgProjectSlot reports whether an organisation already holding `held`
@@ -65,4 +69,25 @@ func AdmitOrgProject(instances map[string]*domain.DatabaseInstance, inst *domain
 		return ErrProjectExists
 	}
 	return CheckOrgProjectSlot(CountOrgProjectSlots(instances, inst.OrgID), maxProjects)
+}
+
+// AdmitOrgProjectUpdate applies the UpdateIfStatusWithinOrgLimit rules the
+// in-memory stores share: the row must exist, not be under teardown and still
+// hold expected, and a write that moves it back into a slot-holding status
+// needs a free slot. Callers hold their own lock around it and write only on nil.
+func AdmitOrgProjectUpdate(instances map[string]*domain.DatabaseInstance, inst *domain.DatabaseInstance, expected string, maxProjects int) error {
+	stored, ok := instances[inst.ProjectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	if err := CheckUpdatable(stored); err != nil {
+		return err
+	}
+	if stored.Status != expected {
+		return fmt.Errorf("%w: %s is %s, expected %s", ErrProjectStatusChanged, inst.ProjectID, stored.Status, expected)
+	}
+	if !HoldsOrgProjectSlot(inst.Status) || HoldsOrgProjectSlot(stored.Status) {
+		return nil
+	}
+	return CheckOrgProjectSlot(CountOrgProjectSlots(instances, stored.OrgID), maxProjects)
 }

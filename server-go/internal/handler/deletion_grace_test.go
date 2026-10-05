@@ -13,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -39,6 +40,9 @@ func graceRouter(t *testing.T, pauser service.DeletionPauser) (chi.Router, *stor
 	mock.SetupPostgreSQLMock(graceHandlerProject, "org1-"+graceHandlerProject, 1)
 	svc := service.NewProvisioningService(store, provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(mock, "")), mock)
 	svc.SetVault(newFakeVault())
+	orgs := fakestore.NewOrgs()
+	orgs.AddOrg("org1", domain.Free)
+	svc.SetOrgStore(orgs)
 	withBackupTarget(t, svc)
 	if stub, ok := pauser.(*pausingStub); ok {
 		stub.store = store
@@ -115,6 +119,25 @@ func TestCancelDeletionRoute(t *testing.T) {
 	}
 	if w := doRequest(r, "POST", "/api/provision/nope/deletion/cancel", ""); w.Code != http.StatusNotFound {
 		t.Fatalf("unknown project: %d, want 404", w.Code)
+	}
+}
+
+// A restore that would take the org past its plan is a 409 the Studio shows
+// as is: it says what the plan allows and what the user can do.
+func TestCancelDeletionAtThePlanLimitIsAConflict(t *testing.T) {
+	r, store := graceRouter(t, &pausingStub{})
+	doRequest(r, "DELETE", "/api/provision/"+graceHandlerProject, "")
+	_ = store.Create(&domain.DatabaseInstance{ProjectID: "grace-new", OrgID: "org1", Status: "ACTIVE"})
+
+	w := doRequest(r, "POST", "/api/provision/"+graceHandlerProject+"/deletion/cancel", "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("cancel at the limit: %d %s, want 409", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	want := "Your plan allows 1 project(s) and they are in use; delete one or move to a larger plan before restoring this project"
+	if body["error"] != want {
+		t.Fatalf("error = %q, want %q", body["error"], want)
 	}
 }
 
