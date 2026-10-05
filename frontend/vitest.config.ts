@@ -50,6 +50,8 @@ export default defineConfig({
         'src/components/InviteLinkNotice.tsx',
         'src/pages/RegisterPage.tsx',
         'src/pages/LoginPage.tsx',
+        'src/pages/ForgotPasswordPage.tsx',
+        'src/components/layout/AuthLayout.tsx',
         'src/pages/OAuthCompletePage.tsx',
         'src/components/SignInProviders.tsx',
         'src/api/base.ts',
