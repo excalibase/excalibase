@@ -1,6 +1,9 @@
 package apphost
 
 import (
+	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -106,6 +109,48 @@ func (c DeployConfig) ToApp(id, projectID, name string) *App {
 	}
 }
 
+// Where a deploy was asked for: Studio, the API (CI or a script holding a
+// token), or the image watcher noticing that the app's tag moved.
+const (
+	DeploySourceStudio       = "studio"
+	DeploySourceAPI          = "api"
+	DeploySourceImageWatcher = "image-watcher"
+)
+
+func IsDeploySource(source string) bool {
+	return source == DeploySourceStudio || source == DeploySourceAPI || source == DeploySourceImageWatcher
+}
+
+// DeployOrigin is who asked for a deploy, from where, and the commit the
+// caller says the image was built from.
+type DeployOrigin struct {
+	Actor     string
+	Source    string
+	CommitSHA string
+}
+
+var commitSHA = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+
+// ValidateCommitSHA accepts an abbreviated or full git object id; empty means none was given.
+func ValidateCommitSHA(sha string) error {
+	if sha != "" && !commitSHA.MatchString(sha) {
+		return errors.New("commitSha must be 7 to 64 lowercase hex characters")
+	}
+	return nil
+}
+
+// PinImage names the image's repository at exactly digest, whatever tag or
+// digest image named before.
+func PinImage(image, digest string) string {
+	name, _, hasDigest := strings.Cut(image, "@")
+	if !hasDigest {
+		if colon := strings.LastIndex(name, ":"); colon > strings.LastIndex(name, "/") {
+			name = name[:colon]
+		}
+	}
+	return name + "@" + digest
+}
+
 type Deploy struct {
 	ID        string     `json:"id"`
 	AppID     string     `json:"appId"`
@@ -113,6 +158,11 @@ type Deploy struct {
 	Revision  int        `json:"revision"`
 	Image     string     `json:"image"`
 	Spec      DeploySpec `json:"spec"`
+	// ImageRef is the reference the caller named, when Image pins it to Digest.
+	ImageRef  string `json:"imageRef,omitempty"`
+	Digest    string `json:"digest,omitempty"`
+	Source    string `json:"source,omitempty"`
+	CommitSHA string `json:"commitSha,omitempty"`
 	// Config never reaches the API response: it is marshaled directly by the
 	// store, not through this struct's JSON tags.
 	Config        DeployConfig `json:"-"`

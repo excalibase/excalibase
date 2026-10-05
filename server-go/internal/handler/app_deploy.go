@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"io"
 	"log"
 	"net/http"
@@ -13,15 +12,19 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/imagedigest"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/excalibase/provisioning-poc/internal/storagebudget"
 	"github.com/go-chi/chi/v5"
 )
 
 type AppDeployer interface {
-	DeployApp(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, error)
-	RedeployApp(ctx context.Context, projectID, appID, deployID, actor string) (*apphost.Deploy, error)
+	DeployAppAs(ctx context.Context, projectID, appID string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
+	DeployImage(ctx context.Context, projectID, appID, image string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
+	RedeployAppAs(ctx context.Context, projectID, appID, deployID string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
+	GetDeploy(projectID, appID, deployID string) (*apphost.Deploy, error)
 	ListDeploys(projectID, appID string, limit int) ([]*apphost.Deploy, error)
 	PauseApp(ctx context.Context, projectID, appID string) (*apphost.App, error)
 	ResumeApp(ctx context.Context, projectID, appID, actor string) (*apphost.App, error)
@@ -41,19 +44,77 @@ func NewAppDeployHandler(deploys AppDeployer) *AppDeployHandler {
 	return &AppDeployHandler{deploys: deploys}
 }
 
+// deployRequest is the optional body of POST .../deploy. With an image, the
+// deploy resolves it to a digest and runs that digest (EXC-543); without one
+// it runs the app as it is.
+type deployRequest struct {
+	Image     string `json:"image"`
+	CommitSHA string `json:"commitSha"`
+}
+
+const maxDeployBodyBytes = 4096
+
+// deployView is a deploy as the API answers it, with the address it serves on
+// at the top so a CI job reads it without knowing the spec.
+type deployView struct {
+	*apphost.Deploy
+	URL string `json:"url,omitempty"`
+}
+
+func newDeployView(deploy *apphost.Deploy) deployView {
+	return deployView{Deploy: deploy, URL: deploy.Spec.URL}
+}
+
 func (h *AppDeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	projectID, appID, ok := h.appPath(w, r)
 	if !ok {
 		return
 	}
-	actor := actorID(r)
-	deploy, err := h.deploys.DeployApp(r.Context(), projectID, appID, actor)
+	body, err := decodeDeployRequest(w, r)
+	if err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	origin := apphost.DeployOrigin{Actor: actorID(r), Source: deploySource(r), CommitSHA: body.CommitSHA}
+	var deploy *apphost.Deploy
+	if body.Image == "" {
+		deploy, err = h.deploys.DeployAppAs(r.Context(), projectID, appID, origin)
+	} else {
+		deploy, err = h.deploys.DeployImage(r.Context(), projectID, appID, body.Image, origin)
+	}
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
-	writeJSON(w, deploy)
+	writeJSONStatus(w, http.StatusAccepted, newDeployView(deploy))
+}
+
+// decodeDeployRequest refuses a field it does not know: a misspelt image must
+// not quietly deploy whatever the app already runs.
+func decodeDeployRequest(w http.ResponseWriter, r *http.Request) (deployRequest, error) {
+	var body deployRequest
+	if r.Body == nil {
+		return body, nil
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxDeployBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		return body, errors.New(`the body must be JSON such as {"image":"ghcr.io/acme/web:main","commitSha":"<git sha>"}, or empty`)
+	}
+	if err := apphost.ValidateCommitSHA(body.CommitSHA); err != nil {
+		return body, err
+	}
+	return body, nil
+}
+
+// deploySource tells a deploy asked from Studio, which signs in with a
+// session, from one asked with a token.
+func deploySource(r *http.Request) string {
+	if auth.IsSessionToken(auth.GetToken(r.Context())) {
+		return apphost.DeploySourceStudio
+	}
+	return apphost.DeploySourceAPI
 }
 
 func (h *AppDeployHandler) Redeploy(w http.ResponseWriter, r *http.Request) {
@@ -61,19 +122,44 @@ func (h *AppDeployHandler) Redeploy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	deployID := chi.URLParam(r, "deployId")
-	if err := apphost.ValidateID(deployID); err != nil {
-		httpError(w, "invalid deployId", http.StatusBadRequest)
+	deployID, ok := deployIDFromPath(w, r)
+	if !ok {
 		return
 	}
-	actor := actorID(r)
-	deploy, err := h.deploys.RedeployApp(r.Context(), projectID, appID, deployID, actor)
+	origin := apphost.DeployOrigin{Actor: actorID(r), Source: deploySource(r)}
+	deploy, err := h.deploys.RedeployAppAs(r.Context(), projectID, appID, deployID, origin)
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
-	writeJSON(w, deploy)
+	writeJSONStatus(w, http.StatusAccepted, newDeployView(deploy))
+}
+
+// GetDeploy is what a CI job polls until the deploy is succeeded, failed or superseded.
+func (h *AppDeployHandler) GetDeploy(w http.ResponseWriter, r *http.Request) {
+	projectID, appID, ok := h.appPath(w, r)
+	if !ok {
+		return
+	}
+	deployID, ok := deployIDFromPath(w, r)
+	if !ok {
+		return
+	}
+	deploy, err := h.deploys.GetDeploy(projectID, appID, deployID)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, newDeployView(deploy))
+}
+
+func deployIDFromPath(w http.ResponseWriter, r *http.Request) (string, bool) {
+	deployID := chi.URLParam(r, "deployId")
+	if err := apphost.ValidateID(deployID); err != nil {
+		httpError(w, "invalid deployId", http.StatusBadRequest)
+		return "", false
+	}
+	return deployID, true
 }
 
 func (h *AppDeployHandler) ListDeploys(w http.ResponseWriter, r *http.Request) {
@@ -277,8 +363,23 @@ func (h *AppDeployHandler) lifecycleAccepted(w http.ResponseWriter, r *http.Requ
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"id": app.ID, "status": app.Status, "acceptedAt": acceptedAt})
 }
 
+// registryRetryAfter is how long a caller waits when the registry rate limits us.
+const registryRetryAfter = "60"
+
 func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, apphost.ErrInvalidImage):
+		httpError(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, imagedigest.ErrNotFound), errors.Is(err, imagedigest.ErrDenied),
+		errors.Is(err, imagedigest.ErrNotPublic):
+		httpError(w, err.Error(), http.StatusUnprocessableEntity)
+	case errors.Is(err, imagedigest.ErrRateLimited):
+		w.Header().Set("Retry-After", registryRetryAfter)
+		httpError(w, err.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, imagedigest.ErrUnavailable):
+		httpError(w, err.Error(), http.StatusBadGateway)
+	case errors.Is(err, apphost.ErrAppVersionConflict):
+		httpError(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, apphost.ErrAppNotFound), errors.Is(err, apphost.ErrDeployNotFound):
 		httpError(w, errNotFound, http.StatusNotFound)
 	case errors.Is(err, apphost.ErrAppStatusConflict), errors.Is(err, apphost.ErrAppBusy),

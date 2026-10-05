@@ -46,7 +46,9 @@ type AppDeployService struct {
 	claimer            ProjectOperationClaimer
 	secrets            AppSecretPurger
 	// registries reads the pull credential for the image's registry; nil when no vault is configured.
-	registries      RegistryCredentialFinder
+	registries RegistryCredentialFinder
+	// images resolves a named image to the digest a deploy pins.
+	images          ImageResolver
 	plans           PlanTiers
 	headroomPercent int
 	// quotaTiers sizes the namespace quota from the plan (EXC-524).
@@ -98,6 +100,16 @@ func (s *AppDeployService) SetRegistryCredentials(registries RegistryCredentialF
 
 // pullAuth fails rather than pull anonymously when the credential cannot be read.
 func (s *AppDeployService) pullAuth(projectID, image string) (*k8s.RegistryAuth, error) {
+	cred, err := s.registryCredential(projectID, image)
+	if err != nil || cred == nil {
+		return nil, err
+	}
+	return &k8s.RegistryAuth{Registry: apphost.ImageRegistry(image), Username: cred.Username, Password: cred.Password}, nil
+}
+
+// registryCredential is the project's saved credential for the image's
+// registry, or nil when it has none.
+func (s *AppDeployService) registryCredential(projectID, image string) (*apphost.RegistryCredential, error) {
 	if s.registries == nil {
 		return nil, nil
 	}
@@ -106,10 +118,7 @@ func (s *AppDeployService) pullAuth(projectID, image string) (*k8s.RegistryAuth,
 	if err != nil {
 		return nil, fmt.Errorf("read the pull credential for %s: %w", registry, err)
 	}
-	if cred == nil {
-		return nil, nil
-	}
-	return &k8s.RegistryAuth{Registry: registry, Username: cred.Username, Password: cred.Password}, nil
+	return cred, nil
 }
 
 // errPullAuthChanged fails a deploy whose credential was removed or replaced while it was applied.
@@ -148,15 +157,25 @@ func (s *AppDeployService) SetDomainSync(sync func(ctx context.Context, namespac
 }
 
 func (s *AppDeployService) DeployApp(ctx context.Context, projectID, appID, actor string) (*apphost.Deploy, error) {
+	return s.DeployAppAs(ctx, projectID, appID, apphost.DeployOrigin{Actor: actor})
+}
+
+// DeployAppAs rolls the app's current config out, recording who asked and from where.
+func (s *AppDeployService) DeployAppAs(ctx context.Context, projectID, appID string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
 	return s.underLease(ctx, projectID, appID, func(app *apphost.App) (*apphost.Deploy, func(), error) {
-		return s.rollout(context.WithoutCancel(ctx), app, apphost.ConfigFromApp(app), actor, "")
+		return s.rollout(context.WithoutCancel(ctx), app, apphost.ConfigFromApp(app), deployMeta{origin: origin})
 	})
 }
 
-// RedeployApp rolls a deploy's frozen config out again as a new deploy. It
-// never touches the app record — the source deploy's config is what runs,
-// even if the app has since been edited.
 func (s *AppDeployService) RedeployApp(ctx context.Context, projectID, appID, deployID, actor string) (*apphost.Deploy, error) {
+	return s.RedeployAppAs(ctx, projectID, appID, deployID, apphost.DeployOrigin{Actor: actor})
+}
+
+// RedeployAppAs rolls a deploy's frozen config out again as a new deploy. It
+// never touches the app record — the source deploy's config is what runs,
+// even if the app has since been edited. A pinned source runs its digest
+// again, so this is also the rollback; the commit stays the source's.
+func (s *AppDeployService) RedeployAppAs(ctx context.Context, projectID, appID, deployID string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
 	return s.underLease(ctx, projectID, appID, func(app *apphost.App) (*apphost.Deploy, func(), error) {
 		source, err := s.deploys.Get(projectID, appID, deployID)
 		if err != nil {
@@ -165,8 +184,25 @@ func (s *AppDeployService) RedeployApp(ctx context.Context, projectID, appID, de
 		if source == nil {
 			return nil, nil, apphost.ErrDeployNotFound
 		}
-		return s.rollout(context.WithoutCancel(ctx), app, source.Config, actor, source.ID)
+		origin.CommitSHA = source.CommitSHA
+		meta := deployMeta{origin: origin, imageRef: source.ImageRef, digest: source.Digest, redeployOf: source.ID}
+		return s.rollout(context.WithoutCancel(ctx), app, source.Config, meta)
 	})
+}
+
+// GetDeploy reads one deploy of the app, for a caller polling it until it finishes.
+func (s *AppDeployService) GetDeploy(projectID, appID, deployID string) (*apphost.Deploy, error) {
+	if _, err := s.lookupApp(projectID, appID); err != nil {
+		return nil, err
+	}
+	deploy, err := s.deploys.Get(projectID, appID, deployID)
+	if err != nil {
+		return nil, fmt.Errorf("look up deploy: %w", err)
+	}
+	if deploy == nil {
+		return nil, apphost.ErrDeployNotFound
+	}
+	return deploy, nil
 }
 
 // underLease applies a deploy while holding the app's lease, and starts its
@@ -193,11 +229,18 @@ func (s *AppDeployService) underLease(ctx context.Context, projectID, appID stri
 	return deploy, err
 }
 
-// rollout is the deploy engine DeployApp and RedeployApp both drive: create
-// the record, apply the workload, and watch the rollout. cfg is what actually
-// runs; redeployOf names the deploy it was frozen from, or "" for a plain
-// deploy.
-func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, actor, redeployOf string) (*apphost.Deploy, func(), error) {
+// deployMeta is what a deploy records beside the config it runs: who asked,
+// the reference and digest it was pinned from, and the deploy it repeats.
+type deployMeta struct {
+	origin     apphost.DeployOrigin
+	imageRef   string
+	digest     string
+	redeployOf string
+}
+
+// rollout is the deploy engine every deploy and redeploy drives: create the
+// record, apply the workload, and watch the rollout. cfg is what actually runs.
+func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg apphost.DeployConfig, meta deployMeta) (*apphost.Deploy, func(), error) {
 	tierType, tier, err := s.planTier(ctx, app.ProjectID, cfg.Replicas)
 	if err != nil {
 		return nil, nil, err
@@ -226,11 +269,15 @@ func (s *AppDeployService) rollout(ctx context.Context, app *apphost.App, cfg ap
 			AppName: app.Name,
 			Disk:    app.Disk,
 		},
+		ImageRef:   meta.imageRef,
+		Digest:     meta.digest,
+		Source:     meta.origin.Source,
+		CommitSHA:  meta.origin.CommitSHA,
 		Config:     cfg,
-		RedeployOf: redeployOf,
+		RedeployOf: meta.redeployOf,
 		Kind:       apphost.DeployKindDeploy,
 		Status:     apphost.DeployStatusPending,
-		CreatedBy:  actor,
+		CreatedBy:  meta.origin.Actor,
 		CreatedAt:  time.Now().UTC(),
 	}
 	if err := s.deploys.Create(deploy); err != nil {

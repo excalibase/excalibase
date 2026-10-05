@@ -1,22 +1,25 @@
 package routepolicy
 
+const appPath = "/api/projects/{projectId}/apps/{appId}/"
+
 // appRows cover /api/projects/{projectId}/apps. An app is data-plane
 // authoring, like a function or a bucket: reads on the viewer rung, every
 // write, including pause, resume and deletion of the app, on the developer rung.
 var appRows = []Row{
 	{Methods: get, Pattern: "/api/projects/{projectId}/apps/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
-	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "the app is read as (projectId, appId)"},
+	{Methods: get, Pattern: appPath, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "the app is read as (projectId, appId)"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
-	{Methods: patch, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "changes the image, env, port and replicas the next deploy would run"},
-	{Methods: del, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "tears the workload down and waits for its pods to be gone before the app is forgotten; an app with a disk needs confirmDeleteDisk"},
+	{Methods: patch, Pattern: appPath, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "changes the image, env, port and replicas the next deploy would run"},
+	{Methods: del, Pattern: appPath, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "tears the workload down and waits for its pods to be gone before the app is forgotten; an app with a disk needs confirmDeleteDisk"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/pause", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "scales the app to zero; its config and deploy history stay"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/resume", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/disk", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "grows the app's disk up to its plan's cap, or lowers a stopped app's disk to no less than it holds; the same rung that attaches one"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/disk", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Discloses: NoSecret, Note: "what the disk holds against its size and the plan's cap; it takes the app's lease and may start a short probe, so the rung that deploys"},
 
-	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/deploy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/deploy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "an image in the body is resolved to a digest with the project's own saved credential, over public addresses only (EXC-543)"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/logs", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "reads only the pods labelled with this app's id in this project's namespace; viewer, like the project's and a function's logs"},
 	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
+	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys/{deployId}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "one deploy, read as (projectId, appId, deployId); what CI polls until it finishes"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/deploys/{deployId}/redeploy", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "rolls an earlier deploy's frozen config out again as a new deploy; never edits the app"},
 	{Methods: put, Pattern: "/api/projects/{projectId}/apps/{appId}/secrets/{name}", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "write-only: stores a secret variable's value in the project vault and points the variable at it; no route returns the value"},
 

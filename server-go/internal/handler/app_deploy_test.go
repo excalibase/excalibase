@@ -33,14 +33,33 @@ type fakeAppDeployer struct {
 	lifecycleErr    error
 	lifecycleCalls  []string
 	resumedBy       string
+	lastOrigin      apphost.DeployOrigin
+	lastImage       string
+	getDeploy       map[string]*apphost.Deploy // keyed projectID+"/"+appID+"/"+deployID
 }
 
 func newFakeAppDeployer() *fakeAppDeployer {
-	return &fakeAppDeployer{deployApp: map[string]*apphost.Deploy{}, redeployApp: map[string]*apphost.Deploy{}}
+	return &fakeAppDeployer{deployApp: map[string]*apphost.Deploy{}, redeployApp: map[string]*apphost.Deploy{}, getDeploy: map[string]*apphost.Deploy{}}
 }
 
-func (f *fakeAppDeployer) DeployApp(_ context.Context, projectID, appID, actor string) (*apphost.Deploy, error) {
-	f.lastActor = actor
+func (f *fakeAppDeployer) DeployAppAs(_ context.Context, projectID, appID string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
+	f.lastActor, f.lastOrigin, f.lastImage = origin.Actor, origin, ""
+	return f.deployed(projectID, appID)
+}
+
+func (f *fakeAppDeployer) DeployImage(_ context.Context, projectID, appID, image string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
+	f.lastActor, f.lastOrigin, f.lastImage = origin.Actor, origin, image
+	return f.deployed(projectID, appID)
+}
+
+func (f *fakeAppDeployer) GetDeploy(projectID, appID, deployID string) (*apphost.Deploy, error) {
+	if deploy, ok := f.getDeploy[projectID+"/"+appID+"/"+deployID]; ok {
+		return deploy, nil
+	}
+	return nil, apphost.ErrDeployNotFound
+}
+
+func (f *fakeAppDeployer) deployed(projectID, appID string) (*apphost.Deploy, error) {
 	if f.deployErr != nil {
 		return nil, f.deployErr
 	}
@@ -50,8 +69,8 @@ func (f *fakeAppDeployer) DeployApp(_ context.Context, projectID, appID, actor s
 	return nil, apphost.ErrAppNotFound
 }
 
-func (f *fakeAppDeployer) RedeployApp(_ context.Context, projectID, appID, deployID, actor string) (*apphost.Deploy, error) {
-	f.lastActor = actor
+func (f *fakeAppDeployer) RedeployAppAs(_ context.Context, projectID, appID, deployID string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
+	f.lastActor, f.lastOrigin = origin.Actor, origin
 	f.lastRedeployIDs = [3]string{projectID, appID, deployID}
 	if f.redeployErr != nil {
 		return nil, f.redeployErr
@@ -125,6 +144,7 @@ func setupAppDeployRouter(t *testing.T, deployer *fakeAppDeployer) chi.Router {
 	r.Route("/api/projects/{projectId}/apps/{appId}", func(r chi.Router) {
 		r.Post("/deploy", h.Deploy)
 		r.Get("/deploys", h.ListDeploys)
+		r.Get("/deploys/{deployId}", h.GetDeploy)
 		r.Post("/deploys/{deployId}/redeploy", h.Redeploy)
 		r.Post("/pause", h.Pause)
 		r.Post("/resume", h.Resume)

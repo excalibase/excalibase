@@ -24,6 +24,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/email"
 	"github.com/excalibase/provisioning-poc/internal/endusers"
 	"github.com/excalibase/provisioning-poc/internal/handler"
+	"github.com/excalibase/provisioning-poc/internal/imagedigest"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/metrics"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
@@ -1378,6 +1379,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 
 	registryCreds := registryCredentials(vc, store, k8sClient)
 	withRegistryCredentials(appDeploySvc, registryCreds)
+	appDeploySvc.SetImageResolver(imagedigest.NewResolver())
 	appNetworkSvc := newAppNetworkService(sqlStore, store, k8sClient, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)
 	return &handlerDeps{
@@ -1827,6 +1829,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.With(dev).Get("/disk", d.appDeployHandler.DiskStatus)
 				r.With(dev).Post("/deploy", d.appDeployHandler.Deploy)
 				r.Get("/deploys", d.appDeployHandler.ListDeploys)
+				r.Get("/deploys/{deployId}", d.appDeployHandler.GetDeploy)
 				r.Get("/logs", d.appLogHandler.Logs)
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)

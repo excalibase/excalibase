@@ -60,10 +60,12 @@ func (s *PostgresDeployStore) Create(deploy *Deploy) error {
 		return fmt.Errorf("marshal deploy config: %w", err)
 	}
 	const q = `
-INSERT INTO app_deploys (id, app_id, project_id, revision, image, spec, config, redeploy_of, status, created_by, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+INSERT INTO app_deploys (id, app_id, project_id, revision, image, spec, config, redeploy_of, status, created_by, created_at,
+                         source, commit_sha, image_ref, digest)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`
 	if _, err := tx.Exec(q, deploy.ID, deploy.AppID, deploy.ProjectID, deploy.Revision,
-		deploy.Image, spec, config, nullIfEmpty(deploy.RedeployOf), deploy.Status, deploy.CreatedBy, deploy.CreatedAt); err != nil {
+		deploy.Image, spec, config, nullIfEmpty(deploy.RedeployOf), deploy.Status, deploy.CreatedBy, deploy.CreatedAt,
+		nullIfEmpty(deploy.Source), nullIfEmpty(deploy.CommitSHA), nullIfEmpty(deploy.ImageRef), nullIfEmpty(deploy.Digest)); err != nil {
 		return fmt.Errorf("create deploy: %w", err)
 	}
 	return tx.Commit()
@@ -209,8 +211,7 @@ func (s *PostgresDeployStore) Finish(id, status, failureReason string, finishedA
 
 func (s *PostgresDeployStore) ListUnfinished() ([]*Deploy, error) {
 	rows, err := s.db.Query(
-		`SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at, kind
-		 FROM app_deploys WHERE status IN ($1, $2) ORDER BY created_at`, DeployStatusPending, DeployStatusRolling)
+		listUnfinishedDeploys, DeployStatusPending, DeployStatusRolling)
 	if err != nil {
 		return nil, fmt.Errorf("list unfinished deploys: %w", err)
 	}
@@ -233,14 +234,12 @@ func (s *PostgresDeployStore) ListByApp(projectID, appID string, limit int) ([]*
 	if err := ValidateID(appID); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at, kind
-	      FROM app_deploys WHERE project_id = $1 AND app_id = $2 ORDER BY revision DESC`
-	args := []any{projectID, appID}
+	// LIMIT NULL is no limit.
+	var rowLimit any
 	if limit > 0 {
-		q += " LIMIT $3"
-		args = append(args, limit)
+		rowLimit = limit
 	}
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.db.Query(listAppDeploys, projectID, appID, rowLimit)
 	if err != nil {
 		return nil, fmt.Errorf("list deploys: %w", err)
 	}
@@ -279,8 +278,7 @@ func (s *PostgresDeployStore) Get(projectID, appID, id string) (*Deploy, error) 
 		return nil, err
 	}
 	row := s.db.QueryRow(
-		`SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason, created_by, created_at, finished_at, kind
-		 FROM app_deploys WHERE id = $1 AND app_id = $2 AND project_id = $3`, id, appID, projectID)
+		getAppDeploy, id, appID, projectID)
 	deploy, err := scanDeploy(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -291,6 +289,18 @@ func (s *PostgresDeployStore) Get(projectID, appID, id string) (*Deploy, error) 
 	return deploy, nil
 }
 
+const (
+	listUnfinishedDeploys = `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
+       created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest
+FROM app_deploys WHERE status IN ($1, $2) ORDER BY created_at`
+	listAppDeploys = `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
+       created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest
+FROM app_deploys WHERE project_id = $1 AND app_id = $2 ORDER BY revision DESC LIMIT $3`
+	getAppDeploy = `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
+       created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest
+FROM app_deploys WHERE id = $1 AND app_id = $2 AND project_id = $3`
+)
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
@@ -298,10 +308,11 @@ type rowScanner interface {
 func scanDeploy(row rowScanner) (*Deploy, error) {
 	var d Deploy
 	var spec, config []byte
-	var failureReason, redeployOf sql.NullString
+	var failureReason, redeployOf, source, commitSHA, imageRef, digest sql.NullString
 	var finishedAt sql.NullTime
 	if err := row.Scan(&d.ID, &d.AppID, &d.ProjectID, &d.Revision, &d.Image, &spec, &config, &redeployOf,
-		&d.Status, &failureReason, &d.CreatedBy, &d.CreatedAt, &finishedAt, &d.Kind); err != nil {
+		&d.Status, &failureReason, &d.CreatedBy, &d.CreatedAt, &finishedAt, &d.Kind,
+		&source, &commitSHA, &imageRef, &digest); err != nil {
 		return nil, fmt.Errorf("scan deploy: %w", err)
 	}
 	if err := json.Unmarshal(spec, &d.Spec); err != nil {
@@ -311,6 +322,7 @@ func scanDeploy(row rowScanner) (*Deploy, error) {
 		return nil, fmt.Errorf("unmarshal deploy config: %w", err)
 	}
 	d.RedeployOf = redeployOf.String
+	d.Source, d.CommitSHA, d.ImageRef, d.Digest = source.String, commitSHA.String, imageRef.String, digest.String
 	d.FailureReason = failureReason.String
 	if finishedAt.Valid {
 		d.FinishedAt = &finishedAt.Time
