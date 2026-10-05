@@ -133,6 +133,44 @@ func TestImageWatcher_AMovedTagDeploysItsNewDigestOnce(t *testing.T) {
 	}
 }
 
+// The registry answer takes time; an edit, pause or opt-out made meanwhile wins.
+func TestImageWatcher_AnAppChangedDuringTheCheckIsNotDeployed(t *testing.T) {
+	for name, edit := range map[string]func(*apphost.App){
+		"a new image":      func(app *apphost.App) { app.Image = "ghcr.io/acme/storefront:next" },
+		"auto-deploy off":  func(app *apphost.App) { app.AutoDeploy = false },
+		"paused meanwhile": func(app *apphost.App) { app.Status = apphost.StatusStopped },
+	} {
+		lab := newWatchLab(t, nil)
+		lab.resolver.digest = movedDigest
+		lab.resolver.during = func() {
+			lab.store.fakeAppStoreForDeploy.mu.Lock()
+			edit(lab.store.apps[deployTestProject+"/"+deployTestApp])
+			lab.store.fakeAppStoreForDeploy.mu.Unlock()
+		}
+		lab.pass(t, 0)
+		if len(lab.deploys.deploys) != 0 {
+			t.Errorf("%s: the watcher deployed an app that no longer asks for it", name)
+		}
+		stored, _ := lab.store.Get(deployTestProject, deployTestApp)
+		if stored.ResolvedDigest == movedDigest {
+			t.Errorf("%s: the app was moved to the checked digest", name)
+		}
+	}
+}
+
+func TestImageWatcher_FirstChecksAreSpreadToo(t *testing.T) {
+	lab := newWatchLab(t, nil)
+	lab.watcher.jitter = func(time.Duration) time.Duration { return time.Minute }
+	lab.pass(t, 0)
+	if lab.asked() != 0 {
+		t.Fatal("a replica taking the lead must not check every app at once")
+	}
+	lab.pass(t, time.Minute)
+	if lab.asked() != 1 {
+		t.Fatalf("asked %d after the jitter", lab.asked())
+	}
+}
+
 func TestImageWatcher_TheFirstLookIsTheBaseline(t *testing.T) {
 	lab := newWatchLab(t, func(app *apphost.App) { app.ResolvedDigest = "" })
 	lab.pass(t, 0)

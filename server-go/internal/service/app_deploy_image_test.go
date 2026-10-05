@@ -20,9 +20,14 @@ type stubResolver struct {
 	err    error
 	asked  []string
 	creds  []*apphost.RegistryCredential
+	// during runs while the registry is asked, as a concurrent edit would.
+	during func()
 }
 
 func (r *stubResolver) Resolve(_ context.Context, image string, cred *apphost.RegistryCredential) (string, error) {
+	if r.during != nil {
+		r.during()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.asked = append(r.asked, image)

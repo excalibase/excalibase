@@ -114,7 +114,13 @@ func (w *ImageWatcher) CheckDue(ctx context.Context) {
 func (w *ImageWatcher) due(appID string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return !w.now().Before(w.schedule[appID].due)
+	entry, known := w.schedule[appID]
+	if !known {
+		// A replica that just took the lead spreads its first checks too.
+		entry = watchSchedule{due: w.now().Add(w.jitter(w.every))}
+		w.schedule[appID] = entry
+	}
+	return !w.now().Before(entry.due)
 }
 
 func (w *ImageWatcher) forgetUnlisted(listed map[string]bool) {
@@ -143,9 +149,26 @@ func (w *ImageWatcher) check(ctx context.Context, app *apphost.App) {
 		return
 	}
 	origin := apphost.DeployOrigin{Actor: ImageWatcherActor, Source: apphost.DeploySourceImageWatcher}
-	if _, err := w.deploys.deployDigest(ctx, app.ProjectID, app.ID, app.Image, digest, origin); err != nil {
+	_, err = w.deploys.deployDigest(ctx, app.ProjectID, app.ID, app.Image, digest, origin, stillWatching(app.Image))
+	if errors.Is(err, errWatchOutdated) {
+		return
+	}
+	if err != nil {
 		log.Printf("image watcher: deploy %s/%s at %s: %v", app.ProjectID, app.ID, digest, err)
 		w.failed(app, err)
+	}
+}
+
+// errWatchOutdated: while the registry was asked, the app was edited, paused
+// or opted out, so what was checked no longer speaks for it.
+var errWatchOutdated = errors.New("the app changed while its image was checked")
+
+func stillWatching(image string) func(*apphost.App) error {
+	return func(app *apphost.App) error {
+		if app.Image != image || !app.WatchesImage() {
+			return errWatchOutdated
+		}
+		return nil
 	}
 }
 

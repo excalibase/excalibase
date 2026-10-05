@@ -153,6 +153,33 @@ describe('ContainerPipelinePage', () => {
     await waitFor(() => expect(screen.getByTestId('auto-deploy-toggle')).toBeChecked());
   });
 
+  test('a deploy that lands while the page is open moves the version the toggle sends', async () => {
+    const rolling: Deploy = { ...deploys[0], id: 'dep-4', revision: 4, status: 'rolling', source: 'api' };
+    let polls = 0;
+    const { state, user } = renderPage();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === '/config')
+        return Promise.resolve({ data: { deploymentMode: 'cloud', appHosting: true } } as never);
+      if (url === '/projects/proj-1/apps/app-1') return Promise.resolve({ data: state.app } as never);
+      if (url.startsWith('/projects/proj-1/apps/app-1/deploys')) {
+        polls += 1;
+        if (polls > 1) state.app = { ...state.app, version: 7 };
+        const newest = polls > 1 ? { ...rolling, status: 'succeeded' as const } : rolling;
+        return Promise.resolve({ data: [newest, ...deploys] } as never);
+      }
+      return Promise.resolve({ data: { lines: [] } } as never);
+    });
+    await waitFor(() => expect(polls).toBeGreaterThan(1));
+    await user.click(await screen.findByTestId('auto-deploy-toggle'));
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        '/projects/proj-1/apps/app-1',
+        { autoDeploy: true },
+        { headers: { 'If-Match': '7' } },
+      ),
+    );
+  });
+
   test('auto-deploy shows what the watcher last saw, and why a check failed', async () => {
     renderPage({
       autoDeploy: true,

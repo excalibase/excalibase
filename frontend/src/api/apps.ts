@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import type { TierType } from '../types';
@@ -388,6 +388,16 @@ export const useUpdateApp = (projectId: string, appId: string) => {
       storeSecrets(projectId, await updateApp(projectId, appId, version, input), secrets),
     onSettled: () => qc.invalidateQueries({ queryKey: appsKey(projectId) }),
   });
+};
+
+// A deploy by image moves the app's image and version, so the app is read
+// again whenever the newest deploy changes or finishes.
+export const useAppFollowsDeploys = (projectId: string, appId: string, newest?: Deploy) => {
+  const qc = useQueryClient();
+  const marker = newest ? `${newest.id}:${newest.status}` : '';
+  useEffect(() => {
+    if (marker) qc.invalidateQueries({ queryKey: appKey(projectId, appId), exact: true });
+  }, [qc, projectId, appId, marker]);
 };
 
 export const useSetAutoDeploy = (projectId: string, appId: string) => {

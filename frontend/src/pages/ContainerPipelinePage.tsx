@@ -3,6 +3,7 @@ import {
   apiErrorMessage,
   isDeployInProgress,
   useApp,
+  useAppFollowsDeploys,
   useDeploys,
   useRedeployApp,
 } from '../api/apps';
@@ -26,6 +27,7 @@ function Pipeline({
   const { data: app, isLoading, error } = useApp(projectId, appId);
   const { data: deploys = [] } = useDeploys(projectId, appId, pollIntervalMs);
   const redeploy = useRedeployApp(projectId, appId);
+  useAppFollowsDeploys(projectId, appId, deploys[0]);
 
   if (isLoading) return <Spinner />;
   if (error || !app) {
