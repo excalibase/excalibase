@@ -5,8 +5,11 @@ import { SubNav } from './SubNav';
 import { ProjectHeader } from './ProjectHeader';
 import { CommandMenu } from '../ui/CommandMenu';
 import { PROJECT_NAV } from './navigation';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useRouteProjectId } from '../../hooks/useRouteProjectId';
 
 function ProjectLayoutInner() {
+  useDocumentTitle(useRouteProjectId());
   const location = useLocation();
 
   const initialSection = deriveSection(location.pathname);

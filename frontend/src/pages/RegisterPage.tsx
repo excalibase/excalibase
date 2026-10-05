@@ -5,8 +5,10 @@ import { api } from '../api/client';
 import { Button } from '../components/Button';
 import { ResendVerification } from '../components/auth/ResendVerification';
 import { ProviderButtons } from '../components/auth/ProviderSignIn';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function RegisterPage() {
+  useDocumentTitle('Sign up');
   const [searchParams] = useSearchParams();
   const inviteToken = searchParams.get('invite') ?? '';
 
