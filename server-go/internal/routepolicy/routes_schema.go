@@ -20,6 +20,7 @@ func schemaRead(pattern string) Row {
 		Methods: get, Pattern: "/api/schema/{projectId}" + pattern,
 		Auth: AuthSession, Param: ParamProject,
 		Owner: OwnerProjectAccess, MinRole: roleViewer, Database: true,
+		Discloses: NoSecret,
 	}
 }
 

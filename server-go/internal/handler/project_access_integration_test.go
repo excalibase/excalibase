@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -87,8 +88,43 @@ func e2eRouter(store *pgstore.Store) chi.Router {
 		r.Use(custommw.TenantContext)
 		r.Use(custommw.RequireProjectAccess(store, store))
 		r.Get("/", provH.GetStatus)
+		r.With(auth.RequireWriteCapableForSecrets).Get("/credentials", provH.GetCredentials)
 	})
 	return r
+}
+
+// TestReadOnlyTokenRefusedCredentialsEndToEnd proves against tokens persisted
+// in Postgres that a read-scoped PAT cannot fetch the database password, while
+// a session and a write-capable PAT still pass the gate (EXC-543).
+func TestReadOnlyTokenRefusedCredentialsEndToEnd(t *testing.T) {
+	store := pgtest.New(t)
+	e2eSeed(t, store)
+	r := e2eRouter(store)
+
+	cases := []struct {
+		name    string
+		token   string
+		refused bool
+	}{
+		{"read PAT", e2eIssueToken(t, store, "alice-read", testAliceID, domain.AccessToken{Scopes: auth.ScopeRead}), true},
+		{"read PAT bound to project A", e2eIssueToken(t, store, "alice-read-a", testAliceID, domain.AccessToken{ProjectID: e2eProjectA, Scopes: auth.ScopeRead}), true},
+		{"write PAT", e2eIssueToken(t, store, "alice-write", testAliceID, domain.AccessToken{Scopes: "read,write"}), false},
+		{"session", e2eIssueToken(t, store, "alice-session-creds", testAliceID, domain.AccessToken{Scopes: auth.ScopeSession}), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, e2eStatusA+"/credentials", nil)
+			req.Header.Set("Authorization", "Bearer "+tc.token)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if refused := w.Code == http.StatusForbidden; refused != tc.refused {
+				t.Fatalf("got %d body=%s, refused want %v", w.Code, w.Body.String(), tc.refused)
+			}
+			if tc.refused && strings.Contains(w.Body.String(), "password") {
+				t.Fatalf("refusal leaked credential material: %s", w.Body.String())
+			}
+		})
+	}
 }
 
 // TestProjectAccess_CrossOrgRefusedEndToEnd proves, against a real Postgres

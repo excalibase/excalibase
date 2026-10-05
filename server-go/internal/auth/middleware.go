@@ -209,6 +209,18 @@ func RequireUnrestrictedCredentialForWrites(next http.Handler) http.Handler {
 	})
 }
 
+// RequireWriteCapableForSecrets refuses a write-less PAT on a route that
+// returns credential or secret material (routepolicy Discloses: Secret).
+func RequireWriteCapableForSecrets(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !TokenMayRevealSecrets(GetToken(r.Context())) {
+			writeForbidden(w, "this route requires a write-capable credential")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // writeForbidden emits the 403 body used by the token-level gates.
 func writeForbidden(w http.ResponseWriter, message string) {
 	w.Header().Set(headerContentType, contentTypeJSON)

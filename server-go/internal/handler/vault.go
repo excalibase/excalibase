@@ -248,7 +248,8 @@ func (h *VaultHandler) Routes(r chi.Router) {
 		r.Get("/secrets-list", h.ListSecrets)
 		r.Delete("/secrets-list", h.DeletePrefix)
 		r.Route("/secrets", func(r chi.Router) {
-			r.Get("/*", h.GetSecret)
+			// A human read-only PAT must not carry a tenant password out (EXC-543).
+			r.With(auth.RequireWriteCapableForSecrets).Get("/*", h.GetSecret)
 			r.Put("/*", h.PutSecret)
 			r.Delete("/*", h.DeleteSecret)
 		})

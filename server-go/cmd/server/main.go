@@ -1562,7 +1562,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 			// and restart the tenant workload, so they sit with the lifecycle tier.
 			r.With(admin).Delete("/", d.provHandler.Delete)
 			r.With(owner).Post("/deletion/cancel", d.provHandler.CancelDeletion)
-			r.With(admin, db).Get("/credentials", d.provHandler.GetCredentials)
+			r.With(auth.RequireWriteCapableForSecrets, admin, db).Get("/credentials", d.provHandler.GetCredentials)
 			r.With(admin, db).Post("/credentials/rotate", d.provHandler.RotateCredentials)
 			// A DocumentDB project's own Mongo users hand out passwords (EXC-427).
 			r.With(admin, db).Route("/documentdb/users", d.provHandler.MongoUserRoutes)

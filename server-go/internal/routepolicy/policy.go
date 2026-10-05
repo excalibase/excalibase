@@ -93,6 +93,19 @@ const (
 	OwnerBucketVisibility Owner = "bucket public flag"
 )
 
+// Disclosure is whether a read hands back material — a password, a key, a
+// secret value — that would let its holder act beyond what the read grants.
+type Disclosure string
+
+const (
+	// NoSecret is a read whose answer grants nothing beyond itself.
+	NoSecret Disclosure = "no-secret"
+	// Secret is a read that returns credential or secret material.
+	// auth.RequireWriteCapableForSecrets refuses a write-less PAT on it,
+	// whatever the method: a read-only token must stay read-only (EXC-543).
+	Secret Disclosure = "secret"
+)
+
 // Path parameters that name a tenant.
 const (
 	ParamNone    = ""
@@ -131,6 +144,8 @@ type Row struct {
 	// (middleware.RequireProjectDatabase), never a crash against a cluster
 	// or credential that does not exist (EXC-426).
 	Database bool
+	// Discloses is required on every row that serves a read method.
+	Discloses Disclosure
 	// Note records the non-obvious reason for this row's contract.
 	Note string
 }
