@@ -6,7 +6,7 @@ import { api } from './client';
 export interface AiActivityCall {
   id: number;
   tool: string;
-  status: 'ok' | 'error' | string;
+  status: 'ok' | 'error';
   httpStatus?: number;
   tokenName: string;
   userId: string;

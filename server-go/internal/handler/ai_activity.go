@@ -112,10 +112,12 @@ func activityView(entry domain.AuditEntry, callerID string, live map[string]bool
 		ID: entry.ID, Tool: entry.ResourceID, Status: details.Status, HTTPStatus: details.HTTPStatus,
 		TokenName: details.TokenName, UserID: entry.UserID, At: entry.Timestamp, Mine: entry.UserID == callerID,
 	}
-	if view.Mine && live[entry.TokenHash] {
-		view.TokenID = entry.TokenHash
-	} else if view.Mine {
-		view.TokenRevoked = true
+	if view.Mine && entry.TokenHash != "" {
+		if live[entry.TokenHash] {
+			view.TokenID = entry.TokenHash
+		} else {
+			view.TokenRevoked = true
+		}
 	}
 	return view
 }

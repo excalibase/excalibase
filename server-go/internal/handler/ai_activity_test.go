@@ -33,6 +33,12 @@ func (f fakeTokenList) ListTokensByUser(_ context.Context, userID string) ([]*do
 	return f[userID], nil
 }
 
+type failingTokenList struct{}
+
+func (failingTokenList) ListTokensByUser(context.Context, string) ([]*domain.AccessToken, error) {
+	return nil, errors.New("db down")
+}
+
 func serveActivity(t *testing.T, h *AIActivityHandler, target, userID string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := chi.NewRouter()
@@ -97,5 +103,27 @@ func TestAIActivityReadFailureIsAnError(t *testing.T) {
 	w := serveActivity(t, h, "/api/projects/proj-a/ai-activity/", "me")
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status %d", w.Code)
+	}
+}
+
+func TestAIActivityTokenReadFailureIsAnError(t *testing.T) {
+	audit := &fakeProjectAudit{entries: []domain.AuditEntry{{ID: 1, UserID: "me", Details: `{}`}}}
+	w := serveActivity(t, NewAIActivityHandler(audit, failingTokenList{}), "/api/projects/proj-a/ai-activity/", "me")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d", w.Code)
+	}
+}
+
+func TestAIActivityCallWithoutATokenIsNotShownAsRevoked(t *testing.T) {
+	audit := &fakeProjectAudit{entries: []domain.AuditEntry{{ID: 1, UserID: "me", ResourceID: "list_tables", Details: `{"status":"ok"}`}}}
+	w := serveActivity(t, NewAIActivityHandler(audit, fakeTokenList{}), "/api/projects/proj-a/ai-activity/", "me")
+	var body struct {
+		Calls []aiActivityView `json:"calls"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Calls) != 1 {
+		t.Fatalf("decode %v: %s", err, w.Body.String())
+	}
+	if body.Calls[0].TokenRevoked || body.Calls[0].TokenID != "" {
+		t.Fatalf("call = %+v", body.Calls[0])
 	}
 }

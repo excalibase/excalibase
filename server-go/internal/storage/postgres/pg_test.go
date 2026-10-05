@@ -633,8 +633,6 @@ func TestQueryProjectAuditListsOneProjectsCallsThroughOneDoor(t *testing.T) {
 
 // --- Org tests ---
 
-// --- Org tests ---
-
 func setupOrgTest(t *testing.T) (*Store, string) {
 	t.Helper()
 	store := testStore(t)
