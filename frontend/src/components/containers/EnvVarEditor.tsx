@@ -96,7 +96,7 @@ function ValueField({ index, row, databaseName, update }: RowProps) {
   return (
     <input
       aria-label={`Value for variable ${index + 1}`}
-      placeholder="value"
+      placeholder="https://api.example.com"
       value={row.value}
       onChange={(e) => update({ value: e.target.value })}
       className={cn(inputClass, 'flex-1 min-w-0')}
@@ -122,7 +122,7 @@ export function EnvVarEditor({ rows, errors, databaseName, onChange }: EnvVarEdi
           <div className="flex items-center gap-2">
             <input
               aria-label={`Name of variable ${index + 1}`}
-              placeholder="NAME"
+              placeholder="API_BASE_URL"
               value={row.name}
               onChange={(e) => updateRow(index, { name: e.target.value })}
               className={cn(inputClass, 'font-mono max-w-[12rem]')}

@@ -188,6 +188,7 @@ export function MigrationsPage() {
                   id="migration-sql"
                   value={form.sql}
                   onChange={(e) => setForm({ ...form, sql: e.target.value })}
+                  placeholder="ALTER TABLE orders ADD COLUMN shipped_at timestamptz;"
                   rows={10}
                   className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-primary resize-none"
                 />

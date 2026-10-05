@@ -30,8 +30,8 @@ describe('CreateTablePanel columns', () => {
     const user = userEvent.setup();
     await user.type(screen.getByTestId('table-name-input'), 'notes');
     await user.click(screen.getByText('+ Add column'));
-    const names = screen.getAllByPlaceholderText('name');
-    const types = screen.getAllByPlaceholderText('type');
+    const names = screen.getAllByPlaceholderText('e.g. email');
+    const types = screen.getAllByPlaceholderText('e.g. text');
     await user.type(names[1], 'body');
     await user.clear(types[1]);
     await user.type(types[1], 'varchar');

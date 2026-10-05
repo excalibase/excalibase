@@ -62,6 +62,17 @@ describe('AppDomains', () => {
     expect(row).toHaveTextContent(/waiting for dns/i);
   });
 
+  test('the domain field shows a subdomain example and refuses a bare domain in words', async () => {
+    renderDomains([]);
+    expect(await screen.findByTestId('domain-input')).toHaveAttribute(
+      'placeholder',
+      'shop.example.com',
+    );
+    expect(
+      screen.getByText('A subdomain such as shop.example.com, not a bare domain like example.com.'),
+    ).toBeInTheDocument();
+  });
+
   test('adding and verifying a domain', async () => {
     const user = renderDomains([]);
     await user.type(await screen.findByTestId('domain-input'), 'www.example.com');

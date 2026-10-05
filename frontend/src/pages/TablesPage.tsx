@@ -270,7 +270,7 @@ export function TablesPage() {
         <div className="space-y-4">
           <div>
             <label htmlFor="col-name-input" className="block text-sm font-medium text-text-secondary mb-1">Name</label>
-            <input id="col-name-input" type="text" value={newColName} onChange={e => setNewColName(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" data-testid="column-name-input" autoFocus />
+            <input id="col-name-input" type="text" value={newColName} onChange={e => setNewColName(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="e.g. created_at" data-testid="column-name-input" autoFocus />
           </div>
           <div>
             <label htmlFor="col-type-select" className="block text-sm font-medium text-text-secondary mb-1">Type</label>

@@ -178,6 +178,21 @@ function ClusterSettingsBody({ projectId, settings }: BodyProps) {
   );
 }
 
+// Each example is the Postgres default, or within the smallest plan's bounds.
+const PARAMETER_EXAMPLES: Record<string, string> = {
+  work_mem: '4MB',
+  maintenance_work_mem: '64MB',
+  effective_cache_size: '384MB',
+  random_page_cost: '1.1',
+  seq_page_cost: '1',
+  effective_io_concurrency: '200',
+  default_statistics_target: '100',
+  jit: 'off',
+  default_transaction_isolation: 'read committed',
+  lock_timeout: '5s',
+  deadlock_timeout: '1s',
+};
+
 interface ParametersFormProps {
   readonly settings: ClusterSettings;
   readonly busy: boolean;
@@ -198,7 +213,7 @@ function ParametersForm({ settings, busy, onSave }: ParametersFormProps) {
     <div>
       <p className="mb-2">
         Postgres settings you may tune; empty means the default. Values are checked against the
-        plan.
+        plan. Memory takes kB, MB, GB or TB (e.g. 64MB); times take ms, s, min or h (e.g. 5s).
       </p>
       <div className="grid grid-cols-2 gap-2">
         {settings.tunableParameters.map((name) => (
@@ -213,6 +228,7 @@ function ParametersForm({ settings, busy, onSave }: ParametersFormProps) {
                 type="text"
                 value={values[name] ?? ''}
                 onChange={(event) => setValues({ ...values, [name]: event.target.value })}
+                placeholder={PARAMETER_EXAMPLES[name]}
                 className={`${inputClass} w-32`}
               />
             ) : (

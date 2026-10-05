@@ -105,7 +105,7 @@ export function OrgsPage() {
               className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500"
               placeholder="my-company"
             />
-            <p className="text-xs text-text-tertiary mt-1">Lowercase letters, numbers, and hyphens only</p>
+            <p className="text-xs text-text-tertiary mt-1">2–50 lowercase letters, digits and hyphens, starting with a letter or digit</p>
           </div>
           <div className="flex gap-2">
             <Button type="submit" disabled={creating || !newName.trim() || !newSlug.trim()}>

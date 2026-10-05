@@ -34,7 +34,7 @@ describe('sign-in identifier', () => {
     renderLogin();
     const field = screen.getByLabelText('Username or e-mail');
     expect(field).toHaveAttribute('autocomplete', 'username');
-    expect(field).toHaveAttribute('placeholder', 'Enter username or e-mail');
+    expect(field).toHaveAttribute('placeholder', 'you@company.com');
   });
 
   test('an e-mail address is sent as typed, trimmed', async () => {

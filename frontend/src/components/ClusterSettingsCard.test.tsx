@@ -121,6 +121,18 @@ describe('ClusterSettingsCard', () => {
     );
   });
 
+  test('each setting shows an example value and the units it takes', async () => {
+    renderCard(project());
+    expect(
+      within(await screen.findByTestId('param-work_mem')).getByRole('textbox'),
+    ).toHaveAttribute('placeholder', '4MB');
+    expect(within(screen.getByTestId('param-jit')).getByRole('textbox')).toHaveAttribute(
+      'placeholder',
+      'off',
+    );
+    expect(screen.getByText(/Memory takes kB, MB, GB or TB/)).toBeInTheDocument();
+  });
+
   // The tier follows the organization; the card can only apply the org's plan.
   test('offers to move onto the organization plan when it differs', async () => {
     const user = userEvent.setup();

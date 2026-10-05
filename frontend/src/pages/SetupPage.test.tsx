@@ -119,6 +119,13 @@ describe('SetupPage', () => {
     expect(screen.getByText('printed in the server log on first start')).toBeInTheDocument();
   });
 
+  test('admin step shows example username and email', async () => {
+    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    await screen.findByTestId('vault-setup-admin');
+    expect(screen.getByTestId('admin-username')).toHaveAttribute('placeholder', 'admin');
+    expect(screen.getByTestId('admin-email')).toHaveAttribute('placeholder', 'you@company.com');
+  });
+
   test('renders init step once the admin exists', async () => {
     renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
     expect(await screen.findByTestId('vault-setup-init')).toBeInTheDocument();

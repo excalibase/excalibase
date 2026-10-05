@@ -143,7 +143,7 @@ export function AppDomains({
       <form onSubmit={submit} className="flex gap-2">
         <input
           aria-label="Domain"
-          placeholder="www.example.com"
+          placeholder="shop.example.com"
           value={hostname}
           onChange={(e) => setHostname(e.target.value)}
           className={inputClass}
@@ -158,6 +158,9 @@ export function AppDomains({
           Add
         </button>
       </form>
+      <p className="text-xs text-text-tertiary">
+        A subdomain such as shop.example.com, not a bare domain like example.com.
+      </p>
       {error && (
         <div role="alert" className="text-sm text-red-400">
           {apiErrorMessage(error, 'The domain could not be changed')}

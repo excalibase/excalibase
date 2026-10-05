@@ -424,6 +424,7 @@ export function EdgeFunctionsPage() {
               placeholder="STRIPE_KEY"
               className="w-full px-3 py-2 bg-bg-tertiary border border-border-primary rounded text-sm text-text-primary font-mono"
             />
+            <p className="text-xs text-text-tertiary mt-1">Up to 64 letters, digits and underscores, not starting with a digit.</p>
           </div>
           <div>
             <label htmlFor="secret-value-input" className="block text-xs text-text-tertiary mb-1">Value</label>
@@ -432,7 +433,7 @@ export function EdgeFunctionsPage() {
               type="password"
               value={secretValue}
               onChange={(e) => setSecretValue(e.target.value)}
-              placeholder="sk_test_…"
+              placeholder="The value Deno.env.get returns"
               className="w-full px-3 py-2 bg-bg-tertiary border border-border-primary rounded text-sm text-text-primary"
             />
           </div>
@@ -453,7 +454,7 @@ export function EdgeFunctionsPage() {
             <textarea
               value={envPaste}
               onChange={(e) => setEnvPaste(e.target.value)}
-              placeholder={'STRIPE_KEY=sk_test_...\nDATABASE_URL="postgres://..."\n# comments and blank lines are ignored'}
+              placeholder={'STRIPE_KEY=...\nAPI_BASE_URL="https://api.example.com"\n# comments and blank lines are ignored'}
               rows={6}
               className="w-full px-3 py-2 bg-bg-tertiary border border-border-primary rounded text-xs text-text-primary font-mono"
               data-testid="env-paste-textarea"

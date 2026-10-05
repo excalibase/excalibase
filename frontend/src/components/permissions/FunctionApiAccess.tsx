@@ -273,7 +273,7 @@ function FunctionRoles({ projectId, fnKey, name, roles }: FunctionRolesProps) {
           aria-label={`Role allowed to call ${name}`}
           value={role}
           onChange={(e) => setRole(e.target.value)}
-          placeholder="role"
+          placeholder="e.g. editor"
           className="w-40 px-2 py-1 rounded border border-border-primary bg-bg-primary text-text-primary font-mono"
         />
         <button type="submit" disabled={add.isPending} className={`${smallButton} flex items-center gap-1 text-purple-400 hover:bg-purple-500/10`}>

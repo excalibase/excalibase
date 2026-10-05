@@ -12,6 +12,11 @@ interface ProviderSettings {
 
 const labels: Record<string, string> = { google: 'Google', github: 'GitHub' };
 
+const clientIdExamples: Record<string, string> = {
+  google: '1234567890-abc123.apps.googleusercontent.com',
+  github: 'Ov23liAbCdEf12345678',
+};
+
 const inputClass = 'w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm';
 
 function ProviderForm({ initial }: { readonly initial: ProviderSettings }) {
@@ -53,13 +58,14 @@ function ProviderForm({ initial }: { readonly initial: ProviderSettings }) {
       </div>
       <div>
         <label htmlFor={`${prefix}-client-id`} className="block text-sm text-text-secondary mb-1">Client ID</label>
-        <input id={`${prefix}-client-id`} value={clientId} onChange={(e) => setClientId(e.target.value)} className={inputClass} autoComplete="off" />
+        <input id={`${prefix}-client-id`} value={clientId} onChange={(e) => setClientId(e.target.value)} className={inputClass} autoComplete="off"
+          placeholder={clientIdExamples[settings.provider]} />
       </div>
       <div>
         <label htmlFor={`${prefix}-secret`} className="block text-sm text-text-secondary mb-1">Client secret</label>
         <input id={`${prefix}-secret`} type="password" value={secret} onChange={(e) => setSecret(e.target.value)}
           className={inputClass} autoComplete="new-password"
-          placeholder={settings.clientSecretSet ? 'Leave empty to keep the current secret' : ''} />
+          placeholder={settings.clientSecretSet ? 'Leave empty to keep the current secret' : `From the OAuth app at ${name}`} />
         <p className="text-xs text-text-secondary mt-1">
           {settings.clientSecretSet ? 'A secret is set. It is never shown again.' : 'No secret set.'}
         </p>

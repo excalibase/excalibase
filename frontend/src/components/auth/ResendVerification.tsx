@@ -28,7 +28,7 @@ export function ResendVerification({ email: knownEmail }: { readonly email?: str
         <div>
           <label htmlFor="resend-email" className="block text-sm font-medium text-text-secondary mb-1.5">Your email</label>
           <input id="resend-email" type="email" autoComplete="email" value={email}
-            onChange={(e) => setEmail(e.target.value)} className={inputClass} placeholder="john@company.com" />
+            onChange={(e) => setEmail(e.target.value)} className={inputClass} placeholder="you@company.com" />
         </div>
       )}
       <Button type="button" onClick={resend} disabled={state === 'sending' || !email.trim()} className="w-full">

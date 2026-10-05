@@ -32,6 +32,16 @@ describe('Studio sign-in providers settings', () => {
     expect(api.get).toHaveBeenCalledWith('/admin/sso-providers/');
   });
 
+  test('the client ID shows an example in the provider format; the secret says where it comes from', async () => {
+    render(<SignInProviders />);
+    const google = await screen.findByTestId('sso-google');
+    expect(within(google).getByLabelText('Client ID')).toHaveAttribute('placeholder', '1234567890-abc123.apps.googleusercontent.com');
+    expect(within(google).getByLabelText('Client secret')).toHaveAttribute('placeholder', 'From the OAuth app at Google');
+    const github = screen.getByTestId('sso-github');
+    expect(within(github).getByLabelText('Client ID')).toHaveAttribute('placeholder', 'Ov23liAbCdEf12345678');
+    expect(within(github).getByLabelText('Client secret')).toHaveAttribute('placeholder', 'Leave empty to keep the current secret');
+  });
+
   test('saving sends the secret only when one is typed', async () => {
     const u = userEvent.setup();
     vi.mocked(api.put).mockResolvedValue({ data: listed.providers[0] } as never);

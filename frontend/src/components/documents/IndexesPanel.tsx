@@ -56,7 +56,7 @@ export function IndexesPanel({ collectionRef }: { readonly collectionRef: Collec
       <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col text-xs text-text-secondary gap-1">
           <span>Field</span>
-          <input aria-label="Index field" value={field} onChange={(e) => setField(e.target.value)} className={inputClass} />
+          <input aria-label="Index field" value={field} onChange={(e) => setField(e.target.value)} placeholder="e.g. email" className={inputClass} />
         </label>
         <label className="flex flex-col text-xs text-text-secondary gap-1">
           <span>Type</span>
@@ -70,7 +70,7 @@ export function IndexesPanel({ collectionRef }: { readonly collectionRef: Collec
         </label>
         <label className="flex flex-col text-xs text-text-secondary gap-1">
           <span>Name (optional)</span>
-          <input aria-label="Index name" value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+          <input aria-label="Index name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. email_1" className={inputClass} />
         </label>
         <label className="flex items-center gap-1.5 text-sm text-text-secondary pb-1.5">
           <input type="checkbox" aria-label="Unique" checked={unique} onChange={(e) => setUnique(e.target.checked)} />
