@@ -235,6 +235,9 @@ export function MongoUsersPage() {
           Create user
         </Button>
       </form>
+      <p className="text-xs text-text-tertiary">
+        3–63 lowercase letters, digits and underscores, starting with a letter.
+      </p>
 
       {users.isLoading && <Loader2 className="w-5 h-5 animate-spin text-text-secondary" />}
       {users.isError && (

@@ -74,8 +74,8 @@ test.describe('API permissions against a live Studio', () => {
       await page.getByTestId('new-table-btn').click();
       await page.getByTestId('table-name-input').fill(table);
       await page.getByText('+ Add column').click();
-      await page.getByPlaceholder('name').nth(1).fill('body');
-      await page.getByPlaceholder('type').nth(1).fill('text');
+      await page.getByPlaceholder('e.g. email').nth(1).fill('body');
+      await page.getByPlaceholder('e.g. text').nth(1).fill('text');
       const anon = page.getByLabel('Anyone can read (anon)');
       await expect(anon, 'the live user must be a Developer or above').toBeVisible();
       await anon.check();

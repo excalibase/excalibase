@@ -119,11 +119,17 @@ function DiskFields({ values, errors, onChange }: DiskFieldsProps) {
       </p>
       {values.diskEnabled && (
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Mount path" htmlFor="app-disk-mount" error={errors.diskMountPath}>
+          <Field
+            label="Mount path"
+            htmlFor="app-disk-mount"
+            error={errors.diskMountPath}
+            hint="An absolute path such as /data, not a system directory like /etc or /usr."
+          >
             <input
               id="app-disk-mount"
               value={values.diskMountPath}
               onChange={(e) => onChange({ diskMountPath: e.target.value })}
+              placeholder="/data"
               className={cn(inputClass, 'font-mono')}
               data-testid="app-disk-mount"
             />
@@ -132,7 +138,11 @@ function DiskFields({ values, errors, onChange }: DiskFieldsProps) {
             label={values.diskAttached ? 'Size' : 'Size (GiB)'}
             htmlFor="app-disk-size"
             error={errors.diskSize}
-            hint={values.diskAttached ? 'Resize the disk from the container page.' : undefined}
+            hint={
+              values.diskAttached
+                ? 'Resize the disk from the container page.'
+                : "Whole GiB, from 1 up to the plan's cap."
+            }
           >
             <input
               id="app-disk-size"
@@ -141,6 +151,7 @@ function DiskFields({ values, errors, onChange }: DiskFieldsProps) {
               value={values.diskSize}
               disabled={values.diskAttached}
               onChange={(e) => onChange({ diskSize: e.target.value })}
+              placeholder="10"
               className={inputClass}
               data-testid="app-disk-size"
             />
@@ -246,7 +257,7 @@ export function AppForm({
           label="Name"
           htmlFor="app-name"
           error={errors.name}
-          hint="Lowercase letters, digits and hyphens."
+          hint="2–50 lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit."
         >
           <input
             id="app-name"
@@ -255,6 +266,7 @@ export function AppForm({
               setNameTouched(true);
               set({ name: e.target.value });
             }}
+            placeholder="web"
             className={inputClass}
             data-testid="app-name"
           />
@@ -275,6 +287,7 @@ export function AppForm({
                 max={65535}
                 value={values.port}
                 onChange={(e) => set({ port: e.target.value })}
+                placeholder="8080"
                 className={inputClass}
                 data-testid="app-port"
               />
@@ -358,6 +371,10 @@ export function AppForm({
           <p className="text-xs text-text-tertiary">
             A value, a connection to this project's database, or a secret kept in the project's
             vault.
+          </p>
+          <p className="text-xs text-text-tertiary">
+            Names are letters, digits and underscores, not starting with a digit; up to 100
+            variables.
           </p>
         </div>
         <EnvVarEditor

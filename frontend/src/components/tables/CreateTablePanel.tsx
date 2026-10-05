@@ -160,7 +160,7 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
                   setNewCols(c);
                 }}
                 className="flex-1 px-2 py-1.5 rounded border border-border-primary bg-bg-primary text-text-primary text-xs"
-                placeholder="name"
+                placeholder="e.g. email"
               />
               <input
                 value={col.type}
@@ -170,7 +170,7 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
                   setNewCols(c);
                 }}
                 className="flex-1 px-2 py-1.5 rounded border border-border-primary bg-bg-primary text-text-primary text-xs"
-                placeholder="type"
+                placeholder="e.g. text"
               />
               {i > 0 && (
                 <button onClick={() => setNewCols(newCols.filter((_, j) => j !== i))} className="p-1 text-red-400" aria-label="Remove column">

@@ -339,6 +339,7 @@ export function SetupPage() {
                 autoComplete="username"
                 field={field}
                 testId="admin-username"
+                placeholder="admin"
               />
             )}
           </adminForm.Field>
@@ -357,6 +358,7 @@ export function SetupPage() {
                 autoComplete="email"
                 field={field}
                 testId="admin-email"
+                placeholder="you@company.com"
               />
             )}
           </adminForm.Field>
@@ -485,9 +487,10 @@ interface TextFieldProps {
   readonly field: FieldApiLike<string>;
   readonly testId: string;
   readonly hint?: string;
+  readonly placeholder?: string;
 }
 
-function TextField({ label, type, autoComplete, field, testId, hint }: TextFieldProps) {
+function TextField({ label, type, autoComplete, field, testId, hint, placeholder }: TextFieldProps) {
   const error = field.state.meta.isTouched ? (field.state.meta.errors[0] as string | undefined) : undefined;
   return (
     <label className="block mb-3">
@@ -498,6 +501,7 @@ function TextField({ label, type, autoComplete, field, testId, hint }: TextField
         value={field.state.value}
         onChange={(e) => field.handleChange(e.target.value)}
         onBlur={field.handleBlur}
+        placeholder={placeholder}
         className="mt-1 w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500"
         data-testid={testId}
         required

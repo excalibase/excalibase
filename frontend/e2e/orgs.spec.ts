@@ -163,7 +163,7 @@ test.describe('Registration', () => {
     await page.goto('/register');
     await expect(page.getByRole('heading', { name: 'Create Account' })).toBeVisible();
     await expect(page.getByPlaceholder('johndoe')).toBeVisible();
-    await expect(page.getByPlaceholder('john@company.com')).toBeVisible();
+    await expect(page.getByPlaceholder('you@company.com')).toBeVisible();
     await expect(page.getByPlaceholder('Choose a password')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Create Account' })).toBeVisible();
   });
@@ -190,7 +190,7 @@ test.describe('Registration', () => {
     await page.goto('/register');
     await page.waitForLoadState('networkidle');
     await page.getByPlaceholder('johndoe').fill('testuser');
-    await page.getByPlaceholder('john@company.com').fill('test@test.com');
+    await page.getByPlaceholder('you@company.com').fill('test@test.com');
     await page.getByPlaceholder('Choose a password').fill('Test123!');
     await page.getByLabel('Confirm password').fill('Test123!');
     await page.getByRole('button', { name: 'Create Account' }).click();
@@ -221,7 +221,7 @@ test.describe('Registration', () => {
 
     await page.goto('/register');
     await page.getByPlaceholder('johndoe').fill('dup');
-    await page.getByPlaceholder('john@company.com').fill('dup@test.com');
+    await page.getByPlaceholder('you@company.com').fill('dup@test.com');
     await page.getByPlaceholder('Choose a password').fill('Dup12345');
     await page.getByLabel('Confirm password').fill('Dup12345');
     await page.getByRole('button', { name: 'Create Account' }).click();

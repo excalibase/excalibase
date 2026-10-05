@@ -64,6 +64,12 @@ describe('MongoUsersPage', () => {
     expect(screen.getByText(/1 of 100/)).toBeInTheDocument();
   });
 
+  test('the user name field states the server rule', async () => {
+    mockServer();
+    renderAt(<MongoUsersPage />);
+    expect(await screen.findByText('3–63 lowercase letters, digits and underscores, starting with a letter.')).toBeInTheDocument();
+  });
+
   test('a new user is shown once with a connection string', async () => {
     mockServer();
     const u = userEvent.setup();

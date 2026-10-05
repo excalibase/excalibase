@@ -130,6 +130,7 @@ export function LifecycleActions({ app, deployed, onError, followMs = 3000 }: Li
               value={typedName}
               onChange={(e) => setTypedName(e.target.value)}
               aria-label="Type the container name to confirm"
+              placeholder={app.name}
               className="w-32 px-2 py-1 rounded-md bg-bg-tertiary border border-border-primary text-text-primary"
               data-testid="delete-confirm-name"
             />

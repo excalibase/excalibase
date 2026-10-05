@@ -135,7 +135,7 @@ export function FunctionsPage() {
             <label htmlFor="fn-name-input" className="block text-sm font-medium text-text-secondary mb-1">Function Name</label>
             <input id="fn-name-input" type="text" value={fName} onChange={e => setFName(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              data-testid="fn-name-input" autoFocus />
+              placeholder="e.g. order_total" data-testid="fn-name-input" autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -149,7 +149,8 @@ export function FunctionsPage() {
             <div>
               <label htmlFor="fn-return-input" className="block text-sm font-medium text-text-secondary mb-1">Returns</label>
               <input id="fn-return-input" type="text" value={fReturn} onChange={e => setFReturn(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                placeholder="e.g. numeric" />
             </div>
           </div>
           <div>

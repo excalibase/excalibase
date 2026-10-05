@@ -61,6 +61,7 @@ export function ImportMapping({
           <input
             value={target.schema}
             onChange={(e) => onTargetChange({ ...target, schema: e.target.value })}
+            placeholder="public"
             className={inputClass}
             data-testid="import-schema"
           />
@@ -87,6 +88,7 @@ export function ImportMapping({
           <input
             value={target.table}
             onChange={(e) => onTargetChange({ ...target, table: e.target.value })}
+            placeholder="e.g. customers"
             className={inputClass}
             data-testid="import-table-name"
           />

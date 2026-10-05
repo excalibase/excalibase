@@ -386,3 +386,33 @@ describe('AppForm', () => {
     expect(screen.getByTestId('app-port')).toBeInTheDocument();
   });
 });
+
+describe('AppForm examples', () => {
+  test('name, port and variables show example values and the name rule', () => {
+    renderForm();
+    expect(screen.getByTestId('app-name')).toHaveAttribute('placeholder', 'web');
+    expect(screen.getByText(
+      '2–50 lowercase letters, digits and hyphens, starting with a letter and ending with a letter or digit.',
+    )).toBeInTheDocument();
+    expect(screen.getByTestId('app-port')).toHaveAttribute('placeholder', '8080');
+  });
+
+  test('the disk fields show an example mount path and size with their rules', async () => {
+    const { user } = renderForm();
+    await user.click(screen.getByTestId('app-disk-enabled'));
+    expect(screen.getByTestId('app-disk-mount')).toHaveAttribute('placeholder', '/data');
+    expect(screen.getByText('An absolute path such as /data, not a system directory like /etc or /usr.')).toBeInTheDocument();
+    expect(screen.getByTestId('app-disk-size')).toHaveAttribute('placeholder', '10');
+    expect(screen.getByText("Whole GiB, from 1 up to the plan's cap.")).toBeInTheDocument();
+  });
+
+  test('a variable row shows an example name and value', async () => {
+    const { user } = renderForm();
+    await user.click(screen.getByTestId('env-add'));
+    expect(screen.getByTestId('env-name-0')).toHaveAttribute('placeholder', 'API_BASE_URL');
+    expect(screen.getByTestId('env-value-0')).toHaveAttribute('placeholder', 'https://api.example.com');
+    expect(screen.getByText(
+      'Names are letters, digits and underscores, not starting with a digit; up to 100 variables.',
+    )).toBeInTheDocument();
+  });
+});

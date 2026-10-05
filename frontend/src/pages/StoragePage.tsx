@@ -261,11 +261,11 @@ function CreateBucketModal({ projectId, onClose, onCreated }: CreateBucketModalP
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="bucket-name"
+          placeholder="avatars"
           autoFocus
           className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-sm"
         />
-        <p className="text-xs text-text-tertiary">3-63 chars, lowercase, digits, hyphens.</p>
+        <p className="text-xs text-text-tertiary">3–63 lowercase letters, digits and hyphens, not starting or ending with a hyphen.</p>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
           <span>Public — anyone can read objects without auth</span>
