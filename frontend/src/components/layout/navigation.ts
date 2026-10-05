@@ -28,6 +28,7 @@ import {
   UserCog,
   Container,
   LayoutDashboard,
+  Bot,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -92,6 +93,7 @@ export const PROJECT_NAV: NavSection[] = [
   // { key: 'realtime', label: 'Realtime', icon: Radio, to: 'realtime' },
   { key: 'storage', label: 'Storage', icon: FolderOpen, to: 'storage' },
   { key: 'api-keys', label: 'API Keys', icon: KeyRound, to: 'api-keys' },
+  { key: 'ai-tools', label: 'AI Tools', icon: Bot, to: 'ai-tools' },
   {
     key: 'monitoring',
     label: 'Monitoring',
