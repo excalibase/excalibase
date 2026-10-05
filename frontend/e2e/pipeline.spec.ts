@@ -101,6 +101,20 @@ test.describe('Container pipeline', () => {
     await expect(snippet).toContainText('${{ secrets.EXCALIBASE_TOKEN }}');
   });
 
+  test('gives GitLab CI, Jenkins and plain curl setups too', async ({ page }) => {
+    await mockPipeline(page);
+    await page.goto('/project/test-project/containers/app-1/pipeline');
+    const snippet = page.getByTestId('ci-snippet');
+    await page.getByTestId('ci-tab-gitlab').click();
+    await expect(snippet).toContainText('docker:27-dind');
+    await expect(page.getByTestId('ci-file')).toHaveText('.gitlab-ci.yml');
+    await page.getByTestId('ci-tab-jenkins').click();
+    await expect(snippet).toContainText("credentials('excalibase-token')");
+    await page.getByTestId('ci-tab-curl').click();
+    await expect(snippet).toContainText('COMMIT_SHA');
+    await expect(snippet).toContainText('/projects/test-project/apps/app-1');
+  });
+
   test('is reached from the container page', async ({ page }) => {
     await mockPipeline(page);
     await page.route(new RegExp(`${APP_PATH}/(domains/|certificate|disk)$`), (route) =>

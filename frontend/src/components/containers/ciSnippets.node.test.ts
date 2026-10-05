@@ -1,10 +1,21 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { spawn } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parse } from 'yaml';
-import { deployScript, githubActionsSnippet, imageRepository, type SnippetTarget } from './ciSnippets';
+import {
+  curlSnippet,
+  deployScript,
+  githubActionsSnippet,
+  gitlabCiSnippet,
+  imageRepository,
+  jenkinsSnippet,
+  type SnippetTarget,
+} from './ciSnippets';
 
 const DIGEST = `sha256:${'ab'.repeat(32)}`;
 const COMMIT = '9fceb02d0ae598e95dc970b74767f19372d61af8';
@@ -195,5 +206,127 @@ describe('githubActionsSnippet', () => {
       username: '${{ secrets.REGISTRY_USERNAME }}',
       password: '${{ secrets.REGISTRY_PASSWORD }}',
     });
+  });
+});
+
+// A docker stand-in on PATH: it records each call and answers inspect the way
+// docker does after a push, with the repository at the pushed digest.
+function fakeTools(): { bin: string; calls: () => string[] } {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-snippet-'));
+  const log = join(dir, 'calls.log');
+  writeFileSync(
+    join(dir, 'docker'),
+    `#!/bin/sh
+if [ "$1" = login ]; then cat >/dev/null; fi
+echo "docker $*" >> "${log}"
+if [ "$1" = inspect ]; then
+  for last in "$@"; do :; done
+  echo "\${last%:*}@${DIGEST}"
+fi
+`,
+  );
+  writeFileSync(join(dir, 'apk'), `#!/bin/sh\necho "apk $*" >> "${log}"\n`);
+  chmodSync(join(dir, 'docker'), 0o755);
+  chmodSync(join(dir, 'apk'), 0o755);
+  return {
+    bin: dir,
+    calls: () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []),
+  };
+}
+
+describe('gitlabCiSnippet', () => {
+  test('builds, pushes and deploys the pushed digest with the commit', async () => {
+    const yamlText = gitlabCiSnippet(target('registry.gitlab.com/acme/web:main'));
+    const job = (parse(yamlText) as Record<string, { script: string[]; image: string; services: string[]; variables: Record<string, string> }>)['deploy'];
+    expect(job.image).toMatch(/^docker:/);
+    expect(job.services[0]).toMatch(/^docker:.*dind$/);
+    const tools = fakeTools();
+
+    const result = await run(job.script.join('\n'), {
+      ...job.variables,
+      PATH: `${tools.bin}:${process.env.PATH}`,
+      EXCALIBASE_TOKEN: TOKEN,
+      CI_COMMIT_SHA: COMMIT,
+      CI_REGISTRY: 'registry.gitlab.com',
+      CI_REGISTRY_USER: 'gitlab-ci-token',
+      CI_REGISTRY_PASSWORD: 'job-token',
+    });
+    expect(result.code, result.out).toBe(0);
+    expect(tools.calls()).toEqual(
+      expect.arrayContaining([
+        'docker login -u gitlab-ci-token --password-stdin registry.gitlab.com',
+        `docker build -t registry.gitlab.com/acme/web:${COMMIT} .`,
+        `docker push registry.gitlab.com/acme/web:${COMMIT}`,
+      ]),
+    );
+    expect(fake.deploys).toEqual([{ image: `registry.gitlab.com/acme/web@${DIGEST}`, commitSha: COMMIT }]);
+  }, 30_000);
+
+  test('logs in to another registry with masked variables', () => {
+    const yamlText = gitlabCiSnippet(target('ghcr.io/acme/web:main'));
+    expect(yamlText).toContain('"$REGISTRY_PASSWORD" | docker login -u "$REGISTRY_USERNAME" --password-stdin ghcr.io');
+    expect(gitlabCiSnippet(target('acme/web:main'))).toContain(
+      '"$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin',
+    );
+  });
+});
+
+// Groovy reads a ''' string's backslash escapes; this is what sh then receives.
+function groovySingleQuoted(text: string): string {
+  return text.replace(/\\(\n|.)/g, (_, next: string) => {
+    const escapes: Record<string, string> = { '\\': '\\', "'": "'", n: '\n', t: '\t', $: '$', '\n': '' };
+    if (!(next in escapes)) throw new Error(`Groovy refuses the escape \\${next}`);
+    return escapes[next];
+  });
+}
+
+function jenkinsShellSteps(jenkinsfile: string): string[] {
+  return [...jenkinsfile.matchAll(/sh '''([\s\S]*?)'''/g)].map((match) => groovySingleQuoted(match[1]));
+}
+
+describe('jenkinsSnippet', () => {
+  test('builds, pushes and deploys the pushed digest with the commit', async () => {
+    const jenkinsfile = jenkinsSnippet(target());
+    expect(jenkinsfile).toContain("EXCALIBASE_TOKEN = credentials('excalibase-token')");
+    const steps = jenkinsShellSteps(jenkinsfile);
+    expect(steps).toHaveLength(2);
+    const tools = fakeTools();
+    const env = {
+      PATH: `${tools.bin}:${process.env.PATH}`,
+      IMAGE_REPOSITORY: 'ghcr.io/acme/web',
+      GIT_COMMIT: COMMIT,
+      EXCALIBASE_TOKEN: TOKEN,
+      REGISTRY_USERNAME: 'ci',
+      REGISTRY_PASSWORD: 'secret',
+    };
+
+    for (const step of steps) {
+      const result = await run(step, env);
+      expect(result.code, result.out).toBe(0);
+    }
+    expect(tools.calls()).toEqual(
+      expect.arrayContaining([
+        'docker login -u ci --password-stdin ghcr.io',
+        `docker push ghcr.io/acme/web:${COMMIT}`,
+      ]),
+    );
+    expect(fake.deploys).toEqual([{ image: `ghcr.io/acme/web@${DIGEST}`, commitSha: COMMIT }]);
+  }, 30_000);
+
+  test('names the repository it pushes to', () => {
+    expect(jenkinsSnippet(target('acme/web:main'))).toContain("IMAGE_REPOSITORY = 'acme/web'");
+  });
+});
+
+describe('curlSnippet', () => {
+  test('deploys from any CI that sets the three variables', async () => {
+    const result = await run(curlSnippet(target()), ciEnv);
+    expect(result.code, result.out).toBe(0);
+    expect(fake.deploys).toEqual([{ image: `ghcr.io/acme/web@${DIGEST}`, commitSha: COMMIT }]);
+  }, 30_000);
+
+  test('says what it needs before it runs', () => {
+    const snippet = curlSnippet(target());
+    for (const name of ['EXCALIBASE_TOKEN', 'IMAGE', 'COMMIT_SHA']) expect(snippet).toContain(name);
   });
 });
