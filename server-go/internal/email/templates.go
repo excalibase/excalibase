@@ -107,6 +107,7 @@ The link expires in {{.ExpiresHour}} hours. If you didn't sign up, ignore this e
 // PasswordResetData populates the password reset template.
 type PasswordResetData struct {
 	UserEmail   string
+	Username    string // a provider sign-up never saw its generated one
 	ResetURL    string
 	ExpiresMin  int
 	ProductName string
@@ -135,7 +136,10 @@ A password reset was requested for your {{.ProductName}} account.
         <h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:#111827;font-weight:600;">Reset your password</h1>
         <p style="margin:0 0 8px;font-size:15px;line-height:1.6;color:#374151;">
           A password reset was requested for <b>{{.UserEmail}}</b>.
-        </p>
+        </p>{{if .Username}}
+        <p style="margin:0 0 8px;font-size:15px;line-height:1.6;color:#374151;">
+          Your username is <b>{{.Username}}</b>. Sign in with it or with your e-mail.
+        </p>{{end}}
       </td></tr>
       <tr><td style="padding:24px 40px;">
         <table role="presentation" cellspacing="0" cellpadding="0" border="0">
@@ -182,7 +186,8 @@ A password reset was requested for your {{.ProductName}} account.
 
 const passwordResetText = `Reset your password — {{.ProductName}}
 
-A password reset was requested for {{.UserEmail}}.
+A password reset was requested for {{.UserEmail}}.{{if .Username}}
+Your username is {{.Username}}. Sign in with it or with your e-mail.{{end}}
 
 Reset link: {{.ResetURL}}
 

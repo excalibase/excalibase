@@ -43,11 +43,6 @@ func (s *Store) FindUserByIdentity(ctx context.Context, provider, subject string
 		 WHERE i.provider = $1 AND i.subject = $2`, provider, subject))
 }
 
-func (s *Store) FindUserByEmailFold(ctx context.Context, email string) (*domain.User, error) {
-	return scanUser(s.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE lower(email) = lower($1)`, email))
-}
-
 func (s *Store) LinkStudioIdentity(ctx context.Context, provider, subject, userID, email string) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO studio_identities (provider, subject, user_id, email) VALUES ($1, $2, $3, $4)`,

@@ -32,7 +32,7 @@ export function LoginPage() {
     setUnverified(false);
 
     if (!username.trim() || !password.trim()) {
-      setError('Username and password are required');
+      setError('Username or e-mail and password are required');
       return;
     }
 
@@ -50,7 +50,7 @@ export function LoginPage() {
       if (axiosErr.response?.data?.code === 'email_not_verified') {
         setUnverified(true);
       } else if (axiosErr.response?.status === 401) {
-        setError('Invalid username or password');
+        setError('Invalid username, e-mail or password');
       } else {
         setError(axiosErr.response?.data?.error || 'Login failed. Please try again.');
       }
@@ -98,7 +98,7 @@ export function LoginPage() {
       <div className="space-y-4">
         <div>
           <label htmlFor="username" className="block text-sm font-medium text-text-secondary mb-1.5">
-            Username
+            Username or e-mail
           </label>
           <input
             id="username"
@@ -107,7 +107,7 @@ export function LoginPage() {
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             className="w-full px-3 py-2.5 bg-bg-secondary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-colors"
-            placeholder="Enter username"
+            placeholder="Enter username or e-mail"
             disabled={loading}
           />
         </div>

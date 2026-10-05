@@ -61,7 +61,7 @@ describe('Studio email verification', () => {
     } as never);
     renderAt('/login');
 
-    await u.type(screen.getByLabelText('Username'), 'dev');
+    await u.type(screen.getByLabelText('Username or e-mail'), 'dev');
     await u.type(screen.getByLabelText('Password'), PASSWORD);
     await u.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -80,7 +80,7 @@ describe('Studio email verification', () => {
     });
     renderAt('/login');
 
-    await u.type(screen.getByLabelText('Username'), 'dev');
+    await u.type(screen.getByLabelText('Username or e-mail'), 'dev');
     await u.type(screen.getByLabelText('Password'), PASSWORD);
     await u.click(screen.getByRole('button', { name: /sign in/i }));
 
@@ -137,6 +137,17 @@ describe('Studio email verification', () => {
     const notice = await screen.findByTestId('tokens-revoked');
     expect(notice).toHaveTextContent(/2 personal access tokens were revoked/i);
     expect(notice).toHaveTextContent(/signed out/i);
+  });
+
+  test('after a reset the user is told which username signs in', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { status: 'reset', accessTokensRevoked: 0, username: 'erin-3fa9c1' } } as never);
+    renderAt('/reset-password?token=rst');
+
+    await u.type(screen.getByLabelText('New password'), PASSWORD);
+    await u.click(screen.getByRole('button', { name: /set password/i }));
+
+    expect(await screen.findByTestId('sign-in-as')).toHaveTextContent('Sign in as erin-3fa9c1 or with your e-mail');
   });
 
   test('a reset with no access tokens still says every session was signed out', async () => {

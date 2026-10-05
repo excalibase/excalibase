@@ -56,12 +56,3 @@ func TestStudioIdentityLinksToOneAccount(t *testing.T) {
 		t.Fatal("one provider account was linked to a second Studio account")
 	}
 }
-
-func TestFindUserByEmailFoldIgnoresCase(t *testing.T) {
-	store := testStore(t)
-	user := seedUnverifiedUser(t, store, "Mixed")
-	found, err := store.FindUserByEmailFold(context.Background(), "mixed@VERIFY.example.com")
-	if err != nil || found == nil || found.ID != user.ID {
-		t.Fatalf("got %+v %v", found, err)
-	}
-}

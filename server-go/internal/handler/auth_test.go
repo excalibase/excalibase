@@ -73,7 +73,7 @@ func (s *mockUserStore) FindUserByEmail(_ context.Context, email string) (*domai
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, u := range s.users {
-		if u.Email == email {
+		if strings.EqualFold(u.Email, email) {
 			return u, nil
 		}
 	}

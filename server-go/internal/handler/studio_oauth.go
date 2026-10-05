@@ -35,7 +35,7 @@ type studioSignIn interface {
 
 type studioIdentities interface {
 	FindUserByIdentity(ctx context.Context, provider, subject string) (*domain.User, error)
-	FindUserByEmailFold(ctx context.Context, email string) (*domain.User, error)
+	FindUserByEmail(ctx context.Context, email string) (*domain.User, error)
 	LinkStudioIdentity(ctx context.Context, provider, subject, userID, email string) error
 }
 
@@ -193,7 +193,7 @@ func (h *StudioOAuthHandler) accountFor(ctx context.Context, identity studiooaut
 		return nil, false, err
 	}
 	if user == nil {
-		user, err = h.identities.FindUserByEmailFold(ctx, identity.Email)
+		user, err = h.identities.FindUserByEmail(ctx, identity.Email)
 		if err != nil {
 			return nil, false, err
 		}

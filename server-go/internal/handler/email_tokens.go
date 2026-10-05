@@ -364,6 +364,7 @@ func (h *EmailTokensHandler) sendResetLink(ctx context.Context, address, ip stri
 	}
 	msg, err := email.BuildPasswordResetEmail(email.PasswordResetData{
 		UserEmail:   user.Email,
+		Username:    user.Username,
 		ResetURL:    h.studioURL + "/reset-password?" + url.Values{"token": {token}}.Encode(),
 		ExpiresMin:  int(passwordResetLifetime.Minutes()),
 		ProductName: h.productName,
@@ -455,7 +456,7 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 	if err := h.verifier.MarkVerified(r.Context(), user.ID); err != nil {
 		log.Printf("ERROR: mark %s verified after reset: %v", user.ID, err)
 	}
-	writeJSON(w, map[string]any{"status": "reset", "accessTokensRevoked": revoked})
+	writeJSON(w, map[string]any{"status": "reset", "accessTokensRevoked": revoked, "username": user.Username})
 }
 
 // claimReset consumes a reset link, and every other open link of its account,

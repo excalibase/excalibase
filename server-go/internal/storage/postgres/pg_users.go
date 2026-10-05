@@ -51,9 +51,12 @@ func (s *Store) FindUserByUsername(ctx context.Context, username string) (*domai
 	return scanUser(row)
 }
 
+// FindUserByEmail matches the address ignoring case. Human addresses are
+// unique ignoring case; should a service principal share one, the human wins.
 func (s *Store) FindUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE email = $1`, email)
+		`SELECT `+userColumns+` FROM users WHERE lower(email) = lower($1)
+		 ORDER BY kind = 'human' DESC LIMIT 1`, email)
 	return scanUser(row)
 }
 

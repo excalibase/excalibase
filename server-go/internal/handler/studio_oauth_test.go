@@ -59,7 +59,7 @@ func (m *memIdentities) FindUserByIdentity(_ context.Context, provider, subject 
 	return nil, nil
 }
 
-func (m *memIdentities) FindUserByEmailFold(_ context.Context, address string) (*domain.User, error) {
+func (m *memIdentities) FindUserByEmail(_ context.Context, address string) (*domain.User, error) {
 	if m.emailErr != nil {
 		return nil, m.emailErr
 	}

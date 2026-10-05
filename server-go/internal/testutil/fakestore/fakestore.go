@@ -8,6 +8,7 @@ package fakestore
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -327,10 +328,10 @@ func (s *Users) FindUserByUsername(_ context.Context, username string) (*domain.
 	return nil, nil
 }
 
-// FindUserByEmail returns the matching user or nil.
+// FindUserByEmail returns the user whose address matches ignoring case, or nil.
 func (s *Users) FindUserByEmail(_ context.Context, email string) (*domain.User, error) {
 	for _, u := range s.ByID {
-		if u.Email == email {
+		if strings.EqualFold(u.Email, email) {
 			return u, nil
 		}
 	}
