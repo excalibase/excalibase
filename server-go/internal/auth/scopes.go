@@ -66,6 +66,20 @@ func TokenAllowsMethod(t *domain.AccessToken, method string) bool {
 	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
 		return true
 	}
+	return tokenCanWrite(t)
+}
+
+// TokenMayRevealSecrets reports whether the token may be handed credential or
+// secret material. A password read with a read-only token would let it write
+// by another door, so a write-less PAT is refused whatever the method. A
+// capability token stays governed by the capability gate (EXC-365).
+func TokenMayRevealSecrets(t *domain.AccessToken) bool {
+	return IsCapabilityToken(t) || tokenCanWrite(t)
+}
+
+// tokenCanWrite reports whether the token's scopes permit a mutating request.
+// A nil token or legacy empty scopes pass (see RequireScope).
+func tokenCanWrite(t *domain.AccessToken) bool {
 	if t == nil || t.Scopes == "" {
 		return true
 	}

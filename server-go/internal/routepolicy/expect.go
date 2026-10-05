@@ -107,7 +107,7 @@ func expectSession(row Row, method string, p Principal) Expectation {
 	if row.Param == ParamProject && p.ForeignProject {
 		return Deny404
 	}
-	if isWrite(method) && p.ReadOnly {
+	if (isWrite(method) || row.Discloses == Secret) && p.ReadOnly {
 		return Deny403
 	}
 	if row.Unrestricted && p.Restricted {

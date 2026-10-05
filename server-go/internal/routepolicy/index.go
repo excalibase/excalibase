@@ -55,3 +55,14 @@ func (r Row) expandMethods() []string {
 	}
 	return r.Methods
 }
+
+// hasReadMethod reports whether the row serves a method a read-only token
+// passes.
+func (r Row) hasReadMethod() bool {
+	for _, method := range r.expandMethods() {
+		if !isWrite(method) {
+			return true
+		}
+	}
+	return false
+}

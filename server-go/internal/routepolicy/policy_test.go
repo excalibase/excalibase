@@ -70,6 +70,40 @@ func TestEveryRowIsWellFormed(t *testing.T) {
 		if row.ServiceOnly && row.Capability == "" {
 			t.Errorf("%s is service-only but names no capability, so nothing could call it", row.Pattern)
 		}
+		if row.Discloses == Secret && row.Auth != AuthSession {
+			t.Errorf("%s discloses a secret but is not behind auth.RequireAuth, so no credential gate could refuse a read-only token", row.Pattern)
+		}
+	}
+}
+
+// TestEveryReadRowDecidesWhetherItDisclosesASecret is the EXC-543 guard: a
+// read-only token passes every read, so a read that hands back a password or
+// key must say so, and a new read cannot be added without that decision.
+func TestEveryReadRowDecidesWhetherItDisclosesASecret(t *testing.T) {
+	for _, row := range Table() {
+		if !row.hasReadMethod() {
+			continue
+		}
+		if row.Discloses != NoSecret && row.Discloses != Secret {
+			t.Errorf("%v %s does not declare Discloses — a read-only token reaches every read, so decide whether this one returns a credential or secret", row.Methods, row.Pattern)
+		}
+	}
+}
+
+// TestSecretRows pins the reads EXC-543 found handing out write authority, so
+// dropping one from the table is a visible decision.
+func TestSecretRows(t *testing.T) {
+	index, err := Index()
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	for _, key := range []Key{
+		{Method: http.MethodGet, Pattern: "/api/provision/{projectId}/credentials"},
+		{Method: http.MethodGet, Pattern: vaultSecretsRoute},
+	} {
+		if index[key].Discloses != Secret {
+			t.Errorf("%s returns a credential and must be declared Discloses: Secret", key)
+		}
 	}
 }
 
@@ -108,6 +142,9 @@ func TestExpect(t *testing.T) {
 	openRow := Row{Pattern: "/t", Auth: AuthSession, Owner: OwnerNone}
 	withCapability := Row{Pattern: "/c", Auth: AuthSession, Owner: OwnerNone, Capability: "policies:read"}
 	serviceOnly := Row{Pattern: "/s", Auth: AuthSession, Owner: OwnerNone, Capability: "email:send", ServiceOnly: true}
+	secret := Row{Pattern: "/p", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: domain.OrgRoleAdmin, Discloses: Secret}
+	secretForService := Row{Pattern: "/v", Auth: AuthSession, Permission: permCredentials, Owner: OwnerPlatformRole, Capability: "vault:read:<secret path>", Discloses: Secret}
+	readOnlyAdmin := Principal{Name: "readOnlyAdmin", OrgRole: domain.OrgRoleAdmin, ReadOnly: true, Restricted: true}
 
 	cases := []struct {
 		name   string
@@ -131,6 +168,12 @@ func TestExpect(t *testing.T) {
 		{"read-only token may not write", openRow, http.MethodPost, readOnly, Deny403},
 		{"read-only token may still read", openRow, http.MethodGet, readOnly, Allow},
 		{"narrowed credential may not mint authority", unrestricted, http.MethodPost, narrowed, Deny403},
+		{"read-only token may not read a secret", secret, http.MethodGet, readOnlyAdmin, Deny403},
+		{"read-only platform admin may not read a secret", secretForService, http.MethodGet, readOnly, Deny403},
+		{"a write-capable narrowed token may read a secret", secret, http.MethodGet, Principal{Name: "boundAdmin", OrgRole: domain.OrgRoleAdmin, Restricted: true}, Allow},
+		{"a session may read a secret", secret, http.MethodGet, Principal{Name: "admin", OrgRole: domain.OrgRoleAdmin}, Allow},
+		{"a secret route keeps its capability contract", secretForService, http.MethodGet, capability, Unasserted},
+		{"a read-only token is still refused a secret it lacks the role for", secret, http.MethodGet, Principal{Name: "readOnlyViewer", OrgRole: domain.OrgRoleViewer, ReadOnly: true}, Deny403},
 		{"platform admin bypasses the org ladder", projectWrite, http.MethodPost, platformer, Allow},
 		{"a tenant holds no platform permission", platform, http.MethodGet, developer, Deny403},
 		{"a non-member must not learn the project exists", projectWrite, http.MethodGet, outsider, Deny404},

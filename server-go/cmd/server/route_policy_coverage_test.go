@@ -75,6 +75,7 @@ var gateRefusalBodies = map[string]bool{
 	`{"error":"insufficient permissions"}`:                               true,
 	`{"error":"token lacks required scope: write"}`:                      true,
 	`{"error":"this route requires a session or an unrestricted token"}`: true,
+	`{"error":"this route requires a write-capable credential"}`:         true,
 	`{"error":"token is not permitted to call this endpoint"}`:           true,
 	// Refusals the handlers write themselves, in their own words.
 	`{"error":"org not found","status":404}`:                 true,
@@ -194,6 +195,10 @@ func policyPrincipals(platform *fakePlatform) []principal {
 	add(routepolicy.Principal{Name: "platformAdmin", PlatformAdmin: true}, matrixAdminID, "platform_admin", session)
 	add(routepolicy.Principal{Name: "platformAdminReadOnlyPAT", PlatformAdmin: true, ReadOnly: true, Restricted: true},
 		matrixAdminID+"-ro", "platform_admin", domain.AccessToken{Scopes: auth.ScopeRead})
+	// The EXC-543 caller: an org admin's read-only PAT, which reaches every
+	// read yet must not be handed the credential that lets it write.
+	add(routepolicy.Principal{Name: "orgAdminReadOnlyPAT", OrgRole: domain.OrgRoleAdmin, ReadOnly: true, Restricted: true},
+		policyAdminID, "user", domain.AccessToken{Scopes: auth.ScopeRead})
 	add(routepolicy.Principal{Name: "patBoundToOtherProject", OrgRole: domain.OrgRoleAdmin, Restricted: true, ForeignProject: true},
 		policyBoundID, "user", domain.AccessToken{ProjectID: matrixProjectB})
 	// A platform admin holding a project-bound PAT: every platform permission,

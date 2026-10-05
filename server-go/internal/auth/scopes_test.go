@@ -84,3 +84,31 @@ func TestNormalizeScopes(t *testing.T) {
 		})
 	}
 }
+
+// TestTokenMayRevealSecrets pins EXC-543: a read-only PAT may read, but not a
+// credential that would let its holder write through another door.
+func TestTokenMayRevealSecrets(t *testing.T) {
+	cases := []struct {
+		name  string
+		token *domain.AccessToken
+		want  bool
+	}{
+		{"no token is left to RequireAuth", nil, true},
+		{"session", &domain.AccessToken{Scopes: ScopeSession}, true},
+		{"legacy all-purpose PAT", &domain.AccessToken{}, true},
+		{"write PAT", &domain.AccessToken{Scopes: ScopeWrite}, true},
+		{"admin PAT", &domain.AccessToken{Scopes: ScopeAdmin}, true},
+		{"read,write PAT", &domain.AccessToken{Scopes: "read, write"}, true},
+		{"project-bound write PAT", &domain.AccessToken{Scopes: ScopeWrite, ProjectID: "p1"}, true},
+		{"read PAT", &domain.AccessToken{Scopes: ScopeRead}, false},
+		{"project-bound read PAT", &domain.AccessToken{Scopes: ScopeRead, ProjectID: "p1"}, false},
+		{"capability token keeps its own gate", &domain.AccessToken{Scopes: ScopeRead, Permissions: []string{"vault:read:x"}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := TokenMayRevealSecrets(tc.token); got != tc.want {
+				t.Errorf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}

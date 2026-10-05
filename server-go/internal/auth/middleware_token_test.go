@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -237,6 +238,38 @@ func TestRequireAuth_EnforcesTokenScopeForMethod(t *testing.T) {
 			RequireAuth(okHandler()).ServeHTTP(w, req)
 			if w.Code != tc.want {
 				t.Errorf("%s %s with scopes %q: got %d, want %d", tc.method, req.URL.Path, tc.scopes, w.Code, tc.want)
+			}
+		})
+	}
+}
+
+// TestRequireWriteCapableForSecrets pins that the refusal ignores the method:
+// a GET that returns a password is as much a write door as the write itself.
+func TestRequireWriteCapableForSecrets(t *testing.T) {
+	const genericRefusal = `{"error":"this route requires a write-capable credential"}`
+	cases := []struct {
+		name   string
+		scopes string
+		method string
+		want   int
+	}{
+		{"read PAT reads a secret", ScopeRead, http.MethodGet, http.StatusForbidden},
+		{"read PAT heads a secret", ScopeRead, http.MethodHead, http.StatusForbidden},
+		{"write PAT reads a secret", "read,write", http.MethodGet, http.StatusOK},
+		{"session reads a secret", ScopeSession, http.MethodGet, http.StatusOK},
+		{"legacy all-purpose PAT reads a secret", "", http.MethodGet, http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := SetToken(context.Background(), &domain.AccessToken{TokenHash: "h", UserID: "u1", Scopes: tc.scopes})
+			req := httptest.NewRequest(tc.method, "/api/provision/p1/credentials", nil).WithContext(ctx)
+			w := httptest.NewRecorder()
+			RequireWriteCapableForSecrets(okHandler()).ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("got %d, want %d", w.Code, tc.want)
+			}
+			if tc.want == http.StatusForbidden && strings.TrimSpace(w.Body.String()) != genericRefusal {
+				t.Fatalf("refusal must be generic, got %q", w.Body.String())
 			}
 		})
 	}
