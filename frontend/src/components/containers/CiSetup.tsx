@@ -2,18 +2,53 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Copy } from 'lucide-react';
 import { API_BASE } from '../../api/base';
-import { githubActionsSnippet, type SnippetTarget } from './ciSnippets';
+import {
+  curlSnippet,
+  githubActionsSnippet,
+  gitlabCiSnippet,
+  jenkinsSnippet,
+  type SnippetTarget,
+} from './ciSnippets';
 import { secondaryButton } from './ContainerBits';
 
 interface CiKind {
   readonly id: string;
   readonly label: string;
   readonly file: string;
+  // Where this CI keeps the token, so no snippet ever carries one.
+  readonly secret: string;
   readonly render: (target: SnippetTarget) => string;
 }
 
 const CI_KINDS: CiKind[] = [
-  { id: 'github', label: 'GitHub Actions', file: '.github/workflows/deploy.yml', render: githubActionsSnippet },
+  {
+    id: 'github',
+    label: 'GitHub Actions',
+    file: '.github/workflows/deploy.yml',
+    secret: 'a repository secret named EXCALIBASE_TOKEN',
+    render: githubActionsSnippet,
+  },
+  {
+    id: 'gitlab',
+    label: 'GitLab CI',
+    file: '.gitlab-ci.yml',
+    secret: 'a masked CI/CD variable named EXCALIBASE_TOKEN',
+    render: gitlabCiSnippet,
+  },
+  {
+    id: 'jenkins',
+    label: 'Jenkins',
+    file: 'Jenkinsfile',
+    secret: 'a secret text credential with the ID excalibase-token, beside a username and password credential "registry"',
+    render: jenkinsSnippet,
+  },
+  {
+    id: 'curl',
+    label: 'Any CI',
+    file: 'a step after the push',
+    secret: 'a secret exposed to the step as EXCALIBASE_TOKEN',
+    render: curlSnippet,
+  },
 ];
 
 // The API as CI reaches it: absolute, whatever origin Studio is served from.
@@ -32,22 +67,8 @@ export function CiSetup({ projectId, appId, image }: { readonly projectId: strin
 
   return (
     <section className="bg-surface-card border border-border-primary rounded-lg p-4 space-y-3">
-      <ol className="list-decimal list-inside text-sm text-text-secondary space-y-1">
-        <li>
-          <Link to="/account/tokens" className="text-purple-400 hover:underline" data-testid="ci-token-link">
-            Create an access token
-          </Link>{' '}
-          with write access, bound to this project, and save it in your CI as the secret{' '}
-          <code className="font-mono">EXCALIBASE_TOKEN</code>.
-        </li>
-        <li>If the image is private, save a registry credential for its registry under Containers.</li>
-        <li>
-          Add this as <code className="font-mono">{kind.file}</code>. Each push builds the image, pushes
-          it, deploys its digest with the commit, and waits until it is live.
-        </li>
-      </ol>
       <div className="flex items-center justify-between gap-2">
-        <div className="flex gap-1" role="tablist">
+        <div className="flex flex-wrap gap-1" role="tablist">
           {CI_KINDS.map((candidate) => (
             <button
               key={candidate.id}
@@ -73,6 +94,21 @@ export function CiSetup({ projectId, appId, image }: { readonly projectId: strin
           <Copy className="w-3.5 h-3.5" /> {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
+      <ol className="list-decimal list-inside text-sm text-text-secondary space-y-1">
+        <li>
+          <Link to="/account/tokens" className="text-purple-400 hover:underline" data-testid="ci-token-link">
+            Create an access token
+          </Link>{' '}
+          with write access, bound to this project, and keep it as{' '}
+          <span data-testid="ci-secret">{kind.secret}</span>.
+        </li>
+        <li>If the image is private, save a registry credential for its registry under Containers.</li>
+        <li>
+          Add this as <span className="font-mono" data-testid="ci-file">{kind.file}</span>. It
+          builds the image, pushes it, deploys its digest with the commit, and waits until it is
+          live.
+        </li>
+      </ol>
       <pre
         className="text-xs font-mono bg-bg-tertiary border border-border-primary rounded-lg p-3 overflow-x-auto"
         data-testid="ci-snippet"

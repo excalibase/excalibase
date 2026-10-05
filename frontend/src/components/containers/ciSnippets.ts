@@ -120,6 +120,94 @@ function githubLogin(registry: string | null): string {
           password: \${{ secrets.REGISTRY_PASSWORD }}`;
 }
 
+// The docker login a shell runs, with the secrets each CI holds for the registry.
+function shellLogin(registry: string | null, gitlab: boolean): string {
+  if (gitlab && registry === 'registry.gitlab.com') {
+    return 'echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"';
+  }
+  if (registry === null) {
+    return 'echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin';
+  }
+  return `echo "$REGISTRY_PASSWORD" | docker login -u "$REGISTRY_USERNAME" --password-stdin ${registry}`;
+}
+
+// A reused agent may hold the same image under other repositories; only this one's digest is deployed.
+const PUSHED_DIGEST = `docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPOSITORY:$COMMIT_SHA" | grep "^$IMAGE_REPOSITORY@" | head -n 1`;
+
+// .gitlab-ci.yml: build and push on the default branch with docker-in-docker, then deploy the digest.
+export function gitlabCiSnippet(target: SnippetTarget): string {
+  const login = shellLogin(imageRegistry(target.image), true).replaceAll("'", "''");
+  return `deploy:
+  stage: deploy
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    IMAGE_REPOSITORY: "${imageRepository(target.image)}"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - '${login}'
+    - export COMMIT_SHA="$CI_COMMIT_SHA"
+    - docker build -t "$IMAGE_REPOSITORY:$COMMIT_SHA" .
+    - docker push "$IMAGE_REPOSITORY:$COMMIT_SHA"
+    - export IMAGE="$(${PUSHED_DIGEST.replaceAll("'", '"')})"
+    - apk add --no-cache curl
+    - |
+${indent(deployScript(target), 6)}
+`;
+}
+
+// Groovy reads backslashes inside ''' strings, so each one is doubled to reach sh as written.
+const groovyShell = (script: string) => script.replaceAll('\\', '\\\\');
+
+// Jenkinsfile: needs a Docker-capable agent, a username/password credential
+// "registry" and a secret-text credential "excalibase-token".
+export function jenkinsSnippet(target: SnippetTarget): string {
+  const registry = imageRegistry(target.image);
+  const [userVariable, passwordVariable] =
+    registry === null ? ['DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN'] : ['REGISTRY_USERNAME', 'REGISTRY_PASSWORD'];
+  return `pipeline {
+  agent any
+  environment {
+    IMAGE_REPOSITORY = '${imageRepository(target.image)}'
+    EXCALIBASE_TOKEN = credentials('excalibase-token')
+  }
+  stages {
+    stage('Build and push') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'registry', usernameVariable: '${userVariable}', passwordVariable: '${passwordVariable}')]) {
+          sh '''
+            ${shellLogin(registry, false)}
+            docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" .
+            docker push "$IMAGE_REPOSITORY:$GIT_COMMIT"
+          '''
+        }
+      }
+    }
+    stage('Deploy to Excalibase') {
+      steps {
+        sh '''
+${indent(groovyShell(`export COMMIT_SHA="$GIT_COMMIT"\nexport IMAGE="$(${PUSHED_DIGEST})"\n${deployScript(target)}`), 10)}
+        '''
+      }
+    }
+  }
+}
+`;
+}
+
+// Any other CI: one shell step after the image is pushed.
+export function curlSnippet(target: SnippetTarget): string {
+  return `# Run after pushing the image, with these set:
+#   EXCALIBASE_TOKEN  a write token bound to this project, kept as a CI secret
+#   IMAGE             the pushed image, best by digest: ${imageRepository(target.image)}@sha256:...
+#   COMMIT_SHA        the commit the image was built from
+${deployScript(target)}
+`;
+}
+
 // .github/workflows/deploy.yml: build and push on every push to main, then deploy the digest.
 export function githubActionsSnippet(target: SnippetTarget): string {
   const repository = imageRepository(target.image);

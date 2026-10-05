@@ -197,6 +197,19 @@ describe('ContainerPipelinePage', () => {
     expect(screen.getByTestId('auto-deploy-pinned')).toHaveTextContent(/pinned by digest/i);
   });
 
+  test.each([
+    ['gitlab', '.gitlab-ci.yml', 'docker:27-dind', /masked CI\/CD variable/],
+    ['jenkins', 'Jenkinsfile', "credentials('excalibase-token')", /secret text credential/],
+    ['curl', 'a step after the push', 'COMMIT_SHA', /secret/],
+  ])('the %s setup is one tab away, filled in for this app', async (kind, file, marker, secretHint) => {
+    const { user } = renderPage();
+    await user.click(await screen.findByTestId(`ci-tab-${kind}`));
+    expect(screen.getByTestId('ci-snippet')).toHaveTextContent(marker);
+    expect(screen.getByTestId('ci-snippet')).toHaveTextContent('/projects/proj-1/apps/app-1');
+    expect(screen.getByTestId('ci-file')).toHaveTextContent(file);
+    expect(screen.getByTestId('ci-secret')).toHaveTextContent(secretHint);
+  });
+
   test('the GitHub Actions setup is filled in for this app, with the token as a secret', async () => {
     const { user } = renderPage();
     const snippet = await screen.findByTestId('ci-snippet');
