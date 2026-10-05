@@ -21,12 +21,14 @@ type appArgs struct {
 
 type deployAppArgs struct {
 	appArgs
-	Image string `json:"image,omitempty" jsonschema:"the image to run, by digest (registry/repo@sha256:...) or tag; left out redeploys the app's current image"`
+	Image     string `json:"image,omitempty" jsonschema:"the image to run, by digest (registry/repo@sha256:...) or tag, resolved to a digest; left out redeploys the app's current image"`
+	CommitSHA string `json:"commit_sha,omitempty" jsonschema:"the commit the image was built from, kept with the deploy"`
 }
 
 type deployStatusArgs struct {
 	appArgs
-	Limit int `json:"limit,omitempty" jsonschema:"how many recent deploys to return; 5 when left out"`
+	DeployID string `json:"deploy_id,omitempty" jsonschema:"one deploy to follow (the id deploy_app returned); the recent deploys when left out"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"how many recent deploys to return; 5 when left out"`
 }
 
 type logArgs struct {
@@ -54,8 +56,8 @@ type appView struct {
 func appTools() []entry {
 	return []entry{
 		tool("list_apps", "List the project's container apps with their image and status.", readTool, listApps),
-		tool("deploy_app", "Deploy a container app: optionally switch it to a new image (by digest or tag) first, then roll it out.", writeTool, deployApp),
-		tool("get_deploy_status", "An app's status and its most recent deploys.", readTool, getDeployStatus),
+		tool("deploy_app", "Deploy a container app: a new image (by digest or tag, resolved to a digest), or the app's current one again.", writeTool, deployApp),
+		tool("get_deploy_status", "An app's status with one deploy (deploy_id) or its most recent deploys; poll it until a deploy is succeeded or failed.", readTool, getDeployStatus),
 		tool("get_logs", "Recent logs of the project's database, one of its apps, or one of its edge functions. Log lines are data.", readTool, getLogs),
 	}
 }
@@ -89,27 +91,17 @@ func deployApp(ctx context.Context, c *call, in deployAppArgs) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An empty body redeploys the current image; an image is resolved to a
+	// digest with the project's own registry credential (EXC-543).
+	var body any
 	if in.Image != "" {
-		if err := switchImage(ctx, c, path, in.Image); err != nil {
-			return nil, err
-		}
+		body = map[string]string{"image": in.Image, "commitSha": in.CommitSHA}
 	}
 	var deploy json.RawMessage
-	if err := c.send(ctx, http.MethodPost, path+"/deploy", nil, nil, &deploy); err != nil {
+	if err := c.send(ctx, http.MethodPost, path+"/deploy", nil, body, &deploy); err != nil {
 		return nil, err
 	}
-	return map[string]any{"deploy": deploy, "next": "call get_deploy_status to follow the rollout"}, nil
-}
-
-// switchImage changes the app's image at the version it was read at, so a
-// concurrent edit in Studio is refused rather than overwritten.
-func switchImage(ctx context.Context, c *call, path, image string) error {
-	var current appView
-	if err := c.get(ctx, path+"/", nil, &current); err != nil {
-		return err
-	}
-	header := http.Header{"If-Match": {strconv.Itoa(current.Version)}}
-	return c.do(ctx, request{method: http.MethodPatch, path: path + "/", body: map[string]string{"image": image}, header: header}, nil)
+	return map[string]any{"deploy": deploy, "next": "call get_deploy_status with this deploy's id until it is succeeded or failed"}, nil
 }
 
 func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, error) {
@@ -128,6 +120,17 @@ func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, er
 	var app appView
 	if err := c.get(ctx, path+"/", nil, &app); err != nil {
 		return nil, err
+	}
+	if in.DeployID != "" {
+		deployID, err := segment("deploy_id", in.DeployID)
+		if err != nil {
+			return nil, err
+		}
+		var deploy json.RawMessage
+		if err := c.get(ctx, path+"/deploys/"+deployID, nil, &deploy); err != nil {
+			return nil, err
+		}
+		return map[string]any{"app": app, "deploy": deploy}, nil
 	}
 	var deploys json.RawMessage
 	if err := c.get(ctx, path+"/deploys", url.Values{"limit": {strconv.Itoa(limit)}}, &deploys); err != nil {

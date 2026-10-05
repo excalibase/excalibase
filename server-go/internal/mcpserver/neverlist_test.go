@@ -38,9 +38,9 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^POST /api/projects/[^/]+/functions/secrets$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/functions/[^/]+/logs(\?.*)?$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/$`),
-	regexp.MustCompile(`^(GET|PATCH) /api/projects/[^/]+/apps/[^/]+/$`),
+	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/$`),
 	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/deploy$`),
-	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/(deploys|logs)(\?.*)?$`),
+	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/(deploys|deploys/[^/]+|logs)(\?.*)?$`),
 }
 
 // neverReached is the surface ADR 0037 keeps out of MCP: project lifecycle,

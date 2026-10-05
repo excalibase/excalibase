@@ -48,10 +48,10 @@ apps and grant what the anon role grants.
 | `list_migrations` / `apply_migration` | `GET` / `POST /api/provision/{id}/migrations/` |
 | `list_permissions` / `set_permission` | `GET /api/provision/{id}/permissions/`, `PUT`/`DELETE .../permissions/tables/{t}/roles/{r}/{op}` |
 | `list_functions` / `deploy_function` / `set_function_secret` | `GET`/`POST /api/projects/{id}/functions/`, `POST .../functions/secrets` |
-| `list_apps` / `deploy_app` / `get_deploy_status` | `/api/projects/{id}/apps/...` (`deploy_app` sets the image with `If-Match`, then `POST .../deploy`) |
+| `list_apps` / `deploy_app` / `get_deploy_status` | `GET /api/projects/{id}/apps/`; `POST .../apps/{app}/deploy` with `{image, commitSha}` (resolved to a digest) or empty to redeploy; `GET .../apps/{app}/` + `.../deploys` or `.../deploys/{deployId}` |
 | `get_logs` | database: `GET /api/provision/{id}/logs`; app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs` |
 | `get_dockerfile_template` | none: Dockerfiles for node, nextjs, vite, python, go, java |
-| `get_ci_snippet` | none: GitHub Actions, GitLab CI or Jenkins pipeline that builds, pushes and calls the deploy API |
+| `get_ci_snippet` | `GET .../apps/{app}/` for the app's image; renders the same GitHub Actions, GitLab CI, Jenkins or curl pipeline as Studio's pipeline page |
 
 ## Connecting a client
 

@@ -361,36 +361,44 @@ func routeCases() []routeCase {
 		},
 		{
 			name: "deploy_app with a new image", tool: "deploy_app",
-			args: map[string]any{"project_id": testProjectA, "app_id": "web", "image": "ghcr.io/a/web@sha256:" + strings.Repeat("a", 64)},
+			args: map[string]any{"project_id": testProjectA, "app_id": "web", "image": "ghcr.io/a/web:main", "commit_sha": "abc123"},
 			setup: func(f *fakeRoutes) {
-				f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","image":"ghcr.io/a/web:1","version":3}`)
-				f.on(http.MethodPatch, projectsA+"/apps/web/", 200, `{"id":"web","image":"ghcr.io/a/web@sha256:aa","version":4}`)
-				f.on(http.MethodPost, projectsA+"/apps/web/deploy", 202, `{"id":"d1","status":"PENDING"}`)
+				f.on(http.MethodPost, projectsA+"/apps/web/deploy", 202, `{"id":"d1","status":"pending"}`)
 			},
-			expect: []string{"GET " + projectsA + "/apps/web/", "PATCH " + projectsA + "/apps/web/", "POST " + projectsA + "/apps/web/deploy"},
+			expect: []string{"POST " + projectsA + "/apps/web/deploy"},
 			check: func(t *testing.T, calls []recordedCall, _ map[string]any) {
-				if calls[1].Header.Get("If-Match") != "3" {
-					t.Errorf("the image change must name the version it read, If-Match=%q", calls[1].Header.Get("If-Match"))
-				}
-				if !strings.Contains(calls[1].Body, `"image":"ghcr.io/a/web@sha256:`) {
-					t.Errorf("patch body = %s", calls[1].Body)
+				if calls[0].Body != `{"commitSha":"abc123","image":"ghcr.io/a/web:main"}` {
+					t.Errorf("deploy body = %s", calls[0].Body)
 				}
 			},
 		},
 		{
 			name: "deploy_app as it stands", tool: "deploy_app", args: map[string]any{"project_id": testProjectA, "app_id": "web"},
 			setup: func(f *fakeRoutes) {
-				f.on(http.MethodPost, projectsA+"/apps/web/deploy", 202, `{"id":"d1","status":"PENDING"}`)
+				f.on(http.MethodPost, projectsA+"/apps/web/deploy", 202, `{"id":"d1","status":"pending"}`)
 			},
 			expect: []string{"POST " + projectsA + "/apps/web/deploy"},
+			check: func(t *testing.T, calls []recordedCall, _ map[string]any) {
+				if calls[0].Body != "" {
+					t.Errorf("a redeploy sends no body, got %s", calls[0].Body)
+				}
+			},
 		},
 		{
 			name: "get_deploy_status", tool: "get_deploy_status", args: map[string]any{"project_id": testProjectA, "app_id": "web"},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","status":"RUNNING","version":4}`)
-				f.on(http.MethodGet, projectsA+"/apps/web/deploys", 200, `[{"id":"d1","status":"SUCCEEDED"}]`)
+				f.on(http.MethodGet, projectsA+"/apps/web/deploys", 200, `[{"id":"d1","status":"succeeded"}]`)
 			},
 			expect: []string{"GET " + projectsA + "/apps/web/", "GET " + projectsA + "/apps/web/deploys?limit=5"},
+		},
+		{
+			name: "get_deploy_status of one deploy", tool: "get_deploy_status", args: map[string]any{"project_id": testProjectA, "app_id": "web", "deploy_id": "d1"},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","status":"RUNNING","version":4}`)
+				f.on(http.MethodGet, projectsA+"/apps/web/deploys/d1", 200, `{"id":"d1","status":"rolling"}`)
+			},
+			expect: []string{"GET " + projectsA + "/apps/web/", "GET " + projectsA + "/apps/web/deploys/d1"},
 		},
 		{
 			name: "get_logs database", tool: "get_logs", args: map[string]any{"project_id": testProjectA, "source": "database", "lines": 50},
@@ -423,9 +431,13 @@ func routeCases() []routeCase {
 		},
 		{
 			name: "get_ci_snippet", tool: "get_ci_snippet", args: map[string]any{"provider": "github-actions", "project_id": testProjectA, "app_id": "web"},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","image":"ghcr.io/a/web:1","version":3}`)
+			},
+			expect: []string{"GET " + projectsA + "/apps/web/"},
 			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
 				content := out["content"].(string)
-				if !strings.Contains(content, "https://app.example.test/api/projects/proj-a/apps/web") || !strings.Contains(content, "/deploy") {
+				if !strings.Contains(content, "https://app.example.test/api/projects/proj-a/apps/web") || !strings.Contains(content, "tags: ghcr.io/a/web:") {
 					t.Errorf("content = %s", content)
 				}
 			},
@@ -566,7 +578,7 @@ func TestACallIsFiledUnderAProjectOnlyWhenTheProjectAnswered(t *testing.T) {
 	cs := session(t, routes, audit, writeCaller())
 	callTool(t, cs, "list_tables", map[string]any{"project_id": testProjectA})
 	callTool(t, cs, "list_tables", map[string]any{"project_id": testProjectB})
-	callTool(t, cs, "get_ci_snippet", map[string]any{"project_id": testProjectA, "provider": "github-actions"})
+	callTool(t, cs, "get_ci_snippet", map[string]any{"project_id": testProjectA, "provider": "github-actions", "image": "ghcr.io/a/web"})
 
 	if len(audit.entries) != 3 {
 		t.Fatalf("entries = %+v", audit.entries)

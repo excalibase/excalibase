@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// The pipelines here are the ones Studio's pipeline page shows
+// (frontend/src/components/containers/ciSnippets.ts); keep the two in step.
+
 // DeployTarget is the app a pipeline deploys to.
 type DeployTarget struct {
 	// APIBase is the control plane's public origin, e.g. https://app.excalibase.io.
@@ -13,6 +16,8 @@ type DeployTarget struct {
 	ProjectID string
 	// AppID may be empty; the pipeline then carries a placeholder.
 	AppID string
+	// Image is the app's image; its repository is where CI pushes.
+	Image string
 }
 
 // Snippet is a rendered CI pipeline and the secrets it reads.
@@ -25,207 +30,173 @@ type Snippet struct {
 
 var (
 	validID = regexp.MustCompile(`^[a-zA-Z0-9_\-]{1,64}$`)
-	// validRepository is a lowercase registry repository: host[:port]/path.
-	validRepository = regexp.MustCompile(`^[a-z0-9]([a-z0-9._\-]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9]([a-z0-9._\-]*[a-z0-9])?)+$|^[a-z0-9]([a-z0-9._\-]*[a-z0-9])?$`)
+	// validImage is an image reference: no quote, space or shell character can
+	// reach the pipeline it is written into.
+	validImage = regexp.MustCompile(`^[a-z0-9][a-z0-9._\-/:@]{0,254}$`)
 )
 
-const appPlaceholder = "<app id>"
+var dockerHubAliases = map[string]bool{"docker.io": true, "index.docker.io": true, "registry-1.docker.io": true}
+
+const (
+	appPlaceholder = "<app id>"
+	tokenSecret    = "EXCALIBASE_TOKEN: a personal access token bound to this project with the write scope"
+)
 
 // Providers lists what CI can render.
-func Providers() []string { return []string{"github-actions", "gitlab-ci", "jenkins"} }
+func Providers() []string { return []string{"github-actions", "gitlab-ci", "jenkins", "curl"} }
 
-// tokenSecret is how every pipeline names the project token.
-const tokenSecret = "EXCALIBASE_TOKEN: a personal access token bound to this project with the write scope (Studio, Account, Access tokens)"
-
-const registrySecrets = "REGISTRY_USERNAME and REGISTRY_PASSWORD: the login of the registry the image is pushed to"
-
-// CI renders the pipeline that builds the image, pushes it to the user's
-// registry and deploys it by digest. image names the registry repository;
-// empty uses the provider's own registry.
-func CI(provider string, target DeployTarget, image string) (Snippet, error) {
-	appURL, err := deployURL(target)
-	if err != nil {
+// CI renders the pipeline that builds the image, pushes it to the app's
+// registry repository and deploys the pushed digest.
+func CI(provider string, target DeployTarget) (Snippet, error) {
+	if err := validate(&target); err != nil {
 		return Snippet{}, err
 	}
-	if image != "" && !validRepository.MatchString(image) {
-		return Snippet{}, fmt.Errorf("image must be a lowercase registry repository without a tag, e.g. ghcr.io/team/app")
+	notes := []string{
+		"The app must exist in Excalibase first; set its port to the one the image serves on.",
+		"A private image needs the registry's credentials saved in the project (Containers, Registry credentials).",
 	}
 	switch provider {
 	case "github-actions":
-		return githubSnippet(appURL, image), nil
+		return Snippet{Path: ".github/workflows/deploy.yml", Content: githubActions(target), Secrets: githubSecrets(imageRegistry(target.Image)), Notes: notes}, nil
 	case "gitlab-ci":
-		return gitlabSnippet(appURL, image), nil
+		return Snippet{Path: ".gitlab-ci.yml", Content: gitlabCI(target), Secrets: shellSecrets(imageRegistry(target.Image), true), Notes: notes}, nil
 	case "jenkins":
-		return jenkinsSnippet(appURL, image), nil
+		return Snippet{
+			Path: "Jenkinsfile", Content: jenkins(target),
+			Secrets: []string{
+				"excalibase-token: a Secret text credential holding " + strings.TrimPrefix(tokenSecret, "EXCALIBASE_TOKEN: "),
+				"registry: a Username with password credential for the registry",
+			},
+			Notes: append(notes, "The agent needs docker and curl."),
+		}, nil
+	case "curl":
+		return Snippet{Path: "deploy.sh", Content: curlScript(target), Secrets: []string{tokenSecret}, Notes: notes}, nil
 	}
 	return Snippet{}, fmt.Errorf("unknown CI provider %q: use %s", provider, strings.Join(Providers(), ", "))
 }
 
-func deployURL(target DeployTarget) (string, error) {
+func validate(target *DeployTarget) error {
 	if !validID.MatchString(target.ProjectID) {
-		return "", fmt.Errorf("project id must be a project id")
+		return fmt.Errorf("project id must be a project id")
 	}
-	appID := target.AppID
-	if appID == "" {
-		appID = appPlaceholder
-	} else if !validID.MatchString(appID) {
-		return "", fmt.Errorf("app id must be an app id")
+	if target.AppID == "" {
+		target.AppID = appPlaceholder
+	} else if !validID.MatchString(target.AppID) {
+		return fmt.Errorf("app id must be an app id")
 	}
-	return strings.TrimRight(target.APIBase, "/") + "/api/projects/" + target.ProjectID + "/apps/" + appID, nil
+	if !validImage.MatchString(target.Image) {
+		return fmt.Errorf("image must be a lowercase image reference such as ghcr.io/team/app")
+	}
+	return nil
 }
 
-// registryHost is the registry an image repository lives in; "" is Docker Hub.
-func registryHost(repository string) string {
-	first, _, found := strings.Cut(repository, "/")
-	if found && (strings.ContainsAny(first, ".:") || first == "localhost") {
-		return first
+// imageRepository is the repository part of an image reference, without its tag or digest.
+func imageRepository(image string) string {
+	name, _, _ := strings.Cut(image, "@")
+	if colon := strings.LastIndex(name, ":"); colon > strings.LastIndex(name, "/") {
+		return name[:colon]
 	}
-	return ""
+	return name
 }
 
-func commonNotes() []string {
-	return []string{
-		"The app must exist in Excalibase first; set its port to the one the image serves on.",
-		"A private image needs the registry's credentials saved in the project (Containers, Registry credentials).",
+// imageRegistry is the registry host CI logs in to, or "" for Docker Hub.
+func imageRegistry(image string) string {
+	first, _, found := strings.Cut(imageRepository(image), "/")
+	isHost := found && (strings.ContainsAny(first, ".:") || first == "localhost")
+	if !isHost || dockerHubAliases[first] {
+		return ""
 	}
+	return first
 }
 
-func githubSnippet(appURL, image string) Snippet {
-	notes, secrets := commonNotes(), []string{tokenSecret}
-	login := "          registry: ghcr.io\n          username: ${{ github.actor }}\n          password: ${{ secrets.GITHUB_TOKEN }}\n"
-	repo := image
-	if repo == "" {
-		repo = "ghcr.io/${{ github.repository }}"
-		notes = append(notes, "ghcr.io needs a lowercase repository name; set the image explicitly if the owner has capitals.")
-	} else if host := registryHost(image); host != "ghcr.io" {
-		login = "          username: ${{ secrets.REGISTRY_USERNAME }}\n          password: ${{ secrets.REGISTRY_PASSWORD }}\n"
-		if host != "" {
-			login = "          registry: " + host + "\n" + login
+func appAPI(target DeployTarget) string {
+	return strings.TrimRight(target.APIBase, "/") + "/api/projects/" + target.ProjectID + "/apps/" + target.AppID
+}
+
+// deployScript is the POSIX sh step every CI runs: deploy $IMAGE with
+// $COMMIT_SHA, then poll until the deploy is live or failed. Needs curl and sed.
+func deployScript(target DeployTarget) string {
+	return strings.Replace(deployScriptTemplate, "{{appAPI}}", appAPI(target), 1)
+}
+
+const deployScriptTemplate = `set -eu
+APP_API="{{appAPI}}"
+answer=$(curl -sS -X POST "$APP_API/deploy" \
+  -H "Authorization: Bearer $EXCALIBASE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"image\":\"$IMAGE\",\"commitSha\":\"$COMMIT_SHA\"}" \
+  -w '\n%{http_code}')
+code=$(printf '%s\n' "$answer" | tail -n 1)
+body=$(printf '%s\n' "$answer" | sed '$d')
+if [ "$code" != "202" ]; then
+  echo "Deploy refused ($code): $body" >&2
+  exit 1
+fi
+deploy_id=$(printf '%s' "$body" | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
+if [ -z "$deploy_id" ]; then
+  echo "No deploy id in: $body" >&2
+  exit 1
+fi
+echo "Deploy $deploy_id started; waiting until it is live"
+tries=0
+unanswered=0
+while [ "$tries" -lt 120 ]; do
+  tries=$((tries + 1))
+  answer=$(curl -sS "$APP_API/deploys/$deploy_id" -H "Authorization: Bearer $EXCALIBASE_TOKEN" \
+    -w '\n%{http_code}' || true)
+  code=$(printf '%s\n' "$answer" | tail -n 1)
+  state=$(printf '%s\n' "$answer" | sed '$d')
+  case "$code" in
+    200) unanswered=0 ;;
+    000|5??)
+      unanswered=$((unanswered + 1))
+      if [ "$unanswered" -ge 6 ]; then
+        echo "The API did not answer ($code): $state" >&2
+        exit 1
+      fi
+      sleep 5
+      continue ;;
+    *)
+      echo "Polling refused ($code): $state" >&2
+      exit 1 ;;
+  esac
+  status=$(printf '%s' "$state" | sed -n 's/.*"status":"\([a-z]*\)".*/\1/p')
+  case "$status" in
+    succeeded)
+      echo "Live at $(printf '%s' "$state" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
+      exit 0 ;;
+    failed|superseded)
+      echo "Deploy $status: $state" >&2
+      exit 1 ;;
+    pending|rolling) ;;
+    *)
+      echo "Unexpected answer: $state" >&2
+      exit 1 ;;
+  esac
+  sleep 5
+done
+echo "Deploy $deploy_id did not finish within 10 minutes" >&2
+exit 1`
+
+func indent(text string, spaces int) string {
+	pad := strings.Repeat(" ", spaces)
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = pad + line
 		}
-		secrets = append(secrets, registrySecrets)
 	}
-	content := strings.Replace(fill(githubWorkflow, appURL, repo, 10), "{{login}}", login, 1)
-	return Snippet{Path: ".github/workflows/deploy.yml", Content: content, Secrets: secrets, Notes: notes}
+	return strings.Join(lines, "\n")
 }
 
-func gitlabSnippet(appURL, image string) Snippet {
-	secrets := []string{tokenSecret + "; add it as a masked CI/CD variable"}
-	repo, login := "$CI_REGISTRY_IMAGE", `echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"`
-	if image != "" {
-		repo = image
-		login = `echo "$REGISTRY_PASSWORD" | docker login -u "$REGISTRY_USERNAME" --password-stdin ` + registryHost(image)
-		secrets = append(secrets, registrySecrets+"; masked CI/CD variables")
-	}
-	content := strings.Replace(fill(gitlabPipeline, appURL, repo, 6), "{{login}}", strings.TrimSpace(login), 1)
-	return Snippet{Path: ".gitlab-ci.yml", Content: content, Secrets: secrets, Notes: commonNotes()}
+// pushedDigest picks the digest of this repository: a reused agent may hold
+// the same image under other repositories.
+const pushedDigest = `docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPOSITORY:$COMMIT_SHA" | grep "^$IMAGE_REPOSITORY@" | head -n 1`
+
+func curlScript(target DeployTarget) string {
+	return "# Run after pushing the image, with these set:\n" +
+		"#   EXCALIBASE_TOKEN  a write token bound to this project, kept as a CI secret\n" +
+		"#   IMAGE             the pushed image, best by digest: " + imageRepository(target.Image) + "@sha256:...\n" +
+		"#   COMMIT_SHA        the commit the image was built from\n" +
+		deployScript(target) + "\n"
 }
-
-func jenkinsSnippet(appURL, image string) Snippet {
-	notes := append(commonNotes(), "The agent needs docker, curl and jq.")
-	repo := image
-	if repo == "" {
-		repo = "registry.example.com/team/app"
-		notes = append(notes, "Replace REGISTRY_IMAGE with your registry repository.")
-	}
-	content := strings.Replace(fill(jenkinsPipeline, appURL, repo, 12), "{{registry}}", registryHost(repo), 1)
-	return Snippet{
-		Path: "Jenkinsfile", Content: content, Notes: notes,
-		Secrets: []string{
-			"excalibase-token: a Secret text credential holding " + strings.TrimPrefix(tokenSecret, "EXCALIBASE_TOKEN: "),
-			"registry: a Username with password credential for your registry",
-		},
-	}
-}
-
-// fill places the app URL, the image repository and the deploy steps,
-// indented for the pipeline file they sit in.
-func fill(template, appURL, repo string, indent int) string {
-	pad := strings.Repeat(" ", indent)
-	steps := pad + strings.ReplaceAll(strings.TrimRight(deploySteps, "\n"), "\n", "\n"+pad)
-	return strings.NewReplacer("{{appURL}}", appURL, "{{repo}}", repo, "{{deploy}}", steps).Replace(template)
-}
-
-// deploySteps reads the app's version, switches it to $IMAGE at that version
-// and rolls it out. IMAGE is a digest reference.
-const deploySteps = `VERSION=$(curl -fsS -H "Authorization: Bearer $EXCALIBASE_TOKEN" "$EXCALIBASE_APP_URL/" | jq -r .version)
-curl -fsS -X PATCH "$EXCALIBASE_APP_URL/" -H "Authorization: Bearer $EXCALIBASE_TOKEN" -H "If-Match: $VERSION" -H "Content-Type: application/json" -d "$(jq -n --arg image "$IMAGE" '{image: $image}')"
-curl -fsS -X POST "$EXCALIBASE_APP_URL/deploy" -H "Authorization: Bearer $EXCALIBASE_TOKEN"
-`
-
-const githubWorkflow = `name: deploy
-on:
-  push:
-    branches: [main]
-permissions:
-  contents: read
-  packages: write
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-{{login}}      - id: build
-        uses: docker/build-push-action@v6
-        with:
-          push: true
-          tags: {{repo}}:${{ github.sha }}
-      - name: Deploy to Excalibase
-        env:
-          EXCALIBASE_TOKEN: ${{ secrets.EXCALIBASE_TOKEN }}
-          EXCALIBASE_APP_URL: {{appURL}}
-          IMAGE: {{repo}}@${{ steps.build.outputs.digest }}
-        run: |
-{{deploy}}
-`
-
-const gitlabPipeline = `deploy:
-  stage: deploy
-  image: docker:27
-  services:
-    - docker:27-dind
-  variables:
-    DOCKER_TLS_CERTDIR: "/certs"
-    EXCALIBASE_APP_URL: {{appURL}}
-    TAGGED: {{repo}}:$CI_COMMIT_SHA
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-  script:
-    - {{login}}
-    - docker build -t "$TAGGED" .
-    - docker push "$TAGGED"
-    - apk add --no-cache curl jq
-    - |
-      IMAGE=$(docker inspect --format '{{index .RepoDigests 0}}' "$TAGGED")
-{{deploy}}
-`
-
-const jenkinsPipeline = `pipeline {
-  agent any
-  environment {
-    REGISTRY = '{{registry}}'
-    REGISTRY_IMAGE = '{{repo}}'
-    EXCALIBASE_APP_URL = '{{appURL}}'
-  }
-  stages {
-    stage('Build, push and deploy') {
-      steps {
-        withCredentials([
-          usernamePassword(credentialsId: 'registry', usernameVariable: 'REGISTRY_USER', passwordVariable: 'REGISTRY_PASSWORD'),
-          string(credentialsId: 'excalibase-token', variable: 'EXCALIBASE_TOKEN')
-        ]) {
-          sh '''
-            echo "$REGISTRY_PASSWORD" | docker login -u "$REGISTRY_USER" --password-stdin $REGISTRY
-            docker build -t "$REGISTRY_IMAGE:$GIT_COMMIT" .
-            docker push "$REGISTRY_IMAGE:$GIT_COMMIT"
-            IMAGE=$(docker inspect --format '{{index .RepoDigests 0}}' "$REGISTRY_IMAGE:$GIT_COMMIT")
-{{deploy}}
-          '''
-        }
-      }
-    }
-  }
-}
-`
