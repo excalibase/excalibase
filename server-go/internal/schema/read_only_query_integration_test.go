@@ -72,12 +72,23 @@ func TestIntegration_ExecuteReadOnlyQuery_LeavesNoSessionBehind(t *testing.T) {
 	if result.Error != "" {
 		t.Fatalf("lock: %s", result.Error)
 	}
-	var free bool
-	if err := superDB.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(4242)").Scan(&free); err != nil {
-		t.Fatalf("try lock: %v", err)
+	if open := appDB.Stats().OpenConnections; open != 0 {
+		t.Fatalf("the read-only call's connection went back to the pool: %d open", open)
 	}
-	if !free {
-		t.Fatalf("the advisory lock outlived the read-only call")
+	// The server ends the closed session's backend, and its locks, shortly after.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var free bool
+		if err := superDB.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(4242)").Scan(&free); err != nil {
+			t.Fatalf("try lock: %v", err)
+		}
+		if free {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the advisory lock outlived the read-only call")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
