@@ -31,7 +31,7 @@ export function OrgsPage() {
     }
   };
 
-  useEffect(() => { fetchOrgs(); }, []);
+  useEffect(() => { void fetchOrgs(); }, []);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
