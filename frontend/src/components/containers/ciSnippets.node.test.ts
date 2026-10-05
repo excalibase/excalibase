@@ -77,9 +77,9 @@ function target(image = 'ghcr.io/acme/web:main'): SnippetTarget {
 }
 
 // Runs a script the way a CI runner does, with POSIX sh, and reports how it ended.
-function run(script: string, env: Record<string, string>): Promise<{ code: number; out: string }> {
+function run(script: string, env: Record<string, string>, shell = ['sh']): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    const child = spawn('sh', ['-c', script], { env: { PATH: process.env.PATH ?? '', ...env } });
+    const child = spawn(shell[0], [...shell.slice(1), '-c', script], { env: { PATH: process.env.PATH ?? '', ...env } });
     let out = '';
     child.stdout.on('data', (chunk) => (out += chunk));
     child.stderr.on('data', (chunk) => (out += chunk));
@@ -221,6 +221,7 @@ if [ "$1" = login ]; then cat >/dev/null; fi
 echo "docker $*" >> "${log}"
 if [ "$1" = inspect ]; then
   for last in "$@"; do :; done
+  echo "elsewhere.example.com/other/repo@sha256:${'0'.repeat(64)}"
   echo "\${last%:*}@${DIGEST}"
 fi
 `,
@@ -259,6 +260,19 @@ describe('gitlabCiSnippet', () => {
         `docker push registry.gitlab.com/acme/web:${COMMIT}`,
       ]),
     );
+    expect(fake.deploys).toEqual([{ image: `registry.gitlab.com/acme/web@${DIGEST}`, commitSha: COMMIT }]);
+  }, 30_000);
+
+  // GitLab's docker image runs the job in busybox ash, not dash.
+  test.skipIf(!existsSync('/usr/bin/busybox'))('runs under busybox ash as in the docker image', async () => {
+    const job = (parse(gitlabCiSnippet(target('registry.gitlab.com/acme/web:main'))) as Record<string, { script: string[]; variables: Record<string, string> }>)['deploy'];
+    const tools = fakeTools();
+    const result = await run(
+      job.script.join('\n'),
+      { ...job.variables, PATH: `${tools.bin}:${process.env.PATH}`, EXCALIBASE_TOKEN: TOKEN, CI_COMMIT_SHA: COMMIT },
+      ['/usr/bin/busybox', 'sh'],
+    );
+    expect(result.code, result.out).toBe(0);
     expect(fake.deploys).toEqual([{ image: `registry.gitlab.com/acme/web@${DIGEST}`, commitSha: COMMIT }]);
   }, 30_000);
 

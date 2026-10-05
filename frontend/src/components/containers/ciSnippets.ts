@@ -131,7 +131,8 @@ function shellLogin(registry: string | null, gitlab: boolean): string {
   return `echo "$REGISTRY_PASSWORD" | docker login -u "$REGISTRY_USERNAME" --password-stdin ${registry}`;
 }
 
-const PUSHED_DIGEST = `docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_REPOSITORY:$COMMIT_SHA"`;
+// A reused agent may hold the same image under other repositories; only this one's digest is deployed.
+const PUSHED_DIGEST = `docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPOSITORY:$COMMIT_SHA" | grep "^$IMAGE_REPOSITORY@" | head -n 1`;
 
 // .gitlab-ci.yml: build and push on the default branch with docker-in-docker, then deploy the digest.
 export function gitlabCiSnippet(target: SnippetTarget): string {
