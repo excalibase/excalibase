@@ -53,6 +53,38 @@ func (f *fakeDomains) Remove(_ context.Context, projectID, appID, id string) err
 	return f.err
 }
 
+func (f *fakeDomains) HostCertificate(_ context.Context, projectID, appID string) (*service.HostCertificateView, error) {
+	f.calls = append(f.calls, "certificate:"+projectID+"/"+appID)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &service.HostCertificateView{Hostname: "web-p1.apps.example.com", Status: apphost.DomainIssuing}, nil
+}
+
+func certificateRequest(domains *fakeDomains, appID string) *httptest.ResponseRecorder {
+	r := chi.NewRouter()
+	r.Get("/api/projects/{projectId}/apps/{appId}/certificate", NewAppDomainHandler(domains).HostCertificate)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/projects/"+appTestProject+"/apps/"+appID+"/certificate", nil))
+	return w
+}
+
+func TestAppDomainHandler_HostCertificate(t *testing.T) {
+	domains := &fakeDomains{}
+	w := certificateRequest(domains, "app-1")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"issuing"`) ||
+		!strings.Contains(w.Body.String(), `"hostname":"web-p1.apps.example.com"`) {
+		t.Fatalf("certificate = %d %s", w.Code, w.Body.String())
+	}
+	if w := certificateRequest(domains, "Bad%20App"); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid app id = %d", w.Code)
+	}
+	domains.err = apphost.ErrAppNotFound
+	if w := certificateRequest(domains, "app-1"); w.Code != http.StatusNotFound {
+		t.Fatalf("missing app = %d", w.Code)
+	}
+}
+
 func domainRequest(domains *fakeDomains, method, path, body string) *httptest.ResponseRecorder {
 	h := NewAppDomainHandler(domains)
 	r := chi.NewRouter()

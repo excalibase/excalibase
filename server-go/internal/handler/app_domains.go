@@ -19,6 +19,7 @@ type AppDomains interface {
 	List(projectID, appID string) ([]*service.DomainView, error)
 	Verify(ctx context.Context, projectID, appID, id string) (*service.DomainView, error)
 	Remove(ctx context.Context, projectID, appID, id string) error
+	HostCertificate(ctx context.Context, projectID, appID string) (*service.HostCertificateView, error)
 }
 
 // AppDomainHandler lets a project point its own domains at its apps.
@@ -95,6 +96,20 @@ func (h *AppDomainHandler) Remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// HostCertificate reports the certificate of the app's own hostname.
+func (h *AppDomainHandler) HostCertificate(w http.ResponseWriter, r *http.Request) {
+	projectID, appID, ok := domainAppPath(w, r)
+	if !ok {
+		return
+	}
+	view, err := h.domains.HostCertificate(r.Context(), projectID, appID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, view)
 }
 
 func domainAppPath(w http.ResponseWriter, r *http.Request) (string, string, bool) {

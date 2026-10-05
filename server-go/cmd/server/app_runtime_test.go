@@ -61,11 +61,11 @@ func TestVerifyAppRuntime_Refusals(t *testing.T) {
 
 func TestAppRouteCarriesTheRouteConfig(t *testing.T) {
 	cfg := config.AppConfig{
-		AppDomain: "apps.example.com", AppIngressClass: "haproxy", AppTLSSecret: "apps-tls",
+		AppDomain: "apps.example.com", AppIngressClass: "haproxy", AppDomainIssuer: "apps-acme",
 		AppIngressFromNamespace: "haproxy-controller", AppIngressFromLabels: map[string]string{"app": "edge"},
 	}
 	route := appRoute(cfg)
-	if route.Domain != "apps.example.com" || route.IngressClass != "haproxy" || route.TLSSecret != "apps-tls" ||
+	if route.Domain != "apps.example.com" || route.IngressClass != "haproxy" || route.Issuer != "apps-acme" ||
 		route.IngressFromNamespace != "haproxy-controller" || route.IngressFromLabels["app"] != "edge" {
 		t.Errorf("appRoute = %+v", route)
 	}

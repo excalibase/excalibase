@@ -4,10 +4,12 @@ import { apiErrorMessage } from '../../api/apps';
 import {
   useAddAppDomain,
   useAppDomains,
+  useAppHostCertificate,
   useRemoveAppDomain,
   useVerifyAppDomain,
   type AppDomain,
   type DomainStatus,
+  type HostCertificate,
 } from '../../api/appDomains';
 import { inputClass } from './EnvVarEditor';
 import { ToneBadge, primaryButton, secondaryButton } from './ContainerBits';
@@ -20,6 +22,34 @@ const STATUS: Record<DomainStatus, { label: string; tone: Tone }> = {
   issue_failed: { label: 'Certificate failed', tone: 'error' },
   detached: { label: 'Detached', tone: 'error' },
 };
+
+const HOST_STATUS: Record<
+  Exclude<HostCertificate['status'], 'none'>,
+  { label: string; tone: Tone }
+> = {
+  issuing: STATUS.issuing,
+  active: { label: 'HTTPS', tone: 'success' },
+  issue_failed: STATUS.issue_failed,
+};
+
+// The certificate of the app's own hostname, beside its URL.
+export function HostCertificateBadge({
+  projectId,
+  appId,
+}: {
+  readonly projectId: string;
+  readonly appId: string;
+}) {
+  const { data } = useAppHostCertificate(projectId, appId);
+  if (!data || data.status === 'none') return null;
+  const status = HOST_STATUS[data.status];
+  return (
+    <>
+      <ToneBadge label={status.label} tone={status.tone} testId="host-certificate" />
+      {data.failureReason && <span className="text-xs text-red-400">{data.failureReason}</span>}
+    </>
+  );
+}
 
 function DomainRow({
   domain,

@@ -193,10 +193,6 @@ spec:
               number: 80
         path: /
         pathType: Prefix
-  tls:
-  - hosts:
-    - web-abc.apps.example.com
-    secretName: apps-wildcard-tls
 status:
   loadBalancer: {}
 ---
@@ -232,4 +228,57 @@ spec:
     toPorts:
     - ports:
       - port: "8080"
+        protocol: TCP
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  labels:
+    app.kubernetes.io/component: app
+    app.kubernetes.io/managed-by: excalibase-provisioning
+    app.kubernetes.io/name: web
+    excalibase.io/app: app-01H
+    excalibase.io/component: app
+    excalibase.io/host-tls: pending
+    excalibase.io/project: proj-abc
+    excalibase.io/tier: free
+  name: app-web
+  namespace: org1-proj-abc
+spec:
+  dnsNames:
+  - web-abc.apps.example.com
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: letsencrypt
+  secretName: app-web-tls
+  secretTemplate:
+    labels:
+      app.kubernetes.io/component: app
+      app.kubernetes.io/managed-by: excalibase-provisioning
+      app.kubernetes.io/name: web
+      excalibase.io/app: app-01H
+      excalibase.io/component: app
+      excalibase.io/project: proj-abc
+      excalibase.io/tier: free
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: excalibase-provisioning
+  name: acme-http01-solver
+  namespace: org1-proj-abc
+spec:
+  endpointSelector:
+    matchLabels:
+      acme.cert-manager.io/http01-solver: "true"
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:app.kubernetes.io/name: kubernetes-ingress
+        k8s:io.kubernetes.pod.namespace: haproxy-controller
+    toPorts:
+    - ports:
+      - port: "8089"
         protocol: TCP

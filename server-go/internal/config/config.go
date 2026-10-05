@@ -283,8 +283,6 @@ type AppConfig struct {
 	// AppDomain is the parent of every app hostname: <app>-<project>.<AppDomain>.
 	AppDomain       string
 	AppIngressClass string
-	// AppTLSSecret names a wildcard certificate for AppDomain; empty serves apps over HTTP only.
-	AppTLSSecret string
 	// AppIngressFromNamespace and AppIngressFromLabels select the only pods an app accepts traffic from.
 	AppIngressFromNamespace string
 	AppIngressFromLabels    map[string]string
@@ -306,8 +304,9 @@ type AppConfig struct {
 	StorageNodeCapacity   string
 	StorageLVMNamespace   string
 	StorageLVMVolumeGroup string
-	// AppDomainIssuer is the ACME ClusterIssuer custom domains get certificates
-	// from; empty turns custom domains off.
+	// AppDomainIssuer is the ACME ClusterIssuer every app hostname and custom
+	// domain gets its certificate from; empty serves apps over HTTP only and
+	// turns custom domains off.
 	AppDomainIssuer string
 	// AppDomainResolver is host:port of the resolver custom-domain CNAMEs are
 	// read from; empty uses the host's first nameserver.
@@ -464,7 +463,6 @@ func load() AppConfig {
 		AppEgressExtraDenyCIDRs:        envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),
 		AppDomain:                      os.Getenv("APP_DOMAIN"),
 		AppIngressClass:                envOr("APP_INGRESS_CLASS", "haproxy"),
-		AppTLSSecret:                   os.Getenv("APP_TLS_SECRET"),
 		AppIngressFromNamespace:        os.Getenv("APP_INGRESS_FROM_NAMESPACE"),
 		AppIngressFromLabels:           envIngressFromLabels("APP_INGRESS_FROM_LABELS"),
 		TenantStorageClass:             strings.TrimSpace(os.Getenv("TENANT_STORAGE_CLASS")),

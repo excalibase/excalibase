@@ -314,13 +314,7 @@ func (c *Client) appLeftovers(namespace string, opts metav1.ListOptions) []owned
 		}, func(ctx context.Context, name string) error {
 			return services.Delete(ctx, name, metav1.DeleteOptions{})
 		}},
-		{"secret", func(ctx context.Context) ([]string, error) {
-			list, err := secrets.List(ctx, opts)
-			if err != nil {
-				return nil, err
-			}
-			return namesOf(list.Items), nil
-		}, func(ctx context.Context, name string) error { return secrets.Delete(ctx, name, metav1.DeleteOptions{}) }},
+		// A certificate goes before its key, or cert-manager issues the key again.
 		{"certificate", func(ctx context.Context) ([]string, error) {
 			list, err := certs.List(ctx, opts)
 			if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
@@ -331,6 +325,13 @@ func (c *Client) appLeftovers(namespace string, opts metav1.ListOptions) []owned
 			}
 			return namesOf(list.Items), nil
 		}, func(ctx context.Context, name string) error { return certs.Delete(ctx, name, metav1.DeleteOptions{}) }},
+		{"secret", func(ctx context.Context) ([]string, error) {
+			list, err := secrets.List(ctx, opts)
+			if err != nil {
+				return nil, err
+			}
+			return namesOf(list.Items), nil
+		}, func(ctx context.Context, name string) error { return secrets.Delete(ctx, name, metav1.DeleteOptions{}) }},
 		{"network policy", func(ctx context.Context) ([]string, error) {
 			list, err := policies.List(ctx, opts)
 			if err != nil {

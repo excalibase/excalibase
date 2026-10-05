@@ -186,6 +186,10 @@ type MockClient struct {
 	DomainCerts    map[string]CertificateState // keyed host
 	DomainCertErr  error
 	IssuerReadyErr error
+	// HostCerts answers AppHostCertificate, keyed "namespace/appName"; a missing key is ErrNoCertificate.
+	HostCerts         map[string]CertificateState
+	HostCertErr       error
+	HostCertAttachErr error
 
 	RuntimeClasses    map[string]bool
 	RuntimeClassError error
@@ -224,6 +228,7 @@ func NewMockClient() *MockClient {
 		RuntimeClasses: make(map[string]bool),
 		DomainHosts:    make(map[string][]string),
 		DomainCerts:    make(map[string]CertificateState),
+		HostCerts:      make(map[string]CertificateState),
 	}
 }
 
@@ -936,6 +941,26 @@ func (m *MockClient) AppDomainCertificate(ctx context.Context, namespace, appNam
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.DomainCerts[host], m.DomainCertErr
+}
+
+func (m *MockClient) AttachIssuedAppHostCertificates(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "AttachIssuedAppHostCertificates")
+	return m.HostCertAttachErr
+}
+
+func (m *MockClient) AppHostCertificate(ctx context.Context, namespace, appName string) (CertificateState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.HostCertErr != nil {
+		return CertificateState{}, m.HostCertErr
+	}
+	state, ok := m.HostCerts[namespace+"/"+appName]
+	if !ok {
+		return CertificateState{}, ErrNoCertificate
+	}
+	return state, nil
 }
 
 func (m *MockClient) ClusterIssuerReady(ctx context.Context, name string) error {
