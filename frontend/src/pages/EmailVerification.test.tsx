@@ -44,6 +44,7 @@ describe('Studio email verification', () => {
     await u.type(screen.getByLabelText('Username'), 'dev');
     await u.type(screen.getByLabelText('Email'), 'dev@x.test');
     await u.type(screen.getByLabelText('Password'), PASSWORD);
+    await u.type(screen.getByLabelText('Confirm password'), PASSWORD);
     await u.click(screen.getByRole('button', { name: /create account/i }));
 
     expect(await screen.findByTestId('check-email')).toHaveTextContent('dev@x.test');
@@ -120,10 +121,46 @@ describe('Studio email verification', () => {
     renderAt('/reset-password?token=rst');
 
     await u.type(screen.getByLabelText('New password'), PASSWORD);
+    await u.type(screen.getByLabelText('Confirm new password'), PASSWORD);
     await u.click(screen.getByRole('button', { name: /set password/i }));
 
     await waitFor(() => expect(api.post).toHaveBeenCalledWith('/email/reset/confirm', { token: 'rst', newPassword: PASSWORD }));
     expect(await screen.findByTestId('password-reset')).toBeInTheDocument();
+  });
+
+  test('a mistyped confirmation blocks the reset and says so', async () => {
+    const u = userEvent.setup();
+    renderAt('/reset-password?token=rst');
+
+    await u.type(screen.getByLabelText('New password'), PASSWORD);
+    await u.type(screen.getByLabelText('Confirm new password'), `${PASSWORD}x`);
+
+    expect(screen.getByText("Passwords don't match")).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /set password/i })).toBeDisabled();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  test('a reset password that breaks the rules cannot be submitted', async () => {
+    const u = userEvent.setup();
+    renderAt('/reset-password?token=rst');
+
+    await u.type(screen.getByLabelText('New password'), 'weakpass');
+    await u.type(screen.getByLabelText('Confirm new password'), 'weakpass');
+
+    expect(screen.getByRole('button', { name: /set password/i })).toBeDisabled();
+  });
+
+  test('the reset sends only the token and the password, never the confirmation', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { status: 'reset' } } as never);
+    renderAt('/reset-password?token=rst');
+
+    await u.type(screen.getByLabelText('New password'), PASSWORD);
+    await u.type(screen.getByLabelText('Confirm new password'), PASSWORD);
+    await u.click(screen.getByRole('button', { name: /set password/i }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.post).mock.calls[0]).toEqual(['/email/reset/confirm', { token: 'rst', newPassword: PASSWORD }]);
   });
 
   test('after a reset the user is told their access tokens were revoked', async () => {
@@ -132,6 +169,7 @@ describe('Studio email verification', () => {
     renderAt('/reset-password?token=rst');
 
     await u.type(screen.getByLabelText('New password'), PASSWORD);
+    await u.type(screen.getByLabelText('Confirm new password'), PASSWORD);
     await u.click(screen.getByRole('button', { name: /set password/i }));
 
     const notice = await screen.findByTestId('tokens-revoked');
@@ -145,6 +183,7 @@ describe('Studio email verification', () => {
     renderAt('/reset-password?token=rst');
 
     await u.type(screen.getByLabelText('New password'), PASSWORD);
+    await u.type(screen.getByLabelText('Confirm new password'), PASSWORD);
     await u.click(screen.getByRole('button', { name: /set password/i }));
 
     expect(await screen.findByTestId('sign-in-as')).toHaveTextContent('Sign in as erin-3fa9c1 or with your e-mail');
@@ -156,6 +195,7 @@ describe('Studio email verification', () => {
     renderAt('/reset-password?token=rst');
 
     await u.type(screen.getByLabelText('New password'), PASSWORD);
+    await u.type(screen.getByLabelText('Confirm new password'), PASSWORD);
     await u.click(screen.getByRole('button', { name: /set password/i }));
 
     const notice = await screen.findByTestId('tokens-revoked');

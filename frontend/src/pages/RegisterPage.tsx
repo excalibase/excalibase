@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button } from '../components/Button';
+import { NewPasswordFields, newPasswordReady } from '../components/auth/NewPasswordFields';
 import { ResendVerification } from '../components/auth/ResendVerification';
 import { ProviderButtons } from '../components/auth/ProviderSignIn';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -15,6 +16,7 @@ export function RegisterPage() {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [pendingEmail, setPendingEmail] = useState<string | null>(null);
@@ -23,7 +25,8 @@ export function RegisterPage() {
     e.preventDefault();
     setError(null);
 
-    if (!username.trim() || !email.trim() || !password.trim()) {
+    if (!newPasswordReady(password, confirm)) return;
+    if (!username.trim() || !email.trim()) {
       setError('All fields are required');
       return;
     }
@@ -96,15 +99,11 @@ export function RegisterPage() {
             className="w-full px-3 py-2.5 bg-bg-secondary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-colors"
             placeholder="john@company.com" disabled={loading} />
         </div>
-        <div>
-          <label htmlFor="password" className="block text-sm font-medium text-text-secondary mb-1.5">Password</label>
-          <input id="password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)}
-            className="w-full px-3 py-2.5 bg-bg-secondary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-colors"
-            placeholder="Choose a password" disabled={loading} />
-        </div>
+        <NewPasswordFields id="password" label="Password" password={password} confirm={confirm}
+          onPasswordChange={setPassword} onConfirmChange={setConfirm} placeholder="Choose a password" disabled={loading} />
       </div>
 
-      <Button type="submit" disabled={loading} className="w-full flex items-center justify-center gap-2">
+      <Button type="submit" disabled={loading || !newPasswordReady(password, confirm)} className="w-full flex items-center justify-center gap-2">
         {loading && <Loader2 className="w-4 h-4 animate-spin" />}
         {loading ? 'Creating account...' : 'Create Account'}
       </Button>
