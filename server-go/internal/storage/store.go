@@ -144,6 +144,13 @@ type InstanceStore interface {
 	// one of its tier slots. It answers from the organisation's rows alone,
 	// never by loading every instance on the platform.
 	CountOrgProjects(orgID string) (int, error)
+	// UpdateIfStatusWithinOrgLimit is UpdateIfStatus for a write that moves
+	// a project back into a slot-holding status (restoring one in its
+	// deletion grace period): it lands only while the organisation has a free
+	// slot, counted and written under the same lock CreateWithinOrgLimit
+	// takes, so a restore and a create can never both take the last slot.
+	// Returns ErrOrgProjectLimitReached when the organisation is full.
+	UpdateIfStatusWithinOrgLimit(instance *domain.DatabaseInstance, expected string, maxProjects int) error
 	// Update persists changes to an existing project. It never changes the
 	// project's id or its owning org, returns ErrProjectNotFound when the
 	// row is absent, and ErrProjectDeleting when the stored row is already

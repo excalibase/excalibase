@@ -269,7 +269,8 @@ func (s *ProvisioningService) updatePendingChoice(ctx context.Context, inst *dom
 }
 
 // CancelDeletion ends a project's grace period. The project stays PAUSED, with
-// its disk, and deletion protection is turned back on.
+// its disk, and deletion protection is turned back on. A deleted project gave
+// its plan slot up, so restoring it needs a free one.
 func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID string) error {
 	if inst, err := s.store.FindByProjectID(projectID); err != nil || inst == nil {
 		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
@@ -296,7 +297,14 @@ func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID stri
 	inst.DeletionDeleteBackups = false
 	inst.DeletionProtection = boolPtr(true)
 	inst.UpdatedAt = &domain.FlexTime{Time: s.deletionClock()}
-	if err := s.store.UpdateIfStatus(inst, string(domain.StatusPendingDeletion)); err != nil {
+	limit, err := s.orgProjectLimitFor(ctx, inst.OrgID)
+	if err != nil {
+		return err
+	}
+	switch err := s.store.UpdateIfStatusWithinOrgLimit(inst, string(domain.StatusPendingDeletion), limit); {
+	case errors.Is(err, storage.ErrOrgProjectLimitReached):
+		return &RestoreProjectLimitError{Limit: limit}
+	case err != nil:
 		return err
 	}
 	log.Printf("action=cancel_deletion project=%s", projectID)

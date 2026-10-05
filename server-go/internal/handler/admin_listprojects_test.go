@@ -98,6 +98,10 @@ func (errInstanceStore) Delete(string) error { return nil }
 func (errInstanceStore) BeginDeletion(string, *bool) (bool, error) {
 	return false, errors.New("db down")
 }
+func (errInstanceStore) UpdateIfStatusWithinOrgLimit(*domain.DatabaseInstance, string, int) error {
+	return nil
+}
+
 func (errInstanceStore) UpdateIfStatus(*domain.DatabaseInstance, string) error {
 	return nil
 }

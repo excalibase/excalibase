@@ -160,14 +160,107 @@ func TestCreateWithinOrgLimit_ConcurrentCreatesTakeOneSlot(t *testing.T) {
 	}
 }
 
-// The SQL filter and the Go predicate must name the same statuses.
-func TestDeletionStatuses_MatchTheSlotPredicate(t *testing.T) {
-	if len(deletionStatuses) != len(storage.NonSlotStatuses()) {
-		t.Fatalf("deletion statuses %v vs non-slot statuses %v", deletionStatuses, storage.NonSlotStatuses())
-	}
+// A status the update door treats as teardown never holds a slot either; the
+// grace period frees the slot without being a teardown status.
+func TestDeletionStatuses_HoldNoSlot(t *testing.T) {
 	for _, status := range deletionStatuses {
 		if storage.HoldsOrgProjectSlot(status) {
-			t.Fatalf("%q is excluded from the count query but holds a slot", status)
+			t.Fatalf("%q is a teardown status but holds a slot", status)
+		}
+	}
+}
+
+func pendingDeletionRow(projectID, orgID string) *domain.DatabaseInstance {
+	row := instanceRow(projectID, orgID)
+	row.Status = string(domain.StatusPendingDeletion)
+	return row
+}
+
+func restoredRow(projectID, orgID string) *domain.DatabaseInstance {
+	row := instanceRow(projectID, orgID)
+	row.Status = string(domain.StatusPaused)
+	return row
+}
+
+func TestUpdateIfStatusWithinOrgLimit_RestoreRefusedAtTheLimit(t *testing.T) {
+	store := testStore(t)
+	if err := store.Create(pendingDeletionRow("proj-rest0001", "org-rest")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := store.CreateWithinOrgLimit(instanceRow("proj-rest0002", "org-rest"), 1); err != nil {
+		t.Fatalf("a project in its grace period must not hold the slot: %v", err)
+	}
+
+	err := store.UpdateIfStatusWithinOrgLimit(restoredRow("proj-rest0001", "org-rest"), string(domain.StatusPendingDeletion), 1)
+	if !errors.Is(err, storage.ErrOrgProjectLimitReached) {
+		t.Fatalf("restore = %v, want ErrOrgProjectLimitReached", err)
+	}
+	got, err := store.FindByProjectID("proj-rest0001")
+	if err != nil || got.Status != string(domain.StatusPendingDeletion) {
+		t.Fatalf("a refused restore must leave the grace period in place: %+v %v", got, err)
+	}
+}
+
+func TestUpdateIfStatusWithinOrgLimit_RestoreTakesAFreeSlot(t *testing.T) {
+	store := testStore(t)
+	if err := store.Create(pendingDeletionRow("proj-rest0003", "org-free")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := store.UpdateIfStatusWithinOrgLimit(restoredRow("proj-rest0003", "org-free"), string(domain.StatusPendingDeletion), 1); err != nil {
+		t.Fatalf("restore with a free slot: %v", err)
+	}
+	count, err := store.CountOrgProjects("org-free")
+	if err != nil || count != 1 {
+		t.Fatalf("count = %d %v, want the restored project holding the slot", count, err)
+	}
+	err = store.UpdateIfStatusWithinOrgLimit(restoredRow("proj-rest0003", "org-free"), string(domain.StatusPendingDeletion), 1)
+	if !errors.Is(err, storage.ErrProjectStatusChanged) {
+		t.Fatalf("a second restore = %v, want ErrProjectStatusChanged", err)
+	}
+}
+
+// A restore and creates racing for the last slot share the org lock, so
+// exactly one of them gets it.
+func TestUpdateIfStatusWithinOrgLimit_RestoreAndCreatesRaceForTheLastSlot(t *testing.T) {
+	store := testStore(t)
+	for round := 0; round < 10; round++ {
+		org := fmt.Sprintf("org-rrace%d", round)
+		old := fmt.Sprintf("proj-rr%d-old", round)
+		if err := store.Create(pendingDeletionRow(old, org)); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		const creators = 4
+		var start, done sync.WaitGroup
+		start.Add(1)
+		results := make([]error, creators+1)
+		for i := 0; i <= creators; i++ {
+			done.Add(1)
+			go func(i int) {
+				defer done.Done()
+				start.Wait()
+				if i == creators {
+					results[i] = store.UpdateIfStatusWithinOrgLimit(restoredRow(old, org), string(domain.StatusPendingDeletion), 1)
+					return
+				}
+				results[i] = store.CreateWithinOrgLimit(instanceRow(fmt.Sprintf("proj-rr%d-new%d", round, i), org), 1)
+			}(i)
+		}
+		start.Done()
+		done.Wait()
+
+		admitted := 0
+		for i, err := range results {
+			switch {
+			case err == nil:
+				admitted++
+			case errors.Is(err, storage.ErrOrgProjectLimitReached):
+			default:
+				t.Fatalf("racer %d: unexpected error %v", i, err)
+			}
+		}
+		count, err := store.CountOrgProjects(org)
+		if admitted != 1 || err != nil || count != 1 {
+			t.Fatalf("round %d: admitted %d, count %d (%v); want one slot taken once", round, admitted, count, err)
 		}
 	}
 }

@@ -160,9 +160,11 @@ tear it down. It pauses it (backup first, then the workload stops, disk kept),
 answers `202` with `status: PENDING_DELETION` and `deletionDueAt` seven days
 out, and the deletion sweep (every 15 minutes, leader replica only) runs the
 teardown below once that date passes. During the grace period the project
-still holds its org slot, is not served (credentials, data plane, functions
-refuse it), and its deletion-protection toggle is locked. An org **Owner** can
-cancel:
+no longer holds its org slot (the org can create a replacement at once), is not
+served (credentials, data plane, functions refuse it), and its
+deletion-protection toggle is locked. An org **Owner** can cancel, which takes
+a slot again: when the plan's slots are all in use the cancel is refused with
+`409` until one is freed or the org moves to a larger plan:
 
 ```bash
 curl -X POST -H "Authorization: Bearer $PAT" \

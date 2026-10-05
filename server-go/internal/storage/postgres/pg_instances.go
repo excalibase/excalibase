@@ -157,11 +157,17 @@ func (s *Store) UpdateStorageSizeIfStatus(projectID, size, expected string) erro
 // update writes the row. expectedStatus empty means "any status the door
 // allows"; a non-empty one additionally pins the write to that status.
 func (s *Store) update(inst *domain.DatabaseInstance, expectedStatus string) error {
+	return updateInstance(s.db, inst, expectedStatus)
+}
+
+// updateInstance is the general update on either the store's pool or an open
+// transaction, so a write admitted under the org lock lands inside it.
+func updateInstance(q execQuerier, inst *domain.DatabaseInstance, expectedStatus string) error {
 	mode := inst.DeploymentMode
 	if mode == "" {
 		mode = domain.ModeK8s
 	}
-	res, err := s.db.Exec(`
+	res, err := q.Exec(`
 		UPDATE database_instances SET
 			project_name = $2,
 			owner_id = $3,
@@ -243,7 +249,7 @@ func (s *Store) update(inst *domain.DatabaseInstance, expectedStatus string) err
 		return err
 	}
 	if affected == 0 {
-		return s.explainRefusedUpdate(inst.ProjectID, expectedStatus)
+		return explainRefusedUpdate(q, inst.ProjectID, expectedStatus)
 	}
 	return nil
 }
@@ -256,8 +262,12 @@ var deletionStatuses = []string{string(domain.StatusDeleting), string(domain.Sta
 // explainRefusedUpdate turns "no rows matched" into the reason: either the row
 // is gone, or a teardown owns it.
 func (s *Store) explainRefusedUpdate(projectID, expectedStatus string) error {
+	return explainRefusedUpdate(s.db, projectID, expectedStatus)
+}
+
+func explainRefusedUpdate(q execQuerier, projectID, expectedStatus string) error {
 	var status string
-	err := s.db.QueryRow(`SELECT status FROM database_instances WHERE project_id = $1`, projectID).Scan(&status)
+	err := q.QueryRow(`SELECT status FROM database_instances WHERE project_id = $1`, projectID).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return storage.ErrProjectNotFound
 	}

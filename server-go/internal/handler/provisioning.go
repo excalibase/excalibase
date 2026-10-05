@@ -423,11 +423,14 @@ const errDeletionStopFailed = "the project could not be stopped for deletion and
 func (h *ProvisioningHandler) CancelDeletion(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	err := h.svc.CancelDeletion(r.Context(), projectID)
+	var limitErr *service.RestoreProjectLimitError
 	switch {
 	case err == nil:
 		writeJSON(w, map[string]interface{}{"projectId": projectID, "status": domain.StatusPaused})
 	case errors.Is(err, service.ErrProjectNotFound):
 		httpError(w, "project not found", http.StatusNotFound)
+	case errors.As(err, &limitErr):
+		httpError(w, limitErr.Error(), http.StatusConflict)
 	case errors.Is(err, service.ErrNotScheduledForDeletion), errors.Is(err, service.ErrProjectOperationRunning),
 		errors.Is(err, storage.ErrProjectStatusChanged):
 		httpError(w, safeError(err), http.StatusConflict)

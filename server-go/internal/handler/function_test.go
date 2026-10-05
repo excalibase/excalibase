@@ -1273,6 +1273,10 @@ func (s *inMemoryInstanceStore) BeginDeletion(projectID string, deleteBackups *b
 }
 
 // RecordDeletionFailure stores how far a teardown got. See storage.InstanceStore.
+func (s *inMemoryInstanceStore) UpdateIfStatusWithinOrgLimit(*domain.DatabaseInstance, string, int) error {
+	return nil
+}
+
 func (s *inMemoryInstanceStore) UpdateIfStatus(*domain.DatabaseInstance, string) error {
 	return nil
 }
