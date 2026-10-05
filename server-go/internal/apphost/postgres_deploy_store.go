@@ -211,8 +211,7 @@ func (s *PostgresDeployStore) Finish(id, status, failureReason string, finishedA
 
 func (s *PostgresDeployStore) ListUnfinished() ([]*Deploy, error) {
 	rows, err := s.db.Query(
-		`SELECT `+deployColumns+`
-		 FROM app_deploys WHERE status IN ($1, $2) ORDER BY created_at`, DeployStatusPending, DeployStatusRolling)
+		listUnfinishedDeploys, DeployStatusPending, DeployStatusRolling)
 	if err != nil {
 		return nil, fmt.Errorf("list unfinished deploys: %w", err)
 	}
@@ -235,14 +234,12 @@ func (s *PostgresDeployStore) ListByApp(projectID, appID string, limit int) ([]*
 	if err := ValidateID(appID); err != nil {
 		return nil, err
 	}
-	q := `SELECT ` + deployColumns + `
-	      FROM app_deploys WHERE project_id = $1 AND app_id = $2 ORDER BY revision DESC`
-	args := []any{projectID, appID}
+	// LIMIT NULL is no limit.
+	var rowLimit any
 	if limit > 0 {
-		q += " LIMIT $3"
-		args = append(args, limit)
+		rowLimit = limit
 	}
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.db.Query(listAppDeploys, projectID, appID, rowLimit)
 	if err != nil {
 		return nil, fmt.Errorf("list deploys: %w", err)
 	}
@@ -281,8 +278,7 @@ func (s *PostgresDeployStore) Get(projectID, appID, id string) (*Deploy, error) 
 		return nil, err
 	}
 	row := s.db.QueryRow(
-		`SELECT `+deployColumns+`
-		 FROM app_deploys WHERE id = $1 AND app_id = $2 AND project_id = $3`, id, appID, projectID)
+		getAppDeploy, id, appID, projectID)
 	deploy, err := scanDeploy(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -293,8 +289,17 @@ func (s *PostgresDeployStore) Get(projectID, appID, id string) (*Deploy, error) 
 	return deploy, nil
 }
 
-const deployColumns = `id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
-	created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest`
+const (
+	listUnfinishedDeploys = `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
+       created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest
+FROM app_deploys WHERE status IN ($1, $2) ORDER BY created_at`
+	listAppDeploys = `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
+       created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest
+FROM app_deploys WHERE project_id = $1 AND app_id = $2 ORDER BY revision DESC LIMIT $3`
+	getAppDeploy = `SELECT id, app_id, project_id, revision, image, spec, config, redeploy_of, status, failure_reason,
+       created_by, created_at, finished_at, kind, source, commit_sha, image_ref, digest
+FROM app_deploys WHERE id = $1 AND app_id = $2 AND project_id = $3`
+)
 
 type rowScanner interface {
 	Scan(dest ...any) error

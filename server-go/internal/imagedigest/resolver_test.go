@@ -25,57 +25,67 @@ type fakeRegistry struct {
 	heads     atomic.Int32
 }
 
-func (f *fakeRegistry) handler(t *testing.T) http.Handler {
+func (f *fakeRegistry) handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		user, password, ok := r.BasicAuth()
-		if !ok || user != f.user || password != f.password {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"token": "granted"})
-	})
-	mux.HandleFunc("/v2/", func(w http.ResponseWriter, r *http.Request) {
-		if f.status != 0 {
-			w.WriteHeader(f.status)
-			return
-		}
-		if f.user != "" && r.Header.Get("Authorization") != "Bearer granted" {
-			w.Header().Set("WWW-Authenticate",
-				`Bearer realm="http://`+r.Host+`/token",service="fake",scope="repository:x:pull"`)
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		path := strings.TrimPrefix(r.URL.Path, "/v2/")
-		repo, reference, ok := strings.Cut(path, "/manifests/")
-		if !ok {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		digest, found := f.manifests[repo+":"+reference]
-		for _, known := range f.manifests {
-			if reference == known {
-				digest, found = known, true
-			}
-		}
-		if !found {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.Method == http.MethodHead {
-			f.heads.Add(1)
-		}
-		w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
-		w.Header().Set("Docker-Content-Digest", digest)
-		w.Header().Set("Content-Length", "2")
-		w.WriteHeader(http.StatusOK)
-	})
+	mux.HandleFunc("/token", f.serveToken)
+	mux.HandleFunc("/v2/", f.serveManifest)
 	return mux
+}
+
+func (f *fakeRegistry) serveToken(w http.ResponseWriter, r *http.Request) {
+	user, password, ok := r.BasicAuth()
+	if !ok || user != f.user || password != f.password {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"token": "granted"})
+}
+
+func (f *fakeRegistry) serveManifest(w http.ResponseWriter, r *http.Request) {
+	if f.status != 0 {
+		w.WriteHeader(f.status)
+		return
+	}
+	if f.user != "" && r.Header.Get("Authorization") != "Bearer granted" {
+		w.Header().Set("WWW-Authenticate",
+			`Bearer realm="http://`+r.Host+`/token",service="fake",scope="repository:x:pull"`)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	digest, found := f.lookup(r.URL.Path)
+	if !found {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if r.Method == http.MethodHead {
+		f.heads.Add(1)
+	}
+	w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+	w.Header().Set("Docker-Content-Digest", digest)
+	w.Header().Set("Content-Length", "2")
+	w.WriteHeader(http.StatusOK)
+}
+
+// lookup answers a /v2/<repo>/manifests/<tag or digest> path.
+func (f *fakeRegistry) lookup(path string) (string, bool) {
+	repo, reference, ok := strings.Cut(strings.TrimPrefix(path, "/v2/"), "/manifests/")
+	if !ok {
+		return "", false
+	}
+	if digest, found := f.manifests[repo+":"+reference]; found {
+		return digest, true
+	}
+	for _, known := range f.manifests {
+		if reference == known {
+			return known, true
+		}
+	}
+	return "", false
 }
 
 func serve(t *testing.T, registry *fakeRegistry) (string, *Resolver) {
 	t.Helper()
-	server := httptest.NewServer(registry.handler(t))
+	server := httptest.NewServer(registry.handler())
 	t.Cleanup(server.Close)
 	host := strings.TrimPrefix(server.URL, "http://")
 	return host, newResolver(server.Client(), true)
@@ -158,7 +168,7 @@ func TestResolveRefusesAnInvalidReference(t *testing.T) {
 // door into the cluster's own network or the cloud metadata service.
 func TestResolveNeverDialsAnInternalAddress(t *testing.T) {
 	registry := &fakeRegistry{manifests: map[string]string{"acme/web:main": testDigest}}
-	server := httptest.NewServer(registry.handler(t))
+	server := httptest.NewServer(registry.handler())
 	t.Cleanup(server.Close)
 	host := strings.TrimPrefix(server.URL, "http://")
 

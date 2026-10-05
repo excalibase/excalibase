@@ -1,14 +1,16 @@
 package routepolicy
 
+const appPath = "/api/projects/{projectId}/apps/{appId}/"
+
 // appRows cover /api/projects/{projectId}/apps. An app is data-plane
 // authoring, like a function or a bucket: reads on the viewer rung, every
 // write, including pause, resume and deletion of the app, on the developer rung.
 var appRows = []Row{
 	{Methods: get, Pattern: "/api/projects/{projectId}/apps/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret},
-	{Methods: get, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "the app is read as (projectId, appId)"},
+	{Methods: get, Pattern: appPath, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleViewer, Discloses: NoSecret, Note: "the app is read as (projectId, appId)"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
-	{Methods: patch, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "changes the image, env, port and replicas the next deploy would run"},
-	{Methods: del, Pattern: "/api/projects/{projectId}/apps/{appId}/", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "tears the workload down and waits for its pods to be gone before the app is forgotten; an app with a disk needs confirmDeleteDisk"},
+	{Methods: patch, Pattern: appPath, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "changes the image, env, port and replicas the next deploy would run"},
+	{Methods: del, Pattern: appPath, Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "tears the workload down and waits for its pods to be gone before the app is forgotten; an app with a disk needs confirmDeleteDisk"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/pause", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "scales the app to zero; its config and deploy history stay"},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/resume", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: post, Pattern: "/api/projects/{projectId}/apps/{appId}/disk", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "grows the app's disk up to its plan's cap, or lowers a stopped app's disk to no less than it holds; the same rung that attaches one"},
