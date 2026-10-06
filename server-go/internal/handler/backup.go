@@ -110,6 +110,11 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	if err := req.Validate(); err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.NewProjectName, _ = domain.NormalizeProjectName(req.NewProjectName)
 	inst, err := h.svc.GetInstance(projectID)
 	if err != nil {
 		// A store that cannot be read is not an answer about the project.

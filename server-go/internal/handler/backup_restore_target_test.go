@@ -144,3 +144,39 @@ func TestBackupHandler_Restore_RefusesATargetTimeWithoutAZone(t *testing.T) {
 		t.Errorf("the refusal must say why, got %s", w.Body.String())
 	}
 }
+
+// EXC-555: a recovery target is written into postgresql.auto.conf, so one
+// carrying a quote or newline is refused before anything is filed.
+func TestBackupHandler_Restore_RefusesAnInjectedRecoveryTarget(t *testing.T) {
+	r, _ := setupBackupHandlerWithStore(t)
+	for _, body := range []string{
+		`{"newProjectName":"copy","targetXid":"1'\narchive_command = 'id"}`,
+		`{"newProjectName":"copy","targetLsn":"0/1' x"}`,
+		`{"newProjectName":"copy","targetName":"a'b"}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400 (body=%s)", body, w.Code, w.Body.String())
+		}
+	}
+}
+
+// The restored project's name follows the project-name rule and is stored trimmed.
+func TestBackupHandler_Restore_TrimsTheNewProjectName(t *testing.T) {
+	r, _ := setupBackupHandlerWithStore(t)
+	req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(`{"newProjectName":"  copy  "}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+	var job domain.RestoreJob
+	if err := json.NewDecoder(w.Body).Decode(&job); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if job.NewProjectName != "copy" {
+		t.Errorf("name stored as %q", job.NewProjectName)
+	}
+}

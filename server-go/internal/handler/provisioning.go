@@ -278,8 +278,7 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 
 func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProvisioningRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpError(w, errInvalidRequestBody, http.StatusBadRequest)
+	if !decodeProvisioningRequest(w, r, &req) {
 		return
 	}
 
