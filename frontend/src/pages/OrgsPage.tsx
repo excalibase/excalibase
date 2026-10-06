@@ -4,6 +4,7 @@ import { Building2, Plus, Crown, ChevronRight } from 'lucide-react';
 import { listMyOrgs, createOrg, type Org } from '../api/orgs';
 import { Button } from '../components/Button';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { deriveOrgSlug, orgSlugError, ORG_SLUG_MAX, ORG_SLUG_RULE } from '../utils/orgSlug';
 
 const TIER_COLORS: Record<string, string> = {
   FREE: 'bg-gray-500/20 text-gray-400',
@@ -24,6 +25,8 @@ export function OrgsPage() {
   const [showCreate, setShowCreate] = useState(searchParams.get('new') === '1');
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
+  // Once the slug is typed by hand, a name change no longer replaces it.
+  const [slugEdited, setSlugEdited] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
@@ -48,6 +51,7 @@ export function OrgsPage() {
       setShowCreate(false);
       setNewName('');
       setNewSlug('');
+      setSlugEdited(false);
       navigate(`/orgs/${org.id}`);
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -59,8 +63,15 @@ export function OrgsPage() {
 
   const handleNameChange = (name: string) => {
     setNewName(name);
-    setNewSlug(name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-').replaceAll(/^-|-$/g, ''));
+    if (!slugEdited) setNewSlug(deriveOrgSlug(name));
   };
+
+  const handleSlugChange = (slug: string) => {
+    setNewSlug(slug);
+    setSlugEdited(slug !== '');
+  };
+
+  const slugError = orgSlugError(newSlug, newName);
 
   if (loading) {
     return (
@@ -109,14 +120,21 @@ export function OrgsPage() {
             <input
               id="org-slug"
               value={newSlug}
-              onChange={(e) => setNewSlug(e.target.value)}
+              onChange={(e) => handleSlugChange(e.target.value)}
               className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500"
               placeholder="my-company"
+              maxLength={ORG_SLUG_MAX}
+              aria-invalid={slugError ? true : undefined}
+              aria-describedby="org-slug-help"
             />
-            <p className="text-xs text-text-tertiary mt-1">2–50 lowercase letters, digits and hyphens, starting with a letter or digit</p>
+            {slugError ? (
+              <p id="org-slug-help" data-testid="org-slug-error" className="text-xs text-red-400 mt-1">{slugError}</p>
+            ) : (
+              <p id="org-slug-help" className="text-xs text-text-tertiary mt-1">{ORG_SLUG_RULE}</p>
+            )}
           </div>
           <div className="flex gap-2">
-            <Button type="submit" disabled={creating || !newName.trim() || !newSlug.trim()}>
+            <Button type="submit" disabled={creating || !newName.trim() || !newSlug.trim() || !!slugError}>
               {creating ? 'Creating...' : 'Create'}
             </Button>
             <Button type="button" onClick={() => setShowCreate(false)} className="bg-transparent border border-border-primary text-text-secondary hover:bg-surface-hover">

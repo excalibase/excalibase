@@ -9,6 +9,8 @@ vi.mock('../hooks/useProvisioning', () => ({
   useListBackups: () => ({ data: { backups: [], backupEnabled: true, schedule: '', retentionDays: 0 }, isLoading: false }),
   useTriggerBackup: () => ({ mutate: vi.fn(), isPending: false }),
   useRestoreFromBackup: () => ({ mutate: restoreMutate, isPending: false, data: undefined }),
+  useRestoreJob: () => ({ data: undefined }),
+  RESTORE_RUNNING: 'RUNNING',
 }));
 
 beforeEach(() => restoreMutate.mockReset());

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/idna"
 	"golang.org/x/net/publicsuffix"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
@@ -62,7 +63,10 @@ func DomainRoutable(status string) bool {
 // (a CNAME cannot sit there), a public suffix, a wildcard, an address, and
 // anything under the platform's own app domain.
 func NormalizeCustomDomain(raw, platformDomain string) (string, error) {
-	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(raw)), ".")
+	host, err := hostFromInput(raw)
+	if err != nil {
+		return "", err
+	}
 	if problems := validation.IsDNS1123Subdomain(host); len(problems) > 0 || host == "" {
 		return "", fmt.Errorf("%w: %q is not a host name", ErrInvalidDomain, raw)
 	}
@@ -83,6 +87,34 @@ func NormalizeCustomDomain(raw, platformDomain string) (string, error) {
 		return "", fmt.Errorf("%w: %q is under the platform's own domain", ErrInvalidDomain, host)
 	}
 	return host, nil
+}
+
+// hostFromInput takes the host out of what people paste — a bare host or an
+// http(s) URL with a path — and writes an internationalised name in its ASCII
+// form, the one DNS and certificates carry.
+func hostFromInput(raw string) (string, error) {
+	host := strings.TrimSpace(raw)
+	if scheme, rest, found := strings.Cut(host, "://"); found {
+		if scheme = strings.ToLower(scheme); scheme != "http" && scheme != "https" {
+			return "", fmt.Errorf("%w: give the host name only, such as www.example.com", ErrInvalidDomain)
+		}
+		host = rest
+	}
+	if end := strings.IndexAny(host, "/?#"); end >= 0 {
+		host = host[:end]
+	}
+	host = strings.TrimSuffix(host, ".")
+	if strings.Contains(host, "*") {
+		return "", fmt.Errorf("%w: wildcard domains are not supported; add each subdomain, such as www.example.com, on its own", ErrInvalidDomain)
+	}
+	if strings.ContainsAny(host, "@:") {
+		return "", fmt.Errorf("%w: give the host name only, without a user or port, such as www.example.com", ErrInvalidDomain)
+	}
+	ascii, err := idna.Lookup.ToASCII(host)
+	if err != nil {
+		return "", fmt.Errorf("%w: %q is not a host name", ErrInvalidDomain, raw)
+	}
+	return strings.ToLower(ascii), nil
 }
 
 // DomainStore persists custom domains, always scoped by project and app.

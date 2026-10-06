@@ -51,6 +51,10 @@ func TestValidateImageReference(t *testing.T) {
 		"acme/storefront@sha256:" + strings.Repeat("a", 64),
 		"localhost:5000/app:dev",
 		"nginx:1.27",
+		// The standard pinned form: the tag documents, the digest decides.
+		"nginx:1.27@sha256:" + strings.Repeat("a", 64),
+		"ghcr.io/acme/storefront:1.4.2@sha256:" + strings.Repeat("b", 64),
+		"localhost:5000/app:dev@sha256:" + strings.Repeat("c", 64),
 	}
 	for _, ref := range accepted {
 		if err := apphost.ValidateImageReference(ref); err != nil {
@@ -71,6 +75,9 @@ func TestValidateImageReference(t *testing.T) {
 		"ghcr.io//acme/app:1.0",             // empty path component
 		"ghcr.io/acme/app:" + strings.Repeat("t", 129),
 		strings.Repeat("a", 600) + ":1.0",
+		"nginx:@sha256:" + strings.Repeat("a", 64), // empty tag before the digest
+		"nginx:1.0@sha256:zz",                      // tag with a bad digest
+		"nginx:bad/tag@sha256:" + strings.Repeat("a", 64),
 	}
 	for _, ref := range refused {
 		if err := apphost.ValidateImageReference(ref); err == nil {
@@ -577,11 +584,11 @@ func TestValidateSecretPathCharsetAndLength(t *testing.T) {
 	}
 }
 
-// A secret or a reference weighs almost nothing in the row and a full value in
-// the rendered Secret. The cap charges each one what its resolved value is
-// expected to weigh, so a hundred pointers cannot slip past a byte count that
-// exists to keep the rendered object inside its own limit.
-func TestPointerVariablesAreChargedTheirResolvedWeight(t *testing.T) {
+// Secrets and references are counted by number, not charged a guessed byte
+// weight: a stored secret value is capped at MaxLiteralValueLength, so the
+// variable cap bounds what they render. The byte cap covers the names and the
+// literal values only.
+func TestPointerVariablesCountByNumberNotBytes(t *testing.T) {
 	pointers := func(count int) []apphost.EnvVar {
 		out := make([]apphost.EnvVar, 0, count)
 		for i := 0; i < count; i++ {
@@ -590,16 +597,39 @@ func TestPointerVariablesAreChargedTheirResolvedWeight(t *testing.T) {
 		}
 		return out
 	}
-	fits := apphost.MaxTotalEnvBytes / apphost.ResolvedPointerWeight
 
 	app := validApp()
-	app.Env = pointers(fits - 1)
+	app.Env = pointers(apphost.MaxEnvVars)
 	if err := app.Validate(); err != nil {
-		t.Fatalf("%d secret references must fit: %v", fits-1, err)
+		t.Fatalf("%d secrets must fit: %v", apphost.MaxEnvVars, err)
 	}
-	app.Env = pointers(fits + 1)
+	app.Env = pointers(apphost.MaxEnvVars + 1)
 	if err := app.Validate(); err == nil {
-		t.Fatalf("%d secret references must be refused: each one renders a value", fits+1)
+		t.Fatalf("%d secrets must be refused", apphost.MaxEnvVars+1)
+	}
+}
+
+// The rendered Secret stays inside its 1 MiB limit at the extremes the caps allow.
+func TestWorstCaseRenderedEnvFitsAKubernetesSecret(t *testing.T) {
+	const mebibyte = 1 << 20
+	worst := apphost.MaxTotalEnvBytes + apphost.MaxEnvVars*(apphost.MaxLiteralValueLength+apphost.MaxEnvNameLength)
+	if worst >= mebibyte {
+		t.Fatalf("the caps allow %d bytes, over a Secret's %d", worst, mebibyte)
+	}
+}
+
+// The refusal names what is counted, in words a person can act on.
+func TestTotalLiteralBytesRefusalSaysWhatCounts(t *testing.T) {
+	chunk := strings.Repeat("v", apphost.MaxLiteralValueLength)
+	app := validApp()
+	app.Env = nil
+	for i := 0; i < apphost.MaxTotalEnvBytes/apphost.MaxLiteralValueLength+1; i++ {
+		value := chunk
+		app.Env = append(app.Env, apphost.EnvVar{Name: fmt.Sprintf("K%d", i), Kind: apphost.KindLiteral, Value: &value})
+	}
+	err := app.Validate()
+	if err == nil || !strings.Contains(err.Error(), "64 KB") || !strings.Contains(err.Error(), "secrets and references do not count") {
+		t.Fatalf("got %v, want a refusal that says the literal values exceed 64 KB and secrets do not count", err)
 	}
 }
 

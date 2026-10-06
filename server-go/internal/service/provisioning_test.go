@@ -584,6 +584,19 @@ func TestProvisionValidation_ProjectNameTooLong(t *testing.T) {
 	}
 }
 
+// The rule is 100 characters, as Studio counts them: a Vietnamese or Japanese
+// name is not refused for its UTF-8 byte length.
+func TestValidateProjectIdentityCountsCharactersNotBytes(t *testing.T) {
+	accepted := domain.ProvisioningRequest{OrgID: "org1", ProjectName: strings.Repeat("ệ", 100)}
+	if err := validateProjectIdentity(accepted); err != nil {
+		t.Errorf("a 100-character name must be accepted: %v", err)
+	}
+	refused := domain.ProvisioningRequest{OrgID: "org1", ProjectName: strings.Repeat("ệ", 101)}
+	if err := validateProjectIdentity(refused); err == nil || !strings.Contains(err.Error(), "100 characters") {
+		t.Errorf("a 101-character name must be refused by its character count, got %v", err)
+	}
+}
+
 func TestProvisionValidation_EmptyOrgID(t *testing.T) {
 	svc, _, _ := setupProvisioningTest(t)
 	_, err := svc.Provision(context.Background(), domain.ProvisioningRequest{

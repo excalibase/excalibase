@@ -1,5 +1,13 @@
 import { useState } from 'react';
-import { useListBackups, useTriggerBackup, useRestoreFromBackup, type RestoreRequest } from '../hooks/useProvisioning';
+import {
+  useListBackups,
+  useTriggerBackup,
+  useRestoreFromBackup,
+  useRestoreJob,
+  RESTORE_RUNNING,
+  type RestoreRequest,
+  type RestoreResult,
+} from '../hooks/useProvisioning';
 import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
@@ -8,6 +16,47 @@ import { Archive, RefreshCw, RotateCcw, Clock, type LucideIcon } from 'lucide-re
 import { serverErrorMessage } from '../utils/serverError';
 
 type Tab = 'backups' | 'restore';
+
+type RestoreTone = 'pending' | 'ok' | 'error';
+
+const TONE_CLASSES: Record<RestoreTone, string> = {
+  pending: 'bg-blue-900/20 border-blue-500/30 text-blue-300',
+  ok: 'bg-green-900/20 border-green-500/30 text-green-400',
+  error: 'bg-red-900/20 border-red-500/30 text-red-400',
+};
+
+// A started restore answers RUNNING and is polled to COMPLETED or FAILED.
+function describeRestore(result: RestoreResult): { tone: RestoreTone; message: string } {
+  const step = result.currentStep ? ` (${result.currentStep})` : '';
+  switch (result.status) {
+    case RESTORE_RUNNING:
+      return { tone: 'pending', message: `Restore started. The new instance is being created${step}.` };
+    case 'COMPLETED':
+      return { tone: 'ok', message: 'Restore completed. The new instance is ready.' };
+    case 'FAILED':
+      return { tone: 'error', message: `The restore failed: ${result.failureReason || 'no reason was recorded.'}` };
+    default:
+      return result.failureReason
+        ? { tone: 'error', message: `The restore failed: ${result.failureReason}` }
+        : { tone: 'ok', message: result.message || 'Restore started.' };
+  }
+}
+
+function RestoreResultPanel({ result }: { readonly result: RestoreResult }) {
+  const { tone, message } = describeRestore(result);
+  const newInstance = result.newProjectId ?? result.projectId;
+  return (
+    <div data-testid="restore-result" data-tone={tone} role="status" className={`p-3 rounded-lg border text-sm ${TONE_CLASSES[tone]}`}>
+      <p className="font-medium">{message}</p>
+      {newInstance && (
+        <p className="mt-1 text-xs text-text-secondary">New instance: <span className="font-mono text-text-primary">{newInstance}</span></p>
+      )}
+      {result.recoveryType && (
+        <p className="text-xs text-text-secondary">Recovery type: <span className="font-mono text-text-primary">{result.recoveryType}</span></p>
+      )}
+    </div>
+  );
+}
 
 export function BackupsPage() {
   const projectId = useRouteProjectId();
@@ -21,6 +70,9 @@ export function BackupsPage() {
   const restore = useRestoreFromBackup(projectId);
   const [restoreForm, setRestoreForm] = useState<RestoreRequest>({ newProjectName: '', targetTime: '' });
   const isPitr = !!restoreForm.targetTime?.trim();
+  const startedJobId = restore.data?.status === RESTORE_RUNNING ? restore.data.id : undefined;
+  const restoreJob = useRestoreJob(projectId, startedJobId);
+  const restoreResult = restoreJob.data ?? restore.data;
 
   function showToast(msg: string, ok: boolean) {
     setToast({ msg, ok });
@@ -77,7 +129,7 @@ export function BackupsPage() {
                 disabled={!projectId || triggerBackup.isPending}
                 onClick={() => triggerBackup.mutate(projectId, {
                   onSuccess: () => showToast('Backup triggered successfully', true),
-                  onError: () => showToast('Failed to trigger backup', false),
+                  onError: (e: unknown) => showToast(serverErrorMessage(e, 'The backup was not started'), false),
                 })}
               >
                 <RefreshCw className="w-4 h-4 mr-1.5" /> Trigger Backup
@@ -158,17 +210,7 @@ export function BackupsPage() {
                 </div>
               </div>
 
-              {restore.data && (
-                <div className={`p-3 rounded-lg border text-sm ${restore.data.status === 'success' ? 'bg-green-900/20 border-green-500/30 text-green-400' : 'bg-red-900/20 border-red-500/30 text-red-400'}`}>
-                  <p className="font-medium">{restore.data.message}</p>
-                  {restore.data.newProjectId && (
-                    <p className="mt-1 text-xs text-text-secondary">New instance: <span className="font-mono text-text-primary">{restore.data.newProjectId}</span></p>
-                  )}
-                  {restore.data.recoveryType && (
-                    <p className="text-xs text-text-secondary">Recovery type: <span className="font-mono text-text-primary">{restore.data.recoveryType}</span></p>
-                  )}
-                </div>
-              )}
+              {restoreResult && <RestoreResultPanel result={restoreResult} />}
 
               <Button
                 disabled={!restoreForm.newProjectName.trim() || restore.isPending || !projectId}

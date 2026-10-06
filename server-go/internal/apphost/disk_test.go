@@ -16,7 +16,7 @@ func withDisk(mountPath, size string) *apphost.App {
 }
 
 func TestValidateAcceptsADisk(t *testing.T) {
-	for _, path := range []string{"/data", "/var/lib/redis", "/usr/share/nginx/html", "/home/app/.cache", "/srv/k8s_state-1"} {
+	for _, path := range []string{"/data", "/var/lib/redis", "/var/lib/postgresql/data", "/home/app/.cache", "/srv/k8s_state-1", "/usrdata", "/etcetera", "/running"} {
 		if err := withDisk(path, "1Gi").Validate(); err != nil {
 			t.Errorf("mount path %q refused: %v", path, err)
 		}
@@ -31,6 +31,9 @@ func TestValidateRefusesADiskMountPathThatIsNotADataDirectory(t *testing.T) {
 		"/proc", "/proc/self", "/sys/fs", "/dev", "/dev/shm",
 		"/etc", "/bin", "/sbin", "/lib", "/lib64", "/usr", "/var", "/run", "/var/run", "/boot",
 		"/" + strings.Repeat("a", 256),
+		// Under a system directory hides the image's files just as surely.
+		"/usr/local/data", "/usr/share/nginx/html", "/etc/app", "/bin/x", "/sbin/x", "/lib/x", "/lib64/x",
+		"/boot/x", "/run/app", "/var/run/app",
 	}
 	for _, path := range refused {
 		if err := withDisk(path, "1Gi").Validate(); err == nil {
