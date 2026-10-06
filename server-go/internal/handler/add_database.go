@@ -20,10 +20,21 @@ import (
 // project is PROVISIONING and follows the build through GET /{projectId}.
 func (h *ProvisioningHandler) AddDatabase(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProvisioningRequest
-	if !decodeProvisioningRequest(w, r, &req) {
+	statedTier, ok := decodeProvisioningRequest(w, r, &req)
+	if !ok {
 		return
 	}
 	projectID := chi.URLParam(r, "projectId")
+	if statedTier != nil {
+		inst, err := h.svc.GetInstance(projectID)
+		if err != nil {
+			httpError(w, "project not found", http.StatusNotFound)
+			return
+		}
+		if !h.confirmStatedTier(w, r, inst.OrgID, statedTier) {
+			return
+		}
+	}
 	if prefersRespondAsync(r) {
 		resp, err := h.svc.AddDatabaseInBackground(r.Context(), projectID, req)
 		if err != nil {

@@ -13,7 +13,7 @@ import (
 func TestProvision_RefusesUnknownAndUnimplementedFieldsByName(t *testing.T) {
 	r := provisionRouter(t, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}})
 	for field, body := range map[string]string{
-		"tier":               `{"projectName":"a","orgId":"org1","databaseType":"POSTGRESQL","postgresVersion":"17","tier":"ENTERPRISE"}`,
+		"bogus":              `{"projectName":"a","orgId":"org1","databaseType":"POSTGRESQL","postgresVersion":"17","bogus":1}`,
 		"network":            `{"projectName":"a","orgId":"org1","databaseType":"POSTGRESQL","postgresVersion":"17","network":{"policyEnabled":true}}`,
 		"maintenance":        `{"projectName":"a","orgId":"org1","databaseType":"POSTGRESQL","postgresVersion":"17","maintenance":{"window":"sun"}}`,
 		"pooler":             `{"projectName":"a","orgId":"org1","databaseType":"POSTGRESQL","postgresVersion":"17","pooler":{"enabled":true}}`,
@@ -67,5 +67,32 @@ func TestProvision_RefusesABadTagNamingIt(t *testing.T) {
 		`{"projectName":"a","orgId":"org1","databaseType":"POSTGRESQL","postgresVersion":"17","tags":{"bad key":"v"}}`)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "bad key") {
 		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// The documented body states the plan; it provisions when that is the
+// organisation's plan, in any case.
+func TestProvision_AcceptsATierThatIsTheOrganisationsPlan(t *testing.T) {
+	for _, stated := range []string{"FREE", "free"} {
+		r := provisionRouter(t, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}})
+		w := doRequest(r, "POST", testProvisionPath,
+			`{"projectName":"a","orgId":"org1","databaseType":"POSTGRESQL","postgresVersion":"17","tier":"`+stated+`"}`)
+		if w.Code != http.StatusOK && w.Code != http.StatusAccepted {
+			t.Fatalf("%s: status %d body=%s", stated, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestProvision_RefusesATierThatIsNotTheOrganisationsPlan(t *testing.T) {
+	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}
+	r := provisionRouter(t, store)
+	w := doRequest(r, "POST", testProvisionPath,
+		`{"projectName":"a","orgId":"org1","databaseType":"POSTGRESQL","postgresVersion":"17","tier":"ENTERPRISE"}`)
+	want := "a project's plan comes from its organization (FREE); change the organization's plan instead"
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), want) {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+	if len(store.insts) != 0 {
+		t.Fatalf("a refused body created a project: %v", store.insts)
 	}
 }
