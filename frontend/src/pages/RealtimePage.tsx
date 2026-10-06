@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { serverErrorMessage } from '../utils/serverError';
 import { useParams } from 'react-router-dom';
 import { Loader2, Search, Radio } from 'lucide-react';
 import {
@@ -23,6 +24,10 @@ export function RealtimePage() {
   const [search, setSearch] = useState('');
   const [showOnlyEnabled, setShowOnlyEnabled] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmKind>(null);
+
+  // The most recent refusal across the four switches; a new attempt clears it.
+  const failed = [enableTable, disableTable, enableAll, disableAll].find((mutation) => mutation.isError);
+  const refusal = failed ? serverErrorMessage(failed.error, 'Realtime was not changed') : null;
 
   const enabledCount = (tables ?? []).filter((t) => t.enabled).length;
   const totalCount = tables?.length ?? 0;
@@ -118,6 +123,9 @@ export function RealtimePage() {
         </div>
       )}
 
+      {refusal && (
+        <p data-testid="realtime-error" role="alert" className="mb-3 text-sm text-red-400">{refusal}</p>
+      )}
       <div className="space-y-1" data-testid="realtime-list">
         {filtered.map((t) => {
           const id = `${t.schema}-${t.table}`;

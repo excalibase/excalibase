@@ -14,6 +14,7 @@ import { AppNetworkSection } from '../components/AppNetworkCard';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
+import { serverErrorMessage } from '../utils/serverError';
 import { engineLabel } from '../utils/engine';
 import { projectOperationMessage } from '../hooks/projectFollow';
 
@@ -43,7 +44,7 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const [showDelete, setShowDelete] = useState(false);
   const deprovision = useDeprovisionDatabase();
-  const { data: project, isLoading } = useQuery({
+  const { data: project, isLoading, error: loadError } = useQuery({
     queryKey: ['project', projectId],
     queryFn: async () => {
       const res = await api.get<DatabaseInstance>(`/provision/${projectId}`);
@@ -57,6 +58,13 @@ export function SettingsPage() {
   // without a database has no endpoint to read.
   const endpoint = useProjectEndpoint(project && !project.noDatabase ? projectId : undefined);
 
+  if (loadError && !project) {
+    return (
+      <p data-testid="settings-load-error" role="alert" className="py-16 text-center text-sm text-red-400">
+        {serverErrorMessage(loadError, 'The project could not be loaded')}
+      </p>
+    );
+  }
   if (isLoading || !project) {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>;
   }
@@ -293,6 +301,11 @@ function DangerZone({ project, protectedFromDeletion, onDelete, deleting, delete
               ? DELETION_PROTECTED_REASON
               : 'Deletion protection is off. Any org admin can delete this project.'}
           </p>
+          {setProtection.error != null && (
+            <p className="text-xs text-red-400 mb-3 break-words" data-testid="deletion-protection-error" role="alert">
+              {serverErrorMessage(setProtection.error, 'Deletion protection was not changed')}
+            </p>
+          )}
           <div className="flex gap-2">
             <button
               onClick={() => setProtection.mutate({ projectId: project.projectId, enabled: !protectedFromDeletion })}
