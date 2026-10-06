@@ -684,7 +684,7 @@ func TestFindOrgsByUser(t *testing.T) {
 	store.CreateOrg(ctx, &domain.Org{ID: "org-a", Name: "Org A", Slug: "org-a", Tier: domain.Free, OwnerID: userID})
 	store.CreateOrg(ctx, &domain.Org{ID: "org-b", Name: "Org B", Slug: "org-b", Tier: domain.Free, OwnerID: userID})
 	store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-a", UserID: userID, Role: domain.OrgRoleOwner})
-	store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-b", UserID: userID, Role: domain.OrgRoleOwner})
+	store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-b", UserID: userID, Role: domain.OrgRoleDeveloper})
 
 	orgs, err := store.FindOrgsByUser(ctx, userID)
 	if err != nil {
@@ -692,6 +692,15 @@ func TestFindOrgsByUser(t *testing.T) {
 	}
 	if len(orgs) != 2 {
 		t.Errorf("expected 2 orgs, got %d", len(orgs))
+	}
+	// Studio gates its controls on the caller's role in each org; the listing
+	// is where it reads it (EXC-555: owners were shown "developers and above").
+	roles := map[string]string{}
+	for _, org := range orgs {
+		roles[org.ID] = org.Role
+	}
+	if roles["org-a"] != domain.OrgRoleOwner || roles["org-b"] != domain.OrgRoleDeveloper {
+		t.Errorf("roles = %v, want org-a owner and org-b developer", roles)
 	}
 }
 

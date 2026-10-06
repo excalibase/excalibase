@@ -28,6 +28,8 @@ type Org struct {
 	// OwnerID is the account that created the org. It never changes, so the
 	// free allowance stays with the creator whoever owns the org later.
 	OwnerID   string    `json:"ownerId"`
+	// The caller's membership role, set only by the orgs-for-user listing.
+	Role      string    `json:"role,omitempty"`
 	CreatedAt *FlexTime `json:"createdAt,omitempty"`
 	UpdatedAt *FlexTime `json:"updatedAt,omitempty"`
 }
