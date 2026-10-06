@@ -327,4 +327,33 @@ describe('SetupPage', () => {
       expect(screen.getByTestId('admin-email-error')).toBeInTheDocument();
     });
   });
+  test("a refused vault init shows the server's reason", async () => {
+    const user = userEvent.setup();
+    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
+    await screen.findByTestId('vault-setup-init');
+    vi.mocked(api.post).mockRejectedValueOnce({
+      message: 'Request failed with status code 409',
+      response: { status: 409, data: { error: 'the vault is already initialized' } },
+    });
+    await user.click(screen.getByTestId('vault-init-submit'));
+
+    expect(await screen.findByText('the vault is already initialized')).toBeInTheDocument();
+    expect(screen.queryByText(/status code/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('vault-setup-shares')).not.toBeInTheDocument();
+  });
+
+  test("a refused unseal share shows the server's reason", async () => {
+    const user = userEvent.setup();
+    renderPage({ initialized: true, sealed: true, threshold: 1, shares: 1, progress: 0, hasAdmin: true });
+    const input = await screen.findByTestId('vault-unseal-input');
+    vi.mocked(api.post).mockRejectedValueOnce({
+      message: 'Request failed with status code 400',
+      response: { status: 400, data: { error: 'the share is not valid hex' } },
+    });
+    await user.type(input, 'zz');
+    await user.click(screen.getByTestId('vault-unseal-submit'));
+
+    expect(await screen.findByText('the share is not valid hex')).toBeInTheDocument();
+    expect(screen.queryByText(/status code/)).not.toBeInTheDocument();
+  });
 });

@@ -104,6 +104,11 @@ export default defineConfig({
         'src/pages/AlertsPage.tsx',
         'src/components/layout/ProjectSwitcher.tsx',
         'src/components/layout/ProjectLayout.tsx',
+        'src/components/TierConfigTable.tsx',
+        'src/pages/SqlEditorPage.tsx',
+        'src/pages/PlatformAdminPage.tsx',
+        'src/api/clusterSettings.ts',
+        'src/api/tableImport.ts',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {
