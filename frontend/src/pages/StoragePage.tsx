@@ -18,7 +18,7 @@ export function StoragePage() {
   const [selectedBucket, setSelectedBucket] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
-  const { data: buckets = [], isLoading: bucketsLoading } = useBuckets(projectId!);
+  const { data: buckets = [], isLoading: bucketsLoading, error: bucketsError } = useBuckets(projectId!);
 
   if (!selectedBucket && buckets.length > 0) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
@@ -40,7 +40,12 @@ export function StoragePage() {
               <Loader2 className="w-4 h-4 animate-spin text-accent-primary" />
             </div>
           )}
-          {!bucketsLoading && buckets.length === 0 && (
+          {bucketsError && (
+            <p data-testid="buckets-error" role="alert" className="text-sm text-red-400 px-2 py-3">
+              {serverErrorMessage(bucketsError, 'Buckets could not be loaded')}
+            </p>
+          )}
+          {!bucketsLoading && !bucketsError && buckets.length === 0 && (
             <p className="text-sm text-text-tertiary px-2 py-3">
               No buckets yet. Create one to start uploading files.
             </p>
@@ -99,6 +104,7 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
   const del = useDeleteObject(projectId, bucket);
   const download = useDownloadURL(projectId, bucket);
   const delBucket = useDeleteBucket(projectId);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const isPublic = buckets.find((b) => b.name === bucket)?.public ?? false;
@@ -162,15 +168,24 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
           <Button
             size="sm"
             variant="danger"
+            disabled={delBucket.isPending}
             onClick={async () => {
               if (!confirm(`Delete bucket "${bucket}" and all its files?`)) return;
-              await delBucket.mutateAsync(bucket);
+              setDeleteError(null);
+              try {
+                await delBucket.mutateAsync(bucket);
+              } catch (err) {
+                setDeleteError(serverErrorMessage(err, 'The bucket was not deleted'));
+              }
             }}
           >
             Delete bucket
           </Button>
         </div>
       </div>
+      {deleteError && (
+        <p data-testid="bucket-delete-error" role="alert" className="px-4 py-2 text-sm text-red-400">{deleteError}</p>
+      )}
 
       <section
         aria-label="File drop zone"
@@ -240,10 +255,41 @@ interface CreateBucketModalProps {
   readonly onCreated: (name: string) => void;
 }
 
+// Mirrors the server's rule (storagesvc.validateBucketName) so a bad name is
+// explained before anything is sent.
+export function bucketNameProblem(name: string): string | null {
+  if (name.length < 3 || name.length > 63) return 'Use 3–63 characters.';
+  if (!/^[a-z0-9-]+$/.test(name)) return 'Use only lowercase letters, digits and hyphens.';
+  if (name.startsWith('-') || name.endsWith('-')) return 'A bucket name cannot start or end with a hyphen.';
+  return null;
+}
+
 function CreateBucketModal({ projectId, onClose, onCreated }: CreateBucketModalProps) {
   const [name, setName] = useState('');
   const [isPublic, setIsPublic] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const create = useCreateBucket(projectId);
+  // A fast double click lands twice before isPending re-renders the button.
+  const inFlight = useRef(false);
+
+  const submit = async () => {
+    if (inFlight.current) return;
+    const problem = bucketNameProblem(name);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    inFlight.current = true;
+    setError(null);
+    try {
+      const b = await create.mutateAsync({ name, public: isPublic });
+      onCreated(b.name);
+    } catch (err) {
+      setError(serverErrorMessage(err, 'The bucket was not created'));
+    } finally {
+      inFlight.current = false;
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
@@ -264,8 +310,12 @@ function CreateBucketModal({ projectId, onClose, onCreated }: CreateBucketModalP
           onChange={(e) => setName(e.target.value)}
           placeholder="avatars"
           autoFocus
+          maxLength={63}
+          aria-label="Bucket name"
+          aria-invalid={error ? true : undefined}
           className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-sm"
         />
+        {error && <p data-testid="bucket-name-error" role="alert" className="text-xs text-red-400">{error}</p>}
         <p className="text-xs text-text-tertiary">3–63 lowercase letters, digits and hyphens, not starting or ending with a hyphen.</p>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />
@@ -277,15 +327,7 @@ function CreateBucketModal({ projectId, onClose, onCreated }: CreateBucketModalP
           </Button>
           <Button
             disabled={!name || create.isPending}
-            onClick={async () => {
-              try {
-                const b = await create.mutateAsync({ name, public: isPublic });
-                onCreated(b.name);
-              } catch (e: unknown) {
-                const err = e as { response?: { data?: { error?: string } }; message?: string };
-                alert(`Create failed: ${serverErrorMessage(err, 'no reason given')}`);
-              }
-            }}
+            onClick={submit}
           >
             {create.isPending ? 'Creating…' : 'Create'}
           </Button>
