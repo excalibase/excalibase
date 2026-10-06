@@ -40,15 +40,21 @@ export function SetupPage() {
     onSubmit: async ({ value }) => {
       const sharesNum = Number(value.shares);
       const thresholdNum = Number(value.threshold);
-      const result = await initMutation.mutateAsync({ shares: sharesNum, threshold: thresholdNum });
-      setIssuedKeys({ shares: result.shares, threshold: result.threshold });
+      // A refusal is shown from initMutation.error; the catch keeps it from
+      // also escaping as an unhandled rejection.
+      const result = await initMutation
+        .mutateAsync({ shares: sharesNum, threshold: thresholdNum })
+        .catch(() => null);
+      if (result) setIssuedKeys({ shares: result.shares, threshold: result.threshold });
     },
   });
 
   const adminForm = useForm({
     defaultValues: { username: '', email: '', password: '', setupToken: '' },
     onSubmit: async ({ value }) => {
-      const data = await registerMutation.mutateAsync(value);
+      // A refusal is shown from registerMutation.error.
+      const data = await registerMutation.mutateAsync(value).catch(() => null);
+      if (!data) return;
       // The server set the httpOnly session cookie on the response.
       setAuth({
         id: data.user.id,
