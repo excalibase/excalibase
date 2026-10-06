@@ -36,13 +36,13 @@ func TestValidateRefusesAnUnsafeMasterUsername(t *testing.T) {
 
 func TestValidateRefusesTagsThatAreNotKubernetesLabels(t *testing.T) {
 	for key, value := range map[string]string{
-		"bad key":              "v",
-		"team":                 "has space",
-		"":                     "v",
-		"cnpg.io/cluster":      "x",
-		"kubernetes.io/name":   "x",
+		"bad key":               "v",
+		"team":                  "has space",
+		"":                      "v",
+		"cnpg.io/cluster":       "x",
+		"kubernetes.io/name":    "x",
 		strings.Repeat("k", 64): "v",
-		"ok":                   strings.Repeat("v", 64),
+		"ok":                    strings.Repeat("v", 64),
 	} {
 		req := provisionRequest(supportedMajor(t))
 		req.Tags = map[string]string{key: value}
