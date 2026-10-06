@@ -27,6 +27,18 @@ export function RlsPage() {
   // isPending lands a render late; two quick clicks would both get through.
   const createInFlight = useRef(false);
   const dropInFlight = useRef(false);
+  const rlsInFlight = useRef(false);
+  const [enablingTable, setEnablingTable] = useState<string | null>(null);
+
+  const handleEnableRls = (tableName: string) => {
+    if (rlsInFlight.current) return;
+    rlsInFlight.current = true;
+    setEnablingTable(tableName);
+    updateTable.mutate(
+      { tableName, rlsEnabled: true },
+      { onSettled: () => { rlsInFlight.current = false; setEnablingTable(null); } },
+    );
+  };
 
   const handleCreate = () => {
     if (!pName.trim() || !pTable || createInFlight.current) return;
@@ -80,8 +92,9 @@ export function RlsPage() {
           {tables.filter(t => t.type === 'BASE TABLE').map(t => (
             <button
               key={t.name}
-              onClick={() => updateTable.mutate({ tableName: t.name, rlsEnabled: true })}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-primary text-xs font-medium text-text-secondary hover:bg-surface-hover transition-colors"
+              onClick={() => handleEnableRls(t.name)}
+              disabled={enablingTable !== null}
+              className="disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-primary text-xs font-medium text-text-secondary hover:bg-surface-hover transition-colors"
               data-testid={`rls-toggle-${t.name}`}
             >
               <Shield className="w-3.5 h-3.5" /> {t.name}

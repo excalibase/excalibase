@@ -8,8 +8,10 @@ const inputClass =
 
 // Mails a fresh verification link. The server answers the same for every
 // address, so this never tells anyone whether an account exists.
-export function ResendVerification({ email: knownEmail }: { readonly email?: string }) {
-  const [email, setEmail] = useState(knownEmail ?? '');
+// `email` is an address the page already knows (no field shown); `initialEmail`
+// is a likely one the user can still change.
+export function ResendVerification({ email: knownEmail, initialEmail }: { readonly email?: string; readonly initialEmail?: string }) {
+  const [email, setEmail] = useState(knownEmail ?? initialEmail ?? '');
   const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle');
   const [failure, setFailure] = useState('');
 

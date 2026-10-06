@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 
 interface ConfirmModalProps {
   readonly open: boolean;
   readonly onClose: () => void;
-  readonly onConfirm: () => void;
+  readonly onConfirm: () => void | Promise<unknown>;
   readonly title: string;
   readonly message: string;
   readonly confirmLabel?: string;
@@ -25,15 +25,37 @@ export function ConfirmModal({
   loading = false,
 }: ConfirmModalProps) {
   const [typed, setTyped] = useState('');
+  // One confirm per opening: cleared when a returned promise settles, when the
+  // caller's loading state ends, or when the dialog closes.
+  const [submitted, setSubmitted] = useState(false);
+  const submittedRef = useRef(false);
+  const wasLoading = useRef(loading);
+
+  const release = () => {
+    submittedRef.current = false;
+    setSubmitted(false);
+  };
+
+  useEffect(() => {
+    if (wasLoading.current && !loading) release();
+    wasLoading.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    if (!open) release();
+  }, [open]);
 
   if (!open) return null;
 
   const canConfirm = confirmText ? typed === confirmText : true;
 
   const handleConfirm = () => {
-    if (!canConfirm || loading) return;
-    onConfirm();
+    if (!canConfirm || loading || submittedRef.current) return;
+    submittedRef.current = true;
+    setSubmitted(true);
+    const result = onConfirm();
     setTyped('');
+    if (result instanceof Promise) void result.finally(release);
   };
 
   const handleClose = () => {
@@ -103,7 +125,7 @@ export function ConfirmModal({
             </button>
             <button
               onClick={handleConfirm}
-              disabled={!canConfirm || loading}
+              disabled={!canConfirm || loading || submitted}
               className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 destructive
                   ? 'bg-red-500 hover:bg-red-600 text-white'

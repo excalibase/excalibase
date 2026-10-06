@@ -7,6 +7,7 @@ import { NewPasswordFields, newPasswordReady } from '../components/auth/NewPassw
 import { ResendVerification } from '../components/auth/ResendVerification';
 import { ProviderButtons } from '../components/auth/ProviderSignIn';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { USERNAME_RULE, usernameError } from '../utils/names';
 
 export function RegisterPage() {
   useDocumentTitle('Sign up');
@@ -20,6 +21,8 @@ export function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const [usernameTouched, setUsernameTouched] = useState(false);
+  const usernameInvalid = usernameTouched && usernameError(username.trim()) !== undefined;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,6 +33,8 @@ export function RegisterPage() {
       setError('All fields are required');
       return;
     }
+    setUsernameTouched(true);
+    if (usernameError(username.trim())) return;
 
     setLoading(true);
     try {
@@ -91,7 +96,12 @@ export function RegisterPage() {
           <label htmlFor="username" className="block text-sm font-medium text-text-secondary mb-1.5">Username</label>
           <input id="username" type="text" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)}
             className="w-full px-3 py-2.5 bg-bg-secondary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-colors"
-            placeholder="johndoe" disabled={loading} />
+            placeholder="johndoe" disabled={loading} onBlur={() => setUsernameTouched(true)} aria-invalid={usernameInvalid} aria-describedby="username-rule" />
+          {usernameInvalid ? (
+            <p id="username-rule" role="alert" className="mt-1 text-xs text-red-400" data-testid="username-error">{USERNAME_RULE}</p>
+          ) : (
+            <p id="username-rule" className="mt-1 text-xs text-text-tertiary">{USERNAME_RULE}</p>
+          )}
         </div>
         <div>
           <label htmlFor="email" className="block text-sm font-medium text-text-secondary mb-1.5">Email</label>

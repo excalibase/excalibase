@@ -25,6 +25,30 @@ beforeEach(() => {
   vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
 });
 
+describe('CreateTablePanel name length', () => {
+  test('counts the table name live and refuses one Postgres would cut short', async () => {
+    renderPanel();
+    const name = screen.getByTestId('table-name-input');
+    fireEvent.change(name, { target: { value: 'notes' } });
+    expect(screen.getByTestId('table-name-count')).toHaveTextContent('5/63');
+
+    fireEvent.change(name, { target: { value: 'n'.repeat(64) } });
+    expect(screen.getByTestId('table-name-count')).toHaveTextContent('64/63');
+    expect(screen.getByText('Table names can be at most 63 characters; this one has 64')).toBeInTheDocument();
+    expect(screen.getByTestId('create-table-submit')).toBeDisabled();
+  });
+
+  test('an over-long column name blocks the create and says why', () => {
+    renderPanel();
+    fireEvent.change(screen.getByTestId('table-name-input'), { target: { value: 'notes' } });
+    fireEvent.change(screen.getAllByPlaceholderText('e.g. email')[0], { target: { value: 'c'.repeat(70) } });
+    expect(screen.getByText('Column names can be at most 63 characters; this one has 70')).toBeInTheDocument();
+    expect(screen.getByTestId('create-table-submit')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('create-table-submit'));
+    expect(api.post).not.toHaveBeenCalled();
+  });
+});
+
 describe('CreateTablePanel columns', () => {
   test('edits, adds and removes columns before creating', async () => {
     const onClose = renderPanel();

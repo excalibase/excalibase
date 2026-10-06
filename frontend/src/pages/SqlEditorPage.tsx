@@ -111,7 +111,10 @@ export function SqlEditorPage() {
     const queryText = hasSelection
       ? viewRef.current.state.sliceDoc(sel.from, sel.to).trim()
       : viewRef.current.state.doc.toString().trim();
-    if (!queryText) return;
+    if (!queryText) {
+      applyQueryResult({ columns: [], rows: [], error: 'Write a query first' });
+      return;
+    }
 
     setHistory(prev => {
       const next = [queryText, ...prev.filter(q => q !== queryText)].slice(0, MAX_HISTORY);

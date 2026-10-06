@@ -1,5 +1,6 @@
 import { useParams } from 'react-router-dom';
 import { useAppHostingEnabled } from '../hooks/useDeploymentMode';
+import { useInstance } from '../hooks/useProvisioning';
 import { DatabaseServiceCard } from '../components/services/DatabaseServiceCard';
 import { ContainersServiceCard } from '../components/services/ContainersServiceCard';
 
@@ -9,11 +10,16 @@ import { ContainersServiceCard } from '../components/services/ContainersServiceC
 export function ProjectOverviewPage() {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { enabled: appHosting } = useAppHostingEnabled();
+  const { data: project } = useInstance(projectId);
+  const projectName = project?.projectName || projectId;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6" data-testid="project-overview">
       <div>
-        <h2 className="text-xl font-bold text-text-primary">{projectId}</h2>
+        <h2 className="text-xl font-bold text-text-primary">{projectName}</h2>
+        {projectName !== projectId && (
+          <p className="text-xs font-mono text-text-tertiary" data-testid="project-overview-id">{projectId}</p>
+        )}
         <p className="text-sm text-text-tertiary mt-0.5">
           {appHosting
             ? 'The services in this project. Each one runs and reports on its own.'
