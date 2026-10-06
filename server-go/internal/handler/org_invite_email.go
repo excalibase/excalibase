@@ -1,13 +1,8 @@
 package handler
 
-import (
-	"net/mail"
-	"strings"
-)
-
-// isEmailAddress reports whether an invite names a single bare address, the
-// kind a sign-up can later match; display names and lists are refused.
+// isEmailAddress reports whether an invite names an address a sign-up would
+// accept. It is the registration rule itself, so an invite is never sent to
+// an address that could not register to claim it.
 func isEmailAddress(address string) bool {
-	parsed, err := mail.ParseAddress(address)
-	return err == nil && parsed.Address == address && strings.Contains(address, ".")
+	return isValidEmail(address)
 }

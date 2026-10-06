@@ -36,7 +36,7 @@ const (
 	backupLiveOrg        = "org1"
 	backupLiveBucket     = "excalibase-backups"
 	backupLiveNodePort   = 30900
-	backupLiveSchedule   = "0 0 2 * * *"
+	backupLiveSchedule   = "0 2 * * *"
 )
 
 // archiverStatus: last archived, archived count, failed count, last failed

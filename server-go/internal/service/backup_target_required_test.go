@@ -94,7 +94,7 @@ func TestAPaidTierProvisionIsRefusedWithoutABackupTarget(t *testing.T) {
 
 func TestAnEnabledBackupWithoutATargetIsRefused(t *testing.T) {
 	svc, _ := withoutBackupTarget(t)
-	err := provisionOnTier(t, svc, domain.Standard, &domain.BackupSettings{Enabled: true, Schedule: "0 0 2 * * *", Retention: 7})
+	err := provisionOnTier(t, svc, domain.Standard, &domain.BackupSettings{Enabled: true, Schedule: "0 2 * * *", Retention: 7})
 	if !errors.Is(err, ErrBackupTargetNotConfigured) {
 		t.Fatalf("got %v, want ErrBackupTargetNotConfigured", err)
 	}

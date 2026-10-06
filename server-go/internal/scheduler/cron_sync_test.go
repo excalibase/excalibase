@@ -136,6 +136,27 @@ func TestSyncCronJobs_PropagatesUpsertError(t *testing.T) {
 	}
 }
 
+// TestSyncCronJobs_RefusesAScheduleThatWouldNeverRun — an out-of-range
+// schedule fails the sync before any row is touched.
+func TestSyncCronJobs_RefusesAScheduleThatWouldNeverRun(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	tx, _ := db.Begin()
+	job := CronJobRow{Name: "nightly", Schedule: json.RawMessage(`{"kind":"daily","hourUTC":25,"minuteUTC":0}`)}
+	job.FnRef.ModuleName, job.FnRef.ExportName = "jobs", "run"
+	err = SyncCronJobs(context.Background(), tx, "proj", "fn", []CronJobRow{job})
+	if !errors.Is(err, ErrInvalidSchedule) {
+		t.Fatalf("err = %v, want ErrInvalidSchedule", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("a refused sync must not run SQL: %v", err)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || (len(s) > 0 && (func() bool {
 		for i := 0; i+len(sub) <= len(s); i++ {

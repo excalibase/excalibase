@@ -66,6 +66,11 @@ func SyncCronJobs(
 		if j.Name == "" {
 			return fmt.Errorf("sync cron: row missing name")
 		}
+		if len(j.Schedule) > 0 {
+			if err := ValidateSchedule(j.Schedule); err != nil {
+				return fmt.Errorf("cron job %q: %w", j.Name, err)
+			}
+		}
 		wantedNames[j.Name] = struct{}{}
 	}
 

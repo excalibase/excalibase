@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	testCronSchedule = "0 0 2 * * *"
+	testCronSchedule = "0 2 * * *"
 )
 
 func TestBuildPostgreSQLClusterFree(t *testing.T) {
@@ -124,7 +124,7 @@ func TestBuildScheduledBackup(t *testing.T) {
 	}
 
 	spec := obj.Object["spec"].(map[string]interface{})
-	if spec["schedule"] != testCronSchedule {
+	if spec["schedule"] != "0 0 2 * * *" {
 		t.Errorf("schedule: got %v", spec["schedule"])
 	}
 

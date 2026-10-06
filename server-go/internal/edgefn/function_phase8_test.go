@@ -145,6 +145,28 @@ export default { kind: "mutation", args: { parse: (a:any)=>a },
   handler: async () => null, __metadata: {} };`,
 			want: "schedule kind",
 		},
+		{
+			desc: "hour out of range",
+			content: `
+globalThis.__excalibase_crons = [
+  { name: "j", schedule: { kind: "daily", hourUTC: 25, minuteUTC: 0 },
+    fnRef: { moduleName: "m", exportName: "x" }, args: {} },
+];
+export default { kind: "mutation", args: { parse: (a:any)=>a },
+  handler: async () => null, __metadata: {} };`,
+			want: "hourUTC",
+		},
+		{
+			desc: "unsupported shorthand",
+			content: `
+globalThis.__excalibase_crons = [
+  { name: "j", schedule: { kind: "cron", expression: "@yearly" },
+    fnRef: { moduleName: "m", exportName: "x" }, args: {} },
+];
+export default { kind: "mutation", args: { parse: (a:any)=>a },
+  handler: async () => null, __metadata: {} };`,
+			want: "@daily",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {

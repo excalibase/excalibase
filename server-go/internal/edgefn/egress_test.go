@@ -13,15 +13,18 @@ func TestParseEgressHosts_Accepts(t *testing.T) {
 		in   []string
 		want []string
 	}{
-		{"hostname", []string{"api.stripe.com"}, []string{"api.stripe.com"}},
+		{"hostname", []string{"api.stripe.com"}, []string{"api.stripe.com:443"}},
 		{"host with port", []string{"api.stripe.com:8443"}, []string{"api.stripe.com:8443"}},
-		{"wildcard suffix", []string{"*.amazonaws.com"}, []string{"*.amazonaws.com"}},
+		{"wildcard suffix", []string{"*.amazonaws.com"}, []string{"*.amazonaws.com:443"}},
 		{"wildcard suffix with port", []string{"*.amazonaws.com:443"}, []string{"*.amazonaws.com:443"}},
-		{"public ipv4", []string{"203.0.113.10"}, []string{"203.0.113.10"}},
+		{"public ipv4", []string{"203.0.113.10"}, []string{"203.0.113.10:443"}},
 		{"public ipv4 with port", []string{"203.0.113.10:9000"}, []string{"203.0.113.10:9000"}},
 		{"public ipv6 bracketed with port", []string{"[2606:4700::1111]:443"}, []string{"[2606:4700::1111]:443"}},
-		{"lowercased, trimmed, deduped, sorted", []string{" B.example.com ", "a.example.com", "b.example.com"}, []string{"a.example.com", "b.example.com"}},
-		{"blank entries dropped", []string{"", "  ", "x.example.com"}, []string{"x.example.com"}},
+		{"lowercased, trimmed, deduped, sorted", []string{" B.example.com ", "a.example.com", "b.example.com:443"}, []string{"a.example.com:443", "b.example.com:443"}},
+		{"blank entries dropped", []string{"", "  ", "x.example.com"}, []string{"x.example.com:443"}},
+		{"public ipv6 without port", []string{"2606:4700::1111"}, []string{"[2606:4700::1111]:443"}},
+		{"bracketed ipv6 without port", []string{"[2606:4700::1111]"}, []string{"[2606:4700::1111]:443"}},
+		{"plain http states its port", []string{"api.example.com:80"}, []string{"api.example.com:80"}},
 		{"nil is empty", nil, []string{}},
 	}
 	for _, tc := range cases {
@@ -100,7 +103,7 @@ func TestParseEgressHostList_SplitsCommaString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"a.example.com:443", "b.example.com"}
+	want := []string{"a.example.com:443", "b.example.com:443"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
@@ -108,7 +111,7 @@ func TestParseEgressHostList_SplitsCommaString(t *testing.T) {
 
 func TestMergeEgressHosts_UnionSortedDeduped(t *testing.T) {
 	got := MergeEgressHosts([]string{"b.example.com", "a.example.com"}, nil, []string{"a.example.com", "c.example.com:80"})
-	want := []string{"a.example.com", "b.example.com", "c.example.com:80"}
+	want := []string{"a.example.com:443", "b.example.com:443", "c.example.com:80"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
@@ -131,5 +134,25 @@ func TestEgressHostPorts(t *testing.T) {
 	want := []int{443, 8443, 9000}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
+// A host named without a port is HTTPS on both layers: the sandbox is given
+// host:443, and the NetworkPolicy opens 443. Plain HTTP must state :80, so a
+// request on a port the policy does not open is refused at once instead of
+// hanging.
+func TestEgressHostWithoutAPortIsHTTPSOnBothLayers(t *testing.T) {
+	hosts, err := ParseEgressHosts([]string{"api.example.com", "legacy.example.com:80"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env := EgressEnvValue(hosts); env != "api.example.com:443,legacy.example.com:80" {
+		t.Errorf("sandbox list = %q, want every entry with its port", env)
+	}
+	if ports := EgressHostPorts(hosts); !reflect.DeepEqual(ports, []int{80, 443}) {
+		t.Errorf("policy ports = %v, want [80 443]", ports)
+	}
+	if merged := MergeEgressHosts([]string{"stored.example.com"}); !reflect.DeepEqual(merged, []string{"stored.example.com:443"}) {
+		t.Errorf("a stored entry without a port renders as %v, want it pinned to 443", merged)
 	}
 }

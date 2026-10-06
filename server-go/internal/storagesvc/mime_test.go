@@ -1,6 +1,7 @@
 package storagesvc
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -92,6 +93,70 @@ func TestCheckMIMEAllowlist_IgnoresMalformedEntries(t *testing.T) {
 	}
 	if err := checkMIMEAllowlist([]string{"image"}, "image/gif"); err == nil {
 		t.Error("a malformed entry must not allow an unrelated type")
+	}
+}
+
+// "type/*" allows every subtype of that type and nothing else.
+func TestCheckMIMEAllowlist_TypeWildcard(t *testing.T) {
+	for _, mediaType := range []string{"image/png", "image/jpeg", "image/webp"} {
+		if err := checkMIMEAllowlist([]string{"IMAGE/*"}, mediaType); err != nil {
+			t.Errorf("image/* should allow %q: %v", mediaType, err)
+		}
+	}
+	for _, mediaType := range []string{"text/plain", "application/image", "imagex/png"} {
+		if err := checkMIMEAllowlist([]string{"image/*"}, mediaType); err == nil {
+			t.Errorf("image/* should refuse %q", mediaType)
+		}
+	}
+}
+
+// A wildcard is not the owner naming a renderable type: an SVG on a public
+// bucket still needs "image/svg+xml" listed by name.
+func TestCheckPublicBucketType_WildcardDoesNotNameARenderableType(t *testing.T) {
+	bucket := &Bucket{Public: true, AllowedTypes: []string{"image/*"}}
+	if err := checkPublicBucketType(bucket, "image/svg+xml"); err == nil {
+		t.Error("image/* must not let a public bucket serve SVG")
+	}
+}
+
+func TestValidateBucketLimits(t *testing.T) {
+	good := []CreateBucketRequest{
+		{},
+		{FileSizeLimit: 1024, AllowedMimeTypes: []string{"image/png", "image/*", "*/*", "Application/JSON"}},
+	}
+	for _, req := range good {
+		if err := validateBucketLimits(req); err != nil {
+			t.Errorf("%+v: %v", req, err)
+		}
+	}
+	bad := map[string]CreateBucketRequest{
+		"negative size":     {FileSizeLimit: -1},
+		"no subtype":        {AllowedMimeTypes: []string{"image"}},
+		"wildcard type":     {AllowedMimeTypes: []string{"*/png"}},
+		"partial wildcard":  {AllowedMimeTypes: []string{"image/pn*"}},
+		"blank entry":       {AllowedMimeTypes: []string{" "}},
+		"with a parameter":  {AllowedMimeTypes: []string{"text/plain x=1"}},
+		"three parts":       {AllowedMimeTypes: []string{"a/b/c"}},
+		"good then garbage": {AllowedMimeTypes: []string{"image/png", "nope"}},
+	}
+	for name, req := range bad {
+		var invalid *ValidationError
+		if err := validateBucketLimits(req); !errors.As(err, &invalid) {
+			t.Errorf("%s: err = %v, want a ValidationError", name, err)
+		}
+	}
+}
+
+func TestService_CreateBucket_RefusesInvalidLimits(t *testing.T) {
+	svc := NewServiceWithObjectStore(newMemStore(), newFakeObjectStore(), nil)
+	_, err := svc.CreateBucket(context.Background(), testProjX, CreateBucketRequest{Name: "assets", FileSizeLimit: -5})
+	var invalid *ValidationError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("a negative size limit must be refused, got %v", err)
+	}
+	b, err := svc.CreateBucket(context.Background(), testProjX, CreateBucketRequest{Name: "photos", AllowedMimeTypes: []string{"image/*"}})
+	if err != nil || len(b.AllowedTypes) != 1 {
+		t.Fatalf("image/* must be accepted, got %v, %v", b, err)
 	}
 }
 

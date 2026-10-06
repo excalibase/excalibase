@@ -505,6 +505,15 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "invalid role", http.StatusBadRequest)
 		return
 	}
+	// An admin-made account meets the same rules a sign-up does.
+	if !isValidEmail(req.Email) {
+		httpError(w, "invalid email format", http.StatusBadRequest)
+		return
+	}
+	if msg := isValidPassword(req.Password); msg != "" {
+		httpError(w, msg, http.StatusBadRequest)
+		return
+	}
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {

@@ -560,7 +560,8 @@ func BuildFirstScheduledBackup(projectID, namespace, schedule string) (*unstruct
 }
 
 func scheduledBackup(projectID, namespace, schedule string, immediate bool) (*unstructured.Unstructured, error) {
-	if err := ValidateBackupSchedule(schedule); err != nil {
+	cnpgSchedule, err := CNPGBackupSchedule(schedule)
+	if err != nil {
 		return nil, err
 	}
 	return &unstructured.Unstructured{
@@ -571,7 +572,7 @@ func scheduledBackup(projectID, namespace, schedule string, immediate bool) (*un
 				"name":      projectID + "-postgres-backup",
 				"namespace": namespace,
 			},
-			"spec": scheduledBackupSpec(projectID, schedule, immediate),
+			"spec": scheduledBackupSpec(projectID, cnpgSchedule, immediate),
 		},
 	}, nil
 }

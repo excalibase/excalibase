@@ -129,7 +129,7 @@ type BackupDefaults struct {
 	Endpoint        string // e.g. https://<account_id>.r2.cloudflarestorage.com
 	Bucket          string // e.g. excalibase-backups
 	Region          string // R2 ignores; SDK requires non-empty. Default "auto".
-	Schedule        string // cron; default "0 0 2 * * *"
+	Schedule        string // five-field cron; default "0 2 * * *"
 	RetentionDays   int    // default 7
 }
 
@@ -610,6 +610,7 @@ func (s *ProvisioningService) databaseTier(ctx context.Context, req *domain.Prov
 	if err != nil {
 		return config.TierConfig{}, err
 	}
+	req.Parameters = config.NormalizeTenantParameters(req.Parameters)
 	if err := config.ValidateTenantParameters(req.Parameters, tier); err != nil {
 		return config.TierConfig{}, err
 	}
@@ -725,7 +726,7 @@ func (s *ProvisioningService) requireBackupTarget(req *domain.ProvisioningReques
 }
 
 const (
-	defaultBackupSchedule      = "0 0 2 * * *"
+	defaultBackupSchedule      = "0 2 * * *"
 	defaultBackupRetentionDays = 7
 )
 

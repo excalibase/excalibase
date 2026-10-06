@@ -56,8 +56,31 @@ func checkMIMEAllowlist(allowed []string, mediaType string) error {
 		if normalised == mediaType {
 			return nil
 		}
+		if kind, wildcard := strings.CutSuffix(normalised, "/*"); wildcard && strings.HasPrefix(mediaType, kind+"/") {
+			return nil
+		}
 	}
 	return invalidf("mime type %q not allowed in bucket", mediaType)
+}
+
+// validateBucketLimits refuses a negative size limit and any allow-list entry
+// that is not "*/*", "type/*" or a full media type, so a typo is told rather
+// than silently matching nothing.
+func validateBucketLimits(req CreateBucketRequest) error {
+	if req.FileSizeLimit < 0 {
+		return invalidf("fileSizeLimit must not be negative")
+	}
+	for _, entry := range req.AllowedMimeTypes {
+		normalised, err := normaliseMIME(entry)
+		if err != nil {
+			return invalidf("allowedMimeTypes entry %q must be a media type such as image/png, or image/* for every image type", entry)
+		}
+		kind, subtype, _ := strings.Cut(normalised, "/")
+		if (kind == "*" && subtype != "*") || (subtype != "*" && strings.Contains(subtype, "*")) {
+			return invalidf("allowedMimeTypes entry %q: a wildcard may only be a whole subtype, as in image/*", entry)
+		}
+	}
+	return nil
 }
 
 // renderableTypes are the media types a browser executes or renders as a

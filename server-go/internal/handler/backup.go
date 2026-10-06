@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/go-chi/chi/v5"
 )
@@ -239,6 +240,10 @@ func (h *BackupHandler) UpsertSchedule(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "cron is required", http.StatusBadRequest)
 		return
 	}
+	if err := k8s.ValidateBackupSchedule(body.Cron); err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if h.scheduler == nil {
 		httpError(w, "scheduler not configured", http.StatusServiceUnavailable)
 		return
@@ -250,7 +255,8 @@ func (h *BackupHandler) UpsertSchedule(w http.ResponseWriter, r *http.Request) {
 		Enabled:       body.Enabled,
 	}
 	if err := h.scheduler.Register(r.Context(), sch); err != nil {
-		httpError(w, safeError(err), http.StatusBadRequest)
+		log.Printf("backup schedule for %s: %v", projectID, err)
+		httpError(w, "the backup schedule could not be saved; try again in a moment", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, sch)

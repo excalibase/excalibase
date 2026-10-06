@@ -169,6 +169,12 @@ func validateTierConfig(tc config.TierConfig) error {
 	if tc.CPU == "" || tc.Memory == "" || tc.StorageSize == "" {
 		return errors.New("cpu, memory and storageSize are required")
 	}
+	if !positiveQuantity(tc.CPU) {
+		return errors.New("cpu must be a CPU quantity above zero such as 500m or 2")
+	}
+	if !positiveQuantity(tc.Memory) {
+		return errors.New("memory must be a memory quantity above zero such as 512Mi or 4Gi")
+	}
 	if _, err := tc.SlotWALKeepSize(); err != nil {
 		return errors.New("storageSize must be a storage quantity such as 5Gi")
 	}
@@ -182,6 +188,11 @@ func validateTierConfig(tc config.TierConfig) error {
 		return errors.New("maxAppDiskSize must be a whole number of gibibytes such as 20Gi (0Gi offers no app disks)")
 	}
 	return nil
+}
+
+func positiveQuantity(value string) bool {
+	quantity, err := resource.ParseQuantity(value)
+	return err == nil && quantity.Sign() > 0
 }
 
 // validateMaxStorage requires the disk a project may grow to, no smaller than

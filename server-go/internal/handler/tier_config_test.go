@@ -148,6 +148,32 @@ func TestTierHandler_Update_RejectsUnusableStorageSize(t *testing.T) {
 	}
 }
 
+// CPU and memory are Kubernetes quantities greater than zero; anything else
+// would only fail later, when a cluster is built from the plan.
+func TestTierHandler_Update_RejectsUnusableCPUAndMemory(t *testing.T) {
+	const valid = `"instances":1,"storageSize":"5Gi","maxStorageSize":"5Gi","maxAppDiskSize":"1Gi","maxApps":2`
+	cases := map[string]struct{ body, field string }{
+		"cpu not a quantity":    {`{` + valid + `,"memory":"512Mi","cpu":"two"}`, "cpu"},
+		"cpu zero":              {`{` + valid + `,"memory":"512Mi","cpu":"0"}`, "cpu"},
+		"cpu negative":          {`{` + valid + `,"memory":"512Mi","cpu":"-1"}`, "cpu"},
+		"memory not a quantity": {`{` + valid + `,"memory":"lots","cpu":"0.5"}`, "memory"},
+		"memory zero":           {`{` + valid + `,"memory":"0Mi","cpu":"0.5"}`, "memory"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := &fakeTierStore{m: map[domain.TierType]config.TierConfig{}}
+			rec := httptest.NewRecorder()
+			NewTierHandler(store).Update(rec, newTierReqWithParam("PUT", tc.body, string(domain.Free)))
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.field) {
+				t.Errorf("got %d %s, want 400 naming %s", rec.Code, rec.Body.String(), tc.field)
+			}
+			if len(store.m) != 0 {
+				t.Error("a refused spec was stored")
+			}
+		})
+	}
+}
+
 // A plan's maximum disk is what a project may grow to (EXC-492): required, a
 // storage quantity, and never below the disk the plan starts with.
 func TestTierHandler_Update_MaxStorageSize(t *testing.T) {

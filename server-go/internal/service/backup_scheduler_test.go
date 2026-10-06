@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -119,7 +121,9 @@ func TestScheduler_RegisterAndRun(t *testing.T) {
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 
-	// 6-field cron lets us schedule per-second for the test.
+	// A per-second schedule is refused on the API; the test lifts the rule
+	// to see the cron fire without waiting an hour.
+	scheduler.checkSchedule = func(string) error { return nil }
 	if err := scheduler.Register(context.Background(), &domain.BackupSchedule{
 		ProjectID: "p1", Cron: "@every 1s", RetentionDays: 7, Enabled: true,
 	}); err != nil {
@@ -149,12 +153,19 @@ func TestScheduler_RegisterAndRun(t *testing.T) {
 }
 
 func TestScheduler_InvalidCronReturnsError(t *testing.T) {
-	scheduler, _, _, _, _ := setupScheduler(t)
-	err := scheduler.Register(context.Background(), &domain.BackupSchedule{
-		ProjectID: "p1", Cron: "not-a-cron", Enabled: true,
-	})
-	if err == nil {
-		t.Error("expected error for bad cron")
+	scheduler, schedules, _, _, _ := setupScheduler(t)
+	// The Docker route takes the same five-field, at-most-hourly schedule
+	// the Kubernetes route does.
+	for _, cron := range []string{"not-a-cron", "0 0 2 * * *", "* * * * *", "@every 1s"} {
+		err := scheduler.Register(context.Background(), &domain.BackupSchedule{
+			ProjectID: "p1", Cron: cron, Enabled: true,
+		})
+		if !errors.Is(err, k8s.ErrInvalidBackupSchedule) {
+			t.Errorf("%q: err = %v, want ErrInvalidBackupSchedule", cron, err)
+		}
+	}
+	if got, _ := schedules.ListEnabledSchedules(context.Background()); len(got) != 0 {
+		t.Errorf("a refused schedule was persisted: %v", got)
 	}
 }
 
@@ -214,6 +225,7 @@ func TestScheduler_NotLeader_DoesNotFire(t *testing.T) {
 		ProjectID: "p1", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	})
 	scheduler.leadership = NewLeadership(&refusingLock{})
+	scheduler.checkSchedule = func(string) error { return nil }
 
 	scheduler.Register(context.Background(), &domain.BackupSchedule{
 		ProjectID: "p1", Cron: "@every 200ms", RetentionDays: 7, Enabled: true,

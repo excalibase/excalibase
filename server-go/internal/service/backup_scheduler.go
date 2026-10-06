@@ -10,6 +10,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -35,6 +36,9 @@ type BackupScheduler struct {
 	cron   *cron.Cron
 	jobs   map[string]cron.EntryID // projectID → cron entry id
 	parser cron.Parser
+	// checkSchedule is the rule a registered schedule must meet: the same
+	// five-field, at-most-hourly format the Kubernetes route takes.
+	checkSchedule func(string) error
 
 	// running is true between Start and Stop; serialises double-start.
 	running bool
@@ -46,19 +50,20 @@ func NewBackupScheduler(c BackupSchedulerConfig) *BackupScheduler {
 		logger = log.Default()
 	}
 	return &BackupScheduler{
-		store:      c.Schedules,
-		backups:    c.Backups,
-		leadership: NewLeadership(c.Lock),
-		logger:     logger,
-		jobs:       make(map[string]cron.EntryID),
-		parser:     cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor),
+		store:         c.Schedules,
+		backups:       c.Backups,
+		leadership:    NewLeadership(c.Lock),
+		logger:        logger,
+		jobs:          make(map[string]cron.EntryID),
+		parser:        cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor),
+		checkSchedule: k8s.ValidateBackupSchedule,
 	}
 }
 
 // Register persists a schedule and adds it to the running cron.
 func (s *BackupScheduler) Register(ctx context.Context, sched *domain.BackupSchedule) error {
-	if _, err := s.parser.Parse(sched.Cron); err != nil {
-		return fmt.Errorf("invalid cron %q: %w", sched.Cron, err)
+	if err := s.checkSchedule(sched.Cron); err != nil {
+		return err
 	}
 	if err := s.store.UpsertSchedule(ctx, sched); err != nil {
 		return fmt.Errorf("persist schedule: %w", err)

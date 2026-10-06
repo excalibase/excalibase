@@ -124,45 +124,54 @@ var safeFunctions = map[string]bool{
 	"transaction_timestamp()": true,
 }
 
-// ValidateDefaultExpression validates and sanitizes a column DEFAULT expression.
-// It returns the safe SQL expression or an error if the input is rejected.
+// quotedLiteralPattern is one complete SQL string literal (a doubled quote
+// escapes a quote inside it), optionally cast to a plain type name, such as
+// 'x'::text, '{}'::jsonb or 'a'::character varying. Postgres reports a
+// column's default in this shape, so it round-trips unchanged.
+var quotedLiteralPattern = regexp.MustCompile(`^'(?:[^']|'')*'(?:::[a-zA-Z_][a-zA-Z0-9_]*(?: [a-zA-Z_][a-zA-Z0-9_]*)*(?:\[\])?)?$`)
+
+// callPattern is anything shaped like a function call or a parenthesised
+// expression; outside the allowlist it is refused rather than stored as text.
+var callPattern = regexp.MustCompile(`^(?:\(|[a-zA-Z_][a-zA-Z0-9_.]*\s*\()`)
+
+// ValidateDefaultExpression turns a column DEFAULT into the SQL to write.
+// Numbers, booleans, null, allowlisted functions and nextval are kept as
+// expressions; one complete quoted literal (optionally cast) is kept as
+// written; any other value, including the empty string and JSON such as {},
+// is a text literal the server quotes itself.
 func ValidateDefaultExpression(expr string) (string, error) {
 	if expr == "" {
-		return "", invalidInput("default expression is empty")
+		return "''", nil
 	}
-
-	// Reject dangerous patterns
+	if quotedLiteralPattern.MatchString(expr) {
+		return expr, nil
+	}
+	if strings.HasPrefix(expr, "'") {
+		return "", invalidInput("a quoted default must be one literal, like 'text' or '{}'::jsonb: %q", expr)
+	}
 	if strings.Contains(expr, ";") || strings.Contains(expr, "--") || strings.Contains(expr, "/*") {
 		return "", invalidInput("default expression contains forbidden characters: %q", expr)
 	}
-
-	// Numeric literals
-	if numericPattern.MatchString(expr) {
+	if isDefaultKeyword(expr) {
 		return expr, nil
 	}
+	if callPattern.MatchString(expr) {
+		return "", invalidInput("unrecognized default expression: %q; to store it as text, wrap it in single quotes", expr)
+	}
+	return QuoteLiteral(expr), nil
+}
 
-	// Boolean/null literals
+// isDefaultKeyword reports whether expr is written into DEFAULT as is: a
+// number, a boolean, null, an allowlisted function or nextval('seq').
+func isDefaultKeyword(expr string) bool {
+	if numericPattern.MatchString(expr) || nextvalPattern.MatchString(expr) {
+		return true
+	}
 	switch strings.ToLower(expr) {
 	case "true", "false", "null":
-		return expr, nil
+		return true
 	}
-
-	// Safe function calls (case-insensitive lookup)
-	if safeFunctions[strings.ToLower(expr)] {
-		return expr, nil
-	}
-
-	// nextval('sequence_name') pattern
-	if nextvalPattern.MatchString(expr) {
-		return expr, nil
-	}
-
-	// If it looks like a plain string (no parens, no operators), wrap as literal
-	if !strings.ContainsAny(expr, "()=<>+*/%|&^~!@#${}[]") {
-		return QuoteLiteral(expr), nil
-	}
-
-	return "", invalidInput("unrecognized default expression: %q", expr)
+	return safeFunctions[strings.ToLower(expr)]
 }
 
 // MaxPolicyExpressionLen caps the length of a USING / WITH CHECK clause to

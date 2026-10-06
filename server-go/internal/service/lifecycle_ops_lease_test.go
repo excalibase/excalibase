@@ -24,7 +24,7 @@ func lifecycleOps() []lifecycleOp {
 	return []lifecycleOp{
 		{"upgrade", OperationUpgrade, func(s *ProvisioningService) error { return s.UpgradeVersion(ctx, testOpsDB, "17") }},
 		{"maintenance", OperationMaintenance, func(s *ProvisioningService) error {
-			return s.SetMaintenanceWindow(ctx, testOpsDB, domain.MaintenanceWindowConfig{Window: "0 3 * * 0", DurationMinutes: 60})
+			return s.SetMaintenanceWindow(ctx, testOpsDB, domain.MaintenanceWindowConfig{Window: "sunday 03:00", DurationMinutes: 60})
 		}},
 	}
 }
@@ -129,7 +129,7 @@ func TestMaintenanceWindowEditsAreAllowedInAnyStatusTheStoreAccepts(t *testing.T
 		t.Run(status, func(t *testing.T) {
 			svc, store, _ := setupLeasedOpsTest(t)
 			markStatus(t, store, status)
-			cfg := domain.MaintenanceWindowConfig{Window: "0 3 * * 0", DurationMinutes: 60}
+			cfg := domain.MaintenanceWindowConfig{Window: "sunday 03:00", DurationMinutes: 60}
 			if err := svc.SetMaintenanceWindow(context.Background(), testOpsDB, cfg); err != nil {
 				t.Fatalf("SetMaintenanceWindow on %s: %v", status, err)
 			}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -78,8 +79,8 @@ func (h *SDKKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "keyType must be 'publishable' or 'secret'", http.StatusBadRequest)
 		return
 	}
-	if len(req.Name) > maxSDKKeyNameLength {
-		httpError(w, "name is too long", http.StatusBadRequest)
+	if utf8.RuneCountInString(req.Name) > maxSDKKeyNameLength {
+		httpError(w, "name must be "+strconv.Itoa(maxSDKKeyNameLength)+" characters or fewer", http.StatusBadRequest)
 		return
 	}
 	projectID, orgSlug, ok := h.resolve(w, r)

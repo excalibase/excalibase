@@ -51,6 +51,7 @@ func ParseEgressHosts(entries []string) ([]string, error) {
 		if err := validateEgressHost(entry); err != nil {
 			return nil, err
 		}
+		entry = withExplicitPort(entry)
 		if _, dup := seen[entry]; dup {
 			continue
 		}
@@ -152,6 +153,23 @@ func parseEgressLiteral(host string) (netip.Addr, bool) {
 	return addr, true
 }
 
+// defaultEgressPort is what an entry without a port means: HTTPS.
+const defaultEgressPort = "443"
+
+// withExplicitPort pins an entry without a port to 443. Deno reads a bare
+// host as every port while the NetworkPolicy opens 443 only, so a bare entry
+// would let plain HTTP through the sandbox and then hang at the policy.
+func withExplicitPort(entry string) string {
+	host, port, err := splitEgressHostPort(entry)
+	if err != nil || port != "" {
+		return entry
+	}
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	return host + ":" + defaultEgressPort
+}
+
 // MergeEgressHosts unions already-parsed lists (operator defaults + project
 // allowlist) into one canonical list. Never returns nil.
 func MergeEgressHosts(lists ...[]string) []string {
@@ -159,6 +177,7 @@ func MergeEgressHosts(lists ...[]string) []string {
 	out := []string{}
 	for _, list := range lists {
 		for _, host := range list {
+			host = withExplicitPort(host)
 			if _, dup := seen[host]; dup {
 				continue
 			}

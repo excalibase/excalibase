@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-const platformBackupSchedule = "0 0 4 * * *"
+const platformBackupSchedule = "0 4 * * *"
 
 func provisionWithBackup(t *testing.T, svc *ProvisioningService, backup *domain.BackupSettings) (*domain.ProvisioningResponse, error) {
 	t.Helper()
@@ -28,7 +28,7 @@ func TestProvisionRefusesABackupScheduleCloudNativePGWouldMisread(t *testing.T) 
 	svc, store, mock := setupProvisioningTest(t)
 	withPlatformBackups(svc)
 
-	_, err := provisionWithBackup(t, svc, &domain.BackupSettings{Enabled: true, Schedule: "0 2 * * *", Retention: 7})
+	_, err := provisionWithBackup(t, svc, &domain.BackupSettings{Enabled: true, Schedule: "0 0 2 * * *", Retention: 7})
 	if !errors.Is(err, k8s.ErrInvalidBackupSchedule) {
 		t.Fatalf("Provision = %v, want ErrInvalidBackupSchedule", err)
 	}
@@ -52,7 +52,7 @@ func TestProvisionGivesAnUnscheduledBackupThePlatformSchedule(t *testing.T) {
 	if scheduled == nil {
 		t.Fatalf("no ScheduledBackup: %v", mock.CRDs)
 	}
-	if schedule, _, _ := unstructured.NestedString(scheduled.Object, "spec", "schedule"); schedule != platformBackupSchedule {
+	if schedule, _, _ := unstructured.NestedString(scheduled.Object, "spec", "schedule"); schedule != "0 "+platformBackupSchedule {
 		t.Errorf("schedule = %q, want the platform's %q", schedule, platformBackupSchedule)
 	}
 	if inst, _ := store.FindByProjectID(resp.ProjectID); inst == nil || inst.BackupSchedule != platformBackupSchedule {
