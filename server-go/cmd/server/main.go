@@ -26,6 +26,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/imagedigest"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
+	"github.com/excalibase/provisioning-poc/internal/mcpserver"
 	"github.com/excalibase/provisioning-poc/internal/metrics"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
@@ -806,6 +807,8 @@ type handlerDeps struct {
 	// rlTokenCreate bounds personal access token minting per user (EXC-536),
 	// so a stolen session cannot mint credentials in bulk.
 	rlTokenCreate func(http.Handler) http.Handler
+	// mcpAudit records every tool call made through /mcp (EXC-544).
+	mcpAudit mcpserver.AuditLogger
 	// activity marks a project as seen on every successful project-scoped
 	// call (EXC-279). Mounted after the access guards so rejected calls never
 	// count.
@@ -1464,6 +1467,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlDataPlane:   custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
 		rlMailSend:    custommw.RateLimit(custommw.PerUser, 5, time.Hour),
 		rlTokenCreate: newTokenCreateLimiter(),
+		mcpAudit:      sqlStore,
 		activity:      custommw.ProjectActivity(activityRecorder),
 		emailSender:   emailSender,
 		storageSvc:    storageSvc,
@@ -1502,6 +1506,8 @@ func serveConfig(cfg config.AppConfig) http.HandlerFunc {
 // this top-level remains a manifest of which features are exposed.
 func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.InstanceStore, d *handlerDeps) *chi.Mux {
 	r := chi.NewRouter()
+	// Read-only SQL travels in the query string; the access log never keeps it.
+	r.Use(custommw.RedactQueryParams("sql"))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(metrics.Middleware)
@@ -1531,6 +1537,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	mountVaultAndSchemaRoutes(r, sqlStore, store, d)
 	mountProjectScopedRoutes(r, cfg, sqlStore, store, d)
 	mountEmailRoutes(r, d)
+	mountMCP(r, cfg, d)
 
 	// Phase 7: /http/* dispatch is mounted BEFORE the bare /{fnId} route so
 	// chi's router doesn't treat the literal segment "http" as a function id.
@@ -1547,6 +1554,13 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	// the metadata callback above.
 	r.With(d.activity).Post("/internal/invoke/{projectId}/{fnId}", d.fnHandler.InternalInvoke)
 	return r
+}
+
+// mountMCP serves MCP for coding tools (ADR 0037). Each tool is an
+// in-process request through r itself, so it meets the same gates as Studio.
+func mountMCP(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
+	settings := mcpserver.Settings{PublicBaseURL: cfg.PublicBaseURL, StudioURL: cfg.StudioURL}
+	r.With(d.rlAuthed).Handle("/mcp", mcpserver.NewHandler(r, d.mcpAudit, settings))
 }
 
 // mountProvisioningRoutes attaches /api/provision and its per-project sub-router.
@@ -1772,6 +1786,10 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 		r.Use(d.activity)
 		// A preview writes nothing, so it announces no schema change.
 		r.Post("/import/preview", d.tableImportHandler.Preview)
+		// Read-only SQL is a GET, so a read-only token reaches it, but only on
+		// the rung that may run SQL at all.
+		r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).
+			Get("/query", d.schemaHandler.ExecuteReadOnlyQuery)
 		r.Group(func(r chi.Router) {
 			r.Use(d.schemaHandler.AnnounceSchemaChange)
 			d.schemaHandler.RoutesInner(r)

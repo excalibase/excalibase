@@ -160,9 +160,10 @@ func (s *Store) LogAudit(ctx context.Context, e *domain.AuditEntry) error {
 		ts = *e.Timestamp
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO audit_log (user_id, action, resource, resource_id, details, ip_address, timestamp)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		e.UserID, e.Action, e.Resource, e.ResourceID, e.Details, e.IPAddress, ts)
+		`INSERT INTO audit_log (user_id, action, resource, resource_id, details, ip_address, timestamp,
+		                        project_id, token_hash, via)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		e.UserID, e.Action, e.Resource, e.ResourceID, e.Details, e.IPAddress, ts, e.ProjectID, e.TokenHash, e.Via)
 	return err
 }
 

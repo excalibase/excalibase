@@ -76,4 +76,14 @@ type AuditEntry struct {
 	Details    string     `json:"details,omitempty"`
 	IPAddress  string     `json:"ipAddress,omitempty"`
 	Timestamp  *time.Time `json:"timestamp"`
+	// ProjectID, TokenHash and Via say which project a call acted on, which
+	// personal access token made it, and through which door (AuditViaMCP).
+	// TokenHash is the id the token routes take, never shown for someone else's token.
+	ProjectID string `json:"projectId,omitempty"`
+	TokenHash string `json:"-"`
+	Via       string `json:"via,omitempty"`
 }
+
+// AuditViaMCP marks an audit entry written for a call through the hosted MCP
+// endpoint.
+const AuditViaMCP = "mcp"

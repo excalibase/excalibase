@@ -177,18 +177,27 @@ func (i *Introspector) executeReadQuery(ctx context.Context, tx interface {
 	if err != nil {
 		return QueryResult{Error: err.Error()}
 	}
-	defer rows.Close()
+	result := readResult(rows)
+	if result.Error != "" {
+		return result
+	}
+	if err := tx.Commit(); err != nil {
+		return QueryResult{Error: fmt.Errorf("commit: %w", err).Error()}
+	}
+	return result
+}
 
+// readResult reads a row set up to the runner's caps and closes it.
+func readResult(rows *sql.Rows) QueryResult {
+	defer rows.Close()
 	colTypes, err := rows.ColumnTypes()
 	if err != nil {
 		return QueryResult{Error: fmt.Errorf("column types: %w", err).Error()}
 	}
-
 	columns := make([]ColumnMeta, len(colTypes))
 	for idx, ct := range colTypes {
 		columns[idx] = ColumnMeta{Name: ct.Name(), DataType: ct.DatabaseTypeName()}
 	}
-
 	resultRows, truncated, err := collectRows(rows, len(colTypes))
 	if err != nil {
 		return QueryResult{Error: err.Error()}
@@ -196,9 +205,6 @@ func (i *Introspector) executeReadQuery(ctx context.Context, tx interface {
 	// Closing drains what was not kept, so a data-modifying WITH still commits.
 	if err := rows.Close(); err != nil {
 		return QueryResult{Error: err.Error()}
-	}
-	if err := tx.Commit(); err != nil {
-		return QueryResult{Error: fmt.Errorf("commit: %w", err).Error()}
 	}
 	return QueryResult{Columns: columns, Rows: resultRows, Truncated: truncated}
 }

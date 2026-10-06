@@ -46,6 +46,11 @@ func schemaReadRows() []Row {
 		schemaRead("/extensions"),
 		schemaRead("/functions"),
 		schemaRead("/policies"),
+		{
+			Methods: get, Pattern: "/api/schema/{projectId}/query",
+			Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Database: true, Discloses: NoSecret,
+			Note: "read-only SQL in a read-only transaction (EXC-544): a read, yet on the rung that may run SQL at all",
+		},
 		schemaRead("/relationships"),
 		schemaRead("/roles"),
 		schemaRead("/tables"),
