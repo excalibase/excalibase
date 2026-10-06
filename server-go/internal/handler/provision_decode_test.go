@@ -41,6 +41,17 @@ func TestProvision_AcceptsTheStudioBody(t *testing.T) {
 	}
 }
 
+func TestProvision_RefusesAnOversizedOrMalformedBody(t *testing.T) {
+	r := provisionRouter(t, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}})
+	big := `{"projectName":"` + strings.Repeat("a", maxProvisionBodyBytes) + `"}`
+	if w := doRequest(r, "POST", testProvisionPath, big); w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized: got %d, want 413", w.Code)
+	}
+	if w := doRequest(r, "POST", testProvisionPath, `{"projectName":`); w.Code != http.StatusBadRequest {
+		t.Errorf("malformed: got %d, want 400", w.Code)
+	}
+}
+
 func TestProvision_RefusesAnUnsafeMasterUsername(t *testing.T) {
 	r := provisionRouter(t, &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}})
 	w := doRequest(r, "POST", testProvisionPath,

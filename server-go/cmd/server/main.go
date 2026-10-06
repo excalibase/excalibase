@@ -1601,7 +1601,7 @@ func mountProvisioningRoutes(r *chi.Mux, sqlStore storage.OrgStore, store storag
 	r.Route("/api/provision", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
 		r.Get("/", d.provHandler.ListInstances)
-		r.Post("/", d.provHandler.Provision)
+		r.With(custommw.LimitBody(custommw.DefaultBodyLimit)).Post("/", d.provHandler.Provision)
 		r.Post("/estimate", d.provHandler.EstimateCost)
 
 		r.Route("/{projectId}", func(r chi.Router) {
@@ -1763,8 +1763,9 @@ func newOrgCreateLimiter() func(http.Handler) http.Handler {
 // mountAuthRoutes mounts /api/auth (mixed public + authed).
 func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 	r.Route("/api/auth", func(r chi.Router) {
-		r.With(d.rlUnauth).Post("/register", d.authHandler.Register)
-		r.With(d.rlUnauth).Post("/login", d.authHandler.Login)
+		authBody := custommw.LimitBody(custommw.AuthBodyLimit)
+		r.With(d.rlUnauth, authBody).Post("/register", d.authHandler.Register)
+		r.With(d.rlUnauth, authBody).Post("/login", d.authHandler.Login)
 		r.With(d.rlUnauth).Get("/setup-status", d.authHandler.GetSetupStatus)
 		r.Route("/oauth", func(r chi.Router) { d.oauthHandler.Routes(r, d.rlUnauth) })
 		r.With(d.rlAuthed).Post("/logout", d.authHandler.Logout)
@@ -1788,6 +1789,7 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 	r.Route("/api/orgs", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
+		r.Use(custommw.LimitBody(custommw.DefaultBodyLimit))
 		d.orgHandler.Routes(r, cfg.IsCloud(), d.rlOrgCreate)
 	})
 	r.Route("/api/admin", func(r chi.Router) {
@@ -1834,8 +1836,14 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 		r.With(features.Require(d.features, features.MCP), custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).
 			Get("/query", d.schemaHandler.ExecuteReadOnlyQuery)
 		r.Group(func(r chi.Router) {
+			// An oversized body is refused before anything is announced.
+			r.Use(custommw.LimitBody(custommw.SchemaBodyLimit))
 			r.Use(d.schemaHandler.AnnounceSchemaChange)
 			d.schemaHandler.RoutesInner(r)
+		})
+		r.Group(func(r chi.Router) {
+			// The import keeps its own, larger upload limit.
+			r.Use(d.schemaHandler.AnnounceSchemaChange)
 			r.Post("/import", d.tableImportHandler.Import)
 		})
 	})
@@ -1881,7 +1889,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.With(dev).Post("/", d.fnHandler.Create)
 		// Function secrets can hold API keys — Developer+ to read or write.
 		r.With(dev).Get("/secrets", d.fnHandler.ListSecrets)
-		r.With(dev).Post("/secrets", d.fnHandler.SetSecret)
+		r.With(dev, custommw.LimitBody(custommw.DefaultBodyLimit)).Post("/secrets", d.fnHandler.SetSecret)
 		r.With(dev).Delete("/secrets/{key}", d.fnHandler.DeleteSecret)
 		// Outbound allowlist: it changes what deployed code can reach, so it
 		// carries the same Developer+ gate as a deploy (EXC-348).
