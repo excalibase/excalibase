@@ -428,7 +428,7 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 	}
 	claimed, err := h.claimReset(r.Context(), hash)
 	if err != nil {
-		httpError(w, "consume token: "+safeError(err), http.StatusInternalServerError)
+		resetFailure(w, "consume token", err)
 		return
 	}
 	if !claimed {
@@ -437,11 +437,11 @@ func (h *EmailTokensHandler) ConfirmReset(w http.ResponseWriter, r *http.Request
 	}
 	hashed, err := auth.HashPassword(body.NewPassword)
 	if err != nil {
-		httpError(w, "hash: "+safeError(err), http.StatusInternalServerError)
+		resetFailure(w, "hash password", err)
 		return
 	}
 	if err := h.store.UpdateUserPassword(r.Context(), user.Username, hashed); err != nil {
-		httpError(w, "update password: "+safeError(err), http.StatusInternalServerError)
+		resetFailure(w, "update password", err)
 		return
 	}
 	// After the update, so a sign-in with the old password in between is

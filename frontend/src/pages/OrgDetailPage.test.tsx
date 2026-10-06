@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { OrgDetailPage } from './OrgDetailPage';
@@ -142,5 +142,75 @@ describe('OrgDetailPage', () => {
 
     await u.selectOptions(screen.getByLabelText('Tier'), 'STANDARD');
     expect(api.patch).toHaveBeenCalledWith('/orgs/o1', { tier: 'STANDARD' });
+  });
+});
+
+// EXC-555: these failed silently (or spun forever on a failed load).
+describe('OrgDetailPage — refusals say why', () => {
+  const refusal = (error: string) => ({
+    message: 'Request failed with status code 409',
+    response: { status: 409, data: { error } },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAuthStore.getState().setAuth({ id: 'u-owner', username: 'owner', email: 'owner@x.test', role: 'platform_admin' });
+    mockReads();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  });
+
+  test('an organization that cannot be loaded says so instead of spinning', async () => {
+    vi.mocked(api.get).mockRejectedValue({ message: 'x', response: { status: 403, data: { error: 'you are not a member of this organization' } } });
+    renderPage();
+    expect(await screen.findByTestId('org-load-error')).toHaveTextContent('you are not a member of this organization');
+  });
+
+  test('a refused member removal shows the reason', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.delete).mockRejectedValue(refusal('the last owner cannot be removed'));
+    await openMembers(u);
+    await u.click((await screen.findAllByTitle('Remove member'))[0]);
+    expect(await screen.findByTestId('org-action-error')).toHaveTextContent('the last owner cannot be removed');
+  });
+
+  test('a refused role change shows the reason', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.patch).mockRejectedValue(refusal('only owners can make admins'));
+    await openMembers(u);
+    await u.selectOptions(await screen.findByLabelText('Role for dev'), 'admin');
+    expect(await screen.findByTestId('org-action-error')).toHaveTextContent('only owners can make admins');
+  });
+
+  test('a refused organization delete shows the reason and stays', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.delete).mockRejectedValue(refusal('delete the organization’s projects first'));
+    renderPage();
+    await u.click(await screen.findByRole('button', { name: /settings/i }));
+    await u.click(screen.getByRole('button', { name: /delete organization/i }));
+    expect(await screen.findByTestId('org-action-error')).toHaveTextContent('projects first');
+    expect(screen.queryByTestId('orgs-list')).not.toBeInTheDocument();
+  });
+
+  test('a refused tier change shows the reason', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.patch).mockRejectedValue(refusal('the cluster has no room for this tier'));
+    renderPage();
+    await u.click(await screen.findByRole('button', { name: /settings/i }));
+    await u.selectOptions(screen.getByLabelText('Tier'), 'STANDARD');
+    expect(await screen.findByTestId('org-action-error')).toHaveTextContent('no room for this tier');
+  });
+
+  test('a double-clicked invite sends one request', async () => {
+    const u = userEvent.setup();
+    let finish: (value: unknown) => void = () => {};
+    vi.mocked(api.post).mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
+    await openMembers(u);
+    await u.click(screen.getByRole('button', { name: /invite member/i }));
+    await u.type(screen.getByPlaceholderText('user@example.com'), 'new@x.test');
+    const send = screen.getByRole('button', { name: /^invite$/i });
+    fireEvent.click(send);
+    fireEvent.click(send);
+    finish({ data: { status: 'invited' } });
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
   });
 });

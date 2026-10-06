@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { serverErrorMessage } from '../utils/serverError';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Settings, Users, Trash2, UserPlus, Shield, ChevronRight, Database, Clock } from 'lucide-react';
 import { getOrg, listOrgMembers, inviteOrgMember, removeOrgMember, updateOrgMemberRole, updateOrg, deleteOrg, listPendingInvites, type Org, type OrgMember, type PendingInvite } from '../api/orgs';
@@ -38,6 +39,10 @@ export function OrgDetailPage() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('developer');
   const [inviteError, setInviteError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // A fast double click lands twice before the dialog closes.
+  const inviting = useRef(false);
   const [issuedInvite, setIssuedInvite] = useState<{ email: string; link: string } | null>(null);
 
   const isOwnerOrAdmin = members.some(
@@ -64,6 +69,8 @@ export function OrgDetailPage() {
         } catch {
           setProjects([]);
         }
+      } catch (err) {
+        setLoadError(serverErrorMessage(err, 'The organization could not be loaded'));
       } finally {
         setLoading(false);
       }
@@ -82,7 +89,8 @@ export function OrgDetailPage() {
   };
 
   const handleInvite = async () => {
-    if (!orgId || !inviteEmail.trim()) return;
+    if (!orgId || !inviteEmail.trim() || inviting.current) return;
+    inviting.current = true;
     setInviteError(null);
     try {
       const email = inviteEmail.trim();
@@ -92,30 +100,52 @@ export function OrgDetailPage() {
       setInviteEmail('');
       loadMembers();
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { error?: string } } };
-      setInviteError(axiosErr.response?.data?.error || 'Failed to invite member');
+      setInviteError(serverErrorMessage(err, 'The invite was not sent'));
+    } finally {
+      inviting.current = false;
     }
   };
 
-  const handleRemoveMember = async (userId: string) => {
-    if (!orgId) return;
-    await removeOrgMember(orgId, userId);
-    loadMembers();
+  // Runs a member or organization change, keeping its refusal on screen.
+  const attempt = async (action: () => Promise<void>, fallback: string) => {
+    setActionError(null);
+    try {
+      await action();
+    } catch (err) {
+      setActionError(serverErrorMessage(err, fallback));
+    }
   };
 
-  const handleRoleChange = async (userId: string, newRole: string) => {
+  const handleRemoveMember = (userId: string) => {
     if (!orgId) return;
-    await updateOrgMemberRole(orgId, userId, newRole);
-    loadMembers();
+    return attempt(async () => {
+      await removeOrgMember(orgId, userId);
+      await loadMembers();
+    }, 'The member was not removed');
   };
 
-  const handleDeleteOrg = async () => {
+  const handleRoleChange = (userId: string, newRole: string) => {
+    if (!orgId) return;
+    return attempt(async () => {
+      await updateOrgMemberRole(orgId, userId, newRole);
+      await loadMembers();
+    }, 'The role was not changed');
+  };
+
+  const handleDeleteOrg = () => {
     if (!orgId || !confirm('Delete this organization? This cannot be undone.')) return;
-    await deleteOrg(orgId);
-    navigate('/orgs');
+    return attempt(async () => {
+      await deleteOrg(orgId);
+      navigate('/orgs');
+    }, 'The organization was not deleted');
   };
 
 
+  if (loadError && !org) {
+    return (
+      <p data-testid="org-load-error" role="alert" className="py-16 text-center text-sm text-red-400">{loadError}</p>
+    );
+  }
   if (loading || !org) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -132,6 +162,10 @@ export function OrgDetailPage() {
           <p className="text-sm text-text-secondary mt-1">{org.slug} &middot; {org.tier}</p>
         </div>
       </div>
+
+      {actionError && (
+        <p data-testid="org-action-error" role="alert" className="mb-4 text-sm text-red-400">{actionError}</p>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 border-b border-border-primary">
@@ -254,6 +288,7 @@ export function OrgDetailPage() {
                   <div className="flex items-center gap-1">
                     <select
                       value={m.role}
+                      aria-label={`Role for ${m.username}`}
                       onChange={(e) => handleRoleChange(m.userId, e.target.value)}
                       className="px-2 py-1 bg-bg-secondary border border-border-primary rounded text-xs text-text-primary"
                     >
@@ -312,9 +347,9 @@ export function OrgDetailPage() {
                 <select
                   id="org-tier-select"
                   value={org.tier}
-                  onChange={async (e) => {
-                    const updated = await updateOrg(org.id, { tier: e.target.value });
-                    setOrg(updated);
+                  onChange={(e) => {
+                    const tier = e.target.value;
+                    return attempt(async () => setOrg(await updateOrg(org.id, { tier })), 'The tier was not changed');
                   }}
                   className="px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm"
                 >

@@ -378,6 +378,10 @@ func isValidOrgRole(role string) bool {
 // resolveAndAddMember looks up the user by email if needed, then either adds
 // them as a member directly (user exists) or creates a pending invite.
 func (h *OrgHandler) resolveAndAddMember(w http.ResponseWriter, r *http.Request, orgID, userID, email, role string) {
+	if userID == "" && !isEmailAddress(email) {
+		httpError(w, "enter a valid e-mail address, like name@example.com", http.StatusBadRequest)
+		return
+	}
 	if h.userStore != nil {
 		if u, _ := h.resolveInvitee(r.Context(), userID, email); u != nil {
 			if u.IsService() {
@@ -391,6 +395,16 @@ func (h *OrgHandler) resolveAndAddMember(w http.ResponseWriter, r *http.Request,
 	}
 
 	if userID != "" {
+		existing, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
+		if err != nil {
+			log.Printf("invite to %s: look up membership: %v", orgID, err)
+			httpError(w, "failed to add member", http.StatusInternalServerError)
+			return
+		}
+		if existing != nil {
+			httpError(w, "that person is already a member of this organization; change their role in the list instead", http.StatusConflict)
+			return
+		}
 		if err := h.orgStore.AddOrgMember(r.Context(), &domain.OrgMember{
 			OrgID: orgID, UserID: userID, Role: role,
 		}); err != nil {
