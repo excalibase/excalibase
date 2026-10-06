@@ -8,20 +8,17 @@ import (
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/permissions"
+	"github.com/excalibase/provisioning-poc/internal/schema"
 )
 
-const maxIdentifierBytes = 63
-
-// Lower-case only: the engine's permission names and GraphQL fields expect
-// it, and it never needs quoting by a human writing SQL later.
-var identifierPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+const maxIdentifierBytes = schema.MaxIdentifierBytes
 
 var nonIdentifier = regexp.MustCompile(`[^a-z0-9_]+`)
 var repeatedUnderscore = regexp.MustCompile(`_{2,}`)
 
 // ValidateIdentifier accepts a lower-case Postgres identifier.
 func ValidateIdentifier(name string) error {
-	if !identifierPattern.MatchString(name) {
+	if !schema.IsPlainIdentifier(name) {
 		return fmt.Errorf("%q must be lower-case letters, digits and underscores, starting with a letter or underscore, at most 63 characters", name)
 	}
 	return nil

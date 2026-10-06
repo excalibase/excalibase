@@ -18,6 +18,9 @@ const SniffBytes = 8 << 10
 
 var zipMagic = []byte("PK\x03\x04")
 
+// oleMagic opens a legacy .xls workbook.
+var oleMagic = []byte("\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+
 // DetectFormat classifies a file by its first bytes; the name and the type
 // the client declared are never consulted.
 func DetectFormat(head []byte) (Format, error) {
@@ -27,8 +30,12 @@ func DetectFormat(head []byte) (Format, error) {
 	if bytes.HasPrefix(head, zipMagic) {
 		return FormatXLSX, nil
 	}
-	if bytes.IndexByte(head, 0) >= 0 || !validUTF8Prefix(head) {
+	if bytes.IndexByte(head, 0) >= 0 || bytes.HasPrefix(head, oleMagic) {
 		return "", ErrUnsupportedFormat
+	}
+	// Text in a legacy encoding, most often Excel's plain "CSV" (Windows-1252).
+	if !validUTF8Prefix(head) {
+		return "", ErrNotUTF8
 	}
 	return FormatCSV, nil
 }

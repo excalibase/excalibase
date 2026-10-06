@@ -214,6 +214,8 @@ func (h *AuthHandler) createFirstAdmin(w http.ResponseWriter, r *http.Request, s
 		httpError(w, "setup is not available", http.StatusInternalServerError)
 		return false
 	}
+	// A token copied from a terminal often carries a newline.
+	setupToken = strings.TrimSpace(setupToken)
 	if setupToken == "" {
 		httpError(w, "setup token required", http.StatusForbidden)
 		return false

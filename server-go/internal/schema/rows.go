@@ -3,6 +3,7 @@ package schema
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -30,7 +31,7 @@ func validateSortOrder(order string) error {
 	case "asc", "desc":
 		return nil
 	default:
-		return fmt.Errorf("invalid sort order: %q (must be asc or desc)", order)
+		return invalidInput("invalid sort order: %q (must be asc or desc)", order)
 	}
 }
 
@@ -162,11 +163,10 @@ func scanQueryRows(rows *sql.Rows) ([]ColumnMeta, [][]interface{}, error) {
 
 // InsertRow inserts a new row into a table and returns the inserted row.
 func (i *Introspector) InsertRow(ctx context.Context, db *sql.DB, schema, table string, data map[string]interface{}) (*QueryResult, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("data is required")
+	query, args, err := buildInsertQuery(schema, table, data)
+	if err != nil {
+		return nil, err
 	}
-
-	query, args := buildInsertQuery(schema, table, data)
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -185,55 +185,81 @@ func (i *Introspector) InsertRow(ctx context.Context, db *sql.DB, schema, table 
 	}, nil
 }
 
-// buildInsertQuery constructs the INSERT ... RETURNING * SQL and its arguments from a data map.
-// Keys are sorted for deterministic parameter ordering.
-func buildInsertQuery(schema, table string, data map[string]interface{}) (string, []interface{}) {
+// buildInsertQuery constructs the INSERT ... RETURNING * SQL and its arguments
+// from a data map; no values inserts a row of defaults. Keys are sorted for
+// deterministic parameter ordering.
+func buildInsertQuery(schema, table string, data map[string]interface{}) (string, []interface{}, error) {
 	fqn := QuoteIdent(schema) + "." + QuoteIdent(table)
-
-	keys := make([]string, 0, len(data))
-	for k := range data {
-		keys = append(keys, k)
+	if len(data) == 0 {
+		return "INSERT INTO " + fqn + " DEFAULT VALUES RETURNING *", nil, nil
 	}
-	sort.Strings(keys)
 
+	keys := sortedKeys(data)
 	quotedCols := make([]string, 0, len(keys))
 	placeholders := make([]string, 0, len(keys))
 	args := make([]interface{}, 0, len(keys))
 
 	for idx, k := range keys {
+		value, err := rowArg(data[k])
+		if err != nil {
+			return "", nil, fmt.Errorf("column %q: %w", k, err)
+		}
 		quotedCols = append(quotedCols, QuoteIdent(k))
 		placeholders = append(placeholders, fmt.Sprintf("$%d", idx+1))
-		args = append(args, data[k])
+		args = append(args, value)
 	}
 
 	query := "INSERT INTO " + fqn +
 		" (" + strings.Join(quotedCols, ", ") + ")" +
 		" VALUES (" + strings.Join(placeholders, ", ") + ")" +
 		" RETURNING *"
-	return query, args
+	return query, args, nil
 }
 
-// UpdateRow updates a row by primary key.
-func (i *Introspector) UpdateRow(ctx context.Context, db *sql.DB, schema, table, pkColumn, pkValue string, data map[string]interface{}) error {
-	if len(data) == 0 {
-		return fmt.Errorf("data is required")
-	}
-
-	fqn := QuoteIdent(schema) + "." + QuoteIdent(table)
-
-	// Sort keys for deterministic query building
+func sortedKeys(data map[string]interface{}) []string {
 	keys := make([]string, 0, len(data))
 	for k := range data {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	return keys
+}
 
+// rowArg is a decoded JSON value as Postgres takes it: a number as written
+// (no float64 rounding) and an object or array as JSON text for json/jsonb.
+func rowArg(value interface{}) (interface{}, error) {
+	switch v := value.(type) {
+	case json.Number:
+		return v.String(), nil
+	case map[string]interface{}, []interface{}:
+		text, err := json.Marshal(v)
+		if err != nil {
+			return nil, invalidInput("value is not valid JSON")
+		}
+		return string(text), nil
+	}
+	return value, nil
+}
+
+// UpdateRow updates a row by primary key.
+func (i *Introspector) UpdateRow(ctx context.Context, db *sql.DB, schema, table, pkColumn, pkValue string, data map[string]interface{}) error {
+	if len(data) == 0 {
+		return invalidInput("data is required")
+	}
+
+	fqn := QuoteIdent(schema) + "." + QuoteIdent(table)
+
+	keys := sortedKeys(data)
 	setClauses := make([]string, 0, len(keys))
 	args := make([]interface{}, 0, len(keys)+1)
 
 	for idx, k := range keys {
+		value, err := rowArg(data[k])
+		if err != nil {
+			return fmt.Errorf("column %q: %w", k, err)
+		}
 		setClauses = append(setClauses, QuoteIdent(k)+" = "+fmt.Sprintf("$%d", idx+1))
-		args = append(args, data[k])
+		args = append(args, value)
 	}
 
 	// PK value is the last parameter
@@ -276,7 +302,7 @@ func buildWhereClause(filters []RowFilter) ([]string, []interface{}, error) {
 		}
 		sqlOp, ok := allowedOperators[strings.ToLower(f.Operator)]
 		if !ok {
-			return nil, nil, fmt.Errorf("invalid operator: %q", f.Operator)
+			return nil, nil, invalidInput("invalid operator: %q", f.Operator)
 		}
 
 		col := QuoteIdent(f.Column)

@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,6 +13,29 @@ import (
 )
 
 // --- Row Data ---
+
+// decodeRowData reads {"data": {...}}; an empty object inserts a row of
+// defaults.
+func decodeRowData(body io.Reader) (map[string]interface{}, error) {
+	var req struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	if err := decodeKeepingNumbers(body, &req); err != nil {
+		return nil, err
+	}
+	if req.Data == nil {
+		return map[string]interface{}{}, nil
+	}
+	return req.Data, nil
+}
+
+// decodeKeepingNumbers keeps every number as written, so a bigint past 2^53
+// or a long numeric is not rounded through float64.
+func decodeKeepingNumbers(body io.Reader, v interface{}) error {
+	decoder := json.NewDecoder(body)
+	decoder.UseNumber()
+	return decoder.Decode(v)
+}
 
 func (h *SchemaHandler) GetRows(w http.ResponseWriter, r *http.Request) {
 	db, err := h.getDB(chi.URLParam(r, "projectId"))
@@ -90,20 +114,14 @@ func (h *SchemaHandler) InsertRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Data map[string]interface{} `json:"data"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	data, err := decodeRowData(r.Body)
+	if err != nil {
 		httpError(w, errInvalidBody, http.StatusBadRequest)
-		return
-	}
-	if len(body.Data) == 0 {
-		httpError(w, "data is required", http.StatusBadRequest)
 		return
 	}
 
 	tableName := chi.URLParam(r, "tableName")
-	result, err := h.introspector.InsertRow(r.Context(), db, schemaParam(r), tableName, body.Data)
+	result, err := h.introspector.InsertRow(r.Context(), db, schemaParam(r), tableName, data)
 	if err != nil {
 		schemaError(w, err, http.StatusInternalServerError)
 		return
@@ -127,7 +145,7 @@ func (h *SchemaHandler) UpdateRow(w http.ResponseWriter, r *http.Request) {
 		} `json:"pk"`
 		Data map[string]interface{} `json:"data"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := decodeKeepingNumbers(r.Body, &body); err != nil {
 		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}

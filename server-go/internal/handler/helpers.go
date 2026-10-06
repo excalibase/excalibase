@@ -171,6 +171,11 @@ func schemaError(w http.ResponseWriter, err error, code int) {
 		httpError(w, nameErr.Error(), http.StatusBadRequest)
 		return
 	}
+	var inputErr *schema.InputError
+	if errors.As(err, &inputErr) {
+		httpError(w, truncate(err.Error(), 200), http.StatusBadRequest)
+		return
+	}
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Message != "" {
 		if code == http.StatusInternalServerError {

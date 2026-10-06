@@ -235,3 +235,12 @@ func TestRegister_FirstAdmin_IsCreatedVerified(t *testing.T) {
 		}
 	}
 }
+
+// A setup token pasted with a trailing newline is the same token.
+func TestRegister_FirstAdmin_PastedTokenWithWhitespace_CreatesAdmin(t *testing.T) {
+	h, raw := firstAdminHandler(t)
+	w := postRegisterWithToken(h, "founder", "founder@x.test", "  "+raw+"\n")
+	if w.Code != http.StatusCreated {
+		t.Fatalf("register with padded setup token: got %d, want %d: %s", w.Code, http.StatusCreated, w.Body.String())
+	}
+}

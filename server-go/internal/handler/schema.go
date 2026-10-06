@@ -111,15 +111,28 @@ func (h *SchemaHandler) ProjectStatusChanged(projectID, status string) {
 	h.pools.ProjectStatusChanged(projectID, status)
 }
 
+// schemaParam is the ?schema= the route group already validated
+// (requireValidSchemaParam), public when absent.
 func schemaParam(r *http.Request) string {
 	s := r.URL.Query().Get("schema")
 	if s == "" {
 		return "public"
 	}
-	if err := schema.ValidateSchemaName(s); err != nil {
-		return "public"
-	}
 	return s
+}
+
+// requireValidSchemaParam refuses an invalid ?schema= rather than letting a
+// DROP aimed at another schema land on public.
+func requireValidSchemaParam(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s := r.URL.Query().Get("schema"); s != "" {
+			if err := schema.ValidateSchemaName(s); err != nil {
+				httpError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Routes mounts the schema endpoints under a /{projectId} segment. Callers that
@@ -132,6 +145,13 @@ func (h *SchemaHandler) Routes(r chi.Router) {
 // RoutesInner registers the schema endpoints relative to an already-bound
 // {projectId}. The mount is responsible for RequireProjectAccess (EXC-349).
 func (h *SchemaHandler) RoutesInner(r chi.Router) {
+	r.Group(func(r chi.Router) {
+		r.Use(requireValidSchemaParam)
+		h.routes(r)
+	})
+}
+
+func (h *SchemaHandler) routes(r chi.Router) {
 	r.Get("/tables", h.GetTables)
 	r.Post("/tables", h.CreateTable)
 	r.Patch("/tables/{tableName}", h.UpdateTable)
