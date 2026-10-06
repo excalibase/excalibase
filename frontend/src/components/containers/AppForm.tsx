@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import type { App, AppSubmission } from '../../api/apps';
@@ -228,11 +228,25 @@ export function AppForm({
   const onImageChange = (image: string) =>
     set(nameTouched ? { image } : { image, name: suggestAppName(image) });
 
+  // A fast double click submits twice before `submitting` re-renders the
+  // button; held until the parent's request has started and finished.
+  const sent = useRef(false);
+  useEffect(() => {
+    if (!submitting) sent.current = false;
+  }, [submitting]);
+  // An edit is a new intent: the next submit goes out.
+  useEffect(() => {
+    sent.current = false;
+  }, [values]);
+
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
+    if (submitting || sent.current) return;
     const found = validateAppForm(values, maxReplicas, databaseName);
     setErrors(found);
-    if (!hasErrors(found)) onSubmit(toAppSubmission(values, databaseName));
+    if (hasErrors(found)) return;
+    sent.current = true;
+    onSubmit(toAppSubmission(values, databaseName));
   };
 
   return (

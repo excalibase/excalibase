@@ -108,6 +108,17 @@ describe('AppForm', () => {
     expect(screen.getByTestId('app-size')).toHaveTextContent(/1 GB/);
   });
 
+  // EXC-555: a fast double click created the container and then showed the plan
+  // limit refusal for the second request, so the user thought it had failed.
+  test('a double click submits once', async () => {
+    const { onSubmit, user } = renderForm();
+    await user.type(screen.getByTestId('app-image'), 'nginx:1.27');
+    const form = screen.getByTestId('app-form');
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
   test('refuses blank and duplicate variable names', async () => {
     const { onSubmit, user } = renderForm();
     await user.type(screen.getByTestId('app-image'), 'nginx:1.27');
