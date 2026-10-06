@@ -74,6 +74,7 @@ export function EdgeFunctionsPage() {
   const { data: functions = [], isLoading } = useEdgeFunctions(projectId);
   const { data: runtime } = useRuntimeStatus(projectId);
   const createFn = useCreateEdgeFunction(projectId);
+  const createInFlight = useRef(false);
   const deleteFn = useDeleteEdgeFunction(projectId);
   const invokeFn = useInvokeEdgeFunction(projectId);
 
@@ -102,8 +103,6 @@ export function EdgeFunctionsPage() {
   const [envStatus, setEnvStatus] = useState<string | null>(null);
   const [secretDeleteError, setSecretDeleteError] = useState<string | null>(null);
   const [deleteFnError, setDeleteFnError] = useState<string | null>(null);
-  // isPending only re-renders after the click, so a fast double click would send twice.
-  const deployInFlight = useRef(false);
   const secretInFlight = useRef(false);
 
   const updateFileContent = (content: string) => {
@@ -134,18 +133,21 @@ export function EdgeFunctionsPage() {
   };
 
   const handleCreate = () => {
-    if (!fnId.trim() || !fnName.trim()) return;
+    // A fast double click lands twice before isPending re-renders the button;
+    // two deploys of one function race each other and one fails.
+    if (createInFlight.current || !fnId.trim() || !fnName.trim()) return;
     if (!files.some((f) => f.path === 'index.ts')) return;
-    if (deployInFlight.current) return;
-    deployInFlight.current = true;
+    createInFlight.current = true;
     createFn.mutate(
-      { id: fnId, name: fnName, files },
+      { id: fnId.trim(), name: fnName.trim(), files },
       {
         onSuccess: () => {
           setShowCreate(false);
           resetCreateForm();
         },
-        onSettled: () => { deployInFlight.current = false; },
+        onSettled: () => {
+          createInFlight.current = false;
+        },
       },
     );
   };
