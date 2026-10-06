@@ -411,6 +411,16 @@ type StudioIdentityStore interface {
 // ErrUserNotFound is returned when an operation names a user that does not exist.
 var ErrUserNotFound = errors.New("user not found")
 
+// ErrOrgMemberNotFound is returned when a membership change names someone who
+// is not a member of the organization.
+var ErrOrgMemberNotFound = errors.New("not a member of this organization")
+
+// ErrLastOwner refuses a change that would leave an organization without an owner.
+var ErrLastOwner = errors.New("an organization must keep at least one owner")
+
+// ErrProjectMemberExists is returned when the user is already a member of the project.
+var ErrProjectMemberExists = errors.New("already a member of this project")
+
 // EmailVerificationStore records Studio email-verification links (hashed) and
 // the account's verified state.
 type EmailVerificationStore interface {
