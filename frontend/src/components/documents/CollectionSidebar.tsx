@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Loader2, Plus } from 'lucide-react';
 import { InlineConfirm } from './InlineConfirm';
 import { apiErrorMessage } from '../../api/documents';
@@ -24,10 +24,13 @@ export function CollectionSidebar({ projectId, databases, database, collection, 
   const [newCollection, setNewCollection] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  // A second submit before the first answers would ask the server to create it twice.
+  const creating = useRef(false);
   const createCollection = (event: React.FormEvent) => {
     event.preventDefault();
     const name = newCollection.trim();
-    if (!name || !database) return;
+    if (!name || !database || creating.current) return;
+    creating.current = true;
     setError(null);
     create.mutate(name, {
       onSuccess: () => {
@@ -35,6 +38,9 @@ export function CollectionSidebar({ projectId, databases, database, collection, 
         onCollection(name);
       },
       onError: (err) => setError(apiErrorMessage(err)),
+      onSettled: () => {
+        creating.current = false;
+      },
     });
   };
 
@@ -123,7 +129,7 @@ export function CollectionSidebar({ projectId, databases, database, collection, 
               onChange={(e) => setNewCollection(e.target.value)}
               className={inputClass}
             />
-            <button type="submit" aria-label="Create collection" className="px-2 rounded-md border border-border-primary hover:bg-surface-hover">
+            <button type="submit" aria-label="Create collection" disabled={create.isPending} className="px-2 disabled:opacity-50 rounded-md border border-border-primary hover:bg-surface-hover">
               <Plus className="w-3.5 h-3.5" />
             </button>
           </form>

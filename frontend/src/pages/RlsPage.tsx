@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Trash2, Loader2, Shield, ShieldCheck } from 'lucide-react';
 import { usePolicies, useCreatePolicy, useDropPolicy, useTables, useUpdateTable } from '../hooks/useSchema';
@@ -24,12 +24,29 @@ export function RlsPage() {
   const [pUsing, setPUsing] = useState('');
   const [pWithCheck, setPWithCheck] = useState('');
 
+  // isPending lands a render late; two quick clicks would both get through.
+  const createInFlight = useRef(false);
+  const dropInFlight = useRef(false);
+
   const handleCreate = () => {
-    if (!pName.trim() || !pTable) return;
+    if (!pName.trim() || !pTable || createInFlight.current) return;
+    createInFlight.current = true;
     createPolicy.mutate(
       { name: pName, table: pTable, command: pCommand, roles: pRoles, using: pUsing || undefined, withCheck: pWithCheck || undefined },
-      { onSuccess: () => { setShowCreate(false); setPName(''); setPUsing(''); setPWithCheck(''); } }
+      {
+        onSuccess: () => { setShowCreate(false); setPName(''); setPUsing(''); setPWithCheck(''); },
+        onSettled: () => { createInFlight.current = false; },
+      }
     );
+  };
+
+  const handleDrop = () => {
+    if (!dropTarget || dropInFlight.current) return;
+    dropInFlight.current = true;
+    dropPolicy.mutate(dropTarget, {
+      onSuccess: () => setDropTarget(null),
+      onSettled: () => { dropInFlight.current = false; },
+    });
   };
 
   // Group policies by table
@@ -140,7 +157,7 @@ export function RlsPage() {
             <label htmlFor="policy-name-input" className="block text-sm font-medium text-text-secondary mb-1">Policy Name</label>
             <input id="policy-name-input" type="text" value={pName} onChange={e => setPName(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. owners_read_own_rows" data-testid="policy-name-input" autoFocus />
+              placeholder="e.g. owners_read_own_rows" data-testid="policy-name-input" />
           </div>
           <div>
             <label htmlFor="policy-table-select" className="block text-sm font-medium text-text-secondary mb-1">Table</label>
@@ -184,7 +201,7 @@ export function RlsPage() {
       <ConfirmModal
         open={!!dropTarget}
         onClose={() => setDropTarget(null)}
-        onConfirm={() => { if (dropTarget) dropPolicy.mutate(dropTarget, { onSuccess: () => setDropTarget(null) }); }}
+        onConfirm={handleDrop}
         title="Drop Policy"
         message={`Are you sure you want to drop the policy "${dropTarget?.name}" from "${dropTarget?.table}"?`}
         confirmLabel="Drop Policy"

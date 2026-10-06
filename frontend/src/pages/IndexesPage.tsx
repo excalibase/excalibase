@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Trash2, Loader2, List } from 'lucide-react';
 import { useTables, useIndexes, useCreateIndex, useDropIndex, useColumns } from '../hooks/useSchema';
@@ -44,12 +44,29 @@ export function IndexesPage() {
     }));
   };
 
+  // isPending lands a render late; two quick clicks would both get through.
+  const createInFlight = useRef(false);
+  const dropInFlight = useRef(false);
+
   const handleCreate = () => {
-    if (!form.name.trim() || !form.table || form.columns.length === 0) return;
+    if (!form.name.trim() || !form.table || form.columns.length === 0 || createInFlight.current) return;
+    createInFlight.current = true;
     createIndex.mutate(
       { name: form.name, table: form.table, columns: form.columns, unique: form.unique, type: form.type },
-      { onSuccess: () => { setShowCreate(false); setForm({ name: '', table: '', columns: [], unique: false, type: 'btree' }); } }
+      {
+        onSuccess: () => { setShowCreate(false); setForm({ name: '', table: '', columns: [], unique: false, type: 'btree' }); },
+        onSettled: () => { createInFlight.current = false; },
+      }
     );
+  };
+
+  const handleDrop = () => {
+    if (!dropTarget || dropInFlight.current) return;
+    dropInFlight.current = true;
+    dropIndex.mutate({ name: dropTarget }, {
+      onSuccess: () => setDropTarget(null),
+      onSettled: () => { dropInFlight.current = false; },
+    });
   };
 
   return (
@@ -153,7 +170,7 @@ export function IndexesPage() {
             <label htmlFor="index-name-input" className="block text-sm font-medium text-text-secondary mb-1">Index Name</label>
             <input id="index-name-input" type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. orders_customer_id_idx" autoFocus />
+              placeholder="e.g. orders_customer_id_idx" />
           </div>
           <div>
             <label htmlFor="index-table-select" className="block text-sm font-medium text-text-secondary mb-1">Table</label>
@@ -198,9 +215,7 @@ export function IndexesPage() {
       <ConfirmModal
         open={!!dropTarget}
         onClose={() => setDropTarget(null)}
-        onConfirm={() => {
-          if (dropTarget) dropIndex.mutate({ name: dropTarget }, { onSuccess: () => setDropTarget(null) });
-        }}
+        onConfirm={handleDrop}
         title="Drop Index"
         message={`Are you sure you want to drop the index "${dropTarget}"? This cannot be undone.`}
         confirmLabel="Drop Index"

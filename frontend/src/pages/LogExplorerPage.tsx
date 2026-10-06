@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { Loader2, Search, FileText } from 'lucide-react';
 import { useLogs } from '../hooks/useProvisioning';
+import { serverErrorMessage } from '../utils/serverError';
 
 const TIME_RANGES = [
   { label: '1h', lines: 50 },
@@ -22,7 +23,7 @@ export function LogExplorerPage() {
   const [rangeIdx, setRangeIdx] = useState(0);
   const lines = TIME_RANGES[rangeIdx].lines;
 
-  const { data: rawLogs = '', isLoading } = useLogs(projectId || '', lines);
+  const { data: rawLogs = '', isLoading, error } = useLogs(projectId || '', lines);
 
   const logLines = useMemo(() => {
     const allLines = typeof rawLogs === 'string' ? rawLogs.split('\n').filter(Boolean) : [];
@@ -74,7 +75,12 @@ export function LogExplorerPage() {
         {isLoading && (
           <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-purple-400" /></div>
         )}
-        {!isLoading && logLines.length === 0 && (
+        {!isLoading && error && (
+          <p role="alert" className="p-12 text-center text-red-400 text-sm" data-testid="logs-error">
+            {serverErrorMessage(error, 'The logs could not be loaded')}
+          </p>
+        )}
+        {!isLoading && !error && logLines.length === 0 && (
           <div className="p-12 text-center text-text-tertiary text-sm">
             {search ? 'No matching log lines' : 'No logs available'}
           </div>

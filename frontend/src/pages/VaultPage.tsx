@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { KeyRound, Eye, EyeOff, Copy, Trash2, Loader2, Lock, Search, Check } from 'lucide-react';
 import { useVaultSecretsList, useVaultSecret, useDeleteVaultSecret, useVaultStatus } from '../hooks/useVault';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
+import { serverErrorMessage } from '../utils/serverError';
+import { toast } from '../utils/toast';
 
 const PKI_PREFIX = 'pki/';
 
@@ -11,6 +13,7 @@ export function VaultPage() {
   const [revealedPath, setRevealedPath] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data: status } = useVaultStatus();
   const { data: paths, isLoading: pathsLoading } = useVaultSecretsList();
@@ -34,9 +37,13 @@ export function VaultPage() {
     .filter((p) => search === '' || p.toLowerCase().includes(search.toLowerCase()));
 
   const copyToClipboard = (text: string, field: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopiedField(field);
+        setTimeout(() => setCopiedField(null), 2000);
+      },
+      () => toast.error('Could not copy to the clipboard'),
+    );
   };
 
   if (status?.sealed) {
@@ -66,6 +73,12 @@ export function VaultPage() {
           </p>
         </div>
       </div>
+
+      {deleteError && (
+        <p role="alert" data-testid="vault-delete-error" className="mb-4 text-sm text-red-400">
+          {deleteError}
+        </p>
+      )}
 
       {/* Search */}
       <div className="relative mb-4">
@@ -188,11 +201,17 @@ export function VaultPage() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => {
           if (deleteTarget) {
+            setDeleteError(null);
             deleteMutation.mutate(deleteTarget, {
               onSuccess: () => {
                 setDeleteTarget(null);
                 setSelectedPath(null);
                 setRevealedPath(null);
+              },
+              // Close the dialog so the reason is not hidden behind it.
+              onError: (err) => {
+                setDeleteTarget(null);
+                setDeleteError(serverErrorMessage(err, 'The secret was not deleted'));
               },
             });
           }

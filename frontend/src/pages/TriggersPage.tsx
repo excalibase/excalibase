@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Trash2, Loader2, Zap } from 'lucide-react';
 import { useTriggers, useCreateTrigger, useDropTrigger, useTables, useFunctions } from '../hooks/useSchema';
@@ -28,12 +28,29 @@ export function TriggersPage() {
   const [dropTarget, setDropTarget] = useState<{ name: string; table: string } | null>(null);
   const [form, setForm] = useState<TriggerForm>({ name: '', table: '', event: 'INSERT', timing: 'BEFORE', function: '' });
 
+  // isPending lands a render late; two quick clicks would both get through.
+  const createInFlight = useRef(false);
+  const dropInFlight = useRef(false);
+
   const handleCreate = () => {
-    if (!form.name.trim() || !form.table || !form.function) return;
+    if (!form.name.trim() || !form.table || !form.function || createInFlight.current) return;
+    createInFlight.current = true;
     createTrigger.mutate(
       { name: form.name, table: form.table, event: form.event, timing: form.timing, function: form.function },
-      { onSuccess: () => { setShowCreate(false); setForm({ name: '', table: '', event: 'INSERT', timing: 'BEFORE', function: '' }); } }
+      {
+        onSuccess: () => { setShowCreate(false); setForm({ name: '', table: '', event: 'INSERT', timing: 'BEFORE', function: '' }); },
+        onSettled: () => { createInFlight.current = false; },
+      }
     );
+  };
+
+  const handleDrop = () => {
+    if (!dropTarget || dropInFlight.current) return;
+    dropInFlight.current = true;
+    dropTrigger.mutate(dropTarget, {
+      onSuccess: () => setDropTarget(null),
+      onSettled: () => { dropInFlight.current = false; },
+    });
   };
 
   // Group triggers by table
@@ -133,7 +150,7 @@ export function TriggersPage() {
             <label htmlFor="trigger-name-input" className="block text-sm font-medium text-text-secondary mb-1">Trigger Name</label>
             <input id="trigger-name-input" type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. orders_set_updated_at" autoFocus />
+              placeholder="e.g. orders_set_updated_at" />
           </div>
           <div>
             <label htmlFor="trigger-table-select" className="block text-sm font-medium text-text-secondary mb-1">Table</label>
@@ -171,9 +188,7 @@ export function TriggersPage() {
       <ConfirmModal
         open={!!dropTarget}
         onClose={() => setDropTarget(null)}
-        onConfirm={() => {
-          if (dropTarget) dropTrigger.mutate(dropTarget, { onSuccess: () => setDropTarget(null) });
-        }}
+        onConfirm={handleDrop}
         title="Drop Trigger"
         message={`Are you sure you want to drop the trigger "${dropTarget?.name}" on table "${dropTarget?.table}"? This cannot be undone.`}
         confirmLabel="Drop Trigger"

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Loader2, Search, Package, Check, X } from 'lucide-react';
 import { useExtensions, useCreateExtension, useDropExtension } from '../hooks/useSchema';
@@ -11,6 +11,23 @@ export function ExtensionsPage() {
   const dropExt = useDropExtension(projectId || '');
   const [search, setSearch] = useState('');
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  // isPending only re-renders after the click, so a fast double click would send twice.
+  const inFlight = useRef(false);
+
+  const enableExtension = (name: string) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    createExt.mutate({ name }, { onSettled: () => { inFlight.current = false; } });
+  };
+
+  const dropExtension = (name: string) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    dropExt.mutate(
+      { name, cascade: true },
+      { onSuccess: () => setDropTarget(null), onSettled: () => { inFlight.current = false; } },
+    );
+  };
 
   const filtered = extensions.filter(e =>
     e.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -85,7 +102,7 @@ export function ExtensionsPage() {
                     <span className="text-sm font-medium text-text-primary">{ext.name}</span>
                   </div>
                   <button
-                    onClick={() => createExt.mutate({ name: ext.name })}
+                    onClick={() => enableExtension(ext.name)}
                     disabled={createExt.isPending}
                     className="px-2 py-1 text-xs font-medium text-purple-400 hover:bg-purple-500/10 rounded transition-colors"
                     data-testid={`enable-ext-${ext.name}`}
@@ -104,7 +121,7 @@ export function ExtensionsPage() {
       <ConfirmModal
         open={!!dropTarget}
         onClose={() => setDropTarget(null)}
-        onConfirm={() => { if (dropTarget) dropExt.mutate({ name: dropTarget, cascade: true }, { onSuccess: () => setDropTarget(null) }); }}
+        onConfirm={() => { if (dropTarget) dropExtension(dropTarget); }}
         title="Disable Extension"
         message={`Are you sure you want to disable "${dropTarget}"? This may affect dependent objects.`}
         confirmLabel="Disable"

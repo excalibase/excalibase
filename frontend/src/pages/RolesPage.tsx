@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Trash2, Loader2, UserCheck, UserX } from 'lucide-react';
 import { useRoles, useCreateRole, useDropRole } from '../hooks/useSchema';
@@ -16,13 +16,29 @@ export function RolesPage() {
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [canLogin, setCanLogin] = useState(true);
+  // isPending lands a render late; two quick clicks would both get through.
+  const createInFlight = useRef(false);
+  const dropInFlight = useRef(false);
 
   const handleCreate = () => {
-    if (!name.trim()) return;
+    if (!name.trim() || createInFlight.current) return;
+    createInFlight.current = true;
     createRole.mutate(
       { name, password: password || undefined, login: canLogin },
-      { onSuccess: () => { setShowCreate(false); setName(''); setPassword(''); } }
+      {
+        onSuccess: () => { setShowCreate(false); setName(''); setPassword(''); },
+        onSettled: () => { createInFlight.current = false; },
+      }
     );
+  };
+
+  const handleDrop = () => {
+    if (!dropTarget || dropInFlight.current) return;
+    dropInFlight.current = true;
+    dropRole.mutate(dropTarget, {
+      onSuccess: () => setDropTarget(null),
+      onSettled: () => { dropInFlight.current = false; },
+    });
   };
 
   if (isLoading) {
@@ -102,7 +118,7 @@ export function RolesPage() {
             <label htmlFor="role-name-input" className="block text-sm font-medium text-text-secondary mb-1">Role Name</label>
             <input id="role-name-input" type="text" value={name} onChange={e => setName(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. reporting" data-testid="role-name-input" autoFocus />
+              placeholder="e.g. reporting" data-testid="role-name-input" />
           </div>
           <div>
             <label htmlFor="role-password-input" className="block text-sm font-medium text-text-secondary mb-1">Password</label>
@@ -120,7 +136,7 @@ export function RolesPage() {
       <ConfirmModal
         open={!!dropTarget}
         onClose={() => setDropTarget(null)}
-        onConfirm={() => { if (dropTarget) dropRole.mutate(dropTarget, { onSuccess: () => setDropTarget(null) }); }}
+        onConfirm={handleDrop}
         title="Drop Role"
         message={`Are you sure you want to drop the role "${dropTarget}"? This cannot be undone.`}
         confirmLabel="Drop Role"

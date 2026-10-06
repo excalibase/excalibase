@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Plus, Trash2, Play, Loader2, Code2, Circle, Key, X, FileCode, Terminal } from 'lucide-react';
 import {
@@ -91,6 +91,11 @@ export function EdgeFunctionsPage() {
   const [envPaste, setEnvPaste] = useState('');
   const [envParsing, setEnvParsing] = useState(false);
   const [envStatus, setEnvStatus] = useState<string | null>(null);
+  const [secretDeleteError, setSecretDeleteError] = useState<string | null>(null);
+  const [deleteFnError, setDeleteFnError] = useState<string | null>(null);
+  // isPending only re-renders after the click, so a fast double click would send twice.
+  const deployInFlight = useRef(false);
+  const secretInFlight = useRef(false);
 
   const updateFileContent = (content: string) => {
     setFiles((cur) => cur.map((f, i) => (i === activeFileIdx ? { ...f, content } : f)));
@@ -122,6 +127,8 @@ export function EdgeFunctionsPage() {
   const handleCreate = () => {
     if (!fnId.trim() || !fnName.trim()) return;
     if (!files.some((f) => f.path === 'index.ts')) return;
+    if (deployInFlight.current) return;
+    deployInFlight.current = true;
     createFn.mutate(
       { id: fnId, name: fnName, files },
       {
@@ -129,6 +136,7 @@ export function EdgeFunctionsPage() {
           setShowCreate(false);
           resetCreateForm();
         },
+        onSettled: () => { deployInFlight.current = false; },
       },
     );
   };
@@ -151,20 +159,20 @@ export function EdgeFunctionsPage() {
     }
     setEnvParsing(true);
     setEnvStatus(null);
-    let ok = 0;
-    const failed: string[] = [];
-    for (const entry of entries) {
-      try {
-        await setSecret.mutateAsync(entry);
-        ok++;
-      } catch (err) {
-        failed.push(`${entry.key}: ${(err as Error).message}`);
-      }
-    }
+    // One at a time, in paste order: each save rewrites the function's secrets.
+    const failed = await entries.reduce<Promise<string[]>>(
+      (prior, entry) => prior.then((soFar) =>
+        setSecret.mutateAsync(entry).then(
+          () => soFar,
+          (err: unknown) => [...soFar, `${entry.key}: ${serverErrorMessage(err, 'not saved')}`],
+        )),
+      Promise.resolve([]),
+    );
+    const ok = entries.length - failed.length;
     setEnvParsing(false);
     const parts: string[] = [`saved ${ok}/${entries.length}`];
     if (errors.length > 0) parts.push(`${errors.length} skipped`);
-    if (failed.length > 0) parts.push(`${failed.length} failed`);
+    if (failed.length > 0) parts.push(`${failed.length} failed (${failed.join('; ')})`);
     setEnvStatus(parts.join(', '));
     if (failed.length === 0 && errors.length === 0) {
       setEnvPaste('');
@@ -173,6 +181,8 @@ export function EdgeFunctionsPage() {
 
   const handleSetSecret = () => {
     if (!secretKey.trim() || !secretValue.trim()) return;
+    if (secretInFlight.current) return;
+    secretInFlight.current = true;
     setSecret.mutate(
       { key: secretKey, value: secretValue },
       {
@@ -180,8 +190,19 @@ export function EdgeFunctionsPage() {
           setSecretKey('');
           setSecretValue('');
         },
+        onSettled: () => { secretInFlight.current = false; },
       },
     );
+  };
+
+  const handleDeleteSecret = (key: string) => {
+    if (secretInFlight.current) return;
+    secretInFlight.current = true;
+    setSecretDeleteError(null);
+    deleteSecret.mutate(key, {
+      onError: (err) => setSecretDeleteError(serverErrorMessage(err, `${key} was not deleted`)),
+      onSettled: () => { secretInFlight.current = false; },
+    });
   };
 
   if (isLoading) {
@@ -226,6 +247,12 @@ export function EdgeFunctionsPage() {
           </button>
         </div>
       </div>
+
+      {deleteFnError && (
+        <p role="alert" data-testid="delete-fn-error" className="mb-4 text-sm text-red-400">
+          {deleteFnError}
+        </p>
+      )}
 
       <div className="flex gap-4 h-[calc(100vh-220px)]">
         <div className="w-72 flex-shrink-0 border border-border-primary rounded-lg bg-surface-card overflow-hidden flex flex-col">
@@ -479,12 +506,17 @@ export function EdgeFunctionsPage() {
 
           <div className="border-t border-border-primary pt-4">
             <div className="text-xs text-text-tertiary mb-2">Existing keys (values hidden)</div>
+            {secretDeleteError && (
+              <p role="alert" data-testid="edge-secret-delete-error" className="text-xs text-red-400 mb-2">
+                {secretDeleteError}
+              </p>
+            )}
             {secrets.length === 0 && <div className="text-xs text-text-tertiary">No secrets set</div>}
             {secrets.map((s) => (
               <div key={s.key} className="flex items-center justify-between py-2 border-b border-border-primary">
                 <code className="text-xs text-text-primary font-mono">{s.key}</code>
                 <button
-                  onClick={() => deleteSecret.mutate(s.key)}
+                  onClick={() => handleDeleteSecret(s.key)}
                   className="text-xs text-red-400 hover:text-red-300"
                 >
                   <Trash2 className="w-3 h-3" />
@@ -538,10 +570,16 @@ export function EdgeFunctionsPage() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => {
           if (deleteTarget) {
+            setDeleteFnError(null);
             deleteFn.mutate(deleteTarget, {
               onSuccess: () => {
                 setSelected(null);
                 setDeleteTarget(null);
+              },
+              // Close the dialog so the reason is not hidden behind it.
+              onError: (err) => {
+                setDeleteTarget(null);
+                setDeleteFnError(serverErrorMessage(err, 'The function was not deleted'));
               },
             });
           }

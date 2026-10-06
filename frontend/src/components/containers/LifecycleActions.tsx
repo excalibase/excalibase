@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, Pause, Play, Trash2 } from 'lucide-react';
 import {
@@ -78,14 +78,18 @@ export function LifecycleActions({ app, deployed, onError, followMs = 3000 }: Li
     onError(null);
     start(accepted);
   };
+  // busy disables the buttons a render late; a second quick click would start the operation twice.
+  const inFlight = useRef(false);
+  const run = (action: typeof pause, onSuccess: (accepted: PendingLifecycle) => void) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    action.mutate(undefined, { onSuccess, onError, onSettled: () => { inFlight.current = false; } });
+  };
 
   const confirmDelete = () =>
-    remove.mutate(undefined, {
-      onSuccess: (accepted) => {
-        setConfirming(false);
-        started(accepted);
-      },
-      onError,
+    run(remove, (accepted) => {
+      setConfirming(false);
+      started(accepted);
     });
 
   return (
@@ -99,7 +103,7 @@ export function LifecycleActions({ app, deployed, onError, followMs = 3000 }: Li
       {deployed && PAUSABLE.has(app.status) && (
         <button
           type="button"
-          onClick={() => pause.mutate(undefined, { onSuccess: started, onError })}
+          onClick={() => run(pause, started)}
           disabled={busy}
           className={secondaryButton}
           data-testid="pause-button"
@@ -110,7 +114,7 @@ export function LifecycleActions({ app, deployed, onError, followMs = 3000 }: Li
       {deployed && canResume(app) && (
         <button
           type="button"
-          onClick={() => resume.mutate(undefined, { onSuccess: started, onError })}
+          onClick={() => run(resume, started)}
           disabled={busy}
           className={secondaryButton}
           data-testid="resume-button"
