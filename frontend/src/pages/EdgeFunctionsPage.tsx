@@ -60,6 +60,15 @@ function parseEnv(src: string): { entries: EnvEntry[]; errors: string[] } {
   return { entries, errors };
 }
 
+// A non-2xx answer the function itself gave (marked by the server) is its
+// output, shown as status and body rather than as a platform error.
+function functionAnswer(err: unknown): string | null {
+  const response = (err as { response?: { status?: number; data?: unknown; headers?: Record<string, string> } }).response;
+  if (response?.headers?.['x-excalibase-function-response'] !== '1') return null;
+  const body = typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2);
+  return `HTTP ${response.status}\n${body ?? ''}`;
+}
+
 export function EdgeFunctionsPage() {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: functions = [], isLoading } = useEdgeFunctions(projectId);
@@ -146,7 +155,7 @@ export function EdgeFunctionsPage() {
       { fnId: fn.id, body: JSON.stringify({ name: 'world' }) },
       {
         onSuccess: (data) => setInvokeResult(typeof data === 'string' ? data : JSON.stringify(data, null, 2)),
-        onError: (err: Error) => setInvokeResult(`Error: ${serverErrorMessage(err, 'The function did not answer')}`),
+        onError: (err: Error) => setInvokeResult(functionAnswer(err) ?? `Error: ${serverErrorMessage(err, 'The function did not answer')}`),
       },
     );
   };
@@ -346,7 +355,7 @@ export function EdgeFunctionsPage() {
               {invokeResult && (
                 <div className="border-t border-border-primary p-4 bg-bg-tertiary max-h-48 overflow-auto">
                   <div className="text-xs text-text-tertiary mb-1">Invoke result</div>
-                  <pre className="text-xs text-text-primary font-mono">{invokeResult}</pre>
+                  <pre data-testid="invoke-result" className="text-xs text-text-primary font-mono">{invokeResult}</pre>
                 </div>
               )}
             </>

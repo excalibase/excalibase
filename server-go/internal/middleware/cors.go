@@ -50,8 +50,14 @@ func setCORSOriginHeaders(w http.ResponseWriter, origin string, withCredentials 
 	if withCredentials {
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 	}
+	w.Header().Set("Access-Control-Expose-Headers", FunctionResponseHeader)
 	w.Header().Set("Vary", "Origin")
 }
+
+// FunctionResponseHeader marks a response that is a user function's answer
+// relayed as-is, not the platform's own; Studio reads it to tell a function's
+// 401 from its session ending.
+const FunctionResponseHeader = "X-Excalibase-Function-Response"
 
 func handlePreflight(w http.ResponseWriter, originAllowed bool) {
 	if originAllowed {

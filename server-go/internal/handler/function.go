@@ -1352,6 +1352,9 @@ func writeRuntimeResponse(w http.ResponseWriter, resp *edgefn.InvokeResponse) {
 		}
 		w.Header().Set(k, v)
 	}
+	// Set last so the function cannot clear it: Studio tells a function's own
+	// 401 from its session ending by this mark.
+	w.Header().Set(custommw.FunctionResponseHeader, "1")
 	status := resp.Status
 	if status == 0 {
 		status = 200
