@@ -49,7 +49,7 @@ func tool[In any](name, description string, level access, run func(context.Conte
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: level != writeTool},
 		}
 		mcp.AddTool(server, definition, func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
-			c := &call{dispatcher: dispatcher{router: e.router, caller: caller, answered: &[]routeReply{}}, settings: e.settings}
+			c := &call{dispatcher: dispatcher{router: e.router, caller: caller, answered: &[]routeReply{}}, settings: e.settings, probes: e.probes}
 			if caller.Refused != "" {
 				err := errors.New(caller.Refused)
 				e.record(ctx, caller, name, "", err)
@@ -85,6 +85,7 @@ func catalogue() []entry {
 	tools = append(tools, functionTools()...)
 	tools = append(tools, appTools()...)
 	tools = append(tools, shippingTools()...)
+	tools = append(tools, probeTools()...)
 	return tools
 }
 
@@ -92,6 +93,7 @@ func catalogue() []entry {
 type call struct {
 	dispatcher
 	settings Settings
+	probes   *probeLimits
 	project  string
 }
 

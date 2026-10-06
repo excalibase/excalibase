@@ -84,6 +84,7 @@ func getProjectInfo(ctx context.Context, c *call, in projectArg) (any, error) {
 		"projectId": projectID, "projectName": info.ProjectName,
 		"endpoints": urls,
 		"sdkSetup":  setup,
+		"restApi":   restGuide(urls),
 		"cors": map[string]any{
 			"allowedOrigins": origins,
 			"note": "A browser page can call these APIs only from an origin in this list. create_app adds an app's own origin; " +

@@ -58,6 +58,7 @@ type AppConfig struct {
 	BootstrapServicePermissions []string
 	DeploymentMode              string // "selfhosted" (default) or "cloud"
 	PublicBaseURL               string // base URL for function invoke + SDK snippets, e.g. https://api.excalibase.io
+	MCPDataPlaneURL             string // where test_api_request reaches the data plane; empty turns it off
 	StudioURL                   string // Studio origin that emailed verification and reset links open
 	AuthInternalURL             string // excalibase-auth inside the platform network; SDK key management calls it
 	RegistrationMode            string // "open" (default) or "invite" — invite closes open studio signup
@@ -391,6 +392,7 @@ func load() AppConfig {
 		VaultPAT:                       envOr("VAULT_PAT", ""),
 		DeploymentMode:                 deploymentMode,
 		PublicBaseURL:                  envOr("PUBLIC_BASE_URL", "https://api.excalibase.io"),
+		MCPDataPlaneURL:                mcpDataPlaneURL(),
 		StudioURL:                      strings.TrimRight(strings.TrimSpace(os.Getenv("STUDIO_URL")), "/"),
 		AuthInternalURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_INTERNAL_URL")), "/"),
 		KubeconfigPath:                 envOr("KUBECONFIG_PATH", ""),
@@ -714,6 +716,17 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		log.Fatalf("%s: %v", key, err)
 	}
 	return d
+}
+
+// mcpDataPlaneURL is an address an operator set: MCP_DATA_PLANE_URL, else an
+// explicit PUBLIC_BASE_URL, never PublicBaseURL's built-in default.
+func mcpDataPlaneURL() string {
+	for _, key := range []string{"MCP_DATA_PLANE_URL", "PUBLIC_BASE_URL"} {
+		if value := strings.TrimRight(strings.TrimSpace(os.Getenv(key)), "/"); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func envOr(key, fallback string) string {

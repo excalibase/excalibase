@@ -30,6 +30,9 @@ type Settings struct {
 	PublicBaseURL string
 	// StudioURL is where Studio and the control-plane API are served.
 	StudioURL string
+	// DataPlaneURL is where this server itself reaches the data plane for
+	// test_api_request; empty turns the probe off.
+	DataPlaneURL string
 }
 
 // AuditLogger records one entry per tool call.
@@ -42,6 +45,11 @@ type env struct {
 	router   http.Handler
 	audit    AuditLogger
 	settings Settings
+	probes   *probeLimits
+}
+
+func newEnv(router http.Handler, audit AuditLogger, settings Settings) *env {
+	return &env{router: router, audit: audit, settings: settings, probes: newProbeLimits()}
 }
 
 type callerKey struct{}
@@ -54,7 +62,7 @@ type Handler struct {
 
 // NewHandler serves MCP over router, the same router Studio calls.
 func NewHandler(router http.Handler, audit AuditLogger, settings Settings) *Handler {
-	h := &Handler{env: &env{router: router, audit: audit, settings: settings}}
+	h := &Handler{env: newEnv(router, audit, settings)}
 	h.streamable = mcp.NewStreamableHTTPHandler(h.serverFor, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
 		JSONResponse: true,

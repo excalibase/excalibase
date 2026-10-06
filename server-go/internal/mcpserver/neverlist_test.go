@@ -16,11 +16,13 @@ var offeredTools = []string{
 	"execute_sql", "generate_typescript_types", "get_ci_snippet", "get_deploy_status",
 	"get_dockerfile_template", "get_graphql_schema", "get_logs", "get_project_info", "list_apps",
 	"list_functions", "list_migrations", "list_permissions", "list_projects", "list_tables",
-	"set_function_secret", "set_permission",
+	"set_function_secret", "set_permission", "test_api_request",
 }
 
 // allowedRoutes is every route a tool may call. Anything else is refused by
 // TestNoToolLeavesItsAllowedRoutes, so a new call is a visible decision.
+// test_api_request also calls the project's own data API, signed in with a
+// publishable key, so it holds what the anon role holds (tools_probe_test.go).
 var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^GET /api/provision/$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/info/$`),

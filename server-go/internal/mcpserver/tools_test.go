@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -96,8 +97,13 @@ func readOnlyCaller() Caller {
 // session connects an in-memory MCP client to the server a caller gets.
 func session(t *testing.T, routes http.Handler, audit AuditLogger, caller Caller) *mcp.ClientSession {
 	t.Helper()
+	return sessionWith(t, routes, audit, caller, testSettings)
+}
+
+func sessionWith(t *testing.T, routes http.Handler, audit AuditLogger, caller Caller, settings Settings) *mcp.ClientSession {
+	t.Helper()
 	ctx := context.Background()
-	server := newServer(&env{router: routes, audit: audit, settings: testSettings}, caller)
+	server := newServer(newEnv(routes, audit, settings), caller)
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 	if _, err := server.Connect(ctx, serverTransport, nil); err != nil {
 		t.Fatalf("server connect: %v", err)
@@ -148,10 +154,12 @@ func resultText(res *mcp.CallToolResult) string {
 
 // routeCase is one tool call and the requests it must make.
 type routeCase struct {
-	name   string
-	tool   string
-	args   map[string]any
-	setup  func(f *fakeRoutes)
+	name  string
+	tool  string
+	args  map[string]any
+	setup func(f *fakeRoutes)
+	// plane answers a tool that calls the project's data API.
+	plane  http.Handler
 	expect []string
 	check  func(t *testing.T, calls []recordedCall, out map[string]any)
 }
@@ -198,6 +206,16 @@ func routeCases() []routeCase {
 				} {
 					if !strings.Contains(fetch, want) {
 						t.Errorf("fetchExample lacks %q:\n%s", want, fetch)
+					}
+				}
+				rest, _ := out["restApi"].(map[string]any)
+				guide, _ := json.Marshal(rest)
+				for _, want := range []string{
+					"select=", "order=", "limit=", "offset=", "eq.", "lt.", "in.(", "count=exact", "return=representation",
+					"pagination", "total", "allowAggregations", "403", "test_api_request",
+				} {
+					if !strings.Contains(string(guide), want) {
+						t.Errorf("restApi lacks %q: %s", want, guide)
 					}
 				}
 				cors, _ := out["cors"].(map[string]any)
@@ -483,6 +501,15 @@ func routeCases() []routeCase {
 			expect: []string{"GET " + provisionA + "/logs?lines=50"},
 		},
 		{
+			name: "test_api_request", tool: "test_api_request",
+			args: map[string]any{"project_id": testProjectA, "publishable_key": testPublishableKey, "path": "todos"},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, projectsA+"/info/", 200, `{"projectId":"proj-a","orgSlug":"acme"}`)
+			},
+			plane:  &fakeDataPlane{reply: func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"data":[]}`)) }},
+			expect: []string{"GET " + projectsA + "/info/"},
+		},
+		{
 			name: "get_logs app", tool: "get_logs", args: map[string]any{"project_id": testProjectA, "source": "app", "app_id": "web"},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, projectsA+"/apps/web/logs", 200, `{"lines":[]}`)
@@ -535,7 +562,13 @@ func TestEveryToolGoesThroughItsRoute(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(routes)
 			}
-			cs := session(t, routes, &recordingAudit{}, writeCaller())
+			settings := testSettings
+			if tc.plane != nil {
+				plane := httptest.NewServer(tc.plane)
+				t.Cleanup(plane.Close)
+				settings.DataPlaneURL = plane.URL
+			}
+			cs := sessionWith(t, routes, &recordingAudit{}, writeCaller(), settings)
 			out := structured(t, callTool(t, cs, tc.tool, tc.args))
 			got := make([]string, 0, len(routes.calls))
 			for _, call := range routes.calls {
@@ -563,10 +596,12 @@ func TestToolDescriptionsSteerTheClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	wants := map[string][]string{
-		"deploy_function": {"APIs", "not web pages", "script-src 'self'", "create_app"},
-		"get_ci_snippet":  {"after the app exists"},
-		"deploy_app":      {"public"},
-		"create_app":      {"CORS"},
+		"deploy_function":  {"APIs", "not web pages", "script-src 'self'", "create_app"},
+		"get_ci_snippet":   {"after the app exists"},
+		"deploy_app":       {"public"},
+		"create_app":       {"CORS"},
+		"set_permission":   {"allowAggregations", "Prefer: count=exact", "403"},
+		"test_api_request": {"before handing it over", "allowAggregations"},
 	}
 	for _, tool := range listed.Tools {
 		for _, want := range wants[tool.Name] {

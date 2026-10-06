@@ -42,7 +42,7 @@ apps and grant what the anon role grants.
 | Tool | Route |
 |---|---|
 | `list_projects` | `GET /api/provision/` |
-| `get_project_info` | `GET /api/projects/{id}/info/`, `GET /api/projects/{id}/sdk-keys/` |
+| `get_project_info` | `GET /api/projects/{id}/info/`, `GET /api/projects/{id}/sdk-keys/`; also returns `restApi`, the REST surface below |
 | `create_publishable_key` | `POST /api/projects/{id}/sdk-keys/` (publishable only) |
 | `list_tables` | `GET /api/schema/{id}/tables` |
 | `describe_table` | `GET /api/schema/{id}/tables/{t}/columns`, `.../indexes`, `GET /api/schema/{id}/relationships` |
@@ -50,13 +50,37 @@ apps and grant what the anon role grants.
 | `generate_typescript_types` | `GET /api/schema/{id}/tables` and each table's columns |
 | `execute_sql` | `POST /api/schema/{id}/query`; read-only: `GET /api/schema/{id}/query?sql=` |
 | `list_migrations` / `apply_migration` | `GET` / `POST /api/provision/{id}/migrations/` |
-| `list_permissions` / `set_permission` | `GET /api/provision/{id}/permissions/`, `PUT`/`DELETE .../permissions/tables/{t}/roles/{r}/{op}` |
+| `list_permissions` / `set_permission` | `GET /api/provision/{id}/permissions/`, `PUT`/`DELETE .../permissions/tables/{t}/roles/{r}/{op}`; counting rows needs `allowAggregations` |
 | `list_functions` / `deploy_function` / `set_function_secret` | `GET`/`POST /api/projects/{id}/functions/`, `POST .../functions/secrets` |
-| `list_apps` / `deploy_app` / `get_deploy_status` | `GET /api/projects/{id}/apps/` (+ `.../apps/{app}/deploys?limit=1` to report `NOT_DEPLOYED`); `POST .../apps/{app}/deploy` with `{image, commitSha}` or empty to run the app's own image, pinned to its digest either way when the registry is public; `GET .../apps/{app}/` + `.../deploys` or `.../deploys/{deployId}` |
+| `list_apps` / `deploy_app` / `get_deploy_status` | `GET /api/projects/{id}/apps/` (+ `.../apps/{app}/deploys?limit=1` to report `NOT_DEPLOYED`); `POST .../apps/{app}/deploy` with `{image, commitSha}` or empty to run the app's own image, pinned to its digest either way when the registry is public (the result's `unpinned` says when it is not); `GET .../apps/{app}/` + `.../deploys` or `.../deploys/{deployId}` |
 | `create_app` | `POST /api/projects/{id}/apps/` (Studio's plan limits apply), then `GET`/`PUT /api/projects/{id}/cors/` to allow the app's own origin (it stays listed after the app is deleted; remove it in Studio) |
-| `get_logs` | database: `GET /api/provision/{id}/logs`; app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs` |
+| `get_logs` | database: `GET /api/provision/{id}/logs`; app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs`. A log backend that does not answer gives "not available", never its address |
+| `test_api_request` | `GET /api/projects/{id}/info/`, then one request to the project's own data API (below) |
 | `get_dockerfile_template` | none: Dockerfiles for node, nextjs, vite, python, go, java |
 | `get_ci_snippet` | `GET .../apps/{app}/` for the app's image; renders the same GitHub Actions, GitLab CI, Jenkins or curl pipeline as Studio's pipeline page |
+
+## The REST surface a page uses
+
+`get_project_info` returns this as `restApi`, so a client does not need the engine's source.
+
+- Table URL: `{base}/{projectId}/api/v1/{table}`, with `Authorization: Bearer <accessToken>` from the publishable-key exchange.
+- Read: `select=id,title` (embed: `author(name)`), `order=created_at.desc`, `limit=20&offset=40` (limit defaults to 30 and is capped), or keyset `first=20&after=<value>`.
+- Filters: `<column>=<op>.<value>` with `eq. neq. gt. gte. lt. lte. like. ilike. in.(a,b) is.null`, `not.` before any, and `or=(a.eq.1,b.gt.2)`.
+- Writes: `POST` an object or an array; `PATCH` and `DELETE` need at least one filter; `Prefer: resolution=merge-duplicates` upserts one object.
+- `Prefer: return=representation` returns written rows. `Prefer: count=exact` adds `pagination.total` and `Content-Range`.
+- A list answers `{"data":[...]}`. With a count it answers `{"data":[...],"pagination":{"total","limit","offset"}}`. With `first`/`after` it answers `{"data":[...],"pageInfo":{"hasNextPage"}}`.
+- **Counting rows needs `allowAggregations: true` on the role's select permission.** Without it, a request with `Prefer: count=exact` answers 403 `permission_denied` "Counting rows of ... is not permitted".
+
+### Probing it: `test_api_request`
+
+`test_api_request` sends one request the way a page does. It exchanges a publishable key (`esk_pub_...`, never a secret key) for the anon role's token, then calls REST or GraphQL with the page's query, `Prefer` and `Origin`. It returns the status, the CORS and count headers, and the body, cut at 8 KiB. Permissions, RLS and CORS apply as they do for the page.
+
+The target is always `{data plane}/{projectId}/...`, built from the server's setting and the project id. The caller picks only the table, the query and the headers, redirects are not followed, and a GraphQL body is re-encoded before it is sent.
+
+- A read-only connection sends only `GET`/`HEAD`, or GraphQL with no mutation.
+- Each user gets 10 probes at once, then one every 2 seconds: every probe leaves from the platform's own address.
+- The data plane is `MCP_DATA_PLANE_URL`, else an explicitly set `PUBLIC_BASE_URL`; with neither the tool answers that it is not available. An in-cluster `MCP_DATA_PLANE_URL` must be the same gateway the public edge uses, routing both `/auth/...` and `/{projectId}/...`, or the probe sees something different from a browser.
+- It probes table REST and GraphQL only; `PUT`, `rpc/` and non-public schemas are not covered. `Prefer: tx=rollback` tries a write without keeping it.
 
 ## Connecting a client
 

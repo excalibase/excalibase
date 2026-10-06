@@ -595,6 +595,10 @@ func (h *ProvisioningHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		lines = 10000
 	}
 	out, err := h.svc.GetLogs(r.Context(), projectID, lines)
+	if errors.Is(err, service.ErrLogsUnavailable) {
+		httpError(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
