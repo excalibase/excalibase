@@ -36,6 +36,7 @@ func TestAddDatabaseAnswersEachRefusal(t *testing.T) {
 		"no version":                           {"apps-only", `{"databaseType":"POSTGRESQL"}`, http.StatusBadRequest, "postgres version is required"},
 		"a project field":                      {"apps-only", `{"projectName":"x","databaseType":"POSTGRESQL","postgresVersion":"17"}`, http.StatusBadRequest, "only database settings"},
 		"unknown field":                        {"apps-only", `{"postgresVersion":"17","bogus":1}`, http.StatusBadRequest, `bogus\" is not a provisioning setting`},
+		"a tier that is not the org's plan":    {"apps-only", `{"databaseType":"POSTGRESQL","postgresVersion":"17","tier":"STANDARD"}`, http.StatusBadRequest, "plan comes from its organization (FREE)"},
 		"documentDb where it is not installed": {"apps-only", `{"databaseType":"POSTGRESQL","postgresVersion":"17","documentDb":true}`, http.StatusConflict, "DocumentDB is not installed"},
 	}
 	for name, tc := range cases {
@@ -47,6 +48,16 @@ func TestAddDatabaseAnswersEachRefusal(t *testing.T) {
 				t.Fatalf("got %d %s, want %d containing %q", w.Code, w.Body.String(), tc.want, tc.says)
 			}
 		})
+	}
+}
+
+func TestAddDatabaseAcceptsATierThatIsTheOrganisationsPlan(t *testing.T) {
+	f := addDatabaseRouterFixture(t)
+	w := httptest.NewRecorder()
+	f.router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/provision/apps-only/database",
+		strings.NewReader(`{"databaseType":"POSTGRESQL","postgresVersion":"17","tier":"free"}`)))
+	if strings.Contains(w.Body.String(), "tier") || strings.Contains(w.Body.String(), "plan comes from") {
+		t.Fatalf("a matching tier was refused: %d %s", w.Code, w.Body.String())
 	}
 }
 

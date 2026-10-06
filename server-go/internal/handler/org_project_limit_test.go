@@ -204,8 +204,8 @@ func TestRestore_UnresolvableTierAnswers500(t *testing.T) {
 	}
 }
 
-// The request has no say in the tier: a body naming one is refused by name
-// (EXC-555) and nothing is created; the org's tier decides the project's.
+// The request has no say in the tier: a body naming another plan than the
+// org's is refused (EXC-555) and nothing is created; the org decides.
 func TestProvision_FreeOrgAskingForEnterpriseIsRefused(t *testing.T) {
 	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}
 	mock := k8s.NewMockClient()
@@ -214,8 +214,8 @@ func TestProvision_FreeOrgAskingForEnterpriseIsRefused(t *testing.T) {
 
 	w := doRequest(r, "POST", testProvisionPath,
 		`{"projectName":"first","orgId":"org1","databaseType":"POSTGRESQL","tier":"ENTERPRISE","postgresVersion":"17"}`)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "tier") {
-		t.Fatalf("got %d; body %s, want 400 naming tier", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "organization (FREE)") {
+		t.Fatalf("got %d; body %s, want 400 naming the org's plan", w.Code, w.Body.String())
 	}
 	if len(store.insts) != 0 {
 		t.Fatalf("a project was created: %v", store.insts)

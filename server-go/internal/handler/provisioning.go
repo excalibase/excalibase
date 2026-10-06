@@ -278,7 +278,8 @@ func (h *ProvisioningHandler) ListInstances(w http.ResponseWriter, r *http.Reque
 
 func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProvisioningRequest
-	if !decodeProvisioningRequest(w, r, &req) {
+	statedTier, ok := decodeProvisioningRequest(w, r, &req)
+	if !ok {
 		return
 	}
 
@@ -304,6 +305,9 @@ func (h *ProvisioningHandler) Provision(w http.ResponseWriter, r *http.Request) 
 			httpError(w, "insufficient org role to create a project (owner/admin required)", http.StatusForbidden)
 			return
 		}
+	}
+	if !h.confirmStatedTier(w, r, req.OrgID, statedTier) {
+		return
 	}
 
 	// A caller that prefers not to wait (RFC 7240) is answered 202 once the
