@@ -134,6 +134,24 @@ describe('ClusterSettingsCard', () => {
     );
   });
 
+  test('values are sent trimmed', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.put).mockResolvedValueOnce({ data: settings } as never);
+    renderCard(project());
+
+    const workMem = within(await screen.findByTestId('param-work_mem')).getByRole('textbox');
+    await user.clear(workMem);
+    await user.type(workMem, '  64 MB ');
+    await user.type(within(screen.getByTestId('param-jit')).getByRole('textbox'), ' OFF');
+    await user.click(screen.getByTestId('params-save-btn'));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/provision/p-1/parameters', {
+        parameters: { work_mem: '64 MB', jit: 'OFF' },
+      }),
+    );
+  });
+
   test('each setting shows an example value and the units it takes', async () => {
     renderCard(project());
     expect(

@@ -211,8 +211,12 @@ function ParametersForm({ settings, busy, onSave }: ParametersFormProps) {
   const save = () => {
     if (busy || sent.current) return;
     sent.current = true;
+    // The server reads " 64 MB" as 64MB and enum values in any case; stray
+    // spaces around a value are dropped here.
     const chosen = Object.fromEntries(
-      Object.entries(values).filter(([, value]) => value.trim() !== ''),
+      Object.entries(values)
+        .map(([name, value]) => [name, value.trim()])
+        .filter(([, value]) => value !== ''),
     );
     onSave(chosen);
   };

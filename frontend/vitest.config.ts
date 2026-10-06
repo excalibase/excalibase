@@ -64,6 +64,8 @@ export default defineConfig({
         'src/components/DatabaseRunning.tsx',
         'src/utils/serverError.ts',
         'src/pages/StoragePage.tsx',
+        'src/utils/uploadFailure.ts',
+        'src/components/ClusterSettingsCard.tsx',
         'src/utils/mutationHelpers.ts',
         'src/utils/toast.ts',
         'src/components/ConnectSnippets.tsx',

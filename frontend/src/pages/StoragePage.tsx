@@ -12,6 +12,7 @@ import {
 import { Button } from '../components/Button';
 import { Loader2, FolderPlus, Upload, Trash2, Download, Globe, Lock } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
+import type { UploadStepError } from '../utils/uploadFailure';
 
 export function StoragePage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -115,8 +116,8 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
         try {
           await upload.mutateAsync({ file, key: file.name });
         } catch (e: unknown) {
-          const err = e as { response?: { data?: { error?: string } }; message?: string };
-          alert(`Upload of ${file.name} failed: ${serverErrorMessage(err, 'no reason given')}`);
+          // Every step of an upload fails as an UploadStepError naming itself.
+          alert(`Upload of ${file.name} failed ${(e as UploadStepError).message}`);
         }
       }
     },

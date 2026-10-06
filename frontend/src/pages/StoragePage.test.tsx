@@ -2,6 +2,7 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import axios, { AxiosError, AxiosHeaders } from 'axios';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { StoragePage } from './StoragePage';
 import { api } from '../api/client';
@@ -72,6 +73,46 @@ describe('Storage — create bucket', () => {
     fireEvent.click(create);
     finish({ data: { id: 'b1', name: 'avatars', public: false } });
     await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('Storage — upload failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(window, 'alert').mockImplementation(() => {});
+  });
+
+  async function upload(container: HTMLElement) {
+    await screen.findByRole('button', { name: 'Upload' });
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, new File(['hello'], 'a.png', { type: 'image/png' }));
+  }
+
+  test('a storage refusal names the step, the HTTP status and the S3 reason', async () => {
+    const { container } = renderPage([{ id: 'b1', name: 'avatars', public: false }]);
+    vi.mocked(api.post).mockResolvedValueOnce({ data: { uploadId: 'u1', url: 'https://r2.example/x', method: 'PUT', headers: {} } } as never);
+    const config = { headers: new AxiosHeaders() };
+    vi.spyOn(axios, 'put').mockRejectedValue(new AxiosError('Request failed with status code 403', 'ERR_BAD_REQUEST', config, {}, {
+      status: 403, statusText: '', headers: {}, config,
+      data: '<Error><Code>AccessDenied</Code><Message>Request has expired</Message></Error>',
+    } as never));
+    await upload(container);
+    await waitFor(() => expect(window.alert).toHaveBeenCalledWith(
+      'Upload of a.png failed while sending the file to storage: HTTP 403, AccessDenied: Request has expired',
+    ));
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
+  test('a refused upload URL names that step', async () => {
+    const { container } = renderPage([{ id: 'b1', name: 'avatars', public: false }]);
+    const config = { headers: new AxiosHeaders() };
+    vi.mocked(api.post).mockRejectedValueOnce(new AxiosError('Request failed with status code 400', 'ERR_BAD_REQUEST', config, {}, {
+      status: 400, statusText: '', headers: {}, config, data: { error: 'file too large for bucket' },
+    } as never));
+    await upload(container);
+    await waitFor(() => expect(window.alert).toHaveBeenCalledWith(
+      'Upload of a.png failed while getting an upload URL: HTTP 400, file too large for bucket',
+    ));
   });
 });
 
