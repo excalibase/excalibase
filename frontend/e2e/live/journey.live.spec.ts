@@ -34,16 +34,24 @@ async function verifyLink(page: Page): Promise<string> {
 }
 
 // Through the page, so the call carries Studio's session and origin as the app's own do.
-async function studioFetch(page: Page, path: string, method = 'GET'): Promise<unknown> {
-  return page.evaluate(async ([target, verb]) => {
-    const response = await fetch(target, { method: verb, credentials: 'include' });
-    return response.headers.get('content-type')?.includes('json') ? response.json() : null;
-  }, [path, method] as const);
+async function studioFetch(page: Page, path: string, method = 'GET', body?: unknown): Promise<{ status: number; data: unknown }> {
+  return page.evaluate(async ([target, verb, payload]) => {
+    const headers: Record<string, string> = { Prefer: 'respond-async' };
+    if (payload !== undefined) headers['Content-Type'] = 'application/json';
+    const response = await fetch(target, {
+      method: verb,
+      credentials: 'include',
+      headers,
+      body: payload === undefined ? undefined : JSON.stringify(payload),
+    });
+    const data = response.headers.get('content-type')?.includes('json') ? await response.json() : null;
+    return { status: response.status, data };
+  }, [path, method, body] as const);
 }
 
 async function projectStatus(page: Page): Promise<string> {
-  const project = (await studioFetch(page, `/api/provision/${projectId}`)) as { status?: string } | null;
-  return project?.status ?? '';
+  const { data } = await studioFetch(page, `/api/provision/${projectId}`);
+  return (data as { status?: string } | null)?.status ?? '';
 }
 
 test.describe.serial('a new user, from sign-up to a deployed app', () => {
@@ -72,8 +80,15 @@ test.describe.serial('a new user, from sign-up to a deployed app', () => {
     page = await context.newPage();
   });
 
+  // New projects are protected from deletion, so protection goes off first;
+  // a refusal fails the run rather than leaving the project behind unnoticed.
   test.afterAll(async () => {
-    if (projectId) await studioFetch(page, `/api/provision/${projectId}`, 'DELETE');
+    if (projectId) {
+      const unprotect = await studioFetch(page, `/api/provision/${projectId}/deletion-protection`, 'PATCH', { enabled: false });
+      const removal = await studioFetch(page, `/api/provision/${projectId}`, 'DELETE');
+      expect(unprotect.status, JSON.stringify(unprotect.data)).toBeLessThan(300);
+      expect(removal.status, JSON.stringify(removal.data)).toBeLessThan(300);
+    }
     await page.context().close();
   });
 
