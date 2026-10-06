@@ -6,6 +6,7 @@ import { VaultGuard } from './components/auth/VaultGuard';
 import { PlatformLayout } from './components/layout/PlatformLayout';
 import { ProjectLayout } from './components/layout/ProjectLayout';
 import { DatabaseRequired } from './components/DatabaseRequired';
+import { DatabaseRunning } from './components/DatabaseRunning';
 import { FeatureGate } from './components/FeatureGate';
 
 // Lazy-loaded pages
@@ -110,38 +111,38 @@ export default function App() {
             {/* Pages that work on the project's database: a project created
                 without one gets a notice instead (EXC-426). */}
             <Route element={<DatabaseRequired />}>
-              <Route path="sql" element={<SqlEditorPage />} />
-              <Route path="schema" element={<SchemaDesignerPage />} />
-              {/* Database */}
+              {/* Pages that connect to the database: only an ACTIVE project's
+                  is served, so other states say why (EXC-555). */}
+              <Route element={<DatabaseRunning />}>
+                <Route path="sql" element={<SqlEditorPage />} />
+                <Route path="schema" element={<SchemaDesignerPage />} />
+                <Route path="database/tables" element={<TablesPage />} />
+                <Route path="database/tables/:schema/:table/permissions" element={<TablePermissionsPage />} />
+                <Route path="database/functions" element={<FunctionsPage />} />
+                <Route path="database/extensions" element={<ExtensionsPage />} />
+                <Route path="database/roles" element={<RolesPage />} />
+                <Route path="database/rls" element={<RlsPage />} />
+                <Route path="database/triggers" element={<TriggersPage />} />
+                <Route path="database/indexes" element={<IndexesPage />} />
+                <Route path="database/types" element={<TypesPage />} />
+                <Route path="database/advisors" element={<AdvisorsPage />} />
+                <Route path="database/documents" element={<DocumentsPage />} />
+                <Route path="database/mongo-users" element={<MongoUsersPage />} />
+                {/* Authentication: end users live in the project's database */}
+                <Route path="auth/users" element={<AuthUsersPage />} />
+                <Route path="auth/sessions" element={<AuthSessionsPage />} />
+                <Route path="realtime" element={<RealtimePage />} />
+                <Route path="monitoring/performance" element={<PerformancePage />} />
+                <Route path="operations/migrations" element={<MigrationsPage />} />
+              </Route>
+              {/* Read from the platform, so they work in any state. */}
               <Route path="database/overview" element={<InstanceDetailPage />} />
-              <Route path="database/tables" element={<TablesPage />} />
-              <Route path="database/tables/:schema/:table/permissions" element={<TablePermissionsPage />} />
-              <Route path="database/functions" element={<FunctionsPage />} />
-              <Route path="database/extensions" element={<ExtensionsPage />} />
-              <Route path="database/roles" element={<RolesPage />} />
-              <Route path="database/rls" element={<RlsPage />} />
-              <Route path="database/triggers" element={<TriggersPage />} />
-              <Route path="database/indexes" element={<IndexesPage />} />
-              <Route path="database/types" element={<TypesPage />} />
-              <Route path="database/advisors" element={<AdvisorsPage />} />
-              <Route path="database/documents" element={<DocumentsPage />} />
-              <Route path="database/mongo-users" element={<MongoUsersPage />} />
-              {/* Authentication: end users live in the project's database */}
-              <Route path="auth/users" element={<AuthUsersPage />} />
-              <Route path="auth/sessions" element={<AuthSessionsPage />} />
               <Route path="api-keys" element={<SdkKeysPage />} />
-              {/* API */}
               <Route path="api" element={<ApiInfoPage />} />
-              {/* Realtime */}
-              <Route path="realtime" element={<RealtimePage />} />
-              {/* Monitoring */}
               <Route path="monitoring/metrics" element={<MetricsPage />} />
-              <Route path="monitoring/performance" element={<PerformancePage />} />
               <Route path="monitoring/logs" element={<LogExplorerPage />} />
-              {/* Operations */}
               <Route path="operations/backups" element={<BackupsPage />} />
               <Route path="operations/snapshots" element={<SnapshotsPage />} />
-              <Route path="operations/migrations" element={<MigrationsPage />} />
             </Route>
             {/* Containers */}
             <Route path="containers" element={<ContainersPage />} />
