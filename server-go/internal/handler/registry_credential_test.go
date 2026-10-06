@@ -122,6 +122,43 @@ func TestRegistryCredentialHandler_Refusals(t *testing.T) {
 	}
 }
 
+// Studio escapes the registry in the path; the service sees, files and names
+// it as the user typed it, never as "localhost%3A5000".
+func TestRegistryCredentialHandler_DecodesTheRegistry(t *testing.T) {
+	creds := &fakeRegistryCredentials{stored: map[string]apphost.RegistryCredential{}}
+	r := registryRouter(creds)
+	w := registryRequest(r, http.MethodPut, "/localhost%3A5000", `{"username":"octocat","password":"`+registryTestSecret+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("set = %d %s", w.Code, w.Body.String())
+	}
+	if _, ok := creds.stored[appTestProject+"/localhost:5000"]; !ok {
+		t.Fatalf("stored under %v", creds.stored)
+	}
+	w = registryRequest(r, http.MethodDelete, "/localhost%3A5000", "")
+	if w.Code != http.StatusNoContent || creds.removed[0] != appTestProject+"/localhost:5000" {
+		t.Fatalf("remove = %d %v", w.Code, creds.removed)
+	}
+}
+
+// A registry segment that is not valid percent-encoding is refused before the store sees it.
+func TestRegistryCredentialHandler_RefusesAnUndecodableRegistry(t *testing.T) {
+	creds := &fakeRegistryCredentials{stored: map[string]apphost.RegistryCredential{}}
+	r := registryRouter(creds)
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/projects/"+appTestProject+"/registry-credentials/bad",
+			strings.NewReader(`{"username":"octocat","password":"`+registryTestSecret+`"}`))
+		req.URL.RawPath = "/api/projects/" + appTestProject + "/registry-credentials/bad%zz"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid registry") {
+			t.Errorf("%s: %d %s", method, w.Code, w.Body.String())
+		}
+	}
+	if len(creds.stored) != 0 || len(creds.removed) != 0 {
+		t.Fatalf("the store was reached: %v %v", creds.stored, creds.removed)
+	}
+}
+
 func TestRegistryCredentialHandler_RejectsAnInvalidProject(t *testing.T) {
 	creds := &fakeRegistryCredentials{stored: map[string]apphost.RegistryCredential{}}
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/bad%20id/registry-credentials/", nil)

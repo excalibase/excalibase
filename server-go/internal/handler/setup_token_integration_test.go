@@ -57,7 +57,7 @@ func TestRegister_FirstAdmin_WrongToken_RefusedOnRealStore(t *testing.T) {
 func TestRegister_ConcurrentFirstRegistrations_ExactlyOneAdminOnRealStore(t *testing.T) {
 	r, store, setupToken := setupRegisterRouter(t)
 
-	names := []string{"racer-a", "racer-b", "racer-c"}
+	names := []string{"racer_a", "racer_b", "racer_c"}
 	var wg sync.WaitGroup
 	codes := make([]int, len(names))
 	for i, name := range names {

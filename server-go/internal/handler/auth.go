@@ -495,6 +495,10 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "username, email, and password are required", http.StatusBadRequest)
 		return
 	}
+	if !isValidUsername(req.Username) {
+		httpError(w, usernameRule, http.StatusBadRequest)
+		return
+	}
 	if !auth.IsValidPlatformRole(req.Role) {
 		httpError(w, "invalid role", http.StatusBadRequest)
 		return
@@ -539,6 +543,9 @@ func (h *AuthHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) checkRegistration(ctx context.Context, username, email, password string) (int, string) {
 	if username == "" || email == "" || password == "" {
 		return http.StatusBadRequest, "username, email, and password are required"
+	}
+	if !isValidUsername(username) {
+		return http.StatusBadRequest, usernameRule
 	}
 	if !isValidEmail(email) {
 		return http.StatusBadRequest, "invalid email format"

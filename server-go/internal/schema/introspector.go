@@ -131,7 +131,7 @@ func (i *Introspector) ExecuteDDL(ctx context.Context, db *sql.DB, ddl string) D
 	defer cancel()
 	result, err := db.ExecContext(ctx, ddl)
 	if err != nil {
-		return DDLResult{Success: false, Error: err.Error()}
+		return DDLResult{Success: false, Error: userMessage(err)}
 	}
 	rowsAffected, _ := result.RowsAffected()
 	return DDLResult{Success: true, UpdateCount: int(rowsAffected)}
@@ -153,13 +153,13 @@ func (i *Introspector) ExecuteQuery(ctx context.Context, db *sql.DB, query strin
 	defer cancel()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return QueryResult{Error: fmt.Errorf("begin tx: %w", err).Error()}
+		return QueryResult{Error: userMessage(fmt.Errorf("begin tx: %w", err))}
 	}
 	defer tx.Rollback()
 
 	timeout := fmt.Sprintf("SET LOCAL statement_timeout = %d", i.statementTimeout.Milliseconds())
 	if _, err := tx.ExecContext(ctx, timeout); err != nil {
-		return QueryResult{Error: fmt.Errorf("set timeout: %w", err).Error()}
+		return QueryResult{Error: userMessage(fmt.Errorf("set timeout: %w", err))}
 	}
 
 	if isReadQuery(query) {
@@ -175,14 +175,14 @@ func (i *Introspector) executeReadQuery(ctx context.Context, tx interface {
 }, query string) QueryResult {
 	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
-		return QueryResult{Error: err.Error()}
+		return QueryResult{Error: userMessage(err)}
 	}
 	result := readResult(rows)
 	if result.Error != "" {
 		return result
 	}
 	if err := tx.Commit(); err != nil {
-		return QueryResult{Error: fmt.Errorf("commit: %w", err).Error()}
+		return QueryResult{Error: userMessage(fmt.Errorf("commit: %w", err))}
 	}
 	return result
 }
@@ -192,7 +192,7 @@ func readResult(rows *sql.Rows) QueryResult {
 	defer rows.Close()
 	colTypes, err := rows.ColumnTypes()
 	if err != nil {
-		return QueryResult{Error: fmt.Errorf("column types: %w", err).Error()}
+		return QueryResult{Error: userMessage(fmt.Errorf("column types: %w", err))}
 	}
 	columns := make([]ColumnMeta, len(colTypes))
 	for idx, ct := range colTypes {
@@ -200,11 +200,11 @@ func readResult(rows *sql.Rows) QueryResult {
 	}
 	resultRows, truncated, err := collectRows(rows, len(colTypes))
 	if err != nil {
-		return QueryResult{Error: err.Error()}
+		return QueryResult{Error: userMessage(err)}
 	}
 	// Closing drains what was not kept, so a data-modifying WITH still commits.
 	if err := rows.Close(); err != nil {
-		return QueryResult{Error: err.Error()}
+		return QueryResult{Error: userMessage(err)}
 	}
 	return QueryResult{Columns: columns, Rows: resultRows, Truncated: truncated}
 }
@@ -260,11 +260,11 @@ func (i *Introspector) executeDMLQuery(ctx context.Context, tx interface {
 }, query string) QueryResult {
 	result, err := tx.ExecContext(ctx, query)
 	if err != nil {
-		return QueryResult{Error: err.Error()}
+		return QueryResult{Error: userMessage(err)}
 	}
 	affected, _ := result.RowsAffected()
 	if err := tx.Commit(); err != nil {
-		return QueryResult{Error: fmt.Errorf("commit: %w", err).Error()}
+		return QueryResult{Error: userMessage(fmt.Errorf("commit: %w", err))}
 	}
 	return QueryResult{Command: "EXEC", AffectedRows: affected}
 }

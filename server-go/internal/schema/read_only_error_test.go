@@ -15,7 +15,7 @@ func TestReadOnlyErrorNamesTheRefusedWrite(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 	syntax := &pq.Error{Code: "42601", Message: "syntax error at or near \"selec\""}
-	if got := readOnlyError(syntax); got != syntax.Error() {
+	if got := readOnlyError(syntax); got != syntax.Message {
 		t.Errorf("other errors pass through, got %q", got)
 	}
 	if got := readOnlyError(errors.New("connection reset")); got != "connection reset" {

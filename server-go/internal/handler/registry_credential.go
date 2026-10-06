@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -76,7 +77,11 @@ func (h *RegistryCredentialHandler) Set(w http.ResponseWriter, r *http.Request) 
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
 		return
 	}
-	registry, err := h.creds.Set(projectID, chi.URLParam(r, "registry"), cred)
+	requested, ok := registryFromPath(w, r)
+	if !ok {
+		return
+	}
+	registry, err := h.creds.Set(projectID, requested, cred)
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -89,11 +94,26 @@ func (h *RegistryCredentialHandler) Remove(w http.ResponseWriter, r *http.Reques
 	if !ok || !h.available(w) {
 		return
 	}
-	if err := h.creds.Remove(r.Context(), projectID, chi.URLParam(r, "registry")); err != nil {
+	registry, ok := registryFromPath(w, r)
+	if !ok {
+		return
+	}
+	if err := h.creds.Remove(r.Context(), projectID, registry); err != nil {
 		h.writeError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// registryFromPath decodes the registry segment: chi hands it over still
+// escaped when the client escaped it ("localhost%3A5000").
+func registryFromPath(w http.ResponseWriter, r *http.Request) (string, bool) {
+	registry, err := url.PathUnescape(chi.URLParam(r, "registry"))
+	if err != nil {
+		httpError(w, "invalid registry: give a host name, with a port if it needs one", http.StatusBadRequest)
+		return "", false
+	}
+	return registry, true
 }
 
 // writeError never echoes the request: a refusal names what was wrong, not the value sent.

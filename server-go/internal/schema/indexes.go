@@ -26,6 +26,9 @@ func ValidateIndexType(indexType string) error {
 
 // CreateIndex creates a new index on a table.
 func (i *Introspector) CreateIndex(ctx context.Context, db *sql.DB, req CreateIndexRequest) error {
+	if err := checkNameLength("index", req.Name); err != nil {
+		return err
+	}
 	schemaName := req.Schema
 	if schemaName == "" {
 		schemaName = "public"

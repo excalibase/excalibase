@@ -33,6 +33,9 @@ func (i *Introspector) GetPolicies(ctx context.Context, db *sql.DB, schema strin
 
 // CreatePolicy creates a new RLS policy on a table.
 func (i *Introspector) CreatePolicy(ctx context.Context, db *sql.DB, req CreatePolicyRequest) error {
+	if err := checkNameLength("policy", req.Name); err != nil {
+		return err
+	}
 	schemaName := req.Schema
 	if schemaName == "" {
 		schemaName = "public"

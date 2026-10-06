@@ -49,7 +49,7 @@ func (i *Introspector) ExecuteReadOnlyQuery(ctx context.Context, db *sql.DB, que
 	defer cancel()
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		return QueryResult{Error: fmt.Errorf("open connection: %w", err).Error()}
+		return QueryResult{Error: userMessage(fmt.Errorf("open connection: %w", err))}
 	}
 	defer discard(conn)
 	return i.readOnly(ctx, conn, query)
@@ -58,13 +58,13 @@ func (i *Introspector) ExecuteReadOnlyQuery(ctx context.Context, db *sql.DB, que
 func (i *Introspector) readOnly(ctx context.Context, conn *sql.Conn, query string) QueryResult {
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return QueryResult{Error: fmt.Errorf("begin tx: %w", err).Error()}
+		return QueryResult{Error: userMessage(fmt.Errorf("begin tx: %w", err))}
 	}
 	// Always rolled back: nothing a read-only call runs is ever committed.
 	defer tx.Rollback()
 	timeout := fmt.Sprintf("SET LOCAL statement_timeout = %d", i.statementTimeout.Milliseconds())
 	if _, err := tx.ExecContext(ctx, timeout); err != nil {
-		return QueryResult{Error: fmt.Errorf("set timeout: %w", err).Error()}
+		return QueryResult{Error: userMessage(fmt.Errorf("set timeout: %w", err))}
 	}
 	statement, err := tx.PrepareContext(ctx, query)
 	if err != nil {
@@ -89,7 +89,7 @@ func readOnlyError(err error) string {
 	if errors.As(err, &pgErr) && pgErr.Code == readOnlyTransaction {
 		return "read-only SQL cannot change data or schema; this statement writes (a data-modifying WITH counts)"
 	}
-	return err.Error()
+	return userMessage(err)
 }
 
 // discard closes the connection instead of returning it to the pool.

@@ -34,6 +34,9 @@ func (i *Introspector) CreateTable(ctx context.Context, db *sql.DB, req CreateTa
 
 // buildCreateTableSQL constructs the CREATE TABLE DDL without executing it.
 func buildCreateTableSQL(schema string, req CreateTableRequest) (string, error) {
+	if err := CheckIdentifier("table", req.Name); err != nil {
+		return "", err
+	}
 	var b strings.Builder
 	b.WriteString("CREATE TABLE ")
 	b.WriteString(QuoteIdent(schema))
@@ -77,6 +80,9 @@ func appendColumnDefs(b *strings.Builder, cols []CreateColumnDef) ([]string, err
 // writeColumnDef writes a single column definition fragment to b.
 // Returns true if the column is a primary key.
 func writeColumnDef(b *strings.Builder, col CreateColumnDef, idx int) (isPK bool, err error) {
+	if err := CheckIdentifier("column", col.Name); err != nil {
+		return false, err
+	}
 	if err := ValidateTypeName(col.Type); err != nil {
 		return false, fmt.Errorf("column %q: %w", col.Name, err)
 	}
@@ -105,6 +111,12 @@ func writeColumnDef(b *strings.Builder, col CreateColumnDef, idx int) (isPK bool
 
 // UpdateTable alters table properties: rename, move schema, toggle RLS, set comment.
 func (i *Introspector) UpdateTable(ctx context.Context, db *sql.DB, schema, name string, req UpdateTableRequest) error {
+	if err := checkOptionalIdentifier("table", req.NewName); err != nil {
+		return err
+	}
+	if err := checkOptionalIdentifier("schema", req.NewSchema); err != nil {
+		return err
+	}
 	fqn := QuoteIdent(schema) + "." + QuoteIdent(name)
 
 	if req.RlsEnabled != nil {
