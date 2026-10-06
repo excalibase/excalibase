@@ -9,9 +9,7 @@ const TEST_FILE = /\.test\.tsx?$/;
 
 // Files that match the form markup but are not forms, or are tested elsewhere.
 // Every entry needs a reason; never list a real form here to make this pass.
-const ALLOWLIST: Record<string, string> = {
-  'pages/StoragePage.tsx': 'covered by StoragePage.test.tsx in PR 247',
-};
+const ALLOWLIST: Record<string, string> = {};
 
 function listFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
