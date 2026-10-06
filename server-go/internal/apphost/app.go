@@ -45,18 +45,11 @@ const (
 	// MaxLiteralValueLength caps one literal value at 8 KiB. The empty
 	// string is a legitimate value and is never read as absent.
 	MaxLiteralValueLength = 8 * 1024
-	// MaxTotalEnvBytes caps the variables together at 64 KiB. A Kubernetes
-	// Secret is capped at 1 MiB, and the whole set has to fit inside one
-	// with room to spare.
+	// MaxTotalEnvBytes caps the names and literal values together at 64 KiB.
+	// Secrets and references are bounded by MaxEnvVars instead: a stored
+	// secret value is capped at MaxLiteralValueLength, so the rendered
+	// Secret stays under 64 KiB + 100 × 8 KiB, inside Kubernetes' 1 MiB.
 	MaxTotalEnvBytes = 64 * 1024
-	// ResolvedPointerWeight is what one reference or secret costs against
-	// MaxTotalEnvBytes. A pointer weighs a few dozen bytes in the app row and
-	// a whole value in the object the renderer builds, so charging it what it
-	// stores would let a hundred pointers — a hundred resolved values — past
-	// a cap that exists to keep the rendered object inside its own 1 MiB
-	// limit. Charging each one 4 KiB bounds the rendered set at roughly
-	// 64 KiB of literals plus 16 resolved values.
-	ResolvedPointerWeight = 4 * 1024
 	// envVarFramingBytes is the per-variable overhead the rendered object
 	// carries beyond the name and the value: the key framing and the kind.
 	envVarFramingBytes = 64
@@ -359,25 +352,30 @@ func ValidateImageReference(ref string) error {
 		return fmt.Errorf("%w: must not contain whitespace", ErrInvalidImage)
 	}
 
-	name := ref
-	if at := strings.Index(ref, "@"); at >= 0 {
-		name = ref[:at]
-		if !imageDigest.MatchString(ref[at+1:]) {
-			return fmt.Errorf("%w: digest must be <algorithm>:<hex>", ErrInvalidImage)
-		}
-	} else {
-		lastSlash := strings.LastIndex(ref, "/")
-		colon := strings.LastIndex(ref, ":")
-		if colon < 0 || colon < lastSlash {
-			return fmt.Errorf("%w: must name an explicit tag or digest", ErrInvalidImage)
-		}
-		tag := ref[colon+1:]
-		if len(tag) > maxImageTagLength || !imageTag.MatchString(tag) {
-			return fmt.Errorf("%w: invalid tag", ErrInvalidImage)
-		}
-		name = ref[:colon]
+	// name:tag@digest is the standard pinned form: the digest decides what
+	// runs and the tag is kept as the human-readable label.
+	name, digest, hasDigest := strings.Cut(ref, "@")
+	if hasDigest && !imageDigest.MatchString(digest) {
+		return fmt.Errorf("%w: digest must be <algorithm>:<hex>", ErrInvalidImage)
 	}
-	return validateImageName(name)
+	repository, tag, hasTag := splitImageTag(name)
+	if !hasTag && !hasDigest {
+		return fmt.Errorf("%w: must name an explicit tag or digest", ErrInvalidImage)
+	}
+	if hasTag && (len(tag) > maxImageTagLength || !imageTag.MatchString(tag)) {
+		return fmt.Errorf("%w: invalid tag", ErrInvalidImage)
+	}
+	return validateImageName(repository)
+}
+
+// splitImageTag separates a trailing ":tag" from the repository; a colon
+// before the last slash is a registry port, not a tag.
+func splitImageTag(name string) (repository, tag string, hasTag bool) {
+	colon := strings.LastIndex(name, ":")
+	if colon < 0 || colon < strings.LastIndex(name, "/") {
+		return name, "", false
+	}
+	return name[:colon], name[colon+1:], true
 }
 
 // validateImageName checks the repository part: an optional registry host
@@ -537,7 +535,7 @@ func validateEnv(projectID, appID string, env []EnvVar) error {
 		}
 		total += envVarBytes(v)
 		if total > MaxTotalEnvBytes {
-			return fmt.Errorf("the environment variables exceed %d bytes in total", MaxTotalEnvBytes)
+			return fmt.Errorf("the environment variable names and plain values exceed 64 KB (%d bytes) in total; secrets and references do not count toward this", MaxTotalEnvBytes)
 		}
 	}
 	return nil
@@ -595,7 +593,7 @@ func envVarBytes(v EnvVar) int {
 	if v.Value != nil {
 		return size + len(*v.Value)
 	}
-	return size + ResolvedPointerWeight
+	return size
 }
 
 // validateReferenceTarget checks a reference's shape: a known source kind, a

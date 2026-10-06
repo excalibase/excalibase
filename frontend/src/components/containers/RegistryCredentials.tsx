@@ -67,7 +67,8 @@ export function RegistryCredentials({ projectId }: { readonly projectId: string 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     save.mutate(
-      { registry: registry.trim(), username, password },
+      // A pasted token often carries a trailing space or line break.
+      { registry: registry.trim(), username: username.trim(), password: password.trim() },
       { onSettled: () => setPassword('') },
     );
   };
@@ -126,7 +127,7 @@ export function RegistryCredentials({ projectId }: { readonly projectId: string 
         />
         <button
           type="submit"
-          disabled={save.isPending || !registry.trim() || !username || !password}
+          disabled={save.isPending || !registry.trim() || !username.trim() || !password.trim()}
           className={primaryButton}
           data-testid="registry-save"
         >

@@ -65,9 +65,17 @@ async function mockRestore(page: Page, opts: { fail?: boolean; capture?: { body?
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'success', message: 'Restore initiated', newProjectId: 'restored-db', recoveryType: 'PITR' }),
+      // The server's real answer: a started job, polled until it completes.
+      body: JSON.stringify({ id: 'job-1', sourceProjectId: PROJECT, newProjectId: 'restored-db', status: 'RUNNING', targetKind: 'latest' }),
     });
   });
+  await page.route(`**/api/provision/${PROJECT}/backup/restore/job-1`, (route: Route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'job-1', sourceProjectId: PROJECT, newProjectId: 'restored-db', status: 'COMPLETED', targetKind: 'latest' }),
+    }),
+  );
 }
 
 async function mockMe(page: Page) {
@@ -153,7 +161,8 @@ test.describe('Backups page', () => {
     await page.goto(BACKUPS_URL);
     await page.getByRole('button', { name: /Trigger Backup/i }).click();
 
-    await expect(page.getByText(/Failed to trigger backup/i)).toBeVisible();
+    // The server's own reason, not a generic failure.
+    await expect(page.getByText('r2 unreachable')).toBeVisible();
     // Existing backups should still be visible — failure must not wipe history.
     await expect(page.getByText('backup-001')).toBeVisible();
   });
@@ -190,7 +199,7 @@ test.describe('Backups page', () => {
       await expect(page.getByRole('button', { name: /Restore to Point in Time/i })).toBeEnabled();
 
       await page.getByRole('button', { name: /Restore to Point in Time/i }).click();
-      await expect(page.getByText('Restore initiated')).toBeVisible();
+      await expect(page.getByText(/Restore completed/)).toBeVisible();
 
       // The body the studio actually sends — pin that the display name
       // and targetTime survive the form correctly. The project id is
@@ -213,8 +222,8 @@ test.describe('Backups page', () => {
     await page.getByLabel(/New Instance Name/i).fill('restored-db');
     await page.getByRole('button', { name: /Restore Latest Backup/i }).click();
 
-    await expect(page.getByText('Restore initiated')).toBeVisible();
-    await expect(page.getByText('restored-db')).toBeVisible();
+    await expect(page.getByText(/Restore completed/)).toBeVisible();
+    await expect(page.getByTestId('restore-result').getByText('restored-db')).toBeVisible();
 
     const body = captured.body as { newProjectName?: string; targetTime?: unknown } | undefined;
     expect(body?.newProjectName).toBe('restored-db');

@@ -70,6 +70,30 @@ describe('RegistryCredentials', () => {
     expect(screen.queryByDisplayValue(TOKEN)).not.toBeInTheDocument();
   });
 
+  // A pasted token often carries a trailing space; the server refuses it, so it is trimmed here.
+  test('sends the username and token without surrounding spaces', async () => {
+    const user = renderSection([]);
+    await user.type(await screen.findByTestId('registry-host'), 'ghcr.io');
+    await user.type(screen.getByTestId('registry-username'), ' octocat ');
+    await user.type(screen.getByTestId('registry-password'), `${TOKEN} `);
+    await user.click(screen.getByTestId('registry-save'));
+
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/projects/proj-1/registry-credentials/ghcr.io', {
+        username: 'octocat',
+        password: TOKEN,
+      }),
+    );
+  });
+
+  test('a username of only spaces cannot be saved', async () => {
+    const user = renderSection([]);
+    await user.type(await screen.findByTestId('registry-host'), 'ghcr.io');
+    await user.type(screen.getByTestId('registry-username'), '   ');
+    await user.type(screen.getByTestId('registry-password'), TOKEN);
+    expect(screen.getByTestId('registry-save')).toBeDisabled();
+  });
+
   test('removing asks first', async () => {
     const user = renderSection(['ghcr.io']);
     const row = await screen.findByTestId('registry-row-ghcr.io');

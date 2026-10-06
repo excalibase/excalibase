@@ -247,11 +247,40 @@ export interface RestoreRequest {
   backupId?: string;
 }
 
+// What POST /restore answers: a restore job (RUNNING, then COMPLETED or FAILED)
+// when restores run in the background, or the new project when they do not.
+export interface RestoreResult {
+  id?: string;
+  status?: string;
+  newProjectId?: string;
+  newProjectName?: string;
+  projectId?: string;
+  currentStep?: string;
+  failureReason?: string;
+  message?: string;
+  recoveryType?: string;
+}
+
+export const RESTORE_RUNNING = 'RUNNING';
+
+// Polls a started restore until it completes or fails.
+export const useRestoreJob = (projectId: string, jobId: string | undefined) => {
+  return useQuery({
+    queryKey: ['restoreJob', projectId, jobId],
+    queryFn: async () => {
+      const response = await api.get<RestoreResult>(`/provision/${projectId}/backup/restore/${jobId}`);
+      return response.data;
+    },
+    enabled: !!projectId && !!jobId,
+    refetchInterval: (query) => (query.state.data?.status === RESTORE_RUNNING ? 3000 : false),
+  });
+};
+
 export const useRestoreFromBackup = (projectId: string) => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (request: RestoreRequest) => {
-      const response = await api.post<Record<string, string>>(
+      const response = await api.post<RestoreResult>(
         `/provision/${projectId}/backup/restore`, request
       );
       return response.data;

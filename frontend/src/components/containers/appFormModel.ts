@@ -129,20 +129,13 @@ function imageError(image: string): string | undefined {
 }
 
 const MOUNT_PATH = /^\/[\w.@+-][\w.@+/-]*$/;
-const SYSTEM_DIRECTORIES = new Set([
-  '/bin',
-  '/boot',
-  '/etc',
-  '/lib',
-  '/lib32',
-  '/lib64',
-  '/run',
-  '/sbin',
-  '/usr',
-  '/var',
-  '/var/run',
-]);
+// A disk at or under one of these hides the image's own files. /var itself too,
+// but /var/lib/<service> is the usual data directory.
+const SYSTEM_DIRECTORIES = ['/bin', '/boot', '/etc', '/lib', '/lib32', '/lib64', '/run', '/sbin', '/usr', '/var/run'];
 const KERNEL_FILESYSTEMS = ['/proc', '/sys', '/dev'];
+
+const atOrUnderAny = (path: string, roots: string[]) =>
+  roots.some((root) => path === root || path.startsWith(`${root}/`));
 
 // Mirrors the server's rules, which still decide.
 function mountPathError(path: string): string | undefined {
@@ -150,10 +143,10 @@ function mountPathError(path: string): string | undefined {
   if (!clean || path.length > 256) {
     return 'Use an absolute path of letters, digits and . _ - @ +, such as /data.';
   }
-  if (SYSTEM_DIRECTORIES.has(path)) {
-    return `${path} holds the image's own files; mount the disk at a data directory such as /data.`;
+  if (path === '/var' || atOrUnderAny(path, SYSTEM_DIRECTORIES)) {
+    return `${path} is at or under a directory that holds the image's own files; mount the disk at a data directory such as /data.`;
   }
-  if (KERNEL_FILESYSTEMS.some((root) => path === root || path.startsWith(`${root}/`))) {
+  if (atOrUnderAny(path, KERNEL_FILESYSTEMS)) {
     return `${path} belongs to the container runtime; mount the disk at a data directory such as /data.`;
   }
   return undefined;
@@ -201,11 +194,34 @@ function envRowError(row: EnvRow, seen: Set<string>, databaseName?: string): str
   return undefined;
 }
 
+// The server's set limits (EXC-555): at most 100 variables, and the names and
+// plain values within 64 KB counted as it counts them — name, kind, value and
+// 64 bytes of framing each. Secrets and references count by number only.
+export const MAX_ENV_VARS = 100;
+const MAX_TOTAL_ENV_BYTES = 64 * 1024;
+const ENV_FRAMING_BYTES = 64;
+const utf8Length = (text: string) => new TextEncoder().encode(text).length;
+
+const envRowBytes = (row: EnvRow) =>
+  utf8Length(row.name) + row.kind.length + ENV_FRAMING_BYTES + (row.kind === 'literal' ? utf8Length(row.value) : 0);
+
+// Reported on the row that crosses a limit.
+function envSetError(index: number, before: number, after: number): string | undefined {
+  if (index === MAX_ENV_VARS) return `A container takes at most ${MAX_ENV_VARS} variables.`;
+  if (before <= MAX_TOTAL_ENV_BYTES && after > MAX_TOTAL_ENV_BYTES) {
+    return 'The variable names and plain values exceed 64 KB in total; secrets and references do not count toward this.';
+  }
+  return undefined;
+}
+
 function envErrors(rows: EnvRow[], databaseName?: string): Record<number, string> {
   const seen = new Set<string>();
   const errors: Record<number, string> = {};
+  let total = 0;
   rows.forEach((row, index) => {
-    const error = envRowError(row, seen, databaseName);
+    const before = total;
+    total += envRowBytes(row);
+    const error = envRowError(row, seen, databaseName) ?? envSetError(index, before, total);
     if (error) errors[index] = error;
   });
   return errors;

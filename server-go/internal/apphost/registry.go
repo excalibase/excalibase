@@ -38,6 +38,10 @@ func (c RegistryCredential) Validate() error {
 		return fmt.Errorf("the username exceeds %d characters", MaxRegistryUsernameLength)
 	case len(c.Password) > MaxRegistryPasswordLength:
 		return fmt.Errorf("the password exceeds %d characters", MaxRegistryPasswordLength)
+	case strings.TrimSpace(c.Username) != c.Username:
+		return errors.New("the username has a space or line break at its start or end; remove it")
+	case strings.TrimSpace(c.Password) != c.Password:
+		return errors.New("the password or token has a space or line break at its start or end; remove it")
 	case strings.Contains(c.Username, ":"):
 		return errors.New("the username must not contain a colon")
 	case hasControl(c.Username) || hasControl(c.Password):

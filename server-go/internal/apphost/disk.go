@@ -45,11 +45,12 @@ var (
 	planDiskSize   = regexp.MustCompile(`^(?:(0|[1-9][0-9]{0,6})Mi|(0|[1-9][0-9]{0,5})Gi)$`)
 	validMountPath = regexp.MustCompile(`^/[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 
-	// systemDirectories hold the image itself; a disk over one hides it.
-	systemDirectories = map[string]bool{
-		"/bin": true, "/boot": true, "/etc": true, "/lib": true, "/lib32": true, "/lib64": true,
-		"/run": true, "/sbin": true, "/usr": true, "/var": true, "/var/run": true,
+	// systemDirectories hold the image itself; a disk at or under one hides it.
+	systemDirectories = []string{
+		"/bin", "/boot", "/etc", "/lib", "/lib32", "/lib64", "/run", "/sbin", "/usr", "/var/run",
 	}
+	// /var itself is the image's, but /var/lib/<service> is the usual data directory.
+	varDirectory = "/var"
 	// kernelFilesystems are the runtime's, at any depth.
 	kernelFilesystems = []string{"/proc", "/sys", "/dev"}
 )
@@ -135,15 +136,22 @@ func validateMountPath(mountPath string) error {
 	if len(mountPath) > maxMountPathLength || !validMountPath.MatchString(mountPath) || path.Clean(mountPath) != mountPath {
 		return fmt.Errorf("%w: the mount path must be a clean absolute path of letters, digits and . _ - @ +", ErrInvalidDisk)
 	}
-	if systemDirectories[mountPath] {
-		return fmt.Errorf("%w: %s holds the image's own files; mount the disk at a data directory such as /data", ErrInvalidDisk, mountPath)
+	if mountPath == varDirectory || atOrUnderAny(mountPath, systemDirectories) {
+		return fmt.Errorf("%w: %s is at or under a directory that holds the image's own files; mount the disk at a data directory such as /data", ErrInvalidDisk, mountPath)
 	}
-	for _, kernel := range kernelFilesystems {
-		if mountPath == kernel || strings.HasPrefix(mountPath, kernel+"/") {
-			return fmt.Errorf("%w: %s belongs to the container runtime", ErrInvalidDisk, mountPath)
-		}
+	if atOrUnderAny(mountPath, kernelFilesystems) {
+		return fmt.Errorf("%w: %s belongs to the container runtime", ErrInvalidDisk, mountPath)
 	}
 	return nil
+}
+
+func atOrUnderAny(mountPath string, roots []string) bool {
+	for _, root := range roots {
+		if mountPath == root || strings.HasPrefix(mountPath, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // DiskLimits answers the largest disk, in bytes, one app of a project may

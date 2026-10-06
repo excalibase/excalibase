@@ -78,3 +78,20 @@ func TestRegistryCredentialValidate(t *testing.T) {
 		}
 	}
 }
+
+// A pasted token often carries a trailing newline or space; the registry would
+// refuse the login much later, so the space is refused now, by name.
+func TestRegistryCredentialRefusesSurroundingWhitespace(t *testing.T) {
+	for name, bad := range map[string]apphost.RegistryCredential{
+		"user leading space":  {Username: " octocat", Password: "x"},
+		"user trailing space": {Username: "octocat ", Password: "x"},
+		"pass trailing space": {Username: "octocat", Password: "ghp_token "},
+		"pass leading tab":    {Username: "octocat", Password: "\tghp_token"},
+		"pass trailing LF":    {Username: "octocat", Password: "ghp_token\n"},
+	} {
+		err := bad.Validate()
+		if err == nil || !strings.Contains(err.Error(), "space") {
+			t.Errorf("%s: got %v, want a refusal naming the surrounding space", name, err)
+		}
+	}
+}
