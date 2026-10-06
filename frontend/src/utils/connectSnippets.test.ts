@@ -41,4 +41,12 @@ describe('connect snippets', () => {
     expect(curlSnippet(base, project)).toContain('/api/v1/your_table?limit=10');
     expect(curlSnippet(base, project)).toMatch(/API permissions/);
   });
+
+  // EXC-555: a quoted table name such as "my table!" went into the URL raw; the
+  // copied curl line then printed nothing.
+  test('a table name is percent-encoded in the REST path', () => {
+    expect(sdkSnippet(base, project, 'my table!')).toContain("db.rest.get('/my%20table!?limit=10')");
+    expect(curlSnippet(base, project, 'my table!')).toContain('/api/v1/my%20table!?limit=10');
+    expect(curlSnippet(base, project, "it's")).not.toContain("it's");
+  });
 });

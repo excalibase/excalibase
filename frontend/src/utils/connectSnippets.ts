@@ -15,6 +15,12 @@ export const sdkInstall = 'npm install @excalibase/sdk graphql-request';
 
 const PLACEHOLDER_TABLE = 'your_table';
 
+// A quoted table name may hold spaces or quotes; both snippets put the path
+// inside single quotes, so ' is encoded too.
+function tablePath(table: string): string {
+  return encodeURIComponent(table).replace(/'/g, '%27');
+}
+
 export function connectEndpoints(apiUrl: string, projectId: string): ConnectEndpoints {
   const base = apiUrl.replace(/\/+$/, '');
   return {
@@ -40,7 +46,7 @@ const db = createClient({
 await db.auth.signInWithApiKey();
 console.log(await db.graphql.query('{ __typename }'));
 // A table answers once its API permissions let this role read it.
-console.log(await db.rest.get('/${table}?limit=10'));`;
+console.log(await db.rest.get('/${tablePath(table)}?limit=10'));`;
 }
 
 export function curlSnippet(apiUrl: string, projectId: string, table: string = PLACEHOLDER_TABLE): string {
@@ -52,7 +58,7 @@ TOKEN=$(curl -s -X POST '${urls.token}' \\
 
 # REST: one path per table. A table answers once its API permissions
 # (Database > Tables > API permissions) let this role read it.
-curl -s '${urls.rest}/${table}?limit=10' -H "Authorization: Bearer $TOKEN"
+curl -s '${urls.rest}/${tablePath(table)}?limit=10' -H "Authorization: Bearer $TOKEN"
 
 # GraphQL
 curl -s -X POST '${urls.graphql}' -H "Authorization: Bearer $TOKEN" \\
