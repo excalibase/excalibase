@@ -46,11 +46,11 @@ func TestLoginStillAcceptsTheUsername(t *testing.T) {
 	}
 }
 
-// A username is matched exactly; only an address ignores case.
-func TestLoginDoesNotFoldTheUsername(t *testing.T) {
+// A username matches ignoring case, as an address does: no two accounts differ only by case.
+func TestLoginFoldsTheUsername(t *testing.T) {
 	r, _, password := identifierLoginRouter(t, 10)
-	if w := doRequest(r, "POST", routeLogin, loginBody("ERIN-3FA9C1", password)); w.Code != http.StatusUnauthorized {
-		t.Fatalf("username in another case: got %d, want 401", w.Code)
+	if w := doRequest(r, "POST", routeLogin, loginBody("ERIN-3FA9C1", password)); w.Code != http.StatusOK {
+		t.Fatalf("username in another case: got %d, want 200", w.Code)
 	}
 }
 

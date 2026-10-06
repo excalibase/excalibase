@@ -70,6 +70,14 @@ func TestRegister_TakenUsernameIsAConflict(t *testing.T) {
 	}
 }
 
+// Existing and existing in other letters would read as the same person.
+func TestRegister_AUsernameDifferingOnlyByCaseIsAConflict(t *testing.T) {
+	h := registerHandler(seededStore(), nil, false)
+	if w := postRegister(h, "EXISTING", "other@x.test"); w.Code != http.StatusConflict {
+		t.Fatalf("got %d, want 409", w.Code)
+	}
+}
+
 func acceptRequest(h *OrgHandler, body string) *httptest.ResponseRecorder {
 	verified := time.Now()
 	return acceptRequestAs(h, &domain.User{ID: "u-accept", Role: "user", Email: "bob@company.test", EmailVerifiedAt: &verified}, body)

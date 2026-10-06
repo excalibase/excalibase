@@ -27,7 +27,7 @@ func (s *Store) CreateUser(ctx context.Context, u *domain.User) error {
 func (s *Store) UpdateUserPassword(ctx context.Context, username, passwordHash string) error {
 	now := time.Now().UTC()
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE users SET password_hash = $1, updated_at = $2 WHERE username = $3`,
+		`UPDATE users SET password_hash = $1, updated_at = $2 WHERE lower(username) = lower($3)`,
 		passwordHash, now, username)
 	if err != nil {
 		return err
@@ -47,7 +47,7 @@ func (s *Store) FindUserByID(ctx context.Context, id string) (*domain.User, erro
 
 func (s *Store) FindUserByUsername(ctx context.Context, username string) (*domain.User, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE username = $1`, username)
+		`SELECT `+userColumns+` FROM users WHERE lower(username) = lower($1)`, username)
 	return scanUser(row)
 }
 

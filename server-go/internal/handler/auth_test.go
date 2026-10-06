@@ -62,7 +62,7 @@ func (s *mockUserStore) FindUserByUsername(_ context.Context, username string) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, u := range s.users {
-		if u.Username == username {
+		if strings.EqualFold(u.Username, username) {
 			return u, nil
 		}
 	}
@@ -110,7 +110,7 @@ func (s *mockUserStore) UpdateUserPassword(_ context.Context, username, hash str
 		return errors.New("db error")
 	}
 	for _, u := range s.users {
-		if u.Username == username {
+		if strings.EqualFold(u.Username, username) {
 			u.PasswordHash = hash
 			return nil
 		}
