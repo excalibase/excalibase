@@ -5,6 +5,11 @@ Excalibase serves an MCP endpoint (streamable HTTP) at `https://<studio host>/mc
 read the schema, run SQL and migrations, generate types, set API permissions, deploy
 functions and apps, and read logs (ADR 0037, decision 6).
 
+MCP ships dark (EXC-554): until an install sets `FEATURE_MCP=true` (chart value
+`features.mcp`), `/mcp`, `GET /api/schema/{projectId}/query` and the AI activity
+feed answer 404 and Studio hides AI Tools. The deploy-by-image and CI tools also
+need `FEATURE_PIPELINE=true` (`features.pipeline`).
+
 ## Authentication
 
 Send a personal access token in `Authorization: Bearer <token>`. Sign-in sessions,

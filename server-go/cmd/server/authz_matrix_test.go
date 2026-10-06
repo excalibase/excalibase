@@ -13,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
@@ -71,6 +72,14 @@ func matrixRouter(t *testing.T) (http.Handler, callers) {
 // RequirePermission routes are driven with.
 func buildMatrix(t *testing.T) (http.Handler, callers, callers) {
 	t.Helper()
+	return buildMatrixWith(t, config.AppConfig{DeploymentMode: "selfhosted"}, func(*handlerDeps) {
+		// the matrix covers every route with every dark feature on
+	})
+}
+
+// buildMatrixWith is buildMatrix under cfg, with deps adjusted before the router is built.
+func buildMatrixWith(t *testing.T, cfg config.AppConfig, adjust func(*handlerDeps)) (http.Handler, callers, callers) {
+	t.Helper()
 	instances := fakestore.NewInstances()
 	instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectA, OrgID: matrixOrgA, Status: "ACTIVE"})
 	instances.Create(&domain.DatabaseInstance{ProjectID: matrixProjectB, OrgID: matrixOrgB, Status: "ACTIVE"})
@@ -99,8 +108,9 @@ func buildMatrix(t *testing.T) (http.Handler, callers, callers) {
 	issue(admins, callerAdminWrite, matrixAdminID, domain.AccessToken{Scopes: "read,write"})
 	issue(admins, callerAdminSession, matrixAdminID, domain.AccessToken{Scopes: auth.ScopeSession})
 
-	cfg := config.AppConfig{DeploymentMode: "selfhosted"}
-	return buildRouter(cfg, platform, instances, matrixDeps(t, instances)), who, admins
+	deps := matrixDeps(t, instances)
+	adjust(deps)
+	return buildRouter(cfg, platform, instances, deps), who, admins
 }
 
 // matrixDeps wires the handlers whose registration or reachable path the
@@ -151,6 +161,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),
 		mcpAudit: &discardAudit{},
+		features: features.NewStatic(features.All()...),
 	}
 }
 

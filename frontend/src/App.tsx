@@ -6,6 +6,7 @@ import { VaultGuard } from './components/auth/VaultGuard';
 import { PlatformLayout } from './components/layout/PlatformLayout';
 import { ProjectLayout } from './components/layout/ProjectLayout';
 import { DatabaseRequired } from './components/DatabaseRequired';
+import { FeatureGate } from './components/FeatureGate';
 
 // Lazy-loaded pages
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
@@ -148,12 +149,12 @@ export default function App() {
             <Route path="containers/templates" element={<ContainerTemplatesPage />} />
             <Route path="containers/:appId" element={<ContainerDetailPage />} />
             <Route path="containers/:appId/edit" element={<ContainerFormPage />} />
-            <Route path="containers/:appId/pipeline" element={<ContainerPipelinePage />} />
+            <Route path="containers/:appId/pipeline" element={<FeatureGate feature="pipeline"><ContainerPipelinePage /></FeatureGate>} />
             {/* Edge Functions */}
             <Route path="edge-functions" element={<EdgeFunctionsPage />} />
             {/* Storage */}
             <Route path="storage" element={<StoragePage />} />
-            <Route path="ai-tools" element={<ConnectAiToolPage />} />
+            <Route path="ai-tools" element={<FeatureGate feature="mcp"><ConnectAiToolPage /></FeatureGate>} />
             <Route path="monitoring/alerts" element={<AlertsPage />} />
             {/* Settings */}
             <Route path="vault" element={<VaultPage />} />

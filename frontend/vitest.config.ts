@@ -73,6 +73,7 @@ export default defineConfig({
         'src/utils/mcpConfig.ts',
         'src/api/aiActivity.ts',
         'src/components/AiActivityFeed.tsx',
+        'src/components/FeatureGate.tsx',
         'src/components/layout/PlatformLayout.tsx',
         'src/api/endUsers.ts',
         'src/utils/deletionProtection.ts',

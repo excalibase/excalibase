@@ -14,6 +14,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	custommw "github.com/excalibase/provisioning-poc/internal/middleware"
 	"github.com/excalibase/provisioning-poc/internal/provisioner"
@@ -54,6 +55,7 @@ func ciRouter(t *testing.T, store *pgstore.Store, resolver service.ImageResolver
 	deploys.SetNamespaceQuotaTiers(prov)
 	deploys.SetImageResolver(resolver)
 	h := NewAppDeployHandler(deploys)
+	h.SetFeatures(features.NewStatic(features.Pipeline))
 
 	r := chi.NewRouter()
 	r.Use(auth.ExtractAuth(store))

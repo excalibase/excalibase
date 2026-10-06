@@ -24,6 +24,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -46,7 +47,12 @@ type AppHandler struct {
 	// limits caps the project's app count by its plan; unset, no app is created.
 	limits apphost.AppLimits
 	budget *storagebudget.Budget
+	// features gates auto-deploy, part of the pipeline (EXC-554); nil keeps it dark.
+	features features.Flags
 }
+
+// SetFeatures wires the flags that decide whether auto-deploy may be set.
+func (h *AppHandler) SetFeatures(flags features.Flags) { h.features = flags }
 
 // SetAppLimits wires the plan's app count (EXC-524).
 func (h *AppHandler) SetAppLimits(limits apphost.AppLimits) { h.limits = limits }
@@ -319,6 +325,10 @@ func (h *AppHandler) Update(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAppBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, errInvalidJSON, http.StatusBadRequest)
+		return
+	}
+	if req.AutoDeploy != nil && !features.Enabled(r.Context(), h.features, features.Pipeline) {
+		http.NotFound(w, r)
 		return
 	}
 	attaching := existing.Disk == nil && req.Disk != nil

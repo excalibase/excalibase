@@ -1,10 +1,22 @@
 import { test, expect } from '@playwright/test';
 import { loginAs, mockProject } from './helpers';
+import type { Page } from '@playwright/test';
+
+// MCP ships dark (EXC-554); the server says in /api/config whether it is on.
+async function mockMcp(page: Page, mcp: boolean) {
+  await page.route('**/api/config', (route) =>
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ deploymentMode: 'cloud', features: { mcp, pipeline: false } }),
+    }),
+  );
+}
 
 test.describe('Connect your AI tool', () => {
   test.beforeEach(async ({ page }) => {
     await loginAs(page);
     await mockProject(page);
+    await mockMcp(page, true);
   });
 
   test('mints a project-bound token and shows the Gemini CLI setup once', async ({ page }) => {
@@ -77,5 +89,21 @@ test.describe('Connect your AI tool', () => {
     const setup = page.getByTestId('mcp-setup');
     await expect(setup).toContainText('.cursor/mcp.json');
     await expect(setup).toContainText('/mcp?project=test-project&read_only=true');
+  });
+});
+
+test.describe('Connect your AI tool, with MCP dark', () => {
+  test.beforeEach(async ({ page }) => {
+    await loginAs(page);
+    await mockProject(page);
+    await mockMcp(page, false);
+  });
+
+  test('the page is not available and the rail has no AI Tools', async ({ page }) => {
+    await page.goto('/project/test-project/ai-tools');
+    await expect(page.getByTestId('feature-unavailable')).toBeVisible();
+    await expect(page.getByTestId('connect-ai-tool-page')).toHaveCount(0);
+    await expect(page.getByTestId('nav-storage')).toBeVisible();
+    await expect(page.getByTestId('nav-ai-tools')).toHaveCount(0);
   });
 });

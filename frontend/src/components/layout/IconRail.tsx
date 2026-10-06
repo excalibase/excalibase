@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useParams, useNavigate, Link } from 'react-router-dom';
 import { visibleProjectNav, type NavSection } from './navigation';
-import { useAppHostingEnabled } from '../../hooks/useDeploymentMode';
+import { useAppHostingEnabled, useFeatureEnabled } from '../../hooks/useDeploymentMode';
 import { cn } from '../../utils/cn';
 import { PanelLeftDashed } from 'lucide-react';
 
@@ -20,7 +20,8 @@ export function IconRail({ activeSection, onSectionClick }: IconRailProps) {
   const location = useLocation();
   const basePath = `/project/${projectId}`;
   const { enabled: appHosting } = useAppHostingEnabled();
-  const sections = visibleProjectNav({ appHosting });
+  const { enabled: mcp } = useFeatureEnabled('mcp');
+  const sections = visibleProjectNav({ appHosting, mcp });
 
   const [mode, setMode] = useState<SidebarMode>(() => {
     return (localStorage.getItem(STORAGE_KEY) as SidebarMode) ?? 'expandable';

@@ -13,6 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/go-chi/chi/v5"
 )
@@ -143,9 +144,16 @@ func (f *fakeAppDeployer) AppDiskStatus(context.Context, string, string) (*servi
 	return nil, errors.New("not used")
 }
 
+// setupAppDeployRouter switches the pipeline on: these tests cover what it added.
 func setupAppDeployRouter(t *testing.T, deployer *fakeAppDeployer) chi.Router {
 	t.Helper()
+	return setupAppDeployRouterWith(t, deployer, features.NewStatic(features.All()...))
+}
+
+func setupAppDeployRouterWith(t *testing.T, deployer *fakeAppDeployer, flags features.Flags) chi.Router {
+	t.Helper()
 	h := NewAppDeployHandler(deployer)
+	h.SetFeatures(flags)
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/apps/{appId}", func(r chi.Router) {
 		r.Post("/deploy", h.Deploy)

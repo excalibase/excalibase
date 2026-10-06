@@ -71,6 +71,8 @@ interface Scenario {
   afterLifecycle?: Array<Partial<App> | 'gone'>;
   // The app hostname's certificate; default: issued.
   certificate?: { hostname?: string; status: string; failureReason?: string };
+  // What the server reports as switched on (EXC-554); default: everything.
+  features?: Record<string, boolean>;
 }
 
 const RESPOND_ASYNC = { headers: { Prefer: 'respond-async' } };
@@ -101,7 +103,10 @@ function renderPage(scenario: Scenario) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === '/config')
       return Promise.resolve({
-        data: { deploymentMode: 'cloud', appHosting: true, customDomains: true },
+        data: {
+          deploymentMode: 'cloud', appHosting: true, customDomains: true,
+          features: scenario.features ?? { mcp: true, pipeline: true },
+        },
       } as never);
     if (url === '/projects/proj-1/apps/app-1/domains/')
       return Promise.resolve({ data: [] } as never);
@@ -208,6 +213,12 @@ describe('ContainerDetailPage', () => {
       'href',
       '/project/proj-1/containers/app-1/pipeline',
     );
+  });
+
+  test('with the pipeline dark there is no pipeline link, and deploy stays', async () => {
+    renderPage({ deploys: [], features: { mcp: true, pipeline: false } });
+    expect(await screen.findByRole('button', { name: /^deploy$/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-link')).not.toBeInTheDocument();
   });
 
   test('shows the arguments a container is started with, as written', async () => {

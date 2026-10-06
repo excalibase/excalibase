@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/auth"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/imagedigest"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
@@ -39,7 +41,12 @@ type AppDeployer interface {
 
 type AppDeployHandler struct {
 	deploys AppDeployer
+	// features gates what the pipeline added (EXC-554); nil keeps it dark.
+	features features.Flags
 }
+
+// SetFeatures wires the flags that decide whether the pipeline is on.
+func (h *AppDeployHandler) SetFeatures(flags features.Flags) { h.features = flags }
 
 func NewAppDeployHandler(deploys AppDeployer) *AppDeployHandler {
 	return &AppDeployHandler{deploys: deploys}
@@ -71,6 +78,10 @@ func (h *AppDeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !features.Enabled(r.Context(), h.features, features.Pipeline) {
+		h.deployWithoutPipeline(w, r, projectID, appID)
+		return
+	}
 	body, err := decodeDeployRequest(w, r)
 	if err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
@@ -88,6 +99,39 @@ func (h *AppDeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSONStatus(w, http.StatusAccepted, newDeployView(deploy))
+}
+
+// deployWithoutPipeline is the deploy Studio asked before EXC-543, with no
+// body. Any body is a pipeline deploy, which answers as if it did not exist (EXC-554).
+func (h *AppDeployHandler) deployWithoutPipeline(w http.ResponseWriter, r *http.Request, projectID, appID string) {
+	if !emptyDeployBody(w, r) {
+		http.NotFound(w, r)
+		return
+	}
+	origin := apphost.DeployOrigin{Actor: actorID(r), Source: deploySource(r)}
+	deploy, err := h.deploys.DeployAppAs(r.Context(), projectID, appID, origin)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSONStatus(w, http.StatusAccepted, newDeployView(deploy))
+}
+
+// emptyDeployBody accepts no body, whitespace, or an empty JSON object.
+func emptyDeployBody(w http.ResponseWriter, r *http.Request) bool {
+	if r.Body == nil {
+		return true
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxDeployBodyBytes))
+	if err != nil {
+		return false
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return true
+	}
+	var fields map[string]json.RawMessage
+	return json.Unmarshal(trimmed, &fields) == nil && len(fields) == 0
 }
 
 // decodeDeployRequest refuses a field it does not know: a misspelt image must
