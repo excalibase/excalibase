@@ -63,6 +63,7 @@ export default defineConfig({
         'src/components/shared/StatusBadge.tsx',
         'src/components/DatabaseRunning.tsx',
         'src/utils/serverError.ts',
+        'src/pages/StoragePage.tsx',
         'src/utils/mutationHelpers.ts',
         'src/utils/toast.ts',
         'src/components/ConnectSnippets.tsx',
