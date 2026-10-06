@@ -243,6 +243,28 @@ describe('ImportTablePanel', () => {
     expect(importApi.grantSelect).not.toHaveBeenCalled();
   });
 
+  test('a file with an id column has it preselected as the primary key', async () => {
+    vi.mocked(importApi.previewImport).mockResolvedValue({
+      ...preview,
+      columns: [
+        { source: 0, sourceName: 'id', name: 'id', type: 'integer' },
+        { source: 1, sourceName: 'Age', name: 'age', type: 'integer' },
+      ],
+    });
+    vi.mocked(importApi.importTable).mockResolvedValue({ schema: 'public', table: 'my_people', mode: 'create', rows: 2 });
+    renderPanel();
+    await uploadAndPreview();
+    expect(screen.getByTestId('import-primary-key')).toHaveValue('id');
+    await userEvent.click(screen.getByTestId('import-submit'));
+    await screen.findByTestId('import-result');
+    expect(importApi.importTable).toHaveBeenCalledWith(
+      'p1',
+      expect.anything(),
+      expect.objectContaining({ primaryKey: 'id' }),
+      expect.any(Function),
+    );
+  });
+
   test('a chosen primary key and schema are sent', async () => {
     vi.mocked(importApi.importTable).mockResolvedValue({
       schema: 'sales',

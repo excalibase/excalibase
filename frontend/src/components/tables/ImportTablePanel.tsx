@@ -64,7 +64,8 @@ function initialTarget(preview: ImportPreview, table: string): TargetChoice {
     schema: 'public',
     table,
     mode: 'create',
-    primaryKey: '',
+    // A column named id is almost always the key; without one the server adds its own id.
+    primaryKey: preview.columns.some((c) => c.name === 'id') ? 'id' : '',
     columns: preview.columns.map((c) => ({ include: true, name: c.name, type: c.type })),
   };
 }

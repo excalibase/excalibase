@@ -7,7 +7,7 @@ import { permissionsKey } from '../../hooks/usePermissions';
 import { apiErrorMessage, putTablePermission } from '../../api/permissions';
 import { DEFAULT_ROLES, fullAccess, tableKey } from '../../utils/permissionModel';
 import { serverErrorMessage } from '../../utils/serverError';
-import { identifierError } from '../../utils/names';
+import { newNameError } from '../../utils/names';
 import { NameLengthHint } from '../ui/NameLengthHint';
 
 interface ColumnDraft {
@@ -93,14 +93,15 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
   };
 
   const handleCreate = async () => {
-    if (!newTableName.trim() || namesTooLong || inFlight.current) return;
+    if (!newTableName.trim() || namesInvalid || inFlight.current) return;
     inFlight.current = true;
     setCreateError(null);
+    const tableName = newTableName.trim();
     try {
       await createTable.mutateAsync({
-        name: newTableName,
+        name: tableName,
         // Strip the client-only _key before sending to the API.
-        columns: newCols.map(({ _key: _, ...c }) => ({ ...c, default: undefined })),
+        columns: newCols.map(({ _key: _, ...c }) => ({ ...c, name: c.name.trim(), default: undefined })),
       });
     } catch (err) {
       setCreateError(serverErrorMessage(err, 'The table was not created'));
@@ -109,12 +110,12 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
       inFlight.current = false;
     }
     setGranting(true);
-    const failures = await grantRead(newTableName);
+    const failures = await grantRead(tableName);
     setGranting(false);
     qc.invalidateQueries({ queryKey: permissionsKey(projectId) });
     if (failures.length > 0) {
       setGrantError(
-        `Table ${newTableName} was created, but ${failures.join('; ')}. Set it on the table's permissions page.`,
+        `Table ${tableName} was created, but ${failures.join('; ')}. Set it on the table's permissions page.`,
       );
       return;
     }
@@ -122,8 +123,9 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
   };
 
   const busy = createTable.isPending || granting;
-  const namesTooLong =
-    !!identifierError('Table', newTableName) || newCols.some((col) => !!identifierError('Column', col.name));
+  const namesInvalid =
+    !!newNameError('Table', newTableName) ||
+    newCols.some((col) => !col.name.trim() || !!newNameError('Column', col.name));
 
   return (
     <SidePanel
@@ -144,7 +146,7 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
           )}
           <button
             onClick={grantError ? handleClose : handleCreate}
-            disabled={!grantError && (!newTableName.trim() || namesTooLong || busy)}
+            disabled={!grantError && (!newTableName.trim() || namesInvalid || busy)}
             className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-lg disabled:opacity-50"
             data-testid="create-table-submit"
           >
@@ -166,7 +168,7 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
             data-testid="table-name-input"
             autoFocus
           />
-          <NameLengthHint kind="Table" name={newTableName} testId="table-name-count" />
+          <NameLengthHint kind="Table" name={newTableName} testId="table-name-count" newName />
         </div>
         <div>
           <span className="block text-sm font-medium text-text-secondary mb-1">Columns</span>
@@ -199,8 +201,8 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
                 </button>
               )}
             </div>
-            {identifierError('Column', col.name) && (
-              <p role="alert" className="mt-1 text-xs text-red-400">{identifierError('Column', col.name)}</p>
+            {newNameError('Column', col.name) && (
+              <p role="alert" className="mt-1 text-xs text-red-400">{newNameError('Column', col.name)}</p>
             )}
             </div>
           ))}

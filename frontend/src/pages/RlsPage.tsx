@@ -44,7 +44,7 @@ export function RlsPage() {
     if (!pName.trim() || !pTable || createInFlight.current) return;
     createInFlight.current = true;
     createPolicy.mutate(
-      { name: pName, table: pTable, command: pCommand, roles: pRoles, using: pUsing || undefined, withCheck: pWithCheck || undefined },
+      { name: pName.trim(), table: pTable, command: pCommand, roles: pRoles, using: pUsing || undefined, withCheck: pWithCheck || undefined },
       {
         onSuccess: () => { setShowCreate(false); setPName(''); setPUsing(''); setPWithCheck(''); },
         onSettled: () => { createInFlight.current = false; },

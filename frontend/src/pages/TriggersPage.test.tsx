@@ -94,7 +94,7 @@ describe('TriggersPage', () => {
   test('creates a trigger with its event and timing', async () => {
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
     renderPage();
-    await fillTrigger('orders_touch');
+    await fillTrigger('  orders_touch ');
     fireEvent.change(screen.getByLabelText('Event'), { target: { value: 'DELETE' } });
     fireEvent.change(screen.getByLabelText('Timing'), { target: { value: 'AFTER' } });
     fireEvent.click(panelSubmit());
@@ -118,7 +118,7 @@ describe('TriggersPage', () => {
   test('a double click on create sends one request', async () => {
     vi.mocked(api.post).mockReturnValue(new Promise(() => {}) as never);
     renderPage();
-    await fillTrigger('orders_touch');
+    await fillTrigger('  orders_touch ');
     const submit = panelSubmit();
     fireEvent.click(submit);
     fireEvent.click(submit);

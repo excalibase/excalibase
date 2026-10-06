@@ -222,7 +222,7 @@ describe('FunctionsPage database functions', () => {
     renderPage();
     const user = userEvent.setup();
     await user.click(await screen.findByTestId('create-function-btn'));
-    await user.type(screen.getByTestId('fn-name-input'), 'recent_notes');
+    await user.type(screen.getByTestId('fn-name-input'), '  recent_notes ');
     await user.clear(screen.getByLabelText('Returns'));
     await user.type(screen.getByLabelText('Returns'), 'SETOF notes');
     await user.type(screen.getByLabelText('Arguments'), 'n integer');

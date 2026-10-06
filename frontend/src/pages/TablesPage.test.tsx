@@ -226,6 +226,33 @@ describe('TablesPage data browsing', () => {
     );
   });
 
+  test('a field typed and then cleared is left out, so its default applies', async () => {
+    renderPage();
+    const user = userEvent.setup();
+    await selectOrders(user);
+
+    await user.click(screen.getByTestId('insert-row-btn'));
+    await user.type(screen.getByLabelText(/^note/), 'oops');
+    await user.clear(screen.getByLabelText(/^note/));
+    await user.click(screen.getByTestId('insert-row-submit'));
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/schema/p1/tables/orders/rows', { data: {} }),
+    );
+  });
+
+  test('a NOT NULL column refuses Set NULL with a message', async () => {
+    renderPage();
+    const user = userEvent.setup();
+    await selectOrders(user);
+
+    await user.dblClick(screen.getByText('1'));
+    await user.click(screen.getByRole('button', { name: 'Set NULL' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('id is NOT NULL; it needs a value');
+    expect(api.patch).not.toHaveBeenCalled();
+  });
+
   test('exports the visible rows as CSV, quoting values and blanking nulls', async () => {
     // Blob.text() is async, so capture the promise and assert on it after.
     const captured: Promise<string>[] = [];
@@ -281,6 +308,31 @@ describe('TablesPage schema editing', () => {
         name: 'shipped_at',
         type: 'timestamptz',
         nullable: false,
+      }),
+    );
+  });
+
+  test('a column name with capitals or spaces is explained and not sent; spaces around it are dropped', async () => {
+    renderPage();
+    const user = userEvent.setup();
+    await selectOrders(user);
+
+    await user.click(screen.getByRole('button', { name: 'Schema' }));
+    await user.click(screen.getByTestId('add-column-btn'));
+
+    fireEvent.change(screen.getByTestId('column-name-input'), { target: { value: 'Shipped At' } });
+    expect(
+      screen.getByText('Use lowercase letters, numbers and underscores, starting with a letter or underscore; at most 63 characters.'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('add-column-submit')).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('column-name-input'), { target: { value: ' shipped_at ' } });
+    await user.click(screen.getByTestId('add-column-submit'));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/schema/p1/tables/orders/columns', {
+        name: 'shipped_at',
+        type: 'text',
+        nullable: true,
       }),
     );
   });

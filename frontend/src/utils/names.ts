@@ -13,6 +13,19 @@ export function identifierBytes(name: string): number {
   return new TextEncoder().encode(name).length;
 }
 
+// The server's rule for a new table, column or schema name
+// (schema/identifier.go CheckNewName): names the API can expose unquoted.
+const PLAIN_NAME_PATTERN = /^[a-z_][a-z0-9_]*$/;
+export const NAME_RULE =
+  'Use lowercase letters, numbers and underscores, starting with a letter or underscore; at most 63 characters.';
+
+// Checks the trimmed name, which is what is sent; a blank name has no message.
+export function newNameError(kind: string, name: string): string | undefined {
+  const trimmed = name.trim();
+  if (trimmed === '') return undefined;
+  return identifierError(kind, trimmed) ?? (PLAIN_NAME_PATTERN.test(trimmed) ? undefined : NAME_RULE);
+}
+
 export function identifierError(kind: string, name: string): string | undefined {
   const bytes = identifierBytes(name);
   return bytes > MAX_IDENTIFIER_BYTES

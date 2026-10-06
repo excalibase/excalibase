@@ -20,7 +20,11 @@ interface DataGridProps {
   readonly onPageChange: (page: number) => void;
   readonly onCellEdit: (tableName: string, pkColumn: string, pkValue: string, columnName: string, value: string | null) => void;
   readonly onDeleteRow: (pkColumn: string, pkValue: string) => void;
+  // Columns that refuse NULL; Set NULL on them explains instead of saving.
+  readonly notNullColumns?: readonly string[];
 }
+
+const NO_COLUMNS: readonly string[] = [];
 
 interface EditingCell {
   readonly row: number;
@@ -50,12 +54,13 @@ interface BuildColumnDefArgs {
   readonly sortOrder: 'asc' | 'desc';
   readonly onSortChange: (col: string, order: 'asc' | 'desc') => void;
   readonly editingCell: EditingCell | null;
-  readonly commitEdit: (rowIdx: number, colIdx: number, columnName: string, val: unknown, newVal: string) => void;
+  readonly commitEdit: (rowIdx: number, colIdx: number, columnName: string, val: unknown, newVal: string | null) => void;
   readonly setEditingCell: (c: EditingCell | null) => void;
+  readonly notNull: boolean;
 }
 
 function buildColumnDef(a: BuildColumnDefArgs): ColumnDef<unknown[], unknown> {
-  const { col, i, sortCol, sortOrder, onSortChange, editingCell, commitEdit, setEditingCell } = a;
+  const { col, i, sortCol, sortOrder, onSortChange, editingCell, commitEdit, setEditingCell, notNull } = a;
   return {
     id: col.name,
     header: () => (
@@ -70,6 +75,8 @@ function buildColumnDef(a: BuildColumnDefArgs): ColumnDef<unknown[], unknown> {
         return (
           <CellEditor
             val={val}
+            columnName={col.name}
+            notNull={notNull}
             onCommit={(newVal) => commitEdit(tableRow.index, i, col.name, val, newVal)}
             onCancel={() => setEditingCell(null)}
           />
@@ -114,12 +121,23 @@ function HeaderCell({ column, sortCol, sortOrder, onSortChange }: HeaderCellProp
 
 interface CellEditorProps {
   readonly val: unknown;
-  readonly onCommit: (newVal: string) => void;
+  readonly columnName: string;
+  readonly notNull: boolean;
+  readonly onCommit: (newVal: string | null) => void;
   readonly onCancel: () => void;
 }
 
-function CellEditor({ val, onCommit, onCancel }: CellEditorProps) {
+// An emptied cell saves an empty string; NULL is its own explicit choice.
+function CellEditor({ val, columnName, notNull, onCommit, onCancel }: CellEditorProps) {
+  const [refusal, setRefusal] = useState<string | null>(null);
   const initial = val === null ? '' : safeString(val);
+  const setNull = () => {
+    if (notNull) {
+      setRefusal(`${columnName} is NOT NULL; it needs a value`);
+      return;
+    }
+    onCommit(null);
+  };
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     onCommit(e.target.value);
   };
@@ -128,13 +146,31 @@ function CellEditor({ val, onCommit, onCancel }: CellEditorProps) {
     if (e.key === 'Escape') onCancel();
   };
   return (
-    <input
-      autoFocus
-      defaultValue={initial}
-      className="w-full px-1 py-0.5 bg-bg-primary border border-purple-500 rounded text-xs font-mono outline-none"
-      onBlur={handleBlur}
-      onKeyDown={handleKey}
-    />
+    <div>
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          defaultValue={initial}
+          className="w-full px-1 py-0.5 bg-bg-primary border border-purple-500 rounded text-xs font-mono outline-none"
+          onBlur={handleBlur}
+          onKeyDown={handleKey}
+        />
+        <button
+          type="button"
+          // Keeps the input from committing its text on blur first.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={setNull}
+          className="flex-shrink-0 px-1 py-0.5 rounded text-[10px] text-text-tertiary border border-border-primary hover:text-text-primary"
+        >
+          Set NULL
+        </button>
+      </div>
+      {refusal && (
+        <p role="alert" className="mt-0.5 text-[10px] text-red-400 whitespace-normal">
+          {refusal}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -162,17 +198,18 @@ function CellView({ val, onActivate }: CellViewProps) {
 export function DataGrid({
   rowsData, rowsLoading, pkColumn, selectedTable,
   sortCol, sortOrder, page, pageSize,
-  onSortChange, onPageChange, onCellEdit, onDeleteRow,
+  onSortChange, onPageChange, onCellEdit, onDeleteRow, notNullColumns = NO_COLUMNS,
 }: DataGridProps) {
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
 
   // commitEdit lifts the side-effectful "did the cell value change?" branch out
   // of the render path so the cell renderer stays shallow (S2004).
-  const commitEdit = useCallback((tableRowIndex: number, _colIndex: number, columnName: string, val: unknown, newVal: string) => {
-    if (newVal !== safeString(val) && pkColumn && rowsData?.rows) {
+  const commitEdit = useCallback((tableRowIndex: number, _colIndex: number, columnName: string, val: unknown, newVal: string | null) => {
+    const unchanged = newVal === null ? val === null : newVal === safeString(val);
+    if (!unchanged && pkColumn && rowsData?.rows) {
       const pkIdx = rowsData.columns.findIndex((c: ColumnMeta) => c.name === pkColumn);
       const pkValue = safeString(rowsData.rows[tableRowIndex][pkIdx]);
-      onCellEdit(selectedTable, pkColumn, pkValue, columnName, newVal || null);
+      onCellEdit(selectedTable, pkColumn, pkValue, columnName, newVal);
     }
     setEditingCell(null);
   }, [pkColumn, rowsData, selectedTable, onCellEdit]);
@@ -183,9 +220,10 @@ export function DataGrid({
       buildColumnDef({
         col, i, sortCol, sortOrder, onSortChange,
         editingCell, commitEdit, setEditingCell,
+        notNull: notNullColumns.includes(col.name),
       })
     );
-  }, [rowsData, sortCol, sortOrder, editingCell, onSortChange, commitEdit]);
+  }, [rowsData, sortCol, sortOrder, editingCell, onSortChange, commitEdit, notNullColumns]);
 
   const table = useReactTable({
     data: rowsData?.rows ?? [],

@@ -65,12 +65,29 @@ describe('DataGrid', () => {
     expect(screen.queryByDisplayValue('renamed')).not.toBeInTheDocument();
   });
 
-  test('emptying a cell saves NULL', () => {
+  test('emptying a cell saves an empty string, not NULL', () => {
     const { onCellEdit } = renderGrid();
     const editor = editCell('first');
     fireEvent.change(editor, { target: { value: '' } });
     fireEvent.blur(editor);
+    expect(onCellEdit).toHaveBeenCalledWith('posts', 'id', '1', 'title', '');
+  });
+
+  test('Set NULL saves NULL once', () => {
+    const { onCellEdit } = renderGrid();
+    editCell('first');
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Set NULL' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set NULL' }));
+    expect(onCellEdit).toHaveBeenCalledTimes(1);
     expect(onCellEdit).toHaveBeenCalledWith('posts', 'id', '1', 'title', null);
+  });
+
+  test('a NOT NULL column says so instead of saving NULL', () => {
+    const { onCellEdit } = renderGrid({ notNullColumns: ['title'] });
+    editCell('first');
+    fireEvent.click(screen.getByRole('button', { name: 'Set NULL' }));
+    expect(onCellEdit).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('title is NOT NULL; it needs a value');
   });
 
   test('an unchanged cell is not saved', () => {
