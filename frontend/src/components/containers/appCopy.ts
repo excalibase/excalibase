@@ -61,8 +61,14 @@ export function appDisplayStatus(app: App, lastDeploy?: Deploy): { label: string
       return { label: 'Running', tone: 'success' };
     case 'failed':
       return { label: 'Failed', tone: 'error' };
-    default:
+    case 'pending':
+    case 'rolling':
       return { label: 'Deploying', tone: 'progress' };
+    case 'superseded':
+      return DEPLOY_STATUS.superseded;
+    default:
+      // Only a deploy that is really moving spins.
+      return { label: `Unknown (${String(lastDeploy?.status)})`, tone: 'neutral' };
   }
 }
 

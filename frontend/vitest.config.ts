@@ -60,6 +60,7 @@ export default defineConfig({
         'src/api/orgs.ts',
         'src/api/apps.ts',
         'src/components/containers/**/*.{ts,tsx}',
+        'src/components/shared/StatusBadge.tsx',
         'src/components/layout/IconRail.tsx',
         'src/pages/ContainersPage.tsx',
         'src/pages/ContainerFormPage.tsx',

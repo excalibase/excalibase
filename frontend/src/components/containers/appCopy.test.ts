@@ -80,6 +80,13 @@ describe('appDisplayStatus', () => {
   ])('%#', (a, d, label) => {
     expect(appDisplayStatus(a, d).label).toBe(label);
   });
+
+  test('only a queued or rolling deploy spins; an unknown one reads Unknown', () => {
+    expect(appDisplayStatus(app, withStatus('pending')).tone).toBe('progress');
+    expect(appDisplayStatus(app, withStatus('rolling')).tone).toBe('progress');
+    expect(appDisplayStatus(app, withStatus('superseded'))).toEqual({ label: 'Replaced by a newer deploy', tone: 'neutral' });
+    expect(appDisplayStatus(app, withStatus('exploded' as Deploy['status']))).toEqual({ label: 'Unknown (exploded)', tone: 'neutral' });
+  });
 });
 
 describe('diskStopReason', () => {

@@ -121,10 +121,11 @@ test.describe('Backups page', () => {
     await expect(page.getByText('backup-001')).toBeVisible();
     await expect(page.getByText('backup-002')).toBeVisible();
 
-    // StatusBadge maps COMPLETED → "Active" and falls through to
-    // "Provisioning" for IN_PROGRESS. We assert the rendered labels.
-    await expect(page.getByText('Active').first()).toBeVisible();
-    await expect(page.getByText('Provisioning').first()).toBeVisible();
+    // A backup reads its own state: COMPLETED → "Completed", IN_PROGRESS →
+    // "In progress"; never a project's "Active" or "Provisioning".
+    await expect(page.getByText('Completed').first()).toBeVisible();
+    await expect(page.getByText('In progress').first()).toBeVisible();
+    await expect(page.getByText('Provisioning')).toHaveCount(0);
   });
 
   test('trigger backup posts to API and shows success toast', async ({ page }) => {
