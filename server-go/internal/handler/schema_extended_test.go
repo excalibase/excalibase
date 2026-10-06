@@ -4,6 +4,7 @@ package handler
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
@@ -128,9 +129,9 @@ func TestSchemaHandler_GetTypes(t *testing.T) {
 func TestSchemaHandler_DropExtension_NotExists(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	// Drop a non-existent extension — should return error (500)
+	// Dropping a missing extension is the caller's mistake: Postgres's reason with 400.
 	w := schemaRequest(r, "DELETE", "/api/schema/test-proj/extensions/nonexistent_ext", "")
-	if w.Code != 500 && w.Code != 200 {
+	if w.Code != 400 || !strings.Contains(w.Body.String(), `extension \"nonexistent_ext\" does not exist`) {
 		t.Fatalf("DropExtension not exists: unexpected %d, body: %s", w.Code, w.Body.String())
 	}
 }
