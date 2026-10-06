@@ -372,7 +372,7 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, apphost.ErrInvalidImage):
 		httpError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, imagedigest.ErrNotPublic):
-		httpError(w, err.Error()+"; push the image to a public registry, or deploy with no image to run the image the app already names", http.StatusUnprocessableEntity)
+		httpError(w, err.Error()+"; push the image to a public registry, or set it as the app's image and deploy with no image, which runs it as the node pulls it, without a pinned digest", http.StatusUnprocessableEntity)
 	case errors.Is(err, imagedigest.ErrNotFound), errors.Is(err, imagedigest.ErrDenied):
 		httpError(w, err.Error(), http.StatusUnprocessableEntity)
 	case errors.Is(err, imagedigest.ErrRateLimited):

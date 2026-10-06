@@ -6,7 +6,8 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
 const (
@@ -65,7 +66,8 @@ type corsList struct {
 }
 
 // allowAppOrigin adds the origin of appURL to the project's CORS allowlist
-// unless it is there already; it answers the origin it added.
+// unless it is there already; it answers the origin it added. The list is
+// read and written whole, so an edit in Studio between the two is lost.
 func allowAppOrigin(ctx context.Context, c *call, projectID, appURL string) (string, error) {
 	origin, err := originOf(appURL)
 	if err != nil || origin == "" {
@@ -94,7 +96,12 @@ func originOf(raw string) (string, error) {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return "", fmt.Errorf("the app's address %q is not a URL", raw)
 	}
-	return strings.ToLower(parsed.Scheme + "://" + parsed.Host), nil
+	// The allowlist stores origins in this form, so a comparison sees what it holds.
+	canonical, err := domain.ParseCorsOrigins([]string{parsed.Scheme + "://" + parsed.Host}, false)
+	if err != nil || len(canonical) != 1 {
+		return "", fmt.Errorf("the app's address %q is not an origin the allowlist takes", raw)
+	}
+	return canonical[0], nil
 }
 
 // markNotDeployed reports an app that no deploy has run as NOT_DEPLOYED.

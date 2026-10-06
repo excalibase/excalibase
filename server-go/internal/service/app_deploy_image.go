@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 
@@ -50,8 +51,16 @@ func (s *AppDeployService) DeployCurrent(ctx context.Context, projectID, appID s
 	if err != nil {
 		return nil, err
 	}
+	// The image is read before the registry is asked; an edit in between
+	// must not be undone by deploying, and recording, the old one.
+	stillNames := func(current *apphost.App) error {
+		if current.Image != app.Image {
+			return fmt.Errorf("%w: its image changed while the deploy was being prepared", apphost.ErrAppVersionConflict)
+		}
+		return nil
+	}
 	if _, digest, pinned := strings.Cut(app.Image, "@"); pinned {
-		return s.deployDigest(ctx, projectID, appID, app.Image, digest, origin, nil)
+		return s.deployDigest(ctx, projectID, appID, app.Image, digest, origin, stillNames)
 	}
 	if s.images == nil {
 		return s.DeployAppAs(ctx, projectID, appID, origin)
@@ -63,7 +72,7 @@ func (s *AppDeployService) DeployCurrent(ctx context.Context, projectID, appID s
 	if err != nil {
 		return nil, err
 	}
-	return s.deployDigest(ctx, projectID, appID, app.Image, digest, origin, nil)
+	return s.deployDigest(ctx, projectID, appID, app.Image, digest, origin, stillNames)
 }
 
 // resolveImage asks the image's registry with the project's saved credential

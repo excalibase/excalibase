@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -83,9 +84,11 @@ func listApps(ctx context.Context, c *call, in projectArg) (any, error) {
 	}
 	out := map[string]any{"apps": apps}
 	for i := range apps {
+		// One app's history that cannot be read leaves its status as stored.
 		fresh, err := markNotDeployed(ctx, c, projectID, &apps[i])
 		if err != nil {
-			return nil, err
+			log.Printf("mcp: deploys of app %s/%s: %v", projectID, apps[i].ID, err)
+			continue
 		}
 		if fresh {
 			out["next"] = "an app that is NOT_DEPLOYED runs nothing yet: " + nextDeploy

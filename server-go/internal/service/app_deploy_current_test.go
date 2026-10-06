@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/imagedigest"
 )
 
@@ -70,6 +71,45 @@ func TestDeployCurrent_AMissingImageIsRefused(t *testing.T) {
 	}
 	if len(deploys.deploys) != 0 {
 		t.Fatalf("a refused deploy is not recorded")
+	}
+}
+
+// An image changed while the registry is asked must not be overwritten by
+// the deploy of the old one.
+func TestDeployCurrent_AnImageChangedMeanwhileIsNotUndone(t *testing.T) {
+	app := sampleDeployApp()
+	svc, deploys, _ := newDeployTestService(t, app)
+	resolver := &stubResolver{digest: resolvedDigest}
+	resolver.during = func() {
+		stored, _ := svc.apps.Get(app.ProjectID, app.ID)
+		stored.Image = "ghcr.io/acme/storefront:2.0.0"
+		if err := svc.apps.Update(stored, stored.Version); err != nil {
+			t.Errorf("concurrent edit: %v", err)
+		}
+	}
+	svc.SetImageResolver(resolver)
+
+	if _, err := svc.DeployCurrent(context.Background(), app.ProjectID, app.ID, ciOrigin()); !errors.Is(err, apphost.ErrAppVersionConflict) {
+		t.Fatalf("err = %v, want a version conflict", err)
+	}
+	if stored, _ := svc.apps.Get(app.ProjectID, app.ID); stored.Image != "ghcr.io/acme/storefront:2.0.0" || len(deploys.deploys) != 0 {
+		t.Fatalf("the edit was undone or a deploy recorded: %q, %d deploys", stored.Image, len(deploys.deploys))
+	}
+}
+
+// A registry that does not answer fails the deploy closed, as a CI deploy
+// does: the deploy record always names the digest it ran when it can.
+func TestDeployCurrent_ARegistryOutageRefuses(t *testing.T) {
+	for _, outage := range []error{imagedigest.ErrUnavailable, imagedigest.ErrRateLimited} {
+		app := sampleDeployApp()
+		svc, deploys, _ := newDeployTestService(t, app)
+		svc.SetImageResolver(&stubResolver{err: outage})
+		if _, err := svc.DeployCurrent(context.Background(), app.ProjectID, app.ID, ciOrigin()); !errors.Is(err, outage) {
+			t.Errorf("%v: err = %v", outage, err)
+		}
+		if len(deploys.deploys) != 0 {
+			t.Errorf("%v: a deploy was recorded", outage)
+		}
 	}
 }
 
