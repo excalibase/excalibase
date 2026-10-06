@@ -168,3 +168,19 @@ describe('displayPrefix', () => {
     expect(displayPrefix(key)).toBe('abc');
   });
 });
+
+describe('SDK keys — using a key', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('the page shows how to use a key from code', async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => {
+      if (url === '/config') return { data: { deploymentMode: 'cloud', apiUrl: 'https://api.example.test' } } as never;
+      if (url.startsWith('/schema/')) return { data: [] } as never;
+      return { data: listed } as never;
+    });
+    renderRoute();
+    const code = await screen.findByTestId('connect-code');
+    expect(code).toHaveTextContent("projectId: 'proj-1'");
+    expect(code).toHaveTextContent('key: process.env.EXCALIBASE_PUBLISHABLE_KEY');
+  });
+});

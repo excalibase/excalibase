@@ -168,7 +168,7 @@ describe('SettingsPage — lifecycle', () => {
 
   test('copying the project ref puts it on the clipboard', async () => {
     renderSettings(false);
-    const button = await screen.findByRole('button', { name: 'Copy Project Ref' });
+    const button = await screen.findByRole('button', { name: 'Copy Project ID' });
     const written: string[] = [];
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -208,5 +208,18 @@ describe('SettingsPage — operations followed on the project', () => {
     await userEvent.click(screen.getByTestId('modal-confirm'));
     expect(await screen.findByTestId('delete-error')).toHaveTextContent(/not confirmed stopped/);
     expect(screen.queryByTestId('projects-list-page')).not.toBeInTheDocument();
+  });
+});
+
+describe('SettingsPage — connect from code', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('the connect snippet uses the published SDK and the server-reported API URL', async () => {
+    renderSettings(false, {}, { '/config': { deploymentMode: 'cloud', apiUrl: 'https://api.example.test' } });
+    const code = await screen.findByTestId('connect-code');
+    expect(code).toHaveTextContent("from '@excalibase/sdk'");
+    expect(code).toHaveTextContent("url: 'https://api.example.test'");
+    expect(code).toHaveTextContent("projectId: 'p-1'");
+    expect(screen.getByTestId('connect-section')).not.toHaveTextContent(/@excalibase\/client|anonKey|api\.excalibase\.io\/o-1/);
   });
 });

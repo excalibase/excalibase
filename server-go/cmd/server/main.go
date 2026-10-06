@@ -1520,10 +1520,13 @@ func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
 		CustomDomains  bool   `json:"customDomains"`
 		// Features is what ships dark and whether it is on (EXC-554).
 		Features map[string]bool `json:"features"`
+		// The public API base Studio's connect snippets point at (the SDK's url).
+		APIURL string `json:"apiUrl"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled,
-			CustomDomains: customDomainsOn(cfg), Features: features.Snapshot(r.Context(), flags)}
+			CustomDomains: customDomainsOn(cfg), Features: features.Snapshot(r.Context(), flags),
+			APIURL: strings.TrimRight(cfg.PublicBaseURL, "/")}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
 			log.Printf("write /api/config: %v", err)

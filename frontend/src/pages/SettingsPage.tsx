@@ -1,11 +1,12 @@
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Server, Database, Shield, Clock, Trash2, Copy, Check, AlertTriangle, PauseCircle, PlayCircle } from 'lucide-react';
+import { Loader2, Server, Database, Shield, Clock, Trash2, Check, AlertTriangle, PauseCircle, PlayCircle } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../api/client';
 import { useCancelDeletion, useDeprovisionDatabase, usePauseProject, useResumeProject, useSetDeletionProtection } from '../hooks/useProvisioning';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { ConnectionStrings } from '../components/ConnectionStrings';
+import { ConnectSnippets } from '../components/ConnectSnippets';
 import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
 import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
 import { PublicPortCard } from '../components/PublicPortCard';
@@ -20,42 +21,6 @@ interface RollbackResult {
   name: string;
   ok: boolean;
   error?: string;
-}
-
-interface CopyFieldProps {
-  readonly label: string;
-  readonly value: string;
-}
-
-function CopyField({ label, value }: CopyFieldProps) {
-  const [copied, setCopied] = useState(false);
-  const onCopy = () => {
-    navigator.clipboard.writeText(value).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      },
-      () => setCopied(false),
-    );
-  };
-  return (
-    <div>
-      <div className="text-xs text-text-tertiary mb-1">{label}</div>
-      <div className="flex items-center gap-2">
-        <code className="flex-1 bg-bg-tertiary border border-border-primary rounded px-3 py-2 text-sm font-mono text-text-primary truncate">
-          {value}
-        </code>
-        <button
-          type="button"
-          onClick={onCopy}
-          aria-label={`Copy ${label}`}
-          className="p-2 rounded border border-border-primary text-text-secondary hover:text-text-primary hover:border-text-secondary transition-colors"
-        >
-          {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-        </button>
-      </div>
-    </div>
-  );
 }
 
 function projectInfo(project: DatabaseInstance) {
@@ -104,14 +69,6 @@ export function SettingsPage() {
   const info = projectInfo(project);
   const noDatabase = project.noDatabase === true;
 
-  const authEndpoint = `https://auth.excalibase.io/${project.orgId}/${project.projectId}`;
-  const graphqlEndpoint = `https://api.excalibase.io/${project.orgId}/${project.projectId}/graphql`;
-  const sdkSnippet = `import { createClient } from '@excalibase/client'
-
-const excalibase = createClient({
-  url: 'https://api.excalibase.io/${project.orgId}/${project.projectId}',
-  anonKey: '<paste your anon key from Auth settings>',
-})`;
 
   return (
     <div data-testid="settings-page">
@@ -136,17 +93,7 @@ const excalibase = createClient({
       {!noDatabase && (<>
       <div className="rounded-lg border border-border-primary bg-surface-card p-4 mb-8" data-testid="connect-section">
         <h4 className="text-sm font-medium text-text-primary mb-3">Connect to your project</h4>
-        <div className="space-y-3">
-          <CopyField label="Project Ref" value={project.projectId} />
-          <CopyField label="GraphQL endpoint" value={graphqlEndpoint} />
-          <CopyField label="Auth endpoint" value={authEndpoint} />
-          <div>
-            <div className="text-xs text-text-tertiary mb-1">SDK init</div>
-            <pre className="bg-bg-tertiary border border-border-primary rounded px-3 py-2 text-xs font-mono text-text-primary overflow-x-auto">
-              <code>{sdkSnippet}</code>
-            </pre>
-          </div>
-        </div>
+        <ConnectSnippets projectId={project.projectId} />
       </div>
 
       <div className="mb-8">

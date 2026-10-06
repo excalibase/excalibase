@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { AlertTriangle, Check, Copy, KeyRound, Loader2 } from 'lucide-react';
 import { Button } from '../components/Button';
+import { ConnectSnippets } from '../components/ConnectSnippets';
 import {
   displayPrefix,
   useCreateSdkKey,
@@ -130,6 +131,11 @@ export function SdkKeysPage() {
           </tbody>
         </table>
       )}
+
+      <section className="space-y-3 pt-2 border-t border-border-primary" data-testid="sdk-keys-usage">
+        <h2 className="text-sm font-medium text-text-primary pt-4">Use a key from code</h2>
+        <ConnectSnippets projectId={projectId} />
+      </section>
     </div>
   );
 }
