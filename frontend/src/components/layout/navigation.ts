@@ -47,11 +47,13 @@ export interface NavSection {
   to?: string;
   children?: NavItem[];
   // Shown only when the server reports the capability as enabled.
-  requires?: 'appHosting';
+  requires?: keyof NavCapabilities;
 }
 
 export interface NavCapabilities {
   appHosting: boolean;
+  // MCP for coding tools ships dark (EXC-554).
+  mcp: boolean;
 }
 
 export const PROJECT_NAV: NavSection[] = [
@@ -93,7 +95,7 @@ export const PROJECT_NAV: NavSection[] = [
   // { key: 'realtime', label: 'Realtime', icon: Radio, to: 'realtime' },
   { key: 'storage', label: 'Storage', icon: FolderOpen, to: 'storage' },
   { key: 'api-keys', label: 'API Keys', icon: KeyRound, to: 'api-keys' },
-  { key: 'ai-tools', label: 'AI Tools', icon: Bot, to: 'ai-tools' },
+  { key: 'ai-tools', label: 'AI Tools', icon: Bot, to: 'ai-tools', requires: 'mcp' },
   {
     key: 'monitoring',
     label: 'Monitoring',

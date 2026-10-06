@@ -22,7 +22,7 @@ import {
 } from '../components/containers/appCopy';
 import { DeployHistory } from '../components/containers/DeployHistory';
 import { AppDomains, HostCertificateBadge } from '../components/containers/AppDomains';
-import { useCustomDomainsEnabled } from '../hooks/useDeploymentMode';
+import { useCustomDomainsEnabled, useFeatureEnabled } from '../hooks/useDeploymentMode';
 import { LifecycleActions } from '../components/containers/LifecycleActions';
 import { AppLogs } from '../components/containers/AppLogs';
 import { AppDiskCard } from '../components/containers/AppDiskCard';
@@ -159,6 +159,7 @@ function Detail({
   const redeploy = useRedeployApp(projectId, appId);
   const [lifecycleError, setLifecycleError] = useState<unknown>(null);
   const customDomains = useCustomDomainsEnabled();
+  const { enabled: pipeline } = useFeatureEnabled('pipeline');
 
   if (isLoading) return <Spinner />;
   if (error || !app) {
@@ -189,13 +190,15 @@ function Detail({
             >
               <Pencil className="w-4 h-4" /> Edit
             </Link>
-            <Link
-              to={`/project/${projectId}/containers/${appId}/pipeline`}
-              className={secondaryButton}
-              data-testid="pipeline-link"
-            >
-              <Workflow className="w-4 h-4" /> Pipeline
-            </Link>
+            {pipeline && (
+              <Link
+                to={`/project/${projectId}/containers/${appId}/pipeline`}
+                className={secondaryButton}
+                data-testid="pipeline-link"
+              >
+                <Workflow className="w-4 h-4" /> Pipeline
+              </Link>
+            )}
             <button
               type="button"
               onClick={() => deployApp.mutate()}

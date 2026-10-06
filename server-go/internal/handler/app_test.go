@@ -16,6 +16,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
 	"github.com/go-chi/chi/v5"
 )
@@ -193,14 +194,24 @@ type fakeAppLimits struct {
 func (f fakeAppLimits) MaxApps(context.Context, string) (int, error) { return f.limit, f.err }
 
 func setupAppRouter(t *testing.T) (chi.Router, *fakeAppStore) {
-	r, store, _ := setupAppRouterWithSources(t, newFakeSources("storefront_db"))
+	return setupAppRouterWith(t, features.NewStatic(features.All()...))
+}
+
+func setupAppRouterWith(t *testing.T, flags features.Flags) (chi.Router, *fakeAppStore) {
+	r, store, _ := setupAppRouterWithFlags(t, newFakeSources("storefront_db"), flags)
 	return r, store
 }
 
+// setupAppRouterWithSources switches every dark feature on: these tests cover them.
 func setupAppRouterWithSources(t *testing.T, sources *fakeSources) (chi.Router, *fakeAppStore, *fakeSources) {
+	return setupAppRouterWithFlags(t, sources, features.NewStatic(features.All()...))
+}
+
+func setupAppRouterWithFlags(t *testing.T, sources *fakeSources, flags features.Flags) (chi.Router, *fakeAppStore, *fakeSources) {
 	t.Helper()
 	store := newFakeAppStore()
 	h := NewAppHandler(store, sources, testAppRoute)
+	h.SetFeatures(flags)
 	h.SetAppLimits(fakeAppLimits{limit: testAppLimit})
 	r := chi.NewRouter()
 	r.Route("/api/projects/{projectId}/apps", func(r chi.Router) { h.Routes(r) })

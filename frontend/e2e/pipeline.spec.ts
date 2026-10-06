@@ -31,11 +31,15 @@ interface Recorded {
   redeploys: string[];
 }
 
-async function mockPipeline(page: Page): Promise<Recorded> {
+// The pipeline ships dark (EXC-554); these tests cover it switched on.
+async function mockPipeline(page: Page, pipeline = true): Promise<Recorded> {
   const recorded: Recorded = { patches: [], redeploys: [] };
   let current = { ...app } as Record<string, unknown>;
   await page.route('**/api/config', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ deploymentMode: 'cloud', appHosting: true }) }),
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ deploymentMode: 'cloud', appHosting: true, features: { mcp: false, pipeline } }),
+    }),
   );
   await page.route(new RegExp(`${APP_PATH}$`), async (route) => {
     if (route.request().method() === 'PATCH') {
@@ -123,5 +127,18 @@ test.describe('Container pipeline', () => {
     await page.goto('/project/test-project/containers/app-1');
     await page.getByTestId('pipeline-link').click();
     await expect(page.getByTestId('container-pipeline-page')).toBeVisible();
+  });
+
+  test('with the pipeline dark, the container page deploys but has no pipeline', async ({ page }) => {
+    await mockPipeline(page, false);
+    await page.route(new RegExp(`${APP_PATH}/(domains/|certificate|disk)$`), (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
+    );
+    await page.goto('/project/test-project/containers/app-1');
+    await expect(page.getByTestId('deploy-button')).toBeVisible();
+    await expect(page.getByTestId('pipeline-link')).toHaveCount(0);
+    await page.goto('/project/test-project/containers/app-1/pipeline');
+    await expect(page.getByTestId('feature-unavailable')).toBeVisible();
+    await expect(page.getByTestId('auto-deploy-toggle')).toHaveCount(0);
   });
 });

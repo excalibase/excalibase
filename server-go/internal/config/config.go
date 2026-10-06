@@ -13,6 +13,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/clientaddr"
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/natsauth"
 )
 
@@ -275,6 +276,9 @@ type AppConfig struct {
 	// any install until the epic is finished, so it defaults off; only the
 	// exact value "true" turns it on.
 	AppHostingEnabled bool
+	// DarkFeatures are the features shipped dark that this install turned on
+	// (EXC-554); feature code asks Features(), never this list.
+	DarkFeatures []features.Feature
 	// AppRuntimeClass names the sandbox RuntimeClass every app pod runs under.
 	AppRuntimeClass string
 
@@ -460,6 +464,7 @@ func load() AppConfig {
 		FnReplayEnabled:                envBool("EXCALIBASE_FN_REPLAY_ENABLED", true),
 		FnReplayPollInterval:           envMillis("EXCALIBASE_FN_REPLAY_POLL_MS", defaultReplayPoll),
 		AppHostingEnabled:              envOr("APP_HOSTING_ENABLED", "") == "true",
+		DarkFeatures:                   loadDarkFeatures(),
 		DocumentDBEnabled:              envOr("DOCUMENTDB_ENABLED", "") == "true",
 		AppRuntimeClass:                envOr("APP_RUNTIME_CLASS", "gvisor"),
 		AppEgressExtraDenyCIDRs:        envEgressExtraDenyCIDRs("APP_EGRESS_EXTRA_DENY_CIDRS"),

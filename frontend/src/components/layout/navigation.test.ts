@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { PROJECT_NAV } from './navigation';
+import { PROJECT_NAV, visibleProjectNav } from './navigation';
 
 describe('project navigation', () => {
   test('the project home is the project, not its database', () => {
@@ -16,5 +16,11 @@ describe('project navigation', () => {
   test('AI Tools opens the Connect your AI tool page', () => {
     const aiTools = PROJECT_NAV.find((section) => section.key === 'ai-tools');
     expect(aiTools).toMatchObject({ label: 'AI Tools', to: 'ai-tools' });
+  });
+
+  test('AI Tools is listed only when the server has MCP on', () => {
+    const keys = (mcp: boolean) => visibleProjectNav({ appHosting: true, mcp }).map((section) => section.key);
+    expect(keys(false)).not.toContain('ai-tools');
+    expect(keys(true)).toContain('ai-tools');
   });
 });

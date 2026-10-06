@@ -77,7 +77,7 @@ func TestAppDomainResolver(t *testing.T) {
 func TestConfigReportsCustomDomains(t *testing.T) {
 	for issuer, want := range map[string]bool{"": false, "le": true} {
 		w := httptest.NewRecorder()
-		serveConfig(domainsConfig(issuer))(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+		serveConfig(domainsConfig(issuer), nil)(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 		if got := strings.Contains(w.Body.String(), `"customDomains":true`); got != want {
 			t.Errorf("issuer %q: body %s", issuer, w.Body.String())
 		}

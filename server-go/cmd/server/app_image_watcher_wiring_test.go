@@ -18,17 +18,17 @@ func TestImageWatcher_StartedAtBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}
-	if !strings.Contains(string(body), "startImageWatcher(cfg, sqlStore, deps.appDeploySvc)") {
+	if !strings.Contains(string(body), "startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)") {
 		t.Error("the image watcher is never started")
 	}
 }
 
 func TestImageWatcher_NeedsAppHostingAndThePlatformStore(t *testing.T) {
 	deploys := service.NewAppDeployService(nil, nil, k8s.NewMockClient(), fakestore.NewInstances(), nil, k8s.AppRenderOptions{})
-	if startImageWatcher(config.AppConfig{}, nil, deploys) == nil {
+	if startImageWatcher(config.AppConfig{}, nil, nil, deploys) == nil {
 		t.Fatal("a stop function is always returned")
 	}
-	if startImageWatcher(config.AppConfig{AppHostingEnabled: true}, nil, deploys) == nil {
+	if startImageWatcher(config.AppConfig{AppHostingEnabled: true}, nil, nil, deploys) == nil {
 		t.Fatal("a stop function is always returned")
 	}
 	if appImageWatchInterval < time.Minute {

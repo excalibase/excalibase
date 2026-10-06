@@ -23,6 +23,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/email"
 	"github.com/excalibase/provisioning-poc/internal/endusers"
+	"github.com/excalibase/provisioning-poc/internal/features"
 	"github.com/excalibase/provisioning-poc/internal/handler"
 	"github.com/excalibase/provisioning-poc/internal/imagedigest"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -274,7 +275,7 @@ func runServer(cfg config.AppConfig) {
 
 	stopAppRollouts := startAppRolloutSweeper(cfg, sqlStore, deps.appDeploySvc)
 	defer stopAppRollouts()
-	stopImageWatcher := startImageWatcher(cfg, sqlStore, deps.appDeploySvc)
+	stopImageWatcher := startImageWatcher(cfg, deps.features, sqlStore, deps.appDeploySvc)
 	defer stopImageWatcher()
 	stopCredentialRenewal := startBackupCredentialRenewer(cfg, sqlStore, store, k8sClient, provSvc)
 	defer stopCredentialRenewal()
@@ -471,11 +472,16 @@ const (
 	appImageWatchTick           = 30 * time.Second
 )
 
+// imageWatcherWanted: auto-deploy is part of the pipeline, dark until it is on (EXC-554).
+func imageWatcherWanted(ctx context.Context, cfg config.AppConfig, flags features.Flags) bool {
+	return cfg.AppHostingEnabled && features.Enabled(ctx, flags, features.Pipeline)
+}
+
 // startImageWatcher runs auto-deploy (EXC-542) on the leading replica.
-func startImageWatcher(cfg config.AppConfig, sqlStore storage.PlatformStore, deploys *service.AppDeployService) func() {
-	if !cfg.AppHostingEnabled || sqlStore == nil || deploys == nil {
+func startImageWatcher(cfg config.AppConfig, flags features.Flags, sqlStore storage.PlatformStore, deploys *service.AppDeployService) func() {
+	if !imageWatcherWanted(context.Background(), cfg, flags) || sqlStore == nil || deploys == nil {
 		return func() {
-			// no app hosting or no platform store: nothing to watch
+			// no app hosting, pipeline dark or no platform store: nothing to watch
 		}
 	}
 	var lock storage.LeaderLock = service.AlwaysLeader{}
@@ -810,6 +816,8 @@ type handlerDeps struct {
 	rlTokenCreate func(http.Handler) http.Handler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
+	// features decides what ships dark (EXC-554); routes ask it per request.
+	features features.Flags
 	// activity marks a project as seen on every successful project-scoped
 	// call (EXC-279). Mounted after the access guards so rejected calls never
 	// count.
@@ -1276,6 +1284,13 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	h.SetDiskLimits(disks)
 	h.SetAppLimits(service.NewAppLimits(plans, tiers))
 	h.SetStorageBudget(budget)
+	h.SetFeatures(cfg.Features())
+	return h
+}
+
+func newAppDeployHandler(deploys handler.AppDeployer, flags features.Flags) *handler.AppDeployHandler {
+	h := handler.NewAppDeployHandler(deploys)
+	h.SetFeatures(flags)
 	return h
 }
 
@@ -1443,7 +1458,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		storageBudgetH:      handler.NewStorageBudgetHandler(a.budget),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeploySvc:        appDeploySvc,
-		appDeployHandler:    handler.NewAppDeployHandler(appDeploySvc),
+		appDeployHandler:    newAppDeployHandler(appDeploySvc, cfg.Features()),
 		registryCredHandler: newRegistryCredentialHandler(registryCreds),
 		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
 			apphost.NewPostgresAppStore(sqlStore.DB()), store, k8sClient)),
@@ -1470,6 +1485,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlMailSend:    custommw.RateLimit(custommw.PerUser, 5, time.Hour),
 		rlTokenCreate: newTokenCreateLimiter(),
 		mcpAudit:      sqlStore,
+		features:      cfg.Features(),
 		activity:      custommw.ProjectActivity(activityRecorder),
 		emailSender:   emailSender,
 		storageSvc:    storageSvc,
@@ -1489,13 +1505,17 @@ type routerStores interface {
 
 // serveConfig answers what the studio must know before login: the deployment
 // mode, and whether app hosting is mounted so it never links to a 404.
-func serveConfig(cfg config.AppConfig) http.HandlerFunc {
-	body := struct {
+func serveConfig(cfg config.AppConfig, flags features.Flags) http.HandlerFunc {
+	type configBody struct {
 		DeploymentMode string `json:"deploymentMode"`
 		AppHosting     bool   `json:"appHosting"`
 		CustomDomains  bool   `json:"customDomains"`
-	}{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled, CustomDomains: customDomainsOn(cfg)}
-	return func(w http.ResponseWriter, _ *http.Request) {
+		// Features is what ships dark and whether it is on (EXC-554).
+		Features map[string]bool `json:"features"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		body := configBody{DeploymentMode: cfg.DeploymentMode, AppHosting: cfg.AppHostingEnabled,
+			CustomDomains: customDomainsOn(cfg), Features: features.Snapshot(r.Context(), flags)}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
 			log.Printf("write /api/config: %v", err)
@@ -1529,7 +1549,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})
-	r.Get("/api/config", serveConfig(cfg))
+	r.Get("/api/config", serveConfig(cfg, d.features))
 	r.Get("/api/capacity", auth.RequireAuth(http.HandlerFunc(d.capDeps.serveCapacity)).ServeHTTP)
 
 	mountProvisioningRoutes(r, sqlStore, store, d)
@@ -1562,7 +1582,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 // in-process request through r itself, so it meets the same gates as Studio.
 func mountMCP(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 	settings := mcpserver.Settings{PublicBaseURL: cfg.PublicBaseURL, StudioURL: cfg.StudioURL, DataPlaneURL: cfg.MCPDataPlaneURL}
-	r.With(d.rlAuthed).Handle("/mcp", mcpserver.NewHandler(r, d.mcpAudit, settings))
+	r.With(features.Require(d.features, features.MCP), d.rlAuthed).Handle("/mcp", mcpserver.NewHandler(r, d.mcpAudit, settings))
 }
 
 // mountProvisioningRoutes attaches /api/provision and its per-project sub-router.
@@ -1790,7 +1810,8 @@ func mountVaultAndSchemaRoutes(r *chi.Mux, sqlStore storage.OrgStore, store stor
 		r.Post("/import/preview", d.tableImportHandler.Preview)
 		// Read-only SQL is a GET, so a read-only token reaches it, but only on
 		// the rung that may run SQL at all.
-		r.With(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).
+		// It serves MCP's run_sql, so it is dark with MCP (EXC-554).
+		r.With(features.Require(d.features, features.MCP), custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore)).
 			Get("/query", d.schemaHandler.ExecuteReadOnlyQuery)
 		r.Group(func(r chi.Router) {
 			r.Use(d.schemaHandler.AnnounceSchemaChange)
@@ -1874,7 +1895,8 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 				r.With(dev).Get("/disk", d.appDeployHandler.DiskStatus)
 				r.With(dev).Post("/deploy", d.appDeployHandler.Deploy)
 				r.Get("/deploys", d.appDeployHandler.ListDeploys)
-				r.Get("/deploys/{deployId}", d.appDeployHandler.GetDeploy)
+				// What CI polls (EXC-543), dark with the pipeline.
+				r.With(features.Require(d.features, features.Pipeline)).Get("/deploys/{deployId}", d.appDeployHandler.GetDeploy)
 				r.Get("/logs", d.appLogHandler.Logs)
 				r.With(dev).Post("/deploys/{deployId}/redeploy", d.appDeployHandler.Redeploy)
 				r.With(dev).Put("/secrets/{name}", d.appSecretHandler.Set)
@@ -1952,6 +1974,7 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 	})
 	// What AI coding tools did in the project through MCP (EXC-544).
 	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {
+		r.Use(features.Require(d.features, features.MCP))
 		r.Use(custommw.TenantContext)
 		r.Use(auth.RequireAuth)
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))

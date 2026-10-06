@@ -3,10 +3,14 @@ import { api } from '../api/client';
 
 export type DeploymentMode = 'selfhosted' | 'cloud';
 
+// Features that ship dark and are turned on per installation (EXC-554).
+export type Feature = 'mcp' | 'pipeline';
+
 interface ConfigResponse {
   deploymentMode: DeploymentMode;
   appHosting?: boolean;
   customDomains?: boolean;
+  features?: Partial<Record<Feature, boolean>>;
 }
 
 function useStudioConfig() {
@@ -36,6 +40,13 @@ export function useAppHostingEnabled(): { enabled: boolean; isLoading: boolean }
 export function useCustomDomainsEnabled(): boolean {
   const { data } = useStudioConfig();
   return data?.customDomains === true;
+}
+
+// Off until the server says the feature is on, so Studio never shows a
+// page whose calls the server answers with 404.
+export function useFeatureEnabled(feature: Feature): { enabled: boolean; isLoading: boolean } {
+  const { data, isLoading } = useStudioConfig();
+  return { enabled: data?.features?.[feature] === true, isLoading };
 }
 
 export function isSelfHosted(mode: DeploymentMode): boolean {
