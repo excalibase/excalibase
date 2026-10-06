@@ -748,6 +748,7 @@ func functionCronLock(cfg config.AppConfig, sqlStore storage.PlatformStore) stor
 type handlerDeps struct {
 	provHandler        *handler.ProvisioningHandler
 	sdkKeysHandler     *handler.SDKKeysHandler
+	aiActivityHandler  *handler.AIActivityHandler
 	endUsersHandler    *handler.EndUsersHandler
 	metricsHandler     *handler.MetricsHandler
 	backupHandler      *handler.BackupHandler
@@ -1413,6 +1414,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	return &handlerDeps{
 		provHandler:         provHandler,
 		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
+		aiActivityHandler:   handler.NewAIActivityHandler(sqlStore, sqlStore),
 		endUsersHandler:     handler.NewEndUsersHandler(buildEndUserManager(cfg, vc), store, sqlStore, sqlStore),
 		metricsHandler:      handler.NewMetricsHandler(metricsSvc),
 		backupHandler:       handler.NewBackupHandler(backupSvc),
@@ -1947,6 +1949,14 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(custommw.RequireProjectAccess(store, sqlStore))
 		r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 		d.sdkKeysHandler.Routes(r)
+	})
+	// What AI coding tools did in the project through MCP (EXC-544).
+	r.Route("/api/projects/{projectId}/ai-activity", func(r chi.Router) {
+		r.Use(custommw.TenantContext)
+		r.Use(auth.RequireAuth)
+		r.Use(custommw.RequireProjectAccess(store, sqlStore))
+		r.Use(custommw.RequireProjectRole(domain.OrgRoleDeveloper, store, sqlStore))
+		d.aiActivityHandler.Routes(r)
 	})
 	// End users and their roles (EXC-370): who a project's app users run as
 	// is a project admin's decision, and every change is audited.
