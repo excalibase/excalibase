@@ -3,6 +3,7 @@ import { KeyRound, Eye, EyeOff, Copy, Trash2, Loader2, Lock, Search, Check } fro
 import { useVaultSecretsList, useVaultSecret, useDeleteVaultSecret, useVaultStatus } from '../hooks/useVault';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { serverErrorMessage } from '../utils/serverError';
+import { toast } from '../utils/toast';
 
 const PKI_PREFIX = 'pki/';
 
@@ -36,9 +37,13 @@ export function VaultPage() {
     .filter((p) => search === '' || p.toLowerCase().includes(search.toLowerCase()));
 
   const copyToClipboard = (text: string, field: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopiedField(field);
+        setTimeout(() => setCopiedField(null), 2000);
+      },
+      () => toast.error('Could not copy to the clipboard'),
+    );
   };
 
   if (status?.sealed) {

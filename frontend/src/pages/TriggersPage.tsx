@@ -150,7 +150,7 @@ export function TriggersPage() {
             <label htmlFor="trigger-name-input" className="block text-sm font-medium text-text-secondary mb-1">Trigger Name</label>
             <input id="trigger-name-input" type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. orders_set_updated_at" autoFocus />
+              placeholder="e.g. orders_set_updated_at" />
           </div>
           <div>
             <label htmlFor="trigger-table-select" className="block text-sm font-medium text-text-secondary mb-1">Table</label>

@@ -88,7 +88,7 @@ function UntrackedView({ projectId, fn, onTracked }: UntrackedViewProps) {
           {isQuery && (
             <label className="flex items-center gap-2 text-text-primary">
               <input type="checkbox" checked={infer} onChange={(e) => setInfer(e.target.checked)} className="rounded" />
-              Infer permissions from select
+              <span>Infer permissions from select</span>
             </label>
           )}
           {isQuery && (

@@ -118,7 +118,7 @@ export function RolesPage() {
             <label htmlFor="role-name-input" className="block text-sm font-medium text-text-secondary mb-1">Role Name</label>
             <input id="role-name-input" type="text" value={name} onChange={e => setName(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. reporting" data-testid="role-name-input" autoFocus />
+              placeholder="e.g. reporting" data-testid="role-name-input" />
           </div>
           <div>
             <label htmlFor="role-password-input" className="block text-sm font-medium text-text-secondary mb-1">Password</label>

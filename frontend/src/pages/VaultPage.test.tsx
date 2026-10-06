@@ -3,8 +3,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { VaultPage } from './VaultPage';
 import { api } from '../api/client';
+import { toast } from '../utils/toast';
 
 vi.mock('../api/client', () => ({ api: { get: vi.fn(), delete: vi.fn() } }));
+vi.mock('../utils/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 const PATHS = ['projects/alpha/db', 'projects/beta/db', 'pki/root'];
 
@@ -60,7 +62,7 @@ describe('VaultPage', () => {
   });
 
   test('reveals a secret with the password masked and copies a value', async () => {
-    const writeText = vi.fn();
+    const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     renderPage();
     fireEvent.click(await screen.findByTestId('vault-reveal-projects-alpha-db'));
@@ -74,6 +76,16 @@ describe('VaultPage', () => {
 
     fireEvent.click(screen.getByTestId('vault-reveal-projects-alpha-db'));
     expect(screen.queryByTestId('vault-secret-values')).not.toBeInTheDocument();
+  });
+
+  test('a copy the browser refuses says so instead of showing Copied', async () => {
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+    renderPage();
+    fireEvent.click(await screen.findByTestId('vault-reveal-projects-alpha-db'));
+    await screen.findByTestId('vault-secret-values');
+    fireEvent.click(screen.getAllByTitle('Copy')[0]);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not copy to the clipboard'));
+    expect(screen.queryByTestId('vault-secret-values')?.querySelector('.lucide-check')).toBeNull();
   });
 
   test('delete stays disabled until the secret name is typed', async () => {

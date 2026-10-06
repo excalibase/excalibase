@@ -159,16 +159,16 @@ export function EdgeFunctionsPage() {
     }
     setEnvParsing(true);
     setEnvStatus(null);
-    let ok = 0;
-    const failed: string[] = [];
-    for (const entry of entries) {
-      try {
-        await setSecret.mutateAsync(entry);
-        ok++;
-      } catch (err) {
-        failed.push(`${entry.key}: ${serverErrorMessage(err, 'not saved')}`);
-      }
-    }
+    // One at a time, in paste order: each save rewrites the function's secrets.
+    const failed = await entries.reduce<Promise<string[]>>(
+      (prior, entry) => prior.then((soFar) =>
+        setSecret.mutateAsync(entry).then(
+          () => soFar,
+          (err: unknown) => [...soFar, `${entry.key}: ${serverErrorMessage(err, 'not saved')}`],
+        )),
+      Promise.resolve([]),
+    );
+    const ok = entries.length - failed.length;
     setEnvParsing(false);
     const parts: string[] = [`saved ${ok}/${entries.length}`];
     if (errors.length > 0) parts.push(`${errors.length} skipped`);

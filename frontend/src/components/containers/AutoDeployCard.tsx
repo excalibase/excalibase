@@ -47,7 +47,7 @@ export function AutoDeployCard({ app }: { readonly app: App }) {
   };
   return (
     <section className="bg-surface-card border border-border-primary rounded-lg p-4">
-      <label className="flex items-start gap-3">
+      <label className="grid grid-cols-[auto_1fr] gap-x-3 items-start">
         <input
           type="checkbox"
           className="mt-1"
@@ -56,15 +56,13 @@ export function AutoDeployCard({ app }: { readonly app: App }) {
           onChange={(event) => toggle(event.target.checked)}
           data-testid="auto-deploy-toggle"
         />
-        <span>
-          <span className="block text-sm font-medium text-text-primary">
-            Auto-deploy when the image tag changes
-          </span>
-          <span className="block text-xs text-text-tertiary">
-            Every few minutes the tag is looked up in its registry, with this project's saved
-            registry credential when there is one. When it points at a new digest, that digest is
-            deployed.
-          </span>
+        <span className="text-sm font-medium text-text-primary">
+          Auto-deploy when the image tag changes
+        </span>
+        <span className="col-start-2 text-xs text-text-tertiary">
+          Every few minutes the tag is looked up in its registry, with this project's saved
+          registry credential when there is one. When it points at a new digest, that digest is
+          deployed.
         </span>
       </label>
       {pinned && (

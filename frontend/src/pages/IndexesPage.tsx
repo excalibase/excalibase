@@ -170,7 +170,7 @@ export function IndexesPage() {
             <label htmlFor="index-name-input" className="block text-sm font-medium text-text-secondary mb-1">Index Name</label>
             <input id="index-name-input" type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. orders_customer_id_idx" autoFocus />
+              placeholder="e.g. orders_customer_id_idx" />
           </div>
           <div>
             <label htmlFor="index-table-select" className="block text-sm font-medium text-text-secondary mb-1">Table</label>

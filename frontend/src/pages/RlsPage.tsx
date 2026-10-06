@@ -157,7 +157,7 @@ export function RlsPage() {
             <label htmlFor="policy-name-input" className="block text-sm font-medium text-text-secondary mb-1">Policy Name</label>
             <input id="policy-name-input" type="text" value={pName} onChange={e => setPName(e.target.value)}
               className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="e.g. owners_read_own_rows" data-testid="policy-name-input" autoFocus />
+              placeholder="e.g. owners_read_own_rows" data-testid="policy-name-input" />
           </div>
           <div>
             <label htmlFor="policy-table-select" className="block text-sm font-medium text-text-secondary mb-1">Table</label>
