@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -283,6 +283,20 @@ describe('TablesPage schema editing', () => {
         nullable: false,
       }),
     );
+  });
+
+  test('a column name over 63 characters is counted, explained and not sent', async () => {
+    renderPage();
+    const user = userEvent.setup();
+    await selectOrders(user);
+
+    await user.click(screen.getByRole('button', { name: 'Schema' }));
+    await user.click(screen.getByTestId('add-column-btn'));
+
+    fireEvent.change(screen.getByTestId('column-name-input'), { target: { value: 'c'.repeat(64) } });
+    expect(screen.getByTestId('column-name-count')).toHaveTextContent('64/63');
+    expect(screen.getByText('Column names can be at most 63 characters; this one has 64')).toBeInTheDocument();
+    expect(screen.getByTestId('add-column-submit')).toBeDisabled();
   });
 
   test('dropping a column confirms before it drops', async () => {

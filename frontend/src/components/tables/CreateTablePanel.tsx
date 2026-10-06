@@ -7,6 +7,8 @@ import { permissionsKey } from '../../hooks/usePermissions';
 import { apiErrorMessage, putTablePermission } from '../../api/permissions';
 import { DEFAULT_ROLES, fullAccess, tableKey } from '../../utils/permissionModel';
 import { serverErrorMessage } from '../../utils/serverError';
+import { identifierError } from '../../utils/names';
+import { NameLengthHint } from '../ui/NameLengthHint';
 
 interface ColumnDraft {
   // _key is a stable identity for React keys, since column names + positions
@@ -91,7 +93,7 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
   };
 
   const handleCreate = async () => {
-    if (!newTableName.trim() || inFlight.current) return;
+    if (!newTableName.trim() || namesTooLong || inFlight.current) return;
     inFlight.current = true;
     setCreateError(null);
     try {
@@ -120,6 +122,8 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
   };
 
   const busy = createTable.isPending || granting;
+  const namesTooLong =
+    !!identifierError('Table', newTableName) || newCols.some((col) => !!identifierError('Column', col.name));
 
   return (
     <SidePanel
@@ -140,7 +144,7 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
           )}
           <button
             onClick={grantError ? handleClose : handleCreate}
-            disabled={!grantError && (!newTableName.trim() || busy)}
+            disabled={!grantError && (!newTableName.trim() || namesTooLong || busy)}
             className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-lg disabled:opacity-50"
             data-testid="create-table-submit"
           >
@@ -162,11 +166,13 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
             data-testid="table-name-input"
             autoFocus
           />
+          <NameLengthHint kind="Table" name={newTableName} testId="table-name-count" />
         </div>
         <div>
           <span className="block text-sm font-medium text-text-secondary mb-1">Columns</span>
           {newCols.map((col, i) => (
-            <div key={col._key} className="flex gap-2 mb-2">
+            <div key={col._key} className="mb-2">
+            <div className="flex gap-2">
               <input
                 value={col.name}
                 onChange={e => {
@@ -192,6 +198,10 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               )}
+            </div>
+            {identifierError('Column', col.name) && (
+              <p role="alert" className="mt-1 text-xs text-red-400">{identifierError('Column', col.name)}</p>
+            )}
             </div>
           ))}
           <button

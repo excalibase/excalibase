@@ -85,7 +85,7 @@ export function LoginPage() {
       {unverified && (
         <div data-testid="email-not-verified" className="space-y-3 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-300">
           <p>Confirm your email address before signing in. Use the link we sent you, or ask for a new one.</p>
-          <ResendVerification />
+          <ResendVerification initialEmail={username.includes('@') ? username.trim() : undefined} />
         </div>
       )}
 

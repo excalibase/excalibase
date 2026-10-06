@@ -50,6 +50,30 @@ describe('sign-in identifier', () => {
     expect(await screen.findByTestId('home')).toBeInTheDocument();
   });
 
+  test('an unverified sign-in by e-mail prefills the resend form with that address', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockRejectedValue({ response: { status: 403, data: { code: 'email_not_verified' } } });
+    renderLogin();
+
+    await u.type(screen.getByLabelText('Username or e-mail'), ' erin@x.test ');
+    await u.type(screen.getByLabelText('Password'), PASSWORD);
+    await u.click(screen.getByRole('button', { name: /sign in/i }));
+
+    expect(await screen.findByLabelText('Your email')).toHaveValue('erin@x.test');
+  });
+
+  test('an unverified sign-in by username leaves the resend address for the user', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockRejectedValue({ response: { status: 403, data: { code: 'email_not_verified' } } });
+    renderLogin();
+
+    await u.type(screen.getByLabelText('Username or e-mail'), 'erin');
+    await u.type(screen.getByLabelText('Password'), PASSWORD);
+    await u.click(screen.getByRole('button', { name: /sign in/i }));
+
+    expect(await screen.findByLabelText('Your email')).toHaveValue('');
+  });
+
   test('a refused sign-in names both identifiers', async () => {
     const u = userEvent.setup();
     vi.mocked(api.post).mockRejectedValue({ response: { status: 401, data: {} } });

@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { ConfirmModal } from './ConfirmModal';
 
 type ModalProps = Parameters<typeof ConfirmModal>[0];
@@ -46,6 +46,48 @@ describe('ConfirmModal', () => {
     expect(screen.getByTestId('modal-confirm')).toHaveTextContent('Processing...');
     fireEvent.click(screen.getByTestId('modal-confirm'));
     expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  test('an action with no loading state confirms once, however fast the clicks', () => {
+    const { onConfirm } = mount();
+    const confirm = screen.getByTestId('modal-confirm');
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toBeDisabled();
+  });
+
+  test('an action that returns a promise can confirm again once it settles', async () => {
+    let finish: () => void = () => {};
+    const onConfirm = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    mount({ onConfirm });
+    const confirm = screen.getByTestId('modal-confirm');
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toBeDisabled();
+    await act(async () => finish());
+    expect(confirm).toBeEnabled();
+  });
+
+  test('a loading state that ends lets the user confirm again', () => {
+    const { onConfirm, view } = mount();
+    fireEvent.click(screen.getByTestId('modal-confirm'));
+    const props = { open: true, onClose: vi.fn(), onConfirm, title: 'Drop table', message: 'This cannot be undone.' };
+    view.rerender(<ConfirmModal {...props} loading />);
+    view.rerender(<ConfirmModal {...props} loading={false} />);
+    fireEvent.click(screen.getByTestId('modal-confirm'));
+    expect(onConfirm).toHaveBeenCalledTimes(2);
+  });
+
+  test('reopening the dialog lets it confirm again', () => {
+    const { onConfirm, view } = mount();
+    fireEvent.click(screen.getByTestId('modal-confirm'));
+    const props = { onClose: vi.fn(), onConfirm, title: 'Drop table', message: 'This cannot be undone.' };
+    view.rerender(<ConfirmModal {...props} open={false} />);
+    view.rerender(<ConfirmModal {...props} open />);
+    fireEvent.click(screen.getByTestId('modal-confirm'));
+    expect(onConfirm).toHaveBeenCalledTimes(2);
   });
 
   test('cancel, the close button and the backdrop all close and clear the typed text', () => {

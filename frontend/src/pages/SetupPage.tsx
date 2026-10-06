@@ -7,6 +7,7 @@ import { useSetupStatus, useRegisterAdmin } from '../hooks/useSetup';
 import { useAuthStore } from '../stores/auth-store';
 import { NewPasswordFields, newPasswordReady, passwordProblem } from '../components/auth/NewPasswordFields';
 import { serverErrorMessage } from '../utils/serverError';
+import { usernameError } from '../utils/names';
 
 type Step = 'init' | 'shares' | 'unseal' | 'admin' | 'done';
 
@@ -335,8 +336,7 @@ export function SetupPage() {
           <adminForm.Field
             name="username"
             validators={{
-              onChange: ({ value }) =>
-                value.trim().length < 3 ? 'Username must be at least 3 characters' : undefined,
+              onChange: ({ value }) => usernameError(value.trim()),
             }}
           >
             {(field) => (

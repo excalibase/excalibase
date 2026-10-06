@@ -95,6 +95,12 @@ describe('ProjectOverviewPage', () => {
     vi.mocked(api.get).mockReset();
   });
 
+  test('the heading is the project name, with the id beside it', async () => {
+    renderPage();
+    expect(await screen.findByRole('heading', { name: 'Shop' })).toBeInTheDocument();
+    expect(screen.getByTestId('project-overview-id')).toHaveTextContent('proj-1');
+  });
+
   test('shows the database and the containers as two services, each with its own status', async () => {
     renderPage();
     const database = await screen.findByTestId('service-database');

@@ -114,10 +114,11 @@ describe('SqlEditorPage', () => {
     expect(await screen.findByTestId('query-success')).toHaveTextContent('UPDATE: 3 rows affected');
   });
 
-  test('an empty editor runs nothing', async () => {
+  test('an empty editor runs nothing and asks for a query', async () => {
     const { container } = renderPage();
     await run(container, '   ');
     expect(api.post).not.toHaveBeenCalled();
+    expect(await screen.findByTestId('query-error')).toHaveTextContent('Write a query first');
   });
 
   test('history keeps a run query, loads it back and can be cleared', async () => {

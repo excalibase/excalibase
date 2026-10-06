@@ -122,6 +122,16 @@ describe('RlsPage', () => {
     expect(api.post).toHaveBeenCalledTimes(1);
   });
 
+  test('a double click on an RLS toggle sends one request and disables it meanwhile', async () => {
+    vi.mocked(api.patch).mockReturnValue(new Promise(() => {}) as never);
+    renderPage();
+    const toggle = await screen.findByTestId('rls-toggle-orders');
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toBeDisabled());
+    expect(api.patch).toHaveBeenCalledTimes(1);
+  });
+
   test('a refused RLS toggle shows the server reason', async () => {
     vi.mocked(api.patch).mockRejectedValue(rejection('must be owner of table orders'));
     renderPage();

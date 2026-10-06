@@ -55,6 +55,22 @@ describe('Studio email verification', () => {
     expect(await screen.findByText(/new link is on its way/i)).toBeInTheDocument();
   });
 
+  test('sign-up shows the username rule and sends nothing while a name breaks it', async () => {
+    const u = userEvent.setup();
+    renderAt('/register');
+
+    expect(screen.getByText('Use 3–32 letters, numbers or underscores')).toBeInTheDocument();
+    await u.type(screen.getByLabelText('Username'), 'dev-ops');
+    await u.type(screen.getByLabelText('Email'), 'dev@x.test');
+    await u.type(screen.getByLabelText('Password'), PASSWORD);
+    await u.type(screen.getByLabelText('Confirm password'), PASSWORD);
+    await u.click(screen.getByRole('button', { name: /create account/i }));
+
+    expect(await screen.findByTestId('username-error')).toHaveTextContent('Use 3–32 letters, numbers or underscores');
+    expect(screen.getByLabelText('Username')).toHaveAttribute('aria-invalid', 'true');
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   test('sign-in keeps the session token out of script-readable storage', async () => {
     const u = userEvent.setup();
     vi.mocked(api.post).mockResolvedValue({

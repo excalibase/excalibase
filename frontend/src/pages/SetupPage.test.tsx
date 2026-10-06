@@ -273,6 +273,17 @@ describe('SetupPage', () => {
     });
   });
 
+  test('admin form holds the first username to the sign-up rule', async () => {
+    const user = userEvent.setup();
+    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+
+    await screen.findByTestId('vault-setup-admin');
+    await user.type(screen.getByTestId('admin-username'), 'the-admin');
+    await user.tab();
+
+    expect(await screen.findByTestId('admin-username-error')).toHaveTextContent('Use 3–32 letters, numbers or underscores');
+  });
+
   test('shares step copy-to-clipboard hits the clipboard API', async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);

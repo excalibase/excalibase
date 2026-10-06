@@ -31,6 +31,17 @@ describe('ResendVerification', () => {
     expect(api.post).toHaveBeenCalledWith('/email/verify/resend', { email: 'dev@acme.io' });
   });
 
+  test('a likely address is prefilled and still editable', async () => {
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    render(<ResendVerification initialEmail="dev@acme.io" />);
+    const field = screen.getByLabelText('Your email');
+    expect(field).toHaveValue('dev@acme.io');
+    fireEvent.change(field, { target: { value: 'ops@acme.io' } });
+    fireEvent.click(sendButton());
+    expect(await screen.findByText(/a new link is on its way/)).toBeInTheDocument();
+    expect(api.post).toHaveBeenCalledWith('/email/verify/resend', { email: 'ops@acme.io' });
+  });
+
   test('a known address needs no field', () => {
     render(<ResendVerification email="dev@acme.io" />);
     expect(screen.queryByLabelText('Your email')).not.toBeInTheDocument();
