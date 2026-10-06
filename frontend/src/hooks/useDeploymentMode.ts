@@ -11,6 +11,8 @@ interface ConfigResponse {
   appHosting?: boolean;
   customDomains?: boolean;
   features?: Partial<Record<Feature, boolean>>;
+  // The public API base the SDK, REST and GraphQL calls go to.
+  apiUrl?: string;
 }
 
 function useStudioConfig() {
@@ -55,4 +57,11 @@ export function isSelfHosted(mode: DeploymentMode): boolean {
 
 export function isCloud(mode: DeploymentMode): boolean {
   return mode === 'cloud';
+}
+
+// The public API base for connect snippets; undefined when the server names none.
+export function useApiUrl(): { apiUrl: string | undefined; isLoading: boolean } {
+  const { data, isLoading } = useStudioConfig();
+  const apiUrl = data?.apiUrl?.trim();
+  return { apiUrl: apiUrl || undefined, isLoading };
 }
