@@ -113,6 +113,22 @@ test.describe('Edge Functions Page', () => {
     await expect(page).toHaveURL(/edge-functions/);
   });
 
+  test('a double click deploys once', async ({ page }) => {
+    let posts = 0;
+    await page.route('**/api/projects/test-project/functions', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      posts += 1;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'hello2', name: 'Hello 2', version: 1, files: [] }) });
+    });
+    await page.getByTestId('create-fn-btn').click();
+    await page.getByTestId('fn-id-input').fill('hello2');
+    await page.locator('#fn-name-field').fill('Hello 2');
+    await page.getByTestId('submit-fn-btn').dblclick();
+    await page.waitForTimeout(800);
+    expect(posts).toBe(1);
+  });
+
   test('delete shows confirm modal', async ({ page }) => {
     await page.getByTestId('fn-item-hello').click();
     await page.getByTestId('delete-fn-btn').click();

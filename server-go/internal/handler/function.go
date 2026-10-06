@@ -674,7 +674,9 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	cronTx, cronCommit, cronErr := h.beginCronSync(r.Context(), projectID, fn.ID, fn.CronJobs)
 	if cronErr != nil {
 		_ = h.store.Delete(projectID, fn.ID)
-		httpError(w, "cron sync failed: "+safeError(cronErr), http.StatusBadGateway)
+		log.Printf("function %s/%s: cron sync: %v", projectID, fn.ID, cronErr)
+		msg, code := cronSyncFailure(cronErr)
+		httpError(w, msg, code)
 		return
 	}
 
