@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { projectOperationMessage } from '../hooks/projectFollow';
 import { useInstances, useDeprovisionDatabase } from '../hooks/useProvisioning';
 import { StatusBadge } from '../components/shared/StatusBadge';
+import { ProjectNameCell } from '../components/shared/ProjectNameCell';
 import { Button } from '../components/Button';
 import { Database, DatabaseZap, Loader2, Trash2, Eye, Sprout, Star, Crown } from 'lucide-react';
 import { useAuthStore } from '../stores/auth-store';
@@ -101,7 +102,7 @@ function renderInstancesContent(args: InstancesContentArgs) {
             <td className="px-6 py-4">
               <div className="flex items-center gap-2">
                 <span className="text-lg">{engineIcon(inst)}</span>
-                <span className="font-medium text-text-primary">{inst.projectId}</span>
+                <ProjectNameCell projectId={inst.projectId} projectName={inst.projectName} />
               </div>
             </td>
             <td className="px-6 py-4 text-text-secondary">{engineLabel(inst)}</td>

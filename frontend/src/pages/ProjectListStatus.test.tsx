@@ -47,4 +47,23 @@ describe('project lists show the project status', () => {
     const live = screen.getByText('proj-live').closest('tr') as HTMLElement;
     expect(within(live).getByText(/Active/)).toBeInTheDocument();
   });
+
+  test.each([
+    ['projects page', <InstancesPage key="i" />],
+    ['dashboard', <DashboardPage key="d" />],
+  ])('%s: the project column leads with the project name, the id second', async (_name, page) => {
+    renderWith(page);
+    const name = await screen.findByText('gone');
+    const row = name.closest('tr') as HTMLElement;
+    expect(within(row).getByText('proj-gone')).toBeInTheDocument();
+    expect(name.compareDocumentPosition(within(row).getByText('proj-gone')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test('a project without a name falls back to its id', async () => {
+    projects.push({ projectId: 'proj-noname', tier: 'FREE', namespace: 'ns-3', databaseType: 'POSTGRESQL',
+      status: 'ACTIVE', currentStage: 'COMPLETED', createdAt: '2026-10-01T00:00:00Z' } as never);
+    renderWith(<DashboardPage />);
+    expect(await screen.findAllByText('proj-noname')).toHaveLength(1);
+    projects.pop();
+  });
 });

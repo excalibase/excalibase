@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useInstances } from '../hooks/useProvisioning';
 import { StatusBadge } from '../components/shared/StatusBadge';
+import { ProjectNameCell } from '../components/shared/ProjectNameCell';
 import { MetricCard } from '../components/shared/MetricCard';
 import { Database, DatabaseZap, CheckCircle, Loader2, XCircle } from 'lucide-react';
 import { Button } from '../components/Button';
@@ -67,7 +68,7 @@ export function DashboardPage() {
                   className="border-b border-border-primary last:border-0 hover:bg-surface-hover cursor-pointer transition-colors"
                   onClick={() => navigate(`/project/${inst.projectId}`)}
                 >
-                  <td className="px-6 py-3 font-medium text-text-primary">{inst.projectId}</td>
+                  <td className="px-6 py-3"><ProjectNameCell projectId={inst.projectId} projectName={inst.projectName} /></td>
                   <td className="px-6 py-3 text-text-secondary">{engineIcon(inst)} {engineLabel(inst)}</td>
                   <td className="px-6 py-3">
                     <span className="px-2 py-0.5 rounded text-xs bg-bg-tertiary text-text-secondary border border-border-primary">{inst.tier}</span>
