@@ -65,17 +65,30 @@ func getProjectInfo(ctx context.Context, c *call, in projectArg) (any, error) {
 		return nil, err
 	}
 	var info struct {
-		ProjectID   string `json:"projectId"`
-		ProjectName string `json:"projectName"`
-		OrgSlug     string `json:"orgSlug"`
+		ProjectID          string   `json:"projectId"`
+		ProjectName        string   `json:"projectName"`
+		OrgSlug            string   `json:"orgSlug"`
+		CorsAllowedOrigins []string `json:"corsAllowedOrigins"`
 	}
 	if err := c.get(ctx, projectsAPI+projectID+"/info/", nil, &info); err != nil {
 		return nil, err
 	}
+	urls := endpoints(c.settings.PublicBaseURL, info.OrgSlug, projectID)
+	setup := sdkSetup(c.settings.PublicBaseURL, projectID)
+	setup["fetchExample"] = fetchExample(urls)
+	origins := info.CorsAllowedOrigins
+	if origins == nil {
+		origins = []string{}
+	}
 	out := map[string]any{
 		"projectId": projectID, "projectName": info.ProjectName,
-		"endpoints": endpoints(c.settings.PublicBaseURL, info.OrgSlug, projectID),
-		"sdkSetup":  sdkSetup(c.settings.PublicBaseURL, projectID),
+		"endpoints": urls,
+		"sdkSetup":  setup,
+		"cors": map[string]any{
+			"allowedOrigins": origins,
+			"note": "A browser page can call these APIs only from an origin in this list. create_app adds an app's own origin; " +
+				"any other origin (a local dev server, a custom domain) is added in Studio, Settings, CORS.",
+		},
 	}
 	keys, err := publishableKeys(ctx, c, projectID)
 	if err != nil {
@@ -143,6 +156,24 @@ const data = await db.graphql.query("{ __typename }");`, strings.TrimRight(base,
 		"snippet": snippet,
 		"types":   "npx excalibase-codegen --url " + strings.TrimRight(base, "/") + " --project " + projectID + " --key <publishable key> --out src/database.types.ts",
 	}
+}
+
+// fetchExample is the SDK's sign-in and one REST call with plain fetch, for a
+// page built without a bundler.
+func fetchExample(urls map[string]string) string {
+	return fmt.Sprintf(`const KEY = "esk_pub_..."; // a publishable key, safe in a page
+
+const signIn = await fetch(%q, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ grant_type: "api_key", api_key: KEY }),
+});
+const { accessToken } = await signIn.json();
+
+// REST: one path per table, e.g. GET <rest>/todos; POST, PATCH and DELETE write.
+const rows = await fetch(%q, {
+  headers: { Authorization: "Bearer " + accessToken, "X-Excalibase-Publishable-Key": KEY },
+}).then((answer) => answer.json());`, urls["auth"]+"/token", urls["rest"]+"/todos")
 }
 
 func createPublishableKey(ctx context.Context, c *call, in createKeyArgs) (any, error) {

@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -49,6 +50,11 @@ func tool[In any](name, description string, level access, run func(context.Conte
 		}
 		mcp.AddTool(server, definition, func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
 			c := &call{dispatcher: dispatcher{router: e.router, caller: caller, answered: &[]routeReply{}}, settings: e.settings}
+			if caller.Refused != "" {
+				err := errors.New(caller.Refused)
+				e.record(ctx, caller, name, "", err)
+				return nil, nil, err
+			}
 			out, err := run(ctx, c, in)
 			e.record(ctx, caller, name, c.answeredProject(), err)
 			if err != nil {

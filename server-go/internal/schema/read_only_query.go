@@ -9,6 +9,8 @@ import (
 	"log"
 	"regexp"
 	"strings"
+
+	"github.com/lib/pq"
 )
 
 // MaxReadOnlySQL bounds a read-only statement, which travels in a query string.
@@ -66,14 +68,28 @@ func (i *Introspector) readOnly(ctx context.Context, conn *sql.Conn, query strin
 	}
 	statement, err := tx.PrepareContext(ctx, query)
 	if err != nil {
-		return QueryResult{Error: err.Error()}
+		return QueryResult{Error: readOnlyError(err)}
 	}
 	defer statement.Close()
 	rows, err := statement.QueryContext(ctx)
 	if err != nil {
-		return QueryResult{Error: err.Error()}
+		return QueryResult{Error: readOnlyError(err)}
 	}
 	return readResult(rows)
+}
+
+// readOnlyTransaction is SQLSTATE read_only_sql_transaction.
+const readOnlyTransaction = "25006"
+
+// readOnlyError words a write refused by the read-only transaction for what
+// it is: Postgres names the outer statement, so a data-modifying WITH reads
+// as "cannot execute SELECT".
+func readOnlyError(err error) string {
+	var pgErr *pq.Error
+	if errors.As(err, &pgErr) && pgErr.Code == readOnlyTransaction {
+		return "read-only SQL cannot change data or schema; this statement writes (a data-modifying WITH counts)"
+	}
+	return err.Error()
 }
 
 // discard closes the connection instead of returning it to the pool.

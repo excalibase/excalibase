@@ -35,6 +35,7 @@ type fakeAppDeployer struct {
 	resumedBy       string
 	lastOrigin      apphost.DeployOrigin
 	lastImage       string
+	deployedCurrent bool
 	getDeploy       map[string]*apphost.Deploy // keyed projectID+"/"+appID+"/"+deployID
 }
 
@@ -44,6 +45,11 @@ func newFakeAppDeployer() *fakeAppDeployer {
 
 func (f *fakeAppDeployer) DeployAppAs(_ context.Context, projectID, appID string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
 	f.lastActor, f.lastOrigin, f.lastImage = origin.Actor, origin, ""
+	return f.deployed(projectID, appID)
+}
+
+func (f *fakeAppDeployer) DeployCurrent(_ context.Context, projectID, appID string, origin apphost.DeployOrigin) (*apphost.Deploy, error) {
+	f.lastActor, f.lastOrigin, f.lastImage, f.deployedCurrent = origin.Actor, origin, "", true
 	return f.deployed(projectID, appID)
 }
 

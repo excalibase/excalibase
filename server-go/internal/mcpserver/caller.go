@@ -27,6 +27,10 @@ type Caller struct {
 	ReadOnly   bool
 	Project    string
 	ClientAddr string
+	// Refused is why every tool call on this connection is refused: a
+	// narrowing the token does not allow, answered per call because some
+	// clients hide a refused connection's reason.
+	Refused string
 }
 
 // refusal is a connection the endpoint turns away before speaking MCP.
@@ -49,16 +53,14 @@ func connect(r *http.Request) (Caller, *refusal) {
 	if auth.IsSessionToken(token) || auth.IsCapabilityToken(token) {
 		return Caller{}, &refusal{http.StatusForbidden, "MCP takes a personal access token, not a sign-in session or a service token"}
 	}
-	readOnly, err := readOnlyParam(r.URL.Query().Get("read_only"))
-	if err != nil {
-		return Caller{}, &refusal{http.StatusBadRequest, err.Error()}
-	}
-	project := r.URL.Query().Get("project")
-	if project != "" && !validID.MatchString(project) {
-		return Caller{}, &refusal{http.StatusBadRequest, "project must be a project id"}
-	}
-	if project != "" && token.ProjectID != "" && project != token.ProjectID {
-		return Caller{}, &refusal{http.StatusForbidden, "this token is bound to another project"}
+	readOnly, project, refused := narrowing(r, token)
+	if refused != "" {
+		narrowed := *token
+		narrowed.Scopes = auth.ScopeRead
+		return Caller{
+			User: user, Token: &narrowed, ReadOnly: true, Project: token.ProjectID,
+			ClientAddr: clientaddr.FromRequest(r), Refused: refused,
+		}, nil
 	}
 	narrowed := *token
 	if readOnly || !auth.TokenAllowsMethod(token, http.MethodPost) {
@@ -72,6 +74,22 @@ func connect(r *http.Request) (Caller, *refusal) {
 		User: user, Token: &narrowed, ReadOnly: readOnly,
 		Project: narrowed.ProjectID, ClientAddr: clientaddr.FromRequest(r),
 	}, nil
+}
+
+// narrowing reads read_only and project, or why they cannot apply.
+func narrowing(r *http.Request, token *domain.AccessToken) (readOnly bool, project, refused string) {
+	readOnly, err := readOnlyParam(r.URL.Query().Get("read_only"))
+	if err != nil {
+		return false, "", "the MCP URL is refused: " + err.Error()
+	}
+	project = r.URL.Query().Get("project")
+	if project != "" && !validID.MatchString(project) {
+		return false, "", "the MCP URL is refused: project must be a project id"
+	}
+	if project != "" && token.ProjectID != "" && project != token.ProjectID {
+		return false, "", "the MCP URL is refused: this token is bound to another project (" + token.ProjectID + ")"
+	}
+	return readOnly, project, ""
 }
 
 func readOnlyParam(raw string) (bool, error) {

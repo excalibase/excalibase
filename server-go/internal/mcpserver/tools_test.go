@@ -174,7 +174,7 @@ func routeCases() []routeCase {
 		{
 			name: "get_project_info", tool: "get_project_info", args: map[string]any{"project_id": testProjectA},
 			setup: func(f *fakeRoutes) {
-				f.on(http.MethodGet, projectsA+"/info/", 200, `{"projectId":"proj-a","projectName":"A","orgSlug":"acme","orgId":"o"}`)
+				f.on(http.MethodGet, projectsA+"/info/", 200, `{"projectId":"proj-a","projectName":"A","orgSlug":"acme","orgId":"o","corsAllowedOrigins":["https://web.example.test"]}`)
 				f.on(http.MethodGet, projectsA+"/sdk-keys/", 200, `{"keys":[{"id":1,"keyPrefix":"esk_pub_live_ab","keyType":"publishable","name":"web"},{"id":2,"keyPrefix":"esk_sec_live_cd","keyType":"secret","name":"server"}]}`)
 			},
 			expect: []string{"GET " + projectsA + "/info/", "GET " + projectsA + "/sdk-keys/"},
@@ -190,6 +190,20 @@ func routeCases() []routeCase {
 				setup, _ := out["sdkSetup"].(map[string]any)
 				if !strings.Contains(setup["snippet"].(string), `projectId: "proj-a"`) {
 					t.Errorf("snippet = %v", setup["snippet"])
+				}
+				fetch, _ := setup["fetchExample"].(string)
+				for _, want := range []string{
+					"https://api.example.test/auth/acme/proj-a/token", `grant_type: "api_key"`,
+					"https://api.example.test/proj-a/api/v1/", "Authorization", "X-Excalibase-Publishable-Key",
+				} {
+					if !strings.Contains(fetch, want) {
+						t.Errorf("fetchExample lacks %q:\n%s", want, fetch)
+					}
+				}
+				cors, _ := out["cors"].(map[string]any)
+				origins, _ := cors["allowedOrigins"].([]any)
+				if len(origins) != 1 || origins[0] != "https://web.example.test" || !strings.Contains(cors["note"].(string), "origin") {
+					t.Errorf("cors = %v", cors)
 				}
 			},
 		},
@@ -353,6 +367,53 @@ func routeCases() []routeCase {
 			},
 		},
 		{
+			name: "create_app", tool: "create_app",
+			args: map[string]any{"project_id": testProjectA, "name": "web", "image": "ghcr.io/a/web:1", "health_check_path": "/healthz"},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodPost, projectsA+"/apps/", 201, `{"id":"app-1","name":"web","image":"ghcr.io/a/web:1","port":8080,"status":"PROVISIONING","version":1,"url":"https://web-proj-a.apps.example.test"}`)
+				f.on(http.MethodGet, projectsA+"/cors/", 200, `{"allowedOrigins":["http://localhost:5173"],"allowWildcard":false}`)
+				f.on(http.MethodPut, projectsA+"/cors/", 200, `{"allowedOrigins":["http://localhost:5173","https://web-proj-a.apps.example.test"],"allowWildcard":false}`)
+			},
+			expect: []string{"POST " + projectsA + "/apps/", "GET " + projectsA + "/cors/", "PUT " + projectsA + "/cors/"},
+			check: func(t *testing.T, calls []recordedCall, out map[string]any) {
+				if calls[0].Body != `{"healthCheckPath":"/healthz","image":"ghcr.io/a/web:1","name":"web","port":8080,"replicas":1}` {
+					t.Errorf("create body = %s", calls[0].Body)
+				}
+				if calls[2].Body != `{"allowedOrigins":["http://localhost:5173","https://web-proj-a.apps.example.test"],"allowWildcard":false}` {
+					t.Errorf("cors body = %s", calls[2].Body)
+				}
+				app, _ := out["app"].(map[string]any)
+				if app["status"] != "NOT_DEPLOYED" || !strings.Contains(out["next"].(string), "deploy_app") || out["corsOriginAdded"] != "https://web-proj-a.apps.example.test" {
+					t.Errorf("out = %v", out)
+				}
+			},
+		},
+		{
+			name: "create_app whose origin is allowed already", tool: "create_app",
+			args: map[string]any{"project_id": testProjectA, "name": "web", "image": "ghcr.io/a/web:1", "port": 3000},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodPost, projectsA+"/apps/", 201, `{"id":"app-1","name":"web","port":3000,"status":"PROVISIONING","url":"https://web-proj-a.apps.example.test"}`)
+				f.on(http.MethodGet, projectsA+"/cors/", 200, `{"allowedOrigins":["https://web-proj-a.apps.example.test"],"allowWildcard":false}`)
+			},
+			expect: []string{"POST " + projectsA + "/apps/", "GET " + projectsA + "/cors/"},
+		},
+		{
+			name: "list_apps marks an app never deployed", tool: "list_apps", args: map[string]any{"project_id": testProjectA},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, projectsA+"/apps/", 200, `[{"id":"web","status":"RUNNING"},{"id":"new","status":"PROVISIONING"}]`)
+				f.on(http.MethodGet, projectsA+"/apps/new/deploys", 200, `[]`)
+			},
+			expect: []string{"GET " + projectsA + "/apps/", "GET " + projectsA + "/apps/new/deploys?limit=1"},
+			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+				apps, _ := out["apps"].([]any)
+				fresh, _ := apps[1].(map[string]any)
+				running, _ := apps[0].(map[string]any)
+				if fresh["status"] != "NOT_DEPLOYED" || running["status"] != "RUNNING" || !strings.Contains(out["next"].(string), "deploy_app") {
+					t.Errorf("out = %v", out)
+				}
+			},
+		},
+		{
 			name: "list_apps", tool: "list_apps", args: map[string]any{"project_id": testProjectA},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, projectsA+"/apps/", 200, `[{"id":"web","name":"web","image":"ghcr.io/a/web:1","status":"RUNNING","version":3,"env":[{"name":"X","value":"y"}]}]`)
@@ -391,6 +452,20 @@ func routeCases() []routeCase {
 				f.on(http.MethodGet, projectsA+"/apps/web/deploys", 200, `[{"id":"d1","status":"succeeded"}]`)
 			},
 			expect: []string{"GET " + projectsA + "/apps/web/", "GET " + projectsA + "/apps/web/deploys?limit=5"},
+		},
+		{
+			name: "get_deploy_status of an app never deployed", tool: "get_deploy_status", args: map[string]any{"project_id": testProjectA, "app_id": "web"},
+			setup: func(f *fakeRoutes) {
+				f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","status":"PROVISIONING","version":1}`)
+				f.on(http.MethodGet, projectsA+"/apps/web/deploys", 200, `[]`)
+			},
+			expect: []string{"GET " + projectsA + "/apps/web/", "GET " + projectsA + "/apps/web/deploys?limit=5"},
+			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+				app, _ := out["app"].(map[string]any)
+				if app["status"] != "NOT_DEPLOYED" || !strings.Contains(out["next"].(string), "deploy_app") {
+					t.Errorf("out = %v", out)
+				}
+			},
 		},
 		{
 			name: "get_deploy_status of one deploy", tool: "get_deploy_status", args: map[string]any{"project_id": testProjectA, "app_id": "web", "deploy_id": "d1"},
@@ -479,6 +554,33 @@ func TestEveryToolGoesThroughItsRoute(t *testing.T) {
 	}
 }
 
+// TestToolDescriptionsSteerTheClient pins the guidance a client reads before
+// calling: functions are not web pages, and CI comes after the app exists.
+func TestToolDescriptionsSteerTheClient(t *testing.T) {
+	cs := session(t, newFakeRoutes(), &recordingAudit{}, writeCaller())
+	listed, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wants := map[string][]string{
+		"deploy_function": {"APIs", "not web pages", "script-src 'self'", "create_app"},
+		"get_ci_snippet":  {"after the app exists"},
+		"deploy_app":      {"public"},
+		"create_app":      {"CORS"},
+	}
+	for _, tool := range listed.Tools {
+		for _, want := range wants[tool.Name] {
+			if !strings.Contains(tool.Description, want) {
+				t.Errorf("%s description lacks %q: %s", tool.Name, want, tool.Description)
+			}
+		}
+		delete(wants, tool.Name)
+	}
+	if len(wants) != 0 {
+		t.Errorf("not offered: %v", wants)
+	}
+}
+
 func TestReadOnlyConnectionOffersNoWriteTool(t *testing.T) {
 	cs := session(t, newFakeRoutes(), &recordingAudit{}, readOnlyCaller())
 	listed, err := cs.ListTools(context.Background(), nil)
@@ -551,6 +653,30 @@ func TestBoundConnectionRefusesAnotherProjectBeforeAnyCall(t *testing.T) {
 	}
 	if len(routes.calls) != 0 {
 		t.Fatalf("calls = %+v", routes.calls)
+	}
+}
+
+func TestARefusedConnectionAnswersEveryCallWithTheReason(t *testing.T) {
+	routes := newFakeRoutes()
+	caller := readOnlyCaller()
+	caller.Refused = "this token is bound to another project"
+	audit := &recordingAudit{}
+	cs := session(t, routes, audit, caller)
+	for name, args := range map[string]map[string]any{
+		"list_projects":           {},
+		"list_tables":             {"project_id": testProjectA},
+		"get_dockerfile_template": {"stack": "go"},
+	} {
+		res := callTool(t, cs, name, args)
+		if !res.IsError || !strings.Contains(resultText(res), "this token is bound to another project") {
+			t.Errorf("%s: %s", name, resultText(res))
+		}
+	}
+	if len(routes.calls) != 0 {
+		t.Fatalf("a refused connection reached %+v", routes.calls)
+	}
+	if len(audit.entries) != 3 || audit.entries[0].ProjectID != "" {
+		t.Fatalf("refused calls are audited, under no project: %+v", audit.entries)
 	}
 }
 

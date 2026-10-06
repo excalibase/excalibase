@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
@@ -26,6 +27,38 @@ func authedRequest(target string, token *domain.AccessToken) *http.Request {
 	return req.WithContext(ctx)
 }
 
+// TestABadNarrowingIsRefusedPerCall pins that a connection asking for more
+// than its token allows, or naming a malformed value, is still spoken to:
+// some clients hide a refused connection's reason, so every tool answers it
+// instead, and nothing is reachable.
+func TestABadNarrowingIsRefusedPerCall(t *testing.T) {
+	cases := []struct {
+		name, target string
+		token        domain.AccessToken
+		wantProject  string
+		wantMessage  string
+	}{
+		{"bound PAT cannot widen to another project", "/mcp?project=" + testProjectB, domain.AccessToken{Scopes: auth.ScopeWrite, ProjectID: testProjectA}, testProjectA, "bound to another project"},
+		{"read_only must be a boolean", "/mcp?read_only=maybe", domain.AccessToken{Scopes: auth.ScopeWrite}, "", "read_only must be true or false"},
+		{"project must be a valid id", "/mcp?project=../etc", domain.AccessToken{Scopes: auth.ScopeWrite}, "", "project must be a project id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			token := tc.token
+			caller, refusal := connect(authedRequest(tc.target, &token))
+			if refusal != nil {
+				t.Fatalf("the connection itself must not be refused: %+v", refusal)
+			}
+			if !strings.Contains(caller.Refused, tc.wantMessage) {
+				t.Errorf("Refused = %q, want %q", caller.Refused, tc.wantMessage)
+			}
+			if !caller.ReadOnly || auth.TokenAllowsMethod(caller.Token, http.MethodPost) || caller.Project != tc.wantProject {
+				t.Errorf("a refused connection must be the narrowest: %+v %+v", caller, caller.Token)
+			}
+		})
+	}
+}
+
 func TestConnectNarrowsOnlyEverNarrows(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -43,9 +76,6 @@ func TestConnectNarrowsOnlyEverNarrows(t *testing.T) {
 		{"unbound PAT narrowed to a project", "/mcp?project=" + testProjectA, domain.AccessToken{Scopes: auth.ScopeWrite}, false, testProjectA, 0},
 		{"bound PAT keeps its project", "/mcp", domain.AccessToken{Scopes: auth.ScopeWrite, ProjectID: testProjectA}, false, testProjectA, 0},
 		{"bound PAT names its own project", "/mcp?project=" + testProjectA, domain.AccessToken{ProjectID: testProjectA}, false, testProjectA, 0},
-		{"bound PAT cannot widen to another project", "/mcp?project=" + testProjectB, domain.AccessToken{ProjectID: testProjectA}, false, "", http.StatusForbidden},
-		{"read_only must be a boolean", "/mcp?read_only=maybe", domain.AccessToken{Scopes: auth.ScopeWrite}, false, "", http.StatusBadRequest},
-		{"project must be a valid id", "/mcp?project=../etc", domain.AccessToken{Scopes: auth.ScopeWrite}, false, "", http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

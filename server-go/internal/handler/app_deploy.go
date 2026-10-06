@@ -22,6 +22,7 @@ import (
 
 type AppDeployer interface {
 	DeployAppAs(ctx context.Context, projectID, appID string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
+	DeployCurrent(ctx context.Context, projectID, appID string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
 	DeployImage(ctx context.Context, projectID, appID, image string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
 	RedeployAppAs(ctx context.Context, projectID, appID, deployID string, origin apphost.DeployOrigin) (*apphost.Deploy, error)
 	GetDeploy(projectID, appID, deployID string) (*apphost.Deploy, error)
@@ -46,7 +47,7 @@ func NewAppDeployHandler(deploys AppDeployer) *AppDeployHandler {
 
 // deployRequest is the optional body of POST .../deploy. With an image, the
 // deploy resolves it to a digest and runs that digest (EXC-543); without one
-// it runs the app as it is.
+// it runs the app's own image, pinned the same way.
 type deployRequest struct {
 	Image     string `json:"image"`
 	CommitSHA string `json:"commitSha"`
@@ -78,7 +79,7 @@ func (h *AppDeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	origin := apphost.DeployOrigin{Actor: actorID(r), Source: deploySource(r), CommitSHA: body.CommitSHA}
 	var deploy *apphost.Deploy
 	if body.Image == "" {
-		deploy, err = h.deploys.DeployAppAs(r.Context(), projectID, appID, origin)
+		deploy, err = h.deploys.DeployCurrent(r.Context(), projectID, appID, origin)
 	} else {
 		deploy, err = h.deploys.DeployImage(r.Context(), projectID, appID, body.Image, origin)
 	}
@@ -370,8 +371,9 @@ func (h *AppDeployHandler) writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, apphost.ErrInvalidImage):
 		httpError(w, err.Error(), http.StatusBadRequest)
-	case errors.Is(err, imagedigest.ErrNotFound), errors.Is(err, imagedigest.ErrDenied),
-		errors.Is(err, imagedigest.ErrNotPublic):
+	case errors.Is(err, imagedigest.ErrNotPublic):
+		httpError(w, err.Error()+"; push the image to a public registry, or deploy with no image to run the image the app already names", http.StatusUnprocessableEntity)
+	case errors.Is(err, imagedigest.ErrNotFound), errors.Is(err, imagedigest.ErrDenied):
 		httpError(w, err.Error(), http.StatusUnprocessableEntity)
 	case errors.Is(err, imagedigest.ErrRateLimited):
 		w.Header().Set("Retry-After", registryRetryAfter)
