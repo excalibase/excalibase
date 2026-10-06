@@ -69,6 +69,22 @@ func TestListAppsKeepsGoingWhenOneDeployLookupFails(t *testing.T) {
 	}
 }
 
+func TestDeployAppSaysWhenADeployRunsUnpinned(t *testing.T) {
+	for body, wantNote := range map[string]bool{
+		`{"id":"d1","status":"pending","image":"registry.local:5000/web:1"}`:                                                 true,
+		`{"id":"d1","status":"pending","image":"ghcr.io/a/web@sha256:aa","imageRef":"ghcr.io/a/web:1","digest":"sha256:aa"}`: false,
+	} {
+		routes := newFakeRoutes()
+		routes.on(http.MethodPost, projectsA+"/apps/web/deploy", 202, body)
+		cs := session(t, routes, &recordingAudit{}, writeCaller())
+		out := structured(t, callTool(t, cs, "deploy_app", map[string]any{"project_id": testProjectA, "app_id": "web"}))
+		note, _ := out["unpinned"].(string)
+		if wantNote != (note != "") || (wantNote && !strings.Contains(note, "public")) {
+			t.Errorf("%s: unpinned = %q", body, note)
+		}
+	}
+}
+
 func TestDeployStatusWithNoDeploysListsNone(t *testing.T) {
 	routes := newFakeRoutes()
 	routes.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","status":"RUNNING"}`)

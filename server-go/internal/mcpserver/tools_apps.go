@@ -112,11 +112,16 @@ func deployApp(ctx context.Context, c *call, in deployAppArgs) (any, error) {
 	if in.Image != "" {
 		body = map[string]string{"image": in.Image, "commitSha": in.CommitSHA}
 	}
-	var deploy json.RawMessage
+	var deploy map[string]any
 	if err := c.send(ctx, http.MethodPost, path+"/deploy", nil, body, &deploy); err != nil {
 		return nil, err
 	}
-	return map[string]any{"deploy": deploy, "next": "call get_deploy_status with this deploy's id until it is succeeded or failed"}, nil
+	out := map[string]any{"deploy": deploy, "next": "call get_deploy_status with this deploy's id until it is succeeded or failed"}
+	if digest, _ := deploy["digest"].(string); digest == "" {
+		out["unpinned"] = "this deploy runs the image as the node pulls it, without a pinned digest: the platform asks only " +
+			"registries on public addresses for a digest. Push to a public registry to have deploys pinned."
+	}
+	return out, nil
 }
 
 func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, error) {

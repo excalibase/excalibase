@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -58,6 +60,12 @@ func (s *ProvisioningService) UpgradeVersion(ctx context.Context, projectID, new
 	return s.k8sClient.UpdateCRD(ctx, k8s.CNPGClusterGVR, inst.Namespace, existing)
 }
 
+// ErrLogsUnavailable is a log backend that did not answer.
+var ErrLogsUnavailable = errors.New("the database's logs are not available right now")
+
+// maxLokiAnswer bounds one Loki reply: 5000 lines with their labels.
+const maxLokiAnswer = 32 << 20
+
 // GetLogs returns the last N lines of the project's postgres pod log.
 // Prefers Loki when configured (sees logs across pod restarts, doesn't hang
 // on busy minikube apiservers); falls back to kubectl-exec tail in dev/test
@@ -92,14 +100,21 @@ func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, namespace, pr
 
 	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(reqCtx, "GET", u, nil)
+	req, err := http.NewRequestWithContext(reqCtx, "GET", u, nil)
+	if err != nil {
+		log.Printf("logs of %s: loki request: %v", projectID, err)
+		return "", ErrLogsUnavailable
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("loki query: %w", err)
+		// The client error names Loki's internal address: log it, answer only that logs are unavailable.
+		log.Printf("logs of %s: loki query: %v", projectID, err)
+		return "", ErrLogsUnavailable
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("loki returned %d", resp.StatusCode)
+		log.Printf("logs of %s: loki returned %d", projectID, resp.StatusCode)
+		return "", ErrLogsUnavailable
 	}
 
 	var body struct {
@@ -109,8 +124,9 @@ func (s *ProvisioningService) getLogsFromLoki(ctx context.Context, namespace, pr
 			} `json:"result"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", fmt.Errorf("loki decode: %w", err)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxLokiAnswer)).Decode(&body); err != nil {
+		log.Printf("logs of %s: loki decode: %v", projectID, err)
+		return "", ErrLogsUnavailable
 	}
 
 	var sb strings.Builder

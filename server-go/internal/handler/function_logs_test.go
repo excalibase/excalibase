@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -39,6 +40,26 @@ func setupFnHandlerWithLogs(t *testing.T, runtimeURL string) (chi.Router, *edgef
 		})
 	})
 	return r, store
+}
+
+// A runtime that cannot be reached is reported without its address.
+func TestFunctionHandler_Logs_RuntimeUnreachableNamesNoAddress(t *testing.T) {
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	r, store := setupFnHandlerWithLogs(t, closed.URL)
+	fn := &edgefn.Function{ID: "hello", Name: "Hello", ProjectID: "proj_p1",
+		Files: []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('ok')"}}}
+	if err := store.Save(fn); err != nil {
+		t.Fatalf("seed function: %v", err)
+	}
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/projects/proj_p1/functions/hello/logs", nil))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "127.0.0.1") || strings.Contains(w.Body.String(), "http://") {
+		t.Fatalf("status %d body names the runtime: %s", w.Code, w.Body.String())
+	}
 }
 
 func TestFunctionHandler_Logs_FunctionNotFound(t *testing.T) {

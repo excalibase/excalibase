@@ -41,7 +41,8 @@ func databaseTools() []entry {
 		tool("list_migrations", "List the migrations applied to the project's database.", readTool, listMigrations),
 		tool("apply_migration", "Apply a SQL migration to the project's database and record it in the migration history.", writeTool, applyMigration),
 		tool("list_permissions", "The project's API permissions: which role may select, insert, update or delete which rows and columns of each table, and which functions are tracked.", readTool, listPermissions),
-		tool("set_permission", "Set or remove one API permission for a (table, role, operation). A table a role has no permission for is hidden from that role.", writeTool, setPermission),
+		tool("set_permission", "Set or remove one API permission for a (table, role, operation). A table a role has no permission for is hidden from that role. "+
+			"A page's anon role needs select with every column the page reads. "+countNeedsAggregations, writeTool, setPermission),
 	}
 }
 

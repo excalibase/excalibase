@@ -923,7 +923,9 @@ func (h *FunctionHandler) Logs(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]interface{}{"logs": []edgefn.LogEntry{}})
 			return
 		}
-		httpError(w, safeError(err), http.StatusBadGateway)
+		// The runtime's error names its internal address; the caller learns only that logs are unavailable.
+		log.Printf("function logs %s/%s: %v", projectID, fnID, err)
+		httpError(w, "the function's logs are not available right now", http.StatusBadGateway)
 		return
 	}
 	if logs == nil {

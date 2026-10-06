@@ -1561,7 +1561,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 // mountMCP serves MCP for coding tools (ADR 0037). Each tool is an
 // in-process request through r itself, so it meets the same gates as Studio.
 func mountMCP(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
-	settings := mcpserver.Settings{PublicBaseURL: cfg.PublicBaseURL, StudioURL: cfg.StudioURL}
+	settings := mcpserver.Settings{PublicBaseURL: cfg.PublicBaseURL, StudioURL: cfg.StudioURL, DataPlaneURL: cfg.MCPDataPlaneURL}
 	r.With(d.rlAuthed).Handle("/mcp", mcpserver.NewHandler(r, d.mcpAudit, settings))
 }
 
