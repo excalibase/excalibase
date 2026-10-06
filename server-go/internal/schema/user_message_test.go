@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -99,5 +100,41 @@ func TestDDLRefusesLongNamesBeforeTouchingTheDatabase(t *testing.T) {
 	}
 	if err := i.CreateRole(t.Context(), nil, CreateRoleRequest{Name: long}); !errors.As(err, &nameErr) {
 		t.Errorf("role: %v", err)
+	}
+	if err := i.UpdateTable(t.Context(), nil, "public", "t", UpdateTableRequest{NewSchema: &long}); !errors.As(err, &nameErr) || !strings.HasPrefix(err.Error(), "Schema names") {
+		t.Errorf("move schema: %v", err)
+	}
+}
+
+// An index, trigger or policy may leave its name to Postgres; only a long one is refused.
+func TestCheckNameLengthLeavesAnEmptyNameToTheCaller(t *testing.T) {
+	if err := checkNameLength("index", ""); err != nil {
+		t.Errorf("empty: %v", err)
+	}
+	if err := checkNameLength("index", "orders_idx"); err != nil {
+		t.Errorf("short: %v", err)
+	}
+	if got := capitalize(""); got != "" {
+		t.Errorf("capitalize empty: %q", got)
+	}
+}
+
+// A database that cannot be reached is reported as the driver said it, with
+// the step that failed.
+func TestQueriesOnAClosedDatabaseSayWhichStepFailed(t *testing.T) {
+	db, err := sql.Open("postgres", "postgres://nobody@127.0.0.1:1/none?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	i := NewIntrospector()
+	if got := i.ExecuteQuery(t.Context(), db, "SELECT 1"); !strings.HasPrefix(got.Error, "begin tx: ") {
+		t.Errorf("query: %q", got.Error)
+	}
+	if got := i.ExecuteReadOnlyQuery(t.Context(), db, "SELECT 1"); !strings.HasPrefix(got.Error, "open connection: ") {
+		t.Errorf("read-only query: %q", got.Error)
+	}
+	if got := i.ExecuteDDL(t.Context(), db, "SELECT 1"); got.Success || got.Error == "" {
+		t.Errorf("ddl: %+v", got)
 	}
 }

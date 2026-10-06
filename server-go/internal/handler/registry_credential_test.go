@@ -140,6 +140,25 @@ func TestRegistryCredentialHandler_DecodesTheRegistry(t *testing.T) {
 	}
 }
 
+// A registry segment that is not valid percent-encoding is refused before the store sees it.
+func TestRegistryCredentialHandler_RefusesAnUndecodableRegistry(t *testing.T) {
+	creds := &fakeRegistryCredentials{stored: map[string]apphost.RegistryCredential{}}
+	r := registryRouter(creds)
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/projects/"+appTestProject+"/registry-credentials/bad",
+			strings.NewReader(`{"username":"octocat","password":"`+registryTestSecret+`"}`))
+		req.URL.RawPath = "/api/projects/" + appTestProject + "/registry-credentials/bad%zz"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid registry") {
+			t.Errorf("%s: %d %s", method, w.Code, w.Body.String())
+		}
+	}
+	if len(creds.stored) != 0 || len(creds.removed) != 0 {
+		t.Fatalf("the store was reached: %v %v", creds.stored, creds.removed)
+	}
+}
+
 func TestRegistryCredentialHandler_RejectsAnInvalidProject(t *testing.T) {
 	creds := &fakeRegistryCredentials{stored: map[string]apphost.RegistryCredential{}}
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/bad%20id/registry-credentials/", nil)
