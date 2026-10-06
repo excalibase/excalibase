@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { api } from '../api/client';
+import { uploadFailure, type UploadStep } from '../utils/uploadFailure';
 
 // Mirrors server-side storagesvc.Bucket. The two booleans (public,
 // fileSize/MIME constraints) are what the studio surfaces; the rest is
@@ -88,6 +89,14 @@ export const useObjects = (projectId: string, bucket: string, prefix: string = '
     enabled: !!projectId && !!bucket,
   });
 
+async function step<T>(name: UploadStep, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    throw uploadFailure(name, err);
+  }
+}
+
 // useUploadFile combines: mint signed URL → PUT bytes to R2 → confirm.
 // Two network calls land on Excalibase (mint + confirm); the bytes go
 // directly to R2 to avoid streaming-cost-multipliers.
@@ -95,25 +104,35 @@ export const useUploadFile = (projectId: string, bucket: string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ file, key }: { file: File; key: string }) => {
-      const sign = await api.post<UploadURLResponse>(`/projects/${projectId}/storage/buckets/${bucket}/upload-url`, {
-        key,
-        mimeType: file.type || 'application/octet-stream',
-        size: file.size,
-      });
+      // Each step reports itself on failure, so a refusal says which request
+      // failed and with what status (UploadStepError).
+      const sign = await step('sign', () =>
+        api.post<UploadURLResponse>(`/projects/${projectId}/storage/buckets/${bucket}/upload-url`, {
+          key,
+          mimeType: file.type || 'application/octet-stream',
+          size: file.size,
+        }),
+      );
 
       // PUT directly to R2. Use bare axios (no auth interceptor) so the
-      // Excalibase Authorization header doesn't leak to Cloudflare.
-      await axios.put(sign.data.url, file, {
-        headers: sign.data.headers,
-        // Disable axios's default JSON transform — file goes raw.
-        transformRequest: [(data) => data],
-      });
+      // Excalibase Authorization header doesn't leak to Cloudflare. The
+      // answer is read as text: a refusal is an S3 XML error body.
+      await step('put', () =>
+        axios.put(sign.data.url, file, {
+          headers: sign.data.headers,
+          responseType: 'text',
+          // Disable axios's default JSON transform — file goes raw.
+          transformRequest: [(data) => data],
+        }),
+      );
 
       // Confirm names the staged upload. Size and content type are read back
       // from the object store, so sending them here would achieve nothing.
-      const confirm = await api.post<StorageObject>(
-        `/projects/${projectId}/storage/buckets/${bucket}/confirm-upload`,
-        { key, uploadId: sign.data.uploadId },
+      const confirm = await step('confirm', () =>
+        api.post<StorageObject>(
+          `/projects/${projectId}/storage/buckets/${bucket}/confirm-upload`,
+          { key, uploadId: sign.data.uploadId },
+        ),
       );
       return confirm.data;
     },
