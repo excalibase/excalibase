@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-const testBackupSchedule = "0 0 3 * * *"
+const testBackupSchedule = "0 3 * * *"
 
 type fakeRestorePlans struct {
 	plan  RestorePlan
@@ -108,7 +108,7 @@ func TestK8sRestoreSchedulesBackupsAndRecordsTheProject(t *testing.T) {
 	if scheduled == nil {
 		t.Fatalf("no ScheduledBackup for the restored project: %v", mock.CRDs)
 	}
-	if schedule, _, _ := unstructured.NestedString(scheduled.Object, "spec", "schedule"); schedule != testBackupSchedule {
+	if schedule, _, _ := unstructured.NestedString(scheduled.Object, "spec", "schedule"); schedule != "0 "+testBackupSchedule {
 		t.Errorf("schedule = %q, want the plan's %q", schedule, testBackupSchedule)
 	}
 	if len(reg.calls) != 1 {
@@ -287,7 +287,7 @@ func TestProvisionRecordsTheClusterSettingsARestoreNeeds(t *testing.T) {
 	svc.SetStorageClassPolicy(config.StorageClassPolicy{Allowed: []string{"fast-ssd"}})
 	resp, err := svc.Provision(context.Background(), domain.ProvisioningRequest{
 		PostgresVersion: "17", ProjectName: "p", OrgID: "org", DBType: domain.PostgreSQL,
-		StorageClass: "fast-ssd", Parameters: map[string]string{"work_mem": "16MB"},
+		StorageClass: "fast-ssd", Parameters: map[string]string{"work_mem": " 16 MB", "jit": "Off"},
 	})
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
@@ -296,7 +296,7 @@ func TestProvisionRecordsTheClusterSettingsARestoreNeeds(t *testing.T) {
 	if err != nil || inst == nil {
 		t.Fatalf("find: %v", err)
 	}
-	if inst.StorageClass != "fast-ssd" || inst.Parameters["work_mem"] != "16MB" {
+	if inst.StorageClass != "fast-ssd" || inst.Parameters["work_mem"] != "16MB" || inst.Parameters["jit"] != "off" {
 		t.Errorf("the project must record its storage class and parameters, got %q %v", inst.StorageClass, inst.Parameters)
 	}
 }

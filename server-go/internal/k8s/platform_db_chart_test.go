@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/robfig/cron/v3"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/engine"
@@ -198,7 +199,10 @@ func TestThePlatformDatabaseIsBackedUpOnScheduleByThePlugin(t *testing.T) {
 	if spec["method"] != "plugin" || plugin != barmanCloudPlugin || cluster != "platform-db" {
 		t.Errorf("scheduled backup is not taken by the plugin: %v", spec)
 	}
-	if err := ValidateBackupSchedule(spec["schedule"].(string)); err != nil {
+	// The chart writes the ScheduledBackup itself, so it is in the six-field
+	// form CloudNativePG reads, the form CNPGBackupSchedule produces.
+	sixFields := cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	if _, err := sixFields.Parse(spec["schedule"].(string)); err != nil {
 		t.Errorf("schedule: %v", err)
 	}
 }

@@ -115,7 +115,7 @@ func (p *prefixAlwaysInUse) ListKeys(_ context.Context, _, prefix, _ string, _ i
 func TestARequestCannotNameItsOwnBackupStore(t *testing.T) {
 	svc, _, mock := setupProvisioningTest(t)
 	err := provisionOnTier(t, svc, domain.Standard, &domain.BackupSettings{
-		Enabled: true, Schedule: "0 0 2 * * *", Retention: 7,
+		Enabled: true, Schedule: "0 2 * * *", Retention: 7,
 		S3: &domain.S3Credentials{AccessKeyID: "mine", SecretAccessKey: "mine", Bucket: "backups", Endpoint: testR2Endpoint},
 	})
 	if !errors.Is(err, ErrBackupStoreChosenByPlatform) {

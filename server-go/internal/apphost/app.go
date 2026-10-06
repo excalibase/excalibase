@@ -565,6 +565,9 @@ func validateVarPayload(projectID, appID string, v EnvVar) error {
 		if len(*v.Value) > MaxLiteralValueLength {
 			return fmt.Errorf("environment variable %q exceeds %d bytes", v.Name, MaxLiteralValueLength)
 		}
+		if err := ValidateEnvValue(*v.Value); err != nil {
+			return fmt.Errorf("environment variable %q: %w", v.Name, err)
+		}
 		return nil
 	case KindReference:
 		if v.Reference == nil {

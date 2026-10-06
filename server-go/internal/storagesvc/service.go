@@ -98,6 +98,9 @@ func (s *Service) CreateBucket(ctx context.Context, projectID string, req Create
 	if err := validateBucketName(req.Name); err != nil {
 		return nil, err
 	}
+	if err := validateBucketLimits(req); err != nil {
+		return nil, err
+	}
 	existing, err := s.store.GetBucket(ctx, projectID, req.Name)
 	if err != nil {
 		return nil, fmt.Errorf("check existing bucket: %w", err)

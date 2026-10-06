@@ -159,8 +159,8 @@ func TestValidateDefaultExpression(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		// Empty → error
-		{"empty string", "", "", true},
+		// Empty → the empty string literal
+		{"empty string", "", "''", false},
 
 		// Numeric literals
 		{"integer", "42", "42", false},
@@ -203,7 +203,28 @@ func TestValidateDefaultExpression(t *testing.T) {
 		{"comment block injection", "1 /* DROP */", "", true},
 		{"nextval injection", "nextval('seq'); DROP TABLE users--')", "", true},
 
+		// Already-quoted literals are kept as written, never quoted twice
+		{"quoted text", "'hello'", "'hello'", false},
+		{"quoted empty", "''", "''", false},
+		{"quoted with escaped quote", "'it''s'", "'it''s'", false},
+		{"quoted typed text", "'hello'::text", "'hello'::text", false},
+		{"quoted typed jsonb", "'{}'::jsonb", "'{}'::jsonb", false},
+		{"quoted typed varchar", "'x'::character varying", "'x'::character varying", false},
+		{"quoted typed array", "'{}'::text[]", "'{}'::text[]", false},
+		{"unbalanced quote", "'abc", "", true},
+		{"two literals", "'a' 'b'", "", true},
+		{"quote escape attempt", "'a'); DROP TABLE t; --", "", true},
+		{"bad cast type", "'a'::text; drop", "", true},
+
+		// JSON and other text with braces → quoted as one literal
+		{"json object", "{}", "'{}'", false},
+		{"json array", "[1,2]", "'[1,2]'", false},
+		{"json with fields", `{"a": 1}`, `'{"a": 1}'`, false},
+		{"text with symbols", "a+b=c", "'a+b=c'", false},
+
 		// Unrecognized expressions → rejected
+		{"bare call", "random()", "", true},
+		{"qualified call", "public.f()", "", true},
 		{"subquery", "(SELECT 1)", "", true},
 		{"function not in allowlist", "my_func()", "", true},
 		{"cast expression", "CAST(1 AS text)", "", true},

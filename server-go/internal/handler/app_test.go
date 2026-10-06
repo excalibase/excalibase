@@ -359,6 +359,9 @@ func TestAppCreateRejectsBadRequests(t *testing.T) {
 		"bad env name":        func(b map[string]any) { b["env"] = []map[string]any{{"name": "a b", "kind": "literal", "value": "x"}} },
 		"env with no kind":    func(b map[string]any) { b["env"] = []map[string]any{{"name": "TOKEN", "value": "x"}} },
 		"env with no payload": func(b map[string]any) { b["env"] = []map[string]any{{"name": "TOKEN", "kind": "literal"}} },
+		"env with a NUL": func(b map[string]any) {
+			b["env"] = []map[string]any{{"name": "TOKEN", "kind": "literal", "value": "a\x00b"}}
+		},
 		"env with two payloads": func(b map[string]any) {
 			b["env"] = []map[string]any{{
 				"name":   "TOKEN",

@@ -134,7 +134,7 @@ func TestEgress_PutPersistsCanonicalListAndGetReadsItBack(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT: %d %s", w.Code, w.Body.String())
 	}
-	want := []string{"*.amazonaws.com", "api.stripe.com"}
+	want := []string{"*.amazonaws.com:443", "api.stripe.com:443"}
 	if got := decodeEgress(t, w.Body.Bytes()); !reflect.DeepEqual(got.AllowedHosts, want) {
 		t.Fatalf("PUT response = %v want %v", got.AllowedHosts, want)
 	}
@@ -164,13 +164,13 @@ func TestEgress_OperatorDefaultsMergeIntoEffective(t *testing.T) {
 	f.egress.hosts[testEgressProject] = []string{"api.stripe.com"}
 	w := doJSON(f.router, "GET", testEgressPath, nil)
 	got := decodeEgress(t, w.Body.Bytes())
-	if !reflect.DeepEqual(got.DefaultHosts, []string{"*.excalibase.io"}) {
+	if !reflect.DeepEqual(got.DefaultHosts, []string{"*.excalibase.io:443"}) {
 		t.Fatalf("defaults = %v", got.DefaultHosts)
 	}
-	if !reflect.DeepEqual(got.AllowedHosts, []string{"api.stripe.com"}) {
+	if !reflect.DeepEqual(got.AllowedHosts, []string{"api.stripe.com:443"}) {
 		t.Fatalf("project list must stay separate from defaults: %v", got.AllowedHosts)
 	}
-	if !reflect.DeepEqual(got.EffectiveHosts, []string{"*.excalibase.io", "api.stripe.com"}) {
+	if !reflect.DeepEqual(got.EffectiveHosts, []string{"*.excalibase.io:443", "api.stripe.com:443"}) {
 		t.Fatalf("effective = %v", got.EffectiveHosts)
 	}
 }
@@ -181,7 +181,7 @@ func TestEgress_FirstDeployRendersEffectiveListIntoRuntimeSpecAndDeploy(t *testi
 	f.egress.hosts[testEgressProject] = []string{"api.stripe.com"}
 	deployEgressFn(t, f, "hello")
 
-	want := []string{"*.excalibase.io", "api.stripe.com"}
+	want := []string{"*.excalibase.io:443", "api.stripe.com:443"}
 	if spec := f.k8s.DenoSpecs[testEgressNS]; !reflect.DeepEqual(spec.AllowedHosts, want) {
 		t.Fatalf("runtime spec AllowedHosts = %v want %v", spec.AllowedHosts, want)
 	}

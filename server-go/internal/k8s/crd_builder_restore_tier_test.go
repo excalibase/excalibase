@@ -25,7 +25,7 @@ func fullProjectCluster() PostgreSQLClusterOpts {
 	opts.Tier = config.TierConfig{Instances: 3, StorageSize: "500Gi", Memory: "16Gi", CPU: "4", StatementTimeout: "60s"}
 	opts.StorageClass = "fast-ssd"
 	opts.Parameters = map[string]string{"work_mem": "64MB", "shared_preload_libraries": "pg_stat_statements"}
-	opts.Backup = &BackupOpts{Schedule: "0 0 2 * * *", RetentionDays: 14, EndpointURL: testR2Endpoint, Bucket: "excalibase-backups"}
+	opts.Backup = &BackupOpts{Schedule: "0 2 * * *", RetentionDays: 14, EndpointURL: testR2Endpoint, Bucket: "excalibase-backups"}
 	opts.ImageName = "excalibase/postgresql@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 	opts.ServerAltDNSNames = []string{"dst.db.example.com"}
 	opts.DatabaseName = "shop"

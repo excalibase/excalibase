@@ -226,6 +226,23 @@ func TestTuneParametersAppliesAndRecordsTheTenantSettings(t *testing.T) {
 	}
 }
 
+// A value typed with spaces or capitals is applied and recorded in the
+// spelling Postgres prints back.
+func TestTuneParametersRecordsTheCanonicalSpelling(t *testing.T) {
+	svc, store, mock := setupClusterChangeTest(t)
+	given := map[string]string{"work_mem": " 8 MB ", "jit": "OFF"}
+	if err := svc.TuneParameters(context.Background(), testOpsDB, given); err != nil {
+		t.Fatalf("TuneParameters: %v", err)
+	}
+	want := map[string]string{"work_mem": "8MB", "jit": "off"}
+	if got := k8s.TenantParameters(opsCluster(t, mock)); !maps.Equal(got, want) {
+		t.Errorf("cluster tenant parameters = %v, want %v", got, want)
+	}
+	if inst, _ := store.FindByProjectID(testOpsDB); !maps.Equal(inst.Parameters, want) {
+		t.Errorf("recorded parameters = %v, want %v", inst.Parameters, want)
+	}
+}
+
 func TestTuneParametersWithNoneResetsToTheDefaults(t *testing.T) {
 	svc, _, mock := setupClusterChangeTest(t)
 	if err := svc.TuneParameters(context.Background(), testOpsDB, map[string]string{}); err != nil {

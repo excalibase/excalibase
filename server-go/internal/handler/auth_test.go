@@ -427,6 +427,30 @@ func TestAuthCreateUser_Success(t *testing.T) {
 	}
 }
 
+// An admin-created account meets the rules a sign-up does.
+func TestAuthCreateUser_UsesTheRegistrationRules(t *testing.T) {
+	good := testutil.FixturePassword("admin-made")
+	cases := map[string]struct{ body, reason string }{
+		"invalid email":             {fmt.Sprintf(`{"username":"newuser","email":"not-an-email","password":%q,"role":"platform_viewer"}`, good), "email"},
+		"email with a display name": {fmt.Sprintf(`{"username":"newuser","email":"New <new@example.com>","password":%q,"role":"platform_viewer"}`, good), "email"},
+		"short password":            {`{"username":"newuser","email":"new@example.com","password":"Ab1","role":"platform_viewer"}`, "password"},
+		"weak password":             {`{"username":"newuser","email":"new@example.com","password":"alllowercase","role":"platform_viewer"}`, "password"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			us := newMockUserStore()
+			r := setupAuthRouter(t, us, newMockTokenStore())
+			w := doRequest(r, "POST", routeAuthUsers, tc.body)
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), tc.reason) {
+				t.Fatalf("got %d %s, want 400 naming the %s", w.Code, w.Body.String(), tc.reason)
+			}
+			if len(us.users) != 0 {
+				t.Errorf("a refused account was created")
+			}
+		})
+	}
+}
+
 func TestAuthCreateUser_StoreFails_Returns400(t *testing.T) {
 	us := newMockUserStore()
 	us.failSave = true

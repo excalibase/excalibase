@@ -118,6 +118,20 @@ func TestSDKKeysCreateValidatesTheRequest(t *testing.T) {
 	}
 }
 
+// The name limit counts characters, as Studio does, not bytes.
+func TestSDKKeysNameLengthCountsCharacters(t *testing.T) {
+	keys := &fakeSDKKeys{}
+	r, _ := newSDKKeysRouter(keys)
+	accented := `{"name":"` + strings.Repeat("é", 100) + `","keyType":"secret"}`
+	if w := doRequest(r, "POST", "/api/projects/proj-a/sdk-keys/", accented); w.Code != http.StatusCreated {
+		t.Errorf("100 accented characters: got %d %s, want 201", w.Code, w.Body.String())
+	}
+	tooLong := `{"name":"` + strings.Repeat("é", 101) + `","keyType":"secret"}`
+	if w := doRequest(r, "POST", "/api/projects/proj-a/sdk-keys/", tooLong); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "100 characters") {
+		t.Errorf("101 accented characters: got %d %s, want 400 naming the limit", w.Code, w.Body.String())
+	}
+}
+
 func TestSDKKeysListAndRevoke(t *testing.T) {
 	keys := &fakeSDKKeys{}
 	r, audit := newSDKKeysRouter(keys)

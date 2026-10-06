@@ -407,6 +407,7 @@ func (s *ProvisioningService) TuneParameters(ctx context.Context, projectID stri
 	if err != nil {
 		return err
 	}
+	params = config.NormalizeTenantParameters(params)
 	if err := config.ValidateTenantParameters(params, tier); err != nil {
 		return err
 	}

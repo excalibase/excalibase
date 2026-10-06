@@ -197,7 +197,7 @@ func TestProvisionCRDDeploymentFailure(t *testing.T) {
 // A backup with no schedule, or one CloudNativePG would misread, is refused
 // before the namespace exists: there is no schedule to fall back to.
 func TestProvisionRefusesABackupScheduleCloudNativePGCannotRun(t *testing.T) {
-	for _, schedule := range []string{"", "0 0 * * *"} {
+	for _, schedule := range []string{"", "0 0 2 * * *", "*/5 * * * *"} {
 		t.Run(schedule, func(t *testing.T) {
 			tier, _ := config.GetTierConfig(domain.Free)
 			req := domain.ProvisioningRequest{

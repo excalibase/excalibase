@@ -102,7 +102,7 @@ func TestPostgreSQLProvisionerWithBackup(t *testing.T) {
 		DBType:          domain.PostgreSQL,
 		Backup: &domain.BackupSettings{
 			Enabled:   true,
-			Schedule:  "0 0 2 * * *",
+			Schedule:  "0 2 * * *",
 			Retention: 30,
 			S3: &domain.S3Credentials{
 				AccessKeyID:     "AKIA123",
@@ -197,7 +197,7 @@ func TestPostgreSQLConfigureBackup(t *testing.T) {
 	mock := k8s.NewMockClient()
 	prov := NewPostgreSQLProvisioner(mock, "")
 
-	err := prov.ConfigureBackup(context.Background(), "ns", testBKTest, "0 0 3 * * *", 14)
+	err := prov.ConfigureBackup(context.Background(), "ns", testBKTest, "0 3 * * *", 14)
 	if err != nil {
 		t.Fatalf("ConfigureBackup: %v", err)
 	}

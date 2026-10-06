@@ -13,7 +13,8 @@ import (
 func TestProvision_ClusterSettingsThePlatformDoesNotOfferAnswer400(t *testing.T) {
 	cases := map[string]struct{ extra, reason string }{
 		"a storage class not on the allowlist": {`,"storageClassName":"local-path"`, "storage class"},
-		"a five-field backup schedule":         {`,"backup":{"enabled":true,"schedule":"0 2 * * *","retention":7}`, "backup schedule"},
+		"a six-field backup schedule":          {`,"backup":{"enabled":true,"schedule":"0 0 2 * * *","retention":7}`, "backup schedule"},
+		"an every-minute backup schedule":      {`,"backup":{"enabled":true,"schedule":"* * * * *","retention":7}`, "once an hour"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

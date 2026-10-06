@@ -21,7 +21,7 @@ const (
 func backedUpRequest(s3 *domain.S3Credentials) domain.ProvisioningRequest {
 	return domain.ProvisioningRequest{
 		PostgresVersion: "17", ProjectName: storeProject, OrgID: "org1", DBType: domain.PostgreSQL,
-		Backup: &domain.BackupSettings{Enabled: true, Schedule: "0 0 2 * * *", Retention: 7, S3: s3},
+		Backup: &domain.BackupSettings{Enabled: true, Schedule: "0 2 * * *", Retention: 7, S3: s3},
 	}
 }
 

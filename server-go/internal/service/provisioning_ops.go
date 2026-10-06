@@ -147,6 +147,10 @@ func urlEscape(s string) string {
 
 // SetMaintenanceWindow sets the maintenance window config.
 func (s *ProvisioningService) SetMaintenanceWindow(ctx context.Context, projectID string, cfg domain.MaintenanceWindowConfig) error {
+	cfg, err := normalizeMaintenanceWindow(cfg)
+	if err != nil {
+		return err
+	}
 	inst, release, err := s.holdProject(ctx, projectID, OperationMaintenance, anyStatus)
 	if err != nil {
 		return err

@@ -255,7 +255,7 @@ if [ -z "${SKIP_PROVISIONED:-}" ]; then
   ###############################################################################
   section "F14. Maintenance window + deletion protection + credentials rotation"
   MW=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H "$PAT_HDR" -H 'Content-Type: application/json' \
-    -d '{"day":"Sunday","startTime":"02:00","durationMinutes":60}' \
+    -d '{"window":"sunday 02:00","durationMinutes":60}' \
     "$API_PROV/api/provision/$PROJECT_ID/maintenance-window")
   [ "$MW" = "200" ] && pass "set maintenance window" || fail "maintenance window" "got $MW"
 

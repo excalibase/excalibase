@@ -125,6 +125,9 @@ func readSecretValue(w http.ResponseWriter, r *http.Request) (string, bool) {
 	case len(*req.Value) > apphost.MaxLiteralValueLength:
 		httpError(w, "value exceeds "+strconv.Itoa(apphost.MaxLiteralValueLength)+" bytes", http.StatusBadRequest)
 		return "", false
+	case apphost.ValidateEnvValue(*req.Value) != nil:
+		httpError(w, apphost.ErrEnvValueControlCharacter.Error(), http.StatusBadRequest)
+		return "", false
 	}
 	return *req.Value, true
 }

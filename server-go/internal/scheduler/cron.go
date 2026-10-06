@@ -98,13 +98,9 @@ func NewCronRunner(c CronRunnerConfig) *CronRunner {
 		logger:       logger,
 		idGen:        idGen,
 		now:          now,
-		// Standard 5-field cron expression — matches what cronJobs.cron()
-		// validates on the lib side. Robfig/cron's default parser
-		// expects the optional seconds field; we strip the seconds slot
-		// by using the standard parser explicitly.
-		parser: cron.NewParser(
-			cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
-		),
+		// The deploy-time check parses with the same parser, so every
+		// schedule a deploy accepts is one the runner can run.
+		parser: cronExpressionParser,
 	}
 }
 

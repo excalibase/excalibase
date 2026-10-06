@@ -42,8 +42,42 @@ func TenantTunableParameter(name string) bool {
 	return ok
 }
 
+// enumParameters take one of a fixed set of words, which Postgres reads
+// without regard to case.
+var enumParameters = map[string]bool{"jit": true, "default_transaction_isolation": true}
+
+// unitSpace is the one space Postgres allows between a number and its unit.
+var unitSpace = regexp.MustCompile(`^([0-9]+) ([A-Za-z]+)$`)
+
+// NormalizeTenantParameters returns the canonical spelling of each value the
+// tenant may set: trimmed, no space before a unit, enum words in lower case.
+// The caller's map is left as it is; parameters the tenant may not set are
+// copied unchanged for validation to refuse.
+func NormalizeTenantParameters(params map[string]string) map[string]string {
+	if params == nil {
+		return nil
+	}
+	out := make(map[string]string, len(params))
+	for name, value := range params {
+		out[name] = normalizeParameterValue(name, value)
+	}
+	return out
+}
+
+func normalizeParameterValue(name, value string) string {
+	if !TenantTunableParameter(name) {
+		return value
+	}
+	value = strings.TrimSpace(value)
+	if enumParameters[name] {
+		return strings.ToLower(strings.Join(strings.Fields(value), " "))
+	}
+	return unitSpace.ReplaceAllString(value, "$1$2")
+}
+
 // ValidateTenantParameters refuses the whole set if any parameter is not the
-// tenant's to set or is out of its bounds for the tier.
+// tenant's to set or is out of its bounds for the tier. Values are checked in
+// their canonical spelling (NormalizeTenantParameters).
 func ValidateTenantParameters(params map[string]string, tier TierConfig) error {
 	names := make([]string, 0, len(params))
 	for name := range params {
@@ -55,7 +89,7 @@ func ValidateTenantParameters(params map[string]string, tier TierConfig) error {
 		if !ok {
 			return fmt.Errorf("%w: %q is set by the platform", ErrTenantParameter, name)
 		}
-		if err := rule(params[name], tier); err != nil {
+		if err := rule(normalizeParameterValue(name, params[name]), tier); err != nil {
 			return fmt.Errorf("%w: %s: %v", ErrTenantParameter, name, err)
 		}
 	}

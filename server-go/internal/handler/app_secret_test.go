@@ -141,6 +141,8 @@ func TestAppSecret_Refusals(t *testing.T) {
 		{"value too long", secretTestApp, "API_KEY", valueBody(strings.Repeat("x", apphost.MaxLiteralValueLength+1)), http.StatusBadRequest},
 		{"missing value", secretTestApp, "API_KEY", `{}`, http.StatusBadRequest},
 		{"not json", secretTestApp, "API_KEY", `nope`, http.StatusBadRequest},
+		{"nul in value", secretTestApp, "API_KEY", valueBody("abc\x00def"), http.StatusBadRequest},
+		{"escape in value", secretTestApp, "API_KEY", valueBody("abc\x1bdef"), http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

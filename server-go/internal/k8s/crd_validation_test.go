@@ -15,7 +15,7 @@ func TestCRDProducesValidYAML(t *testing.T) {
 		ProjectID:      "test-db",
 		Namespace:      "org-test-db",
 		Tier:           config.TierConfig{Instances: 3, StorageSize: "50Gi", Memory: "4Gi", CPU: "2"},
-		Backup:         &BackupOpts{Schedule: "0 0 2 * * *", RetentionDays: 30},
+		Backup:         &BackupOpts{Schedule: "0 2 * * *", RetentionDays: 30},
 		Parameters:     map[string]string{"work_mem": "16MB"},
 		Tags:           map[string]string{"owner": "duke"},
 		ImageName:      "excalibase/postgresql:17@sha256:abc123",
@@ -123,7 +123,7 @@ func TestCRDDefaultDatabaseName(t *testing.T) {
 
 // TestScheduledBackupTargetsCorrectCluster verifies the backup CRD references the right cluster.
 func TestScheduledBackupTargetsCorrectCluster(t *testing.T) {
-	obj, err := BuildScheduledBackup("my-db", "my-ns", "0 0 3 * * *")
+	obj, err := BuildScheduledBackup("my-db", "my-ns", "0 3 * * *")
 	if err != nil {
 		t.Fatalf("BuildScheduledBackup: %v", err)
 	}

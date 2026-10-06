@@ -46,7 +46,7 @@ func TestSetMaintenanceWindow(t *testing.T) {
 	svc, store, _ := setupOpsTest(t)
 
 	err := svc.SetMaintenanceWindow(context.Background(), testOpsDB, domain.MaintenanceWindowConfig{
-		Window:          "0 3 * * 0",
+		Window:          "sunday 03:00",
 		DurationMinutes: 60,
 		AutoUpgrade:     true,
 	})
@@ -55,7 +55,7 @@ func TestSetMaintenanceWindow(t *testing.T) {
 	}
 
 	inst, _ := store.FindByProjectID(testOpsDB)
-	if inst.MaintenanceWindow != "0 3 * * 0" {
+	if inst.MaintenanceWindow != "sunday 03:00" {
 		t.Errorf("window: got %s", inst.MaintenanceWindow)
 	}
 	if inst.MaintenanceWindowDurationMinutes == nil || *inst.MaintenanceWindowDurationMinutes != 60 {
@@ -70,14 +70,14 @@ func TestGetMaintenanceWindow(t *testing.T) {
 	svc, _, _ := setupOpsTest(t)
 
 	svc.SetMaintenanceWindow(context.Background(), testOpsDB, domain.MaintenanceWindowConfig{
-		Window: "0 4 * * 1", DurationMinutes: 30, AutoUpgrade: false,
+		Window: "monday 04:00", DurationMinutes: 30, AutoUpgrade: false,
 	})
 
 	cfg, err := svc.GetMaintenanceWindow(testOpsDB)
 	if err != nil {
 		t.Fatalf("GetMaintenanceWindow: %v", err)
 	}
-	if cfg.Window != "0 4 * * 1" {
+	if cfg.Window != "monday 04:00" {
 		t.Errorf("window: got %s", cfg.Window)
 	}
 	if cfg.DurationMinutes != 30 {

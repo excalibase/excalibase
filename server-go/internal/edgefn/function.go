@@ -10,6 +10,8 @@ import (
 
 	"github.com/dop251/goja"
 	esbuild "github.com/evanw/esbuild/pkg/api"
+
+	"github.com/excalibase/provisioning-poc/internal/scheduler"
 )
 
 // v2ShapePattern matches the tagged FunctionDef record produced by the
@@ -642,6 +644,11 @@ func validateCronJobs(jobs []cronJobRecord) error {
 		kind, _ := j.Schedule["kind"].(string)
 		if !validCronScheduleKinds[kind] {
 			return fmt.Errorf("cronJobs[%d] %q: unknown schedule kind %q (want cron|interval|daily|hourly)", i, j.Name, kind)
+		}
+		// Decoded from JSON, so it always encodes back.
+		schedule, _ := json.Marshal(j.Schedule)
+		if err := scheduler.ValidateSchedule(schedule); err != nil {
+			return fmt.Errorf("cronJobs[%d] %q: %w", i, j.Name, err)
 		}
 		if j.FnRef == nil {
 			return fmt.Errorf("cronJobs[%d] %q: fnRef is required", i, j.Name)

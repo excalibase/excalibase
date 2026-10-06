@@ -56,7 +56,7 @@ func TestAddDatabaseInBackground_HoldsTheProjectUntilTheBuildEnds(t *testing.T) 
 		t.Fatalf("add in background: %v", err)
 	}
 
-	maintenance := domain.MaintenanceWindowConfig{Window: "sun:03:00", DurationMinutes: 60}
+	maintenance := domain.MaintenanceWindowConfig{Window: "sunday 03:00", DurationMinutes: 60}
 	if err := svc.SetMaintenanceWindow(context.Background(), created.ProjectID, maintenance); !errors.Is(err, ErrProjectOperationRunning) {
 		t.Fatalf("a change during the build: got %v, want ErrProjectOperationRunning", err)
 	}

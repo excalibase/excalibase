@@ -10,11 +10,11 @@ import (
 // primary. On a standby, pg_backup_start is cancelled by a recovery conflict
 // under write load and the backup fails; one instance has only a primary.
 func TestEveryBaseBackupRunsOnThePrimary(t *testing.T) {
-	scheduled, err := BuildScheduledBackup("p1", "ns", "0 0 2 * * *")
+	scheduled, err := BuildScheduledBackup("p1", "ns", "0 2 * * *")
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := BuildFirstScheduledBackup("p1", "ns", "0 0 2 * * *")
+	first, err := BuildFirstScheduledBackup("p1", "ns", "0 2 * * *")
 	if err != nil {
 		t.Fatal(err)
 	}
