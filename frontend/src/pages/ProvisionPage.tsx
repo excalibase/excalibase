@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useProvisionDatabase } from '../hooks/useProvisioning';
 import { DatabaseType } from '../types';
 import { Button } from '../components/Button';
@@ -36,6 +36,33 @@ const ENGINES: readonly { engine: Engine; icon: string; label: string; desc: str
   { engine: 'NONE',       icon: '📦', label: 'No database',     desc: 'Containers, functions and storage',  disabled: false },
 ];
 
+// The server's project name rule (validateProjectIdentity): required, at most
+// 100 characters once trimmed.
+const PROJECT_NAME_MAX = 100;
+const CREATE_ORG_PATH = '/orgs?new=1';
+
+interface FormFields {
+  projectName: string;
+  orgId: string;
+  postgresVersion: string;
+  needsVersion: boolean;
+}
+
+type FieldErrors = Partial<Record<'projectName' | 'orgId' | 'postgresVersion', string>>;
+
+function validateFields({ projectName, orgId, postgresVersion, needsVersion }: FormFields): FieldErrors {
+  const errors: FieldErrors = {};
+  const name = projectName.trim();
+  if (!name) errors.projectName = 'Enter a project name.';
+  else if (name.length > PROJECT_NAME_MAX) errors.projectName = `Project name must be ${PROJECT_NAME_MAX} characters or fewer.`;
+  if (!orgId) errors.orgId = 'Choose an organization for the project.';
+  if (needsVersion && !postgresVersion) errors.postgresVersion = 'Choose a PostgreSQL version.';
+  return errors;
+}
+
+const fieldErrorClass = 'text-xs text-color-error mt-1';
+const linkClass = 'text-accent-primary hover:underline font-medium';
+
 function tierLabel(tier: string): string {
   return tier.charAt(0) + tier.slice(1).toLowerCase();
 }
@@ -55,7 +82,10 @@ export function ProvisionPage() {
   const provision = useProvisionDatabase();
 
   const [orgs, setOrgs] = useState<Org[]>([]);
+  const [orgsLoaded, setOrgsLoaded] = useState(false);
   const [orgsError, setOrgsError] = useState('');
+  // Errors show once the user has tried to create, and clear as fields are fixed.
+  const [attempted, setAttempted] = useState(false);
   const [deployMode, setDeployMode] = useState<DeployMode>('k8s');
   const [projectName, setProjectName] = useState('');
   const [orgId, setOrgId] = useState('');
@@ -101,6 +131,7 @@ export function ProvisionPage() {
     listMyOrgs()
       .then((data) => {
         setOrgs(data);
+        setOrgsLoaded(true);
         if (data.length === 1) setOrgId(data[0].id);
       })
       .catch((failure: unknown) => {
@@ -110,14 +141,22 @@ export function ProvisionPage() {
 
   const isPending = provision.isPending;
   const error = provision.error;
+  const noOrgs = orgsLoaded && orgs.length === 0;
+  const fieldErrors = attempted
+    ? validateFields({ projectName, orgId, postgresVersion, needsVersion: !withoutDatabase })
+    : {};
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAttempted(true);
+    const missing = validateFields({ projectName, orgId, postgresVersion, needsVersion: !withoutDatabase });
+    if (Object.keys(missing).length > 0) return;
+    const name = projectName.trim();
     const result = await provision.mutateAsync(
       withoutDatabase
-        ? { projectName, orgId, noDatabase: true }
+        ? { projectName: name, orgId, noDatabase: true }
         : {
-            projectName,
+            projectName: name,
             orgId,
             databaseType: isDocumentDbEngine ? DatabaseType.POSTGRESQL : (engine as DatabaseType),
             postgresVersion,
@@ -129,7 +168,7 @@ export function ProvisionPage() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-8" data-testid="provision-page">
-      <form onSubmit={handleSubmit} className="space-y-8">
+      <form onSubmit={handleSubmit} noValidate className="space-y-8">
         {/* Deployment Mode */}
         <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
           <h2 className="font-semibold text-text-primary">Deployment Mode</h2>
@@ -164,21 +203,48 @@ export function ProvisionPage() {
                 id="provision-project-name"
                 type="text" value={projectName} onChange={(e) => setProjectName(e.target.value)}
                 placeholder="my-database" required
+                aria-invalid={fieldErrors.projectName ? true : undefined}
+                aria-describedby="provision-project-name-help"
                 className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent-primary"
               />
+              {fieldErrors.projectName ? (
+                <p id="provision-project-name-help" data-testid="project-name-error" className={fieldErrorClass}>{fieldErrors.projectName}</p>
+              ) : (
+                <p id="provision-project-name-help" className="text-xs text-text-tertiary mt-1">Up to {PROJECT_NAME_MAX} characters.</p>
+              )}
             </div>
             <div>
-              <label htmlFor="provision-org-select" className="block text-sm font-medium text-text-primary mb-1.5">Organization</label>
-              <select
-                id="provision-org-select"
-                value={orgId} onChange={(e) => setOrgId(e.target.value)} required
-                className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
-              >
-                <option value="">Select organization...</option>
-                {orgs.map((org) => (
-                  <option key={org.id} value={org.id}>{org.name} ({org.tier})</option>
-                ))}
-              </select>
+              {noOrgs ? (
+                <div data-testid="provision-no-orgs">
+                  <p className="block text-sm font-medium text-text-primary mb-1.5">Organization</p>
+                  <p className="text-sm text-text-secondary">
+                    Every project belongs to an organization, and you are not in one yet.{' '}
+                    <Link to={CREATE_ORG_PATH} className={linkClass}>Create an organization</Link>, then come back here.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <label htmlFor="provision-org-select" className="block text-sm font-medium text-text-primary mb-1.5">Organization</label>
+                  <select
+                    id="provision-org-select"
+                    value={orgId} onChange={(e) => setOrgId(e.target.value)} required
+                    aria-invalid={fieldErrors.orgId ? true : undefined}
+                    className="w-full px-4 py-2.5 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
+                  >
+                    <option value="">Select organization...</option>
+                    {orgs.map((org) => (
+                      <option key={org.id} value={org.id}>{org.name} ({org.tier})</option>
+                    ))}
+                  </select>
+                </>
+              )}
+              {fieldErrors.orgId && (
+                <p data-testid="org-error" className={fieldErrorClass}>
+                  {noOrgs ? (
+                    <>An organization is required. <Link to={CREATE_ORG_PATH} className={linkClass}>Create an organization</Link> first.</>
+                  ) : fieldErrors.orgId}
+                </p>
+              )}
               {orgsError && (
                 <p data-testid="orgs-error" className="text-xs text-color-error mt-1">
                   Organizations could not be loaded: {orgsError}
@@ -224,6 +290,9 @@ export function ProvisionPage() {
                 documentDbOnly={isDocumentDbEngine}
               />
             )}
+            {fieldErrors.postgresVersion && (
+              <p data-testid="version-error" className="text-sm text-color-error">{fieldErrors.postgresVersion}</p>
+            )}
 
             <div className="bg-surface-card border border-border-primary rounded-xl p-6 space-y-4">
               <h2 className="font-semibold text-text-primary">Plan</h2>
@@ -257,7 +326,7 @@ export function ProvisionPage() {
             type="submit"
             className="flex-1"
             data-testid="provision-submit"
-            disabled={isPending || !orgId || (!withoutDatabase && !postgresVersion)}
+            disabled={isPending}
           >
             {isPending && <><Loader2 className="w-4 h-4 mr-2 animate-spin inline" /> Provisioning...</>}
             {!isPending && withoutDatabase && <><Box className="w-4 h-4 mr-2 inline" /> Create project</>}

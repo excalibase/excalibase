@@ -53,6 +53,14 @@ function renderPage(catalog: typeof CATALOG = CATALOG) {
   );
 }
 
+// Without a major the create is refused with the reason next to the picker
+// (EXC-553), not by a button that silently does nothing.
+async function expectVersionStillRequired() {
+  await userEvent.setup().click(screen.getByTestId('provision-submit'));
+  expect(screen.getByTestId('version-error')).toHaveTextContent(/postgresql version/i);
+  expect(api.post).not.toHaveBeenCalled();
+}
+
 describe('ProvisionPage — PostgreSQL version', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -75,7 +83,7 @@ describe('ProvisionPage — PostgreSQL version', () => {
     for (const major of ['14', '15', '16', '17']) {
       expect(screen.getByTestId(`pg-version-${major}`)).toHaveAttribute('aria-pressed', 'false');
     }
-    expect(screen.getByTestId('provision-submit')).toBeDisabled();
+    await expectVersionStillRequired();
   });
 
   test('a major with no published image cannot be chosen', async () => {
@@ -208,7 +216,7 @@ describe('ProvisionPage — DocumentDB engine card', () => {
       expect(screen.getByTestId(`pg-version-${major}`)).toHaveAttribute('aria-pressed', 'false');
     }
     expect(screen.getByTestId('pg-version-17')).toBeDisabled();
-    expect(screen.getByTestId('provision-submit')).toBeDisabled();
+    await expectVersionStillRequired();
   });
 
   test('replaces the tick box with a statement that DocumentDB is included for good', async () => {
@@ -251,7 +259,7 @@ describe('ProvisionPage — DocumentDB engine card', () => {
     await user.click(screen.getByTestId('pg-version-14'));
     await user.click(screen.getByTestId('engine-DOCUMENTDB'));
 
-    expect(screen.getByTestId('provision-submit')).toBeDisabled();
+    await expectVersionStillRequired();
   });
 
   test('keeps a capable major when switching to the card', async () => {

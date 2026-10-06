@@ -147,6 +147,7 @@ func matrixDeps(t *testing.T, instances *fakestore.Instances) *handlerDeps {
 		rlDataPlane:        custommw.RateLimit(custommw.PerProjectAndUser, 1000, time.Second),
 		rlMailSend:         custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		rlTokenCreate:      custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
+		rlOrgCreate:        custommw.RateLimit(custommw.PerUser, 1000, time.Minute),
 		// The matrix only asserts authz outcomes; a nil recorder makes the
 		// activity middleware a transparent pass-through.
 		activity: custommw.ProjectActivity(nil),

@@ -12,8 +12,9 @@ const testAdminUserID = "admin-user-id"
 
 // mockOrgStore implements the subset of OrgStore needed for bootstrap
 type mockOrgStore struct {
-	orgs  []*domain.Org
-	errOn string
+	orgs        []*domain.Org
+	errOn       string
+	maxFreeOrgs int
 }
 
 func (m *mockOrgStore) FindAllOrgs(ctx context.Context) ([]*domain.Org, error) {
@@ -23,15 +24,14 @@ func (m *mockOrgStore) FindAllOrgs(ctx context.Context) ([]*domain.Org, error) {
 	return m.orgs, nil
 }
 
-func (m *mockOrgStore) CreateOrg(ctx context.Context, org *domain.Org) error {
+// CreateOrgWithOwner records the org with its owner, as the real store does
+// in one transaction.
+func (m *mockOrgStore) CreateOrgWithOwner(ctx context.Context, org *domain.Org, maxFreeOrgs int) error {
 	if m.errOn == "CreateOrg" {
 		return fmt.Errorf("db error")
 	}
+	m.maxFreeOrgs = maxFreeOrgs
 	m.orgs = append(m.orgs, org)
-	return nil
-}
-
-func (m *mockOrgStore) AddOrgMember(ctx context.Context, member *domain.OrgMember) error {
 	return nil
 }
 
@@ -60,6 +60,9 @@ func TestBootstrapDefaultOrg_CreatesWhenEmpty(t *testing.T) {
 	}
 	if org.ID == "" {
 		t.Error("expected non-empty ID")
+	}
+	if store.maxFreeOrgs != 0 {
+		t.Errorf("the default org is not held to the free cap, got %d", store.maxFreeOrgs)
 	}
 }
 

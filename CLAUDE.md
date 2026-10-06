@@ -96,7 +96,7 @@ frontend/                        # React 18 studio (Vite, Tailwind, TanStack)
 
 `DEPLOYMENT_MODE` env var (`selfhosted` default, or `cloud`):
 - **Self-hosted**: Postgres store + Postgres-backed vault, default org auto-created at first registration, no tier enforcement, single tenant
-- **Cloud**: Postgres store + a vault that is one of (in priority): remote HTTP (`VAULT_URL` set), Postgres-backed in-process (init/unseal by the bootstrap Job). Multi-org create/delete, tier limits enforced. See `cmd/server/vault_wiring.go` and `buildVault` in `cmd/server/main.go`.
+- **Cloud**: Postgres store + a vault that is one of (in priority): remote HTTP (`VAULT_URL` set), Postgres-backed in-process (init/unseal by the bootstrap Job). Multi-org create/delete, tier limits enforced. Every account gets a free personal org at sign-in (`startSession`, EXC-553) and may create at most one free org (`orgs.owner_id` = creator, enforced under a per-creator advisory lock); org creation is rate-limited per user. See `cmd/server/vault_wiring.go` and `buildVault` in `cmd/server/main.go`.
 
 ### Strategy Pattern for Database Provisioning
 

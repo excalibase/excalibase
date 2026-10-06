@@ -466,6 +466,15 @@ type AuditLogStore interface {
 // OrgStore persists organizations and memberships.
 type OrgStore interface {
 	CreateOrg(ctx context.Context, org *domain.Org) error
+	// CreateOrgWithOwner writes the org and its creator's owner membership in
+	// one transaction. A free org is refused with ErrFreeOrgLimitReached once
+	// org.OwnerID created maxFreeOrgs free orgs (zero or less: no cap); a taken
+	// slug is ErrOrgSlugTaken.
+	CreateOrgWithOwner(ctx context.Context, org *domain.Org, maxFreeOrgs int) error
+	// EnsurePersonalOrg creates org, owned by org.OwnerID, only when that
+	// account created no org yet, and reports whether it did. Concurrent calls
+	// for one account create one org.
+	EnsurePersonalOrg(ctx context.Context, org *domain.Org) (bool, error)
 	FindOrgByID(ctx context.Context, id string) (*domain.Org, error)
 	FindOrgBySlug(ctx context.Context, slug string) (*domain.Org, error)
 	FindOrgsByUser(ctx context.Context, userID string) ([]*domain.Org, error)

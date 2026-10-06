@@ -220,6 +220,47 @@ func (s *Orgs) GetOrgMember(_ context.Context, orgID, userID string) (*domain.Or
 	return s.Members[orgID][userID], nil
 }
 
+// CreateOrgWithOwner records the org and its owner, holding the free cap the
+// real store holds.
+func (s *Orgs) CreateOrgWithOwner(_ context.Context, org *domain.Org, maxFreeOrgs int) error {
+	if s.Err != nil {
+		return s.Err
+	}
+	if maxFreeOrgs > 0 && org.Tier == domain.Free && s.createdBy(org.OwnerID, true) >= maxFreeOrgs {
+		return storage.ErrFreeOrgLimitReached
+	}
+	s.recordOwned(org)
+	return nil
+}
+
+// EnsurePersonalOrg records the org unless its owner created one already.
+func (s *Orgs) EnsurePersonalOrg(_ context.Context, org *domain.Org) (bool, error) {
+	if s.Err != nil {
+		return false, s.Err
+	}
+	if s.createdBy(org.OwnerID, false) > 0 {
+		return false, nil
+	}
+	s.recordOwned(org)
+	return true, nil
+}
+
+func (s *Orgs) createdBy(ownerID string, freeOnly bool) int {
+	count := 0
+	for _, org := range s.ByID {
+		if org.OwnerID == ownerID && (!freeOnly || org.Tier == domain.Free) {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *Orgs) recordOwned(org *domain.Org) {
+	stored := *org
+	s.ByID[org.ID] = &stored
+	s.AddMember(org.ID, org.OwnerID, domain.OrgRoleOwner)
+}
+
 func (s *Orgs) CreateOrg(context.Context, *domain.Org) error                      { return nil }
 func (s *Orgs) FindOrgBySlug(context.Context, string) (*domain.Org, error)        { return nil, nil }
 func (s *Orgs) FindOrgsByUser(context.Context, string) ([]*domain.Org, error)     { return nil, nil }

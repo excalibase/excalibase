@@ -13,7 +13,9 @@ export function Button({
   children,
   ...props
 }: Readonly<ButtonProps>) {
-  const baseStyles = 'font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-accent-primary';
+  // A disabled button is dimmed and shows a not-allowed cursor, so it never
+  // looks pressable.
+  const baseStyles = 'font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed';
 
   const variants = {
     primary: 'bg-accent-primary hover:bg-accent-primary-hover text-white',

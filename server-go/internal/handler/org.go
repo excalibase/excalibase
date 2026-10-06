@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 
@@ -72,12 +73,13 @@ func (h *OrgHandler) projectBelongsToOrg(projectID, orgID string) bool {
 // can't spin up additional orgs beyond the bootstrapped default. Team /
 // member / project management endpoints are available in both modes —
 // self-hosted users still need to invite teammates to the default org.
-func (h *OrgHandler) Routes(r chi.Router, isCloud bool) {
+// createLimits bound org creation (EXC-553).
+func (h *OrgHandler) Routes(r chi.Router, isCloud bool, createLimits ...func(http.Handler) http.Handler) {
 	r.Get("/", h.ListMyOrgs)
 	r.Post("/invites/accept", h.AcceptInvite)
 	if isCloud {
 		// Cloud-only: multi-org creation. Self-hosted has one default org.
-		r.Post("/", h.CreateOrg)
+		r.With(createLimits...).Post("/", h.CreateOrg)
 	}
 	r.Route("/{orgId}", func(r chi.Router) {
 		r.Get("/", h.GetOrg)
@@ -121,8 +123,9 @@ func (h *OrgHandler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidRequest, http.StatusBadRequest)
 		return
 	}
-	if req.Name == "" || req.Slug == "" {
-		httpError(w, "name and slug are required", http.StatusBadRequest)
+	name, ok := domain.NormalizeOrgName(req.Name)
+	if !ok {
+		httpError(w, errOrgNameLength, http.StatusBadRequest)
 		return
 	}
 	if !isValidSlug(req.Slug) {
@@ -132,27 +135,34 @@ func (h *OrgHandler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 
 	org := &domain.Org{
 		ID:      uuid.New().String(),
-		Name:    req.Name,
+		Name:    name,
 		Slug:    req.Slug,
 		Tier:    domain.Free,
 		OwnerID: user.ID,
 	}
 
-	if err := h.orgStore.CreateOrg(r.Context(), org); err != nil {
+	err := h.orgStore.CreateOrgWithOwner(r.Context(), org, storage.FreeOrgsPerUser)
+	switch {
+	case errors.Is(err, storage.ErrFreeOrgLimitReached):
+		httpError(w, errFreeOrgLimit, http.StatusConflict)
+		return
+	case errors.Is(err, storage.ErrOrgSlugTaken):
+		httpError(w, "an organization with this slug already exists", http.StatusConflict)
+		return
+	case err != nil:
+		log.Printf("ERROR: create org for %s: %v", user.ID, err)
 		httpError(w, "failed to create org", http.StatusInternalServerError)
 		return
 	}
 
-	// Add creator as owner
-	h.orgStore.AddOrgMember(r.Context(), &domain.OrgMember{
-		OrgID:  org.ID,
-		UserID: user.ID,
-		Role:   domain.OrgRoleOwner,
-	})
-
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, org)
 }
+
+const (
+	errOrgNameLength = "organization name must be 1-64 characters"
+	errFreeOrgLimit  = "you already own a free organization; each account can own one free organization"
+)
 
 func (h *OrgHandler) ListMyOrgs(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
@@ -223,7 +233,12 @@ func (h *OrgHandler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Name != nil {
-		org.Name = *req.Name
+		name, ok := domain.NormalizeOrgName(*req.Name)
+		if !ok {
+			httpError(w, errOrgNameLength, http.StatusBadRequest)
+			return
+		}
+		org.Name = name
 	}
 	if req.Tier != nil {
 		if !auth.HasPermission(user.Role, auth.PermManageOrgs) {
