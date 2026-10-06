@@ -72,7 +72,7 @@ export function DashboardPage() {
                   <td className="px-6 py-3">
                     <span className="px-2 py-0.5 rounded text-xs bg-bg-tertiary text-text-secondary border border-border-primary">{inst.tier}</span>
                   </td>
-                  <td className="px-6 py-3"><StatusBadge stage={inst.currentStage} /></td>
+                  <td className="px-6 py-3"><StatusBadge status={inst.status} stage={inst.currentStage} deletionDueAt={inst.deletionDueAt} /></td>
                   <td className="px-6 py-3 text-text-tertiary">{new Date(inst.createdAt).toLocaleDateString()}</td>
                 </tr>
               ))}

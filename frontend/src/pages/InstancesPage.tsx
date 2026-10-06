@@ -109,7 +109,7 @@ function renderInstancesContent(args: InstancesContentArgs) {
               <TierBadge tier={inst.tier} />
             </td>
             <td className="px-6 py-4 text-text-tertiary font-mono text-xs">{inst.namespace}</td>
-            <td className="px-6 py-4"><StatusBadge stage={inst.currentStage} /></td>
+            <td className="px-6 py-4"><StatusBadge status={inst.status} stage={inst.currentStage} deletionDueAt={inst.deletionDueAt} /></td>
             <td className="px-6 py-4 text-text-tertiary">{new Date(inst.createdAt).toLocaleDateString()}</td>
             <td className="px-6 py-4">
               <fieldset

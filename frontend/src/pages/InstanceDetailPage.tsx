@@ -60,7 +60,7 @@ export function InstanceDetailPage() {
           <div>
             <div className="flex items-center gap-3">
               <h2 className="text-xl font-bold text-text-primary">{instance.projectId}</h2>
-              <StatusBadge stage={instance.currentStage} />
+              <StatusBadge status={instance.status} stage={instance.currentStage} deletionDueAt={instance.deletionDueAt} />
             </div>
             <p className="text-sm text-text-tertiary mt-0.5">
               {engineLabel(instance)} · {instance.tier} · {instance.namespace}
