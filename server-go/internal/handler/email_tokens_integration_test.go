@@ -560,3 +560,38 @@ func TestEmailTokens_ResetReportsAccessTokensThatCouldNotBeRevoked(t *testing.T)
 		t.Fatalf("got %d %s, want 500 naming the access tokens", w.Code, w.Body.String())
 	}
 }
+
+// passwordUpdateFails is the real user store with a password update that fails.
+type passwordUpdateFails struct{ emailTokenUsers }
+
+func (passwordUpdateFails) UpdateUserPassword(context.Context, string, string) error {
+	return errors.New("pq: could not connect to server at 10.42.0.7:5432")
+}
+
+// EXC-555: a reset that fails on our side tells the user to retry, never the driver's text.
+func TestEmailTokens_ResetThatCannotSaveThePasswordSaysTryAgain(t *testing.T) {
+	store := pgtest.New(t)
+	sender := &capturingSender{}
+	h := NewEmailTokensHandler(store.DB(), sender, passwordUpdateFails{store}, "https://app.example.com", "Excalibase")
+	h.SetVerifier(NewEmailVerifier(store, sender, "https://app.example.com", "Excalibase"))
+	h.SetSessionStore(store)
+	h.runInBackground = func(f func()) { f() }
+	user := &domain.User{ID: "user-stall", Username: testutil.FixturePassword("stall"), Email: "stall@example.com",
+		PasswordHash: testutil.FixturePasswordHash(), Role: "user", Active: true}
+	if err := store.CreateUser(context.Background(), user); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	h.SendReset(httptest.NewRecorder(), httptest.NewRequest("POST", "/reset/send", strings.NewReader(`{"email":"stall@example.com"}`)))
+	w := httptest.NewRecorder()
+	h.ConfirmReset(w, httptest.NewRequest("POST", "/reset/confirm",
+		strings.NewReader(`{"token":"`+tokenFromURL(sender.message().HTMLBody)+`","newPassword":"Brand-new-pass9"}`)))
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "try again") {
+		t.Fatalf("got %d %s, want 500 telling the user to try again", w.Code, w.Body.String())
+	}
+	for _, leak := range []string{"pq", "10.42.0.7", "update password"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Errorf("answer %s leaks %q", w.Body.String(), leak)
+		}
+	}
+}

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,15 +16,20 @@ import (
 type memberOrgStore struct {
 	storage.OrgStore
 	existing map[string]bool
+	lookup   error // a failure other than "not a member"
 	added    []string
 	invites  int
 }
 
 func (s *memberOrgStore) GetOrgMember(_ context.Context, _, userID string) (*domain.OrgMember, error) {
+	if s.lookup != nil {
+		return nil, s.lookup
+	}
 	if s.existing[userID] {
 		return &domain.OrgMember{UserID: userID, Role: domain.OrgRoleDeveloper}, nil
 	}
-	return nil, nil
+	// As the Postgres store answers for someone who is not a member.
+	return nil, fmt.Errorf("org member not found: %w", sql.ErrNoRows)
 }
 
 func (s *memberOrgStore) AddOrgMember(_ context.Context, member *domain.OrgMember) error {
@@ -58,6 +65,27 @@ func TestInviteRefusalsSayWhy(t *testing.T) {
 		}
 		if len(orgs.added) != 0 {
 			t.Errorf("an existing member must not be re-added")
+		}
+	})
+
+	t.Run("someone not yet a member is added", func(t *testing.T) {
+		orgs := &memberOrgStore{}
+		w := httptest.NewRecorder()
+		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", "ann@x.test", "viewer")
+		if w.Code != http.StatusCreated || len(orgs.added) != 1 {
+			t.Fatalf("got %d %s (added %v), want 201 and one new member", w.Code, w.Body.String(), orgs.added)
+		}
+	})
+
+	t.Run("a membership lookup that fails is not taken for no membership", func(t *testing.T) {
+		orgs := &memberOrgStore{lookup: fmt.Errorf("org member not found: %w", sql.ErrConnDone)}
+		w := httptest.NewRecorder()
+		NewOrgHandler(orgs, users).resolveAndAddMember(w, inviteRequest(), "org1", "", "ann@x.test", "viewer")
+		if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "connection") {
+			t.Fatalf("got %d %s, want a plain 500", w.Code, w.Body.String())
+		}
+		if len(orgs.added) != 0 {
+			t.Errorf("nobody may be added when membership is unknown")
 		}
 	})
 

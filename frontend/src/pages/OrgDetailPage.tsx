@@ -75,7 +75,7 @@ export function OrgDetailPage() {
         setLoading(false);
       }
     };
-    load();
+    void load();
   }, [orgId]);
 
   const loadMembers = async () => {
@@ -98,7 +98,8 @@ export function OrgDetailPage() {
       setIssuedInvite(result.status === 'pending' && result.inviteLink ? { email, link: result.inviteLink } : null);
       setShowInvite(false);
       setInviteEmail('');
-      loadMembers();
+      // The invite went out; a list that fails to reload is a separate, smaller problem.
+      loadMembers().catch((err) => setActionError(serverErrorMessage(err, 'The member list could not be refreshed')));
     } catch (err: unknown) {
       setInviteError(serverErrorMessage(err, 'The invite was not sent'));
     } finally {
@@ -238,7 +239,7 @@ export function OrgDetailPage() {
             <div className="mb-4 p-4 bg-surface-card border border-border-primary rounded-lg space-y-3">
               <h3 className="font-semibold text-text-primary text-sm">Invite Member by Email</h3>
               {inviteError && (
-                <div className="px-3 py-2 rounded bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
+                <div data-testid="invite-error" className="px-3 py-2 rounded bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
                   {inviteError}
                 </div>
               )}

@@ -165,6 +165,19 @@ describe('OrgDetailPage — refusals say why', () => {
     expect(await screen.findByTestId('org-load-error')).toHaveTextContent('you are not a member of this organization');
   });
 
+  test('an invite that was sent but whose member list cannot reload says the list is stale', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { status: 'invited' } } as never);
+    await openMembers(u);
+    vi.mocked(api.get).mockImplementation((url: string) =>
+      url === '/orgs/o1/members'
+        ? Promise.reject(refusal('the member list is busy'))
+        : Promise.resolve({ data: [] } as never));
+    await invite(u, 'dev2@x.test');
+    expect(await screen.findByTestId('org-action-error')).toHaveTextContent('the member list is busy');
+    expect(screen.queryByTestId('invite-error')).not.toBeInTheDocument();
+  });
+
   test('a refused member removal shows the reason', async () => {
     const u = userEvent.setup();
     vi.mocked(api.delete).mockRejectedValue(refusal('the last owner cannot be removed'));

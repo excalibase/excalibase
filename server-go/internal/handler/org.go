@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -19,6 +20,7 @@ const (
 	errInvalidRequest    = "invalid request"
 	errOrgNotFound       = "org not found"
 	errInsufficientPerms = "insufficient permissions"
+	errAddMemberFailed   = "failed to add member"
 )
 
 type OrgHandler struct {
@@ -395,10 +397,11 @@ func (h *OrgHandler) resolveAndAddMember(w http.ResponseWriter, r *http.Request,
 	}
 
 	if userID != "" {
+		// The store answers "not a member" with sql.ErrNoRows.
 		existing, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
-		if err != nil {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			log.Printf("invite to %s: look up membership: %v", orgID, err)
-			httpError(w, "failed to add member", http.StatusInternalServerError)
+			httpError(w, errAddMemberFailed, http.StatusInternalServerError)
 			return
 		}
 		if existing != nil {
@@ -408,7 +411,7 @@ func (h *OrgHandler) resolveAndAddMember(w http.ResponseWriter, r *http.Request,
 		if err := h.orgStore.AddOrgMember(r.Context(), &domain.OrgMember{
 			OrgID: orgID, UserID: userID, Role: role,
 		}); err != nil {
-			httpError(w, "failed to add member", http.StatusInternalServerError)
+			httpError(w, errAddMemberFailed, http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -541,7 +544,7 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 	if err := h.orgStore.AddProjectMember(r.Context(), &domain.ProjectMember{
 		ProjectID: projectID, OrgID: orgID, UserID: req.UserID, Role: req.Role,
 	}); err != nil {
-		httpError(w, "failed to add member", http.StatusInternalServerError)
+		httpError(w, errAddMemberFailed, http.StatusInternalServerError)
 		return
 	}
 
