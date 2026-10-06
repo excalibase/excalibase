@@ -553,7 +553,7 @@ if [ -n "$EMAIL_E2E" ]; then
   else
     TEST_EMAIL="${BASE_EMAIL%@*}+e2e-${TS}@${BASE_EMAIL#*@}"
   fi
-  TEST_USER="email-test-${TS}"
+  TEST_USER="email_test_${TS}"
   TEST_PASS="EmailTest@Pass123"
 
   # Register a new platform user with the sandbox-allowed email.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,17 +168,17 @@ func TestSignUpWhoseMailFailsLeavesNoAccount(t *testing.T) {
 
 func TestAdminCreatedAccountStartsUnverifiedAndIsMailed(t *testing.T) {
 	h := newVerificationHarness(t, &recordingSender{})
-	body := fmt.Sprintf(`{"username":"jo","email":"jo@example.com","password":%q,"role":"user"}`, h.password)
+	body := fmt.Sprintf(`{"username":"jordan","email":"jo@example.com","password":%q,"role":"user"}`, h.password)
 	if w := doRequest(h.router, "POST", "/users", body); w.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
 	}
-	if user := h.userNamed("jo"); user == nil || user.EmailVerifiedAt != nil {
+	if user := h.userNamed("jordan"); user == nil || user.EmailVerifiedAt != nil {
 		t.Fatalf("stored account: %+v", user)
 	}
 	if len(h.sender.sent) != 1 {
 		t.Fatalf("verification mails sent: %d", len(h.sender.sent))
 	}
-	if status, _ := h.login("jo"); status != http.StatusForbidden {
+	if status, _ := h.login("jordan"); status != http.StatusForbidden {
 		t.Fatalf("login before verification: %d", status)
 	}
 }
@@ -252,5 +253,55 @@ func TestAdminCreatedAccountSurvivesAFailedMail(t *testing.T) {
 	body := fmt.Sprintf(`{"username":"lee","email":"lee@example.com","password":%q,"role":"user"}`, h.password)
 	if w := doRequest(h.router, "POST", "/users", body); w.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A new account's name is 3-32 letters, digits or underscores; the refusal
+// says the rule and nothing is created.
+func TestRegisterRefusesAUsernameOutsideTheRule(t *testing.T) {
+	for _, name := range []string{"jo", strings.Repeat("a", 33), "bad name", "dash-name", "dot.name", "émile", "a;drop"} {
+		t.Run(name, func(t *testing.T) {
+			h := newVerificationHarness(t, &recordingSender{})
+			status, resp := h.register(name)
+			if status != http.StatusBadRequest || resp["error"] != usernameRule {
+				t.Fatalf("got %d %v", status, resp)
+			}
+			if h.userNamed(name) != nil {
+				t.Fatal("an account was created")
+			}
+		})
+	}
+}
+
+func TestRegisterAcceptsAUsernameInsideTheRule(t *testing.T) {
+	for _, name := range []string{"bob", "Alice_2", strings.Repeat("a", 32)} {
+		h := newVerificationHarness(t, &recordingSender{})
+		if status, resp := h.register(name); status != http.StatusCreated {
+			t.Fatalf("%s: got %d %v", name, status, resp)
+		}
+	}
+}
+
+func TestAdminCreatedAccountFollowsTheUsernameRule(t *testing.T) {
+	h := newVerificationHarness(t, &recordingSender{})
+	body := fmt.Sprintf(`{"username":"x y","email":"xy@example.com","password":%q,"role":"user"}`, h.password)
+	if w := doRequest(h.router, "POST", "/users", body); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), usernameRule) {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	if h.userNamed("x y") != nil {
+		t.Fatal("an account was created")
+	}
+}
+
+// An account made before the rule existed still signs in.
+func TestAnExistingUsernameOutsideTheRuleStillSignsIn(t *testing.T) {
+	h := newVerificationHarness(t, &recordingSender{})
+	h.register("legacy")
+	user := h.userNamed("legacy")
+	user.Username = "old.name-x"
+	verifiedAt := time.Now()
+	user.EmailVerifiedAt = &verifiedAt
+	if status, resp := h.login("old.name-x"); status != http.StatusOK {
+		t.Fatalf("login: %d %v", status, resp)
 	}
 }

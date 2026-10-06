@@ -144,7 +144,7 @@ func TestRegister_ConcurrentFirstRegistrations_ExactlyOneAdmin(t *testing.T) {
 
 	var wg sync.WaitGroup
 	codes := make([]int, 2)
-	names := []string{"racer-a", "racer-b"}
+	names := []string{"racer_a", "racer_b"}
 	for i := range names {
 		wg.Add(1)
 		go func(i int) {

@@ -6,10 +6,30 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/lib/pq"
 )
+
+// An over-long table or column name is the caller's mistake, said plainly.
+func TestSchemaErrorRefusesAnInvalidNameWith400(t *testing.T) {
+	w := httptest.NewRecorder()
+	schemaError(w, fmt.Errorf("create table: %w", schema.CheckIdentifier("table", strings.Repeat("a", 300))), http.StatusInternalServerError)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != "Table names can be at most 63 characters; this one has 300" {
+		t.Errorf("error = %q", body.Error)
+	}
+}
 
 // A Postgres refusal reaches the user as Postgres's own sentence, without the
 // wrapping our code adds, and with a status that says whose mistake it was.

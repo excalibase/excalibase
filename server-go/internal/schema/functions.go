@@ -39,6 +39,9 @@ func (i *Introspector) GetFunctions(ctx context.Context, db *sql.DB, schema stri
 
 // CreateFunction creates a new PostgreSQL function.
 func (i *Introspector) CreateFunction(ctx context.Context, db *sql.DB, req CreateFunctionRequest) error {
+	if err := checkNameLength("function", req.Name); err != nil {
+		return err
+	}
 	schemaName := req.Schema
 	if schemaName == "" {
 		schemaName = "public"

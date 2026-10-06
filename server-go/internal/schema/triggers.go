@@ -52,6 +52,9 @@ func (i *Introspector) GetTriggers(ctx context.Context, db *sql.DB, schemaName s
 
 // CreateTrigger creates a new trigger on a table.
 func (i *Introspector) CreateTrigger(ctx context.Context, db *sql.DB, req CreateTriggerRequest) error {
+	if err := checkNameLength("trigger", req.Name); err != nil {
+		return err
+	}
 	schemaName := req.Schema
 	if schemaName == "" {
 		schemaName = "public"

@@ -14,6 +14,9 @@ const (
 
 // AddColumn adds a new column to an existing table.
 func (i *Introspector) AddColumn(ctx context.Context, db *sql.DB, schema, table string, req AddColumnRequest) error {
+	if err := CheckIdentifier("column", req.Name); err != nil {
+		return err
+	}
 	var b strings.Builder
 	b.WriteString(sqlAlterTable)
 	b.WriteString(QuoteIdent(schema))
@@ -50,6 +53,9 @@ func (i *Introspector) AddColumn(ctx context.Context, db *sql.DB, schema, table 
 
 // AlterColumn modifies an existing column's properties.
 func (i *Introspector) AlterColumn(ctx context.Context, db *sql.DB, schema, table, col string, req AlterColumnRequest) error {
+	if err := checkOptionalIdentifier("column", req.NewName); err != nil {
+		return err
+	}
 	fqn := QuoteIdent(schema) + "." + QuoteIdent(table)
 	quotedCol := QuoteIdent(col)
 	base := sqlAlterTable + fqn + sqlAlterColumn + quotedCol

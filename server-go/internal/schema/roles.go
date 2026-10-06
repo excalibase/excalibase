@@ -38,6 +38,9 @@ var ErrProtectedRole = errors.New("this role belongs to the platform")
 // The password travels as its SCRAM verifier, a bind parameter, so the
 // plaintext never reaches the database.
 func (i *Introspector) CreateRole(ctx context.Context, db *sql.DB, req CreateRoleRequest) error {
+	if err := checkNameLength("role", req.Name); err != nil {
+		return err
+	}
 	if pgroles.IsReserved(req.Name) {
 		return fmt.Errorf("cannot create role %q: %w", req.Name, ErrProtectedRole)
 	}

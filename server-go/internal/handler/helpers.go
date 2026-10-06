@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/lib/pq"
@@ -31,6 +32,16 @@ var validEmail = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-
 
 func isValidEmail(email string) bool {
 	return validEmail.MatchString(email)
+}
+
+// validUsername is the rule for a new account's name; Studio's sign-up form
+// uses the same pattern. Accounts named before the rule keep signing in.
+var validUsername = regexp.MustCompile(`^[A-Za-z0-9_]{3,32}$`)
+
+const usernameRule = "Use 3–32 letters, numbers or underscores"
+
+func isValidUsername(username string) bool {
+	return validUsername.MatchString(username)
 }
 
 func isValidPassword(password string) string {
@@ -155,6 +166,11 @@ func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 // it was: a duplicate is 409, a bad statement or value 400, a missing grant 403.
 func schemaError(w http.ResponseWriter, err error, code int) {
 	log.Printf("schema error: %v", err)
+	var nameErr *schema.InvalidNameError
+	if errors.As(err, &nameErr) {
+		httpError(w, nameErr.Error(), http.StatusBadRequest)
+		return
+	}
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Message != "" {
 		if code == http.StatusInternalServerError {
