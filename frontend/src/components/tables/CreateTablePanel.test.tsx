@@ -49,15 +49,44 @@ describe('CreateTablePanel name length', () => {
   });
 });
 
+describe('CreateTablePanel name rule', () => {
+  const RULE = 'Use lowercase letters, numbers and underscores, starting with a letter or underscore; at most 63 characters.';
+
+  test('a table name the API could never expose is explained and not sent', () => {
+    renderPanel();
+    fireEvent.change(screen.getByTestId('table-name-input'), { target: { value: 'My Notes' } });
+    expect(screen.getByText(RULE)).toBeInTheDocument();
+    expect(screen.getByTestId('create-table-submit')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('create-table-submit'));
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  test('a column name with a space or capital is explained and not sent', () => {
+    renderPanel();
+    fireEvent.change(screen.getByTestId('table-name-input'), { target: { value: 'notes' } });
+    fireEvent.change(screen.getAllByPlaceholderText('e.g. email')[0], { target: { value: 'First Name' } });
+    expect(screen.getByText(RULE)).toBeInTheDocument();
+    expect(screen.getByTestId('create-table-submit')).toBeDisabled();
+  });
+
+  test('a blank column name blocks the create', () => {
+    renderPanel();
+    fireEvent.change(screen.getByTestId('table-name-input'), { target: { value: 'notes' } });
+    fireEvent.click(screen.getByText('+ Add column'));
+    expect(screen.getByTestId('create-table-submit')).toBeDisabled();
+  });
+});
+
 describe('CreateTablePanel columns', () => {
   test('edits, adds and removes columns before creating', async () => {
     const onClose = renderPanel();
     const user = userEvent.setup();
-    await user.type(screen.getByTestId('table-name-input'), 'notes');
+    // Surrounding spaces from a paste are not part of the name.
+    await user.type(screen.getByTestId('table-name-input'), '  notes ');
     await user.click(screen.getByText('+ Add column'));
     const names = screen.getAllByPlaceholderText('e.g. email');
     const types = screen.getAllByPlaceholderText('e.g. text');
-    await user.type(names[1], 'body');
+    await user.type(names[1], ' body ');
     await user.clear(types[1]);
     await user.type(types[1], 'varchar');
     await user.click(screen.getByText('+ Add column'));

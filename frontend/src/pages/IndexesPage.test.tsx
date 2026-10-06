@@ -104,7 +104,7 @@ describe('IndexesPage', () => {
   test('creates a unique index of the chosen type', async () => {
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
     renderPage();
-    await fillIndex('orders_customer_uq');
+    await fillIndex(' orders_customer_uq  ');
     fireEvent.click(screen.getByRole('checkbox', { name: /Unique/ }));
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'gin' } });
     fireEvent.click(panelSubmit());
@@ -128,7 +128,7 @@ describe('IndexesPage', () => {
   test('a double click on create sends one request', async () => {
     vi.mocked(api.post).mockReturnValue(new Promise(() => {}) as never);
     renderPage();
-    await fillIndex('orders_customer_uq');
+    await fillIndex(' orders_customer_uq  ');
     const submit = panelSubmit();
     fireEvent.click(submit);
     fireEvent.click(submit);

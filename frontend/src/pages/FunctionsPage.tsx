@@ -38,7 +38,7 @@ export function FunctionsPage() {
   const handleCreate = () => {
     if (!fName.trim() || !fBody.trim()) return;
     createFn.mutate(
-      { name: fName, language: fLang, returnType: fReturn, args: fArgs || undefined, body: fBody, volatility: fVol },
+      { name: fName.trim(), language: fLang, returnType: fReturn, args: fArgs || undefined, body: fBody, volatility: fVol },
       { onSuccess: () => { setShowCreate(false); setFName(''); setFBody(''); setFArgs(''); } }
     );
   };

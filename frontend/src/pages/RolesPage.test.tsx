@@ -64,7 +64,7 @@ describe('RolesPage', () => {
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
     renderPage();
     await openCreatePanel();
-    fireEvent.change(screen.getByTestId('role-name-input'), { target: { value: 'analyst' } });
+    fireEvent.change(screen.getByTestId('role-name-input'), { target: { value: '  analyst \n' } });
     fireEvent.change(screen.getByTestId('role-password-input'), { target: { value: 's3cret' } });
     fireEvent.click(screen.getByLabelText(/Can Login/));
     fireEvent.click(screen.getByTestId('create-role-submit'));

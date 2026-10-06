@@ -54,7 +54,9 @@ export function SetupPage() {
     defaultValues: { username: '', email: '', password: '', setupToken: '' },
     onSubmit: async ({ value }) => {
       // A refusal is shown from registerMutation.error.
-      const data = await registerMutation.mutateAsync(value).catch(() => null);
+      const data = await registerMutation
+        .mutateAsync({ ...value, setupToken: value.setupToken.trim() })
+        .catch(() => null);
       if (!data) return;
       // The server set the httpOnly session cookie on the response.
       setAuth({

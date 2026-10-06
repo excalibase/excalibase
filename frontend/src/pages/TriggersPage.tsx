@@ -36,7 +36,7 @@ export function TriggersPage() {
     if (!form.name.trim() || !form.table || !form.function || createInFlight.current) return;
     createInFlight.current = true;
     createTrigger.mutate(
-      { name: form.name, table: form.table, event: form.event, timing: form.timing, function: form.function },
+      { name: form.name.trim(), table: form.table, event: form.event, timing: form.timing, function: form.function },
       {
         onSuccess: () => { setShowCreate(false); setForm({ name: '', table: '', event: 'INSERT', timing: 'BEFORE', function: '' }); },
         onSettled: () => { createInFlight.current = false; },

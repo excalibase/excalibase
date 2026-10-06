@@ -24,7 +24,7 @@ export function RolesPage() {
     if (!name.trim() || createInFlight.current) return;
     createInFlight.current = true;
     createRole.mutate(
-      { name, password: password || undefined, login: canLogin },
+      { name: name.trim(), password: password || undefined, login: canLogin },
       {
         onSuccess: () => { setShowCreate(false); setName(''); setPassword(''); },
         onSettled: () => { createInFlight.current = false; },

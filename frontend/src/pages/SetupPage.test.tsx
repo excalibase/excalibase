@@ -196,7 +196,7 @@ describe('SetupPage', () => {
     await user.type(screen.getByTestId('admin-email'), 'founder@example.com');
     await user.type(screen.getByTestId('admin-password'), TEST_PASSWORD_PLACEHOLDER);
     await user.type(screen.getByTestId('admin-password-confirm'), TEST_PASSWORD_PLACEHOLDER);
-    await user.type(screen.getByTestId('admin-setup-token'), 'the-one-time-token');
+    await user.type(screen.getByTestId('admin-setup-token'), ' the-one-time-token  ');
 
     const submit = screen.getByTestId('admin-submit');
     await waitFor(() => expect(submit).toBeEnabled());
@@ -248,7 +248,7 @@ describe('SetupPage', () => {
     await user.type(screen.getByTestId('admin-email'), 'founder@example.com');
     await user.type(screen.getByTestId('admin-password'), TEST_PASSWORD_PLACEHOLDER);
     await user.type(screen.getByTestId('admin-password-confirm'), `${TEST_PASSWORD_PLACEHOLDER}x`);
-    await user.type(screen.getByTestId('admin-setup-token'), 'the-one-time-token');
+    await user.type(screen.getByTestId('admin-setup-token'), ' the-one-time-token  ');
 
     expect(screen.getByText("Passwords don't match")).toBeInTheDocument();
     expect(screen.getByTestId('admin-submit')).toBeDisabled();

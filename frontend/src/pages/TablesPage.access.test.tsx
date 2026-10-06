@@ -135,16 +135,16 @@ describe('create table with public read', () => {
 
   test('a failed permission write is shown and the table is left', async () => {
     renderPage();
-    vi.mocked(api.put).mockRejectedValueOnce({ response: { status: 400, data: { error: '"public.Notes" is not schema.name' } } });
+    vi.mocked(api.put).mockRejectedValueOnce({ response: { status: 400, data: { error: 'permissions are read-only right now' } } });
     const user = userEvent.setup();
     const panel = await openCreatePanel(user);
-    await user.type(within(panel).getByTestId('table-name-input'), 'Notes');
+    await user.type(within(panel).getByTestId('table-name-input'), 'notes');
     await user.click(await within(panel).findByLabelText('Anyone can read (anon)'));
     await user.click(within(panel).getByTestId('create-table-submit'));
 
     const alert = await within(panel).findByRole('alert');
-    expect(alert).toHaveTextContent(/Table Notes was created, but anon read could not be granted/);
-    expect(alert).toHaveTextContent('is not schema.name');
+    expect(alert).toHaveTextContent(/Table notes was created, but anon read could not be granted/);
+    expect(alert).toHaveTextContent('permissions are read-only right now');
     expect(api.delete).not.toHaveBeenCalled();
     await user.click(within(panel).getByTestId('create-table-submit'));
     await waitFor(() => expect(screen.queryByTestId('sidepanel')).not.toBeInTheDocument());

@@ -87,7 +87,7 @@ describe('RlsPage', () => {
   test('creates a policy with its expressions', async () => {
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
     renderPage();
-    await fillPolicy('owners_write');
+    await fillPolicy(' owners_write ');
     fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'UPDATE' } });
     fireEvent.change(screen.getByLabelText('Roles'), { target: { value: 'reporting' } });
     fireEvent.change(screen.getByLabelText('USING expression'), { target: { value: 'owner = 1' } });
@@ -114,7 +114,7 @@ describe('RlsPage', () => {
   test('a double click on create sends one request', async () => {
     vi.mocked(api.post).mockReturnValue(new Promise(() => {}) as never);
     renderPage();
-    await fillPolicy('owners_write');
+    await fillPolicy(' owners_write ');
     const submit = screen.getByTestId('create-policy-submit');
     fireEvent.click(submit);
     fireEvent.click(submit);

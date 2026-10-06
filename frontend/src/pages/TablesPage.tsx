@@ -9,7 +9,7 @@ import {
 import { SidePanel } from '../components/ui/SidePanel';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { NameLengthHint } from '../components/ui/NameLengthHint';
-import { identifierError } from '../utils/names';
+import { newNameError } from '../utils/names';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import { DataGrid } from '../components/tables/DataGrid';
 import { CreateTablePanel } from '../components/tables/CreateTablePanel';
@@ -73,6 +73,7 @@ export function TablesPage() {
   const [newRowData, setNewRowData] = useState<Record<string, string>>({});
 
   const pkColumn = useMemo(() => columns.find(c => c.primaryKey)?.name ?? '', [columns]);
+  const notNullColumns = useMemo(() => columns.filter(c => !c.nullable).map(c => c.name), [columns]);
 
   const handleSortChange = useCallback((col: string, order: 'asc' | 'desc') => {
     setSortCol(col);
@@ -93,17 +94,19 @@ export function TablesPage() {
   }, []);
 
   const handleAddColumn = () => {
-    if (!newColName.trim() || !selectedTable || identifierError('Column', newColName)) return;
+    if (!newColName.trim() || !selectedTable || newNameError('Column', newColName)) return;
     addColumn.mutate(
-      { tableName: selectedTable, name: newColName, type: newColType, nullable: newColNullable },
+      { tableName: selectedTable, name: newColName.trim(), type: newColType, nullable: newColNullable },
       { onSuccess: () => { setShowAddColumn(false); setNewColName(''); } },
     );
   };
 
   const handleInsertRow = () => {
     if (!selectedTable) return;
+    // A blank field is left out so the column's default (or NULL) applies.
+    const data = Object.fromEntries(Object.entries(newRowData).filter(([, value]) => value !== ''));
     insertRow.mutate(
-      { tableName: selectedTable, data: newRowData },
+      { tableName: selectedTable, data },
       { onSuccess: () => { setShowInsertRow(false); setNewRowData({}); } },
     );
   };
@@ -247,6 +250,7 @@ export function TablesPage() {
                 rowsData={rowsData}
                 rowsLoading={rowsLoading}
                 pkColumn={pkColumn}
+                notNullColumns={notNullColumns}
                 selectedTable={selectedTable}
                 sortCol={sortCol}
                 sortOrder={sortOrder}
@@ -274,12 +278,12 @@ export function TablesPage() {
 
       {/* Add Column SidePanel */}
       <SidePanel open={showAddColumn} onClose={() => setShowAddColumn(false)} title={`Add Column to ${selectedTable}`}
-        footer={<button onClick={handleAddColumn} disabled={!newColName.trim() || !!identifierError('Column', newColName) || addColumn.isPending} className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-lg disabled:opacity-50" data-testid="add-column-submit">{addColumn.isPending ? 'Adding...' : 'Add Column'}</button>}>
+        footer={<button onClick={handleAddColumn} disabled={!newColName.trim() || !!newNameError('Column', newColName) || addColumn.isPending} className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white text-sm font-medium rounded-lg disabled:opacity-50" data-testid="add-column-submit">{addColumn.isPending ? 'Adding...' : 'Add Column'}</button>}>
         <div className="space-y-4">
           <div>
             <label htmlFor="col-name-input" className="block text-sm font-medium text-text-secondary mb-1">Name</label>
             <input id="col-name-input" type="text" value={newColName} onChange={e => setNewColName(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-border-primary bg-bg-primary text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="e.g. created_at" data-testid="column-name-input" autoFocus />
-            <NameLengthHint kind="Column" name={newColName} testId="column-name-count" />
+            <NameLengthHint kind="Column" name={newColName} testId="column-name-count" newName />
           </div>
           <div>
             <label htmlFor="col-type-select" className="block text-sm font-medium text-text-secondary mb-1">Type</label>

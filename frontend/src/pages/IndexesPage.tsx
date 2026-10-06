@@ -52,7 +52,7 @@ export function IndexesPage() {
     if (!form.name.trim() || !form.table || form.columns.length === 0 || createInFlight.current) return;
     createInFlight.current = true;
     createIndex.mutate(
-      { name: form.name, table: form.table, columns: form.columns, unique: form.unique, type: form.type },
+      { name: form.name.trim(), table: form.table, columns: form.columns, unique: form.unique, type: form.type },
       {
         onSuccess: () => { setShowCreate(false); setForm({ name: '', table: '', columns: [], unique: false, type: 'btree' }); },
         onSettled: () => { createInFlight.current = false; },
