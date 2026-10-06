@@ -14,6 +14,9 @@ export function useTables(projectId: string, schema = 'public') {
       return res.data;
     },
     enabled: !!projectId,
+    // Several always-mounted components read this list; refetching a failed
+    // read on each mount reset it to loading and remounted them in a loop.
+    retryOnMount: false,
   });
 }
 

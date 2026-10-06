@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ClusterSettingsCard } from './ClusterSettingsCard';
@@ -101,6 +101,19 @@ describe('ClusterSettingsCard', () => {
     expect(await screen.findByTestId('cluster-settings-error')).toHaveTextContent(
       'postgres parameter not allowed',
     );
+  });
+
+  // EXC-555: the second of two saves answered "project is busy", hiding the
+  // first one's real reason.
+  test('a double-clicked save sends one request', async () => {
+    let finish: (value: unknown) => void = () => {};
+    vi.mocked(api.put).mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
+    renderCard(project());
+    const saveButton = await screen.findByTestId('params-save-btn');
+    fireEvent.click(saveButton);
+    fireEvent.click(saveButton);
+    finish({ data: settings });
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
   });
 
   test('sends only the settings that have a value', async () => {

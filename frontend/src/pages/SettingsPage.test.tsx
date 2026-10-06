@@ -223,3 +223,34 @@ describe('SettingsPage — connect from code', () => {
     expect(screen.getByTestId('connect-section')).not.toHaveTextContent(/@excalibase\/client|anonKey|api\.excalibase\.io\/o-1/);
   });
 });
+
+// EXC-555: a failed load spun forever and a refused toggle said nothing.
+describe('SettingsPage — failures say why', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const refusal = (status: number, error: string) => ({
+    message: `Request failed with status code ${status}`,
+    response: { status, data: { error, status } },
+  });
+
+  test('a project that cannot be loaded says so instead of spinning', async () => {
+    vi.mocked(api.get).mockRejectedValue(refusal(404, 'project not found'));
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/project/p-1/settings']}>
+          <Routes>
+            <Route path="/project/:projectId/settings" element={<SettingsPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId('settings-load-error')).toHaveTextContent('project not found');
+  });
+
+  test('a refused deletion-protection change shows the reason', async () => {
+    renderSettings(false);
+    vi.mocked(api.patch).mockRejectedValue(refusal(403, 'only org owners and admins can change deletion protection'));
+    await userEvent.click(await screen.findByTestId('deletion-protection-btn'));
+    expect(await screen.findByTestId('deletion-protection-error')).toHaveTextContent('only org owners and admins');
+  });
+});

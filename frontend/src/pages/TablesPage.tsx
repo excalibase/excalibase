@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { serverErrorMessage } from '../utils/serverError';
 import { Link, useParams } from 'react-router-dom';
 import { Plus, Trash2, Table2, Columns3, Download, RefreshCw, ShieldCheck, Upload } from 'lucide-react';
 import {
@@ -21,7 +22,7 @@ import { rolesWithSelect, tableKey } from '../utils/permissionModel';
 export function TablesPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const pid = projectId ?? '';
-  const { data: tables = [], isLoading } = useTables(pid);
+  const { data: tables = [], isLoading, error: tablesError } = useTables(pid);
   const [selectedTable, setSelectedTable] = useState<string>('');
   const { data: columns = [] } = useColumns(pid, selectedTable);
   const dropTable = useDropTable(pid);
@@ -190,7 +191,12 @@ export function TablesPage() {
               </div>
             );
           })}
-          {tables.length === 0 && <p className="px-4 py-8 text-sm text-text-tertiary text-center">No tables yet</p>}
+          {tablesError != null && (
+            <p data-testid="tables-load-error" role="alert" className="px-4 py-8 text-sm text-red-400 text-center">
+              {serverErrorMessage(tablesError, 'The tables could not be loaded')}
+            </p>
+          )}
+          {tablesError == null && tables.length === 0 && <p className="px-4 py-8 text-sm text-text-tertiary text-center">No tables yet</p>}
         </div>
       </div>
 

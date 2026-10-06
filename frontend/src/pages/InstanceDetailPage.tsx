@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { serverErrorMessage } from '../utils/serverError';
 import { projectOperationMessage } from '../hooks/projectFollow';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useInstance, useDeprovisionDatabase, useListBackups, useTriggerBackup, useLogs } from '../hooks/useProvisioning';
@@ -21,7 +22,7 @@ export function InstanceDetailPage() {
 
   const { data: instance, isLoading } = useInstance(projectId!);
   const { data: metrics } = useCurrentMetrics(projectId!);
-  const { data: backupData } = useListBackups(projectId!);
+  const { data: backupData, refetch: refetchBackups } = useListBackups(projectId!);
   const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
   const { data: logs } = useLogs(projectId!, 200);
   const deprovision = useDeprovisionDatabase();
@@ -170,12 +171,23 @@ export function InstanceDetailPage() {
                   size="sm"
                   variant="secondary"
                   disabled={triggerBackup.isPending}
-                  onClick={() => triggerBackup.mutate(projectId!)}
+                  onClick={() => triggerBackup.mutate(projectId!, { onSuccess: () => refetchBackups() })}
                 >
                   <RefreshCw className="w-4 h-4 mr-1.5" />
                   Trigger Backup
                 </Button>
               </div>
+              {(triggerBackup.isSuccess || triggerBackup.isError) && (
+                <p
+                  data-testid="backup-trigger-result"
+                  role={triggerBackup.isError ? 'alert' : 'status'}
+                  className={`text-sm ${triggerBackup.isError ? 'text-red-400' : 'text-text-secondary'}`}
+                >
+                  {triggerBackup.isError
+                    ? serverErrorMessage(triggerBackup.error, 'The backup was not started')
+                    : 'Backup started. It appears below once it completes.'}
+                </p>
+              )}
               {backups.length === 0 ? (
                 <div className="text-center py-10">
                   <Archive className="w-10 h-10 mx-auto mb-2 text-text-tertiary" />

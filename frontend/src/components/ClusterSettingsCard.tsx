@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { HardDrive, Loader2 } from 'lucide-react';
 import { ConfirmModal } from './ui/ConfirmModal';
 import {
@@ -201,8 +201,16 @@ interface ParametersFormProps {
 
 function ParametersForm({ settings, busy, onSave }: ParametersFormProps) {
   const [values, setValues] = useState<Record<string, string>>(settings.parameters);
+  // A double click lands twice before `busy` disables the button; the second
+  // save would only report the first as "busy".
+  const sent = useRef(false);
+  useEffect(() => {
+    if (!busy) sent.current = false;
+  }, [busy]);
 
   const save = () => {
+    if (busy || sent.current) return;
+    sent.current = true;
     const chosen = Object.fromEntries(
       Object.entries(values).filter(([, value]) => value.trim() !== ''),
     );

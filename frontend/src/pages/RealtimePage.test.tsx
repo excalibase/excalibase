@@ -198,3 +198,25 @@ describe('RealtimePage', () => {
     });
   });
 });
+
+// EXC-555: a refused toggle left the checkbox as it was and said nothing.
+describe('RealtimePage — refusals', () => {
+  const refusal = { message: 'Request failed with status code 409', response: { status: 409, data: { error: 'table has no primary key' } } };
+
+  test('a refused per-table toggle shows the reason', async () => {
+    const user = userEvent.setup();
+    renderPage([{ schema: 'public', table: 'posts', enabled: false }]);
+    vi.mocked(api.put).mockRejectedValue(refusal);
+    await user.click(await screen.findByTestId('realtime-toggle-public-posts'));
+    expect(await screen.findByTestId('realtime-error')).toHaveTextContent('table has no primary key');
+  });
+
+  test('a refused enable-all shows the reason', async () => {
+    const user = userEvent.setup();
+    renderPage([{ schema: 'public', table: 'posts', enabled: false }]);
+    vi.mocked(api.post).mockRejectedValue(refusal);
+    await user.click(await screen.findByTestId('realtime-enable-all'));
+    await user.click(await screen.findByTestId('modal-confirm'));
+    expect(await screen.findByTestId('realtime-error')).toHaveTextContent('table has no primary key');
+  });
+});

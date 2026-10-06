@@ -68,7 +68,7 @@ interface RowsCall {
   readonly order?: string;
 }
 
-function renderPage() {
+function renderPage(tablesFailure?: unknown) {
   const rowsCalls: RowsCall[] = [];
 
   vi.mocked(api.get).mockImplementation((url: string, cfg?: unknown) => {
@@ -77,7 +77,9 @@ function renderPage() {
       return Promise.resolve({ data: ROWS } as never);
     }
     if (url.endsWith('/columns')) return Promise.resolve({ data: COLUMNS } as never);
-    if (url.endsWith('/tables')) return Promise.resolve({ data: TABLES } as never);
+    if (url.endsWith('/tables')) {
+      return tablesFailure ? Promise.reject(tablesFailure) : Promise.resolve({ data: TABLES } as never);
+    }
     return Promise.resolve({ data: [] } as never);
   });
   vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
@@ -331,3 +333,18 @@ describe('TablesPage schema editing', () => {
 });
 
 afterEach(() => vi.unstubAllGlobals());
+
+// EXC-555: a list that failed to load read "No tables yet", inviting a create
+// that would fail the same way.
+describe('TablesPage — a failed table list', () => {
+  beforeEach(() => vi.clearAllMocks());
+  test('says why instead of "No tables yet"', async () => {
+    renderPage({ message: 'Request failed with status code 409', response: { status: 409, data: { error: 'project is not running' } } });
+    expect(await screen.findByTestId('tables-load-error')).toHaveTextContent('project is not running');
+    expect(screen.queryByText('No tables yet')).not.toBeInTheDocument();
+    // A failed list once refetched in a loop, remounting the page each time.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const listReads = vi.mocked(api.get).mock.calls.filter(([url]) => String(url).endsWith('/tables'));
+    expect(listReads.length).toBeLessThanOrEqual(2);
+  });
+});
