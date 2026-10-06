@@ -35,7 +35,7 @@ func TestAddDatabaseAnswersEachRefusal(t *testing.T) {
 		"a project that has one":               {"test-db", `{"databaseType":"POSTGRESQL","postgresVersion":"17"}`, http.StatusConflict, "already has a database"},
 		"no version":                           {"apps-only", `{"databaseType":"POSTGRESQL"}`, http.StatusBadRequest, "postgres version is required"},
 		"a project field":                      {"apps-only", `{"projectName":"x","databaseType":"POSTGRESQL","postgresVersion":"17"}`, http.StatusBadRequest, "only database settings"},
-		"unknown field":                        {"apps-only", `{"postgresVersion":"17","bogus":1}`, http.StatusBadRequest, "invalid request body"},
+		"unknown field":                        {"apps-only", `{"postgresVersion":"17","bogus":1}`, http.StatusBadRequest, `bogus\" is not a provisioning setting`},
 		"documentDb where it is not installed": {"apps-only", `{"databaseType":"POSTGRESQL","postgresVersion":"17","documentDb":true}`, http.StatusConflict, "DocumentDB is not installed"},
 	}
 	for name, tc := range cases {

@@ -102,6 +102,24 @@ func TestAMongoUserIsRefusedEveryNetworkLogin(t *testing.T) {
 	}
 }
 
+// EXC-555 defence in depth: an owner that is not a plain role name never
+// reaches a trust or ident line, even if the request boundary were bypassed.
+func TestAnUnsafeOwnerNeverReachesPgHBAOrIdent(t *testing.T) {
+	for _, owner := range []string{"all 0.0.0.0/0 trust #", "postgres", "Owner", "app\nhost"} {
+		opts := documentDBOpts(owner)
+		for _, line := range hbaLines(t, opts) {
+			if strings.Contains(line, "all "+owner+" ") {
+				t.Errorf("owner %q reached pg_hba: %q", owner, line)
+			}
+		}
+		for _, line := range postgresqlSection(t, opts)["pg_ident"].([]interface{}) {
+			if strings.HasSuffix(line.(string), "postgres "+owner) {
+				t.Errorf("owner %q reached pg_ident: %q", owner, line)
+			}
+		}
+	}
+}
+
 func TestAPlainProjectHasNoMongoUserLines(t *testing.T) {
 	opts := documentDBOpts("owner_doc")
 	opts.DocumentDB = false

@@ -204,28 +204,21 @@ func TestRestore_UnresolvableTierAnswers500(t *testing.T) {
 	}
 }
 
-// The request has no say in the tier: a FREE organisation that asks for
-// ENTERPRISE gets a FREE project, and is held to the FREE project limit.
-func TestProvision_FreeOrgAskingForEnterpriseGetsFree(t *testing.T) {
+// The request has no say in the tier: a body naming one is refused by name
+// (EXC-555) and nothing is created; the org's tier decides the project's.
+func TestProvision_FreeOrgAskingForEnterpriseIsRefused(t *testing.T) {
 	store := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{}}
 	mock := k8s.NewMockClient()
 	mock.WildcardPodReady = true
 	r := provisionRouterOn(t, store, mock)
-	const body = `{"projectName":"%s","orgId":"org1","databaseType":"POSTGRESQL","tier":"ENTERPRISE","postgresVersion":"17"}`
 
-	w := doRequest(r, "POST", testProvisionPath, fmt.Sprintf(body, "first"))
-	if w.Code != http.StatusOK {
-		t.Fatalf("first: got %d; body %s", w.Code, w.Body.String())
+	w := doRequest(r, "POST", testProvisionPath,
+		`{"projectName":"first","orgId":"org1","databaseType":"POSTGRESQL","tier":"ENTERPRISE","postgresVersion":"17"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "tier") {
+		t.Fatalf("got %d; body %s, want 400 naming tier", w.Code, w.Body.String())
 	}
-	for _, inst := range store.insts {
-		if inst.Tier != domain.Free {
-			t.Fatalf("project tier = %s, want FREE", inst.Tier)
-		}
-	}
-
-	w = doRequest(r, "POST", testProvisionPath, fmt.Sprintf(body, "second"))
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), orgLimitRefusal) {
-		t.Fatalf("second: got %d %s, want 409 with the FREE limit", w.Code, w.Body.String())
+	if len(store.insts) != 0 {
+		t.Fatalf("a project was created: %v", store.insts)
 	}
 }
 

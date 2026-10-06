@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/lib/pq"
 )
 
 func (s *Store) CreateOrg(ctx context.Context, org *domain.Org) error {
@@ -95,16 +96,72 @@ func (s *Store) AddOrgMember(ctx context.Context, m *domain.OrgMember) error {
 	return err
 }
 
+// RemoveOrgMember removes the membership, refusing to remove the last owner.
 func (s *Store) RemoveOrgMember(ctx context.Context, orgID, userID string) error {
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`, orgID, userID)
-	return err
+	return s.changeOrgMember(ctx, orgID, userID, "", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`, orgID, userID)
+		return err
+	})
 }
 
+// UpdateOrgMemberRole sets the member's role, refusing to demote the last owner.
 func (s *Store) UpdateOrgMemberRole(ctx context.Context, orgID, userID, role string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE org_members SET role = $1 WHERE org_id = $2 AND user_id = $3`, role, orgID, userID)
-	return err
+	return s.changeOrgMember(ctx, orgID, userID, role, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`UPDATE org_members SET role = $1 WHERE org_id = $2 AND user_id = $3`, role, orgID, userID)
+		return err
+	})
+}
+
+// changeOrgMember applies change to one membership with the org's owners and
+// the member locked in a fixed order, so two concurrent demotions cannot each
+// see the other owner and leave the org with none. newRole "" is a removal.
+func (s *Store) changeOrgMember(ctx context.Context, orgID, userID, newRole string, change func(*sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT user_id, role FROM org_members
+		 WHERE org_id = $1 AND (role = $2 OR user_id = $3)
+		 ORDER BY user_id FOR UPDATE`, orgID, domain.OrgRoleOwner, userID)
+	if err != nil {
+		return err
+	}
+	owners, targetRole, found, err := scanOwnersAndTarget(rows, userID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return storage.ErrOrgMemberNotFound
+	}
+	if targetRole == domain.OrgRoleOwner && newRole != domain.OrgRoleOwner && owners <= 1 {
+		return storage.ErrLastOwner
+	}
+	if err := change(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func scanOwnersAndTarget(rows *sql.Rows, userID string) (owners int, targetRole string, found bool, err error) {
+	defer rows.Close()
+	for rows.Next() {
+		var id, role string
+		if err = rows.Scan(&id, &role); err != nil {
+			return 0, "", false, err
+		}
+		if role == domain.OrgRoleOwner {
+			owners++
+		}
+		if id == userID {
+			targetRole, found = role, true
+		}
+	}
+	return owners, targetRole, found, rows.Err()
 }
 
 func (s *Store) ListOrgMembers(ctx context.Context, orgID string) ([]*domain.OrgMember, error) {
@@ -156,6 +213,15 @@ func (s *Store) AddProjectMember(ctx context.Context, m *domain.ProjectMember) e
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO project_members (project_id, org_id, user_id, role, created_at) VALUES ($1, $2, $3, $4, $5)`,
 		m.ProjectID, m.OrgID, m.UserID, m.Role, now)
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		switch string(pqErr.Code) {
+		case uniqueViolation:
+			return storage.ErrProjectMemberExists
+		case foreignKeyViolation:
+			return storage.ErrUserNotFound
+		}
+	}
 	return err
 }
 

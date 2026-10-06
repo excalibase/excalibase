@@ -252,12 +252,11 @@ func validateProvisioningRequest(req domain.ProvisioningRequest) error {
 
 // validateProjectIdentity checks the project's name and organisation.
 func validateProjectIdentity(req domain.ProvisioningRequest) error {
-	name := strings.TrimSpace(req.ProjectName)
-	if name == "" {
+	if strings.TrimSpace(req.ProjectName) == "" {
 		return fmt.Errorf("project name is required")
 	}
-	if len(name) > 100 {
-		return fmt.Errorf("project name must be 100 characters or fewer")
+	if _, ok := domain.NormalizeProjectName(req.ProjectName); !ok {
+		return fmt.Errorf("project name must be %d characters or fewer", domain.MaxProjectNameLength)
 	}
 
 	org := strings.TrimSpace(req.OrgID)
@@ -298,7 +297,7 @@ func validateDatabaseRequest(req domain.ProvisioningRequest) error {
 			return fmt.Errorf("backup retention must be 365 days or fewer")
 		}
 	}
-	return nil
+	return validateOwnerAndTags(req)
 }
 
 // canonicalPostgresMajor returns the catalogue's spelling of the major a

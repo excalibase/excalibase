@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -307,10 +308,10 @@ func (r RestoreRequest) Validate() error {
 	if count > 1 {
 		return errors.New("restore request: at most one of targetTime, targetXid, targetLsn, targetName may be set")
 	}
-	if r.NewProjectName == "" {
-		return errors.New("restore request: newProjectName is required")
+	if _, ok := NormalizeProjectName(r.NewProjectName); !ok {
+		return fmt.Errorf("restore request: newProjectName is required and must be %d characters or fewer", MaxProjectNameLength)
 	}
-	return nil
+	return validateRecoveryTarget(r)
 }
 
 // RecoveryTarget returns the CNPG `recoveryTarget` map (or nil for

@@ -5,6 +5,7 @@ import (
 	"maps"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -259,6 +260,17 @@ func clusterOwner(opts PostgreSQLClusterOpts) string {
 	return defaultClusterUser
 }
 
+// hbaSafeOwner is the owner as a pg_hba/pg_ident role, or nothing when the
+// name is not a plain role name: the request boundary refuses those, and a
+// trust line is never written for one that slipped past it (EXC-555).
+func hbaSafeOwner(opts PostgreSQLClusterOpts) []string {
+	owner := clusterOwner(opts)
+	if domain.ValidateMasterUsername(owner) != nil {
+		return nil
+	}
+	return []string{owner}
+}
+
 // documentDBLoopbackTrust lets the gateway, which only does passwordless local
 // logins, reach Postgres as itself and as the roles clients authenticate as.
 // Loopback only: nothing outside the pod matches these lines. The project's
@@ -266,7 +278,7 @@ func clusterOwner(opts PostgreSQLClusterOpts) string {
 func documentDBLoopbackTrust(opts PostgreSQLClusterOpts) []interface{} {
 	mongoUsers := "+" + config.DocumentDBMongoUsersGroup
 	// No platform role: the gateway would open a session for its password (EXC-410).
-	roles := []string{config.DocumentDBGatewayRole, clusterOwner(opts), mongoUsers}
+	roles := append(append([]string{config.DocumentDBGatewayRole}, hbaSafeOwner(opts)...), mongoUsers)
 	lines := make([]interface{}, 0, 2*len(roles)+1)
 	for _, role := range roles {
 		lines = append(lines,
@@ -296,7 +308,7 @@ const (
 // the superuser, connect over the socket as the roles DocumentDB's own
 // connect-backs use: its background worker, and the roles clients act as.
 func documentDBPeerIdentities(opts PostgreSQLClusterOpts) []interface{} {
-	roles := []string{"documentdb_bg_worker_role", config.DocumentDBGatewayRole, clusterOwner(opts)}
+	roles := append([]string{"documentdb_bg_worker_role", config.DocumentDBGatewayRole}, hbaSafeOwner(opts)...)
 	lines := make([]interface{}, 0, len(roles))
 	for _, role := range roles {
 		lines = append(lines, "local postgres "+role)

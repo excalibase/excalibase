@@ -76,6 +76,11 @@ func TestCreateOrgWithOwnerCountsOrgsTheUserCreatedAndLeft(t *testing.T) {
 	if err := store.CreateOrgWithOwner(ctx, ownedOrg("org-a", "org-a", userID, domain.Free), 1); err != nil {
 		t.Fatalf("first: %v", err)
 	}
+	// The last owner cannot leave (EXC-555), so a second owner takes over first.
+	addInvitee(t, store, "next-owner")
+	if err := store.AddOrgMember(ctx, &domain.OrgMember{OrgID: "org-a", UserID: "next-owner", Role: domain.OrgRoleOwner}); err != nil {
+		t.Fatalf("second owner: %v", err)
+	}
 	if err := store.RemoveOrgMember(ctx, "org-a", userID); err != nil {
 		t.Fatalf("leave: %v", err)
 	}

@@ -647,6 +647,19 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	fn.ProjectID = projectID
 	fn.Active = true
 
+	if err := edgefn.ValidateID(fn.ID); err != nil {
+		httpError(w, safeError(err), http.StatusBadRequest)
+		return
+	}
+	// A failed redeploy must leave the version the runtime still serves.
+	previous, err := h.store.Get(projectID, fn.ID)
+	if err != nil {
+		log.Printf("function %s/%s: read current version: %v", projectID, fn.ID, err)
+		httpError(w, "could not read the function", http.StatusInternalServerError)
+		return
+	}
+	rollback := func() { h.rollbackFunctionSave(projectID, fn.ID, previous) }
+
 	if err := h.store.Save(&fn); err != nil {
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
@@ -655,6 +668,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// Bundle + deploy to runtime with merged secrets.
 	code, err := fn.BundleWith(h.sharedFilesFor(fn.ProjectID))
 	if err != nil {
+		rollback()
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
@@ -662,7 +676,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// Extract user-declared schema (if any) and apply it before deploying
 	// the function bundle. If migration fails we roll back the store record
 	// so the deploy is atomic.
-	if !h.applyExtractedSchema(w, r, projectID, code, &fn) {
+	if !h.applyExtractedSchema(w, r, projectID, code, &fn, rollback) {
 		return
 	}
 
@@ -673,7 +687,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// visible to the CronRunner on its next tick.
 	cronTx, cronCommit, cronErr := h.beginCronSync(r.Context(), projectID, fn.ID, fn.CronJobs)
 	if cronErr != nil {
-		_ = h.store.Delete(projectID, fn.ID)
+		rollback()
 		log.Printf("function %s/%s: cron sync: %v", projectID, fn.ID, cronErr)
 		msg, code := cronSyncFailure(cronErr)
 		httpError(w, msg, code)
@@ -685,7 +699,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	client, err := h.runtimeClientFor(r.Context(), projectID)
 	if err != nil {
 		_ = rollbackCronSync(cronTx)
-		_ = h.store.Delete(projectID, fn.ID)
+		rollback()
 		httpError(w, "runtime unavailable: "+safeError(err), http.StatusServiceUnavailable)
 		return
 	}
@@ -695,9 +709,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// didn't land, so we shouldn't keep stale crons (or a stale
 		// function) around.
 		_ = rollbackCronSync(cronTx)
-		if delErr := h.store.Delete(projectID, fn.ID); delErr != nil {
-			log.Printf("WARN: rollback function store: %v", delErr)
-		}
+		rollback()
 		httpError(w, "failed to deploy: "+safeError(deployErr), http.StatusBadGateway)
 		return
 	}
@@ -710,6 +722,21 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(fn)
+}
+
+// rollbackFunctionSave undoes a deploy's store write: a first deploy leaves
+// no record, a redeploy puts back the version the runtime still serves.
+func (h *FunctionHandler) rollbackFunctionSave(projectID, fnID string, previous *edgefn.Function) {
+	var err error
+	if previous == nil {
+		err = h.store.Delete(projectID, fnID)
+	} else {
+		restored := *previous
+		err = h.store.Save(&restored)
+	}
+	if err != nil {
+		log.Printf("WARN: rollback function %s/%s: %v", projectID, fnID, err)
+	}
 }
 
 // createEnv builds the env for a first deploy. Unavailable user secrets
@@ -766,7 +793,7 @@ func deployRequestFor(fn *edgefn.Function, code string, env map[string]string, a
 // writes an HTTP error. Returns false when the caller should stop (an error
 // response has already been written); true when the deploy may continue.
 // Schema extraction is a no-op for bundles that don't call defineSchema.
-func (h *FunctionHandler) applyExtractedSchema(w http.ResponseWriter, r *http.Request, projectID, code string, fn *edgefn.Function) bool {
+func (h *FunctionHandler) applyExtractedSchema(w http.ResponseWriter, r *http.Request, projectID, code string, fn *edgefn.Function, rollback func()) bool {
 	schema, found, sErr := edgefn.ExtractSchema(code)
 	if sErr != nil {
 		log.Printf("WARN: schema extraction failed for %s/%s: %v", projectID, fn.ID, sErr)
@@ -787,7 +814,7 @@ func (h *FunctionHandler) applyExtractedSchema(w http.ResponseWriter, r *http.Re
 	}
 	db, dbErr := h.projectDBFn(r.Context(), projectID)
 	if dbErr != nil {
-		_ = h.store.Delete(projectID, fn.ID)
+		rollback()
 		if errors.Is(dbErr, domain.ErrNoDatabase) {
 			// The function declares tables, and there is no database to hold them.
 			httpError(w, domain.ErrNoDatabase.Error(), http.StatusConflict)
@@ -797,7 +824,7 @@ func (h *FunctionHandler) applyExtractedSchema(w http.ResponseWriter, r *http.Re
 		return false
 	}
 	if err := edgefn.ApplySchema(r.Context(), db, projectID, schema); err != nil {
-		_ = h.store.Delete(projectID, fn.ID)
+		rollback()
 		httpError(w, "schema migration failed: "+safeError(err), http.StatusBadGateway)
 		return false
 	}

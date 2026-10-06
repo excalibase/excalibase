@@ -449,7 +449,7 @@ func (h *OrgHandler) UpdateOrgMemberRole(w http.ResponseWriter, r *http.Request)
 
 	userID := chi.URLParam(r, "userId")
 	if err := h.orgStore.UpdateOrgMemberRole(r.Context(), orgID, userID, req.Role); err != nil {
-		httpError(w, "failed to update role", http.StatusInternalServerError)
+		writeOrgMemberChangeError(w, err, "failed to update role")
 		return
 	}
 	writeJSON(w, map[string]string{"status": "updated"})
@@ -466,13 +466,63 @@ func (h *OrgHandler) RemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 
 	userID := chi.URLParam(r, "userId")
 	if err := h.orgStore.RemoveOrgMember(r.Context(), orgID, userID); err != nil {
-		httpError(w, "failed to remove member", http.StatusInternalServerError)
+		writeOrgMemberChangeError(w, err, "failed to remove member")
 		return
 	}
 	writeJSON(w, map[string]string{"status": "removed"})
 }
 
+// writeOrgMemberChangeError answers a refused membership change with its
+// reason and anything else with a plain failure.
+func writeOrgMemberChangeError(w http.ResponseWriter, err error, failure string) {
+	switch {
+	case errors.Is(err, storage.ErrOrgMemberNotFound):
+		httpError(w, storage.ErrOrgMemberNotFound.Error(), http.StatusNotFound)
+	case errors.Is(err, storage.ErrLastOwner):
+		httpError(w, storage.ErrLastOwner.Error(), http.StatusConflict)
+	default:
+		log.Printf("org member change: %v", err)
+		httpError(w, failure, http.StatusInternalServerError)
+	}
+}
+
 // --- Project Members ---
+
+// errNotOrgMember is the answer for a project member who is not in the org;
+// it does not say whether such a user exists at all.
+const errNotOrgMember = "that user is not a member of this organization"
+
+// requireOrgMember reports whether userID belongs to the org, answering 404
+// when it does not: project members are drawn from the org's members.
+func (h *OrgHandler) requireOrgMember(w http.ResponseWriter, r *http.Request, orgID, userID string) bool {
+	if userID == "" {
+		httpError(w, "userId is required", http.StatusBadRequest)
+		return false
+	}
+	member, err := h.orgStore.GetOrgMember(r.Context(), orgID, userID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		log.Printf("add project member to %s: look up membership: %v", orgID, err)
+		httpError(w, errAddMemberFailed, http.StatusInternalServerError)
+		return false
+	}
+	if member == nil {
+		httpError(w, errNotOrgMember, http.StatusNotFound)
+		return false
+	}
+	return true
+}
+
+func writeProjectMemberAddError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, storage.ErrProjectMemberExists):
+		httpError(w, "that person is already a member of this project; change their role in the list instead", http.StatusConflict)
+	case errors.Is(err, storage.ErrUserNotFound):
+		httpError(w, errNotOrgMember, http.StatusNotFound)
+	default:
+		log.Printf("add project member: %v", err)
+		httpError(w, errAddMemberFailed, http.StatusInternalServerError)
+	}
+}
 
 func (h *OrgHandler) ListProjectMembers(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
@@ -541,10 +591,13 @@ func (h *OrgHandler) AddProjectMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.requireOrgMember(w, r, orgID, req.UserID) {
+		return
+	}
 	if err := h.orgStore.AddProjectMember(r.Context(), &domain.ProjectMember{
 		ProjectID: projectID, OrgID: orgID, UserID: req.UserID, Role: req.Role,
 	}); err != nil {
-		httpError(w, errAddMemberFailed, http.StatusInternalServerError)
+		writeProjectMemberAddError(w, err)
 		return
 	}
 

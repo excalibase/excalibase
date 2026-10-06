@@ -462,6 +462,8 @@ func TestProjectMemberCRUD(t *testing.T) {
 	// my-proj belongs to this org — seed the instance so the project↔org
 	// ownership check passes for the legitimate same-org flow.
 	instances.Create(&domain.DatabaseInstance{ProjectID: "my-proj", OrgID: org.ID})
+	// Project members are drawn from the org's members (EXC-555).
+	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
 
 	// Alice (owner) adds bob as editor
 	w2 := orgRequest(r, "POST", testOrgsSlash+org.ID+testMyProjMembers,
@@ -615,6 +617,8 @@ func TestProjectMember_SameOrgProjectSucceeds(t *testing.T) {
 	var org domain.Org
 	json.NewDecoder(w.Body).Decode(&org)
 	instances.Create(&domain.DatabaseInstance{ProjectID: "own-proj", OrgID: org.ID})
+	// Project members are drawn from the org's members (EXC-555).
+	orgRequest(r, "POST", testOrgsSlash+org.ID+testMembersPath, `{"userId":"`+testBobID+`","role":"developer"}`, testAliceID)
 
 	base := testOrgsSlash + org.ID + "/projects/own-proj/members"
 

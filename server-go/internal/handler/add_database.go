@@ -20,7 +20,7 @@ import (
 // project is PROVISIONING and follows the build through GET /{projectId}.
 func (h *ProvisioningHandler) AddDatabase(w http.ResponseWriter, r *http.Request) {
 	var req domain.ProvisioningRequest
-	if !decodeStrict(w, r, &req) {
+	if !decodeProvisioningRequest(w, r, &req) {
 		return
 	}
 	projectID := chi.URLParam(r, "projectId")
