@@ -42,7 +42,7 @@ type functionView struct {
 func functionTools() []entry {
 	return []entry{
 		tool("list_functions", "List the project's edge functions.", readTool, listFunctions),
-		tool("deploy_function", "Create or update an edge function from its source files and deploy it.", writeTool, deployFunction),
+		tool("deploy_function", "Create or update an edge function from its source files and deploy it. Functions are for APIs and webhooks, not web pages: their answers carry Content-Security-Policy script-src 'self', so a page's inline scripts never run. Host a web page as a container app (create_app).", writeTool, deployFunction),
 		tool("set_function_secret", "Set a secret the project's edge functions read as an environment variable. The value is never returned.", writeTool, setFunctionSecret),
 	}
 }

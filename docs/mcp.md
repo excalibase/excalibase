@@ -18,6 +18,10 @@ Two query parameters can only narrow what the token allows:
 | `read_only=true` | No write tool is offered; `execute_sql` runs one statement in a read-only transaction on a connection that is closed afterwards, and refuses functions that act outside it (`pg_terminate_backend`, `dblink*`, `lo_*`, `pg_notify`, ...). A token with only the `read` scope is always read-only. |
 | `project=<id>` | Every tool acts on that project only. A token bound to another project is refused. |
 
+A URL that asks for more than the token allows (another project, a malformed value) still
+connects, but every tool call answers why it is refused and reaches nothing: some clients hide
+a refused connection's reason from the user.
+
 ## How a tool is authorized
 
 A tool is an in-process request through the same API routes Studio calls, carrying
@@ -48,7 +52,8 @@ apps and grant what the anon role grants.
 | `list_migrations` / `apply_migration` | `GET` / `POST /api/provision/{id}/migrations/` |
 | `list_permissions` / `set_permission` | `GET /api/provision/{id}/permissions/`, `PUT`/`DELETE .../permissions/tables/{t}/roles/{r}/{op}` |
 | `list_functions` / `deploy_function` / `set_function_secret` | `GET`/`POST /api/projects/{id}/functions/`, `POST .../functions/secrets` |
-| `list_apps` / `deploy_app` / `get_deploy_status` | `GET /api/projects/{id}/apps/`; `POST .../apps/{app}/deploy` with `{image, commitSha}` (resolved to a digest) or empty to redeploy; `GET .../apps/{app}/` + `.../deploys` or `.../deploys/{deployId}` |
+| `list_apps` / `deploy_app` / `get_deploy_status` | `GET /api/projects/{id}/apps/` (+ `.../apps/{app}/deploys?limit=1` to report `NOT_DEPLOYED`); `POST .../apps/{app}/deploy` with `{image, commitSha}` or empty to run the app's own image, pinned to its digest either way when the registry is public; `GET .../apps/{app}/` + `.../deploys` or `.../deploys/{deployId}` |
+| `create_app` | `POST /api/projects/{id}/apps/` (Studio's plan limits apply), then `GET`/`PUT /api/projects/{id}/cors/` to allow the app's own origin (it stays listed after the app is deleted; remove it in Studio) |
 | `get_logs` | database: `GET /api/provision/{id}/logs`; app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs` |
 | `get_dockerfile_template` | none: Dockerfiles for node, nextjs, vite, python, go, java |
 | `get_ci_snippet` | `GET .../apps/{app}/` for the app's image; renders the same GitHub Actions, GitLab CI, Jenkins or curl pipeline as Studio's pipeline page |
@@ -75,7 +80,12 @@ Codex, `~/.codex/config.toml`
 [mcp_servers.excalibase]
 url = "https://app.excalibase.io/mcp?project=<id>"
 bearer_token_env_var = "EXCALIBASE_TOKEN"
+# codex exec cannot ask for approval: without this every write tool is refused client-side.
+default_tools_approval_mode = "approve"
 ```
+
+For a one-off run, the same settings go on the command line, for example
+`codex exec -c 'mcp_servers.excalibase.url="..."' -c 'mcp_servers.excalibase.bearer_token_env_var="EXCALIBASE_TOKEN"' -c 'mcp_servers.excalibase.default_tools_approval_mode="approve"' "..."`.
 
 Gemini CLI, `.gemini/settings.json`
 

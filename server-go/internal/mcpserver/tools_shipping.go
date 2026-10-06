@@ -22,7 +22,7 @@ type ciArgs struct {
 func shippingTools() []entry {
 	return []entry{
 		tool("get_dockerfile_template", "A Dockerfile and .dockerignore for a stack, ready to write into the repository. Every image serves on port 8080.", readTool, getDockerfileTemplate),
-		tool("get_ci_snippet", "A CI pipeline (GitHub Actions, GitLab CI, Jenkins, or a curl step for any other CI) that builds the image, pushes it to your registry and deploys it to an app by digest. The same pipeline Studio's pipeline page shows.", readTool, getCISnippet),
+		tool("get_ci_snippet", "A CI pipeline (GitHub Actions, GitLab CI, Jenkins, or a curl step for any other CI) that builds the image, pushes it to your registry and deploys it to an app by digest. The same pipeline Studio's pipeline page shows. Call it after the app exists (create_app, list_apps).", readTool, getCISnippet),
 	}
 }
 

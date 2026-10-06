@@ -40,6 +40,13 @@ func TestIntegration_ExecuteReadOnlyQuery(t *testing.T) {
 		}
 	}
 
+	// Postgres names the outer SELECT when a data-modifying WITH is refused;
+	// the answer says what was refused instead.
+	cte := introspector.ExecuteReadOnlyQuery(ctx, appDB, "WITH gone AS (DELETE FROM users RETURNING id) SELECT count(*) FROM gone")
+	if !strings.Contains(cte.Error, "read-only SQL cannot change data or schema") || strings.Contains(cte.Error, "cannot execute SELECT") {
+		t.Errorf("CTE refusal = %q", cte.Error)
+	}
+
 	// Postgres may accept SET TRANSACTION READ WRITE here, but it is the only
 	// statement the transaction runs before the rollback, so it writes nothing.
 	introspector.ExecuteReadOnlyQuery(ctx, appDB, "SET TRANSACTION READ WRITE")

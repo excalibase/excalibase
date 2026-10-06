@@ -87,8 +87,24 @@ func TestDeploy_WithoutABodyRunsTheAppAsItIs(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	if deployer.lastImage != "" || deployer.lastOrigin.Source != apphost.DeploySourceStudio {
-		t.Fatalf("image %q origin %+v", deployer.lastImage, deployer.lastOrigin)
+	if deployer.lastImage != "" || deployer.lastOrigin.Source != apphost.DeploySourceStudio || !deployer.deployedCurrent {
+		t.Fatalf("image %q origin %+v current %v", deployer.lastImage, deployer.lastOrigin, deployer.deployedCurrent)
+	}
+}
+
+// A registry the platform may not dial names both ways out.
+func TestDeploy_APrivateRegistryRefusalSaysWhatToDoInstead(t *testing.T) {
+	deployer := ciDeployer()
+	deployer.deployErr = fmt.Errorf("%w: registry.local:5000", imagedigest.ErrNotPublic)
+	r := setupAppDeployRouter(t, deployer)
+	rec := ciDeployRequest(t, r, http.MethodPost, "/api/projects/"+deployHandlerProject+"/apps/app-1/deploy",
+		`{"image":"registry.local:5000/web:1"}`, ciToken)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "registry.local:5000") || !strings.Contains(body, "deploy with no image") || !strings.Contains(body, "public registry") {
+		t.Fatalf("body = %s", body)
 	}
 }
 

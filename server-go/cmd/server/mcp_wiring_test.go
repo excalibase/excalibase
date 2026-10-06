@@ -145,8 +145,13 @@ func TestMCPToolsMeetTheRealGates(t *testing.T) {
 func TestMCPNarrowingOverTheRealRouter(t *testing.T) {
 	server, _ := mcpServer(t)
 
-	if _, err := mcpConnect(t, server.URL+"/mcp?project="+matrixProjectB, mcpBoundPAT); err == nil {
-		t.Fatalf("a token bound to one project connected to another")
+	// Pointed at another project, the connection answers every call with why.
+	other, err := mcpConnect(t, server.URL+"/mcp?project="+matrixProjectB, mcpBoundPAT)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if res := mcpCall(t, other, "list_functions", map[string]any{"project_id": matrixProjectB}); !res.IsError || !strings.Contains(mcpText(res), "bound to another project") {
+		t.Fatalf("a token bound to one project reached another: %s", mcpText(res))
 	}
 
 	bound, err := mcpConnect(t, server.URL+"/mcp", mcpBoundPAT)
