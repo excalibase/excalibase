@@ -69,6 +69,8 @@ export default defineConfig({
         'src/api/sdkKeys.ts',
         'src/pages/AccessTokensPage.tsx',
         'src/api/accessTokens.ts',
+        'src/pages/ConnectAiToolPage.tsx',
+        'src/utils/mcpConfig.ts',
         'src/components/layout/PlatformLayout.tsx',
         'src/api/endUsers.ts',
         'src/utils/deletionProtection.ts',

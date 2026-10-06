@@ -12,4 +12,9 @@ describe('project navigation', () => {
     const databases = PROJECT_NAV.find((section) => section.key === 'database');
     expect(databases?.children?.[0]).toMatchObject({ label: 'Overview', to: 'database/overview' });
   });
+
+  test('AI Tools opens the Connect your AI tool page', () => {
+    const aiTools = PROJECT_NAV.find((section) => section.key === 'ai-tools');
+    expect(aiTools).toMatchObject({ label: 'AI Tools', to: 'ai-tools' });
+  });
 });
