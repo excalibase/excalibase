@@ -18,11 +18,17 @@ const PLACEHOLDER_TABLE = 'your_table';
 // A quoted table name may hold spaces or quotes; both snippets put the path
 // inside single quotes, so ' is encoded too.
 function tablePath(table: string): string {
-  return encodeURIComponent(table).replace(/'/g, '%27');
+  return encodeURIComponent(table).replaceAll("'", '%27');
+}
+
+function withoutTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end -= 1;
+  return url.slice(0, end);
 }
 
 export function connectEndpoints(apiUrl: string, projectId: string): ConnectEndpoints {
-  const base = apiUrl.replace(/\/+$/, '');
+  const base = withoutTrailingSlashes(apiUrl);
   return {
     apiUrl: base,
     graphql: `${base}/${projectId}/graphql`,
@@ -51,16 +57,16 @@ console.log(await db.rest.get('/${tablePath(table)}?limit=10'));`;
 
 export function curlSnippet(apiUrl: string, projectId: string, table: string = PLACEHOLDER_TABLE): string {
   const urls = connectEndpoints(apiUrl, projectId);
-  return `KEY='esk_pub_...'   # a publishable key from API Keys
-TOKEN=$(curl -s -X POST '${urls.token}' \\
-  -H 'Content-Type: application/json' \\
-  -d "{\\"grant_type\\":\\"api_key\\",\\"api_key\\":\\"$KEY\\"}" | jq -r .accessToken)
+  return String.raw`KEY='esk_pub_...'   # a publishable key from API Keys
+TOKEN=$(curl -s -X POST '${urls.token}' \
+  -H 'Content-Type: application/json' \
+  -d "{\"grant_type\":\"api_key\",\"api_key\":\"$KEY\"}" | jq -r .accessToken)
 
 # REST: one path per table. A table answers once its API permissions
 # (Database > Tables > API permissions) let this role read it.
 curl -s '${urls.rest}/${tablePath(table)}?limit=10' -H "Authorization: Bearer $TOKEN"
 
 # GraphQL
-curl -s -X POST '${urls.graphql}' -H "Authorization: Bearer $TOKEN" \\
+curl -s -X POST '${urls.graphql}' -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}'`;
 }

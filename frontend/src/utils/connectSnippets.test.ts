@@ -42,6 +42,26 @@ describe('connect snippets', () => {
     expect(curlSnippet(base, project)).toMatch(/API permissions/);
   });
 
+  // Byte for byte: a lost backslash breaks the copied shell command.
+  test('the curl snippet is exactly the shell a user pastes', () => {
+    expect(curlSnippet('https://api.example.test///', project, 'todos')).toBe(
+      [
+        "KEY='esk_pub_...'   # a publishable key from API Keys",
+        "TOKEN=$(curl -s -X POST 'https://api.example.test/auth/proj-abc123/proj-abc123/token' \\",
+        "  -H 'Content-Type: application/json' \\",
+        '  -d "{\\"grant_type\\":\\"api_key\\",\\"api_key\\":\\"$KEY\\"}" | jq -r .accessToken)',
+        '',
+        '# REST: one path per table. A table answers once its API permissions',
+        '# (Database > Tables > API permissions) let this role read it.',
+        "curl -s 'https://api.example.test/proj-abc123/api/v1/todos?limit=10' -H \"Authorization: Bearer $TOKEN\"",
+        '',
+        '# GraphQL',
+        "curl -s -X POST 'https://api.example.test/proj-abc123/graphql' -H \"Authorization: Bearer $TOKEN\" \\",
+        "  -H 'Content-Type: application/json' -d '{\"query\":\"{ __typename }\"}'",
+      ].join('\n'),
+    );
+  });
+
   // EXC-555: a quoted table name such as "my table!" went into the URL raw; the
   // copied curl line then printed nothing.
   test('a table name is percent-encoded in the REST path', () => {
