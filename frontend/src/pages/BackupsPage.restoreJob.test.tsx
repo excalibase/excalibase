@@ -42,8 +42,8 @@ function renderPage() {
   );
 }
 
-async function startRestore() {
-  vi.mocked(api.post).mockResolvedValueOnce({ data: STARTED } as never);
+async function startRestore(answer: Record<string, unknown> = STARTED) {
+  vi.mocked(api.post).mockResolvedValueOnce({ data: answer } as never);
   renderPage();
   await userEvent.click(screen.getByRole('button', { name: /Restore \/ PITR/i }));
   await userEvent.type(screen.getByLabelText(/New Instance Name/i), 'copy');
@@ -62,6 +62,35 @@ describe('BackupsPage restore job', () => {
     expect(result).toHaveTextContent('proj-new');
     expect(result).toHaveAttribute('data-tone', 'pending');
     expect(api.get).toHaveBeenCalledWith('/provision/p1/backup/restore/job-1');
+  });
+
+  test('a failed job without a reason still says it failed', async () => {
+    stubJob({ ...STARTED, status: 'FAILED' });
+    await startRestore();
+    expect(await screen.findByText(/no reason was recorded/)).toBeInTheDocument();
+  });
+
+  // Without the background orchestrator the server answers with the new project itself.
+  test('a synchronous restore answer shows the new instance and is not polled', async () => {
+    stubJob(STARTED);
+    await startRestore({ projectId: 'proj-sync', status: 'ACTIVE', recoveryType: 'PITR' });
+    const result = await screen.findByTestId('restore-result');
+    expect(result).toHaveTextContent(/Restore started/);
+    expect(result).toHaveTextContent('proj-sync');
+    expect(result).toHaveTextContent('PITR');
+    expect(result).toHaveAttribute('data-tone', 'ok');
+    expect(api.get).not.toHaveBeenCalledWith(expect.stringContaining('/backup/restore/'));
+  });
+
+  test('a synchronous answer carrying a failure reason reads as failed', async () => {
+    stubJob(STARTED);
+    await startRestore({
+      projectId: 'proj-sync',
+      status: 'FAILED_SOMEHOW',
+      failureReason: 'no base backup',
+    });
+    expect(await screen.findByText(/The restore failed: no base backup/)).toBeInTheDocument();
+    expect(screen.getByTestId('restore-result')).toHaveAttribute('data-tone', 'error');
   });
 
   test("a failed restore shows the job's reason", async () => {
