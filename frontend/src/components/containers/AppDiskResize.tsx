@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { apiErrorMessage, useResizeAppDisk, type App, type AppDisk } from '../../api/apps';
 import {
   MIN_DISK_MI,
@@ -36,6 +36,13 @@ export function AppDiskResize({ app, usedBytes }: AppDiskResizeProps) {
   const target = toDiskSize(amount, unit);
   const lowering = target !== null && current !== null && target.bytes < current;
   const valid = target !== null && target.bytes !== current && !(lowering && running);
+  // isPending re-renders a tick late, so a second click can land before the button disables.
+  const inFlight = useRef(false);
+  const submit = () => {
+    if (!target || inFlight.current) return;
+    inFlight.current = true;
+    resize.mutate(target.size, { onSettled: () => { inFlight.current = false; } });
+  };
 
   return (
     <div className="space-y-1">
@@ -62,7 +69,7 @@ export function AppDiskResize({ app, usedBytes }: AppDiskResizeProps) {
         <button
           type="button"
           disabled={!valid || resize.isPending}
-          onClick={() => target && resize.mutate(target.size)}
+          onClick={submit}
           className={secondaryButton}
           data-testid="disk-resize"
         >

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { AlertTriangle, Plus, X } from 'lucide-react';
 import { ConfirmModal } from '../ui/ConfirmModal';
 import { apiErrorMessage, type TrackedFunction } from '../../api/permissions';
@@ -234,6 +234,8 @@ function FunctionRoles({ projectId, fnKey, name, roles }: FunctionRolesProps) {
   const [error, setError] = useState<string | null>(null);
   const add = useAddFunctionPermission(projectId);
   const remove = useRemoveFunctionPermission(projectId);
+  // isPending reaches the button only after a render; a second Enter can land first.
+  const adding = useRef(false);
   const failed = (err: Error) => setError(apiErrorMessage(err, 'The change could not be saved.'));
 
   const submit = (e: React.FormEvent) => {
@@ -241,8 +243,18 @@ function FunctionRoles({ projectId, fnKey, name, roles }: FunctionRolesProps) {
     const candidate = role.trim();
     const problem = validatePermissionRole(candidate) ?? (roles.includes(candidate) ? `${candidate} is already allowed` : null);
     setError(problem);
-    if (problem) return;
-    add.mutate({ function: fnKey, role: candidate }, { onSuccess: () => setRole(''), onError: failed });
+    if (problem || adding.current) return;
+    adding.current = true;
+    add.mutate(
+      { function: fnKey, role: candidate },
+      {
+        onSuccess: () => setRole(''),
+        onError: failed,
+        onSettled: () => {
+          adding.current = false;
+        },
+      },
+    );
   };
 
   return (

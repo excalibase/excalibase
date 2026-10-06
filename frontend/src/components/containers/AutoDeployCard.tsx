@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { apiErrorMessage, useSetAutoDeploy, type App } from '../../api/apps';
 import { formatWhen } from './appCopy';
 import { shortDigest } from './pipelineCopy';
@@ -34,6 +35,16 @@ export function AutoDeployCard({ app }: { readonly app: App }) {
   const pinned = isPinned(app.image);
   // Shows the choice at once; the server's answer then confirms or reverts it.
   const checked = setAutoDeploy.isPending ? !!setAutoDeploy.variables?.autoDeploy : !!app.autoDeploy;
+  // The toggle disables a render late; without this a quick second click sends a second change.
+  const inFlight = useRef(false);
+  const toggle = (autoDeploy: boolean) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setAutoDeploy.mutate(
+      { version: app.version, autoDeploy },
+      { onSettled: () => { inFlight.current = false; } },
+    );
+  };
   return (
     <section className="bg-surface-card border border-border-primary rounded-lg p-4">
       <label className="flex items-start gap-3">
@@ -42,9 +53,7 @@ export function AutoDeployCard({ app }: { readonly app: App }) {
           className="mt-1"
           checked={checked}
           disabled={pinned || setAutoDeploy.isPending}
-          onChange={(event) =>
-            setAutoDeploy.mutate({ version: app.version, autoDeploy: event.target.checked })
-          }
+          onChange={(event) => toggle(event.target.checked)}
           data-testid="auto-deploy-toggle"
         />
         <span>

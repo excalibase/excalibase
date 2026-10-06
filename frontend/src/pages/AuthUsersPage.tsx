@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Loader2, Trash2, Search, UserCheck, UserX } from 'lucide-react';
 import { useAuthUsers, useUpdateAuthUser, useDeleteAuthUser } from '../hooks/useAuthUsers';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { EndUserRoles } from '../components/endusers/EndUserRoles';
+import { serverErrorMessage } from '../utils/serverError';
 
 export function AuthUsersPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -12,6 +13,9 @@ export function AuthUsersPage() {
   const deleteUser = useDeleteAuthUser(projectId || '');
   const [search, setSearch] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; email: string } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // isPending only re-renders after the click, so a fast double click would send twice.
+  const toggleInFlight = useRef(false);
 
   const filtered = users.filter(u =>
     u.email.toLowerCase().includes(search.toLowerCase()) ||
@@ -19,7 +23,29 @@ export function AuthUsersPage() {
   );
 
   const toggleEnabled = (userId: number, current: boolean) => {
-    updateUser.mutate({ userId, enabled: !current });
+    if (toggleInFlight.current) return;
+    toggleInFlight.current = true;
+    setActionError(null);
+    updateUser.mutate(
+      { userId, enabled: !current },
+      {
+        onError: (err) => setActionError(serverErrorMessage(err, 'The user was not updated')),
+        onSettled: () => { toggleInFlight.current = false; },
+      },
+    );
+  };
+
+  const deleteSelectedUser = () => {
+    if (!deleteTarget) return;
+    setActionError(null);
+    deleteUser.mutate(deleteTarget.id, {
+      onSuccess: () => setDeleteTarget(null),
+      // Close the dialog so the reason is not hidden behind it.
+      onError: (err) => {
+        setDeleteTarget(null);
+        setActionError(serverErrorMessage(err, 'The user was not deleted'));
+      },
+    });
   };
 
   if (isLoading) {
@@ -42,6 +68,12 @@ export function AuthUsersPage() {
           />
         </div>
       </div>
+
+      {actionError && (
+        <p role="alert" data-testid="auth-users-error" className="mb-4 text-sm text-red-400">
+          {actionError}
+        </p>
+      )}
 
       <div className="rounded-lg border border-border-primary overflow-hidden">
         <table className="w-full text-sm">
@@ -107,7 +139,7 @@ export function AuthUsersPage() {
       <ConfirmModal
         open={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}
-        onConfirm={() => { if (deleteTarget) deleteUser.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) }); }}
+        onConfirm={deleteSelectedUser}
         title="Delete User"
         message={`Permanently delete "${deleteTarget?.email}"? This will remove all their data and sessions.`}
         confirmText={deleteTarget?.email}
