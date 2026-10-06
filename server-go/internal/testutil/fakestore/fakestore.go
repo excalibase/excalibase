@@ -371,10 +371,10 @@ func (s *Users) FindUserByID(_ context.Context, id string) (*domain.User, error)
 	return u, nil
 }
 
-// FindUserByUsername returns the matching user or nil.
+// FindUserByUsername returns the user whose name matches ignoring case, or nil.
 func (s *Users) FindUserByUsername(_ context.Context, username string) (*domain.User, error) {
 	for _, u := range s.ByID {
-		if u.Username == username {
+		if strings.EqualFold(u.Username, username) {
 			return u, nil
 		}
 	}

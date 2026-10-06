@@ -193,6 +193,14 @@ func TestImportPreview_XLSXListsSheets(t *testing.T) {
 	}
 }
 
+func TestImportPreview_ALegacyEncodedCSVIsRefusedWithHowToFix(t *testing.T) {
+	f := newImportFixture(t)
+	rec := f.do(multipartRequest(t, previewPath(), formPart{name: "file", filename: "a.csv", body: "name\nJos\xe9\n"}))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "CSV UTF-8") {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+}
+
 func TestImportPreview_RefusesBinaryAndOversizedFiles(t *testing.T) {
 	f := newImportFixture(t)
 	rec := f.do(multipartRequest(t, previewPath(), formPart{name: "file", filename: "a.csv", body: "\x7fELF\x00\x00\x00"}))

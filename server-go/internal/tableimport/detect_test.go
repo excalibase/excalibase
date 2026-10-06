@@ -18,12 +18,21 @@ func TestDetectFormat_ByContentNotByName(t *testing.T) {
 		{[]byte("\x7fELF\x02\x01\x01\x00\x00"), "", ErrUnsupportedFormat},
 		{[]byte("%PDF-1.7\n\x00\x01"), "", ErrUnsupportedFormat},
 		{[]byte{}, "", ErrEmptyFile},
+		{[]byte("name,city\nJos\xe9,K\xf6ln\n"), "", ErrNotUTF8},
 	}
 	for _, c := range cases {
 		got, err := DetectFormat(c.head)
 		if !errors.Is(err, c.err) || got != c.want {
 			t.Errorf("DetectFormat(%q) = %q, %v; want %q, %v", c.head, got, err, c.want, c.err)
 		}
+	}
+}
+
+// Excel's plain "CSV" is Windows-1252; the refusal says how to save it instead.
+func TestDetectFormat_ALegacyEncodedCSVSaysToSaveAsUTF8(t *testing.T) {
+	_, err := DetectFormat([]byte("name\nJos\xe9\n"))
+	if !errors.Is(err, ErrNotUTF8) || err.Error() != "the file is not UTF-8 text; save it as CSV UTF-8 (in Excel: Save As, CSV UTF-8) and try again" {
+		t.Fatalf("err = %v", err)
 	}
 }
 

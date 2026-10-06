@@ -246,13 +246,42 @@ func TestSchemaHandler_InsertRow_Success(t *testing.T) {
 	}
 }
 
-func TestSchemaHandler_InsertRow_EmptyData_Returns400(t *testing.T) {
+// An empty row takes every default; numbers arrive exact and an object lands
+// in jsonb; a table name Postgres would quote is refused before it exists.
+func TestSchemaHandler_InsertRow_DefaultsExactNumbersAndJSON(t *testing.T) {
 	r := setupSchemaRouter(t)
 
-	// Empty data map
-	w := schemaRequest(r, "POST", testRowsPath, `{"data":{}}`)
-	if w.Code != 400 {
-		t.Fatalf("InsertRow empty data: %d, body: %s", w.Code, w.Body.String())
+	w := schemaRequest(r, "POST", testTablesPath, `{"name":"ledger","columns":[
+		{"name":"id","type":"bigint","primaryKey":true,"default":"0"},
+		{"name":"amount","type":"numeric","nullable":true},
+		{"name":"doc","type":"jsonb","nullable":true}]}`)
+	if w.Code != 201 {
+		t.Fatalf("create table: %d, body: %s", w.Code, w.Body.String())
+	}
+	if w := schemaRequest(r, "POST", "/api/schema/test-proj/tables/ledger/rows", `{"data":{}}`); w.Code != 201 {
+		t.Fatalf("insert defaults: %d, body: %s", w.Code, w.Body.String())
+	}
+	w = schemaRequest(r, "POST", "/api/schema/test-proj/tables/ledger/rows",
+		`{"data":{"id":9007199254740993,"amount":12.345678901234567890,"doc":{"a":[1,2]}}}`)
+	if w.Code != 201 {
+		t.Fatalf("insert values: %d, body: %s", w.Code, w.Body.String())
+	}
+	w = schemaRequest(r, "POST", testQueryPath,
+		`{"query":"SELECT id::text, amount::text, doc->'a'->>1 FROM ledger WHERE id <> 0"}`)
+	for _, want := range []string{"9007199254740993", "12.345678901234567890", `"2"`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("row lacks %s: %s", want, w.Body.String())
+		}
+	}
+
+	if w := schemaRequest(r, "POST", testTablesPath, `{"name":"My Table"}`); w.Code != 400 {
+		t.Fatalf("mixed-case table: %d, body: %s", w.Code, w.Body.String())
+	}
+	if w := schemaRequest(r, "DELETE", "/api/schema/test-proj/tables/users?schema=Bad%20Schema", ""); w.Code != 400 {
+		t.Fatalf("invalid schema param: %d, body: %s", w.Code, w.Body.String())
+	}
+	if w := schemaRequest(r, "POST", testRolesPath, `{"name":"  reporter \n"}`); w.Code != 201 {
+		t.Fatalf("padded role name: %d, body: %s", w.Code, w.Body.String())
 	}
 }
 

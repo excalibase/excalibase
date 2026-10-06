@@ -61,6 +61,7 @@ var (
 	ErrTooManyRows       = errors.New("the file has more rows than your plan allows for an import")
 	ErrEmptyFile         = errors.New("the file is empty")
 	ErrUnsupportedFormat = errors.New("the file is not a CSV, TSV or XLSX file")
+	ErrNotUTF8           = errors.New("the file is not UTF-8 text; save it as CSV UTF-8 (in Excel: Save As, CSV UTF-8) and try again")
 	ErrActiveContent     = errors.New("the workbook contains macros, external links or embedded objects; save it as a plain .xlsx or .csv")
 	ErrZipBomb           = errors.New("the workbook expands to more data than an import allows")
 	ErrTableExists       = errors.New("a table with that name already exists")

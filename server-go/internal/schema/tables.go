@@ -13,6 +13,9 @@ func (i *Introspector) CreateTable(ctx context.Context, db *sql.DB, req CreateTa
 	if schema == "" {
 		schema = "public"
 	}
+	if err := CheckNewName("schema", schema); err != nil {
+		return err
+	}
 
 	sql, err := buildCreateTableSQL(schema, req)
 	if err != nil {
@@ -34,7 +37,7 @@ func (i *Introspector) CreateTable(ctx context.Context, db *sql.DB, req CreateTa
 
 // buildCreateTableSQL constructs the CREATE TABLE DDL without executing it.
 func buildCreateTableSQL(schema string, req CreateTableRequest) (string, error) {
-	if err := CheckIdentifier("table", req.Name); err != nil {
+	if err := CheckNewName("table", req.Name); err != nil {
 		return "", err
 	}
 	var b strings.Builder
@@ -80,7 +83,7 @@ func appendColumnDefs(b *strings.Builder, cols []CreateColumnDef) ([]string, err
 // writeColumnDef writes a single column definition fragment to b.
 // Returns true if the column is a primary key.
 func writeColumnDef(b *strings.Builder, col CreateColumnDef, idx int) (isPK bool, err error) {
-	if err := CheckIdentifier("column", col.Name); err != nil {
+	if err := CheckNewName("column", col.Name); err != nil {
 		return false, err
 	}
 	if err := ValidateTypeName(col.Type); err != nil {
@@ -111,7 +114,7 @@ func writeColumnDef(b *strings.Builder, col CreateColumnDef, idx int) (isPK bool
 
 // UpdateTable alters table properties: rename, move schema, toggle RLS, set comment.
 func (i *Introspector) UpdateTable(ctx context.Context, db *sql.DB, schema, name string, req UpdateTableRequest) error {
-	if err := checkOptionalIdentifier("table", req.NewName); err != nil {
+	if err := checkOptionalNewName("table", req.NewName); err != nil {
 		return err
 	}
 	if err := checkOptionalIdentifier("schema", req.NewSchema); err != nil {

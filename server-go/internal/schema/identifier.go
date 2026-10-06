@@ -3,6 +3,7 @@ package schema
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -28,6 +29,45 @@ func CheckIdentifier(kind, name string) error {
 		return &InvalidNameError{fmt.Sprintf("%s names can be at most %d characters; this one has %d", label, MaxIdentifierBytes, len(name))}
 	}
 	return nil
+}
+
+// NameRule is the rule a new table, column or schema name follows; Studio
+// shows the same sentence.
+const NameRule = "Use lowercase letters, numbers and underscores, starting with a letter or underscore; at most 63 characters."
+
+// plainIdentifier is a name that never needs quoting. Permissions, realtime
+// and the engine's GraphQL fields accept only these, so a table named any
+// other way could never be exposed.
+var plainIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
+// IsPlainIdentifier reports whether name follows NameRule.
+func IsPlainIdentifier(name string) bool { return plainIdentifier.MatchString(name) }
+
+// CheckNewName refuses a table, column or schema name that does not follow NameRule.
+func CheckNewName(kind, name string) error {
+	if err := CheckIdentifier(kind, name); err != nil {
+		return err
+	}
+	if !IsPlainIdentifier(name) {
+		return &InvalidNameError{fmt.Sprintf("%s name %q is not allowed. %s", capitalize(kind), name, NameRule)}
+	}
+	return nil
+}
+
+func checkOptionalNewName(kind string, name *string) error {
+	if name == nil {
+		return nil
+	}
+	return CheckNewName(kind, *name)
+}
+
+// InputError is a request our own validation refused: the caller's mistake.
+type InputError struct{ msg string }
+
+func (e *InputError) Error() string { return e.msg }
+
+func invalidInput(format string, args ...any) error {
+	return &InputError{fmt.Sprintf(format, args...)}
 }
 
 func checkOptionalIdentifier(kind string, name *string) error {

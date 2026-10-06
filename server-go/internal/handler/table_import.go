@@ -557,7 +557,7 @@ func importStatus(err error) (int, bool) {
 		return http.StatusServiceUnavailable, true
 	case errors.As(err, &fileErr), errors.As(err, &rowErrs), errors.Is(err, tableimport.ErrEmptyFile),
 		errors.Is(err, tableimport.ErrTableMissing), errors.Is(err, tableimport.ErrColumnsMissing),
-		errors.Is(err, tableimport.ErrTimedOut), errors.Is(err, tableimport.ErrSheetNotPublic):
+		errors.Is(err, tableimport.ErrTimedOut), errors.Is(err, tableimport.ErrSheetNotPublic), errors.Is(err, tableimport.ErrNotUTF8):
 		return http.StatusUnprocessableEntity, true
 	}
 	return http.StatusInternalServerError, false

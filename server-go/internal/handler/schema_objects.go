@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/schema"
 	"github.com/go-chi/chi/v5"
@@ -42,6 +43,7 @@ func (h *SchemaHandler) CreateRole(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		httpError(w, "name is required", http.StatusBadRequest)
 		return
@@ -178,6 +180,7 @@ func (h *SchemaHandler) CreatePolicy(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
+	req.Name, req.Table = strings.TrimSpace(req.Name), strings.TrimSpace(req.Table)
 	if req.Name == "" || req.Table == "" {
 		httpError(w, "name and table are required", http.StatusBadRequest)
 		return
@@ -237,6 +240,7 @@ func (h *SchemaHandler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" || req.Body == "" {
 		httpError(w, "name and body are required", http.StatusBadRequest)
 		return
@@ -292,6 +296,7 @@ func (h *SchemaHandler) CreateTrigger(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
+	req.Name, req.Table, req.Function = strings.TrimSpace(req.Name), strings.TrimSpace(req.Table), strings.TrimSpace(req.Function)
 	if req.Name == "" || req.Table == "" || req.Function == "" {
 		httpError(w, "name, table, and function are required", http.StatusBadRequest)
 		return
@@ -337,6 +342,7 @@ func (h *SchemaHandler) CreateIndex(w http.ResponseWriter, r *http.Request) {
 		httpError(w, errInvalidBody, http.StatusBadRequest)
 		return
 	}
+	req.Name, req.Table = strings.TrimSpace(req.Name), strings.TrimSpace(req.Table)
 	if req.Name == "" || req.Table == "" || len(req.Columns) == 0 {
 		httpError(w, "name, table, and columns are required", http.StatusBadRequest)
 		return

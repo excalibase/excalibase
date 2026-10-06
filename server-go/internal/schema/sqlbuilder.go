@@ -1,7 +1,6 @@
 package schema
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -24,7 +23,7 @@ func ValidatePolicyCommand(cmd string) error {
 	case "ALL", "SELECT", "INSERT", "UPDATE", "DELETE":
 		return nil
 	default:
-		return fmt.Errorf("invalid policy command: %q", cmd)
+		return invalidInput("invalid policy command: %q", cmd)
 	}
 }
 
@@ -34,7 +33,7 @@ func ValidateLanguage(lang string) error {
 	case "sql", "plpgsql", "plpython3u", "plperl", "plperlu", "pltcl", "pltclu":
 		return nil
 	default:
-		return fmt.Errorf("invalid language: %q", lang)
+		return invalidInput("invalid language: %q", lang)
 	}
 }
 
@@ -44,7 +43,7 @@ func ValidateVolatility(vol string) error {
 	case "VOLATILE", "STABLE", "IMMUTABLE":
 		return nil
 	default:
-		return fmt.Errorf("invalid volatility: %q", vol)
+		return invalidInput("invalid volatility: %q", vol)
 	}
 }
 
@@ -55,10 +54,10 @@ var pgTypePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_ ()\[\],]*$`)
 // ValidateTypeName validates that a PostgreSQL type name doesn't contain injection characters.
 func ValidateTypeName(typeName string) error {
 	if typeName == "" {
-		return fmt.Errorf("type name is required")
+		return invalidInput("type name is required")
 	}
 	if !pgTypePattern.MatchString(typeName) {
-		return fmt.Errorf("invalid type name: %q", typeName)
+		return invalidInput("invalid type name: %q", typeName)
 	}
 	return nil
 }
@@ -72,7 +71,7 @@ func ValidateArgTypes(argTypes string) error {
 		return nil
 	}
 	if !pgArgTypesPattern.MatchString(argTypes) {
-		return fmt.Errorf("invalid argument types: %q", argTypes)
+		return invalidInput("invalid argument types: %q", argTypes)
 	}
 	return nil
 }
@@ -84,10 +83,10 @@ var columnNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 // ValidateColumnName validates that a column name is a safe identifier.
 func ValidateColumnName(name string) error {
 	if name == "" {
-		return fmt.Errorf("column name is required")
+		return invalidInput("column name is required")
 	}
 	if !columnNamePattern.MatchString(name) {
-		return fmt.Errorf("invalid column name: %q", name)
+		return invalidInput("invalid column name: %q", name)
 	}
 	return nil
 }
@@ -98,10 +97,10 @@ var schemaNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
 // ValidateSchemaName validates that a schema name is a safe identifier.
 func ValidateSchemaName(name string) error {
 	if name == "" {
-		return fmt.Errorf("schema name is required")
+		return invalidInput("schema name is required")
 	}
 	if !schemaNamePattern.MatchString(name) {
-		return fmt.Errorf("invalid schema name: %q", name)
+		return invalidInput("invalid schema name: %q", name)
 	}
 	return nil
 }
@@ -129,12 +128,12 @@ var safeFunctions = map[string]bool{
 // It returns the safe SQL expression or an error if the input is rejected.
 func ValidateDefaultExpression(expr string) (string, error) {
 	if expr == "" {
-		return "", fmt.Errorf("default expression is empty")
+		return "", invalidInput("default expression is empty")
 	}
 
 	// Reject dangerous patterns
 	if strings.Contains(expr, ";") || strings.Contains(expr, "--") || strings.Contains(expr, "/*") {
-		return "", fmt.Errorf("default expression contains forbidden characters: %q", expr)
+		return "", invalidInput("default expression contains forbidden characters: %q", expr)
 	}
 
 	// Numeric literals
@@ -163,7 +162,7 @@ func ValidateDefaultExpression(expr string) (string, error) {
 		return QuoteLiteral(expr), nil
 	}
 
-	return "", fmt.Errorf("unrecognized default expression: %q", expr)
+	return "", invalidInput("unrecognized default expression: %q", expr)
 }
 
 // MaxPolicyExpressionLen caps the length of a USING / WITH CHECK clause to
@@ -202,10 +201,10 @@ var rejectedPolicyKeywords = []string{
 func ValidatePolicyExpression(expr string) (string, error) {
 	expr = strings.TrimSpace(expr)
 	if expr == "" {
-		return "", fmt.Errorf("policy expression is empty")
+		return "", invalidInput("policy expression is empty")
 	}
 	if len(expr) > MaxPolicyExpressionLen {
-		return "", fmt.Errorf("policy expression exceeds %d chars", MaxPolicyExpressionLen)
+		return "", invalidInput("policy expression exceeds %d chars", MaxPolicyExpressionLen)
 	}
 	if err := checkForbiddenTokens(expr); err != nil {
 		return "", err
@@ -225,10 +224,10 @@ func checkForbiddenTokens(expr string) error {
 	if strings.ContainsAny(expr, ";") || strings.Contains(expr, "--") ||
 		strings.Contains(expr, "/*") || strings.Contains(expr, "*/") ||
 		strings.Contains(expr, "$$") {
-		return fmt.Errorf("policy expression contains forbidden token")
+		return invalidInput("policy expression contains forbidden token")
 	}
 	if strings.Count(expr, "$") >= 2 {
-		return fmt.Errorf("policy expression contains $-tagged token")
+		return invalidInput("policy expression contains $-tagged token")
 	}
 	return nil
 }
@@ -252,7 +251,7 @@ func checkKeywordBoundary(lower, kw string) error {
 			after = lower[at+len(kw)]
 		}
 		if !isIdentChar(before) && !isIdentChar(after) {
-			return fmt.Errorf("policy expression contains forbidden keyword %q", kw)
+			return invalidInput("policy expression contains forbidden keyword %q", kw)
 		}
 		idx = at + len(kw)
 	}
