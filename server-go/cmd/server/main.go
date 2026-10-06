@@ -814,6 +814,8 @@ type handlerDeps struct {
 	// rlTokenCreate bounds personal access token minting per user (EXC-536),
 	// so a stolen session cannot mint credentials in bulk.
 	rlTokenCreate func(http.Handler) http.Handler
+	// rlOrgCreate bounds organization creation per user (EXC-553).
+	rlOrgCreate func(http.Handler) http.Handler
 	// mcpAudit records every tool call made through /mcp (EXC-544).
 	mcpAudit mcpserver.AuditLogger
 	// features decides what ships dark (EXC-554); routes ask it per request.
@@ -1386,6 +1388,11 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	authHandler.SetInviteOnly(cfg.RegistrationMode == "invite")
 	authHandler.SetSetupTokenStore(sqlStore)
 	authHandler.SetEmailVerifier(emailVerifier)
+	if cfg.IsCloud() {
+		// Self-hosted keeps its one default org; cloud accounts each get a
+		// personal one when they sign in (EXC-553).
+		authHandler.SetPersonalOrgs(sqlStore)
+	}
 	setUpFirstAdminToken(cfg, sqlStore)
 	adoptBootstrapServiceToken(cfg, sqlStore)
 	ceilings, err := config.LoadServiceTokenCeilings()
@@ -1484,6 +1491,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		rlDataPlane:   custommw.RateLimit(custommw.PerProjectAndUser, 120, time.Second),
 		rlMailSend:    custommw.RateLimit(custommw.PerUser, 5, time.Hour),
 		rlTokenCreate: newTokenCreateLimiter(),
+		rlOrgCreate:   newOrgCreateLimiter(),
 		mcpAudit:      sqlStore,
 		features:      cfg.Features(),
 		activity:      custommw.ProjectActivity(activityRecorder),
@@ -1740,6 +1748,15 @@ func newTokenCreateLimiter() func(http.Handler) http.Handler {
 	return custommw.RateLimit(custommw.PerUser, tokenCreateBudget, time.Hour)
 }
 
+// orgCreateBudget is how many organization creates one user may attempt per
+// hour. An account owns one free org, so a few attempts cover typos and
+// taken slugs.
+const orgCreateBudget = 10
+
+func newOrgCreateLimiter() func(http.Handler) http.Handler {
+	return custommw.RateLimit(custommw.PerUser, orgCreateBudget, time.Hour)
+}
+
 // mountAuthRoutes mounts /api/auth (mixed public + authed).
 func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 	r.Route("/api/auth", func(r chi.Router) {
@@ -1768,7 +1785,7 @@ func mountAuthRoutes(r *chi.Mux, d *handlerDeps) {
 func mountOrgAndAdminRoutes(r *chi.Mux, cfg config.AppConfig, d *handlerDeps) {
 	r.Route("/api/orgs", func(r chi.Router) {
 		r.Use(auth.RequireAuth)
-		d.orgHandler.Routes(r, cfg.IsCloud())
+		d.orgHandler.Routes(r, cfg.IsCloud(), d.rlOrgCreate)
 	})
 	r.Route("/api/admin", func(r chi.Router) {
 		r.Use(auth.RequireAuth)

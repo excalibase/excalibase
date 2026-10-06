@@ -33,7 +33,13 @@ type AuthHandler struct {
 	ceilings   map[string][]string
 	verifier   *EmailVerifier
 	loginGuard *loginguard.Guard
+	// personalOrgs gives every account its personal org when it signs in
+	// (EXC-553); nil in self-hosted mode, which keeps its one default org.
+	personalOrgs auth.PersonalOrgStore
 }
+
+// SetPersonalOrgs makes every sign-in ensure the account's personal org.
+func (h *AuthHandler) SetPersonalOrgs(s auth.PersonalOrgStore) { h.personalOrgs = s }
 
 // Five guesses per account per quarter hour, whatever address they come from.
 const (
@@ -379,7 +385,17 @@ func (h *AuthHandler) findLoginUser(ctx context.Context, identifier string) (*do
 // startSession issues a session-scope PAT and sets it as the session cookie.
 // The 12h TTL bounds the blast radius of a leaked cookie; "session" scope
 // tells it apart from long-lived CI tokens in the token list.
+//
+// Every sign-in path ends here, so this is where an account first becomes
+// usable and gets its personal org. Without one no session is issued: the
+// step is idempotent, and the next sign-in retries it.
 func (h *AuthHandler) startSession(ctx context.Context, w http.ResponseWriter, user *domain.User, name string) (string, time.Time, error) {
+	if h.personalOrgs != nil {
+		if err := auth.EnsurePersonalOrg(ctx, h.personalOrgs, user); err != nil {
+			log.Printf("ERROR: personal organization for %s: %v", user.ID, err)
+			return "", time.Time{}, err
+		}
+	}
 	raw := auth.GenerateToken()
 	now := time.Now()
 	expiry := now.Add(sessionTokenTTL)

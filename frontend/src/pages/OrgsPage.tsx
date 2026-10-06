@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Building2, Plus, Crown, ChevronRight } from 'lucide-react';
 import { listMyOrgs, createOrg, type Org } from '../api/orgs';
 import { Button } from '../components/Button';
@@ -11,12 +11,17 @@ const TIER_COLORS: Record<string, string> = {
   ENTERPRISE: 'bg-purple-500/20 text-purple-400',
 };
 
+// The server's organization name rule: 1-64 characters once trimmed.
+const ORG_NAME_MAX = 64;
+
 export function OrgsPage() {
   useDocumentTitle('Organizations');
   const navigate = useNavigate();
+  // ?new=1 (linked from the create-project form) opens the create form.
+  const [searchParams] = useSearchParams();
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreate, setShowCreate] = useState(searchParams.get('new') === '1');
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
@@ -93,8 +98,11 @@ export function OrgsPage() {
               onChange={(e) => handleNameChange(e.target.value)}
               className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500"
               placeholder="My Company"
+              maxLength={ORG_NAME_MAX}
+              aria-describedby="org-name-help"
               autoFocus
             />
+            <p id="org-name-help" data-testid="org-name-help" className="text-xs text-text-tertiary mt-1">1–{ORG_NAME_MAX} characters</p>
           </div>
           <div>
             <label htmlFor="org-slug" className="block text-sm text-text-secondary mb-1">Slug</label>

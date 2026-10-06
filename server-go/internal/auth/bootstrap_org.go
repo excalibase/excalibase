@@ -11,8 +11,7 @@ import (
 // OrgBootstrapper is the subset of OrgStore needed for default org creation.
 type OrgBootstrapper interface {
 	FindAllOrgs(ctx context.Context) ([]*domain.Org, error)
-	CreateOrg(ctx context.Context, org *domain.Org) error
-	AddOrgMember(ctx context.Context, m *domain.OrgMember) error
+	CreateOrgWithOwner(ctx context.Context, org *domain.Org, maxFreeOrgs int) error
 }
 
 // BootstrapDefaultOrg creates a "default" org if no orgs exist.
@@ -34,16 +33,11 @@ func BootstrapDefaultOrg(ctx context.Context, store OrgBootstrapper, adminUserID
 		OwnerID: adminUserID,
 	}
 
-	if err := store.CreateOrg(ctx, org); err != nil {
+	// The admin owns it from the same transaction; the platform's own org is
+	// not held to the free cap.
+	if err := store.CreateOrgWithOwner(ctx, org, 0); err != nil {
 		return fmt.Errorf("create default org: %w", err)
 	}
-
-	// Add admin as owner
-	store.AddOrgMember(ctx, &domain.OrgMember{
-		OrgID:  org.ID,
-		UserID: adminUserID,
-		Role:   domain.OrgRoleOwner,
-	})
 
 	log.Printf("Created default organization (id=%s, slug=default)", org.ID)
 	return nil

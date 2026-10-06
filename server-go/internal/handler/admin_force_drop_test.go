@@ -25,6 +25,12 @@ type adminOrgStore struct {
 }
 
 func (a *adminOrgStore) CreateOrg(context.Context, *domain.Org) error { return nil }
+func (a *adminOrgStore) CreateOrgWithOwner(context.Context, *domain.Org, int) error {
+	return nil
+}
+func (a *adminOrgStore) EnsurePersonalOrg(context.Context, *domain.Org) (bool, error) {
+	return false, nil
+}
 func (a *adminOrgStore) FindOrgByID(_ context.Context, id string) (*domain.Org, error) {
 	if a.org != nil && a.org.ID == id {
 		return a.org, nil

@@ -1,11 +1,32 @@
 package domain
 
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// MaxOrgNameLength bounds an organization's display name, in characters.
+const MaxOrgNameLength = 64
+
+// NormalizeOrgName trims the name and reports whether it is 1 to
+// MaxOrgNameLength characters long.
+func NormalizeOrgName(name string) (string, bool) {
+	trimmed := strings.TrimSpace(name)
+	length := utf8.RuneCountInString(trimmed)
+	if length == 0 || length > MaxOrgNameLength {
+		return "", false
+	}
+	return trimmed, true
+}
+
 // Org represents an organization that owns projects.
 type Org struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	Tier      TierType  `json:"tier"`
+	ID   string   `json:"id"`
+	Name string   `json:"name"`
+	Slug string   `json:"slug"`
+	Tier TierType `json:"tier"`
+	// OwnerID is the account that created the org. It never changes, so the
+	// free allowance stays with the creator whoever owns the org later.
 	OwnerID   string    `json:"ownerId"`
 	CreatedAt *FlexTime `json:"createdAt,omitempty"`
 	UpdatedAt *FlexTime `json:"updatedAt,omitempty"`

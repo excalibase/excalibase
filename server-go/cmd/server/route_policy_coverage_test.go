@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -256,6 +257,7 @@ func policyDeps(t *testing.T, instances *fakestore.Instances, platform *fakePlat
 	// stop asserting the one thing that route's limiter is for.
 	deps.rlMailSend = custommw.RateLimit(custommw.PerUser, 5, time.Hour)
 	deps.rlTokenCreate = newTokenCreateLimiter()
+	deps.rlOrgCreate = newOrgCreateLimiter()
 	return deps
 }
 
@@ -637,5 +639,40 @@ func TestTokenCreationHasItsOwnSmallBudget(t *testing.T) {
 	}
 	if code := call(http.MethodGet); code != http.StatusOK {
 		t.Fatalf("listing must not share the mint budget, got %d", code)
+	}
+}
+
+// EXC-553: creating an organization carries its own small budget, counted on
+// every attempt, refused or not; listing is not charged.
+func TestOrgCreationHasItsOwnSmallBudget(t *testing.T) {
+	instances := fakestore.NewInstances()
+	platform := &fakePlatform{Orgs: fakestore.NewOrgs(), Tokens: fakestore.NewTokens()}
+	deps := policyDeps(t, instances, platform, edgefn.NewFunctionStore(t.TempDir()))
+	principals := policyPrincipals(platform)
+	router := buildRouter(config.AppConfig{DeploymentMode: "cloud"}, platform, instances, deps)
+	caller := principalNamed(t, principals, "orgDeveloper")
+
+	call := func(method string, attempt int) int {
+		body := fmt.Sprintf(`{"name":"Org %d","slug":"org-%d"}`, attempt, attempt)
+		req := httptest.NewRequest(method, "/api/orgs/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+caller.token)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+	refusedAt := 0
+	for i := 1; i <= orgCreateBudget+1 && refusedAt == 0; i++ {
+		if code := call(http.MethodPost, i); code == http.StatusTooManyRequests {
+			refusedAt = i
+		} else if code != http.StatusCreated && code != http.StatusConflict {
+			t.Fatalf("create %d answered %d", i, code)
+		}
+	}
+	if refusedAt != orgCreateBudget+1 {
+		t.Fatalf("the create past the budget of %d must be refused, refused at %d", orgCreateBudget, refusedAt)
+	}
+	if code := call(http.MethodGet, 0); code != http.StatusOK {
+		t.Fatalf("listing must not share the create budget, got %d", code)
 	}
 }

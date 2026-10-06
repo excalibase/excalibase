@@ -81,6 +81,7 @@ func (m *memIdentities) LinkStudioIdentity(_ context.Context, provider, subject,
 
 type oauthHarness struct {
 	router     chi.Router
+	auth       *AuthHandler
 	signIn     *fakeSignIn
 	users      *mockUserStore
 	tokens     *mockTokenStore
@@ -101,6 +102,7 @@ func newOAuthHarness(t *testing.T, inviteOnly bool) *oauthHarness {
 	authHandler.SetOrgStore(h.orgs)
 	authHandler.SetInviteOnly(inviteOnly)
 	authHandler.SetEmailVerifier(NewEmailVerifier(h.links, &recordingSender{}, testStudioURL, ""))
+	h.auth = authHandler
 	oauth := NewStudioOAuthHandler(h.signIn, authHandler, h.identities, testStudioURL)
 	r := chi.NewRouter()
 	r.Route("/api/auth/oauth", func(r chi.Router) { oauth.Routes(r) })

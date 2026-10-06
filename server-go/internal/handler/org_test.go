@@ -188,11 +188,14 @@ func TestCreateOrg(t *testing.T) {
 }
 
 func TestListMyOrgs(t *testing.T) {
-	r, _ := setupOrgRouter(t)
+	r, store := setupOrgRouter(t)
 
-	// Create org as alice
-	orgRequest(r, "POST", testOrgsPath, `{"name":"Org1","slug":"org1"}`, testAliceID)
-	orgRequest(r, "POST", testOrgsPath, `{"name":"Org2","slug":"org2"}`, testAliceID)
+	// Alice creates one org and is a member of Bob's (one free org each).
+	createOrgAs(t, r, "org1", testAliceID)
+	bobs := createOrgAs(t, r, "org2", testBobID)
+	if err := store.AddOrgMember(t.Context(), &domain.OrgMember{OrgID: bobs.ID, UserID: testAliceID, Role: domain.OrgRoleDeveloper}); err != nil {
+		t.Fatalf("AddOrgMember: %v", err)
+	}
 
 	// Alice should see 2 orgs
 	w := orgRequest(r, "GET", testOrgsPath, "", testAliceID)
@@ -206,12 +209,12 @@ func TestListMyOrgs(t *testing.T) {
 		t.Errorf("expected 2 orgs, got %d", len(orgs))
 	}
 
-	// Bob should see 0 orgs
-	w2 := orgRequest(r, "GET", testOrgsPath, "", testBobID)
-	var bobOrgs []domain.Org
-	json.NewDecoder(w2.Body).Decode(&bobOrgs)
-	if len(bobOrgs) != 0 {
-		t.Errorf("bob should see 0 orgs, got %d", len(bobOrgs))
+	// Someone in no org sees none.
+	w2 := orgRequest(r, "GET", testOrgsPath, "", testutil.FixtureToken("carol-id"))
+	var carolOrgs []domain.Org
+	json.NewDecoder(w2.Body).Decode(&carolOrgs)
+	if len(carolOrgs) != 0 {
+		t.Errorf("carol should see 0 orgs, got %d", len(carolOrgs))
 	}
 }
 
