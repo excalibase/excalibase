@@ -32,7 +32,7 @@ func (s *Store) FindOrgBySlug(ctx context.Context, slug string) (*domain.Org, er
 
 func (s *Store) FindOrgsByUser(ctx context.Context, userID string) ([]*domain.Org, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT o.id, o.name, o.slug, o.tier, o.owner_id, o.created_at, o.updated_at
+		`SELECT o.id, o.name, o.slug, o.tier, o.owner_id, o.created_at, o.updated_at, m.role
 		 FROM orgs o JOIN org_members m ON o.id = m.org_id
 		 WHERE m.user_id = $1`, userID)
 	if err != nil {
@@ -41,14 +41,16 @@ func (s *Store) FindOrgsByUser(ctx context.Context, userID string) ([]*domain.Or
 	defer rows.Close()
 
 	var orgs []*domain.Org
+	var role string
 	for rows.Next() {
-		org, err := s.scanOrgRow(rows)
+		org, err := s.scanOrgRow(rows, &role)
 		if err != nil {
 			return nil, err
 		}
+		org.Role = role
 		orgs = append(orgs, org)
 	}
-	return orgs, nil
+	return orgs, rows.Err()
 }
 
 func (s *Store) FindAllOrgs(ctx context.Context) ([]*domain.Org, error) {
@@ -333,10 +335,12 @@ func (s *Store) scanOrg(row *sql.Row) (*domain.Org, error) {
 	return org, nil
 }
 
-func (s *Store) scanOrgRow(rows *sql.Rows) (*domain.Org, error) {
+// scanOrgRow reads an org row; extra receives any columns selected after updated_at.
+func (s *Store) scanOrgRow(rows *sql.Rows, extra ...any) (*domain.Org, error) {
 	org := &domain.Org{}
 	var createdAt, updatedAt sql.NullTime
-	err := rows.Scan(&org.ID, &org.Name, &org.Slug, &org.Tier, &org.OwnerID, &createdAt, &updatedAt)
+	dest := append([]any{&org.ID, &org.Name, &org.Slug, &org.Tier, &org.OwnerID, &createdAt, &updatedAt}, extra...)
+	err := rows.Scan(dest...)
 	if err != nil {
 		return nil, err
 	}
