@@ -15,8 +15,10 @@ export function DashboardPage() {
 
   const total       = instances.length;
   const active      = instances.filter((i) => i.status === 'ACTIVE').length;
-  const provisioning = instances.filter((i) => i.currentStage !== 'COMPLETED' && i.currentStage !== 'FAILED').length;
-  const failed      = instances.filter((i) => i.currentStage === 'FAILED').length;
+  // By status, as the badges read it: a project being deleted or paused keeps
+  // whatever stage it stopped at, so the stage alone over-counts the builds.
+  const provisioning = instances.filter((i) => i.status === 'PROVISIONING').length;
+  const failed      = instances.filter((i) => i.status === 'FAILED' || i.currentStage === 'FAILED').length;
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">

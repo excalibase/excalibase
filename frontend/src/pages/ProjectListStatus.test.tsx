@@ -59,6 +59,25 @@ describe('project lists show the project status', () => {
     expect(name.compareDocumentPosition(within(row).getByText('proj-gone')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  // EXC-555: the summary cards counted by pipeline stage, so a project
+  // scheduled for deletion (stage short of COMPLETED) counted as Provisioning.
+  test('dashboard cards count by status: a project scheduled for deletion is not provisioning', async () => {
+    projects.push(
+      { projectId: 'proj-new', projectName: 'new', tier: 'FREE', namespace: 'ns-4', databaseType: 'POSTGRESQL',
+        status: 'PROVISIONING', currentStage: 'WAITING_FOR_READY', createdAt: '2026-10-01T00:00:00Z' } as never,
+      { projectId: 'proj-broke', projectName: 'broke', tier: 'FREE', namespace: 'ns-5', databaseType: 'POSTGRESQL',
+        status: 'FAILED', currentStage: 'CRD_DEPLOYMENT', createdAt: '2026-10-01T00:00:00Z' } as never,
+    );
+    renderWith(<DashboardPage />);
+    await screen.findByText('proj-gone');
+    const card = (label: string) => screen.getByText(label, { selector: 'p' }).nextElementSibling;
+    expect(card('Total Instances')).toHaveTextContent('4');
+    expect(card('Active')).toHaveTextContent('1');
+    expect(card('Provisioning')).toHaveTextContent('1');
+    expect(card('Failed')).toHaveTextContent('1');
+    projects.splice(-2, 2);
+  });
+
   test('a project without a name falls back to its id', async () => {
     projects.push({ projectId: 'proj-noname', tier: 'FREE', namespace: 'ns-3', databaseType: 'POSTGRESQL',
       status: 'ACTIVE', currentStage: 'COMPLETED', createdAt: '2026-10-01T00:00:00Z' } as never);
