@@ -12,6 +12,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/storage"
+	"github.com/lib/pq"
 )
 
 // validPathID allows only alphanumeric, hyphens, underscores, max 64 chars.
@@ -93,9 +94,9 @@ func httpError(w http.ResponseWriter, msg string, code int) {
 func safeError(err error) string {
 	msg := err.Error()
 	// Strip common PG detail prefixes that leak schema info
-	for _, prefix := range []string{"pq: ", "ERROR: "} {
-		msg = strings.TrimPrefix(msg, prefix)
-	}
+	// The driver prefix also appears after our own wrapping ("create table: pq: ...").
+	msg = strings.ReplaceAll(msg, "pq: ", "")
+	msg = strings.TrimPrefix(msg, "ERROR: ")
 	// Remove DETAIL/HINT lines
 	if idx := strings.Index(msg, "\nDETAIL:"); idx >= 0 {
 		msg = msg[:idx]
@@ -149,9 +150,41 @@ func writeProjectCreationError(w http.ResponseWriter, err error) bool {
 }
 
 // schemaError logs the full error server-side and returns a sanitized message.
+// A Postgres refusal is answered with Postgres's own message (no DETAIL/HINT)
+// and, when the caller passed the 500 default, a status saying whose mistake
+// it was: a duplicate is 409, a bad statement or value 400, a missing grant 403.
 func schemaError(w http.ResponseWriter, err error, code int) {
 	log.Printf("schema error: %v", err)
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Message != "" {
+		if code == http.StatusInternalServerError {
+			code = postgresRefusalStatus(pqErr.Code)
+		}
+		httpError(w, truncate(pqErr.Message, 200), code)
+		return
+	}
 	httpError(w, safeError(err), code)
+}
+
+func postgresRefusalStatus(code pq.ErrorCode) int {
+	switch code {
+	case "42P07", "42701", "42710", "42P06", "42723", "42P04", "23505":
+		return http.StatusConflict
+	case "42501":
+		return http.StatusForbidden
+	}
+	switch code.Class() {
+	case "22", "23", "42", "2B", "0A":
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 // refuseWhileNotServable writes 409 and reports true when the project must

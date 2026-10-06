@@ -603,8 +603,8 @@ func TestSchemaHandler_CreateAndDropExtension(t *testing.T) {
 	// We test the HTTP contract regardless.
 	w := schemaRequest(r, "POST", "/api/schema/test-proj/extensions",
 		`{"name":"pg_trgm"}`)
-	// May be 201 (success) or 500 (permission denied)
-	if w.Code != 201 && w.Code != 500 {
+	// May be 201 (success) or 403 (permission denied, Postgres's reason)
+	if w.Code != 201 && w.Code != 403 {
 		t.Errorf("create extension: unexpected %d", w.Code)
 	}
 
