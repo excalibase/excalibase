@@ -71,6 +71,8 @@ export default defineConfig({
         'src/api/accessTokens.ts',
         'src/pages/ConnectAiToolPage.tsx',
         'src/utils/mcpConfig.ts',
+        'src/api/aiActivity.ts',
+        'src/components/AiActivityFeed.tsx',
         'src/components/layout/PlatformLayout.tsx',
         'src/api/endUsers.ts',
         'src/utils/deletionProtection.ts',

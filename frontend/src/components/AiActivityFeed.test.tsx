@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AiActivityFeed } from './AiActivityFeed';
 import { api } from '../api/client';
+import { callResult } from '../api/aiActivity';
 
 vi.mock('../api/client', () => ({
   api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
@@ -64,5 +65,31 @@ describe('AI activity feed', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><AiActivityFeed projectId="proj-1" /></QueryClientProvider>);
     expect(await screen.findByText(/no ai tool has called this project yet/i)).toBeInTheDocument();
+  });
+
+  test('a refused revoke is shown', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.delete).mockRejectedValue({ response: { data: { error: 'token not found' } } });
+    renderFeed();
+    await u.click(within(await screen.findByTestId('ai-activity-3')).getByRole('button', { name: /revoke/i }));
+    await u.click(within(await screen.findByTestId('confirm-modal')).getByRole('button', { name: /^revoke$/i }));
+    expect(await screen.findByText('token not found')).toBeInTheDocument();
+  });
+
+  test('a feed that cannot load says so', async () => {
+    vi.mocked(api.get).mockRejectedValue({ response: { data: { error: 'insufficient project role' } } });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><AiActivityFeed projectId="proj-1" /></QueryClientProvider>);
+    expect(await screen.findByText('insufficient project role')).toBeInTheDocument();
+  });
+});
+
+describe('call result', () => {
+  const base = { id: 1, tool: 't', tokenName: 'n', userId: 'u', at: '2026-10-06T00:00:00Z', mine: false };
+  test('names each outcome', () => {
+    expect(callResult({ ...base, status: 'ok' })).toBe('OK');
+    expect(callResult({ ...base, status: 'error', httpStatus: 404 })).toBe('Refused (404)');
+    expect(callResult({ ...base, status: 'error', httpStatus: 409 })).toBe('Failed (409)');
+    expect(callResult({ ...base, status: 'error' })).toBe('Failed');
   });
 });
