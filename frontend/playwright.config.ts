@@ -19,6 +19,9 @@ export default defineConfig({
     baseURL: liveUrl ?? localUrl,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // A live stack on plain http under a made-up host needs Chromium flags such
+    // as --host-resolver-rules and --unsafely-treat-insecure-origin-as-secure.
+    launchOptions: { args: process.env.STUDIO_LIVE_BROWSER_ARGS?.split('\n').filter(Boolean) ?? [] },
   },
   projects: [
     {
