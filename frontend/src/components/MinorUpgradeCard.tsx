@@ -3,6 +3,7 @@ import { ArrowUpCircle, Loader2 } from 'lucide-react';
 import { useUpgradeMinorVersion } from '../hooks/useProvisioning';
 import { ConfirmModal } from './ui/ConfirmModal';
 import type { DatabaseInstance } from '../types';
+import { serverErrorMessage } from '../utils/serverError';
 
 interface MinorUpgradeCardProps {
   readonly project: DatabaseInstance;
@@ -46,7 +47,7 @@ export function MinorUpgradeCard({ project }: MinorUpgradeCardProps) {
 
       {upgrade.isError && (
         <p className="text-xs text-color-error mt-3" data-testid="minor-upgrade-error">
-          {upgrade.error instanceof Error ? upgrade.error.message : String(upgrade.error)}
+          {serverErrorMessage(upgrade.error, 'The upgrade was not started')}
         </p>
       )}
 

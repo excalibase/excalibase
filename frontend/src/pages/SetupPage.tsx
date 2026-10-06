@@ -6,6 +6,7 @@ import { useVaultStatus, useInitVault, useUnsealVault } from '../hooks/useVault'
 import { useSetupStatus, useRegisterAdmin } from '../hooks/useSetup';
 import { useAuthStore } from '../stores/auth-store';
 import { NewPasswordFields, newPasswordReady, passwordProblem } from '../components/auth/NewPasswordFields';
+import { serverErrorMessage } from '../utils/serverError';
 
 type Step = 'init' | 'shares' | 'unseal' | 'admin' | 'done';
 
@@ -39,15 +40,21 @@ export function SetupPage() {
     onSubmit: async ({ value }) => {
       const sharesNum = Number(value.shares);
       const thresholdNum = Number(value.threshold);
-      const result = await initMutation.mutateAsync({ shares: sharesNum, threshold: thresholdNum });
-      setIssuedKeys({ shares: result.shares, threshold: result.threshold });
+      // A refusal is shown from initMutation.error; the catch keeps it from
+      // also escaping as an unhandled rejection.
+      const result = await initMutation
+        .mutateAsync({ shares: sharesNum, threshold: thresholdNum })
+        .catch(() => null);
+      if (result) setIssuedKeys({ shares: result.shares, threshold: result.threshold });
     },
   });
 
   const adminForm = useForm({
     defaultValues: { username: '', email: '', password: '', setupToken: '' },
     onSubmit: async ({ value }) => {
-      const data = await registerMutation.mutateAsync(value);
+      // A refusal is shown from registerMutation.error.
+      const data = await registerMutation.mutateAsync(value).catch(() => null);
+      if (!data) return;
       // The server set the httpOnly session cookie on the response.
       setAuth({
         id: data.user.id,
@@ -139,7 +146,7 @@ export function SetupPage() {
           </div>
 
           {initMutation.isError && (
-            <ErrorBanner message={initMutation.error?.message ?? 'Init failed'} />
+            <ErrorBanner message={serverErrorMessage(initMutation.error, 'The vault was not initialized')} />
           )}
 
           <initForm.Subscribe selector={(s) => [s.canSubmit, s.isSubmitting] as const}>
@@ -272,7 +279,7 @@ export function SetupPage() {
                 setShareInput('');
               },
               onError: (err) => {
-                setUnsealError(err.message);
+                setUnsealError(serverErrorMessage(err, 'The share was not accepted'));
               },
             });
           }}
@@ -404,7 +411,7 @@ export function SetupPage() {
           </adminForm.Field>
 
           {registerMutation.isError && (
-            <ErrorBanner message={registerMutation.error?.message ?? 'Registration failed'} />
+            <ErrorBanner message={serverErrorMessage(registerMutation.error, 'The admin was not created')} />
           )}
 
           <adminForm.Subscribe selector={(s) => [s.canSubmit, s.isSubmitting, s.values.password] as const}>

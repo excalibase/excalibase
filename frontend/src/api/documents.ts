@@ -1,5 +1,6 @@
 import { api } from './client';
 import type { ServerQuery } from '../utils/mongoQuery';
+import { serverErrorMessage } from '../utils/serverError';
 
 export type MongoDocument = Record<string, unknown>;
 
@@ -106,6 +107,5 @@ export async function sampleDocuments(ref: CollectionRef): Promise<MongoDocument
 // The server's own words for a refused request, which name the problem with
 // the query or document rather than the transport.
 export function apiErrorMessage(err: unknown): string {
-  const response = (err as { response?: { data?: { error?: string } } })?.response;
-  return response?.data?.error ?? (err as Error)?.message ?? 'Request failed';
+  return serverErrorMessage(err, 'The request failed');
 }

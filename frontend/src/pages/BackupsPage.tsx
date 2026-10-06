@@ -5,6 +5,7 @@ import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
 import { toZonedInstant } from '../utils/zonedInstant';
 import { Archive, RefreshCw, RotateCcw, Clock, type LucideIcon } from 'lucide-react';
+import { serverErrorMessage } from '../utils/serverError';
 
 type Tab = 'backups' | 'restore';
 
@@ -175,7 +176,7 @@ export function BackupsPage() {
                   // datetime-local only yields a valid local time or ''.
                   { ...restoreForm, targetTime: toZonedInstant(restoreForm.targetTime) },
                   { onError: (e: unknown) => {
-                    const msg = e instanceof Error ? e.message : String(e);
+                    const msg = serverErrorMessage(e, 'The restore was not started');
                     showToast(msg || 'Restore failed', false);
                   } }
                 )}

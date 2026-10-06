@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Loader2, Save } from 'lucide-react';
 import { Button } from './Button';
 import { useTiers, useUpdateTier, sortTiers, type TierConfig, type TierConfigInput } from '../api/tiers';
+import { serverErrorMessage } from '../utils/serverError';
 
 // The server takes the app disk cap in whole Mi or whole Gi; "0Gi" offers no app disks.
 const APP_DISK_CAP = /^\d+(Mi|Gi)$/;
@@ -48,7 +49,7 @@ export function TierConfigTable({ canMutate }: { readonly canMutate: boolean }) 
       await update.mutateAsync({ tier: t.tier, body });
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } }; message?: string };
-      alert(`Save failed: ${err?.response?.data?.error ?? err?.message ?? 'unknown error'}`);
+      alert(`Save failed: ${serverErrorMessage(err, 'no reason given')}`);
     }
   };
 

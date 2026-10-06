@@ -10,6 +10,7 @@ import { TierConfigTable } from '../components/TierConfigTable';
 import { StorageBudgetCard } from '../components/StorageBudgetCard';
 import { SignInProviders } from '../components/SignInProviders';
 import { Loader2, Trash2, ShieldAlert, Cpu, MemoryStick } from 'lucide-react';
+import { serverErrorMessage } from '../utils/serverError';
 
 // PlatformAdminPage is the operator dashboard. Surfaces cluster capacity,
 // every project across every org, and lets platform_admin force-drop a
@@ -131,7 +132,7 @@ function ProjectsTable({ canMutate }: { readonly canMutate: boolean }) {
       await drop.mutateAsync(projectId);
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } }; message?: string };
-      alert(`Drop failed: ${err?.response?.data?.error ?? err?.message ?? 'unknown error'}`);
+      alert(`Drop failed: ${serverErrorMessage(err, 'no reason given')}`);
     }
   };
 
@@ -228,7 +229,7 @@ function OrgsTable({ canMutate }: { readonly canMutate: boolean }) {
       await revoke.mutateAsync(orgId);
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } }; message?: string };
-      alert(`Revoke failed: ${err?.response?.data?.error ?? err?.message ?? 'unknown error'}`);
+      alert(`Revoke failed: ${serverErrorMessage(err, 'no reason given')}`);
     } finally {
       setBusyOrgId(null);
     }

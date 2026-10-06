@@ -121,4 +121,75 @@ describe('TierConfigTable', () => {
     expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
     expect(screen.getByTestId('app-disk-cap-error-STANDARD')).toHaveTextContent(/Mi or.*Gi/);
   });
+  test("a refused save alerts the server's reason, not the transport text", async () => {
+    const user = userEvent.setup();
+    const alert = vi.spyOn(globalThis, 'alert').mockImplementation(() => {});
+    vi.mocked(api.put).mockRejectedValueOnce({
+      message: 'Request failed with status code 409',
+      response: { status: 409, data: { error: 'instances must be odd' } },
+    });
+    renderTable();
+
+    // Every field of the row is edited, so each one reaches the request.
+    await user.clear(await screen.findByDisplayValue('2'));
+    await user.type(screen.getByPlaceholderText('0.5'), '4');
+    await user.clear(screen.getByDisplayValue('4Gi'));
+    await user.type(screen.getByPlaceholderText('4Gi'), '8Gi');
+    await user.clear(screen.getByDisplayValue('50Gi'));
+    await user.type(screen.getByPlaceholderText('50Gi'), '60Gi');
+    const [, instances, maxProjects, autoPause] = screen.getAllByRole('spinbutton');
+    await user.clear(instances);
+    await user.type(instances, '4');
+    await user.clear(maxProjects);
+    await user.type(maxProjects, '9');
+    await user.clear(autoPause);
+    await user.type(autoPause, '7');
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Save failed: instances must be odd'));
+    expect(api.put).toHaveBeenCalledWith(
+      '/admin/tiers/STANDARD',
+      expect.objectContaining({
+        cpu: '4', memory: '8Gi', storageSize: '60Gi', instances: 4, maxProjects: 9, autoPauseAfterDays: 7, backupEnabled: false,
+      }),
+    );
+    alert.mockRestore();
+  });
+
+  test('a read-only viewer cannot edit or save', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [standard] } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <TierConfigTable canMutate={false} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByDisplayValue('500Gi')).toBeDisabled();
+    expect(screen.getByText(/Read-only/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
+  });
+  // Save turns on for a change to any one field, a plan without an auto-pause setting included.
+  test.each([
+    ['instances', 1],
+    ['max projects', 2],
+    ['auto-pause', 3],
+    ['backup', -1],
+  ])('editing only %s enables save', async (_field, spinIndex) => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockResolvedValue({ data: [{ ...standard, autoPauseAfterDays: undefined }] } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <TierConfigTable canMutate />
+      </QueryClientProvider>,
+    );
+    await screen.findByDisplayValue('500Gi');
+    if (spinIndex < 0) {
+      await user.click(screen.getByRole('checkbox'));
+    } else {
+      await user.type(screen.getAllByRole('spinbutton')[spinIndex], '1');
+    }
+    expect(screen.getByRole('button', { name: /save/i })).toBeEnabled();
+  });
 });

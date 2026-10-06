@@ -1,4 +1,5 @@
 import { api } from './client';
+import { serverErrorMessage } from '../utils/serverError';
 
 // Studio's table import (EXC-368). The server parses every file itself; this
 // module only carries the file, the user's choices and the answers.
@@ -170,7 +171,7 @@ export function importErrorOf(err: unknown): ImportFailure {
   const data = (err as { response?: { data?: { error?: string; rowErrors?: RowError[] } } })
     .response?.data;
   if (data?.error) return { message: data.error, rowErrors: data.rowErrors ?? [] };
-  return { message: err instanceof Error ? err.message : 'The import failed', rowErrors: [] };
+  return { message: serverErrorMessage(err, 'The import failed'), rowErrors: [] };
 }
 
 export interface ColumnChoice {

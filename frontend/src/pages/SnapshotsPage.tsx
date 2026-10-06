@@ -4,6 +4,7 @@ import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { Camera, Download, Trash2, Plus, FileText } from 'lucide-react';
 import { formatBytes } from '../utils/formatBytes';
 import { API_BASE } from '../api/base';
+import { serverErrorMessage } from '../utils/serverError';
 
 function getSnapshotType(schemaOnly: boolean, dataOnly: boolean): string {
   if (schemaOnly) return 'Schema only';
@@ -30,7 +31,7 @@ export function SnapshotsPage() {
     exportSnap.mutate(exportOpts, {
       onSuccess: (s) => showToast(`Snapshot ${s.id} created (${formatBytes(s.size)})`, true),
       onError: (e: unknown) => {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = serverErrorMessage(e, 'The snapshot request failed');
         showToast(msg || 'Export failed', false);
       },
     });
@@ -41,7 +42,7 @@ export function SnapshotsPage() {
     deleteSnap.mutate(snapshotId, {
       onSuccess: () => showToast('Snapshot deleted', true),
       onError: (e: unknown) => {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = serverErrorMessage(e, 'The snapshot request failed');
         showToast(msg || 'Delete failed', false);
       },
     });

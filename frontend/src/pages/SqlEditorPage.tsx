@@ -9,6 +9,7 @@ import { basicSetup } from 'codemirror';
 import { useExecuteQuery, useTables } from '../hooks/useSchema';
 import type { QueryResult } from '../types/schema';
 import { cn } from '../utils/cn';
+import { serverErrorMessage } from '../utils/serverError';
 
 const TABS_KEY = 'sql_editor_tabs';
 const HISTORY_KEY = 'sql_editor_history';
@@ -118,7 +119,11 @@ export function SqlEditorPage() {
       return next;
     });
 
-    executeQuery.mutate(queryText, { onSuccess: applyQueryResult });
+    executeQuery.mutate(queryText, {
+      onSuccess: applyQueryResult,
+      // A refused request is shown where a SQL error would be, with the server's reason.
+      onError: (err) => applyQueryResult({ columns: [], rows: [], error: serverErrorMessage(err, 'The query could not run') }),
+    });
   };
 
   const runQuery = useCallback(() => runQueryRef.current(), []);

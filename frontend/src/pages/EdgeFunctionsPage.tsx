@@ -15,6 +15,7 @@ import {
 import { SidePanel } from '../components/ui/SidePanel';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import type { EdgeFunction, EdgeFile } from '../types/edgefn';
+import { serverErrorMessage } from '../utils/serverError';
 
 const DEFAULT_INDEX_TS = `export default async (req: Request): Promise<Response> => {
   const { name = 'world' } = await req.json().catch(() => ({}));
@@ -137,7 +138,7 @@ export function EdgeFunctionsPage() {
       { fnId: fn.id, body: JSON.stringify({ name: 'world' }) },
       {
         onSuccess: (data) => setInvokeResult(typeof data === 'string' ? data : JSON.stringify(data, null, 2)),
-        onError: (err: Error) => setInvokeResult(`Error: ${err.message}`),
+        onError: (err: Error) => setInvokeResult(`Error: ${serverErrorMessage(err, 'The function did not answer')}`),
       },
     );
   };
@@ -403,7 +404,7 @@ export function EdgeFunctionsPage() {
             {createFn.isPending ? 'Deploying…' : 'Deploy'}
           </button>
           {createFn.error && (
-            <div className="text-xs text-red-400 font-mono">{createFn.error instanceof Error ? createFn.error.message : String(createFn.error)}</div>
+            <div className="text-xs text-red-400 font-mono">{serverErrorMessage(createFn.error, 'The function was not deployed')}</div>
           )}
         </div>
       </SidePanel>
@@ -446,7 +447,7 @@ export function EdgeFunctionsPage() {
             {setSecret.isPending ? 'Saving…' : 'Save secret'}
           </button>
           {setSecret.error && (
-            <div className="text-xs text-red-400 font-mono">{setSecret.error instanceof Error ? setSecret.error.message : String(setSecret.error)}</div>
+            <div className="text-xs text-red-400 font-mono">{serverErrorMessage(setSecret.error, 'The secret was not saved')}</div>
           )}
 
           <div className="border-t border-border-primary pt-4">

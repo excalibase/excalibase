@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { useMigrations, useApplyMigration, type MigrationRequest } from '../hooks/useMigrations';
 import { CheckCircle, XCircle, Clock, ArrowUpDown, Plus, X } from 'lucide-react';
+import { serverErrorMessage } from '../utils/serverError';
 
 interface StatusBadgeProps {
   readonly status: string;
@@ -64,7 +65,7 @@ export function MigrationsPage() {
         setTimeout(() => setToast(null), 5000);
       },
       onError: (e: unknown) => {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = serverErrorMessage(e, 'The migration was not applied');
         setToast({ msg: msg || 'Request failed', ok: false });
         setTimeout(() => setToast(null), 5000);
       },

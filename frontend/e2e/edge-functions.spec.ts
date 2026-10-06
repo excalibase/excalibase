@@ -80,6 +80,23 @@ test.describe('Edge Functions Page', () => {
     await expect(page.getByTestId('fn-code-input')).toBeVisible();
   });
 
+  test("a refused deploy shows the server's reason", async ({ page }) => {
+    await page.route('**/api/projects/test-project/functions', (route) =>
+      route.request().method() === 'POST'
+        ? route.fulfill({
+            status: 400, contentType: 'application/json',
+            body: JSON.stringify({ error: 'invalid function id: must be lowercase letters, digits and hyphens', status: 400 }),
+          })
+        : route.fallback(),
+    );
+    await page.getByTestId('create-fn-btn').click();
+    await page.getByTestId('fn-id-input').fill('Bad_Id');
+    await page.locator('#fn-name-field').fill('Bad');
+    await page.getByTestId('submit-fn-btn').click();
+    await expect(page.getByText('invalid function id: must be lowercase letters, digits and hyphens')).toBeVisible();
+    await expect(page.getByText(/status code/)).toHaveCount(0);
+  });
+
   test('delete shows confirm modal', async ({ page }) => {
     await page.getByTestId('fn-item-hello').click();
     await page.getByTestId('delete-fn-btn').click();

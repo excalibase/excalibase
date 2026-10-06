@@ -77,6 +77,18 @@ describe('MinorUpgradeCard', () => {
     expect(screen.queryByTestId('minor-upgrade-result')).not.toBeInTheDocument();
   });
 
+  test("shows the control plane's reason, not a status code", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockRejectedValueOnce({
+      message: 'Request failed with status code 409',
+      response: { status: 409, data: { error: 'project is PAUSED; a minor upgrade needs an active project' } },
+    });
+    renderCard(project());
+    await confirmUpgrade(user);
+    expect(await screen.findByTestId('minor-upgrade-error')).toHaveTextContent('a minor upgrade needs an active project');
+    expect(screen.queryByText(/status code/)).not.toBeInTheDocument();
+  });
+
   test('is closed on a project that is not active', () => {
     renderCard(project({ status: 'PAUSED' }));
     expect(screen.getByTestId('minor-upgrade-btn')).toBeDisabled();

@@ -1,5 +1,6 @@
 import { api } from './client';
 import type { BoolExp } from '../utils/permissionRules';
+import { serverErrorMessage } from '../utils/serverError';
 
 // API permissions (EXC-370, docs/features/permissions.md): one object per
 // (table, role, operation), tracked functions and function permissions. The
@@ -137,8 +138,5 @@ export async function deleteFunctionPermission(projectId: string, fn: string, ro
 
 /** The server's own message for a refused call, else the transport's. */
 export function apiErrorMessage(err: unknown, fallback: string): string {
-  const server = (err as { response?: { data?: { error?: unknown } } } | undefined)?.response?.data?.error;
-  if (typeof server === 'string' && server) return server;
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
+  return serverErrorMessage(err, fallback);
 }
