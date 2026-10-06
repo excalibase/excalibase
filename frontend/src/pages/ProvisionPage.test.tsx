@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { AxiosError } from 'axios';
 import { ProvisionPage } from './ProvisionPage';
 import { api } from '../api/client';
 import { listMyOrgs } from '../api/orgs';
@@ -328,5 +329,37 @@ describe('ProvisionPage — organizations', () => {
       </QueryClientProvider>,
     );
     expect(await screen.findByTestId('orgs-error')).toHaveTextContent('network down');
+  });
+});
+
+// EXC-555: a refused create showed only "Request failed with status code 400".
+describe('ProvisionPage — refusals', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test("a refused create shows the server's reason", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    vi.mocked(api.post).mockRejectedValue(
+      new AxiosError('Request failed with status code 409', 'ERR_BAD_REQUEST', undefined, undefined, {
+        status: 409, data: { error: 'this organization already has 1 of 1 projects on the FREE plan', status: 409 },
+      } as never),
+    );
+    await screen.findByTestId('pg-version-16');
+    await user.type(screen.getByLabelText('Project Name'), 'my-db');
+    await user.click(screen.getByTestId('pg-version-16'));
+    await user.click(screen.getByTestId('provision-submit'));
+    expect(await screen.findByTestId('provision-error')).toHaveTextContent('this organization already has 1 of 1 projects on the FREE plan');
+    expect(screen.queryByText(/Request failed with status code/)).not.toBeInTheDocument();
+  });
+
+  test('a blank name is refused next to the field before anything is sent', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTestId('pg-version-16');
+    await user.type(screen.getByLabelText('Project Name'), '   ');
+    await user.click(screen.getByTestId('pg-version-16'));
+    await user.click(screen.getByTestId('provision-submit'));
+    expect(await screen.findByTestId('project-name-error')).toHaveTextContent(/name/i);
+    expect(api.post).not.toHaveBeenCalled();
   });
 });

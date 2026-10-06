@@ -11,6 +11,7 @@ import {
 } from '../hooks/useStorage';
 import { Button } from '../components/Button';
 import { Loader2, FolderPlus, Upload, Trash2, Download, Globe, Lock } from 'lucide-react';
+import { serverErrorMessage } from '../utils/serverError';
 
 export function StoragePage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -109,7 +110,7 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
           await upload.mutateAsync({ file, key: file.name });
         } catch (e: unknown) {
           const err = e as { response?: { data?: { error?: string } }; message?: string };
-          alert(`Upload of ${file.name} failed: ${err?.response?.data?.error ?? err?.message ?? 'unknown'}`);
+          alert(`Upload of ${file.name} failed: ${serverErrorMessage(err, 'no reason given')}`);
         }
       }
     },
@@ -122,7 +123,7 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
       globalThis.open(resp.url, '_blank');
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } }; message?: string };
-      alert(`Download URL failed: ${err?.response?.data?.error ?? err?.message ?? 'unknown'}`);
+      alert(`Download URL failed: ${serverErrorMessage(err, 'no reason given')}`);
     }
   };
 
@@ -132,7 +133,7 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
       await del.mutateAsync(key);
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } }; message?: string };
-      alert(`Delete failed: ${err?.response?.data?.error ?? err?.message ?? 'unknown'}`);
+      alert(`Delete failed: ${serverErrorMessage(err, 'no reason given')}`);
     }
   };
 
@@ -282,7 +283,7 @@ function CreateBucketModal({ projectId, onClose, onCreated }: CreateBucketModalP
                 onCreated(b.name);
               } catch (e: unknown) {
                 const err = e as { response?: { data?: { error?: string } }; message?: string };
-                alert(`Create failed: ${err?.response?.data?.error ?? err?.message ?? 'unknown'}`);
+                alert(`Create failed: ${serverErrorMessage(err, 'no reason given')}`);
               }
             }}
           >

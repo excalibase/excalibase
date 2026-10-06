@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trash2 } from 'lucide-react';
 import { SidePanel } from '../ui/SidePanel';
@@ -6,6 +6,7 @@ import { useCreateTable } from '../../hooks/useSchema';
 import { permissionsKey } from '../../hooks/usePermissions';
 import { apiErrorMessage, putTablePermission } from '../../api/permissions';
 import { DEFAULT_ROLES, fullAccess, tableKey } from '../../utils/permissionModel';
+import { serverErrorMessage } from '../../utils/serverError';
 
 interface ColumnDraft {
   // _key is a stable identity for React keys, since column names + positions
@@ -59,12 +60,16 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
   const [readRoles, setReadRoles] = useState<Record<ReadRole, boolean>>(NO_READ);
   const [granting, setGranting] = useState(false);
   const [grantError, setGrantError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+  // A fast double click lands twice before isPending re-renders the button.
+  const inFlight = useRef(false);
 
   const reset = () => {
     setNewTableName('');
     setNewCols([...DEFAULT_COLUMNS]);
     setReadRoles(NO_READ);
     setGrantError(null);
+    setCreateError(null);
   };
 
   const handleClose = () => {
@@ -86,15 +91,20 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
   };
 
   const handleCreate = async () => {
-    if (!newTableName.trim()) return;
+    if (!newTableName.trim() || inFlight.current) return;
+    inFlight.current = true;
+    setCreateError(null);
     try {
       await createTable.mutateAsync({
         name: newTableName,
         // Strip the client-only _key before sending to the API.
         columns: newCols.map(({ _key: _, ...c }) => ({ ...c, default: undefined })),
       });
-    } catch {
-      return; // useCreateTable already reported it
+    } catch (err) {
+      setCreateError(serverErrorMessage(err, 'The table was not created'));
+      return;
+    } finally {
+      inFlight.current = false;
     }
     setGranting(true);
     const failures = await grantRead(newTableName);
@@ -121,6 +131,11 @@ export function CreateTablePanel({ open, onClose, projectId, canGrantRead = fals
           {grantError && (
             <p role="alert" className="text-xs text-red-400">
               {grantError}
+            </p>
+          )}
+          {createError && (
+            <p role="alert" className="text-xs text-red-400" data-testid="create-table-error">
+              {createError}
             </p>
           )}
           <button

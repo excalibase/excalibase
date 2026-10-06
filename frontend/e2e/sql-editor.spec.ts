@@ -38,4 +38,24 @@ test.describe('SQL Editor Page', () => {
     await expect(page.getByTestId('query-error')).toBeVisible();
     await expect(page.getByText('relation "nonexistent" does not exist')).toBeVisible();
   });
+
+  // EXC-555: a refused request (project still provisioning, paused, no access)
+  // used to leave the editor unchanged, with no message at all.
+  test('a refused request shows the server reason', async ({ page }) => {
+    await page.route('**/api/schema/test-project/query', (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'project is not running', status: 409 }),
+      })
+    );
+    await page.getByTestId('run-query-btn').click();
+    await expect(page.getByTestId('query-error')).toHaveText(/project is not running/);
+  });
+
+  test('an unreachable server says so', async ({ page }) => {
+    await page.route('**/api/schema/test-project/query', (route) => route.abort('connectionrefused'));
+    await page.getByTestId('run-query-btn').click();
+    await expect(page.getByTestId('query-error')).toHaveText(/could not be reached/);
+  });
 });

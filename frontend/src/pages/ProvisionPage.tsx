@@ -9,6 +9,7 @@ import { useTiers, type TierConfig } from '../api/tiers';
 import { usePostgresCatalog, findMajor, type PostgresMajor } from '../api/postgresCatalog';
 import { PostgresVersionPicker } from '../components/PostgresVersionPicker';
 import { DOCUMENTDB_LABEL } from '../utils/engine';
+import { serverErrorMessage } from '../utils/serverError';
 
 type DeployMode = 'k8s' | 'docker';
 
@@ -152,7 +153,9 @@ export function ProvisionPage() {
     const missing = validateFields({ projectName, orgId, postgresVersion, needsVersion: !withoutDatabase });
     if (Object.keys(missing).length > 0) return;
     const name = projectName.trim();
-    const result = await provision.mutateAsync(
+    let result: { projectId: string };
+    try {
+      result = await provision.mutateAsync(
       withoutDatabase
         ? { projectName: name, orgId, noDatabase: true }
         : {
@@ -162,7 +165,10 @@ export function ProvisionPage() {
             postgresVersion,
             documentDb: isDocumentDbEngine || documentDb,
           },
-    );
+      );
+    } catch {
+      return; // shown below the form from provision.error
+    }
     navigate(`/project/${result.projectId}`);
   };
 
@@ -315,7 +321,7 @@ export function ProvisionPage() {
 
         {error && (
           <div className="bg-red-900/20 border border-color-error rounded-lg p-4">
-            <p className="text-color-error text-sm">{error instanceof Error ? error.message : String(error)}</p>
+            <p data-testid="provision-error" className="text-color-error text-sm">{serverErrorMessage(error, 'The project was not created')}</p>
           </div>
         )}
         <div className="flex gap-3">

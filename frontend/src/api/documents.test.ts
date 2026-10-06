@@ -32,6 +32,6 @@ describe('documents api', () => {
   test('errors read the server message first', () => {
     expect(apiErrorMessage({ response: { data: { error: 'bad filter' } } })).toBe('bad filter');
     expect(apiErrorMessage(new Error('Network Error'))).toBe('Network Error');
-    expect(apiErrorMessage(undefined)).toBe('Request failed');
+    expect(apiErrorMessage(undefined)).toBe('The request failed');
   });
 });

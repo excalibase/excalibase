@@ -221,6 +221,24 @@ describe('SetupPage', () => {
     expect(await screen.findByTestId('dashboard')).toBeInTheDocument();
   });
 
+  test("a refused admin registration shows the server's reason", async () => {
+    const user = userEvent.setup();
+    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    await screen.findByTestId('vault-setup-admin');
+    vi.mocked(api.post).mockRejectedValueOnce({
+      message: 'Request failed with status code 403',
+      response: { status: 403, data: { error: 'invalid setup token' } },
+    });
+    await user.type(screen.getByTestId('admin-username'), 'founder');
+    await user.type(screen.getByTestId('admin-email'), 'founder@example.com');
+    await user.type(screen.getByTestId('admin-password'), TEST_PASSWORD_PLACEHOLDER);
+    await user.type(screen.getByTestId('admin-password-confirm'), TEST_PASSWORD_PLACEHOLDER);
+    await user.type(screen.getByTestId('admin-setup-token'), 'wrong');
+    await user.click(screen.getByTestId('admin-submit'));
+    expect(await screen.findByText('invalid setup token')).toBeInTheDocument();
+    expect(screen.queryByText(/status code/)).not.toBeInTheDocument();
+  });
+
   test('admin form stays disabled while the confirmation differs', async () => {
     const user = userEvent.setup();
     renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });

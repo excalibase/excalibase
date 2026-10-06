@@ -1,4 +1,5 @@
 import { toast } from 'sonner';
+import { serverErrorMessage } from './serverError';
 
 /**
  * Wrap a mutation's onSuccess/onError with toast notifications.
@@ -11,7 +12,7 @@ export function mutationToast(successMsg: string, errorMsg?: string) {
     },
     onError: (err: Error) => {
       toast.error(errorMsg || 'Operation failed', {
-        description: err.message,
+        description: serverErrorMessage(err, 'The server did not say why.'),
       });
     },
   };

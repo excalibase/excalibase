@@ -232,11 +232,8 @@ test.describe('Backups page', () => {
     await page.getByLabel(/New Instance Name/i).fill('restored-db');
     await page.getByRole('button', { name: /Restore Latest Backup/i }).click();
 
-    // Axios surfaces "Request failed with status code 400" on its
-    // Error.message; the BackupsPage onError shows that string (or
-    // falls back to "Restore failed"). Either works — the contract
-    // is "an error toast appears", which we detect by the red border
-    // styling the toast applies on failure.
-    await expect(page.getByText(/Restore failed|Request failed/i).first()).toBeVisible();
+    // The server's own reason, never axios's "Request failed with status code 400".
+    await expect(page.getByText('restore request: newProjectName is required').first()).toBeVisible();
+    await expect(page.getByText(/status code/)).toHaveCount(0);
   });
 });

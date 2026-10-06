@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
+import { serverErrorMessage } from '../utils/serverError';
 
 // ClusterSettings is the database as the control plane reads it off the
 // cluster: disk, size, plan and the tenant's Postgres settings (EXC-492).
@@ -67,7 +68,5 @@ export const useTuneParameters = (projectId: string) =>
 
 // refusalMessage is the control plane's own reason for a refused change.
 export function refusalMessage(error: unknown): string {
-  const response = (error as { response?: { data?: { error?: string } } })?.response;
-  if (response?.data?.error) return response.data.error;
-  return error instanceof Error ? error.message : String(error);
+  return serverErrorMessage(error, 'The change was not made');
 }
