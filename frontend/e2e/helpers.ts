@@ -57,7 +57,7 @@ export async function mockInstances(page: Page, projectId = 'test-project') {
     if (route.request().method() === 'GET') {
       return route.fulfill({
         status: 200, contentType: 'application/json',
-        body: JSON.stringify([{ projectId, databaseType: 'POSTGRESQL', tier: 'FREE', namespace: 'excalibase-test', status: 'COMPLETED', currentStage: 'COMPLETED', host: 'localhost', port: '5432', databaseName: 'testdb' }]),
+        body: JSON.stringify([{ projectId, databaseType: 'POSTGRESQL', tier: 'FREE', namespace: 'excalibase-test', status: 'ACTIVE', currentStage: 'COMPLETED', host: 'localhost', port: '5432', databaseName: 'testdb' }]),
       });
     }
     return route.continue();
@@ -69,7 +69,7 @@ export async function mockProject(page: Page, projectId = 'test-project') {
   await page.route(`**/api/provision/${projectId}`, (route) =>
     route.fulfill({
       status: 200, contentType: 'application/json',
-      body: JSON.stringify({ projectId, databaseType: 'POSTGRESQL', tier: 'FREE', namespace: 'excalibase-test', status: 'COMPLETED', currentStage: 'COMPLETED', host: 'localhost', port: '5432', databaseName: 'testdb', backupEnabled: false, backupSchedule: '', backupRetentionDays: 0, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }),
+      body: JSON.stringify({ projectId, databaseType: 'POSTGRESQL', tier: 'FREE', namespace: 'excalibase-test', status: 'ACTIVE', currentStage: 'COMPLETED', host: 'localhost', port: '5432', databaseName: 'testdb', backupEnabled: false, backupSchedule: '', backupRetentionDays: 0, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }),
     })
   );
 }
@@ -191,7 +191,7 @@ export async function mockProjectRole(page: Page, role: string, projectId = 'tes
   await page.route(`**/api/provision/${projectId}`, (route) =>
     route.fulfill({
       status: 200, contentType: 'application/json',
-      body: JSON.stringify({ projectId, orgId: 'org-1', databaseType: 'POSTGRESQL', tier: 'FREE', namespace: 'excalibase-test', status: 'COMPLETED', currentStage: 'COMPLETED', host: 'localhost', port: '5432', databaseName: 'testdb' }),
+      body: JSON.stringify({ projectId, orgId: 'org-1', databaseType: 'POSTGRESQL', tier: 'FREE', namespace: 'excalibase-test', status: 'ACTIVE', currentStage: 'COMPLETED', host: 'localhost', port: '5432', databaseName: 'testdb' }),
     }),
   );
 }
