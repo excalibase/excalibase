@@ -283,6 +283,21 @@ describe('EdgeFunctionsPage', () => {
       expect(await screen.findByText('Error: function hello is not deployed')).toBeInTheDocument();
     });
 
+    // EXC-555: a function's own 401/4xx is its answer, not a Studio error.
+    test.each([
+      ['text', 'nope', 'HTTP 401\nnope'],
+      ['JSON', { reason: 'no token' }, 'HTTP 401\n{\n  "reason": "no token"\n}'],
+    ])('a marked %s answer from the function shows as its status and body', async (_kind, data, shown) => {
+      vi.mocked(api.post).mockRejectedValueOnce({
+        message: 'Request failed with status code 401',
+        response: { status: 401, data, headers: { 'x-excalibase-function-response': '1' } },
+      });
+      renderPage();
+      await selectHello();
+      fireEvent.click(screen.getByTestId('invoke-btn'));
+      await waitFor(() => expect(screen.getByTestId('invoke-result').textContent).toBe(shown));
+    });
+
     test('logs panel lists each line', async () => {
       renderPage();
       await selectHello();

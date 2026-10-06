@@ -97,6 +97,22 @@ test.describe('Edge Functions Page', () => {
     await expect(page.getByText(/status code/)).toHaveCount(0);
   });
 
+  // EXC-555: a function that answers 401 signed the developer out of Studio.
+  test("a function's 401 is shown as its answer and keeps the developer signed in", async ({ page }) => {
+    await page.route('**/api/projects/test-project/functions/hello/invoke', (route) =>
+      route.fulfill({
+        status: 401,
+        // As the server sends it: Studio runs on another origin here.
+        headers: { 'X-Excalibase-Function-Response': '1', 'Access-Control-Expose-Headers': 'X-Excalibase-Function-Response' },
+        body: 'nope',
+      }),
+    );
+    await page.getByTestId('fn-item-hello').click();
+    await page.getByTestId('invoke-btn').click();
+    await expect(page.getByTestId('invoke-result')).toHaveText(/401[\s\S]*nope/);
+    await expect(page).toHaveURL(/edge-functions/);
+  });
+
   test('delete shows confirm modal', async ({ page }) => {
     await page.getByTestId('fn-item-hello').click();
     await page.getByTestId('delete-fn-btn').click();

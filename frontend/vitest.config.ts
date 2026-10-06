@@ -118,6 +118,7 @@ export default defineConfig({
         'src/components/ui/ConfirmModal.tsx',
         'src/pages/AuthUsersPage.tsx',
         'src/pages/EdgeFunctionsPage.tsx',
+        'src/api/client.ts',
         'src/pages/ExtensionsPage.tsx',
         'src/pages/IndexesPage.tsx',
         'src/pages/LogExplorerPage.tsx',

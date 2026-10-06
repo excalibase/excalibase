@@ -18,7 +18,9 @@ export const api = axios.create({
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    // A user function's own 401, relayed by invoke, is its answer, not ours.
+    const fromFunction = error.response?.headers?.['x-excalibase-function-response'] === '1';
+    if (error.response?.status === 401 && !fromFunction) {
       localStorage.removeItem('auth_user');
       if (globalThis.location.pathname !== '/login') {
         globalThis.location.href = '/login';
