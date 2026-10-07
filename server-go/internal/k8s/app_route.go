@@ -24,7 +24,10 @@ type AppRouteOptions struct {
 	IngressClass string
 	// Issuer is the ACME ClusterIssuer each app's own hostname gets a
 	// certificate from; empty serves HTTP only.
-	Issuer               string
+	Issuer string
+	// WildcardTLS: the edge's default certificate covers every app hostname, so
+	// an app asks for no certificate of its own and is served over HTTPS at once.
+	WildcardTLS          bool
 	IngressFromNamespace string
 	// IngressFromLabels narrows the controller's namespace to its pods; empty admits the whole namespace.
 	IngressFromLabels map[string]string
@@ -32,7 +35,7 @@ type AppRouteOptions struct {
 
 // Public is the route as the API reports it.
 func (o AppRouteOptions) Public() apphost.Route {
-	return apphost.Route{Domain: o.Domain, TLS: o.Issuer != ""}
+	return apphost.Route{Domain: o.Domain, TLS: o.Issuer != "" || o.WildcardTLS}
 }
 
 func (o AppRouteOptions) validate() error {
@@ -72,7 +75,7 @@ func buildAppRoute(namespace string, app *apphost.App, opts AppRouteOptions) (*a
 		if err != nil {
 			return nil, err
 		}
-		route.dropCertificate = opts.Issuer != ""
+		route.dropCertificate = opts.Issuer != "" || opts.WildcardTLS
 		return route, nil
 	}
 	host, err := opts.Public().Hostname(app.Name, app.ProjectID)
@@ -87,6 +90,11 @@ func buildAppRoute(namespace string, app *apphost.App, opts AppRouteOptions) (*a
 		service: buildAppService(namespace, app),
 		ingress: buildAppIngress(namespace, app, host, opts),
 		policy:  policy,
+	}
+	if opts.WildcardTLS {
+		serveWildcardTLS(route.ingress)
+		route.dropCertificate = true
+		return route, nil
 	}
 	if opts.Issuer == "" {
 		return route, nil

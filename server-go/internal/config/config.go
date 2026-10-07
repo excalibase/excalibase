@@ -319,6 +319,9 @@ type AppConfig struct {
 	// domain gets its certificate from; empty serves apps over HTTP only and
 	// turns custom domains off.
 	AppDomainIssuer string
+	// AppWildcardTLS: the edge serves every app hostname with one wildcard
+	// certificate as its default, so apps request none and are HTTPS at once.
+	AppWildcardTLS bool
 	// AppDomainResolver is host:port of the resolver custom-domain CNAMEs are
 	// read from; empty uses the host's first nameserver.
 	AppDomainResolver string
@@ -487,6 +490,7 @@ func load() AppConfig {
 		TenantStorageClass:             strings.TrimSpace(os.Getenv("TENANT_STORAGE_CLASS")),
 		TenantStorageClasses:           envList("TENANT_STORAGE_CLASSES"),
 		AppDomainIssuer:                os.Getenv("APP_DOMAIN_ISSUER"),
+		AppWildcardTLS:                 envOr("APP_WILDCARD_TLS", "") == "true",
 		AppDomainResolver:              os.Getenv("APP_DOMAIN_RESOLVER"),
 	}
 }
@@ -565,6 +569,7 @@ func (c AppConfig) FeatureFlags() []Flag {
 		{Env: "DOCKER_DB_PUBLIC", Field: "DockerDBPublic", Enabled: c.DockerDBPublic},
 		{Env: "DOCKER_TLS_VERIFY", Field: "DockerTLSVerify", Enabled: c.DockerTLSVerify},
 		{Env: "APP_HOSTING_ENABLED", Field: "AppHostingEnabled", Enabled: c.AppHostingEnabled},
+		{Env: "APP_WILDCARD_TLS", Field: "AppWildcardTLS", Enabled: c.AppWildcardTLS},
 		{Env: "DOCUMENTDB_ENABLED", Field: "DocumentDBEnabled", Enabled: c.DocumentDBEnabled},
 		{Env: "TENANT_STORAGE_REQUIRE_SIZED", Field: "TenantStorageRequireSized", Enabled: c.TenantStorageRequireSized},
 	}

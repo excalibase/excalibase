@@ -38,6 +38,7 @@ func appRoute(cfg config.AppConfig) k8s.AppRouteOptions {
 		Domain:               cfg.AppDomain,
 		IngressClass:         cfg.AppIngressClass,
 		Issuer:               cfg.AppDomainIssuer,
+		WildcardTLS:          cfg.AppWildcardTLS,
 		IngressFromNamespace: cfg.AppIngressFromNamespace,
 		IngressFromLabels:    cfg.AppIngressFromLabels,
 	}
