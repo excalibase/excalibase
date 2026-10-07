@@ -60,6 +60,10 @@ func (h *ProvisioningHandler) PutAuthSettings(w http.ResponseWriter, r *http.Req
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
+	if body.RequireEmailVerification && siteURL == "" {
+		httpError(w, domain.ErrSiteURLRequired.Error(), http.StatusBadRequest)
+		return
+	}
 	settings := domain.ProjectAuthSettings{
 		RequireEmailVerification: body.RequireEmailVerification,
 		SiteURL:                  siteURL,

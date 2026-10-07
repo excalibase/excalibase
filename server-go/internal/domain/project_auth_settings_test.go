@@ -27,7 +27,8 @@ func TestValidateSiteURL_AcceptsAndCanonicalises(t *testing.T) {
 		want  string
 	}{
 		{"https no path", "https://app.example.com", "https://app.example.com"},
-		{"http scheme", "http://app.example.com", "http://app.example.com"},
+		{"http localhost", "http://localhost:3000", "http://localhost:3000"},
+		{"http loopback", "http://127.0.0.1:5173", "http://127.0.0.1:5173"},
 		{"uppercase scheme and host lower-cased", "HTTPS://App.Example.com", "https://app.example.com"},
 		{"path allowed without trailing slash", "https://app.example.com/callback", "https://app.example.com/callback"},
 		{"port preserved", "https://app.example.com:8443", "https://app.example.com:8443"},
@@ -52,6 +53,8 @@ func TestValidateSiteURL_Rejects(t *testing.T) {
 		input string
 	}{
 		{"no scheme", "app.example.com"},
+		{"http on a real host", "http://app.example.com"},
+		{"localhost lookalike", "http://localhost.evil.com"},
 		{"unsupported scheme", "ftp://app.example.com"},
 		{"scheme only, no host", "https://"},
 		{"userinfo", "https://user:pw@app.example.com"},

@@ -125,6 +125,28 @@ func TestAuthSettings_PutCanonicalisesSiteURL(t *testing.T) {
 	}
 }
 
+func TestAuthSettings_PutRefusesVerificationWithoutSiteURL(t *testing.T) {
+	f := setupAuthSettingsHandler(t)
+	w := doJSON(f.router, "PUT", testAuthPath, map[string]interface{}{"requireEmailVerification": true, "siteUrl": ""})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d want 400 (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "site URL") {
+		t.Fatalf("400 body must tell the developer to set the site URL: %s", w.Body.String())
+	}
+	if _, saved := f.store.settings[testAuthProject]; saved {
+		t.Fatal("a refused update must not be stored")
+	}
+}
+
+func TestAuthSettings_PutRefusesPlainHTTPOnARealHost(t *testing.T) {
+	f := setupAuthSettingsHandler(t)
+	w := doJSON(f.router, "PUT", testAuthPath, map[string]interface{}{"requireEmailVerification": false, "siteUrl": "http://app.example.com"})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d want 400", w.Code)
+	}
+}
+
 func TestAuthSettings_PutEmptySiteURLClears(t *testing.T) {
 	f := setupAuthSettingsHandler(t)
 	f.store.settings[testAuthProject] = domain.ProjectAuthSettings{RequireEmailVerification: true, SiteURL: testAuthSiteURL}

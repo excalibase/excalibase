@@ -15,6 +15,10 @@ var ErrInvalidSiteURL = errors.New("invalid site url")
 // anything longer is a sign of a mistaken paste, not a real deploy target.
 const MaxSiteURLLength = 512
 
+// ErrSiteURLRequired marks settings that ask for email verification without a
+// site URL: the auth service refuses to mail a link it cannot make absolute.
+var ErrSiteURLRequired = errors.New("set the site URL before requiring email verification: auth cannot mail a link without it")
+
 // ProjectAuthSettings is a project's per-tenant auth behavior, served on
 // GET /api/projects/{id}/info so the auth service can enforce email
 // verification and build the correct redirect/callback URLs (EXC-367).
@@ -42,7 +46,7 @@ func ValidateSiteURL(raw string) (string, error) {
 		return "", siteURLError(trimmed)
 	}
 	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
+	if scheme != "https" && (scheme != "http" || !isLoopbackHost(parsed.Hostname())) {
 		return "", siteURLError(trimmed)
 	}
 	if parsed.Host == "" || parsed.Opaque != "" {
@@ -58,6 +62,16 @@ func ValidateSiteURL(raw string) (string, error) {
 	return scheme + "://" + strings.ToLower(parsed.Host) + parsed.Path, nil
 }
 
+// isLoopbackHost reports whether host is this machine, the only place plain
+// http is acceptable (local development).
+func isLoopbackHost(host string) bool {
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
 // truncateForError keeps an oversized input out of the error message body
 // while still giving the caller something to recognise.
 func truncateForError(s string) string {
@@ -69,5 +83,5 @@ func truncateForError(s string) string {
 }
 
 func siteURLError(entry string) error {
-	return fmt.Errorf("%w: %q must be an absolute http(s) URL with a host, no userinfo/query/fragment, and no trailing slash", ErrInvalidSiteURL, entry)
+	return fmt.Errorf("%w: %q must be an absolute https URL (http only for localhost) with a host, no userinfo/query/fragment, and no trailing slash", ErrInvalidSiteURL, entry)
 }
