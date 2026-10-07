@@ -12,11 +12,17 @@ claims, etc.) and invokes the stored handler on each request.
 ## Installation
 
 ```sh
-npm install @excalibase/server zod
+npm install zod
 ```
 
-`zod` is a peer dependency. `zod-to-json-schema` is bundled as a regular
-dependency because the metadata it produces is part of the package output.
+There is nothing to install for a deploy: the package is not on npm, and the
+function runtime carries both it and zod. Import them by bare name, as below,
+or pinned (`npm:@excalibase/server@0.13.0`, `npm:zod@^3.22.0`); the platform's
+bundler points bare names at the runtime's copies. Any other bare import must
+be one of the function's own files, and an `npm:` package other than these two
+is fetched from the registry, which a project runtime reaches only when its
+egress allowlist says so. `zod-to-json-schema` is bundled as a regular dependency
+because the metadata it produces is part of the package output.
 
 ## Usage
 

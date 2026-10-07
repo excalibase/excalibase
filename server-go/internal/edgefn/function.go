@@ -686,6 +686,11 @@ func virtualFSPlugin(files map[string]string) esbuild.Plugin {
 					if isExternal(args.Path) {
 						return esbuild.OnResolveResult{Path: args.Path, External: true}, nil
 					}
+					// The library and zod by bare name, as the README writes
+					// them, become the copies the runtime image carries.
+					if pinned, ok := runtimeModules[args.Path]; ok {
+						return esbuild.OnResolveResult{Path: pinned, External: true}, nil
+					}
 
 					resolved := args.Path
 					if args.Importer != "" && (strings.HasPrefix(args.Path, "./") || strings.HasPrefix(args.Path, "../")) {
@@ -727,6 +732,21 @@ func virtualFSPlugin(files map[string]string) esbuild.Plugin {
 				})
 		},
 	}
+}
+
+const (
+	// runtimeServerLib is the @excalibase/server the runtime image vendors and
+	// its deno.json maps; a test keeps the three in step.
+	runtimeServerLib = "npm:@excalibase/server@0.13.0"
+	// runtimeZod is the zod the image caches and maps the bare name to.
+	runtimeZod = "npm:zod@^3.22.0"
+)
+
+// runtimeModules are the bare imports a function may use without a bundle
+// file of its own (EXC-560).
+var runtimeModules = map[string]string{
+	"@excalibase/server": runtimeServerLib,
+	"zod":                runtimeZod,
 }
 
 func isExternal(p string) bool {
