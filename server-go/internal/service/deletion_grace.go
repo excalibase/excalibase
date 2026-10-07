@@ -302,8 +302,8 @@ func (s *ProvisioningService) updatePendingChoice(ctx context.Context, inst *dom
 
 // CancelDeletion ends a project's grace period. The project stays PAUSED, with
 // its disk, and deletion protection is turned back on. Its function runtime
-// starts again; its apps stay paused, each resumed (or redeployed) on its own. A deleted project gave
-// its plan slot up, so restoring it needs a free one.
+// starts again; its apps stay paused, each resumed (or redeployed) on its own.
+// A deleted project gave its plan slot up, so restoring it needs a free one.
 func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID string) error {
 	if inst, err := s.store.FindByProjectID(projectID); err != nil || inst == nil {
 		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
