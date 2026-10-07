@@ -130,6 +130,11 @@ export default defineConfig({
         'src/pages/RolesPage.tsx',
         'src/pages/TriggersPage.tsx',
         'src/pages/VaultPage.tsx',
+        'src/api/projectCors.ts',
+        'src/api/functionEgress.ts',
+        'src/components/AllowList.tsx',
+        'src/components/CorsOriginsCard.tsx',
+        'src/components/FunctionEgressCard.tsx',
       ],
       exclude: ['**/*.d.ts', '**/__tests__/**', '**/*.test.{ts,tsx}'],
       thresholds: {

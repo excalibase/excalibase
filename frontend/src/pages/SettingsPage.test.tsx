@@ -254,3 +254,14 @@ describe('SettingsPage — failures say why', () => {
     expect(await screen.findByTestId('deletion-protection-error')).toHaveTextContent('only org owners and admins');
   });
 });
+
+// EXC-566: the browser-origin allowlist is set in Studio, not only over MCP.
+describe('SettingsPage — allowed origins', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('shows the project origins, with or without a database', async () => {
+    renderSettings(false, { noDatabase: true }, { '/projects/p-1/cors': { allowedOrigins: ['http://localhost:5173'], allowWildcard: false } });
+    expect(await screen.findByTestId('cors-origins-card')).toHaveTextContent('Allowed origins');
+    expect(await screen.findByText('http://localhost:5173')).toBeInTheDocument();
+  });
+});
