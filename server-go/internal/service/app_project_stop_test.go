@@ -125,3 +125,47 @@ func TestResumeApp_StaysResumingWhenTheRouteCannotBeRestored(t *testing.T) {
 		t.Fatalf("status = %s, want RESUMING for a retry", f.status())
 	}
 }
+
+func TestRestartFunctionRuntime_WithoutANamespaceHasNothingToRestart(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusRunning)
+	f.svc.instances.(*fakestore.Instances).Items[f.app.ProjectID].Namespace = ""
+
+	if err := f.svc.RestartFunctionRuntime(context.Background(), f.app.ProjectID); err != nil {
+		t.Fatalf("RestartFunctionRuntime: %v", err)
+	}
+	if len(f.kube.RestartedRuntimes) != 0 {
+		t.Fatalf("restarted = %v, want nothing", f.kube.RestartedRuntimes)
+	}
+}
+
+// A redeploy runs a deploy's frozen config, which may differ from the app record:
+// the route that comes back is the one the latest deploy ran.
+func TestResumeApp_RestoresTheRouteTheLatestDeployRan(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusStopped)
+	cfg := apphost.ConfigFromApp(f.app)
+	cfg.Internal = true
+	cfg.InternalPorts = []apphost.InternalPort{{Port: 6379, Protocol: apphost.ProtocolTCP}}
+	if err := f.deploys.Create(&apphost.Deploy{ID: "d1", AppID: f.app.ID, ProjectID: f.app.ProjectID,
+		Config: cfg, Status: apphost.DeployStatusSucceeded, Kind: apphost.DeployKindDeploy}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev-1"); err != nil {
+		t.Fatalf("ResumeApp: %v", err)
+	}
+	if served := f.kube.RestoredRoutes[f.key()]; served == nil || !served.Internal {
+		t.Fatalf("restored %+v, want the internal service the latest deploy ran", served)
+	}
+}
+
+func TestResumeApp_StaysResumingWhenTheCustomDomainsCannotBeRouted(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusStopped)
+	f.svc.SetDomainSync(func(context.Context, string, *apphost.App) error { return errors.New("api server down") })
+
+	if _, err := f.svc.ResumeApp(context.Background(), f.app.ProjectID, f.app.ID, "dev-1"); err == nil {
+		t.Fatal("a resume without its custom domains must fail")
+	}
+	if f.status() != apphost.StatusResuming {
+		t.Fatalf("status = %s, want RESUMING for a retry", f.status())
+	}
+}

@@ -2,14 +2,82 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/excalibase/provisioning-poc/internal/apphost"
 )
+
+func TestWithdrawProjectWorkloads_ReportsWhatTheAPIRefused(t *testing.T) {
+	for _, step := range []struct{ verb, resource string }{
+		{"list", "ingresses"}, {"delete", "ingresses"}, {"list", "deployments"}, {"update", "deployments"},
+	} {
+		t.Run(step.verb+" "+step.resource, func(t *testing.T) {
+			c, clientset := newLifecycleFakeClient()
+			app := fullApp()
+			deployedApp(t, c, app)
+			clientset.PrependReactor(step.verb, step.resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, errors.New("api server down")
+			})
+			if err := c.WithdrawProjectWorkloads(context.Background(), testNamespace); err == nil {
+				t.Fatal("want the API's refusal")
+			}
+		})
+	}
+}
+
+func TestRestartFunctionRuntime_RefusesAnUnreadableCount(t *testing.T) {
+	c, _ := newLifecycleFakeClient()
+	ctx := context.Background()
+	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	dep, _ := c.clientset.AppsV1().Deployments(testNamespace).Get(ctx, denoRuntimeName, metav1.GetOptions{})
+	dep.Annotations = map[string]string{appPausedReplicasAnnotation: "x"}
+	if _, err := c.clientset.AppsV1().Deployments(testNamespace).Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RestartFunctionRuntime(ctx, testNamespace); err == nil {
+		t.Fatal("an unreadable count must not be guessed")
+	}
+	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}); err == nil {
+		t.Fatal("a function deploy must not guess it either")
+	}
+}
+
+func TestRestoreAppRoute_RefusesARouteWithoutAnIngressClass(t *testing.T) {
+	c, _ := newLifecycleFakeClient()
+	if err := c.RestoreAppRoute(context.Background(), testNamespace, fullApp(), AppRouteOptions{}); err == nil {
+		t.Fatal("want the render refusal")
+	}
+}
+
+func TestMockClient_ProjectWorkloads(t *testing.T) {
+	m := NewMockClient()
+	ctx := context.Background()
+	app := &apphost.App{ID: "a1", Name: "web"}
+	if err := m.WithdrawProjectWorkloads(ctx, "ns1"); err != nil || len(m.WithdrawnWorkloads) != 1 {
+		t.Fatalf("withdraw: %v %v", err, m.WithdrawnWorkloads)
+	}
+	if err := m.RestartFunctionRuntime(ctx, "ns1"); err != nil || len(m.RestartedRuntimes) != 1 {
+		t.Fatalf("restart: %v %v", err, m.RestartedRuntimes)
+	}
+	if err := m.RestoreAppRoute(ctx, "ns1", app, AppRouteOptions{}); err != nil || m.RestoredRoutes["ns1/a1"] != app {
+		t.Fatalf("restore: %v %v", err, m.RestoredRoutes)
+	}
+	boom := errors.New("boom")
+	m.WithdrawErr, m.RestartRuntimeErr, m.RestoreRouteErr = boom, boom, boom
+	if m.WithdrawProjectWorkloads(ctx, "ns1") == nil || m.RestartFunctionRuntime(ctx, "ns1") == nil ||
+		m.RestoreAppRoute(ctx, "ns1", app, AppRouteOptions{}) == nil {
+		t.Fatal("want the scripted errors")
+	}
+}
 
 func listIngressNames(t *testing.T, c *Client) []string {
 	t.Helper()
