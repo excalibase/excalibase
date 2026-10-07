@@ -32,6 +32,10 @@ func TestStopProjectWorkloads_TakesTheRoutesAwayAndStopsEveryRunningApp(t *testi
 	if got := f.apps.statusOf(created.ProjectID, created.ID); got != apphost.StatusCreated {
 		t.Fatalf("an app never deployed keeps its status, got %s", got)
 	}
+	// A first deploy still rolling out has pods though its app is not yet ACTIVE.
+	if !slices.Contains(f.kube.Calls, "WaitForAppPodsGone:"+testDeployNamespace+"/"+created.ID) {
+		t.Fatalf("calls %v: the stop must wait for a rolling-out app's pods too", f.kube.Calls)
+	}
 	withdrawAt := slices.Index(f.kube.Calls, "WithdrawProjectWorkloads:"+testDeployNamespace)
 	pauseAt := slices.Index(f.kube.Calls, "PauseAppWorkload:"+f.key())
 	if withdrawAt < 0 || pauseAt < withdrawAt {

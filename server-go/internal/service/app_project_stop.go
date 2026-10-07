@@ -30,38 +30,41 @@ func (s *AppDeployService) StopProjectWorkloads(ctx context.Context, projectID s
 	if err != nil {
 		return fmt.Errorf("list the project's apps: %w", err)
 	}
-	return s.pauseServing(ctx, projectID, apps)
+	return s.pauseServing(ctx, projectID, namespace, apps)
 }
 
-// pauseServing pauses every app that may still have pods, all at once, so a
-// project with many apps stops within one drain period.
-func (s *AppDeployService) pauseServing(ctx context.Context, projectID string, apps []*apphost.App) error {
+// pauseServing pauses every app, or waits for the pods of one PauseApp does
+// not take, all at once so a project with many apps stops within one drain period.
+func (s *AppDeployService) pauseServing(ctx context.Context, projectID, namespace string, apps []*apphost.App) error {
 	var (
 		wg   sync.WaitGroup
 		mu   sync.Mutex
 		errs []error
 	)
 	for _, app := range apps {
-		if !mayHavePods(app.Status) {
-			continue
-		}
 		wg.Add(1)
-		go func(appID string) {
+		go func(appID, status string) {
 			defer wg.Done()
-			_, err := s.PauseApp(ctx, projectID, appID)
+			var err error
+			if mayHavePods(status) {
+				_, err = s.PauseApp(ctx, projectID, appID)
+			} else {
+				// Not ACTIVE yet (a first rollout) or already stopped: the
+				// withdrawal scaled it to zero; wait for any pods it still has.
+				err = s.kube.WaitForAppPodsGone(ctx, namespace, appID, s.stopTimeout)
+			}
 			if err != nil && !errors.Is(err, k8s.ErrAppNotDeployed) {
 				mu.Lock()
 				errs = append(errs, fmt.Errorf("pause app %s: %w", appID, err))
 				mu.Unlock()
 			}
-		}(app.ID)
+		}(app.ID, app.Status)
 	}
 	wg.Wait()
 	return errors.Join(errs...)
 }
 
-// mayHavePods lists the statuses PauseApp stops. An app never deployed, or
-// one already stopped, has no pods once the withdrawal scaled it to zero.
+// mayHavePods lists the statuses PauseApp stops and records STOPPED.
 func mayHavePods(status string) bool {
 	return status == apphost.StatusRunning || status == apphost.StatusFailed || status == apphost.StatusPausing
 }

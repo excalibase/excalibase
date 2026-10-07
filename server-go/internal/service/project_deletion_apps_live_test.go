@@ -31,6 +31,10 @@ func TestLiveProjectDeletionTakesTheAppsOffline(t *testing.T) {
 	first := lab.deploy(t, svc, app)
 	lab.expectOutcome(t, deployStore, first.ID, apphost.DeployStatusSucceeded, apphost.StatusRunning)
 	lab.expectEdge(t, app, http.StatusOK)
+	// The Postgres deploy store writes the finished deploy's app status onto the app row; the fakes keep them apart.
+	appStore.mu.Lock()
+	appStore.apps[app.ProjectID+"/"+app.ID].Status = apphost.StatusRunning
+	appStore.mu.Unlock()
 	runtime := k8s.DenoRuntimeSpec{Image: appLiveGoodImage, RuntimeSecret: "live"}
 	if err := lab.client.EnsureDenoRuntime(lab.ctx, namespace, runtime); err != nil {
 		t.Fatalf("function runtime: %v", err)
