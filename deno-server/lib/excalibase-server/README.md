@@ -26,25 +26,40 @@ because the metadata it produces is part of the package output.
 
 ## Usage
 
-```ts
-import { z } from "zod";
-import { query, mutation } from "@excalibase/server";
+Each function is one deployed module whose **default export** is the
+wrapper; its id is `module.name`, and that is how a client calls it
+(`db.functions.users.get(args)` → `POST /functions/v1/{projectId}/users.get`).
 
-export const getUser = query({
+```ts
+// deployed with id "users.get"
+import { z } from "zod";
+import { query } from "@excalibase/server";
+
+export default query({
   args: z.object({ id: z.string() }),
   handler: async (ctx, args) => {
     // ctx.db is provided by the runtime at request time.
     return { id: args.id };
   },
 });
+```
 
-export const createUser = mutation({
-  args: z.object({ name: z.string() }),
+```ts
+// deployed with id "users.create"
+import { z } from "zod";
+import { mutation } from "@excalibase/server";
+
+export default mutation({
+  args: z.object({ name: z.string().min(1) }),
   handler: async (ctx, args) => {
     return { name: args.name };
   },
 });
 ```
+
+The runtime checks the arguments against `args` before the handler runs:
+arguments the schema refuses answer `400 { "error": "args validation failed",
+"issues": [...] }`, and the handler gets the parsed value.
 
 ## Refusing a caller
 
@@ -54,9 +69,11 @@ the caller gets `500 { "error": "internal error" }` and the message is
 written to the function's logs.
 
 ```ts
+import { z } from "zod";
 import { mutation, FunctionError } from "@excalibase/server";
 
-export const generateUploadUrl = mutation({
+// deployed with id "system.generateUploadUrl"
+export default mutation({
   args: z.object({ contentType: z.string(), size: z.number() }),
   handler: async (ctx, args) => {
     if (!ctx.auth.claims) throw new FunctionError(401, "sign in to upload");

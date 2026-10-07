@@ -1479,8 +1479,23 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
             ? __makeStorageReader()
             : __makeStorageWriter(),
         };
+        // The def's zod schema guards the handler: refused args are a 400
+        // and never reach it (EXC-560). A hand-written def without
+        // safeParse passes args through.
+        let args = body.args;
+        if (fnDef.args && typeof fnDef.args.safeParse === 'function') {
+          const parsed = fnDef.args.safeParse(args);
+          if (!parsed || parsed.success !== true) {
+            const issues = (parsed && parsed.error && Array.isArray(parsed.error.issues)) ? parsed.error.issues : [];
+            self.postMessage({ type: 'success', reqId, status: 400,
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ error: 'args validation failed', issues }) });
+            return;
+          }
+          args = parsed.data;
+        }
         try {
-          const result = await fnDef.handler(ctx, body.args);
+          const result = await fnDef.handler(ctx, args);
           self.postMessage({ type: 'success', reqId, status: 200,
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ data: result === undefined ? null : result }) });
