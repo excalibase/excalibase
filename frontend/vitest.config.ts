@@ -119,6 +119,8 @@ export default defineConfig({
         'src/components/tables/ImportMapping.tsx',
         'src/components/ui/ConfirmModal.tsx',
         'src/pages/AuthUsersPage.tsx',
+        'src/pages/AuthSettingsPage.tsx',
+        'src/api/authSettings.ts',
         'src/pages/EdgeFunctionsPage.tsx',
         'src/api/client.ts',
         'src/pages/ExtensionsPage.tsx',
