@@ -301,6 +301,9 @@ type AppConfig struct {
 	EdgeNamespace string
 	EdgePodLabels map[string]string
 	EdgePodPorts  []int
+	// FunctionEgressPolicy is how function runtimes are fenced: by address and
+	// port ("networkpolicy") or by host name ("cilium").
+	FunctionEgressPolicy string
 
 	// TenantStorageClass is the StorageClass a project's database runs on when
 	// its request names none; empty is the cluster's default StorageClass.
@@ -364,6 +367,9 @@ func (c AppConfig) Validate() error {
 		return err
 	}
 	if err := c.validateFileStorage(); err != nil {
+		return err
+	}
+	if err := c.validateFunctionEgress(); err != nil {
 		return err
 	}
 	return c.validateAppRoute()
@@ -495,6 +501,7 @@ func load() AppConfig {
 		EdgeNamespace:                  os.Getenv("EDGE_NAMESPACE"),
 		EdgePodLabels:                  envIngressFromLabels("EDGE_POD_LABELS"),
 		EdgePodPorts:                   envEdgePodPorts("EDGE_POD_PORTS"),
+		FunctionEgressPolicy:           envOr("FUNCTION_EGRESS_POLICY", FunctionEgressNetworkPolicy),
 		TenantStorageClass:             strings.TrimSpace(os.Getenv("TENANT_STORAGE_CLASS")),
 		TenantStorageClasses:           envList("TENANT_STORAGE_CLASSES"),
 		AppDomainIssuer:                os.Getenv("APP_DOMAIN_ISSUER"),

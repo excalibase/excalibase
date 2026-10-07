@@ -52,7 +52,19 @@ type ciliumEgressRule struct {
 	ToEndpoints []metav1.LabelSelector `json:"toEndpoints,omitempty"`
 	ToEntities  []string               `json:"toEntities,omitempty"`
 	ToCIDRSet   []ciliumCIDRRule       `json:"toCIDRSet,omitempty"`
+	ToFQDNs     []ciliumFQDNSelector   `json:"toFQDNs,omitempty"`
 	ToPorts     []ciliumPortRule       `json:"toPorts,omitempty"`
+}
+
+// ciliumFQDNSelector names a host exactly (matchName) or by a "*" pattern.
+type ciliumFQDNSelector struct {
+	MatchName    string `json:"matchName,omitempty"`
+	MatchPattern string `json:"matchPattern,omitempty"`
+}
+
+// ciliumL7Rules sends a port's traffic through Cilium's proxy; DNS is the only kind used.
+type ciliumL7Rules struct {
+	DNS []ciliumFQDNSelector `json:"dns,omitempty"`
 }
 
 type ciliumCIDRRule struct {
@@ -60,7 +72,8 @@ type ciliumCIDRRule struct {
 }
 
 type ciliumPortRule struct {
-	Ports []ciliumPort `json:"ports"`
+	Ports []ciliumPort   `json:"ports"`
+	Rules *ciliumL7Rules `json:"rules,omitempty"`
 }
 
 type ciliumPort struct {
@@ -114,10 +127,16 @@ func appDNSRule() ciliumEgressRule {
 	}
 }
 
-// appOwnDatabaseRule: an empty selector in a namespaced policy is this namespace only.
+// databasePodLabels select the project's own database pods (CNPG instances). A
+// selector with no namespace label in a namespaced policy is this namespace
+// only, and the label keeps out every other pod there listening on 5432.
+func databasePodLabels() map[string]string {
+	return map[string]string{"cnpg.io/podRole": "instance"}
+}
+
 func appOwnDatabaseRule() ciliumEgressRule {
 	return ciliumEgressRule{
-		ToEndpoints: []metav1.LabelSelector{{}},
+		ToEndpoints: []metav1.LabelSelector{{MatchLabels: databasePodLabels()}},
 		ToPorts:     []ciliumPortRule{{Ports: []ciliumPort{{Port: strconv.Itoa(postgresPortNumber), Protocol: protocolTCP}}}},
 	}
 }

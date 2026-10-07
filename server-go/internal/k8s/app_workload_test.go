@@ -654,11 +654,13 @@ func assertDNSRule(t *testing.T, rule ciliumEgressRule) {
 	assertNoAddressPeers(t, rule)
 }
 
-// An empty selector with no namespace label stays in the policy's namespace, so no other tenant.
+// No namespace label keeps the rule in the policy's namespace (no other tenant); the CNPG instance
+// label keeps out every other pod there listening on 5432 (EXC-558).
 func assertDatabaseRuleIsLocal(t *testing.T, rule ciliumEgressRule) {
 	t.Helper()
-	if len(rule.ToEndpoints) != 1 || len(rule.ToEndpoints[0].MatchLabels) != 0 || len(rule.ToEndpoints[0].MatchExpressions) != 0 {
-		t.Errorf("the database rule must be confined to this namespace, got %+v", rule.ToEndpoints)
+	if len(rule.ToEndpoints) != 1 || !maps.Equal(rule.ToEndpoints[0].MatchLabels, map[string]string{"cnpg.io/podRole": "instance"}) ||
+		len(rule.ToEndpoints[0].MatchExpressions) != 0 {
+		t.Errorf("the database rule must select this namespace's database pods only, got %+v", rule.ToEndpoints)
 	}
 	assertPorts(t, "database", rule.ToPorts, ciliumPort{Port: "5432", Protocol: "TCP"})
 	assertNoAddressPeers(t, rule)

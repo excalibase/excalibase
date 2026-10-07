@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -152,11 +153,13 @@ func TestEnsureDenoRuntime_CreatesEgressPolicy(t *testing.T) {
 	if len(prov.Ports) != 1 || prov.Ports[0].Port.IntValue() != 24005 {
 		t.Errorf("expected only provisioning's API port 24005, got %+v", prov.Ports)
 	}
-	// The Postgres rule must be namespace-local: a peer with an empty PodSelector
-	// and NO NamespaceSelector means "this namespace only".
+	// The Postgres rule must be the project's own database pods: no
+	// NamespaceSelector means "this namespace only", and the CNPG instance label
+	// keeps out any other pod there listening on 5432 (EXC-558).
 	pg := np.Spec.Egress[1]
-	if len(pg.To) != 1 || pg.To[0].PodSelector == nil || pg.To[0].NamespaceSelector != nil {
-		t.Errorf("Postgres egress must be namespace-local, got %+v", pg.To)
+	if len(pg.To) != 1 || pg.To[0].PodSelector == nil || pg.To[0].NamespaceSelector != nil ||
+		!maps.Equal(pg.To[0].PodSelector.MatchLabels, map[string]string{"cnpg.io/podRole": "instance"}) {
+		t.Errorf("Postgres egress must select this namespace's database pods only, got %+v", pg.To)
 	}
 	if len(pg.Ports) != 1 || pg.Ports[0].Port.IntValue() != 5432 {
 		t.Errorf("expected only port 5432 for the DB rule, got %+v", pg.Ports)
@@ -231,12 +234,12 @@ func TestGetClusterCapacity_MarksNodesUntoleratedPodsCannotUse(t *testing.T) {
 	preferOnly.Spec.Taints = []corev1.Taint{{Key: "soft", Effect: corev1.TaintEffectPreferNoSchedule}}
 	c := newFakeClient(noSchedule, notReady, preferOnly, node("plain", 4000, 8<<30, false))
 
-	cap, err := c.GetClusterCapacity(context.Background())
+	capacity, err := c.GetClusterCapacity(context.Background())
 	if err != nil {
 		t.Fatalf("GetClusterCapacity: %v", err)
 	}
 	tainted := map[string]bool{}
-	for _, n := range cap.Nodes {
+	for _, n := range capacity.Nodes {
 		tainted[n.Name] = n.Tainted
 	}
 	want := map[string]bool{"control-plane": true, "not-ready": true, "prefer": false, "plain": false}

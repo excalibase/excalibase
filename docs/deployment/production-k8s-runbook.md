@@ -550,8 +550,10 @@ the re-unseal a silent no-op (§5.3). No ticket found.
   operator floor `EXCALIBASE_FN_EGRESS_DEFAULT_HOSTS` (e.g.
   `*.excalibase.io,api.resend.com`) is unioned into every project; a
   malformed value stops the server at boot. On k8s the list is rendered as
-  `ALLOWED_HOSTS` env plus a `deno-runtime-egress` NetworkPolicy
-  (OPERATOR.md §6.1).
+  `ALLOWED_HOSTS` env plus a `deno-runtime-egress` fence: a
+  CiliumNetworkPolicy admitting the names with `FUNCTION_EGRESS_POLICY=cilium`,
+  otherwise a NetworkPolicy (OPERATOR.md §6.1). The list is per project: one
+  runtime serves all of its functions.
 
 The env var must be added to the provisioning Deployment by hand (§3.1).
 

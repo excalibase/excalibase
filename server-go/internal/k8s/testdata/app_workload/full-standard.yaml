@@ -154,7 +154,8 @@ spec:
       - port: "53"
         protocol: TCP
   - toEndpoints:
-    - {}
+    - matchLabels:
+        cnpg.io/podRole: instance
     toPorts:
     - ports:
       - port: "5432"

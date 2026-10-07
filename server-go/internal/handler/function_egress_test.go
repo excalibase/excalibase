@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -277,6 +278,71 @@ func TestEgress_NoEdgeAddsNoPlatformHost(t *testing.T) {
 	}
 	if req := (*f.scripts)[testEgressProject+"__hello"]; len(req.AllowedHosts) != 0 {
 		t.Fatalf("deploy request AllowedHosts = %v", req.AllowedHosts)
+	}
+}
+
+// Where Cilium runs, the runtime is fenced by name; the handler only passes the switch on.
+func TestEgress_CiliumFQDNReachesTheRuntimeSpec(t *testing.T) {
+	f := setupEgressHandler(t)
+	f.handler.SetRuntimeCiliumFQDN(true)
+	deployEgressFn(t, f, "hello")
+	if !f.k8s.DenoSpecs[testEgressNS].CiliumFQDN {
+		t.Fatal("the runtime spec must ask for the Cilium fence")
+	}
+}
+
+const testEgressDBHost = "proj-egress1-postgres-rw.org1-proj-egress1.svc.cluster.local"
+
+// EXCALIBASE_DB_URL is only of use if the worker may open it: its host and port join the worker's
+// permission, and stay out of the project's allowlist and the runtime's environment (EXC-558).
+func TestEgress_WorkerMayOpenTheDatabaseItIsGiven(t *testing.T) {
+	f := setupEgressHandler(t)
+	vault := newFakeVault()
+	vault.data["projects/"+testEgressProject+"/credentials/admin"] = map[string]string{
+		"host": testEgressDBHost, "port": "5432", "database": "app", "username": "owner", "password": "p4ss",
+	}
+	f.handler.SetVault(vault)
+	f.egress.hosts[testEgressProject] = []string{"api.stripe.com"}
+	deployEgressFn(t, f, "hello")
+
+	req := (*f.scripts)[testEgressProject+"__hello"]
+	if !strings.Contains(req.Secrets["EXCALIBASE_DB_URL"], "@"+testEgressDBHost+":5432/") {
+		t.Fatalf("precondition: the worker is given the database URL, got %q", req.Secrets["EXCALIBASE_DB_URL"])
+	}
+	want := []string{"api.stripe.com:443", testEgressDBHost + ":5432"}
+	if !reflect.DeepEqual(req.AllowedHosts, want) {
+		t.Fatalf("deploy request AllowedHosts = %v want %v", req.AllowedHosts, want)
+	}
+	if spec := f.k8s.DenoSpecs[testEgressNS]; !reflect.DeepEqual(spec.AllowedHosts, []string{"api.stripe.com:443"}) {
+		t.Fatalf("the project's allowlist must stay its own: %v", spec.AllowedHosts)
+	}
+	got := decodeEgress(t, doJSON(f.router, "GET", testEgressPath, nil).Body.Bytes())
+	if !reflect.DeepEqual(got.EffectiveHosts, []string{"api.stripe.com:443"}) {
+		t.Fatalf("effective hosts are the outbound list, not the project's own database: %v", got.EffectiveHosts)
+	}
+}
+
+func TestEgress_NoDatabaseNoDatabaseHost(t *testing.T) {
+	f := setupEgressHandler(t)
+	f.handler.SetVault(newFakeVault())
+	deployEgressFn(t, f, "hello")
+	if req := (*f.scripts)[testEgressProject+"__hello"]; len(req.AllowedHosts) != 0 {
+		t.Fatalf("a project without a database login opens nothing, got %v", req.AllowedHosts)
+	}
+}
+
+// The runtime refuses a whole deploy over one host it cannot read, so an address
+// outside its host shape is left out rather than breaking every function.
+func TestEgress_DatabaseHostTheRuntimeCannotReadIsLeftOut(t *testing.T) {
+	f := setupEgressHandler(t)
+	vault := newFakeVault()
+	vault.data["projects/"+testEgressProject+"/credentials/admin"] = map[string]string{
+		"host": "excalibase-my_project-postgres", "port": "5432", "database": "app", "username": "owner", "password": "p4ss",
+	}
+	f.handler.SetVault(vault)
+	deployEgressFn(t, f, "hello")
+	if req := (*f.scripts)[testEgressProject+"__hello"]; len(req.AllowedHosts) != 0 {
+		t.Fatalf("an unreadable database host must not reach the deploy, got %v", req.AllowedHosts)
 	}
 }
 

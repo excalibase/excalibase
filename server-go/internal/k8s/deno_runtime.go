@@ -33,6 +33,8 @@ const (
 	// functionsV2EnvName turns on query/mutation/action functions, the shape
 	// ctx.storage and the SDK's uploadFile are written against.
 	functionsV2EnvName = "EXCALIBASE_FUNCTIONS_V2"
+	// provisioningAPIPort is provisioning's in-cluster API, the runtime's callback target.
+	provisioningAPIPort = 24005
 )
 
 // denoTierResources maps a project tier to Deno runtime pod resource requests
@@ -291,6 +293,9 @@ func platformNamespace() string {
 // applyDenoEgressPolicy creates the runtime's egress fence, or rewrites a live
 // one that differs from it; an identical one is left untouched.
 func (c *Client) applyDenoEgressPolicy(ctx context.Context, namespace string, spec DenoRuntimeSpec) error {
+	if spec.CiliumFQDN {
+		return c.applyDenoCiliumFence(ctx, namespace, spec)
+	}
 	policy := buildDenoEgressPolicy(namespace, spec.AllowedHosts, spec.Edge)
 	policies := c.clientset.NetworkingV1().NetworkPolicies(namespace)
 	existing, err := policies.Get(ctx, policy.Name, metav1.GetOptions{})
@@ -320,7 +325,7 @@ func (c *Client) applyDenoEgressPolicy(ctx context.Context, namespace string, sp
 // thread), but the *pod* still opens the Postgres pool — so an escape from the
 // isolate would otherwise have the pod's full network reach. This policy is
 // the infra backstop under the Deno sandbox: egress is allowed ONLY to DNS,
-// to Postgres inside this project's own namespace, to provisioning's API, to
+// to this project's own database pods, to provisioning's API, to
 // the public edge's pods (where the platform's own public hosts land, EXC-558)
 // and — when the project has an allowlist — to public internet addresses on
 // the allowlisted ports. Everything else is denied by omission — cloud metadata
@@ -328,6 +333,8 @@ func (c *Client) applyDenoEgressPolicy(ctx context.Context, namespace string, sp
 // API, and every other tenant's namespace. A NetworkPolicy cannot match
 // hostnames, so the per-host part of the allowlist is enforced by the Deno
 // permission alone; the policy fences the address space and ports around it.
+// Where Cilium runs, DenoRuntimeSpec.CiliumFQDN replaces this policy with one
+// that admits the allowlist by name (buildDenoCiliumEgressPolicy).
 //
 // Egress-only: ingress is untouched so provisioning can still reach /deploy and
 // /invoke. Requires a NetworkPolicy-enforcing CNI (Calico/Cilium); with a CNI
@@ -376,12 +383,12 @@ func denoDNSRule() networkingv1.NetworkPolicyEgressRule {
 	}
 }
 
-// denoOwnPostgresRule allows this project's own Postgres only. An empty
-// PodSelector with no NamespaceSelector means "pods in this namespace" — so
-// it cannot reach another tenant's database.
+// denoOwnPostgresRule allows this project's own database pods only. No
+// NamespaceSelector means "pods in this namespace", so it cannot reach another
+// tenant's database.
 func denoOwnPostgresRule() networkingv1.NetworkPolicyEgressRule {
 	return networkingv1.NetworkPolicyEgressRule{
-		To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
+		To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: databasePodLabels()}}},
 		Ports: []networkingv1.NetworkPolicyPort{tcpPort(5432)},
 	}
 }
@@ -399,7 +406,7 @@ func denoProvisioningRule() networkingv1.NetworkPolicyEgressRule {
 			},
 			PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "provisioning"}},
 		}},
-		Ports: []networkingv1.NetworkPolicyPort{tcpPort(24005)},
+		Ports: []networkingv1.NetworkPolicyPort{tcpPort(provisioningAPIPort)},
 	}
 }
 
