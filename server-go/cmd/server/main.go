@@ -947,6 +947,18 @@ func wireFunctionEgress(cfg config.AppConfig, sqlStore storage.PlatformStore, fn
 	fnHandler.SetEgressDefaults(defaults)
 }
 
+// newAIActivityHandler serves the MCP activity feed; revoking from it needs
+// the platform Postgres store.
+func newAIActivityHandler(sqlStore storage.PlatformStore) *handler.AIActivityHandler {
+	h := handler.NewAIActivityHandler(sqlStore, sqlStore)
+	if revokes, ok := sqlStore.(handler.ActivityRevokeStore); ok {
+		h.SetRevokeStore(revokes)
+	} else {
+		log.Println("WARN: no Postgres platform store — tokens cannot be revoked from the AI activity feed")
+	}
+	return h
+}
+
 // wireProjectCors attaches the per-project browser-origin allowlist store
 // (EXC-23). It lives in the platform Postgres; without it the /cors API is
 // unavailable and /info reports no origins, so the data plane sends no CORS
@@ -1431,13 +1443,16 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 
 	registryCreds := registryCredentials(vc, store, k8sClient)
 	withRegistryCredentials(appDeploySvc, registryCreds)
+	if origins, ok := sqlStore.(storage.ProjectCorsEditor); ok {
+		appDeploySvc.SetCorsOriginReleaser(origins)
+	}
 	appDeploySvc.SetImageResolver(imagedigest.NewResolver())
 	appNetworkSvc := newAppNetworkService(sqlStore, store, k8sClient, a.claimer)
 	schemaHandler := newSchemaHandler(cfg, vc, store)
 	return &handlerDeps{
 		provHandler:         provHandler,
 		sdkKeysHandler:      handler.NewSDKKeysHandler(buildSDKKeyManager(cfg, vc), store, sqlStore, sqlStore),
-		aiActivityHandler:   handler.NewAIActivityHandler(sqlStore, sqlStore),
+		aiActivityHandler:   newAIActivityHandler(sqlStore),
 		endUsersHandler:     handler.NewEndUsersHandler(buildEndUserManager(cfg, vc), store, sqlStore, sqlStore),
 		metricsHandler:      handler.NewMetricsHandler(metricsSvc),
 		backupHandler:       handler.NewBackupHandler(backupSvc),
@@ -2028,6 +2043,8 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		r.Use(d.activity)
 		r.Get("/", d.provHandler.GetCors)
 		r.Put("/", d.provHandler.PutCors)
+		r.Post("/origins", d.provHandler.AddCorsOrigin)
+		r.Delete("/origins", d.provHandler.RemoveCorsOrigin)
 	})
 	// Public database endpoint (EXC-410): reads report the host, port and
 	// cluster CA a client needs to connect and verify, so Developer+ can

@@ -47,6 +47,8 @@ type AppDeployService struct {
 	secrets            AppSecretPurger
 	// registries reads the pull credential for the image's registry; nil when no vault is configured.
 	registries RegistryCredentialFinder
+	// corsOrigins releases the allowlist origin an app added; nil leaves it.
+	corsOrigins CorsOriginReleaser
 	// images resolves a named image to the digest a deploy pins.
 	images          ImageResolver
 	plans           PlanTiers
@@ -96,6 +98,16 @@ type RegistryCredentialFinder interface {
 
 func (s *AppDeployService) SetRegistryCredentials(registries RegistryCredentialFinder) {
 	s.registries = registries
+}
+
+// CorsOriginReleaser removes the CORS origin an app added (EXC-544).
+type CorsOriginReleaser interface {
+	ReleaseAppCorsOrigins(ctx context.Context, projectID, appID string) ([]string, error)
+}
+
+// SetCorsOriginReleaser makes deleting an app remove the origin it added.
+func (s *AppDeployService) SetCorsOriginReleaser(origins CorsOriginReleaser) {
+	s.corsOrigins = origins
 }
 
 // pullAuth fails rather than pull anonymously when the credential cannot be read.

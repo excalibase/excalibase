@@ -192,6 +192,19 @@ func (s *Store) QueryProjectAudit(ctx context.Context, projectID, via string, li
 	return result, rows.Err()
 }
 
+// ProjectAuditUsedToken reports whether tokenHash made a call in the project
+// through one door: the project's feed may only revoke a token it shows.
+func (s *Store) ProjectAuditUsedToken(ctx context.Context, projectID, via, tokenHash string) (bool, error) {
+	var used bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM audit_log WHERE project_id = $1 AND via = $2 AND token_hash = $3)`,
+		projectID, via, tokenHash).Scan(&used)
+	if err != nil {
+		return false, fmt.Errorf("query project token use: %w", err)
+	}
+	return used, nil
+}
+
 func (s *Store) QueryAudit(ctx context.Context, limit int) ([]domain.AuditEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, user_id, action, resource, resource_id, details, ip_address, timestamp

@@ -109,7 +109,7 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 		Checksum:        checksum,
 	}
 
-	ft := &domain.FlexTime{Time: now}
+	ft := &domain.UTCTime{Time: now}
 	if execErr != nil {
 		record.Status = "FAILED"
 		record.ErrorMessage = execErr.Error()
@@ -150,11 +150,16 @@ func (s *MigrationService) ListMigrations(projectID string) ([]domain.MigrationR
 		if _, err := security.SafePathComponent(e.Name()); err != nil {
 			continue
 		}
-		data, _ := os.ReadFile(filepath.Join(dir, filepath.Base(e.Name())))
-		var rec domain.MigrationRecord
-		if json.Unmarshal(data, &rec) == nil {
-			result = append(result, rec)
+		data, err := os.ReadFile(filepath.Join(dir, filepath.Base(e.Name())))
+		if err != nil {
+			return nil, fmt.Errorf("read migration record %s: %w", e.Name(), err)
 		}
+		var rec domain.MigrationRecord
+		if err := json.Unmarshal(data, &rec); err != nil {
+			log.Printf("WARN: migration record %s/%s is unreadable and is not listed: %v", projectID, e.Name(), err)
+			continue
+		}
+		result = append(result, rec)
 	}
 	return result, nil
 }

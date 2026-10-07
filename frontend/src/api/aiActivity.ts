@@ -1,8 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
+import { TOKENS_KEY } from './accessTokens';
 
 // One call an AI tool made through MCP, as GET /api/projects/{id}/ai-activity/
-// lists it. tokenId is set only for the caller's own token while it exists.
+// lists it. tokenId is set while the token exists and the caller may revoke
+// it: their own, or any member's for an org owner or admin.
 export interface AiActivityCall {
   id: number;
   tool: string;
@@ -24,6 +26,17 @@ export function useAiActivity(projectId: string) {
     queryFn: async () =>
       (await api.get<{ calls: AiActivityCall[] }>(`/projects/${encodeURIComponent(projectId)}/ai-activity/`)).data.calls,
     enabled: !!projectId,
+  });
+}
+
+// Revokes a token the project's feed shows; the caller's token list is stale after.
+export function useRevokeActivityToken(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (tokenId: string) => {
+      await api.delete(`/projects/${encodeURIComponent(projectId)}/ai-activity/tokens/${encodeURIComponent(tokenId)}`);
+    },
+    onSuccess: () => client.invalidateQueries({ queryKey: TOKENS_KEY }),
   });
 }
 

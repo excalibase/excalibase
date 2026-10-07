@@ -59,7 +59,7 @@ test.describe('Connect your AI tool', () => {
         ] }),
       }),
     );
-    await page.route('**/api/auth/tokens/*', (route) => {
+    await page.route('**/api/projects/test-project/ai-activity/tokens/*', (route) => {
       revoked = route.request().url().split('/').pop() ?? '';
       return route.fulfill({ status: 204 });
     });

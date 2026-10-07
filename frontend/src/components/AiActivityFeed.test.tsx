@@ -41,7 +41,7 @@ describe('AI activity feed', () => {
     expect(api.get).toHaveBeenCalledWith('/projects/proj-1/ai-activity/');
   });
 
-  test('offers revoke only for the caller\'s own live token', async () => {
+  test('offers revoke only where the server gave a revoke id', async () => {
     renderFeed();
     const own = await screen.findByTestId('ai-activity-3');
     expect(within(own).getByRole('button', { name: /revoke/i })).toBeInTheDocument();
@@ -56,8 +56,23 @@ describe('AI activity feed', () => {
     renderFeed();
     await u.click(within(await screen.findByTestId('ai-activity-3')).getByRole('button', { name: /revoke/i }));
     await u.click(within(await screen.findByTestId('confirm-modal')).getByRole('button', { name: /^revoke$/i }));
-    await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/auth/tokens/hash-live'));
+    await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/projects/proj-1/ai-activity/tokens/hash-live'));
     await waitFor(() => expect(vi.mocked(api.get).mock.calls.length).toBeGreaterThan(1));
+  });
+
+  test('an org owner or admin is offered revoke on a teammate\'s token and told whose it is', async () => {
+    const u = userEvent.setup();
+    vi.mocked(api.delete).mockResolvedValue({ data: null } as never);
+    vi.mocked(api.get).mockResolvedValue({
+      data: { calls: [{ id: 9, tool: 'execute_sql', status: 'ok', tokenName: 'Their MCP', userId: 'teammate', at: '2026-10-06T00:58:00Z', mine: false, tokenId: 'hash-theirs' }] },
+    } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><AiActivityFeed projectId="proj-1" /></QueryClientProvider>);
+    await u.click(within(await screen.findByTestId('ai-activity-9')).getByRole('button', { name: /revoke/i }));
+    const modal = await screen.findByTestId('confirm-modal');
+    expect(modal).toHaveTextContent(/another member's token/i);
+    await u.click(within(modal).getByRole('button', { name: /^revoke$/i }));
+    await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/projects/proj-1/ai-activity/tokens/hash-theirs'));
   });
 
   test('an empty project says so', async () => {

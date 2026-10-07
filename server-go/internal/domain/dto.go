@@ -411,18 +411,18 @@ type SnapshotExportRequest struct {
 // --- Migration ---
 
 type MigrationRecord struct {
-	ID              string    `json:"id"`
-	ProjectID       string    `json:"projectId"`
-	Version         string    `json:"version,omitempty"`
-	Name            string    `json:"name,omitempty"`
-	Description     string    `json:"description,omitempty"`
-	SQL             string    `json:"sql"`
-	Status          string    `json:"status"`
-	AppliedAt       *FlexTime `json:"appliedAt,omitempty"`
-	ExecutionTimeMs int64     `json:"executionTimeMs"`
-	ErrorMessage    string    `json:"errorMessage,omitempty"`
-	Checksum        string    `json:"checksum,omitempty"`
-	Output          string    `json:"output,omitempty"`
+	ID              string   `json:"id"`
+	ProjectID       string   `json:"projectId"`
+	Version         string   `json:"version,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	Description     string   `json:"description,omitempty"`
+	SQL             string   `json:"sql"`
+	Status          string   `json:"status"`
+	AppliedAt       *UTCTime `json:"appliedAt,omitempty"`
+	ExecutionTimeMs int64    `json:"executionTimeMs"`
+	ErrorMessage    string   `json:"errorMessage,omitempty"`
+	Checksum        string   `json:"checksum,omitempty"`
+	Output          string   `json:"output,omitempty"`
 }
 
 type MigrationRequest struct {
