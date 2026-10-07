@@ -3,6 +3,7 @@ package shiptemplates
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -18,6 +19,19 @@ type DeployTarget struct {
 	AppID string
 	// Image is the app's image; its repository is where CI pushes.
 	Image string
+	Build BuildOptions
+}
+
+// BuildOptions say where in the repository the image is built from.
+type BuildOptions struct {
+	// Context is the build folder; "." when empty.
+	Context string
+	// Dockerfile is the Dockerfile's path from the repository root; the
+	// context's own Dockerfile when empty.
+	Dockerfile string
+	// Branch is the branch whose pushes deploy: "main" on GitHub, the
+	// default branch on GitLab, when empty.
+	Branch string
 }
 
 // Snippet is a rendered CI pipeline and the secrets it reads.
@@ -33,6 +47,11 @@ var (
 	// validImage is an image reference: no quote, space or shell character can
 	// reach the pipeline it is written into.
 	validImage = regexp.MustCompile(`^[a-z0-9][a-z0-9._\-/:@]{0,254}$`)
+	// validRepoPath and validBranch keep options to plain names inside the
+	// repository: no quote, space, expression or climb reaches a pipeline.
+	validRepoPath = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._/\-]{0,199}$`)
+	validBranch   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/\-]{0,99}$`)
+	notTagChar    = regexp.MustCompile(`[^A-Za-z0-9_.\-]`)
 )
 
 var dockerHubAliases = map[string]bool{"docker.io": true, "index.docker.io": true, "registry-1.docker.io": true}
@@ -54,6 +73,7 @@ func CI(provider string, target DeployTarget) (Snippet, error) {
 	notes := []string{
 		"The app must exist in Excalibase first; set its port to the one the image serves on.",
 		"A private image needs the registry's credentials saved in the project (Containers, Registry credentials).",
+		"Deploys run one at a time, and the pipeline can also be started by hand on the deploy branch.",
 	}
 	switch provider {
 	case "github-actions":
@@ -70,6 +90,9 @@ func CI(provider string, target DeployTarget) (Snippet, error) {
 			Notes: append(notes, "The agent needs docker and curl."),
 		}, nil
 	case "curl":
+		if target.Build != (BuildOptions{}) {
+			notes = append(notes, "This step runs after your own build and push: set the build context, Dockerfile and branch in that build.")
+		}
 		return Snippet{Path: "deploy.sh", Content: curlScript(target), Secrets: []string{tokenSecret}, Notes: notes}, nil
 	}
 	return Snippet{}, fmt.Errorf("unknown CI provider %q: use %s", provider, strings.Join(Providers(), ", "))
@@ -87,7 +110,43 @@ func validate(target *DeployTarget) error {
 	if !validImage.MatchString(target.Image) {
 		return fmt.Errorf("image must be a lowercase image reference such as ghcr.io/team/app")
 	}
+	return validateBuild(target.Build)
+}
+
+func validateBuild(build BuildOptions) error {
+	for _, option := range [][2]string{{"build context", build.Context}, {"dockerfile", build.Dockerfile}} {
+		if path := option[1]; path != "" && (!validRepoPath.MatchString(path) || climbs(path)) {
+			return fmt.Errorf("%s must be a path inside the repository, e.g. apps/web", option[0])
+		}
+	}
+	if build.Branch != "" && (!validBranch.MatchString(build.Branch) || strings.Contains(build.Branch, "..")) {
+		return fmt.Errorf("branch must be a branch name, e.g. main")
+	}
 	return nil
+}
+
+func climbs(path string) bool {
+	return slices.Contains(strings.Split(path, "/"), "..")
+}
+
+func buildContext(build BuildOptions) string {
+	if build.Context == "" {
+		return "."
+	}
+	return build.Context
+}
+
+// dockerBuildArgs is what docker build reads after its tag: the Dockerfile, when named, and the context.
+func dockerBuildArgs(build BuildOptions) string {
+	if build.Dockerfile == "" {
+		return buildContext(build)
+	}
+	return "-f " + build.Dockerfile + " " + buildContext(build)
+}
+
+// branchTag is the branch as an image tag.
+func branchTag(branch string) string {
+	return notTagChar.ReplaceAllString(branch, "-")
 }
 
 // imageRepository is the repository part of an image reference, without its tag or digest.

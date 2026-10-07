@@ -31,4 +31,16 @@ describe('CI snippets match the server golden pipelines', () => {
       });
     }
   }
+
+  // One app of a monorepo, built from its folder on a release branch.
+  for (const [provider, render] of Object.entries(PROVIDERS)) {
+    test(`${provider} with build options`, () => {
+      const target = {
+        apiUrl: 'https://app.example.test/api', projectId: 'proj-a', appId: 'web', image: 'acme/web',
+        build: { context: 'apps/poll', dockerfile: 'apps/poll/Dockerfile.prod', branch: 'release/v2' },
+      };
+      const golden = readFileSync(join(GOLDEN_DIR, `${provider}.options.golden`), 'utf8');
+      expect(render(target)).toBe(golden);
+    });
+  }
 });

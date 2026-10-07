@@ -3,6 +3,7 @@ deploy:
   image: docker:27
   services:
     - docker:27-dind
+  resource_group: excalibase-deploy
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
     IMAGE_REPOSITORY: "registry.example.com/team/web"

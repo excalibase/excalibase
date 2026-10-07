@@ -8,11 +8,11 @@ deploy:
     DOCKER_TLS_CERTDIR: "/certs"
     IMAGE_REPOSITORY: "acme/web"
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH == "release/v2"
   script:
     - 'echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin'
     - export COMMIT_SHA="$CI_COMMIT_SHA"
-    - docker build -t "$IMAGE_REPOSITORY:$COMMIT_SHA" .
+    - docker build -t "$IMAGE_REPOSITORY:$COMMIT_SHA" -f apps/poll/Dockerfile.prod apps/poll
     - docker push "$IMAGE_REPOSITORY:$COMMIT_SHA"
     - export IMAGE="$(docker inspect --format="{{range .RepoDigests}}{{println .}}{{end}}" "$IMAGE_REPOSITORY:$COMMIT_SHA" | grep "^$IMAGE_REPOSITORY@" | head -n 1)"
     - apk add --no-cache curl

@@ -34,21 +34,81 @@ func TestCIMatchesTheGoldenPipelines(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s %s: %v", provider, label, err)
 			}
-			path := filepath.Join("testdata", provider+"."+label+".golden")
-			if *updateGolden {
-				if err := os.WriteFile(path, []byte(snippet.Content), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				continue
-			}
-			want, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read %s: %v", path, err)
-			}
-			if snippet.Content != string(want) {
-				t.Errorf("%s differs from %s:\n%s", provider, path, snippet.Content)
+			checkGolden(t, filepath.Join("testdata", provider+"."+label+".golden"), snippet.Content)
+		}
+	}
+}
+
+// optionsTarget builds from a folder of a monorepo on a release branch.
+func optionsTarget() DeployTarget {
+	target := goldenTarget("acme/web")
+	target.Build = BuildOptions{Context: "apps/poll", Dockerfile: "apps/poll/Dockerfile.prod", Branch: "release/v2"}
+	return target
+}
+
+// TestCIWithBuildOptionsMatchesTheGoldenPipelines pins a pipeline for one app
+// of a monorepo, the shape the examples repository had to write by hand.
+func TestCIWithBuildOptionsMatchesTheGoldenPipelines(t *testing.T) {
+	for _, provider := range Providers() {
+		snippet, err := CI(provider, optionsTarget())
+		if err != nil {
+			t.Fatalf("%s: %v", provider, err)
+		}
+		checkGolden(t, filepath.Join("testdata", provider+".options.golden"), snippet.Content)
+	}
+}
+
+func TestGitHubPipelineTagsBranchAndShortShaAndRunsOneDeployAtATime(t *testing.T) {
+	snippet, err := CI("github-actions", optionsTarget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`branches: ["release/v2"]`, "workflow_dispatch:", "concurrency:", "cancel-in-progress: false",
+		"if: github.ref_name == 'release/v2'", `context: "apps/poll"`, `file: "apps/poll/Dockerfile.prod"`,
+		"acme/web:release-v2", "acme/web:${{ steps.tag.outputs.short }}", `short=${GITHUB_SHA::7}`,
+	} {
+		if !strings.Contains(snippet.Content, want) {
+			t.Errorf("missing %q:\n%s", want, snippet.Content)
+		}
+	}
+}
+
+func TestCIRefusesBuildOptionsThatLeaveTheRepository(t *testing.T) {
+	for name, build := range map[string]BuildOptions{
+		"a climbing context":     {Context: "../other"},
+		"an absolute dockerfile": {Dockerfile: "/etc/passwd"},
+		"a nested climb":         {Dockerfile: "apps/../../x"},
+		"a quote":                {Context: "apps/a'b"},
+		"a space":                {Dockerfile: "apps/a b/Dockerfile"},
+		"a branch with a space":  {Branch: "main branch"},
+		"a branch expression":    {Branch: "${{ github.event }}"},
+		"a branch with a climb":  {Branch: "a..b"},
+	} {
+		target := goldenTarget("acme/web")
+		target.Build = build
+		for _, provider := range Providers() {
+			if _, err := CI(provider, target); err == nil {
+				t.Errorf("%s: %s was not refused", provider, name)
 			}
 		}
+	}
+}
+
+func checkGolden(t *testing.T, path, content string) {
+	t.Helper()
+	if *updateGolden {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if content != string(want) {
+		t.Errorf("differs from %s:\n%s", path, content)
 	}
 }
 
@@ -120,17 +180,24 @@ func TestCIPlaceholderAppWhenNoneIsNamed(t *testing.T) {
 
 func TestYAMLPipelinesParse(t *testing.T) {
 	for _, provider := range []string{"github-actions", "gitlab-ci"} {
-		snippet, err := CI(provider, goldenTarget("registry.example.com/team/web"))
-		if err != nil {
-			t.Fatalf("%s: %v", provider, err)
+		for _, target := range []DeployTarget{goldenTarget("registry.example.com/team/web"), optionsTarget()} {
+			yamlParses(t, provider, target)
 		}
-		var parsed map[string]any
-		if err := yaml.Unmarshal([]byte(snippet.Content), &parsed); err != nil {
-			t.Fatalf("%s is not valid YAML: %v\n%s", provider, err, snippet.Content)
-		}
-		if !strings.Contains(stepText(parsed), `"$APP_API/deploy"`) {
-			t.Errorf("%s: the deploy script did not land inside a step", provider)
-		}
+	}
+}
+
+func yamlParses(t *testing.T, provider string, target DeployTarget) {
+	t.Helper()
+	snippet, err := CI(provider, target)
+	if err != nil {
+		t.Fatalf("%s: %v", provider, err)
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(snippet.Content), &parsed); err != nil {
+		t.Fatalf("%s is not valid YAML: %v\n%s", provider, err, snippet.Content)
+	}
+	if !strings.Contains(stepText(parsed), `"$APP_API/deploy"`) {
+		t.Errorf("%s: the deploy script did not land inside a step", provider)
 	}
 }
 
