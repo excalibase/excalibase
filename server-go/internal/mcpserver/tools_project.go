@@ -72,13 +72,13 @@ func getProjectInfo(ctx context.Context, c *call, in projectArg) (any, error) {
 	var info struct {
 		ProjectID          string   `json:"projectId"`
 		ProjectName        string   `json:"projectName"`
-		OrgSlug            string   `json:"orgSlug"`
 		CorsAllowedOrigins []string `json:"corsAllowedOrigins"`
 	}
 	if err := c.get(ctx, projectsAPI+projectID+"/info/", nil, &info); err != nil {
 		return nil, err
 	}
-	urls := endpoints(c.settings.PublicBaseURL, info.OrgSlug, projectID)
+	// The org segment is a label auth ignores; the SDK and Studio use the project id, so every snippet agrees.
+	urls := endpoints(c.settings.PublicBaseURL, "", projectID)
 	setup := sdkSetup(c.settings.PublicBaseURL, projectID)
 	setup["fetchExample"] = fetchExample(urls)
 	origins := currentOrigins(ctx, c, projectID, info.CorsAllowedOrigins)
@@ -180,11 +180,14 @@ func endpoints(base, orgSlug, projectID string) map[string]string {
 func sdkSetup(base, projectID string) map[string]string {
 	snippet := fmt.Sprintf(`import { createClient } from "@excalibase/sdk";
 
+// A publishable key (esk_pub_...) is safe in pages and browser bundles: it only
+// reaches what your API permissions allow.
+const PUBLISHABLE_KEY = "esk_pub_...";
+
 export const db = createClient({
   url: %q,
   projectId: %q,
-  // A publishable key (esk_pub_...), safe in browser code.
-  key: process.env.EXCALIBASE_PUBLISHABLE_KEY,
+  key: PUBLISHABLE_KEY,
 });
 
 await db.auth.signInWithApiKey();

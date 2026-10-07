@@ -181,6 +181,6 @@ describe('SDK keys — using a key', () => {
     renderRoute();
     const code = await screen.findByTestId('connect-code');
     expect(code).toHaveTextContent("projectId: 'proj-1'");
-    expect(code).toHaveTextContent('key: process.env.EXCALIBASE_PUBLISHABLE_KEY');
+    expect(code).toHaveTextContent('key: PUBLISHABLE_KEY');
   });
 });

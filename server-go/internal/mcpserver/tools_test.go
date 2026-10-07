@@ -201,9 +201,12 @@ func routeCases() []routeCase {
 				if !strings.Contains(setup["snippet"].(string), `projectId: "proj-a"`) {
 					t.Errorf("snippet = %v", setup["snippet"])
 				}
+				if strings.Contains(setup["snippet"].(string), "process.env") {
+					t.Errorf("a browser bundle has no process.env: %v", setup["snippet"])
+				}
 				fetch, _ := setup["fetchExample"].(string)
 				for _, want := range []string{
-					"https://api.example.test/auth/acme/proj-a/token", `grant_type: "api_key"`,
+					"https://api.example.test/auth/proj-a/proj-a/token", `grant_type: "api_key"`,
 					"https://api.example.test/proj-a/api/v1/", "Authorization", "X-Excalibase-Publishable-Key",
 				} {
 					if !strings.Contains(fetch, want) {
@@ -232,7 +235,7 @@ func routeCases() []routeCase {
 				}
 				guides, _ := json.Marshal(map[string]any{"auth": out["endUserAuth"], "perm": out["permissions"], "rt": out["realtime"], "studio": out["notInMcp"]})
 				for _, want := range []string{
-					"https://api.example.test/auth/acme/proj-a/register", `\"grant_type\":\"password\"`, "refresh_token", "/logout", "userId",
+					"https://api.example.test/auth/proj-a/proj-a/register", `\"grant_type\":\"password\"`, "refresh_token", "/logout", "userId",
 					"X-Excalibase-User-Id", "insert always needs a check", "graphql-transport-ws", "connection_init", "set_realtime",
 					"without an Authorization header", "/account/tokens", "/project/proj-a/api-keys",
 				} {
