@@ -53,7 +53,7 @@ type probeArgs struct {
 }
 
 const probeDescription = "Send ONE request to the project's own data API (REST, rpc/<function> or GraphQL) the way a page does: " +
-	"sign in with a publishable key as the anon role, or pass a signed-in end user's access_token, then call the endpoint, and see the status and body. " +
+	"sign in with a publishable key as the anon role, pass a signed-in end user's access_token, or pass neither to send no credential (which runs as anon, as a page without a key does), then see the status and body. " +
 	"Permissions apply exactly as for the page; with origin, the browser's CORS preflights for the sign-in call and the request are checked too. " +
 	"Probe every request a page makes before handing it over; " +
 	"a 403 usually means a missing permission (set_permission), and a count needs allowAggregations."
@@ -105,16 +105,24 @@ func testAPIRequest(ctx context.Context, c *call, in probeArgs) (any, error) {
 	client := &http.Client{CheckRedirect: noRedirects}
 	tokenURL := endpoints(base, info.OrgSlug, projectID)["auth"] + "/token"
 	token := in.AccessToken
-	if token == "" {
+	if token == "" && in.PublishableKey != "" {
 		if token, err = exchangeKey(ctx, client, tokenURL, in.PublishableKey); err != nil {
 			return nil, err
 		}
 	}
 	out, err := sendProbe(ctx, client, base, target, in, token)
-	if err != nil || target.origin == "" {
+	if err != nil {
 		return out, err
 	}
-	out["cors"] = corsPreflights(ctx, client, tokenURL, base, target, in)
+	if token == "" {
+		out["as"] = "anon: no credential was sent (a request without one runs as anon)"
+	}
+	if target.origin == "" {
+		return out, nil
+	}
+	cors := corsPreflights(ctx, client, tokenURL, base, target, in, token != "")
+	adviseOnBlock(ctx, c, projectID, target.origin, cors)
+	out["cors"] = cors
 	return out, nil
 }
 
@@ -157,9 +165,7 @@ func probeTarget(readOnly bool, projectID string, in probeArgs) (probeRequest, e
 
 // probeCredential is a publishable key, an end user's access token, or both.
 func probeCredential(projectID string, in probeArgs) error {
-	if in.PublishableKey == "" && in.AccessToken == "" {
-		return errors.New("pass publishable_key (anon) or access_token (a signed-in end user)")
-	}
+	// With neither, the request carries no credential and runs as anon (ADR 0036).
 	if in.PublishableKey != "" && (!strings.HasPrefix(in.PublishableKey, publishablePrefix) || len(in.PublishableKey) > maxProbeHeader) {
 		return fmt.Errorf("publishable_key must be a publishable key (%s...); secret keys are never used", publishablePrefix)
 	}
@@ -285,7 +291,9 @@ func sendProbe(ctx context.Context, client *http.Client, base string, target pro
 		log.Printf("mcp: probe request %s: %v", target.path, err)
 		return nil, errProbeUnanswered
 	}
-	request.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 	if in.PublishableKey != "" {
 		request.Header.Set("X-Excalibase-Publishable-Key", in.PublishableKey)
 	}

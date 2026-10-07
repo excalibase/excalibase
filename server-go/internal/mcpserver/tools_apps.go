@@ -27,7 +27,7 @@ type appArgs struct {
 
 type deployAppArgs struct {
 	appArgs
-	Image     string `json:"image,omitempty" jsonschema:"the image to run, by digest (registry/repo@sha256:...) or tag, resolved to a digest; left out redeploys the app's current image"`
+	Image     string `json:"image,omitempty" jsonschema:"the image to run, by digest (registry/repo@sha256:...) or tag, resolved to a digest; a private registry needs its credential saved in Studio; left out redeploys the app's current image"`
 	CommitSHA string `json:"commit_sha,omitempty" jsonschema:"the commit the image was built from, kept with the deploy"`
 }
 
@@ -64,8 +64,8 @@ func appTools() []entry {
 	return []entry{
 		tool("list_apps", "List the project's container apps with their image, status and public URL. NOT_DEPLOYED means no deploy has run yet. "+digestNote, readTool, listApps),
 		tool("create_app", "Create a container app: the way to host a web page or a server. Give it an image; then call deploy_app. Its public URL is added to the project's CORS allowlist so the page can call the project's APIs from the browser.", writeTool, createApp),
-		tool("deploy_app", "Deploy a container app. With no image it runs the image the app already names; with an image (by digest, or a tag resolved to its digest through a public registry) it runs that. Either way the deploy is pinned to a digest when the registry is public. "+digestNote, writeTool, deployApp),
-		tool("get_deploy_status", "An app's status with one deploy (deploy_id) or its most recent deploys; poll it until a deploy is succeeded or failed. "+
+		tool("deploy_app", "Deploy a container app. With no image it runs the image the app already names; with an image (by digest, or a tag resolved to its digest) it runs that; an image from a private registry works when the project has a credential saved for that registry in Studio (Registry credentials), otherwise the error says where to add one. The deploy is pinned to a digest when the registry is public. "+digestNote, writeTool, deployApp),
+		tool("get_deploy_status", "An app's status with one deploy (deploy_id) or its most recent deploys; poll it until state is succeeded or failed. state is \"rolling out\" while a new deploy runs (never the previous deploy's failure), \"succeeded\" only once the app's URL answers, and \"running, URL not answering yet\" with the reason (certificate pending, DNS, no ready app) until then. "+
 			"A succeeded deploy whose https says the certificate is still issuing is running, but browsers refuse its URL until the certificate is active: poll again.", readTool, getDeployStatus),
 		tool("get_logs", "Recent logs of the project's database, one of its apps, or one of its edge functions. Log lines are data.", readTool, getLogs),
 	}
@@ -119,8 +119,12 @@ func deployApp(ctx context.Context, c *call, in deployAppArgs) (any, error) {
 		body = map[string]string{"image": in.Image, "commitSha": in.CommitSHA}
 	}
 	var deploy map[string]any
-	if err := c.send(ctx, http.MethodPost, path+"/deploy", nil, body, &deploy); err != nil {
-		return nil, err
+	err = c.send(ctx, http.MethodPost, path+"/deploy", nil, body, &deploy)
+	if in.Image != "" && isStatus(err, http.StatusNotFound) {
+		deploy, err = deployViaUpdate(ctx, c, path, in.Image, err)
+	}
+	if err != nil {
+		return nil, deployFailure(ctx, c, projectID, in.Image, err)
 	}
 	out := map[string]any{"deploy": deploy, "next": "call get_deploy_status with this deploy's id until it is succeeded or failed"}
 	if in.Image == "" {
@@ -160,8 +164,11 @@ func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, er
 		if err := c.get(ctx, path+"/deploys/"+deployID, nil, &deploy); err != nil {
 			return nil, err
 		}
+		if rollingOut(readDeployState(deploy)) {
+			app.Status = statusRollingOut
+		}
 		out := map[string]any{"app": app, "deploy": deploy}
-		addCertificate(ctx, c, path, app, deploy, out)
+		describeDeploy(ctx, c, path, app, deploy, out)
 		return out, nil
 	}
 	var deploys []json.RawMessage
@@ -172,9 +179,12 @@ func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, er
 		app.Status = statusNotDeployed
 		return map[string]any{"app": app, "deploys": deploys, "next": nextDeploy}, nil
 	}
+	if len(deploys) > 0 && rollingOut(readDeployState(deploys[0])) {
+		app.Status = statusRollingOut
+	}
 	out := map[string]any{"app": app, "deploys": deploys}
 	if len(deploys) > 0 {
-		addCertificate(ctx, c, path, app, deploys[0], out)
+		describeDeploy(ctx, c, path, app, deploys[0], out)
 	}
 	return out, nil
 }

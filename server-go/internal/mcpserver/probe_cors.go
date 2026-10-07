@@ -19,9 +19,11 @@ type preflight struct {
 
 // corsPreflights runs the preflights a browser on target.origin sends before
 // signing in and before this request, since both carry non-simple headers.
-func corsPreflights(ctx context.Context, client *http.Client, tokenURL, base string, target probeRequest, in probeArgs) map[string]any {
-	signIn := sendPreflight(ctx, client, tokenURL, target.origin, http.MethodPost, "content-type")
-	requestHeaders := []string{"authorization"}
+func corsPreflights(ctx context.Context, client *http.Client, tokenURL, base string, target probeRequest, in probeArgs, withCredential bool) map[string]any {
+	var requestHeaders []string
+	if withCredential {
+		requestHeaders = append(requestHeaders, "authorization")
+	}
 	if in.PublishableKey != "" {
 		requestHeaders = append(requestHeaders, "x-excalibase-publishable-key")
 	}
@@ -31,13 +33,51 @@ func corsPreflights(ctx context.Context, client *http.Client, tokenURL, base str
 	if in.Prefer != "" {
 		requestHeaders = append(requestHeaders, "prefer")
 	}
+	out := map[string]any{}
+	allowed := true
+	// An anonymous request with no credential never signs in, so there is no sign-in call to check.
+	if withCredential {
+		signIn := sendPreflight(ctx, client, tokenURL, target.origin, http.MethodPost, "content-type")
+		out["signIn"] = signIn
+		allowed = signIn.Allowed
+	}
 	request := sendPreflight(ctx, client, base+target.path, target.origin, target.method, strings.Join(requestHeaders, ","))
-	out := map[string]any{"signIn": signIn, "request": request}
-	if !signIn.Allowed || !request.Allowed {
-		out["blocked"] = "A browser page on " + target.origin + " would be blocked here. Add the origin with add_cors_origin " +
-			"(the allowlist covers sign-in and data alike), then probe again."
+	out["request"] = request
+	allowed = allowed && request.Allowed
+	if !allowed {
+		out["blocked"] = blockedAdvice(target.origin, false)
 	}
 	return out
+}
+
+const corsPropagation = "CORS changes take about 1 minute to reach the data plane."
+
+// blockedAdvice is what to do about a browser origin the data plane refused.
+func blockedAdvice(origin string, listed bool) string {
+	if listed {
+		return "A browser page on " + origin + " would be blocked here, but the origin is already listed on the project's CORS allowlist: " +
+			"wait about 1 minute for the change to reach the data plane, then probe again. " + corsPropagation
+	}
+	return "A browser page on " + origin + " would be blocked here. Add the origin with add_cors_origin " +
+		"(the allowlist covers sign-in and data alike), then probe again. " + corsPropagation
+}
+
+// adviseOnBlock rewrites a block's advice when the origin is already on the
+// allowlist: adding it again would change nothing, only waiting does.
+func adviseOnBlock(ctx context.Context, c *call, projectID, origin string, cors map[string]any) {
+	if cors["blocked"] == nil {
+		return
+	}
+	var current corsList
+	if err := c.get(ctx, projectsAPI+projectID+"/cors/", nil, &current); err != nil {
+		return
+	}
+	for _, listed := range current.AllowedOrigins {
+		if strings.EqualFold(strings.TrimRight(listed, "/"), origin) {
+			cors["blocked"] = blockedAdvice(origin, true)
+			return
+		}
+	}
 }
 
 func sendPreflight(ctx context.Context, client *http.Client, targetURL, origin, method, headers string) preflight {

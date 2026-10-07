@@ -12,12 +12,12 @@ import (
 // list on purpose: the endpoint is built for coding, and every addition is a
 // decision about what an AI tool may do with a person's credential.
 var offeredTools = []string{
-	"add_cors_origin", "apply_migration", "create_app", "create_publishable_key", "delete_function", "deploy_app",
+	"add_cors_origin", "apply_migration", "create_app", "create_publishable_key", "delete_app", "delete_function", "deploy_app",
 	"deploy_function", "describe_table", "execute_sql", "generate_typescript_types", "get_ci_snippet",
 	"get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_project_info",
 	"list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects",
 	"list_tables", "remove_cors_origin", "set_db_function_permission", "set_function_outbound_hosts",
-	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "track_db_function",
+	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "test_auth_flow", "track_db_function", "update_app",
 }
 
 // allowedRoutes is every route a tool may call. Anything else is refused by
@@ -51,6 +51,11 @@ var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^POST /api/projects/[^/]+/functions/secrets$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/functions/[^/]+/logs(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/apps/$`),
+	regexp.MustCompile(`^(PATCH|DELETE) /api/projects/[^/]+/apps/[^/]+/$`),
+	// Names of the registries with a saved login; never a username or password.
+	regexp.MustCompile(`^GET /api/projects/[^/]+/registry-credentials/$`),
+	// Whether the project's apps may reach each other (the route asks for admin to change it).
+	regexp.MustCompile(`^(GET|PUT) /api/projects/[^/]+/app-network/$`),
 	// The allowlist is read whole and edited one origin at a time; the
 	// wildcard is never set through MCP.
 	regexp.MustCompile(`^GET /api/projects/[^/]+/cors/$`),
@@ -84,7 +89,7 @@ var neverReached = []*regexp.Regexp{
 	regexp.MustCompile(`/api/admin`),
 	regexp.MustCompile(`/api/orgs`),
 	regexp.MustCompile(`/documentdb/users`),
-	regexp.MustCompile(`/registry-credentials`),
+	regexp.MustCompile(`^(PUT|POST|PATCH|DELETE) .*/registry-credentials`),
 }
 
 func TestToolCatalogueIsExactlyTheCodingSurface(t *testing.T) {
