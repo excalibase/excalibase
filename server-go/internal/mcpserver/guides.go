@@ -18,7 +18,9 @@ func authGuide(urls map[string]string) map[string]any {
 			"\"anon\" for the publishable-key exchange). Send it as Authorization: Bearer <accessToken> to REST, GraphQL, realtime and functions.",
 		"cors": "The browser calls these from the page's origin, so that origin must be on the project's CORS list (list_cors_origins, add_cors_origin); " +
 			"test_api_request with origin checks the sign-in call too.",
-		"settings": "Email verification and the site URL in verification links are project sign-in settings; MCP does not change them.",
+		"settings": "Email verification and the site URL in verification and password-reset links are project sign-in settings; MCP does not change them. " +
+			"The site URL (absolute https, or http://localhost) is required: without it register (when verification is on), resend-verification and forgot-password answer 422 site_url_required and send nothing. " +
+			"Set it in Studio → Authentication → Settings.",
 	}
 }
 

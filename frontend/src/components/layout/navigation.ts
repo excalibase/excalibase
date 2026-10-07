@@ -87,6 +87,7 @@ export const PROJECT_NAV: NavSection[] = [
     children: [
       { label: 'Users', icon: Users, to: 'auth/users' },
       { label: 'Sessions', icon: KeyRound, to: 'auth/sessions' },
+      { label: 'Settings', icon: Settings, to: 'auth/settings' },
     ],
   },
   // Temporarily hidden — pending integration with excalibase-rest/watcher/serverless

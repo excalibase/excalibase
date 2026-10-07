@@ -32,6 +32,7 @@ const ExtensionsPage = lazy(() => import('./pages/ExtensionsPage').then(m => ({ 
 const RolesPage = lazy(() => import('./pages/RolesPage').then(m => ({ default: m.RolesPage })));
 const RlsPage = lazy(() => import('./pages/RlsPage').then(m => ({ default: m.RlsPage })));
 const AuthUsersPage = lazy(() => import('./pages/AuthUsersPage').then(m => ({ default: m.AuthUsersPage })));
+const AuthSettingsPage = lazy(() => import('./pages/AuthSettingsPage').then(m => ({ default: m.AuthSettingsPage })));
 const AuthSessionsPage = lazy(() => import('./pages/AuthSessionsPage').then(m => ({ default: m.AuthSessionsPage })));
 const EdgeFunctionsPage = lazy(() => import('./pages/EdgeFunctionsPage').then(m => ({ default: m.EdgeFunctionsPage })));
 const ApiInfoPage = lazy(() => import('./pages/ApiInfoPage').then(m => ({ default: m.ApiInfoPage })));
@@ -137,6 +138,7 @@ export default function App() {
               </Route>
               {/* Read from the platform, so they work in any state. */}
               <Route path="database/overview" element={<InstanceDetailPage />} />
+              <Route path="auth/settings" element={<AuthSettingsPage />} />
               <Route path="api-keys" element={<SdkKeysPage />} />
               <Route path="api" element={<ApiInfoPage />} />
               <Route path="monitoring/metrics" element={<MetricsPage />} />

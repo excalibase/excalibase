@@ -235,6 +235,7 @@ func routeCases() []routeCase {
 					"https://api.example.test/auth/acme/proj-a/register", `\"grant_type\":\"password\"`, "refresh_token", "/logout", "userId",
 					"X-Excalibase-User-Id", "insert always needs a check", "graphql-transport-ws", "connection_init", "set_realtime",
 					"without an Authorization header", "/account/tokens", "/project/proj-a/api-keys",
+					"site_url_required", "Authentication → Settings",
 				} {
 					if !strings.Contains(string(guides), want) {
 						t.Errorf("guides lack %q: %s", want, guides)
