@@ -40,26 +40,20 @@ func (s *Store) SetCorsOrigins(ctx context.Context, projectID string, origins []
 	if origins == nil {
 		origins = []string{}
 	}
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO project_cors_settings (project_id, allowed_origins, updated_at)
-VALUES ($1, $2, $3)
-ON CONFLICT (project_id) DO UPDATE SET
-    allowed_origins = EXCLUDED.allowed_origins,
-    app_origins     = (SELECT COALESCE(jsonb_object_agg(owned.key, owned.value), '{}'::jsonb)
-                       FROM jsonb_each_text(project_cors_settings.app_origins) AS owned
-                       WHERE owned.value = ANY(EXCLUDED.allowed_origins)),
-    updated_at      = EXCLUDED.updated_at`,
-		projectID, pq.Array(origins), time.Now())
-	if err != nil {
-		return fmt.Errorf("write cors allowlist: %w", err)
-	}
-	return nil
+	_, _, err := s.editCors(ctx, projectID, func(row *corsRow) (bool, error) {
+		row.origins = origins
+		for app, owned := range row.apps {
+			row.apps[app] = slices.DeleteFunc(owned, func(origin string) bool { return !slices.Contains(origins, origin) })
+		}
+		return true, nil
+	})
+	return err
 }
 
-// corsRow is one project's allowlist and the origins its apps added.
+// corsRow is one project's allowlist and, per app, the origins it added.
 type corsRow struct {
 	origins []string
-	apps    map[string]string
+	apps    map[string][]string
 }
 
 // editCors changes the allowlist under the row's lock, so two edits never
@@ -73,7 +67,7 @@ func (s *Store) editCors(ctx context.Context, projectID string, edit func(*corsR
 	if _, err := tx.ExecContext(ctx, `INSERT INTO project_cors_settings (project_id) VALUES ($1) ON CONFLICT (project_id) DO NOTHING`, projectID); err != nil {
 		return nil, false, fmt.Errorf("create cors row: %w", err)
 	}
-	row := &corsRow{origins: []string{}, apps: map[string]string{}}
+	row := &corsRow{origins: []string{}, apps: map[string][]string{}}
 	var apps []byte
 	err = tx.QueryRowContext(ctx,
 		`SELECT allowed_origins, app_origins FROM project_cors_settings WHERE project_id = $1 FOR UPDATE`, projectID,
@@ -87,6 +81,11 @@ func (s *Store) editCors(ctx context.Context, projectID string, edit func(*corsR
 	changed, err := edit(row)
 	if err != nil || !changed {
 		return row, false, err
+	}
+	for app, owned := range row.apps {
+		if len(owned) == 0 {
+			delete(row.apps, app)
+		}
 	}
 	encoded, err := json.Marshal(row.apps)
 	if err != nil {
@@ -116,7 +115,7 @@ func (s *Store) AddCorsOrigin(ctx context.Context, projectID, origin, appID stri
 		}
 		row.origins = next
 		if appID != "" {
-			row.apps[appID] = origin
+			row.apps[appID] = append(slices.Clone(row.apps[appID]), origin)
 		}
 		return true, nil
 	})
@@ -137,18 +136,20 @@ func (s *Store) RemoveCorsOrigin(ctx context.Context, projectID, origin string) 
 	return removed, row.origins, nil
 }
 
-// ReleaseAppCorsOrigin removes the origin appID added, if it still holds one,
-// and answers it.
-func (s *Store) ReleaseAppCorsOrigin(ctx context.Context, projectID, appID string) (string, error) {
-	released := ""
+// ReleaseAppCorsOrigins removes the origins appID added that are still listed,
+// and answers them.
+func (s *Store) ReleaseAppCorsOrigins(ctx context.Context, projectID, appID string) ([]string, error) {
+	var released []string
 	_, _, err := s.editCors(ctx, projectID, func(row *corsRow) (bool, error) {
-		origin, ok := row.apps[appID]
+		owned, ok := row.apps[appID]
 		if !ok {
 			return false, nil
 		}
 		delete(row.apps, appID)
-		if removeOrigin(row, origin) {
-			released = origin
+		for _, origin := range owned {
+			if removeOrigin(row, origin) {
+				released = append(released, origin)
+			}
 		}
 		return true, nil
 	})
@@ -162,9 +163,7 @@ func removeOrigin(row *corsRow, origin string) bool {
 	}
 	row.origins = slices.Delete(slices.Clone(row.origins), index, index+1)
 	for app, owned := range row.apps {
-		if owned == origin {
-			delete(row.apps, app)
-		}
+		row.apps[app] = slices.DeleteFunc(slices.Clone(owned), func(o string) bool { return o == origin })
 	}
 	return true
 }

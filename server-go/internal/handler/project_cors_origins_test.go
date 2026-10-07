@@ -13,7 +13,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
-// AddCorsOrigin, RemoveCorsOrigin and ReleaseAppCorsOrigin make memCorsStore
+// AddCorsOrigin, RemoveCorsOrigin and ReleaseAppCorsOrigins make memCorsStore
 // a ProjectCorsEditor; owner records which app added which origin.
 func (m *memCorsStore) AddCorsOrigin(_ context.Context, projectID, origin, appID string) (bool, []string, error) {
 	if m.err != nil {
@@ -47,17 +47,17 @@ func (m *memCorsStore) RemoveCorsOrigin(_ context.Context, projectID, origin str
 	return true, m.origins[projectID], nil
 }
 
-func (m *memCorsStore) ReleaseAppCorsOrigin(ctx context.Context, projectID, appID string) (string, error) {
+func (m *memCorsStore) ReleaseAppCorsOrigins(ctx context.Context, projectID, appID string) ([]string, error) {
 	origin, ok := m.appOrigins()[projectID+"/"+appID]
 	if !ok {
-		return "", m.err
+		return nil, m.err
 	}
 	delete(m.owner, projectID+"/"+appID)
 	removed, _, err := m.RemoveCorsOrigin(ctx, projectID, origin)
 	if err != nil || !removed {
-		return "", err
+		return nil, err
 	}
-	return origin, nil
+	return []string{origin}, nil
 }
 
 func (m *memCorsStore) appOrigins() map[string]string {

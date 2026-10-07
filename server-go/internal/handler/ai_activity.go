@@ -100,9 +100,10 @@ func (h *AIActivityHandler) List(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "could not read the activity", http.StatusInternalServerError)
 		return
 	}
+	project := chi.URLParam(r, "projectId")
 	calls := make([]aiActivityView, 0, len(entries))
 	for _, entry := range entries {
-		calls = append(calls, activityView(entry, user.ID, revokesAny, live))
+		calls = append(calls, activityView(entry, user.ID, revokesAny, project, live))
 	}
 	writeJSON(w, map[string]any{"calls": calls})
 }
@@ -125,15 +126,16 @@ func entryUsers(entries []domain.AuditEntry) []string {
 	return users
 }
 
-func (h *AIActivityHandler) liveTokens(ctx context.Context, userIDs []string) (map[string]bool, error) {
-	live := map[string]bool{}
+// liveTokens maps each existing token of userIDs by its hash.
+func (h *AIActivityHandler) liveTokens(ctx context.Context, userIDs []string) (map[string]*domain.AccessToken, error) {
+	live := map[string]*domain.AccessToken{}
 	for _, userID := range userIDs {
 		tokens, err := h.tokens.ListTokensByUser(ctx, userID)
 		if err != nil {
 			return nil, err
 		}
 		for _, token := range tokens {
-			live[token.TokenHash] = true
+			live[token.TokenHash] = token
 		}
 	}
 	return live, nil
@@ -159,9 +161,11 @@ func (h *AIActivityHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	if token.UserID != user.ID && !h.mayRevokeMembersToken(w, r, token) {
 		return
 	}
-	if refused := restrictToCallerToken(auth.GetToken(r.Context()), token.ProjectID, token.Scopes); refused != nil {
-		httpError(w, "a token may not revoke a token broader than itself", refused.status)
-		return
+	if caller := auth.GetToken(r.Context()); !auth.IsCapabilityToken(caller) {
+		if refused := restrictToCallerToken(caller, token.ProjectID, token.Scopes); refused != nil {
+			httpError(w, "a token may not revoke a token broader than itself", refused.status)
+			return
+		}
 	}
 	if err := h.revokes.DeleteToken(r.Context(), token.TokenHash); err != nil {
 		log.Printf("ai activity: revoke %s: %v", token.TokenPrefix, err)
@@ -197,11 +201,17 @@ func (h *AIActivityHandler) feedToken(w http.ResponseWriter, r *http.Request) (*
 	return token, true
 }
 
+// mayRevokeMembersToken: an org owner revokes any member's token, an admin a
+// developer's or viewer's. Only a token bound to this project: one that is
+// not may be what its owner uses in another organization.
 func (h *AIActivityHandler) mayRevokeMembersToken(w http.ResponseWriter, r *http.Request, token *domain.AccessToken) bool {
-	const refusal = "only an organization owner or admin may revoke another member's token"
 	access := middleware.ProjectAccessFromContext(r.Context())
 	if access == nil || !access.RoleAtLeast(domain.OrgRoleAdmin) {
-		httpError(w, refusal, http.StatusForbidden)
+		httpError(w, "only an organization owner or admin may revoke another member's token", http.StatusForbidden)
+		return false
+	}
+	if token.ProjectID != chi.URLParam(r, "projectId") {
+		httpError(w, "this token is not bound to this project, so it may be used elsewhere; only its owner can revoke it", http.StatusForbidden)
 		return false
 	}
 	if access.PlatformAdmin {
@@ -215,6 +225,10 @@ func (h *AIActivityHandler) mayRevokeMembersToken(w http.ResponseWriter, r *http
 	}
 	if member == nil {
 		httpError(w, "the token's owner is not a member of this organization", http.StatusForbidden)
+		return false
+	}
+	if access.Member.Role != domain.OrgRoleOwner && auth.OrgRoleAtLeast(member.Role, domain.OrgRoleAdmin) {
+		httpError(w, "only an organization owner may revoke an owner's or admin's token", http.StatusForbidden)
 		return false
 	}
 	return true
@@ -236,7 +250,7 @@ func (h *AIActivityHandler) auditRevoke(r *http.Request, token *domain.AccessTok
 	}
 }
 
-func activityView(entry domain.AuditEntry, callerID string, revokesAny bool, live map[string]bool) aiActivityView {
+func activityView(entry domain.AuditEntry, callerID string, revokesAny bool, projectID string, live map[string]*domain.AccessToken) aiActivityView {
 	var details struct {
 		Tool       string `json:"tool"`
 		Status     string `json:"status"`
@@ -250,12 +264,15 @@ func activityView(entry domain.AuditEntry, callerID string, revokesAny bool, liv
 		ID: entry.ID, Tool: entry.ResourceID, Status: details.Status, HTTPStatus: details.HTTPStatus,
 		TokenName: details.TokenName, UserID: entry.UserID, At: entry.Timestamp, Mine: entry.UserID == callerID,
 	}
-	if (view.Mine || revokesAny) && entry.TokenHash != "" {
-		if live[entry.TokenHash] {
-			view.TokenID = entry.TokenHash
-		} else {
-			view.TokenRevoked = true
-		}
+	if (!view.Mine && !revokesAny) || entry.TokenHash == "" {
+		return view
+	}
+	token, exists := live[entry.TokenHash]
+	switch {
+	case !exists:
+		view.TokenRevoked = true
+	case view.Mine || token.ProjectID == projectID:
+		view.TokenID = entry.TokenHash
 	}
 	return view
 }

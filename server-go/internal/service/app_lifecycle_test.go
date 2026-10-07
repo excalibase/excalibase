@@ -339,12 +339,12 @@ type recordingOriginReleaser struct {
 	err      error
 }
 
-func (r *recordingOriginReleaser) ReleaseAppCorsOrigin(_ context.Context, projectID, appID string) (string, error) {
+func (r *recordingOriginReleaser) ReleaseAppCorsOrigins(_ context.Context, projectID, appID string) ([]string, error) {
 	if r.err != nil {
-		return "", r.err
+		return nil, r.err
 	}
 	r.released = append(r.released, projectID+"/"+appID)
-	return "https://web.apps.example.test", nil
+	return []string{"https://web.apps.example.test"}, nil
 }
 
 func TestDeleteApp_ReleasesTheOriginTheAppAdded(t *testing.T) {

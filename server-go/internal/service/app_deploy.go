@@ -102,7 +102,7 @@ func (s *AppDeployService) SetRegistryCredentials(registries RegistryCredentialF
 
 // CorsOriginReleaser removes the CORS origin an app added (EXC-544).
 type CorsOriginReleaser interface {
-	ReleaseAppCorsOrigin(ctx context.Context, projectID, appID string) (string, error)
+	ReleaseAppCorsOrigins(ctx context.Context, projectID, appID string) ([]string, error)
 }
 
 // SetCorsOriginReleaser makes deleting an app remove the origin it added.

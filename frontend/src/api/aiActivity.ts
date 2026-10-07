@@ -1,5 +1,6 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
+import { TOKENS_KEY } from './accessTokens';
 
 // One call an AI tool made through MCP, as GET /api/projects/{id}/ai-activity/
 // lists it. tokenId is set while the token exists and the caller may revoke
@@ -28,12 +29,14 @@ export function useAiActivity(projectId: string) {
   });
 }
 
-// Revokes a token the project's feed shows.
+// Revokes a token the project's feed shows; the caller's token list is stale after.
 export function useRevokeActivityToken(projectId: string) {
+  const client = useQueryClient();
   return useMutation({
     mutationFn: async (tokenId: string) => {
       await api.delete(`/projects/${encodeURIComponent(projectId)}/ai-activity/tokens/${encodeURIComponent(tokenId)}`);
     },
+    onSuccess: () => client.invalidateQueries({ queryKey: TOKENS_KEY }),
   });
 }
 

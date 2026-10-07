@@ -1,9 +1,38 @@
 package service
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestListMigrationsReadsZonelessRecordsAsUTCAndSkipsUnreadableOnes(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "projects", "proj-a", "migrations")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"001.json":  `{"id":"001","sql":"select 1","status":"APPLIED","appliedAt":"2026-10-07T02:30:00.000000000"}`,
+		"002.json":  `{"id":"002","sql":"select 2","status":"APPLIED","appliedAt":"not a time"}`,
+		"notes.txt": "ignored",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records, err := NewMigrationService(nil, nil, root).ListMigrations("proj-a")
+	if err != nil || len(records) != 1 || records[0].ID != "001" {
+		t.Fatalf("records = %+v err = %v", records, err)
+	}
+	encoded, _ := json.Marshal(records[0])
+	if !strings.Contains(string(encoded), `"appliedAt":"2026-10-07T02:30:00Z"`) {
+		t.Fatalf("appliedAt is not written with its zone: %s", encoded)
+	}
+}
 
 // TestMigration_TenantDSNUsesAppRole pins SEC-C2: migrations connect to the
 // tenant database as the non-superuser excalibase_app role (which has CREATE

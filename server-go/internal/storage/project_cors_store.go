@@ -21,6 +21,6 @@ type ProjectCorsEditor interface {
 	AddCorsOrigin(ctx context.Context, projectID, origin, appID string) (added bool, origins []string, err error)
 	// RemoveCorsOrigin removes origin when it is there.
 	RemoveCorsOrigin(ctx context.Context, projectID, origin string) (removed bool, origins []string, err error)
-	// ReleaseAppCorsOrigin removes the origin appID added, answering it, or "".
-	ReleaseAppCorsOrigin(ctx context.Context, projectID, appID string) (released string, err error)
+	// ReleaseAppCorsOrigins removes the origins appID added, answering them.
+	ReleaseAppCorsOrigins(ctx context.Context, projectID, appID string) (released []string, err error)
 }

@@ -108,8 +108,8 @@ func TestProjectCors_ConcurrentAddsAreAllKept(t *testing.T) {
 	if added, _, err := store.AddCorsOrigin(ctx, "proj_new", "https://a.example.com", "app-1"); err != nil || added {
 		t.Fatalf("an origin already present is not added again: %v %v", added, err)
 	}
-	if released, err := store.ReleaseAppCorsOrigin(ctx, "proj_new", "app-1"); err != nil || released != "" {
-		t.Fatalf("an app that added nothing owns nothing: %q %v", released, err)
+	if released, err := store.ReleaseAppCorsOrigins(ctx, "proj_new", "app-1"); err != nil || len(released) != 0 {
+		t.Fatalf("an app that added nothing owns nothing: %v %v", released, err)
 	}
 	if err := store.SetCorsOrigins(ctx, "proj_wild", []string{"*"}); err != nil {
 		t.Fatal(err)
@@ -129,55 +129,58 @@ func TestProjectCors_ConcurrentAddsAreAllKept(t *testing.T) {
 	}
 }
 
-func TestProjectCors_AnAppReleasesOnlyTheOriginItAdded(t *testing.T) {
+func TestProjectCors_AnAppReleasesOnlyTheOriginsItAdded(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
+	const web, renamed = "https://web.apps.example.com", "https://shop.apps.example.com"
 	if err := store.SetCorsOrigins(ctx, "proj_rel", []string{"https://mine.example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.AddCorsOrigin(ctx, "proj_rel", "https://web.apps.example.com", "app-web"); err != nil {
-		t.Fatal(err)
+	for _, origin := range []string{web, renamed} {
+		if _, _, err := store.AddCorsOrigin(ctx, "proj_rel", origin, "app-web"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	released, err := store.ReleaseAppCorsOrigin(ctx, "proj_rel", "app-web")
-	if err != nil || released != "https://web.apps.example.com" {
-		t.Fatalf("release: %q %v", released, err)
+	released, err := store.ReleaseAppCorsOrigins(ctx, "proj_rel", "app-web")
+	if err != nil || !reflect.DeepEqual(released, []string{web, renamed}) {
+		t.Fatalf("release: %v %v", released, err)
 	}
 	if got, _ := store.GetCorsOrigins(ctx, "proj_rel"); !reflect.DeepEqual(got, []string{"https://mine.example.com"}) {
 		t.Fatalf("after release: %v", got)
 	}
-	if released, err := store.ReleaseAppCorsOrigin(ctx, "proj_rel", "app-web"); err != nil || released != "" {
-		t.Fatalf("a second release finds nothing: %q %v", released, err)
+	if released, err := store.ReleaseAppCorsOrigins(ctx, "proj_rel", "app-web"); err != nil || len(released) != 0 {
+		t.Fatalf("a second release finds nothing: %v %v", released, err)
 	}
 
 	// Removed by hand, then added back by hand: no longer the app's to remove.
-	if _, _, err := store.AddCorsOrigin(ctx, "proj_rm", "https://web.apps.example.com", "app-web"); err != nil {
+	if _, _, err := store.AddCorsOrigin(ctx, "proj_rm", web, "app-web"); err != nil {
 		t.Fatal(err)
 	}
-	removed, origins, err := store.RemoveCorsOrigin(ctx, "proj_rm", "https://web.apps.example.com")
+	removed, origins, err := store.RemoveCorsOrigin(ctx, "proj_rm", web)
 	if err != nil || !removed || len(origins) != 0 {
 		t.Fatalf("remove: %v %v %v", removed, origins, err)
 	}
-	if removed, _, err := store.RemoveCorsOrigin(ctx, "proj_rm", "https://web.apps.example.com"); err != nil || removed {
+	if removed, _, err := store.RemoveCorsOrigin(ctx, "proj_rm", web); err != nil || removed {
 		t.Fatalf("removing an absent origin changes nothing: %v %v", removed, err)
 	}
-	if _, _, err := store.AddCorsOrigin(ctx, "proj_rm", "https://web.apps.example.com", ""); err != nil {
+	if _, _, err := store.AddCorsOrigin(ctx, "proj_rm", web, ""); err != nil {
 		t.Fatal(err)
 	}
-	if released, err := store.ReleaseAppCorsOrigin(ctx, "proj_rm", "app-web"); err != nil || released != "" {
-		t.Fatalf("release after a manual re-add: %q %v", released, err)
+	if released, err := store.ReleaseAppCorsOrigins(ctx, "proj_rm", "app-web"); err != nil || len(released) != 0 {
+		t.Fatalf("release after a manual re-add: %v %v", released, err)
 	}
 
 	// A whole-list replace that drops the origin ends the app's claim too.
-	if _, _, err := store.AddCorsOrigin(ctx, "proj_put", "https://web.apps.example.com", "app-web"); err != nil {
+	if _, _, err := store.AddCorsOrigin(ctx, "proj_put", web, "app-web"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetCorsOrigins(ctx, "proj_put", []string{"https://other.example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetCorsOrigins(ctx, "proj_put", []string{"https://other.example.com", "https://web.apps.example.com"}); err != nil {
+	if err := store.SetCorsOrigins(ctx, "proj_put", []string{"https://other.example.com", web}); err != nil {
 		t.Fatal(err)
 	}
-	if released, err := store.ReleaseAppCorsOrigin(ctx, "proj_put", "app-web"); err != nil || released != "" {
-		t.Fatalf("an origin set by hand is not the app's to remove: %q %v", released, err)
+	if released, err := store.ReleaseAppCorsOrigins(ctx, "proj_put", "app-web"); err != nil || len(released) != 0 {
+		t.Fatalf("an origin set by hand is not the app's to remove: %v %v", released, err)
 	}
 }

@@ -8,15 +8,15 @@ import (
 var (
 	dmlStatement    = regexp.MustCompile(`(?i)^(INSERT|UPDATE|DELETE|MERGE)\b`)
 	returningClause = regexp.MustCompile(`(?i)\bRETURNING\b`)
-	dollarTag       = regexp.MustCompile(`^\$[A-Za-z_]*\$`)
+	dollarTag       = regexp.MustCompile(`^\$([A-Za-z_][A-Za-z0-9_]*)?\$`)
 )
 
 // returnsRows reports a write with a RETURNING clause: its rows are the
 // answer, as they are for a SELECT. The word inside a string, quoted
 // identifier or comment does not count.
 func returnsRows(query string) bool {
-	trimmed := strings.TrimSpace(query)
-	return dmlStatement.MatchString(trimmed) && returningClause.MatchString(sqlCode(trimmed))
+	code := strings.TrimSpace(sqlCode(query))
+	return dmlStatement.MatchString(code) && returningClause.MatchString(code)
 }
 
 // sqlCode is query with its string literals, quoted identifiers and comments
@@ -40,6 +40,8 @@ func sqlCode(query string) string {
 func skipQuoted(query string, i int) int {
 	rest := query[i:]
 	switch {
+	case rest[0] == '\'' && i > 0 && (query[i-1] == 'E' || query[i-1] == 'e'):
+		return closeEscapedQuote(query, i)
 	case rest[0] == '\'' || rest[0] == '"':
 		return closeQuote(query, i, rest[0])
 	case strings.HasPrefix(rest, "--"):
@@ -65,6 +67,21 @@ func closeQuote(query string, i int, quote byte) int {
 			continue
 		}
 		return j + 1
+	}
+	return len(query)
+}
+
+// closeEscapedQuote ends an E'...' string, where a backslash escapes the next character.
+func closeEscapedQuote(query string, i int) int {
+	for j := i + 1; j < len(query); j++ {
+		switch {
+		case query[j] == '\\':
+			j++
+		case query[j] == '\'' && j+1 < len(query) && query[j+1] == '\'':
+			j++
+		case query[j] == '\'':
+			return j + 1
+		}
 	}
 	return len(query)
 }

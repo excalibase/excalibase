@@ -17,9 +17,14 @@ func TestReturnsRowsOnlyForAWriteWithARealReturningClause(t *testing.T) {
 		"INSERT INTO t (a) VALUES ($tag$ returning $tag$) RETURNING a":                                true,
 		"INSERT INTO t (a) VALUES ('unterminated returning":                                           false,
 		"CREATE FUNCTION f() RETURNS void AS $$ INSERT INTO t VALUES (1) RETURNING 1 $$ LANGUAGE sql": false,
-		"SELECT 1":                    false,
-		"UPDATE t SET a = 1":          false,
-		"INSERT INTO t VALUES (1) $1": false,
+		"INSERT INTO t (a) VALUES ($tag1$ returning $tag1$)":                                          false,
+		`INSERT INTO t (a) VALUES (E'it\'s returning')`:                                               false,
+		`INSERT INTO t (a) VALUES (E'a\\') RETURNING a`:                                               true,
+		"-- add a row\nINSERT INTO t (a) VALUES (1) RETURNING a":                                      true,
+		"/* note */ DELETE FROM t RETURNING a":                                                        true,
+		"SELECT 1":                                                                                    false,
+		"UPDATE t SET a = 1":                                                                          false,
+		"INSERT INTO t VALUES (1) $1":                                                                 false,
 	}
 	for query, want := range cases {
 		if got := returnsRows(query); got != want {

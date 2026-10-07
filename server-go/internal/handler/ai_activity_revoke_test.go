@@ -29,12 +29,16 @@ func newFakeRevokeStore() *fakeRevokeStore {
 	return &fakeRevokeStore{
 		tokens: map[string]*domain.AccessToken{
 			"mine":      {TokenHash: "mine", TokenPrefix: "excali_mi", UserID: "me", Name: "laptop"},
-			"theirs":    {TokenHash: "theirs", TokenPrefix: "excali_th", UserID: "teammate", Name: "ci"},
-			"outsider":  {TokenHash: "outsider", TokenPrefix: "excali_ou", UserID: "stranger", Name: "x"},
-			"elsewhere": {TokenHash: "elsewhere", TokenPrefix: "excali_el", UserID: "teammate", Name: "y"},
+			"theirs":    {TokenHash: "theirs", TokenPrefix: "excali_th", UserID: "teammate", Name: "ci", ProjectID: "proj-a"},
+			"unbound":   {TokenHash: "unbound", TokenPrefix: "excali_un", UserID: "teammate", Name: "everywhere"},
+			"admins":    {TokenHash: "admins", TokenPrefix: "excali_ad", UserID: "co-admin", Name: "a", ProjectID: "proj-a"},
+			"owners":    {TokenHash: "owners", TokenPrefix: "excali_ow", UserID: "boss", Name: "o", ProjectID: "proj-a"},
+			"outsider":  {TokenHash: "outsider", TokenPrefix: "excali_ou", UserID: "stranger", Name: "x", ProjectID: "proj-a"},
+			"elsewhere": {TokenHash: "elsewhere", TokenPrefix: "excali_el", UserID: "teammate", Name: "y", ProjectID: "proj-b"},
 		},
-		used:    map[string]bool{"proj-a/mine": true, "proj-a/theirs": true, "proj-a/outsider": true, "proj-b/elsewhere": true},
-		members: map[string]string{"me": "", "teammate": domain.OrgRoleDeveloper},
+		used: map[string]bool{"proj-a/mine": true, "proj-a/theirs": true, "proj-a/unbound": true, "proj-a/admins": true,
+			"proj-a/owners": true, "proj-a/outsider": true, "proj-b/elsewhere": true},
+		members: map[string]string{"me": "", "teammate": domain.OrgRoleDeveloper, "co-admin": domain.OrgRoleAdmin, "boss": domain.OrgRoleOwner},
 	}
 }
 
@@ -103,6 +107,11 @@ func TestAIActivityRevokeAuthorization(t *testing.T) {
 		{"developer may not revoke a teammate's", domain.OrgRoleDeveloper, "theirs", http.StatusForbidden},
 		{"viewer may not revoke a teammate's", domain.OrgRoleViewer, "theirs", http.StatusForbidden},
 		{"admin may not revoke a non-member's", domain.OrgRoleAdmin, "outsider", http.StatusForbidden},
+		{"owner may not revoke a token not bound to the project", domain.OrgRoleOwner, "unbound", http.StatusForbidden},
+		{"admin may not revoke another admin's", domain.OrgRoleAdmin, "admins", http.StatusForbidden},
+		{"admin may not revoke an owner's", domain.OrgRoleAdmin, "owners", http.StatusForbidden},
+		{"owner revokes an admin's", domain.OrgRoleOwner, "admins", http.StatusOK},
+		{"owner revokes another owner's", domain.OrgRoleOwner, "owners", http.StatusOK},
 		{"a token this project never saw", domain.OrgRoleOwner, "elsewhere", http.StatusNotFound},
 		{"an unknown token", domain.OrgRoleOwner, "nope", http.StatusNotFound},
 	}
@@ -167,10 +176,11 @@ func TestAIActivityRevokeWithoutAStoreIsUnavailable(t *testing.T) {
 func TestAIActivityOffersAdminsRevokeOnEveryLiveToken(t *testing.T) {
 	at := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
 	audit := &fakeProjectAudit{entries: []domain.AuditEntry{
-		{ID: 2, UserID: "teammate", ResourceID: "list_tables", Details: `{"tokenName":"ci"}`, TokenHash: "theirs", Timestamp: &at},
-		{ID: 1, UserID: "teammate", ResourceID: "list_tables", Details: `{"tokenName":"old"}`, TokenHash: "gone", Timestamp: &at},
+		{ID: 3, UserID: "teammate", ResourceID: "list_tables", Details: `{"tokenName":"ci"}`, TokenHash: "theirs", Timestamp: &at},
+		{ID: 2, UserID: "teammate", ResourceID: "list_tables", Details: `{"tokenName":"old"}`, TokenHash: "gone", Timestamp: &at},
+		{ID: 1, UserID: "teammate", ResourceID: "list_tables", Details: `{"tokenName":"everywhere"}`, TokenHash: "unbound", Timestamp: &at},
 	}}
-	tokens := fakeTokenList{"teammate": {{TokenHash: "theirs"}}}
+	tokens := fakeTokenList{"teammate": {{TokenHash: "theirs", ProjectID: "proj-a"}, {TokenHash: "unbound"}}}
 	for role, wantID := range map[string]string{domain.OrgRoleAdmin: "theirs", domain.OrgRoleOwner: "theirs", domain.OrgRoleDeveloper: ""} {
 		h := NewAIActivityHandler(audit, tokens)
 		h.SetRevokeStore(newFakeRevokeStore())
@@ -178,7 +188,7 @@ func TestAIActivityOffersAdminsRevokeOnEveryLiveToken(t *testing.T) {
 		var body struct {
 			Calls []aiActivityView `json:"calls"`
 		}
-		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Calls) != 2 {
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Calls) != 3 {
 			t.Fatalf("%s: %v %s", role, err, w.Body.String())
 		}
 		if body.Calls[0].TokenID != wantID {
@@ -186,6 +196,9 @@ func TestAIActivityOffersAdminsRevokeOnEveryLiveToken(t *testing.T) {
 		}
 		if wantID != "" && (!body.Calls[1].TokenRevoked || body.Calls[1].TokenID != "") {
 			t.Errorf("%s: a revoked token offers no revoke: %+v", role, body.Calls[1])
+		}
+		if body.Calls[2].TokenID != "" || body.Calls[2].TokenRevoked {
+			t.Errorf("%s: a token not bound to the project is not someone else's to revoke: %+v", role, body.Calls[2])
 		}
 	}
 }

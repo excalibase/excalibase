@@ -38,7 +38,7 @@ export interface CreateAccessTokenInput {
 }
 
 const TOKENS_PATH = '/auth/tokens';
-const TOKENS_KEY = ['access-tokens'];
+export const TOKENS_KEY = ['access-tokens'];
 
 export function scopeLabel(scopes: string): string {
   const set = new Set(scopes.split(',').map((s) => s.trim()).filter(Boolean));

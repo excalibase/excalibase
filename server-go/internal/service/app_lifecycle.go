@@ -198,7 +198,7 @@ func (s *AppDeployService) DeleteApp(ctx context.Context, projectID, appID strin
 		}
 	}
 	if s.corsOrigins != nil {
-		if _, err := s.corsOrigins.ReleaseAppCorsOrigin(ctx, projectID, appID); err != nil {
+		if _, err := s.corsOrigins.ReleaseAppCorsOrigins(ctx, projectID, appID); err != nil {
 			return fmt.Errorf("remove the app's origin from the CORS allowlist: %w", err)
 		}
 	}
