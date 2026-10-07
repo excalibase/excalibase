@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	networkingv1 "k8s.io/api/networking/v1"
@@ -140,10 +141,7 @@ func TestApplyAppWorkload_TakesTheRedirectAwayWithTheCertificate(t *testing.T) {
 
 func assertServesHTTPS(t *testing.T, tls []networkingv1.IngressTLS, annotations map[string]string, host, secret string) {
 	t.Helper()
-	if annotations[haproxySSLRedirect] != "true" || annotations["haproxy.org/ssl-redirect-code"] != "301" ||
-		annotations["haproxy.org/ssl-redirect-port"] != "443" {
-		t.Errorf("redirect annotations = %v", annotations)
-	}
+	assertRedirectsWith308(t, annotations)
 	if len(tls) != 1 || tls[0].SecretName != secret || len(tls[0].Hosts) != 1 || tls[0].Hosts[0] != host {
 		t.Errorf("tls = %+v, want %s from %s", tls, host, secret)
 	}
@@ -303,5 +301,74 @@ func TestAppHostCertificate_ReportsIssuedFailedAndMissing(t *testing.T) {
 	setCertConditions(t, c, AppObjectName("web"), readyCondition)
 	if state, _ := c.AppHostCertificate(ctx, testNamespace, "web"); !state.Ready {
 		t.Fatalf("ready = %+v", state)
+	}
+}
+
+func assertRedirectsWith308(t *testing.T, annotations map[string]string) {
+	t.Helper()
+	snippet := annotations["haproxy.org/backend-config-snippet"]
+	if annotations[haproxySSLRedirect] != "false" {
+		t.Errorf("the controller's own redirect keeps :8443 and 301, so it must be off: %v", annotations)
+	}
+	if !strings.Contains(snippet, "code 308") || !strings.Contains(snippet, "unless { ssl_fc }") {
+		t.Errorf("plain HTTP must be redirected with 308: %q", snippet)
+	}
+	if strings.Contains(snippet, ":443") || strings.Contains(snippet, "code 301") {
+		t.Errorf("redirect must not name a port or use 301: %q", snippet)
+	}
+}
+
+func wildcardRoute() AppRouteOptions {
+	route := testRoute
+	route.WildcardTLS = true
+	return route
+}
+
+func TestRenderAppWorkload_WildcardServesHTTPSAtOnceWithNoCertificateOfItsOwn(t *testing.T) {
+	workload := renderWithRoute(t, wildcardRoute())
+	if workload.HostCertificate != nil || workload.AcmeSolverPolicy != nil || len(workload.Ingress.Spec.TLS) != 0 {
+		t.Fatalf("the edge's wildcard certificate serves the host: %+v", workload)
+	}
+	assertRedirectsWith308(t, workload.Ingress.Annotations)
+	hsts := workload.Ingress.Annotations["haproxy.org/response-set-header"]
+	if !strings.Contains(hsts, "Strict-Transport-Security") || !strings.Contains(hsts, "max-age=31536000") || strings.Contains(hsts, "preload") {
+		t.Errorf("HSTS for one year, without preload: %q", hsts)
+	}
+	if !wildcardRoute().Public().TLS {
+		t.Error("a wildcard makes the public URL https")
+	}
+	if !workload.dropHostCertificate {
+		t.Error("an app that had its own certificate must lose it")
+	}
+}
+
+func TestRenderAppWorkload_WildcardWinsOverTheIssuerForAppHosts(t *testing.T) {
+	route := issuerRoute()
+	route.WildcardTLS = true
+	if workload := renderWithRoute(t, route); workload.HostCertificate != nil || workload.AcmeSolverPolicy != nil {
+		t.Fatal("with a wildcard no app host asks the issuer for a certificate")
+	}
+}
+
+func TestApplyAppWorkload_WildcardDropsTheCertificateAnAppHadBefore(t *testing.T) {
+	c, clientset := newLifecycleFakeClient()
+	ctx := context.Background()
+	createSecret(t, c, AppHostTLSSecretName("web"), appLabels(minimalApp()))
+	if err := c.ApplyAppWorkload(ctx, testNamespace, renderWithRoute(t, issuerRoute())); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ApplyAppWorkload(ctx, testNamespace, renderWithRoute(t, wildcardRoute())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.dynamicClient.Resource(CertificateGVR).Namespace(testNamespace).Get(ctx, AppObjectName("web"), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the app's own certificate must be deleted: %v", err)
+	}
+	if _, err := clientset.CoreV1().Secrets(testNamespace).Get(ctx, AppHostTLSSecretName("web"), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("its key must be deleted: %v", err)
+	}
+	ingress, _ := clientset.NetworkingV1().Ingresses(testNamespace).Get(ctx, AppObjectName("web"), metav1.GetOptions{})
+	assertRedirectsWith308(t, ingress.Annotations)
+	if len(ingress.Spec.TLS) != 0 {
+		t.Errorf("no per-host tls entry: %+v", ingress.Spec.TLS)
 	}
 }

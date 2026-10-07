@@ -25,12 +25,20 @@ const (
 	haproxySSLRedirect = "haproxy.org/ssl-redirect"
 )
 
-// httpsRedirectAnnotations send plain HTTP to HTTPS as the platform's own hosts
-// do; the edge listens on 8443 behind hostPort 443, hence the explicit port.
+// httpsRedirectAnnotations send plain HTTP to HTTPS with 308, so a POST keeps
+// its method and body. The controller's own redirect is off: it answers 301 and
+// names the port it listens on inside its pod (8443), which forced an explicit
+// :443 into every Location. The snippet redirects to the host the client asked
+// for, with no port, on the backend that serves it.
 var httpsRedirectAnnotations = map[string]string{
-	haproxySSLRedirect:              "true",
-	"haproxy.org/ssl-redirect-code": "301",
-	"haproxy.org/ssl-redirect-port": "443",
+	haproxySSLRedirect:                   "false",
+	"haproxy.org/backend-config-snippet": `http-request redirect location https://%[req.hdr(host),field(1,:)]%[pathq] code 308 unless { ssl_fc }`,
+}
+
+// hstsAnnotations make browsers keep to HTTPS on an app's platform hostname for a
+// year. No preload: that is a commitment for the whole registered domain.
+var hstsAnnotations = map[string]string{
+	"haproxy.org/response-set-header": `Strict-Transport-Security "max-age=31536000; includeSubDomains"`,
 }
 
 // ErrNoCertificate: the app's hostname has no certificate (not deployed, internal, or no issuer).
@@ -49,10 +57,27 @@ func buildAppHostCertificate(namespace string, app *apphost.App, host, issuer st
 // serveTLS attaches an issued certificate and redirects HTTP to it.
 func serveTLS(ingress *networkingv1.Ingress, host, secretName string) {
 	ingress.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{host}, SecretName: secretName}}
+	addAnnotations(ingress, httpsRedirectAnnotations)
+}
+
+// serveAppHostTLS is serveTLS for the app's platform hostname, which also gets HSTS.
+func serveAppHostTLS(ingress *networkingv1.Ingress, host, secretName string) {
+	serveTLS(ingress, host, secretName)
+	addAnnotations(ingress, hstsAnnotations)
+}
+
+// serveWildcardTLS redirects and pins HTTPS for a host the edge's wildcard
+// certificate already serves: there is no per-host secret to name.
+func serveWildcardTLS(ingress *networkingv1.Ingress) {
+	addAnnotations(ingress, httpsRedirectAnnotations)
+	addAnnotations(ingress, hstsAnnotations)
+}
+
+func addAnnotations(ingress *networkingv1.Ingress, annotations map[string]string) {
 	if ingress.Annotations == nil {
 		ingress.Annotations = map[string]string{}
 	}
-	maps.Copy(ingress.Annotations, httpsRedirectAnnotations)
+	maps.Copy(ingress.Annotations, annotations)
 }
 
 // withRedirectAnnotationsOf keeps existing's other annotations and takes the redirect ones from desired.
@@ -61,10 +86,12 @@ func withRedirectAnnotationsOf(existing, desired map[string]string) map[string]s
 	if merged == nil {
 		merged = map[string]string{}
 	}
-	for key := range httpsRedirectAnnotations {
-		delete(merged, key)
-		if value, ok := desired[key]; ok {
-			merged[key] = value
+	for _, managed := range []map[string]string{httpsRedirectAnnotations, hstsAnnotations} {
+		for key := range managed {
+			delete(merged, key)
+			if value, ok := desired[key]; ok {
+				merged[key] = value
+			}
 		}
 	}
 	return merged
@@ -77,7 +104,13 @@ func withRedirectAnnotationsOf(existing, desired map[string]string) map[string]s
 func (c *Client) applyAppHostRoute(ctx context.Context, namespace string, workload *AppWorkload) error {
 	ingress := workload.Ingress
 	if workload.HostCertificate == nil {
-		return c.applyAppIngress(ctx, namespace, ingress)
+		if err := c.applyAppIngress(ctx, namespace, ingress); err != nil {
+			return err
+		}
+		if workload.dropHostCertificate {
+			return c.dropAppHostCertificate(ctx, namespace, ingress.Name)
+		}
+		return nil
 	}
 	if err := c.applyCiliumPolicy(ctx, namespace, workload.AcmeSolverPolicy, "ACME solver policy"); err != nil {
 		return err
@@ -91,7 +124,7 @@ func (c *Client) applyAppHostRoute(ctx context.Context, namespace string, worklo
 	cert := workload.HostCertificate.DeepCopy()
 	if issued {
 		ingress = ingress.DeepCopy()
-		serveTLS(ingress, ingress.Spec.Rules[0].Host, secretName)
+		serveAppHostTLS(ingress, ingress.Spec.Rules[0].Host, secretName)
 		labels := cert.GetLabels()
 		labels[hostTLSLabel] = hostTLSServed
 		cert.SetLabels(labels)
@@ -159,7 +192,7 @@ func (c *Client) serveIssuedHostCertificate(ctx context.Context, cert *unstructu
 		len(ingress.Spec.Rules) != 1 || ingress.Spec.Rules[0].Host != hosts[0] {
 		return nil
 	}
-	serveTLS(ingress, hosts[0], secretName)
+	serveAppHostTLS(ingress, hosts[0], secretName)
 	if _, err := ingresses.Update(ctx, ingress, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("serve app certificate: %w", err)
 	}
