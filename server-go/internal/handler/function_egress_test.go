@@ -232,3 +232,67 @@ func TestEgress_WithoutStoreIsUnavailable(t *testing.T) {
 		t.Fatalf("PUT without store: %d", w.Code)
 	}
 }
+
+var testRuntimeEdge = k8s.EdgePeer{
+	Namespace: "haproxy-controller",
+	Labels:    map[string]string{"app.kubernetes.io/name": "kubernetes-ingress"},
+	Ports:     []int{8080, 8443},
+}
+
+// With the edge named, functions may call the project's own API host (EXC-558):
+// the worker gets it as a net permission and the runtime policy the edge pods.
+func TestEgress_EdgeLetsFunctionsCallThePublicAPI(t *testing.T) {
+	f := setupEgressHandler(t)
+	f.handler.SetRuntimeEdge(testRuntimeEdge)
+	f.egress.hosts[testEgressProject] = []string{"api.stripe.com"}
+	deployEgressFn(t, f, "hello")
+
+	spec := f.k8s.DenoSpecs[testEgressNS]
+	if !reflect.DeepEqual(spec.Edge, testRuntimeEdge) {
+		t.Fatalf("runtime spec Edge = %+v", spec.Edge)
+	}
+	if !reflect.DeepEqual(spec.PlatformHosts, []string{"api.test.io:443"}) {
+		t.Fatalf("runtime spec PlatformHosts = %v", spec.PlatformHosts)
+	}
+	if !reflect.DeepEqual(spec.AllowedHosts, []string{"api.stripe.com:443"}) {
+		t.Fatalf("the project's own list must stay apart from platform hosts: %v", spec.AllowedHosts)
+	}
+	want := []string{"api.stripe.com:443", "api.test.io:443"}
+	if req := (*f.scripts)[testEgressProject+"__hello"]; !reflect.DeepEqual(req.AllowedHosts, want) {
+		t.Fatalf("deploy request AllowedHosts = %v want %v", req.AllowedHosts, want)
+	}
+	got := decodeEgress(t, doJSON(f.router, "GET", testEgressPath, nil).Body.Bytes())
+	if !reflect.DeepEqual(got.EffectiveHosts, want) {
+		t.Fatalf("effective hosts must name what the runtime gets: %v", got.EffectiveHosts)
+	}
+}
+
+// Without an edge the API host would hang at the policy, so the worker is not told it may call it.
+func TestEgress_NoEdgeAddsNoPlatformHost(t *testing.T) {
+	f := setupEgressHandler(t)
+	deployEgressFn(t, f, "hello")
+	spec := f.k8s.DenoSpecs[testEgressNS]
+	if len(spec.PlatformHosts) != 0 || len(spec.Edge.Ports) != 0 {
+		t.Fatalf("no edge must add no platform host: %+v", spec)
+	}
+	if req := (*f.scripts)[testEgressProject+"__hello"]; len(req.AllowedHosts) != 0 {
+		t.Fatalf("deploy request AllowedHosts = %v", req.AllowedHosts)
+	}
+}
+
+func TestPlatformEgressHosts(t *testing.T) {
+	cases := map[string][]string{
+		"https://api.excalibase.io":      {"api.excalibase.io:443"},
+		"https://api.example.com:8443/x": {"api.example.com:8443"},
+		"http://api.example.com":         {"api.example.com:80"},
+		"":                               nil,
+		"http://localhost:24006":         nil,
+		"http://10.0.0.5":                nil,
+		"not a url":                      nil,
+	}
+	for base, want := range cases {
+		if got := platformEgressHosts(base); !reflect.DeepEqual(got, want) {
+			t.Errorf("platformEgressHosts(%q) = %v, want %v", base, got, want)
+		}
+	}
+}

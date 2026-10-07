@@ -263,6 +263,11 @@ type DenoRuntimeSpec struct {
 	// (edgefn.ParseEgressHosts), rendered as the runtime's ALLOWED_HOSTS env
 	// and mirrored into the egress NetworkPolicy. Empty = no egress (EXC-348).
 	AllowedHosts []string
+	// PlatformHosts are the platform's own public hosts (the API), added to
+	// the worker's net permission only; the policy reaches them through Edge.
+	PlatformHosts []string
+	// Edge is the public edge's pods, where a call to a platform host lands.
+	Edge EdgePeer
 	// ProvisioningURL is provisioning's in-cluster address, which ctx.storage
 	// and the export-metadata callback call with the project's runtime token.
 	ProvisioningURL string

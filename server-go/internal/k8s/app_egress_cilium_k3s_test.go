@@ -3,6 +3,7 @@
 package k8s
 
 import (
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -122,6 +123,7 @@ func (lab *egressLab) installCilium(t *testing.T, apiServerHost string) {
 		"k8sServicePort": kubeAPIServerPort,
 		"operator":       map[string]interface{}{"replicas": 1},
 	}
+	maps.Copy(values, lab.ciliumValues)
 	if err := lab.client.InstallHelmChart(lab.ctx, "kube-system", "cilium", chartPath, values); err != nil {
 		t.Fatalf("install cilium: %v", err)
 	}

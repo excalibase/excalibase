@@ -69,10 +69,13 @@ type ciliumPort struct {
 }
 
 // Cilium deny rules win over every allow, so the denied ranges hold even inside world.
-func buildAppEgressPolicy(namespace string, app *apphost.App, extraDenyCIDRs []string) (*unstructured.Unstructured, error) {
+func buildAppEgressPolicy(namespace string, app *apphost.App, extraDenyCIDRs []string, edge EdgePeer) (*unstructured.Unstructured, error) {
 	allow := []ciliumEgressRule{appDNSRule()}
 	if referencesDatabase(app) {
 		allow = append(allow, appOwnDatabaseRule())
+	}
+	if edge.configured() {
+		allow = append(allow, edge.ciliumEgressRule())
 	}
 	allow = append(allow, ciliumEgressRule{ToEntities: []string{worldEntity}})
 	spec := ciliumPolicySpec{

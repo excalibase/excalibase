@@ -292,6 +292,12 @@ type AppConfig struct {
 	AppIngressFromNamespace string
 	AppIngressFromLabels    map[string]string
 
+	// EdgeNamespace, EdgePodLabels and EdgePodPorts name the public edge's
+	// pods: a workload calling a public platform host lands on them (EXC-558).
+	EdgeNamespace string
+	EdgePodLabels map[string]string
+	EdgePodPorts  []int
+
 	// TenantStorageClass is the StorageClass a project's database runs on when
 	// its request names none; empty is the cluster's default StorageClass.
 	// TenantStorageClasses are the further classes a request may name.
@@ -345,6 +351,9 @@ func (c AppConfig) Validate() error {
 		return err
 	}
 	if err := c.validateTenantStorage(); err != nil {
+		return err
+	}
+	if err := c.validateEdge(); err != nil {
 		return err
 	}
 	return c.validateAppRoute()
@@ -472,6 +481,9 @@ func load() AppConfig {
 		AppIngressClass:                envOr("APP_INGRESS_CLASS", "haproxy"),
 		AppIngressFromNamespace:        os.Getenv("APP_INGRESS_FROM_NAMESPACE"),
 		AppIngressFromLabels:           envIngressFromLabels("APP_INGRESS_FROM_LABELS"),
+		EdgeNamespace:                  os.Getenv("EDGE_NAMESPACE"),
+		EdgePodLabels:                  envIngressFromLabels("EDGE_POD_LABELS"),
+		EdgePodPorts:                   envEdgePodPorts("EDGE_POD_PORTS"),
 		TenantStorageClass:             strings.TrimSpace(os.Getenv("TENANT_STORAGE_CLASS")),
 		TenantStorageClasses:           envList("TENANT_STORAGE_CLASSES"),
 		AppDomainIssuer:                os.Getenv("APP_DOMAIN_ISSUER"),

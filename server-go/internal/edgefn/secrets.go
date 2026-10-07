@@ -20,11 +20,9 @@ var secretKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 
 // reservedSecretKeys are injected automatically by the runtime and cannot be overridden.
 var reservedSecretKeys = map[string]bool{
-	"EXCALIBASE_URL":         true,
-	"EXCALIBASE_PROJECT_ID":  true,
-	"EXCALIBASE_ANON_KEY":    true,
-	"EXCALIBASE_SERVICE_KEY": true,
-	"EXCALIBASE_DB_URL":      true,
+	"EXCALIBASE_URL":        true,
+	"EXCALIBASE_PROJECT_ID": true,
+	"EXCALIBASE_DB_URL":     true,
 }
 
 // ValidateSecretKey returns nil if the key is a valid env var identifier

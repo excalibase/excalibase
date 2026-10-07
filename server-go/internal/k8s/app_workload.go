@@ -104,7 +104,9 @@ type AppRenderOptions struct {
 	RuntimeClass string
 	// ExtraDenyCIDRs are APP_EGRESS_EXTRA_DENY_CIDRS, already validated by config.
 	ExtraDenyCIDRs []string
-	Route          AppRouteOptions
+	// Edge is the public edge's pods, which the app may call on their listener ports.
+	Edge  EdgePeer
+	Route AppRouteOptions
 	// EnvRevision is set per deploy by the deploy service; required once the
 	// app has secret values, so their changes roll the pods.
 	EnvRevision string
@@ -176,7 +178,7 @@ func RenderAppWorkload(namespace string, app *apphost.App, resolver Resolver, op
 	if pullSecret != nil {
 		deployment.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: pullSecret.Name}}
 	}
-	policy, err := buildAppEgressPolicy(namespace, app, opts.ExtraDenyCIDRs)
+	policy, err := buildAppEgressPolicy(namespace, app, opts.ExtraDenyCIDRs, opts.Edge)
 	if err != nil {
 		return nil, err
 	}

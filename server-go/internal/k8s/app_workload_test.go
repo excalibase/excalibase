@@ -721,6 +721,35 @@ func TestRenderAppWorkloadEgressPolicyExtraDenyCIDRs(t *testing.T) {
 	assertDenyRules(t, egressSpec(t, workload).EgressDeny, want)
 }
 
+// A call to a public platform host lands on an edge pod once the node's hostPort is translated (EXC-558).
+func TestRenderAppWorkloadEgressPolicyReachesTheEdge(t *testing.T) {
+	options := testRenderOptions
+	options.Edge = testEdge
+	workload, err := RenderAppWorkload(testNamespace, fullApp(), newResolver(), options)
+	if err != nil {
+		t.Fatalf("RenderAppWorkload: %v", err)
+	}
+	spec := egressSpec(t, workload)
+	if len(spec.Egress) != 4 {
+		t.Fatalf("expected DNS, database, edge and internet rules, got %d", len(spec.Egress))
+	}
+	assertDNSRule(t, spec.Egress[0])
+	assertDatabaseRuleIsLocal(t, spec.Egress[1])
+	assertCiliumEdgeRule(t, spec.Egress[2])
+	assertInternetRuleIsWorldOnly(t, spec.Egress[3])
+	assertDenyRules(t, spec.EgressDeny, wantDeniedRanges)
+}
+
+func TestRenderAppWorkloadEgressPolicyWithoutEdge(t *testing.T) {
+	for _, rule := range egressSpec(t, mustRender(t, fullApp(), newResolver())).Egress {
+		for _, selector := range rule.ToEndpoints {
+			if selector.MatchLabels[podNamespaceKey] == testEdge.Namespace {
+				t.Errorf("no edge configured must open no edge rule: %+v", rule)
+			}
+		}
+	}
+}
+
 func TestRenderAppWorkloadEgressPolicyWithoutDatabase(t *testing.T) {
 	spec := egressSpec(t, mustRender(t, minimalApp(), newResolver()))
 	if len(spec.Egress) != 2 {
