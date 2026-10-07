@@ -76,6 +76,8 @@ type ProvisioningService struct {
 	objectPurger ProjectObjectPurger
 	// appPurger removes the project's app records and their deploy history.
 	appPurger ProjectAppPurger
+	// workloads stops a deleted project's apps and function runtime (EXC-567).
+	workloads ProjectWorkloadStopper
 	// backupPurger deletes a project's backup objects on request at
 	// deprovision time. nil means confirmDeleteBackups is refused.
 	backupPurger *BackupPurger

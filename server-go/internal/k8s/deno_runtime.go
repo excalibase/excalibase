@@ -67,6 +67,10 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	existing, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, denoRuntimeName, metav1.GetOptions{})
 	switch {
 	case err == nil:
+		if _, stopped := existing.Annotations[appPausedReplicasAnnotation]; stopped {
+			// A cancelled project deletion left it stopped; a function deploy starts it again.
+			return c.restartAndReconcile(ctx, namespace, spec)
+		}
 		return c.reconcileDenoEgress(ctx, namespace, existing, spec)
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("check existing deployment: %w", err)
@@ -81,6 +85,17 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 		return fmt.Errorf("create deno service: %w", err)
 	}
 	return c.applyDenoEgressPolicy(ctx, namespace, spec)
+}
+
+func (c *Client) restartAndReconcile(ctx context.Context, namespace string, spec DenoRuntimeSpec) error {
+	if err := c.RestartFunctionRuntime(ctx, namespace); err != nil {
+		return err
+	}
+	restarted, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, denoRuntimeName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read deno deployment: %w", err)
+	}
+	return c.reconcileDenoEgress(ctx, namespace, restarted, spec)
 }
 
 // reconcileDenoEgress updates a live runtime whose environment differs from
