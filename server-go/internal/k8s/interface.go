@@ -74,8 +74,11 @@ type KubeClient interface {
 	// EnsureDenoRuntime idempotently creates the per-project Deno runtime
 	// (Deployment + Service) in the given namespace. No-op if already present.
 	// The runtime is reachable at http://deno-runtime.{namespace}.svc.cluster.local:8000
-	// after the pod becomes ready (caller polls IsPodReady or sleeps).
+	// once DenoRuntimeRollout reports it ready.
 	EnsureDenoRuntime(ctx context.Context, namespace string, spec DenoRuntimeSpec) error
+	// DenoRuntimeRollout reports whether that runtime has finished rolling
+	// out its current spec: a changed allowlist replaces the pod (EXC-569).
+	DenoRuntimeRollout(ctx context.Context, namespace string) (DenoRolloutState, error)
 
 	// EnsurePublicDBService creates (or re-renders onto the held port) the
 	// project's public database endpoint: one LoadBalancer Service carrying

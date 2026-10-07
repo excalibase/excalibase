@@ -65,12 +65,16 @@ func (i *RuntimeInvoker) Invoke(
 	if err != nil {
 		return fmt.Errorf("marshal args for %s.%s: %w", moduleName, exportName, err)
 	}
-	resp, err := client.Invoke(ctx, runtimeID, edgefn.InvokeRequest{
+	req := edgefn.InvokeRequest{
 		Method:  "POST",
 		URL:     "/invoke/" + runtimeID,
 		Headers: map[string]string{"content-type": "application/json"},
 		Body:    string(body),
-	})
+	}
+	resp, err := client.Invoke(ctx, runtimeID, req)
+	if errors.Is(err, edgefn.ErrFunctionNotDeployed) {
+		resp, err = i.invokeStored(ctx, client, projectID, moduleName, req, err)
+	}
 	if err != nil {
 		return fmt.Errorf("invoke %s.%s: %w", moduleName, exportName, err)
 	}
@@ -78,6 +82,25 @@ func (i *RuntimeInvoker) Invoke(
 		return fmt.Errorf("invoke %s.%s: function returned %d", moduleName, exportName, resp.Status)
 	}
 	return nil
+}
+
+// invokeStored deploys a function a restarted runtime lost and invokes it
+// again. A function the store no longer holds keeps the runtime's answer.
+func (i *RuntimeInvoker) invokeStored(ctx context.Context, client *edgefn.RuntimeClient, projectID, moduleName string, req edgefn.InvokeRequest, notDeployed error) (*edgefn.InvokeResponse, error) {
+	if i.handler.store == nil {
+		return nil, notDeployed
+	}
+	fn, err := i.handler.store.Get(projectID, moduleName)
+	if err != nil {
+		return nil, fmt.Errorf("read function: %w", err)
+	}
+	if fn == nil {
+		return nil, notDeployed
+	}
+	if err := i.handler.redeployFunction(ctx, client, fn); err != nil {
+		return nil, fmt.Errorf("redeploy %s: %w", fn.RuntimeID(), err)
+	}
+	return client.Invoke(ctx, fn.RuntimeID(), req)
 }
 
 // argsOrEmpty keeps the body valid JSON for a task stored without args.

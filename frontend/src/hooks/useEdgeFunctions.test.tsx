@@ -12,6 +12,7 @@ import {
   useEdgeSecrets,
   useSetEdgeSecret,
   useDeleteEdgeSecret,
+  runtimeStatusRefetchMs,
 } from './useEdgeFunctions';
 import { api } from '../api/client';
 
@@ -126,5 +127,33 @@ describe('useEdgeFunctions hooks', () => {
     result.current.mutate('API_KEY');
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(api.delete).toHaveBeenCalledWith('/projects/p1/functions/secrets/API_KEY');
+  });
+
+  // EXC-569: saving or deleting a secret can restart the runtime, so the
+  // badge is asked again instead of showing healthy for 30 seconds.
+  test('saving a secret refreshes the runtime status', async () => {
+    vi.mocked(api.post).mockResolvedValueOnce({ data: {} } as never);
+    const { client, Wrapper } = makeWrapper();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useSetEdgeSecret('p1'), { wrapper: Wrapper });
+    result.current.mutate({ key: 'K', value: 'v' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['edge-functions-runtime', 'p1'] });
+  });
+
+  test('deleting a secret refreshes the runtime status', async () => {
+    vi.mocked(api.delete).mockResolvedValueOnce({} as never);
+    const { client, Wrapper } = makeWrapper();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useDeleteEdgeSecret('p1'), { wrapper: Wrapper });
+    result.current.mutate('K');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['edge-functions-runtime', 'p1'] });
+  });
+
+  test('a restarting runtime is polled every few seconds, a settled one every 30', () => {
+    expect(runtimeStatusRefetchMs({ status: 'restarting', healthy: false })).toBe(3000);
+    expect(runtimeStatusRefetchMs({ status: 'healthy', healthy: true })).toBe(30000);
+    expect(runtimeStatusRefetchMs(undefined)).toBe(30000);
   });
 });

@@ -104,17 +104,22 @@ func (c *Client) restartAndReconcile(ctx context.Context, namespace string, spec
 // are exactly what the runtime reads. The egress policy is compared on its
 // own, so a rule added by a newer provisioning reaches runtimes made before it.
 func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep *appsv1.Deployment, spec DenoRuntimeSpec) error {
+	// The fence first: a pod the update starts must not run under the old one.
+	if err := c.applyDenoEgressPolicy(ctx, namespace, spec); err != nil {
+		return err
+	}
 	want := workerAllowedHosts(spec)
 	settings := runtimeSettingsEnv(spec)
-	if currentAllowedHosts(dep) != want || !hasEnv(dep, settings) {
-		updated := dep.DeepCopy()
-		setAllowedHosts(updated, want)
-		setEnv(updated, settings)
-		if _, err := c.clientset.AppsV1().Deployments(namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("update deno deployment: %w", err)
-		}
+	if currentAllowedHosts(dep) == want && hasEnv(dep, settings) {
+		return nil
 	}
-	return c.applyDenoEgressPolicy(ctx, namespace, spec)
+	updated := dep.DeepCopy()
+	setAllowedHosts(updated, want)
+	setEnv(updated, settings)
+	if _, err := c.clientset.AppsV1().Deployments(namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update deno deployment: %w", err)
+	}
+	return nil
 }
 
 // workerAllowedHosts is the worker's net permission: the project's allowlist

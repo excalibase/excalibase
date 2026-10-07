@@ -42,6 +42,7 @@ import { executeDbOp, newCache } from "./runtime/db.ts";
 import type { DbOp } from "./runtime/db.ts";
 import { newId } from "./runtime/ids.ts";
 import { closePool, getPool } from "./runtime/pool.ts";
+import { drainThenExit, shutdownDrainMs } from "./runtime/shutdown.ts";
 import type { Sql } from "./runtime/pool.ts";
 import type { ValidatorCache } from "./runtime/validator.ts";
 import { runXFailure, runXTargetError, withoutCrashDetail } from "./runtime/invoke_errors.ts";
@@ -3017,7 +3018,14 @@ function badRequest(msg: string): Response {
 // restarted and every function must be replayed from the store (EXC-337).
 const BOOT_ID = crypto.randomUUID();
 
+// draining is set once the runtime has been told to stop: /health fails so
+// readiness takes the pod out of the Service while it still serves.
+let draining = false;
+
 function handleHealth(): Response {
+  if (draining) {
+    return Response.json({ status: "draining", bootId: BOOT_ID }, { status: 503, headers: JSON_HEADERS });
+  }
   return Response.json(
     {
       status: "healthy",
@@ -3229,7 +3237,7 @@ async function dispatch(req: Request, url: URL): Promise<Response> {
   return notFound();
 }
 
-Deno.serve({ port: PORT }, async (req: Request) => {
+const server = Deno.serve({ port: PORT }, async (req: Request) => {
   const url = new URL(req.url);
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
@@ -3246,13 +3254,25 @@ Deno.serve({ port: PORT }, async (req: Request) => {
   }
 });
 
-// Drain the postgres pool on SIGTERM/SIGINT so containers shut down cleanly.
-// Best-effort: if Deno exits before the pool finishes draining, postgres
-// closes the sockets anyway.
-const shutdown = async () => {
-  try { await closePool(); } catch (_) { /* ignore */ }
-  Deno.exit(0);
-};
+// An image whose --allow-env predates the setting gets the default drain.
+function readDrainEnv(): string | undefined {
+  try {
+    return Deno.env.get("EXCALIBASE_SHUTDOWN_DRAIN_MS");
+  } catch (_) {
+    return undefined;
+  }
+}
+
+// On SIGTERM/SIGINT keep serving while the Service forgets this pod, then
+// stop the listener and drain the postgres pool (EXC-569).
+const shutdown = drainThenExit({
+  drainMs: shutdownDrainMs(readDrainEnv()),
+  markDraining: () => { draining = true; },
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  stopServing: () => server.shutdown(),
+  closePool,
+  exit: (code) => Deno.exit(code),
+});
 try { Deno.addSignalListener("SIGTERM", shutdown); } catch (_) { /* not all platforms */ }
 try { Deno.addSignalListener("SIGINT", shutdown); } catch (_) { /* not all platforms */ }
 

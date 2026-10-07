@@ -1,7 +1,6 @@
 package edgefn
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,16 +53,20 @@ type LogEntry struct {
 
 // RuntimeClient communicates with the shared Deno runtime over HTTP.
 type RuntimeClient struct {
-	baseURL string
-	secret  string
-	http    *http.Client
+	baseURL     string
+	secret      string
+	http        *http.Client
+	retryBudget time.Duration
+	retryBase   time.Duration
 }
 
 func NewRuntimeClient(baseURL, secret string) *RuntimeClient {
 	return &RuntimeClient{
-		baseURL: baseURL,
-		secret:  secret,
-		http:    &http.Client{Timeout: 35 * time.Second},
+		baseURL:     baseURL,
+		secret:      secret,
+		http:        &http.Client{Timeout: 35 * time.Second},
+		retryBudget: DefaultRuntimeRetryBudget,
+		retryBase:   defaultRetryBase,
 	}
 }
 
@@ -122,12 +125,7 @@ func (c *RuntimeClient) Deploy(ctx context.Context, deployReq DeployRequest) err
 	if err != nil {
 		return fmt.Errorf("marshal deploy body: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/deploy", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf(errCreateRequest, err)
-	}
-	c.setHeaders(req)
-	resp, err := c.http.Do(req)
+	resp, err := c.send(ctx, http.MethodPost, "/deploy", body, retryTransport)
 	if err != nil {
 		return fmt.Errorf("deploy %s: %w", deployReq.ID, err)
 	}
@@ -146,12 +144,7 @@ func (c *RuntimeClient) Invoke(ctx context.Context, id string, invokeReq InvokeR
 	if err != nil {
 		return nil, fmt.Errorf("marshal invoke body: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/invoke/"+url.PathEscape(id), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf(errCreateRequest, err)
-	}
-	c.setHeaders(req)
-	resp, err := c.http.Do(req)
+	resp, err := c.send(ctx, http.MethodPost, "/invoke/"+url.PathEscape(id), body, retryRefused)
 	if err != nil {
 		return nil, fmt.Errorf("invoke %s: %w", id, err)
 	}
@@ -159,6 +152,9 @@ func (c *RuntimeClient) Invoke(ctx context.Context, id string, invokeReq InvokeR
 
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if notDeployed(resp.StatusCode, b, id) {
+			return nil, fmt.Errorf("invoke %s: %w", id, ErrFunctionNotDeployed)
+		}
 		return nil, fmt.Errorf("invoke %s: status %d: %s", id, resp.StatusCode, string(b))
 	}
 	var result InvokeResponse

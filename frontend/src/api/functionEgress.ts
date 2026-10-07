@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
+import { runtimeStatusKey } from '../hooks/useEdgeFunctions';
 
 // The outside hosts a project's edge functions may call (EXC-348). The server
 // pins a host without a port to :443 and returns the canonical list.
@@ -25,6 +26,10 @@ export const useSetFunctionEgress = (projectId: string) => {
   return useMutation({
     mutationFn: async (allowedHosts: string[]) =>
       (await api.put<FunctionEgress>(`/projects/${projectId}/functions/egress`, { allowedHosts })).data,
-    onSuccess: (egress) => queryClient.setQueryData(egressKey(projectId), egress),
+    onSuccess: (egress) => {
+      queryClient.setQueryData(egressKey(projectId), egress);
+      // The runtime restarts with the new list (EXC-569).
+      queryClient.invalidateQueries({ queryKey: runtimeStatusKey(projectId) });
+    },
   });
 };

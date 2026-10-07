@@ -79,15 +79,22 @@ export function useInvokeEdgeFunction(projectId: string) {
   });
 }
 
+// A restarting runtime (EXC-569) is polled until it settles.
+export function runtimeStatusRefetchMs(status: RuntimeStatus | undefined): number {
+  return status?.status === 'restarting' ? 3000 : 30000;
+}
+
+export const runtimeStatusKey = (projectId: string) => ['edge-functions-runtime', projectId];
+
 export function useRuntimeStatus(projectId: string) {
   return useQuery({
-    queryKey: ['edge-functions-runtime', projectId],
+    queryKey: runtimeStatusKey(projectId),
     queryFn: async () => {
       const res = await api.get<RuntimeStatus>(`${baseUrl(projectId)}/runtime/status`);
       return res.data;
     },
     enabled: !!projectId,
-    refetchInterval: 30000,
+    refetchInterval: (query) => runtimeStatusRefetchMs(query.state.data),
   });
 }
 
@@ -132,6 +139,8 @@ export function useSetEdgeSecret(projectId: string) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['edge-function-secrets', projectId] });
+      // Saving a secret redeploys the functions; the runtime may be restarting.
+      qc.invalidateQueries({ queryKey: runtimeStatusKey(projectId) });
     },
   });
 }
@@ -144,6 +153,8 @@ export function useDeleteEdgeSecret(projectId: string) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['edge-function-secrets', projectId] });
+      // Saving a secret redeploys the functions; the runtime may be restarting.
+      qc.invalidateQueries({ queryKey: runtimeStatusKey(projectId) });
     },
   });
 }

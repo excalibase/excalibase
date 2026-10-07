@@ -211,3 +211,52 @@ func TestSchedulerFunctions_WithoutAStore(t *testing.T) {
 		t.Fatal("a registry with no store must report an error")
 	}
 }
+
+// A runtime that restarted holds none of the project's functions until the
+// replay reaches it; a scheduled task deploys its function again instead of
+// spending a retry (EXC-569).
+func TestSchedulerInvoker_RedeploysAFunctionARestartedRuntimeLost(t *testing.T) {
+	deployed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/deploy":
+			deployed = true
+			w.WriteHeader(http.StatusCreated)
+		case !deployed:
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"function not found: proj_a__jobs"}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":200,"body":"ok"}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	h := invokerHandler(t, srv, "ACTIVE")
+	if err := h.store.Save(&edgefn.Function{ID: "jobs", ProjectID: "proj_a", Name: "jobs", Active: true,
+		Files: []edgefn.File{{Path: "index.ts", Content: "export default () => new Response('ok')"}},
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	if err := h.SchedulerInvoker().Invoke(context.Background(), "proj_a", "jobs", "send", nil); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if !deployed {
+		t.Fatal("the lost function was not deployed again")
+	}
+}
+
+func TestSchedulerInvoker_AFunctionGoneFromTheStoreIsNotRedeployed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/deploy" {
+			t.Error("a function the store no longer has was deployed")
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	h := invokerHandler(t, srv, "ACTIVE")
+
+	err := h.SchedulerInvoker().Invoke(context.Background(), "proj_a", "jobs", "send", nil)
+	if !errors.Is(err, edgefn.ErrFunctionNotDeployed) {
+		t.Fatalf("err = %v, want ErrFunctionNotDeployed", err)
+	}
+}

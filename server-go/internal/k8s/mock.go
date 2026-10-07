@@ -73,6 +73,9 @@ type MockClient struct {
 	// DenoSpecs — the last spec EnsureDenoRuntime received per namespace.
 	DenoSpecs       map[string]DenoRuntimeSpec
 	EnsureDenoError error
+	// DenoRolloutFunc answers DenoRuntimeRollout; nil reports an ensured
+	// runtime ready and any other absent.
+	DenoRolloutFunc func(namespace string) (DenoRolloutState, error)
 
 	// PublicDBServices — the spec of each project's public database
 	// endpoint Service, keyed "namespace/name". A missing key means no
@@ -748,6 +751,21 @@ func (m *MockClient) EnsureDenoRuntime(ctx context.Context, namespace string, sp
 	m.DenoRuntimes[namespace] = true
 	m.DenoSpecs[namespace] = spec
 	return nil
+}
+
+func (m *MockClient) DenoRuntimeRollout(ctx context.Context, namespace string) (DenoRolloutState, error) {
+	m.mu.Lock()
+	m.Calls = append(m.Calls, "DenoRuntimeRollout:"+namespace)
+	rollout := m.DenoRolloutFunc
+	exists := m.DenoRuntimes[namespace]
+	m.mu.Unlock()
+	if rollout != nil {
+		return rollout(namespace)
+	}
+	if exists {
+		return DenoRuntimeReady, nil
+	}
+	return DenoRuntimeAbsent, nil
 }
 
 func (m *MockClient) GetClusterCapacity(ctx context.Context) (ClusterCapacity, error) {

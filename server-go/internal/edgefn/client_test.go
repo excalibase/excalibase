@@ -182,6 +182,7 @@ func TestRuntimeClientListInvalidJSON(t *testing.T) {
 
 func TestRuntimeClientUnreachable(t *testing.T) {
 	client := NewRuntimeClient("http://localhost:1", "") // nothing listening
+	client.SetRetryBudget(0)
 
 	healthy, _ := client.Health(context.Background())
 	if healthy {
