@@ -242,11 +242,11 @@ type RestoreJob struct {
 	NewProjectName string `json:"newProjectName,omitempty"`
 	// Mode is new_project, or in_place when the restore replaces the source
 	// project's own database; NewProjectID is then the source itself.
-	Mode   string `json:"mode"`
-	Status string `json:"status"` // RUNNING | COMPLETED | FAILED
-	CurrentStep    string `json:"currentStep,omitempty"`
-	TargetKind     string `json:"targetKind"` // latest | time | xid | lsn | name | backup
-	TargetValue    string `json:"targetValue,omitempty"`
+	Mode        string `json:"mode"`
+	Status      string `json:"status"` // RUNNING | COMPLETED | FAILED
+	CurrentStep string `json:"currentStep,omitempty"`
+	TargetKind  string `json:"targetKind"` // latest | time | xid | lsn | name | backup
+	TargetValue string `json:"targetValue,omitempty"`
 	// Request is what the driving process restores from. It is not stored: a
 	// job whose driver dies is failed, never resumed from its row.
 	Request       RestoreRequest `json:"-"`

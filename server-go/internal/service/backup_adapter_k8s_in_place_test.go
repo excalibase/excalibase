@@ -224,6 +224,40 @@ func TestIsClusterVolume(t *testing.T) {
 	}
 }
 
+// Each step that fails stops the replace with its error.
+func TestReplaceDatabaseStopsOnAFailedStep(t *testing.T) {
+	boom := errors.New("boom")
+	for name, breakIt := range map[string]func(*k8s.MockClient){
+		"saving the definition": func(m *k8s.MockClient) { m.CreateSecretError = boom },
+		"deleting the cluster":  func(m *k8s.MockClient) { m.DeleteCRDError = boom },
+		"listing its pods":      func(m *k8s.MockClient) { m.GetPodsError = boom },
+		"listing its volumes":   func(m *k8s.MockClient) { m.ListPVCsError = boom },
+		"creating the cluster":  func(m *k8s.MockClient) { m.CRDError = boom },
+		"the mongo service":     func(m *k8s.MockClient) { m.EnsureDocumentDBServiceError = boom },
+		"a corrupt saved definition": func(m *k8s.MockClient) {
+			m.Secrets["org-src/"+inPlaceTemplateSecret("src")] = map[string][]byte{inPlaceTemplateKey: []byte("{not json")}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			adapter, mock := inPlaceAdapter(t, "completed")
+			breakIt(mock)
+			inst := backedUpSource()
+			inst.DocumentDB = true
+			if err := adapter.ReplaceDatabase(context.Background(), inst, nil); err == nil {
+				t.Fatal("want an error")
+			}
+		})
+	}
+}
+
+func TestTakeSafetyBackupThatCannotStartIsAnError(t *testing.T) {
+	adapter, mock := inPlaceAdapter(t, "completed")
+	mock.CRDError = errors.New("forbidden")
+	if _, err := adapter.TakeSafetyBackup(context.Background(), backedUpSource()); err == nil {
+		t.Fatal("want an error")
+	}
+}
+
 func TestReplaceDatabaseDoesNotDeleteWhenTheSecretsCannotBeKept(t *testing.T) {
 	adapter, mock := inPlaceAdapter(t, "completed")
 	mock.KeepSecretsError = errors.New("forbidden")

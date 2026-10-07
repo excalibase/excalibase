@@ -7,9 +7,36 @@ import (
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/tenantcert"
 	"github.com/excalibase/provisioning-poc/internal/testutil"
 )
+
+func TestStopReplicationRemovesTheWatcher(t *testing.T) {
+	h := newRegistrationHarness(t)
+	inst := restoredInstance()
+	if err := h.svc.StopReplication(context.Background(), inst); !errors.Is(err, ErrReplicationRestartUnavailable) {
+		t.Fatalf("without a provisioner: %v", err)
+	}
+	h.svc.factory = provisioner.NewFactory(provisioner.NewPostgreSQLProvisioner(h.kube, "/charts/excalibase-watcher"))
+	if err := h.svc.StopReplication(context.Background(), inst); err != nil {
+		t.Fatalf("StopReplication: %v", err)
+	}
+	if !strings.Contains(strings.Join(h.kube.Calls, ","), "UninstallHelmChart:"+inst.Namespace+"/excalibase-watcher") {
+		t.Errorf("calls=%v", h.kube.Calls)
+	}
+}
+
+func TestInPlaceRestoreErrorReadsAsItsPublicText(t *testing.T) {
+	cause := errors.New("cluster never ready")
+	err := &InPlaceRestoreError{Public: "the restore did not complete", Cause: cause}
+	if !errors.Is(err, cause) || err.Error() != "the restore did not complete: cluster never ready" {
+		t.Errorf("got %q", err.Error())
+	}
+	if (&InPlaceRestoreError{Public: "only"}).Error() != "only" {
+		t.Error("without a cause the public text stands alone")
+	}
+}
 
 func TestReapplyCredentialsSetsTheFiledPasswordsBack(t *testing.T) {
 	h := newRotationHarness(t)

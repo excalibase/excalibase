@@ -20,11 +20,13 @@ type inPlaceWorld struct {
 	instances storage.InstanceStore
 	released  bool
 
-	holdErr      error
-	targetErr    error
-	backupErr    error
-	replaceErrs  []error // one per ReplaceDatabase call, in order
-	probeErrs    []error
+	holdErr     error
+	targetErr   error
+	backupErr   error
+	replaceErrs []error // one per ReplaceDatabase call, in order
+	probeErrs   []error
+	// One-shot failures of the project-side steps, by step name.
+	failOnce     map[string]error
 	targets      []map[string]interface{}
 	statusesSeen []string
 }
@@ -47,19 +49,25 @@ func (w *inPlaceWorld) HoldForInPlaceRestore(_ context.Context, projectID string
 	return inst, func() { w.released = true }, nil
 }
 
+func (w *inPlaceWorld) step(name string) error {
+	w.record(name)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	err := w.failOnce[name]
+	delete(w.failOnce, name)
+	return err
+}
+
 func (w *inPlaceWorld) StopReplication(context.Context, *domain.DatabaseInstance) error {
-	w.record("stop-replication")
-	return nil
+	return w.step("stop-replication")
 }
 
 func (w *inPlaceWorld) RestartReplication(context.Context, *domain.DatabaseInstance) error {
-	w.record("restart-replication")
-	return nil
+	return w.step("restart-replication")
 }
 
 func (w *inPlaceWorld) ReapplyCredentials(context.Context, *domain.DatabaseInstance) error {
-	w.record("reapply-credentials")
-	return nil
+	return w.step("reapply-credentials")
 }
 
 func (w *inPlaceWorld) AnnounceDatabaseReplaced(context.Context, string) { w.record("announce") }
@@ -340,4 +348,24 @@ func hasEntry(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// A failure after the swap is rolled back like a failed swap; a watcher that
+// cannot be stopped does not stop the restore.
+func TestInPlaceRestore_AFailedCheckAfterTheSwapIsRolledBack(t *testing.T) {
+	for _, failing := range []string{"reapply-credentials", "restart-replication"} {
+		t.Run(failing, func(t *testing.T) {
+			w, restorer := newInPlaceWorld(t, inPlaceProject())
+			w.failOnce = map[string]error{failing: errors.New("boom"), "stop-replication": errors.New("not running")}
+
+			err := restorer.Restore(context.Background(), w, "proj-a", restoreAt())
+			var public *InPlaceRestoreError
+			if !errors.As(err, &public) || !strings.Contains(public.Public, "put back as it was") {
+				t.Fatalf("got %v", err)
+			}
+			if len(w.targets) != 2 {
+				t.Errorf("targets %v", w.targets)
+			}
+		})
+	}
 }

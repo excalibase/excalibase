@@ -109,7 +109,7 @@ type MockClient struct {
 	// a provision does when the cluster refuses one.
 	UpdateSecretError error
 	// KeepSecretsError fails KeepSecretsPastOwner.
-	KeepSecretsError error
+	KeepSecretsError  error
 	CreateSecretError error
 
 	// Capacity returned by GetClusterCapacity. Tests set this to simulate

@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -156,5 +158,31 @@ func TestRestoreInPlaceOnDockerIsRefused(t *testing.T) {
 	w, body := h.post(`{"mode":"in_place","confirmReplace":true}`)
 	if w.Code != 409 || body["error"] != service.ErrInPlaceRestoreUnsupported.Error() {
 		t.Fatalf("%d %v", w.Code, body)
+	}
+}
+
+// Without the job runner the replace runs in the request; a failure answers
+// with its public sentence, never the cause.
+func TestRestoreInPlaceInTheRequestAnswersItsFailure(t *testing.T) {
+	dir := t.TempDir()
+	store, _ := storage.NewFileSystemStore(dir)
+	if err := store.Create(backedUpProject()); err != nil {
+		t.Fatal(err)
+	}
+	bh := NewBackupHandler(service.NewBackupService(store, k8s.NewMockClient(), dir, testBackupStorage()))
+	router := chi.NewRouter()
+	router.Route("/api/provision/{projectId}/backup", func(r chi.Router) { bh.Routes(r) })
+	req := httptest.NewRequest("POST", "/api/provision/p1/backup/restore", strings.NewReader(`{"mode":"in_place","confirmReplace":true}`))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), service.ErrInPlaceRestoreNotConfigured.Error()) {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestInPlaceFailureMessageKeepsTheCauseOut(t *testing.T) {
+	err := fmt.Errorf("run: %w", &service.InPlaceRestoreError{Public: "put back as it was", Cause: errors.New("pod p1-postgres-1 crashed")})
+	if got := inPlaceFailureMessage(err); got != "put back as it was" {
+		t.Errorf("got %q", got)
 	}
 }

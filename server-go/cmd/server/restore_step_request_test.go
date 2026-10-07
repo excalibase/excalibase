@@ -12,6 +12,21 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
+// Once wired, an in-place restore reaches the cluster instead of being refused
+// as unconfigured.
+func TestWireInPlaceRestoreConfiguresTheBackupService(t *testing.T) {
+	store, err := storage.NewFileSystemStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupSvc := service.NewBackupService(store, k8s.NewMockClient(), t.TempDir(), nil)
+	wireInPlaceRestore(backupSvc, service.NewProvisioningService(store, nil, nil), store, nil)
+	err = backupSvc.RestoreInPlace(context.Background(), "missing", domain.RestoreRequest{})
+	if err == nil || errors.Is(err, service.ErrInPlaceRestoreNotConfigured) {
+		t.Fatalf("got %v", err)
+	}
+}
+
 // An in-place job is run as an in-place restore, never as a copy.
 func TestRestoreStepRunsAnInPlaceJobInPlace(t *testing.T) {
 	store, err := storage.NewFileSystemStore(t.TempDir())
