@@ -1294,19 +1294,7 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	headers := make(map[string]string, len(r.Header))
-	for k, v := range r.Header {
-		if len(v) > 0 && !strings.EqualFold(k, authVerifiedHeader) {
-			headers[k] = v[0]
-		}
-	}
-	switch auth {
-	case authStripped:
-		delete(headers, "Authorization")
-		delete(headers, "Cookie")
-	case authVerified:
-		headers[authVerifiedHeader] = "1"
-	}
+	headers := runtimeHeaders(r, auth)
 
 	invokeReq := edgefn.InvokeRequest{
 		Method:  r.Method,
