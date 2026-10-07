@@ -234,12 +234,12 @@ func TestGetClusterCapacity_MarksNodesUntoleratedPodsCannotUse(t *testing.T) {
 	preferOnly.Spec.Taints = []corev1.Taint{{Key: "soft", Effect: corev1.TaintEffectPreferNoSchedule}}
 	c := newFakeClient(noSchedule, notReady, preferOnly, node("plain", 4000, 8<<30, false))
 
-	cap, err := c.GetClusterCapacity(context.Background())
+	capacity, err := c.GetClusterCapacity(context.Background())
 	if err != nil {
 		t.Fatalf("GetClusterCapacity: %v", err)
 	}
 	tainted := map[string]bool{}
-	for _, n := range cap.Nodes {
+	for _, n := range capacity.Nodes {
 		tainted[n.Name] = n.Tainted
 	}
 	want := map[string]bool{"control-plane": true, "not-ready": true, "prefer": false, "plain": false}

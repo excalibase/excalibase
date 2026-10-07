@@ -51,16 +51,8 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 		testcontainers.WithFiles(gvisorFiles(t, gvisorPlatformSystrap)...))
 	lab.createGVisorRuntimeClass(t)
 	t.Setenv("POD_NAMESPACE", netPlatform)
-	for _, ns := range []string{netEdge, netPlatform} {
-		if _, err := lab.cs.CoreV1().Namespaces().Create(lab.ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{}); err != nil {
-			t.Fatalf("create namespace %s: %v", ns, err)
-		}
-	}
-	for ns, org := range map[string]string{netProject: "org1", netOtherProject: "org2"} {
-		if err := lab.client.CreateProjectNamespace(lab.ctx, ns, org); err != nil {
-			t.Fatalf("create project namespace %s: %v", ns, err)
-		}
-	}
+	lab.createNamespaces(t, netEdge, netPlatform)
+	lab.createProjectNamespaces(t, map[string]string{netProject: "org1", netOtherProject: "org2"})
 	web := netApp("app-net-web", "proj-neta", "web")
 	api := netApp("app-net-api", "proj-neta", "api")
 	foreign := netApp("app-net-foreign", "proj-netb", "api")
@@ -106,11 +98,7 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 		refusedFor(t, "the edge to queue's internal port", func() error { return lab.agnhostConnect(netEdge, "edge", queueTCP) })
 	})
 
-	for _, ns := range []string{netProject, netOtherProject} {
-		if err := lab.client.SetAppPrivateNetwork(lab.ctx, ns, true); err != nil {
-			t.Fatalf("turn the private network on in %s: %v", ns, err)
-		}
-	}
+	lab.setPrivateNetwork(t, true, netProject, netOtherProject)
 	t.Run("on: apps reach each other by name on the HTTP port", func(t *testing.T) {
 		eventually(t, "web reaches http://api", time.Minute, func() bool { return fromWeb("api", appServicePort) == nil })
 		eventually(t, "api reaches http://web", time.Minute, func() bool { return fromAPI("web", appServicePort) == nil })
@@ -133,25 +121,11 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 	})
 	t.Run("on: the internal port stays closed to everything else", func(t *testing.T) {
 		refusedFor(t, "the edge to queue's internal port", func() error { return lab.agnhostConnect(netEdge, "edge", queueTCP) })
-		for _, probe := range []struct{ desc, ns, pod string }{
-			{"another project's pod", netOtherProject, podIntruder},
-			{"a non-app pod in the same project", netProject, podNeighbour},
-			{"the project's database pod", netProject, podDatabase},
-			{"the platform", netPlatform, podPlatform},
-		} {
-			refusedFor(t, probe.desc+" to the internal port", func() error { return lab.agnhostConnect(probe.ns, probe.pod, queueTCP) })
-		}
+		lab.refusedFromNonApps(t, " to the internal port", queueTCP)
 	})
 	t.Run("on: nothing else gains access to the apps", func(t *testing.T) {
 		refusedFor(t, "an app in another project, both switched on", func() error { return fromWeb(foreignHost, appServicePort) })
-		for _, probe := range []struct{ desc, ns, pod string }{
-			{"another project's pod", netOtherProject, podIntruder},
-			{"a non-app pod in the same project", netProject, podNeighbour},
-			{"the project's database pod", netProject, podDatabase},
-			{"the platform", netPlatform, podPlatform},
-		} {
-			refusedFor(t, probe.desc, func() error { return lab.agnhostConnect(probe.ns, probe.pod, apiPod) })
-		}
+		lab.refusedFromNonApps(t, "", apiPod)
 	})
 	t.Run("on: the database still serves its project and the apps are still ready", func(t *testing.T) {
 		dbAddr := net.JoinHostPort(podIP(lab.ctx, t, lab.cs, netProject, podDatabase), strconv.Itoa(netDBPort))
@@ -161,13 +135,51 @@ func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
 		lab.expectNetAppsReady(t, netProject)
 	})
 
-	if err := lab.client.SetAppPrivateNetwork(lab.ctx, netProject, false); err != nil {
-		t.Fatalf("turn the private network off: %v", err)
-	}
+	lab.setPrivateNetwork(t, false, netProject)
 	t.Run("off again: the apps are closed to each other", func(t *testing.T) {
 		refusedFor(t, "web to api by name", func() error { return fromWeb("api", appServicePort) })
 		refusedFor(t, "web to queue's internal TCP port", func() error { return fromWeb("queue", netQueueTCPPort) })
 	})
+}
+
+func (lab *egressLab) createNamespaces(t *testing.T, names ...string) {
+	t.Helper()
+	for _, ns := range names {
+		if _, err := lab.cs.CoreV1().Namespaces().Create(lab.ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("create namespace %s: %v", ns, err)
+		}
+	}
+}
+
+func (lab *egressLab) createProjectNamespaces(t *testing.T, orgByNamespace map[string]string) {
+	t.Helper()
+	for ns, org := range orgByNamespace {
+		if err := lab.client.CreateProjectNamespace(lab.ctx, ns, org); err != nil {
+			t.Fatalf("create project namespace %s: %v", ns, err)
+		}
+	}
+}
+
+func (lab *egressLab) setPrivateNetwork(t *testing.T, open bool, namespaces ...string) {
+	t.Helper()
+	for _, ns := range namespaces {
+		if err := lab.client.SetAppPrivateNetwork(lab.ctx, ns, open); err != nil {
+			t.Fatalf("set the private network to %v in %s: %v", open, ns, err)
+		}
+	}
+}
+
+// refusedFromNonApps: no pod that is not one of the project's apps reaches target.
+func (lab *egressLab) refusedFromNonApps(t *testing.T, suffix, target string) {
+	t.Helper()
+	for _, probe := range []struct{ desc, ns, pod string }{
+		{"another project's pod", netOtherProject, podIntruder},
+		{"a non-app pod in the same project", netProject, podNeighbour},
+		{"the project's database pod", netProject, podDatabase},
+		{"the platform", netPlatform, podPlatform},
+	} {
+		refusedFor(t, probe.desc+suffix, func() error { return lab.agnhostConnect(probe.ns, probe.pod, target) })
+	}
 }
 
 // pingRedisFromApp speaks the Redis protocol from inside the app's container.

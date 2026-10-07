@@ -50,14 +50,8 @@ func TestK3sCiliumWorkloadsReachTheEdge(t *testing.T) {
 	lab.nodeIP = nodeInternalIP(lab.ctx, t, lab.cs)
 	lab.createGVisorRuntimeClass(t)
 	t.Setenv("POD_NAMESPACE", routePlatform)
-	for _, ns := range []string{haproxyNamespace, routePlatform, egressNamespaceB} {
-		if _, err := lab.cs.CoreV1().Namespaces().Create(lab.ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{}); err != nil {
-			t.Fatalf("create namespace %s: %v", ns, err)
-		}
-	}
-	if err := lab.client.CreateProjectNamespace(lab.ctx, egressNamespaceA, "org1"); err != nil {
-		t.Fatalf("create project namespace: %v", err)
-	}
+	lab.createNamespaces(t, haproxyNamespace, routePlatform, egressNamespaceB)
+	lab.createProjectNamespaces(t, map[string]string{egressNamespaceA: "org1"})
 	lab.installHAProxyEdge(t)
 	lab.startTenantB(t)
 	platformDBLabels := map[string]string{"cnpg.io/cluster": edgePlatformDB, "cnpg.io/podRole": "instance"}
@@ -79,11 +73,7 @@ func TestK3sCiliumWorkloadsReachTheEdge(t *testing.T) {
 	edgeHTTP := net.JoinHostPort(lab.nodeIP, "80")
 	refused := append(lab.fencedTargets(t), otherDatabases...)
 	clients := []string{edgeClientApp, edgeClientFunction}
-	for _, pod := range clients {
-		for _, addr := range append([]string{edgeHTTPS, edgeHTTP, ownDB}, refused...) {
-			eventually(t, "before any fence: "+pod+" reaches "+addr, 2*time.Minute, func() bool { return lab.connect(pod, addr) == nil })
-		}
-	}
+	lab.expectReachableBeforeFences(t, clients, append([]string{edgeHTTPS, edgeHTTP, ownDB}, refused...))
 	hasInternet := lab.connect(edgeClientFunction, "one.one.one.one:443") == nil
 
 	t.Run("without the edge rule the public host is refused", func(t *testing.T) {
@@ -118,6 +108,16 @@ func TestK3sCiliumWorkloadsReachTheEdge(t *testing.T) {
 		t.Error("the function NetworkPolicy fence must be gone once the Cilium fence is in place")
 	}
 	lab.expectFenced(t, edgeClientFunction+" under the Cilium fence", edgeClientFunction, []string{edgeHTTPS, edgeHTTP, ownDB}, refused)
+}
+
+// expectReachableBeforeFences: every address answers each client before any fence, or a refusal after proves nothing.
+func (lab *egressLab) expectReachableBeforeFences(t *testing.T, pods, addrs []string) {
+	t.Helper()
+	for _, pod := range pods {
+		for _, addr := range addrs {
+			eventually(t, "before any fence: "+pod+" reaches "+addr, 2*time.Minute, func() bool { return lab.connect(pod, addr) == nil })
+		}
+	}
 }
 
 // expectFenced: every reachable address answers, every refused one stays closed, and metadata never answers.
