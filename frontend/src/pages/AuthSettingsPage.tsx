@@ -71,7 +71,7 @@ function SiteUrlForm({ projectId, initial }: { readonly projectId: string; reado
         <input id="require-verification" type="checkbox" checked={requireVerification} className="mt-1"
           onChange={(e) => { setRequireVerification(e.target.checked); setSaved(false); }} />
         <span>
-          Require email verification
+          <span className="block">Require email verification</span>
           <span className="block text-xs text-text-secondary">Users must confirm their address before they can sign in. Needs a site URL.</span>
         </span>
       </label>

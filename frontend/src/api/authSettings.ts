@@ -12,7 +12,13 @@ const authSettingsPath = (projectId: string) => `/projects/${projectId}/auth-set
 export const SITE_URL_RULE =
   'Use an absolute https URL such as https://app.example.com (http is accepted only for localhost), with no query, fragment or trailing slash.';
 
-const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') end -= 1;
+  return value.slice(0, end);
+}
 
 // Mirrors the server's rule so a mistake is caught before the request. An
 // empty value is allowed here: it means "not set yet".
@@ -25,7 +31,7 @@ export function siteUrlProblem(raw: string): string | null {
   } catch {
     return `That is not an absolute URL. ${SITE_URL_RULE}`;
   }
-  const loopback = LOOPBACK_HOSTS.includes(parsed.hostname);
+  const loopback = LOOPBACK_HOSTS.has(parsed.hostname);
   if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
     return `${parsed.protocol === 'http:' ? 'Plain http is only allowed for localhost.' : 'The URL must start with https://.'} ${SITE_URL_RULE}`;
   }
@@ -40,7 +46,7 @@ export function siteUrlProblem(raw: string): string | null {
 // The first app that already has a public address, offered as the site URL.
 export function suggestSiteUrl(apps: ReadonlyArray<{ url?: string }> | undefined): string | null {
   for (const app of apps ?? []) {
-    const candidate = (app.url ?? '').trim().replace(/\/+$/, '');
+    const candidate = withoutTrailingSlashes((app.url ?? '').trim());
     if (candidate !== '' && siteUrlProblem(candidate) === null) return candidate;
   }
   return null;
