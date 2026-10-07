@@ -81,6 +81,8 @@ func table(deps Deps) map[string][]Dependency {
 		// The app handler is always constructed; the flag only decides
 		// whether its routes are mounted.
 		"APP_HOSTING_ENABLED": {},
+		// Changes how each app's route is rendered; needs nothing of this process.
+		"APP_WILDCARD_TLS": {},
 		// Only gates requests: the gateway plugin it vouches for is the
 		// chart's, outside this process.
 		"DOCUMENTDB_ENABLED": {},
