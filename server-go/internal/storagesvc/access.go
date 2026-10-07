@@ -38,17 +38,6 @@ const (
 	OpDelete
 )
 
-func (op Operation) String() string {
-	switch op {
-	case OpRead:
-		return "read"
-	case OpWrite:
-		return "write"
-	default:
-		return "delete"
-	}
-}
-
 // EndUser is a verified app user: the subject and role of a project token.
 type EndUser struct {
 	Subject string

@@ -53,6 +53,15 @@ func appClaims(userID float64, role string, allowed ...string) jwt.MapClaims {
 	return claims
 }
 
+func endUserVerifierForTest() fakeEndUserVerifier {
+	return fakeEndUserVerifier{tokens: map[string]jwt.MapClaims{
+		aliceToken: appClaims(7, "authenticated", "staff_candidate"),
+		bobToken:   appClaims(8, "authenticated"),
+		staffToken: appClaims(9, "authenticated", "staff"),
+		anonToken:  appClaims(0, "anon"),
+	}}
+}
+
 type endUserFixture struct {
 	router  *chi.Mux
 	blobs   *fakeObjectStoreForTest
@@ -66,14 +75,8 @@ func newEndUserFixture(t *testing.T, access storagesvc.BucketAccess) endUserFixt
 	if _, err := svc.CreateBucket(context.Background(), appProject, storagesvc.CreateBucketRequest{Name: "files", Access: access}); err != nil {
 		t.Fatalf("create bucket: %v", err)
 	}
-	verifier := fakeEndUserVerifier{tokens: map[string]jwt.MapClaims{
-		aliceToken: appClaims(7, "authenticated", "staff_candidate"),
-		bobToken:   appClaims(8, "authenticated"),
-		staffToken: appClaims(9, "authenticated", "staff"),
-		anonToken:  appClaims(0, "anon"),
-	}}
 	cors := &fakeCorsStore{origins: map[string][]string{appProject: {appOrigin}}}
-	h := NewEndUserStorageHandler(NewStorageHandler(svc, nil), verifier, cors)
+	h := NewEndUserStorageHandler(NewStorageHandler(svc, nil), endUserVerifierForTest(), cors)
 	r := chi.NewRouter()
 	r.Route("/storage/v1/{projectId}", h.Routes)
 	return endUserFixture{router: r, blobs: blobs, service: svc}

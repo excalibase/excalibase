@@ -167,13 +167,8 @@ func (h *EndUserStorageHandler) authorize(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return user, false
 	}
-	bucket, err := h.storage.svc.Bucket(r.Context(), projectID, chi.URLParam(r, "bucket"))
-	if errors.Is(err, storagesvc.ErrBucketNotFound) {
-		httpError(w, errStorageNotAllowed, http.StatusForbidden)
-		return user, false
-	}
-	if err != nil {
-		storageError(w, "end-user bucket lookup", err)
+	bucket, ok := h.lookupBucket(w, r, projectID)
+	if !ok {
 		return user, false
 	}
 	if !bucket.Allows(user, op, key) {
@@ -181,6 +176,21 @@ func (h *EndUserStorageHandler) authorize(w http.ResponseWriter, r *http.Request
 		return user, false
 	}
 	return user, true
+}
+
+// lookupBucket loads the route's bucket. An unknown bucket is refused exactly
+// like a missing rule, so app users cannot probe which buckets exist.
+func (h *EndUserStorageHandler) lookupBucket(w http.ResponseWriter, r *http.Request, projectID string) (*storagesvc.Bucket, bool) {
+	bucket, err := h.storage.svc.Bucket(r.Context(), projectID, chi.URLParam(r, "bucket"))
+	if errors.Is(err, storagesvc.ErrBucketNotFound) {
+		httpError(w, errStorageNotAllowed, http.StatusForbidden)
+		return nil, false
+	}
+	if err != nil {
+		storageError(w, "end-user bucket lookup", err)
+		return nil, false
+	}
+	return bucket, true
 }
 
 func decodeEndUserBody(w http.ResponseWriter, r *http.Request, into any) bool {
@@ -243,13 +253,8 @@ func (h *EndUserStorageHandler) listObjects(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	bucket, err := h.storage.svc.Bucket(r.Context(), projectID, chi.URLParam(r, "bucket"))
-	if errors.Is(err, storagesvc.ErrBucketNotFound) {
-		httpError(w, errStorageNotAllowed, http.StatusForbidden)
-		return
-	}
-	if err != nil {
-		storageError(w, "end-user bucket lookup", err)
+	bucket, ok := h.lookupBucket(w, r, projectID)
+	if !ok {
 		return
 	}
 	query := r.URL.Query()
@@ -260,10 +265,12 @@ func (h *EndUserStorageHandler) listObjects(w http.ResponseWriter, r *http.Reque
 	}
 	limit := 100
 	if raw := query.Get("limit"); raw != "" {
-		if limit, err = strconv.Atoi(raw); err != nil {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
 			httpError(w, "limit must be an integer", http.StatusBadRequest)
 			return
 		}
+		limit = parsed
 	}
 	page, err := h.storage.svc.ListObjects(r.Context(), projectID, bucket.Name, storagesvc.ListObjectsRequest{
 		Prefix: prefix, Cursor: query.Get("cursor"), Limit: limit,

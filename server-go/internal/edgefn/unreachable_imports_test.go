@@ -82,6 +82,17 @@ func TestCarriedImports_MatchTheRuntimeImportMap(t *testing.T) {
 	}
 }
 
+// Modules load over 443: an entry for another port does not reach them, and
+// a specifier with no readable host is reported as such.
+func TestUnreachableImports_OtherPortsAndBadURLs(t *testing.T) {
+	code := `import a from "https://cdn.example.com/a.js"; import b from "https://%zz/b.js";`
+	got := UnreachableImports(code, []string{"cdn.example.com:8443"})
+	want := []string{"https://%zz/b.js ()", "https://cdn.example.com/a.js (cdn.example.com)"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestUnreachableImports_WildcardMatchesSubdomainsOnly(t *testing.T) {
 	code := `import a from "https://cdn.example.com/a.js"; import b from "https://example.com/b.js";`
 	got := UnreachableImports(code, []string{"*.example.com:443"})

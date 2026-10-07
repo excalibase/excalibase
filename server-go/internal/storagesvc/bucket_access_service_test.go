@@ -54,6 +54,28 @@ func TestUpdateBucketAccess_ReplacesTheRules(t *testing.T) {
 	}
 }
 
+// failingCatalogue is a catalogue whose reads and access writes fail.
+type failingCatalogue struct{ *memStore }
+
+func (failingCatalogue) GetBucket(context.Context, string, string) (*Bucket, error) {
+	return nil, errors.New("catalogue down")
+}
+
+func (failingCatalogue) UpdateBucketAccess(context.Context, string, string, BucketAccess) (bool, error) {
+	return false, errors.New("catalogue down")
+}
+
+func TestBucketAccess_CatalogueFailuresAreReported(t *testing.T) {
+	svc := NewServiceWithObjectStore(failingCatalogue{newMemStore()}, newFakeObjectStore(), nil)
+	ctx := context.Background()
+	if _, err := svc.Bucket(ctx, testProjX, "avatars"); err == nil || errors.Is(err, ErrBucketNotFound) {
+		t.Errorf("bucket lookup: %v, want the store failure", err)
+	}
+	if _, err := svc.UpdateBucketAccess(ctx, testProjX, "avatars", nil); err == nil || errors.Is(err, ErrBucketNotFound) {
+		t.Errorf("update access: %v, want the store failure", err)
+	}
+}
+
 func TestUpdateBucketAccess_UnknownBucketAndBadRules(t *testing.T) {
 	svc := NewServiceWithObjectStore(newMemStore(), newFakeObjectStore(), nil)
 	ctx := context.Background()
