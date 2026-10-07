@@ -22,6 +22,7 @@ operations (PATs, capacity, logs, drop project, revoke org) live in
 [ ] Namespace excalibase-platform created                               -> §2
 [ ] Secret r2-creds        (access_key_id, secret_access_key, endpoint, bucket, region)
 [ ] Bucket + key for customer files, bucket CORS applied                  -> §2.1
+[ ] (optional) Cloudflare DNS token for the *.apps wildcard certificate    -> §1.6
 [ ] Secret storage-creds   (access_key_id, secret_access_key, endpoint, bucket, region)
 [ ] Secret resend-creds    (api-key)
 [ ] values-prod.yaml copied and edited: image tags, hosts, cors.origins, admin ingress
@@ -136,6 +137,40 @@ when the stack is missing.
 * `cors.origins` must list the Studio origin(s) exactly with
   `cors.secureCookies: "true"`; `"*"` breaks cookie login (`values-prod.yaml`).
 
+### 1.6 Wildcard certificate for app hosts (EXC-564, optional)
+
+Without it every app host gets its own HTTP-01 certificate, which works but
+counts against Let's Encrypt's 50 new certificates per registered domain per
+week. With it, one `*.apps.<domain>` certificate (DNS-01) is the edge's
+default and new apps are on HTTPS at once; custom domains keep HTTP-01.
+
+1. Cloudflare dashboard → **My Profile → API Tokens → Create Token →
+   Edit zone DNS** template → Zone Resources: **Include → Specific zone →
+   `excalibase.io`** only → Create. Shown once; never paste it in chat or git.
+2. Store it in the cluster (`rke2/edge-tls.sh` in `excalibase-service` reads
+   this Secret and refuses to continue without it):
+
+   ```bash
+   kubectl -n cert-manager create secret generic cloudflare-dns01-token \
+     --from-literal=api-token=<token>
+   ```
+3. On the release tag, rerun `rke2/install-platform.sh` with the existing
+   variables plus `APPS_WILDCARD_TLS=true ACME_EMAIL=<email>
+   APP_DOMAIN=apps.excalibase.io PUBLIC_API_HOST=api.excalibase.io`. It waits
+   up to 10 minutes for the certificate before switching the edge (a few
+   seconds' edge roll) and then sets `appHosting.wildcardTLS=true`.
+   Dry run first if wanted: `APPS_WILDCARD_ACME_SERVER=<LE staging URL>`,
+   then delete certificate/secret `apps-wildcard-tls` in `haproxy-controller`
+   and rerun without it.
+4. Check: `curl -sI http://x.apps.excalibase.io` → 308 with no `:443`;
+   `curl -sI https://api.excalibase.io/` → `strict-transport-security`;
+   `openssl s_client -connect api.excalibase.io:443 -servername unknown.apps.excalibase.io`
+   → subject `*.apps.excalibase.io`.
+
+Rollback: rerun the installer without `APPS_WILDCARD_TLS`; per-app
+certificates come back at each app's next deploy. The token can edit that
+zone's DNS from inside the cluster, so scope it to the one zone.
+
 ## 2. Secrets to prepare before install
 
 All in namespace `excalibase-platform` (`.Values.namespace`). Key names are
@@ -205,6 +240,9 @@ never get one.
    }]}
    ```
 
+   In the Cloudflare dashboard editor paste only the list inside
+   `CORSRules` (it starts with `[`), not the `{"CORSRules": ...}` wrapper.
+
    (wrangler's file is the bare rules list: `{"rules": [{"allowed": {"origins": ["*"], "methods": ["GET","PUT","HEAD"], "headers": ["content-type"]}, "exposeHeaders": ["ETag","Content-Length","Content-Type"], "maxAgeSeconds": 3600}]}`.)
 
    Why every origin: a signed URL is the permission. It names one object,
@@ -216,6 +254,12 @@ never get one.
    of every project's allowlist, custom domains and `localhost` included.
    No credentials are involved: R2 never reads cookies, and an `*` answer
    carries no `Access-Control-Allow-Credentials`.
+   Dashboard path for step 2: R2 → **Manage API tokens** → **Create API
+   token** → permission **Object Read & Write** → **Apply to specific
+   buckets only** → `excalibase-storage` → Create. The secret is shown
+   once: put it straight into the operator's secrets file as
+   `STORAGE_ACCESS_KEY_ID` / `STORAGE_SECRET_ACCESS_KEY`, never in chat,
+   tickets or git.
 4. Create the Secret:
 
    ```bash
