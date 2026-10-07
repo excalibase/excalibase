@@ -101,6 +101,18 @@ func (m *memStore) SetBucketStatus(_ context.Context, projectID, name, status st
 	return errNotFound
 }
 
+func (m *memStore) UpdateBucketAccess(_ context.Context, projectID, name string, access BucketAccess) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.buckets {
+		if b.ProjectID == projectID && b.Name == name {
+			b.Access = access
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (m *memStore) CreateObject(_ context.Context, o *Object) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

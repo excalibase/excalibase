@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -195,4 +196,22 @@ func (h *FunctionHandler) renderEgress(ctx context.Context, projectID string) er
 		return err
 	}
 	return h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID))
+}
+
+// unreachableImports names the imports a per-project runtime could not fetch:
+// its NetworkPolicy closes everything the egress allowlist does not open. The
+// shared docker runtime is not fenced that way, so it is not checked.
+func (h *FunctionHandler) unreachableImports(projectID, code string) []string {
+	if h.k8sClient == nil {
+		return nil
+	}
+	return edgefn.UnreachableImports(code, h.workerEgressHosts(projectID))
+}
+
+// unreachableImportsMessage refuses a deploy whose imports the runtime would
+// hang fetching (EXC-560), and says the two ways out.
+func unreachableImportsMessage(imports []string) string {
+	return "the runtime does not carry " + strings.Join(imports, ", ") +
+		" and this project's function egress does not allow fetching it: add the host to the egress allowlist," +
+		" or put the code in the function's own files (zod and @excalibase/server are built in)"
 }

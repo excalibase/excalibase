@@ -635,6 +635,11 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
+	if unreachable := h.unreachableImports(projectID, code); len(unreachable) > 0 {
+		rollback()
+		httpError(w, unreachableImportsMessage(unreachable), http.StatusBadRequest)
+		return
+	}
 
 	// Extract user-declared schema (if any) and apply it before deploying
 	// the function bundle. If migration fails we roll back the store record
@@ -1014,9 +1019,20 @@ func (h *FunctionHandler) loadSigningPublicKey() (*ecdsa.PublicKey, error) {
 //     EXCALIBASE_AUTH_ISS — defense in depth that the token came from the
 //     platform's auth service, not some other ES256 signer.
 func (h *FunctionHandler) validateProjectJWT(tokenStr, expectedProjectID string) (string, error) {
+	claims, err := h.verifyProjectClaims(tokenStr, expectedProjectID)
+	if err != nil {
+		return "", err
+	}
+	scope, _ := claims["scope"].(string)
+	return scope, nil
+}
+
+// verifyProjectClaims runs the gates validateProjectJWT documents and returns
+// the verified claims.
+func (h *FunctionHandler) verifyProjectClaims(tokenStr, expectedProjectID string) (jwt.MapClaims, error) {
 	key, err := h.loadSigningPublicKey()
 	if err != nil {
-		return "", fmt.Errorf("load signing key: %w", err)
+		return nil, fmt.Errorf("load signing key: %w", err)
 	}
 
 	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
@@ -1026,41 +1042,45 @@ func (h *FunctionHandler) validateProjectJWT(tokenStr, expectedProjectID string)
 		return key, nil
 	}, jwt.WithValidMethods([]string{"ES256"}))
 	if err != nil {
-		return "", fmt.Errorf("parse/verify jwt: %w", err)
+		return nil, fmt.Errorf("parse/verify jwt: %w", err)
 	}
 	if !token.Valid {
-		return "", errors.New("jwt is not valid")
+		return nil, errors.New("jwt is not valid")
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return "", errors.New("jwt claims are not a map")
+		return nil, errors.New("jwt claims are not a map")
 	}
 
 	tokenProjectID, ok := claims["projectId"].(string)
 	if !ok || tokenProjectID == "" {
-		return "", errors.New("jwt missing projectId claim")
+		return nil, errors.New("jwt missing projectId claim")
 	}
 	if tokenProjectID != expectedProjectID {
-		return "", fmt.Errorf("jwt projectId %q does not match url %q", tokenProjectID, expectedProjectID)
+		return nil, fmt.Errorf("jwt projectId %q does not match url %q", tokenProjectID, expectedProjectID)
 	}
 
 	if expectedIss := h.expectedJWTIssuer; expectedIss != "" {
 		iss, _ := claims["iss"].(string)
 		if iss != expectedIss {
-			return "", fmt.Errorf("jwt iss %q does not match expected %q", iss, expectedIss)
+			return nil, fmt.Errorf("jwt iss %q does not match expected %q", iss, expectedIss)
 		}
 	}
 
 	if err := h.checkTokenUse(claims); err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := h.checkAudience(claims, expectedProjectID); err != nil {
-		return "", err
+		return nil, err
 	}
+	return claims, nil
+}
 
-	scope, _ := claims["scope"].(string)
-	return scope, nil
+// VerifyEndUser checks an app user's access token for projectID with the
+// gates a function's verifyJwt uses, and returns the verified claims.
+func (h *FunctionHandler) VerifyEndUser(token, projectID string) (jwt.MapClaims, error) {
+	return h.verifyProjectClaims(token, projectID)
 }
 
 // Machine-readable rejection codes surfaced in the 401 body so an operator can

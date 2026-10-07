@@ -217,13 +217,17 @@ type AppConfig struct {
 	SESConfigurationSet string
 	ResendAPIKey        string
 
-	// Object storage (R2/S3-compatible). Empty across the board means the
-	// storage feature is off; a partial set is a misconfiguration.
+	// The platform's object-store key (R2/S3-compatible): the backup store
+	// when BACKUP_DEFAULT_* is not given. Customer files never use it; they
+	// have FileStorage.
 	R2AccessKeyID     string
 	R2SecretAccessKey string
 	R2Endpoint        string
 	R2Bucket          string
 	R2Region          string
+
+	// FileStorage is where customer files live: their own bucket and key.
+	FileStorage FileStorageConfig
 
 	// Backup destination defaults. They fall back to the object-storage
 	// credentials, which is how a single-bucket deployment is configured.
@@ -359,6 +363,9 @@ func (c AppConfig) Validate() error {
 	if err := c.validateEdge(); err != nil {
 		return err
 	}
+	if err := c.validateFileStorage(); err != nil {
+		return err
+	}
 	return c.validateAppRoute()
 }
 
@@ -465,6 +472,7 @@ func load() AppConfig {
 		R2Endpoint:                     os.Getenv("R2_ENDPOINT"),
 		R2Bucket:                       os.Getenv("R2_BUCKET"),
 		R2Region:                       os.Getenv("R2_REGION"),
+		FileStorage:                    loadFileStorage(),
 		BackupAccessKeyID:              envOr("BACKUP_DEFAULT_ACCESS_KEY_ID", os.Getenv("R2_ACCESS_KEY_ID")),
 		BackupSecretAccessKey:          envOr("BACKUP_DEFAULT_SECRET_ACCESS_KEY", os.Getenv("R2_SECRET_ACCESS_KEY")),
 		BackupEndpoint:                 envOr("BACKUP_DEFAULT_ENDPOINT", os.Getenv("R2_ENDPOINT")),

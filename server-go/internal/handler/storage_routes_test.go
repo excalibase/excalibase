@@ -28,7 +28,10 @@ func newStorageRouterWithBackend(t *testing.T) (chi.Router, *inMemoryBucketStore
 	h := NewStorageHandler(newStubbedStorageService(t, store, backend, nil), nil)
 
 	r := chi.NewRouter()
-	r.Route("/api/projects/{projectId}/storage", func(r chi.Router) { h.Routes(r) })
+	r.Route("/api/projects/{projectId}/storage", func(r chi.Router) {
+		h.Routes(r)
+		r.Put("/buckets/{bucket}/access", h.UpdateBucketAccess)
+	})
 	r.Group(func(r chi.Router) { h.PublicRoutes(r) })
 	return r, store, backend
 }
@@ -192,5 +195,42 @@ func TestStorageRoutes_PublicGetObject_PrivateBucketForbidden(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("private bucket on public path should 403, got %d", w.Code)
+	}
+}
+
+func TestStorageRoutes_BucketAccessRules(t *testing.T) {
+	r, _ := newStorageRouter(t)
+	const base = "/api/projects/proj_a/storage/buckets"
+	created := doStorage(t, r, "POST", base, map[string]any{
+		"name":   "avatars",
+		"access": map[string]any{"authenticated": map[string]string{"read": "own", "write": "own"}},
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	updated := doStorage(t, r, "PUT", base+"/avatars/access", map[string]any{
+		"access": map[string]any{"staff": map[string]string{"write": "all"}},
+	})
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", updated.Code, updated.Body.String())
+	}
+	var bucket storagesvc.Bucket
+	_ = json.Unmarshal(updated.Body.Bytes(), &bucket)
+	if bucket.Access["staff"].Write != storagesvc.ScopeAll || len(bucket.Access) != 1 {
+		t.Errorf("access after update: %+v", bucket.Access)
+	}
+	if w := doStorage(t, r, "PUT", base+"/avatars/access", map[string]any{
+		"access": map[string]any{"staff": map[string]string{"write": "everything"}},
+	}); w.Code != http.StatusBadRequest {
+		t.Errorf("bad scope: %d", w.Code)
+	}
+	if w := doStorage(t, r, "PUT", base+"/missing/access", map[string]any{"access": map[string]any{}}); w.Code != http.StatusNotFound {
+		t.Errorf("unknown bucket: %d", w.Code)
+	}
+	bad := httptest.NewRequest("PUT", base+"/avatars/access", bytes.NewReader([]byte("{")))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, bad)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad json: %d", rec.Code)
 	}
 }

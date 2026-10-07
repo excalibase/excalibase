@@ -12,33 +12,55 @@ claims, etc.) and invokes the stored handler on each request.
 ## Installation
 
 ```sh
-npm install @excalibase/server zod
+npm install zod
 ```
 
-`zod` is a peer dependency. `zod-to-json-schema` is bundled as a regular
-dependency because the metadata it produces is part of the package output.
+There is nothing to install for a deploy: the package is not on npm, and the
+function runtime carries both it and zod. Import them by bare name, as below,
+or pinned (`npm:@excalibase/server@0.13.0`, `npm:zod@^3.22.0`); the platform's
+bundler points bare names at the runtime's copies. Any other bare import must
+be one of the function's own files, and an `npm:` package other than these two
+is fetched from the registry, which a project runtime reaches only when its
+egress allowlist says so; without that the deploy is refused and names the
+package. `zod-to-json-schema` is bundled as a regular dependency
+because the metadata it produces is part of the package output.
 
 ## Usage
 
-```ts
-import { z } from "zod";
-import { query, mutation } from "@excalibase/server";
+Each function is one deployed module whose **default export** is the
+wrapper; its id is `module.name`, and that is how a client calls it
+(`db.functions.users.get(args)` → `POST /functions/v1/{projectId}/users.get`).
 
-export const getUser = query({
+```ts
+// deployed with id "users.get"
+import { z } from "zod";
+import { query } from "@excalibase/server";
+
+export default query({
   args: z.object({ id: z.string() }),
   handler: async (ctx, args) => {
     // ctx.db is provided by the runtime at request time.
     return { id: args.id };
   },
 });
+```
 
-export const createUser = mutation({
-  args: z.object({ name: z.string() }),
+```ts
+// deployed with id "users.create"
+import { z } from "zod";
+import { mutation } from "@excalibase/server";
+
+export default mutation({
+  args: z.object({ name: z.string().min(1) }),
   handler: async (ctx, args) => {
     return { name: args.name };
   },
 });
 ```
+
+The runtime checks the arguments against `args` before the handler runs:
+arguments the schema refuses answer `400 { "error": "args validation failed",
+"issues": [...] }`, and the handler gets the parsed value.
 
 ## Refusing a caller
 
@@ -48,9 +70,11 @@ the caller gets `500 { "error": "internal error" }` and the message is
 written to the function's logs.
 
 ```ts
+import { z } from "zod";
 import { mutation, FunctionError } from "@excalibase/server";
 
-export const generateUploadUrl = mutation({
+// deployed with id "system.generateUploadUrl"
+export default mutation({
   args: z.object({ contentType: z.string(), size: z.number() }),
   handler: async (ctx, args) => {
     if (!ctx.auth.claims) throw new FunctionError(401, "sign in to upload");

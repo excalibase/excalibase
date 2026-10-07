@@ -446,3 +446,48 @@ func TestPgStorage_ConcurrentConfirmAndDeleteDoNotDeadlock(t *testing.T) {
 	}
 	_ = s.DeleteBucket(ctx, project, "files")
 }
+
+func TestPgStorage_BucketAccessRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	access := storagesvc.BucketAccess{"authenticated": {Read: storagesvc.ScopeOwn, Write: storagesvc.ScopeOwn}}
+	if err := s.CreateBucket(ctx, &storagesvc.Bucket{
+		ID: "bkt_access", ProjectID: "proj-access", Name: "avatars", Access: access, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	defer func() { _ = s.DeleteBucket(ctx, "proj-access", "avatars") }()
+	got, err := s.GetBucket(ctx, "proj-access", "avatars")
+	if err != nil || got.Access["authenticated"].Write != storagesvc.ScopeOwn {
+		t.Fatalf("created access: %+v, %v", got, err)
+	}
+	found, err := s.UpdateBucketAccess(ctx, "proj-access", "avatars", storagesvc.BucketAccess{"staff": {Write: storagesvc.ScopeAll}})
+	if err != nil || !found {
+		t.Fatalf("UpdateBucketAccess: %v, %v", found, err)
+	}
+	got, _ = s.GetBucket(ctx, "proj-access", "avatars")
+	if _, stale := got.Access["authenticated"]; stale || got.Access["staff"].Write != storagesvc.ScopeAll {
+		t.Fatalf("updated access: %+v", got.Access)
+	}
+	found, err = s.UpdateBucketAccess(ctx, "proj-access", "nope", storagesvc.BucketAccess{})
+	if err != nil || found {
+		t.Fatalf("unknown bucket: %v, %v", found, err)
+	}
+}
+
+func TestPgStorage_BucketWithoutAccessReadsAsEmpty(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := s.CreateBucket(ctx, &storagesvc.Bucket{
+		ID: "bkt_noaccess", ProjectID: "proj-noaccess", Name: "files", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	defer func() { _ = s.DeleteBucket(ctx, "proj-noaccess", "files") }()
+	got, err := s.GetBucket(ctx, "proj-noaccess", "files")
+	if err != nil || got.Access == nil || len(got.Access) != 0 {
+		t.Fatalf("want empty rules, got %+v, %v", got, err)
+	}
+}

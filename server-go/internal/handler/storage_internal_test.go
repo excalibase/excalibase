@@ -129,6 +129,18 @@ func (m *inMemoryBucketStoreForTest) SetBucketStatus(_ context.Context, projectI
 	return errStorageTestNotFound
 }
 
+func (m *inMemoryBucketStoreForTest) UpdateBucketAccess(_ context.Context, projectID, name string, access storagesvc.BucketAccess) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.buckets {
+		if b.ProjectID == projectID && b.Name == name {
+			b.Access = access
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (m *inMemoryBucketStoreForTest) CreateObject(_ context.Context, o *storagesvc.Object) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

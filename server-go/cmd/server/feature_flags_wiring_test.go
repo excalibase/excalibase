@@ -9,6 +9,7 @@ import (
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/features"
+	"github.com/excalibase/provisioning-poc/internal/handler"
 )
 
 // EXC-554: what shipped dark answers exactly as a route that was never
@@ -30,6 +31,11 @@ var darkRoutes = map[features.Feature][]darkProbe{
 	features.Pipeline: {
 		{http.MethodGet, "/api/projects/" + matrixProjectA + "/apps/app-1/deploys/dep-1"},
 	},
+	features.AppStorage: {
+		{http.MethodPost, "/storage/v1/" + matrixProjectA + "/buckets/files/upload-url"},
+		{http.MethodGet, "/storage/v1/" + matrixProjectA + "/buckets/files/objects"},
+		{http.MethodPut, "/api/projects/" + matrixProjectA + "/storage/buckets/files/access"},
+	},
 }
 
 func darkFeatureRouter(t *testing.T, on ...features.Feature) (http.Handler, string) {
@@ -37,6 +43,9 @@ func darkFeatureRouter(t *testing.T, on ...features.Feature) (http.Handler, stri
 	cfg := config.AppConfig{DeploymentMode: "selfhosted", AppHostingEnabled: true}
 	router, who, _ := buildMatrixWith(t, cfg, func(deps *handlerDeps) {
 		deps.features = features.NewStatic(on...)
+		// Storage mounts only when the object store is configured.
+		deps.storageHandler = handler.NewStorageHandler(nil, nil)
+		deps.fnHandler = handler.NewFunctionHandler(nil, nil, nil, nil, nil, "")
 	})
 	return router, who[callerDeveloper]
 }

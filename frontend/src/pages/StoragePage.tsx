@@ -10,9 +10,12 @@ import {
   useDownloadURL,
 } from '../hooks/useStorage';
 import { Button } from '../components/Button';
-import { Loader2, FolderPlus, Upload, Trash2, Download, Globe, Lock } from 'lucide-react';
+import { Loader2, FolderPlus, Upload, Trash2, Download, Globe, Lock, Users } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
 import type { UploadStepError } from '../utils/uploadFailure';
+import { useFeatureEnabled } from '../hooks/useDeploymentMode';
+import { BucketAccessPanel } from '../components/storage/BucketAccessPanel';
+import type { BucketAccess } from '../hooks/useStorage';
 
 export function StoragePage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -91,6 +94,7 @@ export function StoragePage() {
 interface BucketInfo {
   name: string;
   public: boolean;
+  access?: BucketAccess;
 }
 
 interface ObjectBrowserProps {
@@ -108,7 +112,10 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
-  const isPublic = buckets.find((b) => b.name === bucket)?.public ?? false;
+  const [showAccess, setShowAccess] = useState(false);
+  const { enabled: appStorage } = useFeatureEnabled('appstorage');
+  const current = buckets.find((b) => b.name === bucket);
+  const isPublic = current?.public ?? false;
 
   const handleFiles = useCallback(
     async (files: FileList) => {
@@ -162,6 +169,12 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
             className="hidden"
             onChange={(e) => e.target.files && handleFiles(e.target.files)}
           />
+          {appStorage && (
+            <Button size="sm" variant="ghost" onClick={() => setShowAccess((open) => !open)}>
+              <Users className="w-3.5 h-3.5 mr-1" />
+              App access
+            </Button>
+          )}
           <Button size="sm" onClick={() => fileInput.current?.click()} disabled={upload.isPending}>
             <Upload className="w-3.5 h-3.5 mr-1" />
             {upload.isPending ? 'Uploading…' : 'Upload'}
@@ -186,6 +199,9 @@ function ObjectBrowser({ projectId, bucket, buckets }: ObjectBrowserProps) {
       </div>
       {deleteError && (
         <p data-testid="bucket-delete-error" role="alert" className="px-4 py-2 text-sm text-red-400">{deleteError}</p>
+      )}
+      {appStorage && showAccess && (
+        <BucketAccessPanel key={bucket} projectId={projectId} bucket={bucket} access={current?.access ?? {}} />
       )}
 
       <section

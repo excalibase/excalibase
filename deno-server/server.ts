@@ -1415,6 +1415,16 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
     //   POST body must be { "args": <object> }; on missing args, 400.
     //   Calls handler(ctx, body.args); wraps result as { data } JSON.
     //   ctx.db is a real DbClient for query/mutation; null for action.
+    // The def's zod schema guards the handler: refused args never reach it
+    // (EXC-560). A hand-written def without safeParse passes args through.
+    function __checkArgs(fnDef, args) {
+      if (!fnDef.args || typeof fnDef.args.safeParse !== 'function') return { ok: true, args };
+      const parsed = fnDef.args.safeParse(args);
+      if (parsed && parsed.success === true) return { ok: true, args: parsed.data };
+      const issues = parsed && parsed.error && Array.isArray(parsed.error.issues) ? parsed.error.issues : [];
+      return { ok: false, issues };
+    }
+
     async function __dispatchV2(reqId, reqData, fnDef, txnRefId) {
       try {
         const headers = reqData.headers || {};
@@ -1479,8 +1489,16 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
             ? __makeStorageReader()
             : __makeStorageWriter(),
         };
+        const checked = __checkArgs(fnDef, body.args);
+        if (!checked.ok) {
+          self.postMessage({ type: 'success', reqId, status: 400,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ error: 'args validation failed', issues: checked.issues }) });
+          return;
+        }
+        const args = checked.args;
         try {
-          const result = await fnDef.handler(ctx, body.args);
+          const result = await fnDef.handler(ctx, args);
           self.postMessage({ type: 'success', reqId, status: 200,
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ data: result === undefined ? null : result }) });

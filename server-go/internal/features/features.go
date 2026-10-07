@@ -16,11 +16,13 @@ const (
 	MCP Feature = "mcp"
 	// Pipeline is CI deploy by image, deploy status polling and auto-deploy (EXC-542/543/545).
 	Pipeline Feature = "pipeline"
+	// AppStorage is the app-user storage API at /storage/v1/{projectId} and its bucket access rules (EXC-560).
+	AppStorage Feature = "appstorage"
 )
 
 // All is every declared feature; Studio is told the state of each.
 func All() []Feature {
-	return []Feature{MCP, Pipeline}
+	return []Feature{MCP, Pipeline, AppStorage}
 }
 
 type Flags interface {

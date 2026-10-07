@@ -53,6 +53,9 @@ type BucketStore interface {
 	// mark a bucket deleting before its bytes go, so a crash mid-cascade is
 	// visible rather than silent.
 	SetBucketStatus(ctx context.Context, projectID, name, status string) error
+	// UpdateBucketAccess replaces a bucket's access rules; false when there is
+	// no such bucket.
+	UpdateBucketAccess(ctx context.Context, projectID, name string, access BucketAccess) (bool, error)
 
 	CreateObject(ctx context.Context, o *Object) error
 	// RecordObjectWithinQuota writes (or replaces) an object row and moves
@@ -101,6 +104,9 @@ func (s *Service) CreateBucket(ctx context.Context, projectID string, req Create
 	if err := validateBucketLimits(req); err != nil {
 		return nil, err
 	}
+	if err := ValidateBucketAccess(req.Access); err != nil {
+		return nil, err
+	}
 	existing, err := s.store.GetBucket(ctx, projectID, req.Name)
 	if err != nil {
 		return nil, fmt.Errorf("check existing bucket: %w", err)
@@ -121,6 +127,7 @@ func (s *Service) CreateBucket(ctx context.Context, projectID string, req Create
 		Status:       BucketStatusActive,
 		FileSize:     req.FileSizeLimit,
 		AllowedTypes: req.AllowedMimeTypes,
+		Access:       req.Access,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -128,6 +135,36 @@ func (s *Service) CreateBucket(ctx context.Context, projectID string, req Create
 		return nil, fmt.Errorf("create bucket: %w", err)
 	}
 	return b, nil
+}
+
+// Bucket looks one bucket up; an unknown name is ErrBucketNotFound.
+func (s *Service) Bucket(ctx context.Context, projectID, name string) (*Bucket, error) {
+	bucket, err := s.store.GetBucket(ctx, projectID, name)
+	if err != nil {
+		return nil, fmt.Errorf("load bucket: %w", err)
+	}
+	if bucket == nil {
+		return nil, ErrBucketNotFound
+	}
+	return bucket, nil
+}
+
+// UpdateBucketAccess replaces the bucket's app-user access rules.
+func (s *Service) UpdateBucketAccess(ctx context.Context, projectID, name string, access BucketAccess) (*Bucket, error) {
+	if err := ValidateBucketAccess(access); err != nil {
+		return nil, err
+	}
+	if access == nil {
+		access = BucketAccess{}
+	}
+	found, err := s.store.UpdateBucketAccess(ctx, projectID, name, access)
+	if err != nil {
+		return nil, fmt.Errorf("update bucket access: %w", err)
+	}
+	if !found {
+		return nil, ErrBucketNotFound
+	}
+	return s.Bucket(ctx, projectID, name)
 }
 
 // ListBuckets — straight passthrough.
