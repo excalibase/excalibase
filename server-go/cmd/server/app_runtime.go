@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"maps"
+	"slices"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/handler"
@@ -38,6 +41,15 @@ func appRoute(cfg config.AppConfig) k8s.AppRouteOptions {
 		IngressFromNamespace: cfg.AppIngressFromNamespace,
 		IngressFromLabels:    cfg.AppIngressFromLabels,
 	}
+}
+
+// edgePeer is the edge functions and apps reach the platform's public hosts through (EXC-558).
+func edgePeer(cfg config.AppConfig) k8s.EdgePeer {
+	if !cfg.EdgeConfigured() {
+		log.Printf("WARN: EDGE_NAMESPACE, EDGE_POD_LABELS and EDGE_POD_PORTS are unset: functions and apps cannot call the platform's public hosts")
+		return k8s.EdgePeer{}
+	}
+	return k8s.EdgePeer{Namespace: cfg.EdgeNamespace, Labels: maps.Clone(cfg.EdgePodLabels), Ports: slices.Clone(cfg.EdgePodPorts)}
 }
 
 // wireAppLifecycle shares the lease with every replica and lets a deleted app

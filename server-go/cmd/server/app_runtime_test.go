@@ -17,6 +17,21 @@ func hostingConfig(enabled bool) config.AppConfig {
 	return config.AppConfig{AppHostingEnabled: enabled, AppRuntimeClass: "gvisor"}
 }
 
+func TestEdgePeerFromConfig(t *testing.T) {
+	cfg := config.AppConfig{
+		EdgeNamespace: "haproxy-controller",
+		EdgePodLabels: map[string]string{"app.kubernetes.io/name": "kubernetes-ingress"},
+		EdgePodPorts:  []int{8080, 8443},
+	}
+	edge := edgePeer(cfg)
+	if edge.Namespace != "haproxy-controller" || edge.Labels["app.kubernetes.io/name"] != "kubernetes-ingress" || len(edge.Ports) != 2 {
+		t.Fatalf("edge = %+v", edge)
+	}
+	if empty := edgePeer(config.AppConfig{}); empty.Namespace != "" || len(empty.Ports) != 0 {
+		t.Fatalf("no edge configured must give an empty peer, got %+v", empty)
+	}
+}
+
 func TestVerifyAppRuntime_HostingDisabledChecksNothing(t *testing.T) {
 	kube := k8s.NewMockClient()
 	if err := verifyAppRuntime(context.Background(), hostingConfig(false), kube); err != nil {

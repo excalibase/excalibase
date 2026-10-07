@@ -38,7 +38,7 @@ func (h *FunctionHandler) ReplayDeploys(ctx context.Context, projectID string) (
 		return nil, err
 	}
 	shared := h.sharedFilesFor(projectID)
-	allowedHosts := h.effectiveEgressHosts(projectID)
+	allowedHosts := h.workerEgressHosts(projectID)
 	out := make([]edgefn.DeployRequest, 0, len(list))
 	for _, fn := range list {
 		code, err := fn.BundleWith(shared)

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
@@ -37,6 +39,45 @@ func (h *FunctionHandler) SetEgressStore(s edgefn.EgressStore) {
 // (edgefn.ParseEgressHostList).
 func (h *FunctionHandler) SetEgressDefaults(hosts []string) {
 	h.egressDefaults = edgefn.MergeEgressHosts(hosts)
+}
+
+// SetRuntimeEdge names the public edge's pods. With it, functions may call the
+// platform's own API host: the worker is granted the host and the runtime's
+// policy the edge pods its requests land on (EXC-558).
+func (h *FunctionHandler) SetRuntimeEdge(edge k8s.EdgePeer) {
+	h.runtimeEdge = edge
+}
+
+// platformHosts is the API host the worker may call, only once the edge
+// it is reached through is named; without one the call would hang at the policy.
+func (h *FunctionHandler) platformHosts() []string {
+	if len(h.runtimeEdge.Ports) == 0 {
+		return nil
+	}
+	return platformEgressHosts(h.publicBaseURL)
+}
+
+// platformEgressHosts is the public base URL's host:port in allowlist form; a
+// base that is not a public host (a local or private address) gives none.
+func platformEgressHosts(publicBaseURL string) []string {
+	base, err := url.Parse(publicBaseURL)
+	if err != nil || base.Hostname() == "" {
+		return nil
+	}
+	port := base.Port()
+	if port == "" {
+		port = map[string]string{"https": "443", "http": "80"}[base.Scheme]
+	}
+	hosts, err := edgefn.ParseEgressHosts([]string{net.JoinHostPort(base.Hostname(), port)})
+	if err != nil {
+		return nil
+	}
+	return hosts
+}
+
+// workerEgressHosts is the worker's net permission: the effective list plus the platform's hosts.
+func (h *FunctionHandler) workerEgressHosts(projectID string) []string {
+	return edgefn.MergeEgressHosts(h.effectiveEgressHosts(projectID), h.platformHosts())
 }
 
 // GetEgress serves GET /api/projects/{projectId}/functions/egress.
@@ -103,7 +144,7 @@ func (h *FunctionHandler) egressResponseFor(projectHosts []string) egressRespons
 	return egressResponse{
 		AllowedHosts:   edgefn.MergeEgressHosts(projectHosts),
 		DefaultHosts:   edgefn.MergeEgressHosts(h.egressDefaults),
-		EffectiveHosts: edgefn.MergeEgressHosts(h.egressDefaults, projectHosts),
+		EffectiveHosts: edgefn.MergeEgressHosts(h.egressDefaults, projectHosts, h.platformHosts()),
 	}
 }
 
@@ -130,6 +171,8 @@ func (h *FunctionHandler) denoRuntimeSpecFor(projectID string) k8s.DenoRuntimeSp
 		RuntimeSecret:   edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID),
 		Tier:            h.tierFor(projectID),
 		AllowedHosts:    h.effectiveEgressHosts(projectID),
+		PlatformHosts:   h.platformHosts(),
+		Edge:            h.runtimeEdge,
 		ProvisioningURL: h.runtimeProvisioningURL,
 	}
 }

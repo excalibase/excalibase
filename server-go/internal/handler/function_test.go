@@ -367,7 +367,7 @@ func TestFunctionHandler_Secrets_RejectsReservedKey(t *testing.T) {
 	}
 }
 
-// --- Built-in env injection (DB_URL, ANON_KEY, SERVICE_KEY) ---
+// --- Built-in env injection ---
 
 func TestFunctionHandler_BuiltinEnv_WiresDBURLFromVault(t *testing.T) {
 	store := edgefn.NewFunctionStore(t.TempDir())
@@ -428,16 +428,16 @@ func TestFunctionHandler_BuiltinEnv_WiresDBURLFromVault(t *testing.T) {
 	}
 }
 
-func TestFunctionHandler_BuiltinEnv_WiresAnonAndServiceTokensFromVault(t *testing.T) {
+// No API key is injected (EXC-558): the vault paths once read are written by
+// nothing, so a key a function uses is the project's own secret.
+func TestFunctionHandler_BuiltinEnv_APIKeyIsTheProjectsOwnSecret(t *testing.T) {
 	store := edgefn.NewFunctionStore(t.TempDir())
 	v := newFakeVault()
-	v.data["projects/proj_p1/credentials/jwt_keys/anon_token"] = map[string]string{
-		"token": "eyJanon.token.here",
-	}
-	v.data["projects/proj_p1/credentials/jwt_keys/service_token"] = map[string]string{
-		"token": "eyJservice.token.here",
-	}
+	v.data["projects/proj_p1/credentials/jwt_keys/service_token"] = map[string]string{"token": "eyJstale.token"}
 	secrets := edgefn.NewSecretsStore(v)
+	if err := secrets.Set("proj_p1", "EXCALIBASE_SERVICE_KEY", "esk_project_key"); err != nil {
+		t.Fatalf("set secret: %v", err)
+	}
 	runtime, scripts := mockFnRuntime(t)
 	client := edgefn.NewRuntimeClient(runtime.URL, "")
 	instStore := &inMemoryInstanceStore{insts: map[string]*domain.DatabaseInstance{
@@ -461,11 +461,11 @@ func TestFunctionHandler_BuiltinEnv_WiresAnonAndServiceTokensFromVault(t *testin
 	}
 
 	deploy := (*scripts)["proj_p1__tokens"]
-	if deploy.Secrets["EXCALIBASE_ANON_KEY"] != "eyJanon.token.here" {
-		t.Errorf("anon: %q", deploy.Secrets["EXCALIBASE_ANON_KEY"])
+	if deploy.Secrets["EXCALIBASE_SERVICE_KEY"] != "esk_project_key" {
+		t.Errorf("service key = %q, want the project's own secret", deploy.Secrets["EXCALIBASE_SERVICE_KEY"])
 	}
-	if deploy.Secrets["EXCALIBASE_SERVICE_KEY"] != "eyJservice.token.here" {
-		t.Errorf("service: %q", deploy.Secrets["EXCALIBASE_SERVICE_KEY"])
+	if _, ok := deploy.Secrets["EXCALIBASE_ANON_KEY"]; ok {
+		t.Errorf("no anon key may be injected: %q", deploy.Secrets["EXCALIBASE_ANON_KEY"])
 	}
 }
 

@@ -143,10 +143,20 @@ func TestSecretsStore_RejectsInvalidKey(t *testing.T) {
 func TestSecretsStore_RejectsReservedKeys(t *testing.T) {
 	v := newFakeVault()
 	s := NewSecretsStore(v)
-	reserved := []string{"EXCALIBASE_URL", "EXCALIBASE_PROJECT_ID", "EXCALIBASE_ANON_KEY", "EXCALIBASE_SERVICE_KEY", "EXCALIBASE_DB_URL"}
+	reserved := []string{"EXCALIBASE_URL", "EXCALIBASE_PROJECT_ID", "EXCALIBASE_DB_URL"}
 	for _, k := range reserved {
 		if err := s.Set("proj_p1", k, "malicious"); err == nil {
 			t.Errorf("reserved key %q should be rejected", k)
+		}
+	}
+}
+
+// The platform injects no API key (EXC-558): a project stores its own secret key under these names.
+func TestSecretsStore_AcceptsAPIKeyNames(t *testing.T) {
+	s := NewSecretsStore(newFakeVault())
+	for _, k := range []string{"EXCALIBASE_ANON_KEY", "EXCALIBASE_SERVICE_KEY"} {
+		if err := s.Set("proj_p1", k, "esk_test"); err != nil {
+			t.Errorf("%s must be settable: %v", k, err)
 		}
 	}
 }

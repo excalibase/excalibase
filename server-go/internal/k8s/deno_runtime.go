@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -77,31 +78,32 @@ func (c *Client) EnsureDenoRuntime(ctx context.Context, namespace string, spec D
 	if _, err := c.clientset.CoreV1().Services(namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create deno service: %w", err)
 	}
-	return c.applyDenoEgressPolicy(ctx, namespace, spec.AllowedHosts)
+	return c.applyDenoEgressPolicy(ctx, namespace, spec)
 }
 
 // reconcileDenoEgress updates a live runtime whose environment differs from
 // the desired one: the allowlist, or the runtime settings a runtime created
 // by an older provisioning lacks. The env values are the comparison key: they
-// are exactly what the runtime reads. The egress policy is re-rendered only
-// when the allowlist changed.
+// are exactly what the runtime reads. The egress policy is compared on its
+// own, so a rule added by a newer provisioning reaches runtimes made before it.
 func (c *Client) reconcileDenoEgress(ctx context.Context, namespace string, dep *appsv1.Deployment, spec DenoRuntimeSpec) error {
-	want := edgefn.EgressEnvValue(spec.AllowedHosts)
-	allowlistChanged := currentAllowedHosts(dep) != want
+	want := workerAllowedHosts(spec)
 	settings := runtimeSettingsEnv(spec)
-	if !allowlistChanged && hasEnv(dep, settings) {
-		return nil
+	if currentAllowedHosts(dep) != want || !hasEnv(dep, settings) {
+		updated := dep.DeepCopy()
+		setAllowedHosts(updated, want)
+		setEnv(updated, settings)
+		if _, err := c.clientset.AppsV1().Deployments(namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update deno deployment: %w", err)
+		}
 	}
-	updated := dep.DeepCopy()
-	setAllowedHosts(updated, want)
-	setEnv(updated, settings)
-	if _, err := c.clientset.AppsV1().Deployments(namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update deno deployment: %w", err)
-	}
-	if !allowlistChanged {
-		return nil
-	}
-	return c.applyDenoEgressPolicy(ctx, namespace, spec.AllowedHosts)
+	return c.applyDenoEgressPolicy(ctx, namespace, spec)
+}
+
+// workerAllowedHosts is the worker's net permission: the project's allowlist
+// plus the platform's own hosts.
+func workerAllowedHosts(spec DenoRuntimeSpec) string {
+	return edgefn.EgressEnvValue(edgefn.MergeEgressHosts(spec.AllowedHosts, spec.PlatformHosts))
 }
 
 // runtimeSettingsEnv is the runtime's environment besides its secret and
@@ -198,7 +200,7 @@ func buildDenoDeployment(namespace string, spec DenoRuntimeSpec) *appsv1.Deploym
 	}
 	one := int32(1)
 	falseVal := false
-	allowed := edgefn.EgressEnvValue(spec.AllowedHosts)
+	allowed := workerAllowedHosts(spec)
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: denoRuntimeName, Namespace: namespace, Labels: labels},
 		Spec: appsv1.DeploymentSpec{
@@ -286,17 +288,25 @@ func platformNamespace() string {
 	return "excalibase-platform"
 }
 
-// applyDenoEgressPolicy creates or re-renders the runtime's egress fence.
-func (c *Client) applyDenoEgressPolicy(ctx context.Context, namespace string, allowedHosts []string) error {
-	policy := buildDenoEgressPolicy(namespace, allowedHosts)
+// applyDenoEgressPolicy creates the runtime's egress fence, or rewrites a live
+// one that differs from it; an identical one is left untouched.
+func (c *Client) applyDenoEgressPolicy(ctx context.Context, namespace string, spec DenoRuntimeSpec) error {
+	policy := buildDenoEgressPolicy(namespace, spec.AllowedHosts, spec.Edge)
 	policies := c.clientset.NetworkingV1().NetworkPolicies(namespace)
-	_, err := policies.Create(ctx, policy, metav1.CreateOptions{})
-	if err == nil {
+	existing, err := policies.Get(ctx, policy.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if _, err := policies.Create(ctx, policy, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("create deno egress policy: %w", err)
+		}
 		return nil
 	}
-	if !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create deno egress policy: %w", err)
+	if err != nil {
+		return fmt.Errorf("get deno egress policy: %w", err)
 	}
+	if equality.Semantic.DeepEqual(existing.Spec, policy.Spec) && equality.Semantic.DeepEqual(existing.Labels, policy.Labels) {
+		return nil
+	}
+	policy.ResourceVersion = existing.ResourceVersion
 	if _, err := policies.Update(ctx, policy, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update deno egress policy: %w", err)
 	}
@@ -310,9 +320,10 @@ func (c *Client) applyDenoEgressPolicy(ctx context.Context, namespace string, al
 // thread), but the *pod* still opens the Postgres pool — so an escape from the
 // isolate would otherwise have the pod's full network reach. This policy is
 // the infra backstop under the Deno sandbox: egress is allowed ONLY to DNS,
-// to Postgres inside this project's own namespace, to provisioning's API, and
-// — when the project has an allowlist — to public internet addresses on the
-// allowlisted ports. Everything else is denied by omission — cloud metadata
+// to Postgres inside this project's own namespace, to provisioning's API, to
+// the public edge's pods (where the platform's own public hosts land, EXC-558)
+// and — when the project has an allowlist — to public internet addresses on
+// the allowlisted ports. Everything else is denied by omission — cloud metadata
 // (169.254.169.254), Vault / platform-db in the platform namespace, the k8s
 // API, and every other tenant's namespace. A NetworkPolicy cannot match
 // hostnames, so the per-host part of the allowlist is enforced by the Deno
@@ -321,9 +332,12 @@ func (c *Client) applyDenoEgressPolicy(ctx context.Context, namespace string, al
 // Egress-only: ingress is untouched so provisioning can still reach /deploy and
 // /invoke. Requires a NetworkPolicy-enforcing CNI (Calico/Cilium); with a CNI
 // that ignores policies the object is created but not enforced.
-func buildDenoEgressPolicy(namespace string, allowedHosts []string) *networkingv1.NetworkPolicy {
+func buildDenoEgressPolicy(namespace string, allowedHosts []string, edge EdgePeer) *networkingv1.NetworkPolicy {
 	rules := []networkingv1.NetworkPolicyEgressRule{
 		denoDNSRule(), denoOwnPostgresRule(), denoProvisioningRule(),
+	}
+	if edge.configured() {
+		rules = append(rules, edge.networkPolicyEgressRule())
 	}
 	if len(allowedHosts) > 0 {
 		rules = append(rules, denoInternetRule(edgefn.EgressHostPorts(allowedHosts)))

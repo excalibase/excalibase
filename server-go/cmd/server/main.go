@@ -904,6 +904,7 @@ func buildFunctionHandler(
 	if cfg.ProvisionerMode != "docker" {
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
+		fnHandler.SetRuntimeEdge(edgePeer(cfg))
 	}
 	fnHandler.SetVault(vc)
 	// Without this resolver a deploy stores the declared schema and never
@@ -1305,7 +1306,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 	appDeploySvc := service.NewAppDeployService(
 		apphost.NewPostgresAppStore(sqlStore.DB()), apphost.NewPostgresDeployStore(sqlStore.DB()),
 		k8sClient, store, service.NewAppEnvResolver(vc, store), k8s.AppRenderOptions{
-			RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Route: appRoute(cfg),
+			RuntimeClass: cfg.AppRuntimeClass, ExtraDenyCIDRs: cfg.AppEgressExtraDenyCIDRs, Edge: edgePeer(cfg), Route: appRoute(cfg),
 			DiskStorageClass: cfg.TenantStorageClass,
 		})
 	wireAppLifecycle(appDeploySvc, a.claimer, vc)

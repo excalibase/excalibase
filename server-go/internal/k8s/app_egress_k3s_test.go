@@ -110,6 +110,8 @@ type egressLab struct {
 	targetSvcIP string
 	dbPodIP     string
 	kubeAPIAddr string
+	// ciliumValues are merged over the Cilium chart values every lab installs.
+	ciliumValues map[string]interface{}
 }
 
 func newEgressLab(t *testing.T, start func(*egressLab, *testing.T), extraClients map[string]egressClient) *egressLab {

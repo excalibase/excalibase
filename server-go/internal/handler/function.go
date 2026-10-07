@@ -50,7 +50,7 @@ const sharedClientKey = "__shared__"
 type FunctionHandler struct {
 	store         edgefn.Store
 	secrets       *edgefn.SecretsStore
-	vault         vaultclient.VaultClient // optional, for reading DB_URL + JWT tokens
+	vault         vaultclient.VaultClient // optional, for reading DB_URL
 	instanceStore storage.InstanceStore
 	orgStore      storage.OrgStore
 	publicBaseURL string
@@ -63,9 +63,11 @@ type FunctionHandler struct {
 	corsStore storage.ProjectCorsStore
 	// runtimeProvisioningURL is where per-project runtimes reach provisioning.
 	runtimeProvisioningURL string
-	runtimeURLFn           func(namespace string) string // tests override; nil → cluster DNS
-	clientMu               sync.Mutex
-	clients                map[string]*edgefn.RuntimeClient // keyed by projectId
+	// runtimeEdge is the public edge's pods, through which functions reach the platform's own hosts.
+	runtimeEdge  k8s.EdgePeer
+	runtimeURLFn func(namespace string) string // tests override; nil → cluster DNS
+	clientMu     sync.Mutex
+	clients      map[string]*edgefn.RuntimeClient // keyed by projectId
 
 	// Rate limiting for the public invoke route. Token bucket per project.
 	limiterMu     sync.Mutex
@@ -222,8 +224,7 @@ func (h *FunctionHandler) SetRuntimeProvisioningURL(url string) {
 }
 
 // SetVault wires the platform vault client so the handler can read project
-// credentials (for EXCALIBASE_DB_URL) and JWT tokens (for ANON/SERVICE keys)
-// at function deploy time.
+// credentials (for EXCALIBASE_DB_URL) at function deploy time.
 func (h *FunctionHandler) SetVault(v vaultclient.VaultClient) {
 	h.vault = v
 }
@@ -515,10 +516,9 @@ func (h *FunctionHandler) orgSlugFor(ctx context.Context, projectID string) (str
 //     platform's roles log in by certificate only and are never handed to
 //     customer code (EXC-410).
 //     Absent if vault is sealed or the role doesn't exist.
-//   - ANON_KEY     — JWT for the anon role from
-//     projects/{projectId}/credentials/jwt_keys/anon_token.
-//   - SERVICE_KEY  — JWT for the service role (bypasses RLS) from
-//     projects/{projectId}/credentials/jwt_keys/service_token.
+//
+// No API key is injected: SDK keys are minted by auth and shown once, so a
+// function that calls its project's API stores its own key as a secret.
 func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[string]string {
 	base := h.publicBaseURL
 	if base == "" {
@@ -536,19 +536,6 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[
 	if h.secrets != nil {
 		maps.Copy(env, h.buildDBEnv(projectID))
 	}
-
-	// ANON_KEY + SERVICE_KEY — fetched from vault where the auth service
-	// publishes them. Tolerant: absent keys don't block deploy, function just
-	// can't authenticate back to sibling services until the keys exist.
-	if h.vault != nil {
-		if anon := h.readVaultString(fmt.Sprintf("projects/%s/credentials/jwt_keys/anon_token", projectID)); anon != "" {
-			env["EXCALIBASE_ANON_KEY"] = anon
-		}
-		if svc := h.readVaultString(fmt.Sprintf("projects/%s/credentials/jwt_keys/service_token", projectID)); svc != "" {
-			env["EXCALIBASE_SERVICE_KEY"] = svc
-		}
-	}
-
 	return env
 }
 
@@ -586,30 +573,6 @@ type dbTarget struct {
 func (t dbTarget) url(host string) string {
 	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=require",
 		t.user, t.pass, net.JoinHostPort(host, t.port), t.db)
-}
-
-// readVaultString reads a vault path and returns a single string value. The
-// vault stores values as map[string]string; we pick the first non-empty one
-// or a value keyed "token" / "value" if present.
-func (h *FunctionHandler) readVaultString(path string) string {
-	if h.vault == nil {
-		return ""
-	}
-	data, err := h.vault.Get(path)
-	if err != nil || data == nil {
-		return ""
-	}
-	for _, k := range []string{"token", "value", "key"} {
-		if v, ok := data[k]; ok && v != "" {
-			return v
-		}
-	}
-	for _, v := range data {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // List returns all functions belonging to the project.
@@ -703,7 +666,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "runtime unavailable: "+safeError(err), http.StatusServiceUnavailable)
 		return
 	}
-	deployErr := client.Deploy(r.Context(), deployRequestFor(&fn, code, env, h.effectiveEgressHosts(projectID)))
+	deployErr := client.Deploy(r.Context(), deployRequestFor(&fn, code, env, h.workerEgressHosts(projectID)))
 	if deployErr != nil {
 		// Rollback the cron sync alongside the store record — the deploy
 		// didn't land, so we shouldn't keep stale crons (or a stale
@@ -1469,7 +1432,7 @@ func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
 		return
 	}
 	shared := h.sharedFilesFor(projectID)
-	allowedHosts := h.effectiveEgressHosts(projectID)
+	allowedHosts := h.workerEgressHosts(projectID)
 	for _, fn := range list {
 		code, err := fn.BundleWith(shared)
 		if err != nil {
