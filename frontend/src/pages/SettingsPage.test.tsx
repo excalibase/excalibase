@@ -69,6 +69,16 @@ describe('SettingsPage — deletion protection', () => {
     expect(await screen.findByTestId('deletion-grace-note')).toHaveTextContent(/7 days/);
   });
 
+  test('deleting says the containers go offline at once', async () => {
+    renderSettings(false);
+    expect(await screen.findByTestId('deletion-grace-note')).toHaveTextContent(/containers.*offline now/i);
+  });
+
+  test('a project scheduled for deletion says its containers are stopped until resumed', async () => {
+    renderSettings(false, { status: 'PENDING_DELETION', deletionDueAt: '2026-10-05T10:00:00Z' });
+    expect(await screen.findByTestId('deletion-scheduled')).toHaveTextContent(/containers are stopped.*resume/i);
+  });
+
   test('a project scheduled for deletion shows when and can be cancelled', async () => {
     renderSettings(false, { status: 'PENDING_DELETION', deletionDueAt: '2026-10-05T10:00:00Z' });
     expect(await screen.findByTestId('deletion-scheduled')).toHaveTextContent(/scheduled for deletion/i);

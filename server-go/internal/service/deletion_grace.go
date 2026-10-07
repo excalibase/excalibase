@@ -49,6 +49,29 @@ type DeletionPauser interface {
 // SetDeletionPauser wires the pause a scheduled deletion stops the project with.
 func (s *ProvisioningService) SetDeletionPauser(p DeletionPauser) { s.deletionPauser = p }
 
+// ProjectWorkloadStopper stops what a project serves besides its database:
+// its apps, their routes and custom domains, and its function runtime.
+// AppDeployService implements it.
+type ProjectWorkloadStopper interface {
+	StopProjectWorkloads(ctx context.Context, projectID string) error
+	RestartFunctionRuntime(ctx context.Context, projectID string) error
+}
+
+// SetProjectWorkloadStopper wires the stop a deletion runs before anything else.
+func (s *ProvisioningService) SetProjectWorkloadStopper(w ProjectWorkloadStopper) { s.workloads = w }
+
+// stopWorkloads takes a project being deleted off the internet. The grace
+// period keeps data only: nothing of the project may answer while it runs.
+func (s *ProvisioningService) stopWorkloads(ctx context.Context, projectID string) error {
+	if s.workloads == nil {
+		return nil
+	}
+	if err := s.workloads.StopProjectWorkloads(ctx, projectID); err != nil {
+		return fmt.Errorf("%w: stop the project's apps: %w", ErrDeletionStopFailed, err)
+	}
+	return nil
+}
+
 // SetRetainedBackupStore wires the record of deleted projects' kept backups.
 func (s *ProvisioningService) SetRetainedBackupStore(r storage.RetainedBackupStore) {
 	s.retainedBackups = r
@@ -165,14 +188,18 @@ func (s *ProvisioningService) admitDeletion(ctx context.Context, projectID strin
 	if opts.DeleteBackups != nil && *opts.DeleteBackups && s.backupPurger == nil {
 		return true, nil, ErrBackupPurgeNotConfigured
 	}
+	if !inst.NoDatabase && s.deletionPauser == nil {
+		return true, nil, ErrDeletionGraceUnavailable
+	}
+	// The apps stop answering now, not once the database's backup is done.
+	if err := s.stopWorkloads(context.WithoutCancel(ctx), projectID); err != nil {
+		return true, nil, err
+	}
 	if inst.NoDatabase {
-		// Nothing to stop: the grace period keeps the project's files, apps
-		// and settings, and the project leaves it the way it went in.
+		// No database to stop: the grace period keeps the project's files,
+		// stopped apps and settings.
 		scheduled, err := s.markPendingDeletion(ctx, projectID, opts)
 		return true, scheduled, err
-	}
-	if s.deletionPauser == nil {
-		return true, nil, ErrDeletionGraceUnavailable
 	}
 	return false, nil, nil
 }
@@ -223,6 +250,11 @@ func (s *ProvisioningService) markPendingDeletion(ctx context.Context, projectID
 	if isProtected(inst) {
 		return nil, fmt.Errorf("%w for %s", ErrDeletionProtected, projectID)
 	}
+	// Again: an app deployed or resumed while the database was being backed
+	// up would otherwise serve through the whole grace period.
+	if err := s.stopWorkloads(ctx, projectID); err != nil {
+		return nil, err
+	}
 	now := s.deletionClock()
 	inst.Status = string(domain.StatusPendingDeletion)
 	inst.CurrentStage = domain.StatusPendingDeletion
@@ -269,8 +301,9 @@ func (s *ProvisioningService) updatePendingChoice(ctx context.Context, inst *dom
 }
 
 // CancelDeletion ends a project's grace period. The project stays PAUSED, with
-// its disk, and deletion protection is turned back on. A deleted project gave
-// its plan slot up, so restoring it needs a free one.
+// its disk, and deletion protection is turned back on. Its function runtime
+// starts again; its apps stay paused, each resumed (or redeployed) on its own.
+// A deleted project gave its plan slot up, so restoring it needs a free one.
 func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID string) error {
 	if inst, err := s.store.FindByProjectID(projectID); err != nil || inst == nil {
 		return fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
@@ -286,6 +319,12 @@ func (s *ProvisioningService) CancelDeletion(ctx context.Context, projectID stri
 	}
 	if inst.Status != string(domain.StatusPendingDeletion) {
 		return fmt.Errorf("%w: %s is %s", ErrNotScheduledForDeletion, projectID, inst.Status)
+	}
+	// Before the write, so a cancel whose runtime did not restart can be retried.
+	if s.workloads != nil {
+		if err := s.workloads.RestartFunctionRuntime(ctx, projectID); err != nil {
+			return fmt.Errorf("restart the project's function runtime: %w", err)
+		}
 	}
 	inst.Status = settledStatus(inst)
 	inst.CurrentStage = domain.ProvisioningStage(inst.Status)

@@ -121,6 +121,12 @@ type KubeClient interface {
 	WaitForAppPodsGone(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	DeleteAppWorkload(ctx context.Context, namespace, appID string, timeout time.Duration) error
 	PruneAppWorkload(ctx context.Context, namespace, appID, keepName string, timeout time.Duration) error
+	// WithdrawProjectWorkloads takes every app route away and scales the apps and the function runtime to zero.
+	WithdrawProjectWorkloads(ctx context.Context, namespace string) error
+	// RestartFunctionRuntime brings back a function runtime WithdrawProjectWorkloads stopped.
+	RestartFunctionRuntime(ctx context.Context, namespace string) error
+	// RestoreAppRoute serves a public app at its host again.
+	RestoreAppRoute(ctx context.Context, namespace string, app *apphost.App, opts AppRouteOptions) error
 	// GrowAppDisk grows the app's disk claim; ErrAppDiskNotCreated when no deploy has made it yet.
 	GrowAppDisk(ctx context.Context, namespace, appID string, generation int, size string) error
 	// AppDiskUsage reads how much of the app's disk is used; ErrAppDiskNotCreated when there is none yet.

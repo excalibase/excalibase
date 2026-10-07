@@ -123,7 +123,16 @@ type MockClient struct {
 	AppPrivateNetwork    map[string]bool
 	AppPrivateNetworkErr error
 
-	AppWorkloads        map[string]*AppWorkload // keyed "namespace/deploymentName"
+	AppWorkloads map[string]*AppWorkload // keyed "namespace/deploymentName"
+	// WithdrawnWorkloads lists the namespaces WithdrawProjectWorkloads ran on.
+	WithdrawnWorkloads []string
+	WithdrawErr        error
+	// RestartedRuntimes lists the namespaces RestartFunctionRuntime ran on.
+	RestartedRuntimes []string
+	RestartRuntimeErr error
+	// RestoredRoutes holds the app each RestoreAppRoute served, keyed "namespace/appID".
+	RestoredRoutes      map[string]*apphost.App
+	RestoreRouteErr     error
 	ApplyAppWorkloadErr error
 
 	AppRolloutFunc  func(ctx context.Context, namespace, name, deployID string, timeout time.Duration) error
@@ -780,6 +789,42 @@ func (m *MockClient) PauseAppWorkload(ctx context.Context, namespace, appID stri
 		return m.AppPauseErr
 	}
 	m.AppPaused[namespace+"/"+appID] = true
+	return nil
+}
+
+func (m *MockClient) WithdrawProjectWorkloads(ctx context.Context, namespace string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "WithdrawProjectWorkloads:"+namespace)
+	if m.WithdrawErr != nil {
+		return m.WithdrawErr
+	}
+	m.WithdrawnWorkloads = append(m.WithdrawnWorkloads, namespace)
+	return nil
+}
+
+func (m *MockClient) RestartFunctionRuntime(ctx context.Context, namespace string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "RestartFunctionRuntime:"+namespace)
+	if m.RestartRuntimeErr != nil {
+		return m.RestartRuntimeErr
+	}
+	m.RestartedRuntimes = append(m.RestartedRuntimes, namespace)
+	return nil
+}
+
+func (m *MockClient) RestoreAppRoute(ctx context.Context, namespace string, app *apphost.App, opts AppRouteOptions) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, "RestoreAppRoute:"+namespace+"/"+app.ID)
+	if m.RestoreRouteErr != nil {
+		return m.RestoreRouteErr
+	}
+	if m.RestoredRoutes == nil {
+		m.RestoredRoutes = map[string]*apphost.App{}
+	}
+	m.RestoredRoutes[namespace+"/"+app.ID] = app
 	return nil
 }
 

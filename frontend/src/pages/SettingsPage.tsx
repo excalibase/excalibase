@@ -277,8 +277,8 @@ function DangerZone({ project, protectedFromDeletion, onDelete, deleting, delete
             This project is scheduled for deletion on{' '}
             {project.deletionDueAt ? new Date(project.deletionDueAt).toLocaleString() : 'its due date'}.{' '}
             {project.noDatabase === true
-              ? 'Its files and containers are kept until then. An org owner can cancel; the project then carries on as before.'
-              : 'Its database is stopped and its data kept until then. An org owner can cancel; the project is then left paused.'}
+              ? 'Its containers are stopped and its files kept until then. An org owner can cancel; resume each container afterwards.'
+              : 'Its database and containers are stopped and its data kept until then. An org owner can cancel; the project is then left paused, and each container is resumed on its own.'}
           </p>
           {cancelDeletion.error != null && (
             <p className="text-xs text-red-400 mb-3 break-words" data-testid="cancel-deletion-error" role="alert">
@@ -298,8 +298,8 @@ function DangerZone({ project, protectedFromDeletion, onDelete, deleting, delete
         <>
           <p className="text-xs text-text-secondary mb-3" data-testid="deletion-grace-note">
             {project.noDatabase === true
-              ? 'Deleting schedules this project for permanent removal, with its files and containers, 7 days later. Until then an org owner can cancel.'
-              : 'Deleting stops this project now and permanently removes its data 7 days later. Until then an org owner can cancel. Kept backups are purged 14 days after that.'}
+              ? 'Deleting takes its containers offline now and permanently removes the project, with its files, 7 days later. Until then an org owner can cancel.'
+              : 'Deleting stops this project and takes its containers offline now, and permanently removes its data 7 days later. Until then an org owner can cancel. Kept backups are purged 14 days after that.'}
           </p>
           <p className="text-xs text-text-secondary mb-3" data-testid="deletion-protection-state">
             {protectedFromDeletion
