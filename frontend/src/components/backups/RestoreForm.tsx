@@ -61,7 +61,7 @@ function RestoreResultPanel({ result }: { readonly result: RestoreResult }) {
   const { tone, message } = describeRestore(result);
   const newProject = result.mode === 'in_place' ? undefined : result.newProjectId ?? result.projectId;
   return (
-    <div data-testid="restore-result" data-tone={tone} role="status" className={`p-3 rounded-lg border text-sm ${TONE_CLASSES[tone]}`}>
+    <output data-testid="restore-result" data-tone={tone} className={`block p-3 rounded-lg border text-sm ${TONE_CLASSES[tone]}`}>
       <p className="font-medium">{message}</p>
       {newProject && (
         <p className="mt-1 text-xs text-text-secondary">New project: <span className="font-mono text-text-primary">{newProject}</span></p>
@@ -69,7 +69,7 @@ function RestoreResultPanel({ result }: { readonly result: RestoreResult }) {
       {result.recoveryType && (
         <p className="text-xs text-text-secondary">Recovery type: <span className="font-mono text-text-primary">{result.recoveryType}</span></p>
       )}
-    </div>
+    </output>
   );
 }
 

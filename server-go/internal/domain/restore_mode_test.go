@@ -49,6 +49,15 @@ func TestRestoreRequestModeFromJSON(t *testing.T) {
 	}
 }
 
+func TestRestoreRequestModeOrDefault(t *testing.T) {
+	if (RestoreRequest{}).ModeOrDefault() != RestoreModeNewProject {
+		t.Error("a request without a mode is a copy")
+	}
+	if (RestoreRequest{Mode: RestoreModeInPlace}).ModeOrDefault() != RestoreModeInPlace {
+		t.Error("in_place is kept")
+	}
+}
+
 func TestRestoreJobModeIsPublic(t *testing.T) {
 	raw, err := json.Marshal(RestoreJob{ID: "j", Mode: RestoreModeInPlace})
 	if err != nil {

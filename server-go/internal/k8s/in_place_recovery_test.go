@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -126,6 +127,32 @@ func TestBuildInPlaceRecoveryDefaultDatabaseNamesNothing(t *testing.T) {
 	recovery := got.Object["spec"].(map[string]interface{})["bootstrap"].(map[string]interface{})["recovery"].(map[string]interface{})
 	if _, has := recovery["database"]; has {
 		t.Errorf("CNPG's defaults are not named: %v", recovery)
+	}
+}
+
+func TestBuildInPlaceRecoveryNeedsAStoreToRecoverFrom(t *testing.T) {
+	if _, err := BuildInPlaceRecovery(&unstructured.Unstructured{Object: map[string]interface{}{}}, nil); !errors.Is(err, ErrClusterHasNoArchive) {
+		t.Fatalf("no spec: %v", err)
+	}
+	live := &unstructured.Unstructured{Object: map[string]interface{}{"spec": map[string]interface{}{
+		"plugins": []interface{}{
+			map[string]interface{}{"name": "other", "isWALArchiver": true},
+			map[string]interface{}{"name": BarmanCloudPluginName, "isWALArchiver": true, "parameters": map[string]interface{}{}},
+		},
+	}}}
+	if _, err := BuildInPlaceRecovery(live, nil); !errors.Is(err, ErrClusterHasNoArchive) {
+		t.Fatalf("no object store: %v", err)
+	}
+}
+
+func TestMockKeepSecretsPastOwnerRecordsEachSecret(t *testing.T) {
+	mock := NewMockClient()
+	mock.KeepSecretsError = errors.New("forbidden")
+	if err := mock.KeepSecretsPastOwner(context.Background(), "ns", []string{"a", "b"}); err == nil {
+		t.Fatal("the configured error is returned")
+	}
+	if len(mock.Calls) != 2 || mock.Calls[1] != "KeepSecretsPastOwner:ns/b" {
+		t.Errorf("calls %v", mock.Calls)
 	}
 }
 

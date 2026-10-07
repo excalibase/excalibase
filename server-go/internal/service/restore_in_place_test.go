@@ -20,11 +20,13 @@ type inPlaceWorld struct {
 	instances storage.InstanceStore
 	released  bool
 
-	holdErr     error
-	targetErr   error
-	backupErr   error
-	replaceErrs []error // one per ReplaceDatabase call, in order
-	probeErrs   []error
+	holdErr   error
+	targetErr error
+	backupErr error
+	// safetyTargetErr fails resolving the safety backup as a target.
+	safetyTargetErr error
+	replaceErrs     []error // one per ReplaceDatabase call, in order
+	probeErrs       []error
 	// One-shot failures of the project-side steps, by step name.
 	failOnce     map[string]error
 	targets      []map[string]interface{}
@@ -75,6 +77,9 @@ func (w *inPlaceWorld) AnnounceDatabaseReplaced(context.Context, string) { w.rec
 func (w *inPlaceWorld) InPlaceRecoveryTarget(_ context.Context, _ *domain.DatabaseInstance, req domain.RestoreRequest) (map[string]interface{}, error) {
 	if req.BackupID != "" {
 		w.record("target:" + req.BackupID)
+		if w.safetyTargetErr != nil {
+			return nil, w.safetyTargetErr
+		}
 		return map[string]interface{}{"backupID": req.BackupID, "targetImmediate": true}, nil
 	}
 	w.record("target")

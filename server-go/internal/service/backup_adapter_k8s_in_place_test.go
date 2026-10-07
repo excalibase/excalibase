@@ -250,6 +250,24 @@ func TestReplaceDatabaseStopsOnAFailedStep(t *testing.T) {
 	}
 }
 
+func TestInPlaceRecoveryTargetRefusesAnUnknownBackup(t *testing.T) {
+	adapter, _ := inPlaceAdapter(t, "completed")
+	if _, err := adapter.InPlaceRecoveryTarget(context.Background(), backedUpSource(), domain.RestoreRequest{BackupID: "nope"}); err == nil {
+		t.Fatal("a backup the project does not have is no target")
+	}
+}
+
+func TestReplaceDatabaseOfAClusterWithoutAnArchiveChangesNothing(t *testing.T) {
+	adapter, mock := inPlaceAdapter(t, "completed")
+	unstructured.RemoveNestedField(mock.CRDs[srcCluster].Object, "spec", "plugins")
+	if err := adapter.ReplaceDatabase(context.Background(), backedUpSource(), nil); !errors.Is(err, k8s.ErrClusterHasNoArchive) {
+		t.Fatalf("got %v", err)
+	}
+	if slices.Contains(mock.Calls, "DeleteCRD:"+srcCluster) {
+		t.Error("a cluster that cannot be recovered is not deleted")
+	}
+}
+
 func TestTakeSafetyBackupThatCannotStartIsAnError(t *testing.T) {
 	adapter, mock := inPlaceAdapter(t, "completed")
 	mock.CRDError = errors.New("forbidden")
