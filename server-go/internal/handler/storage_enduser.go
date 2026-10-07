@@ -54,23 +54,32 @@ func (h *EndUserStorageHandler) Routes(r chi.Router) {
 }
 
 // corsMiddleware grants the project's allowlisted origins and answers
-// preflights itself.
+// preflights itself, by the functions' rule (EXC-563): an unlisted origin's
+// preflight is a 403.
 func (h *EndUserStorageHandler) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if allowed := projectCorsGrant(r, chi.URLParam(r, "projectId"), h.cors); allowed != "" {
-			w.Header().Set("Access-Control-Allow-Origin", allowed)
+		origin := r.Header.Get("Origin")
+		if origin != "" {
 			w.Header().Add("Vary", "Origin")
+		}
+		allowed := projectCorsGrant(r, chi.URLParam(r, "projectId"), h.cors)
+		if allowed != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowed)
 			if r.Method == http.MethodOptions {
 				w.Header().Set("Access-Control-Allow-Methods", endUserCORSMethods)
 				w.Header().Set("Access-Control-Allow-Headers", functionCORSHeaders)
 				w.Header().Set("Access-Control-Max-Age", "3600")
 			}
 		}
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
+		if r.Method != http.MethodOptions {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		if origin != "" && allowed == "" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 

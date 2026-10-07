@@ -314,4 +314,19 @@ func TestEndUserStorage_CORSFollowsTheProjectAllowlist(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("unlisted origin granted %q", got)
 	}
+	// The engine's, auth's and functions' rule (EXC-563): an unlisted
+	// preflight is a 403, and every answer to an Origin varies by it.
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("unlisted origin preflight: %d, want 403", rec.Code)
+	}
+	if rec.Header().Get("Vary") != "Origin" {
+		t.Errorf("unlisted origin Vary: %q", rec.Header().Get("Vary"))
+	}
+
+	noOrigin := httptest.NewRequest("OPTIONS", appBucketPath+"/upload-url", nil)
+	rec = httptest.NewRecorder()
+	f.router.ServeHTTP(rec, noOrigin)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("preflight without Origin: %d, want 204", rec.Code)
+	}
 }
