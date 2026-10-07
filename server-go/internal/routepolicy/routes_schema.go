@@ -56,6 +56,7 @@ func schemaReadRows() []Row {
 		schemaRead("/tables"),
 		schemaRead("/tables/{tableName}/columns"),
 		schemaRead("/tables/{tableName}/indexes"),
+		schemaRead("/tables/{tableName}/checks"),
 		schemaRead("/tables/{tableName}/rows"),
 		schemaRead("/triggers"),
 		schemaRead("/types"),

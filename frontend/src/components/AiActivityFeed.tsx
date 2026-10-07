@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Activity, Loader2 } from 'lucide-react';
 import { ConfirmModal } from './ui/ConfirmModal';
-import { aiActivityKey, callResult, useAiActivity, type AiActivityCall } from '../api/aiActivity';
-import { useRevokeAccessToken } from '../api/accessTokens';
+import { aiActivityKey, callResult, useAiActivity, useRevokeActivityToken, type AiActivityCall } from '../api/aiActivity';
 
 function errorText(err: unknown, fallback: string): string {
   const axiosErr = err as { response?: { data?: { error?: string } } };
@@ -22,11 +21,16 @@ function TokenCell({ call, onRevoke }: { readonly call: AiActivityCall; readonly
   );
 }
 
+function revokeMessage(call: AiActivityCall | null): string {
+  const whose = call && !call.mine ? ' This is another member\'s token.' : '';
+  return `Revoke "${call?.tokenName ?? ''}"?${whose} The AI tool using it loses access immediately. This cannot be undone.`;
+}
+
 // What AI tools did in this project through MCP, newest first, with a way to
-// cut off one of the caller's own tokens.
+// cut off a token: the caller's own, or any member's for an org owner or admin.
 export function AiActivityFeed({ projectId }: { readonly projectId: string }) {
   const activity = useAiActivity(projectId);
-  const revokeToken = useRevokeAccessToken();
+  const revokeToken = useRevokeActivityToken(projectId);
   const queryClient = useQueryClient();
   const [revoking, setRevoking] = useState<AiActivityCall | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +77,7 @@ export function AiActivityFeed({ projectId }: { readonly projectId: string }) {
         onClose={() => setRevoking(null)}
         onConfirm={() => { void confirmRevoke(); }}
         title="Revoke access token"
-        message={`Revoke "${revoking?.tokenName ?? ''}"? The AI tool using it loses access immediately. This cannot be undone.`}
+        message={revokeMessage(revoking)}
         confirmLabel="Revoke"
         destructive
         loading={revokeToken.isPending}

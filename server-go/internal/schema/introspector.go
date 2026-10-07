@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // The SQL runner answers Studio, not an export: past these the result is cut
@@ -126,6 +128,35 @@ func (i *Introspector) GetIndexes(ctx context.Context, db *sql.DB, schemaName, t
 	return indexes, rows.Err()
 }
 
+// GetCheckConstraints lists the table's CHECK constraints with the columns each reads.
+func (i *Introspector) GetCheckConstraints(ctx context.Context, db *sql.DB, schemaName, tableName string) ([]CheckConstraint, error) {
+	rows, err := db.QueryContext(ctx, checkConstraintsQuery, schemaName, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("query check constraints: %w", err)
+	}
+	defer rows.Close()
+	checks := make([]CheckConstraint, 0)
+	for rows.Next() {
+		check := CheckConstraint{Columns: []string{}}
+		if err := rows.Scan(&check.Name, &check.Definition, pq.Array(&check.Columns)); err != nil {
+			return nil, fmt.Errorf("scan check constraint: %w", err)
+		}
+		checks = append(checks, check)
+	}
+	return checks, rows.Err()
+}
+
+const checkConstraintsQuery = `
+SELECT con.conname, pg_get_constraintdef(con.oid),
+       COALESCE(ARRAY(SELECT att.attname::text FROM unnest(con.conkey) AS key(num)
+                      JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = key.num
+                      ORDER BY att.attnum), '{}')
+FROM pg_constraint con
+JOIN pg_class rel ON rel.oid = con.conrelid
+JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+WHERE con.contype = 'c' AND nsp.nspname = $1 AND rel.relname = $2
+ORDER BY con.conname`
+
 func (i *Introspector) ExecuteDDL(ctx context.Context, db *sql.DB, ddl string) DDLResult {
 	ctx, cancel := i.bounded(ctx)
 	defer cancel()
@@ -162,7 +193,7 @@ func (i *Introspector) ExecuteQuery(ctx context.Context, db *sql.DB, query strin
 		return QueryResult{Error: userMessage(fmt.Errorf("set timeout: %w", err))}
 	}
 
-	if isReadQuery(query) {
+	if isReadQuery(query) || returnsRows(query) {
 		return i.executeReadQuery(ctx, tx, query)
 	}
 	return i.executeDMLQuery(ctx, tx, query)

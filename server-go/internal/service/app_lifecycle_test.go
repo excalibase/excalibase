@@ -333,6 +333,43 @@ func TestDeleteApp_WithoutAPurgerStillDeletes(t *testing.T) {
 	}
 }
 
+// recordingOriginReleaser stands in for the CORS store an app's origin lives in.
+type recordingOriginReleaser struct {
+	released []string
+	err      error
+}
+
+func (r *recordingOriginReleaser) ReleaseAppCorsOrigin(_ context.Context, projectID, appID string) (string, error) {
+	if r.err != nil {
+		return "", r.err
+	}
+	r.released = append(r.released, projectID+"/"+appID)
+	return "https://web.apps.example.test", nil
+}
+
+func TestDeleteApp_ReleasesTheOriginTheAppAdded(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusRunning)
+	origins := &recordingOriginReleaser{}
+	f.svc.SetCorsOriginReleaser(origins)
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); err != nil {
+		t.Fatalf("DeleteApp: %v", err)
+	}
+	if want := f.app.ProjectID + "/" + f.app.ID; !slices.Equal(origins.released, []string{want}) {
+		t.Fatalf("released %v, want %s", origins.released, want)
+	}
+}
+
+func TestDeleteApp_AFailedOriginReleaseKeepsTheRow(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusRunning)
+	f.svc.SetCorsOriginReleaser(&recordingOriginReleaser{err: errors.New("platform db down")})
+	if err := f.svc.DeleteApp(context.Background(), f.app.ProjectID, f.app.ID, false); err == nil {
+		t.Fatal("want the release failure")
+	}
+	if got, _ := f.apps.Get(f.app.ProjectID, f.app.ID); got == nil {
+		t.Fatal("the row must stay so the deletion can be retried")
+	}
+}
+
 func TestDeployApp_RefusedWhileTheAppIsBusy(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusRunning)
 	f.deploys.createErr = fmt.Errorf("%w: it is PAUSING", apphost.ErrAppBusy)

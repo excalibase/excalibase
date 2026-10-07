@@ -629,6 +629,15 @@ func TestQueryProjectAuditListsOneProjectsCallsThroughOneDoor(t *testing.T) {
 	if entries[0].TokenHash != "hash-2" || entries[0].ProjectID != "proj-a" || entries[0].Via != domain.AuditViaMCP {
 		t.Fatalf("entry fields not read back: %+v", entries[0])
 	}
+	for _, tc := range []struct {
+		project, hash string
+		want          bool
+	}{{"proj-a", "hash-1", true}, {"proj-a", "hash-2", true}, {"proj-b", "hash-2", false}, {"proj-a", "hash-9", false}} {
+		used, err := store.ProjectAuditUsedToken(ctx, tc.project, domain.AuditViaMCP, tc.hash)
+		if err != nil || used != tc.want {
+			t.Errorf("%s %s: used=%v err=%v", tc.project, tc.hash, used, err)
+		}
+	}
 }
 
 // --- Org tests ---

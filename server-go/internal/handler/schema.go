@@ -162,6 +162,7 @@ func (h *SchemaHandler) routes(r chi.Router) {
 	r.Delete("/tables/{tableName}/columns/{columnName}", h.DropColumn)
 	r.Get("/relationships", h.GetRelationships)
 	r.Get("/tables/{tableName}/indexes", h.GetIndexes)
+	r.Get("/tables/{tableName}/checks", h.GetCheckConstraints)
 	r.Post("/ddl", h.ExecuteDDL)
 	r.Post("/query", h.ExecuteQuery)
 	r.Get("/connection-test", h.TestConnection)
@@ -247,6 +248,20 @@ func (h *SchemaHandler) GetIndexes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, indexes)
+}
+
+func (h *SchemaHandler) GetCheckConstraints(w http.ResponseWriter, r *http.Request) {
+	db, err := h.getDB(chi.URLParam(r, "projectId"))
+	if err != nil {
+		h.handleDBError(w, err)
+		return
+	}
+	checks, err := h.introspector.GetCheckConstraints(r.Context(), db, schemaParam(r), chi.URLParam(r, "tableName"))
+	if err != nil {
+		schemaError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, checks)
 }
 
 func (h *SchemaHandler) CreateTable(w http.ResponseWriter, r *http.Request) {

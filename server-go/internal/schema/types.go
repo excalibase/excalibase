@@ -39,6 +39,13 @@ type IndexInfo struct {
 	Type      string   `json:"type"`
 }
 
+// CheckConstraint is one CHECK of a table, as Postgres prints it.
+type CheckConstraint struct {
+	Name       string   `json:"name"`
+	Definition string   `json:"definition"`
+	Columns    []string `json:"columns"`
+}
+
 type DDLResult struct {
 	Success     bool   `json:"success"`
 	UpdateCount int    `json:"updateCount,omitempty"`

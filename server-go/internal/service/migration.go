@@ -109,7 +109,7 @@ func (s *MigrationService) ApplyMigration(ctx context.Context, projectID string,
 		Checksum:        checksum,
 	}
 
-	ft := &domain.FlexTime{Time: now}
+	ft := &domain.UTCTime{Time: now}
 	if execErr != nil {
 		record.Status = "FAILED"
 		record.ErrorMessage = execErr.Error()

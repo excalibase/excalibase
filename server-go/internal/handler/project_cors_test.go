@@ -27,6 +27,8 @@ const (
 type memCorsStore struct {
 	origins map[string][]string
 	err     error
+	// owner maps "project/app" to the origin that app added.
+	owner map[string]string
 }
 
 func (m *memCorsStore) GetCorsOrigins(_ context.Context, projectID string) ([]string, error) {
@@ -68,6 +70,8 @@ func setupCorsHandler(t *testing.T) corsFixture {
 	r.Route("/api/projects/{projectId}/cors", func(r chi.Router) {
 		r.Get("/", h.GetCors)
 		r.Put("/", h.PutCors)
+		r.Post("/origins", h.AddCorsOrigin)
+		r.Delete("/origins", h.RemoveCorsOrigin)
 	})
 	return corsFixture{router: r, handler: h, cors: cors}
 }

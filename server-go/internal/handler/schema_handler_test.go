@@ -798,6 +798,23 @@ func TestSchemaHandler_GetIndexes(t *testing.T) {
 	}
 }
 
+func TestSchemaHandler_GetCheckConstraints(t *testing.T) {
+	r := setupSchemaRouter(t)
+	w := schemaRequest(r, "POST", "/api/schema/test-proj/ddl", `{"sql":"CREATE TABLE polls (id serial PRIMARY KEY, title text CHECK (char_length(title) <= 120))"}`)
+	if w.Code != 200 {
+		t.Fatalf("ddl: %d %s", w.Code, w.Body.String())
+	}
+	w = schemaRequest(r, "GET", "/api/schema/test-proj/tables/polls/checks", "")
+	if w.Code != 200 {
+		t.Fatalf("checks: %d %s", w.Code, w.Body.String())
+	}
+	var checks []schema.CheckConstraint
+	if err := json.NewDecoder(w.Body).Decode(&checks); err != nil || len(checks) != 1 ||
+		checks[0].Definition != "CHECK ((char_length(title) <= 120))" || checks[0].Columns[0] != "title" {
+		t.Fatalf("checks = %+v (%v)", checks, err)
+	}
+}
+
 // The SQL runner answers with at most the capped rows and says it cut them.
 func TestSchemaHandler_QueryResultIsCappedAndFlagged(t *testing.T) {
 	r := setupSchemaRouter(t)
