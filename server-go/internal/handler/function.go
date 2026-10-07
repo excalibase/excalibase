@@ -635,6 +635,11 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		httpError(w, safeError(err), http.StatusInternalServerError)
 		return
 	}
+	if unreachable := h.unreachableImports(projectID, code); len(unreachable) > 0 {
+		rollback()
+		httpError(w, unreachableImportsMessage(unreachable), http.StatusBadRequest)
+		return
+	}
 
 	// Extract user-declared schema (if any) and apply it before deploying
 	// the function bundle. If migration fails we roll back the store record

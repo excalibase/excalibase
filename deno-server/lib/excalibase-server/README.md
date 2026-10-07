@@ -21,7 +21,8 @@ or pinned (`npm:@excalibase/server@0.13.0`, `npm:zod@^3.22.0`); the platform's
 bundler points bare names at the runtime's copies. Any other bare import must
 be one of the function's own files, and an `npm:` package other than these two
 is fetched from the registry, which a project runtime reaches only when its
-egress allowlist says so. `zod-to-json-schema` is bundled as a regular dependency
+egress allowlist says so; without that the deploy is refused and names the
+package. `zod-to-json-schema` is bundled as a regular dependency
 because the metadata it produces is part of the package output.
 
 ## Usage
