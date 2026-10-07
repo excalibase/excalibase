@@ -15,8 +15,9 @@ function refusal(status: number, error: string) {
   return { message: `Request failed with status code ${status}`, response: { status, data: { error, status } } };
 }
 
-function renderPage(buckets: unknown = []) {
+function renderPage(buckets: unknown = [], features: Record<string, boolean> = {}) {
   vi.mocked(api.get).mockImplementation(async (url: string) => {
+    if (url === '/config') return { data: { deploymentMode: 'cloud', features } } as never;
     if (url === BUCKETS) {
       if (buckets instanceof Error || (buckets as { response?: unknown }).response) throw buckets;
       return { data: buckets } as never;
@@ -133,5 +134,23 @@ describe('Storage — bucket list and delete', () => {
     vi.mocked(api.delete).mockRejectedValue(refusal(409, 'bucket is being deleted'));
     await userEvent.click(await screen.findByRole('button', { name: 'Delete bucket' }));
     expect(await screen.findByTestId('bucket-delete-error')).toHaveTextContent('bucket is being deleted');
+  });
+});
+
+describe('Storage — app access (EXC-560)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const AVATARS = [{ id: 'b1', name: 'avatars', public: false, access: { authenticated: { read: 'own' } } }];
+
+  test('hidden while the feature is off', async () => {
+    renderPage(AVATARS);
+    await screen.findByRole('button', { name: 'Delete bucket' });
+    expect(screen.queryByRole('button', { name: 'App access' })).not.toBeInTheDocument();
+  });
+
+  test("opens the bucket's rules when the feature is on", async () => {
+    renderPage(AVATARS, { appstorage: true });
+    await userEvent.click(await screen.findByRole('button', { name: 'App access' }));
+    expect(screen.getByLabelText('authenticated read')).toHaveValue('own');
   });
 });

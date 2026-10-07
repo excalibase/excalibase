@@ -60,6 +60,9 @@ func (m *memBucketStore) DeleteBucket(_ context.Context, projectID, name string)
 func (m *memBucketStore) SetBucketStatus(_ context.Context, projectID, name, status string) error {
 	return nil
 }
+func (m *memBucketStore) UpdateBucketAccess(context.Context, string, string, BucketAccess) (bool, error) {
+	return true, nil
+}
 
 func (m *memBucketStore) CreateObject(_ context.Context, o *Object) error {
 	m.mu.Lock()

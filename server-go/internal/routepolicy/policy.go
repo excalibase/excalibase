@@ -91,6 +91,9 @@ const (
 	OwnerFunctionAudience Owner = "JWT aud names the project"
 	// OwnerBucketVisibility is the bucket's own public flag.
 	OwnerBucketVisibility Owner = "bucket public flag"
+	// OwnerBucketAccess is a project JWT plus the bucket's access rule for
+	// the token's role (EXC-560).
+	OwnerBucketAccess Owner = "JWT aud names the project; bucket access rule for its role"
 )
 
 // Disclosure is whether a read hands back material — a password, a key, a

@@ -9,8 +9,9 @@ import (
 // featureEnv names the variable that turns each dark feature on (EXC-554);
 // the chart sets it from features.<name>.
 var featureEnv = map[features.Feature]string{
-	features.MCP:      "FEATURE_MCP",
-	features.Pipeline: "FEATURE_PIPELINE",
+	features.MCP:        "FEATURE_MCP",
+	features.Pipeline:   "FEATURE_PIPELINE",
+	features.AppStorage: "FEATURE_APPSTORAGE",
 }
 
 // loadDarkFeatures reads once at startup; only the exact value "true" turns one on.

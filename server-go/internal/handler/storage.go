@@ -160,6 +160,21 @@ func (h *StorageHandler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// UpdateBucketAccess replaces what app users may do in the bucket.
+func (h *StorageHandler) UpdateBucketAccess(w http.ResponseWriter, r *http.Request) {
+	var req storagesvc.UpdateBucketAccessRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, errInvalidBody, http.StatusBadRequest)
+		return
+	}
+	bucket, err := h.svc.UpdateBucketAccess(r.Context(), chi.URLParam(r, "projectId"), chi.URLParam(r, "bucket"), req.Access)
+	if err != nil {
+		storageError(w, "update bucket access", err)
+		return
+	}
+	writeJSON(w, bucket)
+}
+
 func (h *StorageHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
 	bucketName := chi.URLParam(r, "bucket")

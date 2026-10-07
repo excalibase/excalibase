@@ -213,6 +213,9 @@ func (emptyBucketStore) DeleteBucket(context.Context, string, string) error { re
 func (emptyBucketStore) SetBucketStatus(context.Context, string, string, string) error {
 	return nil
 }
+func (emptyBucketStore) UpdateBucketAccess(context.Context, string, string, storagesvc.BucketAccess) (bool, error) {
+	return false, nil
+}
 func (emptyBucketStore) CreateObject(context.Context, *storagesvc.Object) error { return nil }
 func (emptyBucketStore) RecordObjectWithinQuota(context.Context, string, *storagesvc.Object, int64) (bool, error) {
 	return true, nil

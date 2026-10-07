@@ -29,15 +29,17 @@ const (
 )
 
 type Bucket struct {
-	ID           string    `json:"id"`
-	ProjectID    string    `json:"projectId"`
-	Name         string    `json:"name"`
-	Public       bool      `json:"public"`
-	Status       string    `json:"status,omitempty"`
-	FileSize     int64     `json:"fileSizeLimit,omitempty"`    // optional per-bucket cap (bytes)
-	AllowedTypes []string  `json:"allowedMimeTypes,omitempty"` // optional MIME allowlist
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID           string   `json:"id"`
+	ProjectID    string   `json:"projectId"`
+	Name         string   `json:"name"`
+	Public       bool     `json:"public"`
+	Status       string   `json:"status,omitempty"`
+	FileSize     int64    `json:"fileSizeLimit,omitempty"`    // optional per-bucket cap (bytes)
+	AllowedTypes []string `json:"allowedMimeTypes,omitempty"` // optional MIME allowlist
+	// Access is what app users may do here, by role (see access.go).
+	Access    BucketAccess `json:"access"`
+	CreatedAt time.Time    `json:"createdAt"`
+	UpdatedAt time.Time    `json:"updatedAt"`
 }
 
 // Object is a single file. ETag is whatever the underlying store returned
@@ -58,10 +60,16 @@ type Object struct {
 // CreateBucketRequest is the input shape for POST /buckets. Validation
 // happens at the handler boundary; the service trusts these fields.
 type CreateBucketRequest struct {
-	Name             string   `json:"name"`
-	Public           bool     `json:"public,omitempty"`
-	FileSizeLimit    int64    `json:"fileSizeLimit,omitempty"`
-	AllowedMimeTypes []string `json:"allowedMimeTypes,omitempty"`
+	Name             string       `json:"name"`
+	Public           bool         `json:"public,omitempty"`
+	FileSizeLimit    int64        `json:"fileSizeLimit,omitempty"`
+	AllowedMimeTypes []string     `json:"allowedMimeTypes,omitempty"`
+	Access           BucketAccess `json:"access,omitempty"`
+}
+
+// UpdateBucketAccessRequest replaces a bucket's app-user access rules.
+type UpdateBucketAccessRequest struct {
+	Access BucketAccess `json:"access"`
 }
 
 // UploadURLRequest carries the metadata we need to mint a signed PUT URL.

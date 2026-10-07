@@ -6,6 +6,10 @@ import { uploadFailure, type UploadStep } from '../utils/uploadFailure';
 // Mirrors server-side storagesvc.Bucket. The two booleans (public,
 // fileSize/MIME constraints) are what the studio surfaces; the rest is
 // metadata for display.
+// What app users may do in a bucket, by role (EXC-560). '' grants nothing.
+export type AccessScope = '' | 'own' | 'all';
+export type BucketAccess = Record<string, { read?: AccessScope; write?: AccessScope; delete?: AccessScope }>;
+
 export interface Bucket {
   id: string;
   projectId: string;
@@ -13,9 +17,19 @@ export interface Bucket {
   public: boolean;
   fileSizeLimit?: number;
   allowedMimeTypes?: string[];
+  access?: BucketAccess;
   createdAt: string;
   updatedAt: string;
 }
+
+export const useUpdateBucketAccess = (projectId: string, bucket: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (access: BucketAccess) =>
+      (await api.put<Bucket>(`/projects/${projectId}/storage/buckets/${bucket}/access`, { access })).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['storage', projectId, 'buckets'] }),
+  });
+};
 
 export interface StorageObject {
   id: string;

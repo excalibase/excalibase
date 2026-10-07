@@ -19,11 +19,15 @@ import (
 
 func (s *Store) CreateBucket(ctx context.Context, b *storagesvc.Bucket) error {
 	allowed, _ := json.Marshal(b.AllowedTypes)
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO storage_buckets (id, project_id, name, public, status, file_size_limit, allowed_mime_types, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)`,
+	access, err := marshalBucketAccess(b.Access)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO storage_buckets (id, project_id, name, public, status, file_size_limit, allowed_mime_types, access, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10)`,
 		b.ID, b.ProjectID, b.Name, b.Public, bucketStatusOrDefault(b.Status), b.FileSize, string(allowed),
-		b.CreatedAt, b.UpdatedAt)
+		access, b.CreatedAt, b.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") {
 			return fmt.Errorf("bucket already exists")
@@ -35,14 +39,14 @@ func (s *Store) CreateBucket(ctx context.Context, b *storagesvc.Bucket) error {
 
 func (s *Store) GetBucket(ctx context.Context, projectID, name string) (*storagesvc.Bucket, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, project_id, name, public, status, file_size_limit, allowed_mime_types, created_at, updated_at
+		`SELECT id, project_id, name, public, status, file_size_limit, allowed_mime_types, access, created_at, updated_at
 		 FROM storage_buckets WHERE project_id = $1 AND name = $2`, projectID, name)
 	return scanBucket(row)
 }
 
 func (s *Store) ListBuckets(ctx context.Context, projectID string) ([]storagesvc.Bucket, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, project_id, name, public, status, file_size_limit, allowed_mime_types, created_at, updated_at
+		`SELECT id, project_id, name, public, status, file_size_limit, allowed_mime_types, access, created_at, updated_at
 		 FROM storage_buckets WHERE project_id = $1 ORDER BY name`, projectID)
 	if err != nil {
 		return nil, err
@@ -62,7 +66,7 @@ func (s *Store) ListBuckets(ctx context.Context, projectID string) ([]storagesvc
 // ListAllBuckets spans every project, for the storage reaper's sweep.
 func (s *Store) ListAllBuckets(ctx context.Context) ([]storagesvc.Bucket, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, project_id, name, public, status, file_size_limit, allowed_mime_types, created_at, updated_at
+		`SELECT id, project_id, name, public, status, file_size_limit, allowed_mime_types, access, created_at, updated_at
 		 FROM storage_buckets ORDER BY project_id, name`)
 	if err != nil {
 		return nil, err
@@ -109,6 +113,37 @@ func (s *Store) SetBucketStatus(ctx context.Context, projectID, name, status str
 		return fmt.Errorf("bucket not found")
 	}
 	return nil
+}
+
+// UpdateBucketAccess replaces a bucket's app-user access rules.
+func (s *Store) UpdateBucketAccess(ctx context.Context, projectID, name string, access storagesvc.BucketAccess) (bool, error) {
+	encoded, err := marshalBucketAccess(access)
+	if err != nil {
+		return false, err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE storage_buckets SET access = $3::jsonb, updated_at = NOW()
+		 WHERE project_id = $1 AND name = $2`, projectID, name, encoded)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// marshalBucketAccess encodes rules for the access column; none is "{}".
+func marshalBucketAccess(access storagesvc.BucketAccess) (string, error) {
+	if access == nil {
+		return "{}", nil
+	}
+	encoded, err := json.Marshal(access)
+	if err != nil {
+		return "", fmt.Errorf("encode bucket access: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // bucketStatusOrDefault keeps rows written before the status column existed
@@ -330,7 +365,8 @@ func scanBucket(r scannable) (*storagesvc.Bucket, error) {
 	var fileSize sql.NullInt64
 	var created, updated time.Time
 	var status sql.NullString
-	err := r.Scan(&b.ID, &b.ProjectID, &b.Name, &b.Public, &status, &fileSize, &allowedRaw, &created, &updated)
+	var accessRaw []byte
+	err := r.Scan(&b.ID, &b.ProjectID, &b.Name, &b.Public, &status, &fileSize, &allowedRaw, &accessRaw, &created, &updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -343,6 +379,10 @@ func scanBucket(r scannable) (*storagesvc.Bucket, error) {
 	}
 	if allowedRaw.Valid && allowedRaw.String != "" && allowedRaw.String != "null" {
 		_ = json.Unmarshal([]byte(allowedRaw.String), &b.AllowedTypes)
+	}
+	b.Access = storagesvc.BucketAccess{}
+	if err := json.Unmarshal(accessRaw, &b.Access); err != nil {
+		return nil, fmt.Errorf("decode bucket access: %w", err)
 	}
 	b.CreatedAt = created
 	b.UpdatedAt = updated

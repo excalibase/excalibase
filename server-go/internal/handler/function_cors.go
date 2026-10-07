@@ -57,13 +57,19 @@ func (h *FunctionHandler) answerCORS(w http.ResponseWriter, r *http.Request, pro
 
 // corsGrant is the Access-Control-Allow-Origin value for the request, or "".
 func (h *FunctionHandler) corsGrant(r *http.Request, projectID string) string {
+	return projectCorsGrant(r, projectID, h.corsStore)
+}
+
+// projectCorsGrant is the Access-Control-Allow-Origin value the project's
+// allowlist gives the request's origin, or "".
+func projectCorsGrant(r *http.Request, projectID string, store storage.ProjectCorsStore) string {
 	origin := r.Header.Get("Origin")
-	if origin == "" || h.corsStore == nil || !isValidID(projectID) {
+	if origin == "" || store == nil || !isValidID(projectID) {
 		return ""
 	}
-	listed, err := h.corsStore.GetCorsOrigins(r.Context(), projectID)
+	listed, err := store.GetCorsOrigins(r.Context(), projectID)
 	if err != nil {
-		log.Printf("WARN: functions CORS allowlist for %s unreadable: %v", projectID, err)
+		log.Printf("WARN: CORS allowlist for %s unreadable: %v", projectID, err)
 		return ""
 	}
 	if domain.IsCorsWildcard(listed) {

@@ -142,6 +142,7 @@ var projectRows = []Row{
 	{Methods: post, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/upload-url", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: post, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/confirm-upload", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
 	{Methods: del, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/objects/*", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper},
+	{Methods: put, Pattern: "/api/projects/{projectId}/storage/buckets/{bucket}/access", Auth: AuthSession, Param: ParamProject, Owner: OwnerProjectAccess, MinRole: roleDeveloper, Note: "decides what the project's app users may do in the bucket"},
 
 	// tus mounts every method on two patterns. HEAD reports an upload's
 	// offset (a read); everything else creates, appends to or terminates an
@@ -159,6 +160,12 @@ var runtimeRows = []Row{
 	{Methods: get, Pattern: "/storage/v1/object/public/{projectId}/{bucket}/*", Auth: AuthPublic, Param: ParamProject, Owner: OwnerBucketVisibility, Discloses: NoSecret, Note: "serves only buckets the tenant marked public"},
 	{Methods: anyVerb, Pattern: "/functions/v1/{projectId}/http/*", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerFunctionAudience, Discloses: NoSecret},
 	{Methods: anyVerb, Pattern: "/functions/v1/{projectId}/{fnId}", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerFunctionAudience, Discloses: NoSecret},
+	// App users reach a bucket through its access rule (EXC-560).
+	{Methods: post, Pattern: "/storage/v1/{projectId}/buckets/{bucket}/upload-url", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerBucketAccess},
+	{Methods: post, Pattern: "/storage/v1/{projectId}/buckets/{bucket}/confirm-upload", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerBucketAccess},
+	{Methods: get, Pattern: "/storage/v1/{projectId}/buckets/{bucket}/objects", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerBucketAccess, Discloses: NoSecret},
+	{Methods: get, Pattern: "/storage/v1/{projectId}/buckets/{bucket}/download-url/*", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerBucketAccess, Discloses: NoSecret},
+	{Methods: del, Pattern: "/storage/v1/{projectId}/buckets/{bucket}/objects/*", Auth: AuthFunctionJWT, Param: ParamProject, Owner: OwnerBucketAccess},
 
 	{Methods: post, Pattern: "/internal/runtime/functions/{fnId}/metadata", Auth: AuthRuntimeToken, Owner: OwnerRuntimeSecret, Note: "the project is named in the BODY, not the path, and the token must match that project's derived secret"},
 	{Methods: post, Pattern: "/internal/invoke/{projectId}/{fnId}", Auth: AuthRuntimeToken, Param: ParamProject, Owner: OwnerRuntimeSecret},

@@ -1563,7 +1563,7 @@ func buildRouter(cfg config.AppConfig, sqlStore routerStores, store storage.Inst
 	r.Use(custommw.SecurityHeaders)
 	// A project's public functions answer CORS from that project's own
 	// allowlist (the handler does it); the Studio list is for everything else.
-	r.Use(custommw.ExceptPathPrefix("/functions/v1/", custommw.CORS(cfg.CORSOrigins)))
+	r.Use(custommw.ExceptPathPrefix("/functions/v1/", custommw.ExceptPathPrefix("/storage/v1/", custommw.CORS(cfg.CORSOrigins))))
 	r.Use(custommw.RequireTrustedOriginForCookies(custommw.TrustedOrigins(cfg.StudioURL, cfg.CORSOrigins)))
 	r.Use(auth.ExtractAuth(sqlStore))
 	// Capability tokens (the platform's own service principals) are
@@ -2115,7 +2115,9 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 			r.Use(custommw.RequireProjectRoleForWrites(domain.OrgRoleDeveloper, store, sqlStore))
 			r.Use(d.activity)
 			d.storageHandler.Routes(r)
+			r.With(features.Require(d.features, features.AppStorage)).Put("/buckets/{bucket}/access", d.storageHandler.UpdateBucketAccess)
 		})
+		mountAppStorage(r, sqlStore, store, d)
 		// The public object path is anonymous, so it sits outside the
 		// project-access gate and carries the rule itself: no downloads are
 		// signed for a project the platform must not serve (EXC-401).
@@ -2130,6 +2132,24 @@ func mountProjectScopedRoutes(r *chi.Mux, cfg config.AppConfig, sqlStore storage
 		// user JWT and don't ride the project-access middleware.
 		d.storageHandler.InternalRoutes(r)
 	}
+}
+
+// mountAppStorage serves a project's buckets to its app users (EXC-560): a
+// project JWT, the bucket's access rule for its role, and CORS from the
+// project's own allowlist.
+func mountAppStorage(r *chi.Mux, sqlStore storage.OrgStore, store storage.InstanceStore, d *handlerDeps) {
+	if d.fnHandler == nil {
+		return
+	}
+	cors, _ := sqlStore.(storage.ProjectCorsStore)
+	endUsers := handler.NewEndUserStorageHandler(d.storageHandler, d.fnHandler, cors)
+	r.Route("/storage/v1/{projectId}", func(r chi.Router) {
+		r.Use(features.Require(d.features, features.AppStorage))
+		r.Use(custommw.TenantContext)
+		r.Use(custommw.RequireServableProject(store))
+		r.Use(d.activity)
+		endUsers.Routes(r)
+	})
 }
 
 // mountEmailRoutes mounts /api/email (verify + reset flows) plus the
@@ -2566,25 +2586,22 @@ func buildResendSender(cfg config.AppConfig) email.Sender {
 	return sender
 }
 
-// buildStorageService constructs the R2-backed storage service. Both R2
-// access and a non-nil sqlStore are required; if either is missing we
-// return nil and main.go skips mounting the /storage routes. Quota
+// buildStorageService constructs the storage service on the customer file
+// store (STORAGE_*), a bucket and key apart from backups (EXC-560). Without
+// it we return nil and main.go skips mounting the /storage routes. Quota
 // defaults match what's documented in OPERATOR.md / values-prod.yaml.
 func buildStorageService(cfg config.AppConfig, sqlStore storagesvc.BucketStore) *storagesvc.Service {
-	keyID := cfg.R2AccessKeyID
-	secret := cfg.R2SecretAccessKey
-	endpoint := cfg.R2Endpoint
-	bucket := cfg.R2Bucket
-	if keyID == "" || secret == "" || endpoint == "" || bucket == "" {
-		log.Printf("INFO: R2 not configured, storage feature disabled")
+	files := cfg.FileStorage
+	if files.AccessKeyID == "" || files.SecretAccessKey == "" || files.Endpoint == "" || files.Bucket == "" {
+		log.Printf("INFO: file storage (STORAGE_*) not configured, storage feature disabled")
 		return nil
 	}
 	r2, err := storagesvc.NewR2Client(storagesvc.R2Config{
-		AccessKeyID:     keyID,
-		SecretAccessKey: secret,
-		Endpoint:        endpoint,
-		Region:          cfg.R2Region,
-		Bucket:          bucket,
+		AccessKeyID:     files.AccessKeyID,
+		SecretAccessKey: files.SecretAccessKey,
+		Endpoint:        files.Endpoint,
+		Region:          files.Region,
+		Bucket:          files.Bucket,
 		PublicURL:       cfg.StoragePublicURL,
 	})
 	if err != nil {
@@ -2599,7 +2616,7 @@ func buildStorageService(cfg config.AppConfig, sqlStore storagesvc.BucketStore) 
 		"standard":   50 * 1024 * 1024 * 1024,       // 50 GiB
 		"enterprise": 1 * 1024 * 1024 * 1024 * 1024, // 1 TiB
 	}
-	log.Printf("INFO: R2 storage configured (endpoint=%s bucket=%s)", endpoint, bucket)
+	log.Printf("INFO: file storage configured (endpoint=%s bucket=%s)", files.Endpoint, files.Bucket)
 	return storagesvc.NewService(sqlStore, r2, tierQuotas)
 }
 
