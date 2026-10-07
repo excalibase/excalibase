@@ -20,11 +20,13 @@ type Stack struct {
 
 // File is a rendered Dockerfile with what to know before using it.
 type File struct {
-	Path         string   `json:"path"`
-	Content      string   `json:"content"`
-	DockerIgnore string   `json:"dockerignore"`
-	Port         int      `json:"port"`
-	Notes        []string `json:"notes"`
+	Path         string `json:"path"`
+	Content      string `json:"content"`
+	DockerIgnore string `json:"dockerignore"`
+	Port         int    `json:"port"`
+	// HealthCheckPath is what to pass as the app's health check path.
+	HealthCheckPath string   `json:"healthCheckPath"`
+	Notes           []string `json:"notes"`
 }
 
 // nodeTool is the install and run commands of one Node package manager.
@@ -46,6 +48,7 @@ func Stacks() []Stack {
 		{Name: "node", Variants: nodeVariants},
 		{Name: "nextjs", Variants: nodeVariants},
 		{Name: "vite", Variants: nodeVariants},
+		{Name: "static", Variants: []string{"default"}},
 		{Name: "python", Variants: []string{"gunicorn", "uvicorn"}},
 		{Name: "go", Variants: []string{"default"}},
 		{Name: "java", Variants: []string{"spring-boot", "spring-boot-gradle", "quarkus"}},
@@ -57,7 +60,7 @@ func Stacks() []Stack {
 func Dockerfile(stack, variant string) (File, error) {
 	index := slices.IndexFunc(Stacks(), func(s Stack) bool { return s.Name == stack })
 	if index < 0 {
-		return File{}, fmt.Errorf("unknown stack %q: use node, nextjs, vite, python, go or java", stack)
+		return File{}, fmt.Errorf("unknown stack %q: use node, nextjs, vite, static, python, go or java", stack)
 	}
 	known := Stacks()[index].Variants
 	if variant == "" {
@@ -67,10 +70,29 @@ func Dockerfile(stack, variant string) (File, error) {
 		return File{}, fmt.Errorf("unknown variant %q for %s: use %s", variant, stack, strings.Join(known, ", "))
 	}
 	content, notes := render(stack, variant)
+	health, healthNote := healthCheck(stack, variant)
+	ignore := dockerIgnore
+	if stack == "static" {
+		ignore = staticDockerIgnore
+	}
 	return File{
-		Path: "Dockerfile", Content: content, DockerIgnore: dockerIgnore, Port: Port,
-		Notes: append(notes, "Set the app's port to 8080 in Excalibase."),
+		Path: "Dockerfile", Content: content, DockerIgnore: ignore, Port: Port, HealthCheckPath: health,
+		Notes: append(notes, healthNote, "Set the app's port to 8080 in Excalibase. The image runs as a non-root user."),
 	}, nil
+}
+
+// healthCheck is the path a stack answers health checks on, and how.
+func healthCheck(stack, variant string) (string, string) {
+	pass := " Pass it as health_check_path to create_app."
+	switch {
+	case stack == "vite" || stack == "static":
+		return "/healthz", "nginx answers GET /healthz with 200 itself." + pass
+	case variant == "spring-boot" || variant == "spring-boot-gradle":
+		return "/actuator/health", "/actuator/health needs the spring-boot-starter-actuator dependency." + pass
+	case variant == "quarkus":
+		return "/q/health", "/q/health needs the quarkus-smallrye-health extension." + pass
+	}
+	return "/healthz", "Add a GET /healthz route that answers 200 without touching the database." + pass
 }
 
 func render(stack, variant string) (string, []string) {
@@ -81,6 +103,8 @@ func render(stack, variant string) (string, []string) {
 		return renderPython(variant)
 	case "go":
 		return goDockerfile, []string{"Builds the main package at the repository root; change the go build path for a cmd/ layout."}
+	case "static":
+		return staticDockerfile, []string{"Serves the repository's files as they are, with no build step: change COPY . to the site's folder (e.g. COPY public/) if it has one."}
 	}
 	return renderJava(variant)
 }
@@ -182,12 +206,55 @@ COPY <<'EOF' /etc/nginx/conf.d/default.conf
 server {
     listen 8080;
     root /usr/share/nginx/html;
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
     location / {
         try_files $uri $uri/ /index.html;
     }
 }
 EOF
+ENV PORT=8080
 EXPOSE 8080
+`
+
+const staticDockerfile = `# syntax=docker/dockerfile:1
+FROM nginxinc/nginx-unprivileged:1.27-alpine
+COPY . /usr/share/nginx/html
+COPY <<'EOF' /etc/nginx/conf.d/default.conf
+server {
+    listen 8080;
+    root /usr/share/nginx/html;
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+    location ~ /\. {
+        deny all;
+    }
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+EOF
+ENV PORT=8080
+EXPOSE 8080
+`
+
+// staticDockerIgnore keeps what builds and ships the site out of a site
+// served as it is.
+const staticDockerIgnore = `.git
+.env
+.env.*
+.*
+Dockerfile
+Jenkinsfile
+node_modules
+*.log
+*.md
 `
 
 const pythonDockerfile = `# syntax=docker/dockerfile:1
@@ -226,7 +293,7 @@ RUN ./mvnw -B -DskipTests package && cp target/*.jar /app.jar
 
 FROM eclipse-temurin:21-jre
 COPY --from=build /app.jar /app/app.jar
-ENV SERVER_PORT=8080
+ENV PORT=8080 SERVER_PORT=8080
 USER 1000
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
@@ -240,7 +307,7 @@ RUN ./gradlew --no-daemon bootJar && cp build/libs/*.jar /app.jar
 
 FROM eclipse-temurin:21-jre
 COPY --from=build /app.jar /app/app.jar
-ENV SERVER_PORT=8080
+ENV PORT=8080 SERVER_PORT=8080
 USER 1000
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
@@ -258,7 +325,7 @@ COPY --from=build /src/target/quarkus-app/lib/ ./lib/
 COPY --from=build /src/target/quarkus-app/*.jar ./
 COPY --from=build /src/target/quarkus-app/app/ ./app/
 COPY --from=build /src/target/quarkus-app/quarkus/ ./quarkus/
-ENV QUARKUS_HTTP_PORT=8080 QUARKUS_HTTP_HOST=0.0.0.0
+ENV PORT=8080 QUARKUS_HTTP_PORT=8080 QUARKUS_HTTP_HOST=0.0.0.0
 USER 1000
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "/app/quarkus-run.jar"]

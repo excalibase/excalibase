@@ -1,11 +1,17 @@
 name: Deploy to Excalibase
 on:
   push:
-    branches: [main]
+    branches: ["main"]
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: excalibase-deploy
+  cancel-in-progress: false
 jobs:
   deploy:
+    # A run started by hand deploys only from the branch above.
+    if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,11 +21,16 @@ jobs:
           registry: registry.example.com
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
+      - id: tag
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - id: build
         uses: docker/build-push-action@v6
         with:
+          context: "."
           push: true
-          tags: registry.example.com/team/web:${{ github.sha }}
+          tags: |
+            registry.example.com/team/web:main
+            registry.example.com/team/web:${{ steps.tag.outputs.short }}
       - name: Deploy to Excalibase
         env:
           EXCALIBASE_TOKEN: ${{ secrets.EXCALIBASE_TOKEN }}

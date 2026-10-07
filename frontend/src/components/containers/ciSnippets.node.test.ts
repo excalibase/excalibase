@@ -173,12 +173,13 @@ describe('githubActionsSnippet', () => {
     const steps = workflowSteps(githubActionsSnippet(target()));
     const login = steps.find((step) => step.uses?.startsWith('docker/login-action@'));
     const build = steps.find((step) => step.uses?.startsWith('docker/build-push-action@'));
-    const deploy = steps.find((step) => step.run !== undefined);
+    const deploy = steps.find((step) => step.name === 'Deploy to Excalibase');
     expect(login?.with?.registry).toBe('ghcr.io');
     expect(login?.with?.password).toBe('${{ secrets.GITHUB_TOKEN }}');
     expect(build?.id).toBe('build');
     expect(build?.with?.push).toBe(true);
-    expect(build?.with?.tags).toBe('ghcr.io/acme/web:${{ github.sha }}');
+    expect(build?.with?.tags).toBe('ghcr.io/acme/web:main\nghcr.io/acme/web:${{ steps.tag.outputs.short }}\n');
+    expect(build?.with?.context).toBe('.');
     expect(deploy?.env).toEqual({
       EXCALIBASE_TOKEN: '${{ secrets.EXCALIBASE_TOKEN }}',
       IMAGE: 'ghcr.io/acme/web@${{ steps.build.outputs.digest }}',
@@ -189,6 +190,18 @@ describe('githubActionsSnippet', () => {
     expect(result.code, result.out).toBe(0);
     expect(fake.deploys).toEqual([{ image: `ghcr.io/acme/web@${DIGEST}`, commitSha: COMMIT }]);
   }, 30_000);
+
+  test('refuses build options that leave the repository or break out of the pipeline', () => {
+    const unsafe = [
+      { context: '../x' }, { dockerfile: '/etc/passwd' }, { context: "a'b" },
+      { branch: '${{ github.event }}' }, { branch: 'a..b' },
+    ];
+    for (const build of unsafe) {
+      for (const render of [githubActionsSnippet, gitlabCiSnippet, jenkinsSnippet]) {
+        expect(() => render({ ...target(), build })).toThrow();
+      }
+    }
+  });
 
   test('logs in to Docker Hub with its own secrets', () => {
     const steps = workflowSteps(githubActionsSnippet(target('acme/web:main')));

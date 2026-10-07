@@ -4,22 +4,24 @@ pipeline {
     disableConcurrentBuilds()
   }
   environment {
-    IMAGE_REPOSITORY = 'registry.example.com/team/web'
+    IMAGE_REPOSITORY = 'acme/web'
     EXCALIBASE_TOKEN = credentials('excalibase-token')
   }
   stages {
     stage('Build and push') {
+      when { anyOf { branch 'release/v2'; expression { env.GIT_BRANCH == 'origin/release/v2' } } }
       steps {
-        withCredentials([usernamePassword(credentialsId: 'registry', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+        withCredentials([usernamePassword(credentialsId: 'registry', usernameVariable: 'DOCKERHUB_USERNAME', passwordVariable: 'DOCKERHUB_TOKEN')]) {
           sh '''
-            echo "$REGISTRY_PASSWORD" | docker login -u "$REGISTRY_USERNAME" --password-stdin registry.example.com
-            docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" .
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+            docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" -f apps/poll/Dockerfile.prod apps/poll
             docker push "$IMAGE_REPOSITORY:$GIT_COMMIT"
           '''
         }
       }
     }
     stage('Deploy to Excalibase') {
+      when { anyOf { branch 'release/v2'; expression { env.GIT_BRANCH == 'origin/release/v2' } } }
       steps {
         sh '''
           export COMMIT_SHA="$GIT_COMMIT"

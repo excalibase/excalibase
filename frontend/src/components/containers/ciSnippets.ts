@@ -8,7 +8,43 @@ export interface SnippetTarget {
   readonly appId: string;
   // The app's image as stored; its repository is where CI pushes.
   readonly image: string;
+  readonly build?: BuildOptions;
 }
+
+// Where in the repository the image is built from (server: shiptemplates.BuildOptions).
+export interface BuildOptions {
+  // The build folder; "." when empty.
+  readonly context?: string;
+  // The Dockerfile's path from the repository root; the context's own when empty.
+  readonly dockerfile?: string;
+  // The branch whose pushes deploy: main on GitHub, the default branch on GitLab, when empty.
+  readonly branch?: string;
+}
+
+// Options stay plain names inside the repository: no quote, space, expression
+// or climb reaches a pipeline (server: shiptemplates.validateBuild).
+const REPO_PATH = /^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$/;
+const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
+
+export function validateBuild(build?: BuildOptions): void {
+  for (const [name, value] of [['build context', build?.context], ['dockerfile', build?.dockerfile]] as const) {
+    if (value && (!REPO_PATH.test(value) || value.split('/').includes('..'))) {
+      throw new Error(`${name} must be a path inside the repository, e.g. apps/web`);
+    }
+  }
+  if (build?.branch && (!BRANCH.test(build.branch) || build.branch.includes('..'))) {
+    throw new Error('branch must be a branch name, e.g. main');
+  }
+}
+
+const buildContext = (build?: BuildOptions) => build?.context || '.';
+
+// What docker build reads after its tag: the Dockerfile, when named, and the context.
+const dockerBuildArgs = (build?: BuildOptions) =>
+  build?.dockerfile ? `-f ${build.dockerfile} ${buildContext(build)}` : buildContext(build);
+
+// The branch as an image tag.
+const branchTag = (branch: string) => branch.replace(/[^A-Za-z0-9_.-]/g, '-');
 
 const DOCKER_HUB_ALIASES = new Set(['docker.io', 'index.docker.io', 'registry-1.docker.io']);
 
@@ -136,21 +172,24 @@ const PUSHED_DIGEST = `docker inspect --format='{{range .RepoDigests}}{{println 
 
 // .gitlab-ci.yml: build and push on the default branch with docker-in-docker, then deploy the digest.
 export function gitlabCiSnippet(target: SnippetTarget): string {
+  validateBuild(target.build);
   const login = shellLogin(imageRegistry(target.image), true).replaceAll("'", "''");
+  const branch = target.build?.branch ? `"${target.build.branch}"` : '$CI_DEFAULT_BRANCH';
   return `deploy:
   stage: deploy
   image: docker:27
   services:
     - docker:27-dind
+  resource_group: excalibase-deploy
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
     IMAGE_REPOSITORY: "${imageRepository(target.image)}"
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH == ${branch}
   script:
     - '${login}'
     - export COMMIT_SHA="$CI_COMMIT_SHA"
-    - docker build -t "$IMAGE_REPOSITORY:$COMMIT_SHA" .
+    - docker build -t "$IMAGE_REPOSITORY:$COMMIT_SHA" ${dockerBuildArgs(target.build)}
     - docker push "$IMAGE_REPOSITORY:$COMMIT_SHA"
     - export IMAGE="$(${PUSHED_DIGEST.replaceAll("'", '"')})"
     - apk add --no-cache curl
@@ -168,25 +207,33 @@ export function jenkinsSnippet(target: SnippetTarget): string {
   const registry = imageRegistry(target.image);
   const [userVariable, passwordVariable] =
     registry === null ? ['DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN'] : ['REGISTRY_USERNAME', 'REGISTRY_PASSWORD'];
+  validateBuild(target.build);
+  const branch = target.build?.branch;
+  const when = branch
+    ? `\n      when { anyOf { branch '${branch}'; expression { env.GIT_BRANCH == 'origin/${branch}' } } }`
+    : '';
   return `pipeline {
   agent any
+  options {
+    disableConcurrentBuilds()
+  }
   environment {
     IMAGE_REPOSITORY = '${imageRepository(target.image)}'
     EXCALIBASE_TOKEN = credentials('excalibase-token')
   }
   stages {
-    stage('Build and push') {
+    stage('Build and push') {${when}
       steps {
         withCredentials([usernamePassword(credentialsId: 'registry', usernameVariable: '${userVariable}', passwordVariable: '${passwordVariable}')]) {
           sh '''
             ${shellLogin(registry, false)}
-            docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" .
+            docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" ${dockerBuildArgs(target.build)}
             docker push "$IMAGE_REPOSITORY:$GIT_COMMIT"
           '''
         }
       }
     }
-    stage('Deploy to Excalibase') {
+    stage('Deploy to Excalibase') {${when}
       steps {
         sh '''
 ${indent(groovyShell(`export COMMIT_SHA="$GIT_COMMIT"\nexport IMAGE="$(${PUSHED_DIGEST})"\n${deployScript(target)}`), 10)}
@@ -208,29 +255,43 @@ ${deployScript(target)}
 `;
 }
 
-// .github/workflows/deploy.yml: build and push on every push to main, then deploy the digest.
+// .github/workflows/deploy.yml: build and push on every push to the branch (or by hand), then deploy the digest.
 export function githubActionsSnippet(target: SnippetTarget): string {
   const repository = imageRepository(target.image);
   const registry = imageRegistry(target.image);
   const packages = registry === 'ghcr.io' ? '\n  packages: write' : '';
+  validateBuild(target.build);
+  const branch = target.build?.branch || 'main';
+  const file = target.build?.dockerfile ? `\n          file: "${target.build.dockerfile}"` : '';
   return `name: Deploy to Excalibase
 on:
   push:
-    branches: [main]
+    branches: ["${branch}"]
+  workflow_dispatch:
 permissions:
   contents: read${packages}
+concurrency:
+  group: excalibase-deploy
+  cancel-in-progress: false
 jobs:
   deploy:
+    # A run started by hand deploys only from the branch above.
+    if: github.ref_name == '${branch}'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
 ${githubLogin(registry)}
+      - id: tag
+        run: echo "short=\${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - id: build
         uses: docker/build-push-action@v6
         with:
+          context: "${buildContext(target.build)}"${file}
           push: true
-          tags: ${repository}:\${{ github.sha }}
+          tags: |
+            ${repository}:${branchTag(branch)}
+            ${repository}:\${{ steps.tag.outputs.short }}
       - name: Deploy to Excalibase
         env:
           EXCALIBASE_TOKEN: \${{ secrets.EXCALIBASE_TOKEN }}

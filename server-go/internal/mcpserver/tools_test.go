@@ -680,21 +680,36 @@ func routeCases() []routeCase {
 		{
 			name: "get_dockerfile_template", tool: "get_dockerfile_template", args: map[string]any{"stack": "go"},
 			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
-				if !strings.Contains(out["content"].(string), "FROM golang:") {
-					t.Errorf("content = %v", out["content"])
+				if !strings.Contains(out["content"].(string), "FROM golang:") || out["healthCheckPath"] != "/healthz" {
+					t.Errorf("out = %v", out)
 				}
 			},
 		},
 		{
-			name: "get_ci_snippet", tool: "get_ci_snippet", args: map[string]any{"provider": "github-actions", "project_id": testProjectA, "app_id": "web"},
+			name: "get_dockerfile_template without a stack", tool: "get_dockerfile_template", args: map[string]any{},
+			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
+				detect, _ := out["detect"].(map[string]any)
+				if ask, _ := out["ask"].([]any); len(ask) == 0 || detect["static"] == nil {
+					t.Errorf("out = %v", out)
+				}
+			},
+		},
+		{
+			name: "get_ci_snippet", tool: "get_ci_snippet",
+			args: map[string]any{"provider": "github-actions", "project_id": testProjectA, "app_id": "web", "context": "apps/web", "dockerfile": "apps/web/Dockerfile", "branch": "trunk"},
 			setup: func(f *fakeRoutes) {
 				f.on(http.MethodGet, projectsA+"/apps/web/", 200, `{"id":"web","image":"ghcr.io/a/web:1","version":3}`)
 			},
 			expect: []string{"GET " + projectsA + "/apps/web/"},
 			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
 				content := out["content"].(string)
-				if !strings.Contains(content, "https://app.example.test/api/projects/proj-a/apps/web") || !strings.Contains(content, "tags: ghcr.io/a/web:") {
-					t.Errorf("content = %s", content)
+				for _, want := range []string{
+					"https://app.example.test/api/projects/proj-a/apps/web", "ghcr.io/a/web:trunk", `context: "apps/web"`,
+					`file: "apps/web/Dockerfile"`, `branches: ["trunk"]`, "workflow_dispatch:", "concurrency:",
+				} {
+					if !strings.Contains(content, want) {
+						t.Errorf("content lacks %q: %s", want, content)
+					}
 				}
 			},
 		},

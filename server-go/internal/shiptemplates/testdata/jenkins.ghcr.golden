@@ -1,5 +1,8 @@
 pipeline {
   agent any
+  options {
+    disableConcurrentBuilds()
+  }
   environment {
     IMAGE_REPOSITORY = 'ghcr.io/acme/web'
     EXCALIBASE_TOKEN = credentials('excalibase-token')
