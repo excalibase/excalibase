@@ -16,6 +16,8 @@ func authGuide(urls map[string]string) map[string]any {
 		"logout":  "POST " + auth + `/logout {"refreshToken":"<refreshToken>"} revokes that session.`,
 		"claims": "The access token is a JWT. userId is the end user's id and role is the role it runs as (\"user\" after sign-up, unless an admin changed it; " +
 			"\"anon\" for the publishable-key exchange). Send it as Authorization: Bearer <accessToken> to REST, GraphQL, realtime and functions.",
+		"userIdType": "userId is numeric (the user's database id, e.g. 42) but travels as a string claim (\"42\"), never a JSON number: " +
+			"test_auth_flow shows the real claims of a test sign-in. See permissions.ownerColumnType for comparing it with an owner column.",
 		"cors": "The browser calls these from the page's origin, so that origin must be on the project's CORS list (list_cors_origins, add_cors_origin); " +
 			"test_api_request with origin checks the sign-in call too.",
 		"settings": "Email verification and the site URL in verification and password-reset links are project sign-in settings; MCP does not change them. " +
@@ -33,8 +35,11 @@ func permissionsGuide() map[string]any {
 		"insertPreset": `insert {"check": {}, "set": {"owner_id": "X-Excalibase-User-Id"}, "columns": ["title"]}: set fills owner_id from the session; ` +
 			`leave it out of columns so the client cannot send it. insert always needs a check ({} allows any row).`,
 		"updateCheck": `update check: {"owner_id": {"_eq": "X-Excalibase-User-Id"}} keeps an update from moving a row to someone else.`,
-		"anon":        "anon has no userId: a permission that uses X-Excalibase-User-Id fails for anon, so give anon its own (or no) permission.",
-		"keys":        anonByDesign,
+		"ownerColumnType": "X-Excalibase-User-Id is always a string (\"42\"); the engine converts it to the owner column's type before comparing. " +
+			"A bigint or integer owner column compares as a number and a text or varchar one as text, so the same {\"_eq\": \"X-Excalibase-User-Id\"} works for both. " +
+			"A uuid column cannot hold \"42\": the request fails with invalid_session_variable. Make the owner column bigint (matching the user id) or text, and never uuid.",
+		"anon": "anon has no userId: a permission that uses X-Excalibase-User-Id fails for anon, so give anon its own (or no) permission.",
+		"keys": anonByDesign,
 	}
 }
 

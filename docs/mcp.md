@@ -57,8 +57,10 @@ apps and grant what the anon role grants.
 | `list_migrations` / `apply_migration` | `GET` / `POST /api/provision/{id}/migrations/` |
 | `list_permissions` / `set_permission` | `GET /api/provision/{id}/permissions/`, `PUT`/`DELETE .../permissions/tables/{t}/roles/{r}/{op}`; counting rows needs `allowAggregations` |
 | `list_functions` / `deploy_function` / `set_function_secret` | `GET`/`POST /api/projects/{id}/functions/`, `POST .../functions/secrets` |
-| `list_apps` / `deploy_app` / `get_deploy_status` | `GET /api/projects/{id}/apps/` (+ `.../apps/{app}/deploys?limit=1` to report `NOT_DEPLOYED`); `POST .../apps/{app}/deploy` with `{image, commitSha}` or empty to run the app's own image, pinned to its digest either way when the registry is public (the result's `unpinned` says when it is not); `GET .../apps/{app}/` + `.../deploys` or `.../deploys/{deployId}` |
-| `create_app` | `POST /api/projects/{id}/apps/` (Studio's plan limits apply), then `GET`/`PUT /api/projects/{id}/cors/` to allow the app's own origin (it stays listed after the app is deleted; remove it in Studio) |
+| `list_apps` / `deploy_app` / `get_deploy_status` | `GET /api/projects/{id}/apps/` (+ `.../apps/{app}/deploys?limit=1` to report `NOT_DEPLOYED`); `POST .../apps/{app}/deploy` (a private-registry image needs its credential saved in Studio: a refusal names the registry and where to add it; where the pipeline flag is off, the image is stored with `PATCH` and the app deployed bodyless) with `{image, commitSha}` or empty to run the app's own image, pinned to its digest either way when the registry is public (the result's `unpinned` says when it is not); `GET .../apps/{app}/` + `.../deploys` or `.../deploys/{deployId}`; `state` is "rolling out" during a rollout and "succeeded" only once the app URL answers an HTTP probe (3 s), else "running, URL not answering yet" with the reason |
+| `create_app` | `POST /api/projects/{id}/apps/` (Studio's plan limits apply), then `GET`/`PUT /api/projects/{id}/cors/` to allow the app's own origin; deleting the app removes that origin again |
+| `update_app` / `delete_app` | `GET` then `PATCH /api/projects/{id}/apps/{app}/` at the version read (`If-Match`; env is merged by name, secrets kept as stored); `PUT /api/projects/{id}/app-network/` for the private-network switch (admin); `DELETE .../apps/{app}/` removes only that app and its CORS origin; an app with a disk is refused |
+| `test_auth_flow` | `GET /api/projects/{id}/info/`, then one register or password sign-in against the project's own auth API with a test account the caller gives; reports status, outcome and the userId and role claims, never the password or a token; with `origin` the CORS preflight is checked first |
 | `get_logs` | database: `GET /api/provision/{id}/logs`; app: `.../apps/{a}/logs`; function: `.../functions/{f}/logs`. A log backend that does not answer gives "not available", never its address |
 | `test_api_request` | `GET /api/projects/{id}/info/`, then one request to the project's own data API (below) |
 | `get_dockerfile_template` | none: Dockerfiles for node, nextjs, vite, python, go, java |
@@ -78,9 +80,9 @@ apps and grant what the anon role grants.
 
 ### Probing it: `test_api_request`
 
-`test_api_request` sends one request the way a page does. It exchanges a publishable key (`esk_pub_...`, never a secret key) for the anon role's token, then calls REST or GraphQL with the page's query, `Prefer` and `Origin`. It returns the status, the CORS and count headers, and the body, cut at 8 KiB. Permissions, RLS and CORS apply as they do for the page.
+`test_api_request` sends one request the way a page does. With neither a key nor an access token it sends no credential at all, which runs as anon (ADR 0036). Otherwise it exchanges a publishable key (`esk_pub_...`, never a secret key) for the anon role's token, then calls REST or GraphQL with the page's query, `Prefer` and `Origin`. It returns the status, the CORS and count headers, and the body, cut at 8 KiB. Permissions, RLS and CORS apply as they do for the page.
 
-The target is always `{data plane}/{projectId}/...`, built from the server's setting and the project id. The caller picks only the table, the query and the headers, redirects are not followed, and a GraphQL body is re-encoded before it is sent.
+The target is always `{data plane}/{projectId}/...`, built from the server's setting and the project id. The caller picks only the table, the query and the headers, redirects are not followed, and a GraphQL body is re-encoded before it is sent. When the browser check says an origin is blocked but it is already on the allowlist, the answer says to wait about a minute: CORS changes take that long to reach the data plane.
 
 - A read-only connection sends only `GET`/`HEAD`, or GraphQL with no mutation.
 - Each user gets 10 probes at once, then one every 2 seconds: every probe leaves from the platform's own address.

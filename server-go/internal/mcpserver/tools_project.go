@@ -94,7 +94,7 @@ func getProjectInfo(ctx context.Context, c *call, in projectArg) (any, error) {
 		"cors": map[string]any{
 			"allowedOrigins": origins,
 			"note": "A browser page can call these APIs only from an origin in this list. create_app adds an app's own origin; " +
-				"add any other origin (a local dev server such as http://localhost:5173, a custom domain) with add_cors_origin.",
+				"add any other origin (a local dev server such as http://localhost:5173, a custom domain) with add_cors_origin. " + corsPropagation,
 		},
 	}
 	addGraphQLFields(ctx, c, projectID, out)

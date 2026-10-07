@@ -170,7 +170,7 @@ const (
 	projectsA  = "/api/projects/" + testProjectA
 )
 
-func routeCases() []routeCase {
+func baseRouteCases() []routeCase {
 	return []routeCase{
 		{
 			name: "list_projects", tool: "list_projects", args: map[string]any{},
@@ -810,7 +810,7 @@ func TestReadOnlyConnectionOffersNoWriteTool(t *testing.T) {
 	for _, name := range []string{
 		"apply_migration", "set_permission", "deploy_function", "set_function_secret", "deploy_app", "create_publishable_key",
 		"add_cors_origin", "remove_cors_origin", "set_realtime", "delete_function", "set_function_outbound_hosts",
-		"track_db_function", "set_db_function_permission",
+		"track_db_function", "set_db_function_permission", "update_app", "delete_app",
 	} {
 		if offered[name] {
 			t.Errorf("%s must not be offered on a read-only connection", name)

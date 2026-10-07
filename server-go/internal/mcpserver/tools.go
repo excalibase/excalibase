@@ -87,8 +87,10 @@ func catalogue() []entry {
 	tools = append(tools, dbFunctionTools()...)
 	tools = append(tools, functionTools()...)
 	tools = append(tools, appTools()...)
+	tools = append(tools, appManageTools()...)
 	tools = append(tools, shippingTools()...)
 	tools = append(tools, probeTools()...)
+	tools = append(tools, authFlowTools()...)
 	return tools
 }
 
