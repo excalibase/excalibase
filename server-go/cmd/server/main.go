@@ -905,6 +905,7 @@ func buildFunctionHandler(
 		fnHandler.SetK8sClient(k8sClient, cfg.DenoRuntimeImage, cfg.DenoRuntimeSecret)
 		fnHandler.SetRuntimeProvisioningURL(cfg.DenoProvisioningURL)
 		fnHandler.SetRuntimeEdge(edgePeer(cfg))
+		fnHandler.SetRuntimeCiliumFQDN(cfg.FunctionEgressByName())
 	}
 	fnHandler.SetVault(vc)
 	// Without this resolver a deploy stores the declared schema and never

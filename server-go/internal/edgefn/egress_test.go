@@ -2,6 +2,7 @@ package edgefn
 
 import (
 	"errors"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
@@ -154,5 +155,23 @@ func TestEgressHostWithoutAPortIsHTTPSOnBothLayers(t *testing.T) {
 	}
 	if merged := MergeEgressHosts([]string{"stored.example.com"}); !reflect.DeepEqual(merged, []string{"stored.example.com:443"}) {
 		t.Errorf("a stored entry without a port renders as %v, want it pinned to 443", merged)
+	}
+}
+
+// The pod-level fence admits the allowlist by name, so each entry is split into
+// what it names (a host, a "*." suffix or an address) and the port it opens.
+func TestEgressDestinations(t *testing.T) {
+	got := EgressDestinations([]string{"api.stripe.com", "*.github.com:8443", "1.1.1.1:9000", "[2606:4700::1111]:443"})
+	want := []EgressDestination{
+		{Host: "api.stripe.com", Port: 443},
+		{Host: "github.com", Wildcard: true, Port: 8443},
+		{Addr: netip.MustParseAddr("1.1.1.1"), Port: 9000},
+		{Addr: netip.MustParseAddr("2606:4700::1111"), Port: 443},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("EgressDestinations = %+v, want %+v", got, want)
+	}
+	if empty := EgressDestinations([]string{"[2606:4700::1111"}); len(empty) != 0 {
+		t.Fatalf("an unreadable entry must open nothing, got %+v", empty)
 	}
 }

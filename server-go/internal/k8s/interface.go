@@ -268,6 +268,10 @@ type DenoRuntimeSpec struct {
 	PlatformHosts []string
 	// Edge is the public edge's pods, where a call to a platform host lands.
 	Edge EdgePeer
+	// CiliumFQDN fences the runtime with a CiliumNetworkPolicy that admits the
+	// allowlist by host name, instead of a NetworkPolicy that opens every public
+	// address on the allowlisted ports (EXC-558). Needs Cilium.
+	CiliumFQDN bool
 	// ProvisioningURL is provisioning's in-cluster address, which ctx.storage
 	// and the export-metadata callback call with the project's runtime token.
 	ProvisioningURL string

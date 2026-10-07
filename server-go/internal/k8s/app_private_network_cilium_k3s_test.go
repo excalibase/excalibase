@@ -45,8 +45,10 @@ func netApp(id, projectID, name string) *apphost.App {
 
 // Run with: go test ./internal/k8s/ -tags=live -run TestK3sCiliumAppPrivateNetwork -v -count=1 -timeout 40m
 func TestK3sCiliumAppPrivateNetwork(t *testing.T) {
-	lab := &egressLab{ctx: context.Background()}
-	lab.startCiliumClusterWith(t, testcontainers.WithFiles(gvisorFiles(t, gvisorPlatformSystrap)...))
+	// On the production datapath (EXC-558): a service name is translated to the app pod before policy decides.
+	lab := &egressLab{ctx: context.Background(), ciliumValues: productionCiliumValues}
+	lab.startCiliumClusterWith(t, testcontainers.WithCmdArgs("--disable-kube-proxy"),
+		testcontainers.WithFiles(gvisorFiles(t, gvisorPlatformSystrap)...))
 	lab.createGVisorRuntimeClass(t)
 	t.Setenv("POD_NAMESPACE", netPlatform)
 	for _, ns := range []string{netEdge, netPlatform} {

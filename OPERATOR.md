@@ -769,18 +769,22 @@ What a `PUT` does, per mode:
 
 | Mode | Rendering | Rollout |
 |---|---|---|
-| k8s (per-project `deno-runtime` pod) | `ALLOWED_HOSTS` env on the Deployment + `excalibase.io/egress-hash` pod annotation; `deno-runtime-egress` NetworkPolicy re-rendered in the same call (public IPv4 on the allowlisted TCP ports, private ranges excepted; nothing when the list is empty) | Deployment rolls; the runtime replayer refills the pod |
+| k8s (per-project `deno-runtime` pod) | `ALLOWED_HOSTS` env on the Deployment + `excalibase.io/egress-hash` pod annotation; the `deno-runtime-egress` fence re-rendered in the same call: with `FUNCTION_EGRESS_POLICY=cilium` a CiliumNetworkPolicy admitting the allowlisted names (`toFQDNs`) on their ports, otherwise a NetworkPolicy opening public IPv4 on the allowlisted TCP ports; private ranges denied either way, nothing when the list is empty | Deployment rolls; the runtime replayer refills the pod |
 | docker (one shared runtime) | every deploy payload carries `allowedHosts`; the worker gets exactly that list | functions redeployed immediately |
 
 Verify on k8s:
 
 ```bash
 kubectl -n <project-ns> get deploy deno-runtime -o jsonpath='{.spec.template.spec.containers[0].env}' | jq
-kubectl -n <project-ns> get networkpolicy deno-runtime-egress -o yaml | grep -A6 ipBlock
+kubectl -n <project-ns> get ciliumnetworkpolicy deno-runtime-egress -o yaml | grep -B2 -A4 toFQDNs   # cilium
+kubectl -n <project-ns> get networkpolicy deno-runtime-egress -o yaml | grep -A6 ipBlock               # networkpolicy
 ```
 
-The NetworkPolicy is only a backstop (it cannot match hostnames) and needs
-an enforcing CNI (Calico / Cilium). On the shared docker runtime the
+One runtime serves all of a project's functions, so the allowlist is per
+project. `FUNCTION_EGRESS_POLICY=cilium` (set by `rke2/install-platform.sh`)
+needs Cilium 1.19+ with the L7 proxy on; the default `networkpolicy` is only
+a backstop (it cannot match hostnames) and needs an enforcing CNI (Calico /
+Cilium). On the shared docker runtime the
 container's own `ALLOWED_HOSTS` env is an operator baseline unioned into
 every worker.
 

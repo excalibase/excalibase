@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/edgefn"
@@ -49,6 +50,12 @@ func (h *FunctionHandler) SetRuntimeEdge(edge k8s.EdgePeer) {
 	h.runtimeEdge = edge
 }
 
+// SetRuntimeCiliumFQDN fences each project's runtime with a CiliumNetworkPolicy
+// that admits its allowlist by host name (EXC-558).
+func (h *FunctionHandler) SetRuntimeCiliumFQDN(on bool) {
+	h.runtimeCiliumFQDN = on
+}
+
 // platformHosts is the API host the worker may call, only once the edge
 // it is reached through is named; without one the call would hang at the policy.
 func (h *FunctionHandler) platformHosts() []string {
@@ -76,10 +83,30 @@ func platformEgressHosts(publicBaseURL string) []string {
 	return hosts
 }
 
-// workerEgressHosts is the worker's net permission: the effective list plus the platform's hosts.
+// workerEgressHosts is the worker's net permission: the effective list, the
+// platform's hosts and the database EXCALIBASE_DB_URL names.
 func (h *FunctionHandler) workerEgressHosts(projectID string) []string {
-	return edgefn.MergeEgressHosts(h.effectiveEgressHosts(projectID), h.platformHosts())
+	return edgefn.MergeEgressHosts(h.effectiveEgressHosts(projectID), h.platformHosts(), h.databaseEgressHosts(projectID))
 }
+
+// databaseEgressHosts lets the worker open the URL it is given (EXC-558). The
+// address is in-cluster, so it never enters the project's allowlist, which
+// refuses those; the runtime's policy admits only the project's database pods.
+func (h *FunctionHandler) databaseEgressHosts(projectID string) []string {
+	target, ok := h.injectedDBTarget(projectID)
+	if !ok {
+		return nil
+	}
+	if !runtimeHostShape.MatchString(target.host) {
+		log.Printf("WARN: functions of %s cannot be granted their database host %q: not a host name the runtime accepts", projectID, target.host)
+		return nil
+	}
+	return []string{net.JoinHostPort(target.host, target.port)}
+}
+
+// runtimeHostShape is a host the runtime takes as a net permission; it refuses
+// a whole deploy over any other.
+var runtimeHostShape = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 
 // GetEgress serves GET /api/projects/{projectId}/functions/egress.
 func (h *FunctionHandler) GetEgress(w http.ResponseWriter, r *http.Request) {
@@ -174,6 +201,7 @@ func (h *FunctionHandler) denoRuntimeSpecFor(projectID string) k8s.DenoRuntimeSp
 		AllowedHosts:    h.effectiveEgressHosts(projectID),
 		PlatformHosts:   h.platformHosts(),
 		Edge:            h.runtimeEdge,
+		CiliumFQDN:      h.runtimeCiliumFQDN,
 		ProvisioningURL: h.runtimeProvisioningURL,
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -64,10 +63,12 @@ type FunctionHandler struct {
 	// runtimeProvisioningURL is where per-project runtimes reach provisioning.
 	runtimeProvisioningURL string
 	// runtimeEdge is the public edge's pods, through which functions reach the platform's own hosts.
-	runtimeEdge  k8s.EdgePeer
-	runtimeURLFn func(namespace string) string // tests override; nil → cluster DNS
-	clientMu     sync.Mutex
-	clients      map[string]*edgefn.RuntimeClient // keyed by projectId
+	runtimeEdge k8s.EdgePeer
+	// runtimeCiliumFQDN fences each runtime by host name (EXC-558).
+	runtimeCiliumFQDN bool
+	runtimeURLFn      func(namespace string) string // tests override; nil → cluster DNS
+	clientMu          sync.Mutex
+	clients           map[string]*edgefn.RuntimeClient // keyed by projectId
 
 	// Rate limiting for the public invoke route. Token bucket per project.
 	limiterMu     sync.Mutex
@@ -532,35 +533,34 @@ func (h *FunctionHandler) builtinEnv(ctx context.Context, projectID string) map[
 		env["EXCALIBASE_ORG_SLUG"] = slug
 	}
 
-	// DB_URL — build from vault-stored app credentials if available.
-	if h.secrets != nil {
-		maps.Copy(env, h.buildDBEnv(projectID))
+	if target, ok := h.injectedDBTarget(projectID); ok {
+		env["EXCALIBASE_DB_URL"] = target.url(target.host)
 	}
 	return env
 }
 
-// buildDBEnv returns EXCALIBASE_DB_URL for a project with owner credentials in
-// vault. Missing credentials yield no entries.
-func (h *FunctionHandler) buildDBEnv(projectID string) map[string]string {
-	if h.vault == nil {
-		return nil
+// injectedDBTarget is the owner login EXCALIBASE_DB_URL is built from, when a
+// function gets one: secrets are wired and vault holds a complete login.
+func (h *FunctionHandler) injectedDBTarget(projectID string) (dbTarget, bool) {
+	if h.secrets == nil || h.vault == nil {
+		return dbTarget{}, false
 	}
 	path := fmt.Sprintf("projects/%s/credentials/admin", projectID)
 	creds, err := h.vault.Get(path)
 	if err != nil || creds == nil {
-		return nil
+		return dbTarget{}, false
 	}
 	target := dbTarget{
 		host: creds["host"], port: creds["port"],
 		user: creds["username"], pass: creds["password"], db: creds["database"],
 	}
 	if target.host == "" || target.user == "" || target.db == "" {
-		return nil
+		return dbTarget{}, false
 	}
 	if target.port == "" {
 		target.port = "5432"
 	}
-	return map[string]string{"EXCALIBASE_DB_URL": target.url(target.host)}
+	return target, true
 }
 
 // dbTarget is the vault-stored app credential set a deploy DSN is built from.

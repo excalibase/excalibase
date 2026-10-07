@@ -81,6 +81,7 @@ const (
 	egressClientExtraDeny = "client-extra-deny"
 	egressExtraDeniedCIDR = "1.1.1.1/32"
 	egressPublicAddress   = "1.1.1.1:443"
+	egressNotADatabase    = "not-a-database"
 )
 
 type egressCheck struct {
@@ -109,6 +110,7 @@ type egressLab struct {
 	targetPodIP string
 	targetSvcIP string
 	dbPodIP     string
+	notDBPodIP  string
 	kubeAPIAddr string
 	// ciliumValues are merged over the Cilium chart values every lab installs.
 	ciliumValues map[string]interface{}
@@ -124,9 +126,11 @@ func newEgressLab(t *testing.T, start func(*egressLab, *testing.T), extraClients
 		}
 	}
 	lab.startTenantB(t)
-	// The own-project DB needs no labels: the DB rule opens the namespace by an empty selector.
-	runPod(lab.ctx, t, lab.cs, egressNamespaceA, "db", nil, []string{"/agnhost", "netexec", "--http-port=5432"})
+	// The own-project DB carries CNPG's instance label; a pod without it on 5432 stays closed (EXC-558).
+	runPod(lab.ctx, t, lab.cs, egressNamespaceA, "db", databasePodLabels(), []string{"/agnhost", "netexec", "--http-port=5432"})
 	lab.dbPodIP = podIP(lab.ctx, t, lab.cs, egressNamespaceA, "db")
+	runPod(lab.ctx, t, lab.cs, egressNamespaceA, egressNotADatabase, nil, []string{"/agnhost", "netexec", "--http-port=5432"})
+	lab.notDBPodIP = podIP(lab.ctx, t, lab.cs, egressNamespaceA, egressNotADatabase)
 	kubeAPISvc, err := lab.cs.CoreV1().Services("default").Get(lab.ctx, "kubernetes", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get kubernetes service: %v", err)
@@ -229,6 +233,7 @@ func (lab *egressLab) checks() []egressCheck {
 		{name: "own DB is refused when not referenced", pod: egressClientNoDB, addr: lab.dbPodIP + ":5432", control: true},
 		{name: "cloud metadata address is refused", pod: egressClientWithDB, addr: "169.254.169.254:80"},
 		{name: "own DB is reachable when referenced", pod: egressClientWithDB, addr: lab.dbPodIP + ":5432", reachable: true},
+		{name: "a project pod that is not the DB is refused on 5432", pod: egressClientWithDB, addr: lab.notDBPodIP + ":5432", control: true},
 		{name: "a public address is reachable", pod: egressClientWithDB, addr: egressPublicAddress, reachable: true, needsInternet: true},
 		{name: "an extra-deny address is refused", pod: egressClientExtraDeny, addr: egressPublicAddress, needsInternet: true},
 		{name: "outbound SMTP port 25 is refused", pod: egressClientWithDB, addr: "smtp.gmail.com:25", controlIfReachable: true},
@@ -337,7 +342,7 @@ func networkPolicyEgressFence(namespace string, app *apphost.App, extraDenyCIDRs
 	}}
 	if referencesDatabase(app) {
 		rules = append(rules, networkingv1.NetworkPolicyEgressRule{
-			To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
+			To:    []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: databasePodLabels()}}},
 			Ports: []networkingv1.NetworkPolicyPort{tcpPort(postgresPortNumber)},
 		})
 	}

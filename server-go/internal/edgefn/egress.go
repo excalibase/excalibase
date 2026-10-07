@@ -215,3 +215,35 @@ func EgressHostPorts(hosts []string) []int {
 	sort.Ints(out)
 	return out
 }
+
+// EgressDestination is one allowlist entry as a network policy reads it: a
+// host name (Wildcard: every name under Host), or an address, and its port.
+type EgressDestination struct {
+	Host     string
+	Wildcard bool
+	Addr     netip.Addr
+	Port     int
+}
+
+// EgressDestinations splits already-parsed entries for a policy that admits
+// them by name (EXC-558); an entry without a port means HTTPS (443).
+func EgressDestinations(hosts []string) []EgressDestination {
+	out := make([]EgressDestination, 0, len(hosts))
+	for _, entry := range hosts {
+		host, port, err := splitEgressHostPort(entry)
+		if err != nil {
+			continue
+		}
+		destination := EgressDestination{Port: 443}
+		if port != "" {
+			destination.Port, _ = strconv.Atoi(port)
+		}
+		if addr, isLiteral := parseEgressLiteral(host); isLiteral {
+			destination.Addr = addr
+		} else {
+			destination.Host, destination.Wildcard = strings.CutPrefix(host, "*.")
+		}
+		out = append(out, destination)
+	}
+	return out
+}
