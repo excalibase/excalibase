@@ -38,6 +38,11 @@ export interface RuntimeOptions {
    * Sets EXCALIBASE_MUTATION_RETRY_BACKOFF_MS; runtime default is 50.
    */
   mutationRetryBackoffMs?: number;
+  /**
+   * EXC-569: how long a stopped runtime keeps serving. Tests default to 0 so
+   * stop() stays fast.
+   */
+  shutdownDrainMs?: number;
 }
 
 export interface RuntimeHandle {
@@ -51,6 +56,9 @@ export interface RuntimeHandle {
     body: string;
   }>;
   raw: (path: string, init?: RequestInit) => Promise<Response>;
+  signal: (sig: Deno.Signal) => void;
+  /** Resolves true once the process has exited, false after timeoutMs. */
+  exited: (timeoutMs: number) => Promise<boolean>;
   stop: () => Promise<void>;
 }
 
@@ -72,6 +80,7 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
   const env: Record<string, string> = {
     RUNTIME_SECRET: SECRET,
     PORT: String(port),
+    EXCALIBASE_SHUTDOWN_DRAIN_MS: String(opts.shutdownDrainMs ?? 0),
   };
   if (opts.v2Enabled) env.EXCALIBASE_FUNCTIONS_V2 = "1";
   if (opts.allowedHosts) env.ALLOWED_HOSTS = opts.allowedHosts;
@@ -146,8 +155,8 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
       }
     } catch (_) { /* ignore */ }
   };
-  drain(child.stdout);
-  drain(child.stderr);
+  void drain(child.stdout);
+  void drain(child.stderr);
 
   const headers = (extra?: Record<string, string>): Record<string, string> => ({
     "Content-Type": "application/json",
@@ -206,6 +215,12 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
       };
     },
     raw: (path, init) => fetch(`${baseUrl}${path}`, init),
+    signal: (sig) => child.kill(sig),
+    exited: async (timeoutMs) => {
+      let done = false;
+      await Promise.race([child.status.then(() => { done = true; }), delay(timeoutMs)]);
+      return done;
+    },
     stop: async () => {
       try { child.kill("SIGTERM"); } catch (_) { /* ignore */ }
       // Wait up to 5s for graceful shutdown; if still alive, SIGKILL.

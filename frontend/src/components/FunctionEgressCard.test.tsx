@@ -13,12 +13,14 @@ const egress = (allowedHosts: string[], defaultHosts: string[] = []) => ({
   data: { allowedHosts, defaultHosts, effectiveHosts: [...defaultHosts, ...allowedHosts] },
 });
 
-function renderCard(answer: ReturnType<typeof egress> | Error) {
+function renderCard(
+  answer: ReturnType<typeof egress> | Error,
+  client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }),
+) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url !== '/projects/p-1/functions/egress') return Promise.reject(new Error(`unexpected GET ${url}`));
     return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer as never);
   });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <FunctionEgressCard projectId="p-1" />
@@ -63,6 +65,17 @@ describe('FunctionEgressCard', () => {
     );
     expect(await within(screen.getByTestId('egress-hosts-list')).findByText('example.com:443')).toBeInTheDocument();
     expect(screen.getByLabelText('Host')).toHaveValue('');
+  });
+
+  // EXC-569: a changed list restarts the runtime, so its badge is asked again.
+  test('saving refreshes the runtime status', async () => {
+    vi.mocked(api.put).mockResolvedValue(egress(['example.com:443']) as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    renderCard(egress([]), client);
+    await userEvent.type(await screen.findByLabelText('Host'), 'example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Add host' }));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['edge-functions-runtime', 'p-1'] }));
   });
 
   test('an empty host is not sent', async () => {

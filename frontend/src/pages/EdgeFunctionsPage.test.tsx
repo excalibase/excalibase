@@ -69,6 +69,28 @@ describe('EdgeFunctionsPage', () => {
     stubReads();
   });
 
+  describe('runtime badge', () => {
+    function stubRuntime(status: { status: string; healthy: boolean }) {
+      const reads = vi.mocked(api.get).getMockImplementation()!;
+      vi.mocked(api.get).mockImplementation((url: string, ...rest: unknown[]) =>
+        url === `${BASE}/runtime/status`
+          ? Promise.resolve({ data: status } as never)
+          : (reads as (u: string, ...r: unknown[]) => Promise<never>)(url, ...rest));
+    }
+
+    test.each([
+      [{ status: 'healthy', healthy: true }, 'Runtime healthy', 'text-green-400'],
+      [{ status: 'restarting', healthy: false }, 'Runtime restarting', 'text-yellow-400'],
+      [{ status: 'unavailable', healthy: false }, 'Runtime unavailable', 'text-red-400'],
+    ])('shows %o as "%s"', async (status, label, color) => {
+      stubRuntime(status);
+      renderPage();
+      const badge = await screen.findByTestId('runtime-status');
+      await waitFor(() => expect(badge).toHaveTextContent(label));
+      expect(badge.querySelector('svg')).toHaveClass(color);
+    });
+  });
+
   describe('deploy form', () => {
     test('Deploy stays disabled until both id and name are filled', async () => {
       renderPage();

@@ -69,6 +69,7 @@ type FunctionHandler struct {
 	runtimeURLFn      func(namespace string) string // tests override; nil → cluster DNS
 	clientMu          sync.Mutex
 	clients           map[string]*edgefn.RuntimeClient // keyed by projectId
+	runtimeWait       runtimeWait
 
 	// Rate limiting for the public invoke route. Token bucket per project.
 	limiterMu     sync.Mutex
@@ -200,6 +201,7 @@ func NewFunctionHandler(
 		// switch lives in the configuration; main passes it with
 		// SetAutoMigrate.
 		autoMigrate: true,
+		runtimeWait: defaultRuntimeWait(),
 	}
 	// Backwards-compat: if a single shared client is supplied, use it for all
 	// projects until k8sClient is set.
@@ -302,11 +304,11 @@ func (h *FunctionHandler) runtimeClientFor(ctx context.Context, projectID string
 	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID)); err != nil {
 		return nil, fmt.Errorf("ensure deno runtime: %w", err)
 	}
-	// First-deploy race: EnsureDenoRuntime creates the Deployment but the pod
-	// may not be ready yet. If we proceed immediately to Deploy, the HTTP call
-	// fails with connection refused / 502. Wait for the pod to become ready.
-	if err := h.waitForDenoReady(ctx, namespace); err != nil {
-		return nil, fmt.Errorf("deno runtime did not become ready: %w", err)
+	// EnsureDenoRuntime may have just created the runtime or rolled its pod
+	// (EXC-569). Until the rollout finishes, the pod answering can be the old
+	// one, and whatever is deployed to it goes with it.
+	if err := h.waitForRollout(ctx, namespace, h.runtimeWait.coldStart); err != nil {
+		return nil, err
 	}
 
 	h.clientMu.Lock()
@@ -325,51 +327,9 @@ func (h *FunctionHandler) newProjectClient(projectID, namespace string) *edgefn.
 	} else {
 		url = fmt.Sprintf("http://deno-runtime.%s.svc.cluster.local:8000", namespace)
 	}
-	return edgefn.NewRuntimeClient(url, edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID))
-}
-
-// waitForDenoReady polls the Deno runtime pod's readiness until it's up or
-// the deadline is reached. Uses the k8s client's IsPodReady which already
-// knows about pod phase + readiness conditions. 60s total budget is enough
-// for image pull (first time) + container start.
-//
-// Skipped entirely if runtimeURLFn is set (integration tests point at
-// pre-started subprocesses) or if k8sClient is nil (legacy shared mode).
-func (h *FunctionHandler) waitForDenoReady(ctx context.Context, namespace string) error {
-	if h.runtimeURLFn != nil || h.k8sClient == nil {
-		return nil
-	}
-	// Deno pod is deployed with label app=deno-runtime. We poll GetPods and check
-	// any pod whose name starts with "deno-runtime". 120s covers first-time image
-	// pull + container start in fresh minikube/kind clusters.
-	deadline := time.Now().Add(120 * time.Second)
-	for time.Now().Before(deadline) {
-		if h.isDenoPodReady(ctx, namespace) {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
-	return fmt.Errorf("deno runtime pod in namespace %s did not become ready within 60s", namespace)
-}
-
-// isDenoPodReady returns true if at least one deno-runtime pod in namespace is ready.
-func (h *FunctionHandler) isDenoPodReady(ctx context.Context, namespace string) bool {
-	pods, err := h.k8sClient.GetPods(ctx, namespace, "app=deno-runtime")
-	if err != nil {
-		return false
-	}
-	for _, p := range pods {
-		if strings.HasPrefix(p.Name, "deno-runtime") {
-			if ready, perr := h.k8sClient.IsPodReady(ctx, namespace, p.Name); perr == nil && ready {
-				return true
-			}
-		}
-	}
-	return false
+	client := edgefn.NewRuntimeClient(url, edgefn.DeriveRuntimeSecret(h.runtimeSecret, projectID))
+	client.SetRetryBudget(h.runtimeWait.retry)
+	return client
 }
 
 // ProjectDeleting is how the provisioning service tells this replica a
@@ -668,7 +628,7 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		_ = rollbackCronSync(cronTx)
 		rollback()
-		httpError(w, "runtime unavailable: "+safeError(err), http.StatusServiceUnavailable)
+		writeRuntimeUnavailable(w, "deploy "+fn.RuntimeID(), err)
 		return
 	}
 	deployErr := client.Deploy(r.Context(), deployRequestFor(&fn, code, env, h.workerEgressHosts(projectID)))
@@ -678,7 +638,9 @@ func (h *FunctionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// function) around.
 		_ = rollbackCronSync(cronTx)
 		rollback()
-		httpError(w, "failed to deploy: "+safeError(deployErr), http.StatusBadGateway)
+		if !writeRuntimeFailure(w, "deploy "+fn.RuntimeID(), deployErr) {
+			httpError(w, "failed to deploy: "+safeError(deployErr), http.StatusBadGateway)
+		}
 		return
 	}
 	// Phase 8.5: deploy succeeded — commit the cron sync so the cron
@@ -1324,18 +1286,16 @@ func (h *FunctionHandler) forwardToRuntime(w http.ResponseWriter, r *http.Reques
 	}
 
 	client, err := h.runtimeClientFor(r.Context(), fn.ProjectID)
-	if errors.Is(err, ErrProjectDeleting) {
-		httpError(w, "project is being deleted", http.StatusConflict)
+	if err != nil {
+		writeRuntimeUnavailable(w, "invoke "+fn.RuntimeID(), err)
 		return
 	}
+	resp, err := h.invokeDeployed(r.Context(), client, fn, invokeReq)
 	if err != nil {
-		httpError(w, "runtime unavailable: "+safeError(err), http.StatusServiceUnavailable)
-		return
-	}
-	resp, err := client.Invoke(r.Context(), fn.RuntimeID(), invokeReq)
-	if err != nil {
-		log.Printf("ERROR: invoke %s failed: %v", fn.RuntimeID(), err)
-		httpError(w, "internal error", http.StatusInternalServerError)
+		if !writeRuntimeFailure(w, "invoke "+fn.RuntimeID(), err) {
+			log.Printf("ERROR: invoke %s failed: %v", fn.RuntimeID(), err)
+			httpError(w, "internal error", http.StatusInternalServerError)
+		}
 		return
 	}
 	writeRuntimeResponse(w, resp)
@@ -1453,9 +1413,14 @@ func (h *FunctionHandler) redeployAll(r *http.Request, projectID string) {
 	}
 }
 
-// RuntimeStatus reports whether the project's runtime is reachable.
+// RuntimeStatus reports whether the project's runtime is reachable, and
+// "restarting" while its pod is being replaced (EXC-569).
 func (h *FunctionHandler) RuntimeStatus(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectId")
+	if h.runtimeRestarting(r.Context(), projectID) {
+		writeJSON(w, map[string]interface{}{"status": runtimeStatusRestart, "healthy": false})
+		return
+	}
 	client, err := h.runtimeClientFor(r.Context(), projectID)
 	if err != nil {
 		writeJSON(w, map[string]interface{}{"status": "unavailable", "healthy": false})

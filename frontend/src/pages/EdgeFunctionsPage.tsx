@@ -15,7 +15,7 @@ import {
 import { SidePanel } from '../components/ui/SidePanel';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { FunctionEgressCard } from '../components/FunctionEgressCard';
-import type { EdgeFunction, EdgeFile } from '../types/edgefn';
+import type { EdgeFunction, EdgeFile, RuntimeStatus } from '../types/edgefn';
 import { serverErrorMessage } from '../utils/serverError';
 
 const DEFAULT_INDEX_TS = `export default async (req: Request): Promise<Response> => {
@@ -68,6 +68,12 @@ function functionAnswer(err: unknown): string | null {
   if (response?.headers?.['x-excalibase-function-response'] !== '1') return null;
   const body = typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2);
   return `HTTP ${response.status}\n${body ?? ''}`;
+}
+
+function runtimeBadgeColor(runtime: RuntimeStatus | undefined): string {
+  if (runtime?.healthy) return 'text-green-400';
+  if (runtime?.status === 'restarting') return 'text-yellow-400';
+  return 'text-red-400';
 }
 
 export function EdgeFunctionsPage() {
@@ -238,8 +244,8 @@ export function EdgeFunctionsPage() {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <h3 className="text-lg font-semibold text-text-primary">Edge Functions</h3>
-          <div className="flex items-center gap-1.5 text-xs">
-            <Circle className={`w-2 h-2 fill-current ${runtime?.healthy ? 'text-green-400' : 'text-red-400'}`} />
+          <div className="flex items-center gap-1.5 text-xs" data-testid="runtime-status">
+            <Circle className={`w-2 h-2 fill-current ${runtimeBadgeColor(runtime)}`} />
             <span className="text-text-tertiary">Runtime {runtime?.status ?? 'unknown'}</span>
           </div>
         </div>

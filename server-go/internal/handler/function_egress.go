@@ -223,7 +223,12 @@ func (h *FunctionHandler) renderEgress(ctx context.Context, projectID string) er
 	if err != nil || !exists {
 		return err
 	}
-	return h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID))
+	if err := h.k8sClient.EnsureDenoRuntime(ctx, namespace, h.denoRuntimeSpecFor(projectID)); err != nil {
+		return err
+	}
+	// A changed allowlist replaces the pod: the redeploy that follows must
+	// reach the new one, not the one about to go (EXC-569).
+	return h.waitForRollout(ctx, namespace, h.runtimeWait.rollout)
 }
 
 // unreachableImports names the imports a per-project runtime could not fetch:
