@@ -47,6 +47,43 @@ anything with a path (`https://app.example.com/`), query, fragment or
 userinfo, a subdomain wildcard (`https://*.example.com`), `null`, `"*"`
 without `allowWildcard` or next to other entries, and more than 32 entries.
 
+## Native apps (Capacitor, Ionic, Tauri, Electron)
+
+A native app's WebView preflights like any browser, so its origin goes on the
+list like a website's:
+
+| Runtime | Origin to add |
+|---|---|
+| Capacitor, iOS | `capacitor://localhost` |
+| Capacitor, Android | `https://localhost` (or `http://localhost` with `androidScheme: "http"`) |
+| Ionic legacy WebView | `ionic://localhost` |
+| Tauri v2, macOS/Linux | `tauri://localhost` |
+| Tauri v2, Windows | `http://tauri.localhost` (`https://` with `useHttpsScheme`) |
+| Electron, custom protocol | the origin you register, e.g. `app://bundle` |
+| Electron `loadFile` / any `file://` page | sends `null`, which cannot be listed: every sandboxed iframe on the web sends it too. Register a custom protocol instead. |
+
+From an agent: `add_cors_origin` with the origin above.
+
+## The rule every service applies
+
+GraphQL, REST, auth and functions answer the same way (EXC-563):
+
+| Request | Origin listed | Origin not listed |
+|---|---|---|
+| Preflight | grant headers | 403, no CORS headers — the browser blocks the call |
+| Actual request | served, `Access-Control-Allow-Origin` echoed | served, no `Access-Control-Allow-Origin` — a page cannot read it |
+| WebSocket upgrade from a web page (`http`/`https`) | 101 | 403 |
+| WebSocket upgrade with no `Origin` or a native scheme / `null` | 101 | 101 |
+
+These APIs take a bearer token, never a cookie, so a foreign page has no
+ambient credential to ride and CORS is the browser's protection. Refusing an
+actual request for its `Origin` alone would add nothing (any non-browser
+client can omit or forge the header) and would break native apps and
+server-side proxies. Browsers apply no CORS to WebSockets, so the engine
+checks web origins at the upgrade itself. Studio's own `/api` is different: it
+authenticates with a session cookie, so it refuses a cookie-authenticated
+write from an untrusted origin on the server.
+
 ## How it reaches the data plane
 
 ```
@@ -57,7 +94,8 @@ GET /api/projects/{id}/info ◄───────────┘  corsAllowed
         │ on demand, cached 30 s per project (service PAT)
 excalibase-graphql ── request /{id}/graphql with Origin: https://app.example.com
                       └─ origin on the list → Access-Control-Allow-Origin echoed
-                         not on the list / list empty → no CORS headers (403 on preflight)
+                         not on the list / list empty → no CORS headers (403 on preflight,
+                                                         actual request served)
 ```
 
 * The engine resolves the project from the URL path exactly as it does for
