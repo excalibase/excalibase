@@ -25,13 +25,19 @@ func (h *FunctionHandler) SetCorsStore(s storage.ProjectCorsStore) {
 }
 
 // answerCORS sets the CORS headers a project's allowlist grants the request's
-// origin and answers a preflight itself, reporting whether it did. Without a
-// store, an unreadable one or an unlisted origin the browser gets no grant;
-// the request itself is still served (CORS binds browsers, not callers).
+// origin and answers a preflight itself, reporting whether it did. The rule is
+// the engine's and auth's (EXC-563): without a store, an unreadable one or an
+// unlisted origin the browser gets no grant and a preflight is a 403; an actual
+// request is still served, because functions take a bearer token, never a
+// cookie, and the browser withholds an ungranted response from the page.
 func (h *FunctionHandler) answerCORS(w http.ResponseWriter, r *http.Request, projectID string) bool {
-	if allowed := h.corsGrant(r, projectID); allowed != "" {
-		w.Header().Set("Access-Control-Allow-Origin", allowed)
+	origin := r.Header.Get("Origin")
+	if origin != "" {
 		w.Header().Add("Vary", "Origin")
+	}
+	allowed := h.corsGrant(r, projectID)
+	if allowed != "" {
+		w.Header().Set("Access-Control-Allow-Origin", allowed)
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Methods", functionCORSMethods)
 			w.Header().Set("Access-Control-Allow-Headers", functionCORSHeaders)
@@ -40,6 +46,10 @@ func (h *FunctionHandler) answerCORS(w http.ResponseWriter, r *http.Request, pro
 	}
 	if r.Method != http.MethodOptions {
 		return false
+	}
+	if origin != "" && allowed == "" {
+		w.WriteHeader(http.StatusForbidden)
+		return true
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return true

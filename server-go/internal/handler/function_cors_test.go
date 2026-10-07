@@ -115,3 +115,54 @@ func TestPublicInvoke_CORSFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// EXC-563: one rule with the engine and auth. A preflight from an unlisted
+// origin is refused (403, no CORS headers); an actual request is served for any
+// Origin and granted only when listed. Functions take a bearer token, never a
+// cookie, so Origin alone is no reason to refuse a call, and native apps
+// (Capacitor, Tauri, Electron file pages sending null) or server-side proxies
+// must reach the function.
+func TestPublicInvoke_CORSRefusesUnlistedPreflightWith403(t *testing.T) {
+	r := corsTestRouter(t, &fakeCorsStore{origins: map[string][]string{"proj_p1": {corsStoreOrigin}}})
+
+	for _, origin := range []string{corsOtherOrigin, "capacitor://localhost", "null"} {
+		pre := corsCall(r, http.MethodOptions, origin)
+		if pre.Code != http.StatusForbidden {
+			t.Errorf("%s: preflight status %d, want 403", origin, pre.Code)
+		}
+		for _, header := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers"} {
+			if got := pre.Header().Get(header); got != "" {
+				t.Errorf("%s: refused preflight carries %s=%q", origin, header, got)
+			}
+		}
+		if got := pre.Header().Get("Vary"); got != "Origin" {
+			t.Errorf("%s: Vary=%q, want Origin", origin, got)
+		}
+	}
+}
+
+func TestPublicInvoke_CORSServesUnlistedOriginsWithoutGrant(t *testing.T) {
+	r := corsTestRouter(t, &fakeCorsStore{origins: map[string][]string{"proj_p1": {corsStoreOrigin}}})
+
+	for _, origin := range []string{corsOtherOrigin, "capacitor://localhost", "tauri://localhost", "null", "http://localhost:5173"} {
+		w := corsCall(r, http.MethodPost, origin)
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: status %d, want the function served", origin, w.Code)
+		}
+		if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Errorf("%s: ACAO=%q, want none", origin, got)
+		}
+		if got := w.Header().Get("Vary"); got != "Origin" {
+			t.Errorf("%s: Vary=%q, want Origin", origin, got)
+		}
+	}
+}
+
+func TestPublicInvoke_CORSGrantsAListedNativeAppOrigin(t *testing.T) {
+	r := corsTestRouter(t, &fakeCorsStore{origins: map[string][]string{"proj_p1": {"capacitor://localhost"}}})
+
+	pre := corsCall(r, http.MethodOptions, "capacitor://localhost")
+	if pre.Code != http.StatusNoContent || pre.Header().Get("Access-Control-Allow-Origin") != "capacitor://localhost" {
+		t.Fatalf("listed native origin: %d ACAO=%q", pre.Code, pre.Header().Get("Access-Control-Allow-Origin"))
+	}
+}

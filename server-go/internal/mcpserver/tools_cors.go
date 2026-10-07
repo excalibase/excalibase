@@ -27,6 +27,9 @@ func corsTools() []entry {
 	return []entry{
 		tool("list_cors_origins", "The project's CORS allowlist: the browser origins that may call its APIs.", readTool, listCorsOrigins),
 		tool("add_cors_origin", "Allow one browser origin to call the project's APIs, e.g. a local dev server (http://localhost:5173) or a custom domain. "+
+			"Native apps run in a WebView and need their origin too: capacitor://localhost (Capacitor iOS), https://localhost (Capacitor Android), "+
+			"tauri://localhost (Tauri macOS/Linux), http://tauri.localhost (Tauri Windows), or an Electron app's custom protocol; "+
+			"an Electron file:// page sends Origin null, which cannot be listed, so register a custom protocol instead. "+
 			"Other origins on the list are kept.", writeTool, addCorsOrigin),
 		tool("remove_cors_origin", "Stop allowing one browser origin; the rest of the list is kept.", writeTool, removeCorsOrigin),
 	}

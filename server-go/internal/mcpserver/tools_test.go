@@ -778,6 +778,7 @@ func TestToolDescriptionsSteerTheClient(t *testing.T) {
 		"get_deploy_status":   {"certificate"},
 		"list_apps":           {"same build"},
 		"get_graphql_schema":  {"Changes"},
+		"add_cors_origin":     {"capacitor://localhost", "tauri://localhost", "null"},
 	}
 	for _, tool := range listed.Tools {
 		for _, want := range wants[tool.Name] {
