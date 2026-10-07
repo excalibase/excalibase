@@ -34,18 +34,21 @@ const (
 	restartProbeMs = 60000
 )
 
-// proberScript calls the runtime through its Service every 50ms and prints
-// one line per call: "ok", "status N", or "error <message>".
+// proberScript calls the runtime through its Service address every 50ms and
+// prints one line per call: "ok", "status N", or "error <message>". The
+// address skips cluster DNS, whose hiccups are not what this test measures.
 const proberScript = `
-const until = Date.now() + Number(Deno.env.get("MS"));
+const start = Date.now();
+const until = start + Number(Deno.env.get("MS"));
+const target = "http://" + Deno.env.get("ADDR") + "/scripts";
 const headers = { "X-Runtime-Secret": Deno.env.get("S"), "Connection": "close" };
 while (Date.now() < until) {
   try {
-    const r = await fetch("http://deno-runtime:8000/scripts", { headers });
+    const r = await fetch(target, { headers });
     await r.body?.cancel();
-    console.log(r.ok ? "ok" : "status " + r.status);
+    console.log(r.ok ? "ok" : "status " + r.status + " at " + (Date.now() - start) + "ms");
   } catch (e) {
-    console.log("error " + String(e.message).split("\n")[0]);
+    console.log("error at " + (Date.now() - start) + "ms: " + String(e.message).split("\n")[0]);
   }
   await new Promise((resolve) => setTimeout(resolve, 50));
 }
@@ -56,7 +59,7 @@ console.log("done");
 // cluster and prints the status and body.
 const callScript = `
 const [path, body] = Deno.args;
-const r = await fetch("http://deno-runtime:8000" + path, {
+const r = await fetch("http://" + Deno.env.get("ADDR") + path, {
   method: "POST",
   headers: { "X-Runtime-Secret": Deno.env.get("S"), "Content-Type": "application/json" },
   body,
@@ -77,9 +80,14 @@ func TestK3sDenoRuntimeRestartWindow(t *testing.T) {
 		t.Fatalf("create runtime: %v", err)
 	}
 	waitRolledOut(ctx, t, client, 3*time.Minute)
+	svc, err := client.clientset.CoreV1().Services(restartNS).Get(ctx, denoRuntimeName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("runtime service: %v", err)
+	}
 	runProbePod(ctx, t, client, restartProber, image, []string{"deno", "eval", proberScript},
-		map[string]string{"S": restartSecret, "MS": fmt.Sprint(restartProbeMs)})
-	runProbePod(ctx, t, client, "caller", image, []string{"sleep", "3600"}, map[string]string{"S": restartSecret})
+		map[string]string{"S": restartSecret, "MS": fmt.Sprint(restartProbeMs), "ADDR": svc.Spec.ClusterIP + ":8000"})
+	runProbePod(ctx, t, client, "caller", image, []string{"sleep", "3600"},
+		map[string]string{"S": restartSecret, "ADDR": svc.Spec.ClusterIP + ":8000"})
 	time.Sleep(3 * time.Second)
 
 	// The change: the fence is rewritten and the pod rolls.
@@ -106,18 +114,15 @@ func TestK3sDenoRuntimeRestartWindow(t *testing.T) {
 		t.Fatalf("deploy after the rollout: %s", late)
 	}
 
-	lines := proberLines(ctx, t, client)
-	time.Sleep(2 * time.Second)
-	assertNoRefusals(t, lines)
-
 	if got := runtimeCall(ctx, t, client, "/invoke/late", `{"method":"GET","url":"/","headers":{},"body":""}`); !strings.Contains(got, "late") {
 		t.Fatalf("a deploy made once the rollout finished is gone: %s", got)
 	}
 	got := runtimeCall(ctx, t, client, "/invoke/early", `{"method":"GET","url":"/","headers":{},"body":""}`)
 	t.Logf("invoke of the deploy made during the rollout: %s", got)
 	if !strings.Contains(got, "function not found") {
-		t.Fatalf("expected the deploy made during the rollout to be lost with the old pod, got %s", got)
+		t.Errorf("expected the deploy made during the rollout to be lost with the old pod, got %s", got)
 	}
+	assertNoRefusals(t, proberLines(ctx, t, client))
 }
 
 func startRestartCluster(ctx context.Context, t *testing.T, image string) *Client {
