@@ -1,62 +1,13 @@
 import { useState } from 'react';
-import {
-  useListBackups,
-  useTriggerBackup,
-  useRestoreFromBackup,
-  useRestoreJob,
-  RESTORE_RUNNING,
-  type RestoreRequest,
-  type RestoreResult,
-} from '../hooks/useProvisioning';
+import { useListBackups, useTriggerBackup } from '../hooks/useProvisioning';
 import { useRouteProjectId } from '../hooks/useRouteProjectId';
 import { StatusBadge } from '../components/shared/StatusBadge';
 import { Button } from '../components/Button';
-import { toZonedInstant } from '../utils/zonedInstant';
-import { Archive, RefreshCw, RotateCcw, Clock, type LucideIcon } from 'lucide-react';
+import { RestoreForm } from '../components/backups/RestoreForm';
+import { Archive, RefreshCw, RotateCcw, type LucideIcon } from 'lucide-react';
 import { serverErrorMessage } from '../utils/serverError';
 
 type Tab = 'backups' | 'restore';
-
-type RestoreTone = 'pending' | 'ok' | 'error';
-
-const TONE_CLASSES: Record<RestoreTone, string> = {
-  pending: 'bg-blue-900/20 border-blue-500/30 text-blue-300',
-  ok: 'bg-green-900/20 border-green-500/30 text-green-400',
-  error: 'bg-red-900/20 border-red-500/30 text-red-400',
-};
-
-// A started restore answers RUNNING and is polled to COMPLETED or FAILED.
-function describeRestore(result: RestoreResult): { tone: RestoreTone; message: string } {
-  const step = result.currentStep ? ` (${result.currentStep})` : '';
-  switch (result.status) {
-    case RESTORE_RUNNING:
-      return { tone: 'pending', message: `Restore started. The new instance is being created${step}.` };
-    case 'COMPLETED':
-      return { tone: 'ok', message: 'Restore completed. The new instance is ready.' };
-    case 'FAILED':
-      return { tone: 'error', message: `The restore failed: ${result.failureReason || 'no reason was recorded.'}` };
-    default:
-      return result.failureReason
-        ? { tone: 'error', message: `The restore failed: ${result.failureReason}` }
-        : { tone: 'ok', message: result.message || 'Restore started.' };
-  }
-}
-
-function RestoreResultPanel({ result }: { readonly result: RestoreResult }) {
-  const { tone, message } = describeRestore(result);
-  const newInstance = result.newProjectId ?? result.projectId;
-  return (
-    <div data-testid="restore-result" data-tone={tone} role="status" className={`p-3 rounded-lg border text-sm ${TONE_CLASSES[tone]}`}>
-      <p className="font-medium">{message}</p>
-      {newInstance && (
-        <p className="mt-1 text-xs text-text-secondary">New instance: <span className="font-mono text-text-primary">{newInstance}</span></p>
-      )}
-      {result.recoveryType && (
-        <p className="text-xs text-text-secondary">Recovery type: <span className="font-mono text-text-primary">{result.recoveryType}</span></p>
-      )}
-    </div>
-  );
-}
 
 export function BackupsPage() {
   const projectId = useRouteProjectId();
@@ -66,13 +17,6 @@ export function BackupsPage() {
   const backups = Array.isArray(backupData?.backups) ? backupData.backups : [];
   const triggerBackup = useTriggerBackup();
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
-
-  const restore = useRestoreFromBackup(projectId);
-  const [restoreForm, setRestoreForm] = useState<RestoreRequest>({ newProjectName: '', targetTime: '' });
-  const isPitr = !!restoreForm.targetTime?.trim();
-  const startedJobId = restore.data?.status === RESTORE_RUNNING ? restore.data.id : undefined;
-  const restoreJob = useRestoreJob(projectId, startedJobId);
-  const restoreResult = restoreJob.data ?? restore.data;
 
   function showToast(msg: string, ok: boolean) {
     setToast({ msg, ok });
@@ -173,63 +117,7 @@ export function BackupsPage() {
             </table>
           )}
 
-          {tab === 'restore' && (
-            <div className="max-w-lg space-y-5">
-              <p className="text-sm text-text-secondary">
-                Restore creates a <strong className="text-text-primary">new database instance</strong> from this instance's backup.
-                Leave the target time blank for a full restore from the latest backup, or set a time for Point-in-Time Recovery (PITR).
-              </p>
-
-              <div className="space-y-4">
-                <div>
-                  <label htmlFor="restore-new-name" className="text-xs text-text-secondary block mb-1">New Instance Name *</label>
-                  <input
-                    id="restore-new-name"
-                    value={restoreForm.newProjectName}
-                    onChange={(e) => setRestoreForm({ ...restoreForm, newProjectName: e.target.value })}
-                    placeholder="e.g. orders restored"
-                    className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent-primary"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="restore-target-time" className="text-xs text-text-secondary block mb-1 flex items-center gap-1.5">
-                    <Clock className="w-3 h-3" /> Target Time (PITR) — leave blank for latest backup
-                  </label>
-                  <input
-                    id="restore-target-time"
-                    type="datetime-local"
-                    step={1}
-                    value={restoreForm.targetTime ?? ''}
-                    onChange={(e) => setRestoreForm({ ...restoreForm, targetTime: e.target.value })}
-                    className="w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent-primary"
-                  />
-                  {isPitr && (
-                    <p className="text-xs text-accent-primary mt-1">Point-in-Time Recovery mode enabled</p>
-                  )}
-                </div>
-              </div>
-
-              {restoreResult && <RestoreResultPanel result={restoreResult} />}
-
-              <Button
-                disabled={!restoreForm.newProjectName.trim() || restore.isPending || !projectId}
-                onClick={() => restore.mutate(
-                  // datetime-local only yields a valid local time or ''.
-                  { ...restoreForm, targetTime: toZonedInstant(restoreForm.targetTime) },
-                  { onError: (e: unknown) => {
-                    const msg = serverErrorMessage(e, 'The restore was not started');
-                    showToast(msg || 'Restore failed', false);
-                  } }
-                )}
-              >
-                <RotateCcw className="w-4 h-4 mr-2" />
-                {restore.isPending && 'Initiating restore…'}
-                {!restore.isPending && isPitr && 'Restore to Point in Time'}
-                {!restore.isPending && !isPitr && 'Restore Latest Backup'}
-              </Button>
-            </div>
-          )}
+          {tab === 'restore' && <RestoreForm projectId={projectId} />}
         </div>
       </div>
     </div>

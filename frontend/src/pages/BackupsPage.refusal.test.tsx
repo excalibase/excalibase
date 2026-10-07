@@ -27,7 +27,7 @@ describe('BackupsPage restore refusal', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: /Restore \/ PITR/i }));
-    await userEvent.type(screen.getByLabelText(/New Instance Name/i), 'copy');
+    await userEvent.type(screen.getByLabelText(/New project name/i), 'copy');
     await userEvent.click(screen.getByRole('button', { name: /Restore Latest Backup/i }));
 
     expect(await screen.findByText('a project named copy already exists')).toBeInTheDocument();

@@ -268,6 +268,7 @@ func runServer(cfg config.AppConfig) {
 	_, stopStorageReap := startStorageReaper(cfg, sqlStore, deps.storageSvc)
 	defer stopStorageReap()
 
+	wireInPlaceRestore(deps.backupHandler.Service(), provSvc, store, vc, projectDB, deps.schemaHandler)
 	if sqlStore != nil {
 		stopRestoreSweeper := wireRestoreOrchestrator(cfg, sqlStore, store, deps)
 		defer stopRestoreSweeper()
@@ -317,10 +318,23 @@ func checkFeatureWiring(cfg config.AppConfig, deps wiring.Deps) {
 	}
 }
 
-// wireRestoreOrchestrator builds the restore orchestrator, registers the
-// single delegate-to-adapter step, sweeps abandoned jobs, starts the periodic
-// sweeper, and wires it into the backup handler. Extracted from runServer to
-// keep that function's branching shallow. Returns the sweeper's stop.
+// wireInPlaceRestore lets a project's database be replaced from its own
+// backups (EXC-568). It holds the same lifecycle lease as pause and deletion,
+// and the pools holding connections to the replaced database are told.
+func wireInPlaceRestore(backupSvc *service.BackupService, provSvc *service.ProvisioningService,
+	store storage.InstanceStore, vc vaultclient.VaultClient, observers ...service.StatusObserver) {
+	backupSvc.SetInPlaceRestore(service.NewInPlaceRestore(service.InPlaceRestoreConfig{
+		Projects:  provSvc,
+		Instances: store,
+		Probe:     service.NewVaultDatabaseProbe(vc),
+		Observers: observers,
+	}))
+}
+
+// wireRestoreOrchestrator builds the restore orchestrator, registers its
+// single restore step, sweeps abandoned jobs, starts the periodic sweeper,
+// and wires it into the backup handler. Extracted from runServer to keep
+// that function's branching shallow. Returns the sweeper's stop.
 func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStore, store storage.InstanceStore, deps *handlerDeps) func() {
 	orchestrator := service.NewRestoreOrchestrator(service.RestoreOrchestratorConfig{
 		Jobs: sqlStore.RestoreJobs(),
@@ -338,7 +352,8 @@ func wireRestoreOrchestrator(cfg config.AppConfig, sqlStore storage.PlatformStor
 	// step list is the only thing that needs to change.
 	orchestrator.SetSteps([]service.RestoreStep{
 		{
-			Name: "delegate-to-adapter",
+			// The step's name is what a client polling the job reads.
+			Name: domain.RestoreStepRestoring,
 			Run: func(ctx context.Context, j *domain.RestoreJob) error {
 				return runRestoreStep(ctx, store, backupSvc, j)
 			},
@@ -511,6 +526,9 @@ func runRestoreStep(ctx context.Context, store storage.InstanceStore, backupSvc 
 	req, err := restoreStepRequest(j)
 	if err != nil {
 		return err
+	}
+	if req.InPlace() {
+		return backupSvc.RestoreInPlace(ctx, j.SourceProjectID, req)
 	}
 	_, err = backupSvc.RestoreFromBackup(ctx, j.SourceProjectID, req)
 	return err

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
 // fakeRestoreJobStore is an in-memory RestoreJobStore carrying the same
@@ -113,6 +114,19 @@ func (f *fakeRestoreJobStore) UpsertRestoreJob(_ context.Context, j *domain.Rest
 		f.jobs[j.ID] = *j
 	}
 	return nil
+}
+
+// StartRestoreJob refuses a conflicting running job as the real table does.
+func (f *fakeRestoreJobStore) StartRestoreJob(ctx context.Context, j *domain.RestoreJob) error {
+	f.mu.Lock()
+	for _, running := range f.jobs {
+		if running.Status == domain.RestoreStatusRunning && storage.RestoreJobsConflict(&running, j) {
+			f.mu.Unlock()
+			return storage.ErrRestoreAlreadyRunning
+		}
+	}
+	f.mu.Unlock()
+	return f.UpsertRestoreJob(ctx, j)
 }
 
 func (f *fakeRestoreJobStore) FindRestoreJob(_ context.Context, projectID, id string) (*domain.RestoreJob, error) {

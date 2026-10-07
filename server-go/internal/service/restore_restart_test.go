@@ -104,6 +104,8 @@ type failingJobStore struct{}
 
 func (failingJobStore) UpsertRestoreJob(context.Context, *domain.RestoreJob) error { return nil }
 
+func (failingJobStore) StartRestoreJob(context.Context, *domain.RestoreJob) error { return nil }
+
 func (failingJobStore) FindRestoreJob(context.Context, string, string) (*domain.RestoreJob, error) {
 	return nil, ErrRestoreJobNotFound
 }

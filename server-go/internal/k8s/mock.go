@@ -108,6 +108,8 @@ type MockClient struct {
 	// CreateSecretError fails every secret write, so a test can assert what
 	// a provision does when the cluster refuses one.
 	UpdateSecretError error
+	// KeepSecretsError fails KeepSecretsPastOwner.
+	KeepSecretsError error
 	CreateSecretError error
 
 	// Capacity returned by GetClusterCapacity. Tests set this to simulate
@@ -564,6 +566,17 @@ func (m *MockClient) DeleteSecret(ctx context.Context, namespace, name string) e
 	m.Calls = append(m.Calls, "DeleteSecret:"+namespace+"/"+name)
 	delete(m.Secrets, namespace+"/"+name)
 	return nil
+}
+
+// KeepSecretsPastOwner records the Secrets that would survive their owner;
+// the mock models no owner references, so it changes nothing else.
+func (m *MockClient) KeepSecretsPastOwner(ctx context.Context, namespace string, names []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, name := range names {
+		m.Calls = append(m.Calls, "KeepSecretsPastOwner:"+namespace+"/"+name)
+	}
+	return m.KeepSecretsError
 }
 
 func (m *MockClient) UpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {

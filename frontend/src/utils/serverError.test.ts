@@ -1,6 +1,18 @@
 import { describe, test, expect } from 'vitest';
 import { AxiosError, AxiosHeaders } from 'axios';
-import { serverErrorMessage } from './serverError';
+import { serverErrorCode, serverErrorMessage } from './serverError';
+
+describe('serverErrorCode', () => {
+  test('reads the code a refusal carries', () => {
+    expect(serverErrorCode(axiosFailure(409, { error: 'full', code: 'project_limit_reached' }))).toBe('project_limit_reached');
+  });
+
+  test('is undefined without one', () => {
+    expect(serverErrorCode(axiosFailure(409, { error: 'full' }))).toBeUndefined();
+    expect(serverErrorCode(axiosFailure(undefined))).toBeUndefined();
+    expect(serverErrorCode(new Error('boom'))).toBeUndefined();
+  });
+});
 
 function axiosFailure(status: number | undefined, data?: unknown): AxiosError {
   const config = { headers: new AxiosHeaders() };

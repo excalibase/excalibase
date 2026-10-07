@@ -177,7 +177,7 @@ test.describe('Backups page', () => {
     const submit = page.getByRole('button', { name: /Restore Latest Backup/i });
     await expect(submit).toBeDisabled();
 
-    await page.getByLabel(/New Instance Name/i).fill('restored-db');
+    await page.getByLabel(/New project name/i).fill('restored-db');
     await expect(submit).toBeEnabled();
   });
 
@@ -192,7 +192,7 @@ test.describe('Backups page', () => {
       await page.goto(BACKUPS_URL);
       await page.getByRole('button', { name: /Restore \/ PITR/i }).click();
 
-      await page.getByLabel(/New Instance Name/i).fill('restored-db');
+      await page.getByLabel(/New project name/i).fill('restored-db');
       await page.getByLabel(/Target Time \(PITR\)/i).fill('2026-05-04T03:30');
 
       await expect(page.getByText('Point-in-Time Recovery mode enabled')).toBeVisible();
@@ -219,7 +219,7 @@ test.describe('Backups page', () => {
     await page.goto(BACKUPS_URL);
     await page.getByRole('button', { name: /Restore \/ PITR/i }).click();
 
-    await page.getByLabel(/New Instance Name/i).fill('restored-db');
+    await page.getByLabel(/New project name/i).fill('restored-db');
     await page.getByRole('button', { name: /Restore Latest Backup/i }).click();
 
     await expect(page.getByText(/Restore completed/)).toBeVisible();
@@ -238,7 +238,7 @@ test.describe('Backups page', () => {
 
     await page.goto(BACKUPS_URL);
     await page.getByRole('button', { name: /Restore \/ PITR/i }).click();
-    await page.getByLabel(/New Instance Name/i).fill('restored-db');
+    await page.getByLabel(/New project name/i).fill('restored-db');
     await page.getByRole('button', { name: /Restore Latest Backup/i }).click();
 
     // The server's own reason, never axios's "Request failed with status code 400".

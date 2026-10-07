@@ -38,6 +38,18 @@ func (f *fakeRestoreJobStoreForHandler) UpsertRestoreJob(_ context.Context, j *d
 	return nil
 }
 
+func (f *fakeRestoreJobStoreForHandler) StartRestoreJob(ctx context.Context, j *domain.RestoreJob) error {
+	f.mu.Lock()
+	for _, running := range f.jobs {
+		if running.Status == domain.RestoreStatusRunning && storage.RestoreJobsConflict(&running, j) {
+			f.mu.Unlock()
+			return storage.ErrRestoreAlreadyRunning
+		}
+	}
+	f.mu.Unlock()
+	return f.UpsertRestoreJob(ctx, j)
+}
+
 // UpdateRunningRestoreJob carries the conditional-write semantics the real
 // table enforces: only the owner of a still-running job may write it.
 func (f *fakeRestoreJobStoreForHandler) UpdateRunningRestoreJob(_ context.Context, j *domain.RestoreJob, owner string) (bool, error) {
@@ -246,7 +258,7 @@ func TestBackupHandler_Restore_OrchestratorDelegatesToAdapter(t *testing.T) {
 	// Same wiring main.go uses: a single delegate step that calls
 	// the legacy synchronous Restore.
 	orch.SetSteps([]service.RestoreStep{
-		{Name: "delegate-to-adapter", Run: func(ctx context.Context, j *domain.RestoreJob) error {
+		{Name: domain.RestoreStepRestoring, Run: func(ctx context.Context, j *domain.RestoreJob) error {
 			inst, _ := store.FindByProjectID(j.SourceProjectID)
 			_, err := backupSvc.RestoreFromBackup(ctx, inst.ProjectID, domain.RestoreRequest{
 				NewProjectName: j.NewProjectID, TargetProjectID: j.NewProjectID,

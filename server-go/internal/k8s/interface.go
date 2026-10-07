@@ -159,6 +159,10 @@ type KubeClient interface {
 	SetAppPrivateNetwork(ctx context.Context, namespace string, open bool) error
 	EnsureNamespaceQuota(ctx context.Context, namespace string, quota NamespaceQuota) error
 	AppPrivateNetworkOpen(ctx context.Context, namespace string) (bool, error)
+	// KeepSecretsPastOwner drops the owner references of the named Secrets,
+	// so deleting the object that created them (a Cluster) leaves them for
+	// its replacement to adopt. A Secret that does not exist is skipped.
+	KeepSecretsPastOwner(ctx context.Context, namespace string, names []string) error
 }
 
 // ClusterCapacity holds aggregate cluster resource state. All values are in

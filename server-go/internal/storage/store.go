@@ -263,6 +263,23 @@ func ApplyDeletionFailure(inst *domain.DatabaseInstance, status domain.Provision
 	return nil
 }
 
+// ErrRestoreAlreadyRunning refuses a restore that duplicates or conflicts
+// with one still running for the same project.
+var ErrRestoreAlreadyRunning = errors.New("a restore of this project is already running; wait for it to finish")
+
+// RestoreJobsConflict reports whether a running job and a new one may not run
+// together: an in-place restore excludes every other restore of its project,
+// and two copies of the same project to the same point are one restore.
+func RestoreJobsConflict(running, next *domain.RestoreJob) bool {
+	if running.SourceProjectID != next.SourceProjectID {
+		return false
+	}
+	if running.Mode == domain.RestoreModeInPlace || next.Mode == domain.RestoreModeInPlace {
+		return true
+	}
+	return running.TargetKind == next.TargetKind && running.TargetValue == next.TargetValue
+}
+
 // ErrProjectNotRestoring is returned when a restore-interrupted marker is
 // asked for on a project that is not being restored.
 var ErrProjectNotRestoring = errors.New("project is not being restored")
@@ -358,6 +375,11 @@ type BackupScheduleStore interface {
 // replay (or fail) jobs that were RUNNING.
 type RestoreJobStore interface {
 	UpsertRestoreJob(ctx context.Context, j *domain.RestoreJob) error
+	// StartRestoreJob records a new RUNNING job unless a running one
+	// conflicts with it (ErrRestoreAlreadyRunning): the same source restored
+	// to the same point, or any other restore of a project being replaced in
+	// place. The check and the insert are one atomic step.
+	StartRestoreJob(ctx context.Context, j *domain.RestoreJob) error
 	// FindRestoreJob resolves a job only within projectID — the project the
 	// caller is already bound to. An id alone never resolves.
 	FindRestoreJob(ctx context.Context, projectID, id string) (*domain.RestoreJob, error)

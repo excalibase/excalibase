@@ -10,6 +10,7 @@ import (
 	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
+	"github.com/excalibase/provisioning-poc/internal/storage"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -115,7 +116,9 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	req.NewProjectName, _ = domain.NormalizeProjectName(req.NewProjectName)
+	if !req.InPlace() {
+		req.NewProjectName, _ = domain.NormalizeProjectName(req.NewProjectName)
+	}
 	inst, err := h.svc.GetInstance(projectID)
 	if err != nil {
 		// A store that cannot be read is not an answer about the project.
@@ -137,17 +140,15 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		httpError(w, service.ErrDocumentDBNotInstalled.Error(), http.StatusConflict)
 		return
 	}
+	if req.InPlace() {
+		h.restoreInPlace(w, r, inst, req)
+		return
+	}
 	// A restore creates a project, so the organisation must have a slot for
 	// it. Asked here as well as in the service so an async restore is refused
 	// at submission rather than by a job that fails minutes later.
 	if err := h.svc.EnsureOrgProjectCapacity(r.Context(), inst); err != nil {
-		if errors.Is(err, service.ErrRestoreDiskAbovePlan) || errors.Is(err, storagebudget.ErrExceeded) {
-			httpError(w, safeError(err), http.StatusConflict)
-			return
-		}
-		if !writeProjectCreationError(w, err) {
-			httpError(w, safeError(err), http.StatusInternalServerError)
-		}
+		h.writeRestoreCapacityError(w, inst, err)
 		return
 	}
 	// The restored project's id is generated here, before anything is
@@ -164,12 +165,7 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if h.orchestrator != nil {
 		// Async path: orchestrator returns RUNNING immediately. The
 		// caller polls /restore/{jobId} for status.
-		job, err := h.orchestrator.Start(r.Context(), inst, req)
-		if err != nil {
-			httpError(w, safeError(err), http.StatusBadRequest)
-			return
-		}
-		writeJSON(w, job)
+		h.startRestoreJob(w, r, inst, req)
 		return
 	}
 	resp, err := h.svc.RestoreFromBackup(r.Context(), projectID, req)
@@ -180,6 +176,85 @@ func (h *BackupHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, resp)
+}
+
+// restoreLimitCode marks a copy refused for want of a project slot, which an
+// in-place restore does not need.
+const restoreLimitCode = "project_limit_reached"
+
+// writeRestoreCapacityError answers a copy the organisation's plan cannot
+// take. At the project limit the caller is told the restore it can do.
+func (h *BackupHandler) writeRestoreCapacityError(w http.ResponseWriter, inst *domain.DatabaseInstance, err error) {
+	var limit *service.OrgProjectLimitError
+	switch {
+	case errors.As(err, &limit) && h.svc.SupportsInPlaceRestore(inst.DeploymentMode):
+		writeJSONStatus(w, http.StatusConflict, map[string]any{
+			"error": limit.Error() + "; restore into this project instead, which replaces its current data",
+			"code":  restoreLimitCode, "status": http.StatusConflict,
+		})
+	case errors.Is(err, service.ErrRestoreDiskAbovePlan), errors.Is(err, storagebudget.ErrExceeded):
+		httpError(w, safeError(err), http.StatusConflict)
+	case !writeProjectCreationError(w, err):
+		httpError(w, safeError(err), http.StatusInternalServerError)
+	}
+}
+
+// restoreInPlace replaces the project's own database. It needs no project
+// slot: the project keeps its id and everything attached to it.
+func (h *BackupHandler) restoreInPlace(w http.ResponseWriter, r *http.Request, inst *domain.DatabaseInstance, req domain.RestoreRequest) {
+	if refusal := inPlaceRefusal(h.svc, inst); refusal != nil {
+		httpError(w, refusal.Error(), http.StatusConflict)
+		return
+	}
+	req.TargetProjectID = inst.ProjectID
+	if h.orchestrator != nil {
+		h.startRestoreJob(w, r, inst, req)
+		return
+	}
+	if err := h.svc.RestoreInPlace(r.Context(), inst.ProjectID, req); err != nil {
+		log.Printf("restore %s in place: %v", inst.ProjectID, err)
+		httpError(w, inPlaceFailureMessage(err), http.StatusConflict)
+		return
+	}
+	writeJSON(w, map[string]any{"projectId": inst.ProjectID, "mode": domain.RestoreModeInPlace, "status": domain.RestoreStatusCompleted})
+}
+
+// inPlaceRefusal is why the project cannot be replaced from its backups now,
+// or nil.
+func inPlaceRefusal(svc *service.BackupService, inst *domain.DatabaseInstance) error {
+	switch {
+	case !svc.SupportsInPlaceRestore(inst.DeploymentMode):
+		return service.ErrInPlaceRestoreUnsupported
+	case inst.BackupEnabled == nil || !*inst.BackupEnabled:
+		return service.ErrInPlaceNoBackups
+	case inst.Status == string(domain.StatusActive):
+		return nil
+	case inst.Status == string(domain.StatusRestoring) && inst.CurrentStep == domain.RestoreStepRestoreStopped:
+		return nil
+	}
+	return service.ErrProjectNotRestorable
+}
+
+func inPlaceFailureMessage(err error) string {
+	var outcome *service.InPlaceRestoreError
+	if errors.As(err, &outcome) {
+		return outcome.Public
+	}
+	return safeError(err)
+}
+
+// startRestoreJob files the restore and answers with its job; a restore that
+// would duplicate or collide with a running one is refused.
+func (h *BackupHandler) startRestoreJob(w http.ResponseWriter, r *http.Request, inst *domain.DatabaseInstance, req domain.RestoreRequest) {
+	job, err := h.orchestrator.Start(r.Context(), inst, req)
+	switch {
+	case errors.Is(err, storage.ErrRestoreAlreadyRunning):
+		httpError(w, err.Error(), http.StatusConflict)
+	case err != nil:
+		httpError(w, safeError(err), http.StatusBadRequest)
+	default:
+		writeJSON(w, job)
+	}
 }
 
 // GetRestoreJob polls a restore job by id, scoped to the project in the URL.

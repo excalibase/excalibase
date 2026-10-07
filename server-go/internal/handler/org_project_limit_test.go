@@ -178,12 +178,17 @@ func TestRestore_OrgAtItsLimitAnswers409(t *testing.T) {
 	}
 	var body struct {
 		Error string `json:"error"`
+		Code  string `json:"code"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body.Error != orgLimitRefusal {
-		t.Fatalf("body: got %q, want %q", body.Error, orgLimitRefusal)
+	// The refusal names the limit and the restore the plan still allows.
+	if !strings.HasPrefix(body.Error, orgLimitRefusal) || !strings.Contains(body.Error, "restore into this project instead") {
+		t.Fatalf("body: got %q, want %q and the in-place offer", body.Error, orgLimitRefusal)
+	}
+	if body.Code != "project_limit_reached" {
+		t.Fatalf("code: got %q", body.Code)
 	}
 }
 

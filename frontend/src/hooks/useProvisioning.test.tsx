@@ -11,6 +11,7 @@ import {
   useTriggerBackup,
   useListBackups,
   useRestoreFromBackup,
+  useRestoreJob,
   useLogs,
 } from './useProvisioning';
 import { api } from '../api/client';
@@ -30,6 +31,26 @@ function makeWrapper() {
 }
 
 beforeEach(() => vi.clearAllMocks());
+
+describe('useRestoreJob', () => {
+  test('a database replaced in place refreshes everything the project shows', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { id: 'j', mode: 'in_place', status: 'COMPLETED' } } as never);
+    const { client, Wrapper } = makeWrapper();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useRestoreJob('p1', 'j'), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith());
+  });
+
+  test('a copy finishing leaves this project alone', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ data: { id: 'j', mode: 'new_project', status: 'COMPLETED' } } as never);
+    const { client, Wrapper } = makeWrapper();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useRestoreJob('p1', 'j'), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+});
 
 describe('useProvisioning hooks', () => {
   test('useInstances GETs all', async () => {
