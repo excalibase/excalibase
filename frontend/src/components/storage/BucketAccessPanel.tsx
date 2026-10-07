@@ -7,6 +7,7 @@ import { serverErrorMessage } from '../../utils/serverError';
 // What a project's app users may do in a bucket, by the role in their token
 // (EXC-560). "own" is the folder named by the signed-in user's id.
 interface RuleRow {
+  readonly id: number;
   readonly role: string;
   readonly read: AccessScope;
   readonly write: AccessScope;
@@ -24,8 +25,12 @@ export function roleNameProblem(name: string): string | null {
   return null;
 }
 
+let nextRowId = 0;
+const newRowId = () => ++nextRowId;
+
 function toRows(access: BucketAccess): RuleRow[] {
   return Object.entries(access).map(([role, rule]) => ({
+    id: newRowId(),
     role,
     read: rule.read ?? '',
     write: rule.write ?? '',
@@ -101,7 +106,7 @@ export function BucketAccessPanel({ projectId, bucket, access }: BucketAccessPan
         <p className="text-xs text-text-secondary">App users cannot reach this bucket. Add a role to let them.</p>
       )}
       {rows.map((row, index) => (
-        <div key={index} className="flex items-center gap-2">
+        <div key={row.id} className="flex items-center gap-2">
           <input
             type="text"
             value={row.role}
@@ -145,7 +150,7 @@ export function BucketAccessPanel({ projectId, bucket, access }: BucketAccessPan
           variant="ghost"
           onClick={() => {
             setSaved(false);
-            setRows((current) => [...current, { role: '', read: '', write: '', delete: '' }]);
+            setRows((current) => [...current, { id: newRowId(), role: '', read: '', write: '', delete: '' }]);
           }}
         >
           <Plus className="w-3.5 h-3.5 mr-1" />
