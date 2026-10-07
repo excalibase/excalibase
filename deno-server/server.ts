@@ -46,6 +46,7 @@ import type { Sql } from "./runtime/pool.ts";
 import type { ValidatorCache } from "./runtime/validator.ts";
 import { runXFailure, runXTargetError, withoutCrashDetail } from "./runtime/invoke_errors.ts";
 import type { InvokeResponse, RunXFailure } from "./runtime/invoke_errors.ts";
+import { outboundDeniedMessage } from "./runtime/outbound_denied.ts";
 
 // ---------------------------------------------------------------------------
 // Phase 8.5 — Shared mutation transaction map.
@@ -613,6 +614,35 @@ function buildWorkerCode(userCode: string, secrets: Record<string, string>): str
       Object.defineProperty(globalThis, 'env', {
         value: __envApi, enumerable: true, configurable: true, writable: false,
       });
+    })();
+
+    // --- outbound refusals ---
+    // A host outside the egress allowlist fails with Deno's NotCapable; the
+    // error keeps its class and gets a message naming the Studio setting.
+    (function() {
+      const __deniedMessage = ${outboundDeniedMessage.toString()};
+      const __told = (e) => {
+        const message = e instanceof Deno.errors.NotCapable ? __deniedMessage(String(e.message)) : null;
+        return message ? new Deno.errors.NotCapable(message) : e;
+      };
+      const __wrapAsync = (fn, self) => async function(...args) {
+        try { return await fn.apply(self, args); } catch (e) { throw __told(e); }
+      };
+      globalThis.fetch = __wrapAsync(globalThis.fetch, globalThis);
+      for (const name of ['connect', 'connectTls']) {
+        try {
+          Object.defineProperty(globalThis.Deno, name, {
+            value: __wrapAsync(globalThis.Deno[name], globalThis.Deno),
+            enumerable: true, configurable: true, writable: false,
+          });
+        } catch (_e) { /* the original refusal still applies */ }
+      }
+      const __WebSocket = globalThis.WebSocket;
+      globalThis.WebSocket = class WebSocket extends __WebSocket {
+        constructor(...args) {
+          try { super(...args); } catch (e) { throw __told(e); }
+        }
+      };
     })();
 
     // --- load user module ---

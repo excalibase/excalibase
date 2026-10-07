@@ -11,6 +11,7 @@ import { MinorUpgradeCard } from '../components/MinorUpgradeCard';
 import { ClusterSettingsCard } from '../components/ClusterSettingsCard';
 import { PublicPortCard } from '../components/PublicPortCard';
 import { AppNetworkSection } from '../components/AppNetworkCard';
+import { CorsOriginsCard } from '../components/CorsOriginsCard';
 import { useProjectEndpoint } from '../api/projectEndpoint';
 import type { DatabaseInstance } from '../types';
 import { DELETION_PROTECTED_REASON, isDeletionProtected } from '../utils/deletionProtection';
@@ -114,6 +115,10 @@ export function SettingsPage() {
       </>)}
 
       <AppNetworkSection projectId={project.projectId} status={project.status} />
+
+      <div className="mb-8">
+        <CorsOriginsCard projectId={project.projectId} />
+      </div>
 
       <div className="rounded-lg border border-border-primary bg-surface-card overflow-hidden mb-8">
         {info.map(({ icon: Icon, label, value }) => (

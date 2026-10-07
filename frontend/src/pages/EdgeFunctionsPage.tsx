@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Trash2, Play, Loader2, Code2, Circle, Key, X, FileCode, Terminal } from 'lucide-react';
+import { Plus, Trash2, Play, Loader2, Code2, Circle, Key, X, FileCode, Terminal, Network } from 'lucide-react';
 import {
   useEdgeFunctions,
   useCreateEdgeFunction,
@@ -14,6 +14,7 @@ import {
 } from '../hooks/useEdgeFunctions';
 import { SidePanel } from '../components/ui/SidePanel';
 import { ConfirmModal } from '../components/ui/ConfirmModal';
+import { FunctionEgressCard } from '../components/FunctionEgressCard';
 import type { EdgeFunction, EdgeFile } from '../types/edgefn';
 import { serverErrorMessage } from '../utils/serverError';
 
@@ -85,6 +86,7 @@ export function EdgeFunctionsPage() {
   const [selected, setSelected] = useState<EdgeFunction | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
+  const [showEgress, setShowEgress] = useState(false);
   const [logsFor, setLogsFor] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [invokeResult, setInvokeResult] = useState<string | null>(null);
@@ -242,6 +244,13 @@ export function EdgeFunctionsPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowEgress(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-bg-tertiary hover:bg-surface-hover text-text-primary text-sm font-medium rounded-lg border border-border-primary transition-colors"
+            data-testid="egress-btn"
+          >
+            <Network className="w-4 h-4" /> Outbound hosts
+          </button>
           <button
             onClick={() => setShowSecrets(true)}
             className="flex items-center gap-2 px-3 py-2 bg-bg-tertiary hover:bg-surface-hover text-text-primary text-sm font-medium rounded-lg border border-border-primary transition-colors"
@@ -445,6 +454,10 @@ export function EdgeFunctionsPage() {
             <div className="text-xs text-red-400 font-mono">{serverErrorMessage(createFn.error, 'The function was not deployed')}</div>
           )}
         </div>
+      </SidePanel>
+
+      <SidePanel open={showEgress} onClose={() => setShowEgress(false)} title="Outbound hosts">
+        {showEgress && <FunctionEgressCard projectId={projectId} />}
       </SidePanel>
 
       <SidePanel open={showSecrets} onClose={() => setShowSecrets(false)} title="Function secrets">

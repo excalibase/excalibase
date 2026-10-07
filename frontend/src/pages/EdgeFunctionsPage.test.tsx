@@ -339,3 +339,22 @@ describe('EdgeFunctionsPage', () => {
     });
   });
 });
+
+// EXC-566: the function outbound allowlist is set in Studio, not only over MCP.
+describe('EdgeFunctionsPage — outbound hosts', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  test('shows the hosts the functions may call', async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === `${BASE}/egress`) {
+        return Promise.resolve({ data: { allowedHosts: ['api.stripe.com:443'], defaultHosts: [], effectiveHosts: [] } } as never);
+      }
+      if (url === BASE) return Promise.resolve({ data: [] } as never);
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    renderPage();
+    fireEvent.click(await screen.findByTestId('egress-btn'));
+    expect(await screen.findByTestId('egress-card')).toHaveTextContent('Outbound hosts');
+    expect(await screen.findByText('api.stripe.com:443')).toBeInTheDocument();
+  });
+});

@@ -178,3 +178,49 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
 });
+
+// Reports the refusal's name and message, as a function returning its error would.
+const MESSENGER = `globalThis.__excalibase_default = async (req) => {
+  const [kind, url] = (await req.text()).split(" ");
+  try {
+    if (kind === "connect") {
+      const { hostname, port } = new URL(url);
+      (await Deno.connect({ hostname, port: Number(port) })).close();
+    } else if (kind === "socket") {
+      new WebSocket(url.replace("http", "ws")).close();
+    } else {
+      await fetch(url);
+    }
+    return new Response("ok");
+  } catch (e) {
+    return new Response(e.name + ": " + e.message, { status: 403 });
+  }
+};`;
+
+Deno.test({
+  name: "egress: a blocked host names itself and where to allow it, not Deno's --allow-net flag",
+  async fn() {
+    const blocked = listener();
+    const rt = await startRuntime();
+    try {
+      const res = await rt.raw("/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Runtime-Secret": rt.secret },
+        body: JSON.stringify({ id: "messenger", code: MESSENGER }),
+      });
+      await res.body?.cancel();
+      assertEquals(res.status, 201);
+      const expected = `NotCapable: outbound host ${hostOf(blocked.url)} isn't allowed for this project; ` +
+        "add it in Studio → Functions → Outbound hosts";
+      for (const kind of ["fetch", "connect", "socket"]) {
+        const denied = await rt.invoke("messenger", `${kind} ${blocked.url}`);
+        assertEquals([denied.status, denied.body], [403, expected], kind);
+      }
+    } finally {
+      await rt.stop();
+      await blocked.stop();
+    }
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
