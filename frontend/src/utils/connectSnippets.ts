@@ -42,11 +42,14 @@ export function sdkSnippet(apiUrl: string, projectId: string, table: string = PL
   const { apiUrl: base } = connectEndpoints(apiUrl, projectId);
   return `import { createClient } from '@excalibase/sdk';
 
+// A publishable key (esk_pub_...) from API Keys. It is safe in pages and
+// browser bundles: it only reaches what your API permissions allow.
+const PUBLISHABLE_KEY = 'esk_pub_...';
+
 const db = createClient({
   url: '${base}',
   projectId: '${projectId}',
-  // A publishable key (esk_pub_...) from API Keys; safe in browser code.
-  key: process.env.EXCALIBASE_PUBLISHABLE_KEY,
+  key: PUBLISHABLE_KEY,
 });
 
 await db.auth.signInWithApiKey();

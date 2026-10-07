@@ -20,7 +20,9 @@ describe('connect snippets', () => {
     expect(code).toContain("from '@excalibase/sdk'");
     expect(code).toContain(`url: '${base}'`);
     expect(code).toContain(`projectId: '${project}'`);
-    expect(code).toContain('key: process.env.EXCALIBASE_PUBLISHABLE_KEY');
+    expect(code).toContain("const PUBLISHABLE_KEY = 'esk_pub_...';");
+    expect(code).toContain('key: PUBLISHABLE_KEY');
+    expect(code).not.toContain('process.env');
     expect(code).toContain('await db.auth.signInWithApiKey();');
     expect(code).toContain("db.rest.get('/todos?limit=10')");
     // The broken snippet it replaces: wrong package, wrong option, org in the url.
