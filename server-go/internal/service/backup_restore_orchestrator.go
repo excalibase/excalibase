@@ -146,19 +146,26 @@ func (o *RestoreOrchestrator) Start(ctx context.Context, source *domain.Database
 	if req.TargetProjectID == "" {
 		return nil, ErrTargetProjectIDMissing
 	}
+	if req.InPlace() && req.TargetProjectID != source.ProjectID {
+		return nil, ErrInPlaceTargetMismatch
+	}
 	kind, value := req.RestoreTargetKind()
 	job := domain.RestoreJob{
 		ID:              newRestoreJobID(),
 		SourceProjectID: source.ProjectID,
 		NewProjectID:    req.TargetProjectID,
 		NewProjectName:  req.NewProjectName,
+		Mode:            req.ModeOrDefault(),
 		Status:          domain.RestoreStatusRunning,
 		TargetKind:      kind,
 		TargetValue:     value,
 		Request:         req,
 		Owner:           o.instance,
 	}
-	if err := o.jobs.UpsertRestoreJob(ctx, &job); err != nil {
+	if err := o.jobs.StartRestoreJob(ctx, &job); err != nil {
+		if errors.Is(err, storage.ErrRestoreAlreadyRunning) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("persist restore job: %w", err)
 	}
 
@@ -176,6 +183,10 @@ func (o *RestoreOrchestrator) Get(ctx context.Context, projectID, id string) (*d
 	return o.jobs.FindRestoreJob(ctx, projectID, id)
 }
 
+// ErrInPlaceTargetMismatch refuses an in-place restore aimed at a project
+// other than the one it was asked on.
+var ErrInPlaceTargetMismatch = errors.New("restore: an in-place restore replaces the project it was asked on")
+
 // abandonedRestoreReason is what a caller sees on a job whose driver died.
 // A restore cannot be resumed by observation: the only place that knew how
 // far it got is the goroutine that is gone, and the target project it was
@@ -189,8 +200,12 @@ const abandonedRestoreReason = "the process running this restore stopped respond
 // what lets it be deleted. Deleting it here instead would destroy resources
 // on the strength of a missed heartbeat.
 const (
-	restoreInterruptedStep   = "RESTORE_INTERRUPTED"
+	restoreInterruptedStep   = domain.RestoreStepRestoreStopped
 	restoreInterruptedReason = "the restore that was building this project was interrupted and cannot be resumed; delete this project and start the restore again"
+	// inPlaceInterruptedReason is the in-place form: the project is the one
+	// that was being replaced, and its data from before is in the backup the
+	// restore took first.
+	inPlaceInterruptedReason = "the restore replacing this project's database was interrupted; restore again from Backups — the backup taken just before the restore holds the data as it was"
 )
 
 // SweepAbandoned fails every RUNNING job whose owner has gone silent. It runs
@@ -220,7 +235,11 @@ func (o *RestoreOrchestrator) markTargetInterrupted(job domain.RestoreJob) {
 	if o.instances == nil || job.NewProjectID == "" {
 		return
 	}
-	err := o.instances.RecordRestoreInterrupted(job.NewProjectID, restoreInterruptedStep, restoreInterruptedReason)
+	reason := restoreInterruptedReason
+	if job.Mode == domain.RestoreModeInPlace {
+		reason = inPlaceInterruptedReason
+	}
+	err := o.instances.RecordRestoreInterrupted(job.NewProjectID, restoreInterruptedStep, reason)
 	switch {
 	case err == nil:
 	case errors.Is(err, storage.ErrProjectNotRestoring), errors.Is(err, storage.ErrProjectNotFound):
@@ -340,6 +359,12 @@ func (o *RestoreOrchestrator) run(ctx context.Context, cancel context.CancelFunc
 	stopBeating := o.beat(ctx, j.ID, cancel)
 	defer stopBeating()
 
+	progressCtx := context.WithValue(ctx, restoreProgressKey{}, func(phase string) {
+		j.CurrentStep = phase
+		if o.write(ctx, j, "record phase "+phase) == writeLost {
+			cancel()
+		}
+	})
 	for _, step := range steps {
 		j.CurrentStep = step.Name
 		switch o.write(ctx, j, "claim step "+step.Name) {
@@ -352,9 +377,10 @@ func (o *RestoreOrchestrator) run(ctx context.Context, cancel context.CancelFunc
 			// the restore carries on rather than being abandoned.
 			o.logger.Printf("restore %s: could not record step %q; continuing", j.ID, step.Name)
 		}
-		if err := step.Run(ctx, j); err != nil {
+		if err := step.Run(progressCtx, j); err != nil {
+			o.logger.Printf("restore %s: step %q failed: %v", j.ID, step.Name, err)
 			j.Status = domain.RestoreStatusFailed
-			j.FailureReason = fmt.Sprintf("step %q: %v", step.Name, err)
+			j.FailureReason = publicRestoreFailure(err)
 			o.write(ctx, j, "record failure")
 			return
 		}
@@ -420,6 +446,48 @@ func (o *RestoreOrchestrator) beat(ctx context.Context, id string, lost context.
 		}
 	}()
 	return stop
+}
+
+// restoreProgressKey carries the running job's phase reporter.
+type restoreProgressKey struct{}
+
+// ReportRestoreProgress records the phase a running restore has reached as
+// its job's current step. Outside a restore job it does nothing.
+func ReportRestoreProgress(ctx context.Context, phase string) {
+	if report, ok := ctx.Value(restoreProgressKey{}).(func(string)); ok {
+		report(phase)
+	}
+}
+
+// restoreFailedReason is what a caller reads when a restore failed for a
+// reason that is the platform's own; the detail is in the log.
+const restoreFailedReason = "the restore did not complete; start it again, and if it fails again ask your platform administrator to check the provisioning log"
+
+// publicRestoreFailures are refusals and outcomes whose own words are meant
+// for the user. Anything else wrapped around them stays in the log.
+var publicRestoreFailures = []error{
+	ErrRestoreNotObserved, ErrRestoreTargetDeleting, ErrRestoreTargetInFuture,
+	ErrRestoreTargetNotArchived, ErrRestoreTargetNotReached, ErrRestoreBackupUnusable,
+	ErrRestoreDiskAbovePlan, ErrBackupStorageNotConfigured, ErrDocumentDBRestoreNeedsKubernetes,
+	ErrInPlaceRestoreUnsupported, ErrInPlaceNoBackups, ErrProjectOperationRunning,
+}
+
+// publicRestoreFailure is the job's failure reason for err.
+func publicRestoreFailure(err error) string {
+	var inPlace *InPlaceRestoreError
+	if errors.As(err, &inPlace) {
+		return inPlace.Public
+	}
+	var limit *OrgProjectLimitError
+	if errors.As(err, &limit) {
+		return limit.Error()
+	}
+	for _, public := range publicRestoreFailures {
+		if errors.Is(err, public) {
+			return public.Error()
+		}
+	}
+	return restoreFailedReason
 }
 
 // newRestoreJobID is a 16-byte hex token. Collision-resistant enough

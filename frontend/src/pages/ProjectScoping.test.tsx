@@ -88,7 +88,7 @@ describe('project pages act on the project in the URL', () => {
   test('Backups restores from the URL project', async () => {
     renderAt('operations/backups', <BackupsPage />);
     fireEvent.click(await screen.findByRole('button', { name: /Restore \/ PITR/i }));
-    fireEvent.change(screen.getByLabelText(/New Instance Name/i), { target: { value: 'copy' } });
+    fireEvent.change(screen.getByLabelText(/New project name/i), { target: { value: 'copy' } });
     fireEvent.click(screen.getByRole('button', { name: /Restore Latest Backup/i }));
     await expectOnlyUrlProject(new RegExp(`^POST /provision/${URL_PROJECT}/backup/restore$`));
   });

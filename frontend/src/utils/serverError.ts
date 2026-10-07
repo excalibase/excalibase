@@ -20,3 +20,11 @@ export function serverErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
   return fallback;
 }
+
+// The machine-readable code a refusal carries ({"code": "..."}), if any, so a
+// page can offer the way forward that fits it.
+export function serverErrorCode(err: unknown): string | undefined {
+  const response = (err as { response?: FailedResponse } | null | undefined)?.response;
+  const code = (response?.data as { code?: unknown } | undefined)?.code;
+  return typeof code === 'string' && code !== '' ? code : undefined;
+}

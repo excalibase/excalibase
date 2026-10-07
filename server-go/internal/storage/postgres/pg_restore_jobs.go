@@ -17,20 +17,66 @@ func NewRestoreJobs(s *Store) *RestoreJobsStore { return &RestoreJobsStore{s: s}
 // RestoreJobs on *Store satisfies storage.PlatformStore.RestoreJobs.
 func (s *Store) RestoreJobs() storage.RestoreJobStore { return NewRestoreJobs(s) }
 
-func (r *RestoreJobsStore) UpsertRestoreJob(ctx context.Context, j *domain.RestoreJob) error {
-	_, err := r.s.db.ExecContext(ctx, `
-		INSERT INTO restore_jobs (id, source_project_id, new_project_id, new_project_name, status, current_step, target_kind, target_value, failure_reason, owner, heartbeat_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+// restoreJobStartLockSpace serialises the start of restores per source
+// project, so a duplicate submitted at the same moment sees the first one.
+const restoreJobStartLockSpace = 568
+
+const upsertRestoreJobSQL = `
+		INSERT INTO restore_jobs (id, source_project_id, new_project_id, new_project_name, mode, status, current_step, target_kind, target_value, failure_reason, owner, heartbeat_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
 		ON CONFLICT (id) DO UPDATE SET
 			status = EXCLUDED.status,
 			current_step = EXCLUDED.current_step,
 			failure_reason = EXCLUDED.failure_reason,
 			owner = EXCLUDED.owner,
 			heartbeat_at = NOW(),
-			updated_at = NOW()`,
-		j.ID, j.SourceProjectID, j.NewProjectID, j.NewProjectName, j.Status, j.CurrentStep,
+			updated_at = NOW()`
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func upsertRestoreJob(ctx context.Context, db execer, j *domain.RestoreJob) error {
+	mode := j.Mode
+	if mode == "" {
+		mode = domain.RestoreModeNewProject
+	}
+	_, err := db.ExecContext(ctx, upsertRestoreJobSQL,
+		j.ID, j.SourceProjectID, j.NewProjectID, j.NewProjectName, mode, j.Status, j.CurrentStep,
 		j.TargetKind, j.TargetValue, j.FailureReason, j.Owner)
 	return err
+}
+
+func (r *RestoreJobsStore) UpsertRestoreJob(ctx context.Context, j *domain.RestoreJob) error {
+	return upsertRestoreJob(ctx, r.s.db, j)
+}
+
+// StartRestoreJob records a new running job unless one already running
+// conflicts with it. See storage.RestoreJobStore.
+func (r *RestoreJobsStore) StartRestoreJob(ctx context.Context, j *domain.RestoreJob) error {
+	tx, err := r.s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin restore job start: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after a commit is a no-op
+
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		restoreJobStartLockSpace, j.SourceProjectID); err != nil {
+		return fmt.Errorf("lock restore jobs of %s: %w", j.SourceProjectID, err)
+	}
+	running, err := queryRestoreJobs(ctx, tx, restoreJobColumns+` WHERE status = 'RUNNING' AND source_project_id = $1`, j.SourceProjectID)
+	if err != nil {
+		return err
+	}
+	for i := range running {
+		if storage.RestoreJobsConflict(&running[i], j) {
+			return storage.ErrRestoreAlreadyRunning
+		}
+	}
+	if err := upsertRestoreJob(ctx, tx, j); err != nil {
+		return fmt.Errorf("insert restore job %s: %w", j.ID, err)
+	}
+	return tx.Commit()
 }
 
 // UpdateRunningRestoreJob is the only write a driver makes after Start. The
@@ -78,7 +124,7 @@ func (r *RestoreJobsStore) FailAbandonedRestoreJobs(ctx context.Context, owner s
 		UPDATE restore_jobs
 		SET status = 'FAILED', failure_reason = $1, updated_at = NOW()
 		WHERE status = 'RUNNING' AND owner <> $2 AND heartbeat_at < NOW() - $3::interval
-		RETURNING id, new_project_id`,
+		RETURNING id, source_project_id, new_project_id, mode`,
 		reason, owner, fmt.Sprintf("%d milliseconds", staleAfter.Milliseconds()))
 	if err != nil {
 		return nil, fmt.Errorf("fail abandoned restore jobs: %w", err)
@@ -88,7 +134,7 @@ func (r *RestoreJobsStore) FailAbandonedRestoreJobs(ctx context.Context, owner s
 	failed := []domain.RestoreJob{}
 	for rows.Next() {
 		var j domain.RestoreJob
-		if err := rows.Scan(&j.ID, &j.NewProjectID); err != nil {
+		if err := rows.Scan(&j.ID, &j.SourceProjectID, &j.NewProjectID, &j.Mode); err != nil {
 			return nil, fmt.Errorf("fail abandoned restore jobs: %w", err)
 		}
 		j.Status = domain.RestoreStatusFailed
@@ -104,17 +150,21 @@ func (r *RestoreJobsStore) FailAbandonedRestoreJobs(ctx context.Context, owner s
 // matches. Every other project gets no row at all: scoping here, in the query,
 // means no caller can reach a job by id alone (EXC-399).
 func (r *RestoreJobsStore) FindRestoreJob(ctx context.Context, projectID, id string) (*domain.RestoreJob, error) {
-	row := r.s.db.QueryRowContext(ctx, `
-		SELECT id, source_project_id, new_project_id, new_project_name, status, current_step, target_kind, target_value, failure_reason, owner, heartbeat_at, created_at, updated_at
-		FROM restore_jobs
+	row := r.s.db.QueryRowContext(ctx, restoreJobColumns+`
 		WHERE id = $1 AND ($2 IN (source_project_id, new_project_id))`, id, projectID)
 	return scanPgRestoreJob(row)
 }
 
-func (r *RestoreJobsStore) ListRunningRestoreJobs(ctx context.Context) ([]domain.RestoreJob, error) {
-	rows, err := r.s.db.QueryContext(ctx, `
-		SELECT id, source_project_id, new_project_id, new_project_name, status, current_step, target_kind, target_value, failure_reason, owner, heartbeat_at, created_at, updated_at
-		FROM restore_jobs WHERE status = 'RUNNING'`)
+const restoreJobColumns = `
+		SELECT id, source_project_id, new_project_id, new_project_name, mode, status, current_step, target_kind, target_value, failure_reason, owner, heartbeat_at, created_at, updated_at
+		FROM restore_jobs`
+
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func queryRestoreJobs(ctx context.Context, db querier, query string, args ...any) ([]domain.RestoreJob, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query restore_jobs: %w", err)
 	}
@@ -131,11 +181,15 @@ func (r *RestoreJobsStore) ListRunningRestoreJobs(ctx context.Context) ([]domain
 	return out, rows.Err()
 }
 
+func (r *RestoreJobsStore) ListRunningRestoreJobs(ctx context.Context) ([]domain.RestoreJob, error) {
+	return queryRestoreJobs(ctx, r.s.db, restoreJobColumns+` WHERE status = 'RUNNING'`)
+}
+
 func scanPgRestoreJob(s scannable) (*domain.RestoreJob, error) {
 	var j domain.RestoreJob
 	var name, step, val, reason, owner sql.NullString
 	var created, updated, heartbeat time.Time
-	err := s.Scan(&j.ID, &j.SourceProjectID, &j.NewProjectID, &name, &j.Status,
+	err := s.Scan(&j.ID, &j.SourceProjectID, &j.NewProjectID, &name, &j.Mode, &j.Status,
 		&step, &j.TargetKind, &val, &reason, &owner, &heartbeat, &created, &updated)
 	if err == sql.ErrNoRows {
 		return nil, nil

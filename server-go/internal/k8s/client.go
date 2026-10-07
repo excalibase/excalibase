@@ -487,6 +487,29 @@ func (c *Client) DeleteSecret(ctx context.Context, namespace, name string) error
 	return nil
 }
 
+// KeepSecretsPastOwner drops the named Secrets' owner references. See KubeClient.
+func (c *Client) KeepSecretsPastOwner(ctx context.Context, namespace string, names []string) error {
+	secrets := c.clientset.CoreV1().Secrets(namespace)
+	for _, name := range names {
+		secret, err := secrets.Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read secret %s/%s: %w", namespace, name, err)
+		}
+		if len(secret.OwnerReferences) == 0 {
+			continue
+		}
+		kept := secret.DeepCopy()
+		kept.OwnerReferences = nil
+		if _, err := secrets.Update(ctx, kept, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("release secret %s/%s from its owner: %w", namespace, name, err)
+		}
+	}
+	return nil
+}
+
 // UpdateSecret replaces an existing Secret's data, keeping its metadata.
 func (c *Client) UpdateSecret(ctx context.Context, namespace, name string, data map[string][]byte) error {
 	secret, err := c.clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})

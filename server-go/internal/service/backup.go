@@ -28,6 +28,43 @@ type BackupService struct {
 	// limit. A restore creates a project, so it is admitted on the same
 	// terms as a provision.
 	capacity OrgProjectCapacity
+	// inPlace replaces a project's database from its own backups; nil on a
+	// platform wired without it.
+	inPlace *InPlaceRestore
+}
+
+// SetInPlaceRestore wires restores that replace a project's own database.
+func (s *BackupService) SetInPlaceRestore(r *InPlaceRestore) { s.inPlace = r }
+
+// SupportsInPlaceRestore reports whether projects deployed in mode can have
+// their database replaced from their backups.
+func (s *BackupService) SupportsInPlaceRestore(mode domain.DeploymentMode) bool {
+	if mode == "" {
+		mode = domain.ModeK8s
+	}
+	_, ok := s.adapters[mode].(InPlaceCluster)
+	return ok
+}
+
+// RestoreInPlace replaces projectID's database with its own backups at the
+// point req names. The project keeps its id, so no project slot is needed.
+func (s *BackupService) RestoreInPlace(ctx context.Context, projectID string, req domain.RestoreRequest) error {
+	if s.inPlace == nil {
+		return ErrInPlaceRestoreNotConfigured
+	}
+	inst, err := s.store.FindByProjectID(projectID)
+	if err != nil || inst == nil {
+		return fmt.Errorf("project not found: %s", projectID)
+	}
+	adapter, err := resolveAdapter(s.adapters, inst)
+	if err != nil {
+		return err
+	}
+	cluster, ok := adapter.(InPlaceCluster)
+	if !ok {
+		return ErrInPlaceRestoreUnsupported
+	}
+	return s.inPlace.Restore(ctx, cluster, projectID, req)
 }
 
 // ErrBackupsNotConfigured refuses a backup of a project that has backups off,

@@ -19,6 +19,18 @@ func TestSchemaHandlerIsRegisteredAsADeletionObserver(t *testing.T) {
 	}
 }
 
+// A database replaced in place is a new server; every pool must drop its old
+// connections (EXC-568).
+func TestPoolsAreToldOfAnInPlaceRestore(t *testing.T) {
+	body, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(body), "wireInPlaceRestore(deps.backupHandler.Service(), provSvc, store, vc, projectDB, deps.schemaHandler)") {
+		t.Error("in-place restore is not wired, or its pools are not observers")
+	}
+}
+
 // A paused project's database is down; the schema browser's pool must hear it.
 func TestSchemaHandlerIsRegisteredAsAPauseObserver(t *testing.T) {
 	body, err := os.ReadFile("main.go")

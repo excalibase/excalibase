@@ -18,7 +18,7 @@ beforeEach(() => restoreMutate.mockReset());
 function openRestore(name: string) {
   render(<BackupsPage />);
   fireEvent.click(screen.getByRole('button', { name: /Restore \/ PITR/i }));
-  fireEvent.change(screen.getByLabelText(/New Instance Name/i), { target: { value: name } });
+  fireEvent.change(screen.getByLabelText(/New project name/i), { target: { value: name } });
 }
 
 describe('BackupsPage restore', () => {

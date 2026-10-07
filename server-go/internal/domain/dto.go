@@ -219,6 +219,17 @@ const (
 	RestoreStatusFailed    = "FAILED"
 )
 
+// The phases a restore job reports as its currentStep. They are codes a
+// client turns into words; nothing else is ever written there.
+const (
+	RestoreStepRestoring      = "RESTORING_DATABASE"
+	RestoreStepSafetyBackup   = "SAFETY_BACKUP"
+	RestoreStepReplacing      = "REPLACING_DATABASE"
+	RestoreStepChecking       = "CHECKING_DATABASE"
+	RestoreStepRollingBack    = "ROLLING_BACK"
+	RestoreStepRestoreStopped = "RESTORE_INTERRUPTED"
+)
+
 // RestoreJob is the persisted state of a restore-into-new-project run.
 // Returned synchronously from POST /api/projects/.../backup/restore so
 // the caller can poll status via GET /api/projects/.../restore/{jobId}.
@@ -229,10 +240,13 @@ type RestoreJob struct {
 	// The client learns it here — it never supplies it.
 	NewProjectID   string `json:"newProjectId"`
 	NewProjectName string `json:"newProjectName,omitempty"`
-	Status         string `json:"status"` // RUNNING | COMPLETED | FAILED
-	CurrentStep    string `json:"currentStep,omitempty"`
-	TargetKind     string `json:"targetKind"` // latest | time | xid | lsn | name | backup
-	TargetValue    string `json:"targetValue,omitempty"`
+	// Mode is new_project, or in_place when the restore replaces the source
+	// project's own database; NewProjectID is then the source itself.
+	Mode        string `json:"mode"`
+	Status      string `json:"status"` // RUNNING | COMPLETED | FAILED
+	CurrentStep string `json:"currentStep,omitempty"`
+	TargetKind  string `json:"targetKind"` // latest | time | xid | lsn | name | backup
+	TargetValue string `json:"targetValue,omitempty"`
 	// Request is what the driving process restores from. It is not stored: a
 	// job whose driver dies is failed, never resumed from its row.
 	Request       RestoreRequest `json:"-"`
@@ -284,6 +298,38 @@ type RestoreRequest struct {
 	// never read from the request body — a caller who could name it could
 	// repoint another tenant's project (EXC-415).
 	TargetProjectID string `json:"-"`
+	// Mode chooses between a copy in a new project (the default) and
+	// replacing this project's database (in_place), which a plan with no free
+	// project slot can still do.
+	Mode string `json:"mode,omitempty"`
+	// ConfirmReplace is the caller's explicit consent that an in-place
+	// restore discards everything written after the restore point.
+	ConfirmReplace bool `json:"confirmReplace,omitempty"`
+}
+
+// Restore modes.
+const (
+	RestoreModeNewProject = "new_project"
+	RestoreModeInPlace    = "in_place"
+)
+
+var (
+	// ErrRestoreModeUnknown refuses a mode other than new_project or in_place.
+	ErrRestoreModeUnknown = errors.New("restore request: mode must be new_project or in_place")
+	// ErrRestoreReplaceUnconfirmed refuses an in-place restore the caller has
+	// not confirmed: it discards the project's current data.
+	ErrRestoreReplaceUnconfirmed = errors.New("restoring into this project replaces its current data; confirm the replace to continue")
+)
+
+// InPlace reports whether the restore replaces the source project's database.
+func (r RestoreRequest) InPlace() bool { return r.Mode == RestoreModeInPlace }
+
+// ModeOrDefault is the mode a job records: new_project unless in_place.
+func (r RestoreRequest) ModeOrDefault() string {
+	if r.InPlace() {
+		return RestoreModeInPlace
+	}
+	return RestoreModeNewProject
 }
 
 // Validate enforces the single-target invariant. Operationally the
@@ -307,6 +353,16 @@ func (r RestoreRequest) Validate() error {
 	}
 	if count > 1 {
 		return errors.New("restore request: at most one of targetTime, targetXid, targetLsn, targetName may be set")
+	}
+	switch r.Mode {
+	case "", RestoreModeNewProject:
+	case RestoreModeInPlace:
+		if !r.ConfirmReplace {
+			return ErrRestoreReplaceUnconfirmed
+		}
+		return validateRecoveryTarget(r)
+	default:
+		return ErrRestoreModeUnknown
 	}
 	if _, ok := NormalizeProjectName(r.NewProjectName); !ok {
 		return fmt.Errorf("restore request: newProjectName is required and must be %d characters or fewer", MaxProjectNameLength)

@@ -46,7 +46,7 @@ async function startRestore(answer: Record<string, unknown> = STARTED) {
   vi.mocked(api.post).mockResolvedValueOnce({ data: answer } as never);
   renderPage();
   await userEvent.click(screen.getByRole('button', { name: /Restore \/ PITR/i }));
-  await userEvent.type(screen.getByLabelText(/New Instance Name/i), 'copy');
+  await userEvent.type(screen.getByLabelText(/New project name/i), 'copy');
   await userEvent.click(screen.getByRole('button', { name: /Restore Latest Backup/i }));
 }
 
