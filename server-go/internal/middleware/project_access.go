@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -41,6 +42,9 @@ func servingAllows(r *http.Request, inst *domain.DatabaseInstance) bool {
 		return true
 	}
 	id := inst.ProjectID
+	if inst.Status == string(domain.StatusRestoring) && restoreSurface(r, id, inst.CurrentStep) {
+		return true
+	}
 	switch r.URL.Path {
 	case "/api/provision/" + id, "/api/provision/" + id + "/":
 		return r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodDelete
@@ -56,6 +60,20 @@ func servingAllows(r *http.Request, inst *domain.DatabaseInstance) bool {
 	default:
 		return false
 	}
+}
+
+// restoreSurface is what a restore in progress needs (EXC-568): following its
+// job and listing the backups; once a restore has stopped, starting one again.
+func restoreSurface(r *http.Request, id, step string) bool {
+	base := "/api/provision/" + id + "/backup/"
+	switch {
+	case r.Method == http.MethodPost:
+		return r.URL.Path == base+"restore" && step == domain.RestoreStepRestoreStopped
+	case r.Method == http.MethodGet:
+		rest, ok := strings.CutPrefix(r.URL.Path, base+"restore/")
+		return r.URL.Path == base+"list" || (ok && rest != "" && !strings.Contains(rest, "/"))
+	}
+	return false
 }
 
 // notServableBody renders the refusal as the JSON shape every other gate
