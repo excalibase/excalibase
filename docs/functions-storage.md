@@ -87,6 +87,11 @@ caller's token only when the platform verified it (functions with
 Refuse with `FunctionError` so the caller gets `401`/`403`; any other thrown
 error answers a bare `500`.
 
+The request a function sees never carries a platform credential: the
+gateway removes the Studio cookies (`excali_session`, `excali_oauth_state`)
+by name, an `Authorization: Bearer excb_…` platform token, and its own
+internal headers. Your app's own cookies and tokens pass through unchanged.
+
 ```ts
 export const generateUploadUrl = mutation({
   args: v.object({ contentType: v.string(), size: v.number() }),
