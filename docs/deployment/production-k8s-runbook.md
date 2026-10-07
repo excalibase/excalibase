@@ -185,14 +185,15 @@ their own, with a key that can reach nothing else. Browsers PUT and GET that
 bucket directly on signed URLs, so it needs a CORS rule; the backup bucket must
 never get one.
 
-1. Create the bucket, e.g. `excalibase-files`, in the same R2 account.
+1. Create the bucket, e.g. `excalibase-storage`, in the same R2 account (on
+   the production account it already exists, empty).
 2. Create an R2 API token with **Object Read & Write** on that bucket only.
    Its S3 key and secret go in `storage-creds`. It cannot change bucket
    settings, which is why step 3 is done by hand.
 3. Apply the CORS rule with a token or login that may edit bucket settings
    (Cloudflare dashboard → R2 → bucket → Settings → CORS policy, or
-   `wrangler r2 bucket cors set excalibase-files --file cors.json`, or
-   `aws s3api put-bucket-cors --bucket excalibase-files --cors-configuration file://cors.json --endpoint-url https://<account_id>.r2.cloudflarestorage.com`):
+   `wrangler r2 bucket cors set excalibase-storage --file cors.json`, or
+   `aws s3api put-bucket-cors --bucket excalibase-storage --cors-configuration file://cors.json --endpoint-url https://<account_id>.r2.cloudflarestorage.com`):
 
    ```json
    {"CORSRules": [{
@@ -222,15 +223,17 @@ never get one.
      --from-literal=access_key_id="$STORAGE_ACCESS_KEY_ID" \
      --from-literal=secret_access_key="$STORAGE_SECRET_ACCESS_KEY" \
      --from-literal=endpoint="https://<account_id>.r2.cloudflarestorage.com" \
-     --from-literal=bucket="excalibase-files" \
+     --from-literal=bucket="excalibase-storage" \
      --from-literal=region="auto"
    ```
 
 Moving files stored before EXC-560 (they sat under `projects/` in the backup
-bucket; the layout is unchanged): `aws s3 sync s3://excalibase-backups/projects/ s3://excalibase-files/projects/`
+bucket; the layout is unchanged): `aws s3 sync s3://excalibase-backups/projects/ s3://excalibase-storage/projects/`
 with a key that reads the old bucket and writes the new one, then remove
 `projects/` from the backup bucket. Tenant backups are under `<projectId>/`,
-never `projects/`.
+never `projects/`. On production there was nothing to move: on 2026-10-07 the
+backup bucket held no key under `projects/`; bucket rows in the catalogue stay
+valid, since the key layout is the same.
 
 ## 3. Install
 
