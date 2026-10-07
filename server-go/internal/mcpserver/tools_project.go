@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
+
+	"github.com/excalibase/provisioning-poc/internal/schema"
 )
 
 type projectArg struct {
@@ -37,7 +40,9 @@ type createKeyArgs struct {
 func projectTools() []entry {
 	return []entry{
 		tool("list_projects", "List the projects this connection can reach, with their ids and status.", readTool, listProjects),
-		tool("get_project_info", "Endpoints for the project's GraphQL and REST APIs, its publishable SDK keys, and a setup snippet for @excalibase/sdk.", readTool, getProjectInfo),
+		tool("get_project_info", "Endpoints for the project's GraphQL, REST, auth and realtime APIs, its publishable SDK keys, its CORS origins, "+
+			"the GraphQL root field names of its public tables, how end users register and sign in, the realtime protocol, "+
+			"how permissions name the signed-in user, and a setup snippet for @excalibase/sdk. Read it before writing a page.", readTool, getProjectInfo),
 		tool("create_publishable_key", "Create a publishable SDK key (role anon, safe to ship in a browser bundle). The full key is returned once.", writeTool, createPublishableKey),
 	}
 }
@@ -76,21 +81,23 @@ func getProjectInfo(ctx context.Context, c *call, in projectArg) (any, error) {
 	urls := endpoints(c.settings.PublicBaseURL, info.OrgSlug, projectID)
 	setup := sdkSetup(c.settings.PublicBaseURL, projectID)
 	setup["fetchExample"] = fetchExample(urls)
-	origins := info.CorsAllowedOrigins
-	if origins == nil {
-		origins = []string{}
-	}
+	origins := currentOrigins(ctx, c, projectID, info.CorsAllowedOrigins)
 	out := map[string]any{
 		"projectId": projectID, "projectName": info.ProjectName,
-		"endpoints": urls,
-		"sdkSetup":  setup,
-		"restApi":   restGuide(urls),
+		"endpoints":   urls,
+		"sdkSetup":    setup,
+		"restApi":     restGuide(urls),
+		"endUserAuth": authGuide(urls),
+		"permissions": permissionsGuide(),
+		"realtime":    realtimeGuide(urls["graphql"]),
+		"notInMcp":    studioOnly(c.settings.StudioURL, projectID),
 		"cors": map[string]any{
 			"allowedOrigins": origins,
 			"note": "A browser page can call these APIs only from an origin in this list. create_app adds an app's own origin; " +
-				"any other origin (a local dev server, a custom domain) is added in Studio, Settings, CORS.",
+				"add any other origin (a local dev server such as http://localhost:5173, a custom domain) with add_cors_origin.",
 		},
 	}
+	addGraphQLFields(ctx, c, projectID, out)
 	keys, err := publishableKeys(ctx, c, projectID)
 	if err != nil {
 		var routeErr *RouteError
@@ -106,6 +113,36 @@ func getProjectInfo(ctx context.Context, c *call, in projectArg) (any, error) {
 		out["publishableKeysNote"] = "Only the prefix of an existing key can be read back; use the full key saved when it was created, or create a new one."
 	}
 	return out, nil
+}
+
+// currentOrigins reads the allowlist from its own route, the one the CORS
+// tools edit; a caller below Developer, who cannot read it, gets the copy
+// /info carries.
+func currentOrigins(ctx context.Context, c *call, projectID string, fromInfo []string) []string {
+	var current corsList
+	if err := c.get(ctx, projectsAPI+projectID+"/cors/", nil, &current); err == nil && current.AllowedOrigins != nil {
+		return current.AllowedOrigins
+	}
+	if fromInfo == nil {
+		return []string{}
+	}
+	return fromInfo
+}
+
+// addGraphQLFields names the public tables' GraphQL root fields; a project
+// whose tables cannot be read (no database yet) says why instead.
+func addGraphQLFields(ctx context.Context, c *call, projectID string, out map[string]any) {
+	var tables []schema.TableInfo
+	if err := c.get(ctx, schemaAPI+projectID+"/tables", url.Values{"schema": {"public"}}, &tables); err != nil {
+		out["graphqlFieldsError"] = err.Error()
+		return
+	}
+	fields := make(map[string]rootFields, len(tables))
+	for _, table := range tables {
+		fields["public."+table.Name] = graphQLFields("public", table.Name, strings.EqualFold(table.Type, "VIEW"))
+	}
+	out["graphqlFields"] = fields
+	out["graphqlNaming"] = namingRule
 }
 
 func publishableKeys(ctx context.Context, c *call, projectID string) ([]sdkKey, error) {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
@@ -49,7 +48,7 @@ func createApp(ctx context.Context, c *call, in createAppArgs) (any, error) {
 	}
 	app.Status = statusNotDeployed
 	out := map[string]any{"app": app, "next": nextDeploy}
-	added, err := allowAppOrigin(ctx, c, projectID, app.URL)
+	added, err := allowAppOrigin(ctx, c, projectID, app.ID, app.URL)
 	if err != nil {
 		out["corsError"] = "the app was created, but its origin could not be added to the CORS allowlist: " + err.Error()
 		return out, nil
@@ -66,24 +65,20 @@ type corsList struct {
 }
 
 // allowAppOrigin adds the origin of appURL to the project's CORS allowlist
-// unless it is there already; it answers the origin it added. The list is
-// read and written whole, so an edit in Studio between the two is lost.
-func allowAppOrigin(ctx context.Context, c *call, projectID, appURL string) (string, error) {
+// as the app's own, so deleting the app removes it; it answers the origin it
+// added. The server adds it under the list's lock, so a concurrent edit is kept.
+func allowAppOrigin(ctx context.Context, c *call, projectID, appID, appURL string) (string, error) {
 	origin, err := originOf(appURL)
 	if err != nil || origin == "" {
 		return "", err
 	}
-	corsPath := projectsAPI + projectID + "/cors/"
-	var current corsList
-	if err := c.get(ctx, corsPath, nil, &current); err != nil {
+	var edit corsEdit
+	body := map[string]string{"origin": origin, "appId": appID}
+	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+"/cors/origins", nil, body, &edit); err != nil {
 		return "", err
 	}
-	if current.AllowWildcard || slices.Contains(current.AllowedOrigins, origin) {
+	if !edit.Added {
 		return "", nil
-	}
-	updated := corsList{AllowedOrigins: append(slices.Clone(current.AllowedOrigins), origin)}
-	if err := c.send(ctx, http.MethodPut, corsPath, nil, updated, nil); err != nil {
-		return "", err
 	}
 	return origin, nil
 }

@@ -4,12 +4,17 @@ package mcpserver
 const countNeedsAggregations = "Counting rows (Prefer: count=exact) needs allowAggregations: true on the role's select permission; " +
 	"without it every request that asks for a count answers 403 permission_denied \"Counting rows of <schema.table> is not permitted\"."
 
+// anonByDesign is ADR 0036: the role is decided by the token, not by a key.
+const anonByDesign = "A data request without an Authorization header runs as anon, exactly like one signed in with a publishable key. " +
+	"That is by design: revoking a publishable key does not block data access. What anon may do is decided only by anon's permissions (set_permission)."
+
 // restGuide is the REST surface a generated page uses, so a client need not
 // read the engine's source to learn it.
 func restGuide(urls map[string]string) map[string]any {
 	return map[string]any{
 		"tableUrl": urls["rest"] + "/<table>",
-		"headers":  "Authorization: Bearer <accessToken from the token exchange>, X-Excalibase-Publishable-Key: <key>",
+		"headers": "Authorization: Bearer <accessToken> (from the publishable-key exchange for anon, or a user's sign-in), " +
+			"optionally X-Excalibase-Publishable-Key: <key>. " + anonByDesign,
 		"read": map[string]string{
 			"select": "select=id,title or select=* ; embed a related table: select=id,author(name)",
 			"order":  "order=created_at.desc or order=title.asc.nullslast ; comma-separate several",
@@ -23,14 +28,19 @@ func restGuide(urls map[string]string) map[string]any {
 			"update": "PATCH <table>?<filters> with the changed columns; at least one filter is required",
 			"delete": "DELETE <table>?<filters>; at least one filter is required",
 		},
+		"rpc": "A tracked database function (track_db_function) is <rest>/rpc/<function>: POST with its arguments as a JSON object, " +
+			"or GET with them as query parameters for a function that only reads. A set-returning function answers {\"data\":[...]}, any other {\"data\": value or null}. " +
+			"select, order, limit and filters apply to the rows it returns.",
 		"prefer": map[string]string{
 			"count=exact":           "GET adds pagination.total and a Content-Range header. " + countNeedsAggregations,
 			"return=representation": "a write answers with the written rows in data; without it the body is empty",
 			"tx=rollback":           "runs a write and rolls it back: a safe way to try a write with test_api_request",
 		},
 		"responses": map[string]string{
-			"list":            `{"data":[...]} ; with Prefer: count=exact {"data":[...],"pagination":{"total":N,"limit":N,"offset":N}} ; with first/after {"data":[...],"pageInfo":{"hasNextPage":bool}}`,
-			"write":           `POST 201, PATCH and DELETE 200; {"data":[...]} with return=representation`,
+			"list": `{"data":[...]} ; with Prefer: count=exact {"data":[...],"pagination":{"total":N,"limit":N,"offset":N}} ; with first/after {"data":[...],"pageInfo":{"hasNextPage":bool}}`,
+			"write": `POST 201, PATCH and DELETE 200. With return=representation: a POST of one object answers {"data":{...}} (an object), ` +
+				`a POST of an array answers {"data":[...]}, PATCH and DELETE always answer {"data":[...]} (an array, possibly empty). ` +
+				`A written row the role may not select is not returned. Read data defensively: Array.isArray(data) ? data : data ? [data] : []`,
 			"permission":      `403 {"code":"permission_denied","message":...}: the role lacks that operation or column (set_permission)`,
 			"unknown":         `404 {"error":"Not found"}: no such table, or the role cannot select it`,
 			"missingCountFix": "set_permission select with allowAggregations: true, or drop Prefer: count=exact",
