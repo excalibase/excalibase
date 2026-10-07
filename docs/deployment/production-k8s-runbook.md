@@ -21,6 +21,8 @@ operations (PATs, capacity, logs, drop project, revoke org) live in
 [ ] cert-manager + ClusterIssuer letsencrypt-prod, DNS for api.* and admin.* -> §1.5
 [ ] Namespace excalibase-platform created                               -> §2
 [ ] Secret r2-creds        (access_key_id, secret_access_key, endpoint, bucket, region)
+[ ] Bucket + key for customer files, bucket CORS applied                  -> §2.1
+[ ] Secret storage-creds   (access_key_id, secret_access_key, endpoint, bucket, region)
 [ ] Secret resend-creds    (api-key)
 [ ] values-prod.yaml copied and edited: image tags, hosts, cors.origins, admin ingress
 [ ] helm upgrade --install platform ... -f values-prod.yaml   (NO --wait on first install)
@@ -143,6 +145,7 @@ typo does not stop the pod, it silently degrades the feature.
 | Secret | Keys | Used for | Created by |
 |---|---|---|---|
 | `r2-creds` | `access_key_id`, `secret_access_key`, `endpoint`, `bucket`, `region` | `R2_*` env → backup store for every tenant cluster and restores (OPERATOR.md §6 "Vault uninitialised fallback") | you, before install |
+| `storage-creds` | `access_key_id`, `secret_access_key`, `endpoint`, `bucket`, `region` | `STORAGE_*` env → the bucket customer files live in (Storage, `ctx.storage`, uploads from apps). Its own bucket and key, never the backup bucket: provisioning refuses to start when they match. Absent = storage off (§2.1) | you, before install |
 | `resend-creds` | `api-key` | `RESEND_API_KEY`; requires `email.provider: resend` | you, before install |
 | `deno-runtime-secret` | `secret` | `DENO_RUNTIME_SECRET` / `RUNTIME_SECRET` on every per-project Deno pod | chart, first install only (`helm.sh/resource-policy: keep`, `lookup`-preserved) |
 | `platform-setup-token` | `token` | `SETUP_TOKEN` on provisioning — the one-time first-admin registration token (EXC-451) | chart, first install only (`lookup`-preserved, same pattern as `deno-runtime-secret`) |
@@ -174,6 +177,60 @@ kubectl create secret generic resend-creds -n "$NS" \
   **not consumed** by `templates/platform-db.yaml`: tenant clusters are
   backed up, the control-plane DB is not (OPERATOR.md §6). The
   `--set platformDb.backup.s3.*` lines in its header are inert. No ticket found.
+
+### 2.1 The customer file bucket (EXC-560)
+
+Customer files (Storage, `ctx.storage`, uploads from apps) live in a bucket of
+their own, with a key that can reach nothing else. Browsers PUT and GET that
+bucket directly on signed URLs, so it needs a CORS rule; the backup bucket must
+never get one.
+
+1. Create the bucket, e.g. `excalibase-files`, in the same R2 account.
+2. Create an R2 API token with **Object Read & Write** on that bucket only.
+   Its S3 key and secret go in `storage-creds`. It cannot change bucket
+   settings, which is why step 3 is done by hand.
+3. Apply the CORS rule with a token or login that may edit bucket settings
+   (Cloudflare dashboard → R2 → bucket → Settings → CORS policy, or
+   `wrangler r2 bucket cors set excalibase-files --file cors.json`, or
+   `aws s3api put-bucket-cors --bucket excalibase-files --cors-configuration file://cors.json --endpoint-url https://<account_id>.r2.cloudflarestorage.com`):
+
+   ```json
+   {"CORSRules": [{
+     "AllowedOrigins": ["*"],
+     "AllowedMethods": ["GET", "PUT", "HEAD"],
+     "AllowedHeaders": ["content-type"],
+     "ExposeHeaders": ["ETag", "Content-Length", "Content-Type"],
+     "MaxAgeSeconds": 3600
+   }]}
+   ```
+
+   (wrangler's file is the bare rules list: `{"rules": [{"allowed": {"origins": ["*"], "methods": ["GET","PUT","HEAD"], "headers": ["content-type"]}, "exposeHeaders": ["ETag","Content-Length","Content-Type"], "maxAgeSeconds": 3600}]}`.)
+
+   Why every origin: a signed URL is the permission. It names one object,
+   one method, the exact type and size, and expires in five minutes, and it
+   works from curl whatever the CORS rule says, so narrowing origins here
+   protects nothing. Which origins may get a URL is decided per project
+   where URLs are minted: the project's CORS allowlist, a project token and
+   the bucket's access rule. A bucket-wide list would have to be the union
+   of every project's allowlist, custom domains and `localhost` included.
+   No credentials are involved: R2 never reads cookies, and an `*` answer
+   carries no `Access-Control-Allow-Credentials`.
+4. Create the Secret:
+
+   ```bash
+   kubectl create secret generic storage-creds -n "$NS" \
+     --from-literal=access_key_id="$STORAGE_ACCESS_KEY_ID" \
+     --from-literal=secret_access_key="$STORAGE_SECRET_ACCESS_KEY" \
+     --from-literal=endpoint="https://<account_id>.r2.cloudflarestorage.com" \
+     --from-literal=bucket="excalibase-files" \
+     --from-literal=region="auto"
+   ```
+
+Moving files stored before EXC-560 (they sat under `projects/` in the backup
+bucket; the layout is unchanged): `aws s3 sync s3://excalibase-backups/projects/ s3://excalibase-files/projects/`
+with a key that reads the old bucket and writes the new one, then remove
+`projects/` from the backup bucket. Tenant backups are under `<projectId>/`,
+never `projects/`.
 
 ## 3. Install
 

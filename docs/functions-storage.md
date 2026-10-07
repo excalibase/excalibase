@@ -8,7 +8,55 @@ against Convex docs ports without translation.
 Storage is backed by Cloudflare R2 (S3-compatible) under the hood; the
 runtime never proxies blob bytes through the worker pod when a direct
 upload is possible. A per-project private bucket (`ctx-storage`) is
-auto-provisioned on first use.
+auto-provisioned on first use. Files live in a bucket of their own, apart
+from backups (`STORAGE_*`, EXC-560).
+
+## App uploads without functions (EXC-560, feature `appstorage`)
+
+Most apps need no upload function at all. A bucket carries **access rules**
+for the project's app users, by the role in their token, and the SDK calls
+the platform's own storage API with the signed-in user's token:
+
+```ts
+const user = db.auth.user(); // after db.auth.signInWithPassword(...)
+await db.storage.uploadFile(file, { bucket: "avatars", path: `${user!.id}/avatar.png` });
+const blob = await db.storage.download("avatars", `${user!.id}/avatar.png`);
+const page = await db.storage.list("avatars");          // the user's own folder
+await db.storage.remove("avatars", `${user!.id}/avatar.png`);
+```
+
+Rules are set in Studio (Storage → bucket → App access) or with
+`PUT /api/projects/{projectId}/storage/buckets/{bucket}/access`:
+
+```json
+{"access": {"authenticated": {"read": "own", "write": "own", "delete": "own"},
+            "staff": {"write": "all", "delete": "all"}}}
+```
+
+* `own` reaches keys under `<userId>/`, the signed-in user's id; `all` every
+  key; leaving an operation out grants nothing. A role with no rule gets
+  nothing, and an unknown bucket is refused exactly like one without a rule.
+* An api-key token (the publishable key's) names no user, so `own` gives it
+  nothing: every visitor holds the same token.
+* A public bucket is readable by anyone; listing still needs a `read` rule.
+* `X-Excalibase-Role` picks another role the token lists in `allowed_roles`.
+* Bucket limits (size, MIME allowlist, project quota) apply as for Studio.
+
+The routes, all `Authorization: Bearer <project access token>`, answer CORS
+from the project's allowlist (`project-cors.md`):
+
+| Method | Path under `/storage/v1/{projectId}/buckets/{bucket}` | Rule |
+|---|---|---|
+| `POST` | `/upload-url` `{key, mimeType, size}` | write |
+| `POST` | `/confirm-upload` `{key, uploadId}` | write |
+| `GET` | `/objects?prefix=&limit=&cursor=` | read (`own` lists the caller's folder) |
+| `GET` | `/download-url/{key}` | read |
+| `DELETE` | `/objects/{key}` | delete |
+
+The bytes go between the browser and the object store on signed URLs; the
+file bucket's CORS rule is in the production runbook §2.1. Use the function
+flow below when the upload rule needs code (checking a row, a quota of your
+own, attaching the file to a record in the same call).
 
 ## Surface
 
@@ -104,9 +152,11 @@ export const generateUploadUrl = mutation({
 ```
 
 Function ids are `module.export`; the export may be camelCase, so the
-defaults `db.storage.uploadFile` calls, `system.generateUploadUrl` and
+defaults `db.storage.uploadViaFunctions` calls, `system.generateUploadUrl` and
 `system.completeUpload`, are deployable as they are. A browser app calls them
 from an origin on the project's CORS allowlist (see `project-cors.md`).
+`@excalibase/server` and `zod` may be imported by bare name, as below; the
+bundler points them at the copies the runtime image carries.
 
 ### 1. Server: mint the signed PUT URL inside a mutation
 
@@ -196,8 +246,9 @@ upload-attaching mutations that all reuse the same `generateUploadUrl`
 helper. An upload that is never accepted is collected after the platform's
 grace period, so step (c) is part of the flow, not an optimisation.
 
-`db.storage.uploadFile(blob)` in `excalibase-sdk-js` (0.10.0 and later) runs
-these three steps in one call. By default it calls `system.generateUploadUrl`
+`db.storage.uploadViaFunctions(blob)` in `excalibase-sdk-js` runs these three
+steps in one call (it was `uploadFile` before 0.12.0, which now uploads
+through the bucket API above). By default it calls `system.generateUploadUrl`
 and `system.completeUpload`; `opts.ref` and `opts.completeRef` name other
 mutations. It returns the `storageId` only after the completion succeeds.
 
@@ -285,9 +336,8 @@ The runtime signs every call with its project's runtime token (derived from
 the platform secret, valid for that project only); user code never holds it.
 On Kubernetes each project's runtime reaches provisioning's internal listener
 at `DENO_PROVISIONING_URL` (provisioning refuses to start without it when it
-runs functions there). Public uploads still ride the
-existing Supabase-shape `/api/projects/{projectId}/storage` routes
-unchanged.
+runs functions there). Studio uploads ride `/api/projects/{projectId}/storage`
+(platform members); app users ride `/storage/v1/{projectId}` (above).
 
 ## Limits
 
