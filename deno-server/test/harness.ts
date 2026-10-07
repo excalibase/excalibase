@@ -155,8 +155,8 @@ export async function startRuntime(opts: RuntimeOptions = {}): Promise<RuntimeHa
       }
     } catch (_) { /* ignore */ }
   };
-  drain(child.stdout);
-  drain(child.stderr);
+  void drain(child.stdout);
+  void drain(child.stderr);
 
   const headers = (extra?: Record<string, string>): Record<string, string> => ({
     "Content-Type": "application/json",
