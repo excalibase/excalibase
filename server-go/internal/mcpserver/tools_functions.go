@@ -2,8 +2,10 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -39,12 +41,72 @@ type functionView struct {
 	Kind         string `json:"kind,omitempty"`
 }
 
+type functionIDArgs struct {
+	projectArg
+	ID string `json:"id" jsonschema:"the edge function's id (list_functions)"`
+}
+
+type outboundHostsArgs struct {
+	projectArg
+	Add    []string `json:"add,omitempty" jsonschema:"hosts to allow, e.g. [\"api.stripe.com\"]"`
+	Remove []string `json:"remove,omitempty" jsonschema:"hosts to stop allowing"`
+}
+
+const secretWarning = "WARNING: the value passes through this conversation and the AI tool's logs. Prefer asking the user to set it in Studio " +
+	"(Edge Functions → Secrets); use this only for a test value or when the user explicitly asks."
+
 func functionTools() []entry {
 	return []entry{
 		tool("list_functions", "List the project's edge functions.", readTool, listFunctions),
 		tool("deploy_function", "Create or update an edge function from its source files and deploy it. Functions are for APIs and webhooks, not web pages: their answers carry Content-Security-Policy script-src 'self', so a page's inline scripts never run. Host a web page as a container app (create_app).", writeTool, deployFunction),
-		tool("set_function_secret", "Set a secret the project's edge functions read as an environment variable. The value is never returned.", writeTool, setFunctionSecret),
+		tool("delete_function", "Delete one edge function: it stops answering at once.", writeTool, deleteFunction),
+		tool("set_function_outbound_hosts", "Allow or stop allowing outside hosts the project's edge functions may call (fetch); anything not listed is blocked. "+
+			"Hosts already on the list stay unless removed. The functions are redeployed with the new list.", writeTool, setFunctionOutboundHosts),
+		tool("set_function_secret", "Set a secret the project's edge functions read as an environment variable. The value is never returned. "+secretWarning, writeTool, setFunctionSecret),
 	}
+}
+
+func deleteFunction(ctx context.Context, c *call, in functionIDArgs) (any, error) {
+	projectID, err := c.useProject(in.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	id, err := segment("id", in.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.send(ctx, http.MethodDelete, projectsAPI+projectID+"/functions/"+id+"/", nil, nil, nil); err != nil {
+		return nil, err
+	}
+	return map[string]any{"deleted": in.ID}, nil
+}
+
+func setFunctionOutboundHosts(ctx context.Context, c *call, in outboundHostsArgs) (any, error) {
+	projectID, err := c.useProject(in.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if len(in.Add)+len(in.Remove) == 0 {
+		return nil, errors.New("name hosts to add or remove")
+	}
+	egressPath := projectsAPI + projectID + "/functions/egress"
+	var current struct {
+		AllowedHosts []string `json:"allowedHosts"`
+	}
+	if err := c.get(ctx, egressPath, nil, &current); err != nil {
+		return nil, err
+	}
+	hosts := make([]string, 0, len(current.AllowedHosts)+len(in.Add))
+	for _, host := range append(slices.Clone(current.AllowedHosts), in.Add...) {
+		if !slices.Contains(in.Remove, host) && !slices.Contains(hosts, host) {
+			hosts = append(hosts, host)
+		}
+	}
+	var saved map[string]any
+	if err := c.send(ctx, http.MethodPut, egressPath, nil, map[string]any{"allowedHosts": hosts}, &saved); err != nil {
+		return nil, err
+	}
+	return map[string]any{"egress": saved, "note": "effectiveHosts is what a function may reach: the operator defaults plus the project's list."}, nil
 }
 
 func listFunctions(ctx context.Context, c *call, in projectArg) (any, error) {
@@ -97,5 +159,8 @@ func setFunctionSecret(ctx context.Context, c *call, in functionSecretArgs) (any
 	if err := c.send(ctx, http.MethodPost, projectsAPI+projectID+"/functions/secrets", nil, body, nil); err != nil {
 		return nil, err
 	}
-	return map[string]any{"key": in.Key, "set": true}, nil
+	return map[string]any{
+		"key": in.Key, "set": true,
+		"note": "Next time, ask the user to set secrets in Studio so the value stays out of the conversation: " + studioOnly(c.settings.StudioURL, projectID)["functionSecrets"],
+	}, nil
 }

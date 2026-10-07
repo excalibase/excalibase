@@ -12,17 +12,19 @@ import (
 // list on purpose: the endpoint is built for coding, and every addition is a
 // decision about what an AI tool may do with a person's credential.
 var offeredTools = []string{
-	"apply_migration", "create_app", "create_publishable_key", "deploy_app", "deploy_function", "describe_table",
-	"execute_sql", "generate_typescript_types", "get_ci_snippet", "get_deploy_status",
-	"get_dockerfile_template", "get_graphql_schema", "get_logs", "get_project_info", "list_apps",
-	"list_functions", "list_migrations", "list_permissions", "list_projects", "list_tables",
-	"set_function_secret", "set_permission", "test_api_request",
+	"add_cors_origin", "apply_migration", "create_app", "create_publishable_key", "delete_function", "deploy_app",
+	"deploy_function", "describe_table", "execute_sql", "generate_typescript_types", "get_ci_snippet",
+	"get_deploy_status", "get_dockerfile_template", "get_graphql_schema", "get_logs", "get_project_info",
+	"list_apps", "list_cors_origins", "list_functions", "list_migrations", "list_permissions", "list_projects",
+	"list_tables", "remove_cors_origin", "set_db_function_permission", "set_function_outbound_hosts",
+	"set_function_secret", "set_permission", "set_realtime", "test_api_request", "track_db_function",
 }
 
 // allowedRoutes is every route a tool may call. Anything else is refused by
 // TestNoToolLeavesItsAllowedRoutes, so a new call is a visible decision.
-// test_api_request also calls the project's own data API, signed in with a
-// publishable key, so it holds what the anon role holds (tools_probe_test.go).
+// test_api_request also calls the project's own data API, as anon (a
+// publishable key) or as one of its signed-in end users (that user's own
+// access token), so it holds no more than the page would (tools_probe_test.go).
 var allowedRoutes = []*regexp.Regexp{
 	regexp.MustCompile(`^GET /api/provision/$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/info/$`),
@@ -30,18 +32,30 @@ var allowedRoutes = []*regexp.Regexp{
 	// the anon role grants. Secret keys and personal access tokens stay out.
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/sdk-keys/$`),
 	regexp.MustCompile(`^GET /api/schema/[^/]+/(tables|relationships)(\?.*)?$`),
-	regexp.MustCompile(`^GET /api/schema/[^/]+/tables/[^/]+/(columns|indexes)(\?.*)?$`),
+	regexp.MustCompile(`^GET /api/schema/[^/]+/tables/[^/]+/(columns|indexes|checks)(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/schema/[^/]+/query(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/provision/[^/]+/migrations/$`),
 	regexp.MustCompile(`^GET /api/provision/[^/]+/permissions/$`),
 	regexp.MustCompile(`^(PUT|DELETE) /api/provision/[^/]+/permissions/tables/[^/]+/roles/[^/]+/[^/]+$`),
 	regexp.MustCompile(`^GET /api/provision/[^/]+/logs(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/functions/$`),
+	regexp.MustCompile(`^DELETE /api/projects/[^/]+/functions/[^/]+/$`),
+	// Which outside hosts the project's functions may reach.
+	regexp.MustCompile(`^(GET|PUT) /api/projects/[^/]+/functions/egress$`),
+	regexp.MustCompile(`^GET /api/projects/[^/]+/realtime/tables$`),
+	regexp.MustCompile(`^(PUT|DELETE) /api/projects/[^/]+/realtime/tables/[^/]+/[^/]+$`),
+	// Serving a database function through the API, and who may call it.
+	regexp.MustCompile(`^POST /api/provision/[^/]+/tracked-functions/$`),
+	regexp.MustCompile(`^DELETE /api/provision/[^/]+/tracked-functions/[^/]+$`),
+	regexp.MustCompile(`^(PUT|DELETE) /api/provision/[^/]+/function-permissions/[^/]+/roles/[^/]+$`),
 	regexp.MustCompile(`^POST /api/projects/[^/]+/functions/secrets$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/functions/[^/]+/logs(\?.*)?$`),
 	regexp.MustCompile(`^(GET|POST) /api/projects/[^/]+/apps/$`),
-	// Only to add a new app's own origin to the allowlist.
-	regexp.MustCompile(`^(GET|PUT) /api/projects/[^/]+/cors/$`),
+	// The allowlist is read whole and edited one origin at a time; the
+	// wildcard is never set through MCP.
+	regexp.MustCompile(`^GET /api/projects/[^/]+/cors/$`),
+	regexp.MustCompile(`^(POST|DELETE) /api/projects/[^/]+/cors/origins(\?.*)?$`),
+	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/certificate$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/$`),
 	regexp.MustCompile(`^POST /api/projects/[^/]+/apps/[^/]+/deploy$`),
 	regexp.MustCompile(`^GET /api/projects/[^/]+/apps/[^/]+/(deploys|deploys/[^/]+|logs)(\?.*)?$`),

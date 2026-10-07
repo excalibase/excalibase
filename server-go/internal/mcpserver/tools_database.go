@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -127,7 +128,57 @@ func listPermissions(ctx context.Context, c *call, in projectArg) (any, error) {
 	if err := c.get(ctx, provisionAPI+projectID+"/permissions/", nil, &document); err != nil {
 		return nil, err
 	}
-	return map[string]any{"permissions": document}, nil
+	out := map[string]any{"permissions": document}
+	if stale := droppedTables(ctx, c, projectID, document); len(stale) > 0 {
+		out["droppedTables"] = stale
+		out["droppedNote"] = "Permissions are stored for these, but the schema has no table or view of that name: if one was dropped, a new table " +
+			"with the same name would get them, so remove each with set_permission remove: true. A materialized view or foreign table is " +
+			"not listed as a table, so leave its permissions alone."
+	}
+	return out, nil
+}
+
+// droppedTables lists the permissioned tables the database no longer has. A
+// schema whose tables cannot be read flags nothing rather than guess.
+func droppedTables(ctx context.Context, c *call, projectID string, document json.RawMessage) []string {
+	var parsed struct {
+		Tables []struct {
+			Table string `json:"table"`
+		} `json:"tables"`
+	}
+	if json.Unmarshal(document, &parsed) != nil {
+		return nil
+	}
+	existing := map[string]map[string]bool{}
+	var stale []string
+	for _, entry := range parsed.Tables {
+		schemaName, table, ok := strings.Cut(entry.Table, ".")
+		if !ok {
+			continue
+		}
+		if _, read := existing[schemaName]; !read {
+			existing[schemaName] = tableNames(ctx, c, projectID, schemaName)
+		}
+		names := existing[schemaName]
+		if names != nil && !names[table] && !slices.Contains(stale, entry.Table) {
+			stale = append(stale, entry.Table)
+		}
+	}
+	return stale
+}
+
+func tableNames(ctx context.Context, c *call, projectID, schemaName string) map[string]bool {
+	var tables []struct {
+		Name string `json:"name"`
+	}
+	if err := c.get(ctx, schemaAPI+projectID+"/tables", url.Values{"schema": {schemaName}}, &tables); err != nil {
+		return nil
+	}
+	names := make(map[string]bool, len(tables))
+	for _, table := range tables {
+		names[table.Name] = true
+	}
+	return names
 }
 
 func setPermission(ctx context.Context, c *call, in permissionArgs) (any, error) {

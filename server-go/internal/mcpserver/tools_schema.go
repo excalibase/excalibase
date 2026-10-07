@@ -36,9 +36,10 @@ func (a schemaArgs) query() url.Values {
 func schemaTools() []entry {
 	return []entry{
 		tool("list_tables", "List the tables and views in a schema of the project's database.", readTool, listTables),
-		tool("describe_table", "Columns, indexes and foreign keys of one table.", readTool, describeTable),
+		tool("describe_table", "Columns, indexes, CHECK constraints and foreign keys of one table.", readTool, describeTable),
 		tool("get_graphql_schema",
-			"What the project's GraphQL and REST APIs are generated from: the endpoint, every table with its columns and foreign keys. "+
+			"What the project's GraphQL and REST APIs are generated from: the endpoint, every table with its columns, foreign keys, "+
+				"its exact GraphQL root field names (query, connection, aggregate, mutations, subscription ...Changes), REST path and realtime state. "+
 				"The engine builds the GraphQL schema per role from these tables and the project's permissions; the returned introspection command fetches the exact schema a role sees.",
 			readTool, getGraphQLSchema),
 		tool("generate_typescript_types", "TypeScript row types for every table in a schema, generated from the database columns.", readTool, generateTypeScriptTypes),
@@ -75,6 +76,10 @@ func describeTable(ctx context.Context, c *call, in tableArgs) (any, error) {
 	if err := c.get(ctx, tablePath(projectID, table)+"/indexes", in.query(), &indexes); err != nil {
 		return nil, err
 	}
+	var checks []schema.CheckConstraint
+	if err := c.get(ctx, tablePath(projectID, table)+"/checks", in.query(), &checks); err != nil {
+		return nil, err
+	}
 	var relationships []schema.RelationshipInfo
 	if err := c.get(ctx, base+"/relationships", in.query(), &relationships); err != nil {
 		return nil, err
@@ -82,7 +87,7 @@ func describeTable(ctx context.Context, c *call, in tableArgs) (any, error) {
 	outgoing, incoming := relationsOf(in.Table, relationships)
 	return map[string]any{
 		"schema": in.schemaName(), "table": in.Table, "columns": columns, "indexes": indexes,
-		"foreignKeys": outgoing, "referencedBy": incoming,
+		"checks": checks, "foreignKeys": outgoing, "referencedBy": incoming,
 	}, nil
 }
 
@@ -104,6 +109,56 @@ type tableColumns struct {
 	Name    string              `json:"name"`
 	Type    string              `json:"type"`
 	Columns []schema.ColumnInfo `json:"columns"`
+}
+
+// schemaTable is one table as get_graphql_schema answers it: its columns, the
+// root fields the engine generates for it, its REST path and whether its
+// changes are published to subscriptions.
+type schemaTable struct {
+	tableColumns
+	GraphQL  rootFields `json:"graphql"`
+	REST     string     `json:"rest"`
+	Realtime *bool      `json:"realtime,omitempty"`
+}
+
+const namingRule = "Root fields are the engine's names for the schema-qualified table: lowerCamel(schema) + PascalCase(table), " +
+	"e.g. public.kanban_cards → publicKanbanCards (list), publicKanbanCardsConnection, publicKanbanCardsAggregate, " +
+	"createPublicKanbanCards, createManyPublicKanbanCards (inputs), updatePublicKanbanCards (where, input), deletePublicKanbanCards (where), " +
+	"and the subscription publicKanbanCardsChanges. A role sees only the fields its permissions allow: the connection needs the primary key, " +
+	"the aggregate needs allowAggregations, each mutation its own permission, the subscription realtime on the table (set_realtime)."
+
+// realtimeTables reads which tables publish changes; nil when that cannot be read.
+func realtimeTables(ctx context.Context, c *call, projectID string) map[string]bool {
+	var states []struct {
+		Schema  string `json:"schema"`
+		Table   string `json:"table"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := c.get(ctx, projectsAPI+projectID+"/realtime/tables", nil, &states); err != nil {
+		return nil
+	}
+	enabled := make(map[string]bool, len(states))
+	for _, state := range states {
+		enabled[state.Schema+"."+state.Table] = state.Enabled
+	}
+	return enabled
+}
+
+func describeSchemaTables(schemaName, restBase string, tables []tableColumns, realtime map[string]bool) []schemaTable {
+	out := make([]schemaTable, 0, len(tables))
+	for _, table := range tables {
+		entry := schemaTable{
+			tableColumns: table,
+			GraphQL:      graphQLFields(schemaName, table.Name, strings.EqualFold(table.Type, "VIEW")),
+			REST:         restBase + "/" + table.Name,
+		}
+		if realtime != nil {
+			enabled := realtime[schemaName+"."+table.Name]
+			entry.Realtime = &enabled
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // readTables lists a schema's tables and reads each one's columns.
@@ -149,10 +204,14 @@ func getGraphQLSchema(ctx context.Context, c *call, in schemaArgs) (any, error) 
 	}
 	base := strings.TrimRight(c.settings.PublicBaseURL, "/")
 	endpoint := base + "/" + projectID + "/graphql"
+	restBase := base + "/" + projectID + "/api/v1"
 	return map[string]any{
-		"endpoint": endpoint, "schema": in.schemaName(), "tables": tables, "foreignKeys": relationships,
+		"endpoint": endpoint, "schema": in.schemaName(), "foreignKeys": relationships,
+		"tables":   describeSchemaTables(in.schemaName(), restBase, tables, realtimeTables(ctx, c, projectID)),
+		"naming":   namingRule,
+		"realtime": realtimeGuide(endpoint),
 		"roles": "Each role sees only the tables, columns and functions it has a permission for (list_permissions); " +
-			"anon is a request with a publishable key and no signed-in user.",
+			"anon is a request with no signed-in user (a publishable key's token, or no token at all).",
 		"introspection": map[string]string{
 			"codegen": "npx excalibase-codegen --url " + base + " --project " + projectID + " --key <publishable key> --out src/database.types.ts",
 		},

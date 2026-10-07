@@ -20,12 +20,17 @@ const (
 	maxProbeRequestBody = 16 << 10
 	maxProbeQuery       = 4 << 10
 	maxProbeHeader      = 256
+	maxProbeToken       = 8 << 10
 	probeTimeout        = 15 * time.Second
 	publishablePrefix   = "esk_pub_"
 )
 
 var (
-	probeTable = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
+	// probePath is a table, or rpc/<function> for a tracked database function.
+	probePath = regexp.MustCompile(`^(rpc/)?[A-Za-z_][A-Za-z0-9_]{0,62}$`)
+	// probeJWT is the shape of an end user's access token; anything else (a
+	// personal access token, a secret key) is never forwarded.
+	probeJWT = regexp.MustCompile(`^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
 	// graphQLMutation is read broadly: a read-only probe refuses any document
 	// that names a mutation, even inside a string.
 	graphQLMutation    = regexp.MustCompile(`(?i)\bmutation\b`)
@@ -36,19 +41,21 @@ var (
 
 type probeArgs struct {
 	projectArg
-	PublishableKey string `json:"publishable_key" jsonschema:"the publishable key the page uses (esk_pub_...); the probe signs in with it as the anon role, as the page does"`
+	PublishableKey string `json:"publishable_key,omitempty" jsonschema:"the publishable key the page uses (esk_pub_...); the probe signs in with it as the anon role, as the page does"`
+	AccessToken    string `json:"access_token,omitempty" jsonschema:"an end user's access token (the accessToken a test sign-in answered) to send the request as that signed-in user instead of anon"`
 	API            string `json:"api,omitempty" jsonschema:"rest (default) or graphql"`
 	Method         string `json:"method,omitempty" jsonschema:"REST method: GET (default) or HEAD; POST, PATCH and DELETE on a read-write connection"`
-	Path           string `json:"path,omitempty" jsonschema:"REST: the table, e.g. todos"`
+	Path           string `json:"path,omitempty" jsonschema:"REST: the table, e.g. todos, or rpc/<function> for a tracked database function"`
 	Query          string `json:"query,omitempty" jsonschema:"REST query string, e.g. select=id,title&order=created_at.desc&limit=20&completed=eq.false"`
 	Prefer         string `json:"prefer,omitempty" jsonschema:"the Prefer header the page sends, e.g. count=exact or return=representation"`
-	Origin         string `json:"origin,omitempty" jsonschema:"the page's origin, e.g. its app URL, to check the CORS allowlist as the browser would"`
+	Origin         string `json:"origin,omitempty" jsonschema:"the page's origin, e.g. its app URL or http://localhost:5173: the probe then also runs the browser's CORS preflights for the sign-in call and this request"`
 	Body           string `json:"body,omitempty" jsonschema:"JSON body: the row(s) for a REST write, or {\"query\": ..., \"variables\": ...} for GraphQL"`
 }
 
-const probeDescription = "Send ONE request to the project's own data API (REST or GraphQL) the way a page does: " +
-	"sign in with a publishable key as the anon role, then call the endpoint, and see the status and body. " +
-	"Permissions and CORS apply exactly as for the page. Probe every request a page makes before handing it over; " +
+const probeDescription = "Send ONE request to the project's own data API (REST, rpc/<function> or GraphQL) the way a page does: " +
+	"sign in with a publishable key as the anon role, or pass a signed-in end user's access_token, then call the endpoint, and see the status and body. " +
+	"Permissions apply exactly as for the page; with origin, the browser's CORS preflights for the sign-in call and the request are checked too. " +
+	"Probe every request a page makes before handing it over; " +
 	"a 403 usually means a missing permission (set_permission), and a count needs allowAggregations."
 
 func probeTools() []entry {
@@ -96,11 +103,19 @@ func testAPIRequest(ctx context.Context, c *call, in probeArgs) (any, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	client := &http.Client{CheckRedirect: noRedirects}
-	token, err := exchangeKey(ctx, client, endpoints(base, info.OrgSlug, projectID)["auth"]+"/token", in.PublishableKey)
-	if err != nil {
-		return nil, err
+	tokenURL := endpoints(base, info.OrgSlug, projectID)["auth"] + "/token"
+	token := in.AccessToken
+	if token == "" {
+		if token, err = exchangeKey(ctx, client, tokenURL, in.PublishableKey); err != nil {
+			return nil, err
+		}
 	}
-	return sendProbe(ctx, client, base, target, in, token)
+	out, err := sendProbe(ctx, client, base, target, in, token)
+	if err != nil || target.origin == "" {
+		return out, err
+	}
+	out["cors"] = corsPreflights(ctx, client, tokenURL, base, target, in)
+	return out, nil
 }
 
 // dataPlaneBase is the configured data plane; with none configured the probe
@@ -114,8 +129,8 @@ func dataPlaneBase(settings Settings) (string, error) {
 }
 
 func probeTarget(readOnly bool, projectID string, in probeArgs) (probeRequest, error) {
-	if !strings.HasPrefix(in.PublishableKey, publishablePrefix) || len(in.PublishableKey) > maxProbeHeader {
-		return probeRequest{}, fmt.Errorf("publishable_key must be a publishable key (%s...); secret keys are never used", publishablePrefix)
+	if err := probeCredential(projectID, in); err != nil {
+		return probeRequest{}, err
 	}
 	if len(in.Prefer) > maxProbeHeader || strings.ContainsAny(in.Prefer+in.PublishableKey, "\r\n") {
 		return probeRequest{}, fmt.Errorf("prefer must be one line of at most %d characters", maxProbeHeader)
@@ -138,6 +153,20 @@ func probeTarget(readOnly bool, projectID string, in probeArgs) (probeRequest, e
 	}
 	target.origin = origin
 	return target, err
+}
+
+// probeCredential is a publishable key, an end user's access token, or both.
+func probeCredential(projectID string, in probeArgs) error {
+	if in.PublishableKey == "" && in.AccessToken == "" {
+		return errors.New("pass publishable_key (anon) or access_token (a signed-in end user)")
+	}
+	if in.PublishableKey != "" && (!strings.HasPrefix(in.PublishableKey, publishablePrefix) || len(in.PublishableKey) > maxProbeHeader) {
+		return fmt.Errorf("publishable_key must be a publishable key (%s...); secret keys are never used", publishablePrefix)
+	}
+	if in.AccessToken != "" {
+		return endUserToken(in.AccessToken, projectID)
+	}
+	return nil
 }
 
 // probeOrigin accepts an origin only and sends it as scheme://host.
@@ -198,8 +227,8 @@ func restTarget(readOnly bool, projectID string, in probeArgs) (probeRequest, er
 	default:
 		return probeRequest{}, errors.New("method must be GET, HEAD, POST, PATCH or DELETE")
 	}
-	if !probeTable.MatchString(in.Path) {
-		return probeRequest{}, errors.New("path must be a table name, e.g. todos")
+	if !probePath.MatchString(in.Path) {
+		return probeRequest{}, errors.New("path must be a table name, e.g. todos, or rpc/<function>")
 	}
 	query, err := url.ParseQuery(in.Query)
 	if err != nil || len(in.Query) > maxProbeQuery {
@@ -242,7 +271,7 @@ func exchangeKey(ctx context.Context, client *http.Client, tokenURL, key string)
 	return session.AccessToken, nil
 }
 
-func sendProbe(ctx context.Context, client *http.Client, base string, target probeRequest, in probeArgs, token string) (any, error) {
+func sendProbe(ctx context.Context, client *http.Client, base string, target probeRequest, in probeArgs, token string) (map[string]any, error) {
 	path := target.path
 	if target.query != "" {
 		path += "?" + target.query
@@ -257,7 +286,9 @@ func sendProbe(ctx context.Context, client *http.Client, base string, target pro
 		return nil, errProbeUnanswered
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("X-Excalibase-Publishable-Key", in.PublishableKey)
+	if in.PublishableKey != "" {
+		request.Header.Set("X-Excalibase-Publishable-Key", in.PublishableKey)
+	}
 	request.Header.Set("Accept", "application/json")
 	if target.body != nil {
 		request.Header.Set("Content-Type", "application/json")

@@ -78,10 +78,13 @@ func tablePath(projectID, table string) string {
 
 // catalogue is every tool the endpoint offers.
 func catalogue() []entry {
-	tools := make([]entry, 0, 24)
+	tools := make([]entry, 0, 32)
 	tools = append(tools, projectTools()...)
+	tools = append(tools, corsTools()...)
 	tools = append(tools, schemaTools()...)
+	tools = append(tools, realtimeTools()...)
 	tools = append(tools, databaseTools()...)
+	tools = append(tools, dbFunctionTools()...)
 	tools = append(tools, functionTools()...)
 	tools = append(tools, appTools()...)
 	tools = append(tools, shippingTools()...)

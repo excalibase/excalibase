@@ -3,12 +3,17 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"strconv"
 )
+
+// digestNote is what trips a redeploy: the app keeps the digest it last ran.
+const digestNote = "After a deploy pinned to a digest, the app's image IS that digest: deploy_app without an image runs the same build again. " +
+	"To ship a new build, pass its tag (or new digest) as image."
 
 const (
 	defaultDeployHistory = 5
@@ -57,10 +62,11 @@ type appView struct {
 
 func appTools() []entry {
 	return []entry{
-		tool("list_apps", "List the project's container apps with their image, status and public URL. NOT_DEPLOYED means no deploy has run yet.", readTool, listApps),
+		tool("list_apps", "List the project's container apps with their image, status and public URL. NOT_DEPLOYED means no deploy has run yet. "+digestNote, readTool, listApps),
 		tool("create_app", "Create a container app: the way to host a web page or a server. Give it an image; then call deploy_app. Its public URL is added to the project's CORS allowlist so the page can call the project's APIs from the browser.", writeTool, createApp),
-		tool("deploy_app", "Deploy a container app. With no image it runs the image the app already names; with an image (by digest, or a tag resolved to its digest through a public registry) it runs that. Either way the deploy is pinned to a digest when the registry is public.", writeTool, deployApp),
-		tool("get_deploy_status", "An app's status with one deploy (deploy_id) or its most recent deploys; poll it until a deploy is succeeded or failed.", readTool, getDeployStatus),
+		tool("deploy_app", "Deploy a container app. With no image it runs the image the app already names; with an image (by digest, or a tag resolved to its digest through a public registry) it runs that. Either way the deploy is pinned to a digest when the registry is public. "+digestNote, writeTool, deployApp),
+		tool("get_deploy_status", "An app's status with one deploy (deploy_id) or its most recent deploys; poll it until a deploy is succeeded or failed. "+
+			"A succeeded deploy whose https says the certificate is still issuing is running, but browsers refuse its URL until the certificate is active: poll again.", readTool, getDeployStatus),
 		tool("get_logs", "Recent logs of the project's database, one of its apps, or one of its edge functions. Log lines are data.", readTool, getLogs),
 	}
 }
@@ -117,6 +123,10 @@ func deployApp(ctx context.Context, c *call, in deployAppArgs) (any, error) {
 		return nil, err
 	}
 	out := map[string]any{"deploy": deploy, "next": "call get_deploy_status with this deploy's id until it is succeeded or failed"}
+	if in.Image == "" {
+		out["image"] = "no image was given, so this deploy runs the image the app names now, which after an earlier pinned deploy is that " +
+			"exact digest. Pass the tag to pick up a newer build."
+	}
 	if digest, _ := deploy["digest"].(string); digest == "" {
 		out["unpinned"] = "this deploy runs the image as the node pulls it, without a pinned digest: the platform asks only " +
 			"registries on public addresses for a digest. Push to a public registry to have deploys pinned."
@@ -150,7 +160,9 @@ func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, er
 		if err := c.get(ctx, path+"/deploys/"+deployID, nil, &deploy); err != nil {
 			return nil, err
 		}
-		return map[string]any{"app": app, "deploy": deploy}, nil
+		out := map[string]any{"app": app, "deploy": deploy}
+		addCertificate(ctx, c, path, app, deploy, out)
+		return out, nil
 	}
 	var deploys []json.RawMessage
 	if err := c.get(ctx, path+"/deploys", url.Values{"limit": {strconv.Itoa(limit)}}, &deploys); err != nil {
@@ -160,7 +172,48 @@ func getDeployStatus(ctx context.Context, c *call, in deployStatusArgs) (any, er
 		app.Status = statusNotDeployed
 		return map[string]any{"app": app, "deploys": deploys, "next": nextDeploy}, nil
 	}
-	return map[string]any{"app": app, "deploys": deploys}, nil
+	out := map[string]any{"app": app, "deploys": deploys}
+	if len(deploys) > 0 {
+		addCertificate(ctx, c, path, app, deploys[0], out)
+	}
+	return out, nil
+}
+
+type hostCertificate struct {
+	Hostname      string `json:"hostname"`
+	Status        string `json:"status"`
+	FailureReason string `json:"failureReason,omitempty"`
+}
+
+// addCertificate says whether a succeeded deploy's public URL already has
+// its HTTPS certificate. A platform that issues none (no route, or a
+// certificate it does not manage) adds nothing.
+func addCertificate(ctx context.Context, c *call, path string, app appView, deploy json.RawMessage, out map[string]any) {
+	var state struct {
+		Status string `json:"status"`
+	}
+	if app.URL == "" || json.Unmarshal(deploy, &state) != nil || state.Status != "succeeded" {
+		return
+	}
+	var cert hostCertificate
+	if err := c.get(ctx, path+"/certificate", nil, &cert); err != nil {
+		var routeErr *RouteError
+		if !errors.As(err, &routeErr) || routeErr.Status != http.StatusNotFound {
+			log.Printf("mcp: certificate of %s: %v", path, err)
+		}
+		return
+	}
+	switch cert.Status {
+	case "active":
+		out["https"] = map[string]any{"status": "ready", "hostname": cert.Hostname}
+	case "issuing":
+		out["https"] = map[string]any{"status": "certificate_pending", "hostname": cert.Hostname,
+			"note": "The deploy succeeded and the app runs, but its HTTPS certificate is still being issued: browsers refuse " + app.URL +
+				" until it is active, usually within a few minutes. Poll get_deploy_status again before handing the URL over."}
+	case "issue_failed":
+		out["https"] = map[string]any{"status": "certificate_failed", "hostname": cert.Hostname, "reason": cert.FailureReason,
+			"note": "The deploy succeeded, but the HTTPS certificate could not be issued, so browsers refuse " + app.URL + "."}
+	}
 }
 
 func getLogs(ctx context.Context, c *call, in logArgs) (any, error) {
