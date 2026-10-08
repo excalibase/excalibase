@@ -15,19 +15,21 @@ import (
 // projectAppsSelector matches what the platform rendered for any app of a namespace.
 const projectAppsSelector = "excalibase.io/app,app.kubernetes.io/managed-by=" + appManagedByValue
 
+// WithdrawOptions says what a withdrawal may touch.
+type WithdrawOptions struct {
+	// AppRoutes is set when app hosting is on; only then does the platform
+	// route apps, and only then may provisioning read Ingresses.
+	AppRoutes bool
+}
+
 // WithdrawProjectWorkloads takes every app of a project off the edge (its own
 // host and its custom domains) and scales every app and the function runtime
 // to zero, remembering the counts. Disks, secrets and certificates stay, so a
 // cancelled deletion can bring the project back. It does not wait for pods.
-func (c *Client) WithdrawProjectWorkloads(ctx context.Context, namespace string) error {
-	ingresses := c.clientset.NetworkingV1().Ingresses(namespace)
-	routes, err := ingresses.List(ctx, metav1.ListOptions{LabelSelector: projectAppsSelector})
-	if err != nil {
-		return fmt.Errorf("list app routes: %w", err)
-	}
-	for _, name := range namesOf(routes.Items) {
-		if err := ingresses.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete app route %s: %w", name, err)
+func (c *Client) WithdrawProjectWorkloads(ctx context.Context, namespace string, opts WithdrawOptions) error {
+	if opts.AppRoutes {
+		if err := c.withdrawAppRoutes(ctx, namespace); err != nil {
+			return err
 		}
 	}
 	apps, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{LabelSelector: projectAppsSelector})
@@ -38,6 +40,20 @@ func (c *Client) WithdrawProjectWorkloads(ctx context.Context, namespace string)
 		err := c.updateAppDeployment(ctx, namespace, name, pauseDeployment)
 		if err != nil && !errors.Is(err, ErrAppNotDeployed) {
 			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) withdrawAppRoutes(ctx context.Context, namespace string) error {
+	ingresses := c.clientset.NetworkingV1().Ingresses(namespace)
+	routes, err := ingresses.List(ctx, metav1.ListOptions{LabelSelector: projectAppsSelector})
+	if err != nil {
+		return fmt.Errorf("list app routes: %w", err)
+	}
+	for _, name := range namesOf(routes.Items) {
+		if err := ingresses.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete app route %s: %w", name, err)
 		}
 	}
 	return nil

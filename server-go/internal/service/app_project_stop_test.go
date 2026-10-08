@@ -13,6 +13,7 @@ import (
 
 func TestStopProjectWorkloads_TakesTheRoutesAwayAndStopsEveryRunningApp(t *testing.T) {
 	f := newLifecycleFixture(t, apphost.StatusRunning)
+	f.svc.SetAppRoutes(true)
 	stopped := sampleDeployAppWithID("app-stopped")
 	stopped.Status = apphost.StatusStopped
 	created := sampleDeployAppWithID("app-created")
@@ -25,6 +26,9 @@ func TestStopProjectWorkloads_TakesTheRoutesAwayAndStopsEveryRunningApp(t *testi
 	}
 	if !slices.Equal(f.kube.WithdrawnWorkloads, []string{testDeployNamespace}) {
 		t.Fatalf("withdrawn = %v, want the project's namespace", f.kube.WithdrawnWorkloads)
+	}
+	if !slices.Equal(f.kube.WithdrawOptions, []k8s.WithdrawOptions{{AppRoutes: true}}) {
+		t.Fatalf("withdraw options = %v, want the app routes taken away", f.kube.WithdrawOptions)
 	}
 	if f.status() != apphost.StatusStopped || !f.kube.AppPaused[f.key()] {
 		t.Fatalf("running app: status %s paused %t, want STOPPED with no pods", f.status(), f.kube.AppPaused[f.key()])
@@ -40,6 +44,19 @@ func TestStopProjectWorkloads_TakesTheRoutesAwayAndStopsEveryRunningApp(t *testi
 	pauseAt := slices.Index(f.kube.Calls, "PauseAppWorkload:"+f.key())
 	if withdrawAt < 0 || pauseAt < withdrawAt {
 		t.Fatalf("calls %v: the routes must go before the apps are waited on", f.kube.Calls)
+	}
+}
+
+// An install without app hosting has no app routes, and no access to them (EXC-567).
+func TestStopProjectWorkloads_WithoutAppHostingLeavesRoutesAlone(t *testing.T) {
+	f := newLifecycleFixture(t, apphost.StatusRunning)
+	f.svc.SetAppRoutes(false)
+
+	if err := f.svc.StopProjectWorkloads(context.Background(), f.app.ProjectID); err != nil {
+		t.Fatalf("StopProjectWorkloads: %v", err)
+	}
+	if !slices.Equal(f.kube.WithdrawOptions, []k8s.WithdrawOptions{{AppRoutes: false}}) {
+		t.Fatalf("withdraw options = %v, want no app routes", f.kube.WithdrawOptions)
 	}
 }
 

@@ -14,6 +14,7 @@ func wireProjectWorkloadStop(cfg config.AppConfig, k8sClient k8s.KubeClient, pro
 	if k8sClient == nil || cfg.ProvisionerMode == "docker" {
 		return false
 	}
+	appDeploySvc.SetAppRoutes(cfg.AppHostingEnabled)
 	provSvc.SetProjectWorkloadStopper(appDeploySvc)
 	return true
 }
