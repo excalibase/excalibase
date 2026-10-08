@@ -23,7 +23,7 @@ func (s *AppDeployService) StopProjectWorkloads(ctx context.Context, projectID s
 	if err != nil {
 		return err
 	}
-	if err := s.kube.WithdrawProjectWorkloads(ctx, namespace); err != nil {
+	if err := s.kube.WithdrawProjectWorkloads(ctx, namespace, k8s.WithdrawOptions{AppRoutes: s.appRoutes}); err != nil {
 		return fmt.Errorf("withdraw the project's apps: %w", err)
 	}
 	apps, err := s.apps.List(projectID)
@@ -32,6 +32,10 @@ func (s *AppDeployService) StopProjectWorkloads(ctx context.Context, projectID s
 	}
 	return s.pauseServing(ctx, projectID, namespace, apps)
 }
+
+// SetAppRoutes says whether app hosting is on: only then are there app routes
+// to withdraw, and only then is provisioning allowed to read them.
+func (s *AppDeployService) SetAppRoutes(managed bool) { s.appRoutes = managed }
 
 // pauseServing pauses every app, or waits for the pods of one PauseApp does
 // not take, all at once so a project with many apps stops within one drain period.

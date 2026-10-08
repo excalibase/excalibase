@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/excalibase/provisioning-poc/internal/config"
+	"github.com/excalibase/provisioning-poc/internal/domain"
 	"github.com/excalibase/provisioning-poc/internal/k8s"
 	"github.com/excalibase/provisioning-poc/internal/service"
 	"github.com/excalibase/provisioning-poc/internal/testutil/fakestore"
@@ -42,5 +45,24 @@ func TestProjectWorkloadStop_OnlyOnKubernetes(t *testing.T) {
 				t.Fatalf("wired = %t, want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+// The chart grants provisioning access to Ingresses only when app hosting is
+// on; a deletion on any other install must not ask for it (EXC-567).
+func TestProjectWorkloadStop_TouchesAppRoutesOnlyWithAppHosting(t *testing.T) {
+	for _, hosting := range []bool{true, false} {
+		kube := k8s.NewMockClient()
+		kube.WithdrawErr = errors.New("stop here")
+		instances := fakestore.NewInstances()
+		instances.Items["proj-1"] = &domain.DatabaseInstance{ProjectID: "proj-1", Namespace: "ns-1"}
+		deploys := service.NewAppDeployService(nil, nil, kube, instances, nil, k8s.AppRenderOptions{})
+		prov := service.NewProvisioningService(fakestore.NewInstances(), nil, nil)
+		wireProjectWorkloadStop(config.AppConfig{ProvisionerMode: "k8s", AppHostingEnabled: hosting}, kube, prov, deploys)
+
+		_ = deploys.StopProjectWorkloads(context.Background(), "proj-1")
+		if len(kube.WithdrawOptions) != 1 || kube.WithdrawOptions[0].AppRoutes != hosting {
+			t.Fatalf("app hosting %t: withdraw options %v", hosting, kube.WithdrawOptions)
+		}
 	}
 }

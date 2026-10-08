@@ -59,6 +59,8 @@ type AppDeployService struct {
 	diskLimits apphost.DiskLimits
 	// diskJobs runs the disk usage probe and the copy that lowers a disk.
 	diskJobs k8s.DiskJobOptions
+	// appRoutes is set when app hosting is on and the platform routes apps.
+	appRoutes bool
 	// domainSync routes the app's custom domains under the name it is deployed as.
 	domainSync func(ctx context.Context, namespace string, app *apphost.App) error
 	// async lets tests run the rollout wait inline instead of in a goroutine.

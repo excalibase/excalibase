@@ -131,7 +131,9 @@ type MockClient struct {
 	AppWorkloads map[string]*AppWorkload // keyed "namespace/deploymentName"
 	// WithdrawnWorkloads lists the namespaces WithdrawProjectWorkloads ran on.
 	WithdrawnWorkloads []string
-	WithdrawErr        error
+	// WithdrawOptions holds the options of each WithdrawProjectWorkloads call.
+	WithdrawOptions []WithdrawOptions
+	WithdrawErr     error
 	// RestartedRuntimes lists the namespaces RestartFunctionRuntime ran on.
 	RestartedRuntimes []string
 	RestartRuntimeErr error
@@ -823,10 +825,11 @@ func (m *MockClient) PauseAppWorkload(ctx context.Context, namespace, appID stri
 	return nil
 }
 
-func (m *MockClient) WithdrawProjectWorkloads(ctx context.Context, namespace string) error {
+func (m *MockClient) WithdrawProjectWorkloads(ctx context.Context, namespace string, opts WithdrawOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, "WithdrawProjectWorkloads:"+namespace)
+	m.WithdrawOptions = append(m.WithdrawOptions, opts)
 	if m.WithdrawErr != nil {
 		return m.WithdrawErr
 	}

@@ -243,6 +243,8 @@ func (lab *appLiveLab) newService(apps *fakeAppStoreForDeploy, deploys *fakeDepl
 	svc.SetPlanTiers(NewOrgPlanTiers(lab.instances, orgs))
 	free, _ := config.GetTierConfig(domain.Free)
 	svc.SetNamespaceQuotaTiers(fixedTierConfigs{domain.Free: free})
+	// The lab routes its apps through the edge, as app hosting does.
+	svc.SetAppRoutes(true)
 	return svc
 }
 

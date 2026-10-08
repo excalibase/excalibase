@@ -25,10 +25,42 @@ func TestWithdrawProjectWorkloads_ReportsWhatTheAPIRefused(t *testing.T) {
 			clientset.PrependReactor(step.verb, step.resource, func(k8stesting.Action) (bool, runtime.Object, error) {
 				return true, nil, errors.New("api server down")
 			})
-			if err := c.WithdrawProjectWorkloads(context.Background(), testNamespace); err == nil {
+			if err := c.WithdrawProjectWorkloads(context.Background(), testNamespace, withRoutes); err == nil {
 				t.Fatal("want the API's refusal")
 			}
 		})
+	}
+}
+
+// withRoutes is an install with app hosting on: provisioning manages app routes.
+var withRoutes = WithdrawOptions{AppRoutes: true}
+
+// Without app hosting the platform grants no access to Ingresses (EXC-567):
+// a deletion must still stop the function runtime and never read a route.
+func TestWithdrawProjectWorkloads_WithoutAppHostingNeverTouchesRoutes(t *testing.T) {
+	c, clientset := newLifecycleFakeClient()
+	ctx := context.Background()
+	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	foreign := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "db-public", Namespace: testNamespace}}
+	if _, err := clientset.NetworkingV1().Ingresses(testNamespace).Create(ctx, foreign, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	forbidden := apierrors.NewForbidden(networkingv1.Resource("ingresses"), "", errors.New("no ingress access"))
+	clientset.PrependReactor("*", "ingresses", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, forbidden
+	})
+
+	if err := c.WithdrawProjectWorkloads(ctx, testNamespace, WithdrawOptions{}); err != nil {
+		t.Fatalf("withdraw without app hosting: %v", err)
+	}
+	deno, err := c.clientset.AppsV1().Deployments(testNamespace).Get(ctx, denoRuntimeName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("deno deployment: %v", err)
+	}
+	if *deno.Spec.Replicas != 0 {
+		t.Fatalf("deno replicas %d, want the function runtime stopped", *deno.Spec.Replicas)
 	}
 }
 
@@ -62,8 +94,11 @@ func TestMockClient_ProjectWorkloads(t *testing.T) {
 	m := NewMockClient()
 	ctx := context.Background()
 	app := &apphost.App{ID: "a1", Name: "web"}
-	if err := m.WithdrawProjectWorkloads(ctx, "ns1"); err != nil || len(m.WithdrawnWorkloads) != 1 {
+	if err := m.WithdrawProjectWorkloads(ctx, "ns1", withRoutes); err != nil || len(m.WithdrawnWorkloads) != 1 {
 		t.Fatalf("withdraw: %v %v", err, m.WithdrawnWorkloads)
+	}
+	if len(m.WithdrawOptions) != 1 || m.WithdrawOptions[0] != withRoutes {
+		t.Fatalf("withdraw options = %v, want the ones asked for", m.WithdrawOptions)
 	}
 	if err := m.RestartFunctionRuntime(ctx, "ns1"); err != nil || len(m.RestartedRuntimes) != 1 {
 		t.Fatalf("restart: %v %v", err, m.RestartedRuntimes)
@@ -73,7 +108,7 @@ func TestMockClient_ProjectWorkloads(t *testing.T) {
 	}
 	boom := errors.New("boom")
 	m.WithdrawErr, m.RestartRuntimeErr, m.RestoreRouteErr = boom, boom, boom
-	if m.WithdrawProjectWorkloads(ctx, "ns1") == nil || m.RestartFunctionRuntime(ctx, "ns1") == nil ||
+	if m.WithdrawProjectWorkloads(ctx, "ns1", withRoutes) == nil || m.RestartFunctionRuntime(ctx, "ns1") == nil ||
 		m.RestoreAppRoute(ctx, "ns1", app, AppRouteOptions{}) == nil {
 		t.Fatal("want the scripted errors")
 	}
@@ -104,7 +139,7 @@ func TestWithdrawProjectWorkloads_RemovesEveryAppRouteAndScalesEverythingToZero(
 		t.Fatalf("deno runtime: %v", err)
 	}
 
-	if err := c.WithdrawProjectWorkloads(ctx, testNamespace); err != nil {
+	if err := c.WithdrawProjectWorkloads(ctx, testNamespace, withRoutes); err != nil {
 		t.Fatalf("withdraw: %v", err)
 	}
 	if names := listIngressNames(t, c); len(names) != 1 || names[0] != "db-public" {
@@ -121,7 +156,7 @@ func TestWithdrawProjectWorkloads_RemovesEveryAppRouteAndScalesEverythingToZero(
 		t.Fatalf("deno replicas %d annotations %v, want stopped with 1 remembered", *deno.Spec.Replicas, deno.Annotations)
 	}
 	// Idempotent: a repeated withdrawal keeps the remembered counts.
-	if err := c.WithdrawProjectWorkloads(ctx, testNamespace); err != nil {
+	if err := c.WithdrawProjectWorkloads(ctx, testNamespace, withRoutes); err != nil {
 		t.Fatalf("withdraw again: %v", err)
 	}
 	if dep := readDeployment(t, c, app); dep.Annotations[appPausedReplicasAnnotation] == "0" {
@@ -131,7 +166,7 @@ func TestWithdrawProjectWorkloads_RemovesEveryAppRouteAndScalesEverythingToZero(
 
 func TestWithdrawProjectWorkloads_InAnEmptyNamespaceDoesNothing(t *testing.T) {
 	c, _ := newLifecycleFakeClient()
-	if err := c.WithdrawProjectWorkloads(context.Background(), testNamespace); err != nil {
+	if err := c.WithdrawProjectWorkloads(context.Background(), testNamespace, withRoutes); err != nil {
 		t.Fatalf("withdraw: %v", err)
 	}
 }
@@ -142,7 +177,7 @@ func TestRestartFunctionRuntime_RestoresTheStoppedRuntime(t *testing.T) {
 	if err := c.EnsureDenoRuntime(ctx, testNamespace, DenoRuntimeSpec{Image: "deno:test", RuntimeSecret: "s"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.WithdrawProjectWorkloads(ctx, testNamespace); err != nil {
+	if err := c.WithdrawProjectWorkloads(ctx, testNamespace, withRoutes); err != nil {
 		t.Fatal(err)
 	}
 
@@ -175,7 +210,7 @@ func TestEnsureDenoRuntime_StartsARuntimeAProjectDeletionStopped(t *testing.T) {
 	if err := c.EnsureDenoRuntime(ctx, testNamespace, spec); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.WithdrawProjectWorkloads(ctx, testNamespace); err != nil {
+	if err := c.WithdrawProjectWorkloads(ctx, testNamespace, withRoutes); err != nil {
 		t.Fatal(err)
 	}
 
@@ -193,7 +228,7 @@ func TestRestoreAppRoute_PutsBackTheIngressAWithdrawalRemoved(t *testing.T) {
 	ctx := context.Background()
 	app := fullApp()
 	deployedApp(t, c, app)
-	if err := c.WithdrawProjectWorkloads(ctx, testNamespace); err != nil {
+	if err := c.WithdrawProjectWorkloads(ctx, testNamespace, withRoutes); err != nil {
 		t.Fatal(err)
 	}
 
