@@ -2523,12 +2523,13 @@ func envOr(key, fallback string) string {
 }
 
 // buildEmailSender picks the email provider from EMAIL_PROVIDER env.
-// Supported values: "ses" (default — back-compat), "resend", "noop".
+// Supported values: "ses" (default — back-compat), "resend", "smtp", "noop".
 // Falls back to noop on unrecognised values or missing creds so the
 // platform still boots and email-dependent handlers return 503.
 //
 // SES creds: SES_ACCESS_KEY_ID + SES_SECRET_ACCESS_KEY (k8s secret ses-creds)
 // Resend creds: RESEND_API_KEY (k8s secret resend-creds, or env directly)
+// SMTP: SMTP_HOST [+ SMTP_PORT, SMTP_TLS, SMTP_USERNAME, SMTP_PASSWORD, SMTP_CA_FILE]
 // Common: EMAIL_FROM_ADDRESS / EMAIL_FROM_NAME (or legacy SES_FROM_*)
 func buildEmailSender(cfg config.AppConfig) email.Sender {
 	provider := cfg.EmailProvider
@@ -2541,6 +2542,12 @@ func buildEmailSender(cfg config.AppConfig) email.Sender {
 		return email.NewNoopSender()
 	case "resend":
 		return buildResendSender(cfg)
+	case "smtp":
+		sender, err := buildSMTPSender(cfg)
+		if err != nil {
+			log.Fatalf("email: %v", err)
+		}
+		return sender
 	case "ses":
 		return buildSESSender(cfg)
 	default:

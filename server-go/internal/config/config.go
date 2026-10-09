@@ -210,7 +210,7 @@ type AppConfig struct {
 	// settings it needs; the boot-time wiring check refuses a deployment
 	// that names one and leaves it half-configured.
 	//
-	// EmailProvider is what the operator named: "ses", "resend" or "noop".
+	// EmailProvider is what the operator named: "ses", "resend", "smtp" or "noop".
 	// Empty means unset — the sender falls back to SES if its credentials
 	// happen to be there, and to a no-op sender otherwise. Naming a
 	// provider is what makes its settings required at boot.
@@ -220,6 +220,14 @@ type AppConfig struct {
 	SESRegion           string
 	SESConfigurationSet string
 	ResendAPIKey        string
+	// SMTP relay for self-hosted installs. SMTPPort 0 picks the port of the
+	// TLS mode (587 starttls, 465 tls, 25 none); SMTPPassword comes from a Secret.
+	SMTPHost     string
+	SMTPPort     int
+	SMTPTLS      string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPCAFile   string
 
 	// The platform's object-store key (R2/S3-compatible): the backup store
 	// when BACKUP_DEFAULT_* is not given. Customer files never use it; they
@@ -478,6 +486,12 @@ func load() AppConfig {
 		SESRegion:                      envOr("SES_REGION", "us-east-1"),
 		SESConfigurationSet:            os.Getenv("SES_CONFIGURATION_SET"),
 		ResendAPIKey:                   os.Getenv("RESEND_API_KEY"),
+		SMTPHost:                       strings.TrimSpace(os.Getenv("SMTP_HOST")),
+		SMTPPort:                       envInt("SMTP_PORT", 0),
+		SMTPTLS:                        strings.ToLower(strings.TrimSpace(os.Getenv("SMTP_TLS"))),
+		SMTPUsername:                   os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:                   os.Getenv("SMTP_PASSWORD"),
+		SMTPCAFile:                     os.Getenv("SMTP_CA_FILE"),
 		R2AccessKeyID:                  os.Getenv("R2_ACCESS_KEY_ID"),
 		R2SecretAccessKey:              os.Getenv("R2_SECRET_ACCESS_KEY"),
 		R2Endpoint:                     os.Getenv("R2_ENDPOINT"),
