@@ -19,7 +19,7 @@ type ciArgs struct {
 	Image      string `json:"image,omitempty" jsonschema:"the registry repository CI pushes to, e.g. ghcr.io/team/app; the app's own image when left out"`
 	Context    string `json:"context,omitempty" jsonschema:"the build folder inside the repository, e.g. apps/web for a monorepo; the repository root when left out"`
 	Dockerfile string `json:"dockerfile,omitempty" jsonschema:"the Dockerfile's path from the repository root, e.g. apps/web/Dockerfile; the context's Dockerfile when left out"`
-	Branch     string `json:"branch,omitempty" jsonschema:"the branch whose pushes deploy; main (GitHub) or the default branch (GitLab) when left out. GitHub tags the image with it and the short commit sha"`
+	Branch     string `json:"branch,omitempty" jsonschema:"the branch whose pushes deploy; main (GitHub) or the default branch (GitLab) when left out. GitHub tags the image with it and the commit sha"`
 }
 
 func shippingTools() []entry {
@@ -28,7 +28,7 @@ func shippingTools() []entry {
 			"runs as a non-root user and names its health check path. When the stack is not clear from the repository, call it without a stack: "+
 			"it answers what to look for and what to ask the user, instead of guessing.", readTool, getDockerfileTemplate),
 		tool("get_ci_snippet", "A CI pipeline (GitHub Actions, GitLab CI, Jenkins, or a curl step for any other CI) that builds the image, pushes it to your registry and deploys it to an app by digest. The same pipeline Studio's pipeline page shows. Call it after the app exists (create_app, list_apps). "+
-			"For a monorepo pass context and dockerfile; deploys run one at a time and the pipeline can be started by hand.", readTool, getCISnippet),
+			"GitHub deploys with the excalibase/deploy-action action; the others with one curl that waits until the deploy is live. For a monorepo pass context and dockerfile; deploys run one at a time.", readTool, getCISnippet),
 	}
 }
 

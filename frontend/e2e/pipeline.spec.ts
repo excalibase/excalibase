@@ -101,7 +101,8 @@ test.describe('Container pipeline', () => {
     await page.goto('/project/test-project/containers/app-1/pipeline');
     const snippet = page.getByTestId('ci-snippet');
     await expect(snippet).toContainText('docker/build-push-action@v6');
-    await expect(snippet).toContainText("/projects/test-project/apps/app-1\"");
+    await expect(snippet).toContainText('uses: excalibase/deploy-action@v1');
+    await expect(snippet).toContainText('app: test-project/app-1');
     await expect(snippet).toContainText('${{ secrets.EXCALIBASE_TOKEN }}');
   });
 
@@ -116,7 +117,7 @@ test.describe('Container pipeline', () => {
     await expect(snippet).toContainText("credentials('excalibase-token')");
     await page.getByTestId('ci-tab-curl').click();
     await expect(snippet).toContainText('COMMIT_SHA');
-    await expect(snippet).toContainText('/projects/test-project/apps/app-1');
+    await expect(snippet).toContainText('/projects/test-project/apps/app-1/deploy?wait=true');
   });
 
   test('is reached from the container page', async ({ page }) => {

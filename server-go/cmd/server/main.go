@@ -1322,9 +1322,10 @@ func newAppHandler(cfg config.AppConfig, store storage.InstanceStore, sqlStore s
 	return h
 }
 
-func newAppDeployHandler(deploys handler.AppDeployer, flags features.Flags) *handler.AppDeployHandler {
+func newAppDeployHandler(deploys handler.AppDeployer, flags features.Flags, deployWait time.Duration) *handler.AppDeployHandler {
 	h := handler.NewAppDeployHandler(deploys)
 	h.SetFeatures(flags)
+	h.SetDeployWait(deployWait)
 	return h
 }
 
@@ -1501,7 +1502,7 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		storageBudgetH:      handler.NewStorageBudgetHandler(a.budget),
 		appSecretHandler:    handler.NewAppSecretHandler(apphost.NewPostgresAppStore(sqlStore.DB()), vc),
 		appDeploySvc:        appDeploySvc,
-		appDeployHandler:    newAppDeployHandler(appDeploySvc, cfg.Features()),
+		appDeployHandler:    newAppDeployHandler(appDeploySvc, cfg.Features(), cfg.DeployWait),
 		registryCredHandler: newRegistryCredentialHandler(registryCreds),
 		appLogHandler: handler.NewAppLogHandler(service.NewAppLogService(
 			apphost.NewPostgresAppStore(sqlStore.DB()), store, k8sClient)),

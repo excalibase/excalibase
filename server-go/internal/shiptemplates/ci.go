@@ -73,7 +73,7 @@ func CI(provider string, target DeployTarget) (Snippet, error) {
 	notes := []string{
 		"The app must exist in Excalibase first; set its port to the one the image serves on.",
 		"A private image needs the registry's credentials saved in the project (Containers, Registry credentials).",
-		"Deploys run one at a time, and the pipeline can also be started by hand on the deploy branch.",
+		"Deploys run one at a time; re-run the pipeline to deploy a commit again.",
 	}
 	switch provider {
 	case "github-actions":
@@ -87,7 +87,7 @@ func CI(provider string, target DeployTarget) (Snippet, error) {
 				"excalibase-token: a Secret text credential holding " + strings.TrimPrefix(tokenSecret, "EXCALIBASE_TOKEN: "),
 				"registry: a Username with password credential for the registry",
 			},
-			Notes: append(notes, "The agent needs docker and curl."),
+			Notes: append(notes, "The agent needs docker and curl 7.76 or later."),
 		}, nil
 	case "curl":
 		if target.Build != (BuildOptions{}) {
@@ -172,70 +172,21 @@ func appAPI(target DeployTarget) string {
 	return strings.TrimRight(target.APIBase, "/") + "/api/projects/" + target.ProjectID + "/apps/" + target.AppID
 }
 
-// deployScript is the POSIX sh step every CI runs: deploy $IMAGE with
-// $COMMIT_SHA, then poll until the deploy is live or failed. Needs curl and sed.
-func deployScript(target DeployTarget) string {
-	return strings.Replace(deployScriptTemplate, "{{appAPI}}", appAPI(target), 1)
-}
+// DeployAction is the GitHub Action the GitHub pipeline deploys with.
+const DeployAction = "excalibase/deploy-action@v1"
 
-const deployScriptTemplate = `set -eu
-APP_API="{{appAPI}}"
-answer=$(curl -sS -X POST "$APP_API/deploy" \
+// defaultAPIURL is the deploy action's own api-url default.
+const defaultAPIURL = "https://app.excalibase.io/api"
+
+// deployCommand deploys $IMAGE built from the commit in commitVar. With
+// wait=true the API answers once the deploy has finished: 200 when it is live,
+// an error status (and so a failed step) when it is not.
+func deployCommand(target DeployTarget, commitVar string) string {
+	return `curl --fail-with-body -sS -X POST "` + appAPI(target) + `/deploy?wait=true" \
   -H "Authorization: Bearer $EXCALIBASE_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"image\":\"$IMAGE\",\"commitSha\":\"$COMMIT_SHA\"}" \
-  -w '\n%{http_code}')
-code=$(printf '%s\n' "$answer" | tail -n 1)
-body=$(printf '%s\n' "$answer" | sed '$d')
-if [ "$code" != "202" ]; then
-  echo "Deploy refused ($code): $body" >&2
-  exit 1
-fi
-deploy_id=$(printf '%s' "$body" | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
-if [ -z "$deploy_id" ]; then
-  echo "No deploy id in: $body" >&2
-  exit 1
-fi
-echo "Deploy $deploy_id started; waiting until it is live"
-tries=0
-unanswered=0
-while [ "$tries" -lt 120 ]; do
-  tries=$((tries + 1))
-  answer=$(curl -sS "$APP_API/deploys/$deploy_id" -H "Authorization: Bearer $EXCALIBASE_TOKEN" \
-    -w '\n%{http_code}' || true)
-  code=$(printf '%s\n' "$answer" | tail -n 1)
-  state=$(printf '%s\n' "$answer" | sed '$d')
-  case "$code" in
-    200) unanswered=0 ;;
-    000|5??)
-      unanswered=$((unanswered + 1))
-      if [ "$unanswered" -ge 6 ]; then
-        echo "The API did not answer ($code): $state" >&2
-        exit 1
-      fi
-      sleep 5
-      continue ;;
-    *)
-      echo "Polling refused ($code): $state" >&2
-      exit 1 ;;
-  esac
-  status=$(printf '%s' "$state" | sed -n 's/.*"status":"\([a-z]*\)".*/\1/p')
-  case "$status" in
-    succeeded)
-      echo "Live at $(printf '%s' "$state" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
-      exit 0 ;;
-    failed|superseded)
-      echo "Deploy $status: $state" >&2
-      exit 1 ;;
-    pending|rolling) ;;
-    *)
-      echo "Unexpected answer: $state" >&2
-      exit 1 ;;
-  esac
-  sleep 5
-done
-echo "Deploy $deploy_id did not finish within 10 minutes" >&2
-exit 1`
+  -d "{\"image\":\"$IMAGE\",\"commitSha\":\"` + commitVar + `\"}"`
+}
 
 func indent(text string, spaces int) string {
 	pad := strings.Repeat(" ", spaces)
@@ -250,12 +201,15 @@ func indent(text string, spaces int) string {
 
 // pushedDigest picks the digest of this repository: a reused agent may hold
 // the same image under other repositories.
-const pushedDigest = `docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPOSITORY:$COMMIT_SHA" | grep "^$IMAGE_REPOSITORY@" | head -n 1`
+func pushedDigest(commitVar string) string {
+	return `docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPOSITORY:` + commitVar + `" | grep "^$IMAGE_REPOSITORY@" | head -n 1`
+}
 
 func curlScript(target DeployTarget) string {
 	return "# Run after pushing the image, with these set:\n" +
 		"#   EXCALIBASE_TOKEN  a write token bound to this project, kept as a CI secret\n" +
 		"#   IMAGE             the pushed image, best by digest: " + imageRepository(target.Image) + "@sha256:...\n" +
 		"#   COMMIT_SHA        the commit the image was built from\n" +
-		deployScript(target) + "\n"
+		"# It answers once the deploy is live, and fails the step when it is not.\n" +
+		deployCommand(target, "$COMMIT_SHA") + "\n"
 }

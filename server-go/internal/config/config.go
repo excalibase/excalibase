@@ -149,6 +149,10 @@ type AppConfig struct {
 	// backup finishing and the project's database stopping.
 	PauseTimeout time.Duration
 
+	// DeployWait bounds POST .../deploy?wait=true. The edge's server timeout
+	// on that route must be longer (EXC-571).
+	DeployWait time.Duration
+
 	// PlatformDBMaxConns is the platform database pool size. See the
 	// arithmetic on MinPlatformDBMaxConns and in OPERATOR.md.
 	PlatformDBMaxConns int
@@ -449,6 +453,7 @@ func load() AppConfig {
 		DockerTLSVerify:                envOr("DOCKER_TLS_VERIFY", "") != "",
 		RestoreReadyTimeout:            envDuration("EXCALIBASE_RESTORE_READY_TIMEOUT", defaultRestoreReadyTimeout),
 		PauseTimeout:                   envDuration("EXCALIBASE_PAUSE_TIMEOUT", defaultPauseTimeout),
+		DeployWait:                     envDuration("EXCALIBASE_DEPLOY_WAIT", defaultDeployWait),
 		PlatformDBMaxConns:             envPlatformDBMaxConns(),
 		SchedulerEnabled:               envBool("EXCALIBASE_SCHEDULER_ENABLED", true),
 		SchedulerPollInterval:          envMillis("EXCALIBASE_SCHEDULER_POLL_MS", defaultSchedulerPoll),
@@ -683,6 +688,10 @@ const defaultRestoreReadyTimeout = 15 * time.Minute
 // busy database takes minutes: the pre-pause backup has to finish and
 // postgres has to shut down cleanly.
 const defaultPauseTimeout = 10 * time.Minute
+
+// defaultDeployWait outlasts the app rollout timeout (10 minutes), so a
+// waited deploy normally finishes inside it.
+const defaultDeployWait = 11 * time.Minute
 
 // DefaultPlatformDBMaxConns is the platform database pool size. It leaves
 // room for roughly a dozen concurrent lifecycle operations alongside ordinary

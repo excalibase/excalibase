@@ -52,6 +52,17 @@ func TestLoadReadsThePauseTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadReadsTheDeployWait(t *testing.T) {
+	t.Setenv("CORS_ORIGINS", "https://app.excalibase.io")
+	if got := Load().DeployWait; got != 11*time.Minute {
+		t.Errorf("DeployWait default: got %v, want 11m", got)
+	}
+	t.Setenv("EXCALIBASE_DEPLOY_WAIT", "4m")
+	if got := Load().DeployWait; got != 4*time.Minute {
+		t.Errorf("DeployWait: got %v, want 4m", got)
+	}
+}
+
 func TestParsePlatformDBMaxConnsAcceptsAUsableSize(t *testing.T) {
 	got, err := parsePlatformDBMaxConns("40")
 	if err != nil {

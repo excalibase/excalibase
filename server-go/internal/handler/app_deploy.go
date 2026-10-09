@@ -43,6 +43,9 @@ type AppDeployHandler struct {
 	deploys AppDeployer
 	// features gates what the pipeline added (EXC-554); nil keeps it dark.
 	features features.Flags
+	// waitLongest bounds ?wait=true; waitPoll is how often the wait reads the deploy.
+	waitLongest time.Duration
+	waitPoll    time.Duration
 }
 
 // SetFeatures wires the flags that decide whether the pipeline is on.
@@ -82,6 +85,11 @@ func (h *AppDeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		h.deployWithoutPipeline(w, r, projectID, appID)
 		return
 	}
+	wait, err := h.deployWaitRequest(r)
+	if err != nil {
+		httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	body, err := decodeDeployRequest(w, r)
 	if err != nil {
 		httpError(w, err.Error(), http.StatusBadRequest)
@@ -96,6 +104,11 @@ func (h *AppDeployHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		h.writeError(w, err)
+		return
+	}
+	if wait > 0 {
+		deploy, err = h.awaitDeploy(r.Context(), projectID, appID, deploy, wait)
+		h.answerWaited(w, r, deploy, err)
 		return
 	}
 	writeJSONStatus(w, http.StatusAccepted, newDeployView(deploy))

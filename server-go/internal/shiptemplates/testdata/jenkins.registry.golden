@@ -8,81 +8,20 @@ pipeline {
     EXCALIBASE_TOKEN = credentials('excalibase-token')
   }
   stages {
-    stage('Build and push') {
+    stage('Build, push and deploy') {
       steps {
         withCredentials([usernamePassword(credentialsId: 'registry', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
           sh '''
             echo "$REGISTRY_PASSWORD" | docker login -u "$REGISTRY_USERNAME" --password-stdin registry.example.com
             docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" .
             docker push "$IMAGE_REPOSITORY:$GIT_COMMIT"
+            IMAGE="$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPOSITORY:$GIT_COMMIT" | grep "^$IMAGE_REPOSITORY@" | head -n 1)"
+            curl --fail-with-body -sS -X POST "https://app.example.test/api/projects/proj-a/apps/web/deploy?wait=true" \\
+              -H "Authorization: Bearer $EXCALIBASE_TOKEN" \\
+              -H "Content-Type: application/json" \\
+              -d "{\\"image\\":\\"$IMAGE\\",\\"commitSha\\":\\"$GIT_COMMIT\\"}"
           '''
         }
-      }
-    }
-    stage('Deploy to Excalibase') {
-      steps {
-        sh '''
-          export COMMIT_SHA="$GIT_COMMIT"
-          export IMAGE="$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPOSITORY:$COMMIT_SHA" | grep "^$IMAGE_REPOSITORY@" | head -n 1)"
-          set -eu
-          APP_API="https://app.example.test/api/projects/proj-a/apps/web"
-          answer=$(curl -sS -X POST "$APP_API/deploy" \\
-            -H "Authorization: Bearer $EXCALIBASE_TOKEN" \\
-            -H "Content-Type: application/json" \\
-            -d "{\\"image\\":\\"$IMAGE\\",\\"commitSha\\":\\"$COMMIT_SHA\\"}" \\
-            -w '\\n%{http_code}')
-          code=$(printf '%s\\n' "$answer" | tail -n 1)
-          body=$(printf '%s\\n' "$answer" | sed '$d')
-          if [ "$code" != "202" ]; then
-            echo "Deploy refused ($code): $body" >&2
-            exit 1
-          fi
-          deploy_id=$(printf '%s' "$body" | sed -n 's/^{"id":"\\([^"]*\\)".*/\\1/p')
-          if [ -z "$deploy_id" ]; then
-            echo "No deploy id in: $body" >&2
-            exit 1
-          fi
-          echo "Deploy $deploy_id started; waiting until it is live"
-          tries=0
-          unanswered=0
-          while [ "$tries" -lt 120 ]; do
-            tries=$((tries + 1))
-            answer=$(curl -sS "$APP_API/deploys/$deploy_id" -H "Authorization: Bearer $EXCALIBASE_TOKEN" \\
-              -w '\\n%{http_code}' || true)
-            code=$(printf '%s\\n' "$answer" | tail -n 1)
-            state=$(printf '%s\\n' "$answer" | sed '$d')
-            case "$code" in
-              200) unanswered=0 ;;
-              000|5??)
-                unanswered=$((unanswered + 1))
-                if [ "$unanswered" -ge 6 ]; then
-                  echo "The API did not answer ($code): $state" >&2
-                  exit 1
-                fi
-                sleep 5
-                continue ;;
-              *)
-                echo "Polling refused ($code): $state" >&2
-                exit 1 ;;
-            esac
-            status=$(printf '%s' "$state" | sed -n 's/.*"status":"\\([a-z]*\\)".*/\\1/p')
-            case "$status" in
-              succeeded)
-                echo "Live at $(printf '%s' "$state" | sed -n 's/.*"url":"\\([^"]*\\)".*/\\1/p')"
-                exit 0 ;;
-              failed|superseded)
-                echo "Deploy $status: $state" >&2
-                exit 1 ;;
-              pending|rolling) ;;
-              *)
-                echo "Unexpected answer: $state" >&2
-                exit 1 ;;
-            esac
-            sleep 5
-          done
-          echo "Deploy $deploy_id did not finish within 10 minutes" >&2
-          exit 1
-        '''
       }
     }
   }

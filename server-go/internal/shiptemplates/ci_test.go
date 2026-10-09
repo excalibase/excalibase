@@ -58,19 +58,40 @@ func TestCIWithBuildOptionsMatchesTheGoldenPipelines(t *testing.T) {
 	}
 }
 
-func TestGitHubPipelineTagsBranchAndShortShaAndRunsOneDeployAtATime(t *testing.T) {
+func TestGitHubPipelineTagsBranchAndShaAndRunsOneDeployAtATime(t *testing.T) {
 	snippet, err := CI("github-actions", optionsTarget())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`branches: ["release/v2"]`, "workflow_dispatch:", "concurrency:", "cancel-in-progress: false",
-		"if: github.ref_name == 'release/v2'", `context: "apps/poll"`, `file: "apps/poll/Dockerfile.prod"`,
-		"acme/web:release-v2", "acme/web:${{ steps.tag.outputs.short }}", `short=${GITHUB_SHA::7}`,
+		`branches: ["release/v2"]`, "concurrency: excalibase-deploy", `context: "apps/poll"`, `file: "apps/poll/Dockerfile.prod"`,
+		"tags: acme/web:release-v2,acme/web:${{ github.sha }}",
 	} {
 		if !strings.Contains(snippet.Content, want) {
 			t.Errorf("missing %q:\n%s", want, snippet.Content)
 		}
+	}
+}
+
+// EXC-571: the GitHub pipeline deploys with the action, naming the API only when it is not the action's default.
+func TestGitHubPipelineDeploysWithTheAction(t *testing.T) {
+	snippet, err := CI("github-actions", goldenTarget("ghcr.io/acme/web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"uses: excalibase/deploy-action@v1", "app: proj-a/web", "image: ghcr.io/acme/web@${{ steps.build.outputs.digest }}",
+		"token: ${{ secrets.EXCALIBASE_TOKEN }}", "api-url: https://app.example.test/api",
+	} {
+		if !strings.Contains(snippet.Content, want) {
+			t.Errorf("missing %q:\n%s", want, snippet.Content)
+		}
+	}
+	production := goldenTarget("ghcr.io/acme/web")
+	production.APIBase = "https://app.excalibase.io/"
+	snippet, err = CI("github-actions", production)
+	if err != nil || strings.Contains(snippet.Content, "api-url") {
+		t.Fatalf("the action's default API needs no api-url: %v\n%s", err, snippet.Content)
 	}
 }
 
@@ -112,15 +133,16 @@ func checkGolden(t *testing.T, path, content string) {
 	}
 }
 
-func TestCIDeploysThePushedDigestAndPolls(t *testing.T) {
-	for _, provider := range Providers() {
+// EXC-571: every CI but GitHub deploys with one curl that waits until the deploy is live.
+func TestCIDeploysThePushedDigestAndWaits(t *testing.T) {
+	for _, provider := range []string{"gitlab-ci", "jenkins", "curl"} {
 		snippet, err := CI(provider, goldenTarget("ghcr.io/acme/web"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, want := range []string{
-			"https://app.example.test/api/projects/proj-a/apps/web",
-			`-X POST "$APP_API/deploy"`, `"$APP_API/deploys/$deploy_id"`, `commitSha`,
+			`curl --fail-with-body -sS -X POST "https://app.example.test/api/projects/proj-a/apps/web/deploy?wait=true"`,
+			`$EXCALIBASE_TOKEN`, `commitSha`,
 		} {
 			if !strings.Contains(snippet.Content, want) {
 				t.Errorf("%s: missing %q", provider, want)
@@ -196,7 +218,7 @@ func yamlParses(t *testing.T, provider string, target DeployTarget) {
 	if err := yaml.Unmarshal([]byte(snippet.Content), &parsed); err != nil {
 		t.Fatalf("%s is not valid YAML: %v\n%s", provider, err, snippet.Content)
 	}
-	if !strings.Contains(stepText(parsed), `"$APP_API/deploy"`) {
+	if text := stepText(parsed); !strings.Contains(text, DeployAction) && !strings.Contains(text, "/deploy?wait=true") {
 		t.Errorf("%s: the deploy script did not land inside a step", provider)
 	}
 }
