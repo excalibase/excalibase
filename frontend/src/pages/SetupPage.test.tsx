@@ -21,6 +21,8 @@ interface State {
   shares: number;
   progress: number;
   hasAdmin: boolean;
+  unsealProvider?: string;
+  unsealStatus?: number;
 }
 
 function renderPage(initial: State) {
@@ -36,6 +38,7 @@ function renderPage(initial: State) {
           shares: state.shares,
           progress: state.progress,
           type: 'shamir',
+          unsealProvider: state.unsealProvider ?? 'plaintext',
         },
       } as never);
     }
@@ -54,6 +57,18 @@ function renderPage(initial: State) {
       state.shares = b.shares;
       const shares = Array.from({ length: b.shares }, (_, i) => `share-${i}`);
       return Promise.resolve({ data: { shares, threshold: b.threshold } } as never);
+    }
+    if (url === '/auth/login') {
+      return Promise.resolve({
+        data: {
+          user: { id: 'u1', username: 'founder', email: 'f@example.com', role: 'platform_admin' },
+        },
+      } as never);
+    }
+    if (url === '/vault/unseal' && state.unsealStatus) {
+      return Promise.reject({
+        response: { status: state.unsealStatus, data: { error: 'auth required' } },
+      });
     }
     if (url === '/vault/unseal') {
       state.progress += 1;
@@ -105,7 +120,14 @@ describe('SetupPage', () => {
   });
 
   test('renders admin step first on a virgin setup (SEC-C1: admin before vault)', async () => {
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: false,
+    });
     expect(await screen.findByTestId('vault-setup-admin')).toBeInTheDocument();
   });
 
@@ -113,21 +135,42 @@ describe('SetupPage', () => {
   // the server log at startup — so the wizard must ask for it and explain
   // where to find it.
   test('admin step shows the setup token field with log hint', async () => {
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: false,
+    });
     await screen.findByTestId('vault-setup-admin');
     expect(screen.getByTestId('admin-setup-token')).toBeInTheDocument();
     expect(screen.getByText('printed in the server log on first start')).toBeInTheDocument();
   });
 
   test('admin step shows example username and email', async () => {
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: false,
+    });
     await screen.findByTestId('vault-setup-admin');
     expect(screen.getByTestId('admin-username')).toHaveAttribute('placeholder', 'admin');
     expect(screen.getByTestId('admin-email')).toHaveAttribute('placeholder', 'you@company.com');
   });
 
   test('renders init step once the admin exists', async () => {
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: true,
+    });
     expect(await screen.findByTestId('vault-setup-init')).toBeInTheDocument();
     expect(screen.getByTestId('vault-init-shares')).toHaveValue('5');
     expect(screen.getByTestId('vault-init-threshold')).toHaveValue('3');
@@ -135,7 +178,14 @@ describe('SetupPage', () => {
 
   test('rejects non-numeric shares input via inline error', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: true,
+    });
 
     await screen.findByTestId('vault-setup-init');
     const sharesInput = screen.getByTestId('vault-init-shares');
@@ -151,7 +201,14 @@ describe('SetupPage', () => {
 
   test('init flow advances to shares-display when backend returns shares', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: true,
+    });
 
     await screen.findByTestId('vault-setup-init');
     await user.click(screen.getByTestId('vault-init-submit'));
@@ -165,7 +222,14 @@ describe('SetupPage', () => {
 
   test('Continue button stays disabled until user confirms saving shares', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: true,
+    });
 
     await screen.findByTestId('vault-setup-init');
     await user.click(screen.getByTestId('vault-init-submit'));
@@ -178,18 +242,105 @@ describe('SetupPage', () => {
   });
 
   test('renders unseal step when vault is initialized but sealed', async () => {
-    renderPage({ initialized: true, sealed: true, threshold: 1, shares: 1, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: true,
+      sealed: true,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: true,
+    });
     expect(await screen.findByTestId('vault-setup-unseal')).toBeInTheDocument();
   });
 
+  // EXC-579: after a restart the vault is sealed and the admin may be signed
+  // out; the unseal call needs an admin session, so sign-in comes first.
+  test('a sealed vault asks a signed-out admin to sign in before the key', async () => {
+    const user = userEvent.setup();
+    renderPage({
+      initialized: true,
+      sealed: true,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: true,
+    });
+
+    expect(await screen.findByTestId('vault-unseal-signin')).toBeInTheDocument();
+    expect(screen.queryByTestId('vault-unseal-input')).not.toBeInTheDocument();
+
+    await user.type(screen.getByTestId('vault-unseal-signin-username'), 'founder');
+    await user.type(screen.getByTestId('vault-unseal-signin-password'), TEST_PASSWORD_PLACEHOLDER);
+    await user.click(screen.getByTestId('vault-unseal-signin-submit'));
+
+    expect(await screen.findByTestId('vault-unseal-input')).toBeInTheDocument();
+    expect(api.post).toHaveBeenCalledWith('/auth/login', {
+      username: 'founder',
+      password: TEST_PASSWORD_PLACEHOLDER,
+    });
+  });
+
+  test('manual unseal explains the vault is sealed after every restart', async () => {
+    useAuthStore
+      .getState()
+      .setAuth({ id: 'u1', username: 'founder', email: 'f@example.com', role: 'platform_admin' });
+    renderPage({
+      initialized: true,
+      sealed: true,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: true,
+      unsealProvider: 'manual',
+    });
+    expect(await screen.findByTestId('vault-unseal-manual-note')).toHaveTextContent(
+      /every restart/i,
+    );
+  });
+
+  test('an expired session on unseal returns to sign-in', async () => {
+    const user = userEvent.setup();
+    useAuthStore
+      .getState()
+      .setAuth({ id: 'u1', username: 'founder', email: 'f@example.com', role: 'platform_admin' });
+    renderPage({
+      initialized: true,
+      sealed: true,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: true,
+      unsealStatus: 401,
+    });
+
+    await user.type(await screen.findByTestId('vault-unseal-input'), 'the-key');
+    await user.click(screen.getByTestId('vault-unseal-submit'));
+
+    expect(await screen.findByTestId('vault-unseal-signin')).toBeInTheDocument();
+  });
+
   test('admin step renders when vault unsealed but no admin yet', async () => {
-    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: true,
+      sealed: false,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: false,
+    });
     expect(await screen.findByTestId('vault-setup-admin')).toBeInTheDocument();
   });
 
   test('admin form signs the admin in and redirects to /', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: true,
+      sealed: false,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: false,
+    });
 
     await screen.findByTestId('vault-setup-admin');
     await user.type(screen.getByTestId('admin-username'), 'founder');
@@ -223,7 +374,14 @@ describe('SetupPage', () => {
 
   test("a refused admin registration shows the server's reason", async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: true,
+      sealed: false,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: false,
+    });
     await screen.findByTestId('vault-setup-admin');
     vi.mocked(api.post).mockRejectedValueOnce({
       message: 'Request failed with status code 403',
@@ -241,7 +399,14 @@ describe('SetupPage', () => {
 
   test('admin form stays disabled while the confirmation differs', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: true,
+      sealed: false,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: false,
+    });
 
     await screen.findByTestId('vault-setup-admin');
     await user.type(screen.getByTestId('admin-username'), 'founder');
@@ -255,14 +420,28 @@ describe('SetupPage', () => {
   });
 
   test('admin form starts disabled before any password is chosen', async () => {
-    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: true,
+      sealed: false,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: false,
+    });
     await screen.findByTestId('vault-setup-admin');
     expect(screen.getByTestId('admin-submit')).toBeDisabled();
   });
 
   test('admin form rejects too-short username via inline error', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: true,
+      sealed: false,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: false,
+    });
 
     await screen.findByTestId('vault-setup-admin');
     await user.type(screen.getByTestId('admin-username'), 'ab');
@@ -275,13 +454,22 @@ describe('SetupPage', () => {
 
   test('admin form holds the first username to the sign-up rule', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: true,
+      sealed: false,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: false,
+    });
 
     await screen.findByTestId('vault-setup-admin');
     await user.type(screen.getByTestId('admin-username'), 'the-admin');
     await user.tab();
 
-    expect(await screen.findByTestId('admin-username-error')).toHaveTextContent('Use 3–32 letters, numbers or underscores');
+    expect(await screen.findByTestId('admin-username-error')).toHaveTextContent(
+      'Use 3–32 letters, numbers or underscores',
+    );
   });
 
   test('shares step copy-to-clipboard hits the clipboard API', async () => {
@@ -293,7 +481,14 @@ describe('SetupPage', () => {
       configurable: true,
     });
 
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: true,
+    });
     await screen.findByTestId('vault-setup-init');
     await user.click(screen.getByTestId('vault-init-submit'));
     await screen.findByTestId('vault-setup-shares');
@@ -304,7 +499,14 @@ describe('SetupPage', () => {
 
   test('shares step continue button advances to unseal once confirmed', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: true,
+    });
 
     await screen.findByTestId('vault-setup-init');
     await user.click(screen.getByTestId('vault-init-submit'));
@@ -316,19 +518,38 @@ describe('SetupPage', () => {
   });
 
   test('unseal form submits a share and clears input on progress', async () => {
+    useAuthStore
+      .getState()
+      .setAuth({ id: 'u1', username: 'founder', email: 'f@example.com', role: 'platform_admin' });
     const user = userEvent.setup();
-    renderPage({ initialized: true, sealed: true, threshold: 1, shares: 1, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: true,
+      sealed: true,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: true,
+    });
 
     const input = await screen.findByTestId('vault-unseal-input');
     await user.type(input, 'my-share-hex');
     await user.click(screen.getByTestId('vault-unseal-submit'));
 
-    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/vault/unseal', { share: 'my-share-hex' }));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/vault/unseal', { share: 'my-share-hex' }),
+    );
   });
 
   test('admin form rejects invalid email via inline error', async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: true, sealed: false, threshold: 1, shares: 1, progress: 0, hasAdmin: false });
+    renderPage({
+      initialized: true,
+      sealed: false,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: false,
+    });
 
     await screen.findByTestId('vault-setup-admin');
     await user.type(screen.getByTestId('admin-email'), 'not-an-email');
@@ -340,7 +561,14 @@ describe('SetupPage', () => {
   });
   test("a refused vault init shows the server's reason", async () => {
     const user = userEvent.setup();
-    renderPage({ initialized: false, sealed: true, threshold: 0, shares: 0, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: false,
+      sealed: true,
+      threshold: 0,
+      shares: 0,
+      progress: 0,
+      hasAdmin: true,
+    });
     await screen.findByTestId('vault-setup-init');
     vi.mocked(api.post).mockRejectedValueOnce({
       message: 'Request failed with status code 409',
@@ -354,8 +582,18 @@ describe('SetupPage', () => {
   });
 
   test("a refused unseal share shows the server's reason", async () => {
+    useAuthStore
+      .getState()
+      .setAuth({ id: 'u1', username: 'founder', email: 'f@example.com', role: 'platform_admin' });
     const user = userEvent.setup();
-    renderPage({ initialized: true, sealed: true, threshold: 1, shares: 1, progress: 0, hasAdmin: true });
+    renderPage({
+      initialized: true,
+      sealed: true,
+      threshold: 1,
+      shares: 1,
+      progress: 0,
+      hasAdmin: true,
+    });
     const input = await screen.findByTestId('vault-unseal-input');
     vi.mocked(api.post).mockRejectedValueOnce({
       message: 'Request failed with status code 400',

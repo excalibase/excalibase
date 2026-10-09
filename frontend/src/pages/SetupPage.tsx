@@ -5,7 +5,12 @@ import { Lock, Loader2, Copy, Check, AlertTriangle, KeyRound, UserPlus } from 'l
 import { useVaultStatus, useInitVault, useUnsealVault } from '../hooks/useVault';
 import { useSetupStatus, useRegisterAdmin } from '../hooks/useSetup';
 import { useAuthStore } from '../stores/auth-store';
-import { NewPasswordFields, newPasswordReady, passwordProblem } from '../components/auth/NewPasswordFields';
+import { SealedVaultSignIn } from '../components/auth/SealedVaultSignIn';
+import {
+  NewPasswordFields,
+  newPasswordReady,
+  passwordProblem,
+} from '../components/auth/NewPasswordFields';
 import { serverErrorMessage } from '../utils/serverError';
 import { usernameError } from '../utils/names';
 
@@ -28,6 +33,8 @@ export function SetupPage() {
   const unsealMutation = useUnsealVault();
   const registerMutation = useRegisterAdmin();
   const setAuth = useAuthStore((s) => s.setAuth);
+  const clearAuth = useAuthStore((s) => s.clearAuth);
+  const signedIn = useAuthStore((s) => s.isAuthenticated);
 
   const [issuedKeys, setIssuedKeys] = useState<IssuedKeys | null>(null);
   const [copiedShare, setCopiedShare] = useState<string | null>(null);
@@ -123,7 +130,11 @@ export function SetupPage() {
               }}
             >
               {(field) => (
-                <NumericField label="Total shares (1–10)" field={field} testId="vault-init-shares" />
+                <NumericField
+                  label="Total shares (1–10)"
+                  field={field}
+                  testId="vault-init-shares"
+                />
               )}
             </initForm.Field>
 
@@ -149,7 +160,9 @@ export function SetupPage() {
           </div>
 
           {initMutation.isError && (
-            <ErrorBanner message={serverErrorMessage(initMutation.error, 'The vault was not initialized')} />
+            <ErrorBanner
+              message={serverErrorMessage(initMutation.error, 'The vault was not initialized')}
+            />
           )}
 
           <initForm.Subscribe selector={(s) => [s.canSubmit, s.isSubmitting] as const}>
@@ -273,47 +286,65 @@ export function SetupPage() {
           />
         </div>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setUnsealError(null);
-            unsealMutation.mutate(shareInput.trim(), {
-              onSuccess: () => {
-                setShareInput('');
-              },
-              onError: (err) => {
-                setUnsealError(serverErrorMessage(err, 'The share was not accepted'));
-              },
-            });
-          }}
-        >
-          <label className="block mb-3">
-            <span className="text-xs font-medium text-text-secondary">Unseal share</span>
-            <input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              value={shareInput}
-              onChange={(e) => setShareInput(e.target.value)}
-              placeholder="Paste a share..."
-              className="mt-1 w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-sm font-mono text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500"
-              data-testid="vault-unseal-input"
-              required
-            />
-          </label>
+        {vaultStatus.unsealProvider === 'manual' && (
+          <p data-testid="vault-unseal-manual-note" className="mb-4 text-xs text-text-secondary">
+            This platform uses manual unseal: the vault is sealed after every restart of
+            provisioning, and projects, sign-ins to apps and backups wait until an admin enters the
+            unseal key here or with <code>excalibase-provisioning vault unseal</code>. The key is
+            never stored on the server.
+          </p>
+        )}
 
-          {unsealError && <ErrorBanner message={unsealError} />}
-
-          <button
-            type="submit"
-            disabled={unsealMutation.isPending || !shareInput.trim()}
-            className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-            data-testid="vault-unseal-submit"
+        {!signedIn ? (
+          <SealedVaultSignIn />
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              setUnsealError(null);
+              unsealMutation.mutate(shareInput.trim(), {
+                onSuccess: () => {
+                  setShareInput('');
+                },
+                onError: (err) => {
+                  // The session ended: sign in again, here, not on /login.
+                  if ((err as { response?: { status?: number } }).response?.status === 401) {
+                    clearAuth();
+                    return;
+                  }
+                  setUnsealError(serverErrorMessage(err, 'The share was not accepted'));
+                },
+              });
+            }}
           >
-            {unsealMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-            Submit share
-          </button>
-        </form>
+            <label className="block mb-3">
+              <span className="text-xs font-medium text-text-secondary">Unseal share</span>
+              <input
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                value={shareInput}
+                onChange={(e) => setShareInput(e.target.value)}
+                placeholder="Paste a share..."
+                className="mt-1 w-full px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-sm font-mono text-text-primary focus:outline-none focus:ring-2 focus:ring-purple-500"
+                data-testid="vault-unseal-input"
+                required
+              />
+            </label>
+
+            {unsealError && <ErrorBanner message={unsealError} />}
+
+            <button
+              type="submit"
+              disabled={unsealMutation.isPending || !shareInput.trim()}
+              className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+              data-testid="vault-unseal-submit"
+            >
+              {unsealMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+              Submit share
+            </button>
+          </form>
+        )}
       </div>
     );
   }
@@ -397,7 +428,8 @@ export function SetupPage() {
           <adminForm.Field
             name="setupToken"
             validators={{
-              onChange: ({ value }) => (value.trim().length === 0 ? 'Setup token is required' : undefined),
+              onChange: ({ value }) =>
+                value.trim().length === 0 ? 'Setup token is required' : undefined,
             }}
           >
             {(field) => (
@@ -413,14 +445,20 @@ export function SetupPage() {
           </adminForm.Field>
 
           {registerMutation.isError && (
-            <ErrorBanner message={serverErrorMessage(registerMutation.error, 'The admin was not created')} />
+            <ErrorBanner
+              message={serverErrorMessage(registerMutation.error, 'The admin was not created')}
+            />
           )}
 
-          <adminForm.Subscribe selector={(s) => [s.canSubmit, s.isSubmitting, s.values.password] as const}>
+          <adminForm.Subscribe
+            selector={(s) => [s.canSubmit, s.isSubmitting, s.values.password] as const}
+          >
             {([canSubmit, isSubmitting, password]) => (
               <button
                 type="submit"
-                disabled={!canSubmit || isSubmitting || !newPasswordReady(password, passwordConfirm)}
+                disabled={
+                  !canSubmit || isSubmitting || !newPasswordReady(password, passwordConfirm)
+                }
                 className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                 data-testid="admin-submit"
               >
@@ -466,7 +504,9 @@ interface NumericFieldProps {
 }
 
 function NumericField({ label, field, testId }: NumericFieldProps) {
-  const error = field.state.meta.isTouched ? (field.state.meta.errors[0] as string | undefined) : undefined;
+  const error = field.state.meta.isTouched
+    ? (field.state.meta.errors[0] as string | undefined)
+    : undefined;
   return (
     <label className="block">
       <span className="text-xs font-medium text-text-secondary">{label}</span>
@@ -499,8 +539,18 @@ interface TextFieldProps {
   readonly placeholder?: string;
 }
 
-function TextField({ label, type, autoComplete, field, testId, hint, placeholder }: TextFieldProps) {
-  const error = field.state.meta.isTouched ? (field.state.meta.errors[0] as string | undefined) : undefined;
+function TextField({
+  label,
+  type,
+  autoComplete,
+  field,
+  testId,
+  hint,
+  placeholder,
+}: TextFieldProps) {
+  const error = field.state.meta.isTouched
+    ? (field.state.meta.errors[0] as string | undefined)
+    : undefined;
   return (
     <label className="block mb-3">
       <span className="text-xs font-medium text-text-secondary">{label}</span>
@@ -515,9 +565,7 @@ function TextField({ label, type, autoComplete, field, testId, hint, placeholder
         data-testid={testId}
         required
       />
-      {hint && !error && (
-        <span className="text-[10px] text-text-tertiary mt-1 block">{hint}</span>
-      )}
+      {hint && !error && <span className="text-[10px] text-text-tertiary mt-1 block">{hint}</span>}
       {error && (
         <span className="text-[10px] text-red-400 mt-1 block" data-testid={`${testId}-error`}>
           {error}

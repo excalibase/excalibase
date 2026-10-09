@@ -7,10 +7,12 @@ import (
 )
 
 // Vault unseal providers (EXC-485). awskms keeps only a KMS ciphertext of the
-// unseal key; plaintext keeps the key itself and is for development.
+// unseal key; plaintext keeps the key itself and is for development; manual
+// (EXC-579) keeps nothing: the vault starts sealed and an admin unseals it.
 const (
 	UnsealProviderAWSKMS    = "awskms"
 	UnsealProviderPlaintext = "plaintext"
+	UnsealProviderManual    = "manual"
 )
 
 // VaultUnseal is how the in-process vault gets its unseal key at boot.
@@ -26,6 +28,9 @@ type VaultUnseal struct {
 
 // UsesKMS reports whether the unseal key is kept under KMS.
 func (u VaultUnseal) UsesKMS() bool { return u.Provider == UnsealProviderAWSKMS }
+
+// Manual reports whether the vault waits sealed for an admin's unseal key.
+func (u VaultUnseal) Manual() bool { return u.Provider == UnsealProviderManual }
 
 // LoadVaultUnseal reads the unseal settings from the environment.
 func LoadVaultUnseal() (VaultUnseal, error) { return ParseVaultUnseal(os.Getenv) }
@@ -48,6 +53,10 @@ func ParseVaultUnseal(get func(string) string) (VaultUnseal, error) {
 		if plaintextKey {
 			return VaultUnseal{}, errors.New("VAULT_UNSEAL_PROVIDER=awskms refuses a plaintext VAULT_UNSEAL_KEY: remove it")
 		}
+	case UnsealProviderManual:
+		if plaintextKey || u.Ciphertext != "" || u.KMSKeyID != "" {
+			return VaultUnseal{}, errors.New("VAULT_UNSEAL_PROVIDER=manual keeps no unseal key on the server: remove VAULT_UNSEAL_KEY, VAULT_UNSEAL_KEY_CIPHERTEXT and VAULT_KMS_KEY_ID")
+		}
 	case UnsealProviderPlaintext, "":
 		if u.Ciphertext != "" {
 			return VaultUnseal{}, errors.New("VAULT_UNSEAL_KEY_CIPHERTEXT is set but VAULT_UNSEAL_PROVIDER is not awskms: set VAULT_UNSEAL_PROVIDER=awskms")
@@ -56,7 +65,7 @@ func ParseVaultUnseal(get func(string) string) (VaultUnseal, error) {
 			return VaultUnseal{}, errors.New("VAULT_KMS_KEY_ID is set but VAULT_UNSEAL_PROVIDER is not awskms: set VAULT_UNSEAL_PROVIDER=awskms")
 		}
 	default:
-		return VaultUnseal{}, fmt.Errorf("VAULT_UNSEAL_PROVIDER=%q is not supported: use awskms or plaintext", u.Provider)
+		return VaultUnseal{}, fmt.Errorf("VAULT_UNSEAL_PROVIDER=%q is not supported: use awskms, manual or plaintext", u.Provider)
 	}
 	return u, nil
 }
@@ -64,6 +73,9 @@ func ParseVaultUnseal(get func(string) string) (VaultUnseal, error) {
 // CheckDeployment refuses awskms where it would configure nothing: a remote
 // vault unseals itself, and the docker provisioner keeps its key in a file.
 func (u VaultUnseal) CheckDeployment(provisionerMode, vaultURL string) error {
+	if u.Manual() && vaultURL != "" {
+		return errors.New("VAULT_UNSEAL_PROVIDER=manual applies to the in-process vault, but VAULT_URL points at a remote one")
+	}
 	if !u.UsesKMS() {
 		return nil
 	}

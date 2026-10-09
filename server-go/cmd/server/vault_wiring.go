@@ -11,9 +11,23 @@ import (
 // unseal itself at boot. On k8s the chart's bootstrap Job does this step in
 // every deployment mode and keeps the unseal key in a Secret (STORAGE_PATH may
 // be an emptyDir, so a key file there would not survive a restart). The docker
-// provisioner has no Job, so the binary readies itself.
+// provisioner has no Job, so the binary readies itself — unless the operator
+// chose manual unseal, where the key is never on the host (EXC-579).
 func localVaultNeedsAutoReady(cfg config.AppConfig) bool {
-	return cfg.ProvisionerMode == "docker"
+	return cfg.ProvisionerMode == "docker" && !cfg.VaultUnseal.Manual()
+}
+
+// vaultLifecycleCallsPerMinute bounds init, unseal, seal and rekey per address.
+// An admin unsealing by hand needs a handful; a guesser gets nowhere.
+const vaultLifecycleCallsPerMinute = 10
+
+// effectiveUnsealProvider names how the in-process vault is opened, for
+// /api/vault/status. Unset is the docker provisioner's key file.
+func effectiveUnsealProvider(unseal config.VaultUnseal) string {
+	if unseal.Provider == "" {
+		return config.UnsealProviderPlaintext
+	}
+	return unseal.Provider
 }
 
 // newLocalVault opens the in-process vault on the given store and, when

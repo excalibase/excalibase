@@ -22,7 +22,10 @@ api.interceptors.response.use(
     const fromFunction = error.response?.headers?.['x-excalibase-function-response'] === '1';
     if (error.response?.status === 401 && !fromFunction) {
       localStorage.removeItem('auth_user');
-      if (globalThis.location.pathname !== '/login') {
+      // /setup signs a sealed vault's admin in itself (EXC-579); /login would
+      // bounce straight back there while the vault is sealed.
+      const signsInItself = ['/login', '/setup'].includes(globalThis.location.pathname);
+      if (!signsInItself) {
         globalThis.location.href = '/login';
       }
     }
