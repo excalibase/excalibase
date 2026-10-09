@@ -292,7 +292,8 @@ Environment variables:
 - `REALTIME_PUBLICATION_NAME` — publication name (default: `cdc_watcher_pub`)
 
 **Email**
-- `EMAIL_PROVIDER` — `ses` (default, back-compat), `resend`, or `noop`. `noop` short-circuits to 503 so dev/CI runs without provider creds.
+- `EMAIL_PROVIDER` — `ses` (default, back-compat), `resend`, `smtp`, or `noop`. `noop` short-circuits to 503 so dev/CI runs without provider creds.
+- SMTP path (self-host, EXC-580): `SMTP_HOST`, `SMTP_PORT` (default by mode), `SMTP_TLS` (`starttls` default / `tls` / `none`), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_CA_FILE`. See docs/deployment/self-host.md.
 - `EMAIL_FROM_ADDRESS` / `EMAIL_FROM_NAME` — provider-agnostic defaults; provider-specific vars (`SES_FROM_ADDRESS`, `RESEND_FROM_ADDRESS`) override when set
 - `EMAIL_PRODUCT_NAME` — string used in templates (verification + reset emails)
 - `EMAIL_REPLY_TO` — optional Reply-To header

@@ -151,11 +151,18 @@ func providerFeatures(cfg config.AppConfig) []Feature {
 			},
 		},
 		{
+			Flag:    "EMAIL_PROVIDER=smtp",
+			Enabled: cfg.EmailProvider == "smtp",
+			Requires: []Dependency{
+				{Name: "SMTP relay host (SMTP_HOST)", Wired: set(cfg.SMTPHost)},
+			},
+		},
+		{
 			Flag:    "EMAIL_PROVIDER",
 			Enabled: cfg.EmailProvider != "",
 			Requires: []Dependency{
-				{Name: "a known email provider (ses, resend or noop)",
-					Wired: cfg.EmailProvider == "ses" || cfg.EmailProvider == "resend" || cfg.EmailProvider == "noop"},
+				{Name: "a known email provider (ses, resend, smtp or noop)",
+					Wired: knownEmailProvider(cfg.EmailProvider)},
 			},
 		},
 		{
@@ -209,4 +216,12 @@ func Check(features []Feature) error {
 		return nil
 	}
 	return fmt.Errorf("startup wiring check failed: %s", strings.Join(gaps, "; "))
+}
+
+func knownEmailProvider(provider string) bool {
+	switch provider {
+	case "ses", "resend", "smtp", "noop":
+		return true
+	}
+	return false
 }

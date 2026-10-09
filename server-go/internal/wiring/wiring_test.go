@@ -129,6 +129,7 @@ func TestCheck_ProviderSelectedWithoutItsSettings(t *testing.T) {
 	cases := map[string]config.AppConfig{
 		"EMAIL_PROVIDER=ses":    {EmailProvider: "ses"},
 		"EMAIL_PROVIDER=resend": {EmailProvider: "resend"},
+		"EMAIL_PROVIDER=smtp":   {EmailProvider: "smtp"},
 		"R2_*":                  {R2Bucket: "uploads"},
 		"BACKUP_DEFAULT_*":      {BackupEndpoint: "https://r2", BackupBucket: "backups"},
 	}
@@ -167,6 +168,14 @@ func TestCheck_ProvidersConfigured(t *testing.T) {
 	}
 	if err := Check(Features(config.AppConfig{}, Deps{})); err != nil {
 		t.Fatalf("nothing named: %v", err)
+	}
+}
+
+// SMTP needs a relay host; credentials stay optional for an open relay.
+func TestCheck_SMTPConfigured(t *testing.T) {
+	cfg := config.AppConfig{EmailProvider: "smtp", SMTPHost: "mail.internal"}
+	if err := Check(Features(cfg, fullyWired())); err != nil {
+		t.Fatalf("smtp with a host: %v", err)
 	}
 }
 
