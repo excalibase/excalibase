@@ -145,3 +145,13 @@ func TestRequireNodeSpread(t *testing.T) {
 		t.Errorf("one instance needs no node lookup: %v", err)
 	}
 }
+
+// ADR 0038: a single Docker/Podman host is one node. A tier with more copies
+// is refused before anything is created, as on a cluster too small for it.
+func TestRequireNodeCount_SingleHostIsOneNode(t *testing.T) {
+	svc := NewProvisioningService(nil, nil, nil)
+	assertTooFewNodes(t, svc.RequireNodeCount(context.Background(), domain.Standard, 3), 3, 1)
+	if err := svc.RequireNodeCount(context.Background(), domain.Free, 1); err != nil {
+		t.Fatalf("one copy on one host: %v", err)
+	}
+}
