@@ -15,8 +15,12 @@ type ContainerLimits struct {
 }
 
 // LimitsForTier reads the tier's memory and CPU the way Kubernetes does. A tier
-// that does not state both is refused: there is no default size.
+// that does not state both is refused: there is no default size. So is one with
+// more than one copy (ADR 0038): copies on one machine fail together.
 func LimitsForTier(tier config.TierConfig) (ContainerLimits, error) {
+	if tier.Instances > 1 {
+		return ContainerLimits{}, fmt.Errorf("the tier runs %d copies, which need %d machines; a single host runs one copy", tier.Instances, tier.Instances)
+	}
 	memory, err := positiveQuantity("memory", tier.Memory)
 	if err != nil {
 		return ContainerLimits{}, err
