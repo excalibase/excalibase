@@ -13,16 +13,16 @@ python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
 hex=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 render() {
   env -i PATH="$PATH" HOME="$HOME" \
-    POSTGRES_PASSWORD=$hex APP_DB_PASSWORD=$hex SETUP_TOKEN=$hex \
+    POSTGRES_PASSWORD=$hex SETUP_TOKEN=$hex \
     EXCALIBASE_DOMAIN=example.test EXCALIBASE_TLS=internal STUDIO_ALLOW_CIDRS="0.0.0.0/0 ::/0" \
-    ADMIN_EMAIL=a@example.test GRAPHQL_PROJECT_ID=x ENGINE_SOCKET=/var/run/docker.sock ENGINE_SOCKET_GID=999 \
+    ADMIN_EMAIL=a@example.test ENGINE_SOCKET=/var/run/docker.sock ENGINE_SOCKET_GID=999 \
     "$@" docker compose --project-directory "$DIR/.." -f "$COMPOSE" config
 }
 
 render | python3 "$DIR/single_host_check.py"
 
 # Every generated secret is required: leaving one out fails the render.
-for missing in POSTGRES_PASSWORD APP_DB_PASSWORD SETUP_TOKEN EXCALIBASE_DOMAIN EXCALIBASE_TLS STUDIO_ALLOW_CIDRS ENGINE_SOCKET_GID; do
+for missing in POSTGRES_PASSWORD SETUP_TOKEN EXCALIBASE_DOMAIN EXCALIBASE_TLS STUDIO_ALLOW_CIDRS ENGINE_SOCKET_GID; do
   if render "$missing=" >/dev/null 2>&1; then
     echo "rendered without $missing" >&2
     exit 1

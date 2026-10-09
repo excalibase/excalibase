@@ -35,12 +35,9 @@ check_secret() {
 }
 
 check_secret POSTGRES_PASSWORD "${POSTGRES_PASSWORD:-}"
-check_secret APP_DB_PASSWORD "${APP_DB_PASSWORD:-}"
 check_secret SETUP_TOKEN "${SETUP_TOKEN:-}"
-
-if [ "${POSTGRES_PASSWORD:-}" = "${APP_DB_PASSWORD:-}" ] || [ "${POSTGRES_PASSWORD:-}" = "${SETUP_TOKEN:-}" ] ||
-  [ "${APP_DB_PASSWORD:-}" = "${SETUP_TOKEN:-}" ]; then
-  complain "POSTGRES_PASSWORD, APP_DB_PASSWORD and SETUP_TOKEN must all differ"
+if [ "${POSTGRES_PASSWORD:-}" = "${SETUP_TOKEN:-}" ]; then
+  complain "POSTGRES_PASSWORD and SETUP_TOKEN must differ"
 fi
 
 # Optional: unset means bootstrap generates one and prints it once.
