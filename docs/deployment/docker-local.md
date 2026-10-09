@@ -137,6 +137,15 @@ SSH tunnel).
 | Edge functions, realtime | no (Kubernetes only) |
 | High availability (3/5 copies) | no — one machine has one disk and one kernel (ADR 0038); a tier with more than one copy is refused. Use Kubernetes across nodes |
 
+## Checking a change
+
+`deploy/single-host/tests/boot-smoke.sh docker` boots the bundle from fresh
+state and walks the first hour (weak secret refused, install, sign-in, project,
+GraphQL/REST with a secret key, backup). It destroys the bundle's containers and
+volumes: never run it on an install you keep. CI runs it on every change to the
+bundle or the engine path; for Podman, `COMPOSE="podman compose" DOCKER=podman
+.../boot-smoke.sh podman`.
+
 ## Operations
 
 ```bash

@@ -5,6 +5,10 @@ The same bundle as [docker-local.md](./docker-local.md)
 user with rootless Podman (ADR 0026). Read docker-local.md first for what runs,
 what is published and what works; this page covers what differs.
 
+Verified from fresh state on Ubuntu 24.04 (Podman 4.9.3, AppArmor) and Fedora 44
+(Podman 5.8.1, SELinux enforcing): install, sign-in, a Postgres project at its
+tier's limits, GraphQL and REST with a secret key, a backup.
+
 Nothing runs as root at run time: the engine is the user's own Podman, and the
 engine proxy reaches the user's `podman.sock` (as the container's root, which in
 a rootless container is that unprivileged user).
