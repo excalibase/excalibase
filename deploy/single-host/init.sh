@@ -51,9 +51,10 @@ case $engine in
     engine_socket_gid=${engine_socket_gid:-$(stat -c %g "$engine_socket")}
     ;;
   podman)
+    # Rootless: the container's root is this unprivileged user, the socket's owner.
     engine_socket=${engine_socket:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock}
-    engine_socket_uid=$(id -u)
-    engine_socket_gid=${engine_socket_gid:-$(id -g)}
+    engine_socket_uid=0
+    engine_socket_gid=0
     ;;
   *) echo "init.sh: --engine must be docker or podman" >&2; exit 2 ;;
 esac
@@ -65,6 +66,37 @@ case $domain in
   *[!0-9.]*) tls=$admin_email ;;
   *) echo "init.sh: Studio and the API are served on subdomains; use a DNS name (for a bare address, $domain.sslip.io)" >&2; exit 2 ;;
 esac
+
+# Rootless Podman: tenant limits need the cpu and memory cgroup controllers
+# delegated to this user, and ports below ip_unprivileged_port_start are out
+# of reach of the edge.
+edge_ports=
+if [ "$engine" = podman ]; then
+  controllers=${CGROUP_CONTROLLERS:-$(cat "/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers" 2>/dev/null)}
+  for needed in cpu memory; do
+    case " $controllers " in
+      *" $needed "*) ;;
+      *) echo "init.sh: the $needed cgroup controller is not delegated to $(id -un); projects run with CPU and memory limits." >&2
+         echo "  As root: mkdir -p /etc/systemd/system/user@.service.d && printf '[Service]\\nDelegate=cpu cpuset io memory pids\\n' > /etc/systemd/system/user@.service.d/delegate.conf && systemctl daemon-reload, then log in again." >&2
+         exit 1 ;;
+    esac
+  done
+  port_start=${UNPRIVILEGED_PORT_START:-$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start)}
+  if [ "$port_start" -gt 80 ]; then
+    if [ "$tls" != internal ]; then
+      echo "init.sh: Let's Encrypt needs ports 80 and 443, which rootless Podman cannot open here." >&2
+      echo "  As root: echo 'net.ipv4.ip_unprivileged_port_start=80' > /etc/sysctl.d/90-excalibase.conf && sysctl --system" >&2
+      exit 1
+    fi
+    edge_ports="EDGE_HTTP_PORT=8080
+EDGE_HTTPS_PORT=8443"
+  fi
+fi
+# On an SELinux host a confined container may not connect to the engine socket.
+selinux_label=
+if [ "${SELINUX_MODE:-$(getenforce 2>/dev/null || echo Disabled)}" = Enforcing ]; then
+  selinux_label="ENGINE_PROXY_SELINUX_LABEL=disable"
+fi
 
 umask 077
 cat >"$env_file" <<ENV
@@ -81,5 +113,9 @@ ENGINE_SOCKET=$engine_socket
 ENGINE_SOCKET_UID=$engine_socket_uid
 ENGINE_SOCKET_GID=$engine_socket_gid
 ENV
+for line in "$edge_ports" "$selinux_label"; do
+  [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
+done
 chmod 600 "$env_file"
-echo "init.sh: wrote $env_file (Studio: https://studio.$domain, API: https://api.$domain)"
+port=${edge_ports:+:8443}
+echo "init.sh: wrote $env_file (Studio: https://studio.$domain$port, API: https://api.$domain$port)"

@@ -45,6 +45,28 @@ if sh "$DIR/../init.sh" --env-file "$WORK/ip.env" --domain 203.0.113.7 --admin-e
   fail "init.sh accepted a bare address"
 fi
 
+# Rootless Podman: the proxy runs as the container's root, which is the
+# unprivileged owner of the socket; low edge ports need the sysctl.
+host() { env UNPRIVILEGED_PORT_START=1024 CGROUP_CONTROLLERS="cpuset cpu io memory pids" SELINUX_MODE=Disabled "$@"; }
+host sh "$DIR/../init.sh" --env-file "$WORK/pm.env" --domain localhost --admin-email me@example.com \
+  --engine podman --engine-socket "$WORK/podman.sock" >/dev/null || fail "podman init refused"
+pm() { sed -n "s/^$1=//p" "$WORK/pm.env"; }
+[ "$(pm ENGINE_SOCKET_UID):$(pm ENGINE_SOCKET_GID)" = 0:0 ] || fail "podman proxy is not the container root (the socket owner)"
+[ "$(pm EDGE_HTTP_PORT):$(pm EDGE_HTTPS_PORT)" = 8080:8443 ] || fail "rootless edge not moved above the privileged ports"
+if host sh "$DIR/../init.sh" --env-file "$WORK/pm2.env" --domain example.com --admin-email me@example.com \
+  --engine podman --engine-socket "$WORK/podman.sock" >"$WORK/out" 2>&1; then
+  fail "public domain accepted with ports 80/443 out of reach"
+fi
+grep -q ip_unprivileged_port_start "$WORK/out" || fail "refusal does not say how to open ports 80/443"
+UNPRIVILEGED_PORT_START=80 CGROUP_CONTROLLERS="memory pids" SELINUX_MODE=Disabled sh "$DIR/../init.sh" --env-file "$WORK/pm3.env" \
+  --domain example.com --admin-email me@example.com --engine podman --engine-socket "$WORK/podman.sock" >"$WORK/out" 2>&1 &&
+  fail "podman accepted without the cpu controller delegated"
+grep -q Delegate "$WORK/out" || fail "refusal does not say how to delegate cpu"
+UNPRIVILEGED_PORT_START=80 CGROUP_CONTROLLERS="cpu memory pids" SELINUX_MODE=Enforcing sh "$DIR/../init.sh" --env-file "$WORK/pm4.env" \
+  --domain example.com --admin-email me@example.com --engine podman --engine-socket "$WORK/podman.sock" >/dev/null || fail "podman with sysctl refused"
+grep -q '^ENGINE_PROXY_SELINUX_LABEL=disable$' "$WORK/pm4.env" || fail "SELinux host: the proxy cannot reach the socket"
+! grep -q '^EDGE_HTTP_PORT' "$WORK/pm4.env" || fail "ports moved although 80/443 are reachable"
+
 # Required arguments.
 if sh "$DIR/../init.sh" --env-file "$WORK/none.env" --admin-email me@example.com >/dev/null 2>&1; then
   fail "init.sh ran without a domain"
