@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/excalibase/provisioning-poc/internal/config"
 	"github.com/excalibase/provisioning-poc/internal/domain"
 )
 
@@ -87,7 +86,7 @@ func TestDockerRealClient_ProvisionPostgres(t *testing.T) {
 		ProjectName:     projectName,
 		DBType:          domain.PostgreSQL,
 	}
-	result, err := p.Provision(ctx, req, config.TierConfig{}, cb)
+	result, err := p.Provision(ctx, req, testTier, cb)
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}

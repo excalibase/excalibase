@@ -76,6 +76,8 @@ type DockerBackupAdapter struct {
 	// probe proves the restored container serves queries with the
 	// credentials registration filed, before the project becomes ACTIVE.
 	probe DatabaseProbe
+	// plans sizes the restored container as a new project of its plan.
+	plans RestorePlanSource
 	// readyTimeout bounds the wait for the restored container to finish
 	// recovery. Zero means the package default.
 	readyTimeout time.Duration
@@ -102,6 +104,14 @@ func (a *DockerBackupAdapter) restoreTimeout() time.Duration {
 
 // SetDatabaseProbe wires the check that proves a restored database serves
 // queries. Without it a restore refuses to run.
+// SetRestorePlanSource wires what sizes a restored project. Without it a
+// restore is refused: there is no default size.
+func (a *DockerBackupAdapter) SetRestorePlanSource(p RestorePlanSource) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.plans = p
+}
+
 func (a *DockerBackupAdapter) SetDatabaseProbe(p DatabaseProbe) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -435,6 +445,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	store := a.instances
 	registrar := a.registrar
 	probe := a.probe
+	plans := a.plans
 	a.mu.RUnlock()
 
 	newProject := req.TargetProjectID
@@ -451,6 +462,10 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 	}
 	if probe == nil {
 		return nil, ErrDatabaseProbeNotConfigured
+	}
+	limits, err := restoreLimits(ctx, plans, inst)
+	if err != nil {
+		return nil, err
 	}
 
 	// 2. Resolve the source backup. Default: most recent COMPLETED
@@ -489,6 +504,7 @@ func (a *DockerBackupAdapter) Restore(ctx context.Context, inst *domain.Database
 		sourceProjectID: inst.ProjectID,
 		body:            body,
 		req:             req,
+		limits:          limits,
 	})
 	if err != nil {
 		return nil, err
@@ -667,6 +683,24 @@ type restoreContainerSpec struct {
 	sourceProjectID string
 	body            io.Reader
 	req             domain.RestoreRequest
+	limits          provisioner.ContainerLimits
+}
+
+// restoreLimits sizes a restored container by the plan a new project of the
+// source's org would get.
+func restoreLimits(ctx context.Context, plans RestorePlanSource, src *domain.DatabaseInstance) (provisioner.ContainerLimits, error) {
+	if plans == nil {
+		return provisioner.ContainerLimits{}, ErrRestorePlanNotConfigured
+	}
+	plan, err := plans.RestorePlan(ctx, src)
+	if err != nil {
+		return provisioner.ContainerLimits{}, fmt.Errorf("restore %s: %w", src.ProjectID, err)
+	}
+	limits, err := provisioner.LimitsForTier(plan.Config)
+	if err != nil {
+		return provisioner.ContainerLimits{}, fmt.Errorf("restore %s at tier %s: %w", src.ProjectID, plan.Tier, err)
+	}
+	return limits, nil
 }
 
 // createAndSeedRestoreContainer creates the stopped restore container, extracts
@@ -684,7 +718,7 @@ func (a *DockerBackupAdapter) createAndSeedRestoreContainer(ctx context.Context,
 		"POSTGRES_PASSWORD": spec.newPassword,
 	}
 	log.Printf("docker restore: image=%q for new project %q", spec.image, spec.newProject)
-	containerID, err := dc.CreateContainer(ctx, spec.containerName, spec.image, env, map[string]string{"5432": ""})
+	containerID, err := dc.CreateContainer(ctx, spec.containerName, spec.image, env, map[string]string{"5432": ""}, spec.limits)
 	if err != nil {
 		return "", fmt.Errorf("create restore container: %w", err)
 	}

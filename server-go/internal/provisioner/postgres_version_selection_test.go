@@ -20,7 +20,7 @@ func TestDockerProvisionUsesTheRequestedMajor(t *testing.T) {
 			OrgID:           "org1",
 			DBType:          domain.PostgreSQL,
 			PostgresVersion: major,
-		}, config.TierConfig{}, func(domain.ProvisioningStage) {})
+		}, testTier, func(domain.ProvisioningStage) {})
 		if err != nil {
 			t.Fatalf("major %s: provision: %v", major, err)
 		}
@@ -39,7 +39,7 @@ func TestDockerProvisionRefusesAMissingOrUnsupportedMajor(t *testing.T) {
 			OrgID:           "org1",
 			DBType:          domain.PostgreSQL,
 			PostgresVersion: major,
-		}, config.TierConfig{}, func(domain.ProvisioningStage) {})
+		}, testTier, func(domain.ProvisioningStage) {})
 		if err == nil {
 			t.Errorf("major %q: expected a refusal", major)
 		}

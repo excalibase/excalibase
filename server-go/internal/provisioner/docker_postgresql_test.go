@@ -24,6 +24,7 @@ type mockDockerClient struct {
 	copyBytes  int64      // total bytes drained from CopyToContainer streams
 	lastImage  string     // image of the most recent CreateContainer call
 	lastEnv    map[string]string
+	lastLimits ContainerLimits
 	// stopKeepsRunning models a container the daemon accepts a stop for but
 	// which is still running while postgres shuts down.
 	stopKeepsRunning bool
@@ -33,12 +34,13 @@ func newMockDocker() *mockDockerClient {
 	return &mockDockerClient{containers: make(map[string]string)}
 }
 
-func (m *mockDockerClient) CreateContainer(_ context.Context, name, image string, env map[string]string, ports map[string]string) (string, error) {
+func (m *mockDockerClient) CreateContainer(_ context.Context, name, image string, env map[string]string, ports map[string]string, limits ContainerLimits) (string, error) {
 	if m.failOn == "create" {
 		return "", fmt.Errorf("create failed")
 	}
 	m.lastImage = image
 	m.lastEnv = env
+	m.lastLimits = limits
 	id := "container-" + name
 	m.containers[id] = "created"
 	return id, nil
@@ -128,7 +130,7 @@ func TestDockerProvisioner_Provision(t *testing.T) {
 	cb := func(s domain.ProvisioningStage) { stages = append(stages, s) }
 
 	req := domain.ProvisioningRequest{ProjectName: "my-app", DBType: domain.PostgreSQL, PostgresVersion: "17"}
-	tier := config.TierConfig{}
+	tier := testTier
 
 	result, err := p.Provision(context.Background(), req, tier, cb)
 	if err != nil {
@@ -181,7 +183,7 @@ func TestDockerProvisioner_EachProjectGetsItsOwnRandomSuperuserPassword(t *testi
 	seen := map[string]bool{}
 	for _, name := range []string{"one", "two", "three"} {
 		req := domain.ProvisioningRequest{ProjectName: name, DBType: domain.PostgreSQL, PostgresVersion: "17"}
-		result, err := p.Provision(context.Background(), req, config.TierConfig{}, func(domain.ProvisioningStage) {})
+		result, err := p.Provision(context.Background(), req, testTier, func(domain.ProvisioningStage) {})
 		if err != nil {
 			t.Fatalf("Provision: %v", err)
 		}
@@ -205,7 +207,7 @@ func TestDockerProvisioner_Deprovision(t *testing.T) {
 
 	// Provision first
 	req := domain.ProvisioningRequest{ProjectName: "to-delete", DBType: domain.PostgreSQL, PostgresVersion: "17"}
-	result, _ := p.Provision(context.Background(), req, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
+	result, _ := p.Provision(context.Background(), req, testTier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	// Deprovision
 	err := p.Deprovision(context.Background(), result.Namespace, "to-delete")
@@ -225,7 +227,7 @@ func TestDockerProvisioner_GetStatus(t *testing.T) {
 	p := NewDockerPostgreSQLProvisioner(docker)
 
 	req := domain.ProvisioningRequest{ProjectName: "status-test", DBType: domain.PostgreSQL, PostgresVersion: "17"}
-	result, _ := p.Provision(context.Background(), req, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
+	result, _ := p.Provision(context.Background(), req, testTier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 
 	status, err := p.GetStatus(context.Background(), result.Namespace, "status-test")
 	if err != nil {
@@ -244,7 +246,7 @@ func TestDockerProvisioner_CreateFails(t *testing.T) {
 	docker.failOn = "create"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "fail", PostgresVersion: "17"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
+	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "fail", PostgresVersion: "17"}, testTier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 	if err == nil {
 		t.Error("expected error when create fails")
 	}
@@ -255,7 +257,7 @@ func TestDockerProvisioner_HealthCheckFails(t *testing.T) {
 	docker.failOn = "health"
 	p := NewDockerPostgreSQLProvisioner(docker)
 
-	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "unhealthy", PostgresVersion: "17"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
+	_, err := p.Provision(context.Background(), domain.ProvisioningRequest{ProjectName: "unhealthy", PostgresVersion: "17"}, testTier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 	if err == nil {
 		t.Error("expected error when health check fails")
 	}
@@ -273,7 +275,7 @@ func TestDockerProvisioner_PgReadyNeverSucceeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	_, err := p.Provision(ctx, domain.ProvisioningRequest{ProjectName: "stuck", PostgresVersion: "17"}, config.TierConfig{}, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
+	_, err := p.Provision(ctx, domain.ProvisioningRequest{ProjectName: "stuck", PostgresVersion: "17"}, testTier, func(s domain.ProvisioningStage) { /* noop: stage progress not checked in this test */ })
 	if err == nil {
 		t.Error("expected error when pg_isready never returns 0")
 	}
@@ -416,5 +418,33 @@ func TestFactory_RegisteredAndGet(t *testing.T) {
 	// Empty factory has no registrations.
 	if len(NewFactory().Registered()) != 0 {
 		t.Error("empty factory should have zero registrations")
+	}
+}
+
+// testTier is a tier that states its size, as every real tier does.
+var testTier = config.TierConfig{Memory: "512Mi", CPU: "0.5"}
+
+func TestDockerProvisioner_AppliesTheTiersMemoryAndCPU(t *testing.T) {
+	docker := newMockDocker()
+	p := NewDockerPostgreSQLProvisioner(docker)
+	req := domain.ProvisioningRequest{ProjectName: "sized", DBType: domain.PostgreSQL, PostgresVersion: "17"}
+	if _, err := p.Provision(context.Background(), req, config.TierConfig{Memory: "4Gi", CPU: "2"}, func(domain.ProvisioningStage) {}); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	want := ContainerLimits{MemoryBytes: 4 << 30, NanoCPUs: 2_000_000_000}
+	if docker.lastLimits != want {
+		t.Fatalf("container limits = %+v, want %+v", docker.lastLimits, want)
+	}
+}
+
+func TestDockerProvisioner_RefusesATierWithoutASizeBeforeAnyContainer(t *testing.T) {
+	docker := newMockDocker()
+	p := NewDockerPostgreSQLProvisioner(docker)
+	req := domain.ProvisioningRequest{ProjectName: "unsized", DBType: domain.PostgreSQL, PostgresVersion: "17"}
+	if _, err := p.Provision(context.Background(), req, config.TierConfig{}, func(domain.ProvisioningStage) {}); err == nil {
+		t.Fatal("provisioned with a tier that states no size")
+	}
+	if len(docker.containers) != 0 {
+		t.Fatalf("containers created: %v", docker.containers)
 	}
 }

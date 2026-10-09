@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/domain"
+	"github.com/excalibase/provisioning-poc/internal/provisioner"
 	"github.com/excalibase/provisioning-poc/internal/storage"
 )
 
@@ -170,6 +171,7 @@ func setupDockerAdapter(t *testing.T) (*DockerBackupAdapter, *storage.FileSystem
 		Bucket:   "test-backups",
 	})
 	adapter.SetDatabaseProbe(alwaysAnswers{})
+	adapter.SetRestorePlanSource(enterprisePlan())
 	store.Create(&domain.DatabaseInstance{
 		ProjectID:       "dk-1",
 		OrgID:           "org",
@@ -314,6 +316,7 @@ type fakeDockerClientForAdapter struct {
 	createdName string
 	createdImg  string
 	createdEnv  map[string]string
+	limits      provisioner.ContainerLimits
 	started     bool
 	healthy     bool
 	copyDst     string
@@ -325,10 +328,11 @@ type fakeDockerClientForAdapter struct {
 	execCode int
 }
 
-func (f *fakeDockerClientForAdapter) CreateContainer(_ context.Context, name, img string, env map[string]string, _ map[string]string) (string, error) {
+func (f *fakeDockerClientForAdapter) CreateContainer(_ context.Context, name, img string, env map[string]string, _ map[string]string, limits provisioner.ContainerLimits) (string, error) {
 	if f.failOn == "create" {
 		return "", errors.New("create failed")
 	}
+	f.limits = limits
 	f.createdName = name
 	f.createdImg = img
 	f.createdEnv = env
@@ -659,5 +663,48 @@ func TestRestoredDockerSuperuserPasswordIsRandom(t *testing.T) {
 		if strings.HasPrefix(password, "restored-") {
 			t.Errorf("restore password is predictable: %s", password)
 		}
+	}
+}
+
+// A restored project runs at its plan's size, exactly like a new one (EXC-573).
+func TestDockerAdapter_Restore_SizesTheContainerByThePlan(t *testing.T) {
+	adapter, store, _, uploader, records := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
+	dc := &fakeDockerClientForAdapter{}
+	adapter.SetDockerClient(dc)
+	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
+	src, _ := store.FindByProjectID("dk-1")
+	uploader.objects["test-backups/backups/dk-1/manual/b1.tar.gz"] = minimalGzippedTar(t)
+	records.Save(context.Background(), &domain.BackupRecord{ID: "b1", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",
+		Timestamp: time.Now().UTC().Format(time.RFC3339)})
+
+	if _, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-sized", TargetProjectID: "dk-sized"}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	want := provisioner.ContainerLimits{MemoryBytes: 16 << 30, NanoCPUs: 4_000_000_000}
+	if dc.limits != want {
+		t.Fatalf("restored container limits = %+v, want %+v", dc.limits, want)
+	}
+}
+
+// No plan, no size: the restore is refused before anything is created.
+func TestDockerAdapter_Restore_RefusesWithoutAPlan(t *testing.T) {
+	adapter, store, _, uploader, records := setupDockerAdapter(t)
+	adapter.SetInstanceStore(store)
+	adapter.SetRestorePlanSource(nil)
+	dc := &fakeDockerClientForAdapter{}
+	adapter.SetDockerClient(dc)
+	adapter.SetProjectRegistrar(&fakeRegistrar{store: store})
+	src, _ := store.FindByProjectID("dk-1")
+	uploader.objects["test-backups/backups/dk-1/manual/b1.tar.gz"] = minimalGzippedTar(t)
+	records.Save(context.Background(), &domain.BackupRecord{ID: "b1", ProjectID: "dk-1", Status: "COMPLETED", Type: "MANUAL",
+		Timestamp: time.Now().UTC().Format(time.RFC3339)})
+
+	_, err := adapter.Restore(context.Background(), src, domain.RestoreRequest{NewProjectName: "dk-x", TargetProjectID: "dk-x"})
+	if !errors.Is(err, ErrRestorePlanNotConfigured) {
+		t.Fatalf("err = %v, want ErrRestorePlanNotConfigured", err)
+	}
+	if dc.createdName != "" {
+		t.Fatalf("container %q created anyway", dc.createdName)
 	}
 }
