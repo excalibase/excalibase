@@ -6,8 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/excalibase/provisioning-poc/internal/config"
 )
 
 // fakeVaultAPI answers /api/vault/status and /api/vault/unseal the way the
@@ -139,5 +142,58 @@ func TestVaultCLI_DefaultURLIsTheLocalServer(t *testing.T) {
 	}
 	if got := vaultCLIDefaultURL(func(string) string { return "" }); got != "http://127.0.0.1:24005" {
 		t.Errorf("default URL = %s", got)
+	}
+}
+
+// A password manager pipes the token and the key, one per line.
+func TestVaultCLI_PipedSecretsAreReadOneLineAtATime(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	_, _ = writer.WriteString("admin-token\nthe-key\n")
+	_ = writer.Close()
+
+	read := readSecretFromTerminal(reader)
+	for _, want := range []string{"admin-token", "the-key"} {
+		got, err := read("prompt: ")
+		if err != nil || got != want {
+			t.Fatalf("read = %q, %v; want %q", got, err, want)
+		}
+	}
+	if _, err := read("Unseal key (2 of 2): "); err == nil || !strings.Contains(err.Error(), "Unseal key (2 of 2):") {
+		t.Fatalf("running out of piped input must name the missing prompt, got %v", err)
+	}
+}
+
+func TestVaultCLI_UsageErrors(t *testing.T) {
+	noSecrets := secretsFrom(nil)
+	getenv := func(string) string { return "" }
+	for name, args := range map[string][]string{
+		"no command":      nil,
+		"unknown command": {"rekey"},
+		"bad flag":        {"status", "--nope"},
+	} {
+		err := runVaultCLI(args, getenv, &bytes.Buffer{}, noSecrets)
+		if err == nil || !strings.Contains(err.Error(), "Usage: excalibase-provisioning vault") {
+			t.Errorf("%s: want the usage text, got %v", name, err)
+		}
+	}
+}
+
+func TestVaultCLI_UnreachableServerIsNamed(t *testing.T) {
+	err := runVaultCLI([]string{"status", "--url", "http://127.0.0.1:1"}, func(string) string { return "" }, &bytes.Buffer{}, secretsFrom(nil))
+	if err == nil || !strings.Contains(err.Error(), "reach the server at http://127.0.0.1:1") {
+		t.Fatalf("want the unreachable address named, got %v", err)
+	}
+}
+
+func TestEffectiveUnsealProvider(t *testing.T) {
+	cases := map[string]string{"": "plaintext", "manual": "manual", "awskms": "awskms"}
+	for provider, want := range cases {
+		if got := effectiveUnsealProvider(config.VaultUnseal{Provider: provider}); got != want {
+			t.Errorf("effectiveUnsealProvider(%q) = %q, want %q", provider, got, want)
+		}
 	}
 }
