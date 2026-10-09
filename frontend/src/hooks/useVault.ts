@@ -8,6 +8,8 @@ interface VaultStatus {
   shares: number;
   progress: number;
   type: string;
+  // How the vault is opened after a restart: awskms, manual or plaintext.
+  unsealProvider?: string;
 }
 
 interface VaultInitResult {

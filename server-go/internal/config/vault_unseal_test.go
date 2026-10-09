@@ -61,3 +61,38 @@ func TestVaultUnsealCheckDeployment(t *testing.T) {
 		t.Fatalf("plaintext default in docker: %v", err)
 	}
 }
+
+// Manual unseal (EXC-579): the key lives with the admin, never on the server,
+// so no setting may hand the process a key or a way to fetch one.
+func TestParseVaultUnseal_Manual(t *testing.T) {
+	got, err := ParseVaultUnseal(lookup(map[string]string{"VAULT_UNSEAL_PROVIDER": "manual"}))
+	if err != nil {
+		t.Fatalf("manual: %v", err)
+	}
+	if !got.Manual() || got.UsesKMS() {
+		t.Fatalf("manual parsed as %+v", got)
+	}
+	for name, env := range map[string]map[string]string{
+		"a plaintext key":  {"VAULT_UNSEAL_PROVIDER": "manual", "VAULT_UNSEAL_KEY": "abc"},
+		"a KMS ciphertext": {"VAULT_UNSEAL_PROVIDER": "manual", "VAULT_UNSEAL_KEY_CIPHERTEXT": "Y3Q="},
+		"a KMS key":        {"VAULT_UNSEAL_PROVIDER": "manual", "VAULT_KMS_KEY_ID": "k"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseVaultUnseal(lookup(env)); err == nil {
+				t.Fatalf("manual accepted %s", name)
+			}
+		})
+	}
+}
+
+func TestVaultUnsealCheckDeployment_Manual(t *testing.T) {
+	manual := VaultUnseal{Provider: UnsealProviderManual}
+	for _, mode := range []string{"k8s", "docker"} {
+		if err := manual.CheckDeployment(mode, ""); err != nil {
+			t.Fatalf("manual on %s: %v", mode, err)
+		}
+	}
+	if err := manual.CheckDeployment("k8s", "http://vault:24010"); err == nil {
+		t.Fatal("manual applies to the in-process vault; a remote vault unseals itself")
+	}
+}

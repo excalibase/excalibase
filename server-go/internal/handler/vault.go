@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/excalibase/provisioning-poc/internal/auth"
 	"github.com/excalibase/provisioning-poc/internal/domain"
@@ -33,6 +34,49 @@ type VaultHandler struct {
 	// leaves this process (EXC-485).
 	kms      kmsseal.Encrypter
 	kmsKeyID string
+	// unsealProvider is reported on /status so Studio can say how this
+	// vault is opened (EXC-579).
+	unsealProvider string
+	// audit records every key-material call; lifecycleLimit bounds how often
+	// one address may make them. Both optional; main.go wires both.
+	audit          auditWriter
+	lifecycleLimit func(http.Handler) http.Handler
+}
+
+// SetUnsealProvider names how this vault is unsealed (awskms, manual, plaintext).
+func (h *VaultHandler) SetUnsealProvider(provider string) { h.unsealProvider = provider }
+
+// SetAuditLog records init, unseal, seal and rekey calls — never a share.
+func (h *VaultHandler) SetAuditLog(audit auditWriter) { h.audit = audit }
+
+// SetLifecycleRateLimit bounds init, unseal, seal and rekey per address.
+func (h *VaultHandler) SetLifecycleRateLimit(limit func(http.Handler) http.Handler) {
+	h.lifecycleLimit = limit
+}
+
+// auditLifecycle writes one key-material event. Details carry counts and
+// outcomes only: a share in the audit log would be a second copy of the key.
+func (h *VaultHandler) auditLifecycle(r *http.Request, action string, details map[string]interface{}) {
+	callerID := ""
+	if user := auth.GetUser(r.Context()); user != nil {
+		callerID = user.ID
+	}
+	log.Printf("INFO: %s caller=%s ip=%s outcome=%v", action, callerID, clientIP(r), details["outcome"])
+	if h.audit == nil {
+		return
+	}
+	encoded, _ := json.Marshal(details)
+	now := time.Now()
+	if err := h.audit.LogAudit(r.Context(), &domain.AuditEntry{
+		UserID:    callerID,
+		Action:    action,
+		Resource:  "vault",
+		Details:   string(encoded),
+		IPAddress: clientIP(r),
+		Timestamp: &now,
+	}); err != nil {
+		log.Printf("WARN: audit %s: %v", action, err)
+	}
 }
 
 func NewVaultHandler(v *vault.Vault) *VaultHandler {
@@ -241,10 +285,15 @@ func (h *VaultHandler) Routes(r chi.Router) {
 		// call: the bootstrap Job's svc-bootstrap token initializes the vault
 		// (vault:init) without an admin session (EXC-485).
 		r.Use(custommw.UnlessGrantedCapability(auth.RequireUnrestrictedCredentialForWrites))
-		r.Post("/init", h.Init)
-		r.Post("/unseal", h.Unseal)
-		r.Post("/seal", h.Seal)
-		r.Post("/rekey", h.Rekey)
+		r.Group(func(r chi.Router) {
+			if h.lifecycleLimit != nil {
+				r.Use(h.lifecycleLimit)
+			}
+			r.Post("/init", h.Init)
+			r.Post("/unseal", h.Unseal)
+			r.Post("/seal", h.Seal)
+			r.Post("/rekey", h.Rekey)
+		})
 		r.Get("/secrets-list", h.ListSecrets)
 		r.Delete("/secrets-list", h.DeletePrefix)
 		r.Route("/secrets", func(r chi.Router) {
@@ -267,7 +316,8 @@ func (h *VaultHandler) Status(w http.ResponseWriter, r *http.Request) {
 		"type":        s.Type,
 		// The bootstrap Job checks this before init on a KMS install, so a
 		// provisioning not using KMS never hands out a plaintext share (EXC-485).
-		"kmsUnseal": h.kms != nil,
+		"kmsUnseal":      h.kms != nil,
+		"unsealProvider": h.unsealProvider,
 	})
 }
 
@@ -293,9 +343,13 @@ func (h *VaultHandler) Init(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.v.Init(body.Shares, body.Threshold)
 	if err != nil {
+		h.auditLifecycle(r, "vault.init", map[string]interface{}{"outcome": "refused"})
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
+	h.auditLifecycle(r, "vault.init", map[string]interface{}{
+		"outcome": "initialized", "shares": len(result.Shares), "threshold": result.Threshold,
+	})
 
 	writeJSON(w, map[string]interface{}{
 		"shares":    result.Shares,
@@ -339,9 +393,17 @@ func (h *VaultHandler) Unseal(w http.ResponseWriter, r *http.Request) {
 
 	progress, err := h.v.Unseal(body.Share)
 	if err != nil {
+		h.auditLifecycle(r, "vault.unseal", map[string]interface{}{"outcome": "refused"})
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
+	outcome := "accepted"
+	if progress.Done {
+		outcome = "unsealed"
+	}
+	h.auditLifecycle(r, "vault.unseal", map[string]interface{}{
+		"outcome": outcome, "progress": progress.Progress, "threshold": progress.Threshold,
+	})
 
 	writeJSON(w, map[string]interface{}{
 		"sealed":    !progress.Done,
@@ -352,6 +414,7 @@ func (h *VaultHandler) Unseal(w http.ResponseWriter, r *http.Request) {
 
 func (h *VaultHandler) Seal(w http.ResponseWriter, r *http.Request) {
 	h.v.Seal()
+	h.auditLifecycle(r, "vault.seal", map[string]interface{}{"outcome": "sealed"})
 	writeJSON(w, map[string]interface{}{"sealed": true})
 }
 
@@ -371,9 +434,13 @@ func (h *VaultHandler) Rekey(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.v.Rekey(body.Shares, body.Threshold)
 	if err != nil {
+		h.auditLifecycle(r, "vault.rekey", map[string]interface{}{"outcome": "refused"})
 		httpError(w, safeError(err), http.StatusBadRequest)
 		return
 	}
+	h.auditLifecycle(r, "vault.rekey", map[string]interface{}{
+		"outcome": "rekeyed", "shares": len(result.Shares), "threshold": result.Threshold,
+	})
 
 	writeJSON(w, map[string]interface{}{
 		"shares":    result.Shares,

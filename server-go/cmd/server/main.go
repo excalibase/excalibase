@@ -83,6 +83,9 @@ func handleCLIArgs() bool {
 	case "recover-instances":
 		recoverInstancesCLI()
 		return true
+	case "vault":
+		vaultCLI()
+		return true
 	case "help", "--help", "-h":
 		printHelp()
 		return true
@@ -98,6 +101,8 @@ func printHelp() {
 	fmt.Println("  (none)              Start the HTTP server")
 	fmt.Println("  reset-password      Reset admin password (vault-gated)")
 	fmt.Println("  recover-instances   Re-discover K8s clusters into SQLite (vault-gated)")
+	fmt.Println("  vault status        Show whether the running server's vault is sealed")
+	fmt.Println("  vault unseal        Unseal the running server's vault (prompts for the key)")
 	fmt.Println("  help                Show this help")
 }
 
@@ -1447,6 +1452,10 @@ func buildHandlerDeps(a handlerDepsArgs) *handlerDeps {
 		if a.unsealKMS != nil {
 			vaultHandler.SetUnsealKMS(a.unsealKMS, cfg.VaultUnseal.KMSKeyID)
 		}
+		// Key-material calls are audited and bounded per address (EXC-579).
+		vaultHandler.SetAuditLog(sqlStore)
+		vaultHandler.SetLifecycleRateLimit(custommw.RateLimit(custommw.PerIP, vaultLifecycleCallsPerMinute, time.Minute))
+		vaultHandler.SetUnsealProvider(effectiveUnsealProvider(cfg.VaultUnseal))
 	}
 
 	realtimeHandler := handler.NewRealtimeHandler(sqlStore, sqlStore, vc)
@@ -2264,6 +2273,9 @@ func buildVault(cfg config.AppConfig, sqlStore storage.PlatformStore) (vaultclie
 		log.Fatalf("Failed to init vault (postgres): %v", err)
 	}
 	log.Printf("Using PostgreSQL vault store (auto-init/unseal at boot: %v)", autoReady)
+	if cfg.VaultUnseal.Manual() {
+		log.Printf("Vault unseal is manual: the vault stays sealed until a platform admin unseals it in Studio (/setup) or with `excalibase-provisioning vault unseal` in the provisioning container")
+	}
 	var unsealKMS kmsseal.Encrypter
 	if cfg.VaultUnseal.UsesKMS() {
 		unsealKMS = unsealWithKMS(localVault, cfg.VaultUnseal)

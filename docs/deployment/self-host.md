@@ -77,3 +77,78 @@ opens Studio. The provisioning log shows
 `SMTP sender configured (host=... tls=starttls auth=true ...)` at start; a
 relay that refuses STARTTLS, an untrusted certificate or a wrong password
 appears there as the sign-up's error.
+
+## Vault unseal without a cloud KMS (manual unseal)
+
+The platform vault holds every project's database credentials and the JWT
+signing key. It is encrypted at rest and must be unsealed with its key before
+anything can use it. There are three ways to hold that key:
+
+| Provider | Key kept | After a restart | Use |
+|---|---|---|---|
+| `awskms` (default) | Only a ciphertext under your AWS KMS key | Unseals itself | Production with AWS |
+| `manual` | **Nowhere on the server**; the admin keeps it | **Sealed until an admin unseals it** | Self-hosting without a cloud KMS |
+| `plaintext` | In the `platform-bootstrap` Secret | Unseals itself | Development only (`devPlaintext: true`) |
+
+The trade-off: `manual` means a stolen disk, backup or Secret dump cannot open
+the vault, but every restart of provisioning (upgrade, node reboot, eviction)
+leaves projects unservable until someone unseals it. While sealed, Studio
+redirects to the unseal screen, auth stays unready and logs
+`the vault is sealed: waiting for a platform admin to unseal it`, and project
+APIs that need credentials fail. A Deployment left waiting longer than its
+progress deadline shows `ProgressDeadlineExceeded`; its pods still become
+ready on their own once the vault is unsealed. Lose every copy of the key and the vault (and
+the project credentials in it) cannot be recovered.
+
+| Server env | Chart value | `install-platform.sh` / `install-all.sh` env |
+|---|---|---|
+| `VAULT_UNSEAL_PROVIDER=manual` | `vault.unseal.provider: manual` | `VAULT_UNSEAL_MANUAL=true` |
+
+`manual` refuses `VAULT_UNSEAL_KEY`, `VAULT_UNSEAL_KEY_CIPHERTEXT`,
+`VAULT_KMS_KEY_ID` and a remote `VAULT_URL`, so no key can be handed to the
+server by configuration. On the docker provisioner it also turns off the
+`STORAGE_PATH/unseal.key` file.
+
+### First start
+
+1. Install (Kubernetes):
+
+   ```bash
+   helm upgrade --install platform-aio charts/platform-aio -n excalibase-platform \
+     --set vault.unseal.provider=manual ...
+   # or: VAULT_UNSEAL_MANUAL=true rke2/install-platform.sh
+   ```
+
+   The bootstrap Job neither initializes nor unseals the vault; auth and
+   graphql become ready only after step 3.
+2. Read the one-time setup token and open Studio at `https://<studio>/setup`:
+
+   ```bash
+   kubectl -n excalibase-platform get secret platform-setup-token -o jsonpath='{.data.token}' | base64 -d; echo
+   ```
+
+   Create the platform admin with it.
+3. Studio asks to initialize the vault: choose the number of key shares and
+   how many are needed to unseal (Shamir; 1 of 1 is fine for one admin). The
+   keys are shown **once**: store them off the server (password manager,
+   printed copy in a safe). Then submit them to unseal.
+
+### After every restart
+
+Unseal in Studio (any page redirects to `/setup`; sign in as a platform admin
+and paste the key), or with the CLI inside the provisioning pod — the key and
+token are prompted for without echo and never go on the command line:
+
+```bash
+kubectl -n excalibase-platform exec -it deploy/provisioning -- excalibase-provisioning vault status
+kubectl -n excalibase-platform exec -it deploy/provisioning -- excalibase-provisioning vault unseal
+# Platform admin token: (a PAT, or set EXCALIBASE_TOKEN inside the pod)
+# Unseal key (1 of 1):
+```
+
+Single host (docker provisioner): `docker exec -it <provisioning container>
+excalibase-provisioning vault unseal`.
+
+Unseal, init, seal and rekey are allowed to platform admins only, limited to
+10 calls per minute per address, and written to the platform audit log
+(`audit_log`, actions `vault.*`) with the outcome and progress, never the key.

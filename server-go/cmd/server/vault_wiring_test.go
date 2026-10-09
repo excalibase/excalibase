@@ -18,6 +18,8 @@ func TestLocalVaultNeedsAutoReady(t *testing.T) {
 		{"selfhosted on k8s relies on the bootstrap Job", config.AppConfig{DeploymentMode: "selfhosted", ProvisionerMode: "k8s"}, false},
 		{"selfhosted on docker auto-readies at boot", config.AppConfig{DeploymentMode: "selfhosted", ProvisionerMode: "docker"}, true},
 		{"cloud on k8s relies on the bootstrap Job", config.AppConfig{DeploymentMode: "cloud", ProvisionerMode: "k8s"}, false},
+		{"manual unseal on docker waits sealed for the admin", config.AppConfig{DeploymentMode: "selfhosted", ProvisionerMode: "docker",
+			VaultUnseal: config.VaultUnseal{Provider: config.UnsealProviderManual}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

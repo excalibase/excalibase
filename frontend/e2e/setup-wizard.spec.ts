@@ -29,7 +29,7 @@ async function mockSetupAPIs(page: Page, initial: MockState) {
         progress: state.progress,
         type: 'shamir',
       }),
-    })
+    }),
   );
 
   await page.route('**/api/auth/setup-status', (route) =>
@@ -37,7 +37,7 @@ async function mockSetupAPIs(page: Page, initial: MockState) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ hasAdmin: state.hasAdmin }),
-    })
+    }),
   );
 
   await page.route('**/api/vault/init', (route) => {
@@ -95,7 +95,7 @@ async function mockSetupAPIs(page: Page, initial: MockState) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ deploymentMode: 'self-hosted' }),
-    })
+    }),
   );
 
   return state;
@@ -157,8 +157,23 @@ test.describe('Setup wizard', () => {
       hasAdmin: true,
     });
 
+    await page.route('**/api/auth/login', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: { id: 'u1', username: 'founder', email: 'f@example.com', role: 'platform_admin' },
+        }),
+      }),
+    );
+
     await page.goto('/setup');
     await expect(page.getByTestId('vault-setup-unseal')).toBeVisible();
+
+    // A sealed vault after a restart: the admin signs in here first (EXC-579).
+    await page.getByTestId('vault-unseal-signin-username').fill('founder');
+    await page.getByTestId('vault-unseal-signin-password').fill('not-a-real-password');
+    await page.getByTestId('vault-unseal-signin-submit').click();
 
     // Submit 3 shares — the last one flips sealed→false, and with the admin
     // already registered the guard sends the operator out of /setup.
@@ -200,7 +215,9 @@ test.describe('Setup wizard', () => {
 
     // Signed in: the profile is cached, the session token is not.
     await page.waitForFunction(() => localStorage.getItem('auth_user') !== null);
-    expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain('pat-bootstrap-token');
+    expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(
+      'pat-bootstrap-token',
+    );
     // Guard sees hasAdmin=true, redirects to /
     await expect(page).toHaveURL(/\/(?!setup).*$|^http:\/\/localhost:5173\/$/);
   });
@@ -219,7 +236,7 @@ test.describe('Setup wizard', () => {
     await page.addInitScript(() => {
       localStorage.setItem(
         'auth_user',
-        JSON.stringify({ id: 'u1', username: 'admin', email: 'a@t.com', role: 'platform_admin' })
+        JSON.stringify({ id: 'u1', username: 'admin', email: 'a@t.com', role: 'platform_admin' }),
       );
     });
 
