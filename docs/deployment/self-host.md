@@ -95,7 +95,9 @@ the vault, but every restart of provisioning (upgrade, node reboot, eviction)
 leaves projects unservable until someone unseals it. While sealed, Studio
 redirects to the unseal screen, auth stays unready and logs
 `the vault is sealed: waiting for a platform admin to unseal it`, and project
-APIs that need credentials fail. Lose every copy of the key and the vault (and
+APIs that need credentials fail. A Deployment left waiting longer than its
+progress deadline shows `ProgressDeadlineExceeded`; its pods still become
+ready on their own once the vault is unsealed. Lose every copy of the key and the vault (and
 the project credentials in it) cannot be recovered.
 
 | Server env | Chart value | `install-platform.sh` / `install-all.sh` env |
