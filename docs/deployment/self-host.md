@@ -152,3 +152,75 @@ excalibase-provisioning vault unseal`.
 Unseal, init, seal and rekey are allowed to platform admins only, limited to
 10 calls per minute per address, and written to the platform audit log
 (`audit_log`, actions `vault.*`) with the outcome and progress, never the key.
+
+## Object storage without a cloud bucket (bundled RustFS)
+
+Tenant backups (WAL archiving, base backups, point-in-time restore), customer
+files (Studio Storage, `/storage/v1`) and the platform database's own backups
+need an S3-compatible store. A self-hosted install can run one inside the
+platform: [RustFS](https://github.com/rustfs/rustfs) (Apache-2.0), pinned by
+digest in the chart. R2 or any S3 store stays selectable.
+
+How it is used:
+
+- **Three buckets, three keys.** `excalibase-backups` (tenant backups),
+  `excalibase-storage` (customer files), `excalibase-platform-db` (platform
+  database). Each key is limited to its own bucket by a policy; the root key
+  is used only by the setup Job. All keys are generated at install and kept
+  in Secrets (`objectstore-root`, `-backups`, `-files`, `-platform-db`) across
+  upgrades and uninstall.
+- **Tenants never hold a store key.** Projects get STS sessions narrowed to
+  their own prefix (`BACKUP_CREDENTIALS_PROVIDER=sts`), renewed by
+  provisioning, exactly as on MinIO. Verified against RustFS 1.0.1: a session
+  writes and lists inside its prefix and is denied outside it.
+- **Network.** RustFS is reachable only from provisioning, the setup Job, the
+  platform database and tenant database pods (their Barman sidecars). Customer
+  app pods cannot reach it. Only the customer-file bucket is exposed through
+  the edge, at `publicUrl`, and every object there needs a signed link.
+- **Data.** One RustFS pod on a ReadWriteOnce volume (`rustfs-data`, kept on
+  uninstall). This is a single copy on one disk: back up the volume or the
+  node, or point backups at an off-site store for disaster recovery.
+
+| Chart value | `install-platform.sh` env | Default | Notes |
+|---|---|---|---|
+| `objectStore.bundled.enabled` | `OBJECT_STORE=bundled` | chart: `false`; script: `bundled` when the namespace has no `r2-creds` Secret, else `external` | |
+| `provisioning.backupCredentials.provider: sts` | set by the script | `r2` | Required with the bundled store. |
+| `objectStore.bundled.publicUrl` | `OBJECT_STORE_PUBLIC_URL` | — | Origin browsers open file links at, e.g. `https://files.example.com`; point its DNS at the edge. Without it, file links are signed for the in-cluster address only. |
+| `objectStore.bundled.storage` | `OBJECT_STORE_SIZE` | `50Gi` | |
+| `objectStore.bundled.storageClass` | the tenant storage class | cluster default | |
+| `objectStore.bundled.corsOrigins` | — | `*` | Origins allowed to use signed links from a browser. |
+| `platformDb.backup.enabled` (+ `schedule`, `retention`) | on with the bundled store | `false` | Endpoint, bucket and Secret default to the bundled store; `PLATFORM_DB_BACKUP_ENDPOINT` still sends them elsewhere. |
+
+### Kubernetes (chart)
+
+```bash
+helm upgrade --install platform-aio charts/platform-aio -n excalibase-platform \
+  --set objectStore.bundled.enabled=true \
+  --set provisioning.backupCredentials.provider=sts \
+  --set objectStore.bundled.publicUrl=https://files.example.com \
+  --set platformDb.backup.enabled=true \
+  --set-string 'platformDb.backup.schedule=0 0 2 * * *' --set platformDb.backup.retention=30d \
+  ...
+# install-platform.sh: nothing to set on a fresh install; optionally
+# OBJECT_STORE_PUBLIC_URL=https://files.example.com OBJECT_STORE_SIZE=200Gi
+```
+
+The Barman Cloud plugin must be installed for the platform database's
+backups (`charts/background/barman-cloud-plugin/install.sh`).
+
+### Using R2 or S3 instead
+
+Keep `objectStore.bundled.enabled=false` (or `OBJECT_STORE=external`) and
+create the operator Secrets as before: `r2-creds` / `provisioning.backupStore`
+for tenant backups with `backupCredentials.provider` `r2` (Cloudflare R2) or
+`sts` (an S3 store with STS, e.g. MinIO or RustFS elsewhere), `storage-creds`
+for customer files, and `platformDb.backup.s3.*` for the platform database.
+
+### Check it
+
+`kubectl -n excalibase-platform logs job/objectstore-setup` ends with
+`OBJECT STORE READY`. Take a backup of a project in Studio (Operations →
+Backups → Trigger Backup), restore it to a point in time, and upload and
+download a file in Storage. `kubectl -n excalibase-platform get cluster
+platform-db -o jsonpath='{.status.conditions[?(@.type=="ContinuousArchiving")].status}'`
+is `True` once the platform database archives to the bundled store.
