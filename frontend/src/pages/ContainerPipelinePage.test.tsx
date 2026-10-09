@@ -214,7 +214,8 @@ describe('ContainerPipelinePage', () => {
     const { user } = renderPage();
     const snippet = await screen.findByTestId('ci-snippet');
     expect(snippet).toHaveTextContent('docker/build-push-action');
-    expect(snippet).toHaveTextContent('/projects/proj-1/apps/app-1');
+    expect(snippet).toHaveTextContent('excalibase/deploy-action@v1');
+    expect(snippet).toHaveTextContent('app: proj-1/app-1');
     expect(snippet).toHaveTextContent('secrets.EXCALIBASE_TOKEN');
     expect(snippet).toHaveTextContent('github.sha');
     expect(screen.getByTestId('ci-token-link')).toHaveAttribute('href', '/account/tokens');
