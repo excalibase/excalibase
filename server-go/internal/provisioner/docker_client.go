@@ -146,7 +146,7 @@ func networkingConfig(netName string) *network.NetworkingConfig {
 // CreateContainer creates a container with the given env + port bindings and
 // returns its ID. Does not start the container. ports maps "containerPort" →
 // "hostPort" (empty hostPort = random free port).
-func (r *RealDockerClient) CreateContainer(ctx context.Context, name, img string, env, ports map[string]string) (string, error) {
+func (r *RealDockerClient) CreateContainer(ctx context.Context, name, img string, env, ports map[string]string, limits ContainerLimits) (string, error) {
 	if err := r.ensureImage(ctx, img); err != nil {
 		return "", err
 	}
@@ -170,6 +170,7 @@ func (r *RealDockerClient) CreateContainer(ctx context.Context, name, img string
 	hostCfg := &container.HostConfig{
 		PortBindings:  bindings,
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
+		Resources:     limits.resources(),
 	}
 
 	resp, err := r.c.ContainerCreate(ctx, cfg, hostCfg, networkingConfig(r.netName), nil, name)

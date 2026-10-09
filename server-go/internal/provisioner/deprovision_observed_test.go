@@ -38,7 +38,7 @@ type deprovisionDocker struct {
 	stops   int
 }
 
-func (d *deprovisionDocker) CreateContainer(context.Context, string, string, map[string]string, map[string]string) (string, error) {
+func (d *deprovisionDocker) CreateContainer(context.Context, string, string, map[string]string, map[string]string, ContainerLimits) (string, error) {
 	return "ctr", nil
 }
 func (d *deprovisionDocker) StartContainer(context.Context, string) error { return nil }

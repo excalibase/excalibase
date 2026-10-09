@@ -14,7 +14,8 @@ import (
 
 // DockerClient abstracts Docker API operations for testability.
 type DockerClient interface {
-	CreateContainer(ctx context.Context, name, image string, env map[string]string, ports map[string]string) (string, error)
+	// CreateContainer creates (does not start) a container held to limits.
+	CreateContainer(ctx context.Context, name, image string, env map[string]string, ports map[string]string, limits ContainerLimits) (string, error)
 	StartContainer(ctx context.Context, containerID string) error
 	StopContainer(ctx context.Context, containerID string) error
 	RemoveContainer(ctx context.Context, containerID string) error
@@ -91,6 +92,10 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	if err != nil {
 		return nil, err
 	}
+	limits, err := LimitsForTier(tier)
+	if err != nil {
+		return nil, err
+	}
 
 	dbName := req.DatabaseName
 	if dbName == "" {
@@ -109,7 +114,7 @@ func (p *DockerPostgreSQLProvisioner) Provision(ctx context.Context, req domain.
 	}
 	ports := map[string]string{"5432": ""}
 
-	containerID, err := p.docker.CreateContainer(ctx, containerName, image, env, ports)
+	containerID, err := p.docker.CreateContainer(ctx, containerName, image, env, ports, limits)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}

@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/excalibase/provisioning-poc/internal/config"
 	"os/exec"
 	"strings"
 	"testing"
@@ -145,6 +146,13 @@ func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, b
 	setOrgTier(registrar, "org", domain.Standard)
 	registrar.SetVault(vault)
 	adapter.SetProjectRegistrar(registrar)
+	// The restored container is sized by the restore plan; Free's sizing,
+	// one copy as a single host runs (ADR 0038).
+	free, err := config.GetTierConfig(domain.Free)
+	if err != nil {
+		t.Fatalf("free tier: %v", err)
+	}
+	adapter.SetRestorePlanSource(&fakeRestorePlans{plan: RestorePlan{Tier: domain.Free, Config: free}})
 	// A restore completes only once the recovered database has answered a
 	// query with the credentials registration filed (EXC-401). This is the
 	// production probe against the live restored container.

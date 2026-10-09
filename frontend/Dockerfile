@@ -20,5 +20,6 @@ RUN chmod +x /docker-entrypoint.d/10-resolver.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
 # busybox wget (present in nginx:alpine); curl is not installed in this base.
+# 127.0.0.1, not localhost: localhost resolves to ::1 and nginx listens on IPv4.
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
-  CMD wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1
+  CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1

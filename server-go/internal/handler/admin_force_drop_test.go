@@ -96,7 +96,7 @@ func (c *captureAudit) LogAudit(_ context.Context, e *domain.AuditEntry) error {
 // what teardown waits for.
 type adminDockerMock struct{ removed bool }
 
-func (adminDockerMock) CreateContainer(context.Context, string, string, map[string]string, map[string]string) (string, error) {
+func (adminDockerMock) CreateContainer(context.Context, string, string, map[string]string, map[string]string, provisioner.ContainerLimits) (string, error) {
 	return "ctr", nil
 }
 func (adminDockerMock) StartContainer(context.Context, string) error { return nil }

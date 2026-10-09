@@ -57,7 +57,7 @@ func TestDockerBackupAdapter_PITR_TargetName(t *testing.T) {
 	adapter, store, _ := newRestoreAdapter(ctx, t, uploader, bucket)
 
 	src := &domain.DatabaseInstance{
-		ProjectID: "src-pitr", OrgID: "org", Namespace: srcID, Tier: domain.Standard,
+		ProjectID: "src-pitr", OrgID: "org", Namespace: srcID, Tier: domain.Standard, StorageSize: "50Gi",
 		DatabaseName: "app", Username: defaultPostgresSuperuser, Password: pgPwd,
 		PostgresVersion: "17", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	}
@@ -163,7 +163,7 @@ func TestDockerBackupAdapter_PITR_TargetVariants(t *testing.T) { //NOSONAR seque
 	adapter, store, _ := newRestoreAdapter(ctx, t, uploader, bucket)
 
 	src := &domain.DatabaseInstance{
-		ProjectID: "src-variants", OrgID: "org", Namespace: srcID, Tier: domain.Standard,
+		ProjectID: "src-variants", OrgID: "org", Namespace: srcID, Tier: domain.Standard, StorageSize: "50Gi",
 		DatabaseName: "app", Username: defaultPostgresSuperuser, Password: pgPwd,
 		PostgresVersion: "17", DeploymentMode: domain.ModeDocker, Status: "ACTIVE",
 	}
