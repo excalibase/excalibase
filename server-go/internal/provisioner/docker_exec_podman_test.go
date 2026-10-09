@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // podmanExecAPI answers exec calls the way Podman's Docker-compatible API
@@ -57,5 +58,32 @@ func TestExecInContainerRunsOnPodman(t *testing.T) {
 	}
 	if code != 3 {
 		t.Fatalf("exit code = %d, want 3", code)
+	}
+}
+
+// Podman 4.9 reports an empty Health block for a container with no
+// healthcheck; running is then all there is to wait for.
+func TestWaitForHealthyAcceptsPodmansEmptyHealth(t *testing.T) {
+	version := regexp.MustCompile(`^/v[0-9.]+`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch path := version.ReplaceAllString(r.URL.Path, ""); path {
+		case "/_ping":
+			w.Header().Set("Api-Version", "1.41")
+			_, _ = w.Write([]byte("OK"))
+		case "/containers/c1/json":
+			_, _ = w.Write([]byte(`{"Id":"c1","State":{"Status":"running","Running":true,"Health":{"Status":"","FailingStreak":0,"Log":null}},"Config":{"Healthcheck":null}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c, err := NewRealDockerClient(DockerClientOptions{Host: "tcp://" + strings.TrimPrefix(srv.URL, "http://")})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := c.WaitForHealthy(ctx, "c1"); err != nil {
+		t.Fatalf("running container without a healthcheck not accepted: %v", err)
 	}
 }

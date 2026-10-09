@@ -251,7 +251,7 @@ func (r *RealDockerClient) WaitForHealthy(ctx context.Context, id string) error 
 			return fmt.Errorf("container %s exited: status=%s exitCode=%d error=%s",
 				id, insp.State.Status, insp.State.ExitCode, insp.State.Error)
 		}
-		if insp.State.Health != nil {
+		if insp.State.Health != nil && hasHealthcheck(insp.Config) {
 			switch insp.State.Health.Status {
 			case "healthy":
 				return nil
@@ -266,6 +266,15 @@ func (r *RealDockerClient) WaitForHealthy(ctx context.Context, id string) error 
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("container %s did not become healthy within 60s", id)
+}
+
+// hasHealthcheck reports whether the container defines a healthcheck. Podman
+// 4.9 shows an empty Health block without one, which would never turn healthy.
+func hasHealthcheck(cfg *container.Config) bool {
+	if cfg == nil || cfg.Healthcheck == nil || len(cfg.Healthcheck.Test) == 0 {
+		return false
+	}
+	return cfg.Healthcheck.Test[0] != "NONE"
 }
 
 // ExecInContainer runs cmd inside a running container and returns its

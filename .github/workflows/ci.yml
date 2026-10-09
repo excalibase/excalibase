@@ -21,6 +21,7 @@ jobs:
       ci: ${{ steps.filter.outputs.ci }}
       hosting: ${{ steps.filter.outputs.hosting }}
       singlehost: ${{ steps.filter.outputs.singlehost }}
+      singlehostboot: ${{ steps.filter.outputs.singlehostboot }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -39,6 +40,14 @@ jobs:
               - '.github/workflows/**'
             singlehost:
               - 'deploy/single-host/**'
+            singlehostboot:
+              - 'deploy/single-host/**'
+              - 'server-go/Dockerfile'
+              - 'server-go/cmd/engine-proxy/**'
+              - 'server-go/internal/engineproxy/**'
+              - 'server-go/internal/provisioner/docker*'
+              - 'server-go/internal/service/backup_*docker*'
+              - 'frontend/Dockerfile'
             hosting:
               - 'server-go/internal/k8s/app_*'
               - 'server-go/internal/k8s/*_k3s_test.go'
@@ -58,6 +67,23 @@ jobs:
           for t in single-host edge-listener init-env preflight; do
             sh deploy/single-host/tests/$t.sh
           done
+
+  single-host-boot:
+    name: Single-host boot (Docker)
+    needs: changes
+    if: needs.changes.outputs.singlehostboot == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build provisioning and Studio from this checkout
+        run: |
+          docker build -q -t docker.io/excalibase/provisioning:ci server-go
+          docker build -q -t docker.io/excalibase/studio:ci frontend
+      - name: Fresh install, project, GraphQL/REST, backup
+        env:
+          PLATFORM_TAG: ci
+        run: bash deploy/single-host/tests/boot-smoke.sh docker
 
   go-lint:
     name: Go Lint
