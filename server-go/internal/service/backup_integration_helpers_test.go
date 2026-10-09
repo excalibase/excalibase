@@ -145,6 +145,8 @@ func newRestoreAdapter(ctx context.Context, t *testing.T, uploader S3Uploader, b
 	setOrgTier(registrar, "org", domain.Standard)
 	registrar.SetVault(vault)
 	adapter.SetProjectRegistrar(registrar)
+	// The restored container is sized by the org's tier, as in main.go.
+	adapter.SetRestorePlanSource(registrar)
 	// A restore completes only once the recovered database has answered a
 	// query with the credentials registration filed (EXC-401). This is the
 	// production probe against the live restored container.
