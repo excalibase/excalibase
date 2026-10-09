@@ -20,6 +20,7 @@ jobs:
       deno: ${{ steps.filter.outputs.deno }}
       ci: ${{ steps.filter.outputs.ci }}
       hosting: ${{ steps.filter.outputs.hosting }}
+      singlehost: ${{ steps.filter.outputs.singlehost }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -36,12 +37,27 @@ jobs:
               - 'deno-server/**'
             ci:
               - '.github/workflows/**'
+            singlehost:
+              - 'deploy/single-host/**'
             hosting:
               - 'server-go/internal/k8s/app_*'
               - 'server-go/internal/k8s/*_k3s_test.go'
               - 'server-go/internal/k8s/testdata/app_workload/**'
               - 'server-go/internal/apphost/**'
               - 'server-go/internal/service/app_deploy*'
+
+  single-host:
+    name: Single-host bundle
+    needs: changes
+    if: needs.changes.outputs.singlehost == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hardening, init and preflight
+        run: |
+          for t in single-host edge-listener init-env preflight; do
+            sh deploy/single-host/tests/$t.sh
+          done
 
   go-lint:
     name: Go Lint

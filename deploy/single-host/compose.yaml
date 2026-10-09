@@ -1,0 +1,438 @@
+# The platform on a single Docker or Podman host.
+#
+#   ./init.sh --domain example.com --admin-email you@example.com
+#   docker compose up -d
+#
+# init.sh writes .env: random secrets, the domain, the engine socket. Only the
+# edge (HTTPS on 80/443) is published; every other service sits on internal
+# networks. provisioning creates tenant containers through engine-proxy, which
+# holds the engine socket and forwards only the calls provisioning makes.
+x-hardened: &hardened
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  # Refuses to start the stack on a known, weak or reused secret.
+  preflight:
+    image: alpine:3.20
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init.sh first}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run ./init.sh first}
+      SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    command: ["sh", "/preflight.sh"]
+    volumes:
+      - ./preflight.sh:/preflight.sh:ro,z
+    network_mode: none
+    <<: *hardened
+    restart: "no"
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: excalibase-postgres
+    environment:
+      POSTGRES_DB: hana
+      POSTGRES_USER: hana001
+      # Hex only (init.sh): also embedded in PLATFORM_DB_URL below.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init.sh first}
+      # Password of the non-superuser app_user role graphql and rest connect as;
+      # read by initdb/01-roles.sh on the first start of a fresh volume.
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run ./init.sh first}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro,z
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_replication_slots=10
+      -c max_wal_senders=10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hana001 -d hana"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - platform
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10
+    container_name: excalibase-nats
+    command: ["-js", "-m", "8222"]
+    healthcheck:
+      test: ["CMD", "/nats-server", "--help"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    # Only its clients share this network (EXC-507): tenant containers cannot reach it.
+    networks:
+      - platform
+    restart: unless-stopped
+
+  # Holds the engine socket so provisioning does not. Forwards only the calls
+  # provisioning makes, only for containers labelled excalibase.managed, and
+  # refuses any container that asks for host access (privileged, host paths,
+  # devices, host namespaces, other networks).
+  engine-proxy:
+    image: excalibase/provisioning:${TAG:-latest}
+    container_name: excalibase-engine-proxy
+    entrypoint: ["/bin/excalibase-engine-proxy"]
+    # The socket's group on Docker (init.sh reads it); the owner on rootless Podman.
+    user: "${ENGINE_SOCKET_UID:-1000}:${ENGINE_SOCKET_GID:?run ./init.sh first}"
+    environment:
+      ENGINE_SOCKET: /var/run/engine.sock
+      LISTEN_ADDR: ":2375"
+      PROXY_NETWORKS: excalibase-tenants
+      PROXY_PORT_BIND_IPS: 127.0.0.1
+    volumes:
+      - ${ENGINE_SOCKET:?run ./init.sh first}:/var/run/engine.sock
+    read_only: true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2375/_ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    <<: *hardened
+    networks:
+      - engine
+    restart: unless-stopped
+
+  provisioning:
+    image: excalibase/provisioning:${TAG:-latest}
+    container_name: excalibase-provisioning
+    environment:
+      # PORT serves the other services and ignores X-Forwarded-For.
+      # PUBLIC_PORT is for the edge and Studio's nginx alone: only the edge
+      # network reaches it by a trusted address, and tenant containers never join it.
+      PORT: "24005"
+      PUBLIC_PORT: "24006"
+      TRUSTED_PROXY_CIDRS: ${AIO_EDGE_SUBNET:-10.203.250.0/28}
+      # Postgres platform store (control-plane metadata) — its own database,
+      # separate from the tenant data DB. Created by initdb/02-platform-db.sql.
+      PLATFORM_DB_URL: "postgres://hana001:${POSTGRES_PASSWORD:?run ./init.sh first}@postgres:5432/excalibase_platform?sslmode=disable"
+      # bbolt vault backend lives here (selfhosted, no external VAULT_URL).
+      STORAGE_PATH: /var/lib/excalibase
+      # Studio is provisioning's only browser origin.
+      CORS_ORIGINS: https://studio.${EXCALIBASE_DOMAIN:?run ./init.sh first}
+      PUBLIC_BASE_URL: https://api.${EXCALIBASE_DOMAIN:?run ./init.sh first}
+      WATCHER_CHART_PATH: ""
+      PROVISIONER_MODE: docker
+      DEPLOYMENT_MODE: selfhosted
+      # Accounts by invitation; the first admin registers with the setup token.
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-invite}
+      STUDIO_URL: https://studio.${EXCALIBASE_DOMAIN:?run ./init.sh first}
+      # Studio's SDK key routes relay here with a key-admin token provisioning signs.
+      AUTH_INTERNAL_URL: http://auth:24000
+      # Features that ship dark (EXC-554): off unless the env file says "true".
+      FEATURE_MCP: ${FEATURE_MCP:-false}
+      FEATURE_PIPELINE: ${FEATURE_PIPELINE:-false}
+      # EXC-451: the first registration is only promoted to platform_admin
+      # with this one-time token — same value the bootstrap service sends.
+      SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}
+      # The engine, through the proxy; provisioning never holds the socket.
+      DOCKER_HOST: tcp://engine-proxy:2375
+      # Tenant containers join this network so provisioning, auth and graphql
+      # reach them by container name. Must match networks.tenants.name below.
+      DOCKER_NETWORK: excalibase-tenants
+      # docker-mode tenant Postgres has no TLS (unlike CNPG in k8s); the schema
+      # editor and migration runner connect with sslmode=disable.
+      SCHEMA_DB_SSLMODE: disable
+      # Transactional email: set EMAIL_PROVIDER=resend and RESEND_API_KEY in .env
+      # to send invitations and password resets. noop sends nothing.
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-noop}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-support@excalibase.io}
+      EMAIL_FROM_NAME: Excalibase
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # S3-compatible bucket for backups (R2, B2, S3, MinIO), from .env.
+      # Projects are refused without one.
+      BACKUP_DEFAULT_ACCESS_KEY_ID: ${BACKUP_DEFAULT_ACCESS_KEY_ID:-}
+      BACKUP_DEFAULT_SECRET_ACCESS_KEY: ${BACKUP_DEFAULT_SECRET_ACCESS_KEY:-}
+      BACKUP_DEFAULT_ENDPOINT: ${BACKUP_DEFAULT_ENDPOINT:-}
+      BACKUP_DEFAULT_BUCKET: ${BACKUP_DEFAULT_BUCKET:-excalibase-backups}
+      BACKUP_DEFAULT_REGION: ${BACKUP_DEFAULT_REGION:-auto}
+      # Customer files (EXC-560): a bucket and key of their own; unset leaves Storage off.
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-}
+      STORAGE_REGION: ${STORAGE_REGION:-}
+    volumes:
+      - provisioning_data:/var/lib/excalibase
+    depends_on:
+      postgres:
+        condition: service_healthy
+      engine-proxy:
+        condition: service_healthy
+    <<: *hardened
+    networks:
+      - platform
+      - engine
+      - tenants
+      - edge
+    restart: unless-stopped
+
+  studio:
+    image: excalibase/studio:${TAG:-latest}
+    container_name: excalibase-studio
+    depends_on:
+      provisioning:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+    restart: unless-stopped
+
+  # One-shot bootstrap — the docker/podman equivalent of the k8s
+  # platform-bootstrap Job. Registers the initial platform admin, creates the
+  # svc-auth and svc-graphql service principals, mints one permission-scoped
+  # capability token each, and seeds the ES256 signing keypair into vault. The
+  # tokens are handed to the consumers as FILES on a shared named volume.
+  # Idempotent: re-mints only the tokens that no longer authenticate.
+  bootstrap:
+    image: alpine:3.20
+    container_name: excalibase-bootstrap
+    environment:
+      PROVISIONING_URL: http://provisioning:24005
+      # The first admin's real address: created verified by the setup token, and
+      # where password resets are mailed. The password is generated and printed
+      # to this service's log once when ADMIN_PASSWORD is unset.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?run ./init.sh first}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SETUP_TOKEN: ${SETUP_TOKEN:?run ./init.sh first}
+      SECRETS_DIR: /var/run/excalibase
+    command: ["sh", "/bootstrap.sh"]
+    volumes:
+      - excalibase_secrets:/var/run/excalibase
+      - ./bootstrap.sh:/bootstrap.sh:ro,z
+    depends_on:
+      provisioning:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+    # egress: it installs curl and jq when it starts.
+    networks:
+      - platform
+      - egress
+    restart: "no"
+
+  auth:
+    image: excalibase/excalibase-auth:${TAG:-latest}
+    container_name: excalibase-auth
+    environment:
+      PORT: "24000"
+      PROVISIONING_URL: http://provisioning:24005/api
+      # Capability token of the svc-auth principal, minted by bootstrap onto the
+      # shared volume; re-read on every provisioning call.
+      PROVISIONING_PAT_FILE: /var/run/excalibase/auth-token
+      CORS_ORIGINS: "*"
+      SECURE_COOKIES: "true"
+      # Only the edge's network may set X-Forwarded-For (per-IP limits).
+      TRUSTED_PROXY_CIDRS: ${AIO_DATAPLANE_SUBNET:-10.203.250.16/28}
+      # Docker-mode tenant databases serve no TLS; k8s tenants require it.
+      TENANT_DB_SSLMODE: disable
+    volumes:
+      - excalibase_secrets:/var/run/excalibase:ro
+    depends_on:
+      provisioning:
+        condition: service_started
+      bootstrap:
+        condition: service_completed_successfully
+    <<: *hardened
+    networks:
+      - platform
+      - dataplane
+      - tenants
+    restart: unless-stopped
+
+  watcher:
+    image: excalibase/excalibase-watcher:${TAG:-latest}
+    container_name: excalibase-watcher
+    environment:
+      APP_CDC_POSTGRES_URL: jdbc:postgresql://postgres:5432/hana
+      APP_CDC_POSTGRES_USERNAME: hana001
+      APP_CDC_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init.sh first}
+      APP_CDC_POSTGRES_ENABLED: "true"
+      APP_CDC_SLOT_NAME: cdc_slot
+      APP_CDC_PUBLICATION_NAME: cdc_publication
+      APP_CDC_CREATE_SLOT_IF_NOT_EXISTS: "true"
+      APP_CDC_CREATE_PUBLICATION_IF_NOT_EXISTS: "true"
+      APP_CDC_POSTGRES_CAPTURE_DDL: "true"
+      APP_NATS_URL: nats://nats:4222
+      APP_NATS_STREAM_NAME: CDC
+      APP_NATS_SUBJECT_PREFIX: cdc
+      APP_NATS_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - platform
+    restart: unless-stopped
+
+  rest:
+    image: excalibase/excalibase-rest:${TAG:-latest}
+    container_name: excalibase-rest
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/hana
+      SPRING_DATASOURCE_USERNAME: app_user
+      SPRING_DATASOURCE_PASSWORD: ${APP_DB_PASSWORD:?run ./init.sh first}
+      APP_SECURITY_USER_CONTEXT_ENABLED: "true"
+      APP_SECURITY_USER_ID_EXTRACTOR_TYPE: header
+      APP_SECURITY_USER_ID_HEADER: X-User-Id
+      APP_NATS_ENABLED: "true"
+      APP_NATS_URL: nats://nats:4222
+      CORS_ORIGINS: "*"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - platform
+    restart: unless-stopped
+
+  graphql:
+    image: excalibase/excalibase-graphql:${TAG:-latest}
+    container_name: excalibase-graphql
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/hana
+      SPRING_DATASOURCE_USERNAME: app_user
+      SPRING_DATASOURCE_PASSWORD: ${APP_DB_PASSWORD:?run ./init.sh first}
+      SERVER_PORT: "10000"
+      APP_DATABASE_TYPE: postgres
+      APP_MAX_ROWS: "30"
+      # Single-database mode serves exactly one project: hana is served under
+      # this id and any other /{projectId}/ path is a 404.
+      APP_PROJECT_ID: ${GRAPHQL_PROJECT_ID:?run ./init.sh first}
+      # Tokens are verified against the bundled auth service's signing keys.
+      APP_SECURITY_JWT_ENABLED: "true"
+      APP_SECURITY_AUTH_JWKS_URL: http://auth:24000/.well-known/jwks.json
+      APP_SECURITY_AUTH_ISSUER: excalibase
+      APP_NATS_ENABLED: "true"
+      APP_NATS_URL: nats://nats:4222
+      APP_NATS_STREAM_NAME: CDC
+      APP_NATS_SUBJECT_PREFIX: cdc
+      CORS_ORIGINS: "*"
+      # Capability token of the svc-graphql principal; the engine re-reads the file.
+      APP_SECURITY_MULTI_TENANT_PROVISIONING_PAT_FILE: /var/run/excalibase/graphql-token
+      APP_SECURITY_RLS_POLICY_PAT_FILE: /var/run/excalibase/graphql-token
+      # Docker-mode tenant databases serve no TLS, so no client certificate either.
+      TENANT_DB_SSLMODE: disable
+    volumes:
+      - excalibase_secrets:/var/run/excalibase:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      watcher:
+        condition: service_started
+      bootstrap:
+        condition: service_completed_successfully
+      # The engine loads auth's JWKS while starting and refuses to start without it.
+      auth:
+        condition: service_started
+    <<: *hardened
+    networks:
+      - platform
+      - dataplane
+      - tenants
+    restart: unless-stopped
+
+  # The only published service: HTTPS for Studio (studio.<domain>) and the
+  # data plane (api.<domain>), certificates from Let's Encrypt or its own CA.
+  edge:
+    image: caddy:2.11
+    container_name: excalibase-edge
+    environment:
+      EXCALIBASE_DOMAIN: ${EXCALIBASE_DOMAIN:?run ./init.sh first}
+      EXCALIBASE_TLS: ${EXCALIBASE_TLS:?run ./init.sh first}
+      STUDIO_ALLOW_CIDRS: ${STUDIO_ALLOW_CIDRS:?run ./init.sh first}
+    ports:
+      - "${EDGE_BIND_ADDRESS:-0.0.0.0}:${EDGE_HTTP_PORT:-80}:80"
+      - "${EDGE_BIND_ADDRESS:-0.0.0.0}:${EDGE_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./edge/Caddyfile:/etc/caddy/Caddyfile:ro,z
+      - edge_data:/data
+      - edge_config:/config
+    depends_on:
+      studio:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      - edge
+      - dataplane
+    restart: unless-stopped
+
+# Fixed names under excalibase-platform-: the engine proxy lets tenant
+# containers mount only volumes under the per-project prefix, never these.
+volumes:
+  postgres_data:
+    name: excalibase-platform-postgres
+  provisioning_data:
+    name: excalibase-platform-provisioning
+  # Shared between bootstrap (writer) and auth + graphql (readers): holds ONLY
+  # the two service tokens. Admin credentials are printed to the bootstrap
+  # log, never written here.
+  excalibase_secrets:
+    name: excalibase-platform-secrets
+  edge_data:
+    name: excalibase-platform-edge-data
+  edge_config:
+    name: excalibase-platform-edge-config
+
+networks:
+  # Platform services and their state. Internal: no route in or out.
+  platform:
+    name: excalibase-platform
+    internal: true
+  # provisioning and the engine proxy alone.
+  engine:
+    name: excalibase-engine
+    internal: true
+  # Tenant containers, with the services that connect to them. Not internal:
+  # tenant ports publish on 127.0.0.1 for the operator, which an internal
+  # network cannot do. Fixed name: provisioning attaches tenants to it.
+  tenants:
+    name: excalibase-tenants
+  # The edge, Studio and provisioning's edge listener. provisioning believes
+  # X-Forwarded-For only from this subnet; override AIO_EDGE_SUBNET if it
+  # clashes with a host network.
+  edge:
+    name: excalibase-edge
+    ipam:
+      config:
+        - subnet: ${AIO_EDGE_SUBNET:-10.203.250.0/28}
+  # The edge to auth and graphql. auth believes X-Forwarded-For only from here.
+  dataplane:
+    name: excalibase-dataplane
+    internal: true
+    ipam:
+      config:
+        - subnet: ${AIO_DATAPLANE_SUBNET:-10.203.250.16/28}
+  # Outbound only, for the one-shot bootstrap's package install.
+  egress:
+    name: excalibase-egress
