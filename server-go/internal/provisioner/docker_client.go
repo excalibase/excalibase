@@ -251,7 +251,7 @@ func (r *RealDockerClient) WaitForHealthy(ctx context.Context, id string) error 
 			return fmt.Errorf("container %s exited: status=%s exitCode=%d error=%s",
 				id, insp.State.Status, insp.State.ExitCode, insp.State.Error)
 		}
-		if insp.State.Health != nil {
+		if insp.State.Health != nil && hasHealthcheck(insp.Config) {
 			switch insp.State.Health.Status {
 			case "healthy":
 				return nil
@@ -268,10 +268,20 @@ func (r *RealDockerClient) WaitForHealthy(ctx context.Context, id string) error 
 	return fmt.Errorf("container %s did not become healthy within 60s", id)
 }
 
+// hasHealthcheck reports whether the container defines a healthcheck. Podman
+// 4.9 shows an empty Health block without one, which would never turn healthy.
+func hasHealthcheck(cfg *container.Config) bool {
+	if cfg == nil || cfg.Healthcheck == nil || len(cfg.Healthcheck.Test) == 0 {
+		return false
+	}
+	return cfg.Healthcheck.Test[0] != "NONE"
+}
+
 // ExecInContainer runs cmd inside a running container and returns its
 // exit code. Does not capture stdout/stderr — callers use it as a boolean
 // probe (e.g. `pg_isready -U postgres`). Polls ContainerExecInspect for
-// up to 10s waiting for the exec to finish.
+// up to 10s waiting for the exec to finish. Started detached: Podman refuses
+// an attached start of an exec that attaches no stream.
 func (r *RealDockerClient) ExecInContainer(ctx context.Context, id string, cmd []string) (int, error) {
 	create, err := r.c.ContainerExecCreate(ctx, id, container.ExecOptions{
 		Cmd:          cmd,
@@ -281,7 +291,7 @@ func (r *RealDockerClient) ExecInContainer(ctx context.Context, id string, cmd [
 	if err != nil {
 		return 0, fmt.Errorf("exec create: %w", err)
 	}
-	if err := r.c.ContainerExecStart(ctx, create.ID, container.ExecStartOptions{Detach: false}); err != nil {
+	if err := r.c.ContainerExecStart(ctx, create.ID, container.ExecStartOptions{Detach: true}); err != nil {
 		return 0, fmt.Errorf("exec start: %w", err)
 	}
 

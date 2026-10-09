@@ -66,6 +66,14 @@ for name in ("provisioning", "engine-proxy", "auth", "graphql"):
     svc = services[name]
     if "ALL" not in (svc.get("cap_drop") or []):
         failures.append(f"{name} keeps its capabilities")
+if "label=type:container_t" not in (proxy.get("security_opt") or []):
+    failures.append("engine-proxy keeps the default SELinux type unless init.sh says otherwise")
+# Podman refuses short image names without a terminal to ask on (Fedora,
+# RHEL): every image names its registry.
+for name, svc in services.items():
+    image = svc.get("image", "")
+    if "/" not in image or "." not in image.split("/")[0]:
+        failures.append(f"{name}: image {image!r} does not name its registry")
 for name, svc in services.items():
     if "no-new-privileges:true" not in (svc.get("security_opt") or []):
         failures.append(f"{name} may gain privileges (no no-new-privileges)")

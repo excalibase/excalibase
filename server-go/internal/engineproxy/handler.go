@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -56,6 +57,7 @@ type Handler struct {
 	target    *url.URL
 	transport http.RoundTripper
 	forward   *httputil.ReverseProxy
+	dial      func(ctx context.Context) (net.Conn, error)
 }
 
 // NewHandler proxies allowed calls to target through transport.
@@ -77,6 +79,10 @@ func NewHandler(policy Policy, target *url.URL, transport http.RoundTripper) *Ha
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := h.authorize(r); err != nil {
 		h.refuse(w, r, err)
+		return
+	}
+	if h.dial != nil && isExecUpgrade(r) {
+		h.splice(w, r)
 		return
 	}
 	h.forward.ServeHTTP(w, r)
