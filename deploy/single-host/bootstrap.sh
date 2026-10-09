@@ -9,7 +9,9 @@
 #   4. ensure the svc-auth and svc-graphql service principals exist and mint one
 #      non-expiring capability token each, written to $SECRETS_DIR
 #   5. seed the ES256 signing keypair into vault (bbolt auto-init/unseal in
-#      selfhosted/docker — no /api/vault/init or /unseal needed)
+#      selfhosted/docker — no /api/vault/init or /unseal needed). Under manual
+#      unseal (EXC-579) the vault waits for the admin: this step is skipped and
+#      the admin initializes or unseals it in Studio, which seeds the key.
 #
 # The tokens are FILES, not env vars: auth and graphql re-read them on change,
 # so re-minting here does not need the stack restarted. There is no shared
@@ -59,9 +61,25 @@ signing_key_present() {
     -H "Authorization: Bearer $1" 2>/dev/null | jq -r '.key // empty' | head -c 10
 }
 
+# vault_state: open, sealed or uninitialized.
+vault_state() {
+  curl -fsS "$PROV_URL/api/vault/status" | jq -r 'if (.initialized|not) then "uninitialized" elif .sealed then "sealed" else "open" end'
+}
+waiting_for_admin() {
+  echo "  the vault is $1: sign in to Studio (/setup) as the platform admin to"
+  echo "  initialize or unseal it, or run 'excalibase-provisioning vault unseal' in the"
+  echo "  provisioning container. The unseal key is never stored on this host."
+}
+
 echo "[2/5] checking the stored service tokens ..."
 if token_valid "$AUTH_TOKEN_FILE" && token_valid "$GRAPHQL_TOKEN_FILE"; then
   echo "  both service tokens are valid"
+  VAULT=$(vault_state)
+  if [ "$VAULT" != open ]; then
+    waiting_for_admin "$VAULT"
+    echo "BOOTSTRAP COMPLETE"
+    exit 0
+  fi
   if [ -n "$(signing_key_present "$(cat "$AUTH_TOKEN_FILE")")" ]; then
     echo "  signing key present — nothing to do"
     echo "BOOTSTRAP COMPLETE"
@@ -135,7 +153,10 @@ else
 fi
 
 echo "[5/5] signing key ..."
-if [ -z "$(signing_key_present "$SESSION")" ]; then
+VAULT=$(vault_state)
+if [ "$VAULT" != open ]; then
+  waiting_for_admin "$VAULT"
+elif [ -z "$(signing_key_present "$SESSION")" ]; then
   openssl ecparam -name prime256v1 -genkey -noout -out /tmp/priv.pem
   openssl ec -in /tmp/priv.pem -pubout -out /tmp/pub.pem 2>/dev/null
   PRIV=$(jq -Rs . < /tmp/priv.pem)

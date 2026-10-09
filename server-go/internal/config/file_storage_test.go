@@ -66,3 +66,14 @@ func TestValidate_RunsTheFileStorageCheck(t *testing.T) {
 		t.Fatal("Validate accepted a partial file store")
 	}
 }
+
+func TestFileStorage_InternalEndpointIsOptional(t *testing.T) {
+	setFileStorageEnv(t)
+	if got := Load().FileStorage.InternalEndpoint; got != "" {
+		t.Fatalf("InternalEndpoint = %q with nothing set, want empty", got)
+	}
+	t.Setenv("STORAGE_INTERNAL_ENDPOINT", "http://objectstore:9000")
+	if got := Load().FileStorage.InternalEndpoint; got != "http://objectstore:9000" {
+		t.Fatalf("InternalEndpoint = %q, want the STORAGE_INTERNAL_ENDPOINT value", got)
+	}
+}

@@ -3,10 +3,14 @@
 # domain the edge serves, and the engine socket the proxy reaches. Refuses to
 # overwrite an existing .env, whose secrets the database was created with.
 #
-#   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman]
+#   ./init.sh --domain example.com --admin-email you@example.com [--engine docker|podman] [--manual-unseal]
 #
 # Studio:     https://studio.<domain>
 # Data plane: https://api.<domain>   (/{projectId}/graphql, /{projectId}/api/v1, /auth)
+# Files:      https://files.<domain> (signed links into the bundled object store)
+# --manual-unseal: the vault starts sealed and the admin unseals it after every
+# restart (Studio /setup or `excalibase-provisioning vault unseal`); the key is
+# never stored on the host.
 # A public domain gets Let's Encrypt certificates for the admin address;
 # localhost gets certificates from the edge's own CA.
 set -eu
@@ -24,6 +28,7 @@ engine_socket=
 engine_socket_uid=
 engine_socket_gid=
 studio_allow="0.0.0.0/0 ::/0"
+manual_unseal=
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -34,6 +39,7 @@ while [ $# -gt 0 ]; do
     --engine-socket) engine_socket=$2; shift 2 ;;
     --engine-socket-gid) engine_socket_gid=$2; shift 2 ;;
     --studio-allow) studio_allow=$2; shift 2 ;;
+    --manual-unseal) manual_unseal="VAULT_UNSEAL_PROVIDER=manual"; shift ;;
     *) usage ;;
   esac
 done
@@ -109,11 +115,16 @@ STUDIO_ALLOW_CIDRS=$studio_allow
 ADMIN_EMAIL=$admin_email
 POSTGRES_PASSWORD=$(secret)
 SETUP_TOKEN=$(secret)
+# The bundled object store (backups, customer files): its root key and one key per bucket.
+OBJECTSTORE_ROOT_SECRET=$(secret)
+OBJECTSTORE_BACKUPS_SECRET=$(secret)
+OBJECTSTORE_FILES_SECRET=$(secret)
+FILES_PUBLIC_URL=https://files.$domain${edge_ports:+:8443}
 ENGINE_SOCKET=$engine_socket
 ENGINE_SOCKET_UID=$engine_socket_uid
 ENGINE_SOCKET_GID=$engine_socket_gid
 ENV
-for line in "$edge_ports" "$selinux_label"; do
+for line in "$edge_ports" "$selinux_label" "$manual_unseal"; do
   [ -n "$line" ] && printf '%s\n' "$line" >>"$env_file"
 done
 chmod 600 "$env_file"

@@ -2637,12 +2637,13 @@ func buildStorageService(cfg config.AppConfig, sqlStore storagesvc.BucketStore) 
 		return nil
 	}
 	r2, err := storagesvc.NewR2Client(storagesvc.R2Config{
-		AccessKeyID:     files.AccessKeyID,
-		SecretAccessKey: files.SecretAccessKey,
-		Endpoint:        files.Endpoint,
-		Region:          files.Region,
-		Bucket:          files.Bucket,
-		PublicURL:       cfg.StoragePublicURL,
+		AccessKeyID:      files.AccessKeyID,
+		SecretAccessKey:  files.SecretAccessKey,
+		Endpoint:         files.Endpoint,
+		Region:           files.Region,
+		Bucket:           files.Bucket,
+		PublicURL:        cfg.StoragePublicURL,
+		InternalEndpoint: files.InternalEndpoint,
 	})
 	if err != nil {
 		log.Printf("WARN: R2 client init failed: %v", err)

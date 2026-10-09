@@ -1,5 +1,4 @@
-# Test-only additions for boot-smoke.sh: images built from this checkout, and
-# an S3 target for backups.
+# Test-only additions for boot-smoke.sh: images built from this checkout.
 services:
   engine-proxy:
     image: docker.io/excalibase/provisioning:${PLATFORM_TAG:-${TAG:-latest}}
@@ -7,17 +6,3 @@ services:
     image: docker.io/excalibase/provisioning:${PLATFORM_TAG:-${TAG:-latest}}
   studio:
     image: docker.io/excalibase/studio:${PLATFORM_TAG:-${TAG:-latest}}
-  test-s3:
-    image: docker.io/rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
-    container_name: excalibase-test-s3
-    environment:
-      RUSTFS_ACCESS_KEY: testbackups
-      RUSTFS_SECRET_KEY: ${TEST_S3_SECRET:?}
-      RUSTFS_VOLUMES: /data
-      RUSTFS_CONSOLE_ENABLE: "false"
-    volumes:
-      - test_s3:/data
-    networks: [platform]
-volumes:
-  test_s3:
-    name: excalibase-test-s3

@@ -18,7 +18,16 @@ value() { sed -n "s/^$1=//p" "$WORK/.env"; }
 for key in POSTGRES_PASSWORD SETUP_TOKEN; do
   echo "$(value $key)" | grep -Eq '^[0-9a-f]{64}$' || fail "$key is not 64 random hex characters"
 done
-[ "$(value POSTGRES_PASSWORD)" != "$(value SETUP_TOKEN)" ] || fail "two secrets are equal"
+for key in OBJECTSTORE_ROOT_SECRET OBJECTSTORE_BACKUPS_SECRET OBJECTSTORE_FILES_SECRET; do
+  echo "$(value $key)" | grep -Eq '^[0-9a-f]{64}$' || fail "$key is not 64 random hex characters"
+done
+[ "$(for key in POSTGRES_PASSWORD SETUP_TOKEN OBJECTSTORE_ROOT_SECRET OBJECTSTORE_BACKUPS_SECRET OBJECTSTORE_FILES_SECRET; do value $key; done | sort -u | wc -l)" = 5 ] \
+  || fail "two secrets are equal"
+[ "$(value FILES_PUBLIC_URL)" = https://files.example.com ] || fail "file links are not served at files.<domain>"
+! grep -q '^VAULT_UNSEAL_PROVIDER' "$WORK/.env" || fail "manual unseal chosen without --manual-unseal"
+sh "$DIR/../init.sh" --env-file "$WORK/manual.env" --domain example.com --admin-email me@example.com \
+  --engine docker --engine-socket "$WORK/docker.sock" --engine-socket-gid 998 --manual-unseal >/dev/null
+grep -q '^VAULT_UNSEAL_PROVIDER=manual$' "$WORK/manual.env" || fail "--manual-unseal not written"
 ! grep -q '^BACKUP_DEFAULT_' "$WORK/.env" || fail "init.sh wrote a backup target"
 [ "$(value EXCALIBASE_DOMAIN)" = example.com ] || fail "domain not written"
 [ "$(value ADMIN_EMAIL)" = me@example.com ] || fail "admin email not written"
@@ -53,6 +62,7 @@ host sh "$DIR/../init.sh" --env-file "$WORK/pm.env" --domain localhost --admin-e
 pm() { sed -n "s/^$1=//p" "$WORK/pm.env"; }
 [ "$(pm ENGINE_SOCKET_UID):$(pm ENGINE_SOCKET_GID)" = 0:0 ] || fail "podman proxy is not the container root (the socket owner)"
 [ "$(pm EDGE_HTTP_PORT):$(pm EDGE_HTTPS_PORT)" = 8080:8443 ] || fail "rootless edge not moved above the privileged ports"
+[ "$(pm FILES_PUBLIC_URL)" = https://files.localhost:8443 ] || fail "file links do not carry the moved edge port"
 if host sh "$DIR/../init.sh" --env-file "$WORK/pm2.env" --domain example.com --admin-email me@example.com \
   --engine podman --engine-socket "$WORK/podman.sock" >"$WORK/out" 2>&1; then
   fail "public domain accepted with ports 80/443 out of reach"

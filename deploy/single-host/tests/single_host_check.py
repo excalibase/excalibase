@@ -105,6 +105,48 @@ if any("initdb" in (v.get("source") or "") for v in services["postgres"].get("vo
 if any(k.startswith("R2_") for k in services["provisioning"]["environment"]):
     failures.append("provisioning still reads R2_*; backups use BACKUP_DEFAULT_*")
 
+# EXC-578: the bundled object store holds backups and customer files. It is
+# never published, tenant containers cannot reach it, and the edge reaches
+# only its file bucket (on the internal dataplane network).
+store = services.get("objectstore")
+if not store:
+    failures.append("no bundled object store")
+else:
+    if "@sha256:" not in store["image"]:
+        failures.append(f"objectstore image {store['image']!r} is not pinned by digest")
+    if nets("objectstore") != {"platform", "dataplane"}:
+        failures.append(f"objectstore networks {sorted(nets('objectstore'))}, want platform and dataplane")
+    if "ALL" not in (store.get("cap_drop") or []):
+        failures.append("objectstore keeps its capabilities")
+    if store["environment"].get("RUSTFS_CONSOLE_ENABLE") != "false":
+        failures.append("objectstore serves its web console")
+setup = services.get("objectstore-setup")
+if not setup:
+    failures.append("no objectstore-setup one-shot")
+elif nets("objectstore-setup") != {"platform"}:
+    failures.append(f"objectstore-setup networks {sorted(nets('objectstore-setup'))}, want only platform")
+penv = services["provisioning"]["environment"]
+want = {
+    "BACKUP_DEFAULT_ENDPOINT": "http://objectstore:9000",
+    "BACKUP_DEFAULT_BUCKET": "excalibase-backups",
+    "BACKUP_DEFAULT_ACCESS_KEY_ID": "excalibase-backups",
+    "STORAGE_ENDPOINT": "https://files.example.test",
+    "STORAGE_BUCKET": "excalibase-storage",
+    "STORAGE_ACCESS_KEY_ID": "excalibase-files",
+    "STORAGE_INTERNAL_ENDPOINT": "http://objectstore:9000",
+}
+for key, value in want.items():
+    if penv.get(key) != value:
+        failures.append(f"provisioning {key}={penv.get(key)!r}, want {value!r} by default")
+secrets = [penv.get("BACKUP_DEFAULT_SECRET_ACCESS_KEY"), penv.get("STORAGE_SECRET_ACCESS_KEY"),
+           store and store["environment"].get("RUSTFS_SECRET_KEY")]
+if not all(secrets) or len(set(secrets)) != 3:
+    failures.append("the root, backups and files keys are not three distinct secrets")
+
+# EXC-579: manual unseal is selectable; the default keeps the key file.
+if penv.get("VAULT_UNSEAL_PROVIDER", "") != "":
+    failures.append(f"VAULT_UNSEAL_PROVIDER={penv.get('VAULT_UNSEAL_PROVIDER')!r} by default, want unset")
+
 if failures:
     sys.exit("\n".join(failures))
 print("single-host hardening ok")
