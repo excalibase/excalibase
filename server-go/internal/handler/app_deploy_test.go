@@ -38,6 +38,7 @@ type fakeAppDeployer struct {
 	lastImage       string
 	deployedCurrent bool
 	getDeploy       map[string]*apphost.Deploy // keyed projectID+"/"+appID+"/"+deployID
+	getDeployFunc   func(projectID, appID, deployID string) (*apphost.Deploy, error)
 }
 
 func newFakeAppDeployer() *fakeAppDeployer {
@@ -60,6 +61,9 @@ func (f *fakeAppDeployer) DeployImage(_ context.Context, projectID, appID, image
 }
 
 func (f *fakeAppDeployer) GetDeploy(projectID, appID, deployID string) (*apphost.Deploy, error) {
+	if f.getDeployFunc != nil {
+		return f.getDeployFunc(projectID, appID, deployID)
+	}
 	if deploy, ok := f.getDeploy[projectID+"/"+appID+"/"+deployID]; ok {
 		return deploy, nil
 	}

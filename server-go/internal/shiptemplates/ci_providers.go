@@ -61,42 +61,35 @@ func githubActions(target DeployTarget) string {
 	if target.Build.Dockerfile != "" {
 		file = "\n          file: \"" + target.Build.Dockerfile + "\""
 	}
+	apiURL := ""
+	if api := strings.TrimRight(target.APIBase, "/") + "/api"; api != defaultAPIURL {
+		apiURL = "\n          api-url: " + api
+	}
 	return `name: Deploy to Excalibase
 on:
   push:
     branches: ["` + branch + `"]
-  workflow_dispatch:
 permissions:
   contents: read` + packages + `
-concurrency:
-  group: excalibase-deploy
-  cancel-in-progress: false
+concurrency: excalibase-deploy
 jobs:
   deploy:
-    # A run started by hand deploys only from the branch above.
-    if: github.ref_name == '` + branch + `'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
 ` + githubLogin(registry) + `
-      - id: tag
-        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: "` + buildContext(target.Build) + `"` + file + `
           push: true
-          tags: |
-            ` + repository + `:` + branchTag(branch) + `
-            ` + repository + `:${{ steps.tag.outputs.short }}
-      - name: Deploy to Excalibase
-        env:
-          EXCALIBASE_TOKEN: ${{ secrets.EXCALIBASE_TOKEN }}
-          IMAGE: ` + repository + `@${{ steps.build.outputs.digest }}
-          COMMIT_SHA: ${{ github.sha }}
-        run: |
-` + indent(deployScript(target), 10) + "\n"
+          tags: ` + repository + `:` + branchTag(branch) + `,` + repository + `:${{ github.sha }}
+      - uses: ` + DeployAction + `
+        with:
+          app: ` + target.ProjectID + `/` + target.AppID + `
+          image: ` + repository + `@${{ steps.build.outputs.digest }}
+          token: ${{ secrets.EXCALIBASE_TOKEN }}` + apiURL + "\n"
 }
 
 // gitlabCI builds and pushes on the default branch with docker-in-docker, then deploys the digest.
@@ -119,13 +112,12 @@ func gitlabCI(target DeployTarget) string {
     - if: $CI_COMMIT_BRANCH == ` + branch + `
   script:
     - '` + login + `'
-    - export COMMIT_SHA="$CI_COMMIT_SHA"
-    - docker build -t "$IMAGE_REPOSITORY:$COMMIT_SHA" ` + dockerBuildArgs(target.Build) + `
-    - docker push "$IMAGE_REPOSITORY:$COMMIT_SHA"
-    - export IMAGE="$(` + strings.ReplaceAll(pushedDigest, "'", `"`) + `)"
+    - docker build -t "$IMAGE_REPOSITORY:$CI_COMMIT_SHA" ` + dockerBuildArgs(target.Build) + `
+    - docker push "$IMAGE_REPOSITORY:$CI_COMMIT_SHA"
+    - IMAGE="$(` + strings.ReplaceAll(pushedDigest("$CI_COMMIT_SHA"), "'", `"`) + `)"
     - apk add --no-cache curl
     - |
-` + indent(deployScript(target), 6) + "\n"
+` + indent(deployCommand(target, "$CI_COMMIT_SHA"), 6) + "\n"
 }
 
 // jenkins needs a Docker-capable agent, a username/password credential
@@ -137,7 +129,11 @@ func jenkins(target DeployTarget) string {
 	if registry == "" {
 		userVariable, passwordVariable = "DOCKERHUB_USERNAME", "DOCKERHUB_TOKEN"
 	}
-	deploy := strings.ReplaceAll("export COMMIT_SHA=\"$GIT_COMMIT\"\nexport IMAGE=\"$("+pushedDigest+")\"\n"+deployScript(target), `\`, `\\`)
+	script := shellLogin(registry, false) + "\n" +
+		`docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" ` + dockerBuildArgs(target.Build) + "\n" +
+		`docker push "$IMAGE_REPOSITORY:$GIT_COMMIT"` + "\n" +
+		`IMAGE="$(` + pushedDigest("$GIT_COMMIT") + `)"` + "\n" +
+		deployCommand(target, "$GIT_COMMIT")
 	when := ""
 	if target.Build.Branch != "" {
 		when = "\n      when { anyOf { branch '" + target.Build.Branch + "'; expression { env.GIT_BRANCH == 'origin/" + target.Build.Branch + "' } } }"
@@ -152,22 +148,13 @@ func jenkins(target DeployTarget) string {
     EXCALIBASE_TOKEN = credentials('excalibase-token')
   }
   stages {
-    stage('Build and push') {` + when + `
+    stage('Build, push and deploy') {` + when + `
       steps {
         withCredentials([usernamePassword(credentialsId: 'registry', usernameVariable: '` + userVariable + `', passwordVariable: '` + passwordVariable + `')]) {
           sh '''
-            ` + shellLogin(registry, false) + `
-            docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" ` + dockerBuildArgs(target.Build) + `
-            docker push "$IMAGE_REPOSITORY:$GIT_COMMIT"
+` + indent(strings.ReplaceAll(script, `\`, `\\`), 12) + `
           '''
         }
-      }
-    }
-    stage('Deploy to Excalibase') {` + when + `
-      steps {
-        sh '''
-` + indent(deploy, 10) + `
-        '''
       }
     }
   }

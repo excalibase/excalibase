@@ -708,8 +708,8 @@ func baseRouteCases() []routeCase {
 			check: func(t *testing.T, _ []recordedCall, out map[string]any) {
 				content := out["content"].(string)
 				for _, want := range []string{
-					"https://app.example.test/api/projects/proj-a/apps/web", "ghcr.io/a/web:trunk", `context: "apps/web"`,
-					`file: "apps/web/Dockerfile"`, `branches: ["trunk"]`, "workflow_dispatch:", "concurrency:",
+					"uses: excalibase/deploy-action@v1", "app: proj-a/web", "api-url: https://app.example.test/api", "ghcr.io/a/web:trunk",
+					`context: "apps/web"`, `file: "apps/web/Dockerfile"`, `branches: ["trunk"]`, "concurrency:",
 				} {
 					if !strings.Contains(content, want) {
 						t.Errorf("content lacks %q: %s", want, content)

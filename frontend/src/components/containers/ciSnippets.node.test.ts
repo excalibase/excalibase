@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import {
   curlSnippet,
-  deployScript,
+  deployCommand,
   githubActionsSnippet,
   gitlabCiSnippet,
   imageRepository,
@@ -21,15 +21,17 @@ const DIGEST = `sha256:${'ab'.repeat(32)}`;
 const COMMIT = '9fceb02d0ae598e95dc970b74767f19372d61af8';
 const TOKEN = 'excali_test_token';
 
-// A stand-in for the deploy API: it accepts one deploy and answers polls
-// with the statuses it is given, in order.
+// A stand-in for the deploy API: it accepts one deploy and, asked to wait,
+// answers with how it ended, the way the server does.
 interface FakeApi {
   url: string;
   deploys: Array<{ image: string; commitSha: string }>;
-  polls: number;
-  statuses: string[];
+  waited: number;
+  outcome: 'succeeded' | 'failed' | 'superseded';
   refuse?: { code: number; error: string };
 }
+
+const WAIT_STATUS = { succeeded: 200, failed: 422, superseded: 409 } as const;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
@@ -43,26 +45,22 @@ let server: Server;
 let fake: FakeApi;
 
 beforeEach(async () => {
-  fake = { url: '', deploys: [], polls: 0, statuses: ['rolling', 'succeeded'] };
+  fake = { url: '', deploys: [], waited: 0, outcome: 'succeeded' };
   server = createServer(async (req, res) => {
     const json = (code: number, body: unknown) => {
       res.writeHead(code, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(body));
     };
     if (req.headers.authorization !== `Bearer ${TOKEN}`) return json(401, { error: 'unauthenticated' });
-    if (req.method === 'POST' && req.url === '/api/projects/proj-1/apps/app-1/deploy') {
+    const [path, query] = (req.url ?? '').split('?');
+    if (req.method === 'POST' && path === '/api/projects/proj-1/apps/app-1/deploy') {
       if (fake.refuse) return json(fake.refuse.code, { error: fake.refuse.error, status: fake.refuse.code });
       fake.deploys.push(JSON.parse(await readBody(req)));
-      return json(202, { id: 'dep-1', appId: 'app-1', status: 'pending', spec: { url: 'https://web.apps.test' }, url: 'https://web.apps.test' });
-    }
-    if (req.method === 'GET' && req.url === '/api/projects/proj-1/apps/app-1/deploys/dep-1') {
-      const status = fake.statuses[Math.min(fake.polls, fake.statuses.length - 1)];
-      fake.polls += 1;
-      if (status === 'unavailable') {
-        res.writeHead(503, { 'Content-Type': 'text/html' });
-        return res.end('<html>bad gateway</html>');
-      }
-      return json(200, { id: 'dep-1', appId: 'app-1', status, failureReason: status === 'failed' ? 'the container never became ready' : undefined, url: 'https://web.apps.test' });
+      const deploy = { id: 'dep-1', appId: 'app-1', url: 'https://web.apps.test' };
+      if (query !== 'wait=true') return json(202, { ...deploy, status: 'pending' });
+      fake.waited += 1;
+      const failed = fake.outcome === 'failed' ? { failureReason: 'the container never became ready', error: 'deploy dep-1 failed: the container never became ready' } : {};
+      return json(WAIT_STATUS[fake.outcome], { ...deploy, status: fake.outcome, ...failed });
     }
     return json(404, { error: 'not found' });
   });
@@ -101,56 +99,43 @@ describe('imageRepository', () => {
   });
 });
 
-describe('deployScript', () => {
-  test('deploys the digest with the commit and waits until it is live', async () => {
-    const result = await run(deployScript(target()), ciEnv);
+describe('deployCommand', () => {
+  const command = () => deployCommand(target(), '$COMMIT_SHA');
+
+  test('deploys the digest with the commit and answers once it is live', async () => {
+    const result = await run(command(), ciEnv);
     expect(result.code, result.out).toBe(0);
     expect(fake.deploys).toEqual([{ image: `ghcr.io/acme/web@${DIGEST}`, commitSha: COMMIT }]);
-    expect(fake.polls).toBe(2);
+    expect(fake.waited).toBe(1);
     expect(result.out).toContain('https://web.apps.test');
   }, 30_000);
 
-  test('rides out a moment the API does not answer', async () => {
-    fake.statuses = ['unavailable', 'succeeded'];
-    const result = await run(deployScript(target()), ciEnv);
-    expect(result.code, result.out).toBe(0);
-    expect(fake.polls).toBe(2);
-  }, 30_000);
-
-  test('gives up when the API stays down', async () => {
-    fake.statuses = ['unavailable'];
-    const result = await run(deployScript(target()).replaceAll('sleep 5', 'sleep 0'), ciEnv);
+  test.each(['failed', 'superseded'] as const)('fails the job when the deploy is %s, with what the API said', async (outcome) => {
+    fake.outcome = outcome;
+    const result = await run(command(), ciEnv);
     expect(result.code).not.toBe(0);
-    expect(result.out).toContain('did not answer (503)');
-    expect(fake.polls).toBe(6);
-  }, 30_000);
-
-  test('fails the job when the deploy fails, with the reason', async () => {
-    fake.statuses = ['failed'];
-    const result = await run(deployScript(target()), ciEnv);
-    expect(result.code).not.toBe(0);
-    expect(result.out).toContain('never became ready');
+    expect(result.out).toContain(`"status":"${outcome}"`);
   }, 30_000);
 
   test('fails the job when the API refuses the deploy, with what it said', async () => {
     fake.refuse = { code: 422, error: 'the registry has no such image' };
-    const result = await run(deployScript(target()), ciEnv);
+    const result = await run(command(), ciEnv);
     expect(result.code).not.toBe(0);
     expect(result.out).toContain('the registry has no such image');
-    expect(fake.polls).toBe(0);
   }, 30_000);
 
   test('fails the job on a token the API does not accept', async () => {
-    const result = await run(deployScript(target()), { ...ciEnv, EXCALIBASE_TOKEN: 'wrong' });
+    const result = await run(command(), { ...ciEnv, EXCALIBASE_TOKEN: 'wrong' });
     expect(result.code).not.toBe(0);
     expect(fake.deploys).toHaveLength(0);
   }, 30_000);
 
-  test('names the project and the app, never a token', () => {
-    const script = deployScript(target());
-    expect(script).toContain(`${fake.url}/projects/proj-1/apps/app-1`);
-    expect(script).toContain('$EXCALIBASE_TOKEN');
-    expect(script).not.toContain(TOKEN);
+  test('is one command naming the project and the app, never a token', () => {
+    const text = command();
+    expect(text).toContain(`${fake.url}/projects/proj-1/apps/app-1/deploy?wait=true`);
+    expect(text).toContain('$EXCALIBASE_TOKEN');
+    expect(text).not.toContain(TOKEN);
+    expect(text.split('\n').every((line, index, lines) => index === lines.length - 1 || line.endsWith('\\'))).toBe(true);
   });
 });
 
@@ -169,27 +154,30 @@ function workflowSteps(yamlText: string): Step[] {
 }
 
 describe('githubActionsSnippet', () => {
-  test('builds with the docker actions and deploys the pushed digest with the commit', async () => {
+  test('builds with the docker actions and deploys the pushed digest with the deploy action', () => {
     const steps = workflowSteps(githubActionsSnippet(target()));
     const login = steps.find((step) => step.uses?.startsWith('docker/login-action@'));
     const build = steps.find((step) => step.uses?.startsWith('docker/build-push-action@'));
-    const deploy = steps.find((step) => step.name === 'Deploy to Excalibase');
+    const deploy = steps.find((step) => step.uses === 'excalibase/deploy-action@v1');
     expect(login?.with?.registry).toBe('ghcr.io');
     expect(login?.with?.password).toBe('${{ secrets.GITHUB_TOKEN }}');
     expect(build?.id).toBe('build');
     expect(build?.with?.push).toBe(true);
-    expect(build?.with?.tags).toBe('ghcr.io/acme/web:main\nghcr.io/acme/web:${{ steps.tag.outputs.short }}\n');
+    expect(build?.with?.tags).toBe('ghcr.io/acme/web:main,ghcr.io/acme/web:${{ github.sha }}');
     expect(build?.with?.context).toBe('.');
-    expect(deploy?.env).toEqual({
-      EXCALIBASE_TOKEN: '${{ secrets.EXCALIBASE_TOKEN }}',
-      IMAGE: 'ghcr.io/acme/web@${{ steps.build.outputs.digest }}',
-      COMMIT_SHA: '${{ github.sha }}',
+    expect(deploy?.with).toEqual({
+      app: 'proj-1/app-1',
+      image: 'ghcr.io/acme/web@${{ steps.build.outputs.digest }}',
+      token: '${{ secrets.EXCALIBASE_TOKEN }}',
+      'api-url': fake.url,
     });
+  });
 
-    const result = await run(deploy?.run ?? '', ciEnv);
-    expect(result.code, result.out).toBe(0);
-    expect(fake.deploys).toEqual([{ image: `ghcr.io/acme/web@${DIGEST}`, commitSha: COMMIT }]);
-  }, 30_000);
+  test('leaves out api-url when it is the action default', () => {
+    const snippet = githubActionsSnippet({ ...target(), apiUrl: 'https://app.excalibase.io/api/' });
+    expect(snippet).not.toContain('api-url');
+    expect(snippet.trim().split('\n').length).toBeLessThanOrEqual(30);
+  });
 
   test('refuses build options that leave the repository or break out of the pipeline', () => {
     const unsafe = [
@@ -316,7 +304,7 @@ describe('jenkinsSnippet', () => {
     const jenkinsfile = jenkinsSnippet(target());
     expect(jenkinsfile).toContain("EXCALIBASE_TOKEN = credentials('excalibase-token')");
     const steps = jenkinsShellSteps(jenkinsfile);
-    expect(steps).toHaveLength(2);
+    expect(steps).toHaveLength(1);
     const tools = fakeTools();
     const env = {
       PATH: `${tools.bin}:${process.env.PATH}`,

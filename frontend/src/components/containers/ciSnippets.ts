@@ -66,67 +66,18 @@ export function imageRegistry(image: string): string | null {
 const appApi = (target: SnippetTarget) =>
   `${target.apiUrl.replace(/\/+$/, '')}/projects/${target.projectId}/apps/${target.appId}`;
 
-// One POSIX sh script every CI runs: deploy $IMAGE with $COMMIT_SHA, then poll
-// until the deploy is live or failed. Needs only curl and sed.
-export function deployScript(target: SnippetTarget): string {
-  return `set -eu
-APP_API="${appApi(target)}"
-answer=$(curl -sS -X POST "$APP_API/deploy" \\
+// The GitHub Action the GitHub pipeline deploys with, and its own api-url default.
+export const DEPLOY_ACTION = 'excalibase/deploy-action@v1';
+const DEFAULT_API_URL = 'https://app.excalibase.io/api';
+
+// Deploys $IMAGE built from the commit in commitVar. With wait=true the API
+// answers once the deploy has finished: 200 when it is live, an error status
+// (and so a failed step) when it is not.
+export function deployCommand(target: SnippetTarget, commitVar: string): string {
+  return `curl --fail-with-body -sS -X POST "${appApi(target)}/deploy?wait=true" \\
   -H "Authorization: Bearer $EXCALIBASE_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d "{\\"image\\":\\"$IMAGE\\",\\"commitSha\\":\\"$COMMIT_SHA\\"}" \\
-  -w '\\n%{http_code}')
-code=$(printf '%s\\n' "$answer" | tail -n 1)
-body=$(printf '%s\\n' "$answer" | sed '$d')
-if [ "$code" != "202" ]; then
-  echo "Deploy refused ($code): $body" >&2
-  exit 1
-fi
-deploy_id=$(printf '%s' "$body" | sed -n 's/^{"id":"\\([^"]*\\)".*/\\1/p')
-if [ -z "$deploy_id" ]; then
-  echo "No deploy id in: $body" >&2
-  exit 1
-fi
-echo "Deploy $deploy_id started; waiting until it is live"
-tries=0
-unanswered=0
-while [ "$tries" -lt 120 ]; do
-  tries=$((tries + 1))
-  answer=$(curl -sS "$APP_API/deploys/$deploy_id" -H "Authorization: Bearer $EXCALIBASE_TOKEN" \\
-    -w '\\n%{http_code}' || true)
-  code=$(printf '%s\\n' "$answer" | tail -n 1)
-  state=$(printf '%s\\n' "$answer" | sed '$d')
-  case "$code" in
-    200) unanswered=0 ;;
-    000|5??)
-      unanswered=$((unanswered + 1))
-      if [ "$unanswered" -ge 6 ]; then
-        echo "The API did not answer ($code): $state" >&2
-        exit 1
-      fi
-      sleep 5
-      continue ;;
-    *)
-      echo "Polling refused ($code): $state" >&2
-      exit 1 ;;
-  esac
-  status=$(printf '%s' "$state" | sed -n 's/.*"status":"\\([a-z]*\\)".*/\\1/p')
-  case "$status" in
-    succeeded)
-      echo "Live at $(printf '%s' "$state" | sed -n 's/.*"url":"\\([^"]*\\)".*/\\1/p')"
-      exit 0 ;;
-    failed|superseded)
-      echo "Deploy $status: $state" >&2
-      exit 1 ;;
-    pending|rolling) ;;
-    *)
-      echo "Unexpected answer: $state" >&2
-      exit 1 ;;
-  esac
-  sleep 5
-done
-echo "Deploy $deploy_id did not finish within 10 minutes" >&2
-exit 1`;
+  -d "{\\"image\\":\\"$IMAGE\\",\\"commitSha\\":\\"${commitVar}\\"}"`;
 }
 
 const indent = (text: string, spaces: number) =>
@@ -168,7 +119,8 @@ function shellLogin(registry: string | null, gitlab: boolean): string {
 }
 
 // A reused agent may hold the same image under other repositories; only this one's digest is deployed.
-const PUSHED_DIGEST = `docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPOSITORY:$COMMIT_SHA" | grep "^$IMAGE_REPOSITORY@" | head -n 1`;
+const pushedDigest = (commitVar: string) =>
+  `docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE_REPOSITORY:${commitVar}" | grep "^$IMAGE_REPOSITORY@" | head -n 1`;
 
 // .gitlab-ci.yml: build and push on the default branch with docker-in-docker, then deploy the digest.
 export function gitlabCiSnippet(target: SnippetTarget): string {
@@ -188,13 +140,12 @@ export function gitlabCiSnippet(target: SnippetTarget): string {
     - if: $CI_COMMIT_BRANCH == ${branch}
   script:
     - '${login}'
-    - export COMMIT_SHA="$CI_COMMIT_SHA"
-    - docker build -t "$IMAGE_REPOSITORY:$COMMIT_SHA" ${dockerBuildArgs(target.build)}
-    - docker push "$IMAGE_REPOSITORY:$COMMIT_SHA"
-    - export IMAGE="$(${PUSHED_DIGEST.replaceAll("'", '"')})"
+    - docker build -t "$IMAGE_REPOSITORY:$CI_COMMIT_SHA" ${dockerBuildArgs(target.build)}
+    - docker push "$IMAGE_REPOSITORY:$CI_COMMIT_SHA"
+    - IMAGE="$(${pushedDigest('$CI_COMMIT_SHA').replaceAll("'", '"')})"
     - apk add --no-cache curl
     - |
-${indent(deployScript(target), 6)}
+${indent(deployCommand(target, '$CI_COMMIT_SHA'), 6)}
 `;
 }
 
@@ -212,6 +163,13 @@ export function jenkinsSnippet(target: SnippetTarget): string {
   const when = branch
     ? `\n      when { anyOf { branch '${branch}'; expression { env.GIT_BRANCH == 'origin/${branch}' } } }`
     : '';
+  const script = [
+    shellLogin(registry, false),
+    `docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" ${dockerBuildArgs(target.build)}`,
+    'docker push "$IMAGE_REPOSITORY:$GIT_COMMIT"',
+    `IMAGE="$(${pushedDigest('$GIT_COMMIT')})"`,
+    deployCommand(target, '$GIT_COMMIT'),
+  ].join('\n');
   return `pipeline {
   agent any
   options {
@@ -222,22 +180,13 @@ export function jenkinsSnippet(target: SnippetTarget): string {
     EXCALIBASE_TOKEN = credentials('excalibase-token')
   }
   stages {
-    stage('Build and push') {${when}
+    stage('Build, push and deploy') {${when}
       steps {
         withCredentials([usernamePassword(credentialsId: 'registry', usernameVariable: '${userVariable}', passwordVariable: '${passwordVariable}')]) {
           sh '''
-            ${shellLogin(registry, false)}
-            docker build -t "$IMAGE_REPOSITORY:$GIT_COMMIT" ${dockerBuildArgs(target.build)}
-            docker push "$IMAGE_REPOSITORY:$GIT_COMMIT"
+${indent(groovyShell(script), 12)}
           '''
         }
-      }
-    }
-    stage('Deploy to Excalibase') {${when}
-      steps {
-        sh '''
-${indent(groovyShell(`export COMMIT_SHA="$GIT_COMMIT"\nexport IMAGE="$(${PUSHED_DIGEST})"\n${deployScript(target)}`), 10)}
-        '''
       }
     }
   }
@@ -251,11 +200,12 @@ export function curlSnippet(target: SnippetTarget): string {
 #   EXCALIBASE_TOKEN  a write token bound to this project, kept as a CI secret
 #   IMAGE             the pushed image, best by digest: ${imageRepository(target.image)}@sha256:...
 #   COMMIT_SHA        the commit the image was built from
-${deployScript(target)}
+# It answers once the deploy is live, and fails the step when it is not.
+${deployCommand(target, '$COMMIT_SHA')}
 `;
 }
 
-// .github/workflows/deploy.yml: build and push on every push to the branch (or by hand), then deploy the digest.
+// .github/workflows/deploy.yml: build and push on every push to the branch, then deploy the digest with the action.
 export function githubActionsSnippet(target: SnippetTarget): string {
   const repository = imageRepository(target.image);
   const registry = imageRegistry(target.image);
@@ -263,41 +213,32 @@ export function githubActionsSnippet(target: SnippetTarget): string {
   validateBuild(target.build);
   const branch = target.build?.branch || 'main';
   const file = target.build?.dockerfile ? `\n          file: "${target.build.dockerfile}"` : '';
+  const apiUrl = target.apiUrl.replace(/\/+$/, '');
+  const apiInput = apiUrl === DEFAULT_API_URL ? '' : `\n          api-url: ${apiUrl}`;
   return `name: Deploy to Excalibase
 on:
   push:
     branches: ["${branch}"]
-  workflow_dispatch:
 permissions:
   contents: read${packages}
-concurrency:
-  group: excalibase-deploy
-  cancel-in-progress: false
+concurrency: excalibase-deploy
 jobs:
   deploy:
-    # A run started by hand deploys only from the branch above.
-    if: github.ref_name == '${branch}'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
 ${githubLogin(registry)}
-      - id: tag
-        run: echo "short=\${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: "${buildContext(target.build)}"${file}
           push: true
-          tags: |
-            ${repository}:${branchTag(branch)}
-            ${repository}:\${{ steps.tag.outputs.short }}
-      - name: Deploy to Excalibase
-        env:
-          EXCALIBASE_TOKEN: \${{ secrets.EXCALIBASE_TOKEN }}
-          IMAGE: ${repository}@\${{ steps.build.outputs.digest }}
-          COMMIT_SHA: \${{ github.sha }}
-        run: |
-${indent(deployScript(target), 10)}
+          tags: ${repository}:${branchTag(branch)},${repository}:\${{ github.sha }}
+      - uses: ${DEPLOY_ACTION}
+        with:
+          app: ${target.projectId}/${target.appId}
+          image: ${repository}@\${{ steps.build.outputs.digest }}
+          token: \${{ secrets.EXCALIBASE_TOKEN }}${apiInput}
 `;
 }

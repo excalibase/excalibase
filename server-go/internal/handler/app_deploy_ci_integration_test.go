@@ -56,6 +56,7 @@ func ciRouter(t *testing.T, store *pgstore.Store, resolver service.ImageResolver
 	deploys.SetImageResolver(resolver)
 	h := NewAppDeployHandler(deploys)
 	h.SetFeatures(features.NewStatic(features.Pipeline))
+	h.waitPoll = 20 * time.Millisecond
 
 	r := chi.NewRouter()
 	r.Use(auth.ExtractAuth(store))
@@ -139,6 +140,27 @@ func TestCIDeploy_AProjectBoundWriteTokenDeploysAndPolls(t *testing.T) {
 	app, err := apphost.NewPostgresAppStore(store.DB()).Get(ciProject, ciApp)
 	if err != nil || app.Image != "ghcr.io/acme/web:main" || app.ResolvedDigest != ciDigest {
 		t.Fatalf("app = %+v, %v", app, err)
+	}
+}
+
+// EXC-571: with ?wait=true the deploy call itself answers once the deploy is live.
+func TestCIDeploy_AWaitedDeployAnswersLive(t *testing.T) {
+	store := pgtest.New(t)
+	ciSeed(t, store)
+	r := ciRouter(t, store, &fixedDigest{})
+	writeToken := e2eIssueToken(t, store, "ci-write", testAliceID, domain.AccessToken{Scopes: auth.ScopeWrite, ProjectID: ciProject})
+
+	rec := ciCall(t, r, http.MethodPost, "/api/projects/"+ciProject+"/apps/"+ciApp+"/deploy?wait=true&timeout=30", writeToken,
+		`{"image":"ghcr.io/acme/web:main","commitSha":"9fceb02d0ae598e95dc970b74767f19372d61af8"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("waited deploy: %d %s", rec.Code, rec.Body.String())
+	}
+	var live struct{ ID, Status, URL string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &live); err != nil {
+		t.Fatal(err)
+	}
+	if live.ID == "" || live.Status != apphost.DeployStatusSucceeded || live.URL == "" {
+		t.Fatalf("waited deploy answer = %+v", live)
 	}
 }
 
