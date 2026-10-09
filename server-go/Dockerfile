@@ -7,11 +7,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=1 go build -o /bin/excalibase-provisioning ./cmd/server/
+# The single-host engine proxy ships in this image so it needs no pipeline of its own.
+RUN CGO_ENABLED=0 go build -o /bin/excalibase-engine-proxy ./cmd/engine-proxy/
 
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates sqlite-libs
 COPY --from=build /bin/excalibase-provisioning /bin/excalibase-provisioning
+COPY --from=build /bin/excalibase-engine-proxy /bin/excalibase-engine-proxy
 
 # Bundle watcher Helm chart so provisioning can auto-deploy per-tenant CDC watchers.
 # Path matches default WATCHER_CHART_PATH env.
