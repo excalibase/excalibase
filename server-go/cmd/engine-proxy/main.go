@@ -42,16 +42,17 @@ func main() {
 	if _, err := os.Stat(cfg.socket); err != nil {
 		log.Fatalf("engine proxy: engine socket: %v", err)
 	}
+	dial := func(ctx context.Context) (net.Conn, error) {
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, "unix", cfg.socket)
+	}
 	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var dialer net.Dialer
-			return dialer.DialContext(ctx, "unix", cfg.socket)
-		},
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) },
 	}
 	target := &url.URL{Scheme: "http", Host: "engine"}
 	server := &http.Server{
 		Addr:              cfg.listen,
-		Handler:           engineproxy.NewHandler(cfg.policy, target, transport),
+		Handler:           engineproxy.NewHandler(cfg.policy, target, transport).WithUpgradeDial(dial),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("engine proxy: %s -> %s, networks %v prefix %q", cfg.listen, cfg.socket, cfg.policy.Networks, cfg.policy.NetworkPrefix)

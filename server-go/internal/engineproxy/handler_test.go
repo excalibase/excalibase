@@ -1,15 +1,20 @@
 package engineproxy
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeEngine answers inspects from a fixed table and records every request
@@ -43,6 +48,18 @@ func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"ID": id, "ContainerID": owner})
+	case r.Header.Get("Upgrade") != "" && strings.Contains(path, "exec-gone"):
+		http.Error(w, `{"message":"no such exec"}`, http.StatusNotFound)
+	case r.Header.Get("Upgrade") != "" && strings.HasPrefix(path, "/exec/"):
+		// Podman 4.9 answers an attached exec start with 200 and then the
+		// raw stream on the same connection, not 101.
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\nexec output")
+		_ = buf.Flush()
 	default:
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("X-Echo-Body", string(body))
@@ -68,7 +85,8 @@ func newProxy(t *testing.T) (*fakeEngine, *httptest.Server) {
 			"excalibase-p1-postgres":  {"excalibase.managed": "true"},
 			"excalibase-provisioning": {"com.docker.compose.service": "provisioning"},
 		},
-		execs: map[string]string{"exec-managed": "excalibase-p1-postgres", "exec-platform": "excalibase-provisioning"},
+		execs: map[string]string{"exec-managed": "excalibase-p1-postgres", "exec-platform": "excalibase-provisioning",
+			"exec-gone": "excalibase-p1-postgres"},
 	}
 	upstream := httptest.NewServer(engine)
 	t.Cleanup(upstream.Close)
@@ -76,7 +94,12 @@ func newProxy(t *testing.T) (*fakeEngine, *httptest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxy := httptest.NewServer(NewHandler(testPolicy(), target, http.DefaultTransport))
+	handler := NewHandler(testPolicy(), target, http.DefaultTransport).WithUpgradeDial(
+		func(ctx context.Context) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "tcp", target.Host)
+		})
+	proxy := httptest.NewServer(handler)
 	t.Cleanup(proxy.Close)
 	return engine, proxy
 }
@@ -198,5 +221,64 @@ func TestHandlerRefusesACreateNamedTwice(t *testing.T) {
 	resp := call(t, proxy.URL, http.MethodPost, "/v1.47/containers/create?name=excalibase-p1-x&name=provisioning", string(createBody(t, nil)))
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("create named twice = %d, want 403", resp.StatusCode)
+	}
+}
+
+// upgrade sends an attached exec start the way the Docker client does and
+// returns everything the proxy sends back.
+func upgrade(t *testing.T, proxy, path string) string {
+	t.Helper()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxy, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	body := `{"Detach":false,"Tty":false}`
+	_, _ = conn.Write([]byte("POST " + path + " HTTP/1.1\r\nHost: engine\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n" +
+		"Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	out, _ := io.ReadAll(bufio.NewReader(conn))
+	return string(out)
+}
+
+func TestHandlerSplicesAnAttachedExecOfAManagedContainer(t *testing.T) {
+	_, proxy := newProxy(t)
+	got := upgrade(t, proxy.URL, "/v1.41/exec/exec-managed/start")
+	if !strings.HasPrefix(got, "HTTP/1.1 200 OK") || !strings.HasSuffix(got, "exec output") {
+		t.Fatalf("attached exec not relayed: %q", got)
+	}
+}
+
+func TestHandlerRefusesAnAttachedExecOfAPlatformContainer(t *testing.T) {
+	engine, proxy := newProxy(t)
+	got := upgrade(t, proxy.URL, "/v1.41/exec/exec-platform/start")
+	if !strings.HasPrefix(got, "HTTP/1.1 403") || engine.reached("POST /v1.41/exec/exec-platform/start") {
+		t.Fatalf("attached exec of a platform container: %q", got)
+	}
+}
+
+// A refused upgrade leaves the engine connection speaking HTTP: a second
+// request pipelined behind it must never reach the engine unchecked.
+func TestHandlerNeverSplicesAnUnhijackedAnswer(t *testing.T) {
+	engine, proxy := newProxy(t)
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxy.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_, _ = conn.Write([]byte("POST /v1.41/exec/exec-gone/start HTTP/1.1\r\nHost: engine\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: 2\r\n\r\n{}" +
+		"POST /v1.41/containers/excalibase-provisioning/stop HTTP/1.1\r\nHost: engine\r\nContent-Length: 0\r\n\r\n"))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.ReadAll(conn)
+	if engine.reached("POST /v1.41/containers/excalibase-provisioning/stop") {
+		t.Fatal("a pipelined request reached the engine unchecked")
+	}
+}
+
+func TestHandlerSplicesOnlyExecStart(t *testing.T) {
+	engine, proxy := newProxy(t)
+	got := upgrade(t, proxy.URL, "/v1.41/containers/excalibase-p1-postgres/start")
+	if strings.HasSuffix(got, "exec output") || !engine.reached("POST /v1.41/containers/excalibase-p1-postgres/start") {
+		t.Fatalf("a container start with an Upgrade header was spliced: %q", got)
 	}
 }
