@@ -1,0 +1,56 @@
+# The single-host edge: the only published service. Values come from .env
+# (written by init.sh). Mirrors the Kubernetes ingress: the data plane on
+# api.<domain>, Studio and its /api on studio.<domain>.
+# No trusted_proxies: clients reach the edge directly, so it believes no
+# forwarded address and sends the real one on.
+{
+	admin off
+}
+
+(tls_mode) {
+	tls {$EXCALIBASE_TLS}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}
+
+studio.{$EXCALIBASE_DOMAIN} {
+	import tls_mode
+	import security_headers
+	@outside not remote_ip {$STUDIO_ALLOW_CIDRS}
+	respond @outside 403
+	request_body {
+		max_size 10MB
+	}
+	reverse_proxy studio:80
+}
+
+api.{$EXCALIBASE_DOMAIN} {
+	import tls_mode
+	import security_headers
+	request_body {
+		max_size 10MB
+	}
+	# Per-project GraphQL (and its realtime WebSocket) and REST.
+	@project path_regexp ^/[^/]+/(graphql|api/v1)(/|$)
+	handle @project {
+		reverse_proxy graphql:10000
+	}
+	# End-user auth: /auth/{orgSlug}/{projectId}/...
+	handle /auth/* {
+		reverse_proxy auth:24000
+	}
+	# Public function invoke and app-user storage: provisioning's edge listener.
+	@public path /functions/v1/* /storage/v1/*
+	handle @public {
+		reverse_proxy provisioning:24006
+	}
+	handle {
+		respond 404
+	}
+}
