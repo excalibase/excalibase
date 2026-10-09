@@ -271,7 +271,8 @@ func (r *RealDockerClient) WaitForHealthy(ctx context.Context, id string) error 
 // ExecInContainer runs cmd inside a running container and returns its
 // exit code. Does not capture stdout/stderr — callers use it as a boolean
 // probe (e.g. `pg_isready -U postgres`). Polls ContainerExecInspect for
-// up to 10s waiting for the exec to finish.
+// up to 10s waiting for the exec to finish. Started detached: Podman refuses
+// an attached start of an exec that attaches no stream.
 func (r *RealDockerClient) ExecInContainer(ctx context.Context, id string, cmd []string) (int, error) {
 	create, err := r.c.ContainerExecCreate(ctx, id, container.ExecOptions{
 		Cmd:          cmd,
@@ -281,7 +282,7 @@ func (r *RealDockerClient) ExecInContainer(ctx context.Context, id string, cmd [
 	if err != nil {
 		return 0, fmt.Errorf("exec create: %w", err)
 	}
-	if err := r.c.ContainerExecStart(ctx, create.ID, container.ExecStartOptions{Detach: false}); err != nil {
+	if err := r.c.ContainerExecStart(ctx, create.ID, container.ExecStartOptions{Detach: true}); err != nil {
 		return 0, fmt.Errorf("exec start: %w", err)
 	}
 

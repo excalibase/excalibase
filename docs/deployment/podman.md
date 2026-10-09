@@ -11,11 +11,18 @@ a rootless container is that unprivileged user).
 
 ## Prerequisites
 
-- Podman 5 or newer, and a Compose tool: `podman compose` (it runs
-  `docker-compose` or `podman-compose`, whichever is installed) or
-  `podman-compose` 1.1+ (older versions ignore `depends_on` conditions).
-  Distribution packages, not a static build: Podman runs healthchecks through
-  systemd user timers.
+- Podman 4.9 or newer and `podman compose` backed by **Docker Compose v2**
+  (`docker-compose`), which is what `podman compose` runs first when it is
+  installed: Fedora/RHEL `dnf install podman docker-compose`, Debian/Ubuntu
+  `apt install podman docker-compose-v2`. Check with `podman compose version`
+  (it names the provider). Use the distribution's Podman, not a static build:
+  healthchecks run through systemd user timers.
+
+  `podman-compose` (1.6) is **not supported**: it turns every `depends_on`
+  into a hard Podman dependency, so a service behind a finished one-shot
+  (`preflight`, `bootstrap`) never starts, and it treats
+  `service_completed_successfully` as "stopped", ignoring the exit code, so a
+  failed secret check would not hold Postgres back.
 - The user's Podman API socket, and lingering so the stack outlives your login:
 
   ```bash
@@ -50,6 +57,7 @@ a rootless container is that unprivileged user).
 git clone https://github.com/excalibase/excalibase.git
 cd excalibase/deploy/single-host
 ./init.sh --engine podman --domain example.com --admin-email you@example.com
+podman compose version             # must name Docker Compose v2
 podman compose up -d
 podman compose logs bootstrap      # the first admin's generated password
 ```
@@ -70,6 +78,7 @@ the other containers can read them under SELinux.
 | Edge ports | 80/443 | 80/443 with the sysctl above, else 8080/8443 for `localhost` |
 | Client addresses seen by the edge | the real client | the address of Podman's port forwarder: `STUDIO_ALLOW_CIDRS` and per-client rate limits cannot tell clients apart — restrict Studio with the host firewall instead |
 | Tenant CPU limits | always | needs the `cpu` controller delegated |
+| Image healthchecks | kept | dropped for OCI-format images (Podman); the bundle declares every health gate it relies on in `compose.yaml` |
 
 Running Docker and Podman stacks side by side on one host needs different
 `AIO_EDGE_SUBNET` / `AIO_DATAPLANE_SUBNET` values: both claim the same subnets.
